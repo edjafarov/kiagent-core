@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.42.0](https://github.com/edjafarov/kiagent-core/compare/v0.41.0...v0.42.0) (2026-07-08)
+
+### Features
+
+* **mcp:** multiplexing `createMcpHandler` over a shared session dispatcher ([e0d3f39](https://github.com/edjafarov/kiagent-core/commit/e0d3f39f656879e0c8ddea4ae40fdcbe88dd161c))
+
+The single-session `createSessionHandler()` handed a product build's remote
+MCP transport ONE `{server, transport}` for its whole lifetime, so a product
+remote server served a single session and reconnect was permanently broken
+(the product can't learn the transport-assigned session id to fix it itself),
+and that lone session leaked into the loopback `sessions` map. This release
+replaces it with a MULTIPLEXING `createMcpHandler()` on `McpServerHandle`
+(`core/mcp/server.ts`): the `/mcp` session machinery is extracted into a
+reusable `createSessionDispatcher()` — each dispatcher owns its own
+`mcp-session-id`-keyed pool, its own `makeSession()`, and its own idle-sweep
+timer, while all dispatchers close over the SAME live registry/query/logSink/
+onActivity (one tool registry, independent session pools). Loopback runs one
+dispatcher; `createMcpHandler()` lazily creates + memoizes a second, product
+dispatcher (repeated calls share one product session pool) so a product remote
+server can serve many concurrent sessions and reconnects. `stop()` disposes
+both dispatchers. The `mainApi` field is renamed `createSessionHandler` →
+`createMcpHandler` — additive/opaque to the `apiVersion`-1 contract, only the
+multiplex semantics and name change. Auth-free by design: the product's own
+JWT middleware runs before `handleMcp`.
+
 ## [0.41.0](https://github.com/edjafarov/kiagent-core/compare/v0.40.0...v0.41.0) (2026-07-07)
 
 ### Features
