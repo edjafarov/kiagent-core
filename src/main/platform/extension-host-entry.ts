@@ -30,6 +30,10 @@ import {
 export interface ChildDeps {
   requireModule?(p: string): unknown;
   exit?(code: number): void;
+  /** In-process privileged tier only: delivered to activate() as
+   *  extras.mainProcess when bootstrap caps include 'unsafe.mainProcess'.
+   *  A forked child never receives this — the cap is inert out-of-process. */
+  mainApi?: unknown;
 }
 
 const NS_METHODS: Record<string, string[]> = {
@@ -88,7 +92,7 @@ function buildRemoteHost(
       continue;
     }
     const methods = NS_METHODS[cap];
-    if (!methods) continue;
+    if (!methods) continue; // caps without an RPC namespace (unsafe.mainProcess)
     const nsObj: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
     for (const m of methods) {
       nsObj[m] = (...args: unknown[]) => endpoint.call(cap, m, args);
@@ -145,7 +149,11 @@ export function runExtensionHost(
         throw new Error('extension has no activate()');
       endpoint.post({ kind: 'ready' });
       const host = buildRemoteHost(endpoint, boot, eventCbs);
-      const contrib = await mod.activate(host as never);
+      const extras =
+        boot.caps.includes('unsafe.mainProcess') && deps.mainApi !== undefined
+          ? { mainProcess: deps.mainApi }
+          : undefined;
+      const contrib = await mod.activate(host as never, extras);
       for (const s of contrib.sources ?? []) sources.set(s.descriptor.id, s);
       for (const t of contrib.tools ?? []) tools.set(t.name, t);
       const contributions: Contributions = {

@@ -15,12 +15,12 @@ const BOOT = {
 };
 
 /** Boots the child runtime in-process against a scripted module. */
-function boot(mod: unknown) {
+function boot(mod: unknown, extraDeps: { mainApi?: unknown } = {}) {
   const { main, child } = createInMemoryHostPair();
   const mainEp = createRpcEndpoint(main);
   const exit = jest.fn();
   const requireModule = jest.fn(() => mod);
-  runExtensionHost(child, { requireModule, exit });
+  runExtensionHost(child, { requireModule, exit, ...extraDeps });
   const waitFor = <K extends ChildToMain['kind']>(kind: K) =>
     new Promise<Extract<ChildToMain, { kind: K }>>((resolve) => {
       const off = mainEp.onNotify((m) => {
@@ -160,6 +160,51 @@ describe('runExtensionHost — bootstrap/activate', () => {
       setTimeout(r, 10);
     });
     expect(seen).toEqual([{ n: 1 }]);
+  });
+
+  it('passes extras.mainProcess to activate() when the cap is granted and mainApi is provided', async () => {
+    const seen: unknown[] = [];
+    const mod = {
+      activate: async (host: unknown, extras?: { mainProcess: unknown }) => {
+        seen.push(extras?.mainProcess);
+        return { sources: [], tools: [] };
+      },
+    };
+    const { mainEp, waitFor } = boot(mod, { mainApi: { marker: 42 } });
+    const activated = waitFor('activated');
+    mainEp.post({ ...BOOT, caps: ['unsafe.mainProcess'] as Cap[] });
+    await activated;
+    expect(seen).toEqual([{ marker: 42 }]);
+  });
+
+  it('passes no extras when the cap is absent, even if mainApi is provided', async () => {
+    const seen: unknown[] = [];
+    const mod = {
+      activate: async (host: unknown, extras?: { mainProcess: unknown }) => {
+        seen.push(extras?.mainProcess);
+        return { sources: [], tools: [] };
+      },
+    };
+    const { mainEp, waitFor } = boot(mod, { mainApi: { marker: 42 } });
+    const activated = waitFor('activated');
+    mainEp.post({ ...BOOT, caps: ['net'] as Cap[] });
+    await activated;
+    expect(seen).toEqual([undefined]);
+  });
+
+  it('passes no extras when mainApi is not provided, even with the cap', async () => {
+    const seen: unknown[] = [];
+    const mod = {
+      activate: async (host: unknown, extras?: { mainProcess: unknown }) => {
+        seen.push(extras?.mainProcess);
+        return { sources: [], tools: [] };
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    const activated = waitFor('activated');
+    mainEp.post({ ...BOOT, caps: ['unsafe.mainProcess'] as Cap[] });
+    await activated;
+    expect(seen).toEqual([undefined]);
   });
 });
 

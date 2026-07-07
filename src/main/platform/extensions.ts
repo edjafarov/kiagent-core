@@ -8,6 +8,7 @@ import path from 'path';
 
 import type { Manifest } from '@shared/contracts';
 
+import type { ManifestTier } from './manifest';
 import { validateManifestDir } from './manifest';
 
 export interface InstalledRecord {
@@ -73,7 +74,10 @@ export interface DiscoveredExtension {
   error?: string;
 }
 
-export function discoverExtensions(extDir: string): DiscoveredExtension[] {
+export function discoverExtensions(
+  extDir: string,
+  opts: { tier?: ManifestTier } = {},
+): DiscoveredExtension[] {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(extDir, { withFileTypes: true });
@@ -85,7 +89,7 @@ export function discoverExtensions(extDir: string): DiscoveredExtension[] {
     if (!e.isDirectory()) continue;
     const dir = path.join(extDir, e.name);
     try {
-      const { manifest, entryAbsPath } = validateManifestDir(dir);
+      const { manifest, entryAbsPath } = validateManifestDir(dir, opts);
       out.push({ dirName: e.name, dir, manifest, entryAbsPath });
     } catch (err) {
       out.push({

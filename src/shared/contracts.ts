@@ -498,7 +498,11 @@ export type Cap =
   | 'ui'
   | 'commands'
   | 'inference'
-  | 'events';
+  | 'events'
+  /** Privileged, bundled-tier only: run in the main process and receive the
+   *  opaque main-process handle as activate()'s extras.mainProcess. Rejected
+   *  for marketplace/dev extensions at manifest validation. */
+  | 'unsafe.mainProcess';
 
 /** Platform-side OAuth providers an extension source may bind to. The
  *  platform owns the provider's profile (auth URL + token exchange) and
@@ -602,6 +606,9 @@ export interface CapSurfaces {
       emit(event: string, payload: unknown): void;
     };
   };
+  /** Privileged, bundled-tier only: main-process handle passed as
+   *  extras.mainProcess in activate(), not as a host surface. */
+  'unsafe.mainProcess': {};
 }
 
 export interface BaseHost {
@@ -622,7 +629,13 @@ export type HostFor<G extends Cap> = BaseHost &
 /** THE one plugin type. activate() returns any MIX of contributions, which
  *  share module state via closure. */
 export interface ExtensionModule<G extends Cap = Cap> {
-  activate(host: HostFor<G>): Promise<{
+  activate(
+    host: HostFor<G>,
+    /** Bundled-tier only: set when granted caps include 'unsafe.mainProcess'
+     *  AND the child runtime was given a mainApi handle. Undefined otherwise
+     *  — including always for out-of-process (forked) children. */
+    extras?: { mainProcess: unknown },
+  ): Promise<{
     sources?: Source[];
     workers?: Worker[];
     tools?: McpTool[];
@@ -643,7 +656,7 @@ export interface ExtensionSnapshot {
   id: string;
   name: string;
   version: string;
-  origin: 'marketplace' | 'dev';
+  origin: 'marketplace' | 'dev' | 'bundled';
   enabled: boolean;
   status: ExtensionStatus;
   error?: string;

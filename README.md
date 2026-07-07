@@ -50,7 +50,7 @@ Plugins sit at the center: each one connects to a third-party service (Gmail, Dr
 - **Local LLM** (`src/main/providers/local-llm`, `src/main/providers/apple-vision`) — on-device inference via a bundled llama.cpp server (backend auto-detection, curated model tiers) plus native OCR/vision helpers for scanned documents and images.
 - **Filesystem** — local-folder ingestion, model storage, temp workspaces for conversion workers (`src/main/workers`, `src/main/converter`).
 - **Web** — outbound HTTP for source APIs, OAuth flows (`src/main/auth`, `src/main/platform/oauth-providers.ts`), and marketplace downloads.
-- **Plugin / extension system** (`src/main/platform`, `src/main/marketplace`) — connectors run in isolated host processes with a manifest-declared, permission-gated view of the platform (sources, auth, storage, network). A GitHub-backed marketplace handles discovery, install and updates.
+- **Plugin / extension system** (`src/main/platform`, `src/main/marketplace`) — connectors run in isolated host processes with a manifest-declared, permission-gated view of the platform (sources, auth, storage, network). A GitHub-backed marketplace handles discovery, install and updates. A second, privileged tier lets a product build ship first-party extensions inside the app package itself — see [`docs/architecture/extension-platform.md`](docs/architecture/extension-platform.md) for the full model, including the bundled/`unsafe.mainProcess` tier and `product.json`.
 - **Renderer** (`src/renderer`) — the React UI: source setup, marketplace, MCP connection status, settings and logs.
 
 ## Getting started

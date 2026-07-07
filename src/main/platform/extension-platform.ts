@@ -7,6 +7,7 @@
  */
 import path from 'path';
 import fs from 'fs';
+import NodeModule from 'module';
 
 import type {
   Cap,
@@ -54,10 +55,80 @@ import {
   createEventBus,
   type SurfaceDeps,
 } from './host-surfaces';
-import type { HostTransport } from './transport';
+import { createInMemoryHostPair, type HostTransport } from './transport';
+import { runExtensionHost } from './extension-host-entry';
+
+// Loads a privileged (in-process) extension entry via Node's real internal
+// module loader, Module._load — the primitive require() itself delegates to.
+// This is deliberately NOT createRequire(__filename)/bare require(): both
+// resolve, under this repo's jest runtime, to jest's own instrumented module
+// registry rather than Node's real one — createRequire's `.cache` is an
+// ephemeral snapshot recomputed on each access (deletions from it silently
+// don't stick) and a bare require's `.cache` is consulted by jest's loader,
+// not Node's, so evicting it does not cause a later require() to reload
+// (verified empirically — see the cache-bust note in activate()). Module's
+// own `_load`/`_cache` are the lower-level primitives require() is built on;
+// they are real and mutable under both jest and plain Node/webpack (target
+// electron-main externalizes the 'module' built-in, so this static import is
+// never touched by webpack's bundle-scoped require rewriting).
+function loadExtensionModule(entryAbsPath: string): unknown {
+  return (
+    NodeModule as unknown as {
+      _load(request: string, parent: NodeModule, isMain: boolean): unknown;
+    }
+  )._load(entryAbsPath, module, false);
+}
+
+function bustRequireCacheUnder(dir: string): void {
+  const cache = (NodeModule as unknown as { _cache: Record<string, unknown> })
+    ._cache;
+  for (const key of Object.keys(cache)) {
+    if (key.startsWith(dir + path.sep)) delete cache[key];
+  }
+}
+
+// A hand-edited installed.json is untrusted input (readInstalled is a bare
+// JSON.parse cast, spec §3.1 gap): only 'marketplace' is ever honored from
+// disk, everything else (including a forged 'bundled') collapses to 'dev'.
+// 'bundled' origin is NEVER read from a record — it is assigned exclusively
+// by the bundledDir discovery loop below, which never consults installed.json.
+function clampRecordOrigin(
+  record: InstalledRecord | undefined,
+): 'marketplace' | 'dev' {
+  return record?.origin === 'marketplace' ? 'marketplace' : 'dev';
+}
+
+// Bundled extensions' install dir lives inside the app package (signed,
+// possibly read-only, wiped on update) — it can never double as a data dir.
+// Every other origin keeps the original convention: a `data` subdir of the
+// extension's own install dir.
+function computeDataDir(e: Entry, deps: ExtensionPlatformDeps): string {
+  if (e.origin === 'bundled') {
+    const root =
+      deps.bundledDataDir ??
+      path.join(path.dirname(deps.extDir), 'bundled-extensions-data');
+    return path.join(root, e.manifest.id);
+  }
+  return path.join(e.dir, 'data');
+}
 
 export interface ExtensionPlatformDeps {
   extDir: string;
+  /** Second discovery root for extensions shipped inside the app package
+   *  (e.g. resources/bundled-extensions). Entries found here: origin
+   *  'bundled', bundled manifest tier (may declare privileged caps),
+   *  auto-consented, not uninstallable. */
+  bundledDir?: string;
+  /** Mutable data root for bundled extensions' `host.self.dataDir` — their
+   *  install dir (inside the app package) is read-only/replaced on update,
+   *  so it can never double as a data dir the way a marketplace/dev
+   *  extension's install dir does. When omitted, defaults to a
+   *  `bundled-extensions-data` directory sibling of `extDir`. */
+  bundledDataDir?: string;
+  /** Opaque main-process handle handed to in-process privileged extensions
+   *  ('unsafe.mainProcess') as activate()'s extras.mainProcess. Core never
+   *  types it; the product build supplies it. */
+  mainApi?: unknown;
   store: CoreStore;
   sources: SourceRegistry;
   scheduler: CoreScheduler;
@@ -90,6 +161,7 @@ interface Entry {
   dir: string;
   entryAbsPath: string;
   record?: InstalledRecord;
+  origin: 'marketplace' | 'dev' | 'bundled';
   enabled: boolean;
   status: ExtensionStatus;
   error?: string;
@@ -177,7 +249,7 @@ export function createExtensionPlatform(
       id: e.manifest.id,
       name: e.manifest.name,
       version: e.manifest.version,
-      origin: e.record?.origin ?? 'dev',
+      origin: e.origin,
       enabled: e.enabled,
       status: e.status,
       error: e.error,
@@ -314,16 +386,59 @@ export function createExtensionPlatform(
     // `e.host` still null and race to create its own host too. Consent is
     // therefore checked AFTER reserving `e.host`, not before.
     if (e.host) return;
+    const inProcess = e.manifest.caps.includes('unsafe.mainProcess');
     const host = createExtensionHost({
       extensionId: e.manifest.id,
       entryAbsPath: e.entryAbsPath,
-      dataDir: path.join(e.dir, 'data'),
+      dataDir: computeDataDir(e, deps),
       caps: e.manifest.caps as Cap[],
-      transportFactory: () => deps.transportFactory(e.manifest.id),
+      transportFactory: inProcess
+        ? () => {
+            // Privileged tier: the real child runtime, in THIS process, over
+            // the in-memory pair — same supervisor, no fork. loadExtensionModule
+            // resolves the entry from the real filesystem even in the webpack
+            // bundle (see its comment above for why it isn't createRequire).
+            //
+            // In-process semantics differ from a forked child in two ways
+            // a bundled extension author must know (spec doc updated in
+            // Task 9):
+            //  1. kill() is simulateExit() — nothing is terminated. The
+            //     primary stop path (the 'deactivate' message → the
+            //     extension's own deactivate()) is identical to the forked
+            //     tier; only the kill BACKSTOP is inert. A timer or server
+            //     the extension leaks keeps running in the main process.
+            //  2. There is no process boundary: an uncaught exception in
+            //     extension async code hits the main process. Bundled tier
+            //     = first-party trusted code, by definition.
+            // A third difference is neutralized below: the require cache is
+            // dropped for the extension's dir on exit, so disable→enable
+            // loads a FRESH module instance — module-level state does not
+            // survive re-activation, same as a forked child.
+            const pair = createInMemoryHostPair();
+            // Module._load keys Module._cache by the REAL (symlink-resolved)
+            // path, not the path it was given — e.g. macOS os.tmpdir() is
+            // itself a symlink (/var/folders -> /private/var/folders), so
+            // comparing against the raw e.dir would silently never match.
+            // Resolve once, now, while the dir is known to exist.
+            let realDir = e.dir;
+            try {
+              realDir = fs.realpathSync(e.dir);
+            } catch {
+              /* dir vanished (e.g. mid-uninstall race) — fall back to e.dir */
+            }
+            pair.main.onExit(() => bustRequireCacheUnder(realDir));
+            runExtensionHost(pair.child, {
+              exit: (code) => pair.simulateExit(code),
+              mainApi: deps.mainApi,
+              requireModule: loadExtensionModule,
+            });
+            return pair.main;
+          }
+        : () => deps.transportFactory(e.manifest.id),
       makeSurfaces: (deliverEvent) =>
         buildSurfaces({
           extensionId: e.manifest.id,
-          dataDir: path.join(e.dir, 'data'),
+          dataDir: computeDataDir(e, deps),
           query: deps.store.read,
           inference: deps.inference,
           notify: deps.notify,
@@ -338,7 +453,7 @@ export function createExtensionPlatform(
     });
     e.host = host;
     try {
-      if (!(await consentCovers(e.manifest))) {
+      if (e.origin !== 'bundled' && !(await consentCovers(e.manifest))) {
         // Never started — createExtensionHost() itself has no side effects
         // (no process, no transport) until .start() is called, so releasing
         // the reservation here orphans nothing.
@@ -386,11 +501,13 @@ export function createExtensionPlatform(
       // Invalid on disk — track it as errored so the UI can show why.
       return null;
     }
+    const record = records.find((r) => r.id === found.manifest!.id);
     const e: Entry = {
       manifest: found.manifest,
       dir: found.dir,
       entryAbsPath: found.entryAbsPath,
-      record: records.find((r) => r.id === found.manifest!.id),
+      record,
+      origin: clampRecordOrigin(record),
       enabled: state[found.manifest.id]?.enabled ?? true,
       status: 'disabled',
       error: undefined,
@@ -416,11 +533,13 @@ export function createExtensionPlatform(
           );
           continue;
         }
+        const record = records.find((r) => r.id === found.manifest!.id);
         entries.set(found.manifest.id, {
           manifest: found.manifest,
           dir: found.dir,
           entryAbsPath: found.entryAbsPath,
-          record: records.find((r) => r.id === found.manifest!.id),
+          record,
+          origin: clampRecordOrigin(record),
           enabled: state[found.manifest.id]?.enabled ?? true,
           status: 'disabled',
           error: undefined,
@@ -428,6 +547,40 @@ export function createExtensionPlatform(
           sourceIds: [],
           iconDataUrl: loadIconDataUrl(found.dir, found.manifest),
         });
+      }
+      if (deps.bundledDir) {
+        for (const found of discoverExtensions(deps.bundledDir, {
+          tier: 'bundled',
+        })) {
+          if (!found.manifest || !found.entryAbsPath) {
+            deps.logSink.log(
+              'extensions',
+              'error',
+              `invalid bundled extension in ${found.dirName}: ${found.error}`,
+            );
+            continue;
+          }
+          if (entries.has(found.manifest.id)) {
+            deps.logSink.log(
+              'extensions',
+              'warn',
+              `bundled extension ${found.manifest.id} shadows an installed copy — bundled wins — the installed copy remains on disk and is ignored`,
+            );
+          }
+          entries.set(found.manifest.id, {
+            manifest: found.manifest,
+            dir: found.dir,
+            entryAbsPath: found.entryAbsPath,
+            record: undefined,
+            origin: 'bundled',
+            enabled: state[found.manifest.id]?.enabled ?? true,
+            status: 'disabled',
+            error: undefined,
+            host: null,
+            sourceIds: [],
+            iconDataUrl: loadIconDataUrl(found.dir, found.manifest),
+          });
+        }
       }
       changed();
       // Activated in PARALLEL across extensions — a hung extension's
@@ -501,6 +654,11 @@ export function createExtensionPlatform(
           // activated, only to have installer.commit() throw unknown-token.
           installer.peek(token);
           const existing = entries.get(id);
+          if (existing?.origin === 'bundled')
+            return {
+              ok: false,
+              error: `'${id}' is bundled with the app and cannot be replaced from the marketplace`,
+            };
           if (existing) await deactivate(existing);
           const { manifest, dir } = await installer.commit(token);
           const consent: ConsentRecord = {
@@ -528,6 +686,12 @@ export function createExtensionPlatform(
       return runExclusive(id, async () => {
         const e = entries.get(id);
         if (!e) return { ok: false, error: `no such extension: ${id}` };
+        if (e.origin === 'bundled')
+          return {
+            ok: false,
+            error:
+              'bundled extensions are part of the app and cannot be uninstalled',
+          };
         const sourceIds = sourceContributions(e.manifest).map((s) => s.id);
         const accounts = await deps.store.read.accounts();
         if (accounts.some((a) => sourceIds.includes(a.source))) {

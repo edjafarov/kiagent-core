@@ -11,7 +11,7 @@ export type MarketplaceFilter = 'all' | 'official' | 'installed';
 export interface MarketplaceRow {
   key: string; // 'gh:owner/repo' | 'ext:<id>'
   title: string;
-  subtitle: string; // catalog description, or 'v1.2.3[ · dev install]' (suffix only when origin is 'dev')
+  subtitle: string; // catalog description, or 'v1.2.3[ · dev install][ · bundled]' (suffix when origin is 'dev' or 'bundled')
   /** Repo-fetched icon, falling back to the installed snapshot's — absent
    *  renders the letter glyph. */
   iconDataUrl?: string;
@@ -74,12 +74,16 @@ export function buildRows(
     .map((e) => ({
       key: `ext:${e.id}`,
       title: e.name,
-      // "dev install" is a claim about *how the extension got here*, so it
+      // "dev install" and "bundled" are claims about *how the extension got here*, so they
       // must key off the snapshot's own origin, not off catalog absence —
       // a marketplace-origin extension whose repo dropped out of the
       // catalog (e.g. topic removed) is still a marketplace install.
       subtitle:
-        e.origin === 'dev' ? `v${e.version} · dev install` : `v${e.version}`,
+        e.origin === 'dev'
+          ? `v${e.version} · dev install`
+          : e.origin === 'bundled'
+            ? `v${e.version} · bundled`
+            : `v${e.version}`,
       iconDataUrl: e.iconDataUrl,
       installed: e,
       updateAvailable: updateIds.has(e.id),

@@ -236,14 +236,16 @@ export function Detail(props: { row: MarketplaceRow }): React.ReactElement {
         >
           {installed.enabled ? 'Disable' : 'Enable'}
         </button>
-        <button
-          type="button"
-          className="btn destructive sm"
-          disabled={busy}
-          onClick={() => void uninstall()}
-        >
-          Uninstall
-        </button>
+        {installed.origin !== 'bundled' && (
+          <button
+            type="button"
+            className="btn destructive sm"
+            disabled={busy}
+            onClick={() => void uninstall()}
+          >
+            Uninstall
+          </button>
+        )}
       </div>
     );
   }

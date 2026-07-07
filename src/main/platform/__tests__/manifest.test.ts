@@ -269,6 +269,32 @@ describe('validateManifestDir', () => {
   });
 });
 
+describe('privileged caps by tier', () => {
+  const base = {
+    id: 'pub.priv',
+    name: 'Priv',
+    version: '1.0.0',
+    engine: '^1.0.0',
+    entry: 'index.js',
+    caps: ['unsafe.mainProcess'],
+  };
+
+  it('rejects unsafe.mainProcess for the default (external) tier', () => {
+    expect(() => parseManifest(base)).toThrow(/unsafe\.mainProcess.*bundled/i);
+  });
+
+  it('rejects unsafe.mainProcess for an explicit external tier', () => {
+    expect(() => parseManifest(base, { tier: 'external' })).toThrow(
+      ManifestError,
+    );
+  });
+
+  it('accepts unsafe.mainProcess for the bundled tier', () => {
+    const m = parseManifest(base, { tier: 'bundled' });
+    expect(m.caps).toContain('unsafe.mainProcess');
+  });
+});
+
 describe('loadIconDataUrl', () => {
   let dir: string;
   beforeEach(() => {

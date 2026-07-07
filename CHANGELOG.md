@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.40.0](https://github.com/edjafarov/kiagent-core/compare/v0.39.0...v0.40.0) (2026-07-07)
+
+### Features
+
+* **platform:** add `unsafe.mainProcess` cap + `origin: 'bundled'`, bump platform API to 1.1.0 ([048d0db](https://github.com/edjafarov/kiagent-core/commit/048d0db82f088622e65d004841525c02009ab484))
+* **platform:** manifest tiers — privileged caps restricted to bundled extensions ([6e09f68](https://github.com/edjafarov/kiagent-core/commit/6e09f6873ba79b6073981af1c4706470cd3e58d4))
+* **platform:** child runtime delivers `mainApi` extras to `unsafe.mainProcess` extensions ([000701b](https://github.com/edjafarov/kiagent-core/commit/000701bbdf0ee8fcd753e524128aef4803aa5e6a))
+* **platform:** bundled extension discovery — origin, auto-consent, uninstall/replace guards ([cb902f7](https://github.com/edjafarov/kiagent-core/commit/cb902f72db8a0cc29effc79408346454511c9c38))
+* **platform:** run `unsafe.mainProcess` extensions in-process over the in-memory transport ([535ac82](https://github.com/edjafarov/kiagent-core/commit/535ac82c4ba6ced4dfb8e7f67e21c4538085b7bb))
+* **marketplace:** bundled extensions — badge + no uninstall ([6c86af0](https://github.com/edjafarov/kiagent-core/commit/6c86af049bc16bb0f4ab26a56941c80aae44a85f))
+* **product:** `product.json` loader with neutral defaults ([c2ebb4c](https://github.com/edjafarov/kiagent-core/commit/c2ebb4c92dd02a75cdd7ab96526af13e739fb01e))
+* **product:** boot wiring — product config + bundled-extensions dir ([3dc0a6d](https://github.com/edjafarov/kiagent-core/commit/3dc0a6dd46956e7b7c80a22957f8145a75d2d5db))
+
+A product build (private overlay, not in this repo) can now ship first-party
+"bundled" extensions inside the app package, alongside marketplace/dev
+extensions. Bundled extensions are auto-consented (trust = shipped in the
+signed bundle), cannot be uninstalled or replaced by the marketplace, and
+bundled ids win on a collision with an installed copy. A new privileged cap,
+`unsafe.mainProcess`, is restricted to that bundled tier and runs the
+extension in-process (over the same in-memory transport used by tests)
+instead of forking a host process, handing it `activate(host, extras)` with
+`extras.mainProcess` — a temporary escape hatch pending real capabilities in
+a later stage. A neutral `product.json` (brand name, update-feed URL,
+bundled-extensions dir override) lets a product build customize identity
+without forking core; OSS ships no `product.json` and runs on defaults. A
+bundled extension's `host.self.dataDir` is rooted outside the app package
+(a `bundled-extensions-data` directory, overridable via
+`ExtensionPlatformDeps.bundledDataDir`) rather than under its own
+read-only, update-replaced install dir, and `origin` read from a
+hand-edited `installed.json` is clamped to `'marketplace' | 'dev'` — it can
+never forge `'bundled'`. See `docs/architecture/extension-platform.md` §
+Bundled extensions (privileged tier) for the full model.
+
 ## [0.39.0](https://github.com/edjafarov/alpha-cent/compare/v4.7.0...v0.39.0) (2026-06-17)
 
 ### Features

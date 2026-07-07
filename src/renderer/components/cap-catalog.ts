@@ -70,6 +70,14 @@ export const CAP_CATALOG: Record<Cap, CapInfo> = {
     risk: 'normal',
     icon: 'log',
   },
+  'unsafe.mainProcess': {
+    label: 'Full app access (bundled only)',
+    description:
+      'Runs inside the app process with unrestricted access to it. ' +
+      'Only extensions shipped as part of the app itself can use this.',
+    risk: 'elevated',
+    icon: 'settings',
+  },
 };
 
 /** Renderer-side registry of what an OAuth provider binding means to a

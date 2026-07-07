@@ -1,0 +1,9 @@
+{
+  "id": "test.bundled-nonpriv",
+  "name": "Bundled Non-Privileged Test Extension",
+  "version": "1.0.0",
+  "engine": "^1.0.0",
+  "entry": "index.js",
+  "caps": [],
+  "contributes": { "tools": ["bundled-nonpriv.probe"] }
+}

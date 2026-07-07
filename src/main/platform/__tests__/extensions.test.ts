@@ -76,4 +76,22 @@ describe('extension disk state', () => {
   it('returns [] when the extensions dir does not exist yet', () => {
     expect(discoverExtensions(path.join(extDir, 'missing'))).toEqual([]);
   });
+
+  it('gates unsafe.mainProcess by tier', () => {
+    writeExt(extDir, 'pub.priv', {
+      ...GOOD,
+      id: 'pub.priv',
+      caps: ['unsafe.mainProcess'],
+    });
+    const externalFound = discoverExtensions(extDir).find(
+      (f) => f.dirName === 'pub.priv',
+    )!;
+    expect(externalFound.manifest).toBeUndefined();
+    expect(externalFound.error).toMatch(/unsafe\.mainProcess/);
+
+    const bundledFound = discoverExtensions(extDir, {
+      tier: 'bundled',
+    }).find((f) => f.dirName === 'pub.priv')!;
+    expect(bundledFound.manifest?.caps).toContain('unsafe.mainProcess');
+  });
 });
