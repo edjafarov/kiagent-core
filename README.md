@@ -1,6 +1,6 @@
 # KIAgent core
 
-**Your knowledge, indexed locally.** KIAgent is a desktop app (Electron + React + TypeScript) that ingests your personal data — mail, documents, chats, notes — on your own machine, stores it in a local database, and serves it to AI assistants over [MCP](https://modelcontextprotocol.io). Nothing leaves your computer: ingestion, OCR, embedding and search all run locally.
+**Your knowledge, indexed locally.** KIAgent is a desktop app (Electron + React + TypeScript) that ingests your personal data — mail, documents, chats, notes — on your own machine, stores it in a local database, and serves it to AI assistants over [MCP](https://modelcontextprotocol.io). All stored and served from your computer: ingestion, parsing, OCR and VCR run locally.
 
 At its core, KIAgent is a **platform**: a small set of host capabilities (MCP, database, local LLM, filesystem, web access) wired together by an ingestion engine, plus a plugin/extension system that lets sandboxed connectors use those capabilities to bring in new data sources.
 
