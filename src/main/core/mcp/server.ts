@@ -51,6 +51,18 @@ export interface McpServerHandle {
   connectClient(id: string): Promise<void>;
   disconnectClient(id: string): Promise<void>;
   stop(): Promise<void>;
+  /** Creates one MCP session (fresh McpServer + StreamableHTTPServerTransport,
+   *  same construction the loopback listener uses) bound to the SAME live
+   *  ToolRegistry/resources/activity, and returns its request-handler closure
+   *  for a product build to serve over its own transport (e.g. a remote
+   *  HTTPS server) — no second, independent registry. The returned handler
+   *  is stateless across calls beyond the one session it owns: call this
+   *  factory again for a second, independent session. */
+  createSessionHandler(): (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    parsedBody?: unknown,
+  ) => Promise<void>;
 }
 
 const HOST = '127.0.0.1';
@@ -271,6 +283,26 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       registry.set(tool.name, tool);
       return () => {
         registry.delete(tool.name);
+      };
+    },
+
+    createSessionHandler() {
+      // One session for the lifetime of this handler — the SDK's
+      // StreamableHTTPServerTransport tracks its own session id internally
+      // (assigned on the first, initialize request) and validates it on
+      // every later call, so a single transport instance is the whole
+      // per-session state machine; no dispatch-by-session-id map needed
+      // here the way the loopback listener above needs one (it multiplexes
+      // many concurrent sessions behind one http.Server).
+      const { server, transport } = makeSession();
+      const connected = server.connect(transport);
+      return async (
+        req: http.IncomingMessage,
+        res: http.ServerResponse,
+        parsedBody?: unknown,
+      ) => {
+        await connected;
+        await transport.handleRequest(req, res, parsedBody);
       };
     },
 
