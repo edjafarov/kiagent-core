@@ -619,6 +619,10 @@ app
     extensionsPlatform = createExtensionPlatform({
       extDir: path.join(app.getPath('userData'), 'extensions'),
       bundledDir: bundledExtensionsDir,
+      bundledDataDir: path.join(
+        app.getPath('userData'),
+        'bundled-extensions-data',
+      ),
       store: p.store,
       sources: p.sources,
       scheduler: p.scheduler,

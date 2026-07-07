@@ -87,6 +87,31 @@ function bustRequireCacheUnder(dir: string): void {
   }
 }
 
+// A hand-edited installed.json is untrusted input (readInstalled is a bare
+// JSON.parse cast, spec §3.1 gap): only 'marketplace' is ever honored from
+// disk, everything else (including a forged 'bundled') collapses to 'dev'.
+// 'bundled' origin is NEVER read from a record — it is assigned exclusively
+// by the bundledDir discovery loop below, which never consults installed.json.
+function clampRecordOrigin(
+  record: InstalledRecord | undefined,
+): 'marketplace' | 'dev' {
+  return record?.origin === 'marketplace' ? 'marketplace' : 'dev';
+}
+
+// Bundled extensions' install dir lives inside the app package (signed,
+// possibly read-only, wiped on update) — it can never double as a data dir.
+// Every other origin keeps the original convention: a `data` subdir of the
+// extension's own install dir.
+function computeDataDir(e: Entry, deps: ExtensionPlatformDeps): string {
+  if (e.origin === 'bundled') {
+    const root =
+      deps.bundledDataDir ??
+      path.join(path.dirname(deps.extDir), 'bundled-extensions-data');
+    return path.join(root, e.manifest.id);
+  }
+  return path.join(e.dir, 'data');
+}
+
 export interface ExtensionPlatformDeps {
   extDir: string;
   /** Second discovery root for extensions shipped inside the app package
@@ -94,6 +119,12 @@ export interface ExtensionPlatformDeps {
    *  'bundled', bundled manifest tier (may declare privileged caps),
    *  auto-consented, not uninstallable. */
   bundledDir?: string;
+  /** Mutable data root for bundled extensions' `host.self.dataDir` — their
+   *  install dir (inside the app package) is read-only/replaced on update,
+   *  so it can never double as a data dir the way a marketplace/dev
+   *  extension's install dir does. When omitted, defaults to a
+   *  `bundled-extensions-data` directory sibling of `extDir`. */
+  bundledDataDir?: string;
   /** Opaque main-process handle handed to in-process privileged extensions
    *  ('unsafe.mainProcess') as activate()'s extras.mainProcess. Core never
    *  types it; the product build supplies it. */
@@ -359,7 +390,7 @@ export function createExtensionPlatform(
     const host = createExtensionHost({
       extensionId: e.manifest.id,
       entryAbsPath: e.entryAbsPath,
-      dataDir: path.join(e.dir, 'data'),
+      dataDir: computeDataDir(e, deps),
       caps: e.manifest.caps as Cap[],
       transportFactory: inProcess
         ? () => {
@@ -407,7 +438,7 @@ export function createExtensionPlatform(
       makeSurfaces: (deliverEvent) =>
         buildSurfaces({
           extensionId: e.manifest.id,
-          dataDir: path.join(e.dir, 'data'),
+          dataDir: computeDataDir(e, deps),
           query: deps.store.read,
           inference: deps.inference,
           notify: deps.notify,
@@ -476,7 +507,7 @@ export function createExtensionPlatform(
       dir: found.dir,
       entryAbsPath: found.entryAbsPath,
       record,
-      origin: record?.origin ?? 'dev',
+      origin: clampRecordOrigin(record),
       enabled: state[found.manifest.id]?.enabled ?? true,
       status: 'disabled',
       error: undefined,
@@ -508,7 +539,7 @@ export function createExtensionPlatform(
           dir: found.dir,
           entryAbsPath: found.entryAbsPath,
           record,
-          origin: record?.origin ?? 'dev',
+          origin: clampRecordOrigin(record),
           enabled: state[found.manifest.id]?.enabled ?? true,
           status: 'disabled',
           error: undefined,
@@ -533,7 +564,7 @@ export function createExtensionPlatform(
             deps.logSink.log(
               'extensions',
               'warn',
-              `bundled extension ${found.manifest.id} shadows an installed copy — bundled wins`,
+              `bundled extension ${found.manifest.id} shadows an installed copy — bundled wins — the installed copy remains on disk and is ignored`,
             );
           }
           entries.set(found.manifest.id, {

@@ -192,8 +192,26 @@ consentCovers(...))`). Trust model: consent is a proxy for "the user chose
 - **Bundled-wins shadowing.** If a bundled id collides with an id already
   discovered from `extDir` (installed/dev), the bundled copy overwrites the
   entry and a warning is logged: _"bundled extension `<id>` shadows an
-  installed copy — bundled wins"_. This is boot-time precedence, not a
-  merge — whichever manifest/entry the bundled scan found is what runs.
+  installed copy — bundled wins — the installed copy remains on disk and is
+  ignored"_. This is boot-time precedence, not a merge — whichever
+  manifest/entry the bundled scan found is what runs; the shadowed copy is
+  never deleted, just never loaded.
+- **`origin` is clamped, never trusted verbatim from disk.** `installed.json`
+  is untrusted input (a bare `JSON.parse` cast, no schema validation) — a
+  hand-edited record claiming `origin: 'bundled'` must never grant an
+  `extDir` extension the auto-consent bypass above. Both Entry-construction
+  sites read a record's origin through a clamp that only ever yields
+  `'marketplace'` or `'dev'`; `'bundled'` is assigned exclusively by the
+  bundled-discovery loop itself, never from a record.
+- **dataDir lives outside the app bundle.** Every extension's
+  `host.self.dataDir` normally sits at `<extDir-entry>/data`, but a bundled
+  extension's install dir is inside the (signed, possibly read-only,
+  update-replaced) app package, so it can never double as mutable storage.
+  `origin === 'bundled'` entries instead get
+  `<bundledDataDir>/<extensionId>`, where `bundledDataDir` defaults to a
+  `bundled-extensions-data` directory sibling of `extDir` and is overridable
+  via `ExtensionPlatformDeps.bundledDataDir` (`main.ts` points it at
+  `userData/bundled-extensions-data`).
 - **Marketplace UI.** The catalog row/detail subtitle gets a `· bundled`
   suffix (alongside the existing `· dev install`) and the Uninstall button
   is hidden when `origin === 'bundled'` (`src/renderer/screens/Marketplace/{rows.ts,Detail.tsx}`).

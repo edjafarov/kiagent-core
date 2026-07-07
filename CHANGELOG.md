@@ -24,9 +24,14 @@ instead of forking a host process, handing it `activate(host, extras)` with
 `extras.mainProcess` — a temporary escape hatch pending real capabilities in
 a later stage. A neutral `product.json` (brand name, update-feed URL,
 bundled-extensions dir override) lets a product build customize identity
-without forking core; OSS ships no `product.json` and runs on defaults. See
-`docs/architecture/extension-platform.md` § Bundled extensions (privileged
-tier) for the full model.
+without forking core; OSS ships no `product.json` and runs on defaults. A
+bundled extension's `host.self.dataDir` is rooted outside the app package
+(a `bundled-extensions-data` directory, overridable via
+`ExtensionPlatformDeps.bundledDataDir`) rather than under its own
+read-only, update-replaced install dir, and `origin` read from a
+hand-edited `installed.json` is clamped to `'marketplace' | 'dev'` — it can
+never forge `'bundled'`. See `docs/architecture/extension-platform.md` §
+Bundled extensions (privileged tier) for the full model.
 
 ## [0.39.0](https://github.com/edjafarov/alpha-cent/compare/v4.7.0...v0.39.0) (2026-06-17)
 
