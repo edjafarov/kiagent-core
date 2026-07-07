@@ -51,14 +51,17 @@ export interface McpServerHandle {
   connectClient(id: string): Promise<void>;
   disconnectClient(id: string): Promise<void>;
   stop(): Promise<void>;
-  /** Creates one MCP session (fresh McpServer + StreamableHTTPServerTransport,
-   *  same construction the loopback listener uses) bound to the SAME live
-   *  ToolRegistry/resources/activity, and returns its request-handler closure
-   *  for a product build to serve over its own transport (e.g. a remote
-   *  HTTPS server) — no second, independent registry. The returned handler
-   *  is stateless across calls beyond the one session it owns: call this
-   *  factory again for a second, independent session. */
-  createSessionHandler(): (
+  /** Returns a MULTIPLEXING request handler bound to the SAME live
+   *  ToolRegistry/resources/activity the loopback listener uses (no second,
+   *  independent registry), for a product build to serve MCP over its own
+   *  transport (e.g. a remote HTTPS server). The handler owns its OWN session
+   *  pool — a `mcp-session-id`-keyed map independent of loopback's — minting a
+   *  fresh session on each `initialize` POST and routing later requests by
+   *  session id, so a product remote server can serve many concurrent sessions
+   *  and reconnects (not one session for its whole lifetime). Memoized:
+   *  repeated calls return the SAME handler over the SAME product session pool.
+   *  Auth-free — the product's own middleware (e.g. JWT) runs before this. */
+  createMcpHandler(): (
     req: http.IncomingMessage,
     res: http.ServerResponse,
     parsedBody?: unknown,
@@ -154,31 +157,104 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   const registry = createToolRegistry(buildBuiltinTools(deps.query));
   const dbPath = path.join(deps.dataDir, 'kiagent.db');
 
-  const sessions = new Map<string, SessionEntry>();
-
-  function makeSession(): {
-    server: McpServer;
-    transport: StreamableHTTPServerTransport;
+  // A reusable session dispatcher: owns ONE `mcp-session-id`-keyed pool and its
+  // own idle-sweep timer, but closes over the SAME live registry/query/logSink/
+  // onActivity as every other dispatcher — so loopback and the product remote
+  // transport share one tool registry while keeping independent session pools.
+  // Auth-free by design (loopback is loopback-trusted; the product's own
+  // middleware runs before it calls `handleMcp`).
+  function createSessionDispatcher(): {
+    handleMcp: (
+      req: http.IncomingMessage,
+      res: http.ServerResponse,
+      parsedBody?: unknown,
+    ) => Promise<void>;
+    dispose: () => void;
   } {
-    const server = makeMcpServer();
-    attachToolHandlers(server, registry, deps.logSink, (rec) =>
-      deps.onActivity?.({ ...rec, transport: 'http' }),
-    );
-    attachResourceHandlers(server, deps.query);
+    const sessions = new Map<string, SessionEntry>();
 
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      enableJsonResponse: true,
-      onsessioninitialized: (sid) => {
-        sessions.set(sid, { server, transport, lastActivity: Date.now() });
-      },
-    });
-    transport.onclose = () => {
-      const sid = transport.sessionId;
-      if (sid) sessions.delete(sid);
-    };
-    return { server, transport };
+    function makeSession(): {
+      server: McpServer;
+      transport: StreamableHTTPServerTransport;
+    } {
+      const server = makeMcpServer();
+      attachToolHandlers(server, registry, deps.logSink, (rec) =>
+        deps.onActivity?.({ ...rec, transport: 'http' }),
+      );
+      attachResourceHandlers(server, deps.query);
+
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        enableJsonResponse: true,
+        onsessioninitialized: (sid) => {
+          sessions.set(sid, { server, transport, lastActivity: Date.now() });
+        },
+      });
+      transport.onclose = () => {
+        const sid = transport.sessionId;
+        if (sid) sessions.delete(sid);
+      };
+      return { server, transport };
+    }
+
+    // The `/mcp` session logic ONLY — path routing + `/healthz` stay in the
+    // loopback http.Server wrapper (or are the product router's job).
+    async function handleMcp(
+      req: http.IncomingMessage,
+      res: http.ServerResponse,
+      parsedBody?: unknown,
+    ): Promise<void> {
+      const sessionId =
+        (req.headers['mcp-session-id'] as string | undefined) ?? undefined;
+      if (sessionId && sessions.has(sessionId)) {
+        const entry = sessions.get(sessionId)!;
+        entry.lastActivity = Date.now();
+        await entry.transport.handleRequest(req, res);
+        return;
+      }
+
+      if (req.method === 'POST') {
+        const body = parsedBody ?? (await readJsonBody(req));
+        if (!isInitializeRequest(body)) {
+          sendJsonRpcError(
+            res,
+            400,
+            'Bad Request: missing mcp-session-id (and not an initialize request)',
+          );
+          return;
+        }
+        const { server, transport } = makeSession();
+        await server.connect(transport);
+        await transport.handleRequest(req, res, body);
+        return;
+      }
+
+      sendJsonRpcError(res, 400, 'Bad Request: missing mcp-session-id');
+    }
+
+    const sweepTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [sid, entry] of sessions) {
+        if (now - entry.lastActivity < IDLE_TIMEOUT_MS) continue;
+        void Promise.resolve(entry.transport.close()).catch(() => {});
+        sessions.delete(sid);
+      }
+    }, SWEEP_INTERVAL_MS);
+    sweepTimer.unref();
+
+    function dispose(): void {
+      clearInterval(sweepTimer);
+      for (const { transport, server } of sessions.values()) {
+        void Promise.resolve(transport.close()).catch(() => {});
+        void Promise.resolve(server.close()).catch(() => {});
+      }
+      sessions.clear();
+    }
+
+    return { handleMcp, dispose };
   }
+
+  const loopback = createSessionDispatcher();
 
   const handler: http.RequestListener = async (req, res) => {
     try {
@@ -195,32 +271,7 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
         return;
       }
 
-      const sessionId =
-        (req.headers['mcp-session-id'] as string | undefined) ?? undefined;
-      if (sessionId && sessions.has(sessionId)) {
-        const entry = sessions.get(sessionId)!;
-        entry.lastActivity = Date.now();
-        await entry.transport.handleRequest(req, res);
-        return;
-      }
-
-      if (req.method === 'POST') {
-        const body = await readJsonBody(req);
-        if (!isInitializeRequest(body)) {
-          sendJsonRpcError(
-            res,
-            400,
-            'Bad Request: missing mcp-session-id (and not an initialize request)',
-          );
-          return;
-        }
-        const { server, transport } = makeSession();
-        await server.connect(transport);
-        await transport.handleRequest(req, res, body);
-        return;
-      }
-
-      sendJsonRpcError(res, 400, 'Bad Request: missing mcp-session-id');
+      await loopback.handleMcp(req, res);
     } catch (err) {
       deps.logSink.log('mcp', 'error', 'request failed', {
         error: err instanceof Error ? err.message : String(err),
@@ -245,15 +296,9 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   const port = await listenOnFirstFree(httpServer, HOST, PORT_CANDIDATES);
   deps.logSink.log('mcp', 'info', `listening on http://${HOST}:${port}/mcp`);
 
-  const sweepTimer = setInterval(() => {
-    const now = Date.now();
-    for (const [sid, entry] of sessions) {
-      if (now - entry.lastActivity < IDLE_TIMEOUT_MS) continue;
-      void Promise.resolve(entry.transport.close()).catch(() => {});
-      sessions.delete(sid);
-    }
-  }, SWEEP_INTERVAL_MS);
-  sweepTimer.unref();
+  // Lazily created on first createMcpHandler() call; disposed in stop().
+  let productDispatcher: ReturnType<typeof createSessionDispatcher> | null =
+    null;
 
   // Built once: the launch descriptor + client registry used by clients()/
   // connectClient()/disconnectClient(). `__dirname` resolves to wherever the
@@ -286,24 +331,14 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       };
     },
 
-    createSessionHandler() {
-      // One session for the lifetime of this handler — the SDK's
-      // StreamableHTTPServerTransport tracks its own session id internally
-      // (assigned on the first, initialize request) and validates it on
-      // every later call, so a single transport instance is the whole
-      // per-session state machine; no dispatch-by-session-id map needed
-      // here the way the loopback listener above needs one (it multiplexes
-      // many concurrent sessions behind one http.Server).
-      const { server, transport } = makeSession();
-      const connected = server.connect(transport);
-      return async (
-        req: http.IncomingMessage,
-        res: http.ServerResponse,
-        parsedBody?: unknown,
-      ) => {
-        await connected;
-        await transport.handleRequest(req, res, parsedBody);
-      };
+    createMcpHandler() {
+      // One product-facing dispatcher for the life of this handle, with its
+      // OWN session pool (independent of loopback's) over the SAME live
+      // registry. Memoized so repeated calls return the same multiplexing
+      // handler sharing one product session pool — the product mounts it on
+      // its remote transport and it serves many sessions + reconnects.
+      if (!productDispatcher) productDispatcher = createSessionDispatcher();
+      return productDispatcher.handleMcp;
     },
 
     async clients(): Promise<
@@ -365,20 +400,10 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
     },
 
     async stop() {
-      clearInterval(sweepTimer);
-      for (const { transport, server } of sessions.values()) {
-        try {
-          await transport.close();
-        } catch {
-          /* ignore */
-        }
-        try {
-          await server.close();
-        } catch {
-          /* ignore */
-        }
-      }
-      sessions.clear();
+      // Tear down both dispatchers' sweep timers + open sessions (loopback
+      // always exists; the product dispatcher only if createMcpHandler() ran).
+      loopback.dispose();
+      productDispatcher?.dispose();
       await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
         // Idle keep-alive sockets (from a client that never explicitly closed
