@@ -217,6 +217,41 @@ describe('createExtensionPlatform', () => {
     expect(registry.has('basicsrc')).toBe(false);
   });
 
+  it('a hand-edited installed.json origin of "bundled" is clamped to "dev" — no auto-consent from a forged record', async () => {
+    await platform.start();
+    await installFixture();
+    await platform.stop();
+    // Drop the consent history exactly as the sibling test above does, so
+    // the only path to 'activated' would be the bundled auto-consent
+    // bypass (`e.origin !== 'bundled' && !(await consentCovers(...))`) —
+    // proving that path is unreachable via a forged installed.json record.
+    store.close();
+    store = openStore(path.join(tmp, 'kiagent-fresh2.db'), {
+      encrypt: (s) => Buffer.from(s, 'utf8'),
+      decrypt: (b) => b.toString('utf8'),
+      detectLanguages: () => [],
+    });
+    registry.clear();
+    const installedPath = path.join(tmp, 'extensions', 'installed.json');
+    const records = JSON.parse(fs.readFileSync(installedPath, 'utf8')) as Array<
+      Record<string, unknown>
+    >;
+    records.forEach((r) => {
+      r.origin = 'bundled';
+    });
+    fs.writeFileSync(installedPath, JSON.stringify(records, null, 2));
+    platform = makePlatform();
+    await platform.start();
+    expect(platform.snapshot()).toEqual([
+      expect.objectContaining({
+        id: 'test.basic',
+        origin: 'dev',
+        status: 'needs-consent',
+      }),
+    ]);
+    expect(registry.has('basicsrc')).toBe(false);
+  });
+
   it('uninstall refuses while accounts exist, then removes everything', async () => {
     await platform.start();
     await installFixture();
@@ -1014,13 +1049,17 @@ describe('createExtensionPlatform', () => {
       'ext-bundled-shadow',
     );
 
-    function makeBundledPlatform(mainApi?: unknown): ExtensionPlatform {
+    function makeBundledPlatform(
+      mainApi?: unknown,
+      overrides?: Partial<ExtensionPlatformDeps>,
+    ): ExtensionPlatform {
       fs.cpSync(BUNDLED_FIXTURE, path.join(tmp, 'bundled', 'ext-bundled'), {
         recursive: true,
       });
       return makePlatform({
         bundledDir: path.join(tmp, 'bundled'),
         mainApi,
+        ...overrides,
       });
     }
 
@@ -1030,6 +1069,36 @@ describe('createExtensionPlatform', () => {
       const snap = platform.snapshot().find((e) => e.id === 'test.bundled');
       expect(snap?.origin).toBe('bundled');
       expect(snap?.status).toBe('activated'); // no ConsentRecord ever written
+    });
+
+    it('a bundled extension dataDir lives under a bundled-extensions-data root, never its own install dir', async () => {
+      platform = makeBundledPlatform({ marker: 7 });
+      await platform.start();
+      const result = (await tools.get('bundled.dataDir')!.call({})) as {
+        dataDir: string;
+      };
+      const expectedDataDir = path.join(
+        tmp,
+        'bundled-extensions-data',
+        'test.bundled',
+      );
+      expect(result.dataDir).toBe(expectedDataDir);
+      expect(
+        result.dataDir.startsWith(path.join(tmp, 'bundled', 'ext-bundled')),
+      ).toBe(false);
+    });
+
+    it('honors an explicit bundledDataDir override', async () => {
+      const customRoot = path.join(tmp, 'custom-bundled-data-root');
+      platform = makeBundledPlatform(
+        { marker: 7 },
+        { bundledDataDir: customRoot },
+      );
+      await platform.start();
+      const result = (await tools.get('bundled.dataDir')!.call({})) as {
+        dataDir: string;
+      };
+      expect(result.dataDir).toBe(path.join(customRoot, 'test.bundled'));
     });
 
     it('a bundled extension shadows an installed copy with the same id — bundled wins, and the shadow is logged', async () => {
@@ -1064,7 +1133,7 @@ describe('createExtensionPlatform', () => {
           scope: 'extensions',
           level: 'warn',
           msg: expect.stringContaining(
-            'test.bundled shadows an installed copy',
+            'test.bundled shadows an installed copy — bundled wins — the installed copy remains on disk and is ignored',
           ),
         }),
       );
@@ -1111,6 +1180,61 @@ describe('createExtensionPlatform', () => {
       expect(
         platform.snapshot().find((e) => e.id === 'test.bundled')?.status,
       ).toBe('disabled');
+    });
+
+    it('installCommit refuses to replace a live bundled extension, which keeps running', async () => {
+      platform = makeBundledPlatform({ marker: 7 });
+      await platform.start();
+      // Same preview/commit sequence the shadow test uses, targeting the
+      // SAME id ('test.bundled') as the already-active bundled entry — this
+      // exercises the installCommit-time guard (extension-platform.ts
+      // installCommit's `existing?.origin === 'bundled'` check), distinct
+      // from the boot-time shadow-wins precedence covered above.
+      const preview = await platform.installPreview(BUNDLED_SHADOW_FIXTURE);
+      if (!('token' in preview))
+        throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+      await expect(platform.installCommit(preview.token)).resolves.toEqual({
+        ok: false,
+        error: expect.stringContaining('cannot be replaced'),
+      });
+      const snap = platform.snapshot().find((e) => e.id === 'test.bundled');
+      expect(snap?.origin).toBe('bundled');
+      expect(snap?.status).toBe('activated');
+      // The live host was never torn down by the refused commit attempt.
+      await expect(tools.get('bundled.probe')!.call({})).resolves.toEqual({
+        marker: 7,
+        activations: 1,
+      });
+    });
+
+    it('a bundled extension without unsafe.mainProcess activates via the injected transportFactory, not in-process', async () => {
+      const NONPRIV_FIXTURE = path.join(
+        __dirname,
+        'fixtures',
+        'ext-bundled-nonpriv',
+      );
+      fs.cpSync(
+        NONPRIV_FIXTURE,
+        path.join(tmp, 'bundled', 'ext-bundled-nonpriv'),
+        { recursive: true },
+      );
+      const transportCalls: string[] = [];
+      platform = makePlatform({
+        bundledDir: path.join(tmp, 'bundled'),
+        transportFactory: (id) => {
+          transportCalls.push(id);
+          const pair = createInMemoryHostPair();
+          runExtensionHost(pair.child, { exit: (c) => pair.simulateExit(c) });
+          return pair.main;
+        },
+      });
+      await platform.start();
+      expect(transportCalls).toContain('test.bundled-nonpriv');
+      const snap = platform
+        .snapshot()
+        .find((e) => e.id === 'test.bundled-nonpriv');
+      expect(snap?.origin).toBe('bundled');
+      expect(snap?.status).toBe('activated');
     });
   });
 });

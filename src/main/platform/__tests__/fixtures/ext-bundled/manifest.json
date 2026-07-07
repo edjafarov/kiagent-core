@@ -5,5 +5,5 @@
   "engine": "^1.0.0",
   "entry": "index.js",
   "caps": ["unsafe.mainProcess"],
-  "contributes": { "tools": ["bundled.probe"] }
+  "contributes": { "tools": ["bundled.probe", "bundled.dataDir"] }
 }
