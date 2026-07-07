@@ -157,6 +157,18 @@ describe('buildRows', () => {
     expect(rows[0].subtitle).not.toContain('dev install');
   });
 
+  it('an installed-only row with origin "bundled" gets the "bundled" subtitle suffix', () => {
+    const bundledExt = ext({
+      id: 'ext.bundled-tools',
+      name: 'Bundled Tools',
+      version: '1.0.0',
+      origin: 'bundled',
+      ref: 'github:kia-plugins/bundled-tools',
+    });
+    const rows = buildRows([], [bundledExt], [], 'all', '');
+    expect(rows[0].subtitle).toBe('v1.0.0 · bundled');
+  });
+
   it('matches a pinned-ref installed extension to its catalog item, not as a separate row', () => {
     const pinned = ext({ ref: 'github:kia-plugins/gmail-tools@v1.0.0' });
     const rows = buildRows([item()], [pinned], [], 'all', '');

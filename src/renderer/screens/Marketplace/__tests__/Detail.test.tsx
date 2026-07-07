@@ -515,4 +515,37 @@ describe('Detail', () => {
     const errorNotice = await screen.findByText('Something went wrong');
     expect(errorNotice.closest('.mkt-error')).not.toBeNull();
   });
+
+  test('a bundled extension hides the Uninstall button but keeps Enable/Disable', async () => {
+    const bundledSnapshot = extSnapshot({
+      origin: 'bundled',
+      enabled: true,
+    });
+    mockState.extensions = [bundledSnapshot];
+
+    render(
+      <Detail
+        row={installedOnlyRow({
+          installed: bundledSnapshot,
+          subtitle: 'v1.0.0 · bundled',
+        })}
+      />,
+    );
+
+    await screen.findByRole('button', { name: 'Disable' });
+    expect(
+      screen.queryByRole('button', { name: 'Uninstall' }),
+    ).not.toBeInTheDocument();
+  });
+
+  test('a marketplace extension shows the Uninstall button', async () => {
+    const snapshot = extSnapshot({ origin: 'marketplace' });
+    mockState.extensions = [snapshot];
+
+    render(<Detail row={installedOnlyRow({ installed: snapshot })} />);
+
+    expect(
+      await screen.findByRole('button', { name: 'Uninstall' }),
+    ).toBeInTheDocument();
+  });
 });
