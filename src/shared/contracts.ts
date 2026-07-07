@@ -629,7 +629,13 @@ export type HostFor<G extends Cap> = BaseHost &
 /** THE one plugin type. activate() returns any MIX of contributions, which
  *  share module state via closure. */
 export interface ExtensionModule<G extends Cap = Cap> {
-  activate(host: HostFor<G>): Promise<{
+  activate(
+    host: HostFor<G>,
+    /** Bundled-tier only: set when granted caps include 'unsafe.mainProcess'
+     *  AND the child runtime was given a mainApi handle. Undefined otherwise
+     *  — including always for out-of-process (forked) children. */
+    extras?: { mainProcess: unknown },
+  ): Promise<{
     sources?: Source[];
     workers?: Worker[];
     tools?: McpTool[];
