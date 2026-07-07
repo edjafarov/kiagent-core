@@ -59,7 +59,7 @@ function stubMcp(): {
       registerToolArgs.push(tool);
       return () => {};
     },
-    createSessionHandler: () => {
+    createMcpHandler: () => {
       sessionHandlerCalls += 1;
       return async () => {};
     },
@@ -135,7 +135,7 @@ describe('buildMainApi', () => {
     expect(mainApi.mcp.port).toBe(7421);
     mainApi.mcp.registerTool({ name: 't' } as never);
     expect(registerToolArgs).toEqual([{ name: 't' }]);
-    mainApi.mcp.createSessionHandler();
+    mainApi.mcp.createMcpHandler();
     expect(mcpStub.sessionHandlerCalls).toBe(1);
 
     expect(mainApi.paths.userData).toBe('/fake/userData');

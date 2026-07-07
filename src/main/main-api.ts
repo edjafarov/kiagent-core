@@ -29,11 +29,12 @@ export interface MainProcessApi {
      *  should not happen once `startMcp` has resolved). */
     port: number | null;
     registerTool: McpServerHandle['registerTool'];
-    /** Creates a request handler bound to the LIVE shared ToolRegistry/
-     *  resources/activity, for serving MCP over a product-owned transport
-     *  (e.g. a remote HTTPS server). See McpServerHandle.createSessionHandler
-     *  in core/mcp/server.ts. */
-    createSessionHandler: McpServerHandle['createSessionHandler'];
+    /** Returns a MULTIPLEXING request handler bound to the LIVE shared
+     *  ToolRegistry/resources/activity, for serving MCP over a product-owned
+     *  transport (e.g. a remote HTTPS server) — owns its own session pool so it
+     *  can serve many sessions + reconnects. See
+     *  McpServerHandle.createMcpHandler in core/mcp/server.ts. */
+    createMcpHandler: McpServerHandle['createMcpHandler'];
   };
   paths: { userData: string; dataDir: string };
   app: { version: string; name: string };
@@ -68,7 +69,7 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
     mcp: {
       port: deps.mcp.port,
       registerTool: (tool) => deps.mcp.registerTool(tool),
-      createSessionHandler: () => deps.mcp.createSessionHandler(),
+      createMcpHandler: () => deps.mcp.createMcpHandler(),
     },
     paths: {
       userData: deps.app.getPath('userData'),
