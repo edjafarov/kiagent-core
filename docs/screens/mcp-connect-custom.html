@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Custom JSON</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 24px; background: #f0eee9; }
+
+  .back-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .page-intro {
+    font-size: 12.5px; color: var(--text-secondary);
+    line-height: 1.55; max-width: 640px; margin: 0;
+  }
+
+  .step-list {
+    margin: 0; padding: 0; list-style: none;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .step-list li {
+    display: grid; grid-template-columns: 22px 1fr;
+    align-items: start; gap: 10px;
+    font-size: 12.5px; color: var(--text-primary); line-height: 1.5;
+  }
+  .step-list .num {
+    width: 20px; height: 20px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent-subtle); color: var(--accent-text);
+    font-family: var(--font-mono); font-weight: 600; font-size: 11.5px;
+  }
+  .step-list code {
+    font-family: var(--font-mono); font-size: 11.5px;
+    padding: 1px 5px; background: var(--bg-muted);
+    border: 1px solid var(--border-subtle); color: var(--text-primary);
+  }
+
+  .snippet-wrap { display: flex; flex-direction: column; gap: 8px; }
+  .snippet-head { display: flex; align-items: center; gap: 8px; }
+  .snippet-head .lbl-section { flex: 1; }
+
+  .code-block { white-space: pre; }
+
+  .info-strip {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 9px 11px;
+    background: var(--info-subtle);
+    border: 1px solid rgba(8,145,178,0.20);
+    font-size: 11.5px; color: var(--text-primary); line-height: 1.5;
+  }
+  .info-strip svg { color: var(--info-solid); flex-shrink: 0; margin-top: 1px; }
+
+  .auth-card {
+    background: var(--bg-surface); border: 1px solid var(--border-subtle);
+    padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .auth-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px;
+  }
+  .auth-row .label {
+    width: 110px; color: var(--text-secondary);
+    font-size: 11.5px;
+  }
+  .token-pill {
+    flex: 1; padding: 5px 10px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-muted);
+    font-family: var(--font-mono); font-size: 11.5px;
+    color: var(--text-primary);
+    display: inline-flex; align-items: center; gap: 6px;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+</style>
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-topbar">
+      <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+      <span class="pill live"><span class="dot"></span>4 live · 47,231 docs</span>
+      <div style="flex:1"></div>
+      <button class="kg-tab">
+        <svg class="i" width="13" height="13"><use href="#i-database"/></svg>
+        <span>Sources</span>
+      </button>
+      <button class="kg-tab active">
+        <svg class="i" width="13" height="13"><use href="#i-link"/></svg>
+        <span>MCP</span>
+        <span class="tab-dot on"></span>
+      </button>
+      <button class="btn ghost sm">
+        <svg class="i" width="14" height="14"><use href="#i-settings"/></svg>
+      </button>
+    </div>
+
+    <div class="back-row">
+      <button class="btn ghost sm">← MCP hub</button>
+      <span class="h-section">Custom / other MCP client</span>
+      <div style="flex:1"></div>
+      <span class="t-meta">Using: <span style="color:var(--accent-text);font-weight:500">● Local</span></span>
+    </div>
+
+    <div class="dash-body" style="gap:14px">
+      <p class="page-intro">
+        For any MCP-aware tool that isn't in the list — Cline, Cursor, Zed, Sourcegraph, your own
+        scripts. KIAgent speaks Streamable HTTP MCP at the URL below, gated by a bearer token.
+        Paste the raw JSON wherever your client wants it, or roll your own wrapper.
+      </p>
+
+      <ol class="step-list">
+        <li>
+          <span class="num">1</span>
+          <span>Find where your client configures MCP servers (env var, JSON file, settings UI).</span>
+        </li>
+        <li>
+          <span class="num">2</span>
+          <span>Use the snippet as-is, or extract just the <code>url</code> and <code>Authorization</code> header into your client's required shape.</span>
+        </li>
+      </ol>
+
+      <div class="snippet-wrap">
+        <div class="snippet-head">
+          <div class="lbl-section">Raw JSON</div>
+          <button class="btn primary sm">
+            <svg class="i" width="12" height="12"><use href="#i-copy"/></svg>
+            Copy snippet
+          </button>
+        </div>
+        <pre class="code-block"><span class="pun">{</span>
+  <span class="key">"url"</span><span class="pun">:</span> <span class="str">"http://127.0.0.1:7421/mcp"</span><span class="pun">,</span>
+  <span class="key">"headers"</span><span class="pun">:</span> <span class="pun">{</span>
+    <span class="key">"Authorization"</span><span class="pun">:</span> <span class="str">"Bearer ••••••••"</span>
+  <span class="pun">}</span>
+<span class="pun">}</span></pre>
+      </div>
+
+      <div>
+        <div class="lbl-section" style="margin-bottom:6px">Authentication</div>
+        <div class="auth-card">
+          <div class="auth-row">
+            <span class="label">Scheme</span>
+            <span class="mono" style="font-size:11.5px">Bearer token (HTTP <code style="font-family:var(--font-mono);font-size:11px;background:var(--bg-muted);padding:1px 4px;border:1px solid var(--border-subtle)">Authorization</code> header)</span>
+          </div>
+          <div class="auth-row">
+            <span class="label">Token</span>
+            <span class="token-pill">
+              <svg class="i" width="12" height="12" style="color:var(--text-secondary)"><use href="#i-shield"/></svg>
+              <span style="flex:1">••••••••••••••••••••••••••••••••</span>
+            </span>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-eye"/></svg>
+              Reveal
+            </button>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-copy"/></svg>
+              Copy
+            </button>
+          </div>
+          <div class="auth-row">
+            <span class="label">Rotate</span>
+            <span class="t-meta">Issuing a new token invalidates the old one. Existing clients will need to be updated.</span>
+            <div style="flex:1"></div>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-refresh-cw"/></svg>
+              Rotate token
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-strip">
+        <svg class="i" width="13" height="13"><use href="#i-info"/></svg>
+        <span>Transport is Streamable HTTP MCP (the modern default). Send <code style="font-family:var(--font-mono);font-size:11px">POST /mcp</code> with <code style="font-family:var(--font-mono);font-size:11px">Accept: application/json, text/event-stream</code>.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

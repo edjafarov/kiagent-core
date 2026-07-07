@@ -1,0 +1,89 @@
+/* Sign-in gate — deep-violet split layout. Uses tokens.css variables.
+   Layout is copied verbatim from the legacy renderer's SignIn.css; only the
+   form-field styling (.si-field) is new, since this rebuild collects a
+   plain name/email instead of driving OAuth provider buttons. */
+.si-canvas {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  background: var(--bg-canvas);
+}
+
+.si-brand {
+  width: 42%;
+  min-width: 240px;
+  background: var(--bg-sidebar);
+  color: var(--text-on-sidebar);
+  padding: 32px 28px;
+  display: flex;
+  flex-direction: column;
+}
+
+.si-brand-copy {
+  margin-top: auto;
+}
+
+.si-brand-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.si-brand-sub {
+  font-size: 12px;
+  opacity: 0.82;
+  margin-top: 10px;
+  line-height: 1.55;
+  max-width: 280px;
+}
+
+.si-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 20px;
+  padding: 40px 44px;
+}
+
+.si-pane-head .si-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.si-actions {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.si-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.si-field .kg-label {
+  font-size: 10px;
+}
+
+.si-error {
+  font-size: 12px;
+  color: var(--error-solid);
+  background: var(--error-subtle);
+  border: 1px solid var(--error-solid);
+  padding: 8px 10px;
+}
+
+.si-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}

@@ -1,0 +1,162 @@
+/* ── ConsentModal ──────────────────────────────────────────────────
+   Dialog chrome ported from the legacy InstallConsentModal's `icm-*`
+   layout (kiagent-ref, still vendored in alpha-cent): header with an
+   accent glyph tile, a "what & where-from" meta grid, a Permissions
+   section, a trust note, and a muted footer bar with a primary action.
+   Sections are separated by 1px dividers; the body scrolls, the header
+   and footer stay pinned.
+
+   `.cm-cap-row` / `.cm-cap-label` / `.cm-elevated-tag` are reused by the
+   Marketplace Detail pane's installed-caps summary — keep them working
+   outside this modal. */
+
+.cm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cm-modal {
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.cm-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cm-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  line-height: var(--text-lg-lh);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cm-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* What & where-from — the primary info block. */
+.cm-meta {
+  margin: 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 7px 16px;
+  align-items: baseline;
+}
+.cm-meta dt {
+  font-size: var(--text-xxs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+.cm-meta dd {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+}
+.cm-meta dd.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.cm-meta dd.trunc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-perms {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cm-perms-label {
+  margin-bottom: 9px;
+  font-size: var(--text-xxs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+.cm-caps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Every row reserves the elevated marker's width (2px bar + 8px gap) so
+   icons and text align in one column whether or not the bar is shown. */
+.cm-cap-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border-left: 2px solid transparent;
+  padding-left: 8px;
+}
+.cm-cap-row.elevated {
+  border-left-color: var(--accent-text);
+}
+.cm-cap-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cm-cap-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.cm-elevated-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cm-note {
+  margin: 0;
+  padding: 12px 18px;
+  font-size: var(--text-xs);
+  line-height: var(--text-xs-lh);
+  color: var(--text-tertiary);
+}
+
+.cm-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-muted);
+}
+.cm-foot .btn {
+  height: 30px;
+  padding: 0 14px;
+}

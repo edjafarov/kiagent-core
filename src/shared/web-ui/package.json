@@ -1,0 +1,28 @@
+{
+  "name": "@kiagent/web-ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "KIAgent design system: tokens, component CSS, icon sprite, and React primitives shared across the Electron renderer, the registration backend's server-rendered HTML, and any future web surfaces.",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "sideEffects": [
+    "*.css"
+  ],
+  "exports": {
+    ".": "./index.ts",
+    "./tokens.css": "./tokens.css",
+    "./components.css": "./components.css",
+    "./shell-app.css": "./shell-app.css",
+    "./shell-hero.css": "./shell-hero.css",
+    "./shell-minimal.css": "./shell-minimal.css",
+    "./components": "./components.tsx",
+    "./icon-sprite": "./icon-sprite.tsx",
+    "./icons-html": "./icons-html.js",
+    "./render-shell": "./render-shell.ts",
+    "./loader-node": "./loader-node.ts",
+    "./esc": "./esc.ts",
+    "./Spark": "./Spark.tsx",
+    "./Spark.css": "./Spark.css",
+    "./spark-html": "./spark-html.ts"
+  }
+}

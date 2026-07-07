@@ -1,0 +1,41 @@
+import { Menu, Tray, nativeImage } from 'electron';
+import type { MenuItemConstructorOptions } from 'electron';
+
+export interface TrayActions {
+  openWindow: () => void;
+  syncNow: () => void;
+  quit: () => void;
+}
+
+/**
+ * Menu template split from the Tray wiring so it stays unit-testable
+ * without an Electron runtime.
+ */
+export function buildTrayMenuTemplate(
+  actions: TrayActions,
+): MenuItemConstructorOptions[] {
+  return [
+    { label: 'Open KIAgent', click: actions.openWindow },
+    { label: 'Sync now', click: actions.syncNow },
+    { type: 'separator' },
+    { label: 'Quit KIAgent', click: actions.quit },
+  ];
+}
+
+/**
+ * Static menu-bar icon with a fixed context menu. Deliberately minimal
+ * compared to the legacy tray (no activity animation, no per-account
+ * status): the app keeps running after the window closes (see
+ * window-all-closed in main.ts), and this is the affordance that shows
+ * that and offers a way out. The caller must hold the returned Tray in a
+ * long-lived reference or GC destroys the icon.
+ */
+export function createTray(iconPath: string, actions: TrayActions): Tray {
+  const icon = nativeImage.createFromPath(iconPath);
+  // Black+alpha template image: macOS recolors it for light/dark menu bars.
+  icon.setTemplateImage(true);
+  const tray = new Tray(icon);
+  tray.setToolTip('KIAgent');
+  tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate(actions)));
+  return tray;
+}

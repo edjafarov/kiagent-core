@@ -1,0 +1,47 @@
+{
+  "id": "kia.whatsapp",
+  "displayName": "WhatsApp",
+  "version": "1.0.1",
+  "hostApi": "^2.0.0",
+  "entry": "dist/index.js",
+  "icon": "whatsapp",
+  "permissions": ["db:write", "db:read", "net", "secrets", "files:read"],
+  "activationEvents": ["onStartup"],
+  "contributes": {
+    "sources": [
+      {
+        "id": "whatsapp",
+        "displayName": "WhatsApp",
+        "icon": "whatsapp",
+        "capabilities": {
+          "multiAccount": true,
+          "requiresAuth": true,
+          "supportsBackfill": true,
+          "supportsDelta": true,
+          "supportsRealtime": true
+        },
+        "inAddSource": false,
+        "pollable": true,
+        "steps": [
+          {
+            "type": "live-stream",
+            "start": "begin-pairing",
+            "channel": "push:connector-stream",
+            "banner": {
+              "level": "danger",
+              "text": "Unofficial — links a companion device via an unofficial library; risk of ban."
+            },
+            "render": {
+              "qr": { "as": "qr-image", "from": "qr" },
+              "connected": { "as": "success", "text": "Linked. Syncing…", "autoCloseMs": 1400 },
+              "error": { "as": "error", "from": "error" }
+            },
+            "onAbandon": "cancel-pairing",
+            "timeoutMs": 25000
+          }
+        ],
+        "actions": [{ "key": "import", "label": "Import chat export…", "hook": "whatsapp-import" }]
+      }
+    ]
+  }
+}

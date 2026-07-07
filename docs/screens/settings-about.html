@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Settings · About</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .back-link {
+    display: inline-flex; align-items: center; gap: 4px;
+    color: var(--text-secondary); font-size: 12px;
+    background: none; border: none; cursor: pointer; padding: 4px 6px;
+  }
+  .back-link:hover { color: var(--text-primary); }
+
+  .about-shell {
+    flex: 1;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 32px 24px; gap: 16px;
+    text-align: center;
+  }
+  .about-mark {
+    width: 64px; height: 64px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent-subtle);
+    border: 1px solid #ddd6fe;
+    color: var(--accent-solid);
+    font-size: 38px; line-height: 1;
+    box-shadow: 0 8px 24px -8px rgba(124,58,237,0.35);
+  }
+  .about-name { font-size: 22px; font-weight: 600; letter-spacing: -0.015em; }
+  .about-version {
+    font-family: var(--font-mono); font-size: 11.5px;
+    color: var(--text-secondary);
+    padding: 3px 8px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-muted);
+  }
+  .about-tag {
+    font-size: 13px; color: var(--text-secondary);
+    max-width: 440px; line-height: 1.55;
+  }
+  .about-list {
+    display: flex; flex-direction: column; gap: 4px;
+    font-size: 12px; color: var(--text-secondary);
+    margin-top: 8px;
+  }
+  .about-list .row {
+    display: flex; align-items: center; gap: 8px;
+    justify-content: center;
+  }
+  .about-list .row .label { color: var(--text-tertiary); min-width: 90px; text-align: right; }
+  .about-list .row .value { color: var(--text-primary); min-width: 120px; text-align: left; }
+
+  .about-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+  .about-foot {
+    margin-top: 8px;
+    font-size: 11px; color: var(--text-tertiary);
+    line-height: 1.55; max-width: 440px;
+  }
+</style>
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent · Settings</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-topbar">
+      <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+      <span class="pill live"><span class="dot"></span>4 live · 47,231 docs</span>
+      <div style="flex:1"></div>
+      <button class="back-link">
+        <span aria-hidden="true">←</span>
+        Back to sources
+      </button>
+    </div>
+
+    <div class="set-shell">
+      <aside class="set-sidebar">
+        <div class="lbl-section">Settings</div>
+        <button class="side-item">Account</button>
+        <button class="side-item">Connectors</button>
+        <button class="side-item">Storage</button>
+        <button class="side-item">Advanced</button>
+        <button class="side-item active">About</button>
+      </aside>
+
+      <div class="set-pane" style="padding:0">
+        <div class="about-shell">
+          <span class="about-mark">✦</span>
+          <div style="display:flex;flex-direction:column;gap:6px;align-items:center">
+            <span class="about-name">KIAgent</span>
+            <span class="about-version">v0.1.0</span>
+          </div>
+
+          <p class="about-tag">
+            A local-first connector and indexer for your communications.
+            Everything stays on this machine.
+          </p>
+
+          <div class="about-actions">
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-external"/></svg>
+              GitHub
+            </button>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-external"/></svg>
+              Release notes
+            </button>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-refresh-cw"/></svg>
+              Check for updates
+            </button>
+          </div>
+
+          <div class="about-list">
+            <div class="row">
+              <span class="label">Version</span>
+              <span class="value mono">0.1.0 (build 2026.05.24)</span>
+            </div>
+            <div class="row">
+              <span class="label">License</span>
+              <span class="value">MIT</span>
+            </div>
+            <div class="row">
+              <span class="label">Built with</span>
+              <span class="value">Electron 30 · React 18 · SQLite</span>
+            </div>
+            <div class="row">
+              <span class="label">Repository</span>
+              <span class="value mono">github.com/edjafarov/alpha-cent</span>
+            </div>
+          </div>
+
+          <div class="about-foot">
+            © 2026 KIAgent contributors. Made with care for offline-first knowledge work.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

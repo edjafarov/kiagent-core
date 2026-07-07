@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "incremental": true,
+    "target": "es2022",
+    "module": "node16",
+    "lib": ["dom", "es2022"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "sourceMap": true,
+    "moduleResolution": "node16",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "outDir": ".erb/dll",
+    "baseUrl": ".",
+    "paths": {
+      "@main/*": ["src/main/*"],
+      "@renderer/*": ["src/renderer/*"],
+      "@shared/*": ["src/shared/*"],
+      "imapflow": ["release/app/node_modules/imapflow"]
+    }
+  },
+  "exclude": [
+    "node_modules",
+    "**/node_modules",
+    "test",
+    "services/registration",
+    "release/build",
+    "release/app/dist",
+    ".erb/dll"
+  ]
+}

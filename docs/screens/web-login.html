@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Sign in</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 0; background: #f0eee9; }
+
+  .login-shell {
+    width: 1200px; height: 800px;
+    display: grid; grid-template-columns: 540px 1fr;
+    background: var(--bg-canvas);
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+  }
+
+  .login-aside {
+    background: var(--bg-rail);
+    color: #fff;
+    padding: 56px 56px 48px;
+    display: flex; flex-direction: column; gap: 28px;
+    position: relative;
+    overflow: hidden;
+  }
+  .login-aside::after {
+    content: ""; position: absolute; inset: 0;
+    background:
+      radial-gradient(800px 400px at 80% 110%, rgba(167,139,250,0.22), transparent 60%),
+      radial-gradient(600px 320px at -10% 10%, rgba(124,58,237,0.18), transparent 60%);
+    pointer-events: none;
+  }
+  .login-aside > * { position: relative; z-index: 1; }
+
+  .login-aside .wordmark {
+    color: #fff; font-size: 14px;
+  }
+  .login-aside .wordmark .spark { color: #a78bfa; font-size: 17px; }
+
+  .login-aside .spark-glyph {
+    font-size: 56px; color: #a78bfa; line-height: 1;
+    text-shadow: 0 0 24px rgba(167,139,250,0.35);
+  }
+
+  .login-aside .tagline {
+    font-size: 30px; font-weight: 600; letter-spacing: -0.015em;
+    color: #fff; line-height: 1.2; margin: 0;
+  }
+  .login-aside .sub {
+    font-size: 14px; line-height: 1.6;
+    color: rgba(237,233,254,0.78);
+    max-width: 380px; margin: 0;
+  }
+
+  .login-aside .meta-list {
+    margin-top: auto;
+    display: flex; flex-direction: column; gap: 10px;
+    color: rgba(237,233,254,0.72); font-size: 12px;
+  }
+  .login-aside .meta-list .row {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .login-aside .meta-list .row svg { color: #a78bfa; }
+
+  .login-pane {
+    display: flex; flex-direction: column;
+    padding: 36px 64px;
+  }
+  .login-pane-head { display: flex; align-items: center; }
+  .login-pane-head .help-link {
+    margin-left: auto; font-size: 12px; color: var(--text-secondary);
+    text-decoration: none;
+  }
+  .login-pane-head .help-link:hover { color: var(--accent-text); }
+
+  .login-pane-body {
+    flex: 1;
+    display: flex; flex-direction: column; justify-content: center;
+    max-width: 420px; width: 100%; margin: 0 auto;
+    gap: 24px;
+  }
+
+  .login-title {
+    font-size: 28px; font-weight: 600; letter-spacing: -0.015em;
+    color: var(--text-primary); margin: 0;
+  }
+  .login-sub {
+    font-size: 14px; color: var(--text-secondary);
+    line-height: 1.55; margin: 6px 0 0 0;
+  }
+
+  .login-providers { display: flex; flex-direction: column; gap: 10px; }
+  .login-providers .prov-row { height: 48px; }
+
+  .login-fineprint {
+    font-size: 11.5px; color: var(--text-tertiary);
+    line-height: 1.55; text-align: center;
+    margin-top: 4px;
+  }
+  .login-fineprint a { color: var(--accent-text); text-decoration: none; }
+
+  .login-foot {
+    margin-top: auto;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; color: var(--text-tertiary);
+  }
+</style>
+</head>
+<body>
+
+<div class="login-shell">
+  <aside class="login-aside">
+    <span class="wordmark"><span class="spark">&#10022;</span>kia</span>
+    <div class="spark-glyph">&#10022;</div>
+    <h2 class="tagline">Your knowledge, indexed locally.</h2>
+    <p class="sub">Mail and docs are read on your machine. We keep only a small account so your remote endpoint stays yours.</p>
+    <div class="meta-list">
+      <div class="row">
+        <svg class="i" width="14" height="14"><use href="#i-shield"/></svg>
+        <span>Indexed locally — no telemetry</span>
+      </div>
+      <div class="row">
+        <svg class="i" width="14" height="14"><use href="#i-link"/></svg>
+        <span>One stable HTTPS subdomain per account</span>
+      </div>
+      <div class="row">
+        <svg class="i" width="14" height="14"><use href="#i-database"/></svg>
+        <span>Your OAuth client, your scopes</span>
+      </div>
+    </div>
+  </aside>
+
+  <section class="login-pane">
+    <div class="login-pane-head">
+      <span style="font-size:12px;color:var(--text-tertiary)">lokalkiagent.de</span>
+      <a class="help-link" href="/help">Help</a>
+    </div>
+
+    <div class="login-pane-body">
+      <div>
+        <h1 class="login-title">Sign in</h1>
+        <p class="login-sub">Use the same Google or Microsoft account you signed into kia with on your machine. Your subdomain re-attaches automatically.</p>
+      </div>
+
+      <div class="login-providers">
+        <a class="prov-row google-signin" href="/app/auth/login?provider=google">
+          <svg width="20" height="20" viewBox="0 0 18 18" style="flex-shrink:0">
+            <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.17-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.79 2.72v2.26h2.9c1.7-1.56 2.69-3.87 2.69-6.62z"/>
+            <path fill="#34A853" d="M9 18c2.43 0 4.47-.81 5.96-2.18l-2.9-2.26c-.8.54-1.83.86-3.06.86-2.36 0-4.36-1.6-5.07-3.74H.96v2.33A9 9 0 0 0 9 18z"/>
+            <path fill="#FBBC05" d="M3.93 10.68A5.4 5.4 0 0 1 3.64 9c0-.58.1-1.15.29-1.68V4.99H.96A9 9 0 0 0 0 9c0 1.45.35 2.82.96 4.01l2.97-2.33z"/>
+            <path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58A9 9 0 0 0 9 0 9 9 0 0 0 .96 4.99l2.97 2.33C4.64 5.18 6.64 3.58 9 3.58z"/>
+          </svg>
+          <span class="prov-label">Sign in with Google</span>
+        </a>
+
+        <a class="prov-row microsoft-signin" href="/app/auth/login?provider=microsoft">
+          <svg width="20" height="20" viewBox="0 0 18 18" style="flex-shrink:0">
+            <rect x="0"  y="0"   width="8.4" height="8.4" fill="#F25022"/>
+            <rect x="9.6" y="0"   width="8.4" height="8.4" fill="#7FBA00"/>
+            <rect x="0"  y="9.6" width="8.4" height="8.4" fill="#00A4EF"/>
+            <rect x="9.6" y="9.6" width="8.4" height="8.4" fill="#FFB900"/>
+          </svg>
+          <span class="prov-label">Sign in with Microsoft</span>
+        </a>
+      </div>
+
+      <p class="login-fineprint">
+        By signing in you agree to the
+        <a href="#">terms</a> and
+        <a href="#">privacy policy</a>.
+        Your kia subdomain is bound to this account.
+      </p>
+    </div>
+
+    <div class="login-foot">
+      <span>&copy; 2026 lokalkiagent.de</span>
+      <span class="mono">build a13c2f9</span>
+    </div>
+  </section>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

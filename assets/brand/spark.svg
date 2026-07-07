@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- KIAgent app icon — the "Bracket" reticle tile: a solid violet square
+       whose own corners echo the focus reticle, with explicit white inner
+       ticks framing the Spark (brand spec, Bracket §09). The primary mark for
+       icons ≥ 48px (dock, app, large .ico/.icns); smaller sizes and the
+       favicon use the plain spark-tile.svg. Geometry authored on the 100u
+       grid and scaled ×10.24 to the 1024 tile. -->
+  <rect width="1024" height="1024" fill="#7c3aed"/>
+  <g transform="scale(10.24)">
+    <g fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="butt" stroke-linejoin="miter" opacity="0.85">
+      <path d="M16 28 L16 16 L28 16"/>
+      <path d="M84 28 L84 16 L72 16"/>
+      <path d="M16 72 L16 84 L28 84"/>
+      <path d="M84 72 L84 84 L72 84"/>
+    </g>
+    <g transform="translate(27.6596 27.6596) scale(0.446809)">
+      <path d="M50 3 C 52.5 33 67 47.5 97 50 C 67 52.5 52.5 67 50 97 C 47.5 67 33 52.5 3 50 C 33 47.5 47.5 33 50 3 Z" fill="#ffffff"/>
+    </g>
+  </g>
+</svg>

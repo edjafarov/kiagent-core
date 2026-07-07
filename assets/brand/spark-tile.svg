@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- KIAgent app icon — plain "Index" tile: the Spark knocked out of a solid
+       violet square at 16% padding. Used at small icon sizes (< 48px) and the
+       favicon, where the reticle ticks can't survive (brand spec, Bracket §09
+       degradation rule). Large sizes use spark.svg (the reticle tile). -->
+  <rect width="1024" height="1024" fill="#7c3aed"/>
+  <g transform="translate(163.84 163.84) scale(6.9632)">
+    <path d="M50 3 C 52.5 33 67 47.5 97 50 C 67 52.5 52.5 67 50 97 C 47.5 67 33 52.5 3 50 C 33 47.5 47.5 33 50 3 Z" fill="#ffffff"/>
+  </g>
+</svg>

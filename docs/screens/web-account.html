@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Your account</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 0; background: #f0eee9; }
+
+  .web-header .wordmark { font-size: 14px; }
+  .web-header .wordmark .spark { font-size: 17px; }
+  .web-header .identity { color: rgba(255,255,255,0.85); font-size: 12px; }
+
+  .acct-main {
+    max-width: 880px;
+    margin: 0 auto;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+
+  .acct-title {
+    font-size: 26px; font-weight: 600; letter-spacing: -0.015em;
+    margin: 0; color: var(--text-primary);
+  }
+  .acct-sub {
+    font-size: 13px; color: var(--text-secondary);
+    margin: 4px 0 0 0;
+  }
+
+  .acct-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-xs);
+    padding: 20px 24px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .acct-card .head {
+    display: flex; align-items: center; gap: 10px;
+  }
+  .acct-card .head .title {
+    font-size: 13px; font-weight: 600; color: var(--text-primary);
+  }
+  .acct-card .head .meta {
+    font-size: 11px; color: var(--text-tertiary);
+    margin-left: auto;
+  }
+
+  dl.acct-kv {
+    display: grid; grid-template-columns: 160px 1fr;
+    gap: 8px 16px; margin: 0;
+  }
+  dl.acct-kv dt {
+    font-size: 11.5px; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+  }
+  dl.acct-kv dd {
+    margin: 0; font-size: 13px; color: var(--text-primary);
+    display: flex; align-items: center; gap: 8px;
+  }
+  dl.acct-kv dd.mono { font-family: var(--font-mono); }
+  dl.acct-kv dd .t-meta { font-size: 11px; color: var(--text-secondary); }
+
+  .hostname-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; background: var(--bg-muted);
+    border: 1px solid var(--border-subtle);
+    font-family: var(--font-mono); font-size: 13px;
+  }
+  .hostname-row .label { color: var(--accent-text); font-size: 11.5px; font-family: var(--font-sans); font-weight: 600; }
+  .hostname-row .host { flex: 1; color: var(--text-primary); }
+
+  .actions-row {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-subtle);
+    margin-top: 6px;
+  }
+
+  .footer-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    padding: 14px 20px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--text-secondary);
+  }
+  .footer-card .spacer { flex: 1; }
+</style>
+</head>
+<body>
+
+<div class="web-shell">
+  <header class="web-header">
+    <span class="wordmark"><span class="spark">&#10022;</span>kia</span>
+    <nav>
+      <a class="active" href="/account">Account</a>
+      <a href="/admin">Admin</a>
+      <a href="/help">Help</a>
+    </nav>
+    <div class="user">
+      <span class="identity">alice@example.com</span>
+      <button class="btn sm">Logout</button>
+    </div>
+  </header>
+
+  <main class="web-main">
+    <div class="acct-main">
+      <div>
+        <h1 class="acct-title">Your account</h1>
+        <p class="acct-sub">Your kia account, the remote endpoint it owns, and the live tunnel from your machine.</p>
+      </div>
+
+      <div class="acct-card">
+        <div class="head">
+          <svg class="i" width="16" height="16" style="color:var(--accent-text)"><use href="#i-mail"/></svg>
+          <span class="title">Identity</span>
+          <span class="meta">Provider: Google</span>
+        </div>
+        <dl class="acct-kv">
+          <dt>Email</dt>
+          <dd class="mono">alice@example.com</dd>
+          <dt>Joined</dt>
+          <dd>March 14, 2026 &middot; <span class="t-meta">2 months ago</span></dd>
+          <dt>Last login</dt>
+          <dd>Today, 09:42 &middot; <span class="t-meta">from 92.116.4.18 (Berlin, DE)</span></dd>
+        </dl>
+      </div>
+
+      <div class="acct-card">
+        <div class="head">
+          <svg class="i" width="16" height="16" style="color:var(--accent-text)"><use href="#i-link"/></svg>
+          <span class="title">Your subdomain</span>
+          <span class="meta">Bound to this account &middot; not your device</span>
+        </div>
+
+        <div class="hostname-row">
+          <span class="label">HOSTNAME</span>
+          <span class="host">alice-a3f9c1.lokalkiagent.de</span>
+          <button class="btn sm">
+            <svg class="i" width="12" height="12"><use href="#i-copy"/></svg>
+            Copy
+          </button>
+          <button class="btn sm">
+            <svg class="i" width="12" height="12"><use href="#i-external"/></svg>
+            Open
+          </button>
+        </div>
+
+        <dl class="acct-kv">
+          <dt>Subdomain status</dt>
+          <dd>
+            <span class="pill live"><span class="dot"></span>active</span>
+          </dd>
+          <dt>Tunnel</dt>
+          <dd>
+            <span class="pill live"><span class="dot"></span>tunnel up</span>
+            <span class="t-meta">Connected from kia desktop &middot; 5m ago</span>
+          </dd>
+          <dt>TLS certificate</dt>
+          <dd>
+            <span class="pill info"><span class="dot"></span>Issued</span>
+            <span class="t-meta">Let's Encrypt &middot; expires Aug 20, 2026 (87 days)</span>
+          </dd>
+          <dt>DNS</dt>
+          <dd>
+            <span class="pill live"><span class="dot"></span>Verified</span>
+            <span class="t-meta">A record propagated to 8/8 resolvers</span>
+          </dd>
+        </dl>
+
+        <div class="actions-row">
+          <button class="btn">
+            <svg class="i" width="12" height="12"><use href="#i-refresh-cw"/></svg>
+            Renew certificate
+          </button>
+          <button class="btn">
+            <svg class="i" width="12" height="12"><use href="#i-refresh-cw"/></svg>
+            Rotate bearer token
+          </button>
+          <span style="flex:1"></span>
+          <button class="btn destructive sm">
+            <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+            Release subdomain
+          </button>
+        </div>
+      </div>
+
+      <div class="footer-card">
+        <svg class="i" width="14" height="14" style="color:var(--text-tertiary)"><use href="#i-info"/></svg>
+        <span>Your subdomain belongs to this account, not your device. Reinstall kia anywhere and sign in with the same account to re-attach.</span>
+        <span class="spacer"></span>
+        <a class="link" href="/help">Help</a>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

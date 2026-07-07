@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Admin</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 0; background: #f0eee9; }
+
+  .web-header .wordmark { font-size: 14px; }
+  .web-header .wordmark .spark { font-size: 17px; }
+  .web-header .identity { color: rgba(255,255,255,0.85); font-size: 12px; }
+
+  .admin-main {
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .admin-head {
+    display: flex; align-items: flex-end; gap: 16px;
+  }
+  .admin-title {
+    font-size: 26px; font-weight: 600; letter-spacing: -0.015em;
+    margin: 0; color: var(--text-primary);
+  }
+  .admin-sub {
+    font-size: 13px; color: var(--text-secondary);
+    margin: 4px 0 0 0;
+  }
+  .admin-head .right {
+    margin-left: auto; display: flex; gap: 8px; align-items: center;
+  }
+
+  .stat-grid { grid-template-columns: repeat(7, 1fr); gap: 10px; }
+  .stat-card .delta {
+    font-size: 10.5px; color: var(--live-solid);
+    margin-top: 2px; font-weight: 500;
+  }
+  .stat-card .delta.warn { color: var(--working-solid); }
+  .stat-card .delta.dim { color: var(--text-tertiary); font-weight: 400; }
+
+  .admin-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-xs);
+  }
+  .admin-card-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 18px; border-bottom: 1px solid var(--border-subtle);
+  }
+  .admin-card-head .title {
+    font-size: 13px; font-weight: 600; color: var(--text-primary);
+  }
+  .admin-card-head .count {
+    font-size: 11px; color: var(--text-tertiary);
+    padding: 2px 8px; background: var(--bg-muted);
+  }
+  .admin-card-head .right {
+    margin-left: auto; display: flex; gap: 8px; align-items: center;
+  }
+
+  .search-input {
+    display: flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 10px;
+    border: 1px solid var(--border-subtle);
+    background: #fff; width: 280px;
+    color: var(--text-tertiary); font-size: 12px;
+  }
+  .search-input input {
+    border: none; outline: none; flex: 1;
+    font: inherit; color: var(--text-primary);
+    background: transparent;
+  }
+
+  .admin-tbl { width: 100%; border-collapse: separate; border-spacing: 0; }
+  .admin-tbl thead th {
+    text-align: left; font-size: 10px; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-tertiary);
+    padding: 10px 16px 8px;
+    background: var(--bg-muted);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .admin-tbl tbody td {
+    padding: 10px 16px; font-size: 12.5px;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--bg-muted);
+    vertical-align: middle;
+  }
+  .admin-tbl tbody tr:hover td { background: var(--bg-muted); }
+  .admin-tbl .mono { font-family: var(--font-mono); }
+  .admin-tbl .col-actions { text-align: right; }
+  .admin-tbl small { font-size: 10.5px; color: var(--text-tertiary); }
+
+  .prov-tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; color: var(--text-secondary);
+  }
+  .prov-tag .swatch {
+    width: 8px; height: 8px;
+  }
+  .prov-tag .swatch.google { background: #4285f4; }
+  .prov-tag .swatch.microsoft { background: #0078d4; }
+
+  .admin-grid-2 {
+    display: grid; grid-template-columns: 2fr 1fr; gap: 16px;
+  }
+  .audit-row {
+    display: grid; grid-template-columns: 110px 1fr;
+    gap: 12px; padding: 10px 16px;
+    border-bottom: 1px solid var(--bg-muted);
+    font-size: 12px;
+  }
+  .audit-row:last-child { border-bottom: 0; }
+  .audit-row .when {
+    font-family: var(--font-mono); color: var(--text-tertiary);
+    font-size: 11px;
+  }
+  .audit-row .body .actor { color: var(--text-primary); font-weight: 500; }
+  .audit-row .body .action {
+    color: var(--accent-text); font-family: var(--font-mono);
+    font-size: 11.5px; margin: 0 4px;
+  }
+  .audit-row .body .target { color: var(--text-secondary); font-family: var(--font-mono); font-size: 11.5px; }
+</style>
+</head>
+<body>
+
+<div class="web-shell">
+  <header class="web-header">
+    <span class="wordmark"><span class="spark">&#10022;</span>kia</span>
+    <nav>
+      <a href="/account">Account</a>
+      <a class="active" href="/admin">Admin</a>
+      <a href="/help">Help</a>
+    </nav>
+    <div class="user">
+      <span class="identity">eldar@lokalkiagent.de</span>
+      <button class="btn sm">Logout</button>
+    </div>
+  </header>
+
+  <main class="web-main">
+    <div class="admin-main">
+      <div class="admin-head">
+        <div>
+          <h1 class="admin-title">Admin</h1>
+          <p class="admin-sub">Registrations, tunnels, certificates &middot; operator view.</p>
+        </div>
+        <div class="right">
+          <button class="btn sm">
+            <svg class="i" width="12" height="12"><use href="#i-refresh-cw"/></svg>
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="label">Total users</div>
+          <div class="value">142</div>
+          <div class="delta">+8 this week</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Google</div>
+          <div class="value">98</div>
+          <div class="delta dim">69%</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Microsoft</div>
+          <div class="value">44</div>
+          <div class="delta dim">31%</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Active subdomains</div>
+          <div class="value">138</div>
+          <div class="delta">+5 this week</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Released</div>
+          <div class="value">4</div>
+          <div class="delta dim">lifetime</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Channels running</div>
+          <div class="value">87</div>
+          <div class="delta">63% online</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Revoked certs</div>
+          <div class="value">1</div>
+          <div class="delta warn">last 30d</div>
+        </div>
+      </div>
+
+      <div class="admin-card">
+        <div class="admin-card-head">
+          <span class="title">Users</span>
+          <span class="count">142 total</span>
+          <div class="right">
+            <div class="search-input">
+              <svg class="i" width="12" height="12"><use href="#i-search"/></svg>
+              <input type="text" placeholder="search email..." />
+            </div>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-external"/></svg>
+              Export CSV
+            </button>
+          </div>
+        </div>
+        <table class="admin-tbl">
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Provider</th>
+              <th>Joined</th>
+              <th>Last login</th>
+              <th>Subdomain</th>
+              <th style="width:60px">Admin</th>
+              <th style="width:140px" class="col-actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>alice@example.com</td>
+              <td><span class="prov-tag"><span class="swatch google"></span>google</span></td>
+              <td>3/14/2026</td>
+              <td>5/25/2026</td>
+              <td class="mono">alice-a3f9c1 <small>(active)</small></td>
+              <td><input type="checkbox" /></td>
+              <td class="col-actions"><button class="btn sm">Force release</button></td>
+            </tr>
+            <tr>
+              <td>bob@acme.io</td>
+              <td><span class="prov-tag"><span class="swatch microsoft"></span>microsoft</span></td>
+              <td>3/18/2026</td>
+              <td>5/24/2026</td>
+              <td class="mono">bob-7e2d11 <small>(active)</small></td>
+              <td><input type="checkbox" /></td>
+              <td class="col-actions"><button class="btn sm">Force release</button></td>
+            </tr>
+            <tr>
+              <td>carol@startup.co</td>
+              <td><span class="prov-tag"><span class="swatch google"></span>google</span></td>
+              <td>3/22/2026</td>
+              <td>5/25/2026</td>
+              <td class="mono">carol-9b5e0a <small>(active)</small></td>
+              <td><input type="checkbox" checked /></td>
+              <td class="col-actions"><button class="btn sm">Force release</button></td>
+            </tr>
+            <tr>
+              <td>david@research.dev</td>
+              <td><span class="prov-tag"><span class="swatch microsoft"></span>microsoft</span></td>
+              <td>4/02/2026</td>
+              <td>5/23/2026</td>
+              <td class="mono">david-1f4cd2 <small>(pending)</small></td>
+              <td><input type="checkbox" /></td>
+              <td class="col-actions"><button class="btn sm">Force release</button></td>
+            </tr>
+            <tr>
+              <td>eve@company.net</td>
+              <td><span class="prov-tag"><span class="swatch google"></span>google</span></td>
+              <td>4/11/2026</td>
+              <td>5/19/2026</td>
+              <td class="mono">eve-6a8b03 <small>(active)</small></td>
+              <td><input type="checkbox" /></td>
+              <td class="col-actions"><button class="btn sm">Force release</button></td>
+            </tr>
+            <tr>
+              <td>frank@studio.de</td>
+              <td><span class="prov-tag"><span class="swatch microsoft"></span>microsoft</span></td>
+              <td>4/17/2026</td>
+              <td>5/20/2026</td>
+              <td class="mono">frank-c0f9d4 <small>(released)</small></td>
+              <td><input type="checkbox" /></td>
+              <td class="col-actions"><span class="t-meta">&mdash;</span></td>
+            </tr>
+            <tr>
+              <td>grace@labs.org</td>
+              <td><span class="prov-tag"><span class="swatch google"></span>google</span></td>
+              <td>5/01/2026</td>
+              <td>5/25/2026</td>
+              <td class="mono">grace-2d7e85 <small>(active)</small></td>
+              <td><input type="checkbox" /></td>
+              <td class="col-actions"><button class="btn sm">Force release</button></td>
+            </tr>
+            <tr>
+              <td>henry@team.app</td>
+              <td><span class="prov-tag"><span class="swatch microsoft"></span>microsoft</span></td>
+              <td>5/08/2026</td>
+              <td>5/24/2026</td>
+              <td class="mono">henry-b39a16 <small>(active)</small></td>
+              <td><input type="checkbox" /></td>
+              <td class="col-actions"><button class="btn sm">Force release</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="admin-grid-2">
+        <div class="admin-card">
+          <div class="admin-card-head">
+            <span class="title">Recent admin actions</span>
+            <span class="count">last 20</span>
+          </div>
+          <div>
+            <div class="audit-row">
+              <span class="when">5/25 09:18</span>
+              <div class="body">
+                <span class="actor">eldar@lokalkiagent.de</span>
+                <span class="action">release_subdomain</span>
+                <span class="target">frank-c0f9d4</span>
+              </div>
+            </div>
+            <div class="audit-row">
+              <span class="when">5/24 16:42</span>
+              <div class="body">
+                <span class="actor">eldar@lokalkiagent.de</span>
+                <span class="action">revoke_cert</span>
+                <span class="target">serial 0xAF22B901</span>
+              </div>
+            </div>
+            <div class="audit-row">
+              <span class="when">5/24 11:05</span>
+              <div class="body">
+                <span class="actor">eldar@lokalkiagent.de</span>
+                <span class="action">grant_admin</span>
+                <span class="target">carol@startup.co</span>
+              </div>
+            </div>
+            <div class="audit-row">
+              <span class="when">5/22 14:31</span>
+              <div class="body">
+                <span class="actor">carol@startup.co</span>
+                <span class="action">release_subdomain</span>
+                <span class="target">old-mike-44ff20</span>
+              </div>
+            </div>
+            <div class="audit-row">
+              <span class="when">5/21 08:09</span>
+              <div class="body">
+                <span class="actor">eldar@lokalkiagent.de</span>
+                <span class="action">revoke_cert</span>
+                <span class="target">serial 0x3E118D04</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="admin-card">
+          <div class="admin-card-head">
+            <span class="title">Revoke certificate</span>
+          </div>
+          <div style="padding: 14px 18px; display:flex; flex-direction:column; gap:10px">
+            <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.5">
+              Mark a leaf certificate as revoked. The CRL updates on the next provisioner cycle.
+            </div>
+            <label style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Serial (hex)</label>
+            <input class="input mono-text" value="0x4f12a8d0" />
+            <label style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Reason</label>
+            <input class="input" placeholder="key compromise, superseded..." />
+            <div style="display:flex;gap:8px;margin-top:4px">
+              <button class="btn destructive">
+                <svg class="i" width="12" height="12"><use href="#i-shield"/></svg>
+                Revoke
+              </button>
+              <button class="btn">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

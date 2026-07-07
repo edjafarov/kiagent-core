@@ -1,0 +1,126 @@
+/**
+ * Bearer-token fetch core with retry/backoff, ported from the legacy
+ * `http-shared/bearer-fetch.ts` (kiagent-ref). Kept self-contained inside the
+ * gmail source (per file-ownership rules) rather than shared, since this is
+ * the only source using it in this port.
+ *
+ * Retains the load-bearing behaviors from legacy:
+ *  - 429 / 5xx / Google-quota-403 are retried with exponential backoff
+ *    (honoring `Retry-After` when present); network errors and timeouts are
+ *    always retryable.
+ *  - The abort signal stays armed across BOTH header and body read — fetch()
+ *    resolves as soon as headers arrive, so clearing the timeout early can
+ *    leave a slow body read unprotected (legacy hit multi-hour hangs this way).
+ *  - Thrown HTTP-failure message format is `${errorPrefix} ${status} ${url} ${body}`
+ *    — callers regex this to detect invalid-cursor conditions (see
+ *    `isInvalidHistoryError` in gmail-api.ts).
+ *  - 401 is NOT retried: it is thrown immediately so the caller can surface a
+ *    reauth condition. (Turning that into a first-class `needsReauth` signal
+ *    is left for later, as noted in the task brief.)
+ */
+
+const MAX_ATTEMPTS = 4;
+const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
+
+export interface BearerFetchOpts {
+  timeoutMs?: number;
+  responseType?: 'json' | 'text';
+  errorPrefix: string;
+  logTag?: string;
+  signal?: AbortSignal;
+}
+
+function isRetryableGoogleFailure(status: number, body: string): boolean {
+  if (status === 429 || status >= 500) return true;
+  if (status === 401) return false;
+  if (status === 403) {
+    return /rateLimitExceeded|userRateLimitExceeded|quotaExceeded/i.test(body);
+  }
+  return false;
+}
+
+export async function bearerFetch<T>(
+  url: string,
+  getToken: () => Promise<string>,
+  opts: BearerFetchOpts,
+): Promise<T> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const responseType = opts.responseType ?? 'json';
+  for (let attempt = 0; ; attempt += 1) {
+    if (opts.signal?.aborted) throw new Error('aborted');
+    const token = await getToken();
+    const controller = new AbortController();
+    const onOuterAbort = () => controller.abort();
+    opts.signal?.addEventListener('abort', onOuterAbort, { once: true });
+    const handle = setTimeout(() => controller.abort(), timeoutMs);
+
+    let parsed: T | undefined;
+    let httpFail:
+      | { status: number; body: string; retryAfter: string | null }
+      | undefined;
+    let netError: Error | undefined;
+    try {
+      const r = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      });
+      if (r.ok) {
+        parsed =
+          responseType === 'json'
+            ? ((await r.json()) as T)
+            : ((await r.text()) as unknown as T);
+      } else {
+        httpFail = {
+          status: r.status,
+          body: await r.text(),
+          retryAfter: r.headers.get('retry-after'),
+        };
+      }
+    } catch (e) {
+      netError = e as Error;
+    } finally {
+      clearTimeout(handle);
+      opts.signal?.removeEventListener('abort', onOuterAbort);
+    }
+
+    if (parsed !== undefined) return parsed;
+
+    if (netError) {
+      if (opts.signal?.aborted) throw netError;
+      if (attempt < MAX_ATTEMPTS) {
+        const delay =
+          Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 250;
+        if (opts.logTag) {
+          const reason =
+            netError.name === 'AbortError'
+              ? `timeout(${timeoutMs}ms)`
+              : netError.message;
+          console.warn(
+            `${opts.logTag} ${reason} ${url} — retry ${attempt + 1}/${MAX_ATTEMPTS} after ${Math.round(delay)}ms`,
+          );
+        }
+        await new Promise((res) => setTimeout(res, delay));
+        continue;
+      }
+      throw netError;
+    }
+
+    const { status, body, retryAfter } = httpFail!;
+    if (attempt < MAX_ATTEMPTS && isRetryableGoogleFailure(status, body)) {
+      const retryAfterMs = Number(retryAfter);
+      const delay =
+        Number.isFinite(retryAfterMs) && retryAfterMs > 0
+          ? retryAfterMs * 1000
+          : Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 250;
+      if (opts.logTag) {
+        console.warn(
+          `${opts.logTag} ${status} ${url} — retry ${attempt + 1}/${MAX_ATTEMPTS} after ${Math.round(delay)}ms`,
+        );
+      }
+      await new Promise((res) => setTimeout(res, delay));
+      continue;
+    }
+    // 401 (and any other non-retryable status) surfaces immediately here.
+    throw new Error(`${opts.errorPrefix} ${status} ${url} ${body}`);
+  }
+}

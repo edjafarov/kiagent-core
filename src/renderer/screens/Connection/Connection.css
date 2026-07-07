@@ -1,0 +1,349 @@
+/* Connection screen — MCP hub status + Local clients + Manual setup.
+   Built from the shared design tokens (@shared/web-ui/tokens.css) and
+   primitives (@shared/web-ui/components.css: .btn, .pill, .h-section,
+   .lbl-section, .t-meta, .div-h). Sharp corners throughout — the radius
+   tokens are 0 app-wide, so nothing here rounds. Ported from the legacy
+   renderer's screens/Connection/Connection.css (kiagent-ref), minus the
+   Remote-only classes (.conn-remote-card/.conn-remote-status/.conn-chips)
+   since the Remote section is omitted in this build — see index.tsx. */
+
+/* Scroll frame — a top-level screen like Sources' .dash-body. */
+.conn-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.conn-body > * {
+  flex-shrink: 0;
+}
+
+.conn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── MCP server status hub ───────────────────────────────────────────── */
+.conn-hub {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conn-hub-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.conn-hub-head .h-section {
+  margin: 0;
+}
+.conn-hub-desc {
+  max-width: 640px;
+  margin: 0;
+}
+.conn-hub-url-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Copyable URL row — same idiom as the legacy mockups' Remote-MCP row
+   (docs/screens/mcp-hub-active.html `.url-input`), repointed at the local
+   endpoint here. */
+.url-input {
+  flex: 1;
+  height: 30px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+.url-input .icon {
+  color: var(--accent-text);
+  flex-shrink: 0;
+}
+.url-input .url {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Local clients ────────────────────────────────────────────────────── */
+.conn-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.conn-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.conn-section-head .h-section {
+  margin: 0;
+}
+.conn-section-head .spacer {
+  flex: 1;
+}
+.conn-section-head .sub {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.conn-empty {
+  margin: 0;
+  padding: 12px;
+  border: 1px dashed var(--border-subtle);
+}
+
+/* Client list — one row per MCP client. Single bordered surface with hairline
+   row dividers, mirroring Settings' .pref-list idiom. */
+.conn-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+.conn-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+}
+.conn-row + .conn-row {
+  border-top: 1px solid var(--border-subtle);
+}
+.conn-row .body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.conn-row .name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.conn-row .desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 380px;
+}
+.conn-row .actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Mono-initial client glyph. Base square/flex sizing comes from
+   @shared/web-ui/components.css' `.conn-glyph` (22px, shared with
+   ConnectorBrandIcon elsewhere); this overrides the size to 30px and adds
+   the concrete mono-tile look, same override legacy's own
+   Connection.css made. */
+.conn-glyph {
+  width: 30px;
+  height: 30px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: -0.02em;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.conn-glyph.accent {
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  border-color: rgba(124, 58, 237, 0.22);
+}
+
+/* ── Manual-setup disclosure ──────────────────────────────────────────── */
+.conn-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.conn-manual-trigger {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.conn-manual-trigger:hover {
+  color: var(--accent-text);
+}
+.conn-manual-trigger .chev {
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+.conn-manual-trigger[aria-expanded='true'] .chev {
+  transform: rotate(90deg);
+}
+.conn-manual-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Monospace config snippet block. */
+.code-block {
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  background: var(--bg-muted);
+  border: 1px solid var(--border-subtle);
+  padding: 10px 12px;
+  margin: 0;
+  overflow-x: auto;
+}
+.code-block.wrap {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── Activity feed (right column) ────────────────────────────────────── */
+/* .conn-body keeps being the screen frame; in columns mode the two children
+   own their scroll independently so a long feed never scrolls the hub. */
+.conn-body.conn-columns {
+  flex-direction: row;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.conn-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 16px 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.conn-main > * {
+  flex-shrink: 0;
+}
+.conn-activity {
+  flex: 0 0 360px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-muted);
+}
+.act-head {
+  padding: 16px 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.act-head .h-section {
+  margin: 0;
+}
+.act-head .t-meta {
+  margin: 0;
+}
+.act-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.act-empty {
+  padding: 16px;
+}
+.act-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 8px 16px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text-primary);
+}
+.act-row:hover {
+  background: var(--bg-canvas);
+}
+.act-row.err .act-summary {
+  color: var(--error-solid);
+}
+.act-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.act-when {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.act-client {
+  font-size: 11px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  padding: 0 6px;
+}
+.act-summary {
+  margin-top: 2px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.act-detail {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.act-title {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.act-error {
+  font-size: 11px;
+  color: var(--error-solid);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 900px) {
+  .conn-body.conn-columns {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .conn-main {
+    overflow-y: visible;
+    flex: none;
+  }
+  .conn-activity {
+    flex: none;
+    max-height: 320px;
+    border-left: 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+}

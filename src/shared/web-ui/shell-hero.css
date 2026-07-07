@@ -1,0 +1,111 @@
+/* Hero shell — left brand panel + right content pane.
+   Used by web /login, /signed-out, hero help; server-rendered MCP consent and
+   verify pages. The brand panel uses the app's violet (sidebar → rail gradient
+   + faint design-canvas grid) so sign-in feels like the product. */
+
+.sh-hero {
+  min-height: 100vh;
+  display: flex;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+
+.sh-hero__brand {
+  width: 42%;
+  min-width: 260px;
+  background: linear-gradient(160deg, var(--bg-sidebar) 0%, var(--bg-rail) 100%);
+  color: var(--text-on-sidebar);
+  padding: 32px 30px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+/* faint 32px grid, echoing the design-system canvas, fading toward the corner */
+.sh-hero__brand::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(0deg,  transparent 0 31px, rgba(255,255,255,0.045) 31px 32px),
+    repeating-linear-gradient(90deg, transparent 0 31px, rgba(255,255,255,0.045) 31px 32px);
+  -webkit-mask-image: linear-gradient(160deg, rgba(0,0,0,0.55), transparent 72%);
+          mask-image: linear-gradient(160deg, rgba(0,0,0,0.55), transparent 72%);
+}
+.sh-hero__brand > * { position: relative; z-index: 1; }
+.sh-hero__brand-copy {
+  margin-top: auto;
+}
+.sh-hero__tagline {
+  font-size: 21px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: -0.02em;
+  line-height: 1.22;
+  max-width: 18ch;
+}
+.sh-hero__sub {
+  font-size: 12.5px;
+  opacity: 0.82;
+  margin-top: 12px;
+  line-height: 1.6;
+  max-width: 300px;
+}
+
+.sh-hero__pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 22px;
+  padding: 48px clamp(32px, 6vw, 72px);
+}
+.sh-hero__pane-head .sh-hero__title {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.sh-hero__content {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sh-hero__foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
+.sh-hero__error-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+/* Stack on narrow viewports: brand becomes a compact top banner. */
+@media (max-width: 720px) {
+  .sh-hero { flex-direction: column; }
+  .sh-hero__brand {
+    width: 100%;
+    min-width: 0;
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 24px;
+  }
+  .sh-hero__brand-copy { margin-top: 0; }
+  .sh-hero__tagline { font-size: 16px; max-width: none; }
+  .sh-hero__sub { display: none; }
+  .sh-hero__pane { padding: 36px 24px; justify-content: flex-start; }
+}

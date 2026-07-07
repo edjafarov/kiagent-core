@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Settings · Advanced</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .back-link {
+    display: inline-flex; align-items: center; gap: 4px;
+    color: var(--text-secondary); font-size: 12px;
+    background: none; border: none; cursor: pointer; padding: 4px 6px;
+  }
+  .back-link:hover { color: var(--text-primary); }
+
+  .field-row {
+    display: flex; align-items: center; gap: 8px; font-size: 12px;
+  }
+  .field-row .lbl { min-width: 180px; color: var(--text-primary); }
+
+  .toggle {
+    width: 32px; height: 18px; flex-shrink: 0;
+    background: var(--bg-muted); border: 1px solid var(--border-strong);
+    position: relative; cursor: pointer;
+  }
+  .toggle .knob {
+    position: absolute; top: 1px; left: 1px;
+    width: 14px; height: 14px; background: #fff;
+    border: 1px solid var(--border-strong);
+  }
+  .toggle.on { background: var(--accent-solid); border-color: var(--accent-solid); }
+  .toggle.on .knob { left: 15px; border-color: var(--accent-solid); }
+
+  .token-row {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .token-row .input-group { flex: 1; height: 28px; }
+
+  .danger-list { display: flex; flex-direction: column; gap: 6px; }
+  .danger-item {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  }
+  .danger-item .copy { flex: 1; }
+  .danger-item .copy .h { font-size: 12.5px; font-weight: 500; color: var(--text-primary); }
+  .danger-item .copy .d { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent · Settings</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-topbar">
+      <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+      <span class="pill live"><span class="dot"></span>4 live · 47,231 docs</span>
+      <div style="flex:1"></div>
+      <button class="back-link">
+        <span aria-hidden="true">←</span>
+        Back to sources
+      </button>
+    </div>
+
+    <div class="set-shell">
+      <aside class="set-sidebar">
+        <div class="lbl-section">Settings</div>
+        <button class="side-item">Account</button>
+        <button class="side-item">Connectors</button>
+        <button class="side-item">Storage</button>
+        <button class="side-item active">Advanced</button>
+        <button class="side-item">About</button>
+      </aside>
+
+      <div class="set-pane">
+        <div>
+          <h2 class="h-screen" style="font-size:17px">Advanced</h2>
+          <div class="t-meta">Configuration, logs, and destructive actions.</div>
+        </div>
+
+        <div class="div-h"></div>
+
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div class="lbl-section">Diagnostics</div>
+
+          <div class="field-row">
+            <span class="lbl">Log level</span>
+            <div class="select">
+              <span style="flex:1">info</span>
+              <svg class="i" width="11" height="11" style="color:var(--text-secondary)"><use href="#i-chev-down"/></svg>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <span class="lbl">Enable developer tools</span>
+            <div class="toggle"><span class="knob"></span></div>
+            <span class="t-meta">Adds View → Toggle Developer Tools menu item.</span>
+          </div>
+
+          <div class="field-row">
+            <span class="lbl">Verbose connector logs</span>
+            <div class="toggle on"><span class="knob"></span></div>
+            <span class="t-meta">Logs each fetch and parse for debugging.</span>
+          </div>
+
+          <div style="display:flex;gap:8px">
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-log"/></svg>
+              Open logs
+            </button>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-external"/></svg>
+              Export logs (.zip)
+            </button>
+          </div>
+        </div>
+
+        <div class="div-h"></div>
+
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <div class="lbl-section" style="color:var(--error-solid)">Danger zone</div>
+          <div class="danger-list">
+            <div class="danger-item">
+              <div class="copy">
+                <div class="h">Purge archived data</div>
+                <div class="d">Permanently delete all soft-deleted documents. Cannot be undone.</div>
+              </div>
+              <button class="btn destructive sm">
+                <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+                Purge archived
+              </button>
+            </div>
+            <div class="danger-item">
+              <div class="copy">
+                <div class="h">Erase all data</div>
+                <div class="d">Wipe the entire local corpus, sign out, and start over.</div>
+              </div>
+              <button class="btn destructive sm">
+                <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+                Reset all
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

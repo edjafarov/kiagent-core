@@ -1,0 +1,93 @@
+/* App shell — product-app chrome for the authenticated web pages
+   (/account, /admin, /help) and the server-rendered 'app' variant.
+   Mirrors the desktop app's in-window look: light surfaces, a violet
+   brand spark, a rail-violet accent edge, sharp corners, dense type.
+   Cards/pills/tables inside come from components.css (same as the app). */
+
+.sh-app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+
+/* Top bar — white like the app's dashboard bar, hairline base, and a thin
+   rail-violet edge along the top so it reads as part of the product. */
+.sh-app__topbar {
+  height: 52px;
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: inset 0 2px 0 var(--bg-rail);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 14px;
+}
+/* Mono wordmark matching the app's .wordmark (spark + KIAgent). */
+.sh-app__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+/* The framed Bracket leads the web app-chrome wordmark. color drives the Spark
+   fill (the reticle is its own fixed Violet Light tone, inlined in the mark).
+   width/height size the server-rendered svg (the React BracketMark also carries
+   its own 24px attrs; these keep both paths identical). */
+.sh-app__brand-mark { width: 22px; height: 22px; color: var(--accent-solid); }
+.sh-app__spacer { flex: 1; }
+/* Identity reads as a small mono chip, like account labels in the app. */
+.sh-app__identity {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  padding: 3px 8px;
+  background: var(--bg-muted);
+  border: 1px solid var(--border-subtle);
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sh-app__nav-link {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+.sh-app__nav-link:hover { color: var(--accent-text); }
+
+.sh-app__main {
+  flex: 1;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 36px 24px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.sh-app__main.sh-app__main--wide {
+  max-width: 1120px;   /* used by /admin */
+}
+
+/* Page header — the app's screen-heading scale. */
+.sh-app__h1 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin: 0 0 2px;
+}
+.sh-app__sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+  line-height: 1.5;
+}

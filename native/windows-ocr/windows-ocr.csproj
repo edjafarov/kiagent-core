@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- The Windows TFM pulls in the WinRT projections (Windows.Media.Ocr). -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <!-- No RuntimeIdentifier here: the build script passes -r win-x64 / -r
+         win-arm64 per target so one csproj publishes both arches (arm64
+         cross-compiles from an x64 host). A pinned RID would override the
+         flag and force every publish to x64. -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <AssemblyName>windows-ocr</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <!-- Keep the bundle lean: en resources only. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Help</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 0; background: #f0eee9; }
+
+  .web-header .wordmark { font-size: 14px; }
+  .web-header .wordmark .spark { font-size: 17px; }
+  .web-header .identity { color: rgba(255,255,255,0.85); font-size: 12px; }
+
+  .help-layout {
+    display: grid; grid-template-columns: 220px 1fr;
+    gap: 32px;
+    max-width: 1080px; margin: 0 auto;
+  }
+
+  .help-toc {
+    position: sticky; top: 0;
+    align-self: start;
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 4px;
+    font-size: 13px;
+  }
+  .help-toc .toc-label {
+    font-size: 10px; font-weight: 600; color: var(--text-tertiary);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 0 12px 6px;
+  }
+  .help-toc a {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px;
+    color: var(--text-secondary); text-decoration: none;
+    border-left: 2px solid transparent;
+    font-size: 12.5px;
+  }
+  .help-toc a:hover { color: var(--text-primary); background: rgba(0,0,0,0.02); }
+  .help-toc a.active {
+    color: var(--accent-text); font-weight: 600;
+    border-left-color: var(--accent-text);
+    background: var(--accent-subtle);
+  }
+
+  .help-content {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-xs);
+    padding: 32px 40px;
+    display: flex; flex-direction: column; gap: 22px;
+  }
+
+  .help-title {
+    font-size: 28px; font-weight: 600; letter-spacing: -0.015em;
+    margin: 0; color: var(--text-primary);
+  }
+  .help-lede {
+    font-size: 14px; line-height: 1.6; color: var(--text-secondary);
+    margin: 4px 0 0 0; max-width: 640px;
+  }
+
+  .help-section { display: flex; flex-direction: column; gap: 10px; }
+  .help-section h2 {
+    font-size: 17px; font-weight: 600; margin: 12px 0 0;
+    color: var(--text-primary); letter-spacing: -0.005em;
+  }
+  .help-section h3 {
+    font-size: 13.5px; font-weight: 600; margin: 6px 0 0;
+    color: var(--text-primary);
+  }
+  .help-section p {
+    font-size: 13px; line-height: 1.65; margin: 0;
+    color: var(--text-primary);
+  }
+  .help-section ul, .help-section ol {
+    margin: 0; padding-left: 22px;
+    font-size: 13px; line-height: 1.7;
+    color: var(--text-primary);
+  }
+  .help-section code {
+    font-family: var(--font-mono); font-size: 11.5px;
+    background: var(--bg-muted); border: 1px solid var(--border-subtle);
+    padding: 1px 5px; color: var(--accent-text);
+  }
+
+  .help-divider {
+    height: 1px; background: var(--border-subtle); margin: 6px 0;
+  }
+
+  .callout {
+    display: flex; gap: 10px;
+    padding: 12px 14px;
+    background: var(--accent-subtle);
+    border-left: 3px solid var(--accent-text);
+  }
+  .callout svg { color: var(--accent-text); flex-shrink: 0; margin-top: 2px; }
+  .callout .body {
+    font-size: 12.5px; line-height: 1.55; color: var(--text-primary);
+  }
+  .callout .body strong { color: var(--accent-text); }
+
+  .code-block {
+    border-radius: 0;
+  }
+  .code-block .com { color: #64748b; }
+  .code-block .key { color: #c4b5fd; }
+  .code-block .str { color: #86efac; }
+  .code-block .pun { color: #94a3b8; }
+
+  .faq {
+    border: 1px solid var(--border-subtle);
+  }
+  .faq details {
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .faq details:last-child { border-bottom: 0; }
+  .faq summary {
+    cursor: pointer;
+    padding: 12px 16px;
+    font-size: 13px; font-weight: 600;
+    color: var(--text-primary);
+    list-style: none;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after {
+    content: "+"; margin-left: auto;
+    font-family: var(--font-mono); color: var(--text-tertiary); font-size: 16px;
+  }
+  .faq details[open] summary::after { content: "\2212"; color: var(--accent-text); }
+  .faq details[open] summary { color: var(--accent-text); background: var(--bg-muted); }
+  .faq .faq-body {
+    padding: 4px 16px 14px;
+    font-size: 12.5px; line-height: 1.6; color: var(--text-secondary);
+  }
+  .faq .faq-body p { margin: 6px 0; }
+
+  .help-foot {
+    margin-top: 8px; padding-top: 14px;
+    border-top: 1px solid var(--border-subtle);
+    font-size: 12px; color: var(--text-secondary);
+    display: flex; gap: 8px; align-items: center;
+  }
+  .help-foot a { color: var(--accent-text); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<div class="web-shell">
+  <header class="web-header">
+    <span class="wordmark"><span class="spark">&#10022;</span>kia</span>
+    <nav>
+      <a href="/account">Account</a>
+      <a href="/admin">Admin</a>
+      <a class="active" href="/help">Help</a>
+    </nav>
+    <div class="user">
+      <span class="identity">alice@example.com</span>
+      <button class="btn sm">Logout</button>
+    </div>
+  </header>
+
+  <main class="web-main">
+    <div class="help-layout">
+      <aside class="help-toc">
+        <div class="toc-label">Help</div>
+        <a class="active" href="#getting-started">Getting started</a>
+        <a href="#mcp-setup">MCP setup</a>
+        <a href="#dns">DNS troubleshooting</a>
+        <a href="#faq">FAQ</a>
+        <div class="toc-label" style="margin-top: 14px">Reference</div>
+        <a href="#endpoints">API endpoints</a>
+        <a href="#errors">Error codes</a>
+      </aside>
+
+      <article class="help-content">
+        <div>
+          <h1 class="help-title">Help</h1>
+          <p class="help-lede">Common questions about kia accounts, your remote subdomain, and connecting clients to your local MCP server.</p>
+        </div>
+
+        <section class="help-section" id="getting-started">
+          <h2>Getting started</h2>
+          <p>kia gives you a stable HTTPS subdomain that points at the MCP server running on your machine. Sign in here with the same Google or Microsoft account you used in the kia desktop app, and your subdomain re-attaches automatically.</p>
+          <ol>
+            <li>Install kia desktop and sign in with Google or Microsoft.</li>
+            <li>The desktop app provisions a subdomain (e.g. <code>alice-a3f9c1.lokalkiagent.de</code>) and opens a tunnel.</li>
+            <li>Copy the HTTPS URL into any MCP-aware client &mdash; Claude.ai, Claude Code, VS Code.</li>
+          </ol>
+
+          <div class="callout">
+            <svg class="i" width="16" height="16"><use href="#i-info"/></svg>
+            <div class="body">
+              <strong>Your subdomain belongs to the account, not the device.</strong> Reinstall kia anywhere; sign in with the same account; the hostname comes back.
+            </div>
+          </div>
+        </section>
+
+        <div class="help-divider"></div>
+
+        <section class="help-section" id="mcp-setup">
+          <h2>MCP setup</h2>
+          <p>Point any MCP client at your kia URL with the bearer token from your account page.</p>
+
+          <h3>Claude Desktop</h3>
+          <pre class="code-block"><span class="com">// ~/Library/Application Support/Claude/claude_desktop_config.json</span>
+<span class="pun">{</span>
+  <span class="key">"mcpServers"</span><span class="pun">:</span> <span class="pun">{</span>
+    <span class="key">"kia"</span><span class="pun">:</span> <span class="pun">{</span>
+      <span class="key">"transport"</span><span class="pun">:</span> <span class="str">"sse"</span><span class="pun">,</span>
+      <span class="key">"url"</span><span class="pun">:</span> <span class="str">"https://alice-a3f9c1.lokalkiagent.de/mcp"</span><span class="pun">,</span>
+      <span class="key">"headers"</span><span class="pun">:</span> <span class="pun">{</span>
+        <span class="key">"Authorization"</span><span class="pun">:</span> <span class="str">"Bearer kia_pat_3f9...c1"</span>
+      <span class="pun">}</span>
+    <span class="pun">}</span>
+  <span class="pun">}</span>
+<span class="pun">}</span></pre>
+
+          <h3>Claude Code</h3>
+          <pre class="code-block"><span class="com"># add the server with one CLI command</span>
+claude mcp add kia <span class="pun">\</span>
+  --url <span class="str">"https://alice-a3f9c1.lokalkiagent.de/mcp"</span> <span class="pun">\</span>
+  --header <span class="str">"Authorization: Bearer kia_pat_3f9...c1"</span></pre>
+        </section>
+
+        <div class="help-divider"></div>
+
+        <section class="help-section" id="dns">
+          <h2>DNS troubleshooting</h2>
+          <p>If your account shows "Pending DNS" for more than a few minutes, propagation is slow somewhere upstream.</p>
+          <ul>
+            <li>Most resolvers see the A record within 30 seconds. A small percentage need a few minutes.</li>
+            <li>Run <code>dig +short alice-a3f9c1.lokalkiagent.de</code> &mdash; you should get our broker IP.</li>
+            <li>Corporate DNS sometimes blocks dynamic subdomains; try from a phone hotspot.</li>
+            <li>If the tunnel says "down" but DNS resolves, the desktop app likely isn't running.</li>
+          </ul>
+        </section>
+
+        <div class="help-divider"></div>
+
+        <section class="help-section" id="faq">
+          <h2>FAQ</h2>
+          <div class="faq">
+            <details open>
+              <summary>I can't sign in</summary>
+              <div class="faq-body">
+                <p>You may have cancelled the Google or Microsoft prompt &mdash; try again from the login page.</p>
+                <p>If you see "expired" or "interrupted", open the page fresh in the same browser you started in.</p>
+                <p>This site needs cookies. Check your browser allows cookies for <code>lokalkiagent.de</code>.</p>
+              </div>
+            </details>
+            <details>
+              <summary>I deleted or reinstalled kia &mdash; what now?</summary>
+              <div class="faq-body">
+                <p>Your web account survives, and your subdomain belongs to your account &mdash; not your device. Reinstall kia, sign in with the same provider, and your subdomain re-attaches automatically.</p>
+              </div>
+            </details>
+            <details>
+              <summary>I want to release my subdomain</summary>
+              <div class="faq-body">
+                <p>Go to your <a href="/account">account page</a> and use the Release subdomain button under the Subdomain card. The hostname returns to the available pool after a 30-day cooldown.</p>
+              </div>
+            </details>
+            <details>
+              <summary>Can I bring my own domain?</summary>
+              <div class="faq-body">
+                <p>Not yet. We're working on a CNAME flow for custom domains. For now everyone is on <code>*.lokalkiagent.de</code>.</p>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <div class="help-foot">
+          <svg class="i" width="14" height="14"><use href="#i-mail"/></svg>
+          <span>Still stuck? Email <a href="mailto:support@lokalkiagent.de">support@lokalkiagent.de</a></span>
+        </div>
+      </article>
+    </div>
+  </main>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

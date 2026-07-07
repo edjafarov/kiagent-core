@@ -1,0 +1,67 @@
+{
+  "id": "18abc0000000001",
+  "historyId": "999001",
+  "messages": [
+    {
+      "id": "18abc0000000001",
+      "threadId": "18abc0000000001",
+      "labelIds": ["INBOX", "IMPORTANT", "CATEGORY_PERSONAL"],
+      "internalDate": "1704106800000",
+      "payload": {
+        "mimeType": "text/plain",
+        "headers": [
+          { "name": "From", "value": "Alice <alice@example.com>" },
+          { "name": "To", "value": "Bob <bob@example.com>, Carol <carol@example.com>" },
+          { "name": "Subject", "value": "Sync time tomorrow?" },
+          { "name": "Date", "value": "Mon, 1 Jan 2024 10:00:00 -0800" },
+          { "name": "Message-ID", "value": "<msg1@example.com>" }
+        ],
+        "body": {
+          "data": "SGkgdGVhbSwKCkNhbiB3ZSBtb3ZlIHRoZSBzeW5jIHRvIDNwbSB0b21vcnJvdz8KClRoYW5rcywKQWxpY2U",
+          "size": 60
+        }
+      }
+    },
+    {
+      "id": "18abc0000000002",
+      "threadId": "18abc0000000001",
+      "labelIds": ["INBOX", "CATEGORY_PERSONAL"],
+      "internalDate": "1704110400000",
+      "payload": {
+        "mimeType": "multipart/mixed",
+        "headers": [
+          { "name": "From", "value": "Bob <bob@example.com>" },
+          { "name": "To", "value": "Alice <alice@example.com>" },
+          { "name": "Cc", "value": "Carol <carol@example.com>" },
+          { "name": "Subject", "value": "Re: Sync time tomorrow?" },
+          { "name": "Date", "value": "Mon, 1 Jan 2024 11:00:00 -0800" },
+          { "name": "Message-ID", "value": "<msg2@example.com>" }
+        ],
+        "parts": [
+          {
+            "partId": "0",
+            "mimeType": "text/plain",
+            "headers": [{ "name": "Content-Type", "value": "text/plain; charset=UTF-8" }],
+            "body": {
+              "data": "V29ya3MgZm9yIG1lLgoKT24gTW9uLCBKYW4gMSwgMjAyNCBhdCAxMDowMCBBTSBBbGljZSA8YWxpY2VAZXhhbXBsZS5jb20-IHdyb3RlOgo-IEhpIHRlYW0sCj4gQ2FuIHdlIG1vdmUgdGhlIHN5bmMgdG8gM3BtIHRvbW9ycm93PwoKLS0KQm9i",
+              "size": 190
+            }
+          },
+          {
+            "partId": "1",
+            "mimeType": "application/pdf",
+            "filename": "agenda.pdf",
+            "headers": [
+              { "name": "Content-Type", "value": "application/pdf; name=\"agenda.pdf\"" },
+              { "name": "Content-Disposition", "value": "attachment; filename=\"agenda.pdf\"" }
+            ],
+            "body": {
+              "attachmentId": "ANGjdJ_ephemeral123",
+              "size": 4096
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

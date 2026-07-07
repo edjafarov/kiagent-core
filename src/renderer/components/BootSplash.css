@@ -1,0 +1,29 @@
+.kg-boot-splash {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: var(--bg-app);
+  animation: kg-boot-splash-in 0.25s var(--ease-out) both;
+}
+
+.kg-boot-splash__name {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+@keyframes kg-boot-splash-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kg-boot-splash { animation: none; }
+}

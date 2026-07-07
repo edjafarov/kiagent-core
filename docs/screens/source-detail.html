@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Source detail</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-shell">
+      <div class="dash-topbar">
+        <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+        <span class="pill live"><span class="dot"></span>5 live · 72,529 docs</span>
+        <div style="flex:1"></div>
+        <button type="button" class="kg-tab active">
+          <svg class="i" width="13" height="13"><use href="#i-database"/></svg>
+          <span>Sources</span>
+        </button>
+        <button type="button" class="kg-tab">
+          <svg class="i" width="13" height="13"><use href="#i-link"/></svg>
+          <span>MCP</span>
+          <span class="tab-dot on" aria-label="MCP online"></span>
+        </button>
+        <button type="button" class="btn ghost sm" aria-label="Settings">
+          <svg class="i" width="14" height="14"><use href="#i-settings"/></svg>
+        </button>
+      </div>
+
+      <div class="dash-topbar" style="gap:10px">
+        <button type="button" class="btn ghost sm">← Sources</button>
+        <span class="conn-glyph gmail">
+          <svg class="i" width="13" height="13"><use href="#i-mail"/></svg>
+        </span>
+        <span class="h-section mono" style="font-size:13px">work@company.com</span>
+        <span class="pill working"><span class="dot"></span>Backfilling 2%</span>
+        <div style="flex:1"></div>
+        <button type="button" class="btn sm">
+          <svg class="i" width="12" height="12"><use href="#i-refresh-cw"/></svg>
+          Sync now
+        </button>
+        <button type="button" class="btn sm">
+          <svg class="i" width="12" height="12"><use href="#i-pause"/></svg>
+          Pause
+        </button>
+        <button type="button" class="btn ghost sm icon-only" style="width:22px;height:22px">
+          <svg class="i" width="12" height="12"><use href="#i-more"/></svg>
+        </button>
+      </div>
+
+      <div class="detail-body">
+        <section class="detail-card">
+          <div class="lbl-section">Overview</div>
+          <dl class="kv">
+            <dt>Identifier</dt>
+            <dd class="mono">work@company.com</dd>
+            <dt>Indexed</dt>
+            <dd>4,802 documents <span class="t-meta">of ~210,000 estimated</span></dd>
+            <dt>Last sync</dt>
+            <dd>now</dd>
+            <dt>Last document</dt>
+            <dd>4 seconds ago</dd>
+          </dl>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+            <div class="progress"><i style="width:2.3%"></i></div>
+            <div class="t-meta">Backfilling Gmail — 4,802 / ~210,000 (2%). Estimated 4h 12m remaining.</div>
+          </div>
+        </section>
+
+        <section class="detail-card">
+          <div class="lbl-section">Scope</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 6px">
+            <span class="scope-chip">gmail.readonly</span>
+            <span class="scope-chip">gmail.metadata</span>
+          </div>
+          <div>
+            <button type="button" class="btn sm">Re-authorize</button>
+          </div>
+        </section>
+
+        <section class="detail-card">
+          <div class="lbl-section">Tracked content</div>
+          <div class="t-meta" style="margin:4px 0 0">All mail in inbox and archive — labels, attachments, threads.</div>
+        </section>
+
+        <section class="detail-card">
+          <div class="lbl-section">Behavior</div>
+          <dl class="kv">
+            <dt>Polling cadence</dt>
+            <dd>30 seconds · 2 minutes · 10 minutes</dd>
+            <dt>Backfill window</dt>
+            <dd>Full history</dd>
+            <dt>Attachment indexing</dt>
+            <dd>PDF, DOCX, TXT · max 25 MB</dd>
+          </dl>
+          <div style="margin-top:6px">
+            <button type="button" class="btn ghost sm">Edit Gmail defaults</button>
+          </div>
+        </section>
+
+        <section class="detail-card">
+          <div class="lbl-section">Recent activity</div>
+          <ul style="list-style:none;padding:0;margin:4px 0 0;display:flex;flex-direction:column;gap:3px">
+            <li style="display:flex;gap:10px;font-size:12px">
+              <span class="t-meta mono" style="min-width:140px">2026-05-25 14:02:17</span>
+              <span>Indexed new document — Re: Q3 forecast</span>
+            </li>
+            <li style="display:flex;gap:10px;font-size:12px">
+              <span class="t-meta mono" style="min-width:140px">2026-05-25 14:02:09</span>
+              <span>Synced inbox (212 new threads)</span>
+            </li>
+            <li style="display:flex;gap:10px;font-size:12px">
+              <span class="t-meta mono" style="min-width:140px">2026-05-25 13:58:51</span>
+              <span>Backfilling (4,802 done)</span>
+            </li>
+            <li style="display:flex;gap:10px;font-size:12px">
+              <span class="t-meta mono" style="min-width:140px">2026-05-25 13:51:04</span>
+              <span>Backfill resumed after token refresh</span>
+            </li>
+          </ul>
+        </section>
+
+        <section class="detail-card">
+          <div class="lbl-section" style="color:var(--error-solid)">Danger zone</div>
+          <div style="display:flex;gap:6px;margin-top:4px">
+            <button type="button" class="btn sm">
+              <svg class="i" width="11" height="11"><use href="#i-pause"/></svg>
+              Pause
+            </button>
+            <button type="button" class="btn sm">
+              <svg class="i" width="11" height="11"><use href="#i-refresh-cw"/></svg>
+              Re-run backfill
+            </button>
+            <button type="button" class="btn destructive sm">
+              <svg class="i" width="11" height="11"><use href="#i-trash"/></svg>
+              Remove…
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Source detail (folders)</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .folder-list {
+    display: flex; flex-direction: column;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+  }
+  .folder-row {
+    display: grid; grid-template-columns: 16px 1fr auto auto auto;
+    align-items: center; gap: 10px;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+  .folder-row + .folder-row { border-top: 1px solid var(--bg-muted); }
+  .folder-row .name { font-weight: 500; color: var(--text-primary); }
+  .folder-row .crumb { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); margin-left: 6px; }
+  .folder-row .docs { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; min-width: 60px; text-align: right; }
+
+  .modal.lg { width: 520px; }
+  .modal-body.p0 { padding: 0; }
+
+  .picker-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-muted);
+    font-size: 11.5px; color: var(--text-secondary);
+  }
+  .picker-head svg { color: var(--text-secondary); }
+  .picker-crumb { font-family: var(--font-mono); color: var(--text-primary); }
+  .picker-list {
+    max-height: 260px; overflow-y: auto;
+    background: var(--bg-surface);
+  }
+  .picker-item {
+    display: grid; grid-template-columns: 18px 14px 1fr auto;
+    align-items: center; gap: 10px;
+    padding: 8px 14px;
+    font-size: 12px; cursor: pointer;
+  }
+  .picker-item + .picker-item { border-top: 1px solid var(--bg-muted); }
+  .picker-item.indent { padding-left: 38px; grid-template-columns: 18px 14px 1fr auto; }
+  .picker-item:hover { background: var(--bg-muted); }
+  .picker-chev { color: var(--text-tertiary); transition: transform var(--duration-fast); }
+  .picker-chev.open { transform: rotate(90deg); }
+  .picker-name { color: var(--text-primary); }
+  .picker-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
+
+  .checkbox {
+    width: 14px; height: 14px;
+    border: 1.5px solid var(--text-tertiary);
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: #fff;
+  }
+  .checkbox.checked { background: var(--accent-solid); border-color: var(--accent-solid); }
+  .checkbox.checked svg { display: block; }
+  .checkbox svg { display: none; }
+</style>
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-shell">
+      <div class="dash-topbar">
+        <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+        <span class="pill live"><span class="dot"></span>5 live · 72,529 docs</span>
+        <div style="flex:1"></div>
+        <button type="button" class="kg-tab active">
+          <svg class="i" width="13" height="13"><use href="#i-database"/></svg>
+          <span>Sources</span>
+        </button>
+        <button type="button" class="kg-tab">
+          <svg class="i" width="13" height="13"><use href="#i-link"/></svg>
+          <span>MCP</span>
+          <span class="tab-dot on" aria-label="MCP online"></span>
+        </button>
+        <button type="button" class="btn ghost sm" aria-label="Settings">
+          <svg class="i" width="14" height="14"><use href="#i-settings"/></svg>
+        </button>
+      </div>
+
+      <div class="dash-topbar" style="gap:10px">
+        <button type="button" class="btn ghost sm">← Sources</button>
+        <span class="conn-glyph google-docs">
+          <svg class="i" width="13" height="13"><use href="#i-file"/></svg>
+        </span>
+        <span class="h-section mono" style="font-size:13px">alice@example.com</span>
+        <span class="t-meta">· Google Drive</span>
+        <span class="pill live"><span class="dot"></span>Watching · 2 folders</span>
+        <div style="flex:1"></div>
+        <button type="button" class="btn primary sm">
+          <svg class="i" width="12" height="12"><use href="#i-plus"/></svg>
+          Add folder
+        </button>
+        <button type="button" class="btn sm">
+          <svg class="i" width="12" height="12"><use href="#i-refresh-cw"/></svg>
+          Sync now
+        </button>
+        <button type="button" class="btn ghost sm icon-only" style="width:22px;height:22px">
+          <svg class="i" width="12" height="12"><use href="#i-more"/></svg>
+        </button>
+      </div>
+
+      <div class="detail-body">
+        <section class="detail-card">
+          <div class="lbl-section">Overview</div>
+          <dl class="kv">
+            <dt>Account</dt>
+            <dd class="mono">alice@example.com</dd>
+            <dt>Connector</dt>
+            <dd>Google Drive · drive.readonly</dd>
+            <dt>Indexed</dt>
+            <dd>1,284 documents <span class="t-meta">across 2 folders</span></dd>
+            <dt>Last sync</dt>
+            <dd>2 minutes ago</dd>
+          </dl>
+        </section>
+
+        <section class="detail-card">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="lbl-section" style="flex:1">Tracked folders</div>
+            <button type="button" class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-plus"/></svg>
+              Add folder
+            </button>
+          </div>
+          <div class="folder-list" style="margin-top:4px">
+            <div class="folder-row">
+              <svg class="i" width="13" height="13" style="color:var(--text-secondary)"><use href="#i-folder"/></svg>
+              <div style="display:flex;align-items:baseline;min-width:0;overflow:hidden">
+                <span class="name">Marketing</span>
+                <span class="crumb">/My Drive/Marketing</span>
+              </div>
+              <span class="docs">412</span>
+              <span class="pill live"><span class="dot"></span>Watching</span>
+              <button type="button" class="btn ghost sm icon-only" title="Remove folder">
+                <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+              </button>
+            </div>
+            <div class="folder-row">
+              <svg class="i" width="13" height="13" style="color:var(--text-secondary)"><use href="#i-folder"/></svg>
+              <div style="display:flex;align-items:baseline;min-width:0;overflow:hidden">
+                <span class="name">Engineering / Specs</span>
+                <span class="crumb">/My Drive/Engineering/Specs</span>
+              </div>
+              <span class="docs">872</span>
+              <span class="pill live"><span class="dot"></span>Watching</span>
+              <button type="button" class="btn ghost sm icon-only" title="Remove folder">
+                <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="detail-card">
+          <div class="lbl-section">Scope</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 6px">
+            <span class="scope-chip">drive.readonly</span>
+            <span class="scope-chip">drive.metadata.readonly</span>
+          </div>
+          <div>
+            <button type="button" class="btn sm">Re-authorize</button>
+          </div>
+        </section>
+
+        <section class="detail-card">
+          <div class="lbl-section">Behavior</div>
+          <dl class="kv">
+            <dt>Polling cadence</dt>
+            <dd>Every 15 minutes</dd>
+            <dt>Indexed file types</dt>
+            <dd>Google Docs, Sheets, Slides · PDF, DOCX, TXT</dd>
+          </dl>
+        </section>
+
+        <section class="detail-card">
+          <div class="lbl-section" style="color:var(--error-solid)">Danger zone</div>
+          <div style="display:flex;gap:6px;margin-top:4px">
+            <button type="button" class="btn sm">
+              <svg class="i" width="11" height="11"><use href="#i-pause"/></svg>
+              Pause
+            </button>
+            <button type="button" class="btn destructive sm">
+              <svg class="i" width="11" height="11"><use href="#i-trash"/></svg>
+              Remove account…
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- Folder picker modal -->
+  <div class="modal-backdrop">
+    <div class="modal lg">
+      <div class="modal-head">
+        <h3 class="modal-title">Track Google Drive folders</h3>
+      </div>
+      <div class="modal-body" style="padding-bottom:6px">
+        Pick the folders KIAgent should watch. You can add or remove folders later.
+      </div>
+
+      <div class="picker-head">
+        <svg class="i" width="12" height="12"><use href="#i-folder"/></svg>
+        <span class="picker-crumb">My Drive</span>
+        <span style="flex:1"></span>
+        <span>5 folders</span>
+      </div>
+
+      <div class="picker-list">
+        <div class="picker-item">
+          <span class="checkbox checked"><svg class="i" width="9" height="9"><use href="#i-check"/></svg></span>
+          <svg class="i picker-chev" width="11" height="11"><use href="#i-chev-right"/></svg>
+          <span class="picker-name">Marketing</span>
+          <span class="picker-count">412</span>
+        </div>
+        <div class="picker-item">
+          <span class="checkbox"><svg class="i" width="9" height="9"><use href="#i-check"/></svg></span>
+          <svg class="i picker-chev open" width="11" height="11"><use href="#i-chev-right"/></svg>
+          <span class="picker-name">Engineering</span>
+          <span class="picker-count">2,318</span>
+        </div>
+        <div class="picker-item indent">
+          <span class="checkbox checked"><svg class="i" width="9" height="9"><use href="#i-check"/></svg></span>
+          <svg class="i picker-chev" width="11" height="11"><use href="#i-chev-right"/></svg>
+          <span class="picker-name">Specs</span>
+          <span class="picker-count">872</span>
+        </div>
+        <div class="picker-item indent">
+          <span class="checkbox"><svg class="i" width="9" height="9"><use href="#i-check"/></svg></span>
+          <svg class="i picker-chev" width="11" height="11"><use href="#i-chev-right"/></svg>
+          <span class="picker-name">Roadmaps</span>
+          <span class="picker-count">184</span>
+        </div>
+        <div class="picker-item indent">
+          <span class="checkbox"><svg class="i" width="9" height="9"><use href="#i-check"/></svg></span>
+          <svg class="i picker-chev" width="11" height="11"><use href="#i-chev-right"/></svg>
+          <span class="picker-name">Postmortems</span>
+          <span class="picker-count">62</span>
+        </div>
+        <div class="picker-item">
+          <span class="checkbox"><svg class="i" width="9" height="9"><use href="#i-check"/></svg></span>
+          <svg class="i picker-chev" width="11" height="11"><use href="#i-chev-right"/></svg>
+          <span class="picker-name">Finance</span>
+          <span class="picker-count">204</span>
+        </div>
+        <div class="picker-item">
+          <span class="checkbox"><svg class="i" width="9" height="9"><use href="#i-check"/></svg></span>
+          <svg class="i picker-chev" width="11" height="11"><use href="#i-chev-right"/></svg>
+          <span class="picker-name">Customer calls</span>
+          <span class="picker-count">98</span>
+        </div>
+        <div class="picker-item">
+          <span class="checkbox"><svg class="i" width="9" height="9"><use href="#i-check"/></svg></span>
+          <svg class="i picker-chev" width="11" height="11"><use href="#i-chev-right"/></svg>
+          <span class="picker-name">Personal</span>
+          <span class="picker-count">421</span>
+        </div>
+      </div>
+
+      <div class="modal-foot">
+        <span class="t-meta" style="flex:1">2 of 9 folders selected · 1,284 docs</span>
+        <button type="button" class="btn sm">Cancel</button>
+        <button type="button" class="btn primary sm">Add 2 folders</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

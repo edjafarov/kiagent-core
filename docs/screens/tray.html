@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Tray popover</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 24px; background: #f0eee9; }
+
+  .tray-pop.popover {
+    width: 480px; height: 600px;
+    display: flex; flex-direction: column;
+    background: var(--bg-canvas);
+  }
+
+  .tray-head .stats-row {
+    display: flex; align-items: baseline; gap: 6px;
+    margin-top: 2px;
+  }
+  .tray-head .big {
+    font-family: var(--font-mono);
+    font-size: 18px; font-weight: 600; line-height: 1.1;
+    letter-spacing: -0.01em;
+  }
+  .tray-head .icon-btn {
+    width: 22px; height: 22px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-secondary);
+    border: 1px solid transparent; background: transparent;
+    cursor: pointer;
+  }
+  .tray-head .icon-btn:hover { background: var(--bg-muted); border-color: var(--border-subtle); color: var(--text-primary); }
+
+  .tray-section .sec-head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 14px 6px;
+  }
+  .tray-section .sec-head .grow { flex: 1; }
+  .tray-section .sec-head .meta { font-size: 11px; color: var(--text-tertiary); }
+
+  .tray-source-row .src-bar {
+    width: 2px; height: 18px; flex-shrink: 0;
+  }
+  .tray-source-row .src-bar.gmail  { background: var(--tag-gmail); }
+  .tray-source-row .src-bar.local  { background: var(--tag-local); }
+  .tray-source-row .src-bar.notion { background: var(--tag-notion); }
+  .tray-source-row .name {
+    font-family: var(--font-mono); font-size: 11.5px;
+    color: var(--text-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1;
+  }
+  .tray-source-row .last {
+    font-size: 10.5px; color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .activity-row {
+    display: grid; grid-template-columns: 14px 1fr auto;
+    align-items: center; gap: 10px;
+    padding: 6px 14px;
+    font-size: 12px; color: var(--text-primary);
+  }
+  .activity-row:hover { background: var(--bg-muted); }
+  .activity-row .icn { color: var(--text-secondary); }
+  .activity-row .icn.live  { color: var(--live-solid); }
+  .activity-row .icn.warn  { color: var(--working-solid); }
+  .activity-row .when {
+    font-size: 10.5px; color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+  .activity-row .text { line-height: 1.35; }
+  .activity-row .text .em { color: var(--text-secondary); }
+
+  .tray-foot .menu-row {
+    height: 28px; padding: 0 14px;
+    font-size: 12.5px;
+  }
+  .tray-foot .menu-row .icn {
+    color: var(--text-secondary);
+    width: 14px; display: inline-flex; justify-content: center;
+  }
+  .tray-foot .menu-row .kbd { font-size: 10.5px; }
+  .tray-foot .menu-row.quit { color: var(--text-secondary); }
+</style>
+</head>
+<body>
+
+<div class="ac tray-pop popover">
+
+  <div class="tray-head">
+    <div class="row">
+      <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+      <span class="pill live" style="margin-left:4px"><span class="dot"></span>4 live · 47,231 docs</span>
+      <div style="flex:1"></div>
+      <button class="icon-btn" title="Sync now">
+        <svg class="i" width="13" height="13"><use href="#i-refresh-cw"/></svg>
+      </button>
+      <button class="icon-btn" title="Open dashboard">
+        <svg class="i" width="13" height="13"><use href="#i-external"/></svg>
+      </button>
+      <button class="icon-btn" title="Settings">
+        <svg class="i" width="13" height="13"><use href="#i-settings"/></svg>
+      </button>
+    </div>
+    <div class="stats-row">
+      <span class="big">47,231</span>
+      <span class="t-meta">docs indexed · 1 backfilling · 3 live · 0 errors</span>
+    </div>
+  </div>
+
+  <div class="tray-body">
+
+    <div class="tray-section" style="padding-top:4px">
+      <div class="sec-head">
+        <span class="lbl-section">Sources</span>
+        <span class="meta">4 accounts</span>
+        <div class="grow"></div>
+        <button class="btn ghost sm" style="height:18px;padding:0 6px;font-size:10.5px">
+          <svg class="i" width="11" height="11"><use href="#i-plus"/></svg>
+          Add
+        </button>
+      </div>
+    </div>
+
+    <div class="tray-source-row">
+      <span class="src-bar gmail"></span>
+      <span class="conn-glyph gmail" style="width:18px;height:18px">
+        <svg class="i" width="11" height="11"><use href="#i-mail"/></svg>
+      </span>
+      <span class="name">alice@example.com</span>
+      <span class="pill live"><span class="dot"></span>Live</span>
+      <span class="last">12s ago</span>
+    </div>
+
+    <div class="tray-source-row">
+      <span class="src-bar gmail"></span>
+      <span class="conn-glyph gmail" style="width:18px;height:18px">
+        <svg class="i" width="11" height="11"><use href="#i-mail"/></svg>
+      </span>
+      <span class="name">work@company.com</span>
+      <div class="progress" style="width:42px;height:3px;flex-shrink:0"><i style="width:22%"></i></div>
+      <span class="pill working"><span class="dot"></span>Backfill</span>
+      <span class="last">now</span>
+    </div>
+
+    <div class="tray-source-row">
+      <span class="src-bar local"></span>
+      <span class="conn-glyph local" style="width:18px;height:18px">
+        <svg class="i" width="11" height="11"><use href="#i-folder"/></svg>
+      </span>
+      <span class="name">/Users/alice/Documents/Projects</span>
+      <span class="pill live"><span class="dot"></span>Watching</span>
+      <span class="last">4s ago</span>
+    </div>
+
+    <div class="tray-source-row">
+      <span class="src-bar local"></span>
+      <span class="conn-glyph local" style="width:18px;height:18px">
+        <svg class="i" width="11" height="11"><use href="#i-folder"/></svg>
+      </span>
+      <span class="name">/Users/alice/Library/Notes</span>
+      <span class="pill live"><span class="dot"></span>Watching</span>
+      <span class="last">11s ago</span>
+    </div>
+
+    <div class="tray-source-row">
+      <span class="src-bar notion"></span>
+      <span class="conn-glyph notion" style="width:18px;height:18px">
+        <span class="notion-n" style="width:12px;height:12px;font-size:9px">N</span>
+      </span>
+      <span class="name">alice-team.notion.so</span>
+      <span class="pill paused"><span class="dot"></span>Paused</span>
+      <span class="last">2h ago</span>
+    </div>
+
+    <div class="menu-divider"></div>
+
+    <div class="tray-section" style="padding-top:0">
+      <div class="sec-head">
+        <span class="lbl-section">Recent activity</span>
+        <div class="grow"></div>
+        <span class="meta">last 5 min</span>
+      </div>
+    </div>
+
+    <div class="activity-row">
+      <svg class="i icn live" width="12" height="12"><use href="#i-check-circle"/></svg>
+      <div class="text">Indexed <span class="em">23 new emails</span> · alice@example.com</div>
+      <span class="when">2s ago</span>
+    </div>
+    <div class="activity-row">
+      <svg class="i icn" width="12" height="12"><use href="#i-spark"/></svg>
+      <div class="text">MCP query from <span class="em">Claude Desktop</span> · search("budget")</div>
+      <span class="when">12s ago</span>
+    </div>
+    <div class="activity-row">
+      <svg class="i icn warn" width="12" height="12"><use href="#i-pause"/></svg>
+      <div class="text">Sync paused · <span class="em">Notion</span> needs reauth</div>
+      <span class="when">38s ago</span>
+    </div>
+    <div class="activity-row">
+      <svg class="i icn" width="12" height="12"><use href="#i-spark"/></svg>
+      <div class="text">MCP query from <span class="em">Claude Code</span> · get_document(4821)</div>
+      <span class="when">1m ago</span>
+    </div>
+
+  </div>
+
+  <div class="tray-foot">
+    <div class="menu-row">
+      <span class="icn"><svg class="i" width="12" height="12"><use href="#i-refresh-cw"/></svg></span>
+      Sync all now
+      <span class="kbd">⌘R</span>
+    </div>
+    <div class="menu-row">
+      <span class="icn"><svg class="i" width="12" height="12"><use href="#i-pause"/></svg></span>
+      Pause all
+      <span class="kbd">⌘P</span>
+    </div>
+    <div class="menu-row">
+      <span class="icn"><svg class="i" width="12" height="12"><use href="#i-settings"/></svg></span>
+      Settings…
+      <span class="kbd">⌘,</span>
+    </div>
+    <div class="menu-divider"></div>
+    <div class="menu-row quit">
+      <span class="icn"><svg class="i" width="12" height="12"><use href="#i-x"/></svg></span>
+      Quit KIAgent
+      <span class="kbd">⌘Q</span>
+    </div>
+  </div>
+
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

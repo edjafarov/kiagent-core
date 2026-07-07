@@ -1,0 +1,548 @@
+/* Shared component primitives — buttons, pills, cards, inputs, progress,
+   typography helpers, link, scroll-y, toast, table, window chrome,
+   sidebar, tray, connector glyphs, wordmark, provider rows. Imported by
+   the desktop renderer (via App.css), the web SPA (via index.html link
+   tag), and the server-rendered HTML (via renderShell, which inlines
+   this file). Tokens live in tokens.css. */
+
+/* ── Container / utility ──────────────────────────────────────── */
+.ac { font-family: var(--font-sans); color: var(--text-primary); background: var(--bg-canvas); font-size: 13px; line-height: 1.4; }
+.ac *, .ac *::before, .ac *::after { box-sizing: border-box; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.num  { font-variant-numeric: tabular-nums; }
+.i    { display: inline-flex; flex-shrink: 0; }
+
+/* ── macOS window chrome ──────────────────────────────────────── */
+.mac-window {
+  overflow: hidden;
+  background: var(--bg-canvas);
+  box-shadow: 0 0 0 1px rgba(15,23,42,0.08), 0 24px 60px rgba(15,23,42,0.18);
+  display: flex; flex-direction: column;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+}
+.mac-titlebar {
+  height: 30px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px;
+  background: var(--bg-rail);
+  border-bottom: 1px solid rgba(0,0,0,0.2);
+  flex-shrink: 0;
+  position: relative;
+}
+.mac-lights { display: flex; gap: 6px; align-items: center; }
+.mac-lights span { width: 10px; height: 10px; display: inline-block; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.3); }
+.mac-lights .l-red { background: #ff5f57; }
+.mac-lights .l-yellow { background: #febc2e; }
+.mac-lights .l-green { background: #28c840; }
+.mac-title {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.85);
+  letter-spacing: -0.01em;
+}
+.mac-body { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--bg-app); }
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  height: 26px; padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: #ffffff;
+  color: var(--text-primary);
+  font-family: var(--font-sans); font-size: 12px; font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+  white-space: nowrap;
+}
+.btn:hover { background: var(--bg-muted); border-color: var(--border-strong); }
+.btn:focus-visible { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(167,139,250,0.18); }
+.btn.sm { height: 22px; padding: 0 8px; font-size: 11px; gap: 4px; }
+.btn.lg { height: 32px; padding: 0 16px; font-size: 13px; }
+.btn.primary {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--accent-contrast);
+  font-weight: 600;
+  box-shadow: var(--shadow-primary);
+}
+.btn.primary:hover { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); }
+.btn.ghost { background: transparent; border: none; color: var(--text-primary); padding: 0 8px; }
+.btn.ghost:hover { background: var(--bg-muted); }
+.btn.destructive {
+  background: #ffffff; border-color: #fecaca;
+  color: var(--error-solid);
+}
+.btn.destructive:hover { background: var(--error-subtle); }
+.btn svg { flex-shrink: 0; }
+.btn[disabled], .btn.disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.icon-only { width: 22px; height: 22px; padding: 0; }
+
+/* ── Pills ────────────────────────────────────────────────────── */
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 18px; padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10.5px; font-weight: 500;
+  font-family: var(--font-sans);
+  white-space: nowrap;
+}
+.pill .dot { width: 5px; height: 5px; flex-shrink: 0; }
+.pill.live    { background: var(--live-subtle);    color: var(--live-solid); }
+.pill.live    .dot { background: var(--live-solid); }
+.pill.working { background: var(--working-subtle); color: var(--working-solid); }
+.pill.working .dot { background: var(--working-solid); }
+.pill.error   { background: var(--error-subtle);   color: var(--error-solid); }
+.pill.error   .dot { background: var(--error-solid); }
+.pill.paused  { background: var(--paused-subtle);  color: var(--paused-solid); }
+.pill.paused  .dot { background: var(--paused-solid); }
+.pill.info    { background: var(--info-subtle);    color: var(--info-solid); }
+.pill.info    .dot { background: var(--info-solid); }
+
+/* ── Cards ────────────────────────────────────────────────────── */
+.card {
+  background: #ffffff;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  position: relative;
+  overflow: hidden;
+}
+.card.danger { border-color: var(--error-solid); }
+.card .stripe { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
+.card .stripe.gmail       { background: var(--tag-gmail); }
+.card .stripe.google-docs { background: var(--tag-google-docs); }
+.card .stripe.onedrive    { background: var(--tag-onedrive); }
+.card .stripe.local       { background: var(--tag-local); }
+.card .stripe.notion      { background: var(--tag-notion); }
+.card .stripe.slack       { background: var(--tag-slack); }
+.card .stripe.browser     { background: var(--tag-browser); }
+.card .stripe.whatsapp    { background: var(--tag-whatsapp); }
+.card .stripe.instagram   { background: var(--tag-instagram); }
+.card .card-inner { padding-left: 20px; }
+
+/* ── Inputs ───────────────────────────────────────────────────── */
+.input {
+  display: flex; align-items: center;
+  height: 26px; padding: 0 10px; gap: 6px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: #ffffff;
+  color: var(--text-primary);
+  font-family: var(--font-sans); font-size: 12px;
+  width: 100%;
+}
+.input:focus, .input:focus-within { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(167,139,250,0.18); }
+.input.mono-text { font-family: var(--font-mono); font-size: 12px; }
+.input.readonly  { background: var(--bg-muted); border-color: var(--border-subtle); color: var(--text-secondary); }
+.input .placeholder { color: var(--text-tertiary); }
+.input-group { display: flex; align-items: center; gap: 6px; background: #ffffff; border-radius: var(--radius-md); padding: 0 4px 0 10px; height: 26px; border: 1px solid var(--border-subtle); }
+
+/* ── Progress ─────────────────────────────────────────────────── */
+.progress { width: 100%; height: 4px; background: var(--bg-muted); overflow: hidden; }
+.progress > i {
+  display: block; height: 100%;
+  background: var(--accent-solid);
+  background-image: linear-gradient(45deg,
+    rgba(255,255,255,0.28) 25%, transparent 25%, transparent 50%,
+    rgba(255,255,255,0.28) 50%, rgba(255,255,255,0.28) 75%, transparent 75%);
+  background-size: 8px 8px;
+  animation: prog-stripes 1.2s linear infinite;
+}
+.progress.tray { height: 2px; }
+@keyframes prog-stripes { from { background-position: 0 0; } to { background-position: 16px 0; } }
+
+/* ── Spinner / Busy ───────────────────────────────────────────────
+   Em-sized so the ring scales with the text it sits next to; the ring
+   inherits `currentColor` (transparent top segment gives the rotation
+   something to read). */
+.spinner {
+  display: inline-block;
+  width: 1em; height: 1em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+}
+
+/* Inline "spinner + label" loading status. Font size matches .t-meta. */
+.busy {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-secondary);
+}
+
+/* ── Typography helpers ───────────────────────────────────────── */
+.lbl-section {
+  font-size: 10px; font-weight: 600; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.h-screen { font-size: 19px; font-weight: 600; line-height: 1.15; letter-spacing: -0.01em; color: var(--text-primary); margin: 0; }
+.h-section { font-size: 14px; font-weight: 600; line-height: 1.25; letter-spacing: -0.005em; color: var(--text-primary); }
+.t-meta { font-size: 11px; color: var(--text-secondary); }
+.t-tiny { font-size: 10px; color: var(--text-tertiary); }
+
+.div-h { height: 1px; background: var(--border-subtle); width: 100%; }
+
+.link { color: var(--accent-text); text-decoration: none; cursor: pointer; background: none; border: 0; border-bottom: 1px solid transparent; padding: 0; font: inherit; }
+.link:hover { border-bottom-color: var(--accent-text); }
+
+.scroll-y { overflow-y: auto; }
+
+/* ── Toast ────────────────────────────────────────────────────── */
+.toast {
+  width: 320px;
+  background: #ffffff;
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--live-solid);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  box-shadow: var(--shadow-md);
+  display: flex; gap: 8px; align-items: flex-start;
+}
+.toast.attention { border-left-color: var(--working-solid); }
+.toast.error     { border-left-color: var(--error-solid); }
+.toast.info      { border-left-color: var(--info-solid); }
+
+/* ── Table (dense) ────────────────────────────────────────────────
+   Ghost-header style per the KIAgent design system: no header bg, no
+   row dividers — the dense rhythm + tr:hover provides enough separation
+   on its own. Visible row borders would compete with the connector
+   stripe and make the table feel like a spreadsheet. */
+.tbl { width: 100%; border-collapse: separate; border-spacing: 0; }
+.tbl thead th {
+  text-align: left; font-size: 10px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-tertiary);
+  padding: 7px 12px 5px;
+  background: transparent;
+}
+.tbl tbody td {
+  padding: 7px 12px; font-size: 12px;
+  vertical-align: middle;
+  color: var(--text-primary);
+}
+.tbl tbody tr:hover td { background: var(--bg-muted); }
+
+/* Stat card — small inline KPI tile, used in /admin's stats grid. */
+.stat { display: inline-block; padding: 0.5rem 0.9rem; border: 1px solid var(--border-subtle); margin: 0.25rem; min-width: 8rem; }
+.stat-label { font-size: 0.8rem; color: var(--text-secondary); }
+.stat-value { font-size: 1.4rem; font-weight: 600; }
+
+/* ── Nav tabs (TopBar's Sources / MCP) ────────────────────────── */
+.kg-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans); font-size: 12px; font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+  white-space: nowrap;
+}
+.kg-tab:hover { background: var(--bg-muted); color: var(--text-primary); }
+.kg-tab:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(167,139,250,0.18); }
+.kg-tab.active {
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.kg-tab .tab-dot {
+  width: 6px; height: 6px;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+.kg-tab .tab-dot.on  { background: var(--live-solid); }
+.kg-tab .tab-dot.off { background: var(--paused-solid); }
+
+/* ── Sidebar items ────────────────────────────────────────────── */
+.side-item {
+  display: flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px; color: var(--text-on-sidebar);
+  cursor: pointer;
+}
+.side-item:hover { background: rgba(255,255,255,0.08); }
+.side-item.active { background: rgba(255,255,255,0.18); color: #ffffff; font-weight: 500; }
+.side-item.parent { font-weight: 600; color: #ffffff; }
+.side-item.child { padding-left: 22px; font-size: 11.5px; }
+
+/* ── Tray popover ─────────────────────────────────────────────── */
+.tray-pop {
+  background: #ffffff;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.menu-row {
+  display: flex; align-items: center; gap: 8px;
+  height: 24px; padding: 0 12px;
+  font-size: 12px; color: var(--text-primary);
+  cursor: pointer;
+}
+.menu-row:hover { background: var(--accent-subtle); color: var(--accent-text); }
+.menu-row .kbd {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--text-tertiary); margin-left: auto;
+}
+.menu-divider { height: 1px; background: var(--border-subtle); margin: 4px 0; }
+
+.kbd-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 4px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-muted);
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--text-secondary);
+}
+
+/* ── Connector glyph (small tile) ─────────────────────────────── */
+.conn-glyph {
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.conn-glyph.lg { width: 26px; height: 26px; }
+.conn-glyph.xl { width: 34px; height: 34px; }
+
+/* ── Wordmark ─────────────────────────────────────────────────── */
+.wordmark {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-weight: 500; font-size: 12.5px;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+/* The framed Bracket leads the wordmark (brand spec §08). The mark sizes
+   itself (BracketMark width/height); color drives the Spark fill, the reticle
+   is its own fixed Violet Light tone. */
+.wordmark .mark { color: var(--accent-solid); }
+
+/* ── Provider row (onboarding) ────────────────────────────────── */
+.prov-row {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; height: 42px; padding: 0 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+  font: inherit;
+  border-radius: var(--radius-md);
+  text-decoration: none; /* anchor variants (e.g. web login) inherit no underline */
+  box-sizing: border-box;
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out);
+}
+.prov-row:hover:not(:disabled) { background: var(--bg-muted); }
+.prov-row:focus-visible { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(167,139,250,0.18); }
+.prov-row[disabled], .prov-row.soon { opacity: 0.55; cursor: not-allowed; }
+
+.prov-row.primary {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--accent-contrast);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.18) inset,
+              0 6px 16px -4px rgba(124,58,237,0.35);
+}
+.prov-row.primary:hover { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); }
+
+/* Google sign-in compliance — per https://developers.google.com/identity/branding-guidelines
+   White bg, #747775 border, #1F1F1F text, Roboto Medium 14px. Icon+label
+   left-aligned as a pair (also a documented variant in the asset set). */
+.prov-row.google-signin {
+  background: #fff; border: 1px solid #747775; color: #1f1f1f;
+  font-family: 'Roboto', var(--font-sans);
+  gap: 10px;
+}
+.prov-row.google-signin .prov-label {
+  flex: 0 0 auto; font-size: 14px; font-weight: 500; letter-spacing: 0.25px;
+}
+.prov-row.google-signin:hover:not(:disabled) {
+  background: #f8f9fa; border-color: #5e6064;
+}
+
+/* Microsoft sign-in compliance — per the Microsoft brand identity guidelines
+   White bg, #8C8C8C border, Segoe UI 15px, #5E5E5E label. Icon+label
+   left-aligned (the layout shown in Microsoft's reference asset). */
+.prov-row.microsoft-signin {
+  background: #fff; border: 1px solid #8c8c8c; color: #5e5e5e;
+  font-family: 'Segoe UI', var(--font-sans); gap: 12px;
+}
+.prov-row.microsoft-signin .prov-label {
+  flex: 0 0 auto; font-size: 15px; font-weight: 400; color: #5e5e5e; letter-spacing: 0;
+}
+.prov-row.microsoft-signin:hover:not(:disabled) {
+  background: #f3f3f3; border-color: #6a6a6a;
+}
+
+/* Local-folder row — neutral structural variant. */
+.prov-row.local-folder { background: #fff; border: 1px solid var(--border-strong); }
+.prov-row.local-folder:hover:not(:disabled) { background: var(--bg-muted); }
+
+.prov-label {
+  flex: 1; font-size: 13px; font-weight: 500;
+  letter-spacing: -0.005em;
+}
+.prov-meta {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  background: var(--bg-muted); color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.prov-row.primary .prov-meta {
+  background: rgba(255,255,255,0.18);
+  color: var(--accent-contrast);
+  border: none;
+}
+
+/* Onboarding divider */
+.onb-divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 2px 0; color: var(--text-tertiary); font-size: 11px;
+}
+.onb-divider .line { flex: 1; height: 1px; background: var(--border-subtle); }
+.onb-divider .or { text-transform: uppercase; letter-spacing: 0.16em; }
+
+/* Notion N glyph (used in onboarding provider row + connector tile) */
+.notion-n {
+  width: 18px; height: 18px; background: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #0b1426; font-family: Georgia, serif; font-weight: 700;
+  font-size: 13px; line-height: 1;
+  border: 1px solid var(--border-subtle);
+}
+
+/* ── Design canvas (Figma-ish wrapper for previews) ───────────── */
+.dc-canvas {
+  min-height: 100vh;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 23px, rgba(0,0,0,0.06) 23px 24px),
+    repeating-linear-gradient(90deg, transparent 0 23px, rgba(0,0,0,0.06) 23px 24px),
+    var(--bg-canvas-warm);
+  padding: 48px 56px 120px;
+}
+.dc-title {
+  font-family: var(--font-sans);
+  font-size: 28px; font-weight: 600; letter-spacing: -0.01em;
+  color: rgba(40,30,20,0.85);
+  margin: 0 0 6px;
+}
+.dc-subtitle {
+  font-family: var(--font-sans);
+  font-size: 14px; color: rgba(60,50,40,0.6);
+  margin: 0 0 36px;
+}
+.dc-section { margin-bottom: 56px; }
+.dc-section-head { margin-bottom: 20px; }
+.dc-section-title {
+  font-family: var(--font-sans);
+  font-size: 18px; font-weight: 600;
+  color: rgba(40,30,20,0.85); margin: 0 0 4px;
+}
+.dc-section-subtitle {
+  font-family: var(--font-sans);
+  font-size: 13px; color: rgba(60,50,40,0.6); margin: 0;
+}
+.dc-row { display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-start; }
+.dc-artboard { position: relative; }
+.dc-artboard-label {
+  font-family: var(--font-sans);
+  font-size: 12px; color: rgba(60,50,40,0.7);
+  margin-bottom: 8px;
+  display: flex; align-items: center; gap: 6px;
+}
+.dc-artboard-label .dim {
+  font-family: var(--font-mono);
+  color: rgba(60,50,40,0.45);
+  font-size: 11px;
+}
+
+/* ── Onboarding / sign-in card ────────────────────────────────────
+   Centered, balanced card used by the desktop onboarding and the web
+   sign-in page. The `--brand` modifier swaps in a deep-violet rail wash
+   so the standalone web sign-in is clearly branded while the card itself
+   stays light + centered (the balanced look from the design mockups). */
+.onb-shell {
+  flex: 1;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-canvas);
+  padding: 32px;
+}
+.onb-shell.onb-shell--brand {
+  background:
+    radial-gradient(780px 460px at 50% -8%,  rgba(124,58,237,0.20), transparent 60%),
+    radial-gradient(620px 380px at 92% 108%, rgba(167,139,250,0.16), transparent 60%),
+    var(--bg-rail);
+}
+.onb-card {
+  width: 400px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+/* On the branded backdrop the card lifts into an elevated white panel. */
+.onb-shell--brand .onb-card {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-lg);
+  padding: 34px 32px 28px;
+}
+.onb-head {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+/* Prominent brand spark leading the card (sized by font-size; SparkGlyph is 1em). */
+.onb-spark {
+  font-size: 38px;
+  line-height: 1;
+  color: var(--accent-solid);
+  filter: drop-shadow(0 0 20px rgba(124,58,237,0.28));
+  margin-bottom: 2px;
+}
+.onb-head .wordmark { font-size: 13.5px; }
+.onb-head .wordmark .mark { width: 16px; height: 16px; }
+.onb-title {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--text-primary);
+  margin: 6px 0 0;
+}
+.onb-sub {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.55;
+  max-width: 330px;
+}
+.onb-providers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.onb-providers .prov-row { height: 46px; }
+.onb-footer {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
+  line-height: 1.5;
+  padding-top: 6px;
+}
+.onb-footer a { color: var(--accent-text); text-decoration: none; }
+.onb-footer a:hover { text-decoration: underline; }

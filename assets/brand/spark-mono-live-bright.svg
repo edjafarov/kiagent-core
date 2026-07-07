@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <!-- Tray · MCP call (pulse) — brighter, larger teal node for per-call
+       feedback, lighting the reticle's top-right corner. Edge-flush tray
+       layout; same as spark-mono-live.svg with a bigger node. -->
+  <g fill="none" stroke="#000000" stroke-width="5" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M4 22 L4 4 L22 4"/>
+    <path d="M4 78 L4 96 L22 96"/>
+    <path d="M96 78 L96 96 L78 96"/>
+  </g>
+  <g transform="translate(21 21) scale(0.58)">
+    <path d="M50 3 C 52.5 33 67 47.5 97 50 C 67 52.5 52.5 67 50 97 C 47.5 67 33 52.5 3 50 C 33 47.5 47.5 33 50 3 Z" fill="#000000"/>
+  </g>
+  <rect x="70" y="4" width="28" height="28" fill="#0d9488"/>
+</svg>

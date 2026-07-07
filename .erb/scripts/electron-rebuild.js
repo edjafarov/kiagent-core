@@ -1,0 +1,23 @@
+import { execSync } from 'child_process';
+import fs from 'fs';
+// release/app holds the packaged-app deps list; the relative reach-in is
+// deliberate (the autofix suggestion resolves to the wrong package.json).
+// eslint-disable-next-line import/no-relative-packages
+import { dependencies } from '../../release/app/package.json';
+import webpackPaths from '../configs/webpack.paths';
+
+if (
+  Object.keys(dependencies || {}).length > 0 &&
+  fs.existsSync(webpackPaths.appNodeModulesPath)
+) {
+  const electronRebuildCmd =
+    '../../node_modules/.bin/electron-rebuild --force --types prod,dev,optional --module-dir .';
+  const cmd =
+    process.platform === 'win32'
+      ? electronRebuildCmd.replace(/\//g, '\\')
+      : electronRebuildCmd;
+  execSync(cmd, {
+    cwd: webpackPaths.appPath,
+    stdio: 'inherit',
+  });
+}

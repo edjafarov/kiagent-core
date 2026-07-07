@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Sources (onboarding)</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-shell">
+      <div class="dash-topbar">
+        <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+        <span class="pill working"><span class="dot"></span>2 sources · indexing</span>
+        <div style="flex:1"></div>
+        <button type="button" class="kg-tab active">
+          <svg class="i" width="13" height="13"><use href="#i-database"/></svg>
+          <span>Sources</span>
+        </button>
+        <button type="button" class="kg-tab">
+          <svg class="i" width="13" height="13"><use href="#i-link"/></svg>
+          <span>MCP</span>
+          <span class="tab-dot" aria-label="MCP not yet connected"></span>
+        </button>
+        <button type="button" class="btn ghost sm" aria-label="Settings">
+          <svg class="i" width="14" height="14"><use href="#i-settings"/></svg>
+        </button>
+      </div>
+
+      <div class="dash-body">
+        <div class="row-flex">
+          <div class="h-section">Sources</div>
+          <span class="t-meta">2 types · 2 sources</span>
+          <div style="flex:1"></div>
+          <button type="button" class="btn sm">
+            <svg class="i" width="13" height="13"><use href="#i-refresh-cw"/></svg>
+            Sync all
+          </button>
+          <button type="button" class="btn primary sm">
+            <svg class="i" width="13" height="13"><use href="#i-plus"/></svg>
+            Add
+          </button>
+        </div>
+
+        <div class="tbl-container">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="width:110px">Source</th>
+                <th>Account / path</th>
+                <th style="width:140px">Status</th>
+                <th style="width:140px">Docs</th>
+                <th style="width:80px">Last</th>
+                <th style="width:36px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="cursor:pointer">
+                <td>
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <span class="src-stripe gmail"></span>
+                    <svg class="i" width="12" height="12" style="color:var(--text-secondary)"><use href="#i-mail"/></svg>
+                    <span style="font-size:11px;color:var(--text-secondary)">Gmail</span>
+                  </div>
+                </td>
+                <td class="mono" style="font-size:11.5px;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">alice@example.com</td>
+                <td><span class="pill working"><span class="dot"></span>Backfilling 14%</span></td>
+                <td class="mono" style="font-size:11.5px">6,420 / ~46k</td>
+                <td class="t-meta">now</td>
+                <td>
+                  <button type="button" class="btn ghost sm icon-only" style="width:20px;height:20px">
+                    <svg class="i" width="12" height="12"><use href="#i-more"/></svg>
+                  </button>
+                </td>
+              </tr>
+              <tr style="cursor:pointer">
+                <td>
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <span class="src-stripe local"></span>
+                    <svg class="i" width="12" height="12" style="color:var(--text-secondary)"><use href="#i-folder"/></svg>
+                    <span style="font-size:11px;color:var(--text-secondary)">Local</span>
+                  </div>
+                </td>
+                <td class="mono" style="font-size:11.5px;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">/Users/alice/Documents/Projects</td>
+                <td><span class="pill live"><span class="dot"></span>Watching</span></td>
+                <td class="mono" style="font-size:11.5px">412</td>
+                <td class="t-meta">8s ago</td>
+                <td>
+                  <button type="button" class="btn ghost sm icon-only" style="width:20px;height:20px">
+                    <svg class="i" width="12" height="12"><use href="#i-more"/></svg>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="ob-panel">
+          <div class="ob-head">
+            <div class="ob-head-text">
+              <div class="ob-title"><span class="spark">✦</span>Get started with kia</div>
+              <span class="ob-sub">Connect your LLM, then try a query — that's it.</span>
+            </div>
+          </div>
+
+          <div class="ob-checklist">
+            <div class="ob-step done">
+              <span class="ob-step-icon done"><svg class="i" width="11" height="11"><use href="#i-check"/></svg></span>
+              <div class="ob-step-body">
+                <span class="ob-step-label">Add a source</span>
+                <span class="ob-step-meta">2 sources connected · backfilling</span>
+              </div>
+            </div>
+            <div class="ob-step">
+              <span class="ob-step-icon"></span>
+              <div class="ob-step-body">
+                <span class="ob-step-label">Connect your LLM</span>
+                <span class="ob-step-meta">Point Claude · Cursor · VS Code at kia's MCP URL.</span>
+              </div>
+              <button type="button" class="btn primary sm">
+                Open MCP tab
+                <svg class="i" width="12" height="12"><use href="#i-arrow-right"/></svg>
+              </button>
+            </div>
+            <div class="ob-step">
+              <span class="ob-step-icon"></span>
+              <div class="ob-step-body">
+                <span class="ob-step-label">Try a query</span>
+                <span class="ob-step-meta">Tap one of the prompts below to copy it — then paste into your LLM.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="ob-grid">
+            <button type="button" class="ob-prompt">
+              <span class="ob-prompt-text"><span class="spark">✦</span>Summarize my unread emails from this week.</span>
+              <span class="ob-prompt-foot">
+                <span class="ob-chip"><span class="src-stripe gmail"></span>Gmail</span>
+                <span class="copy"><svg class="i" width="12" height="12"><use href="#i-copy"/></svg></span>
+              </span>
+            </button>
+            <button type="button" class="ob-prompt">
+              <span class="ob-prompt-text"><span class="spark">✦</span>Find emails about the Q3 budget review and list the key points.</span>
+              <span class="ob-prompt-foot">
+                <span class="ob-chip"><span class="src-stripe gmail"></span>Gmail</span>
+                <span class="copy"><svg class="i" width="12" height="12"><use href="#i-copy"/></svg></span>
+              </span>
+            </button>
+            <button type="button" class="ob-prompt">
+              <span class="ob-prompt-text"><span class="spark">✦</span>What are the most recent docs in /Users/alice/Documents/Projects?</span>
+              <span class="ob-prompt-foot">
+                <span class="ob-chip"><span class="src-stripe local"></span>Local</span>
+                <span class="copy"><svg class="i" width="12" height="12"><use href="#i-copy"/></svg></span>
+              </span>
+            </button>
+            <button type="button" class="ob-prompt">
+              <span class="ob-prompt-text"><span class="spark">✦</span>Show me notes I wrote about the customer-onboarding flow.</span>
+              <span class="ob-prompt-foot">
+                <span class="ob-chip"><span class="src-stripe local"></span>Local</span>
+                <span class="copy"><svg class="i" width="12" height="12"><use href="#i-copy"/></svg></span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

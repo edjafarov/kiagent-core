@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="script-src 'self' 'unsafe-inline'"
+    />
+    <title>KIAgent</title>
+  </head>
+  <!-- Inline background matches --bg-app: the stylesheet ships inside the
+       JS bundle, so without this the page is stark white while the bundle
+       executes. -->
+  <body style="background: #fafafa">
+    <div id="root"></div>
+  </body>
+</html>

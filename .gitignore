@@ -1,0 +1,53 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.idea/
+.claude/
+coverage/
+
+# OAuth client secrets (user-supplied; never commit)
+client_secret_*.json
+
+# electron-react-boilerplate
+/logs/
+pids
+*.pid
+*.seed
+.eslintcache
+release/app/dist
+release/build
+.erb/dll
+npm-debug.log.*
+*.css.d.ts
+*.sass.d.ts
+*.scss.d.ts
+
+# Superpowers brainstorming sessions
+.superpowers/
+
+# Local tooling / stray artifacts
+.clone/
+.antigravitycli/
+.agents/
+.claire/
+test-results/
+# erb workspace symlinks -> release/app/node_modules (not real deps)
+/.erb/node_modules
+/src/node_modules
+
+# Vendored llama.cpp runtime (fetched via scripts/fetch-llama-server.mjs)
+assets/llama/
+
+# Compiled kia-vision helper (built via scripts/build-vision-helper.mjs)
+assets/vision/
+
+# Compiled Windows OCR helper (built via scripts/build-windows-ocr-helper.mjs)
+assets/ocr/
+
+# Bundled connector code (heavy dist; the manifest.json IS committed). Vendored
+# via scripts/vendor-bundled-connectors.mjs (copies a sibling connector build).
+assets/bundled-connectors/*/dist/

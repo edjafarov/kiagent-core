@@ -1,0 +1,231 @@
+/* Marketplace screen shell. .dash-shell lives in ../../App.css; .mkt-shell
+   overrides it to a row (VS-Code-style two-pane layout), matching the
+   legacy renderer's screens/Marketplace/Marketplace.css (kiagent-ref) class
+   shapes (.mkt-pane/.mkt-left/.mkt-right/.mkt-search/.mkt-filters/.mkt-list).
+   Both the list pane (.mkt-row/.mkt-badge) and the detail pane (.mkt-right,
+   header/actions/caps/readme below) are functional as of Task 10. */
+
+.mkt-shell {
+  flex-direction: row;
+  min-height: 0;
+}
+
+.mkt-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.mkt-left {
+  width: 320px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-muted);
+  padding: 14px 16px;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+/* Detail pane: a muted head band (title, versions, actions, caps) over a
+   white README body — padding lives on the sections, not the pane, so the
+   band bleeds edge to edge. */
+.mkt-right {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  overflow-y: auto;
+  background: var(--bg-surface);
+}
+
+.mkt-detail-head {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px;
+  background: var(--bg-muted);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Detail-fetch error rendered where the README would go (outside the head
+   band, which pads its own children). */
+.mkt-right > .mkt-error {
+  margin: 16px 20px;
+}
+
+/* Errors inside the head band sit below the title/actions row. */
+.mkt-detail-head > .mkt-error {
+  margin-top: 10px;
+}
+
+/* Centering wrapper for the no-selection empty state only — the Detail
+   pane itself (Task 10) fills .mkt-right top-down and scrolls. */
+.mkt-right-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mkt-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Detail head's top row: glyph + title/version stack on the left, the
+   action buttons pushed to the right edge. Errors and caps render below. */
+.mkt-detail-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.mkt-detail-top .mkt-actions {
+  margin: 0;
+  justify-content: flex-end;
+}
+.mkt-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+.mkt-header .h-section {
+  margin: 0;
+}
+
+.mkt-search .input {
+  width: 100%;
+}
+
+.mkt-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mkt-list {
+  flex: 1;
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mkt-list-empty {
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 24px;
+  text-align: center;
+}
+
+.mkt-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.mkt-row:hover {
+  background: var(--bg-muted);
+}
+.mkt-row.selected {
+  background: var(--accent-subtle);
+}
+
+.mkt-row-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mkt-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.mkt-badge.update {
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  border-color: transparent;
+}
+
+.mkt-filters .btn.active {
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+}
+
+/* Right-pane notice card — reuses the app's standard `.card` primitive
+   (white surface, 1px border, shadow-xs) plus the same icon-tile idiom used
+   throughout the app (Connection's remote/hub status icon, Sources' error
+   cards): a small accent-tinted square glyph above body copy. Used for the
+   no-selection empty state (see .mkt-right-empty above). */
+.mkt-notice {
+  max-width: 380px;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+.mkt-notice-icon {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+}
+.mkt-notice .t-meta {
+  line-height: 1.55;
+}
+
+/* Detail pane (Task 10): action buttons, inline error notices, the
+   installed-caps summary (compact rows reusing ConsentModal's .cm-cap-row/
+   .cm-cap-label/.cm-elevated-tag classes — self-contained in
+   ConsentModal.css, already loaded since Detail always imports
+   ConsentModal), and README rendering. */
+.mkt-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 10px 0;
+}
+
+.mkt-error {
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid #c33;
+  padding: 8px 10px;
+}
+
+.mkt-caps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.mkt-readme {
+  line-height: 1.55;
+  padding: 16px 20px;
+}
+.mkt-readme h1,
+.mkt-readme h2,
+.mkt-readme h3,
+.mkt-readme pre,
+.mkt-readme code,
+.mkt-readme img {
+  max-width: 100%;
+}

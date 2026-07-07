@@ -1,0 +1,119 @@
+/* Renderer-wide base. Tokens + component primitives (.btn, .pill,
+   .card, .mac-window, .conn-glyph, .prov-row, …) are imported as
+   JS modules from @kiagent/web-ui in src/renderer/index.tsx, not via
+   @import here — webpack-dev-server HMR misses CSS-side @import
+   changes, which leaves stale styles in the renderer window. */
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Thin, subtle scrollbars so scroll panes read as native chrome instead of the
+   raw browser default. Chromium (Electron) honours ::-webkit-scrollbar. macOS
+   overlay scrollbars already auto-hide on their own; this is what gets shown
+   when the OS is set to "Always show scrollbars" and on Windows — kept quiet
+   enough to look intentional in both cases. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  /* Branded translucent purple (the --accent-solid #7c3aed) so the bar reads as
+     part of KIAgent rather than the OS default gray. A transparent border
+     carved out via background-clip makes it a slim pill with edge breathing
+     room — the native-overlay shape — without shrinking the grab target. */
+  background-color: rgba(124, 58, 237, 0.35);
+  border: 2px solid transparent;
+  border-radius: 0;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(124, 58, 237, 0.55);
+}
+::-webkit-scrollbar-thumb:active {
+  background-color: rgba(124, 58, 237, 0.72);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+/* Firefox / non-WebKit engines: the closest equivalent. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(124, 58, 237, 0.45) transparent;
+}
+
+.kg-titlebar {
+  height: 30px;
+  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: var(--bg-rail);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+  -webkit-app-region: drag;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.kg-titlebar-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+  letter-spacing: -0.01em;
+}
+
+/* ── Shared screen-shell chrome ───────────────────────────────────────────
+   Reused by every screen that opts into <TopBar/> (Sources, Connection,
+   Marketplace, Settings). In the legacy renderer these lived in
+   screens/Sources/Sources.css and only worked everywhere because
+   screen-registry.tsx statically imports every screen module (so its CSS
+   side-effect always loads regardless of the active route). That's an
+   accidental global — centralizing the truly shared bits here instead, so a
+   screen's own CSS only has to define what's actually screen-specific. */
+
+.dash-shell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-app);
+}
+
+.dash-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.row-flex {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

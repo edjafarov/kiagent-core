@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Signed out</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 0; background: #f0eee9; }
+
+  .so-shell {
+    width: 1200px; height: 800px;
+    background: var(--bg-canvas-warm);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-sans); color: var(--text-primary);
+    position: relative; overflow: hidden;
+  }
+  .so-shell::before {
+    content: ""; position: absolute; inset: 0;
+    background:
+      radial-gradient(900px 480px at 50% 0%, rgba(124,58,237,0.10), transparent 60%),
+      radial-gradient(800px 420px at 50% 110%, rgba(167,139,250,0.10), transparent 60%);
+    pointer-events: none;
+  }
+
+  .so-topbar {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; align-items: center;
+    padding: 14px 28px;
+    font-size: 12px; color: var(--text-secondary);
+  }
+  .so-topbar .wordmark { color: var(--text-primary); }
+
+  .so-card {
+    position: relative; z-index: 1;
+    width: 460px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-lg);
+    padding: 44px 48px;
+    display: flex; flex-direction: column; gap: 18px;
+    align-items: center; text-align: center;
+  }
+  .so-spark {
+    font-size: 44px; color: var(--accent-text); line-height: 1;
+    text-shadow: 0 0 24px rgba(124,58,237,0.18);
+  }
+  .so-title {
+    font-size: 24px; font-weight: 600; letter-spacing: -0.015em;
+    margin: 0; color: var(--text-primary);
+  }
+  .so-sub {
+    font-size: 14px; line-height: 1.55; margin: 0;
+    color: var(--text-secondary); max-width: 320px;
+  }
+  .so-actions {
+    display: flex; flex-direction: column; gap: 8px;
+    width: 100%; margin-top: 4px;
+  }
+  .so-actions .btn { height: 38px; font-size: 13px; }
+
+  .so-foot {
+    margin-top: 6px; font-size: 11.5px; color: var(--text-tertiary);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .so-foot a { color: var(--accent-text); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<div class="so-shell">
+  <div class="so-topbar">
+    <span class="wordmark"><span class="spark">&#10022;</span>kia</span>
+    <span style="margin-left:auto"><a class="link" href="/help">Help</a></span>
+  </div>
+
+  <div class="so-card">
+    <div class="so-spark">&#10022;</div>
+    <h1 class="so-title">You're signed out</h1>
+    <p class="so-sub">Your kia on this device is unaffected &mdash; only your web session ended. Your subdomain and indexed data stay put.</p>
+
+    <div class="so-actions">
+      <a class="btn primary" href="/">Sign in again</a>
+      <a class="btn" href="kia://open">
+        <svg class="i" width="12" height="12"><use href="#i-external"/></svg>
+        Open kia desktop
+      </a>
+    </div>
+
+    <div class="so-foot">
+      <span>Signed in on a shared machine? <a href="#">Clear local session data</a></span>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

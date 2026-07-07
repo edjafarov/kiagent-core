@@ -1,0 +1,182 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   KIAgent — colors, type, spacing, motion tokens.
+   Foundation layer for every artifact made with this design system.
+   See @kiagent/web-ui README + docs/superpowers/specs/2026-05-11-ui-guidelines.md
+   for the design intent; components live in components.css.
+   ─────────────────────────────────────────────────────────────────────── */
+
+/* Inter + JetBrains Mono via Google Fonts. The desktop renderer hits the
+   CDN at startup; if you need offline-capable artifacts, drop the .woff2
+   files into a /fonts/ folder and replace this @import with @font-face
+   declarations. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* ── Foundation: surfaces ──────────────────────────────────────── */
+  --bg-canvas:      #ffffff;
+  --bg-surface:     #ffffff;
+  --bg-elevated:    #ffffff;
+  --bg-muted:       #f8fafc;
+  --bg-app:         #fafafa;
+  --bg-sidebar:     #4c1d95;
+  --bg-rail:        #2e1065;
+  --bg-canvas-warm: #f0eee9;
+
+  /* ── Foundation: text ──────────────────────────────────────────── */
+  --text-primary:    #0f172a;
+  --text-secondary:  #64748b;
+  --text-tertiary:   #9ca3af;
+  --text-on-sidebar: #ede9fe;
+  --text-on-rail:    #ffffff;
+
+  /* ── Foundation: borders ───────────────────────────────────────── */
+  --border-subtle:   #e5e7eb;
+  --border-strong:   #cbd5e1;
+  --border-focus:    #a78bfa;
+
+  /* ── Brand accent: violet ──────────────────────────────────────── */
+  --accent-solid:       #7c3aed;
+  --accent-solid-hover: #6d28d9;
+  --accent-text:        #6d28d9;
+  --accent-subtle:      #ede9fe;
+  --accent-contrast:    #ffffff;
+
+  /* ── Semantic: status (harmonized against violet) ──────────────── */
+  --live-solid:    #0d9488; --live-subtle:    #ccfbf1;
+  --working-solid: #c2410c; --working-subtle: #ffedd5;
+  --error-solid:   #e11d48; --error-subtle:   #ffe4e6;
+  --paused-solid:  #64748b; --paused-subtle:  #f1f5f9;
+  --info-solid:    #0891b2; --info-subtle:    #cffafe;
+
+  /* ── Connector identity stripes ────────────────────────────────── */
+  --tag-gmail:       #e11d48;
+  --tag-google-docs: #4285f4;
+  --tag-local:       #2563eb;
+  --tag-notion:      #0f172a;
+  --tag-slack:       #7c3aed;
+
+  /* ── Font stacks ───────────────────────────────────────────────── */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+               Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Mono',
+               'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+
+  /* ── Type scale ────────────────────────────────────────────────── */
+  --text-xxs:   10px; --text-xxs-lh:  14px;
+  --text-xs:    11px; --text-xs-lh:   15px;
+  --text-sm:    12px; --text-sm-lh:   17px;
+  --text-base:  13px; --text-base-lh: 18px;
+  --text-md:    14px; --text-md-lh:   20px;
+  --text-lg:    17px; --text-lg-lh:   22px;
+  --text-xl:    19px; --text-xl-lh:   24px;
+  --text-2xl:   22px; --text-2xl-lh:  28px;
+
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+
+  /* ── Spacing scale (4px base) ──────────────────────────────────── */
+  --s-0:  0;
+  --s-1:  4px;
+  --s-2:  8px;
+  --s-3:  12px;
+  --s-4:  16px;
+  --s-5:  20px;
+  --s-6:  24px;
+  --s-8:  32px;
+  --s-10: 40px;
+  --s-12: 48px;
+  --s-16: 64px;
+  --s-20: 80px;
+
+  /* ── Radius — SHARP throughout. Do not soften. ─────────────────── */
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+
+  /* ── Shadows ───────────────────────────────────────────────────── */
+  --shadow-xs: 0 1px 2px rgba(15,23,42,0.06);
+  --shadow-sm: 0 1px 3px rgba(15,23,42,0.08), 0 1px 2px rgba(15,23,42,0.04);
+  --shadow-md: 0 8px 16px -4px rgba(15,23,42,0.10), 0 2px 4px rgba(15,23,42,0.04);
+  --shadow-lg: 0 24px 48px -12px rgba(15,23,42,0.18);
+  --shadow-primary: 0 1px 0 rgba(255,255,255,0.18) inset,
+                    0 1px 2px rgba(124,58,237,0.25);
+
+  /* ── Motion ────────────────────────────────────────────────────── */
+  --duration-fast:   120ms;
+  --duration-normal: 200ms;
+  --duration-slow:   400ms;
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in:     cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast:   0ms;
+    --duration-normal: 0ms;
+    --duration-slow:   0ms;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Semantic type roles — apply by class for prose. Component
+   primitives (.btn, .pill, …) live in components.css.
+   ───────────────────────────────────────────────────────────────── */
+
+.kg-display {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xl); line-height: var(--text-2xl-lh);
+  font-weight: var(--weight-semibold); letter-spacing: -0.015em;
+  color: var(--text-primary); margin: 0;
+}
+.kg-h1 {
+  font-family: var(--font-sans);
+  font-size: var(--text-xl); line-height: var(--text-xl-lh);
+  font-weight: var(--weight-semibold); letter-spacing: -0.01em;
+  color: var(--text-primary); margin: 0;
+}
+.kg-h2 {
+  font-family: var(--font-sans);
+  font-size: var(--text-lg); line-height: var(--text-lg-lh);
+  font-weight: var(--weight-semibold); color: var(--text-primary); margin: 0;
+}
+.kg-h3 {
+  font-family: var(--font-sans);
+  font-size: var(--text-md); line-height: var(--text-md-lh);
+  font-weight: var(--weight-semibold); color: var(--text-primary); margin: 0;
+  letter-spacing: -0.005em;
+}
+.kg-body {
+  font-family: var(--font-sans);
+  font-size: var(--text-base); line-height: var(--text-base-lh);
+  font-weight: var(--weight-regular); color: var(--text-primary);
+}
+.kg-meta {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs); line-height: var(--text-xs-lh);
+  color: var(--text-secondary);
+}
+.kg-tiny {
+  font-family: var(--font-sans);
+  font-size: var(--text-xxs); color: var(--text-tertiary);
+}
+.kg-label {
+  font-family: var(--font-sans);
+  font-size: var(--text-xxs); font-weight: var(--weight-semibold);
+  text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+.kg-code, .kg-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm); line-height: var(--text-sm-lh);
+  color: var(--text-primary);
+}
+.kg-num { font-variant-numeric: tabular-nums; }
+.kg-link {
+  color: var(--accent-text); text-decoration: none; cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+.kg-link:hover { border-bottom-color: var(--accent-text); }

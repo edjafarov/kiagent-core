@@ -1,0 +1,9 @@
+{
+  "id": "test.oauth",
+  "name": "OAuth Test Extension",
+  "version": "1.0.0",
+  "engine": "^1.0.0",
+  "entry": "index.js",
+  "caps": ["net"],
+  "contributes": { "sources": [{ "id": "oauthsrc", "oauth": "google" }] }
+}

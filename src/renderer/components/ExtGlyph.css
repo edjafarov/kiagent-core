@@ -1,0 +1,30 @@
+/* ── ExtGlyph ──────────────────────────────────────────────────────
+   Brand icons render as-is (no tile background — official marks carry
+   their own shape/color); the letter fallback keeps the accent-subtle
+   tile idiom used across the app. Sizing comes from the `size` prop as
+   inline width/height so one component serves 18px rows and 34px heads. */
+
+.ext-glyph-img {
+  flex-shrink: 0;
+  display: block;
+  object-fit: contain;
+}
+
+.ext-glyph-box {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.ext-glyph-fallback {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  font-weight: 700;
+}

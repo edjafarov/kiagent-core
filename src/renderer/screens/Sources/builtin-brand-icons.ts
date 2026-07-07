@@ -1,0 +1,12 @@
+/**
+ * Official brand marks for BUILTIN sources (extension-contributed sources
+ * carry theirs via the manifest `icon` field → ExtensionSnapshot.iconDataUrl;
+ * see SourceIcon.tsx for the resolution order). Inlined as data URIs so no
+ * webpack asset plumbing is involved. Each mark is the unmodified official
+ * product icon, used per its brand guidelines.
+ */
+export const BUILTIN_SOURCE_ICONS: Record<string, string> = {
+  // Google's official Gmail product icon (gstatic, 96px).
+  gmail:
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAEkklEQVR4Ae2ZA5BkSRRFc23bv7H2Fta72V7btm3bDq3tsdkY27b9a9xmTr6IyXB0Z1W/6j8/+56IGzOB1jsdpzp+CQMAAAAAAAAAAAAAAACAEZ53xvDMoz8ekXXMqBGZxyyiDc88pnhExjHvj/S8E0Q7pW7gTtH64h0/ry/ZcVhDyQ6LaPT/+tIdX68ZtEu2aC2js484Uh+7l55qZvUjM4/+btBxhx8o2gnVg3b16kp2+k8fWzU3LeQ3NUjsK1JB/8ZfoI+7QU9ZLjHS84qE4+ij3qyPW66nLLesdsDOyVViZNaR2Toxq+iwyY6yNEiKHYVjqEFi14biHb6joyY7naRZapCwL8TW1qtUR68PYz3vUOEI1HN9yEl6KtVRsoQNw7I9aQ7ZSgmr9GtDnvPJsV+91QuzPl4nPcW1NXmRd5WUoUvSIil3XXvVGX/T8bhGfzHZCJjGKcDPi6lEXqzYl7HQJMmXZ2Xr73uSHh2Oc71sBFQzCzBbtbogts0nSX+fN/t58XL6nrkF0IuxjQCVJgG0+kRu9G2eJPEnJ5Ef/c58r9wCzIIWwJwk/uS4LoA1SfzJcV8Aa5L4k+O+AIYk8SYHAhiSxJAcCEh3knx58p768/9kvhYEtGGSVhdGT/FzY9Poc2/zAp58oMvYYVlZAQngT5LOzd0mOUEKqCzeRd3fRY4ULZH7YYW6+cVJS/qeenYAAtiSZJLzm/lcQQpYNGAfVdjh8uXR/69XVgJol7zrV/1+0W0sAhg2aJ08+8j0J4dfQL8+x6hzO1xbQ8dPSoDZezd+oShJAQugJdbkx4v4k8MvwCTnw+4RZQ6fsgDag48Xq/6nRBgEMCw39jEliS85/AIoObd2yqeD8wigXf36YvXnBTdzCGBYfBgliSE57AIoORd1uJqOzSuAlv/BRvXB9Z9RkngEMCSp2eQwrBXJ4Rdgdt+TgxT9lWQpINRrZXL4BZhd8dYyRX8luS/APjn8Aiz2zk3fUJJcFWCbnOAE0O55aiglyUUBFskJXIBJ0opGSpJjAmyTE7wAs7dv/qaRkuSUAPvkBC+AdssLkxOUJFcEUHKu71RYRQcMhQBawQcbN/4s75kfdgFde2cuOuf/66rpeKESYEZPM+mpZgiPX53Iiz5sDhdaAUJDz/Xp+X5ojp8fn+cXxM4QGicEEPQOF73TFQIB/9GDPUG4JICgp5j8SeJNjjC4KIDgTxJvctwXwJ8k1uS4L4A/SazJcV8AZ5IYkgMBDEliSA4EpD9J8XK9+4UBAtouSfR+Mb1vLAgIaPMk/WafHAjgSpJJzt3CAAGpk8iPSn3UZezJgQB7VsrIgfq4/ZJNDgQw4+fGX6YkWScHAvjx8yMXUJIYkgMBDEliTQ4E8AMBEAABEAABEAABEAABEAABEAABQQEBEDDLQkDlPAhIk4D/rv+rZQEflL8PAekREPv/httFS8h3NuyrD7eMUwAE0PGv7yVskR9tPiHvw4pJbAIgYFqs442HimSQ76gd9evB6zkfVg7T/5ZDQGqHj3S47nn52z27CgAAAAAAAAAAAAAAAAAAtFu2AJlqODQM4+yVAAAAAElFTkSuQmCC',
+};

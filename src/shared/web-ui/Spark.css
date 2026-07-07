@@ -1,0 +1,112 @@
+/*
+ * Spark — KIAgent brand mark (drawn vector astroid) with a state machine.
+ * Geometry comes from spark-geometry.ts; this file sizes the mark and drives
+ * its states. Aligned to "KIAgent Logo — Brand Spec (Bracket)" (§06 color,
+ * §10 states).
+ *
+ * Sizes: inline 14px (wordmark), tray 28px (popover), app 96px (About), hero 200px (sign-in).
+ * At app/hero the mark is the Bracket — the Spark held in a focus reticle
+ * (.kg-spark__frame); at inline/tray the reticle drops and the bare Spark
+ * carries the mark (brand spec, Bracket §05 degradation rule).
+ * States: idle (default), blink = thinking (dim-pulse), mcp (teal badge pop),
+ *         error (rose badge), paused (42% opacity).
+ */
+
+.kg-spark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  color: var(--accent-solid);
+  font-family: var(--font-sans);
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* Size tiers — box dimensions; the star is sized below to sit optically
+   inside each box (matching the brand spec's clear-space proportions). */
+.kg-spark.size-inline { width: 14px;  height: 14px; }
+.kg-spark.size-tray   { width: 28px;  height: 28px; }
+.kg-spark.size-app    { width: 96px;  height: 96px;
+                        background: var(--accent-subtle); }
+.kg-spark.size-hero   { width: 200px; height: 200px;
+                        background: var(--accent-subtle);
+                        box-shadow: 0 8px 32px -8px rgba(124,58,237,0.30); }
+
+/* The drawn mark itself — an inline SVG so animations/color target only the
+   star, not the badge. fill:currentColor inherits the .kg-spark color cascade. */
+.kg-spark__star {
+  display: block;
+  fill: currentColor;
+}
+/* The reticle frame (app/hero only) — "Violet Light", a flat second tone that
+   keeps the duotone relationship (lighter than the Spark) on every surface,
+   light or dark. Drawn in viewBox units: arm 16u, inset 9u, weight 5u.
+   fill:none overrides the inherited currentColor on the parent <svg>. */
+.kg-spark__frame {
+  fill: none;
+  stroke: #a78bfa;
+  stroke-width: 5;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+}
+.kg-spark.size-inline .kg-spark__star { width: 14px;  height: 14px; }
+.kg-spark.size-tray   .kg-spark__star { width: 16px;  height: 16px; }
+.kg-spark.size-app    .kg-spark__star { width: 64px;  height: 64px; }
+.kg-spark.size-hero   .kg-spark__star { width: 140px; height: 140px; }
+
+/* Dark variant — for tray popover header (deep indigo bg) */
+.kg-spark.is-dark              { color: #c4b5fd; }
+.kg-spark.size-app.is-dark,
+.kg-spark.size-hero.is-dark    { background: #1c1917; color: #e7e3dd; }
+
+/* Paused — the Spark at 42% opacity (brand spec §10), no animation */
+.kg-spark.state-paused .kg-spark__star { opacity: 0.42; }
+
+/* Thinking — the one motion the system allows: the Spark dims-pulses
+   (brand spec §10). Drives the `blink` state; opacity-based so it reads
+   identically on light and dark surfaces. */
+.kg-spark.state-blink .kg-spark__star {
+  animation: kg-spark-pulse 1.2s var(--ease-in-out) infinite;
+}
+
+@keyframes kg-spark-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+/* Badge — green square (mcp) or red square (error), positioned top-right */
+.kg-spark__badge {
+  position: absolute;
+  background: var(--live-solid);
+}
+.kg-spark.size-inline .kg-spark__badge { top: 0;  right: 0;  width: 4px;  height: 4px; }
+.kg-spark.size-tray   .kg-spark__badge { top: 3px; right: 3px; width: 6px;  height: 6px;
+                                         box-shadow: 0 0 0 1.5px var(--bg-sidebar); }
+.kg-spark.size-app    .kg-spark__badge { top: 8px; right: 8px; width: 14px; height: 14px;
+                                         box-shadow: 0 0 0 2px var(--accent-subtle); }
+.kg-spark.size-hero   .kg-spark__badge { top: 16px; right: 16px; width: 28px; height: 28px;
+                                         box-shadow: 0 0 0 4px var(--accent-subtle); }
+.kg-spark.is-dark .kg-spark__badge { box-shadow: 0 0 0 2px #1c1917; }
+
+/* MCP state — green badge with pop-on-mount animation (key={pulseSeq} re-mounts) */
+.kg-spark.state-mcp .kg-spark__badge {
+  background: var(--live-solid);
+  animation: kg-spark-mcp-pop 0.8s var(--ease-out) 1 both;
+}
+/* Error state — red badge, no animation */
+.kg-spark.state-error .kg-spark__badge {
+  background: var(--error-solid);
+}
+
+@keyframes kg-spark-mcp-pop {
+  0%   { transform: scale(1);    opacity: 1; }
+  35%  { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1);    opacity: 1; }
+}
+
+/* prefers-reduced-motion: kill all animations */
+@media (prefers-reduced-motion: reduce) {
+  .kg-spark .kg-spark__star,
+  .kg-spark .kg-spark__badge { animation: none !important; }
+}

@@ -1,0 +1,18 @@
+{
+  // Type-check-only config used by CI (`npm run typecheck`). The app is bundled
+  // by webpack (ts-loader, transpileOnly), so the real module system is resolved
+  // by the bundler — not Node's native CJS/ESM rules. The root tsconfig keeps
+  // `module: node16` because ts-node (webpack configs) and ts-jest emit against
+  // it; switching THOSE to a bundler/ESM mode would break their CommonJS emit.
+  // Here we type-check under `moduleResolution: bundler`, which matches how
+  // webpack actually resolves ESM-only deps (jose, libp2p) and drops the phantom
+  // CJS-can't-import-ESM / explicit-extension errors that node16 raised.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "skipLibCheck": true,
+    "module": "esnext",
+    "moduleResolution": "bundler"
+  }
+}

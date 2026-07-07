@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Logs</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 24px; background: #f0eee9; }
+
+  .logs-shell { background: var(--bg-canvas); }
+  .logs-toolbar .select {
+    height: 22px; min-width: auto; padding: 0 8px 0 8px;
+    font-size: 11px; gap: 4px;
+  }
+  .logs-toolbar .select .chev { color: var(--text-tertiary); }
+  .logs-toolbar .input {
+    height: 22px; font-size: 11px; padding: 0 8px;
+    flex: 1; max-width: 320px;
+  }
+  .logs-toolbar .input .placeholder { color: var(--text-tertiary); font-size: 11px; }
+  .logs-toolbar .div-v {
+    width: 1px; height: 16px; background: var(--border-subtle);
+    margin: 0 2px;
+  }
+  .log-row .msg { color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log-row .msg .k { color: var(--text-secondary); }
+  .log-row .msg .v { color: var(--text-primary); }
+  .log-row.err  { background: rgba(225,29,72,0.04); }
+  .log-row.warn-bg { background: rgba(194,65,12,0.03); }
+
+  .footbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 14px;
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-muted);
+    font-size: 11px; color: var(--text-secondary);
+  }
+  .footbar .mono { font-size: 11px; color: var(--text-tertiary); }
+</style>
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent · Logs</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-topbar">
+      <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+      <span class="pill live"><span class="dot"></span>4 live · 47,231 docs</span>
+      <span class="t-meta" style="margin-left:8px">Diagnostic log stream</span>
+      <div style="flex:1"></div>
+      <button class="btn ghost sm">
+        <svg class="i" width="13" height="13"><use href="#i-external"/></svg>
+        <span style="color:var(--text-secondary)">Open log file</span>
+      </button>
+      <button class="btn ghost sm">
+        <svg class="i" width="14" height="14"><use href="#i-settings"/></svg>
+      </button>
+    </div>
+
+    <div class="logs-shell">
+      <div class="logs-body">
+        <div class="logs-toolbar">
+          <span class="lbl-section" style="margin-right:2px">Filter</span>
+          <button class="select">
+            <span style="color:var(--text-secondary)">Level:</span>
+            <span>All levels</span>
+            <svg class="i chev" width="11" height="11"><use href="#i-chev-down"/></svg>
+          </button>
+          <button class="select">
+            <span style="color:var(--text-secondary)">Source:</span>
+            <span>All sources</span>
+            <svg class="i chev" width="11" height="11"><use href="#i-chev-down"/></svg>
+          </button>
+          <div class="input">
+            <svg class="i" width="12" height="12" style="color:var(--text-tertiary)"><use href="#i-search"/></svg>
+            <span class="placeholder">Search messages…</span>
+          </div>
+          <div class="div-v"></div>
+          <span class="t-meta">tail</span>
+          <button class="btn sm">
+            <svg class="i" width="12" height="12"><use href="#i-pause"/></svg>
+            Pause
+          </button>
+          <button class="btn ghost sm">
+            <svg class="i" width="12" height="12"><use href="#i-copy"/></svg>
+            <span style="color:var(--text-secondary)">Copy</span>
+          </button>
+          <div style="flex:1"></div>
+          <button class="btn ghost sm">
+            <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+            <span style="color:var(--text-secondary)">Clear</span>
+          </button>
+        </div>
+
+        <div class="logs-table">
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:11</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">scheduler</span>
+            <span class="msg">Tick: 4 connectors due, <span class="k">cooldown=</span><span class="v">0</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:11</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">connector.gmail</span>
+            <span class="msg">Sync started for <span class="v">alice@example.com</span> <span class="k">cursor=</span><span class="v">"1817b0a3e8"</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:18</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">connector.gmail</span>
+            <span class="msg">Fetched 23 messages for <span class="v">alice@example.com</span> <span class="k">in</span> <span class="v">412ms</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:19</span>
+            <span class="lvl debug">DEBUG</span>
+            <span class="src">db</span>
+            <span class="msg">INSERT documents <span class="k">batch=</span><span class="v">23</span> rows <span class="k">took=</span><span class="v">17ms</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:19</span>
+            <span class="lvl debug">DEBUG</span>
+            <span class="src">db</span>
+            <span class="msg">FTS index updated <span class="k">delta=</span><span class="v">+23 docs</span> <span class="k">size=</span><span class="v">187.4 MB</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:22</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">connector.local</span>
+            <span class="msg">Watched 4 changes in <span class="v">/Users/alice/Documents/Projects</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:24</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">mcp.activity</span>
+            <span class="msg"><span class="v">claude-desktop</span> search(<span class="v">"budget"</span>) → 7 hits <span class="k">in</span> <span class="v">43ms</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:26</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">mcp.server</span>
+            <span class="msg">POST /mcp <span class="k">tool=</span><span class="v">search</span> <span class="k">status=</span><span class="v">200</span> <span class="k">bytes=</span><span class="v">12384</span></span>
+          </div>
+          <div class="log-row warn-bg">
+            <span class="ts">2026-05-25 14:02:30</span>
+            <span class="lvl warn">WARN</span>
+            <span class="src">connector.gmail</span>
+            <span class="msg">Rate limit hit, backing off <span class="v">4s</span> for <span class="v">work@company.com</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:32</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">connector.gmail</span>
+            <span class="msg">Resuming sync after backoff <span class="k">account=</span><span class="v">work@company.com</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:34</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">connector.gmail</span>
+            <span class="msg">Backfill progress <span class="v">4,802 / ~210,000</span> <span class="k">eta=</span><span class="v">38m</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:38</span>
+            <span class="lvl debug">DEBUG</span>
+            <span class="src">connector.local</span>
+            <span class="msg">fs.watch event <span class="k">path=</span><span class="v">/Library/Notes/inbox.md</span> <span class="k">type=</span><span class="v">change</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:41</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">connector.local</span>
+            <span class="msg">Re-indexed <span class="v">1</span> file in <span class="v">/Users/alice/Library/Notes</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:45</span>
+            <span class="lvl error">ERROR</span>
+            <span class="src">connector.notion</span>
+            <span class="msg">401 Unauthorized — token expired <span class="k">workspace=</span><span class="v">"alice-team"</span></span>
+          </div>
+          <div class="log-row err">
+            <span class="ts">2026-05-25 14:02:45</span>
+            <span class="lvl error">ERROR</span>
+            <span class="src">auth</span>
+            <span class="msg">Refresh failed: <span class="v">invalid_grant</span> — user reauth required</span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:46</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">scheduler</span>
+            <span class="msg">Marked <span class="v">notion</span> source as <span class="v">"needs reauth"</span>, suspended pulls</span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:51</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">mcp.activity</span>
+            <span class="msg"><span class="v">claude-code</span> get_document(<span class="v">id=4821</span>) → 1.8 KB <span class="k">in</span> <span class="v">11ms</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:55</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">mcp.server</span>
+            <span class="msg">Connection from <span class="v">127.0.0.1:54812</span> <span class="k">client=</span><span class="v">claude-code/0.4.2</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:02:58</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">connector.gmail</span>
+            <span class="msg">Fetched 11 messages for <span class="v">alice@example.com</span> <span class="k">in</span> <span class="v">208ms</span></span>
+          </div>
+          <div class="log-row warn-bg">
+            <span class="ts">2026-05-25 14:03:00</span>
+            <span class="lvl warn">WARN</span>
+            <span class="src">db</span>
+            <span class="msg">Slow query <span class="v">1842ms</span> <span class="k">stmt=</span><span class="v">"SELECT … FROM documents WHERE …"</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:03:00</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">scheduler</span>
+            <span class="msg">Tick: 3 connectors due, 1 in cooldown</span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:03:04</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">mcp.activity</span>
+            <span class="msg"><span class="v">vscode</span> list_sources() → 4 sources <span class="k">in</span> <span class="v">3ms</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:03:08</span>
+            <span class="lvl debug">DEBUG</span>
+            <span class="src">db</span>
+            <span class="msg">vacuum analyze complete <span class="k">reclaimed=</span><span class="v">2.1 MB</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:03:11</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">connector.local</span>
+            <span class="msg">Watched 4 changes in <span class="v">/Users/alice/Documents</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:03:14</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">mcp.activity</span>
+            <span class="msg"><span class="v">claude-desktop</span> search(<span class="v">"quarterly review"</span>) → 23 hits <span class="k">in</span> <span class="v">61ms</span></span>
+          </div>
+          <div class="log-row">
+            <span class="ts">2026-05-25 14:03:18</span>
+            <span class="lvl info">INFO</span>
+            <span class="src">connector.gmail</span>
+            <span class="msg">Sync complete for <span class="v">alice@example.com</span> <span class="k">added=</span><span class="v">34</span> <span class="k">updated=</span><span class="v">2</span></span>
+          </div>
+        </div>
+
+        <div class="footbar">
+          <span class="mono">~/Library/Logs/KIAgent/kiagent.log</span>
+          <span style="color:var(--text-tertiary)">·</span>
+          <span>25 of <span class="mono">1,000</span> lines</span>
+          <div style="flex:1"></div>
+          <span class="pill live" style="height:16px;padding:0 5px;font-size:10px"><span class="dot"></span>Streaming</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

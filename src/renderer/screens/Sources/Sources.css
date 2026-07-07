@@ -1,0 +1,775 @@
+/* Sources screens (list + detail). .dash-shell / .dash-topbar / .row-flex
+   live in ../../App.css (shared by every <TopBar/> screen — see that file's
+   header comment for why). Everything below is specific to this directory. */
+
+.dash-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* The body itself does not scroll — it's the fixed frame. The header row
+     stays pinned and the account table (.tbl-container) scrolls internally. */
+  overflow: hidden;
+}
+.dash-body > * {
+  flex-shrink: 0;
+}
+/* AddSourcePanel and the table each take the remaining vertical space. */
+.dash-body > .as-panel,
+.dash-body > .tbl-container,
+.dash-body > .src-empty {
+  flex: 1 1 auto;
+  min-height: 120px;
+}
+
+.src-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-tertiary);
+  border: 1px dashed var(--border-subtle);
+  padding: 24px;
+  text-align: center;
+}
+
+/* One-shot spin so "Sync all" gives a visible click acknowledgement even
+   when every accounts:sync-now call resolves near-instantly. */
+@keyframes kg-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.kg-spin {
+  animation: kg-spin 0.7s var(--ease-out, ease-out);
+  transform-origin: center;
+}
+
+/* ── Source table ─────────────────────────────────────────────────── */
+
+.tbl-container {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  overflow-y: auto;
+  box-shadow: var(--shadow-xs);
+}
+.tbl-container thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-surface);
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+}
+.src-row { cursor: pointer; }
+.src-source-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.src-source-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.src-identifier-cell {
+  font-size: 11.5px;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.src-stripe {
+  width: 2px;
+  height: 14px;
+  flex-shrink: 0;
+  background: var(--text-tertiary);
+}
+.src-stripe.gmail       { background: var(--tag-gmail); }
+.src-stripe.google-docs { background: var(--tag-google-docs); }
+.src-stripe.local       { background: var(--tag-local); }
+.src-stripe.notion      { background: var(--tag-notion); }
+.src-stripe.onedrive    { background: var(--tag-onedrive); }
+.src-stripe.slack       { background: var(--tag-slack); }
+.src-stripe.browser     { background: var(--tag-browser); }
+.src-stripe.whatsapp    { background: var(--tag-whatsapp); }
+.src-stripe.instagram   { background: var(--tag-instagram); }
+.src-stripe.default     { background: var(--text-tertiary); }
+
+.scope-chip {
+  display: inline-block;
+  padding: 2px 6px;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+/* ── Error card (ErrorCard.tsx) ───────────────────────────────────── */
+
+.err-card-inner {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.err-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.err-detail {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--error-subtle);
+  align-items: flex-start;
+}
+.err-detail .title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--error-solid);
+}
+.err-detail .detail-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--error-solid);
+  opacity: 0.85;
+}
+.err-links {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+}
+.err-links .link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── Add-source panel (AddSourcePanel.tsx) ────────────────────────── */
+
+.as-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+.as-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.as-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.as-sub {
+  font-size: 11.5px;
+}
+
+.as-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.as-tile {
+  aspect-ratio: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+}
+.as-tile:hover {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.18);
+}
+.as-tile[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.as-ic {
+  display: inline-flex;
+}
+.as-nm {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.as-flow-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.as-flow-msg.err {
+  color: var(--error-solid);
+}
+.as-flow-qr {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg-muted);
+  border: 1px solid var(--border-subtle);
+  padding: 8px;
+  max-width: 100%;
+}
+.as-qr-img {
+  background: #fff;
+  border: 1px solid var(--border-subtle);
+  padding: 8px;
+  align-self: flex-start;
+}
+.as-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.as-field-help {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ── Guided connect wizard (AddSourcePanel flow states) ───────────── */
+
+.as-wizard {
+  align-self: center;
+  width: 100%;
+  max-width: 560px;
+  margin-top: 12px;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.as-wizard-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.as-wizard-head .h-section {
+  margin: 0;
+}
+.as-wizard-intro {
+  margin: 0;
+}
+.as-wizard-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.as-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.as-step {
+  display: flex;
+  gap: 10px;
+}
+.as-step-num {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+.as-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.as-step-body .btn {
+  align-self: flex-start;
+}
+.as-step-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.as-copy {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.as-wizard-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.si-error {
+  color: var(--error-solid);
+  font-size: 11.5px;
+}
+
+/* ── Source detail shell ──────────────────────────────────────────── */
+
+.detail-body {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+.detail-body > * {
+  flex-shrink: 0;
+}
+.detail-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.detail-card .lbl-section.danger { color: var(--error-solid); }
+/* .detail-card is a flex-column; align-items:stretch would make a direct
+   <button> child span the full card width — keep it content-sized. */
+.detail-card > .btn { align-self: flex-start; }
+
+dl.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 4px 0 0 0;
+}
+dl.kv dt {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+dl.kv dd {
+  margin: 0;
+  font-size: 12px;
+}
+
+.ov-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* ── TrackedContent ────────────────────────────────────────────────  */
+
+.tc-list {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+}
+.tc-row + .tc-row { border-top: 1px solid var(--border-subtle); }
+.tc-row-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 2px;
+  cursor: pointer;
+}
+.tc-row-main:hover { background: var(--bg-muted); }
+.tc-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tc-type {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tc-ts { min-width: 70px; text-align: right; }
+.tc-children {
+  list-style: none;
+  margin: 0 0 4px 28px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tc-child-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.tc-children-empty {
+  margin: 2px 0 4px 28px;
+}
+.tc-pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+/* ── TrackedFolders ────────────────────────────────────────────────  */
+
+.tf-list {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+}
+.tf-row + .tf-row { border-top: 1px solid var(--border-subtle); }
+.tf-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+}
+.tf-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tf-count {
+  white-space: nowrap;
+}
+
+/* ── Cadence ───────────────────────────────────────────────────────  */
+
+.cadence-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cadence-row .lbl {
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-width: 70px;
+}
+.cadence-select {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  background: #ffffff;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+/* ── ConnectorConfig ───────────────────────────────────────────────  */
+
+.cc-json {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-muted);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* ── RecentActivity ────────────────────────────────────────────────  */
+
+.ra-list {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ra-row {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+}
+.ra-row.ra-error { color: var(--error-solid); }
+.ra-ts { min-width: 140px; }
+
+/* ── DangerZone ────────────────────────────────────────────────────  */
+
+.dz-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* ── Remove-account confirm modal ─────────────────────────────────  */
+
+.ra-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ra-modal {
+  width: 380px;
+  padding: 16px;
+}
+.ra-modal-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text-primary);
+}
+.ra-modal-body {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+  line-height: 1.4;
+}
+.ra-modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── Folder-tree picker (FolderPickerField "Choose…" modal, and
+   AddSourcePanel's picker-first multi-select fast path) ──────────────
+   Ported from kiagent-ref's FolderPicker.css (`fp-*` classes). Single-select
+   mode uses only the tree/footer rules below; multi-select mode additionally
+   uses `.fp-cb` (the per-row checkbox indicator) and `.fp-chip-tray`/`.fp-chip`
+   (the removable selection chips above the footer). */
+
+.fp-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fp-modal {
+  width: 480px;
+  max-width: calc(100vw - 32px);
+  height: 420px;
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+}
+.fp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.fp-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.fp-modeswitch {
+  display: flex;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.fp-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.fp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 14px;
+  cursor: pointer;
+  user-select: none;
+}
+.fp-row:hover { background: var(--bg-muted); }
+.fp-row.selected { background: var(--accent-subtle); }
+/* Already tracked by an existing account — inert to clicks (see
+   FolderPickerModal's `existingPaths`/`isTracked`), so drop the hover
+   affordance a clickable row would otherwise show. */
+.fp-row.tracked { cursor: default; }
+.fp-row.tracked:hover { background: transparent; }
+.fp-row.depth-1 { padding-left: 34px; }
+.fp-row.depth-2 { padding-left: 54px; }
+.fp-row.depth-3 { padding-left: 74px; }
+.fp-row.depth-4 { padding-left: 94px; }
+.fp-row.depth-5 { padding-left: 114px; }
+.fp-row.depth-6 { padding-left: 134px; }
+.fp-chev {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.fp-chev:hover { color: var(--text-primary); }
+.fp-chev[disabled] { cursor: default; }
+.fp-cb {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-surface);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--accent-contrast);
+}
+.fp-cb.checked {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+}
+/* Implied check: covered by a selected ancestor (auto-selected subtree) —
+   dimmed so the explicit covering roots (which carry the chips) stand out. */
+.fp-cb.checked.implied {
+  opacity: 0.55;
+}
+/* Already-tracked row's pill, in the same column the checkbox would occupy —
+   same small neutral-chip look as .scope-chip elsewhere in this file. */
+.fp-tracked-pill {
+  display: inline-block;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.fp-name {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fp-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.fp-chip-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-muted);
+  max-height: 84px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.fp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 4px 0 8px;
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  font-size: 11px;
+  border: 1px solid var(--border-focus);
+  max-width: 220px;
+}
+.fp-chip .leaf {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fp-chip .x {
+  background: transparent;
+  border: 0;
+  color: var(--accent-text);
+  cursor: pointer;
+  padding: 0 2px;
+  display: inline-flex;
+  opacity: 0.7;
+}
+.fp-chip .x:hover { opacity: 1; }
+
+.fp-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.fp-summary {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Get-started onboarding checklist (GetStartedPanel.tsx) ───────── */
+
+.ob-panel { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+.ob-head { display: flex; align-items: flex-end; gap: 10px; }
+.ob-head-text { display: flex; flex-direction: column; gap: 2px; }
+.ob-title { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
+.ob-sub { font-size: var(--text-xs); color: var(--text-tertiary); }
+.ob-checklist { background: var(--bg-surface); border: 1px solid var(--border-subtle); box-shadow: var(--shadow-xs); }
+.ob-step { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.ob-step + .ob-step { border-top: 1px solid var(--border-subtle); }
+.ob-step-icon {
+  flex-shrink: 0; width: 16px; height: 16px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1.5px solid var(--text-tertiary); border-radius: 50%;
+  background: transparent; color: transparent;
+  font-size: 10px; line-height: 1;
+}
+.ob-step-icon.done { background: var(--accent-solid); border-color: var(--accent-solid); color: #fff; }
+.ob-step.done .ob-step-label { color: var(--text-secondary); }
+.ob-step-body { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ob-step-label { font-size: var(--text-base); color: var(--text-primary); }
+.ob-step-meta { font-size: var(--text-xs); color: var(--text-tertiary); }

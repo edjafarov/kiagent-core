@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · all screens</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { padding: 0; }
+
+  .dc-canvas {
+    min-height: 100vh;
+    background:
+      repeating-linear-gradient(0deg, transparent 0 23px, rgba(0,0,0,0.06) 23px 24px),
+      repeating-linear-gradient(90deg, transparent 0 23px, rgba(0,0,0,0.06) 23px 24px),
+      #f0eee9;
+    padding: 0;
+  }
+
+  .canvas-head {
+    padding: 32px 40px 18px;
+    display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap;
+  }
+  .canvas-head .title-block { flex: 1; min-width: 320px; }
+  .canvas-head .dc-title { margin: 0 0 6px; font-size: 26px; font-weight: 600; color: rgba(40,30,20,0.85); letter-spacing: -0.01em; }
+  .canvas-head .dc-subtitle { margin: 0; font-size: 13px; color: rgba(60,50,40,0.6); max-width: 640px; line-height: 1.5; }
+
+  .toc {
+    display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start;
+    padding: 0 40px 14px;
+  }
+  .toc-group { display: flex; flex-direction: column; gap: 4px; min-width: 160px; }
+  .toc-group h4 {
+    margin: 0 0 4px; font-size: 10px; font-weight: 600;
+    color: rgba(60,50,40,0.55); text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .toc a {
+    text-decoration: none; color: var(--text-primary);
+    border: 1px solid var(--border-subtle); background: #fff;
+    padding: 6px 10px; font-size: 11.5px;
+    box-shadow: var(--shadow-xs);
+    transition: background var(--duration-fast), border-color var(--duration-fast);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .toc a:hover { background: var(--bg-muted); border-color: var(--border-strong); }
+  .toc a .n { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+
+  .dc-canvas-inner { padding: 12px 40px 80px; }
+
+  .group-head {
+    margin: 32px 0 16px;
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  .group-head .h {
+    font-family: var(--font-sans);
+    font-size: 18px; font-weight: 600;
+    color: rgba(40,30,20,0.85); margin: 0;
+    letter-spacing: -0.005em;
+  }
+  .group-head .sub {
+    font-family: var(--font-sans);
+    font-size: 12px; color: rgba(60,50,40,0.6); margin: 0;
+  }
+
+  .row { display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-start; margin-bottom: 18px; }
+
+  .artboard-wrap { display: flex; flex-direction: column; }
+  .artboard-meta {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 6px;
+    font-size: 11.5px; color: rgba(60,50,40,0.7);
+  }
+  .artboard-meta .num {
+    font-family: var(--font-mono);
+    color: rgba(60,50,40,0.45);
+    font-size: 11px;
+  }
+  .artboard-meta a {
+    margin-left: auto;
+    color: rgba(60,50,40,0.55);
+    text-decoration: none;
+    font-size: 11px;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 8px;
+    transition: background var(--duration-fast);
+  }
+  .artboard-meta a:hover { background: rgba(0,0,0,0.05); color: rgba(40,30,20,0.85); }
+
+  .artboard-frame {
+    display: block;
+    border: none;
+    background: transparent;
+  }
+</style>
+</head>
+<body class="dc-canvas">
+
+<div class="canvas-head">
+  <div class="title-block">
+    <h1 class="dc-title">KIAgent · all screens</h1>
+    <p class="dc-subtitle">Every screen in the desktop app and registration web UI, rendered as standalone HTML with mock data derived from the real React source. Violet accent on white, sharp corners throughout.</p>
+  </div>
+</div>
+
+<nav class="toc">
+  <div class="toc-group">
+    <h4>Auth · Sources</h4>
+    <a href="signin.html"><span class="n">01</span> Sign-in</a>
+    <a href="sources-list.html"><span class="n">02</span> Sources list</a>
+    <a href="sources-list-onboarding.html"><span class="n">02b</span> Sources · onboarding</a>
+    <a href="source-detail.html"><span class="n">03</span> Source detail · Gmail</a>
+    <a href="source-detail-folders.html"><span class="n">03b</span> Source detail · folders + picker</a>
+    <a href="add-source.html"><span class="n">04</span> Add source</a>
+  </div>
+  <div class="toc-group">
+    <h4>MCP</h4>
+    <a href="mcp-hub.html"><span class="n">05</span> MCP hub · awaiting</a>
+    <a href="mcp-hub-active.html"><span class="n">05b</span> MCP hub · active</a>
+    <a href="mcp-connect-claude-desktop.html"><span class="n">06</span> Connect · Claude Desktop</a>
+    <a href="mcp-connect-claude-code.html"><span class="n">07</span> Connect · Claude Code</a>
+    <a href="mcp-connect-vscode.html"><span class="n">08</span> Connect · VS Code</a>
+    <a href="mcp-connect-local.html"><span class="n">09</span> Connect · Local file</a>
+    <a href="mcp-connect-custom.html"><span class="n">10</span> Connect · Custom JSON</a>
+  </div>
+  <div class="toc-group">
+    <h4>Settings</h4>
+    <a href="settings-account.html"><span class="n">11</span> Account</a>
+    <a href="settings-connectors.html"><span class="n">12</span> Connectors</a>
+    <a href="settings-storage.html"><span class="n">13</span> Storage</a>
+    <a href="settings-advanced.html"><span class="n">14</span> Advanced</a>
+    <a href="settings-about.html"><span class="n">15</span> About</a>
+  </div>
+  <div class="toc-group">
+    <h4>System surfaces</h4>
+    <a href="logs.html"><span class="n">16</span> Logs</a>
+    <a href="tray.html"><span class="n">17</span> Tray popover</a>
+  </div>
+  <div class="toc-group">
+    <h4>Web · registration</h4>
+    <a href="web-login.html"><span class="n">18</span> Login</a>
+    <a href="web-account.html"><span class="n">19</span> Account</a>
+    <a href="web-admin.html"><span class="n">20</span> Admin</a>
+    <a href="web-signed-out.html"><span class="n">21</span> Signed out</a>
+    <a href="web-error.html"><span class="n">22</span> Error</a>
+    <a href="web-help.html"><span class="n">23</span> Help</a>
+  </div>
+</nav>
+
+<div class="dc-canvas-inner">
+
+  <div class="group-head">
+    <h2 class="h">Auth · Sources</h2>
+    <p class="sub">First-run authentication and the main sources dashboard.</p>
+  </div>
+  <div class="row">
+    <section id="signin" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>01 · Sign-in</span>
+        <span class="num">960 × 640</span>
+        <a href="signin.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="signin.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="sources-list" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>02 · Sources list</span>
+        <span class="num">960 × 640</span>
+        <a href="sources-list.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="sources-list.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="sources-list-onboarding" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>02b · Sources · onboarding (state A)</span>
+        <span class="num">960 × 640</span>
+        <a href="sources-list-onboarding.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="sources-list-onboarding.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="source-detail" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>03 · Source detail · Gmail</span>
+        <span class="num">960 × 640</span>
+        <a href="source-detail.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="source-detail.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="source-detail-folders" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>03b · Source detail · Google Drive + folder picker</span>
+        <span class="num">960 × 640</span>
+        <a href="source-detail-folders.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="source-detail-folders.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="add-source" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>04 · Add source</span>
+        <span class="num">960 × 640</span>
+        <a href="add-source.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="add-source.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+  </div>
+
+  <div class="group-head">
+    <h2 class="h">MCP</h2>
+    <p class="sub">Model Context Protocol hub and per-client connect flows.</p>
+  </div>
+  <div class="row">
+    <section id="mcp-hub" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>05 · MCP hub · awaiting registration</span>
+        <span class="num">960 × 640</span>
+        <a href="mcp-hub.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="mcp-hub.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="mcp-hub-active" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>05b · MCP hub · remote active</span>
+        <span class="num">960 × 640</span>
+        <a href="mcp-hub-active.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="mcp-hub-active.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="mcp-connect-claude-desktop" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>06 · Connect · Claude Desktop</span>
+        <span class="num">960 × 640</span>
+        <a href="mcp-connect-claude-desktop.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="mcp-connect-claude-desktop.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="mcp-connect-claude-code" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>07 · Connect · Claude Code</span>
+        <span class="num">960 × 640</span>
+        <a href="mcp-connect-claude-code.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="mcp-connect-claude-code.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="mcp-connect-vscode" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>08 · Connect · VS Code</span>
+        <span class="num">960 × 640</span>
+        <a href="mcp-connect-vscode.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="mcp-connect-vscode.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="mcp-connect-local" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>09 · Connect · Local file</span>
+        <span class="num">960 × 640</span>
+        <a href="mcp-connect-local.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="mcp-connect-local.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="mcp-connect-custom" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>10 · Connect · Custom JSON</span>
+        <span class="num">960 × 640</span>
+        <a href="mcp-connect-custom.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="mcp-connect-custom.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+  </div>
+
+  <div class="group-head">
+    <h2 class="h">Settings</h2>
+    <p class="sub">Five-pane settings shell — sidebar nav, scrolling pane.</p>
+  </div>
+  <div class="row">
+    <section id="settings-account" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>11 · Account</span>
+        <span class="num">960 × 640</span>
+        <a href="settings-account.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="settings-account.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="settings-connectors" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>12 · Connectors</span>
+        <span class="num">960 × 640</span>
+        <a href="settings-connectors.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="settings-connectors.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="settings-storage" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>13 · Storage</span>
+        <span class="num">960 × 640</span>
+        <a href="settings-storage.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="settings-storage.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="settings-advanced" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>14 · Advanced</span>
+        <span class="num">960 × 640</span>
+        <a href="settings-advanced.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="settings-advanced.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="settings-about" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>15 · About</span>
+        <span class="num">960 × 640</span>
+        <a href="settings-about.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="settings-about.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+  </div>
+
+  <div class="group-head">
+    <h2 class="h">System surfaces</h2>
+    <p class="sub">Logs window (full-frame) and the menubar tray popover (small).</p>
+  </div>
+  <div class="row">
+    <section id="logs" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>16 · Logs</span>
+        <span class="num">960 × 640</span>
+        <a href="logs.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="logs.html" width="960" height="640" loading="lazy"></iframe>
+    </section>
+    <section id="tray" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>17 · Tray popover</span>
+        <span class="num">480 × 600</span>
+        <a href="tray.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="tray.html" width="480" height="600" loading="lazy"></iframe>
+    </section>
+  </div>
+
+  <div class="group-head">
+    <h2 class="h">Web · registration service</h2>
+    <p class="sub">Operator-facing web UI for managing remote-MCP subdomain registrations.</p>
+  </div>
+  <div class="row">
+    <section id="web-login" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>18 · Login</span>
+        <span class="num">1200 × 800</span>
+        <a href="web-login.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="web-login.html" width="1200" height="800" loading="lazy"></iframe>
+    </section>
+    <section id="web-account" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>19 · Account</span>
+        <span class="num">1200 × 800</span>
+        <a href="web-account.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="web-account.html" width="1200" height="800" loading="lazy"></iframe>
+    </section>
+    <section id="web-admin" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>20 · Admin</span>
+        <span class="num">1200 × 800</span>
+        <a href="web-admin.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="web-admin.html" width="1200" height="800" loading="lazy"></iframe>
+    </section>
+    <section id="web-signed-out" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>21 · Signed out</span>
+        <span class="num">1200 × 800</span>
+        <a href="web-signed-out.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="web-signed-out.html" width="1200" height="800" loading="lazy"></iframe>
+    </section>
+    <section id="web-error" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>22 · Error</span>
+        <span class="num">1200 × 800</span>
+        <a href="web-error.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="web-error.html" width="1200" height="800" loading="lazy"></iframe>
+    </section>
+    <section id="web-help" class="artboard-wrap">
+      <div class="artboard-meta">
+        <span>23 · Help</span>
+        <span class="num">1200 × 800</span>
+        <a href="web-help.html" target="_blank">Open →</a>
+      </div>
+      <iframe class="artboard-frame" src="web-help.html" width="1200" height="800" loading="lazy"></iframe>
+    </section>
+  </div>
+
+</div>
+
+</body>
+</html>

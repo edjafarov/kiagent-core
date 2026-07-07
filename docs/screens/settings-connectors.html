@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Settings · Connectors</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .back-link {
+    display: inline-flex; align-items: center; gap: 4px;
+    color: var(--text-secondary); font-size: 12px;
+    background: none; border: none; cursor: pointer; padding: 4px 6px;
+  }
+  .back-link:hover { color: var(--text-primary); }
+
+  .conn-block { display: flex; flex-direction: column; gap: 6px; }
+  .conn-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 2px 0;
+  }
+  .conn-head .name { font-size: 13.5px; font-weight: 600; color: var(--text-primary); }
+  .conn-head .sub  { font-size: 11px; color: var(--text-secondary); }
+
+  .acct-list {
+    display: flex; flex-direction: column;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+  }
+  .acct-list .acct-row {
+    background: transparent;
+    border: 0;
+  }
+
+  .acct-folder {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px 6px 30px;
+    font-size: 11.5px;
+  }
+  .acct-row + .acct-folder { border-top: 1px solid var(--bg-muted); }
+  .acct-folder .tree {
+    color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10px;
+  }
+  .acct-folder .path {
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--text-primary);
+  }
+</style>
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent · Settings</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-topbar">
+      <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+      <span class="pill live"><span class="dot"></span>4 live · 47,231 docs</span>
+      <div style="flex:1"></div>
+      <button class="back-link">
+        <span aria-hidden="true">←</span>
+        Back to sources
+      </button>
+    </div>
+
+    <div class="set-shell">
+      <aside class="set-sidebar">
+        <div class="lbl-section">Settings</div>
+        <button class="side-item">Account</button>
+        <button class="side-item active">Connectors</button>
+        <button class="side-item">Storage</button>
+        <button class="side-item">Advanced</button>
+        <button class="side-item">About</button>
+      </aside>
+
+      <div class="set-pane">
+        <div>
+          <h2 class="h-screen" style="font-size:17px">Connectors</h2>
+          <div class="t-meta">Accounts, scopes, and polling cadence per connector type.</div>
+        </div>
+
+        <div class="div-h"></div>
+
+        <div class="conn-block">
+          <div class="conn-head">
+            <span class="conn-glyph lg gmail">
+              <svg class="i" width="16" height="16"><use href="#i-mail"/></svg>
+            </span>
+            <div style="display:flex;flex-direction:column">
+              <span class="name">Gmail</span>
+              <span class="sub">2 accounts · gmail.readonly</span>
+            </div>
+            <div style="flex:1"></div>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-plus"/></svg>
+              Add account
+            </button>
+          </div>
+
+          <div class="acct-list">
+            <div class="acct-row">
+              <svg class="i" width="13" height="13" style="color:var(--tag-gmail)"><use href="#i-mail"/></svg>
+              <span class="mono" style="font-size:12px;font-weight:500">alice@example.com</span>
+              <span style="flex:1"></span>
+              <span class="mono" style="font-size:11px;color:var(--text-secondary)">47,231</span>
+              <span class="t-meta" style="width:84px;text-align:right">12s ago</span>
+              <span class="pill live"><span class="dot"></span>Live</span>
+              <button class="btn ghost sm icon-only" title="Sync now">
+                <svg class="i" width="12" height="12"><use href="#i-refresh-cw"/></svg>
+              </button>
+              <button class="btn ghost sm icon-only" title="Remove">
+                <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+              </button>
+            </div>
+
+            <div class="acct-row">
+              <svg class="i" width="13" height="13" style="color:var(--tag-gmail)"><use href="#i-mail"/></svg>
+              <span class="mono" style="font-size:12px;font-weight:500">work@company.com</span>
+              <span style="flex:1"></span>
+              <span class="mono" style="font-size:11px;color:var(--text-secondary)">4,802 / ~210k</span>
+              <span class="t-meta" style="width:84px;text-align:right">syncing now</span>
+              <span class="pill working"><span class="dot"></span>Backfilling</span>
+              <button class="btn ghost sm icon-only" title="Sync now">
+                <svg class="i" width="12" height="12"><use href="#i-refresh-cw"/></svg>
+              </button>
+              <button class="btn ghost sm icon-only" title="Remove">
+                <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">
+            <div class="cadence-row">
+              <span class="lbl">Window focused</span>
+              <div class="select">
+                <span style="flex:1">Every 30 seconds</span>
+                <svg class="i" width="11" height="11" style="color:var(--text-secondary)"><use href="#i-chev-down"/></svg>
+              </div>
+            </div>
+            <div class="cadence-row">
+              <span class="lbl">Window unfocused</span>
+              <div class="select">
+                <span style="flex:1">Every 2 minutes</span>
+                <svg class="i" width="11" height="11" style="color:var(--text-secondary)"><use href="#i-chev-down"/></svg>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="div-h"></div>
+
+        <div class="conn-block">
+          <div class="conn-head">
+            <span class="conn-glyph lg google-docs">
+              <svg class="i" width="16" height="16"><use href="#i-file"/></svg>
+            </span>
+            <div style="display:flex;flex-direction:column">
+              <span class="name">Google Docs</span>
+              <span class="sub">1 account · 2 folders · drive.readonly</span>
+            </div>
+            <div style="flex:1"></div>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-plus"/></svg>
+              Add account
+            </button>
+          </div>
+
+          <div class="acct-list">
+            <div class="acct-row">
+              <svg class="i" width="13" height="13" style="color:var(--tag-google-docs)"><use href="#i-file"/></svg>
+              <span class="mono" style="font-size:12px;font-weight:500">alice@example.com</span>
+              <span style="flex:1"></span>
+              <span class="mono" style="font-size:11px;color:var(--text-secondary)">1,284</span>
+              <span class="t-meta" style="width:84px;text-align:right">2m ago</span>
+              <span class="pill live"><span class="dot"></span>Live</span>
+              <button class="btn ghost sm icon-only" title="Sync now">
+                <svg class="i" width="12" height="12"><use href="#i-refresh-cw"/></svg>
+              </button>
+              <button class="btn ghost sm icon-only" title="Add folder">
+                <svg class="i" width="12" height="12"><use href="#i-plus"/></svg>
+              </button>
+              <button class="btn ghost sm icon-only" title="Remove">
+                <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+              </button>
+            </div>
+            <div class="acct-folder">
+              <span class="tree">└</span>
+              <svg class="i" width="11" height="11" style="color:var(--text-secondary)"><use href="#i-folder"/></svg>
+              <span class="path">/Marketing</span>
+              <span style="flex:1"></span>
+              <span class="mono" style="font-size:11px;color:var(--text-secondary)">412</span>
+              <span class="t-meta" style="width:84px;text-align:right">2m ago</span>
+              <span class="pill live"><span class="dot"></span>Watching</span>
+              <button class="btn ghost sm icon-only" title="Remove folder">
+                <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+              </button>
+            </div>
+            <div class="acct-folder">
+              <span class="tree">└</span>
+              <svg class="i" width="11" height="11" style="color:var(--text-secondary)"><use href="#i-folder"/></svg>
+              <span class="path">/Engineering/Specs</span>
+              <span style="flex:1"></span>
+              <span class="mono" style="font-size:11px;color:var(--text-secondary)">872</span>
+              <span class="t-meta" style="width:84px;text-align:right">8m ago</span>
+              <span class="pill live"><span class="dot"></span>Watching</span>
+              <button class="btn ghost sm icon-only" title="Remove folder">
+                <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="cadence-row" style="margin-top:4px">
+            <span class="lbl">Poll cadence</span>
+            <div class="select">
+              <span style="flex:1">Every 15 minutes</span>
+              <svg class="i" width="11" height="11" style="color:var(--text-secondary)"><use href="#i-chev-down"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="div-h"></div>
+
+        <div class="conn-block">
+          <div class="conn-head">
+            <span class="conn-glyph lg notion">
+              <span class="notion-n">N</span>
+            </span>
+            <div style="display:flex;flex-direction:column">
+              <span class="name">Notion</span>
+              <span class="sub">Not connected</span>
+            </div>
+            <div style="flex:1"></div>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-plus"/></svg>
+              Add workspace
+            </button>
+          </div>
+        </div>
+
+        <div class="div-h"></div>
+
+        <div class="conn-block">
+          <div class="conn-head">
+            <span class="conn-glyph lg local">
+              <svg class="i" width="16" height="16"><use href="#i-folder"/></svg>
+            </span>
+            <div style="display:flex;flex-direction:column">
+              <span class="name">Local files</span>
+              <span class="sub">2 folders · watching</span>
+            </div>
+            <div style="flex:1"></div>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-plus"/></svg>
+              Add folder
+            </button>
+          </div>
+
+          <div class="tracked-folders">
+            <div class="tracked-folder">
+              <svg class="i" width="14" height="14" style="color:var(--tag-local)"><use href="#i-folder"/></svg>
+              <div style="display:flex;flex-direction:column;min-width:0">
+                <span class="tf-leaf">Documents</span>
+                <span class="tf-crumb mono">/Users/alice/Documents</span>
+              </div>
+              <span class="tf-docs"><span class="num">4,200</span> docs</span>
+              <button class="btn ghost sm icon-only" title="Remove">
+                <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+              </button>
+            </div>
+            <div class="tracked-folder">
+              <svg class="i" width="14" height="14" style="color:var(--tag-local)"><use href="#i-folder"/></svg>
+              <div style="display:flex;flex-direction:column;min-width:0">
+                <span class="tf-leaf">Notes</span>
+                <span class="tf-crumb mono">/Users/alice/Library/Notes</span>
+              </div>
+              <span class="tf-docs"><span class="num">8,202</span> docs</span>
+              <button class="btn ghost sm icon-only" title="Remove">
+                <svg class="i" width="12" height="12"><use href="#i-trash"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="div-h"></div>
+
+        <div class="conn-block">
+          <div class="conn-head">
+            <span class="conn-glyph lg slack">
+              <svg class="i" width="16" height="16"><use href="#i-link"/></svg>
+            </span>
+            <div style="display:flex;flex-direction:column">
+              <span class="name">Slack</span>
+              <span class="sub">Not connected</span>
+            </div>
+            <div style="flex:1"></div>
+            <button class="btn sm" disabled>
+              <svg class="i" width="12" height="12"><use href="#i-plus"/></svg>
+              Coming soon
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Settings · Account</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .back-link {
+    display: inline-flex; align-items: center; gap: 4px;
+    color: var(--text-secondary); font-size: 12px;
+    background: none; border: none; cursor: pointer; padding: 4px 6px;
+  }
+  .back-link:hover { color: var(--text-primary); }
+  .pref-list {
+    display: flex; flex-direction: column;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+  }
+  .pref-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px;
+  }
+  .pref-row .pref-label { font-size: 12.5px; font-weight: 500; color: var(--text-primary); }
+  .pref-row .pref-desc  { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .pref-row .pref-meta  { display: flex; flex-direction: column; flex: 1; }
+
+  .toggle {
+    width: 32px; height: 18px; flex-shrink: 0;
+    background: var(--bg-muted); border: 1px solid var(--border-strong);
+    position: relative; cursor: pointer;
+  }
+  .toggle .knob {
+    position: absolute; top: 1px; left: 1px;
+    width: 14px; height: 14px; background: #fff;
+    border: 1px solid var(--border-strong);
+    transition: left var(--duration-fast);
+  }
+  .toggle.on { background: var(--accent-solid); border-color: var(--accent-solid); }
+  .toggle.on .knob { left: 15px; border-color: var(--accent-solid); }
+
+  .seg {
+    display: inline-flex; border: 1px solid var(--border-strong);
+    background: var(--bg-surface); height: 24px;
+  }
+  .seg button {
+    border: 0; background: transparent; padding: 0 10px;
+    font-size: 11.5px; color: var(--text-secondary);
+    cursor: pointer; font-family: inherit;
+  }
+  .seg button.active { background: var(--accent-subtle); color: var(--accent-text); font-weight: 600; }
+  .seg button + button { border-left: 1px solid var(--border-strong); }
+</style>
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent · Settings</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-topbar">
+      <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+      <span class="pill live"><span class="dot"></span>4 live · 47,231 docs</span>
+      <div style="flex:1"></div>
+      <button class="back-link">
+        <span aria-hidden="true">←</span>
+        Back to sources
+      </button>
+    </div>
+
+    <div class="set-shell">
+      <aside class="set-sidebar">
+        <div class="lbl-section">Settings</div>
+        <button class="side-item active">Account</button>
+        <button class="side-item">Connectors</button>
+        <button class="side-item">Storage</button>
+        <button class="side-item">Advanced</button>
+        <button class="side-item">About</button>
+      </aside>
+
+      <div class="set-pane">
+        <div>
+          <h2 class="h-screen" style="font-size:17px">Account</h2>
+          <div class="t-meta">Your KIAgent identity and app preferences.</div>
+        </div>
+
+        <div class="div-h"></div>
+
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <div class="lbl-section">Signed in</div>
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border-subtle)">
+            <div style="width:32px;height:32px;background:var(--accent-subtle);color:var(--accent-text);display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:13px">A</div>
+            <div style="display:flex;flex-direction:column;gap:1px;flex:1">
+              <span style="font-size:12.5px;font-weight:500">Alice Liddell</span>
+              <span class="mono" style="font-size:11.5px;color:var(--text-secondary)">alice@example.com</span>
+            </div>
+            <span class="pill live"><span class="dot"></span>Signed in</span>
+            <button class="btn sm">Sign out</button>
+          </div>
+        </div>
+
+        <div class="div-h"></div>
+
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div class="lbl-section">Preferences</div>
+
+          <div class="pref-list">
+            <div class="pref-row">
+              <div class="pref-meta">
+                <span class="pref-label">Launch at login</span>
+                <span class="pref-desc">Start KIAgent automatically when you sign in to macOS.</span>
+              </div>
+              <div class="toggle on"><span class="knob"></span></div>
+            </div>
+
+            <div class="pref-row">
+              <div class="pref-meta">
+                <span class="pref-label">Show in menu bar</span>
+                <span class="pref-desc">Display the tray icon for quick status and search.</span>
+              </div>
+              <div class="toggle on"><span class="knob"></span></div>
+            </div>
+
+            <div class="pref-row">
+              <div class="pref-meta">
+                <span class="pref-label">Hide Dock icon</span>
+                <span class="pref-desc">Run as a menu-bar-only app; reopen from the tray.</span>
+              </div>
+              <div class="toggle"><span class="knob"></span></div>
+            </div>
+
+            <div class="pref-row">
+              <div class="pref-meta">
+                <span class="pref-label">Theme</span>
+                <span class="pref-desc">Match macOS appearance or pick a fixed mode.</span>
+              </div>
+              <div class="seg">
+                <button>Light</button>
+                <button class="active">System</button>
+                <button>Dark</button>
+              </div>
+            </div>
+
+            <div class="pref-row">
+              <div class="pref-meta">
+                <span class="pref-label">Send anonymous diagnostics</span>
+                <span class="pref-desc">Crash reports and performance metrics. No corpus content.</span>
+              </div>
+              <div class="toggle"><span class="knob"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

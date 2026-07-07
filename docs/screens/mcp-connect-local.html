@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Connect via local URL</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 24px; background: #f0eee9; }
+
+  .back-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .page-intro {
+    font-size: 12.5px; color: var(--text-secondary);
+    line-height: 1.55; max-width: 640px; margin: 0;
+  }
+
+  .step-list {
+    margin: 0; padding: 0; list-style: none;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .step-list li {
+    display: grid; grid-template-columns: 22px 1fr;
+    align-items: start; gap: 10px;
+    font-size: 12.5px; color: var(--text-primary); line-height: 1.5;
+  }
+  .step-list .num {
+    width: 20px; height: 20px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent-subtle); color: var(--accent-text);
+    font-family: var(--font-mono); font-weight: 600; font-size: 11.5px;
+  }
+  .step-list code {
+    font-family: var(--font-mono); font-size: 11.5px;
+    padding: 1px 5px; background: var(--bg-muted);
+    border: 1px solid var(--border-subtle); color: var(--text-primary);
+  }
+
+  .snippet-wrap { display: flex; flex-direction: column; gap: 8px; }
+  .snippet-head { display: flex; align-items: center; gap: 8px; }
+  .snippet-head .lbl-section { flex: 1; }
+
+  .code-block { white-space: pre; }
+
+  .info-strip {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 9px 11px;
+    background: var(--info-subtle);
+    border: 1px solid rgba(8,145,178,0.20);
+    font-size: 11.5px; color: var(--text-primary); line-height: 1.5;
+  }
+  .info-strip svg { color: var(--info-solid); flex-shrink: 0; margin-top: 1px; }
+
+  .path-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 26px; padding: 0 10px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-muted);
+    font-family: var(--font-mono); font-size: 11.5px;
+    color: var(--text-primary);
+  }
+</style>
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-topbar">
+      <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+      <span class="pill live"><span class="dot"></span>4 live · 47,231 docs</span>
+      <div style="flex:1"></div>
+      <button class="kg-tab">
+        <svg class="i" width="13" height="13"><use href="#i-database"/></svg>
+        <span>Sources</span>
+      </button>
+      <button class="kg-tab active">
+        <svg class="i" width="13" height="13"><use href="#i-link"/></svg>
+        <span>MCP</span>
+        <span class="tab-dot on"></span>
+      </button>
+      <button class="btn ghost sm">
+        <svg class="i" width="14" height="14"><use href="#i-settings"/></svg>
+      </button>
+    </div>
+
+    <div class="back-row">
+      <button class="btn ghost sm">← MCP hub</button>
+      <span class="h-section">Use Local URL directly</span>
+      <div style="flex:1"></div>
+      <span class="t-meta">Using: <span style="color:var(--accent-text);font-weight:500">● Local</span></span>
+    </div>
+
+    <div class="dash-body" style="gap:14px">
+      <p class="page-intro">
+        For MCP clients that just want a URL plus an optional auth header — pipe it through your
+        own config file or paste it into the client's MCP settings page. The local endpoint is
+        reachable from <strong>this machine only</strong>; for hosted clients (Claude.ai, mobile)
+        set up Remote MCP from the hub.
+      </p>
+
+      <ol class="step-list">
+        <li>
+          <span class="num">1</span>
+          <span>Pick where your client reads MCP server config from — typically a JSON file like <code>~/.kiagent/mcp.json</code> or the client's own settings panel.</span>
+        </li>
+        <li>
+          <span class="num">2</span>
+          <span>Paste the snippet below as a server entry. The bearer header is required — the local server rejects unauthenticated requests.</span>
+        </li>
+        <li>
+          <span class="num">3</span>
+          <span>Restart the client process so it picks up the new entry.</span>
+        </li>
+      </ol>
+
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="lbl-section" style="margin-right:2px">Suggested path</span>
+        <span class="path-pill">
+          <svg class="i" width="12" height="12" style="color:var(--text-secondary)"><use href="#i-file"/></svg>
+          ~/.kiagent/mcp.json
+        </span>
+        <button class="btn ghost sm">
+          <svg class="i" width="12" height="12"><use href="#i-folder"/></svg>
+          Reveal in Finder
+        </button>
+      </div>
+
+      <div class="snippet-wrap">
+        <div class="snippet-head">
+          <div class="lbl-section">Server entry</div>
+          <button class="btn primary sm">
+            <svg class="i" width="12" height="12"><use href="#i-copy"/></svg>
+            Copy snippet
+          </button>
+        </div>
+        <pre class="code-block"><span class="pun">{</span>
+  <span class="key">"url"</span><span class="pun">:</span> <span class="str">"http://127.0.0.1:7421/mcp"</span><span class="pun">,</span>
+  <span class="key">"headers"</span><span class="pun">:</span> <span class="pun">{</span>
+    <span class="key">"Authorization"</span><span class="pun">:</span> <span class="str">"Bearer ••••••••"</span>
+  <span class="pun">}</span>
+<span class="pun">}</span></pre>
+      </div>
+
+      <div class="info-strip">
+        <svg class="i" width="13" height="13"><use href="#i-info"/></svg>
+        <span>Loopback only: <code style="font-family:var(--font-mono);font-size:11px">127.0.0.1:7421</code> is not exposed on your LAN. KIAgent must be running for the URL to respond.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

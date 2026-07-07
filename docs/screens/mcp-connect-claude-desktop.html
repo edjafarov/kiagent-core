@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Connect Claude Desktop</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 24px; background: #f0eee9; }
+
+  .back-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .back-row .h-section { letter-spacing: -0.005em; }
+
+  .page-intro {
+    font-size: 12.5px; color: var(--text-secondary);
+    line-height: 1.55; max-width: 640px; margin: 0;
+  }
+
+  .step-list {
+    margin: 0; padding: 0; list-style: none;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .step-list li {
+    display: grid; grid-template-columns: 22px 1fr;
+    align-items: start; gap: 10px;
+    font-size: 12.5px; color: var(--text-primary); line-height: 1.5;
+  }
+  .step-list .num {
+    width: 20px; height: 20px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent-subtle); color: var(--accent-text);
+    font-family: var(--font-mono); font-weight: 600; font-size: 11.5px;
+  }
+  .step-list code {
+    font-family: var(--font-mono); font-size: 11.5px;
+    padding: 1px 5px; background: var(--bg-muted);
+    border: 1px solid var(--border-subtle); color: var(--text-primary);
+  }
+
+  .snippet-wrap { display: flex; flex-direction: column; gap: 8px; }
+  .snippet-head {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .snippet-head .lbl-section { flex: 1; }
+
+  .code-block { white-space: pre; }
+
+  .info-strip {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 9px 11px;
+    background: var(--info-subtle);
+    border: 1px solid rgba(8,145,178,0.20);
+    font-size: 11.5px; color: var(--text-primary); line-height: 1.5;
+  }
+  .info-strip svg { color: var(--info-solid); flex-shrink: 0; margin-top: 1px; }
+
+  .mcp-section-head {
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 0 8px;
+  }
+
+  .url-input {
+    flex: 1; height: 30px; padding: 0 10px;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-muted);
+    border: 1px solid var(--border-subtle);
+    display: inline-flex; align-items: center; gap: 6px;
+    overflow: hidden;
+  }
+  .url-input .icon { color: var(--accent-text); }
+  .url-input .url { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-topbar">
+      <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+      <span class="pill live"><span class="dot"></span>4 live · 47,231 docs</span>
+      <div style="flex:1"></div>
+      <button class="kg-tab">
+        <svg class="i" width="13" height="13"><use href="#i-database"/></svg>
+        <span>Sources</span>
+      </button>
+      <button class="kg-tab active">
+        <svg class="i" width="13" height="13"><use href="#i-link"/></svg>
+        <span>MCP</span>
+        <span class="tab-dot on"></span>
+      </button>
+      <button class="btn ghost sm">
+        <svg class="i" width="14" height="14"><use href="#i-settings"/></svg>
+      </button>
+    </div>
+
+    <div class="back-row">
+      <button class="btn ghost sm">← MCP hub</button>
+      <span class="h-section">Connect Claude Desktop</span>
+      <div style="flex:1"></div>
+      <span class="pill live"><span class="dot"></span>Remote · active</span>
+    </div>
+
+    <div class="dash-body" style="gap:18px">
+      <p class="page-intro">
+        Claude Desktop can talk to KIAgent two ways. The custom-connector UI uses your remote HTTPS URL and works from any Claude Desktop session — even on another machine. The JSON config is the older path; it points at the local URL and only works on this Mac.
+      </p>
+
+      <div>
+        <div class="mcp-section-head">
+          <div class="h-section">Option 1 — Add a custom connector (remote)</div>
+          <span class="pill live"><span class="dot"></span>Recommended</span>
+        </div>
+        <ol class="step-list">
+          <li>
+            <span class="num">1</span>
+            <span>In Claude Desktop, open <strong>Settings → Customize and Connectors</strong>.</span>
+          </li>
+          <li>
+            <span class="num">2</span>
+            <span>Click <strong>Add custom connector</strong>.</span>
+          </li>
+          <li>
+            <span class="num">3</span>
+            <span>Paste the URL below into the form. Claude Desktop will run the OAuth flow when you first call a tool.</span>
+          </li>
+          <li>
+            <span class="num">4</span>
+            <span>KIAgent's tools appear in the tools menu. Verify by asking: <em style="color:var(--text-secondary)">"list my MCP tools"</em>.</span>
+          </li>
+        </ol>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+          <div class="url-input">
+            <svg class="i icon" width="13" height="13"><use href="#i-database"/></svg>
+            <span class="url">https://alice-7k2n4q9p.lokalkiagent.de/mcp</span>
+          </div>
+          <button class="btn primary sm">
+            <svg class="i" width="12" height="12"><use href="#i-copy"/></svg>
+            Copy URL
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div class="mcp-section-head">
+          <div class="h-section">Option 2 — Edit claude_desktop_config.json (local)</div>
+        </div>
+        <ol class="step-list">
+          <li>
+            <span class="num">1</span>
+            <span>Open <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> in your editor. Create the file if it doesn't exist.</span>
+          </li>
+          <li>
+            <span class="num">2</span>
+            <span>Merge this entry into the <code>mcpServers</code> object (or paste the whole snippet if the file is empty).</span>
+          </li>
+          <li>
+            <span class="num">3</span>
+            <span>Quit and reopen Claude Desktop.</span>
+          </li>
+        </ol>
+        <div class="snippet-wrap" style="margin-top:10px">
+          <div class="snippet-head">
+            <div class="lbl-section">claude_desktop_config.json</div>
+            <button class="btn sm">
+              <svg class="i" width="12" height="12"><use href="#i-external"/></svg>
+              Open file
+            </button>
+            <button class="btn primary sm">
+              <svg class="i" width="12" height="12"><use href="#i-copy"/></svg>
+              Copy snippet
+            </button>
+          </div>
+          <pre class="code-block"><span class="pun">{</span>
+  <span class="key">"mcpServers"</span><span class="pun">:</span> <span class="pun">{</span>
+    <span class="key">"kiagent"</span><span class="pun">:</span> <span class="pun">{</span>
+      <span class="key">"url"</span><span class="pun">:</span> <span class="str">"http://127.0.0.1:7421/mcp"</span><span class="pun">,</span>
+      <span class="key">"headers"</span><span class="pun">:</span> <span class="pun">{</span>
+        <span class="key">"Authorization"</span><span class="pun">:</span> <span class="str">"Bearer ••••••••"</span>
+      <span class="pun">}</span>
+    <span class="pun">}</span>
+  <span class="pun">}</span>
+<span class="pun">}</span></pre>
+        </div>
+      </div>
+
+      <div class="info-strip">
+        <svg class="i" width="13" height="13"><use href="#i-info"/></svg>
+        <span>The bearer token in the JSON snippet is masked above — <strong>Copy snippet</strong> copies the real value to your clipboard. Treat it like a password. The remote URL has no token; Claude Desktop authenticates via OAuth on first call.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+name: kiagent-core CI
+
+# OSS gate for the extracted standalone core. Proves the build seams stay clean
+# with every proprietary slot null (no remote-mcp / updater / oidc overlay
+# injected) — i.e. DEFAULT_BRAND-only HostExtensions, neutral @host-impl /
+# @host-contracts / @channels-runtime / @renderer-ext.
+#
+# Fast checks run on every push/PR. The cross-platform unsigned `package:oss`
+# matrix (which needs the native deep-extraction vendor step — .NET 8 for the
+# Windows OCR helper) is intentionally a follow-up job, not wired here yet.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same ref cancels the in-flight run.
+concurrency:
+  group: kiagent-core-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js and NPM
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: npm install
+        run: npm install
+
+      # The real type gate. build:main / build:renderer are transpile-only, so
+      # tsc is what proves the neutral seams type-check with no overlay.
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: lint
+        run: npm run lint
+
+      # jest's setup (.erb/scripts/check-build-exists.ts) requires the webpack
+      # main + renderer bundles to exist; `npm run build` produces them without
+      # the far slower electron-builder packaging step.
+      #
+      # OAuth client credentials are inlined into the main bundle at build
+      # time (see .erb/configs/oauth-env.ts) — the repo hardcodes none. The
+      # secrets are absent on forks/PRs; the build then inlines '' and only a
+      # Google/Microsoft sign-in attempt would error, which CI never does.
+      - name: build
+        run: npm run build
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          MICROSOFT_OAUTH_CLIENT_ID: ${{ secrets.MICROSOFT_OAUTH_CLIENT_ID }}
+
+      # jest.config.dev.js = full base config minus a few heavyweight integration
+      # suites that flake on shared runners. --forceExit guards against a leaked
+      # handle after a green run; --ci pins snapshots.
+      - name: test
+        run: npm test -- -c jest.config.dev.js --ci --forceExit

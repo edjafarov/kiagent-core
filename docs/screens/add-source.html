@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Add a source</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-shell">
+      <div class="dash-topbar">
+        <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+        <span class="pill live"><span class="dot"></span>5 live · 72,529 docs</span>
+        <div style="flex:1"></div>
+        <button type="button" class="kg-tab active">
+          <svg class="i" width="13" height="13"><use href="#i-database"/></svg>
+          <span>Sources</span>
+        </button>
+        <button type="button" class="kg-tab">
+          <svg class="i" width="13" height="13"><use href="#i-link"/></svg>
+          <span>MCP</span>
+          <span class="tab-dot on" aria-label="MCP online"></span>
+        </button>
+        <button type="button" class="btn ghost sm" aria-label="Settings">
+          <svg class="i" width="14" height="14"><use href="#i-settings"/></svg>
+        </button>
+      </div>
+
+      <div class="dash-body">
+        <div class="row-flex">
+          <div class="h-section">Sources</div>
+          <span class="t-meta">3 types · 5 sources</span>
+          <div style="flex:1"></div>
+          <button type="button" class="btn sm">
+            <svg class="i" width="13" height="13"><use href="#i-refresh-cw"/></svg>
+            Sync all
+          </button>
+          <button type="button" class="btn primary sm">
+            <svg class="i" width="13" height="13"><use href="#i-plus"/></svg>
+            Add
+          </button>
+        </div>
+
+        <div class="as-panel">
+          <div class="as-head">
+            <span class="as-title">Add a source</span>
+            <span class="t-meta as-sub">Everything stays on this machine.</span>
+            <div style="flex:1"></div>
+            <button type="button" class="btn ghost sm">Cancel</button>
+          </div>
+
+          <div class="as-grid">
+            <button type="button" class="as-tile">
+              <span class="as-ic">
+                <svg class="i" width="24" height="24" style="color:var(--tag-gmail)"><use href="#i-mail"/></svg>
+              </span>
+              <span class="as-nm">Gmail</span>
+            </button>
+
+            <button type="button" class="as-tile">
+              <span class="as-ic">
+                <svg class="i" width="24" height="24" style="color:var(--tag-google-docs)"><use href="#i-file"/></svg>
+              </span>
+              <span class="as-nm">Google Docs</span>
+            </button>
+
+            <button type="button" class="as-tile">
+              <span class="as-ic">
+                <svg class="i" width="24" height="24" style="color:var(--accent-text)"><use href="#i-folder"/></svg>
+              </span>
+              <span class="as-nm">Local folder</span>
+            </button>
+
+            <button type="button" class="as-tile">
+              <span class="as-ic">
+                <svg width="22" height="22" viewBox="0 0 18 18" aria-hidden="true">
+                  <rect x="0"   y="0"   width="8.4" height="8.4" fill="#F25022"/>
+                  <rect x="9.6" y="0"   width="8.4" height="8.4" fill="#7FBA00"/>
+                  <rect x="0"   y="9.6" width="8.4" height="8.4" fill="#00A4EF"/>
+                  <rect x="9.6" y="9.6" width="8.4" height="8.4" fill="#FFB900"/>
+                </svg>
+              </span>
+              <span class="as-nm">Microsoft 365</span>
+            </button>
+
+            <button type="button" class="as-tile soon" disabled>
+              <span class="as-chip">Soon</span>
+              <span class="as-ic"><span class="notion-n">N</span></span>
+              <span class="as-nm">Notion</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Connect VS Code</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 24px; background: #f0eee9; }
+
+  .back-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .page-intro {
+    font-size: 12.5px; color: var(--text-secondary);
+    line-height: 1.55; max-width: 640px; margin: 0;
+  }
+
+  .step-list {
+    margin: 0; padding: 0; list-style: none;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .step-list li {
+    display: grid; grid-template-columns: 22px 1fr;
+    align-items: start; gap: 10px;
+    font-size: 12.5px; color: var(--text-primary); line-height: 1.5;
+  }
+  .step-list .num {
+    width: 20px; height: 20px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent-subtle); color: var(--accent-text);
+    font-family: var(--font-mono); font-weight: 600; font-size: 11.5px;
+  }
+  .step-list code {
+    font-family: var(--font-mono); font-size: 11.5px;
+    padding: 1px 5px; background: var(--bg-muted);
+    border: 1px solid var(--border-subtle); color: var(--text-primary);
+  }
+
+  .snippet-wrap { display: flex; flex-direction: column; gap: 8px; }
+  .snippet-head { display: flex; align-items: center; gap: 8px; }
+  .snippet-head .lbl-section { flex: 1; }
+
+  .code-block { white-space: pre; }
+
+  .info-strip {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 9px 11px;
+    background: var(--info-subtle);
+    border: 1px solid rgba(8,145,178,0.20);
+    font-size: 11.5px; color: var(--text-primary); line-height: 1.5;
+  }
+  .info-strip svg { color: var(--info-solid); flex-shrink: 0; margin-top: 1px; }
+</style>
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-topbar">
+      <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+      <span class="pill live"><span class="dot"></span>4 live · 47,231 docs</span>
+      <div style="flex:1"></div>
+      <button class="kg-tab">
+        <svg class="i" width="13" height="13"><use href="#i-database"/></svg>
+        <span>Sources</span>
+      </button>
+      <button class="kg-tab active">
+        <svg class="i" width="13" height="13"><use href="#i-link"/></svg>
+        <span>MCP</span>
+        <span class="tab-dot on"></span>
+      </button>
+      <button class="btn ghost sm">
+        <svg class="i" width="14" height="14"><use href="#i-settings"/></svg>
+      </button>
+    </div>
+
+    <div class="back-row">
+      <button class="btn ghost sm">← MCP hub</button>
+      <span class="h-section">Connect VS Code</span>
+      <div style="flex:1"></div>
+      <span class="t-meta">Using: <span style="color:var(--accent-text);font-weight:500">● Local</span></span>
+    </div>
+
+    <div class="dash-body" style="gap:14px">
+      <p class="page-intro">
+        VS Code's GitHub Copilot Chat reads MCP servers from a per-workspace JSON file. Drop the
+        snippet below into <code style="font-family:var(--font-mono);font-size:11.5px;padding:1px 5px;background:var(--bg-muted);border:1px solid var(--border-subtle)">.vscode/mcp.json</code> and reload the window — KIAgent's tools will be
+        available to Copilot Chat agents in that workspace.
+      </p>
+
+      <ol class="step-list">
+        <li>
+          <span class="num">1</span>
+          <span>In your workspace root, create <code>.vscode/mcp.json</code> (or open the existing one).</span>
+        </li>
+        <li>
+          <span class="num">2</span>
+          <span>Add this server entry inside the <code>servers</code> object.</span>
+        </li>
+        <li>
+          <span class="num">3</span>
+          <span>Reload the VS Code window: <code>⌘⇧P → Developer: Reload Window</code>.</span>
+        </li>
+        <li>
+          <span class="num">4</span>
+          <span>Open Copilot Chat in agent mode and confirm <strong>kiagent</strong> shows in the tools picker.</span>
+        </li>
+      </ol>
+
+      <div class="snippet-wrap">
+        <div class="snippet-head">
+          <div class="lbl-section">.vscode/mcp.json</div>
+          <button class="btn sm">
+            <svg class="i" width="12" height="12"><use href="#i-external"/></svg>
+            Open file
+          </button>
+          <button class="btn primary sm">
+            <svg class="i" width="12" height="12"><use href="#i-copy"/></svg>
+            Copy snippet
+          </button>
+        </div>
+        <pre class="code-block"><span class="pun">{</span>
+  <span class="key">"servers"</span><span class="pun">:</span> <span class="pun">{</span>
+    <span class="key">"kiagent"</span><span class="pun">:</span> <span class="pun">{</span>
+      <span class="key">"url"</span><span class="pun">:</span> <span class="str">"http://127.0.0.1:7421/mcp"</span><span class="pun">,</span>
+      <span class="key">"headers"</span><span class="pun">:</span> <span class="pun">{</span>
+        <span class="key">"Authorization"</span><span class="pun">:</span> <span class="str">"Bearer ••••••••"</span>
+      <span class="pun">}</span>
+    <span class="pun">}</span>
+  <span class="pun">}</span>
+<span class="pun">}</span></pre>
+      </div>
+
+      <div class="info-strip">
+        <svg class="i" width="13" height="13"><use href="#i-info"/></svg>
+        <span>Workspace-scoped: this snippet only takes effect in projects where you commit (or copy) the <code style="font-family:var(--font-mono);font-size:11px">.vscode/mcp.json</code>. For a global install, use <strong>User Settings → MCP Servers</strong>.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · Sources</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-shell">
+      <div class="dash-topbar">
+        <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+        <span class="pill live"><span class="dot"></span>5 live · 72,529 docs</span>
+        <div style="flex:1"></div>
+        <button type="button" class="kg-tab active">
+          <svg class="i" width="13" height="13"><use href="#i-database"/></svg>
+          <span>Sources</span>
+        </button>
+        <button type="button" class="kg-tab">
+          <svg class="i" width="13" height="13"><use href="#i-link"/></svg>
+          <span>MCP</span>
+          <span class="tab-dot on" aria-label="MCP online"></span>
+        </button>
+        <button type="button" class="btn ghost sm" aria-label="Settings">
+          <svg class="i" width="14" height="14"><use href="#i-settings"/></svg>
+        </button>
+      </div>
+
+      <div class="dash-body">
+        <div class="row-flex">
+          <div class="h-section">Sources</div>
+          <span class="t-meta">3 types · 3 sources</span>
+          <div style="flex:1"></div>
+          <button type="button" class="btn sm">
+            <svg class="i" width="13" height="13"><use href="#i-refresh-cw"/></svg>
+            Sync all
+          </button>
+          <button type="button" class="btn primary sm">
+            <svg class="i" width="13" height="13"><use href="#i-plus"/></svg>
+            Add
+          </button>
+        </div>
+
+        <div class="tbl-container">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="width:110px">Source</th>
+                <th>Account / path</th>
+                <th style="width:140px">Status</th>
+                <th style="width:140px">Docs</th>
+                <th style="width:80px">Last</th>
+                <th style="width:36px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="cursor:pointer">
+                <td>
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <span class="src-stripe gmail"></span>
+                    <svg class="i" width="12" height="12" style="color:var(--text-secondary)"><use href="#i-mail"/></svg>
+                    <span style="font-size:11px;color:var(--text-secondary)">Gmail</span>
+                  </div>
+                </td>
+                <td class="mono" style="font-size:11.5px;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">alice@example.com</td>
+                <td><span class="pill live"><span class="dot"></span>Live</span></td>
+                <td class="mono" style="font-size:11.5px">47,231</td>
+                <td class="t-meta">12s ago</td>
+                <td>
+                  <button type="button" class="btn ghost sm icon-only" style="width:20px;height:20px">
+                    <svg class="i" width="12" height="12"><use href="#i-more"/></svg>
+                  </button>
+                </td>
+              </tr>
+              <tr style="cursor:pointer">
+                <td>
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <span class="src-stripe google-docs"></span>
+                    <svg class="i" width="12" height="12" style="color:var(--text-secondary)"><use href="#i-file"/></svg>
+                    <span style="font-size:11px;color:var(--text-secondary)">Google Docs</span>
+                  </div>
+                </td>
+                <td class="mono" style="font-size:11.5px;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">alice@example.com · 2 folders</td>
+                <td><span class="pill live"><span class="dot"></span>Live</span></td>
+                <td class="mono" style="font-size:11.5px">12,894</td>
+                <td class="t-meta">4s ago</td>
+                <td>
+                  <button type="button" class="btn ghost sm icon-only" style="width:20px;height:20px">
+                    <svg class="i" width="12" height="12"><use href="#i-more"/></svg>
+                  </button>
+                </td>
+              </tr>
+              <tr style="cursor:pointer">
+                <td>
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <span class="src-stripe local"></span>
+                    <svg class="i" width="12" height="12" style="color:var(--text-secondary)"><use href="#i-folder"/></svg>
+                    <span style="font-size:11px;color:var(--text-secondary)">Local</span>
+                  </div>
+                </td>
+                <td class="mono" style="font-size:11.5px;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">2 folders · /Users/alice/Documents, /Users/alice/Library/Notes</td>
+                <td><span class="pill live"><span class="dot"></span>Watching</span></td>
+                <td class="mono" style="font-size:11.5px">12,402</td>
+                <td class="t-meta">11s ago</td>
+                <td>
+                  <button type="button" class="btn ghost sm icon-only" style="width:20px;height:20px">
+                    <svg class="i" width="12" height="12"><use href="#i-more"/></svg>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="ob-panel">
+          <div class="ob-head">
+            <div class="ob-head-text">
+              <div class="ob-title"><span class="spark">✦</span>Ideas to try</div>
+              <span class="ob-sub">Click any prompt to copy it, then paste into your LLM.</span>
+            </div>
+            <button type="button" class="reroll" aria-label="Show different prompts">
+              <svg class="i" width="11" height="11"><use href="#i-refresh-cw"/></svg>
+              Shuffle
+            </button>
+          </div>
+          <div class="ob-grid">
+            <button type="button" class="ob-prompt">
+              <span class="ob-prompt-text"><span class="spark">✦</span>Summarize my unread emails from this week.</span>
+              <span class="ob-prompt-foot">
+                <span class="ob-chip"><span class="src-stripe gmail"></span>Gmail</span>
+                <span class="copy"><svg class="i" width="12" height="12"><use href="#i-copy"/></svg></span>
+              </span>
+            </button>
+            <button type="button" class="ob-prompt">
+              <span class="ob-prompt-text"><span class="spark">✦</span>Find emails about the Q3 budget review and list the key points.</span>
+              <span class="ob-prompt-foot">
+                <span class="ob-chip"><span class="src-stripe gmail"></span>Gmail</span>
+                <span class="copy"><svg class="i" width="12" height="12"><use href="#i-copy"/></svg></span>
+              </span>
+            </button>
+            <button type="button" class="ob-prompt">
+              <span class="ob-prompt-text"><span class="spark">✦</span>What are the most recent docs in /Users/alice/Documents/Projects?</span>
+              <span class="ob-prompt-foot">
+                <span class="ob-chip"><span class="src-stripe local"></span>Local</span>
+                <span class="copy"><svg class="i" width="12" height="12"><use href="#i-copy"/></svg></span>
+              </span>
+            </button>
+            <button type="button" class="ob-prompt">
+              <span class="ob-prompt-text"><span class="spark">✦</span>List Google Docs I've edited in the last week.</span>
+              <span class="ob-prompt-foot">
+                <span class="ob-chip"><span class="src-stripe google-docs"></span>Google Docs</span>
+                <span class="copy"><svg class="i" width="12" height="12"><use href="#i-copy"/></svg></span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>

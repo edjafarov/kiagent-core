@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KIAgent · MCP hub (active)</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="components.css" />
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { margin: 0; padding: 24px; background: #f0eee9; }
+
+  .mcp-section-head {
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 0 8px;
+  }
+  .mcp-section-head .sub {
+    font-size: 11.5px; color: var(--text-secondary);
+    margin-left: 2px;
+  }
+
+  .url-input {
+    flex: 1; height: 32px; padding: 0 10px;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    display: inline-flex; align-items: center; gap: 6px;
+    overflow: hidden;
+  }
+  .url-input .icon { color: var(--accent-text); }
+  .url-input .url { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .activity-list {
+    background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  }
+  .activity-row {
+    display: grid; grid-template-columns: 18px 1fr auto;
+    align-items: center; gap: 10px; padding: 8px 12px;
+    border-bottom: 1px solid var(--bg-muted);
+    font-size: 12px;
+  }
+  .activity-row:last-child { border-bottom: 0; }
+  .activity-row .client {
+    font-weight: 500; color: var(--text-primary);
+  }
+  .activity-row .call {
+    font-family: var(--font-mono); font-size: 11.5px;
+    color: var(--text-secondary);
+  }
+  .activity-row .when {
+    font-size: 11px; color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+  .activity-dot { width: 6px; height: 6px; background: var(--live-solid); margin-left: 6px; }
+
+  .client-tile {
+    flex-direction: row !important; align-items: center; gap: 12px !important;
+    padding: 12px 14px !important;
+  }
+  .client-tile .body { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .client-tile .chev { color: var(--text-tertiary); }
+  .client-tile:hover .chev { color: var(--accent-text); }
+  .client-tile .glyph {
+    width: 28px; height: 28px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--bg-muted); color: var(--text-secondary);
+    border: 1px solid var(--border-subtle);
+    font-family: var(--font-mono); font-weight: 600; font-size: 12px;
+  }
+  .client-tile .glyph.cd { background: rgba(124,58,237,0.10); color: var(--accent-text); border-color: rgba(124,58,237,0.20); }
+  .client-tile .glyph.cc { background: #0f172a; color: #e2e8f0; border-color: #0f172a; }
+  .client-tile .glyph.vc { background: rgba(37,99,235,0.10); color: #2563eb; border-color: rgba(37,99,235,0.20); }
+  .client-tile .glyph.lf { background: rgba(13,148,136,0.10); color: var(--live-solid); border-color: rgba(13,148,136,0.20); }
+  .client-tile .glyph.cs { background: rgba(15,23,42,0.06); color: var(--text-primary); border-color: var(--border-subtle); }
+</style>
+</head>
+<body>
+
+<div class="mac-window ac" style="width:960px;height:640px">
+  <div class="mac-titlebar">
+    <div class="mac-lights"><span class="l-red"></span><span class="l-yellow"></span><span class="l-green"></span></div>
+    <div class="mac-title">KIAgent</div>
+  </div>
+  <div class="mac-body">
+    <div class="dash-topbar">
+      <span class="wordmark"><span class="spark">✦</span>KIAgent</span>
+      <span class="pill live"><span class="dot"></span>4 live · 47,231 docs</span>
+      <div style="flex:1"></div>
+      <button class="kg-tab">
+        <svg class="i" width="13" height="13"><use href="#i-database"/></svg>
+        <span>Sources</span>
+      </button>
+      <button class="kg-tab active">
+        <svg class="i" width="13" height="13"><use href="#i-link"/></svg>
+        <span>MCP</span>
+        <span class="tab-dot on"></span>
+      </button>
+      <button class="btn ghost sm">
+        <svg class="i" width="14" height="14"><use href="#i-settings"/></svg>
+      </button>
+    </div>
+
+    <div class="dash-body" style="gap:18px">
+      <div>
+        <div class="mcp-section-head">
+          <div class="h-section">Remote MCP</div>
+          <span class="pill live"><span class="dot"></span>Remote · active</span>
+        </div>
+        <div class="t-meta" style="margin-bottom:8px">Public HTTPS URL — paste into any AI client. Authenticates via OAuth on first call.</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="url-input">
+            <svg class="i icon" width="13" height="13"><use href="#i-database"/></svg>
+            <span class="url">https://alice-7k2n4q9p.lokalkiagent.de/mcp</span>
+          </div>
+          <button class="btn primary sm">
+            <svg class="i" width="12" height="12"><use href="#i-copy"/></svg>
+            Copy
+          </button>
+          <button class="btn sm">Disconnect</button>
+        </div>
+        <div class="t-meta" style="margin-top:6px;font-size:11px">Certificate renews automatically · expires in 87 days</div>
+      </div>
+
+      <div>
+        <div class="mcp-section-head">
+          <div class="h-section">Recent activity</div>
+          <div style="flex:1"></div>
+          <a href="logs.html" style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--accent-text);text-decoration:none">
+            See all logs
+            <svg class="i" width="11" height="11"><use href="#i-arrow-right"/></svg>
+          </a>
+        </div>
+        <div class="activity-list">
+          <div class="activity-row">
+            <span class="activity-dot"></span>
+            <div>
+              <span class="client">Claude Desktop</span>
+              <span class="call">  search("budget")</span>
+            </div>
+            <span class="when">12s ago</span>
+          </div>
+          <div class="activity-row">
+            <span class="activity-dot"></span>
+            <div>
+              <span class="client">Claude.ai (web)</span>
+              <span class="call">  get_document(123)</span>
+            </div>
+            <span class="when">1m ago</span>
+          </div>
+          <div class="activity-row">
+            <span class="activity-dot"></span>
+            <div>
+              <span class="client">VS Code</span>
+              <span class="call">  list_sources()</span>
+            </div>
+            <span class="when">3m ago</span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="mcp-section-head">
+          <div class="h-section">Connect a client</div>
+          <span class="sub">Pick where you want KIAgent to show up</span>
+        </div>
+        <div class="client-grid">
+          <div class="client-tile">
+            <div class="glyph cd">✦</div>
+            <div class="body">
+              <div class="name">Claude Desktop</div>
+              <div class="desc">Add custom connector with the remote URL.</div>
+            </div>
+            <svg class="i chev" width="14" height="14"><use href="#i-chev-right"/></svg>
+          </div>
+          <div class="client-tile">
+            <div class="glyph cc">CC</div>
+            <div class="body">
+              <div class="name">Claude Code</div>
+              <div class="desc">Add the MCP server with one CLI command.</div>
+            </div>
+            <svg class="i chev" width="14" height="14"><use href="#i-chev-right"/></svg>
+          </div>
+          <div class="client-tile">
+            <div class="glyph vc">VS</div>
+            <div class="body">
+              <div class="name">VS Code</div>
+              <div class="desc">Drop a server entry into .vscode/mcp.json.</div>
+            </div>
+            <svg class="i chev" width="14" height="14"><use href="#i-chev-right"/></svg>
+          </div>
+          <div class="client-tile">
+            <div class="glyph lf">
+              <svg class="i" width="14" height="14"><use href="#i-file"/></svg>
+            </div>
+            <div class="body">
+              <div class="name">Local MCP manual</div>
+              <div class="desc">Use the bare local URL from any MCP client on this Mac.</div>
+            </div>
+            <svg class="i chev" width="14" height="14"><use href="#i-chev-right"/></svg>
+          </div>
+          <div class="client-tile">
+            <div class="glyph cs">{ }</div>
+            <div class="body">
+              <div class="name">Custom JSON snippet</div>
+              <div class="desc">Raw URL + bearer for any other MCP-aware tool.</div>
+            </div>
+            <svg class="i chev" width="14" height="14"><use href="#i-chev-right"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+</body>
+</html>
