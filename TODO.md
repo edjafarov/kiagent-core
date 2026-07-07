@@ -27,7 +27,12 @@ before flipping it public.
       section is inert in OSS. This is the renderer analog of the main.ts
       updater guarding.
 - [ ] Neutralize hardcoded `'KIAgent'` brand strings (BootSplash / Spark /
-      About) as part of the brand-asset work.
+      About) as part of the brand-asset work. **Partially addressed:**
+      `product.json` (`src/main/product.ts`, wired in `main.ts`) now
+      supplies `productName`, but only `Notification` titles read it so far
+      — BootSplash, the Spark mark and About still hardcode `'KIAgent'`.
+      This item stays open until those are ported to `product.productName`
+      too. See `docs/architecture/extension-platform.md` § Product builds.
 - [ ] Wire the cross-platform unsigned `package:oss` matrix in CI (needs the
       native deep-extraction vendor step, incl. .NET 8 for the Windows OCR
       helper).

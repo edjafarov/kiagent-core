@@ -152,3 +152,175 @@ Files: `src/main/marketplace/{catalog,github-source,github-cache,github-ref,inst
 the IPC handlers live inline in `src/main/main.ts`.
 
 Authoritative design doc: [`docs/superpowers/specs/2026-07-03-extension-marketplace-design.md`](../superpowers/specs/2026-07-03-extension-marketplace-design.md).
+
+## Bundled extensions (privileged tier)
+
+A second, optional discovery root lets a **product build** ship extensions
+inside the app package itself, alongside the marketplace/dev-installed ones
+in `extDir`. It's wired via `ExtensionPlatformDeps.bundledDir` — `main.ts`
+resolves it from `product.bundledExtensionsDir` (default
+`'bundled-extensions'`) under the resource root; see "Product builds" below.
+OSS with no product config passes no `bundledDir` and behaves exactly as
+before.
+
+### Discovery and `origin: 'bundled'`
+
+`ExtensionPlatform.start()` scans `bundledDir` (if set) with
+`discoverExtensions(dir, { tier: 'bundled' })` *after* scanning `extDir`.
+Each found entry is tagged `origin: 'bundled'` and gets special treatment:
+
+- **Manifest tier `'bundled'`.** `parseManifest`/`validateManifestDir` take
+  an `opts.tier: 'external' | 'bundled'`. Only manifests validated at tier
+  `'bundled'` may declare privileged caps (today just `unsafe.mainProcess`,
+  `PRIVILEGED_CAPS` in `manifest.ts`); an external manifest declaring one is
+  a hard `ManifestError` at parse time: *"this extension requires
+  unsafe.mainProcess — only extensions bundled with the app may use it"*.
+- **Auto-consent.** `activate()` skips the consent check entirely for
+  `origin === 'bundled'` (`e.origin !== 'bundled' && !(await
+  consentCovers(...))`). Trust model: consent is a proxy for "the user chose
+  to install this"; a bundled extension was never installed — it shipped
+  inside the signed app bundle the user already trusted by installing the
+  app. There's no separate approval step, ever.
+- **No uninstall, no marketplace replace.** `uninstall()` and
+  `installCommit()` reject any id whose live entry has `origin ===
+  'bundled'` with a user-facing error ("bundled extensions are part of the
+  app and cannot be uninstalled" / "...cannot be replaced from the
+  marketplace"). A bundled extension *can* still be disabled
+  (`setEnabled(id, false)`) — disable is not uninstall, and `setEnabled` has
+  no origin check.
+- **Bundled-wins shadowing.** If a bundled id collides with an id already
+  discovered from `extDir` (installed/dev), the bundled copy overwrites the
+  entry and a warning is logged: *"bundled extension `<id>` shadows an
+  installed copy — bundled wins"*. This is boot-time precedence, not a
+  merge — whichever manifest/entry the bundled scan found is what runs.
+- **Marketplace UI.** The catalog row/detail subtitle gets a `· bundled`
+  suffix (alongside the existing `· dev install`) and the Uninstall button
+  is hidden when `origin === 'bundled'` (`src/renderer/screens/Marketplace/{rows.ts,Detail.tsx}`).
+
+### The `unsafe.mainProcess` cap
+
+The one privileged cap defined so far. It is **not** a host namespace —
+`CapSurfaces['unsafe.mainProcess']` is `{}`, and the child runtime's
+`NS_METHODS` table (`extension-host-entry.ts`) has no entry for it, so it
+never appears on `host` itself. Instead:
+
+- Declaring it in `caps` marks the manifest privileged (rejected outside
+  tier `'bundled'`, see above).
+- It also selects the transport: `ExtensionPlatform.activate()` checks
+  `e.manifest.caps.includes('unsafe.mainProcess')` and, if true, runs the
+  extension **in-process** (next section) instead of forking a
+  `utilityProcess`/`child_process.fork` host.
+- If the platform was given a `mainApi`
+  (`ExtensionPlatformDeps.mainApi` — Stage 1 wires the plumbing only and
+  `main.ts` never sets it yet; Stage 2 defines the real handle) *and* the
+  extension declared the cap, `activate(host, extras)` receives `extras =
+  { mainProcess: mainApi }` as its second argument. Otherwise `extras` is
+  `undefined` — including always for out-of-process (forked) children,
+  which never receive `mainApi` regardless of caps.
+- Consent copy (`CAP_CATALOG['unsafe.mainProcess']`,
+  `src/renderer/components/cap-catalog.ts`): label *"Full app access
+  (bundled only)"*, risk `elevated`, icon `settings` — *"Runs inside the app
+  process with unrestricted access to it. Only extensions shipped as part
+  of the app itself can use this."*
+- **Explicitly unstable — a temporary escape hatch.** It exists so a
+  first-party bundled extension can reach real main-process internals
+  before the platform grows a proper capability for whatever it needs
+  (identity, extension storage/schema, UI slots — later-stage work). Every
+  escape-hatch usage is expected to migrate to a real cap and the hatch
+  itself to be deleted; it is not meant to become a general "trust me" cap
+  — the manifest tier already forecloses third-party use, since only
+  extensions validated at tier `'bundled'` (i.e. shipped inside the signed
+  app bundle) may ever declare it.
+
+### In-process semantics (vs. a forked child)
+
+For `unsafe.mainProcess` extensions, `activate()` builds an in-memory
+transport pair (`createInMemoryHostPair()`) instead of forking, and drives
+the *same* child-runtime code (`runExtensionHost` from
+`extension-host-entry.ts`) directly inside the main process, over that
+pair. Two real differences remain, and one that looked like a difference is
+neutralized:
+
+1. **The kill backstop is inert.** The primary stop path — the platform
+   sends a `'deactivate'` message, the extension's own `deactivate()` runs,
+   then the host exits — is identical to the forked tier. Only the
+   *backstop* differs: a forked child that ignores/outlives its deactivate
+   gets OS-killed; an in-process extension's `exit` is wired to
+   `pair.simulateExit(code)`, which only tells the supervisor "this host
+   exited" — it cannot terminate anything. A timer or listener a
+   misbehaving bundled extension leaks keeps running in the main process.
+   Consequence for authors: `deactivate()` must actually tear down what you
+   started — the platform cannot force it for you.
+2. **No process boundary for exceptions.** An uncaught exception or
+   unhandled rejection in extension async code hits the main process
+   directly — there's no child process to crash instead. Acceptable because
+   bundled tier is first-party trusted code by definition; this is not a
+   hardening gap for third-party extensions, which always run
+   out-of-process.
+3. **Neutralized: require-cache persistence.** A naive in-process re-run
+   would keep the extension's module (and any module-level state) alive
+   across disable→enable, since Node's module cache doesn't know the
+   extension "left". This is fixed on exit:
+   `pair.main.onExit(() => bustRequireCacheUnder(realDir))` deletes every
+   `Module._cache` entry keyed under the extension directory's **real,
+   symlink-resolved** path (`fs.realpathSync(e.dir)` — needed because e.g.
+   macOS's `os.tmpdir()` is itself a symlink, `/var/folders` →
+   `/private/var/folders`, so comparing against the raw directory would
+   silently never match). The loader used to `require` the entry,
+   `loadExtensionModule()`, goes through Node's real `Module._load`
+   primitive for the matching reason: under this repo's jest runtime,
+   `createRequire(...).cache` is an ephemeral snapshot that recomputes on
+   each access (deletions don't stick), and a bare `require`'s `.cache` is
+   consulted by jest's own instrumented module registry, not Node's —
+   evicting either one does *not* make a later `require()` reload under
+   jest (verified empirically). `Module._load`/`Module._cache` are the
+   lower-level primitives `require()` itself is built on, and are real and
+   mutable under both jest and plain Node/webpack (this static `import
+   NodeModule from 'module'` in `extension-platform.ts` is never touched by
+   webpack's bundle-scoped require rewriting, since `target:
+   'electron-main'` externalizes the `module` built-in). Net effect:
+   disable→enable loads a fresh module instance, same as a forked child
+   getting a fresh process. Documented boundary: the cache-bust is
+   **directory-scoped** — module state held in transitive requires
+   *outside* the extension's own directory (e.g. a shared singleton inside
+   a core module the extension imported) survives re-activation, because
+   only the extension-dir path prefix is evicted.
+
+The two real differences (1 and 2) are meant to retire once a later stage
+lands real capabilities for whatever a given bundled extension needs and it
+stops declaring `unsafe.mainProcess` — it either moves out-of-process like
+every other extension, or the escape hatch itself is deleted once unused.
+The require-cache fix (3) is a permanent property of the in-process host,
+not a temporary trade-off.
+
+### Product builds
+
+A **product build** is a bundled-extensions consumer with its own brand
+identity: `product.json`, resolved by `loadProductConfig()`
+(`src/main/product.ts`). Fields — all optional, and the schema is
+`.strict()` (an unknown key rejects the whole file):
+
+| Field | Type | Effect |
+|---|---|---|
+| `productName` | string | User-facing product name — today only `Notification` titles in `main.ts` read it. |
+| `updateFeedUrl` | string (URL) | Reserved for update-feed wiring; not yet consumed anywhere. |
+| `bundledExtensionsDir` | string | Overrides the bundled-extensions directory name/path (default `'bundled-extensions'`), resolved relative to the resource root. |
+
+`loadProductConfig(candidates, log?)` **never throws**: it takes the first
+candidate whose `product.json` exists (a candidate ending in `.json` is
+used as a literal file path; anything else has `product.json` appended),
+parses it, and falls back to `DEFAULT_PRODUCT = { productName: 'KIAgent' }`
+on a missing file, parse error, or schema violation (logging the reason via
+the optional `log` callback on error, never throwing). `main.ts` calls it
+with `[process.env.KIA_PRODUCT_CONFIG, app.isPackaged ?
+process.resourcesPath : null, app.getAppPath()]` — so `KIA_PRODUCT_CONFIG`
+(a directory or a `.json` file path) always wins if set, then the packaged
+resources dir, then the dev app path. The resolved
+`product.bundledExtensionsDir` (or the default) is what feeds
+`ExtensionPlatformDeps.bundledDir` above.
+
+An OSS checkout with no `product.json` anywhere in the candidate list runs
+on `DEFAULT_PRODUCT` and (absent a populated `bundled-extensions/`
+directory) has nothing for the bundled scan to find — the whole privileged
+tier is dormant unless a product build supplies both the config and the
+extensions.
