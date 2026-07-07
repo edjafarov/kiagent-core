@@ -34,7 +34,17 @@ const CAPS = [
   'commands',
   'inference',
   'events',
+  'unsafe.mainProcess',
 ] as const satisfies readonly Cap[];
+
+/** Manifests are validated the same way regardless of where they come from,
+ *  except for which caps a tier is allowed to declare. 'external' covers
+ *  both marketplace and dev-loaded extensions; 'bundled' is extensions
+ *  shipped inside the app package. */
+export type ManifestTier = 'external' | 'bundled';
+
+/** Caps only extensions shipped inside the app bundle may declare. */
+const PRIVILEGED_CAPS: readonly Cap[] = ['unsafe.mainProcess'];
 
 // OAUTH_PROVIDER_IDS (contracts.ts) is the single shared list — this
 // zod.enum reads it directly rather than keeping a local copy, so the
@@ -88,7 +98,11 @@ const schema = z.object({
     .default({}),
 });
 
-export function parseManifest(raw: unknown): Manifest {
+export function parseManifest(
+  raw: unknown,
+  opts: { tier?: ManifestTier } = {},
+): Manifest {
+  const tier = opts.tier ?? 'external';
   if (raw !== null && typeof raw === 'object') {
     const o = raw as Record<string, unknown>;
     const looksLegacy =
@@ -110,6 +124,14 @@ export function parseManifest(raw: unknown): Manifest {
   if (!semver.satisfies(PLATFORM_API_VERSION, m.engine)) {
     throw new ManifestError(
       `requires platform ${m.engine}; this build is ${PLATFORM_API_VERSION}`,
+    );
+  }
+  const privileged = m.caps.filter((c) =>
+    (PRIVILEGED_CAPS as readonly string[]).includes(c),
+  );
+  if (tier !== 'bundled' && privileged.length > 0) {
+    throw new ManifestError(
+      `this extension requires ${privileged.join(', ')} — only extensions bundled with the app may use it`,
     );
   }
   return { ...m, id: m.id as ExtensionId };
@@ -139,7 +161,10 @@ export function oauthSourceBindings(
  *  capped — official brand marks at UI sizes are a few KB. */
 export const MAX_ICON_BYTES = 200 * 1024;
 
-export function validateManifestDir(dir: string): {
+export function validateManifestDir(
+  dir: string,
+  opts: { tier?: ManifestTier } = {},
+): {
   manifest: Manifest;
   entryAbsPath: string;
 } {
@@ -153,7 +178,7 @@ export function validateManifestDir(dir: string): {
   } catch {
     throw new ManifestError('manifest.json is not valid JSON');
   }
-  const manifest = parseManifest(raw);
+  const manifest = parseManifest(raw, opts);
   const root = path.resolve(dir);
   const entryAbsPath = path.resolve(root, manifest.entry);
   const rel = path.relative(root, entryAbsPath);
