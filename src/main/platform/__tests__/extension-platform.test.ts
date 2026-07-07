@@ -1071,38 +1071,29 @@ describe('createExtensionPlatform', () => {
     });
 
     // These two assert the in-process transport branch that actually
-    // delivers extras.mainProcess and busts the require cache on exit —
-    // that wiring is Task 5's job (this task only threads bundledDir/
-    // mainApi into deps and does discovery/guards). `.failing` documents
-    // the currently-expected-red status; Task 5 flips them to `it`.
-    it.failing(
-      'runs the privileged extension in-process and delivers mainApi (tool round-trip)',
-      async () => {
-        platform = makeBundledPlatform({ marker: 7 });
-        await platform.start();
-        const tool = tools.get('bundled.probe');
-        expect(tool).toBeDefined();
-        await expect(tool!.call({})).resolves.toEqual({
-          marker: 7,
-          activations: 1,
-        });
-      },
-    );
+    // delivers extras.mainProcess and busts the require cache on exit.
+    it('runs the privileged extension in-process and delivers mainApi (tool round-trip)', async () => {
+      platform = makeBundledPlatform({ marker: 7 });
+      await platform.start();
+      const tool = tools.get('bundled.probe');
+      expect(tool).toBeDefined();
+      await expect(tool!.call({})).resolves.toEqual({
+        marker: 7,
+        activations: 1,
+      });
+    });
 
-    it.failing(
-      'loads a FRESH module instance on re-enable (require cache busted on exit)',
-      async () => {
-        platform = makeBundledPlatform({ marker: 7 });
-        await platform.start();
-        await platform.setEnabled('test.bundled', false);
-        await platform.setEnabled('test.bundled', true);
-        // A cached module instance would report activations: 2.
-        await expect(tools.get('bundled.probe')!.call({})).resolves.toEqual({
-          marker: 7,
-          activations: 1,
-        });
-      },
-    );
+    it('loads a FRESH module instance on re-enable (require cache busted on exit)', async () => {
+      platform = makeBundledPlatform({ marker: 7 });
+      await platform.start();
+      await platform.setEnabled('test.bundled', false);
+      await platform.setEnabled('test.bundled', true);
+      // A cached module instance would report activations: 2.
+      await expect(tools.get('bundled.probe')!.call({})).resolves.toEqual({
+        marker: 7,
+        activations: 1,
+      });
+    });
 
     it('refuses to uninstall a bundled extension', async () => {
       platform = makeBundledPlatform();

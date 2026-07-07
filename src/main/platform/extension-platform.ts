@@ -7,6 +7,7 @@
  */
 import path from 'path';
 import fs from 'fs';
+import NodeModule from 'module';
 
 import type {
   Cap,
@@ -54,7 +55,37 @@ import {
   createEventBus,
   type SurfaceDeps,
 } from './host-surfaces';
-import type { HostTransport } from './transport';
+import { createInMemoryHostPair, type HostTransport } from './transport';
+import { runExtensionHost } from './extension-host-entry';
+
+// Loads a privileged (in-process) extension entry via Node's real internal
+// module loader, Module._load — the primitive require() itself delegates to.
+// This is deliberately NOT createRequire(__filename)/bare require(): both
+// resolve, under this repo's jest runtime, to jest's own instrumented module
+// registry rather than Node's real one — createRequire's `.cache` is an
+// ephemeral snapshot recomputed on each access (deletions from it silently
+// don't stick) and a bare require's `.cache` is consulted by jest's loader,
+// not Node's, so evicting it does not cause a later require() to reload
+// (verified empirically — see the cache-bust note in activate()). Module's
+// own `_load`/`_cache` are the lower-level primitives require() is built on;
+// they are real and mutable under both jest and plain Node/webpack (target
+// electron-main externalizes the 'module' built-in, so this static import is
+// never touched by webpack's bundle-scoped require rewriting).
+function loadExtensionModule(entryAbsPath: string): unknown {
+  return (
+    NodeModule as unknown as {
+      _load(request: string, parent: NodeModule, isMain: boolean): unknown;
+    }
+  )._load(entryAbsPath, module, false);
+}
+
+function bustRequireCacheUnder(dir: string): void {
+  const cache = (NodeModule as unknown as { _cache: Record<string, unknown> })
+    ._cache;
+  for (const key of Object.keys(cache)) {
+    if (key.startsWith(dir + path.sep)) delete cache[key];
+  }
+}
 
 export interface ExtensionPlatformDeps {
   extDir: string;
@@ -324,12 +355,55 @@ export function createExtensionPlatform(
     // `e.host` still null and race to create its own host too. Consent is
     // therefore checked AFTER reserving `e.host`, not before.
     if (e.host) return;
+    const inProcess = e.manifest.caps.includes('unsafe.mainProcess');
     const host = createExtensionHost({
       extensionId: e.manifest.id,
       entryAbsPath: e.entryAbsPath,
       dataDir: path.join(e.dir, 'data'),
       caps: e.manifest.caps as Cap[],
-      transportFactory: () => deps.transportFactory(e.manifest.id),
+      transportFactory: inProcess
+        ? () => {
+            // Privileged tier: the real child runtime, in THIS process, over
+            // the in-memory pair — same supervisor, no fork. loadExtensionModule
+            // resolves the entry from the real filesystem even in the webpack
+            // bundle (see its comment above for why it isn't createRequire).
+            //
+            // In-process semantics differ from a forked child in two ways
+            // a bundled extension author must know (spec doc updated in
+            // Task 9):
+            //  1. kill() is simulateExit() — nothing is terminated. The
+            //     primary stop path (the 'deactivate' message → the
+            //     extension's own deactivate()) is identical to the forked
+            //     tier; only the kill BACKSTOP is inert. A timer or server
+            //     the extension leaks keeps running in the main process.
+            //  2. There is no process boundary: an uncaught exception in
+            //     extension async code hits the main process. Bundled tier
+            //     = first-party trusted code, by definition.
+            // A third difference is neutralized below: the require cache is
+            // dropped for the extension's dir on exit, so disable→enable
+            // loads a FRESH module instance — module-level state does not
+            // survive re-activation, same as a forked child.
+            const pair = createInMemoryHostPair();
+            // Module._load keys Module._cache by the REAL (symlink-resolved)
+            // path, not the path it was given — e.g. macOS os.tmpdir() is
+            // itself a symlink (/var/folders -> /private/var/folders), so
+            // comparing against the raw e.dir would silently never match.
+            // Resolve once, now, while the dir is known to exist.
+            let realDir = e.dir;
+            try {
+              realDir = fs.realpathSync(e.dir);
+            } catch {
+              /* dir vanished (e.g. mid-uninstall race) — fall back to e.dir */
+            }
+            pair.main.onExit(() => bustRequireCacheUnder(realDir));
+            runExtensionHost(pair.child, {
+              exit: (code) => pair.simulateExit(code),
+              mainApi: deps.mainApi,
+              requireModule: loadExtensionModule,
+            });
+            return pair.main;
+          }
+        : () => deps.transportFactory(e.manifest.id),
       makeSurfaces: (deliverEvent) =>
         buildSurfaces({
           extensionId: e.manifest.id,
