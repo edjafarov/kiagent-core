@@ -54,7 +54,10 @@ export interface McpServerHandle {
 }
 
 const HOST = '127.0.0.1';
-const PORT_CANDIDATES = [7421, 7422, 7423, 7424, 7425];
+// 7422 is reserved for the product's own remote MCP server (HTTPS, separate
+// process/listener) — never bound here, so a product build can assume it's
+// free without racing this loopback server for it.
+export const PORT_CANDIDATES = [7421, 7423, 7424, 7425];
 const IDLE_TIMEOUT_MS = 45 * 60 * 1000; // evict a session idle past this
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
