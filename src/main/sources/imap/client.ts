@@ -100,7 +100,11 @@ export async function connectImapClient(
       try {
         const out: ImapRawMessage[] = [];
         // {uid:true} makes the sequence set a UID set, not message numbers.
-        for await (const msg of flow.fetch(uids.join(','), { uid: true, source: true }, { uid: true })) {
+        for await (const msg of flow.fetch(
+          uids.join(','),
+          { uid: true, source: true },
+          { uid: true },
+        )) {
           if (msg.source) out.push({ uid: msg.uid, source: msg.source });
         }
         return out;

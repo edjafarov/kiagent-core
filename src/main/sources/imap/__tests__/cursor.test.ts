@@ -50,7 +50,9 @@ describe('advanceCursor / emptyCursor', () => {
   });
 
   it('adds/replaces only the named mailbox, preserving others', () => {
-    const cur: ImapCursor = { mailboxes: { INBOX: { uidValidity: '1', lastUid: 5 } } };
+    const cur: ImapCursor = {
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 5 } },
+    };
     const next = advanceCursor(cur, 'Sent', 42, 7);
     expect(next).toEqual({
       mailboxes: {

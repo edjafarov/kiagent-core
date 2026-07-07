@@ -10,15 +10,22 @@
 import { createRequire } from 'module';
 
 import type {
-  Cap,
   ExtensionModule,
   FolderPickerSpec,
   McpTool,
   Source,
 } from '@shared/contracts';
-import type { Contributions, ExtensionBootstrap, MainToChild } from '@shared/extension-rpc';
+import type {
+  Contributions,
+  ExtensionBootstrap,
+  MainToChild,
+} from '@shared/extension-rpc';
 
-import { createRpcEndpoint, type RpcEndpoint, type WireChannel } from './transport';
+import {
+  createRpcEndpoint,
+  type RpcEndpoint,
+  type WireChannel,
+} from './transport';
 
 export interface ChildDeps {
   requireModule?(p: string): unknown;
@@ -26,7 +33,14 @@ export interface ChildDeps {
 }
 
 const NS_METHODS: Record<string, string[]> = {
-  query: ['search', 'document', 'children', 'byExternalId', 'count', 'accounts'],
+  query: [
+    'search',
+    'document',
+    'children',
+    'byExternalId',
+    'count',
+    'accounts',
+  ],
   net: ['fetch'],
   db: ['exec', 'query'],
   ui: ['notify'],
@@ -66,7 +80,9 @@ function buildRemoteHost(
           };
         },
         emit(event: string, payload: unknown) {
-          void endpoint.call('events', 'emit', [event, payload]).catch(() => {});
+          void endpoint
+            .call('events', 'emit', [event, payload])
+            .catch(() => {});
         },
       };
       continue;
@@ -82,7 +98,10 @@ function buildRemoteHost(
   return host;
 }
 
-export function runExtensionHost(channel: WireChannel, deps: ChildDeps = {}): void {
+export function runExtensionHost(
+  channel: WireChannel,
+  deps: ChildDeps = {},
+): void {
   // A bare `require(p)` gets rewritten by webpack into a bundle-scoped
   // context module whose lookup can never hit an absolute on-disk path, so
   // the compiled child bundle would fail every extension load with "Cannot
@@ -99,20 +118,31 @@ export function runExtensionHost(channel: WireChannel, deps: ChildDeps = {}): vo
   // Task 8 fills these in: active pulls keyed by pullId.
   const pulls = new Map<
     number,
-    { iterator: AsyncIterator<unknown>; abort: AbortController; source: Source; mode: 'batch' | 'refs' }
+    {
+      iterator: AsyncIterator<unknown>;
+      abort: AbortController;
+      source: Source;
+      mode: 'batch' | 'refs';
+    }
   >();
   // The open pickFolders spec per connect flow — its callbacks stay in the
   // child; main reads the tree back through picker-roots/-children/-count.
   const connectPickers = new Map<number, FolderPickerSpec>();
 
   const fail = (e: unknown) =>
-    endpoint.post({ kind: 'errored', error: e instanceof Error ? e.message : String(e) });
+    endpoint.post({
+      kind: 'errored',
+      error: e instanceof Error ? e.message : String(e),
+    });
 
   async function onBootstrap(boot: ExtensionBootstrap): Promise<void> {
     try {
-      const loaded = requireModule(boot.entryAbsPath) as { default?: ExtensionModule };
+      const loaded = requireModule(boot.entryAbsPath) as {
+        default?: ExtensionModule;
+      };
       mod = (loaded.default ?? loaded) as ExtensionModule;
-      if (typeof mod.activate !== 'function') throw new Error('extension has no activate()');
+      if (typeof mod.activate !== 'function')
+        throw new Error('extension has no activate()');
       endpoint.post({ kind: 'ready' });
       const host = buildRemoteHost(endpoint, boot, eventCbs);
       const contrib = await mod.activate(host as never);
@@ -149,13 +179,19 @@ export function runExtensionHost(channel: WireChannel, deps: ChildDeps = {}): vo
     throw new Error(`unexpected main→child namespace ${ns}`);
   });
 
-  function makeSession(pullId: number, account: unknown, abort: AbortController) {
+  function makeSession(
+    pullId: number,
+    account: unknown,
+    abort: AbortController,
+  ) {
     return {
       account,
       signal: abort.signal,
       credentials: () => endpoint.call('session', 'credentials', [pullId]),
       log: (level: unknown, msg: unknown) => {
-        void endpoint.call('session', 'log', [pullId, level, msg]).catch(() => {});
+        void endpoint
+          .call('session', 'log', [pullId, level, msg])
+          .catch(() => {});
       },
     };
   }
@@ -171,19 +207,26 @@ export function runExtensionHost(channel: WireChannel, deps: ChildDeps = {}): vo
     return out;
   }
 
-  async function handleSourceCall(method: string, args: unknown[]): Promise<unknown> {
+  async function handleSourceCall(
+    method: string,
+    args: unknown[],
+  ): Promise<unknown> {
     if (method === 'connect') {
       const [connectId, sourceId] = args as [number, string];
       const source = sources.get(sourceId);
       if (!source) throw new Error(`unknown source ${sourceId}`);
       const auth = {
-        oauth: (scopes: string[]) => endpoint.call('auth', 'oauth', [connectId, scopes]),
+        oauth: (scopes: string[]) =>
+          endpoint.call('auth', 'oauth', [connectId, scopes]),
         showQr: (qr: string) => {
           void endpoint.call('auth', 'showQr', [connectId, qr]).catch(() => {});
         },
-        prompt: (schema: unknown) => endpoint.call('auth', 'prompt', [connectId, schema]),
+        prompt: (schema: unknown) =>
+          endpoint.call('auth', 'prompt', [connectId, schema]),
         status: (msg: string) => {
-          void endpoint.call('auth', 'status', [connectId, msg]).catch(() => {});
+          void endpoint
+            .call('auth', 'status', [connectId, msg])
+            .catch(() => {});
         },
         pickFolders: async (spec: FolderPickerSpec) => {
           if (connectPickers.has(connectId)) {
@@ -224,29 +267,45 @@ export function runExtensionHost(channel: WireChannel, deps: ChildDeps = {}): vo
       return spec.count ? spec.count(id) : null;
     }
     if (method === 'pull-open') {
-      const [pullId, sourceId, account, cursor] = args as [number, string, unknown, unknown];
+      const [pullId, sourceId, account, cursor] = args as [
+        number,
+        string,
+        unknown,
+        unknown,
+      ];
       const source = sources.get(sourceId);
       if (!source) throw new Error(`unknown source ${sourceId}`);
       const abort = new AbortController();
       const session = makeSession(pullId, account, abort);
-      const iterator = source.pull(session as never, cursor)[Symbol.asyncIterator]();
+      const iterator = source
+        .pull(session as never, cursor)
+        [Symbol.asyncIterator]();
       pulls.set(pullId, { iterator, abort, source, mode: 'batch' });
       return null;
     }
     if (method === 'reconcile-open') {
       const [pullId, sourceId, account] = args as [number, string, unknown];
       const source = sources.get(sourceId);
-      if (!source?.reconcile) throw new Error(`source ${sourceId} has no reconcile`);
+      if (!source?.reconcile)
+        throw new Error(`source ${sourceId} has no reconcile`);
       const abort = new AbortController();
       const session = makeSession(pullId, account, abort);
-      const iterator = source.reconcile(session as never)[Symbol.asyncIterator]();
+      const iterator = source
+        .reconcile(session as never)
+        [Symbol.asyncIterator]();
       pulls.set(pullId, { iterator, abort, source, mode: 'refs' });
       return null;
     }
     if (method === 'fetch-bytes') {
-      const [sessionId, sourceId, account, doc] = args as [number, string, unknown, unknown];
+      const [sessionId, sourceId, account, doc] = args as [
+        number,
+        string,
+        unknown,
+        unknown,
+      ];
       const source = sources.get(sourceId);
-      if (!source?.fetchBytes) throw new Error(`source ${sourceId} has no fetchBytes`);
+      if (!source?.fetchBytes)
+        throw new Error(`source ${sourceId} has no fetchBytes`);
       const abort = new AbortController();
       const session = makeSession(sessionId, account, abort);
       return (await source.fetchBytes(session as never, doc as never)) ?? null;
@@ -287,7 +346,10 @@ export function runExtensionHost(channel: WireChannel, deps: ChildDeps = {}): vo
     }
   });
 
-  function handleSourceNotify(msg: { kind: 'src-next' | 'src-abort'; pullId: number }): void {
+  function handleSourceNotify(msg: {
+    kind: 'src-next' | 'src-abort';
+    pullId: number;
+  }): void {
     const pull = pulls.get(msg.pullId);
     if (!pull) return;
     if (msg.kind === 'src-abort') {
@@ -305,10 +367,20 @@ export function runExtensionHost(channel: WireChannel, deps: ChildDeps = {}): vo
           return;
         }
         if (pull.mode === 'refs') {
-          endpoint.post({ kind: 'src-refs', pullId: msg.pullId, refs: r.value });
+          endpoint.post({
+            kind: 'src-refs',
+            pullId: msg.pullId,
+            refs: r.value,
+          });
           return;
         }
-        const b = r.value as { phase: unknown; items: unknown[]; deletions?: unknown; cursor: unknown; estimateTotal?: number };
+        const b = r.value as {
+          phase: unknown;
+          items: unknown[];
+          deletions?: unknown;
+          cursor: unknown;
+          estimateTotal?: number;
+        };
         endpoint.post({
           kind: 'src-batch',
           pullId: msg.pullId,
@@ -334,7 +406,15 @@ export function runExtensionHost(channel: WireChannel, deps: ChildDeps = {}): vo
 
 /** utilityProcess (parentPort) vs node fork (process.send) adapter. */
 export function connectParentChannel(): WireChannel {
-  const pp = (process as unknown as { parentPort?: { postMessage(m: unknown): void; on(ev: 'message', h: (e: { data: unknown }) => void): void; off(ev: 'message', h: (e: { data: unknown }) => void): void } }).parentPort;
+  const pp = (
+    process as unknown as {
+      parentPort?: {
+        postMessage(m: unknown): void;
+        on(ev: 'message', h: (e: { data: unknown }) => void): void;
+        off(ev: 'message', h: (e: { data: unknown }) => void): void;
+      };
+    }
+  ).parentPort;
   if (pp) {
     return {
       send: (m) => pp.postMessage(m),
@@ -359,7 +439,9 @@ export function connectParentChannel(): WireChannel {
   };
 }
 
-const isUtilityChild = Boolean((process as unknown as { parentPort?: unknown }).parentPort);
+const isUtilityChild = Boolean(
+  (process as unknown as { parentPort?: unknown }).parentPort,
+);
 if (isUtilityChild || process.env.KIA_EXT_HOST_CHILD === '1') {
   // Under stdio-less utilityProcess, console must not throw; reroute to stderr
   // like mcp/stdio-entry.ts does.
@@ -370,7 +452,7 @@ if (isUtilityChild || process.env.KIA_EXT_HOST_CHILD === '1') {
     process.exit(1);
   });
   process.on('unhandledRejection', (e) => {
-    const detail = e instanceof Error ? e.stack ?? e.message : String(e);
+    const detail = e instanceof Error ? (e.stack ?? e.message) : String(e);
     process.stderr.write(`[ext-host] unhandled: ${detail}\n`);
     process.exit(1);
   });

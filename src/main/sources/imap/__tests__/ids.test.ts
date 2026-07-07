@@ -2,7 +2,9 @@ import { buildExternalId, stripAngle } from '../ids';
 
 describe('stripAngle', () => {
   it('removes surrounding angle brackets and trims', () => {
-    expect(stripAngle('  <abc123@mail.example.com>  ')).toBe('abc123@mail.example.com');
+    expect(stripAngle('  <abc123@mail.example.com>  ')).toBe(
+      'abc123@mail.example.com',
+    );
   });
 
   it('leaves a bare id untouched (trimmed)', () => {

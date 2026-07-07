@@ -19,6 +19,7 @@ export interface InferencePlane extends Inference {
  *  isn't left permanently un-extracted. */
 export class NoProviderError extends Error {
   readonly kind: 'complete' | 'see' | 'read';
+
   constructor(kind: 'complete' | 'see' | 'read') {
     super(
       `no inference provider available for '${kind}' — install or enable one in Settings`,
@@ -56,7 +57,9 @@ export function createInference(logs: LogSink): InferencePlane {
   };
 
   const pick = (kind: 'complete' | 'see' | 'read'): InferenceProvider => {
-    const p = providers.find((x) => x.supports.includes(kind) && x.status() === 'ready');
+    const p = providers.find(
+      (x) => x.supports.includes(kind) && x.status() === 'ready',
+    );
     if (!p) {
       throw new NoProviderError(kind);
     }

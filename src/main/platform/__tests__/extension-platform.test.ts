@@ -18,7 +18,11 @@ import { runExtensionHost } from '../extension-host-entry';
 import { createInMemoryHostPair } from '../transport';
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'ext-basic');
-const FIXTURE_UNDECLARED = path.join(__dirname, 'fixtures', 'ext-undeclared-source');
+const FIXTURE_UNDECLARED = path.join(
+  __dirname,
+  'fixtures',
+  'ext-undeclared-source',
+);
 const FIXTURE_OAUTH = path.join(__dirname, 'fixtures', 'ext-oauth');
 
 describe('createExtensionPlatform', () => {
@@ -51,14 +55,27 @@ describe('createExtensionPlatform', () => {
         list: () => [...registry.values()].map((s) => s.descriptor),
         unregister: (id: string) => void registry.delete(id),
       },
-      scheduler: { register: jest.fn(), unregister: jest.fn(), jobs: jest.fn(async () => []), trigger: jest.fn(), env: {} } as never,
+      scheduler: {
+        register: jest.fn(),
+        unregister: jest.fn(),
+        jobs: jest.fn(async () => []),
+        trigger: jest.fn(),
+        env: {},
+      } as never,
       registerTool: (t) => {
         activationsCount += 1;
         tools.set(t.name, t);
         return () => tools.delete(t.name);
       },
-      inference: { complete: async () => '', see: async () => '', read: async () => '' },
-      logSink: { log: (scope: string, level: string, msg: string) => logs.push({ scope, level, msg }) } as never,
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+      },
+      logSink: {
+        log: (scope: string, level: string, msg: string) =>
+          logs.push({ scope, level, msg }),
+      } as never,
       notify: jest.fn(),
       // In-process "fork": the real child runtime over the in-memory pair,
       // loading the fixture with jest's own require.
@@ -95,7 +112,8 @@ describe('createExtensionPlatform', () => {
 
   async function installFixture(): Promise<string> {
     const preview = await platform.installPreview(FIXTURE);
-    if (!('token' in preview)) throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+    if (!('token' in preview))
+      throw new Error(`preview failed: ${JSON.stringify(preview)}`);
     expect(preview.caps).toEqual(['net']);
     const commit = await platform.installCommit(preview.token);
     expect(commit).toEqual({ ok: true, id: 'test.basic' });
@@ -111,7 +129,12 @@ describe('createExtensionPlatform', () => {
     expect(consent?.caps).toEqual(['net']);
     const last = snapshots.at(-1)!;
     expect(last).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'activated', enabled: true, sourceIds: ['basicsrc'] }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'activated',
+        enabled: true,
+        sourceIds: ['basicsrc'],
+      }),
     ]);
   });
 
@@ -127,14 +150,23 @@ describe('createExtensionPlatform', () => {
     // consent → activate] sequence runs under one lock, deactivation
     // before commit touches disk.
     const preview2 = await platform.installPreview(FIXTURE);
-    if (!('token' in preview2)) throw new Error(`preview failed: ${JSON.stringify(preview2)}`);
-    await expect(platform.installCommit(preview2.token)).resolves.toEqual({ ok: true, id: 'test.basic' });
+    if (!('token' in preview2))
+      throw new Error(`preview failed: ${JSON.stringify(preview2)}`);
+    await expect(platform.installCommit(preview2.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.basic',
+    });
 
     // Exactly one entry, freshly re-activated (a second genuine activation
     // happened — the old host was torn down, not left running alongside).
     expect(activationsCount).toBe(2);
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'activated', enabled: true, sourceIds: ['basicsrc'] }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'activated',
+        enabled: true,
+        sourceIds: ['basicsrc'],
+      }),
     ]);
     expect(registry.has('basicsrc')).toBe(true);
     expect(tools.has('basic_echo')).toBe(true);
@@ -143,7 +175,9 @@ describe('createExtensionPlatform', () => {
   it('setEnabled(false) unregisters and persists; a restarted platform respects it', async () => {
     await platform.start();
     await installFixture();
-    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({
+      ok: true,
+    });
     expect(registry.has('basicsrc')).toBe(false);
     expect(tools.has('basic_echo')).toBe(false);
 
@@ -152,7 +186,11 @@ describe('createExtensionPlatform', () => {
     platform = makePlatform();
     await platform.start();
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'disabled', enabled: false }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'disabled',
+        enabled: false,
+      }),
     ]);
     expect(registry.has('basicsrc')).toBe(false);
   });
@@ -182,15 +220,26 @@ describe('createExtensionPlatform', () => {
   it('uninstall refuses while accounts exist, then removes everything', async () => {
     await platform.start();
     await installFixture();
-    await store.createAccount({ source: 'basicsrc', identifier: 'a', config: {}, status: 'live' });
+    await store.createAccount({
+      source: 'basicsrc',
+      identifier: 'a',
+      config: {},
+      status: 'live',
+    });
     await expect(platform.uninstall('test.basic')).resolves.toEqual({
       ok: false,
       error: "Remove this connector's sources before uninstalling it.",
     });
-    const acct = (await store.read.accounts()).find((a) => a.source === 'basicsrc')!;
+    const acct = (await store.read.accounts()).find(
+      (a) => a.source === 'basicsrc',
+    )!;
     await store.commit({ removeAccount: acct.id });
-    await expect(platform.uninstall('test.basic')).resolves.toEqual({ ok: true });
-    expect(fs.existsSync(path.join(tmp, 'extensions', 'test.basic'))).toBe(false);
+    await expect(platform.uninstall('test.basic')).resolves.toEqual({
+      ok: true,
+    });
+    expect(fs.existsSync(path.join(tmp, 'extensions', 'test.basic'))).toBe(
+      false,
+    );
     expect(registry.has('basicsrc')).toBe(false);
     expect(platform.snapshot()).toEqual([]);
   });
@@ -200,16 +249,26 @@ describe('createExtensionPlatform', () => {
     await installFixture();
     expect(activationsCount).toBe(1);
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'activated', enabled: true }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'activated',
+        enabled: true,
+      }),
     ]);
 
     // Redundant enable while already activated (e.g. a UI double-click):
     // activate()'s idempotency guard must make this a pure no-op — no
     // second host, no second contribution registration/bus emit.
-    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({
+      ok: true,
+    });
     expect(activationsCount).toBe(1);
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'activated', enabled: true }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'activated',
+        enabled: true,
+      }),
     ]);
 
     // Deactivate, then fire two un-awaited setEnabled(true) calls back to
@@ -227,7 +286,10 @@ describe('createExtensionPlatform', () => {
     expect(registry.has('basicsrc')).toBe(false);
     const p1 = platform.setEnabled('test.basic', true);
     const p2 = platform.setEnabled('test.basic', true);
-    await expect(Promise.all([p1, p2])).resolves.toEqual([{ ok: true }, { ok: true }]);
+    await expect(Promise.all([p1, p2])).resolves.toEqual([
+      { ok: true },
+      { ok: true },
+    ]);
 
     // Exactly one genuine activation happened for this re-enable (total
     // across the whole test: 1 at install + 1 here = 2) — the concurrent
@@ -236,14 +298,22 @@ describe('createExtensionPlatform', () => {
     expect(registry.has('basicsrc')).toBe(true);
     expect(tools.has('basic_echo')).toBe(true);
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'activated', enabled: true }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'activated',
+        enabled: true,
+      }),
     ]);
 
     // Full teardown must be clean: no stray running host left un-stopped
     // behind the one that "won" the race.
-    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({
+      ok: true,
+    });
     expect(registry.has('basicsrc')).toBe(false);
-    await expect(platform.uninstall('test.basic')).resolves.toEqual({ ok: true });
+    await expect(platform.uninstall('test.basic')).resolves.toEqual({
+      ok: true,
+    });
     expect(platform.snapshot()).toEqual([]);
   });
 
@@ -252,7 +322,12 @@ describe('createExtensionPlatform', () => {
     await installFixture();
     await platform.stop();
 
-    const manifestPath = path.join(tmp, 'extensions', 'test.basic', 'manifest.json');
+    const manifestPath = path.join(
+      tmp,
+      'extensions',
+      'test.basic',
+      'manifest.json',
+    );
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     expect(manifest.caps).toEqual(['net']); // same caps as the original consent
     manifest.version = '1.0.1'; // bumped version — the old consent's manifestVersion no longer matches
@@ -281,9 +356,15 @@ describe('createExtensionPlatform', () => {
       grantedAt: new Date().toISOString(),
     } as never);
     await platform.setEnabled('test.basic', false);
-    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({
+      ok: true,
+    });
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'activated', version: '1.0.1' }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'activated',
+        version: '1.0.1',
+      }),
     ]);
     expect(registry.has('basicsrc')).toBe(true);
   });
@@ -294,13 +375,23 @@ describe('createExtensionPlatform', () => {
     // 1. install-preview + install-commit the basic fixture -> status 'activated'
     await installFixture();
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'activated', enabled: true }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'activated',
+        enabled: true,
+      }),
     ]);
 
     // 2. setEnabled(id, false)
-    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({
+      ok: true,
+    });
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'disabled', enabled: false }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'disabled',
+        enabled: false,
+      }),
     ]);
 
     // 3. Record a stale consent row (latest-wins: this stale row no longer
@@ -314,16 +405,28 @@ describe('createExtensionPlatform', () => {
     } as never);
 
     // 4. setEnabled(id, true) -> snapshot status 'needs-consent'
-    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({
+      ok: true,
+    });
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'needs-consent', enabled: true }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'needs-consent',
+        enabled: true,
+      }),
     ]);
     expect(registry.has('basicsrc')).toBe(false);
 
     // 5. grantConsent(id) -> { ok: true }; snapshot status 'activated'
-    await expect(platform.grantConsent('test.basic')).resolves.toEqual({ ok: true });
+    await expect(platform.grantConsent('test.basic')).resolves.toEqual({
+      ok: true,
+    });
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'activated', enabled: true }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'activated',
+        enabled: true,
+      }),
     ]);
     expect(registry.has('basicsrc')).toBe(true);
     expect(tools.has('basic_echo')).toBe(true);
@@ -331,7 +434,11 @@ describe('createExtensionPlatform', () => {
     // 6. store.consents.latest(id) now matches manifest caps + version
     const consent = await store.consents.latest('test.basic' as never);
     expect(consent).toEqual(
-      expect.objectContaining({ extensionId: 'test.basic', caps: ['net'], manifestVersion: '1.0.0' }),
+      expect.objectContaining({
+        extensionId: 'test.basic',
+        caps: ['net'],
+        manifestVersion: '1.0.0',
+      }),
     );
 
     // grantConsent on an unknown id fails cleanly with no side effects.
@@ -345,7 +452,9 @@ describe('createExtensionPlatform', () => {
     await platform.start();
     await installFixture();
     expect(activationsCount).toBe(1);
-    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({
+      ok: true,
+    });
     expect(registry.has('basicsrc')).toBe(false);
 
     // Fire an enable, then — deliberately without awaiting it first — fire
@@ -365,14 +474,21 @@ describe('createExtensionPlatform', () => {
     // enable has genuinely completed — so it stops the real, running host.
     const p1 = platform.setEnabled('test.basic', true);
     const p2 = platform.setEnabled('test.basic', false);
-    await expect(Promise.all([p1, p2])).resolves.toEqual([{ ok: true }, { ok: true }]);
+    await expect(Promise.all([p1, p2])).resolves.toEqual([
+      { ok: true },
+      { ok: true },
+    ]);
 
     // Exactly one genuine activation happened (the enable), and the
     // disable queued behind it genuinely tore that same host back down —
     // not a silent no-op against a not-yet-started host.
     expect(activationsCount).toBe(2);
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'disabled', enabled: false }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'disabled',
+        enabled: false,
+      }),
     ]);
     expect(registry.has('basicsrc')).toBe(false);
     expect(tools.has('basic_echo')).toBe(false);
@@ -382,26 +498,38 @@ describe('createExtensionPlatform', () => {
     // the old bug would have left `e.host` pointing at a stray live child,
     // making this enable's idempotency guard wrongly no-op, or would have
     // left a second host's registrations corrupting the source registry.
-    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({
+      ok: true,
+    });
     expect(activationsCount).toBe(3);
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'activated', enabled: true }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'activated',
+        enabled: true,
+      }),
     ]);
     expect(registry.has('basicsrc')).toBe(true);
     expect(tools.has('basic_echo')).toBe(true);
 
     // Full teardown must be clean — jest output pristine, no stray running
     // host left un-stopped behind whichever call "won" the race.
-    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({
+      ok: true,
+    });
     expect(registry.has('basicsrc')).toBe(false);
-    await expect(platform.uninstall('test.basic')).resolves.toEqual({ ok: true });
+    await expect(platform.uninstall('test.basic')).resolves.toEqual({
+      ok: true,
+    });
     expect(platform.snapshot()).toEqual([]);
   });
 
   it('a consent-read rejection during activate is recoverable: status errored, then a retry succeeds', async () => {
     await platform.start();
     await installFixture();
-    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({
+      ok: true,
+    });
     expect(registry.has('basicsrc')).toBe(false);
 
     // Inject a one-time rejection from the consent store read that
@@ -415,7 +543,9 @@ describe('createExtensionPlatform', () => {
       .spyOn(store.consents, 'latest')
       .mockRejectedValueOnce(new Error('consent store unavailable'));
 
-    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({
+      ok: true,
+    });
     expect(platform.snapshot()).toEqual([
       expect.objectContaining({
         id: 'test.basic',
@@ -430,9 +560,15 @@ describe('createExtensionPlatform', () => {
     // falls through to its real implementation again. Because the failed
     // attempt reset `e.host` to null instead of leaving it wedged, a retry
     // is not a no-op: it activates cleanly.
-    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({ ok: true });
+    await expect(platform.setEnabled('test.basic', true)).resolves.toEqual({
+      ok: true,
+    });
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.basic', status: 'activated', enabled: true }),
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'activated',
+        enabled: true,
+      }),
     ]);
     expect(registry.has('basicsrc')).toBe(true);
     expect(tools.has('basic_echo')).toBe(true);
@@ -440,100 +576,116 @@ describe('createExtensionPlatform', () => {
     latestSpy.mockRestore();
   });
 
-  it(
-    'host.start() failure is recoverable: status errored, then a retry succeeds without intervening disable',
-    async () => {
-      // Install and activate the extension with the original platform
-      await platform.start();
-      await installFixture();
-      expect(activationsCount).toBe(1);
-      // Disable it before stopping so failablePlatform won't auto-activate on start()
-      await platform.setEnabled('test.basic', false);
-      await platform.stop();
+  it('host.start() failure is recoverable: status errored, then a retry succeeds without intervening disable', async () => {
+    // Install and activate the extension with the original platform
+    await platform.start();
+    await installFixture();
+    expect(activationsCount).toBe(1);
+    // Disable it before stopping so failablePlatform won't auto-activate on start()
+    await platform.setEnabled('test.basic', false);
+    await platform.stop();
 
-      // Create a test-specific platform with a conditional transportFactory
-      // to simulate a host.start() failure on the first activation attempt.
-      let failNextTransport = false;
-      const failablePlatform = createExtensionPlatform({
-        extDir: path.join(tmp, 'extensions'),
-        store,
-        sources: {
-          register: (s: Source) => void registry.set(s.descriptor.id, s),
-          get: (id: string) => registry.get(id),
-          list: () => [...registry.values()].map((s) => s.descriptor),
-          unregister: (id: string) => void registry.delete(id),
-        },
-        scheduler: { register: jest.fn(), unregister: jest.fn(), jobs: jest.fn(async () => []), trigger: jest.fn(), env: {} } as never,
-        registerTool: (t) => {
-          activationsCount += 1;
-          tools.set(t.name, t);
-          return () => tools.delete(t.name);
-        },
-        inference: { complete: async () => '', see: async () => '', read: async () => '' },
-        logSink: { log: jest.fn() },
-        notify: jest.fn(),
-        transportFactory: () => {
-          const pair = createInMemoryHostPair();
-          if (failNextTransport) {
-            failNextTransport = false;
-            // Simulate an immediate child process exit (e.g., crash on spawn).
-            // This causes host.start() to fail waiting for the ready handshake.
-            pair.simulateExit(1);
-            return pair.main;
-          }
-          runExtensionHost(pair.child, { exit: (c) => pair.simulateExit(c) });
+    // Create a test-specific platform with a conditional transportFactory
+    // to simulate a host.start() failure on the first activation attempt.
+    let failNextTransport = false;
+    const failablePlatform = createExtensionPlatform({
+      extDir: path.join(tmp, 'extensions'),
+      store,
+      sources: {
+        register: (s: Source) => void registry.set(s.descriptor.id, s),
+        get: (id: string) => registry.get(id),
+        list: () => [...registry.values()].map((s) => s.descriptor),
+        unregister: (id: string) => void registry.delete(id),
+      },
+      scheduler: {
+        register: jest.fn(),
+        unregister: jest.fn(),
+        jobs: jest.fn(async () => []),
+        trigger: jest.fn(),
+        env: {},
+      } as never,
+      registerTool: (t) => {
+        activationsCount += 1;
+        tools.set(t.name, t);
+        return () => tools.delete(t.name);
+      },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+      },
+      logSink: { log: jest.fn() },
+      notify: jest.fn(),
+      transportFactory: () => {
+        const pair = createInMemoryHostPair();
+        if (failNextTransport) {
+          failNextTransport = false;
+          // Simulate an immediate child process exit (e.g., crash on spawn).
+          // This causes host.start() to fail waiting for the ready handshake.
+          pair.simulateExit(1);
           return pair.main;
-        },
-        onChange: (snap) => snapshots.push(snap),
-      });
+        }
+        runExtensionHost(pair.child, { exit: (c) => pair.simulateExit(c) });
+        return pair.main;
+      },
+      onChange: (snap) => snapshots.push(snap),
+    });
 
-      // Start the failable platform so it discovers the installed extension
-      await failablePlatform.start();
-      await expect(failablePlatform.setEnabled('test.basic', false)).resolves.toEqual({ ok: true });
-      expect(registry.has('basicsrc')).toBe(false);
-      expect(activationsCount).toBe(1); // Still one; failable platform hasn't activated yet
+    // Start the failable platform so it discovers the installed extension
+    await failablePlatform.start();
+    await expect(
+      failablePlatform.setEnabled('test.basic', false),
+    ).resolves.toEqual({ ok: true });
+    expect(registry.has('basicsrc')).toBe(false);
+    expect(activationsCount).toBe(1); // Still one; failable platform hasn't activated yet
 
-      // Trigger a host.start() failure by setting the flag, then activate
-      failNextTransport = true;
-      await expect(failablePlatform.setEnabled('test.basic', true)).resolves.toEqual({ ok: true });
-      expect(failablePlatform.snapshot()).toEqual([
-        expect.objectContaining({
-          id: 'test.basic',
-          status: 'errored',
-        }),
-      ]);
-      expect(registry.has('basicsrc')).toBe(false);
-      expect(tools.has('basic_echo')).toBe(false);
-      // activationsCount should still be 1: the failed activation
-      // never reached registerTool because host.start() failed
+    // Trigger a host.start() failure by setting the flag, then activate
+    failNextTransport = true;
+    await expect(
+      failablePlatform.setEnabled('test.basic', true),
+    ).resolves.toEqual({ ok: true });
+    expect(failablePlatform.snapshot()).toEqual([
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'errored',
+      }),
+    ]);
+    expect(registry.has('basicsrc')).toBe(false);
+    expect(tools.has('basic_echo')).toBe(false);
+    // activationsCount should still be 1: the failed activation
+    // never reached registerTool because host.start() failed
 
-      // Before the fix, this retry would silently no-op (idempotency guard
-      // sees e.host still set to the dead host). With the fix, e.host is
-      // reset in the .catch(), so the retry activates cleanly.
-      await expect(failablePlatform.setEnabled('test.basic', true)).resolves.toEqual({ ok: true });
-      expect(failablePlatform.snapshot()).toEqual([
-        expect.objectContaining({
-          id: 'test.basic',
-          status: 'activated',
-          enabled: true,
-        }),
-      ]);
-      expect(registry.has('basicsrc')).toBe(true);
-      expect(tools.has('basic_echo')).toBe(true);
-      expect(activationsCount).toBe(2); // One more genuine activation
+    // Before the fix, this retry would silently no-op (idempotency guard
+    // sees e.host still set to the dead host). With the fix, e.host is
+    // reset in the .catch(), so the retry activates cleanly.
+    await expect(
+      failablePlatform.setEnabled('test.basic', true),
+    ).resolves.toEqual({ ok: true });
+    expect(failablePlatform.snapshot()).toEqual([
+      expect.objectContaining({
+        id: 'test.basic',
+        status: 'activated',
+        enabled: true,
+      }),
+    ]);
+    expect(registry.has('basicsrc')).toBe(true);
+    expect(tools.has('basic_echo')).toBe(true);
+    expect(activationsCount).toBe(2); // One more genuine activation
 
-      // Cleanup
-      await failablePlatform.stop();
-    },
-    15000, // Longer timeout: simulating host.start() failure is slower than other scenarios
-  );
+    // Cleanup
+    await failablePlatform.stop();
+  }, 15000); // Longer timeout: simulating host.start() failure is slower than other scenarios
 
   it('registerContributions skips a source id not declared in the manifest (F6): declared ones still register, undeclared ones warn+skip', async () => {
     await platform.start(); // empty dir — no-op
     const preview = await platform.installPreview(FIXTURE_UNDECLARED);
-    if (!('token' in preview)) throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+    if (!('token' in preview))
+      throw new Error(`preview failed: ${JSON.stringify(preview)}`);
     expect(preview.id).toBe('test.undeclared');
-    await expect(platform.installCommit(preview.token)).resolves.toEqual({ ok: true, id: 'test.undeclared' });
+    await expect(platform.installCommit(preview.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.undeclared',
+    });
 
     // Declared source registers normally; the undeclared one (which could
     // otherwise squat another extension's source id) is skipped.
@@ -547,93 +699,108 @@ describe('createExtensionPlatform', () => {
       }),
     );
     expect(platform.snapshot()).toEqual([
-      expect.objectContaining({ id: 'test.undeclared', status: 'activated', sourceIds: ['declaredsrc'] }),
+      expect.objectContaining({
+        id: 'test.undeclared',
+        status: 'activated',
+        sourceIds: ['declaredsrc'],
+      }),
     ]);
 
-    await expect(platform.uninstall('test.undeclared')).resolves.toEqual({ ok: true });
+    await expect(platform.uninstall('test.undeclared')).resolves.toEqual({
+      ok: true,
+    });
   });
 
-  it(
-    'a crash respawn keeps cadence jobs registered; only a deliberate deactivate stops them (F3)',
-    async () => {
-      const pairs: ReturnType<typeof createInMemoryHostPair>[] = [];
-      const schedulerUnregister = jest.fn();
-      const crashPlatform = createExtensionPlatform({
-        extDir: path.join(tmp, 'extensions'),
-        store,
-        sources: {
-          register: (s: Source) => void registry.set(s.descriptor.id, s),
-          get: (id: string) => registry.get(id),
-          list: () => [...registry.values()].map((s) => s.descriptor),
-          unregister: (id: string) => void registry.delete(id),
-        },
-        scheduler: {
-          register: jest.fn(),
-          unregister: schedulerUnregister,
-          jobs: jest.fn(async () => []),
-          trigger: jest.fn(),
-          env: {},
-        } as never,
-        registerTool: (t) => {
-          tools.set(t.name, t);
-          return () => tools.delete(t.name);
-        },
-        inference: { complete: async () => '', see: async () => '', read: async () => '' },
-        logSink: { log: jest.fn() },
-        notify: jest.fn(),
-        transportFactory: () => {
-          const pair = createInMemoryHostPair();
-          pairs.push(pair);
-          runExtensionHost(pair.child, { exit: (c) => pair.simulateExit(c) });
-          return pair.main;
-        },
-        onChange: (snap) => snapshots.push(snap),
-      });
+  it('a crash respawn keeps cadence jobs registered; only a deliberate deactivate stops them (F3)', async () => {
+    const pairs: ReturnType<typeof createInMemoryHostPair>[] = [];
+    const schedulerUnregister = jest.fn();
+    const crashPlatform = createExtensionPlatform({
+      extDir: path.join(tmp, 'extensions'),
+      store,
+      sources: {
+        register: (s: Source) => void registry.set(s.descriptor.id, s),
+        get: (id: string) => registry.get(id),
+        list: () => [...registry.values()].map((s) => s.descriptor),
+        unregister: (id: string) => void registry.delete(id),
+      },
+      scheduler: {
+        register: jest.fn(),
+        unregister: schedulerUnregister,
+        jobs: jest.fn(async () => []),
+        trigger: jest.fn(),
+        env: {},
+      } as never,
+      registerTool: (t) => {
+        tools.set(t.name, t);
+        return () => tools.delete(t.name);
+      },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+      },
+      logSink: { log: jest.fn() },
+      notify: jest.fn(),
+      transportFactory: () => {
+        const pair = createInMemoryHostPair();
+        pairs.push(pair);
+        runExtensionHost(pair.child, { exit: (c) => pair.simulateExit(c) });
+        return pair.main;
+      },
+      onChange: (snap) => snapshots.push(snap),
+    });
 
-      await crashPlatform.start();
-      const preview = await crashPlatform.installPreview(FIXTURE);
-      if (!('token' in preview)) throw new Error(`preview failed: ${JSON.stringify(preview)}`);
-      await expect(crashPlatform.installCommit(preview.token)).resolves.toEqual({ ok: true, id: 'test.basic' });
-      expect(pairs).toHaveLength(1);
+    await crashPlatform.start();
+    const preview = await crashPlatform.installPreview(FIXTURE);
+    if (!('token' in preview))
+      throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+    await expect(crashPlatform.installCommit(preview.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.basic',
+    });
+    expect(pairs).toHaveLength(1);
 
-      const account = await store.createAccount({ source: 'basicsrc', identifier: 'a', config: {}, status: 'live' });
-      const jobId = `source:basicsrc:${account.id}`;
+    const account = await store.createAccount({
+      source: 'basicsrc',
+      identifier: 'a',
+      config: {},
+      status: 'live',
+    });
+    const jobId = `source:basicsrc:${account.id}`;
 
-      // Crash the running host — its transport exits unexpectedly (not via
-      // deactivate/uninstall/setEnabled).
-      pairs[0].simulateExit(1);
+    // Crash the running host — its transport exits unexpectedly (not via
+    // deactivate/uninstall/setEnabled).
+    pairs[0].simulateExit(1);
 
-      // Wait for the crash-driven respawn to re-activate.
-      await new Promise<void>((resolve, reject) => {
-        const start = Date.now();
-        const iv = setInterval(() => {
-          const s = crashPlatform.snapshot().find((x) => x.id === 'test.basic');
-          if (s?.status === 'activated' && pairs.length === 2) {
-            clearInterval(iv);
-            resolve();
-          } else if (Date.now() - start > 4000) {
-            clearInterval(iv);
-            reject(new Error('respawn did not re-activate in time'));
-          }
-        }, 5);
-      });
+    // Wait for the crash-driven respawn to re-activate.
+    await new Promise<void>((resolve, reject) => {
+      const start = Date.now();
+      const iv = setInterval(() => {
+        const s = crashPlatform.snapshot().find((x) => x.id === 'test.basic');
+        if (s?.status === 'activated' && pairs.length === 2) {
+          clearInterval(iv);
+          resolve();
+        } else if (Date.now() - start > 4000) {
+          clearInterval(iv);
+          reject(new Error('respawn did not re-activate in time'));
+        }
+      }, 5);
+    });
 
-      // The crash-cleanup disposer must NOT have stopped this account's
-      // cadence job — only the source registration was torn down, and the
-      // respawn's re-registration already self-healed it.
-      expect(schedulerUnregister).not.toHaveBeenCalledWith(jobId);
-      expect(registry.has('basicsrc')).toBe(true);
+    // The crash-cleanup disposer must NOT have stopped this account's
+    // cadence job — only the source registration was torn down, and the
+    // respawn's re-registration already self-healed it.
+    expect(schedulerUnregister).not.toHaveBeenCalledWith(jobId);
+    expect(registry.has('basicsrc')).toBe(true);
 
-      // A deliberate, orchestrator-initiated deactivation (disable) still
-      // stops the cadence job exactly as before the fix.
-      await crashPlatform.setEnabled('test.basic', false);
-      await new Promise((r) => setTimeout(r, 20)); // flush the fire-and-forget scheduler.unregister
-      expect(schedulerUnregister).toHaveBeenCalledWith(jobId);
+    // A deliberate, orchestrator-initiated deactivation (disable) still
+    // stops the cadence job exactly as before the fix.
+    await crashPlatform.setEnabled('test.basic', false);
+    await new Promise((r) => setTimeout(r, 20)); // flush the fire-and-forget scheduler.unregister
+    expect(schedulerUnregister).toHaveBeenCalledWith(jobId);
 
-      await crashPlatform.stop();
-    },
-    10000,
-  );
+    await crashPlatform.stop();
+  }, 10000);
 
   describe('oauth-bound source contributions', () => {
     let registeredProfiles: Array<{ sourceId: string; profile: unknown }>;

@@ -2,7 +2,9 @@ import type { ExtensionSnapshot } from '@shared/contracts';
 import type { MarketplaceListItem, UpdateInfo } from '@shared/ipc';
 import { bareGithubRef, buildRows, matchInstalled } from '../rows';
 
-function item(overrides: Partial<MarketplaceListItem> = {}): MarketplaceListItem {
+function item(
+  overrides: Partial<MarketplaceListItem> = {},
+): MarketplaceListItem {
   return {
     owner: 'kia-plugins',
     repo: 'gmail-tools',
@@ -82,7 +84,9 @@ describe('bareGithubRef', () => {
   });
 
   it('passes a non-github ref through unchanged', () => {
-    expect(bareGithubRef('file:/Users/dev/gmail-tools')).toBe('file:/Users/dev/gmail-tools');
+    expect(bareGithubRef('file:/Users/dev/gmail-tools')).toBe(
+      'file:/Users/dev/gmail-tools',
+    );
   });
 });
 
@@ -162,7 +166,11 @@ describe('buildRows', () => {
   });
 
   it("filter 'official' keeps only catalog rows, dropping installed-only dev installs", () => {
-    const devInstall = ext({ id: 'ext.local-tool', name: 'Local Tool', ref: 'file:/x' });
+    const devInstall = ext({
+      id: 'ext.local-tool',
+      name: 'Local Tool',
+      ref: 'file:/x',
+    });
     const rows = buildRows([item()], [devInstall], [], 'official', '');
 
     expect(rows).toHaveLength(1);
@@ -170,19 +178,45 @@ describe('buildRows', () => {
   });
 
   it("filter 'installed' keeps catalog rows that are installed plus dev-install rows, drops uninstalled catalog rows", () => {
-    const other = item({ owner: 'kia-plugins', repo: 'other', displayName: 'Other', fullName: 'kia-plugins/other' });
-    const devInstall = ext({ id: 'ext.local-tool', name: 'Local Tool', ref: 'file:/x' });
+    const other = item({
+      owner: 'kia-plugins',
+      repo: 'other',
+      displayName: 'Other',
+      fullName: 'kia-plugins/other',
+    });
+    const devInstall = ext({
+      id: 'ext.local-tool',
+      name: 'Local Tool',
+      ref: 'file:/x',
+    });
     const installedMatch = ext({ ref: 'github:kia-plugins/gmail-tools' });
 
-    const rows = buildRows([item(), other], [installedMatch, devInstall], [], 'installed', '');
+    const rows = buildRows(
+      [item(), other],
+      [installedMatch, devInstall],
+      [],
+      'installed',
+      '',
+    );
 
     const keys = rows.map((r) => r.key).sort();
-    expect(keys).toEqual(['ext:ext.local-tool', 'gh:kia-plugins/gmail-tools'].sort());
+    expect(keys).toEqual(
+      ['ext:ext.local-tool', 'gh:kia-plugins/gmail-tools'].sort(),
+    );
   });
 
   it("filter 'all' includes everything: catalog (installed or not) and dev installs", () => {
-    const other = item({ owner: 'kia-plugins', repo: 'other', displayName: 'Other', fullName: 'kia-plugins/other' });
-    const devInstall = ext({ id: 'ext.local-tool', name: 'Local Tool', ref: 'file:/x' });
+    const other = item({
+      owner: 'kia-plugins',
+      repo: 'other',
+      displayName: 'Other',
+      fullName: 'kia-plugins/other',
+    });
+    const devInstall = ext({
+      id: 'ext.local-tool',
+      name: 'Local Tool',
+      ref: 'file:/x',
+    });
 
     const rows = buildRows([item(), other], [devInstall], [], 'all', '');
 
@@ -194,7 +228,11 @@ describe('buildRows', () => {
   });
 
   it('search matches the title case-insensitively, across both catalog and installed-only rows', () => {
-    const devInstall = ext({ id: 'ext.local-tool', name: 'Local Tool', ref: 'file:/x' });
+    const devInstall = ext({
+      id: 'ext.local-tool',
+      name: 'Local Tool',
+      ref: 'file:/x',
+    });
     const rows = buildRows([item()], [devInstall], [], 'all', 'GMAIL');
 
     expect(rows).toHaveLength(1);
@@ -213,19 +251,41 @@ describe('buildRows', () => {
   });
 
   it('updateAvailable is true for a dev-install row whose id appears in updates', () => {
-    const devInstall = ext({ id: 'ext.local-tool', name: 'Local Tool', ref: 'file:/x' });
-    const rows = buildRows([], [devInstall], [update({ id: 'ext.local-tool' })], 'all', '');
+    const devInstall = ext({
+      id: 'ext.local-tool',
+      name: 'Local Tool',
+      ref: 'file:/x',
+    });
+    const rows = buildRows(
+      [],
+      [devInstall],
+      [update({ id: 'ext.local-tool' })],
+      'all',
+      '',
+    );
     expect(rows[0].updateAvailable).toBe(true);
   });
 
   it('updateAvailable is false when the update id does not match anything installed', () => {
     const e = ext();
-    const rows = buildRows([item()], [e], [update({ id: 'ext.someone-else' })], 'all', '');
+    const rows = buildRows(
+      [item()],
+      [e],
+      [update({ id: 'ext.someone-else' })],
+      'all',
+      '',
+    );
     expect(rows[0].updateAvailable).toBe(false);
   });
 
   it('an uninstalled catalog row is never flagged with updateAvailable even if its repo id happens to appear in updates', () => {
-    const rows = buildRows([item()], [], [update({ id: 'ext.gmail-tools' })], 'all', '');
+    const rows = buildRows(
+      [item()],
+      [],
+      [update({ id: 'ext.gmail-tools' })],
+      'all',
+      '',
+    );
     expect(rows[0].updateAvailable).toBe(false);
   });
 });

@@ -24,13 +24,15 @@ export async function parseImapMessage(
 
   const headers: Record<string, string> = {};
   for (const [k, v] of mail.headers) {
-    headers[k.toLowerCase()] = typeof v === 'string' ? v : headerValueToString(v);
+    headers[k.toLowerCase()] =
+      typeof v === 'string' ? v : headerValueToString(v);
   }
 
   const from = addrText(mail.from);
   const to = addrList(mail.to);
 
-  const rawText = mail.text ?? (typeof mail.html === 'string' ? stripHtml(mail.html) : '');
+  const rawText =
+    mail.text ?? (typeof mail.html === 'string' ? stripHtml(mail.html) : '');
   const bodyText = cleanBody(rawText);
 
   return {
@@ -55,7 +57,11 @@ function addrList(a: AddressObject | AddressObject[] | undefined): string[] {
   if (!a) return [];
   const list = Array.isArray(a) ? a : [a];
   return list
-    .flatMap((obj) => obj.value.map((v) => (v.name ? `${v.name} <${v.address}>` : (v.address ?? ''))))
+    .flatMap((obj) =>
+      obj.value.map((v) =>
+        v.name ? `${v.name} <${v.address}>` : (v.address ?? ''),
+      ),
+    )
     .filter((s) => s.length > 0);
 }
 

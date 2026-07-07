@@ -21,12 +21,19 @@ function makeDeps(mod: unknown, overrides: Record<string, unknown> = {}) {
     transportFactory: () => {
       const pair = createInMemoryHostPair();
       pairs.push(pair);
-      runExtensionHost(pair.child, { requireModule: () => mod, exit: (c) => pair.simulateExit(c) });
+      runExtensionHost(pair.child, {
+        requireModule: () => mod,
+        exit: (c) => pair.simulateExit(c),
+      });
       return pair.main;
     },
-    makeSurfaces: () => ({ surfaces: { net: { fetch: async () => ({ status: 200 }) } } as never, close: jest.fn() }),
+    makeSurfaces: () => ({
+      surfaces: { net: { fetch: async () => ({ status: 200 }) } } as never,
+      close: jest.fn(),
+    }),
     logSink: noopLog,
-    onStatus: (status: ExtensionStatus, error?: string) => statuses.push({ status, error }),
+    onStatus: (status: ExtensionStatus, error?: string) =>
+      statuses.push({ status, error }),
     registerContributions: (c: Contributions) => {
       registered.push(c);
       return () => unregistered.push(1);
@@ -41,7 +48,12 @@ function makeDeps(mod: unknown, overrides: Record<string, unknown> = {}) {
 
 const okModule = {
   async activate() {
-    return { sources: [], tools: [{ name: 't', description: '', inputSchema: {}, call: async () => 1 }] };
+    return {
+      sources: [],
+      tools: [
+        { name: 't', description: '', inputSchema: {}, call: async () => 1 },
+      ],
+    };
   },
   deactivate: jest.fn(),
 };
@@ -66,10 +78,17 @@ describe('createExtensionHost', () => {
   });
 
   it('an activate() error lands in errored without registering anything', async () => {
-    const { deps, statuses, registered } = makeDeps({ activate: async () => { throw new Error('nope'); } });
+    const { deps, statuses, registered } = makeDeps({
+      activate: async () => {
+        throw new Error('nope');
+      },
+    });
     const host = createExtensionHost(deps as never);
     await expect(host.start()).rejects.toThrow(/nope/);
-    expect(statuses.at(-1)).toEqual({ status: 'errored', error: expect.stringMatching(/nope/) });
+    expect(statuses.at(-1)).toEqual({
+      status: 'errored',
+      error: expect.stringMatching(/nope/),
+    });
     expect(registered).toHaveLength(0);
   });
 
@@ -93,7 +112,9 @@ describe('createExtensionHost', () => {
 
   it('a crash restarts the host; 3 crashes in 60s trip the breaker', async () => {
     let t = 0;
-    const { deps, statuses, pairs, unregistered } = makeDeps(okModule, { now: () => t });
+    const { deps, statuses, pairs, unregistered } = makeDeps(okModule, {
+      now: () => t,
+    });
     const host = createExtensionHost(deps as never);
     await host.start();
     // three crashes at t=1s, 2s, 3s — breaker trips on the third
@@ -103,7 +124,10 @@ describe('createExtensionHost', () => {
       const settled = new Promise<void>((resolve) => {
         const iv = setInterval(() => {
           const last = statuses.at(-1);
-          if (statuses.length > base && (last?.status === 'activated' || last?.status === 'errored')) {
+          if (
+            statuses.length > base &&
+            (last?.status === 'activated' || last?.status === 'errored')
+          ) {
             clearInterval(iv);
             resolve();
           }
@@ -113,13 +137,19 @@ describe('createExtensionHost', () => {
       // eslint-disable-next-line no-await-in-loop
       await settled;
     }
-    expect(statuses.at(-1)).toEqual({ status: 'errored', error: expect.stringMatching(/crash loop/) });
+    expect(statuses.at(-1)).toEqual({
+      status: 'errored',
+      error: expect.stringMatching(/crash loop/),
+    });
     expect(unregistered.length).toBeGreaterThanOrEqual(3);
     expect(pairs).toHaveLength(3); // 1 initial + 2 restarts; third crash stays down
   });
 
   it('a crash during the handshake is recovered by a respawn: start() resolves and no stale errored follows', async () => {
-    const { deps, statuses, pairs } = makeDeps(okModule, { readyTimeoutMs: 30, activateTimeoutMs: 30 });
+    const { deps, statuses, pairs } = makeDeps(okModule, {
+      readyTimeoutMs: 30,
+      activateTimeoutMs: 30,
+    });
     const host = createExtensionHost(deps as never);
     const startPromise = host.start();
     // Crash the very first incarnation before it has processed anything at

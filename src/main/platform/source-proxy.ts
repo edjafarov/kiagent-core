@@ -65,7 +65,13 @@ export interface SourceProxySet {
 export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
   let nextId = 1;
   const auths = new Map<number, AuthChannel>();
-  const sessions = new Map<number, { credentials(): Promise<Credentials | null>; log(l: LogLevel, m: string): void }>();
+  const sessions = new Map<
+    number,
+    {
+      credentials(): Promise<Credentials | null>;
+      log(l: LogLevel, m: string): void;
+    }
+  >();
   const streams = new Map<number, StreamState>();
 
   const push = (pullId: number, msg: Inbox) => {
@@ -77,11 +83,20 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
   };
 
   const offNotify = endpoint.onNotify((raw) => {
-    const m = raw as { kind: string; pullId?: number; batch?: WireBatch; refs?: ExternalRef[]; error?: string };
-    if (m.kind === 'src-batch') push(m.pullId!, { kind: 'batch', batch: m.batch! });
-    else if (m.kind === 'src-refs') push(m.pullId!, { kind: 'refs', refs: m.refs! });
+    const m = raw as {
+      kind: string;
+      pullId?: number;
+      batch?: WireBatch;
+      refs?: ExternalRef[];
+      error?: string;
+    };
+    if (m.kind === 'src-batch')
+      push(m.pullId!, { kind: 'batch', batch: m.batch! });
+    else if (m.kind === 'src-refs')
+      push(m.pullId!, { kind: 'refs', refs: m.refs! });
     else if (m.kind === 'src-done') push(m.pullId!, { kind: 'done' });
-    else if (m.kind === 'src-error') push(m.pullId!, { kind: 'error', error: m.error ?? 'source error' });
+    else if (m.kind === 'src-error')
+      push(m.pullId!, { kind: 'error', error: m.error ?? 'source error' });
   });
 
   /** Shared demand-driven stream loop for pull (batches) and reconcile (refs). */
@@ -143,7 +158,8 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
         const [id, ...rest] = args as [number, ...unknown[]];
         const auth = auths.get(id);
         if (!auth) throw new Error('no active connect flow for this call');
-        if (!AUTH_VERBS.has(method)) throw new Error(`unknown auth verb ${method}`);
+        if (!AUTH_VERBS.has(method))
+          throw new Error(`unknown auth verb ${method}`);
         if (method === 'pickFolders') {
           // Not a plain forward: rebuild a real FolderPickerSpec whose tree
           // callbacks call BACK into the child (symmetric transport — these
@@ -154,7 +170,8 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
           const spec: FolderPickerSpec = {
             modes: wire.modes,
             multiSelect: wire.multiSelect,
-            roots: (modeKey) => treeCall<FolderNode[]>('picker-roots', [modeKey]),
+            roots: (modeKey) =>
+              treeCall<FolderNode[]>('picker-roots', [modeKey]),
             children: (nodeId) =>
               treeCall<FolderNode[]>('picker-children', [nodeId]),
           };
@@ -164,7 +181,9 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
           }
           return auth.pickFolders(spec);
         }
-        const verb = (auth as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
+        const verb = (
+          auth as unknown as Record<string, (...a: unknown[]) => unknown>
+        )[method];
         return verb.call(auth, ...rest);
       }
       if (ns === 'session') {
@@ -190,7 +209,10 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
           nextId += 1;
           auths.set(id, auth);
           try {
-            return (await endpoint.call('source', 'connect', [id, descriptor.id])) as {
+            return (await endpoint.call('source', 'connect', [
+              id,
+              descriptor.id,
+            ])) as {
               identifier: string;
               config?: Record<string, unknown>;
             };
@@ -201,8 +223,14 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
         async *pull(session, cursor) {
           const pullId = nextId;
           nextId += 1;
-          for await (const msg of stream('pull-open', [descriptor.id, session.account, cursor], session, pullId)) {
-            if (msg.kind === 'batch') yield msg.batch as unknown as Batch<unknown, DocumentInput>;
+          for await (const msg of stream(
+            'pull-open',
+            [descriptor.id, session.account, cursor],
+            session,
+            pullId,
+          )) {
+            if (msg.kind === 'batch')
+              yield msg.batch as unknown as Batch<unknown, DocumentInput>;
           }
         },
         toDocument(item) {
@@ -218,7 +246,12 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
             log: (l, m) => session.log(l, m),
           });
           try {
-            const v = await endpoint.call('source', 'fetch-bytes', [id, descriptor.id, session.account, doc]);
+            const v = await endpoint.call('source', 'fetch-bytes', [
+              id,
+              descriptor.id,
+              session.account,
+              doc,
+            ]);
             return v == null ? null : (v as Uint8Array);
           } finally {
             sessions.delete(id);
@@ -229,7 +262,12 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
         source.reconcile = async function* reconcile(session: Session) {
           const pullId = nextId;
           nextId += 1;
-          for await (const msg of stream('reconcile-open', [descriptor.id, session.account], session, pullId)) {
+          for await (const msg of stream(
+            'reconcile-open',
+            [descriptor.id, session.account],
+            session,
+            pullId,
+          )) {
             if (msg.kind === 'refs') yield msg.refs;
           }
         };
@@ -238,7 +276,9 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
     },
 
     abortAll(reason) {
-      streams.forEach((_s, pullId) => push(pullId, { kind: 'error', error: reason }));
+      streams.forEach((_s, pullId) =>
+        push(pullId, { kind: 'error', error: reason }),
+      );
       auths.clear();
     },
 

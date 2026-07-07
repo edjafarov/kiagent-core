@@ -191,8 +191,14 @@ export function createExtensionHost(deps: HostDeps): {
         if (stopping || stopped) return;
         // Crash path: this incarnation exited unexpectedly, on its own.
         crashes.push(now());
-        while (crashes.length > 0 && now() - crashes[0] > CRASH_LOOP_WINDOW_MS) crashes.shift();
-        deps.logSink.log(scope, 'warn', 'extension process exited unexpectedly', { code });
+        while (crashes.length > 0 && now() - crashes[0] > CRASH_LOOP_WINDOW_MS)
+          crashes.shift();
+        deps.logSink.log(
+          scope,
+          'warn',
+          'extension process exited unexpectedly',
+          { code },
+        );
         if (crashes.length >= CRASH_LOOP_MAX) {
           stopped = true;
           const msg = `crash loop: ${CRASH_LOOP_MAX} crashes in ${CRASH_LOOP_WINDOW_MS / 1000}s`;
@@ -243,7 +249,10 @@ export function createExtensionHost(deps: HostDeps): {
         return;
       }
       const contributions = outcome.contributions as Contributions;
-      unregister = deps.registerContributions(contributions, proxySet.makeSource);
+      unregister = deps.registerContributions(
+        contributions,
+        proxySet.makeSource,
+      );
       deps.onStatus('activated');
       resolveStart();
     } catch (e) {
@@ -309,7 +318,8 @@ export function createExtensionHost(deps: HostDeps): {
       deps.onStatus('disabled');
     },
     callTool(name, args) {
-      if (!current) return Promise.reject(new Error('extension is not running'));
+      if (!current)
+        return Promise.reject(new Error('extension is not running'));
       return current.endpoint.call('tool', name, [args]);
     },
   };

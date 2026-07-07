@@ -14,7 +14,14 @@ import type {
 import { coveringRoots, isUnder } from '@shared/folder-paths';
 
 import { advanceCursor, type LocalFolderCursor } from './cursor';
-import { BATCH_SIZE, buildItem, chunk, listEntries, toAbsPosix, type ScannedEntry } from './scanner';
+import {
+  BATCH_SIZE,
+  buildItem,
+  chunk,
+  listEntries,
+  toAbsPosix,
+  type ScannedEntry,
+} from './scanner';
 import { toDocument, type LocalFolderItem } from './to-document';
 import { watchLoop } from './watch';
 
@@ -42,7 +49,8 @@ const MACHINE_IDENTIFIER = 'this-machine';
  *  equivalent to re-indexing, so a hard failure asking the user to re-add
  *  the folder is the deliberate, honest choice (see the design doc's
  *  "Migration: hard cutover" section). */
-const LEGACY_ERROR = 'Legacy single-folder account — remove this source and re-add its folder.';
+const LEGACY_ERROR =
+  'Legacy single-folder account — remove this source and re-add its folder.';
 
 /** `config.paths` when it's a non-empty array of strings; throws the
  *  hard-cutover legacy error otherwise (covers both the old single-`path`
@@ -106,7 +114,10 @@ export async function connect(
     resolved.push(abs);
   }
 
-  return { identifier: MACHINE_IDENTIFIER, config: { paths: coveringRoots(resolved) } };
+  return {
+    identifier: MACHINE_IDENTIFIER,
+    config: { paths: coveringRoots(resolved) },
+  };
 }
 
 /**
@@ -137,7 +148,9 @@ async function assertRootsAvailable(rootPaths: string[]): Promise<void> {
       try {
         stat = await fs.promises.stat(root);
       } catch {
-        throw new Error(`Local Folder: root is missing or unreadable: "${root}"`);
+        throw new Error(
+          `Local Folder: root is missing or unreadable: "${root}"`,
+        );
       }
       if (!stat.isDirectory()) {
         throw new Error(`Local Folder: root is not a directory: "${root}"`);
@@ -154,7 +167,10 @@ async function assertRootsAvailable(rootPaths: string[]): Promise<void> {
  *
  *  `pull()` must not rely on some OTHER batch happening to commit this
  *  cycle to make the prune stick — see `pull()`'s own comment for why. */
-function pruneToConfiguredRoots(cursor: LocalFolderCursor, rootPaths: string[]): LocalFolderCursor {
+function pruneToConfiguredRoots(
+  cursor: LocalFolderCursor,
+  rootPaths: string[],
+): LocalFolderCursor {
   if (cursor === null) return null;
   const configured = new Set(rootPaths);
   const roots: Record<string, { completedAt: string }> = {};
@@ -168,7 +184,10 @@ function pruneToConfiguredRoots(cursor: LocalFolderCursor, rootPaths: string[]):
  *  (as opposed to every entry already matching a configured root). Prune
  *  only ever REMOVES keys, never adds any, so a plain count comparison is
  *  sufficient — no need to diff the actual key sets. */
-function prunedSomething(before: LocalFolderCursor, after: LocalFolderCursor): boolean {
+function prunedSomething(
+  before: LocalFolderCursor,
+  after: LocalFolderCursor,
+): boolean {
   if (before === null || after === null) return false;
   return Object.keys(after.roots).length < Object.keys(before.roots).length;
 }
@@ -193,7 +212,10 @@ async function* backfillRoot(
   scanStartIso: string,
   estimateTotal: number,
   working: LocalFolderCursor,
-): AsyncGenerator<Batch<LocalFolderCursor, LocalFolderItem>, LocalFolderCursor> {
+): AsyncGenerator<
+  Batch<LocalFolderCursor, LocalFolderItem>,
+  LocalFolderCursor
+> {
   if (entries.length === 0) {
     const next = advanceCursor(working, root, scanStartIso);
     yield { phase: 'backfill', items: [], cursor: next, estimateTotal };
@@ -204,7 +226,9 @@ async function* backfillRoot(
   let cursor = working;
   for (let i = 0; i < batches.length; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const items = await Promise.all(batches[i].map((e: ScannedEntry) => buildItem(e.absPath, e.stats)));
+    const items = await Promise.all(
+      batches[i].map((e: ScannedEntry) => buildItem(e.absPath, e.stats)),
+    );
     const isLast = i === batches.length - 1;
     if (isLast) cursor = advanceCursor(cursor, root, scanStartIso);
     yield { phase: 'backfill', items, cursor, estimateTotal };
@@ -230,7 +254,10 @@ async function* incrementalRescanRoot(
   entries: ScannedEntry[],
   rescanStartIso: string,
   working: LocalFolderCursor,
-): AsyncGenerator<Batch<LocalFolderCursor, LocalFolderItem>, LocalFolderCursor> {
+): AsyncGenerator<
+  Batch<LocalFolderCursor, LocalFolderItem>,
+  LocalFolderCursor
+> {
   const sinceMs = Date.parse(since.completedAt);
   const changed = entries.filter((e) => e.stats.mtime.getTime() > sinceMs);
 
@@ -239,7 +266,9 @@ async function* incrementalRescanRoot(
   const next = advanceCursor(working, root, rescanStartIso);
   for (const b of chunk(changed, BATCH_SIZE)) {
     // eslint-disable-next-line no-await-in-loop
-    const items = await Promise.all(b.map((e) => buildItem(e.absPath, e.stats)));
+    const items = await Promise.all(
+      b.map((e) => buildItem(e.absPath, e.stats)),
+    );
     yield { phase: 'live', items, cursor: next };
   }
   return next;
@@ -295,9 +324,21 @@ export async function* pull(
     const entries = listings.get(root) ?? [];
     if (!since) {
       didBackfill = true;
-      working = yield* backfillRoot(root, entries, scanStartIso, estimateTotal, working);
+      working = yield* backfillRoot(
+        root,
+        entries,
+        scanStartIso,
+        estimateTotal,
+        working,
+      );
     } else {
-      working = yield* incrementalRescanRoot(root, since, entries, scanStartIso, working);
+      working = yield* incrementalRescanRoot(
+        root,
+        since,
+        entries,
+        scanStartIso,
+        working,
+      );
     }
   }
 
@@ -319,7 +360,10 @@ export async function* pull(
  *  has been tampered with (or points at a since-removed/relocated root) must
  *  never leak bytes from elsewhere on disk. Throws the legacy-config error
  *  (via `getRootPaths`) for a pre-multi-root account, like pull()/reconcile(). */
-export async function fetchBytes(session: Session, doc: Document): Promise<Uint8Array | null> {
+export async function fetchBytes(
+  session: Session,
+  doc: Document,
+): Promise<Uint8Array | null> {
   const rootPaths = getRootPaths(session.account).map((p) => path.resolve(p));
   const absPathRaw = doc.metadata?.absPath;
   if (typeof absPathRaw !== 'string') return null;
@@ -341,7 +385,9 @@ export async function fetchBytes(session: Session, doc: Document): Promise<Uint8
  * is the anti-mass-archival guard: a missing root must throw here, never
  * enumerate as empty (see that helper's doc for the full rationale).
  */
-export async function* reconcile(session: Session): AsyncIterable<ExternalRef[]> {
+export async function* reconcile(
+  session: Session,
+): AsyncIterable<ExternalRef[]> {
   const rootPaths = getRootPaths(session.account);
   await assertRootsAvailable(rootPaths);
 
@@ -349,7 +395,8 @@ export async function* reconcile(session: Session): AsyncIterable<ExternalRef[]>
   for (const root of rootPaths) {
     // eslint-disable-next-line no-await-in-loop
     const entries = await listEntries(root);
-    for (const e of entries) refs.push({ externalId: toAbsPosix(e.absPath), type: 'file' });
+    for (const e of entries)
+      refs.push({ externalId: toAbsPosix(e.absPath), type: 'file' });
   }
   for (const c of chunk(refs, 500)) {
     if (session.signal.aborted) return;

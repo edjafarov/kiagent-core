@@ -21,7 +21,12 @@ describe('resolveMailboxes', () => {
   });
 
   it('falls back to name heuristics when no special-use flags exist', () => {
-    const folders = [folder('INBOX'), folder('Sent Items'), folder('Junk'), folder('Archive')];
+    const folders = [
+      folder('INBOX'),
+      folder('Sent Items'),
+      folder('Junk'),
+      folder('Archive'),
+    ];
     const out = resolveMailboxes(folders);
     // No "All"/"All Mail" folder present, so INBOX is used (role 'inbox'),
     // plus Sent Items by name. Archive must NOT be picked as all-mail.

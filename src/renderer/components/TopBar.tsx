@@ -20,7 +20,10 @@ function selectTopBarSlice(s: AppState): {
   for (const a of s.accounts) {
     if (a.account.status === 'error' || a.account.status === 'needsReauth') {
       erroringCount += 1;
-    } else if (a.account.status === 'live' || a.account.status === 'backfilling') {
+    } else if (
+      a.account.status === 'live' ||
+      a.account.status === 'backfilling'
+    ) {
       liveCount += 1;
     }
     totalDocs += a.docCount;

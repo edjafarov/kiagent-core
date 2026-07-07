@@ -11,7 +11,12 @@ export const DEFAULT_PREFS: AppPrefs = {
   processing: { enabled: true, window: 'idle' },
   privacy: { browserHistory: false, sendDiagnostics: false },
   models: { override: 'auto', autoInstall: true },
-  onboarding: { sourceBackfilledAt: null, mcpConnectedAt: null, firstQueryAt: null, dismissedAt: null },
+  onboarding: {
+    sourceBackfilledAt: null,
+    mcpConnectedAt: null,
+    firstQueryAt: null,
+    dismissedAt: null,
+  },
 };
 
 function isoOrNull(v: unknown): string | null {
@@ -22,14 +27,16 @@ function sanitize(raw: unknown): AppPrefs {
   const r = (raw ?? {}) as Partial<AppPrefs>;
   return {
     theme: r.theme === 'light' || r.theme === 'dark' ? r.theme : 'system',
-    logLevel: r.logLevel === 'warn' || r.logLevel === 'error' ? r.logLevel : 'info',
+    logLevel:
+      r.logLevel === 'warn' || r.logLevel === 'error' ? r.logLevel : 'info',
     launchAtLogin: r.launchAtLogin === true,
     showInMenuBar: r.showInMenuBar !== false,
     processing: {
       enabled: r.processing?.enabled !== false,
-      window: r.processing?.window === 'always' || r.processing?.window === 'night'
-        ? r.processing.window
-        : 'idle',
+      window:
+        r.processing?.window === 'always' || r.processing?.window === 'night'
+          ? r.processing.window
+          : 'idle',
     },
     privacy: {
       browserHistory: r.privacy?.browserHistory === true,
@@ -37,7 +44,9 @@ function sanitize(raw: unknown): AppPrefs {
     },
     models: {
       override:
-        typeof r.models?.override === 'string' && r.models.override ? r.models.override : 'auto',
+        typeof r.models?.override === 'string' && r.models.override
+          ? r.models.override
+          : 'auto',
       autoInstall: r.models?.autoInstall !== false,
     },
     onboarding: {

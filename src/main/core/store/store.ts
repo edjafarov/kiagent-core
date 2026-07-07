@@ -69,7 +69,10 @@ export interface CoreStore extends Store {
   getOrCreateAccount(source: string, identifier: string): Promise<Account>;
   account(id: AccountId): Promise<Account | null>;
   setAccountCadence(id: AccountId, cadence: Cadence | null): Promise<void>;
-  setAccountConfig(id: AccountId, config: Record<string, unknown>): Promise<void>;
+  setAccountConfig(
+    id: AccountId,
+    config: Record<string, unknown>,
+  ): Promise<void>;
   /** (externalId, type, seq) for every non-archived document under an
    *  account — the diff surface `reconcile()` archiving needs, without
    *  paying for full Document rows (title/markdown/metadata) just to compare
@@ -340,7 +343,11 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
     db.prepare(`DELETE FROM documents_fts WHERE doc_id = ?`).run(docId);
   };
 
-  const ftsUpsert = (docId: string, title: string | null, markdown: string | null): void => {
+  const ftsUpsert = (
+    docId: string,
+    title: string | null,
+    markdown: string | null,
+  ): void => {
     ftsDelete(docId);
     db.prepare(
       `INSERT INTO documents_fts(doc_id, title, markdown) VALUES(?, ?, ?)`,
@@ -348,15 +355,26 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
   };
 
   /** Upsert one document; returns its seq, or null when nothing changed. */
-  const upsertDocument = (accountId: string, input: DocumentInput): Seq | null => {
+  const upsertDocument = (
+    accountId: string,
+    input: DocumentInput,
+  ): Seq | null => {
     const hash = contentHash(input);
     const existing = findDocRow(accountId, input.externalId, input.type);
-    if (existing && existing.content_hash === hash && existing.archived_at === null) {
+    if (
+      existing &&
+      existing.content_hash === hash &&
+      existing.archived_at === null
+    ) {
       return null; // unchanged — no feed churn
     }
     let parentId: string | null = null;
     if (input.parent) {
-      const parent = findDocRow(accountId, input.parent.externalId, input.parent.type);
+      const parent = findDocRow(
+        accountId,
+        input.parent.externalId,
+        input.parent.type,
+      );
       parentId = parent?.id ?? null;
     }
     const text = `${input.title ?? ''}\n${input.markdown ?? ''}`.trim();
@@ -426,7 +444,11 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
 
   const commitTx = db.transaction((batch: CommitBatch): Seq => {
     let last: Seq = Number(
-      (db.prepare(`SELECT MAX(seq) AS s FROM changes`).get() as { s: number | null }).s ?? 0,
+      (
+        db.prepare(`SELECT MAX(seq) AS s FROM changes`).get() as {
+          s: number | null;
+        }
+      ).s ?? 0,
     );
 
     if ('consumer' in batch) {
@@ -445,19 +467,29 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
       }
       if (batch.enrich?.length) {
         for (const e of batch.enrich) {
-          const row = db.prepare(`SELECT * FROM documents WHERE id = ?`).get(e.documentId) as
-            | DocRow
-            | undefined;
+          const row = db
+            .prepare(`SELECT * FROM documents WHERE id = ?`)
+            .get(e.documentId) as DocRow | undefined;
           if (!row) continue; // purged since the worker read it — enrich is best-effort
           const seq = appendChange('document', row.id);
           const metadata = e.metadata
-            ? JSON.stringify({ ...(JSON.parse(row.metadata) as Record<string, unknown>), ...e.metadata })
+            ? JSON.stringify({
+                ...(JSON.parse(row.metadata) as Record<string, unknown>),
+                ...e.metadata,
+              })
             : row.metadata;
           const text = `${row.title ?? ''}\n${e.markdown}`.trim();
           const languages = text ? deps.detectLanguages(text) : [];
           db.prepare(
             `UPDATE documents SET markdown=?, metadata=?, seq=?, languages=?, updated_at=? WHERE id=?`,
-          ).run(e.markdown, metadata, seq, JSON.stringify(languages), now(), row.id);
+          ).run(
+            e.markdown,
+            metadata,
+            seq,
+            JSON.stringify(languages),
+            now(),
+            row.id,
+          );
           ftsUpsert(row.id, row.title, e.markdown);
           last = seq;
         }
@@ -486,7 +518,9 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
 
     if ('purgeArchived' in batch) {
       const rows = db
-        .prepare(`SELECT id FROM documents WHERE archived_at IS NOT NULL AND archived_at < ?`)
+        .prepare(
+          `SELECT id FROM documents WHERE archived_at IS NOT NULL AND archived_at < ?`,
+        )
         .all(batch.purgeArchived.before) as Array<{ id: string }>;
       for (const { id } of rows) {
         ftsDelete(id);
@@ -525,7 +559,10 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
     return last;
   });
 
-  const getOrCreateAccountTx = (source: string, identifier: string): AccountRow => {
+  const getOrCreateAccountTx = (
+    source: string,
+    identifier: string,
+  ): AccountRow => {
     const found = db
       .prepare(`SELECT * FROM accounts WHERE source = ? AND identifier = ?`)
       .get(source, identifier) as AccountRow | undefined;
@@ -547,20 +584,28 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
     ref_id: string;
   }): Change | null => {
     if (r.kind === 'document') {
-      const doc = db.prepare(`SELECT * FROM documents WHERE id = ?`).get(r.ref_id) as
-        | DocRow
-        | undefined;
+      const doc = db
+        .prepare(`SELECT * FROM documents WHERE id = ?`)
+        .get(r.ref_id) as DocRow | undefined;
       // Row already purged — the tombstone further down the feed informs.
-      return doc ? { seq: r.seq, kind: 'document', document: toDocument(doc) } : null;
+      return doc
+        ? { seq: r.seq, kind: 'document', document: toDocument(doc) }
+        : null;
     }
     if (r.kind === 'account') {
       const acc = getAccountRow(r.ref_id);
-      return acc ? { seq: r.seq, kind: 'account', account: toAccount(acc) } : null;
+      return acc
+        ? { seq: r.seq, kind: 'account', account: toAccount(acc) }
+        : null;
     }
     if (r.kind === 'purge') {
       return { seq: r.seq, kind: 'purge', documentId: r.ref_id as DocumentId };
     }
-    return { seq: r.seq, kind: 'accountRemoved', accountId: r.ref_id as AccountId };
+    return {
+      seq: r.seq,
+      kind: 'accountRemoved',
+      accountId: r.ref_id as AccountId,
+    };
   };
 
   /** `high` = last RAW change row scanned — callers advance to it even when
@@ -680,7 +725,9 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
       return r.c;
     },
     async accounts() {
-      const rows = db.prepare(`SELECT * FROM accounts ORDER BY created_at`).all() as AccountRow[];
+      const rows = db
+        .prepare(`SELECT * FROM accounts ORDER BY created_at`)
+        .all() as AccountRow[];
       return rows.map(toAccount);
     },
   };
@@ -787,9 +834,9 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
         ).run(account, deps.encrypt(JSON.stringify(c)));
       },
       async load(account) {
-        const r = db.prepare(`SELECT blob FROM vault WHERE account_id = ?`).get(account) as
-          | { blob: Buffer }
-          | undefined;
+        const r = db
+          .prepare(`SELECT blob FROM vault WHERE account_id = ?`)
+          .get(account) as { blob: Buffer } | undefined;
         if (!r) return null;
         return JSON.parse(deps.decrypt(r.blob)) as Credentials;
       },
@@ -800,9 +847,9 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
 
     identity: {
       async get() {
-        const r = db.prepare(`SELECT value FROM meta WHERE key = 'identity'`).get() as
-          | { value: string }
-          | undefined;
+        const r = db
+          .prepare(`SELECT value FROM meta WHERE key = 'identity'`)
+          .get() as { value: string } | undefined;
         return r ? (JSON.parse(r.value) as Identity) : null;
       },
       async set(i) {
@@ -820,7 +867,12 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
             `SELECT * FROM consents WHERE extension_id = ? ORDER BY id DESC LIMIT 1`,
           )
           .get(extension) as
-          | { extension_id: string; caps: string; manifest_version: string; granted_at: string }
+          | {
+              extension_id: string;
+              caps: string;
+              manifest_version: string;
+              granted_at: string;
+            }
           | undefined;
         if (!r) return null;
         return {
@@ -834,7 +886,12 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
         db.prepare(
           `INSERT INTO consents(extension_id, caps, manifest_version, granted_at)
            VALUES(?, ?, ?, ?)`,
-        ).run(c.extensionId, JSON.stringify(c.caps), c.manifestVersion, c.grantedAt);
+        ).run(
+          c.extensionId,
+          JSON.stringify(c.caps),
+          c.manifestVersion,
+          c.grantedAt,
+        );
       },
     },
 
@@ -850,7 +907,9 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
           JSON.stringify(accounts, null, 2),
         );
         const out = fs.createWriteStream(path.join(destDir, 'documents.jsonl'));
-        const rows = db.prepare(`SELECT * FROM documents`).iterate() as IterableIterator<DocRow>;
+        const rows = db
+          .prepare(`SELECT * FROM documents`)
+          .iterate() as IterableIterator<DocRow>;
         for (const r of rows) out.write(`${JSON.stringify(toDocument(r))}\n`);
         await new Promise<void>((resolve, reject) => {
           out.end(() => resolve());
@@ -918,7 +977,9 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
     },
 
     async getOrCreateAccount(source, identifier) {
-      const row = db.transaction(() => getOrCreateAccountTx(source, identifier))();
+      const row = db.transaction(() =>
+        getOrCreateAccountTx(source, identifier),
+      )();
       nudge.emit('commit');
       return toAccount(row);
     },
@@ -955,14 +1016,22 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
         .prepare(
           `SELECT external_id, type, seq FROM documents WHERE account_id = ? AND archived_at IS NULL`,
         )
-        .all(accountId) as Array<{ external_id: string; type: string; seq: number }>;
-      return rows.map((r) => ({ externalId: r.external_id, type: r.type, seq: r.seq }));
+        .all(accountId) as Array<{
+        external_id: string;
+        type: string;
+        seq: number;
+      }>;
+      return rows.map((r) => ({
+        externalId: r.external_id,
+        type: r.type,
+        seq: r.seq,
+      }));
     },
 
     consumerCursor(name) {
-      const r = db.prepare(`SELECT cursor FROM consumers WHERE name = ?`).get(name) as
-        | { cursor: number }
-        | undefined;
+      const r = db
+        .prepare(`SELECT cursor FROM consumers WHERE name = ?`)
+        .get(name) as { cursor: number } | undefined;
       return r?.cursor ?? 0;
     },
 
@@ -993,7 +1062,9 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
 
     ledgerCountsAll() {
       const rows = db
-        .prepare(`SELECT outcome, COUNT(*) AS c FROM work_ledger GROUP BY outcome`)
+        .prepare(
+          `SELECT outcome, COUNT(*) AS c FROM work_ledger GROUP BY outcome`,
+        )
         .all() as Array<{ outcome: string | null; c: number }>;
       const counts = { done: 0, skip: 0, failed: 0, deferred: 0, pending: 0 };
       for (const r of rows) {
@@ -1001,9 +1072,19 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
           counts[r.outcome as keyof LedgerCounts] = r.c;
         }
       }
-      const head = (db.prepare(`SELECT MAX(seq) AS s FROM changes`).get() as { s: number | null }).s ?? 0;
-      const lags = db.prepare(`SELECT cursor FROM consumers`).all() as Array<{ cursor: number }>;
-      counts.pending = lags.reduce((max, r) => Math.max(max, head - r.cursor), 0);
+      const head =
+        (
+          db.prepare(`SELECT MAX(seq) AS s FROM changes`).get() as {
+            s: number | null;
+          }
+        ).s ?? 0;
+      const lags = db.prepare(`SELECT cursor FROM consumers`).all() as Array<{
+        cursor: number;
+      }>;
+      counts.pending = lags.reduce(
+        (max, r) => Math.max(max, head - r.cursor),
+        0,
+      );
       return counts;
     },
 
@@ -1021,7 +1102,9 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
       for (const seq of seqs) {
         const row = db
           .prepare(`SELECT seq, kind, ref_id FROM changes WHERE seq = ?`)
-          .get(seq) as { seq: number; kind: Change['kind']; ref_id: string } | undefined;
+          .get(seq) as
+          | { seq: number; kind: Change['kind']; ref_id: string }
+          | undefined;
         if (!row) continue;
         const c = materializeRow(row);
         if (c) out.push(c);
@@ -1030,7 +1113,9 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
     },
 
     headSeq() {
-      const r = db.prepare(`SELECT MAX(seq) AS s FROM changes`).get() as { s: number | null };
+      const r = db.prepare(`SELECT MAX(seq) AS s FROM changes`).get() as {
+        s: number | null;
+      };
       return r.s ?? 0;
     },
 

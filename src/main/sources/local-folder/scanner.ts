@@ -31,7 +31,8 @@ export const MAX_BINARY_READ_BYTES = 20 * 1024 * 1024; // 20 MiB
 
 export function chunk<T>(items: readonly T[], size: number): T[][] {
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  for (let i = 0; i < items.length; i += size)
+    out.push(items.slice(i, i + size));
   return out;
 }
 
@@ -80,7 +81,10 @@ export interface FileCount {
  * walk early (capped: true). Never throws — unreadable/nonexistent roots
  * count as 0 (ENUMERATION_OPTIONS.suppressErrors handles that).
  */
-export async function countFiles(rootPath: string, cap = 50_000): Promise<FileCount> {
+export async function countFiles(
+  rootPath: string,
+  cap = 50_000,
+): Promise<FileCount> {
   let count = 0;
   const stream = fg.stream(['**/*'], { ...ENUMERATION_OPTIONS, cwd: rootPath });
   for await (const entry of stream) {
@@ -116,15 +120,20 @@ export function toAbsPosix(absPath: string): string {
  * `stats` is passed in (rather than re-stat'd here) so callers that already
  * have it from a directory walk or an fs-watch event don't pay for it twice.
  */
-export async function buildItem(absPath: string, stats: fs.Stats): Promise<LocalFolderItem> {
+export async function buildItem(
+  absPath: string,
+  stats: fs.Stats,
+): Promise<LocalFolderItem> {
   const externalId = toAbsPosix(absPath);
   const ext = path.extname(absPath).slice(1).toLowerCase();
   const mt = resolveMime(absPath);
   const bucket = classifyMime(mt);
-  const size = stats.size;
+  const { size } = stats;
   const mtimeIso = stats.mtime.toISOString();
   const createdIso = (
-    stats.birthtime && stats.birthtime.getTime() > 0 ? stats.birthtime : stats.mtime
+    stats.birthtime && stats.birthtime.getTime() > 0
+      ? stats.birthtime
+      : stats.mtime
   ).toISOString();
 
   let markdownText: string | null = null;
@@ -135,12 +144,25 @@ export async function buildItem(absPath: string, stats: fs.Stats): Promise<Local
       markdownText = await fs.promises.readFile(absPath, 'utf-8');
     } else if (bucket === 'binary' && size <= MAX_BINARY_READ_BYTES) {
       const bytes = await fs.promises.readFile(absPath);
-      binary = { bytes: new Uint8Array(bytes), mime: mt, filename: path.basename(absPath) };
+      binary = {
+        bytes: new Uint8Array(bytes),
+        mime: mt,
+        filename: path.basename(absPath),
+      };
     }
   } catch {
     // Vanished or unreadable between listing and read — fall back to a
     // metadata-only doc rather than failing the whole batch.
   }
 
-  return { absPath, externalId, size, mtimeIso, createdIso, ext, markdownText, binary };
+  return {
+    absPath,
+    externalId,
+    size,
+    mtimeIso,
+    createdIso,
+    ext,
+    markdownText,
+    binary,
+  };
 }

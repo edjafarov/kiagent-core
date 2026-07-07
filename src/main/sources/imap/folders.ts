@@ -28,7 +28,9 @@ export function resolveMailboxes(folders: ImapFolderInfo[]): ResolvedMailbox[] {
   if (all) {
     out.push({ path: all.path, role: 'all' });
   } else {
-    const byName = folders.find((f) => ALL_NAMES.some((rx) => rx.test(leaf(f.path))));
+    const byName = folders.find((f) =>
+      ALL_NAMES.some((rx) => rx.test(leaf(f.path))),
+    );
     if (byName) out.push({ path: byName.path, role: 'all' });
     else {
       const inbox = folders.find((f) => f.path.toUpperCase() === 'INBOX');
@@ -38,12 +40,15 @@ export function resolveMailboxes(folders: ImapFolderInfo[]): ResolvedMailbox[] {
 
   // Sent.
   const sent =
-    su('\\Sent') ?? folders.find((f) => SENT_NAMES.some((rx) => rx.test(leaf(f.path))));
+    su('\\Sent') ??
+    folders.find((f) => SENT_NAMES.some((rx) => rx.test(leaf(f.path))));
   if (sent) out.push({ path: sent.path, role: 'sent' });
 
   // Dedupe by path (a server could map INBOX and \All to the same mailbox).
   const seen = new Set<string>();
-  return out.filter((r) => (seen.has(r.path) ? false : (seen.add(r.path), true)));
+  return out.filter((r) =>
+    seen.has(r.path) ? false : (seen.add(r.path), true),
+  );
 }
 
 function leaf(path: string): string {

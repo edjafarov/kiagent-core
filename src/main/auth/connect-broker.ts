@@ -72,7 +72,8 @@ export function createConnectBroker(
       const auth: AuthChannel = {
         async oauth(scopes: string[]): Promise<Credentials> {
           const profile = oauthProfiles.get(sourceId);
-          if (!profile) throw new Error(`no OAuth profile registered for ${sourceId}`);
+          if (!profile)
+            throw new Error(`no OAuth profile registered for ${sourceId}`);
           send({ flowId, kind: 'status', msg: 'Waiting for sign-in…' });
           const callbackUrl = await runOAuthWindow(
             profile.authUrl(scopes, profile.redirectUri),

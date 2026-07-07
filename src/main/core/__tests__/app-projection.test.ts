@@ -23,7 +23,12 @@ function account(id: string): Account {
   };
 }
 
-function docChange(seq: number, accountId: string, id: string, over: Partial<Document> = {}): Change {
+function docChange(
+  seq: number,
+  accountId: string,
+  id: string,
+  over: Partial<Document> = {},
+): Change {
   const ts = `2026-01-01T00:00:0${seq}Z`;
   return {
     seq,
@@ -61,7 +66,10 @@ describe('appProjection.apply', () => {
   };
 
   it('counts new documents and tracks recents', () => {
-    const s = projection.apply(base, [docChange(1, 'a1', 'd1'), docChange(2, 'a1', 'd2')]);
+    const s = projection.apply(base, [
+      docChange(1, 'a1', 'd1'),
+      docChange(2, 'a1', 'd2'),
+    ]);
     expect(s.accounts[0].docCount).toBe(2);
     expect(s.accounts[0].recent[0].id).toBe('d2'); // newest first
   });
@@ -69,7 +77,10 @@ describe('appProjection.apply', () => {
   it('updates in place without double counting', () => {
     let s = projection.apply(base, [docChange(1, 'a1', 'd1')]);
     s = projection.apply(s, [
-      docChange(5, 'a1', 'd1', { ingestedAt: '2026-01-01T00:00:01Z', updatedAt: '2026-01-01T00:00:05Z' }),
+      docChange(5, 'a1', 'd1', {
+        ingestedAt: '2026-01-01T00:00:01Z',
+        updatedAt: '2026-01-01T00:00:05Z',
+      }),
     ]);
     expect(s.accounts[0].docCount).toBe(1);
     expect(s.accounts[0].recent).toHaveLength(1);
@@ -90,10 +101,18 @@ describe('appProjection.apply', () => {
 
   it('accountRemoved drops the entry; account upsert keeps counts', () => {
     let s = projection.apply(base, [docChange(1, 'a1', 'd1')]);
-    s = projection.apply(s, [{ seq: 7, kind: 'account', account: { ...account('a1'), status: 'paused' } }]);
+    s = projection.apply(s, [
+      {
+        seq: 7,
+        kind: 'account',
+        account: { ...account('a1'), status: 'paused' },
+      },
+    ]);
     expect(s.accounts[0].account.status).toBe('paused');
     expect(s.accounts[0].docCount).toBe(1); // preserved through account update
-    s = projection.apply(s, [{ seq: 8, kind: 'accountRemoved', accountId: 'a1' as AccountId }]);
+    s = projection.apply(s, [
+      { seq: 8, kind: 'accountRemoved', accountId: 'a1' as AccountId },
+    ]);
     expect(s.accounts).toHaveLength(0);
   });
 });

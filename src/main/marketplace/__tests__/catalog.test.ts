@@ -1,13 +1,15 @@
 /** @jest-environment node */
 
-import { createMarketplaceCatalog } from '../catalog';
 import type { ExtensionSnapshot } from '@shared/contracts';
 import type { MarketplaceListItem, PluginDetail } from '@shared/ipc';
+import { createMarketplaceCatalog } from '../catalog';
 
 describe('marketplace catalog', () => {
   let snapshotItems: ExtensionSnapshot[];
 
-  const baseSnapshot = (overrides: Partial<ExtensionSnapshot> & { id: string }): ExtensionSnapshot => ({
+  const baseSnapshot = (
+    overrides: Partial<ExtensionSnapshot> & { id: string },
+  ): ExtensionSnapshot => ({
     name: overrides.id,
     version: '1.0.0',
     origin: 'marketplace',
@@ -34,7 +36,12 @@ describe('marketplace catalog', () => {
     listOrgPlugins = jest.fn();
     getDetail = jest.fn();
     resolveGitHubRef = jest.fn();
-    source = { listOrgPlugins, getDetail, resolveGitHubRef, downloadAsset: jest.fn() };
+    source = {
+      listOrgPlugins,
+      getDetail,
+      resolveGitHubRef,
+      downloadAsset: jest.fn(),
+    };
   });
 
   function makeCatalog() {
@@ -54,16 +61,25 @@ describe('marketplace catalog', () => {
 
   describe('list', () => {
     it('sets installedId when a snapshot has a bare-ref match', async () => {
-      snapshotItems = [baseSnapshot({ id: 'installed-bare', ref: 'github:acme/widget' })];
+      snapshotItems = [
+        baseSnapshot({ id: 'installed-bare', ref: 'github:acme/widget' }),
+      ];
       listOrgPlugins.mockResolvedValueOnce([widgetListing]);
 
       const result = await makeCatalog().list();
 
-      expect(result).toEqual([{ ...widgetListing, installedId: 'installed-bare' }]);
+      expect(result).toEqual([
+        { ...widgetListing, installedId: 'installed-bare' },
+      ]);
     });
 
     it('sets installedId when a snapshot has a pinned-ref match', async () => {
-      snapshotItems = [baseSnapshot({ id: 'installed-pinned', ref: 'github:acme/widget@v1.0.0' })];
+      snapshotItems = [
+        baseSnapshot({
+          id: 'installed-pinned',
+          ref: 'github:acme/widget@v1.0.0',
+        }),
+      ];
       listOrgPlugins.mockResolvedValueOnce([widgetListing]);
 
       const result = await makeCatalog().list();
@@ -72,7 +88,9 @@ describe('marketplace catalog', () => {
     });
 
     it('leaves installedId undefined for a file: ref', async () => {
-      snapshotItems = [baseSnapshot({ id: 'dev-plugin', ref: 'file:/local/path' })];
+      snapshotItems = [
+        baseSnapshot({ id: 'dev-plugin', ref: 'file:/local/path' }),
+      ];
       listOrgPlugins.mockResolvedValueOnce([widgetListing]);
 
       const result = await makeCatalog().list();
@@ -81,7 +99,9 @@ describe('marketplace catalog', () => {
     });
 
     it('leaves installedId undefined for a different repo', async () => {
-      snapshotItems = [baseSnapshot({ id: 'other-plugin', ref: 'github:other/repo@v1.0.0' })];
+      snapshotItems = [
+        baseSnapshot({ id: 'other-plugin', ref: 'github:other/repo@v1.0.0' }),
+      ];
       listOrgPlugins.mockResolvedValueOnce([widgetListing]);
 
       const result = await makeCatalog().list();
@@ -92,7 +112,12 @@ describe('marketplace catalog', () => {
 
   describe('detail', () => {
     it('decorates the listing with installedId', async () => {
-      snapshotItems = [baseSnapshot({ id: 'installed-detail', ref: 'github:acme/widget@v2.0.0' })];
+      snapshotItems = [
+        baseSnapshot({
+          id: 'installed-detail',
+          ref: 'github:acme/widget@v2.0.0',
+        }),
+      ];
       const detail: PluginDetail = {
         listing: widgetListing,
         readmeMarkdown: '# hi',
@@ -127,7 +152,11 @@ describe('marketplace catalog', () => {
   describe('checkUpdates', () => {
     it('passes installed snapshots through and resolves via the source with the stripped ref', async () => {
       snapshotItems = [
-        baseSnapshot({ id: 'plugin-a', version: '1.0.0', ref: 'github:acme/widget@v1.0.0' }),
+        baseSnapshot({
+          id: 'plugin-a',
+          version: '1.0.0',
+          ref: 'github:acme/widget@v1.0.0',
+        }),
       ];
       resolveGitHubRef.mockResolvedValueOnce({
         tarballUrl: 'https://example.com/v2.0.0.tgz',
@@ -150,7 +179,11 @@ describe('marketplace catalog', () => {
 
     it('reports nothing when the source resolves no newer release', async () => {
       snapshotItems = [
-        baseSnapshot({ id: 'plugin-b', version: '2.0.0', ref: 'github:acme/widget@v2.0.0' }),
+        baseSnapshot({
+          id: 'plugin-b',
+          version: '2.0.0',
+          ref: 'github:acme/widget@v2.0.0',
+        }),
       ];
       resolveGitHubRef.mockResolvedValueOnce({
         tarballUrl: 'https://example.com/v2.0.0.tgz',
@@ -164,7 +197,13 @@ describe('marketplace catalog', () => {
     });
 
     it('skips non-github refs without calling the source', async () => {
-      snapshotItems = [baseSnapshot({ id: 'dev-plugin', version: '0.0.1', ref: 'file:/local' })];
+      snapshotItems = [
+        baseSnapshot({
+          id: 'dev-plugin',
+          version: '0.0.1',
+          ref: 'file:/local',
+        }),
+      ];
 
       const result = await makeCatalog().checkUpdates();
 

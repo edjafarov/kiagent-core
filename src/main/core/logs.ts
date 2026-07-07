@@ -23,7 +23,13 @@ export function createLogs(dir: string): { store: LogStore; sink: LogSink } {
 
   const sink: LogSink = {
     log(scope, level, msg, fields) {
-      const rec: LogRecord = { ts: new Date().toISOString(), level, scope, msg, fields };
+      const rec: LogRecord = {
+        ts: new Date().toISOString(),
+        level,
+        scope,
+        msg,
+        fields,
+      };
       ring.push(rec);
       if (ring.length > RING_MAX) ring.splice(0, ring.length - RING_MAX);
       fs.appendFile(file, `${JSON.stringify(rec)}\n`, () => {});
@@ -52,7 +58,8 @@ export function createLogs(dir: string): { store: LogStore; sink: LogSink } {
                 return { done: false, value: ring.filter(match) };
               }
               for (;;) {
-                if (queue.length) return { done: false, value: queue.splice(0) };
+                if (queue.length)
+                  return { done: false, value: queue.splice(0) };
                 await new Promise<void>((resolve) => {
                   nudge.once('drain', resolve);
                 });

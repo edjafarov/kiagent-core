@@ -17,7 +17,9 @@ const fakeQuery = {
   accounts: jest.fn(async () => []),
 } as unknown as Query;
 
-function makeDeps(overrides: Partial<Parameters<typeof buildSurfaces>[0]> = {}) {
+function makeDeps(
+  overrides: Partial<Parameters<typeof buildSurfaces>[0]> = {},
+) {
   const bus = createEventBus();
   const events: Array<{ name: string; payload: unknown }> = [];
   return {
@@ -27,13 +29,16 @@ function makeDeps(overrides: Partial<Parameters<typeof buildSurfaces>[0]> = {}) 
       dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'kia-ext-data-')),
       query: fakeQuery,
       inference: {
-        complete: jest.fn(async (_p: string, opts?: { lane?: string }) => `lane:${opts?.lane}`),
+        complete: jest.fn(
+          async (_p: string, opts?: { lane?: string }) => `lane:${opts?.lane}`,
+        ),
         see: jest.fn(async () => 'seen'),
         read: jest.fn(async () => 'read'),
       },
       notify: jest.fn(),
       bus,
-      deliverEvent: (name: string, payload: unknown) => events.push({ name, payload }),
+      deliverEvent: (name: string, payload: unknown) =>
+        events.push({ name, payload }),
       ...overrides,
     },
   };
@@ -52,7 +57,11 @@ describe('buildSurfaces', () => {
     const { deps } = makeDeps();
     const { surfaces, close } = buildSurfaces(deps);
     await surfaces.query.byExternalId('acc1', 'ext1', 'email');
-    expect(deps.query.byExternalId).toHaveBeenCalledWith('acc1', 'ext1', 'email');
+    expect(deps.query.byExternalId).toHaveBeenCalledWith(
+      'acc1',
+      'ext1',
+      'email',
+    );
     close();
   });
 
@@ -61,7 +70,9 @@ describe('buildSurfaces', () => {
     const { surfaces, close } = buildSurfaces(deps);
     await surfaces.db.exec('CREATE TABLE t (a TEXT)');
     await surfaces.db.exec('INSERT INTO t VALUES (?)', ['hello']);
-    await expect(surfaces.db.query('SELECT a FROM t')).resolves.toEqual([{ a: 'hello' }]);
+    await expect(surfaces.db.query('SELECT a FROM t')).resolves.toEqual([
+      { a: 'hello' },
+    ]);
     close();
     expect(fs.existsSync(path.join(deps.dataDir, 'private.db'))).toBe(true);
   });
@@ -71,17 +82,23 @@ describe('buildSurfaces', () => {
       res.writeHead(201, { 'x-kia': 'yes' });
       res.end('body!');
     });
-    await new Promise<void>((r) => { srv.listen(0, '127.0.0.1', r); });
-    const port = (srv.address() as { port: number }).port;
+    await new Promise<void>((r) => {
+      srv.listen(0, '127.0.0.1', r);
+    });
+    const { port } = srv.address() as { port: number };
     const { deps } = makeDeps();
     const { surfaces, close } = buildSurfaces(deps);
     const res = (await surfaces.net.fetch(`http://127.0.0.1:${port}/`)) as {
-      status: number; headers: Record<string, string>; body: Uint8Array;
+      status: number;
+      headers: Record<string, string>;
+      body: Uint8Array;
     };
     expect(res.status).toBe(201);
     expect(res.headers['x-kia']).toBe('yes');
     expect(Buffer.from(res.body).toString()).toBe('body!');
-    await expect(surfaces.net.fetch('file:///etc/passwd')).rejects.toThrow(/http/);
+    await expect(surfaces.net.fetch('file:///etc/passwd')).rejects.toThrow(
+      /http/,
+    );
     close();
     srv.close();
   });
@@ -103,11 +120,15 @@ describe('buildSurfaces', () => {
     const sb = buildSurfaces(b.deps);
     sa.surfaces.events.on('ping');
     sb.surfaces.events.emit('ping', { n: 1 });
-    await new Promise((r) => { setTimeout(r, 5); });
+    await new Promise((r) => {
+      setTimeout(r, 5);
+    });
     expect(a.events).toEqual([{ name: 'ping', payload: { n: 1 } }]);
     sa.surfaces.events.off('ping');
     sb.surfaces.events.emit('ping', { n: 2 });
-    await new Promise((r) => { setTimeout(r, 5); });
+    await new Promise((r) => {
+      setTimeout(r, 5);
+    });
     expect(a.events).toHaveLength(1);
     sa.close();
     sb.close();
@@ -118,7 +139,9 @@ describe('buildSurfaces', () => {
     const { surfaces, close } = buildSurfaces(deps);
     surfaces.events.on('ping');
     surfaces.events.emit('ping', { v: 1 });
-    await new Promise((r) => { setTimeout(r, 5); });
+    await new Promise((r) => {
+      setTimeout(r, 5);
+    });
     expect(events).toEqual([{ name: 'ping', payload: { v: 1 } }]);
     close();
   });
@@ -126,8 +149,12 @@ describe('buildSurfaces', () => {
   it('events.emit rejects platform-reserved name prefixes (M2)', async () => {
     const { deps } = makeDeps();
     const { surfaces, close } = buildSurfaces(deps);
-    expect(() => surfaces.events.emit('extension.activated', { id: 'other.ext' })).toThrow(CapError);
-    expect(() => surfaces.events.emit('platform.anything', {})).toThrow(CapError);
+    expect(() =>
+      surfaces.events.emit('extension.activated', { id: 'other.ext' }),
+    ).toThrow(CapError);
+    expect(() => surfaces.events.emit('platform.anything', {})).toThrow(
+      CapError,
+    );
     // Ordinary event names are unaffected.
     expect(() => surfaces.events.emit('ping', {})).not.toThrow();
     close();
@@ -137,7 +164,9 @@ describe('buildSurfaces', () => {
     const { deps } = makeDeps();
     const { surfaces, close } = buildSurfaces(deps);
     expect(() => surfaces.files.read('x')).toThrow(CapError);
-    expect(() => surfaces.commands.register('c')).toThrow(/not supported in this build yet/);
+    expect(() => surfaces.commands.register('c')).toThrow(
+      /not supported in this build yet/,
+    );
     close();
   });
 });

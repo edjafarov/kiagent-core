@@ -13,7 +13,10 @@ const deps = {
   detectLanguages: () => ['eng'],
 };
 
-function doc(externalId: string, over: Partial<DocumentInput> = {}): DocumentInput {
+function doc(
+  externalId: string,
+  over: Partial<DocumentInput> = {},
+): DocumentInput {
   return {
     externalId,
     type: 'note',
@@ -48,7 +51,10 @@ describe('store', () => {
   it('commits documents with cursor atomically and feeds them in order', async () => {
     await store.commit({
       account: accountId,
-      documents: [doc('a'), doc('b', { parent: { externalId: 'a', type: 'note' } })],
+      documents: [
+        doc('a'),
+        doc('b', { parent: { externalId: 'a', type: 'note' } }),
+      ],
       cursor: { page: 1 },
       status: 'backfilling',
     });
@@ -65,16 +71,28 @@ describe('store', () => {
   });
 
   it('is idempotent: unchanged content produces no feed churn', async () => {
-    await store.commit({ account: accountId, documents: [doc('a')], cursor: 1 });
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 1,
+    });
     const head1 = store.headSeq();
-    await store.commit({ account: accountId, documents: [doc('a')], cursor: 2 });
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 2,
+    });
     const head2 = store.headSeq();
     // Only the account-cursor change row lands; the document row does not.
     expect(head2 - head1).toBe(1);
   });
 
   it('archives upstream deletions and hides them from default queries', async () => {
-    await store.commit({ account: accountId, documents: [doc('a'), doc('b')], cursor: 1 });
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b')],
+      cursor: 1,
+    });
     await store.commit({
       account: accountId,
       documents: [],
@@ -82,7 +100,9 @@ describe('store', () => {
       cursor: 2,
     });
     expect(await store.read.count({ account: accountId })).toBe(1);
-    expect(await store.read.count({ account: accountId, includeArchived: true })).toBe(2);
+    expect(
+      await store.read.count({ account: accountId, includeArchived: true }),
+    ).toBe(2);
     const gone = await store.read.byExternalId(accountId, 'a', 'note');
     expect(gone?.archivedAt).not.toBeNull();
   });
@@ -111,11 +131,17 @@ describe('store', () => {
     // seq lets reconcilePass exclude documents committed after its listing
     // snapshot was taken (the TOCTOU guard in engine.ts) — every live ref
     // must carry one.
-    expect(refs.every((r) => typeof r.seq === 'number' && r.seq > 0)).toBe(true);
+    expect(refs.every((r) => typeof r.seq === 'number' && r.seq > 0)).toBe(
+      true,
+    );
   });
 
   it('purges archived documents with tombstones into the feed', async () => {
-    await store.commit({ account: accountId, documents: [doc('a')], cursor: 1 });
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 1,
+    });
     await store.commit({
       account: accountId,
       documents: [],
@@ -123,7 +149,9 @@ describe('store', () => {
       cursor: 2,
     });
     await store.commit({ purgeArchived: { before: '2999-01-01' } });
-    expect(await store.read.count({ account: accountId, includeArchived: true })).toBe(0);
+    expect(
+      await store.read.count({ account: accountId, includeArchived: true }),
+    ).toBe(0);
 
     const changes: Change[] = [];
     for await (const batch of store.feed(0)) {
@@ -251,7 +279,11 @@ describe('store', () => {
   });
 
   it('search: malformed queries throw descriptive errors, never FTS5 ones', async () => {
-    await store.commit({ account: accountId, documents: [doc('a')], cursor: 1 });
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 1,
+    });
     await expect(store.read.search({ text: '-beach' })).rejects.toThrow(
       /needs at least one positive term/,
     );
@@ -273,14 +305,22 @@ describe('store', () => {
       documents: [doc('summary-1', { type: 'summary' })],
     });
     expect(store.consumerCursor('worker:summarizer:v1')).toBe(42);
-    const synthetic = (await store.read.accounts()).find((a) => a.source === 'worker');
+    const synthetic = (await store.read.accounts()).find(
+      (a) => a.source === 'worker',
+    );
     expect(synthetic?.identifier).toBe('worker:summarizer:v1');
     expect(await store.read.count({ type: 'summary' })).toBe(1);
   });
 
   it('persists credentials encrypted and consents append-only', async () => {
-    await store.vault.save(accountId, { accessToken: 't1', refreshToken: 'r1' });
-    expect(await store.vault.load(accountId)).toEqual({ accessToken: 't1', refreshToken: 'r1' });
+    await store.vault.save(accountId, {
+      accessToken: 't1',
+      refreshToken: 'r1',
+    });
+    expect(await store.vault.load(accountId)).toEqual({
+      accessToken: 't1',
+      refreshToken: 'r1',
+    });
 
     await store.consents.record({
       extensionId: 'ext-1',
@@ -301,7 +341,9 @@ describe('store', () => {
   it('enrich: updates markdown + merged metadata, reindexes FTS, one feed change', async () => {
     await store.commit({
       account: accountId,
-      documents: [doc('scan', { markdown: null, metadata: { mime: 'application/pdf' } })],
+      documents: [
+        doc('scan', { markdown: null, metadata: { mime: 'application/pdf' } }),
+      ],
       cursor: 1,
     });
     const before = await store.read.byExternalId(accountId, 'scan', 'note');
@@ -322,7 +364,10 @@ describe('store', () => {
     const after = await store.read.document(before!.id);
     expect(after?.markdown).toBe('invoice total 42 EUR');
     expect((after?.metadata as { mime?: string }).mime).toBe('application/pdf'); // merged, not replaced
-    expect((after?.metadata as { extraction?: { engine: string } }).extraction?.engine).toBe('local-ocr');
+    expect(
+      (after?.metadata as { extraction?: { engine: string } }).extraction
+        ?.engine,
+    ).toBe('local-ocr');
     expect(after?.contentHash).toBe(before?.contentHash); // untouched — source content still dedupes
     expect(store.consumerCursor('worker:vision:v1')).toBe(7);
     expect(store.headSeq()).toBe(head + 1); // exactly one 'document' change
@@ -450,15 +495,25 @@ describe('store', () => {
     expect(second.createdAt).toBe(first.createdAt); // not clobbered on conflict
     expect(store.headSeq()).toBe(headBefore + 1); // exactly one change appended
 
-    const rows = (await store.read.accounts()).filter((a) => a.source === 'imap');
+    const rows = (await store.read.accounts()).filter(
+      (a) => a.source === 'imap',
+    );
     expect(rows).toHaveLength(1); // one row, not two
   });
 
   it('createAccount: a different identifier for the same source creates a separate account', async () => {
-    const a = await store.createAccount({ source: 'imap', identifier: 'a@example.com' });
-    const b = await store.createAccount({ source: 'imap', identifier: 'b@example.com' });
+    const a = await store.createAccount({
+      source: 'imap',
+      identifier: 'a@example.com',
+    });
+    const b = await store.createAccount({
+      source: 'imap',
+      identifier: 'b@example.com',
+    });
     expect(a.id).not.toBe(b.id);
-    const rows = (await store.read.accounts()).filter((r) => r.source === 'imap');
+    const rows = (await store.read.accounts()).filter(
+      (r) => r.source === 'imap',
+    );
     expect(rows).toHaveLength(2);
   });
 

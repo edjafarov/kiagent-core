@@ -114,7 +114,9 @@ export function migrate(db: BetterSqlite3.Database): void {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   const hasMeta = db
-    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='meta'`)
+    .prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='meta'`,
+    )
     .get();
   let version = 0;
   if (hasMeta) {

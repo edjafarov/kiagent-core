@@ -1,15 +1,19 @@
 /** @jest-environment node */
 
 import { checkUpdates } from '../update-check';
-import type { UpdateInfo } from '@shared/ipc';
 
 describe('update-check', () => {
   it('should call resolveLatest with bare ref (without @tag)', async () => {
     const mockResolveLatest = jest.fn();
     mockResolveLatest.mockResolvedValueOnce({ version: '2.0.0' });
 
-    const installed = [{ id: 'plugin-a', version: '1.0.0', ref: 'github:owner/repo@v1.0.0' }];
-    const result = await checkUpdates({ installed, resolveLatest: mockResolveLatest });
+    const installed = [
+      { id: 'plugin-a', version: '1.0.0', ref: 'github:owner/repo@v1.0.0' },
+    ];
+    const result = await checkUpdates({
+      installed,
+      resolveLatest: mockResolveLatest,
+    });
 
     expect(mockResolveLatest).toHaveBeenCalledWith('github:owner/repo');
     expect(result).toEqual([
@@ -28,8 +32,13 @@ describe('update-check', () => {
     // Test: latest < installed (no update)
     mockResolveLatest.mockResolvedValueOnce({ version: '1.0.0' });
 
-    const installed = [{ id: 'plugin-a', version: '2.0.0', ref: 'github:owner/repo@v2.0.0' }];
-    const result = await checkUpdates({ installed, resolveLatest: mockResolveLatest });
+    const installed = [
+      { id: 'plugin-a', version: '2.0.0', ref: 'github:owner/repo@v2.0.0' },
+    ];
+    const result = await checkUpdates({
+      installed,
+      resolveLatest: mockResolveLatest,
+    });
 
     expect(result).toHaveLength(0);
   });
@@ -38,8 +47,13 @@ describe('update-check', () => {
     const mockResolveLatest = jest.fn();
     mockResolveLatest.mockResolvedValueOnce({ version: '3.0.0' });
 
-    const installed = [{ id: 'plugin-a', version: '2.0.0', ref: 'github:owner/repo@v2.0.0' }];
-    const result = await checkUpdates({ installed, resolveLatest: mockResolveLatest });
+    const installed = [
+      { id: 'plugin-a', version: '2.0.0', ref: 'github:owner/repo@v2.0.0' },
+    ];
+    const result = await checkUpdates({
+      installed,
+      resolveLatest: mockResolveLatest,
+    });
 
     expect(result).toHaveLength(1);
     expect(result[0]).toEqual({
@@ -53,8 +67,13 @@ describe('update-check', () => {
   it('should skip file: refs', async () => {
     const mockResolveLatest = jest.fn();
 
-    const installed = [{ id: 'plugin-dev', version: '0.0.1', ref: 'file:/local/path' }];
-    const result = await checkUpdates({ installed, resolveLatest: mockResolveLatest });
+    const installed = [
+      { id: 'plugin-dev', version: '0.0.1', ref: 'file:/local/path' },
+    ];
+    const result = await checkUpdates({
+      installed,
+      resolveLatest: mockResolveLatest,
+    });
 
     expect(mockResolveLatest).not.toHaveBeenCalled();
     expect(result).toHaveLength(0);
@@ -64,7 +83,10 @@ describe('update-check', () => {
     const mockResolveLatest = jest.fn();
 
     const installed = [{ id: 'plugin-snapshot', version: '1.0.0' }]; // ref is optional and not provided
-    const result = await checkUpdates({ installed, resolveLatest: mockResolveLatest });
+    const result = await checkUpdates({
+      installed,
+      resolveLatest: mockResolveLatest,
+    });
 
     expect(mockResolveLatest).not.toHaveBeenCalled();
     expect(result).toHaveLength(0);
@@ -74,8 +96,17 @@ describe('update-check', () => {
     const mockResolveLatest = jest.fn();
     mockResolveLatest.mockRejectedValueOnce(new Error('Network error'));
 
-    const installed = [{ id: 'plugin-offline', version: '1.0.0', ref: 'github:owner/repo@v1.0.0' }];
-    const result = await checkUpdates({ installed, resolveLatest: mockResolveLatest });
+    const installed = [
+      {
+        id: 'plugin-offline',
+        version: '1.0.0',
+        ref: 'github:owner/repo@v1.0.0',
+      },
+    ];
+    const result = await checkUpdates({
+      installed,
+      resolveLatest: mockResolveLatest,
+    });
 
     expect(result).toHaveLength(0);
   });
@@ -95,7 +126,10 @@ describe('update-check', () => {
       { id: 'snapshot', version: '1.0.0' },
     ];
 
-    const result = await checkUpdates({ installed, resolveLatest: mockResolveLatest });
+    const result = await checkUpdates({
+      installed,
+      resolveLatest: mockResolveLatest,
+    });
 
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('plugin-a');
@@ -105,8 +139,13 @@ describe('update-check', () => {
     const mockResolveLatest = jest.fn();
     mockResolveLatest.mockResolvedValueOnce({ version: 'not-a-version' }); // Invalid semver
 
-    const installed = [{ id: 'plugin-a', version: '1.0.0', ref: 'github:owner/repo@v1.0.0' }];
-    const result = await checkUpdates({ installed, resolveLatest: mockResolveLatest });
+    const installed = [
+      { id: 'plugin-a', version: '1.0.0', ref: 'github:owner/repo@v1.0.0' },
+    ];
+    const result = await checkUpdates({
+      installed,
+      resolveLatest: mockResolveLatest,
+    });
 
     expect(result).toHaveLength(0);
   });
@@ -115,8 +154,17 @@ describe('update-check', () => {
     const mockResolveLatest = jest.fn();
     mockResolveLatest.mockResolvedValueOnce({ version: '2.0.0' });
 
-    const installed = [{ id: 'plugin-bad', version: 'not-valid', ref: 'github:owner/repo@v1.0.0' }];
-    const result = await checkUpdates({ installed, resolveLatest: mockResolveLatest });
+    const installed = [
+      {
+        id: 'plugin-bad',
+        version: 'not-valid',
+        ref: 'github:owner/repo@v1.0.0',
+      },
+    ];
+    const result = await checkUpdates({
+      installed,
+      resolveLatest: mockResolveLatest,
+    });
 
     expect(result).toHaveLength(0);
   });
@@ -125,8 +173,17 @@ describe('update-check', () => {
     const mockResolveLatest = jest.fn();
     mockResolveLatest.mockResolvedValueOnce({ version: '2.0.0' });
 
-    const installed = [{ id: 'plugin', version: '1.0.0', ref: 'github:owner/repo@v1.0.0-custom' }];
-    const result = await checkUpdates({ installed, resolveLatest: mockResolveLatest });
+    const installed = [
+      {
+        id: 'plugin',
+        version: '1.0.0',
+        ref: 'github:owner/repo@v1.0.0-custom',
+      },
+    ];
+    const result = await checkUpdates({
+      installed,
+      resolveLatest: mockResolveLatest,
+    });
 
     expect(result[0].ref).toBe('github:owner/repo@v1.0.0-custom');
   });

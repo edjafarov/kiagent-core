@@ -27,18 +27,26 @@ async function hasSubdir(absPath: string): Promise<boolean> {
 
 /** Immediate subdirectories of `absPath`, sorted, hidden + files excluded.
  *  Returns [] (never throws) when the directory can't be read. */
-export async function listChildren(absPath: string): Promise<LocalFolderEntry[]> {
+export async function listChildren(
+  absPath: string,
+): Promise<LocalFolderEntry[]> {
   let entries: Awaited<ReturnType<typeof fs.readdir>>;
   try {
     entries = await fs.readdir(absPath, { withFileTypes: true });
   } catch {
     return [];
   }
-  const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+  const dirs = entries.filter(
+    (e) => e.isDirectory() && !e.name.startsWith('.'),
+  );
   const out: LocalFolderEntry[] = [];
   for (const e of dirs) {
     const child = path.join(absPath, e.name);
-    out.push({ path: child, name: e.name, hasChildren: await hasSubdir(child) });
+    out.push({
+      path: child,
+      name: e.name,
+      hasChildren: await hasSubdir(child),
+    });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
@@ -58,7 +66,11 @@ export async function quickLinks(): Promise<LocalFolderEntry[]> {
   for (const c of candidates) {
     try {
       if ((await fs.stat(c.p)).isDirectory()) {
-        out.push({ path: c.p, name: c.name, hasChildren: await hasSubdir(c.p) });
+        out.push({
+          path: c.p,
+          name: c.name,
+          hasChildren: await hasSubdir(c.p),
+        });
       }
     } catch {
       /* skip missing */

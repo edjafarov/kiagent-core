@@ -5,7 +5,9 @@ import path from 'node:path';
 // declarations (`mime.lookup`). kiagent-ref hits the exact same mismatch and
 // casts the `require` result the same way (kiagent-ref
 // src/main/connectors/local-folder/scanner.ts:7-10).
-const mimeLib = require('mime') as { getType: (filename: string) => string | null };
+const mimeLib = require('mime') as {
+  getType: (filename: string) => string | null;
+};
 
 // Gmail-style fallback table for when the `mime` lookup misses or returns the
 // generic `application/octet-stream` — same rationale and near-identical list

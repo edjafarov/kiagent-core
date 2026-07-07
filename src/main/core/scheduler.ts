@@ -24,7 +24,10 @@ export function createScheduler(
   env: () => SchedulerEnv,
   logs: LogSink,
 ): CoreScheduler {
-  const jobs = new Map<string, { cadence: Cadence; run: () => Promise<void>; busy: boolean }>();
+  const jobs = new Map<
+    string,
+    { cadence: Cadence; run: () => Promise<void>; busy: boolean }
+  >();
   let timer: NodeJS.Timeout | null = null;
 
   const fire = async (id: string): Promise<void> => {
@@ -77,7 +80,11 @@ export function createScheduler(
         lastRun: existing?.lastRun ?? null,
         nextRun:
           existing?.nextRun ??
-          nextRun(cadence, existing?.lastRun ?? null, new Date())?.toISOString() ??
+          nextRun(
+            cadence,
+            existing?.lastRun ?? null,
+            new Date(),
+          )?.toISOString() ??
           null,
       });
     },

@@ -52,8 +52,8 @@ export function SignIn(): React.ReactElement {
             indexed locally.
           </div>
           <div className="si-brand-sub">
-            Mail and docs are read on this machine. We keep only a small
-            account so your remote endpoint stays yours.
+            Mail and docs are read on this machine. We keep only a small account
+            so your remote endpoint stays yours.
           </div>
         </div>
       </div>
@@ -76,6 +76,9 @@ export function SignIn(): React.ReactElement {
               onChange={(e) => setName(e.target.value)}
               placeholder="Ada Lovelace"
               disabled={busy}
+              // first-run screen with a single form — focusing its first
+              // field is the expected starting point, not a focus steal
+              // eslint-disable-next-line jsx-a11y/no-autofocus
               autoFocus
             />
           </label>

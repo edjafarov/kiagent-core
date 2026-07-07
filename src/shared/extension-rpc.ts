@@ -58,7 +58,13 @@ export interface ExtensionBootstrap {
 
 export type MainToChild =
   | ExtensionBootstrap
-  | { kind: 'call'; id: number; ns: 'source' | 'tool'; method: string; args: unknown[] }
+  | {
+      kind: 'call';
+      id: number;
+      ns: 'source' | 'tool';
+      method: string;
+      args: unknown[];
+    }
   | { kind: 'reply'; id: number; ok: boolean; value?: unknown; error?: string }
   | { kind: 'event'; name: string; payload: unknown }
   | { kind: 'src-next'; pullId: number }

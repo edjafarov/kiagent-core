@@ -35,7 +35,9 @@ export interface GmailThreadItem {
  *  messages (mirrors legacy's `emptyThreadReason` skip). Returns an array
  *  with the thread doc followed by attachment child docs if attachments exist,
  *  otherwise returns just the thread doc. */
-export function toDocument(item: GmailThreadItem): DocumentInput | DocumentInput[] | null {
+export function toDocument(
+  item: GmailThreadItem,
+): DocumentInput | DocumentInput[] | null {
   if (item.messages.length === 0) return null;
 
   const parsed = item.messages.map(parseGmailMessage);
@@ -98,7 +100,11 @@ export function toDocument(item: GmailThreadItem): DocumentInput | DocumentInput
   const attachments: DocumentInput[] = [];
   for (const m of parsed) {
     for (const att of m.attachments) {
-      if (att.mimeType.startsWith('image/') && att.sizeBytes < TINY_ATTACHMENT_IMAGE_BYTES) continue;
+      if (
+        att.mimeType.startsWith('image/') &&
+        att.sizeBytes < TINY_ATTACHMENT_IMAGE_BYTES
+      )
+        continue;
       attachments.push({
         externalId: `${att.messageId}/${att.partId}`,
         type: 'attachment',

@@ -12,7 +12,10 @@ const REPO_LABEL = 'github.com/edjafarov/alpha-cent';
  * fabricating download-progress/version states the backend can't produce.
  */
 export function About(): React.ReactElement {
-  const [info, setInfo] = useState<{ version: string; platform: string } | null>(null);
+  const [info, setInfo] = useState<{
+    version: string;
+    platform: string;
+  } | null>(null);
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState(false);
 
@@ -25,12 +28,10 @@ export function About(): React.ReactElement {
 
   const checkForUpdates = () => {
     setChecking(true);
-    void window.kiagent
-      .invoke('update:check', undefined)
-      .finally(() => {
-        setChecking(false);
-        setChecked(true);
-      });
+    void window.kiagent.invoke('update:check', undefined).finally(() => {
+      setChecking(false);
+      setChecked(true);
+    });
   };
 
   return (
@@ -39,18 +40,31 @@ export function About(): React.ReactElement {
         <Spark size="app" />
       </span>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+          alignItems: 'center',
+        }}
+      >
         <span className="about-name">KIAgent</span>
-        <span className="about-version">{info ? `v${info.version}` : 'v—'}</span>
+        <span className="about-version">
+          {info ? `v${info.version}` : 'v—'}
+        </span>
       </div>
 
       <p className="about-tag">
-        A local-first connector and indexer for your communications. Everything stays on this
-        machine.
+        A local-first connector and indexer for your communications. Everything
+        stays on this machine.
       </p>
 
       <div className="about-actions">
-        <button type="button" className="btn sm" onClick={() => window.open(REPO_URL, '_blank')}>
+        <button
+          type="button"
+          className="btn sm"
+          onClick={() => window.open(REPO_URL, '_blank')}
+        >
           <Icon name="external" size={12} /> GitHub
         </button>
         <button
@@ -60,14 +74,24 @@ export function About(): React.ReactElement {
         >
           <Icon name="external" size={12} /> Release notes
         </button>
-        <button type="button" className="btn sm" disabled={checking} onClick={checkForUpdates}>
-          <Icon name="refresh-cw" size={12} /> {checking ? 'Checking…' : 'Check for updates'}
+        <button
+          type="button"
+          className="btn sm"
+          disabled={checking}
+          onClick={checkForUpdates}
+        >
+          <Icon name="refresh-cw" size={12} />{' '}
+          {checking ? 'Checking…' : 'Check for updates'}
         </button>
       </div>
 
       <div className="about-update-status">
-        <span className="value">{checking ? 'Checking for updates…' : "You’re up to date."}</span>
-        {checked && !checking && <span className="t-meta"> (last checked just now)</span>}
+        <span className="value">
+          {checking ? 'Checking for updates…' : 'You’re up to date.'}
+        </span>
+        {checked && !checking && (
+          <span className="t-meta"> (last checked just now)</span>
+        )}
       </div>
 
       <div className="about-list">
@@ -86,7 +110,8 @@ export function About(): React.ReactElement {
       </div>
 
       <div className="about-foot">
-        © 2026 KIAgent contributors. Made with care for offline-first knowledge work.
+        © 2026 KIAgent contributors. Made with care for offline-first knowledge
+        work.
       </div>
     </div>
   );

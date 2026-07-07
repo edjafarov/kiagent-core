@@ -15,7 +15,11 @@ export class CapError extends Error {}
 
 export interface EventBus {
   emit(from: string, event: string, payload: unknown): void;
-  subscribe(extensionId: string, event: string, deliver: (payload: unknown) => void): () => void;
+  subscribe(
+    extensionId: string,
+    event: string,
+    deliver: (payload: unknown) => void,
+  ): () => void;
 }
 
 /** Delivery includes the emitter itself when subscribed — self-delivery is part of the contract. */
@@ -39,16 +43,29 @@ export function createEventBus(): EventBus {
   };
 }
 
-export type Surfaces = Record<string, Record<string, (...args: unknown[]) => unknown>>;
+export type Surfaces = Record<
+  string,
+  Record<string, (...args: unknown[]) => unknown>
+>;
 
 export interface SurfaceDeps {
   extensionId: string;
   dataDir: string;
   query: Query;
   inference: {
-    complete(prompt: string, opts?: { maxTokens?: number; lane?: 'interactive' | 'background' }): Promise<string>;
-    see(image: Uint8Array, prompt: string, opts?: { mime?: string; lane?: 'interactive' | 'background' }): Promise<string>;
-    read(image: Uint8Array, opts?: { mime?: string; lane?: 'interactive' | 'background' }): Promise<string>;
+    complete(
+      prompt: string,
+      opts?: { maxTokens?: number; lane?: 'interactive' | 'background' },
+    ): Promise<string>;
+    see(
+      image: Uint8Array,
+      prompt: string,
+      opts?: { mime?: string; lane?: 'interactive' | 'background' },
+    ): Promise<string>;
+    read(
+      image: Uint8Array,
+      opts?: { mime?: string; lane?: 'interactive' | 'background' },
+    ): Promise<string>;
   };
   notify(msg: string, level?: LogLevel): void;
   bus: EventBus;
@@ -57,10 +74,15 @@ export interface SurfaceDeps {
 }
 
 const unsupported = (ns: string) => () => {
-  throw new CapError(`the '${ns}' capability is not supported in this build yet`);
+  throw new CapError(
+    `the '${ns}' capability is not supported in this build yet`,
+  );
 };
 
-export function buildSurfaces(deps: SurfaceDeps): { surfaces: Surfaces; close(): void } {
+export function buildSurfaces(deps: SurfaceDeps): {
+  surfaces: Surfaces;
+  close(): void;
+} {
   let db: Database.Database | null = null;
   const openDb = () => {
     if (!db) {
@@ -77,16 +99,29 @@ export function buildSurfaces(deps: SurfaceDeps): { surfaces: Surfaces; close():
       document: (id) => deps.query.document(id as never),
       children: (id) => deps.query.children(id as never),
       byExternalId: (account, externalId, type) =>
-        deps.query.byExternalId(account as never, externalId as never, type as never),
+        deps.query.byExternalId(
+          account as never,
+          externalId as never,
+          type as never,
+        ),
       count: (q) => deps.query.count((q ?? {}) as never),
       accounts: () => deps.query.accounts(),
     },
     net: {
       async fetch(url, init) {
         const u = String(url);
-        if (!/^https?:\/\//.test(u)) throw new Error('net.fetch only supports http(s) URLs');
-        const i = (init ?? {}) as { method?: string; headers?: Record<string, string>; body?: string | Uint8Array };
-        const res = await fetch(u, { method: i.method, headers: i.headers, body: i.body });
+        if (!/^https?:\/\//.test(u))
+          throw new Error('net.fetch only supports http(s) URLs');
+        const i = (init ?? {}) as {
+          method?: string;
+          headers?: Record<string, string>;
+          body?: string | Uint8Array;
+        };
+        const res = await fetch(u, {
+          method: i.method,
+          headers: i.headers,
+          body: i.body,
+        });
         return {
           status: res.status,
           statusText: res.statusText,
@@ -103,19 +138,31 @@ export function buildSurfaces(deps: SurfaceDeps): { surfaces: Surfaces; close():
         else d.prepare(String(sql)).run(...p);
       },
       async query(sql, params) {
-        return openDb().prepare(String(sql)).all(...(((params ?? []) as unknown[])));
+        return openDb()
+          .prepare(String(sql))
+          .all(...((params ?? []) as unknown[]));
       },
     },
     ui: {
-      notify: (msg, level) => deps.notify(String(msg), level as LogLevel | undefined),
+      notify: (msg, level) =>
+        deps.notify(String(msg), level as LogLevel | undefined),
     },
     inference: {
       complete: (prompt, opts) =>
-        deps.inference.complete(String(prompt), { ...(opts as object), lane: 'interactive' }),
+        deps.inference.complete(String(prompt), {
+          ...(opts as object),
+          lane: 'interactive',
+        }),
       see: (image, prompt, opts) =>
-        deps.inference.see(image as Uint8Array, String(prompt), { ...(opts as object), lane: 'interactive' }),
+        deps.inference.see(image as Uint8Array, String(prompt), {
+          ...(opts as object),
+          lane: 'interactive',
+        }),
       read: (image, opts) =>
-        deps.inference.read(image as Uint8Array, { ...(opts as object), lane: 'interactive' }),
+        deps.inference.read(image as Uint8Array, {
+          ...(opts as object),
+          lane: 'interactive',
+        }),
     },
     events: {
       on(event) {
@@ -123,7 +170,9 @@ export function buildSurfaces(deps: SurfaceDeps): { surfaces: Surfaces; close():
         if (eventSubs.has(name)) return;
         eventSubs.set(
           name,
-          deps.bus.subscribe(deps.extensionId, name, (p) => deps.deliverEvent(name, p)),
+          deps.bus.subscribe(deps.extensionId, name, (p) =>
+            deps.deliverEvent(name, p),
+          ),
         );
       },
       off(event) {
@@ -138,7 +187,9 @@ export function buildSurfaces(deps: SurfaceDeps): { surfaces: Surfaces; close():
         // gating here (not in the bus) can't break them, only block an
         // extension from forging those names to peers.
         if (name.startsWith('extension.') || name.startsWith('platform.')) {
-          throw new CapError(`event name '${name}' is reserved for platform-emitted events`);
+          throw new CapError(
+            `event name '${name}' is reserved for platform-emitted events`,
+          );
         }
         deps.bus.emit(deps.extensionId, name, payload);
       },

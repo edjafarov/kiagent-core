@@ -15,7 +15,8 @@ import type { LocalLlmProvider } from './local-llm/provider';
  *  darwin (today's only shipped target) needs nothing more. */
 function resolveLlamaBinary(llamaDir: string): string {
   const slug = `${process.platform}-${process.arch}`;
-  const binName = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server';
+  const binName =
+    process.platform === 'win32' ? 'llama-server.exe' : 'llama-server';
   return path.join(llamaDir, slug, binName);
 }
 
@@ -24,17 +25,27 @@ export function registerBundledProviders(
   platform: CorePlatform,
   opts: { assetsDir: string; dataDir: string },
 ): { localLlm: LocalLlmProvider; visionHelper: VisionHelper | null } {
-  const log = (scope: string) => (level: 'info' | 'warn' | 'error', msg: string) =>
-    platform.logSink.log(scope, level, msg);
+  const log =
+    (scope: string) => (level: 'info' | 'warn' | 'error', msg: string) =>
+      platform.logSink.log(scope, level, msg);
 
   const visionBinary = path.join(
-    opts.assetsDir, 'vision', `${process.platform}-${process.arch}`, 'kia-vision',
+    opts.assetsDir,
+    'vision',
+    `${process.platform}-${process.arch}`,
+    'kia-vision',
   );
   const visionHelper =
-    process.platform === 'darwin' ? makeVisionHelper(visionBinary, log('inference')) : null;
+    process.platform === 'darwin'
+      ? makeVisionHelper(visionBinary, log('inference'))
+      : null;
   if (visionHelper) {
     platform.inference.register(
-      createAppleVisionProvider({ binaryPath: visionBinary, helper: visionHelper, log: log('inference') }),
+      createAppleVisionProvider({
+        binaryPath: visionBinary,
+        helper: visionHelper,
+        log: log('inference'),
+      }),
     );
   }
 

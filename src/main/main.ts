@@ -374,7 +374,7 @@ function registerIpc(
         properties: ['openDirectory', 'createDirectory'],
       });
       if (res.canceled || !res.filePaths[0]) return;
-      dir = res.filePaths[0];
+      [dir] = res.filePaths;
     }
     await p.store.maintenance.export(dir);
   });

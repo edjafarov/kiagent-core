@@ -23,7 +23,11 @@ import {
   sourceContributions,
   validateManifestDir,
 } from '@main/platform/manifest';
-import { readInstalled, writeInstalled, type InstalledRecord } from '@main/platform/extensions';
+import {
+  readInstalled,
+  writeInstalled,
+  type InstalledRecord,
+} from '@main/platform/extensions';
 
 const MAX_PENDING = 8;
 
@@ -86,13 +90,19 @@ export function createInstaller(deps: InstallerDeps) {
       // ref never falls through to the local-path branch and surfaces a
       // confusing "no such path" filesystem error instead of this one.
       if (/^http:/.test(ref)) {
-        throw new Error('insecure http: refs are not supported — use an https: URL or a github: ref');
+        throw new Error(
+          'insecure http: refs are not supported — use an https: URL or a github: ref',
+        );
       }
       const isMarketplace = /^github:/.test(ref) || /^https:/.test(ref);
       if (isMarketplace && !deps.download) {
-        throw new Error('marketplace installs are not available yet — install from a local path');
+        throw new Error(
+          'marketplace installs are not available yet — install from a local path',
+        );
       }
-      const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-ext-stage-'));
+      const stagingDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'kia-ext-stage-'),
+      );
       try {
         let integrity: string | null = null;
         let recordRef: string;
@@ -137,13 +147,24 @@ export function createInstaller(deps: InstallerDeps) {
         for (const { id: sid } of sourceContributions(manifest)) {
           const owner = owners[sid];
           if (owner && owner !== manifest.id) {
-            throw new Error(`source id '${sid}' is already provided by ${owner}`);
+            throw new Error(
+              `source id '${sid}' is already provided by ${owner}`,
+            );
           }
         }
         if (integrity) {
-          const prior = readInstalled(deps.extDir).find((r) => r.id === manifest.id);
-          if (prior && prior.version === manifest.version && prior.integrity && prior.integrity !== integrity) {
-            throw new Error('integrity check failed: bytes differ from the pinned install for this version');
+          const prior = readInstalled(deps.extDir).find(
+            (r) => r.id === manifest.id,
+          );
+          if (
+            prior &&
+            prior.version === manifest.version &&
+            prior.integrity &&
+            prior.integrity !== integrity
+          ) {
+            throw new Error(
+              'integrity check failed: bytes differ from the pinned install for this version',
+            );
           }
         }
         const entry: PendingInstall = {
@@ -156,7 +177,8 @@ export function createInstaller(deps: InstallerDeps) {
           origin: isMarketplace ? 'marketplace' : 'dev',
         };
         pending.set(entry.token, entry);
-        if (pending.size > MAX_PENDING) evict(pending.keys().next().value as string);
+        if (pending.size > MAX_PENDING)
+          evict(pending.keys().next().value as string);
         return entry;
       } catch (e) {
         fs.rmSync(stagingDir, { recursive: true, force: true });
@@ -170,13 +192,17 @@ export function createInstaller(deps: InstallerDeps) {
      *  unknown/expired token. */
     peek(token: string): string {
       const p = pending.get(token);
-      if (!p) throw new Error('unknown or expired install token — run preview again');
+      if (!p)
+        throw new Error('unknown or expired install token — run preview again');
       return p.manifest.id;
     },
 
-    async commit(token: string): Promise<{ manifest: Manifest; record: InstalledRecord; dir: string }> {
+    async commit(
+      token: string,
+    ): Promise<{ manifest: Manifest; record: InstalledRecord; dir: string }> {
       const p = pending.get(token);
-      if (!p) throw new Error('unknown or expired install token — run preview again');
+      if (!p)
+        throw new Error('unknown or expired install token — run preview again');
       pending.delete(token);
       fs.mkdirSync(deps.extDir, { recursive: true });
       const dir = path.join(deps.extDir, p.manifest.id);
@@ -200,7 +226,9 @@ export function createInstaller(deps: InstallerDeps) {
         installedAt: new Date().toISOString(),
         origin: p.origin,
       };
-      const records = readInstalled(deps.extDir).filter((r) => r.id !== record.id);
+      const records = readInstalled(deps.extDir).filter(
+        (r) => r.id !== record.id,
+      );
       writeInstalled(deps.extDir, [...records, record]);
       return { manifest: p.manifest, record, dir };
     },

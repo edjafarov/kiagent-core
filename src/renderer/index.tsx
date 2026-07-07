@@ -43,8 +43,8 @@ function renderBridgeUnavailable(): void {
         Couldn’t connect to KIAgent
       </div>
       <div style={{ opacity: 0.8, maxWidth: 360, fontSize: 13 }}>
-        The app’s background bridge didn’t load for this window. Reopening
-        the window usually fixes it.
+        The app’s background bridge didn’t load for this window. Reopening the
+        window usually fixes it.
       </div>
       <button
         type="button"

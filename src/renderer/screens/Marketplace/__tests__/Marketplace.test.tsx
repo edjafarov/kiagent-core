@@ -1,6 +1,12 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import type { ExtensionSnapshot } from '@shared/contracts';
 import type { MarketplaceListItem, UpdateInfo } from '@shared/ipc';
 import { Marketplace } from '..';
@@ -8,14 +14,21 @@ import { Marketplace } from '..';
 // index.tsx mounts Detail (Task 10), which imports react-markdown for the
 // README pane; react-markdown v9 is ESM-only and must be mocked under
 // ts-jest in every test that renders it, directly or transitively.
-jest.mock('react-markdown', () => (p: { children: string }) => (
-  <div data-testid="md">{p.children}</div>
-));
+jest.mock(
+  'react-markdown',
+  () =>
+    function (p: { children: string }) {
+      return <div data-testid="md">{p.children}</div>;
+    },
+);
 
 const invoke = jest.fn();
 beforeEach(() => {
   invoke.mockReset();
-  (window as unknown as { kiagent: unknown }).kiagent = { invoke, on: () => () => {} };
+  (window as unknown as { kiagent: unknown }).kiagent = {
+    invoke,
+    on: () => () => {},
+  };
   mockState.extensions = [];
 });
 
@@ -25,7 +38,9 @@ jest.mock('../../../state/app-state', () => ({
   useAppState: (sel: (s: unknown) => unknown) => sel(mockState),
 }));
 
-function catalogItem(overrides: Partial<MarketplaceListItem> = {}): MarketplaceListItem {
+function catalogItem(
+  overrides: Partial<MarketplaceListItem> = {},
+): MarketplaceListItem {
   return {
     owner: 'kia-plugins',
     repo: 'gmail-tools',
@@ -36,7 +51,9 @@ function catalogItem(overrides: Partial<MarketplaceListItem> = {}): MarketplaceL
   };
 }
 
-function extSnapshot(overrides: Partial<ExtensionSnapshot> = {}): ExtensionSnapshot {
+function extSnapshot(
+  overrides: Partial<ExtensionSnapshot> = {},
+): ExtensionSnapshot {
   return {
     id: 'ext.gmail-tools',
     name: 'Gmail Tools',
@@ -54,17 +71,30 @@ function extSnapshot(overrides: Partial<ExtensionSnapshot> = {}): ExtensionSnaps
 
 /** Resolves marketplace:list with `items` and marketplace:check-updates with
  *  `updates` (or leaves it pending if omitted, when a test doesn't care). */
-function mockInvokes(items: MarketplaceListItem[], updates: UpdateInfo[] = []): void {
+function mockInvokes(
+  items: MarketplaceListItem[],
+  updates: UpdateInfo[] = [],
+): void {
   invoke.mockImplementation((channel: string) => {
     if (channel === 'marketplace:list') return Promise.resolve(items);
-    if (channel === 'marketplace:check-updates') return Promise.resolve(updates);
+    if (channel === 'marketplace:check-updates')
+      return Promise.resolve(updates);
     return Promise.reject(new Error(`unexpected channel ${channel}`));
   });
 }
 
 describe('Marketplace', () => {
   test('renders catalog rows after marketplace:list resolves', async () => {
-    mockInvokes([catalogItem(), catalogItem({ owner: 'kia-plugins', repo: 'other', fullName: 'kia-plugins/other', displayName: 'Other Plugin', description: 'Another one.' })]);
+    mockInvokes([
+      catalogItem(),
+      catalogItem({
+        owner: 'kia-plugins',
+        repo: 'other',
+        fullName: 'kia-plugins/other',
+        displayName: 'Other Plugin',
+        description: 'Another one.',
+      }),
+    ]);
 
     render(<Marketplace />);
 
@@ -77,7 +107,13 @@ describe('Marketplace', () => {
   test('a file:-ref installed snapshot appears as an installed-only row', async () => {
     mockInvokes([catalogItem()]);
     mockState.extensions = [
-      extSnapshot({ id: 'ext.local-tool', name: 'Local Tool', version: '0.2.0', origin: 'dev', ref: 'file:/Users/dev/local-tool' }),
+      extSnapshot({
+        id: 'ext.local-tool',
+        name: 'Local Tool',
+        version: '0.2.0',
+        origin: 'dev',
+        ref: 'file:/Users/dev/local-tool',
+      }),
     ];
 
     render(<Marketplace />);
@@ -90,7 +126,13 @@ describe('Marketplace', () => {
   test("pill 'Installed' filters out catalog rows with no installed match", async () => {
     mockInvokes([
       catalogItem(),
-      catalogItem({ owner: 'kia-plugins', repo: 'other', fullName: 'kia-plugins/other', displayName: 'Other Plugin', description: 'Another one.' }),
+      catalogItem({
+        owner: 'kia-plugins',
+        repo: 'other',
+        fullName: 'kia-plugins/other',
+        displayName: 'Other Plugin',
+        description: 'Another one.',
+      }),
     ]);
     mockState.extensions = [extSnapshot()];
 
@@ -107,13 +149,21 @@ describe('Marketplace', () => {
   test('search filters rows by title', async () => {
     mockInvokes([
       catalogItem(),
-      catalogItem({ owner: 'kia-plugins', repo: 'other', fullName: 'kia-plugins/other', displayName: 'Other Plugin', description: 'Another one.' }),
+      catalogItem({
+        owner: 'kia-plugins',
+        repo: 'other',
+        fullName: 'kia-plugins/other',
+        displayName: 'Other Plugin',
+        description: 'Another one.',
+      }),
     ]);
 
     render(<Marketplace />);
     await screen.findByText('Gmail Tools');
 
-    fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'other' } });
+    fireEvent.change(screen.getByLabelText('Search plugins'), {
+      target: { value: 'other' },
+    });
 
     expect(screen.queryByText('Gmail Tools')).not.toBeInTheDocument();
     expect(screen.getByText('Other Plugin')).toBeInTheDocument();
@@ -125,7 +175,9 @@ describe('Marketplace', () => {
     render(<Marketplace />);
     await screen.findByText('Gmail Tools');
 
-    fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'nonexistent' } });
+    fireEvent.change(screen.getByLabelText('Search plugins'), {
+      target: { value: 'nonexistent' },
+    });
 
     expect(screen.queryByText('Gmail Tools')).not.toBeInTheDocument();
     expect(screen.getByText('No plugins found.')).toBeInTheDocument();
@@ -152,7 +204,17 @@ describe('Marketplace', () => {
   });
 
   test('Update badge appears for an id returned by marketplace:check-updates', async () => {
-    mockInvokes([catalogItem()], [{ id: 'ext.gmail-tools', installedVersion: '1.0.0', latestVersion: '1.1.0', ref: 'github:kia-plugins/gmail-tools@v1.1.0' }]);
+    mockInvokes(
+      [catalogItem()],
+      [
+        {
+          id: 'ext.gmail-tools',
+          installedVersion: '1.0.0',
+          latestVersion: '1.1.0',
+          ref: 'github:kia-plugins/gmail-tools@v1.1.0',
+        },
+      ],
+    );
     mockState.extensions = [extSnapshot()];
 
     render(<Marketplace />);
@@ -167,7 +229,8 @@ describe('Marketplace', () => {
 
   test('list rejection renders the error message and Retry re-invokes the fetch', async () => {
     invoke.mockImplementation((channel: string) => {
-      if (channel === 'marketplace:list') return Promise.reject(new Error('network down'));
+      if (channel === 'marketplace:list')
+        return Promise.reject(new Error('network down'));
       if (channel === 'marketplace:check-updates') return Promise.resolve([]);
       return Promise.reject(new Error(`unexpected channel ${channel}`));
     });
@@ -187,23 +250,34 @@ describe('Marketplace', () => {
     // test; give it a harmless "no installable release" response rather
     // than an unhandled-channel rejection.
     invoke.mockImplementation((channel: string) => {
-      if (channel === 'marketplace:list') return Promise.resolve([catalogItem()]);
+      if (channel === 'marketplace:list')
+        return Promise.resolve([catalogItem()]);
       if (channel === 'marketplace:check-updates') return Promise.resolve([]);
       if (channel === 'marketplace:detail')
-        return Promise.resolve({ listing: catalogItem(), readmeMarkdown: '', latest: null });
+        return Promise.resolve({
+          listing: catalogItem(),
+          readmeMarkdown: '',
+          latest: null,
+        });
       return Promise.reject(new Error(`unexpected channel ${channel}`));
     });
 
     render(<Marketplace />);
     await screen.findByText('Gmail Tools');
 
-    expect(screen.getByText('Select an extension to see details.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Select an extension to see details.'),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Gmail Tools'));
 
-    expect(screen.queryByText('Select an extension to see details.')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Select an extension to see details.'),
+    ).not.toBeInTheDocument();
     // Detail's header re-renders the row title alongside the version line.
-    expect(await screen.findByText('No installable release yet')).toBeInTheDocument();
+    expect(
+      await screen.findByText('No installable release yet'),
+    ).toBeInTheDocument();
   });
 
   test('an installed, disabled extension shows the Disabled badge', async () => {

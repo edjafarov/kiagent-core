@@ -7,7 +7,11 @@ import { pipeline } from 'node:stream/promises';
 import type { ModelDescriptor, ModelFile } from './models';
 import { modelTotalBytes } from './models';
 
-export type DownloadErrorCode = 'disk_full' | 'sha_mismatch' | 'http' | 'aborted';
+export type DownloadErrorCode =
+  | 'disk_full'
+  | 'sha_mismatch'
+  | 'http'
+  | 'aborted';
 
 export class DownloadError extends Error {
   constructor(
@@ -79,8 +83,7 @@ export async function downloadModel(
   let baseReceived = 0;
   for (const f of model.files) {
     const finalPath = path.join(destDir, f.name);
-    if (fileSize(finalPath) === f.sizeBytes)
-      baseReceived += f.sizeBytes;
+    if (fileSize(finalPath) === f.sizeBytes) baseReceived += f.sizeBytes;
   }
 
   for (const f of model.files) {
@@ -133,15 +136,9 @@ async function downloadOne(
   } catch (e) {
     const errorMsg = (e as Error).message;
     if (opts.signal?.aborted) {
-      throw new DownloadError(
-        'aborted',
-        `Download aborted: ${errorMsg}`,
-      );
+      throw new DownloadError('aborted', `Download aborted: ${errorMsg}`);
     }
-    throw new DownloadError(
-      'http',
-      `Download failed: ${errorMsg}`,
-    );
+    throw new DownloadError('http', `Download failed: ${errorMsg}`);
   }
   if (!res.ok || !res.body) {
     throw new DownloadError('http', `Download failed: HTTP ${res.status}`);
@@ -201,15 +198,9 @@ async function downloadOne(
   } catch (e) {
     const errorMsg = (e as Error).message;
     if (opts.signal?.aborted) {
-      throw new DownloadError(
-        'aborted',
-        `Download interrupted: ${errorMsg}`,
-      );
+      throw new DownloadError('aborted', `Download interrupted: ${errorMsg}`);
     }
-    throw new DownloadError(
-      'http',
-      `Download interrupted: ${errorMsg}`,
-    );
+    throw new DownloadError('http', `Download interrupted: ${errorMsg}`);
   }
 
   // A CDN can end a chunked/HTTP-2 body cleanly before all bytes arrive, so a
@@ -250,8 +241,7 @@ export function modelFilesPresent(
   destDir: string,
 ): boolean {
   for (const f of model.files) {
-    if (fileSize(path.join(destDir, f.name)) !== f.sizeBytes)
-      return false;
+    if (fileSize(path.join(destDir, f.name)) !== f.sizeBytes) return false;
   }
   return true;
 }

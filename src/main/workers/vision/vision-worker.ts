@@ -1,4 +1,9 @@
-import type { Change, Worker, WorkerSession, WorkOutcome } from '@shared/contracts';
+import type {
+  Change,
+  Worker,
+  WorkerSession,
+  WorkOutcome,
+} from '@shared/contracts';
 
 import { NoProviderError } from '@main/core/inference';
 
@@ -31,7 +36,8 @@ export function createVisionWorker(deps: {
     version: 1,
     schedule: { every: '30m' }, // deferred re-drive cadence; the live tail always runs
     matches: (change: Change) =>
-      change.kind === 'document' && classifyDocument(change.document) === 'candidate',
+      change.kind === 'document' &&
+      classifyDocument(change.document) === 'candidate',
 
     async work(change: Change, session: WorkerSession): Promise<WorkOutcome> {
       if (change.kind !== 'document') return 'skip';
@@ -45,8 +51,10 @@ export function createVisionWorker(deps: {
       if (!bytes) return 'skip'; // source can't serve bytes — terminal
       if (bytes.length > (pdf ? MAX_PDF_BYTES : MAX_IMAGE_BYTES)) return 'skip';
 
-      const mime = (doc.metadata as { mime?: string }).mime;
-      const pages = pdf ? await deps.rasterizer.pdfToPngs(bytes, MAX_PAGES) : [bytes];
+      const { mime } = doc.metadata as { mime?: string };
+      const pages = pdf
+        ? await deps.rasterizer.pdfToPngs(bytes, MAX_PAGES)
+        : [bytes];
       const pageMime = pdf ? 'image/png' : mime;
 
       // Pass 1 — OCR.
@@ -70,8 +78,12 @@ export function createVisionWorker(deps: {
       if (!ocrFailed && ocrChars >= OCR_SUFFICIENT_CHARS) {
         session.enrich({
           documentId: doc.id,
-          markdown: mergeExtraction(pages.map((_, i): PageResult => ({ ocrText: ocr[i] }))),
-          metadata: { extraction: { engine: 'local-ocr', at: new Date().toISOString() } },
+          markdown: mergeExtraction(
+            pages.map((_, i): PageResult => ({ ocrText: ocr[i] })),
+          ),
+          metadata: {
+            extraction: { engine: 'local-ocr', at: new Date().toISOString() },
+          },
         });
         return 'done';
       }
@@ -85,8 +97,12 @@ export function createVisionWorker(deps: {
       if (!pdf && !isVlmDecodable(doc)) {
         session.enrich({
           documentId: doc.id,
-          markdown: mergeExtraction(pages.map((_, i): PageResult => ({ ocrText: ocr[i] }))),
-          metadata: { extraction: { engine: 'local-ocr', at: new Date().toISOString() } },
+          markdown: mergeExtraction(
+            pages.map((_, i): PageResult => ({ ocrText: ocr[i] })),
+          ),
+          metadata: {
+            extraction: { engine: 'local-ocr', at: new Date().toISOString() },
+          },
         });
         return 'done';
       }
@@ -95,13 +111,20 @@ export function createVisionWorker(deps: {
       try {
         const results: PageResult[] = [];
         for (let i = 0; i < pages.length; i += 1) {
-          const description = await session.see(pages[i], INDEXING_PROMPT, { mime: pageMime });
+          const description = await session.see(pages[i], INDEXING_PROMPT, {
+            mime: pageMime,
+          });
           results.push({ ocrText: ocr[i], description });
         }
         session.enrich({
           documentId: doc.id,
           markdown: mergeExtraction(results),
-          metadata: { extraction: { engine: 'local-ocr+vlm', at: new Date().toISOString() } },
+          metadata: {
+            extraction: {
+              engine: 'local-ocr+vlm',
+              at: new Date().toISOString(),
+            },
+          },
         });
         return 'done';
       } catch {

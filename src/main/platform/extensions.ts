@@ -31,13 +31,24 @@ export function readInstalled(extDir: string): InstalledRecord[] {
   return readJson<InstalledRecord[]>(path.join(extDir, 'installed.json'), []);
 }
 
-export function writeInstalled(extDir: string, records: InstalledRecord[]): void {
+export function writeInstalled(
+  extDir: string,
+  records: InstalledRecord[],
+): void {
   fs.mkdirSync(extDir, { recursive: true });
-  fs.writeFileSync(path.join(extDir, 'installed.json'), JSON.stringify(records, null, 2));
+  fs.writeFileSync(
+    path.join(extDir, 'installed.json'),
+    JSON.stringify(records, null, 2),
+  );
 }
 
-export function readEnabledState(extDir: string): Record<string, { enabled: boolean }> {
-  return readJson<Record<string, { enabled: boolean }>>(path.join(extDir, 'state.json'), {});
+export function readEnabledState(
+  extDir: string,
+): Record<string, { enabled: boolean }> {
+  return readJson<Record<string, { enabled: boolean }>>(
+    path.join(extDir, 'state.json'),
+    {},
+  );
 }
 
 export function writeEnabledState(
@@ -45,9 +56,13 @@ export function writeEnabledState(
   state: Record<string, { enabled: boolean }>,
 ): void {
   fs.mkdirSync(extDir, { recursive: true });
-  fs.writeFileSync(path.join(extDir, 'state.json'), JSON.stringify(state, null, 2), {
-    mode: 0o600,
-  });
+  fs.writeFileSync(
+    path.join(extDir, 'state.json'),
+    JSON.stringify(state, null, 2),
+    {
+      mode: 0o600,
+    },
+  );
 }
 
 export interface DiscoveredExtension {
@@ -73,7 +88,11 @@ export function discoverExtensions(extDir: string): DiscoveredExtension[] {
       const { manifest, entryAbsPath } = validateManifestDir(dir);
       out.push({ dirName: e.name, dir, manifest, entryAbsPath });
     } catch (err) {
-      out.push({ dirName: e.name, dir, error: err instanceof Error ? err.message : String(err) });
+      out.push({
+        dirName: e.name,
+        dir,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
   return out;

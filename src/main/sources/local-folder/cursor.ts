@@ -34,7 +34,9 @@
  *   - A root removed from config is dropped from this map the next time a
  *     batch commits (see `pull()`'s pruning step in local-folder-source.ts).
  */
-export type LocalFolderCursor = { roots: Record<string, { completedAt: string }> } | null;
+export type LocalFolderCursor = {
+  roots: Record<string, { completedAt: string }>;
+} | null;
 
 /**
  * Return a new cursor with one root's entry replaced — every OTHER root's

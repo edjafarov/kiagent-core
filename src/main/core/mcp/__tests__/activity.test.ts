@@ -190,7 +190,9 @@ describe('main.ts watcher batch handler (broadcast + first-query latch)', () => 
   function setup() {
     const prefs = createPrefs(dir);
     const broadcast = jest.fn();
-    const latch = jest.fn((key: 'firstQueryAt') => markOnboardingOnce(prefs, key));
+    const latch = jest.fn((key: 'firstQueryAt') =>
+      markOnboardingOnce(prefs, key),
+    );
     const handler = (recs: McpActivityRecord[]) => {
       broadcast('push:mcp-activity', recs);
       if (recs.some((r) => r.ok)) {
@@ -210,7 +212,10 @@ describe('main.ts watcher batch handler (broadcast + first-query latch)', () => 
     );
     stops.push(createActivityLog(dir).watch(handler));
     expect(broadcast).toHaveBeenCalledTimes(1);
-    expect(broadcast).toHaveBeenCalledWith('push:mcp-activity', expect.any(Array));
+    expect(broadcast).toHaveBeenCalledWith(
+      'push:mcp-activity',
+      expect.any(Array),
+    );
     expect(latch).toHaveBeenCalledTimes(1);
     expect(latch).toHaveBeenCalledWith('firstQueryAt');
     await until(() => prefs.get().onboarding.firstQueryAt != null);
@@ -247,7 +252,9 @@ describe('summarizeCall', () => {
       { source: 'gmail', type: 'email.thread', from_date: 'x' },
       [],
     );
-    expect(out.summary).toBe('search (source=gmail, type=email.thread) → 0 hits');
+    expect(out.summary).toBe(
+      'search (source=gmail, type=email.thread) → 0 hits',
+    );
   });
 
   it('search with query AND filters shows both', () => {
@@ -272,7 +279,10 @@ describe('summarizeCall', () => {
   });
 
   it('get batch with misses reports not-found count', () => {
-    const out = summarizeCall('get', { ids: ['a', 'b'] }, [{ title: 'A' }, null]);
+    const out = summarizeCall('get', { ids: ['a', 'b'] }, [
+      { title: 'A' },
+      null,
+    ]);
     expect(out.summary).toBe('fetched 1 document(s), 1 not found');
     expect(out.detail).toEqual(['A']);
   });
@@ -316,7 +326,9 @@ describe('summarizeCall', () => {
   it('unknown tools fall back to name + compact truncated args', () => {
     const out = summarizeCall('notion_query', { q: 'y'.repeat(300) }, {});
     expect(out.summary.startsWith('notion_query {"q":"yyy')).toBe(true);
-    expect(out.summary.length).toBeLessThanOrEqual('notion_query '.length + 121);
+    expect(out.summary.length).toBeLessThanOrEqual(
+      'notion_query '.length + 121,
+    );
     expect(out.detail).toBeUndefined();
   });
 

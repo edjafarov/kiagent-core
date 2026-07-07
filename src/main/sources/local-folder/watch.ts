@@ -65,7 +65,8 @@ export async function* watchLoop(
 
   const aborted = new Promise<void>((resolve) => {
     if (session.signal.aborted) resolve();
-    else session.signal.addEventListener('abort', () => resolve(), { once: true });
+    else
+      session.signal.addEventListener('abort', () => resolve(), { once: true });
   });
 
   try {
@@ -86,9 +87,12 @@ export async function* watchLoop(
       if (!ev) continue;
 
       if (ev.kind === 'unlink') {
-        const deletions: ExternalRef[] = [{ externalId: toAbsPosix(ev.absPath), type: 'file' }];
+        const deletions: ExternalRef[] = [
+          { externalId: toAbsPosix(ev.absPath), type: 'file' },
+        ];
         const root = rootOf(ev.absPath);
-        if (root) cursor = advanceCursor(cursor, root, new Date().toISOString());
+        if (root)
+          cursor = advanceCursor(cursor, root, new Date().toISOString());
         yield {
           phase: 'live',
           items: [],
@@ -104,7 +108,8 @@ export async function* watchLoop(
         // eslint-disable-next-line no-await-in-loop
         const item = await buildItem(ev.absPath, stats);
         const root = rootOf(ev.absPath);
-        if (root) cursor = advanceCursor(cursor, root, new Date().toISOString());
+        if (root)
+          cursor = advanceCursor(cursor, root, new Date().toISOString());
         yield {
           phase: 'live',
           items: [item],

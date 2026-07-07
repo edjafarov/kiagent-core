@@ -4,14 +4,25 @@
  * pull() parses fixture messages via mailparser, which relies on Node's
  * setImmediate — not provided by the default jsdom test environment.
  */
-import type { Account, AccountId, AuthChannel, Batch, DocumentInput, Session } from '@shared/contracts';
+import type {
+  Account,
+  AccountId,
+  AuthChannel,
+  Batch,
+  DocumentInput,
+  Session,
+} from '@shared/contracts';
 import { createImapSource } from '../source';
 import type { ConnectFn } from '../source';
 import type { ImapClient, ImapCursor, ImapMessageItem } from '../types';
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
-function rfc822(uid: number, subject: string, opts: { headers?: string[] } = {}): string {
+function rfc822(
+  uid: number,
+  subject: string,
+  opts: { headers?: string[] } = {},
+): string {
   const lines = [
     'From: Alice <alice@example.com>',
     'To: bob@example.com',
@@ -41,12 +52,20 @@ function makeFakeClient(mailboxes: FakeMailbox[]) {
   };
   const client: ImapClient = {
     async listFolders() {
-      return mailboxes.map((m) => ({ path: m.path, specialUse: m.specialUse, flags: [] }));
+      return mailboxes.map((m) => ({
+        path: m.path,
+        specialUse: m.specialUse,
+        flags: [],
+      }));
     },
     async status(path: string) {
       state.statusCalls += 1;
       const m = find(path);
-      return { uidValidity: m.uidValidity, uidNext: Math.max(0, ...m.messages.keys()) + 1, exists: m.messages.size };
+      return {
+        uidValidity: m.uidValidity,
+        uidNext: Math.max(0, ...m.messages.keys()) + 1,
+        exists: m.messages.size,
+      };
     },
     async listUids(path: string) {
       return [...find(path).messages.keys()].sort((a, b) => a - b);
@@ -56,7 +75,10 @@ function makeFakeClient(mailboxes: FakeMailbox[]) {
       const m = find(path);
       return uids
         .filter((u) => m.messages.has(u))
-        .map((u) => ({ uid: u, source: Buffer.from(m.messages.get(u)!, 'utf8') }));
+        .map((u) => ({
+          uid: u,
+          source: Buffer.from(m.messages.get(u)!, 'utf8'),
+        }));
     },
     async close() {
       state.closed = true;
@@ -95,7 +117,12 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   return out;
 }
 
-const CONFIG = { host: 'imap.example.com', port: 993, secure: true, user: 'alice@example.com' };
+const CONFIG = {
+  host: 'imap.example.com',
+  port: 993,
+  secure: true,
+  user: 'alice@example.com',
+};
 
 // ── descriptor ──────────────────────────────────────────────────────────────
 
@@ -123,7 +150,8 @@ describe('createImapSource — connect', () => {
       prompt: async (schema) => {
         // The platform's vault only captures the literal 'password' key —
         // assert the prompt schema actually asks for one.
-        const props = (schema as { properties?: Record<string, unknown> }).properties ?? {};
+        const props =
+          (schema as { properties?: Record<string, unknown> }).properties ?? {};
         expect(props).toHaveProperty('password');
         return answers;
       },
@@ -133,12 +161,20 @@ describe('createImapSource — connect', () => {
   }
 
   it('verifies connectivity and returns identifier/config on success', async () => {
-    const { client } = makeFakeClient([{ path: 'INBOX', uidValidity: 1, messages: new Map() }]);
+    const { client } = makeFakeClient([
+      { path: 'INBOX', uidValidity: 1, messages: new Map() },
+    ]);
     const connectFn: ConnectFn = jest.fn(async () => client);
     const source = createImapSource({ connect: connectFn });
 
     const result = await source.connect(
-      fakeAuth({ host: 'imap.example.com', port: 993, secure: true, user: 'alice@example.com', password: 'hunter2' }),
+      fakeAuth({
+        host: 'imap.example.com',
+        port: 993,
+        secure: true,
+        user: 'alice@example.com',
+        password: 'hunter2',
+      }),
     );
 
     expect(result.identifier).toBe('alice@example.com@imap.example.com');
@@ -147,7 +183,9 @@ describe('createImapSource — connect', () => {
   });
 
   it('rejects when required fields are missing', async () => {
-    const source = createImapSource({ connect: jest.fn() as unknown as ConnectFn });
+    const source = createImapSource({
+      connect: jest.fn() as unknown as ConnectFn,
+    });
     await expect(
       source.connect(fakeAuth({ host: '', user: 'alice', password: '' })),
     ).rejects.toThrow(/required/i);
@@ -155,7 +193,11 @@ describe('createImapSource — connect', () => {
 
   it('surfaces an auth-failed message from the connect attempt', async () => {
     const connectFn: ConnectFn = jest.fn(async () => {
-      throw { authenticationFailed: true, responseText: 'bad creds' };
+      // imapflow rejects with an Error carrying these extra fields.
+      throw Object.assign(new Error('bad creds'), {
+        authenticationFailed: true,
+        responseText: 'bad creds',
+      });
     });
     const source = createImapSource({ connect: connectFn });
     await expect(
@@ -164,7 +206,9 @@ describe('createImapSource — connect', () => {
   });
 
   it('rejects when the account has no syncable mailboxes', async () => {
-    const { client } = makeFakeClient([{ path: 'Junk', uidValidity: 1, messages: new Map() }]);
+    const { client } = makeFakeClient([
+      { path: 'Junk', uidValidity: 1, messages: new Map() },
+    ]);
     const source = createImapSource({ connect: jest.fn(async () => client) });
     await expect(
       source.connect(fakeAuth({ host: 'h', user: 'u', password: 'p' })),
@@ -172,11 +216,18 @@ describe('createImapSource — connect', () => {
   });
 
   it('defaults port from `secure` when omitted (993 tls / 143 starttls)', async () => {
-    const { client } = makeFakeClient([{ path: 'INBOX', uidValidity: 1, messages: new Map() }]);
+    const { client } = makeFakeClient([
+      { path: 'INBOX', uidValidity: 1, messages: new Map() },
+    ]);
     const connectFn: ConnectFn = jest.fn(async () => client);
     const source = createImapSource({ connect: connectFn });
-    await source.connect(fakeAuth({ host: 'h', user: 'u', password: 'p', secure: false }));
-    expect(connectFn).toHaveBeenCalledWith(expect.objectContaining({ port: 143, secure: false }), 'p');
+    await source.connect(
+      fakeAuth({ host: 'h', user: 'u', password: 'p', secure: false }),
+    );
+    expect(connectFn).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 143, secure: false }),
+      'p',
+    );
   });
 });
 
@@ -222,17 +273,27 @@ describe('createImapSource — toDocument', () => {
   });
 
   it('falls back to "(no subject)" for blank/missing subjects', () => {
-    expect((source.toDocument(item({ subject: null })) as DocumentInput | null)?.title).toBe('(no subject)');
-    expect((source.toDocument(item({ subject: '   ' })) as DocumentInput | null)?.title).toBe('(no subject)');
+    expect(
+      (source.toDocument(item({ subject: null })) as DocumentInput | null)
+        ?.title,
+    ).toBe('(no subject)');
+    expect(
+      (source.toDocument(item({ subject: '   ' })) as DocumentInput | null)
+        ?.title,
+    ).toBe('(no subject)');
   });
 
   it('returns null (skips) an automated/bulk sender', () => {
-    const doc = source.toDocument(item({ from: 'no-reply@example.com', headers: {} }));
+    const doc = source.toDocument(
+      item({ from: 'no-reply@example.com', headers: {} }),
+    );
     expect(doc).toBeNull();
   });
 
   it('returns null for a message carrying List-Unsubscribe', () => {
-    const doc = source.toDocument(item({ headers: { 'list-unsubscribe': '<mailto:x>' } }));
+    const doc = source.toDocument(
+      item({ headers: { 'list-unsubscribe': '<mailto:x>' } }),
+    );
     expect(doc).toBeNull();
   });
 });
@@ -242,8 +303,11 @@ describe('createImapSource — toDocument', () => {
 describe('createImapSource — pull', () => {
   it('backfills a fresh account in batches of 50, oldest UID first, advancing the cursor each chunk', async () => {
     const messages = new Map<number, string>();
-    for (let uid = 1; uid <= 120; uid += 1) messages.set(uid, rfc822(uid, `Subject ${uid}`));
-    const { client, state } = makeFakeClient([{ path: 'INBOX', uidValidity: 555, messages }]);
+    for (let uid = 1; uid <= 120; uid += 1)
+      messages.set(uid, rfc822(uid, `Subject ${uid}`));
+    const { client, state } = makeFakeClient([
+      { path: 'INBOX', uidValidity: 555, messages },
+    ]);
     const source = createImapSource({
       connect: async () => client,
       sleep: async () => {},
@@ -265,13 +329,21 @@ describe('createImapSource — pull', () => {
     expect(batches.every((b) => b.phase === 'backfill')).toBe(true);
     expect(batches.every((b) => b.estimateTotal === 120)).toBe(true);
     expect(batches[0].items[0].uid).toBe(1); // oldest first
-    expect(batches[2].cursor.mailboxes.INBOX).toEqual({ uidValidity: '555', lastUid: 120 });
+    expect(batches[2].cursor.mailboxes.INBOX).toEqual({
+      uidValidity: '555',
+      lastUid: 120,
+    });
     expect(state.closed).toBe(true);
   });
 
   it('a returning account with nothing new produces no batches during the first pass', async () => {
-    const messages = new Map<number, string>([[1, rfc822(1, 'one')], [2, rfc822(2, 'two')]]);
-    const { client } = makeFakeClient([{ path: 'INBOX', uidValidity: 1, messages }]);
+    const messages = new Map<number, string>([
+      [1, rfc822(1, 'one')],
+      [2, rfc822(2, 'two')],
+    ]);
+    const { client } = makeFakeClient([
+      { path: 'INBOX', uidValidity: 1, messages },
+    ]);
     let pollCount = 0;
     const controller = new AbortController();
     const source = createImapSource({
@@ -281,7 +353,9 @@ describe('createImapSource — pull', () => {
         controller.abort(); // stop after exactly one live-loop iteration
       },
     });
-    const cursor: ImapCursor = { mailboxes: { INBOX: { uidValidity: '1', lastUid: 2 } } };
+    const cursor: ImapCursor = {
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 2 } },
+    };
     const session = makeSession(CONFIG, { signal: controller.signal });
 
     const batches = await collect(source.pull(session, cursor));
@@ -290,8 +364,13 @@ describe('createImapSource — pull', () => {
   });
 
   it('picks up new mail that appears between live-phase polls', async () => {
-    const messages = new Map<number, string>([[1, rfc822(1, 'one')], [2, rfc822(2, 'two')]]);
-    const { client } = makeFakeClient([{ path: 'INBOX', uidValidity: 1, messages }]);
+    const messages = new Map<number, string>([
+      [1, rfc822(1, 'one')],
+      [2, rfc822(2, 'two')],
+    ]);
+    const { client } = makeFakeClient([
+      { path: 'INBOX', uidValidity: 1, messages },
+    ]);
     const controller = new AbortController();
     let sleepCalls = 0;
     const source = createImapSource({
@@ -306,49 +385,76 @@ describe('createImapSource — pull', () => {
         }
       },
     });
-    const cursor: ImapCursor = { mailboxes: { INBOX: { uidValidity: '1', lastUid: 2 } } };
+    const cursor: ImapCursor = {
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 2 } },
+    };
     const session = makeSession(CONFIG, { signal: controller.signal });
 
     const batches = await collect(source.pull(session, cursor));
     expect(batches).toHaveLength(1);
     expect(batches[0].phase).toBe('live');
     expect(batches[0].items.map((i) => i.uid)).toEqual([3]);
-    expect(batches[0].cursor.mailboxes.INBOX).toEqual({ uidValidity: '1', lastUid: 3 });
+    expect(batches[0].cursor.mailboxes.INBOX).toEqual({
+      uidValidity: '1',
+      lastUid: 3,
+    });
     expect(sleepCalls).toBe(2);
   });
 
   it('treats a UIDVALIDITY change as a from-scratch resync, forcing phase=backfill', async () => {
-    const messages = new Map<number, string>([[1, rfc822(1, 'one')], [2, rfc822(2, 'two')]]);
-    const { client } = makeFakeClient([{ path: 'INBOX', uidValidity: 999, messages }]); // server-side UIDVALIDITY rolled over
+    const messages = new Map<number, string>([
+      [1, rfc822(1, 'one')],
+      [2, rfc822(2, 'two')],
+    ]);
+    const { client } = makeFakeClient([
+      { path: 'INBOX', uidValidity: 999, messages },
+    ]); // server-side UIDVALIDITY rolled over
     const controller = new AbortController();
     const source = createImapSource({
       connect: async () => client,
       sleep: async () => controller.abort(),
     });
     // Stale cursor from before the rollover.
-    const cursor: ImapCursor = { mailboxes: { INBOX: { uidValidity: '1', lastUid: 50 } } };
+    const cursor: ImapCursor = {
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 50 } },
+    };
     const session = makeSession(CONFIG, { signal: controller.signal });
 
     const batches = await collect(source.pull(session, cursor));
     expect(batches).toHaveLength(1);
     expect(batches[0].phase).toBe('backfill');
     expect(batches[0].items.map((i) => i.uid)).toEqual([1, 2]); // refetched from 0, not from stale lastUid=50
-    expect(batches[0].cursor.mailboxes.INBOX).toEqual({ uidValidity: '999', lastUid: 2 });
+    expect(batches[0].cursor.mailboxes.INBOX).toEqual({
+      uidValidity: '999',
+      lastUid: 2,
+    });
   });
 
   it('throws when the account has no stored password credential', async () => {
-    const { client } = makeFakeClient([{ path: 'INBOX', uidValidity: 1, messages: new Map() }]);
+    const { client } = makeFakeClient([
+      { path: 'INBOX', uidValidity: 1, messages: new Map() },
+    ]);
     const source = createImapSource({ connect: async () => client });
     const session = makeSession(CONFIG, { password: null });
-    await expect(collect(source.pull(session, null))).rejects.toThrow(/password/i);
+    await expect(collect(source.pull(session, null))).rejects.toThrow(
+      /password/i,
+    );
   });
 
   it('closes the client and yields nothing when the signal is already aborted', async () => {
-    const { client, state } = makeFakeClient([{ path: 'INBOX', uidValidity: 1, messages: new Map([[1, rfc822(1, 'x')]]) }]);
+    const { client, state } = makeFakeClient([
+      {
+        path: 'INBOX',
+        uidValidity: 1,
+        messages: new Map([[1, rfc822(1, 'x')]]),
+      },
+    ]);
     const controller = new AbortController();
     controller.abort();
     const source = createImapSource({ connect: async () => client });
-    const cursor: ImapCursor = { mailboxes: { INBOX: { uidValidity: '1', lastUid: 1 } } };
+    const cursor: ImapCursor = {
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 1 } },
+    };
     const session = makeSession(CONFIG, { signal: controller.signal });
 
     const batches = await collect(source.pull(session, cursor));
@@ -362,8 +468,20 @@ describe('createImapSource — pull', () => {
 describe('createImapSource — reconcile', () => {
   it('yields ExternalRefs for every UID currently present in each synced mailbox', async () => {
     const { client } = makeFakeClient([
-      { path: 'INBOX', uidValidity: 10, messages: new Map([[1, ''], [2, '']]) },
-      { path: 'Sent', uidValidity: 20, specialUse: '\\Sent', messages: new Map([[5, '']]) },
+      {
+        path: 'INBOX',
+        uidValidity: 10,
+        messages: new Map([
+          [1, ''],
+          [2, ''],
+        ]),
+      },
+      {
+        path: 'Sent',
+        uidValidity: 20,
+        specialUse: '\\Sent',
+        messages: new Map([[5, '']]),
+      },
     ]);
     const source = createImapSource({ connect: async () => client });
     const session = makeSession(CONFIG);
@@ -383,7 +501,9 @@ describe('createImapSource — reconcile', () => {
   it('pages large mailboxes into chunks of 500', async () => {
     const messages = new Map<number, string>();
     for (let uid = 1; uid <= 501; uid += 1) messages.set(uid, '');
-    const { client } = makeFakeClient([{ path: 'INBOX', uidValidity: 1, messages }]);
+    const { client } = makeFakeClient([
+      { path: 'INBOX', uidValidity: 1, messages },
+    ]);
     const source = createImapSource({ connect: async () => client });
     const session = makeSession(CONFIG);
 
@@ -394,7 +514,9 @@ describe('createImapSource — reconcile', () => {
   });
 
   it('stops without yielding once the signal is aborted', async () => {
-    const { client } = makeFakeClient([{ path: 'INBOX', uidValidity: 1, messages: new Map([[1, '']]) }]);
+    const { client } = makeFakeClient([
+      { path: 'INBOX', uidValidity: 1, messages: new Map([[1, '']]) },
+    ]);
     const controller = new AbortController();
     controller.abort();
     const source = createImapSource({ connect: async () => client });

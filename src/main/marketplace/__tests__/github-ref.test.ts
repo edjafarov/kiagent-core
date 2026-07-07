@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { parseGitHubRef, formatGitHubRef, GitHubRef } from '../github-ref';
+import { parseGitHubRef, formatGitHubRef } from '../github-ref';
 
 describe('github-ref', () => {
   describe('parseGitHubRef', () => {

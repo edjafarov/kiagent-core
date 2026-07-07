@@ -14,7 +14,9 @@ describe('describeImage mime threading', () => {
   function stubFetch(): jest.Mock {
     const fetchMock = jest.fn(async () => ({
       ok: true,
-      json: async () => ({ choices: [{ message: { content: 'a description' } }] }),
+      json: async () => ({
+        choices: [{ message: { content: 'a description' } }],
+      }),
     })) as unknown as jest.Mock;
     global.fetch = fetchMock as unknown as typeof fetch;
     return fetchMock;

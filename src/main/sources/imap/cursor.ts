@@ -4,7 +4,8 @@ import type { FolderCursorEntry, ImapCursor } from './types';
 export function chunk<T>(items: T[], size: number): T[][] {
   if (size <= 0) throw new Error(`chunk: size must be > 0, got ${size}`);
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  for (let i = 0; i < items.length; i += size)
+    out.push(items.slice(i, i + size));
   return out;
 }
 
@@ -32,7 +33,9 @@ export function planMailboxSync(
   const uidValidityStr = String(currentUidValidity);
   const reset = prev !== undefined && prev.uidValidity !== uidValidityStr;
   const resumeFrom = prev && !reset ? prev.lastUid : 0;
-  const uidsToFetch = presentUids.filter((uid) => uid > resumeFrom).sort((a, b) => a - b);
+  const uidsToFetch = presentUids
+    .filter((uid) => uid > resumeFrom)
+    .sort((a, b) => a - b);
   return { reset, uidsToFetch };
 }
 

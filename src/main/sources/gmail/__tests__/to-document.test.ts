@@ -1,3 +1,4 @@
+import type { DocumentInput } from '@shared/contracts';
 import fixtureThread from './fixtures/thread.json';
 import {
   toDocument,
@@ -6,7 +7,6 @@ import {
   type GmailThreadItem,
 } from '../to-document';
 import type { GmailApiMessage } from '../parser';
-import type { DocumentInput } from '@shared/contracts';
 
 const ACCOUNT_EMAIL = 'owner@example.com';
 
@@ -151,7 +151,10 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
                 mimeType: 'application/pdf',
                 filename: 'scan.pdf',
                 headers: [
-                  { name: 'Content-Disposition', value: 'attachment; filename="scan.pdf"' },
+                  {
+                    name: 'Content-Disposition',
+                    value: 'attachment; filename="scan.pdf"',
+                  },
                 ],
                 body: { attachmentId: 'AAA', size: 50_000 },
               },
@@ -160,7 +163,10 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
                 mimeType: 'image/png',
                 filename: 'sig.png',
                 headers: [
-                  { name: 'Content-Disposition', value: 'attachment; filename="sig.png"' },
+                  {
+                    name: 'Content-Disposition',
+                    value: 'attachment; filename="sig.png"',
+                  },
                 ],
                 body: { attachmentId: 'BBB', size: 900 },
               },
@@ -176,7 +182,10 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
     expect(atts).toHaveLength(1); // tiny image skipped as decorative
     expect(atts[0].externalId).toBe('m1/2');
     expect(atts[0].markdown).toBeNull();
-    expect(atts[0].parent).toEqual({ externalId: item.id, type: 'email.thread' });
+    expect(atts[0].parent).toEqual({
+      externalId: item.id,
+      type: 'email.thread',
+    });
     expect(atts[0].metadata).toMatchObject({
       mime: 'application/pdf',
       filename: 'scan.pdf',

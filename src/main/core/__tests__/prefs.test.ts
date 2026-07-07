@@ -12,19 +12,34 @@ describe('prefs.models', () => {
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   it('defaults to auto + autoInstall', () => {
-    expect(DEFAULT_PREFS.models).toEqual({ override: 'auto', autoInstall: true });
-    expect(createPrefs(dir).get().models).toEqual({ override: 'auto', autoInstall: true });
+    expect(DEFAULT_PREFS.models).toEqual({
+      override: 'auto',
+      autoInstall: true,
+    });
+    expect(createPrefs(dir).get().models).toEqual({
+      override: 'auto',
+      autoInstall: true,
+    });
   });
 
   it('patch deep-merges and survives reload', async () => {
     const p = createPrefs(dir);
     await p.patch({ models: { ...p.get().models, autoInstall: false } });
-    expect(createPrefs(dir).get().models).toEqual({ override: 'auto', autoInstall: false });
+    expect(createPrefs(dir).get().models).toEqual({
+      override: 'auto',
+      autoInstall: false,
+    });
   });
 
   it('sanitize rejects garbage', () => {
-    fs.writeFileSync(path.join(dir, 'prefs.json'), JSON.stringify({ models: { override: 42 } }));
-    expect(createPrefs(dir).get().models).toEqual({ override: 'auto', autoInstall: true });
+    fs.writeFileSync(
+      path.join(dir, 'prefs.json'),
+      JSON.stringify({ models: { override: 42 } }),
+    );
+    expect(createPrefs(dir).get().models).toEqual({
+      override: 'auto',
+      autoInstall: true,
+    });
   });
 });
 
@@ -64,7 +79,9 @@ describe('prefs.onboarding', () => {
 
   it('patch deep-merges onboarding without clobbering sibling latches', async () => {
     const p = createPrefs(dir);
-    await p.patch({ onboarding: { ...p.get().onboarding, mcpConnectedAt: 'A' } });
+    await p.patch({
+      onboarding: { ...p.get().onboarding, mcpConnectedAt: 'A' },
+    });
     await p.patch({ onboarding: { ...p.get().onboarding, firstQueryAt: 'B' } });
     expect(p.get().onboarding.mcpConnectedAt).toBe('A');
     expect(p.get().onboarding.firstQueryAt).toBe('B');

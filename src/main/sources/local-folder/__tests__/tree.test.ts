@@ -46,7 +46,11 @@ describe('quickLinks', () => {
 
     const home = os.homedir();
     const homeEntry = links.find((l) => l.path === home);
-    expect(homeEntry).toEqual({ path: home, name: 'Home', hasChildren: expect.any(Boolean) });
+    expect(homeEntry).toEqual({
+      path: home,
+      name: 'Home',
+      hasChildren: expect.any(Boolean),
+    });
 
     for (const link of links) {
       expect(fs.statSync(link.path).isDirectory()).toBe(true);

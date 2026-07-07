@@ -21,7 +21,11 @@ export interface BackendInfo {
 /** Pure backend decision. darwin is always Metal (capacity = unified RAM).
  *  Elsewhere a usable Vulkan device → vulkan (capacity = its VRAM when known),
  *  else cpu (capacity = system RAM). Never throws. */
-export function detectBackend(platform: string, vulkanDevices: VulkanDevice[], totalMemBytes: number): BackendInfo {
+export function detectBackend(
+  platform: string,
+  vulkanDevices: VulkanDevice[],
+  totalMemBytes: number,
+): BackendInfo {
   if (platform === 'darwin') {
     return { accel: 'metal', capacityBytes: totalMemBytes };
   }
@@ -61,12 +65,10 @@ export function parseVulkanDevices(stdout: string): VulkanDevice[] {
  *
  *  Note: listDevices defaults to returning '' (no Vulkan probe). The bundled
  *  `llama-server --list-devices` spawn wiring is phase C. */
-export async function detectHostBackend(
-  opts?: {
-    platform?: string;
-    listDevices?(): Promise<string>;
-  },
-): Promise<BackendInfo> {
+export async function detectHostBackend(opts?: {
+  platform?: string;
+  listDevices?(): Promise<string>;
+}): Promise<BackendInfo> {
   const platform = opts?.platform ?? os.platform();
   const totalMemBytes = os.totalmem();
 

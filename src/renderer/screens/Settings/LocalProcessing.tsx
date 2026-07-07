@@ -84,7 +84,8 @@ export function LocalProcessing(): React.ReactElement {
   // No push channel carries download progress, so poll while any provider
   // is mid-download; stop as soon as none are (and on unmount).
   useEffect(() => {
-    const anyDownloading = providers?.some((p) => isDownloadingStatus(p.status)) ?? false;
+    const anyDownloading =
+      providers?.some((p) => isDownloadingStatus(p.status)) ?? false;
     if (!anyDownloading) return undefined;
     const id = setInterval(loadProviders, 2000);
     return () => clearInterval(id);
@@ -99,17 +100,23 @@ export function LocalProcessing(): React.ReactElement {
     });
   };
   const setWindow = (w: ProcessingWindow) => {
-    void window.kiagent.invoke('prefs:patch', { processing: { ...processing, window: w } });
+    void window.kiagent.invoke('prefs:patch', {
+      processing: { ...processing, window: w },
+    });
   };
   const setModelOverride = (override: string) => {
-    void window.kiagent.invoke('prefs:patch', { models: { ...models, override } });
+    void window.kiagent.invoke('prefs:patch', {
+      models: { ...models, override },
+    });
   };
 
   return (
     <>
       <div>
         <h2 className="h-screen">Local processing</h2>
-        <div className="t-meta">Local inference providers, and when background work runs.</div>
+        <div className="t-meta">
+          Local inference providers, and when background work runs.
+        </div>
       </div>
       <div className="div-h" />
 
@@ -139,7 +146,8 @@ export function LocalProcessing(): React.ReactElement {
             <div className="pref-meta">
               <span className="pref-label">Window</span>
               <span className="pref-desc">
-                {WINDOW_OPTIONS.find(([v]) => v === processing.window)?.[2] ?? ''}
+                {WINDOW_OPTIONS.find(([v]) => v === processing.window)?.[2] ??
+                  ''}
               </span>
             </div>
             <div
@@ -166,7 +174,9 @@ export function LocalProcessing(): React.ReactElement {
           <div className="pref-row">
             <div className="pref-meta">
               <span className="pref-label">Model</span>
-              <span className="pref-desc">Which local model tier handles scanned documents.</span>
+              <span className="pref-desc">
+                Which local model tier handles scanned documents.
+              </span>
             </div>
             <select
               className="cadence-select"
@@ -177,7 +187,8 @@ export function LocalProcessing(): React.ReactElement {
               <option value="auto">Auto — picked for this Mac</option>
               {modelCatalog?.options.map((o) => (
                 <option key={o.id} value={o.id}>
-                  {o.label} — {gb(o.totalBytes)} GB{o.installed ? ' · installed' : ''}
+                  {o.label} — {gb(o.totalBytes)} GB
+                  {o.installed ? ' · installed' : ''}
                 </option>
               ))}
             </select>
@@ -191,8 +202,14 @@ export function LocalProcessing(): React.ReactElement {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div className="lbl-section">Providers</div>
           <span style={{ flex: 1 }} />
-          <button type="button" className="btn ghost sm" disabled={loadingProviders} onClick={loadProviders}>
-            <Icon name="refresh-cw" size={12} /> {loadingProviders ? 'Refreshing…' : 'Refresh'}
+          <button
+            type="button"
+            className="btn ghost sm"
+            disabled={loadingProviders}
+            onClick={loadProviders}
+          >
+            <Icon name="refresh-cw" size={12} />{' '}
+            {loadingProviders ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
 
@@ -202,13 +219,16 @@ export function LocalProcessing(): React.ReactElement {
           </div>
         )}
         {providers == null ? (
-          providersError ? null : <div className="t-meta">Loading providers…</div>
+          providersError ? null : (
+            <div className="t-meta">Loading providers…</div>
+          )
         ) : providers.length === 0 ? (
           <div className="lp-empty">
             <div className="t-meta">No local model is installed yet.</div>
             <div className="t-meta">
-              Local inference runs entirely on this machine once a provider is available. The local
-              model downloads automatically when scanned documents need it, or on demand above.
+              Local inference runs entirely on this machine once a provider is
+              available. The local model downloads automatically when scanned
+              documents need it, or on demand above.
             </div>
           </div>
         ) : (
@@ -305,12 +325,16 @@ function ProviderRowView(props: {
   return (
     <div className="pref-row" style={{ alignItems: 'flex-start' }}>
       <div className="pref-meta">
-        <span className="pref-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span
+          className="pref-label"
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+        >
           {provider.id}
           {pill && <Pill variant={pill.variant}>{pill.label}</Pill>}
         </span>
         <span className="pref-desc">
-          Supports: {provider.supports.length > 0 ? provider.supports.join(', ') : '—'}
+          Supports:{' '}
+          {provider.supports.length > 0 ? provider.supports.join(', ') : '—'}
         </span>
         {activeModel && <span className="pref-desc">{activeModel}</span>}
         {detail && (
@@ -350,8 +374,12 @@ function ProviderRowView(props: {
   );
 }
 
-function isDownloadingStatus(status: ProviderStatus): status is { downloading: { pct: number } } {
-  return typeof status === 'object' && status !== null && 'downloading' in status;
+function isDownloadingStatus(
+  status: ProviderStatus,
+): status is { downloading: { pct: number } } {
+  return (
+    typeof status === 'object' && status !== null && 'downloading' in status
+  );
 }
 
 function describeStatus(status: ProviderStatus): {
@@ -361,10 +389,20 @@ function describeStatus(status: ProviderStatus): {
   percent: number | null;
 } {
   if (status === 'ready') {
-    return { kind: 'ready', pill: { variant: 'live', label: 'Ready' }, detail: null, percent: null };
+    return {
+      kind: 'ready',
+      pill: { variant: 'live', label: 'Ready' },
+      detail: null,
+      percent: null,
+    };
   }
   if (status === 'standby') {
-    return { kind: 'standby', pill: { variant: 'paused', label: 'Standby' }, detail: null, percent: null };
+    return {
+      kind: 'standby',
+      pill: { variant: 'paused', label: 'Standby' },
+      detail: null,
+      percent: null,
+    };
   }
   if (status === 'unsupported') {
     return {
@@ -383,7 +421,12 @@ function describeStatus(status: ProviderStatus): {
     };
   }
   if (typeof status === 'object' && status !== null && 'error' in status) {
-    return { kind: 'error', pill: { variant: 'error', label: 'Error' }, detail: status.error, percent: null };
+    return {
+      kind: 'error',
+      pill: { variant: 'error', label: 'Error' },
+      detail: status.error,
+      percent: null,
+    };
   }
   return { kind: 'unsupported', pill: null, detail: null, percent: null };
 }

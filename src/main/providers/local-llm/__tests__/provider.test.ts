@@ -1,12 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import fsp from 'fs/promises';
-import { mkdtemp } from 'fs/promises';
+import fsp, { mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 import type { Prefs } from '@shared/contracts';
 import { createLocalLlmProvider } from '../provider';
 import type { ServerLike } from '../provider';
-import { downloadModel, modelFilesPresent } from '../downloader';
 import type { ModelDescriptor } from '../models';
 import { CURATED_MODEL, E4B_MODEL } from '../models';
 
@@ -17,7 +15,9 @@ jest.mock('../capability');
 const mockApi = jest.mocked(require('../api'), { shallow: true });
 const mockCapability = jest.mocked(require('../capability'), { shallow: true });
 
-function fakePrefs(overrides?: { models?: { override?: string; autoInstall?: boolean } }): Prefs {
+function fakePrefs(overrides?: {
+  models?: { override?: string; autoInstall?: boolean };
+}): Prefs {
   const defaults = {
     theme: 'system' as const,
     logLevel: 'info' as const,
@@ -52,7 +52,10 @@ function makeDeps(over = {} as Record<string, any>) {
       modelsDir: over.modelsDir as string,
       prefs: fakePrefs(prefOverrides),
       log: jest.fn(),
-      detect: async () => ({ accel: 'metal' as const, capacityBytes: 64 * 1024 ** 3 }),
+      detect: async () => ({
+        accel: 'metal' as const,
+        capacityBytes: 64 * 1024 ** 3,
+      }),
       download: jest.fn(async (_m, _d, opts) => {
         opts.onProgress?.(50, 100);
       }),
@@ -92,7 +95,7 @@ describe('LocalLlmProvider', () => {
   });
 
   it('ensureInstalled downloads the tier model', async () => {
-    const { deps, server } = makeDeps({
+    const { deps } = makeDeps({
       modelsDir: tmpDir,
       prefs: { models: { override: 'auto', autoInstall: true } },
     });
@@ -185,7 +188,7 @@ describe('LocalLlmProvider', () => {
   it('cancelInstall aborts', async () => {
     const { deps } = makeDeps({
       modelsDir: tmpDir,
-      download: jest.fn(async (_m, _d, opts) => {
+      download: jest.fn(async (_m, _d, _opts) => {
         // Simulate a long-running download
         await new Promise((r) => setTimeout(r, 1000));
       }),
@@ -249,7 +252,7 @@ describe('LocalLlmProvider', () => {
   });
 
   it('handle routes kinds', async () => {
-    const { deps, server } = makeDeps({ modelsDir: tmpDir });
+    const { deps } = makeDeps({ modelsDir: tmpDir });
 
     // Create model directory and files to simulate ready state
     const modelDir = path.join(tmpDir, CURATED_MODEL.id);
@@ -427,13 +430,17 @@ describe('LocalLlmProvider', () => {
     provider.ensureInstalled();
     await new Promise((r) => setTimeout(r, 20));
     expect(download).toHaveBeenCalledTimes(2);
-    expect(provider.status()).toMatchObject({ downloading: { pct: expect.any(Number) } });
+    expect(provider.status()).toMatchObject({
+      downloading: { pct: expect.any(Number) },
+    });
 
     // A's aborted download settles late (rejects, as a real aborted fetch
     // would) — this must NOT clobber B's in-flight state.
     rejectA(new Error('aborted'));
     await new Promise((r) => setTimeout(r, 20));
-    expect(provider.status()).toMatchObject({ downloading: { pct: expect.any(Number) } });
+    expect(provider.status()).toMatchObject({
+      downloading: { pct: expect.any(Number) },
+    });
 
     // A third ensureInstalled() must be a no-op: B is still installing.
     provider.ensureInstalled();
@@ -469,14 +476,13 @@ describe('LocalLlmProvider', () => {
           stop: jest.fn(async () => {}),
           baseUrl: () => 'http://x',
         };
-      } else {
-        // Second attempt: start() succeeds
-        return {
-          start: jest.fn(async () => {}),
-          stop: jest.fn(async () => {}),
-          baseUrl: () => 'http://x',
-        };
       }
+      // Second attempt: start() succeeds
+      return {
+        start: jest.fn(async () => {}),
+        stop: jest.fn(async () => {}),
+        baseUrl: () => 'http://x',
+      };
     });
 
     const { deps } = makeDeps({ modelsDir: tmpDir, makeServer });
@@ -565,7 +571,11 @@ describe('LocalLlmProvider', () => {
     expect(provider.status()).toBe('ready');
 
     mockApi.chatText.mockResolvedValue('ok');
-    await provider.handle({ kind: 'complete', payload: { prompt: 'x' }, lane: 'interactive' });
+    await provider.handle({
+      kind: 'complete',
+      payload: { prompt: 'x' },
+      lane: 'interactive',
+    });
 
     expect(startedModelPath).toContain(E4B_MODEL.id);
   });
@@ -583,14 +593,20 @@ describe('LocalLlmProvider', () => {
     }
 
     let capturedSignal: AbortSignal | undefined;
-    const download = jest.fn((_m: unknown, _d: unknown, opts: { signal: AbortSignal }) => {
-      capturedSignal = opts.signal;
-      return new Promise<void>((_resolve, reject) => {
-        opts.signal.addEventListener('abort', () => reject(new Error('aborted')), {
-          once: true,
+    const download = jest.fn(
+      (_m: unknown, _d: unknown, opts: { signal: AbortSignal }) => {
+        capturedSignal = opts.signal;
+        return new Promise<void>((_resolve, reject) => {
+          opts.signal.addEventListener(
+            'abort',
+            () => reject(new Error('aborted')),
+            {
+              once: true,
+            },
+          );
         });
-      });
-    });
+      },
+    );
 
     const { deps, server } = makeDeps({
       modelsDir: tmpDir,
@@ -601,7 +617,11 @@ describe('LocalLlmProvider', () => {
     mockApi.chatText.mockResolvedValue('ok');
 
     // Start the server (serves the fallback CURATED while E4B isn't installed).
-    await provider.handle({ kind: 'complete', payload: { prompt: 'x' }, lane: 'interactive' });
+    await provider.handle({
+      kind: 'complete',
+      payload: { prompt: 'x' },
+      lane: 'interactive',
+    });
     expect(server.start).toHaveBeenCalledTimes(1);
 
     // Kick off the gated install of the selected E4B model.

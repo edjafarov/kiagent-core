@@ -28,7 +28,9 @@ describe('inference plane', () => {
 
   it('read with no provider throws the settings hint', async () => {
     const plane = createInference(noopLogs);
-    await expect(plane.read(new Uint8Array([1]))).rejects.toThrow(/no inference provider/);
+    await expect(plane.read(new Uint8Array([1]))).rejects.toThrow(
+      /no inference provider/,
+    );
   });
 
   it('background lane fails fast with LaneClosedError while closed', async () => {

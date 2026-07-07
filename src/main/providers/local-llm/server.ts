@@ -67,7 +67,10 @@ function forwardLines(
  * stream. Map the letter instead; unprefixed lines (ggml/Metal banners) are
  * informational, and hard failures still surface via exit codes upstream.
  */
-function logServerLine(log: (level: LogLevel, msg: string) => void, line: string): void {
+function logServerLine(
+  log: (level: LogLevel, msg: string) => void,
+  line: string,
+): void {
   const level = /^\S+ ([EWID]) /.exec(line)?.[1];
   const msg = `[llama-server] ${line}`;
   if (level === 'E') log('error', msg);

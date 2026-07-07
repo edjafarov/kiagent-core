@@ -33,13 +33,15 @@ export const CAP_CATALOG: Record<Cap, CapInfo> = {
   },
   files: {
     label: 'Access approved folders',
-    description: 'Not yet supported in this build — calls fail even if granted.',
+    description:
+      'Not yet supported in this build — calls fail even if granted.',
     risk: 'normal',
     icon: 'folder',
   },
   db: {
     label: 'Keep its own private database',
-    description: 'Stores its own data in a private database, separate from your documents.',
+    description:
+      'Stores its own data in a private database, separate from your documents.',
     risk: 'normal',
     icon: 'database',
   },
@@ -51,7 +53,8 @@ export const CAP_CATALOG: Record<Cap, CapInfo> = {
   },
   commands: {
     label: 'Register commands',
-    description: 'Not yet supported in this build — calls fail even if granted.',
+    description:
+      'Not yet supported in this build — calls fail even if granted.',
     risk: 'normal',
     icon: 'settings',
   },

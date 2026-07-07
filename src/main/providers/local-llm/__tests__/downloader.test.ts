@@ -1,15 +1,10 @@
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
+import fsp, { mkdtemp } from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { Readable } from 'node:stream';
-import {
-  downloadModel,
-  modelFilesPresent,
-  DownloadError,
-} from '../downloader';
+import { downloadModel, modelFilesPresent, DownloadError } from '../downloader';
 import type { ModelDescriptor } from '../models';
 
 describe('downloader', () => {
@@ -45,7 +40,7 @@ describe('downloader', () => {
         }
       }
 
-      const body = scenario.body;
+      const { body } = scenario;
       const status = scenario.status || 200;
       const headers = scenario.headers || {};
 
@@ -84,7 +79,7 @@ describe('downloader', () => {
       ],
     };
 
-    let progressCalls: Array<[number, number]> = [];
+    const progressCalls: Array<[number, number]> = [];
 
     const fetchImpl = createMockFetch({
       'http://example.com/model.gguf': {
@@ -248,12 +243,14 @@ describe('downloader', () => {
       ],
     };
 
-    const fetchImpl = jest.fn(createMockFetch({
-      'http://example.com/model.gguf': {
-        body: payload,
-        status: 200,
-      },
-    }));
+    const fetchImpl = jest.fn(
+      createMockFetch({
+        'http://example.com/model.gguf': {
+          body: payload,
+          status: 200,
+        },
+      }),
+    );
 
     // First download
     await downloadModel(model, destDir, {

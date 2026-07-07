@@ -10,13 +10,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import type { Account, AuthChannel, DocumentInput, Session } from '@shared/contracts';
+import type {
+  Account,
+  AuthChannel,
+  DocumentInput,
+  Session,
+} from '@shared/contracts';
 
 import { buildItem, chunk } from '../scanner';
-import { connect, fetchBytes, localFolderSource, pull, reconcile } from '../local-folder-source';
+import {
+  connect,
+  fetchBytes,
+  localFolderSource,
+  pull,
+  reconcile,
+} from '../local-folder-source';
 import type { LocalFolderCursor } from '../cursor';
 
-const LEGACY_ERROR = 'Legacy single-folder account — remove this source and re-add its folder.';
+const LEGACY_ERROR =
+  'Legacy single-folder account — remove this source and re-add its folder.';
 
 type RootsCursor = { roots: Record<string, { completedAt: string }> };
 
@@ -41,7 +53,10 @@ function toExternalId(abs: string): string {
   return abs.split(path.sep).join('/');
 }
 
-function makeAccount(paths: string[], config: Record<string, unknown> = {}): Account {
+function makeAccount(
+  paths: string[],
+  config: Record<string, unknown> = {},
+): Account {
   return {
     id: 'acct-local-folder-1',
     source: 'local-folder',
@@ -53,7 +68,11 @@ function makeAccount(paths: string[], config: Record<string, unknown> = {}): Acc
   };
 }
 
-function makeSession(paths: string[], signal: AbortSignal, watch?: boolean): Session {
+function makeSession(
+  paths: string[],
+  signal: AbortSignal,
+  watch?: boolean,
+): Session {
   return {
     account: makeAccount(paths, watch === undefined ? {} : { watch }),
     signal,
@@ -62,7 +81,10 @@ function makeSession(paths: string[], signal: AbortSignal, watch?: boolean): Ses
   };
 }
 
-function makeSessionWithConfig(config: Record<string, unknown>, signal: AbortSignal): Session {
+function makeSessionWithConfig(
+  config: Record<string, unknown>,
+  signal: AbortSignal,
+): Session {
   return {
     account: {
       id: 'acct-legacy',
@@ -123,7 +145,10 @@ describe('connect', () => {
 
   it('throws a clear error naming the offending nonexistent path', async () => {
     const dirA = mkTmpDir();
-    const missing = path.join(os.tmpdir(), 'definitely-does-not-exist-kiagent-xyz');
+    const missing = path.join(
+      os.tmpdir(),
+      'definitely-does-not-exist-kiagent-xyz',
+    );
     const auth: AuthChannel = {
       oauth: async () => ({}),
       showQr: () => {},
@@ -171,7 +196,8 @@ describe('pull — backfill (cursor === null)', () => {
     writeFile(dir, 'photo.png', 'not-a-real-png-but-unsupported-mime');
     writeFile(dir, 'subdir/inner.txt', 'nested file');
     // Bulk files to force multiple ~50-file batches.
-    for (let i = 0; i < 58; i += 1) writeFile(dir, `bulk/file-${i}.txt`, `content ${i}`);
+    for (let i = 0; i < 58; i += 1)
+      writeFile(dir, `bulk/file-${i}.txt`, `content ${i}`);
 
     // Legacy exclusions (kiagent-ref exclude-globs.ts:8-17) — must NOT appear.
     writeFile(dir, '.git/HEAD', 'ref: refs/heads/main');
@@ -189,9 +215,11 @@ describe('pull — backfill (cursor === null)', () => {
 
     // Every item-bearing batch is backfill; the trailing cursor-only live
     // batch is the status flip (see the dedicated test below).
-    expect(batches.filter((b) => b.items.length > 0).every((b) => b.phase === 'backfill')).toBe(
-      true,
-    );
+    expect(
+      batches
+        .filter((b) => b.items.length > 0)
+        .every((b) => b.phase === 'backfill'),
+    ).toBe(true);
 
     const allItems = batches.flatMap((b) => b.items);
     const externalIds = allItems.map((i) => i.externalId).sort();
@@ -199,7 +227,9 @@ describe('pull — backfill (cursor === null)', () => {
     // 58 bulk + readme + notes + report + photo + subdir/inner = 63
     expect(allItems).toHaveLength(63);
     expect(externalIds).toContain(toExternalId(path.join(dir, 'readme.txt')));
-    expect(externalIds).toContain(toExternalId(path.join(dir, 'subdir/inner.txt')));
+    expect(externalIds).toContain(
+      toExternalId(path.join(dir, 'subdir/inner.txt')),
+    );
     expect(externalIds.every((id) => path.isAbsolute(id))).toBe(true);
     expect(externalIds.some((p) => p.includes('.git'))).toBe(false);
     expect(externalIds.some((p) => p.includes('node_modules'))).toBe(false);
@@ -245,7 +275,10 @@ describe('pull — backfill (cursor === null)', () => {
     expect(textDoc.markdown).toBe('plain text body');
     expect(textDoc.binary).toBeUndefined();
     expect(textDoc.url).toBe(`file://${encodeURI(textItem.absPath)}`);
-    expect(textDoc.metadata).toMatchObject({ ext: 'txt', absPath: textItem.absPath });
+    expect(textDoc.metadata).toMatchObject({
+      ext: 'txt',
+      absPath: textItem.absPath,
+    });
     expect(typeof textDoc.createdAt).toBe('string');
 
     const csvItem = byAbs.get(path.join(dir, 'report.csv'))!;
@@ -273,7 +306,9 @@ describe('pull — backfill (cursor === null)', () => {
     expect(batches[0].items).toEqual([]);
     expect(batches[0].estimateTotal).toBe(0);
     const cursor = batches[0].cursor as RootsCursor;
-    expect(cursor.roots[dir].completedAt).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/));
+    expect(cursor.roots[dir].completedAt).toEqual(
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    );
     expect(batches[1].phase).toBe('live');
     expect(batches[1].items).toEqual([]);
   });
@@ -331,7 +366,8 @@ describe('pull — unavailable roots', () => {
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, false);
     const backfillBatches = await collect(pull(session, null));
-    const cursor = backfillBatches[backfillBatches.length - 1].cursor as LocalFolderCursor;
+    const cursor = backfillBatches[backfillBatches.length - 1]
+      .cursor as LocalFolderCursor;
 
     fs.rmSync(dir, { recursive: true, force: true });
     await expect(collect(pull(session, cursor))).rejects.toThrow(dir);
@@ -367,7 +403,7 @@ describe('pull — multi-root backfill', () => {
     expect(Object.keys(finalCursor.roots).sort()).toEqual([dirA, dirB].sort());
   });
 
-  it('every backfill batch reports the whole-account estimateTotal, not the current root\'s count', async () => {
+  it("every backfill batch reports the whole-account estimateTotal, not the current root's count", async () => {
     // Regression: the engine accumulates `done` across roots, so per-root
     // estimates displayed "242 / ~107 (100%)" once the second root started.
     const dirA = mkTmpDir();
@@ -388,7 +424,7 @@ describe('pull — multi-root backfill', () => {
     expect(backfill.reduce((n, b) => n + b.items.length, 0)).toBe(5);
   });
 
-  it('yields a trailing cursor-only live batch after backfill so status leaves \'backfilling\'', async () => {
+  it("yields a trailing cursor-only live batch after backfill so status leaves 'backfilling'", async () => {
     // Regression: with watch enabled the source sits silently in the watcher
     // after backfill, so without this flip the account showed
     // "Backfilling … (100%)" forever. Quiet steady-state cycles must NOT
@@ -425,7 +461,8 @@ describe('pull — per-root incremental rescan', () => {
     const controller = new AbortController();
     const session = makeSession([dirA, dirB], controller.signal, false);
     const backfillBatches = await collect(pull(session, null));
-    const cursorAfterBackfill = backfillBatches[backfillBatches.length - 1].cursor as LocalFolderCursor;
+    const cursorAfterBackfill = backfillBatches[backfillBatches.length - 1]
+      .cursor as LocalFolderCursor;
 
     await sleep(20);
     fs.writeFileSync(path.join(dirB, 'b.txt'), 'b updated');
@@ -447,7 +484,8 @@ describe('pull — per-root incremental rescan', () => {
     const controllerA = new AbortController();
     const sessionA = makeSession([dirA], controllerA.signal, false);
     const backfillBatches = await collect(pull(sessionA, null));
-    const cursorAfterA = backfillBatches[backfillBatches.length - 1].cursor as RootsCursor;
+    const cursorAfterA = backfillBatches[backfillBatches.length - 1]
+      .cursor as RootsCursor;
     expect(Object.keys(cursorAfterA.roots)).toEqual([dirA]);
 
     const dirB = mkTmpDir();
@@ -459,9 +497,11 @@ describe('pull — per-root incremental rescan', () => {
 
     expect(items).toHaveLength(1);
     expect(items[0].externalId).toBe(toExternalId(path.join(dirB, 'b.txt')));
-    expect(batches.filter((b) => b.items.length > 0).every((b) => b.phase === 'backfill')).toBe(
-      true,
-    );
+    expect(
+      batches
+        .filter((b) => b.items.length > 0)
+        .every((b) => b.phase === 'backfill'),
+    ).toBe(true);
     // The new root's backfill reports the WHOLE-ACCOUNT estimate (dirA's
     // 1 file + dirB's 1 file), not its own count — the engine seeds `done`
     // with the already-indexed document count, so a root-local estimate
@@ -482,10 +522,11 @@ describe('pull — per-root incremental rescan', () => {
     const controller = new AbortController();
     const session = makeSession([dirA, dirB], controller.signal, false);
     const backfillBatches = await collect(pull(session, null));
-    const cursorAfterBackfill = backfillBatches[backfillBatches.length - 1].cursor as LocalFolderCursor;
-    expect(Object.keys((cursorAfterBackfill as RootsCursor).roots).sort()).toEqual(
-      [dirA, dirB].sort(),
-    );
+    const cursorAfterBackfill = backfillBatches[backfillBatches.length - 1]
+      .cursor as LocalFolderCursor;
+    expect(
+      Object.keys((cursorAfterBackfill as RootsCursor).roots).sort(),
+    ).toEqual([dirA, dirB].sort());
 
     // dirB is removed from config; touch dirA's file so a batch actually
     // commits (nothing is yielded, and so nothing persisted, for a cycle
@@ -510,10 +551,11 @@ describe('pull — per-root incremental rescan', () => {
     const controller = new AbortController();
     const session = makeSession([dirA, dirB], controller.signal, false);
     const backfillBatches = await collect(pull(session, null));
-    const cursorAfterBackfill = backfillBatches[backfillBatches.length - 1].cursor as LocalFolderCursor;
-    expect(Object.keys((cursorAfterBackfill as RootsCursor).roots).sort()).toEqual(
-      [dirA, dirB].sort(),
-    );
+    const cursorAfterBackfill = backfillBatches[backfillBatches.length - 1]
+      .cursor as LocalFolderCursor;
+    expect(
+      Object.keys((cursorAfterBackfill as RootsCursor).roots).sort(),
+    ).toEqual([dirA, dirB].sort());
 
     // dirB is removed from config. dirA is QUIET this cycle (no file
     // changes at all) — the exact scenario where, pre-fix, no batch commits
@@ -521,10 +563,13 @@ describe('pull — per-root incremental rescan', () => {
     await sleep(20);
     const controllerRemove = new AbortController();
     const sessionAOnly = makeSession([dirA], controllerRemove.signal, false);
-    const removalBatches = await collect(pull(sessionAOnly, cursorAfterBackfill));
+    const removalBatches = await collect(
+      pull(sessionAOnly, cursorAfterBackfill),
+    );
 
     expect(removalBatches.length).toBeGreaterThan(0);
-    const cursorAfterRemoval = removalBatches[removalBatches.length - 1].cursor as RootsCursor;
+    const cursorAfterRemoval = removalBatches[removalBatches.length - 1]
+      .cursor as RootsCursor;
     expect(Object.keys(cursorAfterRemoval.roots)).toEqual([dirA]);
 
     // Re-add dirB. Since the prune was persisted, dirB has no cursor entry
@@ -535,7 +580,9 @@ describe('pull — per-root incremental rescan', () => {
     const sessionAB = makeSession([dirA, dirB], controllerReadd.signal, false);
     const readdBatches = await collect(pull(sessionAB, cursorAfterRemoval));
     const items = readdBatches.flatMap((b) => b.items);
-    expect(items.map((i) => i.externalId)).toContain(toExternalId(path.join(dirB, 'b.txt')));
+    expect(items.map((i) => i.externalId)).toContain(
+      toExternalId(path.join(dirB, 'b.txt')),
+    );
     expect(readdBatches.some((b) => b.phase === 'backfill')).toBe(true);
   });
 
@@ -543,7 +590,9 @@ describe('pull — per-root incremental rescan', () => {
     const dir = mkTmpDir();
     writeFile(dir, 'stable.txt', 'unchanged');
     await sleep(20);
-    const since: LocalFolderCursor = { roots: { [dir]: { completedAt: new Date().toISOString() } } };
+    const since: LocalFolderCursor = {
+      roots: { [dir]: { completedAt: new Date().toISOString() } },
+    };
 
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, false);
@@ -555,7 +604,9 @@ describe('pull — per-root incremental rescan', () => {
     const dir = mkTmpDir();
     writeFile(dir, 'old.txt', 'old content');
     await sleep(20);
-    const since: LocalFolderCursor = { roots: { [dir]: { completedAt: new Date().toISOString() } } };
+    const since: LocalFolderCursor = {
+      roots: { [dir]: { completedAt: new Date().toISOString() } },
+    };
     await sleep(20);
     writeFile(dir, 'new.txt', 'new content');
 
@@ -564,10 +615,15 @@ describe('pull — per-root incremental rescan', () => {
     const batches = await collect(pull(session, since));
 
     const items = batches.flatMap((b) => b.items);
-    expect(items.map((i) => i.externalId)).toEqual([toExternalId(path.join(dir, 'new.txt'))]);
+    expect(items.map((i) => i.externalId)).toEqual([
+      toExternalId(path.join(dir, 'new.txt')),
+    ]);
     expect(batches.every((b) => b.phase === 'live')).toBe(true);
     const cursor = batches[0].cursor as RootsCursor;
-    expect(cursor.roots[dir].completedAt >= (since as RootsCursor).roots[dir].completedAt).toBe(true);
+    expect(
+      cursor.roots[dir].completedAt >=
+        (since as RootsCursor).roots[dir].completedAt,
+    ).toBe(true);
   });
 });
 
@@ -575,7 +631,11 @@ describe('buildItem — size caps become metadata-only docs', () => {
   it('drops markdown for an oversized plain-text file', async () => {
     const dir = mkTmpDir();
     const abs = writeFile(dir, 'big.txt', 'small content on disk');
-    const oversizedStats = { size: 999_999_999, mtime: new Date(), birthtime: new Date() } as fs.Stats;
+    const oversizedStats = {
+      size: 999_999_999,
+      mtime: new Date(),
+      birthtime: new Date(),
+    } as fs.Stats;
     const item = await buildItem(abs, oversizedStats);
     expect(item.markdownText).toBeNull();
     expect(item.binary).toBeNull();
@@ -585,7 +645,11 @@ describe('buildItem — size caps become metadata-only docs', () => {
   it('drops binary bytes for an oversized parseable-binary file', async () => {
     const dir = mkTmpDir();
     const abs = writeFile(dir, 'big.csv', 'a,b');
-    const oversizedStats = { size: 999_999_999, mtime: new Date(), birthtime: new Date() } as fs.Stats;
+    const oversizedStats = {
+      size: 999_999_999,
+      mtime: new Date(),
+      birthtime: new Date(),
+    } as fs.Stats;
     const item = await buildItem(abs, oversizedStats);
     expect(item.markdownText).toBeNull();
     expect(item.binary).toBeNull();
@@ -689,7 +753,9 @@ describe('legacy single-folder accounts', () => {
     const abs = writeFile(dir, 'a.txt', 'x');
     const controller = new AbortController();
     const session = makeSessionWithConfig({ path: dir }, controller.signal);
-    const doc = { metadata: { absPath: abs } } as unknown as Parameters<typeof fetchBytes>[1];
+    const doc = { metadata: { absPath: abs } } as unknown as Parameters<
+      typeof fetchBytes
+    >[1];
     await expect(fetchBytes(session, doc)).rejects.toThrow(LEGACY_ERROR);
   });
 });
@@ -735,7 +801,9 @@ describe('watchLoop', () => {
     expect(r1.value?.items[0].externalId).toBe(expectedExternalId);
     expect(r1.value?.items[0].markdownText).toBe('hello');
     const cursor1 = r1.value?.cursor as RootsCursor;
-    expect(cursor1.roots[dir].completedAt).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/));
+    expect(cursor1.roots[dir].completedAt).toEqual(
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    );
 
     fs.writeFileSync(addPath, 'hello again');
     const p2 = it.next();
@@ -748,7 +816,9 @@ describe('watchLoop', () => {
     fakeWatcher.emit('unlink', addPath);
     const r3 = await p3;
     expect(r3.value?.items).toEqual([]);
-    expect(r3.value?.deletions).toEqual([{ externalId: expectedExternalId, type: 'file' }]);
+    expect(r3.value?.deletions).toEqual([
+      { externalId: expectedExternalId, type: 'file' },
+    ]);
 
     const p4 = it.next();
     controller.abort();

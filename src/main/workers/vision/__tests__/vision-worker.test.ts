@@ -21,7 +21,9 @@ const baseDoc = {
   updatedAt: '2026-01-01',
 } as Document;
 
-function fakeSession(over: Partial<WorkerSession> = {}): WorkerSession & { enriched: any[] } {
+function fakeSession(
+  over: Partial<WorkerSession> = {},
+): WorkerSession & { enriched: any[] } {
   const enriched: any[] = [];
   return {
     enriched,
@@ -38,7 +40,7 @@ function fakeSession(over: Partial<WorkerSession> = {}): WorkerSession & { enric
 }
 
 const change = (doc: Partial<Document>) =>
-  ({ seq: 1, kind: 'document', document: { ...baseDoc, ...doc } } as Change);
+  ({ seq: 1, kind: 'document', document: { ...baseDoc, ...doc } }) as Change;
 
 it('OCR-sufficient PDF → done, enrich with per-page OCR, no `see` call', async () => {
   const session = fakeSession();
@@ -78,7 +80,9 @@ it('Thin OCR + see available → done with descriptions', async () => {
   expect(result).toBe('done');
   expect(session.enriched).toHaveLength(1);
   expect(session.enriched[0].markdown).toContain('**Description:**');
-  expect(session.enriched[0].metadata?.extraction?.engine).toBe('local-ocr+vlm');
+  expect(session.enriched[0].metadata?.extraction?.engine).toBe(
+    'local-ocr+vlm',
+  );
 });
 
 it('Thin OCR + see throws (no provider) → defer', async () => {
@@ -217,7 +221,9 @@ it('fetchBytes null → skip', async () => {
 });
 
 it('oversized PDF → skip', async () => {
-  const session = fakeSession({ fetchBytes: async () => new Uint8Array(50 * 1024 * 1024 + 1) });
+  const session = fakeSession({
+    fetchBytes: async () => new Uint8Array(50 * 1024 * 1024 + 1),
+  });
   const rasterizer: Rasterizer = {
     pdfToPngs: jest.fn(),
   };

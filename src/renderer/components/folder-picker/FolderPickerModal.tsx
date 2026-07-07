@@ -157,7 +157,9 @@ export function FolderPickerModal({
   // so it survives mode switches (which rebuild the tree) and quick-link
   // roots that also appear as children elsewhere. Never cleared: a folder's
   // count doesn't change because the root list was reloaded.
-  const countCache = useRef<Map<string, { count: number; capped: boolean }>>(new Map());
+  const countCache = useRef<Map<string, { count: number; capped: boolean }>>(
+    new Map(),
+  );
   // Paths whose count request SETTLED without a number (spec has no count /
   // the folder is unreadable). Distinguishes "no estimate will ever come"
   // from "still counting" so the footer never claims counting… forever for
@@ -547,7 +549,9 @@ function TreeRow(props: {
         <button
           type="button"
           className="fp-chev"
-          aria-label={node.expanded ? `collapse ${node.name}` : `expand ${node.name}`}
+          aria-label={
+            node.expanded ? `collapse ${node.name}` : `expand ${node.name}`
+          }
           disabled={!node.hasChildren}
           onClick={(e) => {
             e.stopPropagation();
@@ -558,7 +562,10 @@ function TreeRow(props: {
             <span className="spinner" />
           ) : (
             node.hasChildren && (
-              <Icon name={node.expanded ? 'chev-down' : 'chev-right'} size={12} />
+              <Icon
+                name={node.expanded ? 'chev-down' : 'chev-right'}
+                size={12}
+              />
             )
           )}
         </button>

@@ -78,7 +78,9 @@ export function Storage(): React.ReactElement {
       .invoke('maintenance:compact', undefined)
       .then(() => window.alert('Database compacted.'))
       .catch((e: unknown) =>
-        window.alert(`Failed: ${e instanceof Error ? e.message : 'unknown error'}`),
+        window.alert(
+          `Failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+        ),
       )
       .finally(() => setBusy(null));
   };
@@ -91,7 +93,9 @@ export function Storage(): React.ReactElement {
       .invoke('maintenance:export', { destDir: '' })
       .then(() => window.alert('Export complete.'))
       .catch((e: unknown) =>
-        window.alert(`Failed: ${e instanceof Error ? e.message : 'unknown error'}`),
+        window.alert(
+          `Failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+        ),
       )
       .finally(() => setBusy(null));
   };
@@ -110,7 +114,9 @@ export function Storage(): React.ReactElement {
       .invoke('maintenance:reset-all', undefined)
       .then(() => window.alert('All local data was wiped.'))
       .catch((e: unknown) =>
-        window.alert(`Failed: ${e instanceof Error ? e.message : 'unknown error'}`),
+        window.alert(
+          `Failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+        ),
       )
       .finally(() => setBusy(null));
   };
@@ -132,12 +138,24 @@ export function Storage(): React.ReactElement {
       ) : (
         <>
           <div className="metric-grid">
-            <MetricTile label="Total documents" value={stats.docCount.toLocaleString()} sub="indexed" />
-            <MetricTile label="Database size" value={formatBytes(stats.dbBytes)} sub="SQLite on disk" />
+            <MetricTile
+              label="Total documents"
+              value={stats.docCount.toLocaleString()}
+              sub="indexed"
+            />
+            <MetricTile
+              label="Database size"
+              value={formatBytes(stats.dbBytes)}
+              sub="SQLite on disk"
+            />
             <MetricTile
               label="Accounts"
               value={stats.accountCount.toLocaleString()}
-              sub={stats.accountCount === 1 ? 'source connected' : 'sources connected'}
+              sub={
+                stats.accountCount === 1
+                  ? 'source connected'
+                  : 'sources connected'
+              }
             />
           </div>
 
@@ -147,7 +165,11 @@ export function Storage(): React.ReactElement {
             <div className="lbl-section">Data folder</div>
             <div className="path-row">
               <span className="lbl">Location</span>
-              <span className="mono" data-testid="data-folder-path" style={{ flex: 1 }}>
+              <span
+                className="mono"
+                data-testid="data-folder-path"
+                style={{ flex: 1 }}
+              >
                 {stats.dataDir}
               </span>
               <button type="button" className="btn sm" onClick={openInFinder}>
@@ -170,22 +192,38 @@ export function Storage(): React.ReactElement {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div className="lbl-section">Maintenance</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button type="button" className="btn sm" disabled={!!busy} onClick={compact}>
-                <Icon name="database" size={12} /> {busy === 'compact' ? 'Compacting…' : 'Compact database'}
+              <button
+                type="button"
+                className="btn sm"
+                disabled={!!busy}
+                onClick={compact}
+              >
+                <Icon name="database" size={12} />{' '}
+                {busy === 'compact' ? 'Compacting…' : 'Compact database'}
               </button>
-              <button type="button" className="btn sm" disabled={!!busy} onClick={exportData}>
-                <Icon name="external" size={12} /> {busy === 'export' ? 'Exporting…' : 'Export data'}
+              <button
+                type="button"
+                className="btn sm"
+                disabled={!!busy}
+                onClick={exportData}
+              >
+                <Icon name="external" size={12} />{' '}
+                {busy === 'export' ? 'Exporting…' : 'Export data'}
               </button>
             </div>
             <div className="t-meta">
-              Compacting reclaims unused pages from soft-deleted rows. Safe to run at any time.
+              Compacting reclaims unused pages from soft-deleted rows. Safe to
+              run at any time.
             </div>
           </div>
 
           <div className="div-h" />
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div className="lbl-section" style={{ color: 'var(--error-solid)' }}>
+            <div
+              className="lbl-section"
+              style={{ color: 'var(--error-solid)' }}
+            >
               Danger zone
             </div>
             <div className="danger-list">
@@ -193,7 +231,8 @@ export function Storage(): React.ReactElement {
                 <div className="copy">
                   <div className="h">Reset all data</div>
                   <div className="d">
-                    Wipe the entire local corpus and start over. Cannot be undone.
+                    Wipe the entire local corpus and start over. Cannot be
+                    undone.
                   </div>
                 </div>
                 <button
@@ -202,7 +241,8 @@ export function Storage(): React.ReactElement {
                   disabled={!!busy}
                   onClick={resetAll}
                 >
-                  <Icon name="trash" size={12} /> {busy === 'reset' ? 'Resetting…' : 'Reset all'}
+                  <Icon name="trash" size={12} />{' '}
+                  {busy === 'reset' ? 'Resetting…' : 'Reset all'}
                 </button>
               </div>
             </div>
@@ -213,7 +253,11 @@ export function Storage(): React.ReactElement {
   );
 }
 
-function MetricTile(props: { label: string; value: string; sub: string }): React.ReactElement {
+function MetricTile(props: {
+  label: string;
+  value: string;
+  sub: string;
+}): React.ReactElement {
   return (
     <div className="metric-tile">
       <span className="label">{props.label}</span>

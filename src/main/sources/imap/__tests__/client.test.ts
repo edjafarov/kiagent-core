@@ -4,7 +4,12 @@ import type { ImapAccountConfig } from '../types';
 
 describe('toImapFlowOptions', () => {
   it('maps our config + password to imapflow options', () => {
-    const config: ImapAccountConfig = { host: 'imap.example.com', port: 993, secure: true, user: 'me@example.com' };
+    const config: ImapAccountConfig = {
+      host: 'imap.example.com',
+      port: 993,
+      secure: true,
+      user: 'me@example.com',
+    };
     const opts = toImapFlowOptions(config, 'hunter2');
     expect(opts).toMatchObject({
       host: 'imap.example.com',
@@ -16,7 +21,12 @@ describe('toImapFlowOptions', () => {
   });
 
   it('preserves secure:false (STARTTLS) verbatim', () => {
-    const config: ImapAccountConfig = { host: 'h', port: 143, secure: false, user: 'u' };
+    const config: ImapAccountConfig = {
+      host: 'h',
+      port: 143,
+      secure: false,
+      user: 'u',
+    };
     expect(toImapFlowOptions(config, 'p').secure).toBe(false);
   });
 });
@@ -27,7 +37,11 @@ describe('attachImapErrorHandler', () => {
     const log = jest.fn();
     attachImapErrorHandler(flow, log);
     expect(() => flow.emit('error', new Error('socket timeout'))).not.toThrow();
-    expect(log).toHaveBeenCalledWith('[imap] client error', '', 'socket timeout');
+    expect(log).toHaveBeenCalledWith(
+      '[imap] client error',
+      '',
+      'socket timeout',
+    );
   });
 
   it('reads a structured error code when present', () => {
@@ -35,6 +49,10 @@ describe('attachImapErrorHandler', () => {
     const log = jest.fn();
     attachImapErrorHandler(flow, log);
     flow.emit('error', { code: 'ECONNRESET', message: 'reset' });
-    expect(log).toHaveBeenCalledWith('[imap] client error', 'ECONNRESET', 'reset');
+    expect(log).toHaveBeenCalledWith(
+      '[imap] client error',
+      'ECONNRESET',
+      'reset',
+    );
   });
 });

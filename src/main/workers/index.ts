@@ -21,11 +21,15 @@ export function attachBundledWorkers(
   // NOT boot.attachWorker: the re-drive job additionally (1) skips outside
   // the processing window and (2) triggers the model auto-install when
   // deferred vision work exists — the user-approved auto-download path.
-  platform.scheduler.register(`worker:${worker.name}`, worker.schedule as { every: string }, async () => {
-    if (!backgroundLaneOpen(platform)) return;
-    if (platform.store.ledgerDeferred(VISION_CONSUMER).length === 0) return;
-    deps.localLlm.ensureInstalled(); // no-op if installed/downloading/opted-out
-    await platform.engine.rerunDeferred(worker);
-  });
+  platform.scheduler.register(
+    `worker:${worker.name}`,
+    worker.schedule as { every: string },
+    async () => {
+      if (!backgroundLaneOpen(platform)) return;
+      if (platform.store.ledgerDeferred(VISION_CONSUMER).length === 0) return;
+      deps.localLlm.ensureInstalled(); // no-op if installed/downloading/opted-out
+      await platform.engine.rerunDeferred(worker);
+    },
+  );
   return handle;
 }

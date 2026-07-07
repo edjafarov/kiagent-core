@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useAppState } from '@renderer/state/app-state';
 import { useView } from '@renderer/state/view';
 import { Icon } from '@shared/web-ui/icon-sprite';
@@ -40,7 +46,13 @@ function fieldsText(rec: LogRecord): string {
 }
 
 function recordToPlainText(rec: LogRecord): string {
-  return [fmtTs(rec.ts), rec.level.toUpperCase(), rec.scope, rec.msg, fieldsText(rec)]
+  return [
+    fmtTs(rec.ts),
+    rec.level.toUpperCase(),
+    rec.scope,
+    rec.msg,
+    fieldsText(rec),
+  ]
     .filter(Boolean)
     .join(' ');
 }
@@ -58,11 +70,15 @@ function matchesSearch(rec: LogRecord, q: string): boolean {
   return false;
 }
 
-function selectLogsTopBarSlice(s: AppState): { live: number; totalDocs: number } {
+function selectLogsTopBarSlice(s: AppState): {
+  live: number;
+  totalDocs: number;
+} {
   let live = 0;
   let totalDocs = 0;
   for (const a of s.accounts) {
-    if (a.account.status === 'live' || a.account.status === 'backfilling') live += 1;
+    if (a.account.status === 'live' || a.account.status === 'backfilling')
+      live += 1;
     totalDocs += a.docCount;
   }
   return { live, totalDocs };

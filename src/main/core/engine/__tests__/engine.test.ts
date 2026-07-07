@@ -25,7 +25,10 @@ function makeStore(dir: string): CoreStore {
   });
 }
 
-function doc(externalId: string, markdown = `body ${externalId}`): DocumentInput {
+function doc(
+  externalId: string,
+  markdown = `body ${externalId}`,
+): DocumentInput {
   return {
     externalId,
     type: 'note',
@@ -39,13 +42,23 @@ function doc(externalId: string, markdown = `body ${externalId}`): DocumentInput
 /** Two backfill pages, then done — with resume support via numeric cursor. */
 function fakeSource(): Source<number, DocumentInput> {
   return {
-    descriptor: { id: 'fake', name: 'Fake', documentTypes: ['note'], auth: 'none' },
+    descriptor: {
+      id: 'fake',
+      name: 'Fake',
+      documentTypes: ['note'],
+      auth: 'none',
+    },
     async connect() {
       return { identifier: 'fake@test' };
     },
     async *pull(_session, cursor) {
       const pages: Array<Batch<number, DocumentInput>> = [
-        { phase: 'backfill', items: [doc('a'), doc('b')], cursor: 1, estimateTotal: 3 },
+        {
+          phase: 'backfill',
+          items: [doc('a'), doc('b')],
+          cursor: 1,
+          estimateTotal: 3,
+        },
         { phase: 'live', items: [doc('c')], cursor: 2 },
       ];
       for (const page of pages.slice(cursor ?? 0)) yield page;
@@ -71,7 +84,9 @@ describe('engine', () => {
   function makeEngine(source: Source) {
     return createEngine({
       store,
-      sources: { get: (id) => (id === source.descriptor.id ? source : undefined) },
+      sources: {
+        get: (id) => (id === source.descriptor.id ? source : undefined),
+      },
       inference: {
         complete: async () => 'summary!',
         see: async () => 'seen',
@@ -109,14 +124,29 @@ describe('engine', () => {
 
   it('run: backfill progress accumulates across batches instead of resetting per batch', async () => {
     const source: Source<number, DocumentInput> = {
-      descriptor: { id: 'fake', name: 'Fake', documentTypes: ['note'], auth: 'none' },
+      descriptor: {
+        id: 'fake',
+        name: 'Fake',
+        documentTypes: ['note'],
+        auth: 'none',
+      },
       async connect() {
         return { identifier: 'fake@test' };
       },
       async *pull(_session, cursor) {
         const pages: Array<Batch<number, DocumentInput>> = [
-          { phase: 'backfill', items: [doc('a'), doc('b')], cursor: 1, estimateTotal: 5 },
-          { phase: 'backfill', items: [doc('c'), doc('d'), doc('e')], cursor: 2, estimateTotal: 5 },
+          {
+            phase: 'backfill',
+            items: [doc('a'), doc('b')],
+            cursor: 1,
+            estimateTotal: 5,
+          },
+          {
+            phase: 'backfill',
+            items: [doc('c'), doc('d'), doc('e')],
+            cursor: 2,
+            estimateTotal: 5,
+          },
         ];
         for (const page of pages.slice(cursor ?? 0)) yield page;
       },
@@ -150,14 +180,29 @@ describe('engine', () => {
 
   it('run: resumed backfill seeds progress from the stored doc count when the persisted counter is stale', async () => {
     const source: Source<number, DocumentInput> = {
-      descriptor: { id: 'fake', name: 'Fake', documentTypes: ['note'], auth: 'none' },
+      descriptor: {
+        id: 'fake',
+        name: 'Fake',
+        documentTypes: ['note'],
+        auth: 'none',
+      },
       async connect() {
         return { identifier: 'fake@test' };
       },
       async *pull(_session, cursor) {
         const pages: Array<Batch<number, DocumentInput>> = [
-          { phase: 'backfill', items: [doc('a'), doc('b')], cursor: 1, estimateTotal: 7 },
-          { phase: 'backfill', items: [doc('c'), doc('d'), doc('e')], cursor: 2, estimateTotal: 7 },
+          {
+            phase: 'backfill',
+            items: [doc('a'), doc('b')],
+            cursor: 1,
+            estimateTotal: 7,
+          },
+          {
+            phase: 'backfill',
+            items: [doc('c'), doc('d'), doc('e')],
+            cursor: 2,
+            estimateTotal: 7,
+          },
         ];
         for (const page of pages.slice(cursor ?? 0)) yield page;
       },
@@ -218,7 +263,8 @@ describe('engine', () => {
       name: 'summarizer',
       version: 1,
       maxAttempts: 2,
-      matches: (c: Change) => c.kind === 'document' && c.document.type === 'note',
+      matches: (c: Change) =>
+        c.kind === 'document' && c.document.type === 'note',
       async work(change, session) {
         if (change.kind !== 'document') return 'skip';
         worked.push(change.document.externalId);
@@ -265,7 +311,11 @@ describe('engine', () => {
       status: () => {},
       pickFolders: async () => [],
     });
-    await store.commit({ account: account.id, documents: [doc('a')], cursor: 1 });
+    await store.commit({
+      account: account.id,
+      documents: [doc('a')],
+      cursor: 1,
+    });
     await engine.remove(account.id);
     expect(await store.account(account.id)).toBeNull();
     expect(await store.read.count({ includeArchived: true })).toBe(0);
@@ -301,7 +351,11 @@ describe('engine', () => {
     await new Promise((r) => {
       setTimeout(r, 200);
     });
-    await store.commit({ account: account.id, documents: [doc('a'), doc('b')], cursor: 1 });
+    await store.commit({
+      account: account.id,
+      documents: [doc('a'), doc('b')],
+      cursor: 1,
+    });
     await new Promise((r) => {
       setTimeout(r, 200);
     });
@@ -332,11 +386,15 @@ describe('engine', () => {
       convert: async (d: DocumentInput) => d,
       logs: noopLogs,
     });
-    const account = await store.createAccount({ source: 'test', identifier: 'x' });
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'x',
+    });
     const worker: Worker = {
       name: 'vision',
       version: 1,
-      matches: (ch) => ch.kind === 'document' && ch.document.externalId === 'scan',
+      matches: (ch) =>
+        ch.kind === 'document' && ch.document.externalId === 'scan',
       async work(ch, session) {
         if (ch.kind !== 'document') return 'skip';
         // enrich feeds a change for the SAME doc back into the feed — skip
@@ -344,12 +402,19 @@ describe('engine', () => {
         if (ch.document.markdown === 'enriched body') return 'skip';
         await session.read(new Uint8Array([1]));
         await session.see(new Uint8Array([1]), 'describe');
-        session.enrich({ documentId: ch.document.id, markdown: 'enriched body' });
+        session.enrich({
+          documentId: ch.document.id,
+          markdown: 'enriched body',
+        });
         return 'done';
       },
     };
     const handle = engine.attach(worker);
-    await store.commit({ account: account.id, documents: [doc('scan')], cursor: 1 });
+    await store.commit({
+      account: account.id,
+      documents: [doc('scan')],
+      cursor: 1,
+    });
     await waitFor(async () => {
       const d = await store.read.byExternalId(account.id, 'scan', 'note');
       return d?.markdown === 'enriched body';
@@ -368,7 +433,11 @@ describe('engine', () => {
       status: () => {},
       pickFolders: async () => [],
     });
-    await store.commit({ account: account.id, documents: [doc('x')], cursor: 1 });
+    await store.commit({
+      account: account.id,
+      documents: [doc('x')],
+      cursor: 1,
+    });
     const before = store.headSeq();
 
     let attempts = 0;
@@ -378,11 +447,15 @@ describe('engine', () => {
       maxAttempts: 2,
       // Match only the pristine doc: the enrich write-back re-enters the
       // feed and must not re-trigger the worker.
-      matches: (c: Change) => c.kind === 'document' && c.document.markdown === 'body x',
+      matches: (c: Change) =>
+        c.kind === 'document' && c.document.markdown === 'body x',
       async work(change, session) {
         if (change.kind !== 'document') return 'skip';
         attempts += 1;
-        session.enrich({ documentId: change.document.id, markdown: `attempt ${attempts}` });
+        session.enrich({
+          documentId: change.document.id,
+          markdown: `attempt ${attempts}`,
+        });
         if (attempts === 1) throw new Error('boom');
         return 'done';
       },
@@ -413,7 +486,10 @@ describe('engine', () => {
       convert: async (d: DocumentInput) => d,
       logs: noopLogs,
     });
-    const account = await store.createAccount({ source: 'test', identifier: 'x' });
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'x',
+    });
 
     let workCalls = 0;
     const worker: Worker = {
@@ -427,14 +503,21 @@ describe('engine', () => {
       async work(c, session) {
         workCalls += 1;
         if (c.kind !== 'document') return 'skip';
-        session.enrich({ documentId: c.document.id, markdown: 'OCR OVERWRITE' });
+        session.enrich({
+          documentId: c.document.id,
+          markdown: 'OCR OVERWRITE',
+        });
         return 'done';
       },
     };
     const consumer = 'worker:vision:v1';
 
     // Commit a text-poor doc, capture its change seq, mark it deferred.
-    await store.commit({ account: account.id, documents: [doc('scan', '')], cursor: 1 });
+    await store.commit({
+      account: account.id,
+      documents: [doc('scan', '')],
+      cursor: 1,
+    });
     const scan = await store.read.byExternalId(account.id, 'scan', 'note');
     const deferredSeq = scan!.seq;
     store.ledgerRecord(consumer, deferredSeq, 1, 'deferred');
@@ -445,7 +528,12 @@ describe('engine', () => {
     await store.commit({
       consumer,
       cursor: store.consumerCursor(consumer),
-      enrich: [{ documentId: scan!.id, markdown: 'real rich markdown that is plenty long' }],
+      enrich: [
+        {
+          documentId: scan!.id,
+          markdown: 'real rich markdown that is plenty long',
+        },
+      ],
     });
 
     await engine.rerunDeferred(worker);
@@ -466,14 +554,19 @@ describe('engine', () => {
       status: () => {},
       pickFolders: async () => [],
     });
-    await store.commit({ account: account.id, documents: [doc('x')], cursor: 1 });
+    await store.commit({
+      account: account.id,
+      documents: [doc('x')],
+      cursor: 1,
+    });
     const before = store.headSeq();
 
     const worker: Worker = {
       name: 'always-fails',
       version: 1,
       maxAttempts: 2,
-      matches: (c: Change) => c.kind === 'document' && c.document.markdown === 'body x',
+      matches: (c: Change) =>
+        c.kind === 'document' && c.document.markdown === 'body x',
       async work(change, session) {
         if (change.kind !== 'document') return 'skip';
         // Produce output on EVERY attempt, then throw — the last attempt's
@@ -486,7 +579,10 @@ describe('engine', () => {
           metadata: {},
           createdAt: null,
         });
-        session.enrich({ documentId: change.document.id, markdown: 'partial enrich' });
+        session.enrich({
+          documentId: change.document.id,
+          markdown: 'partial enrich',
+        });
         throw new Error('always boom');
       },
     };
@@ -509,7 +605,12 @@ describe('engine', () => {
   it('connect: reconnecting an existing (source, identifier) upserts the account, stops the old running loop, no duplicate', async () => {
     let attempt = 0;
     const source: Source<number, DocumentInput> = {
-      descriptor: { id: 'fake', name: 'Fake', documentTypes: ['note'], auth: 'none' },
+      descriptor: {
+        id: 'fake',
+        name: 'Fake',
+        documentTypes: ['note'],
+        auth: 'none',
+      },
       async connect() {
         attempt += 1;
         return { identifier: 'fake@test', config: { attempt } };
@@ -517,7 +618,11 @@ describe('engine', () => {
       // A never-ending live source: stays running until explicitly stopped.
       async *pull(_session, cursor) {
         for (;;) {
-          yield { phase: 'live' as const, items: [], cursor: (cursor ?? 0) + 1 };
+          yield {
+            phase: 'live' as const,
+            items: [],
+            cursor: (cursor ?? 0) + 1,
+          };
           // eslint-disable-next-line no-await-in-loop
           await new Promise((r) => {
             setTimeout(r, 20);
@@ -538,7 +643,9 @@ describe('engine', () => {
     const account1 = await engine.connect(source, auth);
     expect(account1.config).toEqual({ attempt: 1 });
     const handle1 = engine.run(account1);
-    await waitFor(async () => (await store.account(account1.id))?.status === 'live');
+    await waitFor(
+      async () => (await store.account(account1.id))?.status === 'live',
+    );
 
     // Reconnecting the SAME identifier while the account is still syncing
     // must not throw (no UNIQUE constraint) and must stop the old loop.
@@ -547,11 +654,15 @@ describe('engine', () => {
     expect(account2.config).toEqual({ attempt: 2 }); // latest config wins
     expect(handle1.status).toBe('paused'); // old loop stopped by connect()
 
-    const rows = (await store.read.accounts()).filter((a) => a.source === 'fake');
+    const rows = (await store.read.accounts()).filter(
+      (a) => a.source === 'fake',
+    );
     expect(rows).toHaveLength(1);
 
     const handle2 = engine.run(account2);
-    await waitFor(async () => (await store.account(account2.id))?.status === 'live');
+    await waitFor(
+      async () => (await store.account(account2.id))?.status === 'live',
+    );
     await handle2.stop();
   });
 
@@ -566,11 +677,18 @@ describe('engine', () => {
     let maxActive = 0;
     let starts = 0;
     const source: Source<number, DocumentInput> = {
-      descriptor: { id: 'fake', name: 'Fake', documentTypes: ['note'], auth: 'none' },
+      descriptor: {
+        id: 'fake',
+        name: 'Fake',
+        documentTypes: ['note'],
+        auth: 'none',
+      },
       async connect() {
         return { identifier: 'fake@test' };
       },
-      // Never-ending abort-aware pull, like a realtime socket source.
+      // Never-ending abort-aware pull, like a realtime socket source —
+      // deliberately produces no batches, only blocks until aborted.
+      // eslint-disable-next-line require-yield
       async *pull(session) {
         active += 1;
         starts += 1;
@@ -581,7 +699,9 @@ describe('engine', () => {
               resolve();
               return;
             }
-            session.signal.addEventListener('abort', () => resolve(), { once: true });
+            session.signal.addEventListener('abort', () => resolve(), {
+              once: true,
+            });
           });
         } finally {
           active -= 1;
@@ -638,18 +758,28 @@ describe('engine', () => {
     // socket keeps yielding forever, and isRunning=true is what stops the
     // tick from tearing the connection down for a fresh login every 15m.
     const source: Source<number, DocumentInput> = {
-      descriptor: { id: 'fake', name: 'Fake', documentTypes: ['note'], auth: 'none' },
+      descriptor: {
+        id: 'fake',
+        name: 'Fake',
+        documentTypes: ['note'],
+        auth: 'none',
+      },
       async connect() {
         return { identifier: 'fake@test' };
       },
       async *pull(session) {
-        yield { phase: 'live', items: [doc('a')], cursor: 1 } as Batch<number, DocumentInput>;
+        yield { phase: 'live', items: [doc('a')], cursor: 1 } as Batch<
+          number,
+          DocumentInput
+        >;
         await new Promise<void>((resolve) => {
           if (session.signal.aborted) {
             resolve();
             return;
           }
-          session.signal.addEventListener('abort', () => resolve(), { once: true });
+          session.signal.addEventListener('abort', () => resolve(), {
+            once: true,
+          });
         });
       },
       toDocument: (item) => item,
@@ -665,7 +795,9 @@ describe('engine', () => {
 
     const handle = engine.run(account);
     // First batch committed and the pull is parked on its socket — still running.
-    await waitFor(async () => (await store.account(account.id))?.status === 'live');
+    await waitFor(
+      async () => (await store.account(account.id))?.status === 'live',
+    );
     expect(engine.isRunning(account.id)).toBe(true);
     await handle.stop();
     expect(engine.isRunning(account.id)).toBe(false);
@@ -718,13 +850,19 @@ describe('engine', () => {
 
     const handle = engine.run(account);
     // First retry backs off ~2s; well before the 5-retry give-up (~30s).
-    await waitFor(async () => (await store.account(account.id))?.cursor === 2, 8000);
+    await waitFor(
+      async () => (await store.account(account.id))?.cursor === 2,
+      8000,
+    );
     expect(await store.read.count({ account: account.id })).toBe(3);
     await handle.stop();
   }, 15000);
 
   it('updateConfig: when no loop is running, persists config without starting one', async () => {
-    const account = await store.createAccount({ source: 'test', identifier: 'x' });
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'x',
+    });
     const engine = makeEngine(fakeSource());
 
     await engine.updateConfig(account.id, { roots: ['/a'] });
@@ -774,14 +912,23 @@ describe('engine', () => {
 
   it('updateConfig: while a loop is running, persists config and restarts it (old handle stopped)', async () => {
     const source: Source<number, DocumentInput> = {
-      descriptor: { id: 'fake', name: 'Fake', documentTypes: ['note'], auth: 'none' },
+      descriptor: {
+        id: 'fake',
+        name: 'Fake',
+        documentTypes: ['note'],
+        auth: 'none',
+      },
       async connect() {
         return { identifier: 'fake@test', config: { roots: ['/a'] } };
       },
       // A never-ending live source: stays running until explicitly stopped.
       async *pull(_session, cursor) {
         for (;;) {
-          yield { phase: 'live' as const, items: [], cursor: (cursor ?? 0) + 1 };
+          yield {
+            phase: 'live' as const,
+            items: [],
+            cursor: (cursor ?? 0) + 1,
+          };
           // eslint-disable-next-line no-await-in-loop
           await new Promise((r) => {
             setTimeout(r, 20);
@@ -799,7 +946,9 @@ describe('engine', () => {
       pickFolders: async () => [],
     });
     const handle1 = engine.run(account);
-    await waitFor(async () => (await store.account(account.id))?.status === 'live');
+    await waitFor(
+      async () => (await store.account(account.id))?.status === 'live',
+    );
 
     await engine.updateConfig(account.id, { roots: ['/a', '/b'] });
 
@@ -811,7 +960,9 @@ describe('engine', () => {
     const cursorAtRestart = acc?.cursor as number;
     await waitFor(async () => {
       const fresh = await store.account(account.id);
-      return typeof fresh?.cursor === 'number' && fresh.cursor > cursorAtRestart;
+      return (
+        typeof fresh?.cursor === 'number' && fresh.cursor > cursorAtRestart
+      );
     });
 
     await engine.remove(account.id); // stop the fresh loop, clean up
@@ -819,7 +970,12 @@ describe('engine', () => {
 
   it('toDocument returning an array commits every document, parent first', async () => {
     const source: Source<number, string> = {
-      descriptor: { id: 'multi', name: 'Multi', documentTypes: ['note', 'attachment'], auth: 'none' },
+      descriptor: {
+        id: 'multi',
+        name: 'Multi',
+        documentTypes: ['note', 'attachment'],
+        auth: 'none',
+      },
       async connect() {
         return { identifier: 'multi@test' };
       },
@@ -845,10 +1001,16 @@ describe('engine', () => {
     });
 
     const handle = engine.run(account);
-    await waitFor(async () => (await store.read.count({ account: account.id })) === 2);
+    await waitFor(
+      async () => (await store.read.count({ account: account.id })) === 2,
+    );
     await handle.stop();
 
-    const child = await store.read.byExternalId(account.id, 't1/att', 'attachment');
+    const child = await store.read.byExternalId(
+      account.id,
+      't1/att',
+      'attachment',
+    );
     const parent = await store.read.byExternalId(account.id, 't1', 'note');
     expect(child?.parentId).toBe(parent?.id); // resolved in the same tx
   });
@@ -864,7 +1026,12 @@ describe('engine', () => {
       overrides: Pick<Source<number, DocumentInput>, 'reconcile'>,
     ): Source<number, DocumentInput> {
       return {
-        descriptor: { id: 'fake-reconcile', name: 'FakeReconcile', documentTypes: ['note'], auth: 'none' },
+        descriptor: {
+          id: 'fake-reconcile',
+          name: 'FakeReconcile',
+          documentTypes: ['note'],
+          auth: 'none',
+        },
         async connect() {
           return { identifier: 'fake-reconcile@test' };
         },
@@ -1012,7 +1179,12 @@ describe('engine', () => {
         releaseReconcileGate = resolve;
       });
       const source: Source<number, DocumentInput> = {
-        descriptor: { id: 'fake-toctou', name: 'FakeTOCTOU', documentTypes: ['note'], auth: 'none' },
+        descriptor: {
+          id: 'fake-toctou',
+          name: 'FakeTOCTOU',
+          documentTypes: ['note'],
+          auth: 'none',
+        },
         async connect() {
           return { identifier: 'fake-toctou@test' };
         },
@@ -1040,10 +1212,17 @@ describe('engine', () => {
         status: () => {},
         pickFolders: async () => [],
       });
-      await store.commit({ account: account.id, documents: [doc('a')], cursor: 1 });
+      await store.commit({
+        account: account.id,
+        documents: [doc('a')],
+        cursor: 1,
+      });
 
       const handle = engine.run(account);
-      await waitFor(async () => (await store.read.byExternalId(account.id, 'b', 'note')) !== null);
+      await waitFor(
+        async () =>
+          (await store.read.byExternalId(account.id, 'b', 'note')) !== null,
+      );
       releaseReconcileGate?.();
       // Give reconcile time to resume, finish its (now stale) drain, and
       // commit its diff — without the startSeq guard this is exactly when
@@ -1066,7 +1245,12 @@ describe('engine', () => {
       });
       let reconcileStarted = false;
       const source: Source<number, DocumentInput> = {
-        descriptor: { id: 'fake-tail-race', name: 'FakeTailRace', documentTypes: ['note'], auth: 'none' },
+        descriptor: {
+          id: 'fake-tail-race',
+          name: 'FakeTailRace',
+          documentTypes: ['note'],
+          auth: 'none',
+        },
         async connect() {
           return { identifier: 'fake-tail-race@test' };
         },

@@ -54,7 +54,9 @@ export interface CorePlatform {
   /** Per-source OAuth refreshers; source families add theirs at registration. */
   refreshers: Map<string, (creds: Credentials) => Promise<Credentials | null>>;
   convert(input: DocumentInput): Promise<DocumentInput>;
-  createAppProjection(extras: AppStateExtras): ReturnType<typeof createAppProjection>;
+  createAppProjection(
+    extras: AppStateExtras,
+  ): ReturnType<typeof createAppProjection>;
   shutdown(): Promise<void>;
 }
 
@@ -86,8 +88,18 @@ export function bootCore(deps: BootDeps): CorePlatform {
     },
   };
 
-  const refreshers = new Map<string, (creds: Credentials) => Promise<Credentials | null>>();
-  const engine = createEngine({ store, sources, inference, convert, logs: sink, refreshers });
+  const refreshers = new Map<
+    string,
+    (creds: Credentials) => Promise<Credentials | null>
+  >();
+  const engine = createEngine({
+    store,
+    sources,
+    inference,
+    convert,
+    logs: sink,
+    refreshers,
+  });
 
   return {
     store,
@@ -119,24 +131,30 @@ export function runAccount(platform: CorePlatform, account: Account): Handle {
   const source = platform.sources.get(account.source);
   const cadence = account.cadence ?? source?.descriptor.cadence;
   if (cadence) {
-    platform.scheduler.register(`source:${account.source}:${account.id}`, cadence, async () => {
-      // Start-if-idle, never replace. A batch source's previous pull has
-      // ended by now, so this begins the next incremental one — but a live
-      // source's pull never ends, and replacing it would tear down its
-      // connection and force a fresh login + full history re-send every
-      // tick (WhatsApp). The tick doubles as a supervisor: a loop that
-      // died (retries exhausted, extension crash) is no longer running
-      // and gets restarted here.
-      if (platform.engine.isRunning(account.id)) return;
-      const fresh = await platform.store.account(account.id);
-      if (fresh && fresh.status !== 'paused') platform.engine.run(fresh);
-    });
+    platform.scheduler.register(
+      `source:${account.source}:${account.id}`,
+      cadence,
+      async () => {
+        // Start-if-idle, never replace. A batch source's previous pull has
+        // ended by now, so this begins the next incremental one — but a live
+        // source's pull never ends, and replacing it would tear down its
+        // connection and force a fresh login + full history re-send every
+        // tick (WhatsApp). The tick doubles as a supervisor: a loop that
+        // died (retries exhausted, extension crash) is no longer running
+        // and gets restarted here.
+        if (platform.engine.isRunning(account.id)) return;
+        const fresh = await platform.store.account(account.id);
+        if (fresh && fresh.status !== 'paused') platform.engine.run(fresh);
+      },
+    );
   }
   return handle;
 }
 
 /** Resume sync for every non-paused account and register cadence jobs. */
-export async function resumeAccounts(platform: CorePlatform): Promise<Map<string, Handle>> {
+export async function resumeAccounts(
+  platform: CorePlatform,
+): Promise<Map<string, Handle>> {
   const handles = new Map<string, Handle>();
   const accounts = await platform.store.read.accounts();
   for (const account of accounts) {
@@ -160,18 +178,25 @@ export async function resumeAccounts(platform: CorePlatform): Promise<Map<string
 export function attachWorker(platform: CorePlatform, worker: Worker): Handle {
   const handle = platform.engine.attach(worker);
   if (worker.schedule && worker.schedule !== 'live') {
-    platform.scheduler.register(`worker:${worker.name}`, worker.schedule, async () => {
-      await platform.engine.rerunDeferred(worker);
-    });
+    platform.scheduler.register(
+      `worker:${worker.name}`,
+      worker.schedule,
+      async () => {
+        await platform.engine.rerunDeferred(worker);
+      },
+    );
   }
   return handle;
 }
 
 /** Evaluate the processing window: is the background inference lane open? */
-export function backgroundLaneOpen(platform: CorePlatform, now = new Date()): boolean {
+export function backgroundLaneOpen(
+  platform: CorePlatform,
+  now = new Date(),
+): boolean {
   const p = platform.prefs.get().processing;
   if (!p.enabled) return false;
-  const env = platform.scheduler.env;
+  const { env } = platform.scheduler;
   if (env.onBattery) return false;
   switch (p.window) {
     case 'always':

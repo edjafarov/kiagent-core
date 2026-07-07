@@ -62,9 +62,16 @@ function IdentityPanel(props: { identity: Identity }): React.ReactElement {
       .finally(() => setSaving(false));
   };
 
-  const initial = (identity.name.trim()[0] ?? identity.emails[0]?.trim()[0] ?? '?').toUpperCase();
+  const initial = (
+    identity.name.trim()[0] ??
+    identity.emails[0]?.trim()[0] ??
+    '?'
+  ).toUpperCase();
   const primary = identity.name || identity.emails[0] || '—';
-  const secondary = identity.name && identity.emails.length > 0 ? identity.emails.join(', ') : null;
+  const secondary =
+    identity.name && identity.emails.length > 0
+      ? identity.emails.join(', ')
+      : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -79,10 +86,21 @@ function IdentityPanel(props: { identity: Identity }): React.ReactElement {
               <span aria-hidden="true">{initial}</span>
             )}
           </span>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1,
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
             <span style={{ fontSize: 12.5, fontWeight: 500 }}>{primary}</span>
             {secondary ? (
-              <span className="mono" style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+              <span
+                className="mono"
+                style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}
+              >
                 {secondary}
               </span>
             ) : null}
@@ -117,7 +135,9 @@ function IdentityPanel(props: { identity: Identity }): React.ReactElement {
                   className="input mono-text"
                   value={email}
                   onChange={(e) =>
-                    setEmails((prev) => prev.map((v, idx) => (idx === i ? e.target.value : v)))
+                    setEmails((prev) =>
+                      prev.map((v, idx) => (idx === i ? e.target.value : v)),
+                    )
                   }
                   style={{ flex: 1 }}
                 />
@@ -125,7 +145,9 @@ function IdentityPanel(props: { identity: Identity }): React.ReactElement {
                   type="button"
                   className="btn ghost sm icon-only"
                   aria-label="Remove email"
-                  onClick={() => setEmails((prev) => prev.filter((_, idx) => idx !== i))}
+                  onClick={() =>
+                    setEmails((prev) => prev.filter((_, idx) => idx !== i))
+                  }
                 >
                   ×
                 </button>
@@ -143,10 +165,20 @@ function IdentityPanel(props: { identity: Identity }): React.ReactElement {
           </div>
 
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button type="button" className="btn primary sm" disabled={saving} onClick={save}>
+            <button
+              type="button"
+              className="btn primary sm"
+              disabled={saving}
+              onClick={save}
+            >
               {saving ? 'Saving…' : 'Save'}
             </button>
-            <button type="button" className="btn ghost sm" disabled={saving} onClick={cancel}>
+            <button
+              type="button"
+              className="btn ghost sm"
+              disabled={saving}
+              onClick={cancel}
+            >
               Cancel
             </button>
           </div>

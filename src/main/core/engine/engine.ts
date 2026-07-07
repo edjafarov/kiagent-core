@@ -15,7 +15,6 @@ import type {
   Inference,
   LogLevel,
   Projection,
-  Query,
   Seq,
   Session,
   Source,
@@ -27,7 +26,12 @@ import type {
 import type { CoreStore } from '../store/store';
 
 export interface LogSink {
-  log(scope: string, level: LogLevel, msg: string, fields?: Record<string, unknown>): void;
+  log(
+    scope: string,
+    level: LogLevel,
+    msg: string,
+    fields?: Record<string, unknown>,
+  ): void;
 }
 
 export interface EngineDeps {
@@ -56,7 +60,10 @@ async function* abortable<T>(
   const it = iterable[Symbol.asyncIterator]();
   const aborted = new Promise<'aborted'>((resolve) => {
     if (signal.aborted) resolve('aborted');
-    else signal.addEventListener('abort', () => resolve('aborted'), { once: true });
+    else
+      signal.addEventListener('abort', () => resolve('aborted'), {
+        once: true,
+      });
   });
   try {
     for (;;) {
@@ -197,7 +204,10 @@ export function createEngine(deps: EngineDeps): Engine & {
   stopAll(): Promise<void>;
   /** Persist an account's config; restarts its sync loop if one is running
    *  so the new config takes effect immediately. */
-  updateConfig(accountId: AccountId, config: Record<string, unknown>): Promise<void>;
+  updateConfig(
+    accountId: AccountId,
+    config: Record<string, unknown>,
+  ): Promise<void>;
   /** True while the account's pull loop is still executing; false once it
    *  settled (finished, gave up after retries, or was stopped). Cadence
    *  ticks consult this so they only START a pull, never replace one that
@@ -206,9 +216,16 @@ export function createEngine(deps: EngineDeps): Engine & {
   isRunning(accountId: AccountId): boolean;
 } {
   const { store, logs } = deps;
-  const running = new Map<string, { stop(): Promise<void>; active(): boolean }>();
+  const running = new Map<
+    string,
+    { stop(): Promise<void>; active(): boolean }
+  >();
 
-  const makeSession = (account: Account, signal: AbortSignal, scope: string): Session => ({
+  const makeSession = (
+    account: Account,
+    signal: AbortSignal,
+    scope: string,
+  ): Session => ({
     account,
     signal,
     async credentials(): Promise<Credentials | null> {
@@ -236,7 +253,8 @@ export function createEngine(deps: EngineDeps): Engine & {
     },
   });
 
-  const workerConsumerName = (w: Worker): string => `worker:${w.name}:v${w.version}`;
+  const workerConsumerName = (w: Worker): string =>
+    `worker:${w.name}:v${w.version}`;
 
   /** Run one change through a worker with bounded retries. Returns emitted docs and enrich batch. */
   const workOne = async (
@@ -255,7 +273,10 @@ export function createEngine(deps: EngineDeps): Engine & {
         return deps.inference.complete(prompt, { ...opts, lane: 'background' });
       },
       see(image, prompt, opts) {
-        return deps.inference.see(image, prompt, { ...opts, lane: 'background' });
+        return deps.inference.see(image, prompt, {
+          ...opts,
+          lane: 'background',
+        });
       },
       read(image, opts) {
         return deps.inference.read(image, { ...opts, lane: 'background' });
@@ -294,7 +315,11 @@ export function createEngine(deps: EngineDeps): Engine & {
         return { docs: emitted, enrich: enriched };
       } catch (err) {
         if (signal.aborted) throw err;
-        logs.log(scope, 'warn', `attempt ${attempt}/${maxAttempts} failed at seq ${change.seq}: ${String(err)}`);
+        logs.log(
+          scope,
+          'warn',
+          `attempt ${attempt}/${maxAttempts} failed at seq ${change.seq}: ${String(err)}`,
+        );
         if (attempt === maxAttempts) {
           store.ledgerRecord(consumer, change.seq, attempt, 'failed');
           // A failed final attempt must not commit its half-finished output.
@@ -304,7 +329,10 @@ export function createEngine(deps: EngineDeps): Engine & {
           // on, and nothing partial lands.
           return { docs: [], enrich: [] };
         }
-        await sleep(Math.min(BACKOFF_BASE_MS * 2 ** attempt, BACKOFF_CAP_MS), signal);
+        await sleep(
+          Math.min(BACKOFF_BASE_MS * 2 ** attempt, BACKOFF_CAP_MS),
+          signal,
+        );
       }
     }
     return { docs: emitted, enrich: enriched };
@@ -347,7 +375,11 @@ export function createEngine(deps: EngineDeps): Engine & {
       });
       await running.get(`account:${account.id}`)?.stop();
       if (captured) await store.vault.save(account.id, captured);
-      logs.log(`source:${source.descriptor.id}`, 'info', `connected ${identifier}`);
+      logs.log(
+        `source:${source.descriptor.id}`,
+        'info',
+        `connected ${identifier}`,
+      );
       return account;
     },
 
@@ -363,7 +395,11 @@ export function createEngine(deps: EngineDeps): Engine & {
       const prev = running.get(key);
 
       if (!source) {
-        logs.log(scope, 'error', `no source registered for account ${account.id}`);
+        logs.log(
+          scope,
+          'error',
+          `no source registered for account ${account.id}`,
+        );
         status = 'error';
         done = Promise.resolve();
       } else {
@@ -417,7 +453,11 @@ export function createEngine(deps: EngineDeps): Engine & {
                   // reconcilePass handles its own errors internally and
                   // should never throw — this is a defensive backstop so a
                   // bug in it can't crash the main pull loop.
-                  logs.log(scope, 'error', `reconcile pass crashed: ${String(err)}`);
+                  logs.log(
+                    scope,
+                    'error',
+                    `reconcile pass crashed: ${String(err)}`,
+                  );
                 });
               }
               for await (const batch of abortable(
@@ -455,9 +495,13 @@ export function createEngine(deps: EngineDeps): Engine & {
                   deletions: batch.deletions,
                   cursor: batch.cursor,
                   status,
-                  progress: batch.estimateTotal !== undefined
-                    ? { done: progressDone, totalEstimate: batch.estimateTotal }
-                    : undefined,
+                  progress:
+                    batch.estimateTotal !== undefined
+                      ? {
+                          done: progressDone,
+                          totalEstimate: batch.estimateTotal,
+                        }
+                      : undefined,
                   error: null,
                 });
                 retries = 0;
@@ -500,7 +544,11 @@ export function createEngine(deps: EngineDeps): Engine & {
               if (abort.signal.aborted) return;
               retries += 1;
               const msg = String(err instanceof Error ? err.message : err);
-              logs.log(scope, 'error', `sync failed (retry ${retries}/${SOURCE_MAX_RETRIES}): ${msg}`);
+              logs.log(
+                scope,
+                'error',
+                `sync failed (retry ${retries}/${SOURCE_MAX_RETRIES}): ${msg}`,
+              );
               if (retries >= SOURCE_MAX_RETRIES) {
                 status = 'error';
                 await store.commit({
@@ -513,7 +561,10 @@ export function createEngine(deps: EngineDeps): Engine & {
                 return;
               }
               try {
-                await sleep(Math.min(BACKOFF_BASE_MS * 2 ** retries, BACKOFF_CAP_MS), abort.signal);
+                await sleep(
+                  Math.min(BACKOFF_BASE_MS * 2 ** retries, BACKOFF_CAP_MS),
+                  abort.signal,
+                );
               } catch {
                 return;
               }
@@ -545,7 +596,13 @@ export function createEngine(deps: EngineDeps): Engine & {
         async stats() {
           const account2 = await store.account(account.id);
           const done2 = account2?.progress?.done ?? 0;
-          return { pending: 0, done: done2, skipped: 0, failed: 0, deferred: 0 };
+          return {
+            pending: 0,
+            done: done2,
+            skipped: 0,
+            failed: 0,
+            deferred: 0,
+          };
         },
         async stop() {
           abort.abort();
@@ -574,7 +631,10 @@ export function createEngine(deps: EngineDeps): Engine & {
       logs.log('engine', 'info', `account ${accountId} removed`);
     },
 
-    async updateConfig(accountId: AccountId, config: Record<string, unknown>): Promise<void> {
+    async updateConfig(
+      accountId: AccountId,
+      config: Record<string, unknown>,
+    ): Promise<void> {
       await store.setAccountConfig(accountId, config);
       // Only restart a loop that's actually running — a never-started account
       // just gets its config persisted for the next run(). And a running-map
@@ -595,7 +655,10 @@ export function createEngine(deps: EngineDeps): Engine & {
       const done = (async () => {
         const start = store.consumerCursor(consumer);
         try {
-          for await (const changes of abortable(store.feed(start), abort.signal)) {
+          for await (const changes of abortable(
+            store.feed(start),
+            abort.signal,
+          )) {
             if (abort.signal.aborted) return;
             let emitted: DocumentInput[] = [];
             let enrich: EnrichInput[] = [];
@@ -618,7 +681,11 @@ export function createEngine(deps: EngineDeps): Engine & {
           }
         } catch (err) {
           if (!abort.signal.aborted) {
-            logs.log(`worker:${worker.name}`, 'error', `stopped: ${String(err)}`);
+            logs.log(
+              `worker:${worker.name}`,
+              'error',
+              `stopped: ${String(err)}`,
+            );
           }
         }
       })();
@@ -643,7 +710,10 @@ export function createEngine(deps: EngineDeps): Engine & {
         },
         async stats() {
           const c = store.ledgerCounts(consumer);
-          const pending = Math.max(0, store.headSeq() - store.consumerCursor(consumer));
+          const pending = Math.max(
+            0,
+            store.headSeq() - store.consumerCursor(consumer),
+          );
           return {
             pending,
             done: c.done,
@@ -697,11 +767,14 @@ export function createEngine(deps: EngineDeps): Engine & {
       }
     },
 
-    project<S>(projection: Projection<S>, onDiff: (state: S, seq: Seq) => void): Handle {
+    project<S>(
+      projection: Projection<S>,
+      onDiff: (state: S, seq: Seq) => void,
+    ): Handle {
       const abort = new AbortController();
       let stopped = false;
       const done = (async () => {
-        const read: Query = store.read;
+        const { read } = store;
         const state0 = (await projection.init(read)) as S;
         // Head captured after init: a change landing mid-init may be applied
         // twice; apply() must tolerate replays (upserts by id do).
@@ -709,7 +782,10 @@ export function createEngine(deps: EngineDeps): Engine & {
         let state: S = state0;
         onDiff(state, seq);
         try {
-          for await (const changes of abortable(store.feed(seq), abort.signal)) {
+          for await (const changes of abortable(
+            store.feed(seq),
+            abort.signal,
+          )) {
             if (abort.signal.aborted) return;
             state = projection.apply(state, changes);
             seq = changes[changes.length - 1].seq;
@@ -739,7 +815,9 @@ export function createEngine(deps: EngineDeps): Engine & {
     },
 
     async stopAll(): Promise<void> {
-      await Promise.all([...running.values()].map((h) => h.stop().catch(() => {})));
+      await Promise.all(
+        [...running.values()].map((h) => h.stop().catch(() => {})),
+      );
     },
   };
 

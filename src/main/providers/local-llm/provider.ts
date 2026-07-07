@@ -1,7 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 
-import type { InferenceProvider, LogLevel, Prefs, ProviderStatus } from '@shared/contracts';
+import type {
+  InferenceProvider,
+  LogLevel,
+  Prefs,
+  ProviderStatus,
+} from '@shared/contracts';
 
 import { chatText, describeImage } from './api';
 import { checkCapability, readHostProbes } from './capability';
@@ -51,7 +56,8 @@ export function createLocalLlmProvider(deps: {
   const download = deps.download ?? downloadModel;
   const filesPresent = deps.filesPresent ?? modelFilesPresent;
   const makeServer =
-    deps.makeServer ?? ((args) => new LlamaServer(args as any) as unknown as ServerLike);
+    deps.makeServer ??
+    ((args) => new LlamaServer(args as any) as unknown as ServerLike);
   const idleStopMs = deps.idleStopMs ?? DEFAULT_IDLE_STOP_MS;
 
   const capability = checkCapability(readHostProbes());
@@ -125,7 +131,10 @@ export function createLocalLlmProvider(deps: {
     const s = server;
     server = null;
     serverStarting = null;
-    if (s) await s.stop().catch((err) => deps.log('warn', `llama stop: ${String(err)}`));
+    if (s)
+      await s
+        .stop()
+        .catch((err) => deps.log('warn', `llama stop: ${String(err)}`));
   };
 
   const touchIdle = (): void => {
@@ -158,7 +167,10 @@ export function createLocalLlmProvider(deps: {
         const model = await selectedModel();
         const dest = modelDir(deps.modelsDir, model.id);
         if (!filesPresent(model, dest)) {
-          deps.log('info', `downloading ${model.id} (${model.files.reduce((n, f) => n + f.sizeBytes, 0)} bytes)`);
+          deps.log(
+            'info',
+            `downloading ${model.id} (${model.files.reduce((n, f) => n + f.sizeBytes, 0)} bytes)`,
+          );
           await download(model, dest, {
             signal: abort.signal,
             onProgress: (received, total) => {
@@ -251,11 +263,17 @@ export function createLocalLlmProvider(deps: {
     },
     async handle(req) {
       const model = servableModel();
-      if (!model) throw new Error(`local-llm not ready (status: ${JSON.stringify(this.status())})`);
+      if (!model)
+        throw new Error(
+          `local-llm not ready (status: ${JSON.stringify(this.status())})`,
+        );
       const s = await ensureServer(model);
       touchIdle();
       if (req.kind === 'complete') {
-        const { prompt, maxTokens } = req.payload as { prompt: string; maxTokens?: number };
+        const { prompt, maxTokens } = req.payload as {
+          prompt: string;
+          maxTokens?: number;
+        };
         return chatText(s.baseUrl(), prompt, { maxTokens });
       }
       if (req.kind === 'see') {

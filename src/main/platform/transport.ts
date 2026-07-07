@@ -116,7 +116,10 @@ export function utilityProcessTransport(
   });
   if (onOutput) {
     const MAX_LINE = 4096;
-    const wire = (name: 'stdout' | 'stderr', stream: NodeJS.ReadableStream | null | undefined) => {
+    const wire = (
+      name: 'stdout' | 'stderr',
+      stream: NodeJS.ReadableStream | null | undefined,
+    ) => {
       if (!stream) return;
       let buf = '';
       const emit = (raw: string) => {
@@ -177,21 +180,44 @@ export function utilityProcessTransport(
 
 export interface RpcEndpoint {
   call(ns: string, method: string, args: unknown[]): Promise<unknown>;
-  onCall(h: (ns: string, method: string, args: unknown[]) => Promise<unknown>): void;
+  onCall(
+    h: (ns: string, method: string, args: unknown[]) => Promise<unknown>,
+  ): void;
   post(msg: Record<string, unknown>): void;
-  onNotify(cb: (msg: { kind: string } & Record<string, unknown>) => void): () => void;
+  onNotify(
+    cb: (msg: { kind: string } & Record<string, unknown>) => void,
+  ): () => void;
   dispose(reason: string): void;
 }
 
-interface CallMsg { kind: 'call'; id: number; ns: string; method: string; args: unknown[] }
-interface ReplyMsg { kind: 'reply'; id: number; ok: boolean; value?: unknown; error?: string }
+interface CallMsg {
+  kind: 'call';
+  id: number;
+  ns: string;
+  method: string;
+  args: unknown[];
+}
+interface ReplyMsg {
+  kind: 'reply';
+  id: number;
+  ok: boolean;
+  value?: unknown;
+  error?: string;
+}
 
 export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
   let nextId = 1;
   let disposed = false;
-  const pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>();
-  const notifySubs = new Set<(msg: { kind: string } & Record<string, unknown>) => void>();
-  let handler: ((ns: string, method: string, args: unknown[]) => Promise<unknown>) | null = null;
+  const pending = new Map<
+    number,
+    { resolve(v: unknown): void; reject(e: Error): void }
+  >();
+  const notifySubs = new Set<
+    (msg: { kind: string } & Record<string, unknown>) => void
+  >();
+  let handler:
+    | ((ns: string, method: string, args: unknown[]) => Promise<unknown>)
+    | null = null;
 
   const offMessage = channel.onMessage((raw) => {
     const msg = raw as { kind?: string };
@@ -200,14 +226,21 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
       const c = msg as CallMsg;
       const h = handler;
       const reply = (ok: boolean, value?: unknown, error?: string) =>
-        channel.send({ kind: 'reply', id: c.id, ok, value, error } satisfies ReplyMsg);
+        channel.send({
+          kind: 'reply',
+          id: c.id,
+          ok,
+          value,
+          error,
+        } satisfies ReplyMsg);
       if (!h) {
         reply(false, undefined, 'no call handler installed');
         return;
       }
       h(c.ns, c.method, c.args).then(
         (value) => reply(true, value),
-        (e) => reply(false, undefined, e instanceof Error ? e.message : String(e)),
+        (e) =>
+          reply(false, undefined, e instanceof Error ? e.message : String(e)),
       );
       return;
     }
@@ -220,7 +253,9 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
       else p.reject(new Error(r.error ?? 'remote error'));
       return;
     }
-    notifySubs.forEach((cb) => cb(msg as { kind: string } & Record<string, unknown>));
+    notifySubs.forEach((cb) =>
+      cb(msg as { kind: string } & Record<string, unknown>),
+    );
   });
 
   return {

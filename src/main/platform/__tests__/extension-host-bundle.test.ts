@@ -35,14 +35,18 @@ describe('webpack-compiled extensionHost bundle', () => {
   it('loads an on-disk extension by absolute path and activates it', async () => {
     const config: webpack.Configuration = {
       ...devConfig,
-      entry: { extensionHost: path.join(__dirname, '..', 'extension-host-entry.ts') },
+      entry: {
+        extensionHost: path.join(__dirname, '..', 'extension-host-entry.ts'),
+      },
       output: { ...devConfig.output, path: outDir },
       // inline-source-map bloats the throwaway build; not under test.
       devtool: false,
     };
-    const stats = await new Promise<webpack.Stats | undefined>((resolve, reject) => {
-      webpack(config, (err, s) => (err ? reject(err) : resolve(s)));
-    });
+    const stats = await new Promise<webpack.Stats | undefined>(
+      (resolve, reject) => {
+        webpack(config, (err, s) => (err ? reject(err) : resolve(s)));
+      },
+    );
     expect(stats?.hasErrors() ?? true).toBe(false);
     const bundlePath = path.join(outDir, 'extensionHost.bundle.dev.js');
     expect(fs.existsSync(bundlePath)).toBe(true);
@@ -55,11 +59,16 @@ describe('webpack-compiled extensionHost bundle', () => {
     try {
       const activated = new Promise<{ kind: string } & Record<string, unknown>>(
         (resolve, reject) => {
-          child.on('message', (m: { kind: string } & Record<string, unknown>) => {
-            if (m.kind === 'errored') reject(new Error(String(m.error)));
-            if (m.kind === 'activated') resolve(m);
-          });
-          child.on('exit', (code) => reject(new Error(`child exited early (${code})`)));
+          child.on(
+            'message',
+            (m: { kind: string } & Record<string, unknown>) => {
+              if (m.kind === 'errored') reject(new Error(String(m.error)));
+              if (m.kind === 'activated') resolve(m);
+            },
+          );
+          child.on('exit', (code) =>
+            reject(new Error(`child exited early (${code})`)),
+          );
         },
       );
       child.send({
@@ -74,7 +83,9 @@ describe('webpack-compiled extensionHost bundle', () => {
       const contributions = outcome.contributions as {
         sources: { descriptor: { id: string } }[];
       };
-      expect(contributions.sources.map((s) => s.descriptor.id)).toEqual(['basicsrc']);
+      expect(contributions.sources.map((s) => s.descriptor.id)).toEqual([
+        'basicsrc',
+      ]);
     } finally {
       child.kill();
     }

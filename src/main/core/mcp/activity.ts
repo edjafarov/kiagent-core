@@ -255,7 +255,8 @@ export function summarizeCall(
           ? `"${args.query}"`
           : null;
       const filters: string[] = [];
-      if (typeof args.source === 'string') filters.push(`source=${args.source}`);
+      if (typeof args.source === 'string')
+        filters.push(`source=${args.source}`);
       if (typeof args.type === 'string') filters.push(`type=${args.type}`);
       const filterText = filters.length ? `(${filters.join(', ')})` : null;
       const what = [q, filterText].filter(Boolean).join(' ') || '(all)';

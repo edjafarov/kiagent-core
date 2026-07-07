@@ -31,7 +31,11 @@ const REPLY_MESSAGE = [
 
 describe('parseImapMessage', () => {
   it('extracts envelope fields, strips angle brackets from Message-ID, and cleans the body', async () => {
-    const item = await parseImapMessage(rawMessage(42, REPLY_MESSAGE), 'INBOX', 111222);
+    const item = await parseImapMessage(
+      rawMessage(42, REPLY_MESSAGE),
+      'INBOX',
+      111222,
+    );
 
     expect(item.mailbox).toBe('INBOX');
     expect(item.uid).toBe(42);
@@ -53,7 +57,12 @@ describe('parseImapMessage', () => {
   });
 
   it('defaults subject/from/date fields sanely on a minimal message', async () => {
-    const minimal = ['From: a@example.com', 'To: b@example.com', '', 'just a body'].join('\r\n');
+    const minimal = [
+      'From: a@example.com',
+      'To: b@example.com',
+      '',
+      'just a body',
+    ].join('\r\n');
     const item = await parseImapMessage(rawMessage(1, minimal), 'INBOX', 1);
     expect(item.subject).toBeNull();
     expect(item.date).toBeNull();

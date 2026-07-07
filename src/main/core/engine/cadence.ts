@@ -5,7 +5,9 @@ export function everyToMs(every: string): number {
   const m = /^(\d+)\s*(s|m|h|d)$/.exec(every.trim());
   if (!m) throw new Error(`bad cadence interval: ${every}`);
   const n = Number(m[1]);
-  const unit = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as 's' | 'm' | 'h' | 'd'];
+  const unit = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[
+    m[2] as 's' | 'm' | 'h' | 'd'
+  ];
   return n * unit;
 }
 
@@ -33,7 +35,11 @@ function cronNext(expr: string, from: Date): Date {
 }
 
 /** When should a job with this cadence run next, given its last run? */
-export function nextRun(cadence: Cadence, lastRun: string | null, now: Date): Date | null {
+export function nextRun(
+  cadence: Cadence,
+  lastRun: string | null,
+  now: Date,
+): Date | null {
   if (cadence === 'manual') return null;
   if ('every' in cadence) {
     const base = lastRun ? new Date(lastRun) : new Date(0);

@@ -25,7 +25,9 @@ export function createHostRouter(opts: {
   granted: ReadonlySet<Cap>;
   surfaces: Surfaces;
   logSink: LogSink;
-}): { dispatch(ns: string, method: string, args: unknown[]): Promise<unknown> } {
+}): {
+  dispatch(ns: string, method: string, args: unknown[]): Promise<unknown>;
+} {
   const scope = `extension:${opts.extensionId}`;
   return {
     async dispatch(ns, method, args) {
@@ -44,7 +46,9 @@ export function createHostRouter(opts: {
       // Grant check: precedes method existence (controller adjudication).
       if (!opts.granted.has(cap)) {
         opts.logSink.log(scope, 'warn', 'permission-violation', { ns, method });
-        throw new Error(`CAP_DENIED: extension was not granted the '${cap}' capability`);
+        throw new Error(
+          `CAP_DENIED: extension was not granted the '${cap}' capability`,
+        );
       }
       // Method existence check: only after grant passes. Own-property +
       // typeof guards (no prototype-chain lookup) so a GRANTED namespace
@@ -56,7 +60,8 @@ export function createHostRouter(opts: {
         nsSurface && Object.prototype.hasOwnProperty.call(nsSurface, method)
           ? nsSurface[method]
           : undefined;
-      if (typeof fn !== 'function') throw new Error(`unknown method ${ns}.${method}`);
+      if (typeof fn !== 'function')
+        throw new Error(`unknown method ${ns}.${method}`);
       return fn(...args);
     },
   };

@@ -1,6 +1,6 @@
 import semver from 'semver';
-import { parseGitHubRef, formatGitHubRef } from './github-ref';
 import type { UpdateInfo } from '@shared/ipc';
+import { parseGitHubRef, formatGitHubRef } from './github-ref';
 
 export async function checkUpdates(deps: {
   installed: Array<{ id: string; version: string; ref?: string }>;

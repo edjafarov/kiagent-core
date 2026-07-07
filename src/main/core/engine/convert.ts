@@ -10,7 +10,9 @@ import type { LogSink } from './engine';
  * Runs in-process for now; the crash-isolated worker pool rides the
  * converter/worker.ts entry when it lands (see LEFTOVERS).
  */
-export function createConverter(logs: LogSink): (input: DocumentInput) => Promise<DocumentInput> {
+export function createConverter(
+  logs: LogSink,
+): (input: DocumentInput) => Promise<DocumentInput> {
   return async (input) => {
     if (!input.binary || input.markdown !== null) return stripBinary(input);
     const { bytes, mime, filename } = input.binary;
@@ -20,7 +22,11 @@ export function createConverter(logs: LogSink): (input: DocumentInput) => Promis
         return { ...stripBinary(input), markdown };
       }
     } catch (err) {
-      logs.log('converter', 'warn', `parse failed for ${filename ?? mime}: ${String(err)}`);
+      logs.log(
+        'converter',
+        'warn',
+        `parse failed for ${filename ?? mime}: ${String(err)}`,
+      );
     }
     // Unparseable or text-poor: stays markdown-null for the vision pass.
     return stripBinary(input);
@@ -28,7 +34,7 @@ export function createConverter(logs: LogSink): (input: DocumentInput) => Promis
 }
 
 function stripBinary(input: DocumentInput): DocumentInput {
-  const { binary, ...rest } = input;
+  const { binary: _binary, ...rest } = input;
   return rest;
 }
 
@@ -49,7 +55,8 @@ async function parse(
   }
 
   if (
-    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mime ===
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
     ext === 'docx'
   ) {
     const mammoth = await import('mammoth');
@@ -66,7 +73,8 @@ async function parse(
   }
 
   if (
-    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime ===
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
     ext === 'xlsx' ||
     ext === 'xls'
   ) {
@@ -90,12 +98,18 @@ async function parse(
 
 async function htmlToMarkdown(html: string): Promise<string> {
   const { default: TurndownService } = await import('turndown');
-  const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+  const td = new TurndownService({
+    headingStyle: 'atx',
+    codeBlockStyle: 'fenced',
+  });
   return td.turndown(html);
 }
 
 function csvToMarkdown(csv: string): string {
-  const lines = csv.split('\n').filter((l) => l.trim()).slice(0, 200);
+  const lines = csv
+    .split('\n')
+    .filter((l) => l.trim())
+    .slice(0, 200);
   if (lines.length === 0) return '';
   const rows = lines.map((l) => l.split(','));
   const header = `| ${rows[0].join(' | ')} |`;

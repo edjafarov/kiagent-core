@@ -37,14 +37,23 @@ describe('runExtensionHost — bootstrap/activate', () => {
   it('requires the entry, activates, and reports contribution descriptors', async () => {
     const activate = jest.fn(async () => ({
       sources: [],
-      tools: [{ name: 'echo', description: 'd', inputSchema: {}, call: async (a: unknown) => a }],
+      tools: [
+        {
+          name: 'echo',
+          description: 'd',
+          inputSchema: {},
+          call: async (a: unknown) => a,
+        },
+      ],
     }));
     const { mainEp, waitFor, requireModule } = boot({ default: { activate } });
     const activated = waitFor('activated');
     const ready = waitFor('ready');
     mainEp.post(BOOT);
     await ready;
-    const { contributions } = (await activated) as { contributions: Contributions };
+    const { contributions } = (await activated) as {
+      contributions: Contributions;
+    };
     expect(requireModule).toHaveBeenCalledWith('/virtual/entry.js');
     expect(contributions.tools).toEqual([
       { name: 'echo', description: 'd', inputSchema: {}, tier: undefined },
@@ -55,17 +64,33 @@ describe('runExtensionHost — bootstrap/activate', () => {
   it('host proxy: activate() can call query through the endpoint; self is local', async () => {
     let seenSelf: unknown;
     const mod = {
-      async activate(host: { self: { id: string; dataDir: string }; query: { count(q: unknown): Promise<number> } }) {
+      async activate(host: {
+        self: { id: string; dataDir: string };
+        query: { count(q: unknown): Promise<number> };
+      }) {
         seenSelf = host.self;
         const n = await host.query.count({});
-        return { tools: [{ name: 't', description: String(n), inputSchema: {}, call: async () => n }] };
+        return {
+          tools: [
+            {
+              name: 't',
+              description: String(n),
+              inputSchema: {},
+              call: async () => n,
+            },
+          ],
+        };
       },
     };
     const { mainEp, waitFor } = boot(mod);
-    mainEp.onCall(async (ns, method) => (ns === 'query' && method === 'count' ? 42 : null));
+    mainEp.onCall(async (ns, method) =>
+      ns === 'query' && method === 'count' ? 42 : null,
+    );
     const activated = waitFor('activated');
     mainEp.post(BOOT);
-    const { contributions } = (await activated) as { contributions: Contributions };
+    const { contributions } = (await activated) as {
+      contributions: Contributions;
+    };
     expect(seenSelf).toEqual({ id: 'test.basic', dataDir: '/virtual/data' });
     expect(contributions.tools[0].description).toBe('42');
   });
@@ -73,7 +98,16 @@ describe('runExtensionHost — bootstrap/activate', () => {
   it('tool calls dispatch to the kept tool object', async () => {
     const mod = {
       async activate() {
-        return { tools: [{ name: 'sum', description: '', inputSchema: {}, call: async (a: { x: number }) => a.x + 1 }] };
+        return {
+          tools: [
+            {
+              name: 'sum',
+              description: '',
+              inputSchema: {},
+              call: async (a: { x: number }) => a.x + 1,
+            },
+          ],
+        };
       },
     };
     const { mainEp, waitFor } = boot(mod);
@@ -84,7 +118,11 @@ describe('runExtensionHost — bootstrap/activate', () => {
   });
 
   it('a throwing activate sends errored; deactivate runs the hook then exits 0', async () => {
-    const bad = boot({ activate: async () => { throw new Error('boom'); } });
+    const bad = boot({
+      activate: async () => {
+        throw new Error('boom');
+      },
+    });
     const errored = bad.waitFor('errored');
     bad.mainEp.post(BOOT);
     expect((await errored).error).toMatch(/boom/);
@@ -95,7 +133,9 @@ describe('runExtensionHost — bootstrap/activate', () => {
     good.mainEp.post(BOOT);
     await activated;
     good.mainEp.post({ kind: 'deactivate' });
-    await new Promise((r) => { setTimeout(r, 10); });
+    await new Promise((r) => {
+      setTimeout(r, 10);
+    });
     expect(deactivate).toHaveBeenCalled();
     expect(good.exit).toHaveBeenCalledWith(0);
   });
@@ -103,7 +143,9 @@ describe('runExtensionHost — bootstrap/activate', () => {
   it('events: remote emissions dispatch to locally-registered callbacks', async () => {
     const seen: unknown[] = [];
     const mod = {
-      async activate(host: { events: { on(e: string, cb: (p: unknown) => void): () => void } }) {
+      async activate(host: {
+        events: { on(e: string, cb: (p: unknown) => void): () => void };
+      }) {
         host.events.on('ping', (p) => seen.push(p));
         return {};
       },
@@ -114,13 +156,23 @@ describe('runExtensionHost — bootstrap/activate', () => {
     mainEp.post({ ...BOOT, caps: [...BOOT.caps, 'events'] as Cap[] });
     await activated;
     mainEp.post({ kind: 'event', name: 'ping', payload: { n: 1 } });
-    await new Promise((r) => { setTimeout(r, 10); });
+    await new Promise((r) => {
+      setTimeout(r, 10);
+    });
     expect(seen).toEqual([{ n: 1 }]);
   });
 });
 
 describe('runExtensionHost — source runner', () => {
-  const account = { id: 'acc1', source: 'basicsrc', identifier: 'x', config: {}, status: 'connecting', cursor: null, createdAt: 'now' };
+  const account = {
+    id: 'acc1',
+    source: 'basicsrc',
+    identifier: 'x',
+    config: {},
+    status: 'connecting',
+    cursor: null,
+    createdAt: 'now',
+  };
 
   function sourceMod() {
     const pulled: unknown[] = [];
@@ -129,15 +181,38 @@ describe('runExtensionHost — source runner', () => {
         return {
           sources: [
             {
-              descriptor: { id: 'basicsrc', name: 'Basic', documentTypes: ['t'], auth: 'password' as const },
-              async connect(auth: { prompt(s: unknown): Promise<Record<string, unknown>> }) {
+              descriptor: {
+                id: 'basicsrc',
+                name: 'Basic',
+                documentTypes: ['t'],
+                auth: 'password' as const,
+              },
+              async connect(auth: {
+                prompt(s: unknown): Promise<Record<string, unknown>>;
+              }) {
                 const a = await auth.prompt({ fields: ['password'] });
                 return { identifier: `user-${a.password}` };
               },
-              async *pull(session: { credentials(): Promise<unknown>; signal: AbortSignal }, cursor: { n: number } | null) {
+              async *pull(
+                session: {
+                  credentials(): Promise<unknown>;
+                  signal: AbortSignal;
+                },
+                cursor: { n: number } | null,
+              ) {
                 pulled.push(cursor);
-                const creds = (await session.credentials()) as { password?: string } | null;
-                yield { phase: 'backfill', items: [{ v: `a-${creds?.password}` }, { v: 'skip' }, { v: 'b' }], cursor: { n: 1 } };
+                const creds = (await session.credentials()) as {
+                  password?: string;
+                } | null;
+                yield {
+                  phase: 'backfill',
+                  items: [
+                    { v: `a-${creds?.password}` },
+                    { v: 'skip' },
+                    { v: 'b' },
+                  ],
+                  cursor: { n: 1 },
+                };
                 if (session.signal.aborted) return;
                 yield { phase: 'live', items: [{ v: 'c' }], cursor: { n: 2 } };
               },
@@ -145,11 +220,32 @@ describe('runExtensionHost — source runner', () => {
                 if (item.v === 'skip') return null;
                 if (item.v === 'b') {
                   return [
-                    { externalId: 'b1', type: 't', title: 'b1', markdown: 'b1', metadata: {}, createdAt: null },
-                    { externalId: 'b2', type: 't', title: 'b2', markdown: 'b2', metadata: {}, createdAt: null },
+                    {
+                      externalId: 'b1',
+                      type: 't',
+                      title: 'b1',
+                      markdown: 'b1',
+                      metadata: {},
+                      createdAt: null,
+                    },
+                    {
+                      externalId: 'b2',
+                      type: 't',
+                      title: 'b2',
+                      markdown: 'b2',
+                      metadata: {},
+                      createdAt: null,
+                    },
                   ];
                 }
-                return { externalId: item.v, type: 't', title: item.v, markdown: item.v, metadata: {}, createdAt: null };
+                return {
+                  externalId: item.v,
+                  type: 't',
+                  title: item.v,
+                  markdown: item.v,
+                  metadata: {},
+                  createdAt: null,
+                };
               },
               async fetchBytes(_s: unknown, doc: { id: string }) {
                 return new Uint8Array([1, 2, Number(doc.id.length)]);
@@ -165,9 +261,10 @@ describe('runExtensionHost — source runner', () => {
   it('connect proxies auth verbs; pull is demand-driven with toDocument applied child-side', async () => {
     const { mod, pulled } = sourceMod();
     const { mainEp, waitFor } = boot(mod);
-    mainEp.onCall(async (ns, method, args) => {
+    mainEp.onCall(async (ns, method, _args) => {
       if (ns === 'auth' && method === 'prompt') return { password: 'pw' };
-      if (ns === 'session' && method === 'credentials') return { password: 'tok' };
+      if (ns === 'session' && method === 'credentials')
+        return { password: 'tok' };
       if (ns === 'session' && method === 'log') return undefined;
       throw new Error(`unexpected ${ns}.${method}`);
     });
@@ -175,7 +272,9 @@ describe('runExtensionHost — source runner', () => {
     mainEp.post(BOOT);
     await activated;
 
-    await expect(mainEp.call('source', 'connect', [11, 'basicsrc'])).resolves.toEqual({
+    await expect(
+      mainEp.call('source', 'connect', [11, 'basicsrc']),
+    ).resolves.toEqual({
       identifier: 'user-pw',
     });
 
@@ -188,7 +287,9 @@ describe('runExtensionHost — source runner', () => {
     mainEp.post({ kind: 'src-next', pullId: 21 });
     const b1 = await batch1;
     // 3 items → skip dropped, 'b' fanned out to 2 docs → 3 DocumentInputs
-    expect(b1.batch.items.map((i: { externalId: string }) => i.externalId)).toEqual(['a-tok', 'b1', 'b2']);
+    expect(
+      b1.batch.items.map((i: { externalId: string }) => i.externalId),
+    ).toEqual(['a-tok', 'b1', 'b2']);
     expect(b1.batch.cursor).toEqual({ n: 1 });
     // After first src-next, pulled has one entry
     expect(pulled).toEqual([null]);
@@ -237,7 +338,12 @@ describe('runExtensionHost — source runner', () => {
     // Assert no src-done or src-error arrived — entry was cleaned up
     expect(src31Messages).toHaveLength(1);
 
-    const bytes = (await mainEp.call('source', 'fetch-bytes', [41, 'basicsrc', account, { id: 'doc99' }])) as Uint8Array;
+    const bytes = (await mainEp.call('source', 'fetch-bytes', [
+      41,
+      'basicsrc',
+      account,
+      { id: 'doc99' },
+    ])) as Uint8Array;
     expect([...bytes]).toEqual([1, 2, 5]);
   });
 
@@ -245,13 +351,24 @@ describe('runExtensionHost — source runner', () => {
     const mod = {
       async activate() {
         return {
-          sources: [{
-            descriptor: { id: 's', name: 's', documentTypes: [], auth: 'none' as const },
-            async connect() { return { identifier: 'i' }; },
-            // eslint-disable-next-line require-yield
-            async *pull(): AsyncGenerator<never> { throw new Error('pull broke'); },
-            toDocument: () => null,
-          }],
+          sources: [
+            {
+              descriptor: {
+                id: 's',
+                name: 's',
+                documentTypes: [],
+                auth: 'none' as const,
+              },
+              async connect() {
+                return { identifier: 'i' };
+              },
+              // eslint-disable-next-line require-yield
+              async *pull(): AsyncGenerator<never> {
+                throw new Error('pull broke');
+              },
+              toDocument: () => null,
+            },
+          ],
         };
       },
     };

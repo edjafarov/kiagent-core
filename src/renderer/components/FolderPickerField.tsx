@@ -75,7 +75,11 @@ export function FolderPickerField(
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />
-        <button type="button" className="btn sm" onClick={() => setPickerOpen(true)}>
+        <button
+          type="button"
+          className="btn sm"
+          onClick={() => setPickerOpen(true)}
+        >
           Choose…
         </button>
       </div>

@@ -41,7 +41,10 @@ const BATCH_SIZE = 50;
  */
 const LIVE_POLL_INTERVAL_MS = 60_000;
 
-export type ConnectFn = (config: ImapAccountConfig, password: string) => Promise<ImapClient>;
+export type ConnectFn = (
+  config: ImapAccountConfig,
+  password: string,
+) => Promise<ImapClient>;
 export type SleepFn = (ms: number, signal: AbortSignal) => Promise<void>;
 
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -75,7 +78,9 @@ export interface ImapSourceDeps {
  * `email.message` documents (one per message — see the module doc in
  * types.ts for why this differs from legacy's per-thread documents).
  */
-export function createImapSource(deps: ImapSourceDeps = {}): Source<ImapCursor, ImapMessageItem> {
+export function createImapSource(
+  deps: ImapSourceDeps = {},
+): Source<ImapCursor, ImapMessageItem> {
   const connectFn = deps.connect ?? connectImapClient;
   const sleepFn = deps.sleep ?? defaultSleep;
   const pollIntervalMs = deps.pollIntervalMs ?? LIVE_POLL_INTERVAL_MS;
@@ -126,13 +131,19 @@ export function createImapSource(deps: ImapSourceDeps = {}): Source<ImapCursor, 
 
       const host = typeof answers.host === 'string' ? answers.host.trim() : '';
       const user = typeof answers.user === 'string' ? answers.user.trim() : '';
-      const password = typeof answers.password === 'string' ? answers.password : '';
+      const password =
+        typeof answers.password === 'string' ? answers.password : '';
       if (!host || !user || !password) {
         throw new Error('imap: host, user and password are required');
       }
-      const secure = answers.secure === undefined ? true : Boolean(answers.secure);
+      const secure =
+        answers.secure === undefined ? true : Boolean(answers.secure);
       const port =
-        typeof answers.port === 'number' && answers.port > 0 ? answers.port : secure ? 993 : 143;
+        typeof answers.port === 'number' && answers.port > 0
+          ? answers.port
+          : secure
+            ? 993
+            : 143;
 
       const config: ImapAccountConfig = { host, port, secure, user };
 
@@ -169,7 +180,9 @@ export function createImapSource(deps: ImapSourceDeps = {}): Source<ImapCursor, 
         const folders = await client.listFolders();
         const mailboxes = resolveMailboxes(folders).map((f) => f.path);
         if (mailboxes.length === 0) {
-          throw new Error('imap: no syncable mailboxes found (expected INBOX/All Mail and/or Sent)');
+          throw new Error(
+            'imap: no syncable mailboxes found (expected INBOX/All Mail and/or Sent)',
+          );
         }
 
         let cur: ImapCursor = cursor ?? { mailboxes: {} };
@@ -215,7 +228,13 @@ export function createImapSource(deps: ImapSourceDeps = {}): Source<ImapCursor, 
           if (session.signal.aborted) return;
           for (const path of mailboxes) {
             if (session.signal.aborted) return;
-            for await (const batch of syncMailboxOnce(client, path, cur, 'live', session)) {
+            for await (const batch of syncMailboxOnce(
+              client,
+              path,
+              cur,
+              'live',
+              session,
+            )) {
               cur = batch.cursor;
               yield batch;
               if (session.signal.aborted) return;
@@ -303,10 +322,14 @@ async function* syncMailboxOnce(
   const plan = planMailboxSync(prev, status.uidValidity, presentUids);
 
   if (plan.reset) {
-    session.log('warn', `imap: UIDVALIDITY changed for "${path}" — resyncing from scratch`);
+    session.log(
+      'warn',
+      `imap: UIDVALIDITY changed for "${path}" — resyncing from scratch`,
+    );
   }
   const phase: PullPhase = plan.reset ? 'backfill' : defaultPhase;
-  const estimateTotal = phase === 'backfill' ? (totalEstimateOverride ?? status.exists) : undefined;
+  const estimateTotal =
+    phase === 'backfill' ? (totalEstimateOverride ?? status.exists) : undefined;
 
   if (plan.uidsToFetch.length === 0) {
     // Floor the cursor so an empty (or newly-reset) mailbox still gets a
@@ -330,7 +353,10 @@ async function* syncMailboxOnce(
       try {
         items.push(await parseImapMessage(raw, path, status.uidValidity));
       } catch (e) {
-        session.log('warn', `imap: failed to parse ${path} uid=${raw.uid}: ${String(e)}`);
+        session.log(
+          'warn',
+          `imap: failed to parse ${path} uid=${raw.uid}: ${String(e)}`,
+        );
       }
     }
     const lastUid = Math.max(...uidChunk);

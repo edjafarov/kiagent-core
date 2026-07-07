@@ -39,7 +39,7 @@ const VLM_UNDECODABLE_EXT_RE = /\.(webp|heic|heif|tiff?)$/i;
  *  keeps text-poor HEIC/WebP/TIFF from re-driving pass 2 forever. */
 export function isVlmDecodable(doc: Document): boolean {
   const meta = doc.metadata as VisualMeta;
-  const mime = meta.mime;
+  const { mime } = meta;
   if (mime && mime.startsWith('image/')) return VLM_DECODABLE_MIME.has(mime);
   const name = meta.filename ?? doc.title ?? '';
   return !VLM_UNDECODABLE_EXT_RE.test(name);

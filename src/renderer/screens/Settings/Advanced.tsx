@@ -26,10 +26,14 @@ export function Advanced(): React.ReactElement {
     setExportMsg(null);
     window.kiagent
       .invoke('logs:export', undefined)
-      .then((path) => window.kiagent.invoke('app:open-path', { path }).then(() => path))
+      .then((path) =>
+        window.kiagent.invoke('app:open-path', { path }).then(() => path),
+      )
       .then((path) => setExportMsg(`Exported to ${path}`))
       .catch((e: unknown) =>
-        setExportMsg(`Export failed: ${e instanceof Error ? e.message : 'unknown error'}`),
+        setExportMsg(
+          `Export failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+        ),
       )
       .finally(() => setExporting(false));
   };
@@ -38,7 +42,9 @@ export function Advanced(): React.ReactElement {
     <>
       <div>
         <h2 className="h-screen">Advanced</h2>
-        <div className="t-meta">Configuration, logs, and destructive actions.</div>
+        <div className="t-meta">
+          Configuration, logs, and destructive actions.
+        </div>
       </div>
       <div className="div-h" />
 
@@ -81,19 +87,29 @@ export function Advanced(): React.ReactElement {
             label="Browser history"
             desc="Allow the browser connector to read history for indexing."
             checked={prefs.privacy.browserHistory}
-            onChange={(v) => patch({ privacy: { ...prefs.privacy, browserHistory: v } })}
+            onChange={(v) =>
+              patch({ privacy: { ...prefs.privacy, browserHistory: v } })
+            }
           />
           <ToggleRow
             label="Send anonymous diagnostics"
             desc="Crash reports and performance metrics. No corpus content."
             checked={prefs.privacy.sendDiagnostics}
-            onChange={(v) => patch({ privacy: { ...prefs.privacy, sendDiagnostics: v } })}
+            onChange={(v) =>
+              patch({ privacy: { ...prefs.privacy, sendDiagnostics: v } })
+            }
           />
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button type="button" className="btn sm" disabled={exporting} onClick={exportLogs}>
-            <Icon name="external" size={12} /> {exporting ? 'Exporting…' : 'Export logs'}
+          <button
+            type="button"
+            className="btn sm"
+            disabled={exporting}
+            onClick={exportLogs}
+          >
+            <Icon name="external" size={12} />{' '}
+            {exporting ? 'Exporting…' : 'Export logs'}
           </button>
           {exportMsg && <span className="t-meta">{exportMsg}</span>}
         </div>

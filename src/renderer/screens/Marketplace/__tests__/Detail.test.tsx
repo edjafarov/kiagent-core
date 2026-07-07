@@ -1,6 +1,12 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  within,
+  waitFor,
+} from '@testing-library/react';
 import type { ExtensionSnapshot } from '@shared/contracts';
 import type { MarketplaceListItem, PluginDetail } from '@shared/ipc';
 import { CAP_CATALOG } from '../../../components/cap-catalog';
@@ -10,12 +16,16 @@ import { Detail } from '../Detail';
 // react-markdown v9 is ESM-only and must be mocked under ts-jest (importing
 // it un-mocked crashes Jest) — this factory stands in for the real renderer
 // everywhere Detail (or anything importing it) is under test.
-jest.mock('react-markdown', () => (p: { children: string }) => (
-  <div data-testid="md">{p.children}</div>
-));
+jest.mock(
+  'react-markdown',
+  () =>
+    function (p: { children: string }) {
+      return <div data-testid="md">{p.children}</div>;
+    },
+);
 
 const invoke = jest.fn();
-let mockState: { extensions: ExtensionSnapshot[] } = { extensions: [] };
+const mockState: { extensions: ExtensionSnapshot[] } = { extensions: [] };
 
 jest.mock('../../../state/app-state', () => ({
   useAppState: (sel: (s: unknown) => unknown) => sel(mockState),
@@ -23,11 +33,16 @@ jest.mock('../../../state/app-state', () => ({
 
 beforeEach(() => {
   invoke.mockReset();
-  (window as unknown as { kiagent: unknown }).kiagent = { invoke, on: () => () => {} };
+  (window as unknown as { kiagent: unknown }).kiagent = {
+    invoke,
+    on: () => () => {},
+  };
   mockState.extensions = [];
 });
 
-function catalogItem(overrides: Partial<MarketplaceListItem> = {}): MarketplaceListItem {
+function catalogItem(
+  overrides: Partial<MarketplaceListItem> = {},
+): MarketplaceListItem {
   return {
     owner: 'kia-plugins',
     repo: 'gmail-tools',
@@ -38,7 +53,9 @@ function catalogItem(overrides: Partial<MarketplaceListItem> = {}): MarketplaceL
   };
 }
 
-function extSnapshot(overrides: Partial<ExtensionSnapshot> = {}): ExtensionSnapshot {
+function extSnapshot(
+  overrides: Partial<ExtensionSnapshot> = {},
+): ExtensionSnapshot {
   return {
     id: 'ext.gmail-tools',
     name: 'Gmail Tools',
@@ -85,7 +102,9 @@ function catalogRow(overrides: Partial<MarketplaceRow> = {}): MarketplaceRow {
 /** Installed-but-not-in-catalog row (dev install), or used as a lightweight
  *  stand-in for "installed, no README fetch" scenarios that don't care
  *  about the marketplace:detail round-trip. */
-function installedOnlyRow(overrides: Partial<MarketplaceRow> = {}): MarketplaceRow {
+function installedOnlyRow(
+  overrides: Partial<MarketplaceRow> = {},
+): MarketplaceRow {
   return {
     key: 'ext:ext.gmail-tools',
     title: 'Gmail Tools',
@@ -97,10 +116,13 @@ function installedOnlyRow(overrides: Partial<MarketplaceRow> = {}): MarketplaceR
   };
 }
 
-function mockInvoke(handlers: Record<string, (payload: unknown) => unknown>): void {
+function mockInvoke(
+  handlers: Record<string, (payload: unknown) => unknown>,
+): void {
   invoke.mockImplementation((channel: string, payload: unknown) => {
     const handler = handlers[channel];
-    if (!handler) return Promise.reject(new Error(`unexpected channel ${channel}`));
+    if (!handler)
+      return Promise.reject(new Error(`unexpected channel ${channel}`));
     return Promise.resolve(handler(payload));
   });
 }
@@ -161,7 +183,9 @@ describe('Detail', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(CAP_CATALOG.net.label)).toBeInTheDocument();
-    expect(within(dialog).getByText(CAP_CATALOG.query.label)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(CAP_CATALOG.query.label),
+    ).toBeInTheDocument();
     // The preview's oauth binding is part of install consent (I1): the
     // sign-in row must be visible BEFORE the user confirms the install.
     expect(
@@ -172,14 +196,21 @@ describe('Detail', () => {
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Install' }));
 
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(invoke).toHaveBeenCalledWith('extension:install-commit', { token: 'tok-1' });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+    );
+    expect(invoke).toHaveBeenCalledWith('extension:install-commit', {
+      token: 'tok-1',
+    });
   });
 
   test('preview refusal shows an inline .mkt-error notice and never opens the modal', async () => {
     mockInvoke({
       'marketplace:detail': () => pluginDetail(),
-      'extension:install-preview': () => ({ ok: false, error: 'rate limited, try later' }),
+      'extension:install-preview': () => ({
+        ok: false,
+        error: 'rate limited, try later',
+      }),
     });
 
     render(<Detail row={catalogRow()} />);
@@ -213,7 +244,9 @@ describe('Detail', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Install' }));
 
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+    );
     expect(await screen.findByText('disk full')).toBeInTheDocument();
   });
 
@@ -224,22 +257,36 @@ describe('Detail', () => {
         return { ok: true };
       },
     });
-    const snapshot = extSnapshot({ status: 'needs-consent', caps: ['db', 'ui'] });
+    const snapshot = extSnapshot({
+      status: 'needs-consent',
+      caps: ['db', 'ui'],
+    });
     mockState.extensions = [snapshot];
 
     render(<Detail row={installedOnlyRow({ installed: snapshot })} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Review permissions' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Review permissions' }),
+    );
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(CAP_CATALOG.db.label)).toBeInTheDocument();
     expect(within(dialog).getByText(CAP_CATALOG.ui.label)).toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Grant permissions' }));
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Grant permissions' }),
+    );
 
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(invoke).toHaveBeenCalledWith('extension:grant-consent', { id: 'ext.gmail-tools' });
-    expect(invoke).not.toHaveBeenCalledWith('extension:install-preview', expect.anything());
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+    );
+    expect(invoke).toHaveBeenCalledWith('extension:grant-consent', {
+      id: 'ext.gmail-tools',
+    });
+    expect(invoke).not.toHaveBeenCalledWith(
+      'extension:install-preview',
+      expect.anything(),
+    );
   });
 
   test('an installed snapshot with oauthSources shows the sign-in row on the detail pane and in the review dialog', async () => {
@@ -280,7 +327,10 @@ describe('Detail', () => {
     mockInvoke({
       'extension:uninstall': (payload) => {
         expect(payload).toEqual({ id: 'ext.gmail-tools' });
-        return { ok: false, error: "Remove this connector's sources before uninstalling it." };
+        return {
+          ok: false,
+          error: "Remove this connector's sources before uninstalling it.",
+        };
       },
     });
 
@@ -289,7 +339,9 @@ describe('Detail', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Uninstall' }));
 
     expect(
-      await screen.findByText("Remove this connector's sources before uninstalling it."),
+      await screen.findByText(
+        "Remove this connector's sources before uninstalling it.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -297,16 +349,29 @@ describe('Detail', () => {
     ['latest is null', pluginDetail({ latest: null })],
     [
       'latest has no tarballUrl',
-      pluginDetail({ latest: { tag: 'v1.1.0', version: '1.1.0', publishedAt: '2026-01-01T00:00:00Z', tarballUrl: null, prerelease: false } }),
+      pluginDetail({
+        latest: {
+          tag: 'v1.1.0',
+          version: '1.1.0',
+          publishedAt: '2026-01-01T00:00:00Z',
+          tarballUrl: null,
+          prerelease: false,
+        },
+      }),
     ],
-  ])('no installable release (%s) renders a disabled notice button', async (_label, detail) => {
-    mockInvoke({ 'marketplace:detail': () => detail });
+  ])(
+    'no installable release (%s) renders a disabled notice button',
+    async (_label, detail) => {
+      mockInvoke({ 'marketplace:detail': () => detail });
 
-    render(<Detail row={catalogRow()} />);
+      render(<Detail row={catalogRow()} />);
 
-    const btn = await screen.findByRole('button', { name: 'No installable release yet' });
-    expect(btn).toBeDisabled();
-  });
+      const btn = await screen.findByRole('button', {
+        name: 'No installable release yet',
+      });
+      expect(btn).toBeDisabled();
+    },
+  );
 
   test('the Enable/Disable toggle calls extension:set-enabled with the inverted flag', async () => {
     const snapshot = extSnapshot({ enabled: true });
@@ -364,14 +429,18 @@ describe('Detail', () => {
 
     render(<Detail row={installedOnlyRow({ installed: snapshot })} />);
 
-    const uninstallBtn = await screen.findByRole('button', { name: 'Uninstall' });
+    const uninstallBtn = await screen.findByRole('button', {
+      name: 'Uninstall',
+    });
     fireEvent.click(uninstallBtn);
     fireEvent.click(uninstallBtn);
 
     // Resolve the pending invoke
     resolve({ ok: true });
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
-    expect(invoke).toHaveBeenCalledWith('extension:uninstall', { id: 'ext.gmail-tools' });
+    expect(invoke).toHaveBeenCalledWith('extension:uninstall', {
+      id: 'ext.gmail-tools',
+    });
   });
 
   test('Update on a catalog-less marketplace-origin row previews with the bare (unpinned) installed ref', async () => {
@@ -379,7 +448,9 @@ describe('Detail', () => {
     // since dropped out of the catalog (e.g. topic removed): row.catalog is
     // undefined, but the installed snapshot still carries a pinned github:
     // ref and an update is flagged available.
-    const snapshot = extSnapshot({ ref: 'github:kia-plugins/gmail-tools@v1.0.0' });
+    const snapshot = extSnapshot({
+      ref: 'github:kia-plugins/gmail-tools@v1.0.0',
+    });
     mockState.extensions = [snapshot];
     mockInvoke({
       'extension:install-preview': (payload) => {
@@ -413,7 +484,10 @@ describe('Detail', () => {
   });
 
   test('a catalog-less row whose installed ref is not a github: ref (e.g. a file: dev install) never renders Update, even if flagged updateAvailable', async () => {
-    const snapshot = extSnapshot({ origin: 'dev', ref: 'file:/Users/dev/gmail-tools' });
+    const snapshot = extSnapshot({
+      origin: 'dev',
+      ref: 'file:/Users/dev/gmail-tools',
+    });
     mockState.extensions = [snapshot];
 
     render(
@@ -423,12 +497,17 @@ describe('Detail', () => {
     );
 
     await screen.findByRole('button', { name: 'Uninstall' });
-    expect(screen.queryByRole('button', { name: 'Update' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Update' }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Installed' })).toBeDisabled();
   });
 
   test('an installed extension with errored status renders the error notice', async () => {
-    const snapshot = extSnapshot({ status: 'errored', error: 'Something went wrong' });
+    const snapshot = extSnapshot({
+      status: 'errored',
+      error: 'Something went wrong',
+    });
     mockState.extensions = [snapshot];
 
     render(<Detail row={installedOnlyRow({ installed: snapshot })} />);

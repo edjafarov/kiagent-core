@@ -81,7 +81,9 @@ describe('LlamaServer supervisor (fake timers, no real processes/network)', () =
     // before this test gets a chance to crash it — masking the growth this
     // test exists to verify.
     const healthyByChildIndex = [true, false, true];
-    const isHealthyAt = jest.fn(async () => healthyByChildIndex[children.length - 1] ?? true);
+    const isHealthyAt = jest.fn(
+      async () => healthyByChildIndex[children.length - 1] ?? true,
+    );
 
     const s = new LlamaServer({
       binaryPath: 'unused',

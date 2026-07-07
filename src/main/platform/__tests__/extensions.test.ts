@@ -12,8 +12,13 @@ import {
 } from '../extensions';
 
 const GOOD = {
-  id: 'test.basic', name: 'Basic', version: '1.0.0', engine: '^1.0.0',
-  entry: 'index.js', caps: ['net'], contributes: { sources: ['basicsrc'] },
+  id: 'test.basic',
+  name: 'Basic',
+  version: '1.0.0',
+  engine: '^1.0.0',
+  entry: 'index.js',
+  caps: ['net'],
+  contributes: { sources: ['basicsrc'] },
 };
 
 function writeExt(extDir: string, dirName: string, manifest: unknown): void {
@@ -33,8 +38,12 @@ describe('extension disk state', () => {
   it('installed.json round-trips and defaults to []', () => {
     expect(readInstalled(extDir)).toEqual([]);
     const rec = {
-      id: 'test.basic', version: '1.0.0', ref: 'file:/tmp/x', integrity: null,
-      installedAt: '2026-07-03T00:00:00.000Z', origin: 'dev' as const,
+      id: 'test.basic',
+      version: '1.0.0',
+      ref: 'file:/tmp/x',
+      integrity: null,
+      installedAt: '2026-07-03T00:00:00.000Z',
+      origin: 'dev' as const,
     };
     writeInstalled(extDir, [rec]);
     expect(readInstalled(extDir)).toEqual([rec]);
@@ -43,7 +52,9 @@ describe('extension disk state', () => {
   it('state.json round-trips, defaults to {}, and is mode 0600', () => {
     expect(readEnabledState(extDir)).toEqual({});
     writeEnabledState(extDir, { 'test.basic': { enabled: false } });
-    expect(readEnabledState(extDir)).toEqual({ 'test.basic': { enabled: false } });
+    expect(readEnabledState(extDir)).toEqual({
+      'test.basic': { enabled: false },
+    });
     const mode = fs.statSync(path.join(extDir, 'state.json')).mode & 0o777;
     expect(mode).toBe(0o600);
   });
