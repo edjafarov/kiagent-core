@@ -4,7 +4,7 @@ How third-party code runs inside kia without being trusted.
 
 ## The model in one paragraph
 
-Every enabled extension runs in **its own OS process** (an Electron `utilityProcess`; `child_process.fork` in tests). No extension code ever runs in the main process. The extension declares **capabilities** (`caps`) in its manifest; at runtime it receives a `host` object whose *shape is its grants* — a namespace it wasn't granted simply doesn't exist on the object. Every host call crosses back into the main process over RPC, where the **HostRouter (the gate)** re-checks the grant before touching anything real. Denied calls throw `CAP_DENIED` and write a `permission-violation` audit log.
+Every enabled extension runs in **its own OS process** (an Electron `utilityProcess`; `child_process.fork` in tests). No extension code ever runs in the main process. The extension declares **capabilities** (`caps`) in its manifest; at runtime it receives a `host` object whose _shape is its grants_ — a namespace it wasn't granted simply doesn't exist on the object. Every host call crosses back into the main process over RPC, where the **HostRouter (the gate)** re-checks the grant before touching anything real. Denied calls throw `CAP_DENIED` and write a `permission-violation` audit log.
 
 ```mermaid
 flowchart TB
@@ -67,16 +67,16 @@ main process wraps each in an RPC proxy and registers the proxy into the real re
 
 Eight caps, each mapping 1:1 to a host namespace (`CapSurfaces` in contracts.ts):
 
-| Cap | Host surface | Grants |
-|---|---|---|
-| `query` | `host.query` | Read the corpus: `document`, `children`, `byExternalId`, `search`, `count`, `accounts` |
-| `net` | `host.net.fetch` | Outbound HTTP |
-| `files` | `host.files` | Scoped file access: `list`, `read`, `write`, `move` — *declared in the contract, rejected at runtime today* |
-| `db` | `host.db` | A **private** SQLite db (`private.db` in the extension's data dir): `exec`, `query` — never the shared store |
-| `ui` | `host.ui.notify` | User notifications |
-| `commands` | `host.commands.register` | Register invokable commands — *declared in the contract, rejected at runtime today* |
-| `inference` | `host.inference` | Local AI: `complete`, `see`, `read` |
-| `events` | `host.events` | Cross-extension pub/sub: `on`, `emit` |
+| Cap         | Host surface             | Grants                                                                                                       |
+| ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `query`     | `host.query`             | Read the corpus: `document`, `children`, `byExternalId`, `search`, `count`, `accounts`                       |
+| `net`       | `host.net.fetch`         | Outbound HTTP                                                                                                |
+| `files`     | `host.files`             | Scoped file access: `list`, `read`, `write`, `move` — _declared in the contract, rejected at runtime today_  |
+| `db`        | `host.db`                | A **private** SQLite db (`private.db` in the extension's data dir): `exec`, `query` — never the shared store |
+| `ui`        | `host.ui.notify`         | User notifications                                                                                           |
+| `commands`  | `host.commands.register` | Register invokable commands — _declared in the contract, rejected at runtime today_                          |
+| `inference` | `host.inference`         | Local AI: `complete`, `see`, `read`                                                                          |
+| `events`    | `host.events`            | Cross-extension pub/sub: `on`, `emit`                                                                        |
 
 Always present, no cap needed: `host.self` (`id`, `dataDir`) and `host.log(level, msg)`.
 Real implementations live in `src/main/platform/host-surfaces.ts`.
@@ -84,7 +84,7 @@ Real implementations live in `src/main/platform/host-surfaces.ts`.
 Two things worth internalizing:
 
 - **No `db.write` to the shared store exists at all.** Extensions get data into the corpus only
-  by *returning* it — Source pull batches and Worker emissions that the Engine validates and
+  by _returning_ it — Source pull batches and Worker emissions that the Engine validates and
   commits. The write path is structurally owned by trusted code.
 - **Caps are a cooperative contract + audit surface, not OS containment.** The child process can
   still `require('fs')`. The hard gates are install-time (integrity pin, path containment,
@@ -121,19 +121,19 @@ the child advances the async iterator exactly one step, and replies `src-batch` 
 
 ## Runtime files
 
-| File | Role |
-|---|---|
-| `src/main/platform/extension-platform.ts` | Orchestrator: per-extension state machine (disabled → activating → activated / needs-consent / errored), install/uninstall/consent, wires contributions into registries |
-| `src/main/platform/extension-host-entry.ts` | Child bootstrap: loads bundle via `createRequire`, runs `activate`, dispatches tool/source calls |
-| `src/main/platform/host-process.ts` | Per-extension process supervisor: fork → handshake → activate; crash-loop breaker (3 crashes / 60s) |
-| `src/main/platform/host-router.ts` | **The gate**: namespace → cap table, `granted: ReadonlySet<Cap>`, throws `CAP_DENIED`, audit log |
-| `src/main/platform/host-surfaces.ts` | Real implementations behind each cap namespace |
-| `src/main/platform/manifest.ts` | zod manifest validation; unknown caps rejected; legacy manifests rejected; `engine` semver check; entry containment |
-| `src/main/platform/extensions.ts` | Disk state only: `installed.json`, `state.json`, manifest-only discovery — never loads extension code |
-| `src/main/platform/oauth-providers.ts` | OAuth provider profiles/refreshers (e.g. `google`) — client secrets stay main-side |
-| `src/main/platform/source-proxy.ts` | Demand-driven Source proxying (`src-next` / `src-batch`) |
-| `src/main/platform/transport.ts` | `utilityProcess` / `fork` / in-memory transports + symmetric RPC endpoint |
-| `src/shared/extension-rpc.ts` | Wire message unions, bootstrap handshake, `PLATFORM_API_VERSION` |
+| File                                        | Role                                                                                                                                                                    |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main/platform/extension-platform.ts`   | Orchestrator: per-extension state machine (disabled → activating → activated / needs-consent / errored), install/uninstall/consent, wires contributions into registries |
+| `src/main/platform/extension-host-entry.ts` | Child bootstrap: loads bundle via `createRequire`, runs `activate`, dispatches tool/source calls                                                                        |
+| `src/main/platform/host-process.ts`         | Per-extension process supervisor: fork → handshake → activate; crash-loop breaker (3 crashes / 60s)                                                                     |
+| `src/main/platform/host-router.ts`          | **The gate**: namespace → cap table, `granted: ReadonlySet<Cap>`, throws `CAP_DENIED`, audit log                                                                        |
+| `src/main/platform/host-surfaces.ts`        | Real implementations behind each cap namespace                                                                                                                          |
+| `src/main/platform/manifest.ts`             | zod manifest validation; unknown caps rejected; legacy manifests rejected; `engine` semver check; entry containment                                                     |
+| `src/main/platform/extensions.ts`           | Disk state only: `installed.json`, `state.json`, manifest-only discovery — never loads extension code                                                                   |
+| `src/main/platform/oauth-providers.ts`      | OAuth provider profiles/refreshers (e.g. `google`) — client secrets stay main-side                                                                                      |
+| `src/main/platform/source-proxy.ts`         | Demand-driven Source proxying (`src-next` / `src-batch`)                                                                                                                |
+| `src/main/platform/transport.ts`            | `utilityProcess` / `fork` / in-memory transports + symmetric RPC endpoint                                                                                               |
+| `src/shared/extension-rpc.ts`               | Wire message unions, bootstrap handshake, `PLATFORM_API_VERSION`                                                                                                        |
 
 ## Marketplace
 
@@ -160,38 +160,39 @@ inside the app package itself, alongside the marketplace/dev-installed ones
 in `extDir`. It's wired via `ExtensionPlatformDeps.bundledDir` — `main.ts`
 resolves it from `product.bundledExtensionsDir` (default
 `'bundled-extensions'`) under the resource root; see "Product builds" below.
-OSS with no product config passes no `bundledDir` and behaves exactly as
-before.
+OSS with no product config still passes a `bundledDir` — it just points at a
+directory that doesn't exist, so the bundled scan finds nothing and behavior
+is exactly as before.
 
 ### Discovery and `origin: 'bundled'`
 
 `ExtensionPlatform.start()` scans `bundledDir` (if set) with
-`discoverExtensions(dir, { tier: 'bundled' })` *after* scanning `extDir`.
+`discoverExtensions(dir, { tier: 'bundled' })` _after_ scanning `extDir`.
 Each found entry is tagged `origin: 'bundled'` and gets special treatment:
 
 - **Manifest tier `'bundled'`.** `parseManifest`/`validateManifestDir` take
   an `opts.tier: 'external' | 'bundled'`. Only manifests validated at tier
   `'bundled'` may declare privileged caps (today just `unsafe.mainProcess`,
   `PRIVILEGED_CAPS` in `manifest.ts`); an external manifest declaring one is
-  a hard `ManifestError` at parse time: *"this extension requires
-  unsafe.mainProcess — only extensions bundled with the app may use it"*.
+  a hard `ManifestError` at parse time: _"this extension requires
+  unsafe.mainProcess — only extensions bundled with the app may use it"_.
 - **Auto-consent.** `activate()` skips the consent check entirely for
   `origin === 'bundled'` (`e.origin !== 'bundled' && !(await
-  consentCovers(...))`). Trust model: consent is a proxy for "the user chose
+consentCovers(...))`). Trust model: consent is a proxy for "the user chose
   to install this"; a bundled extension was never installed — it shipped
   inside the signed app bundle the user already trusted by installing the
   app. There's no separate approval step, ever.
 - **No uninstall, no marketplace replace.** `uninstall()` and
   `installCommit()` reject any id whose live entry has `origin ===
-  'bundled'` with a user-facing error ("bundled extensions are part of the
+'bundled'` with a user-facing error ("bundled extensions are part of the
   app and cannot be uninstalled" / "...cannot be replaced from the
-  marketplace"). A bundled extension *can* still be disabled
+  marketplace"). A bundled extension _can_ still be disabled
   (`setEnabled(id, false)`) — disable is not uninstall, and `setEnabled` has
   no origin check.
 - **Bundled-wins shadowing.** If a bundled id collides with an id already
   discovered from `extDir` (installed/dev), the bundled copy overwrites the
-  entry and a warning is logged: *"bundled extension `<id>` shadows an
-  installed copy — bundled wins"*. This is boot-time precedence, not a
+  entry and a warning is logged: _"bundled extension `<id>` shadows an
+  installed copy — bundled wins"_. This is boot-time precedence, not a
   merge — whichever manifest/entry the bundled scan found is what runs.
 - **Marketplace UI.** The catalog row/detail subtitle gets a `· bundled`
   suffix (alongside the existing `· dev install`) and the Uninstall button
@@ -212,16 +213,16 @@ never appears on `host` itself. Instead:
   `utilityProcess`/`child_process.fork` host.
 - If the platform was given a `mainApi`
   (`ExtensionPlatformDeps.mainApi` — Stage 1 wires the plumbing only and
-  `main.ts` never sets it yet; Stage 2 defines the real handle) *and* the
+  `main.ts` never sets it yet; Stage 2 defines the real handle) _and_ the
   extension declared the cap, `activate(host, extras)` receives `extras =
-  { mainProcess: mainApi }` as its second argument. Otherwise `extras` is
+{ mainProcess: mainApi }` as its second argument. Otherwise `extras` is
   `undefined` — including always for out-of-process (forked) children,
   which never receive `mainApi` regardless of caps.
 - Consent copy (`CAP_CATALOG['unsafe.mainProcess']`,
-  `src/renderer/components/cap-catalog.ts`): label *"Full app access
-  (bundled only)"*, risk `elevated`, icon `settings` — *"Runs inside the app
+  `src/renderer/components/cap-catalog.ts`): label _"Full app access
+  (bundled only)"_, risk `elevated`, icon `settings` — _"Runs inside the app
   process with unrestricted access to it. Only extensions shipped as part
-  of the app itself can use this."*
+  of the app itself can use this."_
 - **Explicitly unstable — a temporary escape hatch.** It exists so a
   first-party bundled extension can reach real main-process internals
   before the platform grows a proper capability for whatever it needs
@@ -236,7 +237,7 @@ never appears on `host` itself. Instead:
 
 For `unsafe.mainProcess` extensions, `activate()` builds an in-memory
 transport pair (`createInMemoryHostPair()`) instead of forking, and drives
-the *same* child-runtime code (`runExtensionHost` from
+the _same_ child-runtime code (`runExtensionHost` from
 `extension-host-entry.ts`) directly inside the main process, over that
 pair. Two real differences remain, and one that looked like a difference is
 neutralized:
@@ -244,7 +245,7 @@ neutralized:
 1. **The kill backstop is inert.** The primary stop path — the platform
    sends a `'deactivate'` message, the extension's own `deactivate()` runs,
    then the host exits — is identical to the forked tier. Only the
-   *backstop* differs: a forked child that ignores/outlives its deactivate
+   _backstop_ differs: a forked child that ignores/outlives its deactivate
    gets OS-killed; an in-process extension's `exit` is wired to
    `pair.simulateExit(code)`, which only tells the supervisor "this host
    exited" — it cannot terminate anything. A timer or listener a
@@ -272,17 +273,17 @@ neutralized:
    `createRequire(...).cache` is an ephemeral snapshot that recomputes on
    each access (deletions don't stick), and a bare `require`'s `.cache` is
    consulted by jest's own instrumented module registry, not Node's —
-   evicting either one does *not* make a later `require()` reload under
+   evicting either one does _not_ make a later `require()` reload under
    jest (verified empirically). `Module._load`/`Module._cache` are the
    lower-level primitives `require()` itself is built on, and are real and
    mutable under both jest and plain Node/webpack (this static `import
-   NodeModule from 'module'` in `extension-platform.ts` is never touched by
+NodeModule from 'module'` in `extension-platform.ts` is never touched by
    webpack's bundle-scoped require rewriting, since `target:
-   'electron-main'` externalizes the `module` built-in). Net effect:
+'electron-main'` externalizes the `module` built-in). Net effect:
    disable→enable loads a fresh module instance, same as a forked child
    getting a fresh process. Documented boundary: the cache-bust is
    **directory-scoped** — module state held in transitive requires
-   *outside* the extension's own directory (e.g. a shared singleton inside
+   _outside_ the extension's own directory (e.g. a shared singleton inside
    a core module the extension imported) survives re-activation, because
    only the extension-dir path prefix is evicted.
 
@@ -300,11 +301,11 @@ identity: `product.json`, resolved by `loadProductConfig()`
 (`src/main/product.ts`). Fields — all optional, and the schema is
 `.strict()` (an unknown key rejects the whole file):
 
-| Field | Type | Effect |
-|---|---|---|
-| `productName` | string | User-facing product name — today only `Notification` titles in `main.ts` read it. |
-| `updateFeedUrl` | string (URL) | Reserved for update-feed wiring; not yet consumed anywhere. |
-| `bundledExtensionsDir` | string | Overrides the bundled-extensions directory name/path (default `'bundled-extensions'`), resolved relative to the resource root. |
+| Field                  | Type         | Effect                                                                                                                         |
+| ---------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `productName`          | string       | User-facing product name — today only `Notification` titles in `main.ts` read it.                                              |
+| `updateFeedUrl`        | string (URL) | Reserved for update-feed wiring; not yet consumed anywhere.                                                                    |
+| `bundledExtensionsDir` | string       | Overrides the bundled-extensions directory name/path (default `'bundled-extensions'`), resolved relative to the resource root. |
 
 `loadProductConfig(candidates, log?)` **never throws**: it takes the first
 candidate whose `product.json` exists (a candidate ending in `.json` is
