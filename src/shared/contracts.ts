@@ -498,7 +498,11 @@ export type Cap =
   | 'ui'
   | 'commands'
   | 'inference'
-  | 'events';
+  | 'events'
+  /** Privileged, bundled-tier only: run in the main process and receive the
+   *  opaque main-process handle as activate()'s extras.mainProcess. Rejected
+   *  for marketplace/dev extensions at manifest validation. */
+  | 'unsafe.mainProcess';
 
 /** Platform-side OAuth providers an extension source may bind to. The
  *  platform owns the provider's profile (auth URL + token exchange) and
@@ -602,6 +606,9 @@ export interface CapSurfaces {
       emit(event: string, payload: unknown): void;
     };
   };
+  /** Privileged, bundled-tier only: main-process handle passed as
+   *  extras.mainProcess in activate(), not as a host surface. */
+  'unsafe.mainProcess': {};
 }
 
 export interface BaseHost {
@@ -643,7 +650,7 @@ export interface ExtensionSnapshot {
   id: string;
   name: string;
   version: string;
-  origin: 'marketplace' | 'dev';
+  origin: 'marketplace' | 'dev' | 'bundled';
   enabled: boolean;
   status: ExtensionStatus;
   error?: string;
