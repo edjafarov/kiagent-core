@@ -1,0 +1,104 @@
+name: kiagent-core package
+
+# Cross-platform unsigned packaging pipeline (the follow-up job the CI
+# workflow's header points at). Runs `package:oss`, which vendors the native
+# deep-extraction binaries per OS (llama-server everywhere; Swift kia-vision
+# on macOS, .NET 8 Windows.Media.Ocr helper on Windows), webpack-builds, and
+# packages with electron-builder — unsigned (CSC_IDENTITY_AUTO_DISCOVERY=false)
+# into release/build-oss.
+#
+# Triggers: manual, or a v* tag push. Every run uploads installers as
+# workflow artifacts; a tag run additionally attaches them to a DRAFT GitHub
+# release (publishing stays a human decision).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: kiagent-core-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+        # macos-latest (arm64) packages both mac arches: electron-builder
+        # targets arm64+x64 and build-vision-helper.mjs cross-compiles the
+        # x64 Swift binary. windows-latest builds nsis x64+arm64. ubuntu
+        # builds the x64 AppImage.
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js and NPM
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # build-windows-ocr-helper.mjs publishes a .NET 8 self-contained
+      # binary; pin the SDK rather than relying on the runner image default.
+      - name: Install .NET 8 SDK
+        if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+
+      - name: npm install
+        run: npm install
+
+      # OAuth client credentials are inlined into the main bundle at build
+      # time (see .erb/configs/oauth-env.ts). Absent on forks: the build
+      # inlines '' and only Google/Microsoft sign-in is inert in the output.
+      - name: package (unsigned OSS build)
+        run: npm run package:oss
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          MICROSOFT_OAUTH_CLIENT_ID: ${{ secrets.MICROSOFT_OAUTH_CLIENT_ID }}
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiagent-core-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            release/build-oss/*.dmg
+            release/build-oss/*.zip
+            release/build-oss/*.exe
+            release/build-oss/*.AppImage
+
+  # Tag runs only: gather the three platforms' installers into a draft
+  # release for the tag. Draft — nothing is published without a human click.
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all installers
+        uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            installers/*

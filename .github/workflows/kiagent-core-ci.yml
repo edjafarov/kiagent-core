@@ -6,8 +6,8 @@ name: kiagent-core CI
 # @host-contracts / @channels-runtime / @renderer-ext.
 #
 # Fast checks run on every push/PR. The cross-platform unsigned `package:oss`
-# matrix (which needs the native deep-extraction vendor step — .NET 8 for the
-# Windows OCR helper) is intentionally a follow-up job, not wired here yet.
+# matrix (with the native deep-extraction vendor step) lives in
+# kiagent-core-package.yml — manual dispatch or v* tag push.
 
 on:
   push:
