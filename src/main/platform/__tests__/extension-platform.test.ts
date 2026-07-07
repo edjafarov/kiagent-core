@@ -1005,4 +1005,121 @@ describe('createExtensionPlatform', () => {
       expect(refreshers.size).toBe(0);
     }, 10000);
   });
+
+  describe('bundled extensions', () => {
+    const BUNDLED_FIXTURE = path.join(__dirname, 'fixtures', 'ext-bundled');
+    const BUNDLED_SHADOW_FIXTURE = path.join(
+      __dirname,
+      'fixtures',
+      'ext-bundled-shadow',
+    );
+
+    function makeBundledPlatform(mainApi?: unknown): ExtensionPlatform {
+      fs.cpSync(BUNDLED_FIXTURE, path.join(tmp, 'bundled', 'ext-bundled'), {
+        recursive: true,
+      });
+      return makePlatform({
+        bundledDir: path.join(tmp, 'bundled'),
+        mainApi,
+      });
+    }
+
+    it('discovers, auto-consents, and activates a bundled extension', async () => {
+      platform = makeBundledPlatform({ marker: 7 });
+      await platform.start();
+      const snap = platform.snapshot().find((e) => e.id === 'test.bundled');
+      expect(snap?.origin).toBe('bundled');
+      expect(snap?.status).toBe('activated'); // no ConsentRecord ever written
+    });
+
+    it('a bundled extension shadows an installed copy with the same id — bundled wins, and the shadow is logged', async () => {
+      // A regular (non-privileged) "marketplace-installed" extension that
+      // happens to share the bundled fixture's id.
+      await platform.start(); // empty dir — no-op
+      const preview = await platform.installPreview(BUNDLED_SHADOW_FIXTURE);
+      if (!('token' in preview))
+        throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+      await expect(platform.installCommit(preview.token)).resolves.toEqual({
+        ok: true,
+        id: 'test.bundled',
+      });
+      // installPreview/installCommit against a local filesystem path (not a
+      // github ref) records origin 'dev' — same convention as every other
+      // fixture-backed install in this file.
+      expect(
+        platform.snapshot().find((e) => e.id === 'test.bundled')?.origin,
+      ).toBe('dev');
+      await platform.stop();
+
+      // Restart with the SAME extDir (still holding the installed copy on
+      // disk) plus a bundledDir carrying the privileged fixture under the
+      // identical id — the bundled copy must win.
+      platform = makeBundledPlatform({ marker: 7 });
+      await platform.start();
+      expect(
+        platform.snapshot().find((e) => e.id === 'test.bundled')?.origin,
+      ).toBe('bundled');
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          scope: 'extensions',
+          level: 'warn',
+          msg: expect.stringContaining(
+            'test.bundled shadows an installed copy',
+          ),
+        }),
+      );
+    });
+
+    // These two assert the in-process transport branch that actually
+    // delivers extras.mainProcess and busts the require cache on exit —
+    // that wiring is Task 5's job (this task only threads bundledDir/
+    // mainApi into deps and does discovery/guards). `.failing` documents
+    // the currently-expected-red status; Task 5 flips them to `it`.
+    it.failing(
+      'runs the privileged extension in-process and delivers mainApi (tool round-trip)',
+      async () => {
+        platform = makeBundledPlatform({ marker: 7 });
+        await platform.start();
+        const tool = tools.get('bundled.probe');
+        expect(tool).toBeDefined();
+        await expect(tool!.call({})).resolves.toEqual({
+          marker: 7,
+          activations: 1,
+        });
+      },
+    );
+
+    it.failing(
+      'loads a FRESH module instance on re-enable (require cache busted on exit)',
+      async () => {
+        platform = makeBundledPlatform({ marker: 7 });
+        await platform.start();
+        await platform.setEnabled('test.bundled', false);
+        await platform.setEnabled('test.bundled', true);
+        // A cached module instance would report activations: 2.
+        await expect(tools.get('bundled.probe')!.call({})).resolves.toEqual({
+          marker: 7,
+          activations: 1,
+        });
+      },
+    );
+
+    it('refuses to uninstall a bundled extension', async () => {
+      platform = makeBundledPlatform();
+      await platform.start();
+      const r = await platform.uninstall('test.bundled');
+      expect(r.ok).toBe(false);
+      expect(r.error).toMatch(/bundled/i);
+    });
+
+    it('setEnabled(false) disables a bundled extension', async () => {
+      platform = makeBundledPlatform();
+      await platform.start();
+      const r = await platform.setEnabled('test.bundled', false);
+      expect(r.ok).toBe(true);
+      expect(
+        platform.snapshot().find((e) => e.id === 'test.bundled')?.status,
+      ).toBe('disabled');
+    });
+  });
 });

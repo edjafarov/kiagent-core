@@ -58,6 +58,15 @@ import type { HostTransport } from './transport';
 
 export interface ExtensionPlatformDeps {
   extDir: string;
+  /** Second discovery root for extensions shipped inside the app package
+   *  (e.g. resources/bundled-extensions). Entries found here: origin
+   *  'bundled', bundled manifest tier (may declare privileged caps),
+   *  auto-consented, not uninstallable. */
+  bundledDir?: string;
+  /** Opaque main-process handle handed to in-process privileged extensions
+   *  ('unsafe.mainProcess') as activate()'s extras.mainProcess. Core never
+   *  types it; the product build supplies it. */
+  mainApi?: unknown;
   store: CoreStore;
   sources: SourceRegistry;
   scheduler: CoreScheduler;
@@ -90,6 +99,7 @@ interface Entry {
   dir: string;
   entryAbsPath: string;
   record?: InstalledRecord;
+  origin: 'marketplace' | 'dev' | 'bundled';
   enabled: boolean;
   status: ExtensionStatus;
   error?: string;
@@ -177,7 +187,7 @@ export function createExtensionPlatform(
       id: e.manifest.id,
       name: e.manifest.name,
       version: e.manifest.version,
-      origin: e.record?.origin ?? 'dev',
+      origin: e.origin,
       enabled: e.enabled,
       status: e.status,
       error: e.error,
@@ -338,7 +348,7 @@ export function createExtensionPlatform(
     });
     e.host = host;
     try {
-      if (!(await consentCovers(e.manifest))) {
+      if (e.origin !== 'bundled' && !(await consentCovers(e.manifest))) {
         // Never started — createExtensionHost() itself has no side effects
         // (no process, no transport) until .start() is called, so releasing
         // the reservation here orphans nothing.
@@ -386,11 +396,13 @@ export function createExtensionPlatform(
       // Invalid on disk — track it as errored so the UI can show why.
       return null;
     }
+    const record = records.find((r) => r.id === found.manifest!.id);
     const e: Entry = {
       manifest: found.manifest,
       dir: found.dir,
       entryAbsPath: found.entryAbsPath,
-      record: records.find((r) => r.id === found.manifest!.id),
+      record,
+      origin: record?.origin ?? 'dev',
       enabled: state[found.manifest.id]?.enabled ?? true,
       status: 'disabled',
       error: undefined,
@@ -416,11 +428,13 @@ export function createExtensionPlatform(
           );
           continue;
         }
+        const record = records.find((r) => r.id === found.manifest!.id);
         entries.set(found.manifest.id, {
           manifest: found.manifest,
           dir: found.dir,
           entryAbsPath: found.entryAbsPath,
-          record: records.find((r) => r.id === found.manifest!.id),
+          record,
+          origin: record?.origin ?? 'dev',
           enabled: state[found.manifest.id]?.enabled ?? true,
           status: 'disabled',
           error: undefined,
@@ -428,6 +442,40 @@ export function createExtensionPlatform(
           sourceIds: [],
           iconDataUrl: loadIconDataUrl(found.dir, found.manifest),
         });
+      }
+      if (deps.bundledDir) {
+        for (const found of discoverExtensions(deps.bundledDir, {
+          tier: 'bundled',
+        })) {
+          if (!found.manifest || !found.entryAbsPath) {
+            deps.logSink.log(
+              'extensions',
+              'error',
+              `invalid bundled extension in ${found.dirName}: ${found.error}`,
+            );
+            continue;
+          }
+          if (entries.has(found.manifest.id)) {
+            deps.logSink.log(
+              'extensions',
+              'warn',
+              `bundled extension ${found.manifest.id} shadows an installed copy — bundled wins`,
+            );
+          }
+          entries.set(found.manifest.id, {
+            manifest: found.manifest,
+            dir: found.dir,
+            entryAbsPath: found.entryAbsPath,
+            record: undefined,
+            origin: 'bundled',
+            enabled: state[found.manifest.id]?.enabled ?? true,
+            status: 'disabled',
+            error: undefined,
+            host: null,
+            sourceIds: [],
+            iconDataUrl: loadIconDataUrl(found.dir, found.manifest),
+          });
+        }
       }
       changed();
       // Activated in PARALLEL across extensions — a hung extension's
@@ -501,6 +549,11 @@ export function createExtensionPlatform(
           // activated, only to have installer.commit() throw unknown-token.
           installer.peek(token);
           const existing = entries.get(id);
+          if (existing?.origin === 'bundled')
+            return {
+              ok: false,
+              error: `'${id}' is bundled with the app and cannot be replaced from the marketplace`,
+            };
           if (existing) await deactivate(existing);
           const { manifest, dir } = await installer.commit(token);
           const consent: ConsentRecord = {
@@ -528,6 +581,12 @@ export function createExtensionPlatform(
       return runExclusive(id, async () => {
         const e = entries.get(id);
         if (!e) return { ok: false, error: `no such extension: ${id}` };
+        if (e.origin === 'bundled')
+          return {
+            ok: false,
+            error:
+              'bundled extensions are part of the app and cannot be uninstalled',
+          };
         const sourceIds = sourceContributions(e.manifest).map((s) => s.id);
         const accounts = await deps.store.read.accounts();
         if (accounts.some((a) => sourceIds.includes(a.source))) {
