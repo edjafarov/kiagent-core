@@ -40,6 +40,7 @@ import { createGitHubSource } from './marketplace/github-source';
 import { parseGitHubRef, formatGitHubRef } from './marketplace/github-ref';
 import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
+import { buildMainApi } from './main-api';
 import { createExtensionPlatform } from './platform/extension-platform';
 import type { ExtensionPlatform } from './platform/extension-platform';
 import { utilityProcessTransport } from './platform/transport';
@@ -55,6 +56,7 @@ import {
   quickLinks,
 } from './sources/local-folder/tree';
 import { createTray } from './tray';
+import type { TrayMenuController } from './tray-menu';
 import { resolveHtmlPath } from './util';
 import { attachBundledWorkers, VISION_CONSUMER } from './workers';
 
@@ -67,6 +69,7 @@ let activity: ActivityLog | null = null;
 let stopActivityWatch: (() => void) | null = null;
 // Must stay referenced for the app's lifetime or GC destroys the icon.
 let tray: Tray | null = null;
+let trayMenu: TrayMenuController | null = null;
 
 // Test/dev escape hatch: point ALL app storage somewhere disposable.
 if (process.env.KIAGENT_USER_DATA) {
@@ -616,6 +619,39 @@ app
     );
     for (const [sourceId, refresher] of bundledRefreshers)
       p.refreshers.set(sourceId, refresher);
+
+    // Built here (rather than at its historical spot right before
+    // createWindow) so its TrayMenuController exists in time to hand to
+    // buildMainApi below — bundled `unsafe.mainProcess` extensions can
+    // splice tray items via `extras.mainProcess.ui.addTrayMenuItems` from
+    // their very first activate().
+    ({ tray, menu: trayMenu } = createTray(
+      getAssetPath('icons', 'tray', 'trayTemplate.png'),
+      {
+        openWindow: () => {
+          if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+          } else {
+            void createWindow();
+          }
+        },
+        syncNow: () => {
+          void (async () => {
+            const jobs = await p.scheduler.jobs();
+            // Account syncs only — worker:* jobs (vision/OCR sweeps) run on
+            // their own cadence. trigger() skips jobs already mid-run.
+            await Promise.allSettled(
+              jobs
+                .filter((j) => j.id.startsWith('source:'))
+                .map((j) => p.scheduler.trigger(j.id)),
+            );
+          })();
+        },
+        quit: () => app.quit(),
+      },
+    ));
+
     extensionsPlatform = createExtensionPlatform({
       extDir: path.join(app.getPath('userData'), 'extensions'),
       bundledDir: bundledExtensionsDir,
@@ -623,6 +659,15 @@ app
         app.getPath('userData'),
         'bundled-extensions-data',
       ),
+      mainApi: buildMainApi({
+        store: p.store,
+        // Non-null: startMcp() above is awaited before this point, so
+        // `mcp` always holds a live McpServerHandle here.
+        mcp: mcp!,
+        app,
+        dataDir,
+        tray: trayMenu,
+      }),
       store: p.store,
       sources: p.sources,
       scheduler: p.scheduler,
@@ -748,30 +793,6 @@ app
     await resumeAccounts(p);
     p.scheduler.start();
     await createWindow();
-
-    tray = createTray(getAssetPath('icons', 'tray', 'trayTemplate.png'), {
-      openWindow: () => {
-        if (mainWindow) {
-          mainWindow.show();
-          mainWindow.focus();
-        } else {
-          void createWindow();
-        }
-      },
-      syncNow: () => {
-        void (async () => {
-          const jobs = await p.scheduler.jobs();
-          // Account syncs only — worker:* jobs (vision/OCR sweeps) run on
-          // their own cadence. trigger() skips jobs already mid-run.
-          await Promise.allSettled(
-            jobs
-              .filter((j) => j.id.startsWith('source:'))
-              .map((j) => p.scheduler.trigger(j.id)),
-          );
-        })();
-      },
-      quit: () => app.quit(),
-    });
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) void createWindow();

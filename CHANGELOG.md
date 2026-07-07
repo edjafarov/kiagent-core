@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.41.0](https://github.com/edjafarov/kiagent-core/compare/v0.40.0...v0.41.0) (2026-07-07)
+
+### Features
+
+* **platform:** wire MainProcessApi (apiVersion 1) to in-process bundled extensions ([59bf162](https://github.com/edjafarov/kiagent-core/commit/59bf162fc64d13c442749dc2f8c3a9e4bceeb2c3))
+* **mcp:** createSessionHandler factory for product-owned MCP transports ([1878428](https://github.com/edjafarov/kiagent-core/commit/1878428985460166f332c02d1fefdd18795939a2))
+
+### Bug Fixes
+
+* **mcp:** reserve port 7422 for product remote server ([a76856c](https://github.com/edjafarov/kiagent-core/commit/a76856cdcebc7b42215a4dd8d583afd92bd905da))
+
+`unsafe.mainProcess` bundled extensions (v0.40.0) received `extras
+.mainProcess` as `undefined` in practice — `main.ts` never assembled a
+`mainApi` to hand `createExtensionPlatform`. This release closes that gap:
+`buildMainApi()` (new `main-api.ts`) assembles a concrete
+`{ apiVersion: 1, identity, vault, mcp, paths, app, ui }` object from the
+product's own store/mcp/app/tray, and `main.ts` passes it as
+`ExtensionPlatformDeps.mainApi`. Core still types the field as `unknown` —
+the shape is a product-build contract, not something core commits to.
+Two additions make the surface usable: `McpServerHandle
+.createSessionHandler()` (`core/mcp/server.ts`) hands back a request
+handler bound to the SAME live ToolRegistry/resources/activity the
+loopback listener uses, for serving MCP over a product-owned transport
+(e.g. a remote HTTPS server) instead of a second, independent registry;
+and `ui.addTrayMenuItems()` splices extension-contributed items into the
+live tray context menu (before the trailing Quit item), backed by a new
+Electron-free `tray-menu.ts` template-assembly helper, with a disposer to
+remove them again. Port 7422 is now reserved (excluded from
+`PORT_CANDIDATES`) for the product's own remote MCP server so the two
+transports can never race for the same loopback port.
+
 ## [0.40.0](https://github.com/edjafarov/kiagent-core/compare/v0.39.0...v0.40.0) (2026-07-07)
 
 ### Features

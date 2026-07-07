@@ -26,7 +26,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 import type { Document, LogLevel, Query } from '@shared/contracts';
 
-import { startMcp } from '../server';
+import { PORT_CANDIDATES, startMcp } from '../server';
 import type { McpServerHandle } from '../server';
 
 // One canned document so the doc://{id} resource read path has a hit.
@@ -127,7 +127,11 @@ describe('startMcp (HTTP transport)', () => {
 
   it('binds to loopback on one of the candidate ports', () => {
     expect(handle.port).not.toBeNull();
-    expect([7421, 7422, 7423, 7424, 7425]).toContain(handle.port);
+    expect(PORT_CANDIDATES).toContain(handle.port);
+  });
+
+  it('reserves port 7422 for the product remote server', () => {
+    expect(PORT_CANDIDATES).toEqual([7421, 7423, 7424, 7425]);
   });
 
   it('lists the built-in tools over the wire', async () => {
