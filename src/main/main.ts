@@ -43,6 +43,7 @@ import type { MarketplaceCatalog } from './marketplace/catalog';
 import { createExtensionPlatform } from './platform/extension-platform';
 import type { ExtensionPlatform } from './platform/extension-platform';
 import { utilityProcessTransport } from './platform/transport';
+import { loadProductConfig } from './product';
 import { registerBundledProviders } from './providers';
 import { CURATED_TIERS, modelTotalBytes } from './providers/local-llm/models';
 import type { LocalLlmProvider } from './providers/local-llm/provider';
@@ -96,6 +97,24 @@ if (process.env.KIAGENT_USER_DATA) {
   }
   app.setPath('userData', devDir);
 }
+
+// Product identity (spec 2026-07-07 §3.1.4): OSS ships no product.json and
+// runs on DEFAULT_PRODUCT; a product build drops one into resources. Loaded
+// once, early, so both the bundled-extensions dir and user-facing strings
+// (e.g. Notification titles) derive from the same resolved config.
+const product = loadProductConfig(
+  [
+    process.env.KIA_PRODUCT_CONFIG,
+    app.isPackaged ? process.resourcesPath : null,
+    app.getAppPath(),
+  ],
+  (msg) => console.warn(msg),
+);
+const resourceRoot = app.isPackaged ? process.resourcesPath : app.getAppPath();
+const bundledExtensionsDir = path.resolve(
+  resourceRoot,
+  product.bundledExtensionsDir ?? 'bundled-extensions',
+);
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -599,6 +618,7 @@ app
       p.refreshers.set(sourceId, refresher);
     extensionsPlatform = createExtensionPlatform({
       extDir: path.join(app.getPath('userData'), 'extensions'),
+      bundledDir: bundledExtensionsDir,
       store: p.store,
       sources: p.sources,
       scheduler: p.scheduler,
@@ -606,7 +626,7 @@ app
       inference: p.inference,
       logSink: p.logSink,
       notify: (msg) => {
-        new Notification({ title: 'KIAgent', body: msg }).show();
+        new Notification({ title: product.productName, body: msg }).show();
       },
       transportFactory: (id) =>
         utilityProcessTransport(
