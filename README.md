@@ -25,10 +25,10 @@ flowchart TB
     SLACK --> PLUGINS
     NOTION --> PLUGINS
     MORE --> PLUGINS
-    PLUGINS --> WEB
-    PLUGINS --> LLM
-    PLUGINS --> FS
-    PLUGINS --> DB
+    PLUGINS <--> WEB
+    PLUGINS <--> LLM
+    PLUGINS <--> FS
+    PLUGINS <--> DB
     DB --> MCP
 
     classDef service fill:#e8f0fe,stroke:#4285f4,color:#1a3c78
