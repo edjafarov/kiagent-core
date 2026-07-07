@@ -209,7 +209,10 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       if (sessionId && sessions.has(sessionId)) {
         const entry = sessions.get(sessionId)!;
         entry.lastActivity = Date.now();
-        await entry.transport.handleRequest(req, res);
+        // Forward parsedBody on every call (undefined for loopback, which never
+        // pre-reads) so a product router that pre-reads the body before
+        // delegating doesn't leave the transport to re-read a consumed stream.
+        await entry.transport.handleRequest(req, res, parsedBody);
         return;
       }
 

@@ -200,6 +200,10 @@ describe('McpServerHandle.createMcpHandler', () => {
     expect(pingA.status).toBe(200);
   });
 
+  it('is memoized: repeated calls return the same handler (one product pool)', () => {
+    expect(handle.createMcpHandler()).toBe(handle.createMcpHandler());
+  });
+
   it('serves the LIVE shared registry, not a duplicate', async () => {
     const dispose = handle.registerTool({
       name: 'factory-echo',
