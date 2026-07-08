@@ -430,6 +430,41 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
     return seq;
   };
 
+  /** Second pass over a batch, run AFTER every document in it has been
+   *  upserted: `upsertDocument`'s parent resolution only sees rows already
+   *  written earlier IN THIS TRANSACTION, so a child that arrives before its
+   *  parent within the same batch resolves to parentId=null. And a doc whose
+   *  content didn't change is skipped by upsertDocument entirely — its
+   *  content_hash deliberately excludes parent (see contentHash), so a
+   *  reparent with no other edits would otherwise never be seen. Re-resolving
+   *  here against the batch's own DocumentInput.parent refs fixes both,
+   *  without touching content_hash. */
+  const reconcileParents = (
+    accountId: string,
+    documents: DocumentInput[],
+  ): Seq | null => {
+    let last: Seq | null = null;
+    for (const input of documents) {
+      if (!input.parent) continue;
+      const child = findDocRow(accountId, input.externalId, input.type);
+      if (!child) continue; // upserted above; absence means a prior step rejected it
+      const parent = findDocRow(
+        accountId,
+        input.parent.externalId,
+        input.parent.type,
+      );
+      const parentId = parent?.id ?? null;
+      if (child.parent_id !== parentId) {
+        const seq = appendChange('document', child.id);
+        db.prepare(
+          `UPDATE documents SET parent_id=?, seq=?, updated_at=? WHERE id=?`,
+        ).run(parentId, seq, now(), child.id);
+        last = seq;
+      }
+    }
+    return last;
+  };
+
   const archiveByRef = (accountId: string, ref: ExternalRef): Seq | null => {
     const row = findDocRow(accountId, ref.externalId, ref.type);
     if (!row || row.archived_at !== null) return null;
@@ -464,6 +499,8 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
           const seq = upsertDocument(synthetic.id, doc);
           if (seq !== null) last = seq;
         }
+        const reconciled = reconcileParents(synthetic.id, batch.documents);
+        if (reconciled !== null) last = reconciled;
       }
       if (batch.enrich?.length) {
         for (const e of batch.enrich) {
@@ -536,6 +573,8 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
       const seq = upsertDocument(acc.id, doc);
       if (seq !== null) last = seq;
     }
+    const reconciled = reconcileParents(acc.id, batch.documents);
+    if (reconciled !== null) last = reconciled;
     for (const ref of batch.deletions ?? []) {
       const seq = archiveByRef(acc.id, ref);
       if (seq !== null) last = seq;

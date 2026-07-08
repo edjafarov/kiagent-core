@@ -70,6 +70,66 @@ describe('store', () => {
     expect(a?.languages).toEqual(['eng']);
   });
 
+  it('reconciles parent refs when a child is committed before its parent in the same batch', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [
+        doc('child', { parent: { externalId: 'parent', type: 'note' } }),
+        doc('parent'),
+      ],
+      cursor: 1,
+    });
+    const parent = await store.read.byExternalId(accountId, 'parent', 'note');
+    const child = await store.read.byExternalId(accountId, 'child', 'note');
+    expect(child?.parentId).toBe(parent?.id); // resolved by the post-batch reconcile pass, not left null
+  });
+
+  it('reparents a document whose content is unchanged (content_hash excludes parent)', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [
+        doc('p1'),
+        doc('a', { parent: { externalId: 'p1', type: 'note' } }),
+      ],
+      cursor: 1,
+    });
+    const before = await store.read.byExternalId(accountId, 'a', 'note');
+    await store.commit({
+      account: accountId,
+      documents: [doc('p2')],
+      cursor: 2,
+    });
+    // Byte-identical to the first commit of 'a' — only parent differs.
+    await store.commit({
+      account: accountId,
+      documents: [doc('a', { parent: { externalId: 'p2', type: 'note' } })],
+      cursor: 3,
+    });
+    const p2 = await store.read.byExternalId(accountId, 'p2', 'note');
+    const after = await store.read.byExternalId(accountId, 'a', 'note');
+    expect(after?.parentId).toBe(p2?.id);
+    expect(after!.seq).toBeGreaterThan(before!.seq);
+  });
+
+  it('fully unchanged doc (same content, same parent) re-committed causes no seq churn', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [
+        doc('p1'),
+        doc('a', { parent: { externalId: 'p1', type: 'note' } }),
+      ],
+      cursor: 1,
+    });
+    const before = await store.read.byExternalId(accountId, 'a', 'note');
+    await store.commit({
+      account: accountId,
+      documents: [doc('a', { parent: { externalId: 'p1', type: 'note' } })],
+      cursor: 2,
+    });
+    const after = await store.read.byExternalId(accountId, 'a', 'note');
+    expect(after?.seq).toBe(before?.seq);
+  });
+
   it('is idempotent: unchanged content produces no feed churn', async () => {
     await store.commit({
       account: accountId,
