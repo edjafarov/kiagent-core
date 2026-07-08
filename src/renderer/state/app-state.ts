@@ -24,6 +24,15 @@ let gotPush = false;
 let unsubscribePush: (() => void) | null = null;
 const listeners = new Set<() => void>();
 
+// Bumped by detach(). A retry loop closes over the generation it was
+// scheduled under, so a stale loop from a since-detached (or detached then
+// re-attached) store recognizes itself as stale and stops touching module
+// state instead of racing a fresh attachment.
+let attachGen = 0;
+
+const GET_STATE_RETRY_INITIAL_MS = 1000;
+const GET_STATE_RETRY_MAX_MS = 10000;
+
 function notify(): void {
   for (const listener of listeners) listener();
 }
@@ -37,6 +46,31 @@ function apply(nextState: AppState, rev: number): void {
   notify();
 }
 
+// Retries ONLY the one-shot `app:get-state` invoke after a rejection — the
+// push subscription from attach() is untouched and stays live throughout.
+// Stops permanently as soon as any of: a push wins (gotPush), a retry
+// succeeds, or `gen` goes stale (detach()/re-attach() happened meanwhile).
+function scheduleGetStateRetry(gen: number, delayMs: number): void {
+  setTimeout(() => {
+    if (gen !== attachGen || gotPush) return;
+    const bridge = window.kiagent;
+    if (!bridge) return; // bridge vanished; nothing left to retry against
+    bridge.invoke('app:get-state', undefined).then(
+      (payload) => {
+        if (gen !== attachGen || gotPush) return;
+        apply(payload.state, payload.rev);
+      },
+      () => {
+        if (gen !== attachGen || gotPush) return;
+        scheduleGetStateRetry(
+          gen,
+          Math.min(delayMs * 2, GET_STATE_RETRY_MAX_MS),
+        );
+      },
+    );
+  }, delayMs);
+}
+
 function attach(): void {
   if (attached) return;
   const bridge = window.kiagent;
@@ -44,13 +78,29 @@ function attach(): void {
   // hot-restart). Don't latch `attached` — the next subscriber retries.
   if (!bridge) return;
   attached = true;
+  // Stable id for this attachment; detach() bumps `attachGen` so a retry
+  // loop started under this id can tell it's since gone stale.
+  const gen = attachGen;
   unsubscribePush = bridge.on('push:app-state', (payload) => {
     gotPush = true;
     apply(payload.state, payload.rev);
   });
-  void bridge.invoke('app:get-state', undefined).then((payload) => {
-    if (!gotPush) apply(payload.state, payload.rev);
-  });
+  bridge.invoke('app:get-state', undefined).then(
+    (payload) => {
+      if (gen !== attachGen) return; // detached (or re-attached) meanwhile
+      if (!gotPush) apply(payload.state, payload.rev);
+    },
+    () => {
+      // Transient rejection (e.g. main process still booting during a dev
+      // hot-restart race). The push subscription above is healthy and
+      // untouched — only the one-shot invoke needs a retry, so the App
+      // shell's `state !== null` loading gate isn't stuck forever waiting
+      // on an idle app's next unrelated broadcast.
+      if (gen !== attachGen) return;
+      console.warn('app-state: app:get-state rejected, retrying');
+      scheduleGetStateRetry(gen, GET_STATE_RETRY_INITIAL_MS);
+    },
+  );
 }
 
 function detach(): void {
@@ -64,6 +114,7 @@ function detach(): void {
   unsubscribePush = null;
   attached = false;
   gotPush = false;
+  attachGen += 1; // invalidate any in-flight get-state retry loop
   // Drop the cached snapshot so a later re-attach refetches from the
   // *current* bridge rather than serving a stale one (relevant across
   // tests / dev hot-restarts, which replace window.kiagent).
@@ -90,8 +141,10 @@ export function getAppState(): AppState | null {
   return state;
 }
 
-/** One-level structural equality (own enumerable keys, Object.is per value).
- *  Arrays compare by reference. */
+/** One-level structural equality (own enumerable keys, Object.is per value)
+ *  for both plain objects and arrays — arrays compare element-wise, so
+ *  fresh arrays with identical elements are equal. Values one level down,
+ *  including nested arrays/objects, compare by reference (Object.is). */
 function shallowEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (
