@@ -30,6 +30,64 @@ function toVersion(tag: string): string {
   return semver.valid(semver.coerce(tag)) ?? '0.0.0';
 }
 
+/**
+ * Release-asset downloads are fetched from GitHub as part of the
+ * marketplace install flow — a malicious or misconfigured release must not
+ * be able to buffer an unbounded blob in the main process. 200 MiB
+ * comfortably covers legitimate plugin tarballs.
+ */
+const MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024; // 200 MiB
+
+/**
+ * Reads `res`'s body up to `maxBytes`, throwing a descriptive error the
+ * moment that's exceeded. Checked against `content-length` up front (fail
+ * fast), then again against the running total while streaming — a
+ * `content-length` header can lie or be absent, so it can't be trusted
+ * alone. `deps.fetchImpl` is injectable for tests, so `res` may be a fake
+ * lacking `.headers`/`.body`: falls back to `arrayBuffer()` + a length
+ * check in that case.
+ */
+async function readBoundedBuffer(
+  res: {
+    headers?: { get(name: string): string | null };
+    body?: ReadableStream<Uint8Array> | null;
+    arrayBuffer(): Promise<ArrayBuffer>;
+  },
+  maxBytes: number,
+): Promise<Buffer> {
+  const limit = `${Math.floor(maxBytes / (1024 * 1024))} MiB`;
+  const declared = res.headers?.get('content-length');
+  if (declared && Number(declared) > maxBytes) {
+    throw new Error(`downloadAsset: response exceeds the ${limit} limit`);
+  }
+  if (!res.body) {
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > maxBytes) {
+      throw new Error(`downloadAsset: response exceeds the ${limit} limit`);
+    }
+    return Buffer.from(buf);
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.byteLength;
+      if (total > maxBytes) {
+        // Stop the transfer too — without cancel() the stream keeps
+        // pulling bytes until GC even though we've already given up.
+        await reader.cancel();
+        throw new Error(`downloadAsset: response exceeds the ${limit} limit`);
+      }
+      chunks.push(value);
+    }
+  }
+  return Buffer.concat(chunks, total);
+}
+
 function tgzAsset(r: GhRelease): string | null {
   return (
     r.assets.find((a) => a.name.endsWith('.tgz'))?.browser_download_url ?? null
@@ -157,7 +215,7 @@ export function createGitHubSource(deps: {
       redirect: 'follow',
     });
     if (!r.ok) throw new Error(`download failed: ${r.status} ${url}`);
-    return Buffer.from(await r.arrayBuffer());
+    return readBoundedBuffer(r, MAX_DOWNLOAD_BYTES);
   }
 
   return { listOrgPlugins, getDetail, resolveGitHubRef, downloadAsset };

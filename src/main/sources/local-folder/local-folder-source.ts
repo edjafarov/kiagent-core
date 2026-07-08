@@ -16,8 +16,11 @@ import { coveringRoots, isUnder } from '@shared/folder-paths';
 import { advanceCursor, type LocalFolderCursor } from './cursor';
 import {
   BATCH_SIZE,
+  MAX_BATCH_READ_BYTES,
   buildItem,
   chunk,
+  chunkBySize,
+  entryReadCost,
   listEntries,
   toAbsPosix,
   type ScannedEntry,
@@ -222,7 +225,12 @@ async function* backfillRoot(
     return next;
   }
 
-  const batches = chunk(entries, BATCH_SIZE);
+  const batches = chunkBySize(
+    entries,
+    BATCH_SIZE,
+    MAX_BATCH_READ_BYTES,
+    entryReadCost,
+  );
   let cursor = working;
   for (let i = 0; i < batches.length; i += 1) {
     // eslint-disable-next-line no-await-in-loop
@@ -264,7 +272,12 @@ async function* incrementalRescanRoot(
   if (changed.length === 0) return working;
 
   const next = advanceCursor(working, root, rescanStartIso);
-  for (const b of chunk(changed, BATCH_SIZE)) {
+  for (const b of chunkBySize(
+    changed,
+    BATCH_SIZE,
+    MAX_BATCH_READ_BYTES,
+    entryReadCost,
+  )) {
     // eslint-disable-next-line no-await-in-loop
     const items = await Promise.all(
       b.map((e) => buildItem(e.absPath, e.stats)),

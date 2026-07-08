@@ -9,7 +9,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { countFiles, listEntries } from '../scanner';
+import {
+  BATCH_SIZE,
+  MAX_BATCH_READ_BYTES,
+  chunkBySize,
+  countFiles,
+  listEntries,
+} from '../scanner';
 
 function mkTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'local-folder-scanner-'));
@@ -71,5 +77,92 @@ describe('countFiles', () => {
     const result = await countFiles(missing);
 
     expect(result).toEqual({ count: 0, capped: false });
+  });
+});
+
+// Synthetic entries — no real 20 MiB files are written to disk. `chunkBySize`
+// is a pure function; a plain numeric `cost` field stands in for whatever
+// `entryReadCost` would compute from a real ScannedEntry.
+interface SizedEntry {
+  id: number;
+  cost: number;
+}
+
+function costOf(e: SizedEntry): number {
+  return e.cost;
+}
+
+describe('chunkBySize', () => {
+  it('never exceeds MAX_BATCH_READ_BYTES per batch or BATCH_SIZE entries per batch, and drops nothing', () => {
+    const TINY = 1024; // 1 KiB — ordinary small file.
+    const LARGE = 30 * 1024 * 1024; // 30 MiB — two of these alone exceed the cap.
+    const entries: SizedEntry[] = [];
+    let id = 0;
+    // 80 tiny entries, with a handful of 30 MiB entries mixed in — enough
+    // to force both a count-based split (80 > BATCH_SIZE) and byte-based
+    // splits (consecutive 30 MiB entries would blow the byte budget).
+    for (let i = 0; i < 80; i += 1) {
+      entries.push({ id: id++, cost: TINY });
+      if (i % 10 === 0) entries.push({ id: id++, cost: LARGE });
+    }
+
+    const batches = chunkBySize(
+      entries,
+      BATCH_SIZE,
+      MAX_BATCH_READ_BYTES,
+      costOf,
+    );
+
+    // Order preserved, nothing lost.
+    expect(batches.flat().map((e) => e.id)).toEqual(entries.map((e) => e.id));
+
+    for (const batch of batches) {
+      expect(batch.length).toBeLessThanOrEqual(BATCH_SIZE);
+      const totalCost = batch.reduce((sum, e) => sum + costOf(e), 0);
+      expect(totalCost).toBeLessThanOrEqual(MAX_BATCH_READ_BYTES);
+    }
+  });
+
+  it('gives a single over-budget entry its own solo batch instead of dropping it', () => {
+    const entries: SizedEntry[] = [
+      { id: 1, cost: 1024 },
+      { id: 2, cost: 1024 },
+      { id: 3, cost: MAX_BATCH_READ_BYTES + 1 }, // exceeds the whole batch budget alone
+      { id: 4, cost: 1024 },
+    ];
+
+    const batches = chunkBySize(
+      entries,
+      BATCH_SIZE,
+      MAX_BATCH_READ_BYTES,
+      costOf,
+    );
+
+    expect(batches.flat().map((e) => e.id)).toEqual([1, 2, 3, 4]);
+    const soloBatch = batches.find((b) => b.some((e) => e.id === 3));
+    expect(soloBatch).toEqual([{ id: 3, cost: MAX_BATCH_READ_BYTES + 1 }]);
+  });
+
+  it('splits purely on count when every entry is free (metadata-only cost 0)', () => {
+    const entries: SizedEntry[] = Array.from({ length: 120 }, (_, i) => ({
+      id: i,
+      cost: 0,
+    }));
+
+    const batches = chunkBySize(
+      entries,
+      BATCH_SIZE,
+      MAX_BATCH_READ_BYTES,
+      costOf,
+    );
+
+    expect(batches.map((b) => b.length)).toEqual([50, 50, 20]);
+    expect(batches.flat().map((e) => e.id)).toEqual(entries.map((e) => e.id));
+  });
+
+  it('returns an empty array for an empty input', () => {
+    expect(chunkBySize([], BATCH_SIZE, MAX_BATCH_READ_BYTES, costOf)).toEqual(
+      [],
+    );
   });
 });

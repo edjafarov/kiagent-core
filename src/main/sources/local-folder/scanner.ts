@@ -41,6 +41,65 @@ export interface ScannedEntry {
   stats: fs.Stats;
 }
 
+/**
+ * A count-only chunk of `BATCH_SIZE` entries can still hold up to
+ * `BATCH_SIZE * MAX_BINARY_READ_BYTES` (~1 GiB) of file bytes at once if
+ * every entry happens to be a near-cap binary — the whole batch is built
+ * (bytes attached) and held before it's yielded, so bounding read
+ * *concurrency* alone wouldn't help. This is the second, byte-budget cap
+ * `chunkBySize` enforces alongside `BATCH_SIZE`. Sized well above what an
+ * ordinary batch of ~50 everyday files would cost, while keeping the worst
+ * case a small, predictable fraction of memory rather than unbounded.
+ */
+export const MAX_BATCH_READ_BYTES = 64 * 1024 * 1024; // 64 MiB
+
+/**
+ * Bytes `buildItem` will actually read off disk for one entry — mirrors its
+ * bucket/size-cap logic so the chunker's budget lines up exactly with real
+ * read cost. Metadata-only outcomes (unsupported bucket, or over that
+ * bucket's own cap) cost 0 since `buildItem` never reads their bytes.
+ */
+export function entryReadCost(entry: ScannedEntry): number {
+  const bucket = classifyMime(resolveMime(entry.absPath));
+  const { size } = entry.stats;
+  if (bucket === 'text' && size <= MAX_INLINE_TEXT_BYTES) return size;
+  if (bucket === 'binary' && size <= MAX_BINARY_READ_BYTES) return size;
+  return 0;
+}
+
+/**
+ * Greedy size-aware batching: closes the current batch before adding an
+ * item that would push it past `maxCount` entries or `maxBytes` of total
+ * cost. An item whose own cost already exceeds `maxBytes` still gets a
+ * batch of exactly one — never dropped, just isolated so it doesn't inflate
+ * whatever batch it would otherwise have landed in.
+ */
+export function chunkBySize<T>(
+  items: readonly T[],
+  maxCount: number,
+  maxBytes: number,
+  costOf: (item: T) => number,
+): T[][] {
+  const out: T[][] = [];
+  let batch: T[] = [];
+  let batchBytes = 0;
+  for (const item of items) {
+    const cost = costOf(item);
+    if (
+      batch.length > 0 &&
+      (batch.length >= maxCount || batchBytes + cost > maxBytes)
+    ) {
+      out.push(batch);
+      batch = [];
+      batchBytes = 0;
+    }
+    batch.push(item);
+    batchBytes += cost;
+  }
+  if (batch.length > 0) out.push(batch);
+  return out;
+}
+
 /** One source of truth for what the local-folder source enumerates. Shared
  *  by `listEntries` (sync) and `countFiles` (the add-source preview) so the
  *  displayed count can never drift from what a folder would actually index. */

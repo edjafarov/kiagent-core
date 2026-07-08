@@ -571,6 +571,28 @@ describe('github-source', () => {
       expect(result).toEqual(Buffer.from([72, 101, 108, 108, 111]));
     });
 
+    it('should throw when content-length declares more than the 200 MiB download cap, without buffering the (tiny, lying) body', async () => {
+      const mockFetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        // Lies: declares far more than the tiny body actually returned, so
+        // the test never has to allocate anything close to the real cap.
+        headers: {
+          get: (name: string) =>
+            name === 'content-length' ? String(250 * 1024 * 1024) : null,
+        },
+        arrayBuffer: jest.fn().mockResolvedValueOnce(new ArrayBuffer(5)),
+      });
+
+      const source = createGitHubSource({
+        cache: mockCache as any,
+        fetchImpl: mockFetch,
+      });
+
+      await expect(
+        source.downloadAsset('https://example.com/plugin.tgz'),
+      ).rejects.toThrow(/200 MiB/);
+    });
+
     it('should throw error when status is not ok', async () => {
       const mockFetch = jest.fn();
       mockFetch.mockResolvedValueOnce({

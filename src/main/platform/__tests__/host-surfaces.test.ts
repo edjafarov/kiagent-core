@@ -103,6 +103,26 @@ describe('buildSurfaces', () => {
     srv.close();
   });
 
+  it('net.fetch rejects a response whose declared content-length exceeds the 50 MiB cap, without buffering the (tiny, lying) body', async () => {
+    const srv = http.createServer((_req, res) => {
+      // Lies: declares far more than the tiny body actually sent, so the
+      // test never has to allocate anything close to the real cap.
+      res.writeHead(200, { 'content-length': String(60 * 1024 * 1024) });
+      res.end('tiny-body');
+    });
+    await new Promise<void>((r) => {
+      srv.listen(0, '127.0.0.1', r);
+    });
+    const { port } = srv.address() as { port: number };
+    const { deps } = makeDeps();
+    const { surfaces, close } = buildSurfaces(deps);
+    await expect(
+      surfaces.net.fetch(`http://127.0.0.1:${port}/`),
+    ).rejects.toThrow(/50 MiB/);
+    close();
+    srv.close();
+  });
+
   it('inference forces the interactive lane', async () => {
     const { deps } = makeDeps();
     const { surfaces, close } = buildSurfaces(deps);

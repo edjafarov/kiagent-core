@@ -79,6 +79,64 @@ const unsupported = (ns: string) => () => {
   );
 };
 
+/**
+ * `net.fetch` is reachable by semi-trusted third-party connector
+ * extensions — a huge or malicious endpoint must not be able to buffer an
+ * unbounded response in the main process. 50 MiB comfortably covers
+ * ordinary API/webhook payloads.
+ */
+const MAX_NET_FETCH_BYTES = 50 * 1024 * 1024; // 50 MiB
+
+/**
+ * Reads `res`'s body up to `maxBytes`, throwing a descriptive error the
+ * moment that's exceeded. Checked against `content-length` up front (fail
+ * fast, no need to read anything), then again against the running total
+ * while streaming — a `content-length` header can lie or be absent, so it
+ * can't be trusted alone.
+ */
+async function readBoundedBody(
+  res: Response,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const limit = `${Math.floor(maxBytes / (1024 * 1024))} MiB`;
+  const declared = res.headers.get('content-length');
+  if (declared && Number(declared) > maxBytes) {
+    throw new Error(`net.fetch: response exceeds the ${limit} limit`);
+  }
+  if (!res.body) {
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > maxBytes) {
+      throw new Error(`net.fetch: response exceeds the ${limit} limit`);
+    }
+    return new Uint8Array(buf);
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.byteLength;
+      if (total > maxBytes) {
+        // Stop the transfer too — without cancel() the stream keeps
+        // pulling bytes until GC even though we've already given up.
+        await reader.cancel();
+        throw new Error(`net.fetch: response exceeds the ${limit} limit`);
+      }
+      chunks.push(value);
+    }
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+
 export function buildSurfaces(deps: SurfaceDeps): {
   surfaces: Surfaces;
   close(): void;
@@ -126,7 +184,7 @@ export function buildSurfaces(deps: SurfaceDeps): {
           status: res.status,
           statusText: res.statusText,
           headers: Object.fromEntries(res.headers.entries()),
-          body: new Uint8Array(await res.arrayBuffer()),
+          body: await readBoundedBody(res, MAX_NET_FETCH_BYTES),
         };
       },
     },
