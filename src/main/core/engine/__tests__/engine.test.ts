@@ -602,6 +602,89 @@ describe('engine', () => {
     expect(x?.markdown).toBe('body x'); // enrich did not clobber it
   }, 15_000);
 
+  it('workOne: a dangling async emit from a failed attempt does not pollute the retry that succeeds', async () => {
+    // Regression: emitted/enriched/session used to be created ONCE outside
+    // the retry loop and cleared with `.length = 0` per attempt. Workers are
+    // third-party extension code — if attempt 1 leaves a dangling background
+    // task (an un-awaited setTimeout/promise) that calls session.emit() while
+    // attempt 2 is already accumulating (i.e. after the clear), that late
+    // call used to land in the SAME array attempt 2 returns. Each attempt
+    // must get its own session/array so a late call from a dead attempt
+    // writes into an array nothing ever reads. The test replays attempt 1's
+    // captured session mid-attempt-2 — deterministically after any clearing —
+    // rather than racing a real timer against the retry backoff.
+    const source = fakeSource();
+    const engine = makeEngine(source);
+    const account = await engine.connect(source, {
+      oauth: async () => ({}),
+      showQr: () => {},
+      prompt: async () => ({}),
+      status: () => {},
+      pickFolders: async () => [],
+    });
+    await store.commit({
+      account: account.id,
+      documents: [doc('x')],
+      cursor: 1,
+    });
+
+    let attempts = 0;
+    let firstSession: Parameters<Worker['work']>[1] | null = null;
+    const worker: Worker = {
+      name: 'dangling-emitter',
+      version: 1,
+      maxAttempts: 2,
+      matches: (c: Change) =>
+        c.kind === 'document' && c.document.markdown === 'body x',
+      async work(change, session) {
+        if (change.kind !== 'document') return 'skip';
+        attempts += 1;
+        if (attempts === 1) {
+          // Keep a reference to this attempt's session, as a dangling
+          // background task spawned here would.
+          firstSession = session;
+          throw new Error('boom');
+        }
+        // The "dangling task from attempt 1" resolves now, mid-attempt-2:
+        // it emits through the session binding it captured before throwing.
+        firstSession!.emit({
+          externalId: 'dangling-from-attempt-1',
+          type: 'summary',
+          title: null,
+          markdown: 'should never be committed',
+          metadata: {},
+          createdAt: null,
+        });
+        session.emit({
+          externalId: 'summary:x',
+          type: 'summary',
+          title: null,
+          markdown: 'attempt 2 output',
+          metadata: {},
+          createdAt: null,
+        });
+        return 'done';
+      },
+    };
+
+    const handle = engine.attach(worker);
+    await waitFor(
+      async () => store.ledgerCounts('worker:dangling-emitter:v1').done === 1,
+      10_000,
+    );
+    await handle.stop();
+
+    expect(attempts).toBe(2);
+    // Only attempt 2's doc is committed — the dangling attempt-1 emit landed
+    // in an orphaned array and was never returned/committed. (Worker
+    // emissions land under a synthetic per-consumer account, not the source
+    // account, so query by type rather than store.read.byExternalId.)
+    const summaries = await store.read.search({ type: 'summary' });
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].externalId).toBe('summary:x');
+    expect(summaries[0].markdown).toBe('attempt 2 output');
+  }, 15_000);
+
   it('connect: reconnecting an existing (source, identifier) upserts the account, stops the old running loop, no duplicate', async () => {
     let attempt = 0;
     const source: Source<number, DocumentInput> = {

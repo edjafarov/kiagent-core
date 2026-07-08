@@ -58,12 +58,13 @@ async function* abortable<T>(
   signal: AbortSignal,
 ): AsyncGenerator<T> {
   const it = iterable[Symbol.asyncIterator]();
+  let onAbort: (() => void) | null = null;
   const aborted = new Promise<'aborted'>((resolve) => {
     if (signal.aborted) resolve('aborted');
-    else
-      signal.addEventListener('abort', () => resolve('aborted'), {
-        once: true,
-      });
+    else {
+      onAbort = () => resolve('aborted');
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
   try {
     for (;;) {
@@ -72,6 +73,13 @@ async function* abortable<T>(
       yield r.value;
     }
   } finally {
+    // run()'s retry loop calls abortable() fresh on every iteration (once for
+    // src.pull, once inside reconcilePass) against the SAME per-account
+    // AbortSignal. Without removing the listener here, a long-lived flaky
+    // source that iterates indefinitely accrues one listener + one pending
+    // promise per iteration forever (Node warns past 10 listeners on a
+    // signal) — remove it the moment this generator is done with the signal.
+    if (onAbort) signal.removeEventListener('abort', onAbort);
     void it.return?.();
   }
 }
@@ -265,45 +273,53 @@ export function createEngine(deps: EngineDeps): Engine & {
     const consumer = workerConsumerName(worker);
     const scope = `worker:${worker.name}`;
     const maxAttempts = worker.maxAttempts ?? 3;
-    const emitted: DocumentInput[] = [];
-    const enriched: EnrichInput[] = [];
-    const session: WorkerSession = {
-      signal,
-      inference(prompt, opts) {
-        return deps.inference.complete(prompt, { ...opts, lane: 'background' });
-      },
-      see(image, prompt, opts) {
-        return deps.inference.see(image, prompt, {
-          ...opts,
-          lane: 'background',
-        });
-      },
-      read(image, opts) {
-        return deps.inference.read(image, { ...opts, lane: 'background' });
-      },
-      async fetchBytes(doc: Document) {
-        const account = await store.account(doc.accountId);
-        if (!account) return null;
-        const source = deps.sources.get(account.source);
-        if (!source?.fetchBytes) return null;
-        return source.fetchBytes(makeSession(account, signal, scope), doc);
-      },
-      emit(doc) {
-        emitted.push(doc);
-      },
-      enrich(e) {
-        enriched.push(e);
-      },
-      log(level, msg) {
-        logs.log(scope, level, msg);
-      },
-    };
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      // A failed attempt's session output must not leak into the retry —
-      // only the surviving attempt's emit/enrich calls are committed.
-      emitted.length = 0;
-      enriched.length = 0;
+      // Fresh accumulators AND a fresh session object per attempt: workers are
+      // third-party extension code, and a failed attempt can leave a dangling
+      // background promise running (e.g. an un-awaited setTimeout/then chain)
+      // that calls session.emit()/enrich() after its attempt already threw.
+      // With a shared session across attempts that late call would push into
+      // the SAME array the next attempt is accumulating into, polluting the
+      // retry's committed output. Rebinding `session` each iteration means a
+      // dangling call from a dead attempt writes into an orphaned array that
+      // nothing ever reads — never into the array the live attempt returns.
+      const emitted: DocumentInput[] = [];
+      const enriched: EnrichInput[] = [];
+      const session: WorkerSession = {
+        signal,
+        inference(prompt, opts) {
+          return deps.inference.complete(prompt, {
+            ...opts,
+            lane: 'background',
+          });
+        },
+        see(image, prompt, opts) {
+          return deps.inference.see(image, prompt, {
+            ...opts,
+            lane: 'background',
+          });
+        },
+        read(image, opts) {
+          return deps.inference.read(image, { ...opts, lane: 'background' });
+        },
+        async fetchBytes(doc: Document) {
+          const account = await store.account(doc.accountId);
+          if (!account) return null;
+          const source = deps.sources.get(account.source);
+          if (!source?.fetchBytes) return null;
+          return source.fetchBytes(makeSession(account, signal, scope), doc);
+        },
+        emit(doc) {
+          emitted.push(doc);
+        },
+        enrich(e) {
+          enriched.push(e);
+        },
+        log(level, msg) {
+          logs.log(scope, level, msg);
+        },
+      };
       try {
         const outcome = (await worker.work(change, session)) ?? 'done';
         store.ledgerRecord(
@@ -335,7 +351,9 @@ export function createEngine(deps: EngineDeps): Engine & {
         );
       }
     }
-    return { docs: emitted, enrich: enriched };
+    // Unreachable unless maxAttempts < 1 (the loop always returns from
+    // within on a success, on the final failed attempt, or on abort).
+    return { docs: [], enrich: [] };
   };
 
   const engine = {
