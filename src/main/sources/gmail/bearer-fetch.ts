@@ -39,6 +39,29 @@ function isRetryableGoogleFailure(status: number, body: string): boolean {
   return false;
 }
 
+/**
+ * Backoff sleep that races the delay against `signal` aborting, so a stop/
+ * reconnect during a (possibly Retry-After-driven, up to 60s+) backoff wait
+ * doesn't hang the caller for the rest of the delay. Throws `Error('aborted')`
+ * on abort, matching the check at the top of bearerFetch's loop. Always clears
+ * the timer and removes the abort listener, on every path, so nothing leaks.
+ */
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw new Error('aborted');
+  let timer: ReturnType<typeof setTimeout>;
+  let onAbort: () => void;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      onAbort = () => reject(new Error('aborted'));
+      signal?.addEventListener('abort', onAbort, { once: true });
+      timer = setTimeout(resolve, ms);
+    });
+  } finally {
+    clearTimeout(timer!);
+    signal?.removeEventListener('abort', onAbort!);
+  }
+}
+
 export async function bearerFetch<T>(
   url: string,
   getToken: () => Promise<string>,
@@ -99,7 +122,7 @@ export async function bearerFetch<T>(
             `${opts.logTag} ${reason} ${url} — retry ${attempt + 1}/${MAX_ATTEMPTS} after ${Math.round(delay)}ms`,
           );
         }
-        await new Promise((res) => setTimeout(res, delay));
+        await sleep(delay, opts.signal);
         continue;
       }
       throw netError;
@@ -117,7 +140,7 @@ export async function bearerFetch<T>(
           `${opts.logTag} ${status} ${url} — retry ${attempt + 1}/${MAX_ATTEMPTS} after ${Math.round(delay)}ms`,
         );
       }
-      await new Promise((res) => setTimeout(res, delay));
+      await sleep(delay, opts.signal);
       continue;
     }
     // 401 (and any other non-retryable status) surfaces immediately here.

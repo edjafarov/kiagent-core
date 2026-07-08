@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 import type { Credentials } from '@shared/contracts';
 
 import type { OAuthProfile } from '../../auth/oauth-window';
@@ -33,6 +35,18 @@ interface GoogleTokenResponse {
   error_description?: string;
 }
 
+function base64url(buf: Buffer): string {
+  return buf.toString('base64url');
+}
+
+function generateCodeVerifier(): string {
+  return base64url(crypto.randomBytes(32));
+}
+
+function deriveCodeChallenge(verifier: string): string {
+  return base64url(crypto.createHash('sha256').update(verifier).digest());
+}
+
 function expiresAtFrom(expiresInSeconds: number | undefined): string {
   const seconds = expiresInSeconds ?? 3600;
   return new Date(Date.now() + seconds * 1000).toISOString();
@@ -56,6 +70,18 @@ async function postToken(
 }
 
 /**
+ * `OAuthProfile` is a two-phase API (authUrl, then exchange) with no way to
+ * thread state between the calls — so the PKCE code_verifier and the
+ * anti-CSRF state param generated in `authUrl` are held here in module
+ * closure state, consumed (and cleared) by the following `exchange` call.
+ * Same single-pending-flow stance as microsoft/oauth.ts: only one Gmail auth
+ * window runs at a time (UI-enforced, not broker-enforced), and a second
+ * concurrent `authUrl` call would clobber this one's pending verifier/state —
+ * the loser fails safe on the state-mismatch throw.
+ */
+let pending: { codeVerifier: string; state: string } | null = null;
+
+/**
  * `OAuthProfile` for Google/Gmail. `authUrl` is a pure URL builder (no
  * network); `exchange` performs the authorization_code grant directly
  * against Google's token endpoint per the task brief, rather than going
@@ -72,6 +98,11 @@ export const googleOAuthProfile: OAuthProfile = {
 
   authUrl(scopes: string[], redirectUri: string): string {
     const { clientId } = getGoogleClientCredentials();
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = deriveCodeChallenge(codeVerifier);
+    const state = crypto.randomBytes(16).toString('hex');
+    pending = { codeVerifier, state };
+
     const url = new URL(AUTH_ENDPOINT);
     url.searchParams.set('client_id', clientId);
     url.searchParams.set('redirect_uri', redirectUri);
@@ -83,6 +114,9 @@ export const googleOAuthProfile: OAuthProfile = {
     // refresh_token on repeat connects.
     url.searchParams.set('access_type', 'offline');
     url.searchParams.set('prompt', 'consent');
+    url.searchParams.set('code_challenge', codeChallenge);
+    url.searchParams.set('code_challenge_method', 'S256');
+    url.searchParams.set('state', state);
     return url.toString();
   },
 
@@ -93,11 +127,26 @@ export const googleOAuthProfile: OAuthProfile = {
     const cb = new URL(callbackUrl);
     const error = cb.searchParams.get('error');
     if (error) {
+      pending = null;
       const desc = cb.searchParams.get('error_description');
       throw new Error(`gmail oauth error: ${error}${desc ? ` — ${desc}` : ''}`);
     }
     const code = cb.searchParams.get('code');
-    if (!code) throw new Error('gmail oauth callback missing code');
+    if (!code) {
+      pending = null;
+      throw new Error('gmail oauth callback missing code');
+    }
+
+    const current = pending;
+    pending = null;
+    if (!current) {
+      throw new Error(
+        'gmail oauth exchange called with no pending authUrl request',
+      );
+    }
+    if (cb.searchParams.get('state') !== current.state) {
+      throw new Error('gmail oauth state mismatch — possible CSRF, aborting');
+    }
 
     const { clientId, clientSecret } = getGoogleClientCredentials();
     const body = await postToken({
@@ -106,6 +155,7 @@ export const googleOAuthProfile: OAuthProfile = {
       client_id: clientId,
       client_secret: clientSecret,
       redirect_uri: redirectUri,
+      code_verifier: current.codeVerifier,
     });
     if (!body.refresh_token) {
       throw new Error(
