@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.43.0](https://github.com/edjafarov/kiagent-core/compare/v0.42.0...v0.43.0) (2026-07-08)
+
+### Features
+
+* **updater:** port electron-updater state machine into core ([3369149](https://github.com/edjafarov/kiagent-core/commit/33691498c58fd408219f5898c2751d2a2f4ccd5b))
+* **updater:** wire the updater manager into main.ts boot ([c1f193a](https://github.com/edjafarov/kiagent-core/commit/c1f193af5d6e6912f8deff9c7a125e203246373b))
+* **updater:** render live UpdateState in the About pane ([bc65c24](https://github.com/edjafarov/kiagent-core/commit/bc65c243c7f24e336f78ca97f766853c9a4d5d41))
+
+Auto-update restarts and reinstalls the whole app — a main-process concern —
+so it belongs in core, not a bundled extension. Core already shipped
+`electron-updater` (unused), `product.updateFeedUrl` (unconsumed) and two stub
+`update:*` IPC handlers; this release wires them to the proven alpha-cent
+overlay updater. `src/main/updater/` gains `createUpdater` (the state machine +
+eligibility gate + 10s/6h boot check), `createUpdateNotifier` (a one-shot
+native notification per downloaded version) and `registerUpdaterIpc`, ported
+verbatim (only the `errMsg` seam is inlined — core has no `ipc/handlers`
+module). `UpdateStatus`/`UpdateState` move into the shared IPC contract;
+`update:get-state`/`update:check` now return `UpdateState` and there are new
+`update:quit-and-install` invoke and `push:update-state` push channels.
+`main.ts` instantiates the manager once at boot (electron-updater's
+`autoUpdater`, electron-log, `app.getVersion/isPackaged`, `process.platform`),
+applies `product.updateFeedUrl` via `setFeedURL` when present, subscribes the
+native notifier and pushes state to the renderer; the About pane renders the
+live state with a "Restart to update" action. macOS auto-update stays gated
+(`MAC_UPDATES_ENABLED = false`, reason `unsigned-macos`) until Developer-ID
+signing lands.
+
 ## [0.42.0](https://github.com/edjafarov/kiagent-core/compare/v0.41.0...v0.42.0) (2026-07-08)
 
 ### Features
