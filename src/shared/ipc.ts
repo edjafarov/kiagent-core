@@ -129,6 +129,34 @@ export interface UpdateInfo {
   ref: string;
 }
 
+/** Lifecycle of an update check/download. `disabled` = gated off (dev/unsigned-mac). */
+export type UpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'up-to-date'
+  | 'error'
+  | 'disabled';
+
+export interface UpdateState {
+  status: UpdateStatus;
+  /** The running app version (`app.getVersion()`). */
+  currentVersion: string;
+  /** Target version when available/downloaded, else null. */
+  version: string | null;
+  /** 0..100 while downloading. */
+  percent?: number;
+  bytesPerSecond?: number;
+  /** User-readable error text when status === 'error'. */
+  error?: string;
+  /** epoch ms of the last completed check. */
+  checkedAt?: number;
+  /** Why disabled, e.g. 'dev' | 'unsigned-macos'. */
+  reason?: string;
+}
+
 /** invoke(channel, payload) → response. */
 export interface Invokes {
   'app:get-state': { req: void; res: AppStatePush };
@@ -269,9 +297,12 @@ export interface Invokes {
   /** Reveal a path in the system file manager. */
   'app:open-path': { req: { path: string }; res: void };
 
-  /** Present so the About pane keeps working; real updater is overlay-only. */
-  'update:get-state': { req: void; res: { status: 'idle' } };
-  'update:check': { req: void; res: void };
+  /** Auto-updater state machine (electron-updater, ported into core). */
+  'update:get-state': { req: void; res: UpdateState };
+  /** Kicks off a check; resolves with the post-kickoff state. */
+  'update:check': { req: void; res: UpdateState };
+  /** Restart and install an already-downloaded update. */
+  'update:quit-and-install': { req: void; res: void };
 
   /** Official kia-plugins catalog (5-min cached). Rejects on first-ever fetch failure. */
   'marketplace:list': { req: void; res: MarketplaceListItem[] };
@@ -315,6 +346,7 @@ export interface Pushes {
   'push:connect': ConnectEvent;
   'push:logs': LogRecord[];
   'push:mcp-activity': McpActivityRecord[];
+  'push:update-state': UpdateState;
 }
 
 export type InvokeChannel = keyof Invokes;
@@ -368,6 +400,7 @@ export const INVOKE_CHANNELS = [
   'app:open-path',
   'update:get-state',
   'update:check',
+  'update:quit-and-install',
   'marketplace:list',
   'marketplace:detail',
   'marketplace:check-updates',
@@ -383,6 +416,7 @@ export const PUSH_CHANNELS = [
   'push:connect',
   'push:logs',
   'push:mcp-activity',
+  'push:update-state',
 ] as const satisfies readonly PushChannel[];
 
 /** What preload exposes on window.kiagent. */

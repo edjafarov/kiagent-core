@@ -12,6 +12,8 @@ import {
   shell,
 } from 'electron';
 import type { Tray } from 'electron';
+import { autoUpdater } from 'electron-updater';
+import log from 'electron-log/main';
 
 import type { AppState, SchedulerEnv, Seq } from '@shared/contracts';
 import type {
@@ -41,6 +43,9 @@ import { parseGitHubRef, formatGitHubRef } from './marketplace/github-ref';
 import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
+import { createUpdater } from './updater/updater';
+import { createUpdateNotifier } from './updater/native-notify';
+import { registerUpdaterIpc } from './updater/ipc';
 import { createExtensionPlatform } from './platform/extension-platform';
 import type { ExtensionPlatform } from './platform/extension-platform';
 import { utilityProcessTransport } from './platform/transport';
@@ -464,8 +469,46 @@ function registerIpc(
   handle('app:open-path', ({ path: target }) => {
     shell.showItemInFolder(target);
   });
-  handle('update:get-state', () => ({ status: 'idle' as const }));
-  handle('update:check', () => {});
+  // --- Auto-updater (ported from the alpha-cent overlay) ---------------------
+  // Restart-and-reinstall is a whole-app, main-process concern, so it lives in
+  // core. `product.updateFeedUrl` overrides the electron-builder-baked
+  // app-update.yml when present; OSS core with no product.json leaves it
+  // undefined and the eligibility gate keeps the updater idle/disabled.
+  log.transports.file.level = 'info';
+  if (product.updateFeedUrl) {
+    try {
+      autoUpdater.setFeedURL(product.updateFeedUrl);
+    } catch (e) {
+      log.warn('[updater] setFeedURL failed', e);
+    }
+  }
+  const updater = createUpdater({
+    autoUpdater,
+    log,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    currentVersion: app.getVersion(),
+    devUpdates: process.env.KIAGENT_DEV_UPDATES === '1',
+  });
+  registerUpdaterIpc(updater, {
+    handle: (channel, fn) => handle(channel as never, fn as never),
+    broadcast: (channel, payload) =>
+      broadcast(channel as never, payload as never),
+  });
+  // Gentle native nudge: a one-shot OS notification the moment an update
+  // finishes downloading (click → restart & install).
+  const notifier = createUpdateNotifier({
+    notify: ({ title, body, onClick }) => {
+      if (!Notification.isSupported()) return;
+      const n = new Notification({ title, body });
+      n.on('click', onClick);
+      n.show();
+    },
+    quitAndInstall: () => updater.quitAndInstall(),
+    log,
+  });
+  updater.onStateChange((s) => notifier.handle(s));
+  updater.start();
 
   handle('marketplace:list', () => catalog.list());
   handle('marketplace:detail', ({ owner, repo }) =>

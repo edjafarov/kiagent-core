@@ -1,15 +1,47 @@
 import React, { useEffect, useState } from 'react';
 import { Spark } from '@shared/web-ui/Spark';
 import { Icon } from '@shared/web-ui/icon-sprite';
+import type { UpdateState } from '@shared/ipc';
 
 const REPO_URL = 'https://github.com/edjafarov/alpha-cent';
 const REPO_LABEL = 'github.com/edjafarov/alpha-cent';
 
 /**
- * About pane. `update:get-state`/`update:check` are OSS stubs
- * (`{status: 'idle'}`, no real updater wired up — see ipc.ts) so the update
- * section always renders as "up to date" per the task brief rather than
- * fabricating download-progress/version states the backend can't produce.
+ * Human-readable line for the current updater state. Covers the full
+ * `UpdateStatus` union (the state machine also emits `idle`/`up-to-date`).
+ */
+function statusLine(u: UpdateState | null): string {
+  switch (u?.status) {
+    case 'checking':
+      return 'Checking for updates…';
+    case 'available':
+      return `Update available${u.version ? ` (v${u.version})` : ''}, downloading…`;
+    case 'downloading':
+      return `Downloading${
+        typeof u.percent === 'number' ? ` ${Math.round(u.percent)}%` : '…'
+      }`;
+    case 'downloaded':
+      return `Update ready${u.version ? ` (v${u.version})` : ''}.`;
+    case 'error':
+      return `Update check failed: ${u.error ?? 'unknown error'}`;
+    case 'disabled':
+      return u.reason === 'dev'
+        ? 'Updates are disabled in development.'
+        : u.reason === 'unsigned-macos'
+          ? 'Automatic updates are not yet available on macOS.'
+          : 'Updates are disabled.';
+    case 'up-to-date':
+    case 'idle':
+    default:
+      return 'You’re up to date.';
+  }
+}
+
+/**
+ * About pane. Wired to the real core updater: `update:get-state` seeds the
+ * initial state, `push:update-state` streams live transitions, `update:check`
+ * kicks off a check, and `update:quit-and-install` restarts into a downloaded
+ * build.
  */
 export function About(): React.ReactElement {
   const [info, setInfo] = useState<{
@@ -17,21 +49,24 @@ export function About(): React.ReactElement {
     platform: string;
   } | null>(null);
   const [checking, setChecking] = useState(false);
-  const [checked, setChecked] = useState(false);
+  const [update, setUpdate] = useState<UpdateState | null>(null);
 
   useEffect(() => {
     void window.kiagent.invoke('app:info', undefined).then(setInfo);
-    // Idle stub — resolves immediately, no push channel exists for update
-    // state in this contract's Pushes union.
-    void window.kiagent.invoke('update:get-state', undefined);
+    void window.kiagent.invoke('update:get-state', undefined).then(setUpdate);
+    const off = window.kiagent.on('push:update-state', (s) => {
+      setUpdate(s);
+      if (s.status !== 'checking') setChecking(false);
+    });
+    return off;
   }, []);
 
   const checkForUpdates = () => {
     setChecking(true);
-    void window.kiagent.invoke('update:check', undefined).finally(() => {
-      setChecking(false);
-      setChecked(true);
-    });
+    void window.kiagent
+      .invoke('update:check', undefined)
+      .then(setUpdate)
+      .finally(() => setChecking(false));
   };
 
   return (
@@ -77,21 +112,34 @@ export function About(): React.ReactElement {
         <button
           type="button"
           className="btn sm"
-          disabled={checking}
+          disabled={
+            checking ||
+            update?.status === 'checking' ||
+            update?.status === 'downloading' ||
+            update?.status === 'disabled'
+          }
           onClick={checkForUpdates}
         >
           <Icon name="refresh-cw" size={12} />{' '}
-          {checking ? 'Checking…' : 'Check for updates'}
+          {checking || update?.status === 'checking'
+            ? 'Checking…'
+            : 'Check for updates'}
         </button>
+        {update?.status === 'downloaded' && (
+          <button
+            type="button"
+            className="btn sm primary"
+            onClick={() =>
+              void window.kiagent.invoke('update:quit-and-install', undefined)
+            }
+          >
+            <Icon name="refresh-cw" size={12} /> Restart to update
+          </button>
+        )}
       </div>
 
       <div className="about-update-status">
-        <span className="value">
-          {checking ? 'Checking for updates…' : 'You’re up to date.'}
-        </span>
-        {checked && !checking && (
-          <span className="t-meta"> (last checked just now)</span>
-        )}
+        <span className="value">{statusLine(update)}</span>
       </div>
 
       <div className="about-list">
