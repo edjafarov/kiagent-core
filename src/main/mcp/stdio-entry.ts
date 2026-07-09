@@ -26,6 +26,7 @@ import { makeMcpServer } from '../core/mcp/make-server';
 import { attachToolHandlers, createToolRegistry } from '../core/mcp/registry';
 import { attachResourceHandlers } from '../core/mcp/resources';
 import { buildBuiltinTools } from '../core/mcp/tools';
+import { openCorpusReadConnection } from '../db/app-db';
 import { openStore, type CoreStore } from '../core/store/store';
 
 function parseDbArg(argv: string[]): string | null {
@@ -85,7 +86,10 @@ async function main(): Promise<void> {
 
   let store: CoreStore;
   try {
-    store = openStore(dbPath, {
+    // Read-only sibling: openCorpusReadConnection gives an in-process AppDb
+    // (with `_conn`), so the store builds a writeTx that this process never
+    // invokes — only `store.read` is ever touched here.
+    store = openStore(await openCorpusReadConnection(dbPath), {
       // Vault is unreachable from the Query surface this process serves —
       // any codec typechecks; these never actually run.
       encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -124,7 +128,7 @@ async function main(): Promise<void> {
       /* ignore */
     }
     try {
-      store.close();
+      await store.close();
     } finally {
       process.exit(code);
     }

@@ -4,6 +4,7 @@ import path from 'path';
 
 import type { AccountId, Change, DocumentInput } from '@shared/contracts';
 
+import { openDb } from '../../../db/app-db';
 import { openStore } from '../store';
 import type { CoreStore } from '../store';
 
@@ -35,7 +36,7 @@ describe('store', () => {
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-store-'));
-    store = openStore(path.join(dir, 'test.db'), deps);
+    store = openStore(await openDb(path.join(dir, 'test.db')), deps);
     const account = await store.createAccount({
       source: 'test',
       identifier: 'me@example.com',
@@ -43,8 +44,8 @@ describe('store', () => {
     accountId = account.id;
   });
 
-  afterEach(() => {
-    store.close();
+  afterEach(async () => {
+    await store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -136,13 +137,13 @@ describe('store', () => {
       documents: [doc('a')],
       cursor: 1,
     });
-    const head1 = store.headSeq();
+    const head1 = await store.headSeq();
     await store.commit({
       account: accountId,
       documents: [doc('a')],
       cursor: 2,
     });
-    const head2 = store.headSeq();
+    const head2 = await store.headSeq();
     // Only the account-cursor change row lands; the document row does not.
     expect(head2 - head1).toBe(1);
   });
@@ -180,7 +181,7 @@ describe('store', () => {
       cursor: 2,
     });
 
-    const refs = store.liveRefs(accountId);
+    const refs = await store.liveRefs(accountId);
     const stripped = refs
       .map(({ externalId, type }) => ({ externalId, type }))
       .sort((x, y) => x.externalId.localeCompare(y.externalId));
@@ -364,7 +365,7 @@ describe('store', () => {
       cursor: 42,
       documents: [doc('summary-1', { type: 'summary' })],
     });
-    expect(store.consumerCursor('worker:summarizer:v1')).toBe(42);
+    expect(await store.consumerCursor('worker:summarizer:v1')).toBe(42);
     const synthetic = (await store.read.accounts()).find(
       (a) => a.source === 'worker',
     );
@@ -407,7 +408,7 @@ describe('store', () => {
       cursor: 1,
     });
     const before = await store.read.byExternalId(accountId, 'scan', 'note');
-    const head = store.headSeq();
+    const head = await store.headSeq();
 
     await store.commit({
       consumer: 'worker:vision:v1',
@@ -429,8 +430,8 @@ describe('store', () => {
         ?.engine,
     ).toBe('local-ocr');
     expect(after?.contentHash).toBe(before?.contentHash); // untouched — source content still dedupes
-    expect(store.consumerCursor('worker:vision:v1')).toBe(7);
-    expect(store.headSeq()).toBe(head + 1); // exactly one 'document' change
+    expect(await store.consumerCursor('worker:vision:v1')).toBe(7);
+    expect(await store.headSeq()).toBe(head + 1); // exactly one 'document' change
 
     const hits = await store.read.search({ text: 'invoice' });
     expect(hits.map((h) => h.externalId)).toEqual(['scan']);
@@ -442,7 +443,7 @@ describe('store', () => {
       cursor: 8,
       enrich: [{ documentId: 'no-such-id', markdown: 'x' }],
     });
-    expect(store.consumerCursor('worker:vision:v1')).toBe(8);
+    expect(await store.consumerCursor('worker:vision:v1')).toBe(8);
   });
 
   it('extractionStats: counts exclude archived/non-image; recent carries filename', async () => {
@@ -487,7 +488,7 @@ describe('store', () => {
       cursor: 2,
     });
 
-    const stats = store.extractionStats();
+    const stats = await store.extractionStats();
     expect(stats.pendingOcr).toBe(3); // img-1, img-2, pdf-1 — note-1 and processed docs excluded
     expect(stats.processed).toBe(1); // done-1 only — the archived processed doc excluded
     expect(stats.recent).toHaveLength(1);
@@ -523,7 +524,7 @@ describe('store', () => {
         cursor: i,
       });
     }
-    const stats = store.extractionStats();
+    const stats = await store.extractionStats();
     expect(stats.processed).toBe(12);
     expect(stats.recent).toHaveLength(10);
     expect(stats.recent.map((r) => r.title)).toEqual(
@@ -540,7 +541,7 @@ describe('store', () => {
       config: { host: 'a' },
       status: 'connecting',
     });
-    const headBefore = store.headSeq();
+    const headBefore = await store.headSeq();
 
     const second = await store.createAccount({
       source: 'imap',
@@ -553,7 +554,7 @@ describe('store', () => {
     expect(second.config).toEqual({ host: 'b' }); // replaced by the second call's config
     expect(second.status).toBe('live');
     expect(second.createdAt).toBe(first.createdAt); // not clobbered on conflict
-    expect(store.headSeq()).toBe(headBefore + 1); // exactly one change appended
+    expect(await store.headSeq()).toBe(headBefore + 1); // exactly one change appended
 
     const rows = (await store.read.accounts()).filter(
       (a) => a.source === 'imap',
@@ -578,16 +579,16 @@ describe('store', () => {
   });
 
   it('setAccountConfig: updates config and appends an account change', async () => {
-    const headBefore = store.headSeq();
+    const headBefore = await store.headSeq();
     await store.setAccountConfig(accountId, { roots: ['/a', '/b'] });
     const acc = await store.account(accountId);
     expect(acc?.config).toEqual({ roots: ['/a', '/b'] });
-    expect(store.headSeq()).toBe(headBefore + 1);
+    expect(await store.headSeq()).toBe(headBefore + 1);
 
     const changes: Change[] = [];
     for await (const batch of store.feed(0)) {
       changes.push(...batch);
-      if (changes.length >= store.headSeq()) break;
+      if (changes.length >= (await store.headSeq())) break;
     }
     const last = changes[changes.length - 1];
     expect(last.kind).toBe('account');
@@ -640,5 +641,78 @@ describe('store', () => {
     const latest = await store.consents.latest('ext-1');
     expect(latest?.caps).toEqual(['query']);
     expect(latest?.manifestVersion).toBe('1.0.0');
+  });
+
+  it('multi-doc atomic rollback: a mid-transaction failure writes NONE of the batch', async () => {
+    // Dedicated store whose detectLanguages throws on a poison marker, so the
+    // failure originates INSIDE the commit transaction (in upsertDocument),
+    // exercising the real all-or-nothing rollback of the procedural commit.
+    const boomDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-boom-'));
+    const boomStore = openStore(await openDb(path.join(boomDir, 'boom.db')), {
+      ...deps,
+      detectLanguages: (text: string) => {
+        if (text.includes('BOOM')) throw new Error('boom in detectLanguages');
+        return ['eng'];
+      },
+    });
+    try {
+      const acc = await boomStore.createAccount({
+        source: 'test',
+        identifier: 'boom@example.com',
+      });
+      const headBefore = await boomStore.headSeq();
+      // 'a' upserts cleanly; 'b' throws mid-tx — the whole batch must roll back.
+      await expect(
+        boomStore.commit({
+          account: acc.id,
+          documents: [doc('a'), doc('b', { markdown: 'BOOM' })],
+          cursor: 1,
+        }),
+      ).rejects.toThrow(/boom/);
+      expect(await boomStore.read.byExternalId(acc.id, 'a', 'note')).toBeNull();
+      expect(await boomStore.read.byExternalId(acc.id, 'b', 'note')).toBeNull();
+      expect(await boomStore.read.count({ account: acc.id })).toBe(0);
+      expect(await boomStore.headSeq()).toBe(headBefore); // no change rows leaked
+    } finally {
+      await boomStore.close();
+      fs.rmSync(boomDir, { recursive: true, force: true });
+    }
+  });
+
+  it('seq monotonicity: sequential commits yield strictly increasing headSeq', async () => {
+    let prev = await store.headSeq();
+    for (let i = 1; i <= 5; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await store.commit({
+        account: accountId,
+        documents: [doc(`m-${i}`)],
+        cursor: i,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      const head = await store.headSeq();
+      expect(head).toBeGreaterThan(prev);
+      prev = head;
+    }
+  });
+
+  it('content-hash skip: re-committing an unchanged document bumps no seq and emits no change', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 1,
+    });
+    const doc1 = await store.read.byExternalId(accountId, 'a', 'note');
+    const head1 = await store.headSeq();
+    // Same content_hash, not archived → upsertDocument returns null: no UPDATE,
+    // no appended 'document' change, seq unchanged (only the account-cursor
+    // change row from the commit lands).
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 2,
+    });
+    const doc2 = await store.read.byExternalId(accountId, 'a', 'note');
+    expect(doc2?.seq).toBe(doc1?.seq); // document row untouched
+    expect((await store.headSeq()) - head1).toBe(1); // only the cursor change
   });
 });

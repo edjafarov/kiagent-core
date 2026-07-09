@@ -4,6 +4,7 @@ import path from 'path';
 
 import type { AccountId, Document, DocumentInput } from '@shared/contracts';
 
+import { openDb } from '../../../db/app-db';
 import { openStore } from '../../store/store';
 import type { CoreStore } from '../../store/store';
 import { buildBuiltinTools } from '../tools';
@@ -48,7 +49,7 @@ describe('mcp built-in tools', () => {
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-mcp-'));
-    store = openStore(path.join(dir, 'test.db'), deps);
+    store = openStore(await openDb(path.join(dir, 'test.db')), deps);
     const account = await store.createAccount({
       source: 'gmail',
       identifier: 'me@example.com',
@@ -77,8 +78,8 @@ describe('mcp built-in tools', () => {
     tools = buildBuiltinTools(store.read);
   });
 
-  afterEach(() => {
-    store.close();
+  afterEach(async () => {
+    await store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

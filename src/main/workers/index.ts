@@ -26,7 +26,8 @@ export function attachBundledWorkers(
     worker.schedule as { every: string },
     async () => {
       if (!backgroundLaneOpen(platform)) return;
-      if (platform.store.ledgerDeferred(VISION_CONSUMER).length === 0) return;
+      if ((await platform.store.ledgerDeferred(VISION_CONSUMER)).length === 0)
+        return;
       deps.localLlm.ensureInstalled(); // no-op if installed/downloading/opted-out
       await platform.engine.rerunDeferred(worker);
     },

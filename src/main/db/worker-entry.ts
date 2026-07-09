@@ -5,6 +5,9 @@
  * through the bridge protocol (see ./bridge.ts) via openDbInWorker.
  */
 import { parentPort, workerData } from 'node:worker_threads';
+import type { CommitBatch } from '@shared/contracts';
+import { detectLanguages } from '@main/core/language';
+import { createWriteTx } from '@main/core/store/write-tx';
 import { openDb } from './app-db';
 import { attachDbHost } from './bridge';
 
@@ -17,10 +20,24 @@ const { dbPath } = workerData as { dbPath: string };
 (async () => {
   try {
     const db = await openDb(dbPath);
-    attachDbHost(parentPort!, db, () => {
-      // close() handled and acknowledged — nothing left to serve.
-      process.exit(0);
+    // The corpus `commit` is procedural with read-your-own-writes, so it runs
+    // as a host procedure on the worker's RAW connection — the SAME
+    // createWriteTx the in-process store builds — not as a static batch().
+    const writeTx = createWriteTx(db._conn!, {
+      detectLanguages,
+      now: () => new Date().toISOString(),
     });
+    attachDbHost(
+      parentPort!,
+      db,
+      () => {
+        // close() handled and acknowledged — nothing left to serve.
+        process.exit(0);
+      },
+      {
+        commit: (args) => writeTx.commit(args as CommitBatch),
+      },
+    );
     parentPort!.postMessage({ t: 'ready' });
   } catch (e) {
     parentPort!.postMessage({

@@ -6,6 +6,7 @@ import path from 'path';
 import type { AuthChannel, ExtensionSnapshot, Source } from '@shared/contracts';
 
 import { createEngine } from '@main/core/engine/engine';
+import { openDb } from '@main/db/app-db';
 import { openStore, type CoreStore } from '@main/core/store/store';
 
 import {
@@ -29,7 +30,7 @@ describe('extension runtime e2e (real forked child)', () => {
 
   beforeAll(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-e2e-'));
-    store = openStore(path.join(tmp, 'kiagent.db'), {
+    store = openStore(await openDb(path.join(tmp, 'kiagent.db')), {
       encrypt: (s) => Buffer.from(s, 'utf8'),
       decrypt: (b) => b.toString('utf8'),
       detectLanguages: () => [],
@@ -83,7 +84,7 @@ describe('extension runtime e2e (real forked child)', () => {
 
   afterAll(async () => {
     await platform.stop();
-    store.close();
+    await store.close();
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 

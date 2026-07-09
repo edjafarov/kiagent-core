@@ -1,22 +1,16 @@
-import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
-
-import Database from 'better-sqlite3';
-import type BetterSqlite3 from 'better-sqlite3';
 
 import type {
   Account,
   AccountId,
   Cadence,
   Change,
-  CommitBatch,
   ConsentRecord,
   Credentials,
   Document,
   DocumentId,
-  DocumentInput,
   ExtensionId,
   ExternalRef,
   Identity,
@@ -26,8 +20,9 @@ import type {
   SyncStatus,
 } from '@shared/contracts';
 
+import type { AppDb, AppDbParam } from '../../db/app-db';
 import { newId } from '../ids';
-import { migrate } from './schema';
+import { createWriteTx } from './write-tx';
 
 /** Injected so the store stays testable and Electron-free. */
 export interface StoreDeps {
@@ -78,29 +73,29 @@ export interface CoreStore extends Store {
    *  paying for full Document rows (title/markdown/metadata) just to compare
    *  keys. `seq` lets a caller exclude documents committed after some point
    *  in time (see reconcilePass's TOCTOU guard in engine.ts). */
-  liveRefs(accountId: AccountId): Array<ExternalRef & { seq: Seq }>;
-  consumerCursor(name: string): Seq;
+  liveRefs(accountId: AccountId): Promise<Array<ExternalRef & { seq: Seq }>>;
+  consumerCursor(name: string): Promise<Seq>;
   ledgerRecord(
     consumer: string,
     seq: Seq,
     attempts: number,
     outcome: 'done' | 'skip' | 'failed' | 'deferred' | null,
-  ): void;
-  ledgerCounts(consumer: string): LedgerCounts;
+  ): Promise<void>;
+  ledgerCounts(consumer: string): Promise<LedgerCounts>;
   /** Across every consumer — drives the app-wide processing panel. */
-  ledgerCountsAll(): LedgerCounts & { pending: number };
-  ledgerDeferred(consumer: string): Seq[];
-  changesAt(seqs: Seq[]): Change[];
-  headSeq(): Seq;
-  scheduleAll(): ScheduleRow[];
-  scheduleUpsert(row: ScheduleRow): void;
-  scheduleDelete(jobId: string): void;
-  close(): void;
+  ledgerCountsAll(): Promise<LedgerCounts & { pending: number }>;
+  ledgerDeferred(consumer: string): Promise<Seq[]>;
+  changesAt(seqs: Seq[]): Promise<Change[]>;
+  headSeq(): Promise<Seq>;
+  scheduleAll(): Promise<ScheduleRow[]>;
+  scheduleUpsert(row: ScheduleRow): Promise<void>;
+  scheduleDelete(jobId: string): Promise<void>;
+  close(): Promise<void>;
 }
 
 const FEED_BATCH = 500;
 
-interface DocRow {
+export interface DocRow {
   id: string;
   account_id: string;
   external_id: string;
@@ -119,7 +114,7 @@ interface DocRow {
   updated_at: string;
 }
 
-interface AccountRow {
+export interface AccountRow {
   id: string;
   source: string;
   identifier: string;
@@ -168,20 +163,6 @@ function toAccount(r: AccountRow): Account {
     cadence: r.cadence === null ? undefined : JSON.parse(r.cadence),
     createdAt: r.created_at,
   };
-}
-
-function contentHash(d: DocumentInput): string {
-  return createHash('sha256')
-    .update(
-      JSON.stringify({
-        title: d.title,
-        markdown: d.markdown,
-        url: d.url ?? null,
-        metadata: d.metadata,
-        createdAt: d.createdAt,
-      }),
-    )
-    .digest('hex');
 }
 
 /**
@@ -306,333 +287,58 @@ function ftsQuery(text: string): string {
   return expr || '""';
 }
 
-export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
-  const db: BetterSqlite3.Database = new Database(dbPath);
-  migrate(db);
+export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   const now = deps.now ?? (() => new Date().toISOString());
   const nudge = new EventEmitter();
   nudge.setMaxListeners(0);
   let closed = false;
 
-  // ── low-level helpers (all run inside the caller's transaction) ──────────
+  // The procedural, read-your-own-writes commit transaction runs on the RAW
+  // connection. In-process (tests, stdio, DB worker host) the AppDb exposes
+  // `_conn`, so the tx runs directly here; the worker-backed client has none —
+  // there `commit` is dispatched to the worker via `db.proc('commit', …)`
+  // where an identical `createWriteTx` handle is registered (db/worker-entry).
+  const writeTx = db._conn
+    ? createWriteTx(db._conn, { detectLanguages: deps.detectLanguages, now })
+    : null;
 
-  const appendChange = (kind: Change['kind'], refId: string): Seq => {
-    const r = db
-      .prepare(`INSERT INTO changes(kind, ref_id, at) VALUES(?, ?, ?)`)
-      .run(kind, refId, now());
-    return Number(r.lastInsertRowid);
+  // ── low-level read helpers ────────────────────────────────────────────────
+
+  const getAccountRow = async (id: string): Promise<AccountRow | undefined> => {
+    const rows = await db.all(`SELECT * FROM accounts WHERE id = ?`, [id]);
+    return rows[0] as unknown as AccountRow | undefined;
   };
 
-  const getAccountRow = (id: string): AccountRow | undefined =>
-    db.prepare(`SELECT * FROM accounts WHERE id = ?`).get(id) as
-      | AccountRow
-      | undefined;
-
-  const findDocRow = (
+  const findDocRow = async (
     accountId: string,
     externalId: string,
     type: string,
-  ): DocRow | undefined =>
-    db
-      .prepare(
-        `SELECT * FROM documents WHERE account_id = ? AND external_id = ? AND type = ?`,
-      )
-      .get(accountId, externalId, type) as DocRow | undefined;
-
-  const ftsDelete = (docId: string): void => {
-    db.prepare(`DELETE FROM documents_fts WHERE doc_id = ?`).run(docId);
-  };
-
-  const ftsUpsert = (
-    docId: string,
-    title: string | null,
-    markdown: string | null,
-  ): void => {
-    ftsDelete(docId);
-    db.prepare(
-      `INSERT INTO documents_fts(doc_id, title, markdown) VALUES(?, ?, ?)`,
-    ).run(docId, title ?? '', markdown ?? '');
-  };
-
-  /** Upsert one document; returns its seq, or null when nothing changed. */
-  const upsertDocument = (
-    accountId: string,
-    input: DocumentInput,
-  ): Seq | null => {
-    const hash = contentHash(input);
-    const existing = findDocRow(accountId, input.externalId, input.type);
-    if (
-      existing &&
-      existing.content_hash === hash &&
-      existing.archived_at === null
-    ) {
-      return null; // unchanged — no feed churn
-    }
-    let parentId: string | null = null;
-    if (input.parent) {
-      const parent = findDocRow(
-        accountId,
-        input.parent.externalId,
-        input.parent.type,
-      );
-      parentId = parent?.id ?? null;
-    }
-    const text = `${input.title ?? ''}\n${input.markdown ?? ''}`.trim();
-    const languages = text ? deps.detectLanguages(text) : [];
-    const ts = now();
-    if (existing) {
-      const seq = appendChange('document', existing.id);
-      db.prepare(
-        `UPDATE documents SET title=?, markdown=?, url=?, metadata=?, created_at=?,
-           parent_id=?, content_hash=?, seq=?, archived_at=NULL, languages=?, updated_at=?
-         WHERE id=?`,
-      ).run(
-        input.title,
-        input.markdown,
-        input.url ?? null,
-        JSON.stringify(input.metadata),
-        input.createdAt,
-        parentId,
-        hash,
-        seq,
-        JSON.stringify(languages),
-        ts,
-        existing.id,
-      );
-      ftsUpsert(existing.id, input.title, input.markdown);
-      return seq;
-    }
-    const id = newId<'document'>();
-    const seq = appendChange('document', id);
-    db.prepare(
-      `INSERT INTO documents(id, account_id, external_id, type, title, markdown, url,
-         metadata, created_at, parent_id, content_hash, seq, archived_at, languages,
-         ingested_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
-    ).run(
-      id,
-      accountId,
-      input.externalId,
-      input.type,
-      input.title,
-      input.markdown,
-      input.url ?? null,
-      JSON.stringify(input.metadata),
-      input.createdAt,
-      parentId,
-      hash,
-      seq,
-      JSON.stringify(languages),
-      ts,
-      ts,
+  ): Promise<DocRow | undefined> => {
+    const rows = await db.all(
+      `SELECT * FROM documents WHERE account_id = ? AND external_id = ? AND type = ?`,
+      [accountId, externalId, type],
     );
-    ftsUpsert(id, input.title, input.markdown);
-    return seq;
-  };
-
-  /** Second pass over a batch, run AFTER every document in it has been
-   *  upserted: `upsertDocument`'s parent resolution only sees rows already
-   *  written earlier IN THIS TRANSACTION, so a child that arrives before its
-   *  parent within the same batch resolves to parentId=null. And a doc whose
-   *  content didn't change is skipped by upsertDocument entirely — its
-   *  content_hash deliberately excludes parent (see contentHash), so a
-   *  reparent with no other edits would otherwise never be seen. Re-resolving
-   *  here against the batch's own DocumentInput.parent refs fixes both,
-   *  without touching content_hash. */
-  const reconcileParents = (
-    accountId: string,
-    documents: DocumentInput[],
-  ): Seq | null => {
-    let last: Seq | null = null;
-    for (const input of documents) {
-      if (!input.parent) continue;
-      const child = findDocRow(accountId, input.externalId, input.type);
-      if (!child) continue; // upserted above; absence means a prior step rejected it
-      const parent = findDocRow(
-        accountId,
-        input.parent.externalId,
-        input.parent.type,
-      );
-      const parentId = parent?.id ?? null;
-      if (child.parent_id !== parentId) {
-        const seq = appendChange('document', child.id);
-        db.prepare(
-          `UPDATE documents SET parent_id=?, seq=?, updated_at=? WHERE id=?`,
-        ).run(parentId, seq, now(), child.id);
-        last = seq;
-      }
-    }
-    return last;
-  };
-
-  const archiveByRef = (accountId: string, ref: ExternalRef): Seq | null => {
-    const row = findDocRow(accountId, ref.externalId, ref.type);
-    if (!row || row.archived_at !== null) return null;
-    const seq = appendChange('document', row.id);
-    db.prepare(
-      `UPDATE documents SET archived_at = ?, seq = ?, updated_at = ? WHERE id = ?`,
-    ).run(now(), seq, now(), row.id);
-    return seq;
-  };
-
-  // ── the write primitive ───────────────────────────────────────────────────
-
-  const commitTx = db.transaction((batch: CommitBatch): Seq => {
-    let last: Seq = Number(
-      (
-        db.prepare(`SELECT MAX(seq) AS s FROM changes`).get() as {
-          s: number | null;
-        }
-      ).s ?? 0,
-    );
-
-    if ('consumer' in batch) {
-      db.prepare(
-        `INSERT INTO consumers(name, cursor) VALUES(?, ?)
-         ON CONFLICT(name) DO UPDATE SET cursor = excluded.cursor`,
-      ).run(batch.consumer, batch.cursor);
-      if (batch.documents?.length) {
-        // Worker emissions land under the worker's synthetic account,
-        // atomically with its cursor.
-        const synthetic = getOrCreateAccountTx('worker', batch.consumer);
-        for (const doc of batch.documents) {
-          const seq = upsertDocument(synthetic.id, doc);
-          if (seq !== null) last = seq;
-        }
-        const reconciled = reconcileParents(synthetic.id, batch.documents);
-        if (reconciled !== null) last = reconciled;
-      }
-      if (batch.enrich?.length) {
-        for (const e of batch.enrich) {
-          const row = db
-            .prepare(`SELECT * FROM documents WHERE id = ?`)
-            .get(e.documentId) as DocRow | undefined;
-          if (!row) continue; // purged since the worker read it — enrich is best-effort
-          const seq = appendChange('document', row.id);
-          const metadata = e.metadata
-            ? JSON.stringify({
-                ...(JSON.parse(row.metadata) as Record<string, unknown>),
-                ...e.metadata,
-              })
-            : row.metadata;
-          const text = `${row.title ?? ''}\n${e.markdown}`.trim();
-          const languages = text ? deps.detectLanguages(text) : [];
-          db.prepare(
-            `UPDATE documents SET markdown=?, metadata=?, seq=?, languages=?, updated_at=? WHERE id=?`,
-          ).run(
-            e.markdown,
-            metadata,
-            seq,
-            JSON.stringify(languages),
-            now(),
-            row.id,
-          );
-          ftsUpsert(row.id, row.title, e.markdown);
-          last = seq;
-        }
-      }
-      return last;
-    }
-
-    if ('removeAccount' in batch) {
-      const acc = getAccountRow(batch.removeAccount);
-      if (!acc) return last;
-      // One statement, one pass: `doc_id` is UNINDEXED in the fts5 table, so
-      // the per-document ftsDelete loop this replaces was a full FTS scan
-      // PER document — quadratic on exactly the accounts big enough for the
-      // stall to be felt (the whole cascade runs synchronously on the main
-      // process, freezing every IPC until it finishes).
-      db.prepare(
-        `DELETE FROM documents_fts
-          WHERE doc_id IN (SELECT id FROM documents WHERE account_id = ?)`,
-      ).run(acc.id);
-      db.prepare(`DELETE FROM documents WHERE account_id = ?`).run(acc.id);
-      db.prepare(`DELETE FROM vault WHERE account_id = ?`).run(acc.id);
-      db.prepare(`DELETE FROM accounts WHERE id = ?`).run(acc.id);
-      last = appendChange('accountRemoved', acc.id);
-      return last;
-    }
-
-    if ('purgeArchived' in batch) {
-      const rows = db
-        .prepare(
-          `SELECT id FROM documents WHERE archived_at IS NOT NULL AND archived_at < ?`,
-        )
-        .all(batch.purgeArchived.before) as Array<{ id: string }>;
-      for (const { id } of rows) {
-        ftsDelete(id);
-        db.prepare(`DELETE FROM documents WHERE id = ?`).run(id);
-        last = appendChange('purge', id);
-      }
-      return last;
-    }
-
-    const acc = getAccountRow(batch.account);
-    if (!acc) throw new Error(`commit: unknown account ${batch.account}`);
-    for (const doc of batch.documents) {
-      const seq = upsertDocument(acc.id, doc);
-      if (seq !== null) last = seq;
-    }
-    const reconciled = reconcileParents(acc.id, batch.documents);
-    if (reconciled !== null) last = reconciled;
-    for (const ref of batch.deletions ?? []) {
-      const seq = archiveByRef(acc.id, ref);
-      if (seq !== null) last = seq;
-    }
-    last = appendChange('account', acc.id);
-    db.prepare(
-      `UPDATE accounts SET cursor = ?, status = COALESCE(?, status),
-         progress = COALESCE(?, progress),
-         last_error = CASE WHEN ? THEN ? ELSE last_error END,
-         last_sync_at = ?
-       WHERE id = ?`,
-    ).run(
-      JSON.stringify(batch.cursor ?? null),
-      batch.status ?? null,
-      batch.progress ? JSON.stringify(batch.progress) : null,
-      batch.error !== undefined ? 1 : 0,
-      batch.error ?? null,
-      now(),
-      acc.id,
-    );
-    return last;
-  });
-
-  const getOrCreateAccountTx = (
-    source: string,
-    identifier: string,
-  ): AccountRow => {
-    const found = db
-      .prepare(`SELECT * FROM accounts WHERE source = ? AND identifier = ?`)
-      .get(source, identifier) as AccountRow | undefined;
-    if (found) return found;
-    const id = newId<'account'>();
-    db.prepare(
-      `INSERT INTO accounts(id, source, identifier, config, status, created_at)
-       VALUES(?, ?, ?, '{}', 'live', ?)`,
-    ).run(id, source, identifier, now());
-    appendChange('account', id);
-    return getAccountRow(id)!;
+    return rows[0] as unknown as DocRow | undefined;
   };
 
   // ── feed materialization ──────────────────────────────────────────────────
 
-  const materializeRow = (r: {
+  const materializeRow = async (r: {
     seq: number;
     kind: Change['kind'];
     ref_id: string;
-  }): Change | null => {
+  }): Promise<Change | null> => {
     if (r.kind === 'document') {
-      const doc = db
-        .prepare(`SELECT * FROM documents WHERE id = ?`)
-        .get(r.ref_id) as DocRow | undefined;
+      const doc = (
+        await db.all(`SELECT * FROM documents WHERE id = ?`, [r.ref_id])
+      )[0] as unknown as DocRow | undefined;
       // Row already purged — the tombstone further down the feed informs.
       return doc
         ? { seq: r.seq, kind: 'document', document: toDocument(doc) }
         : null;
     }
     if (r.kind === 'account') {
-      const acc = getAccountRow(r.ref_id);
+      const acc = await getAccountRow(r.ref_id);
       return acc
         ? { seq: r.seq, kind: 'account', account: toAccount(acc) }
         : null;
@@ -649,26 +355,25 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
 
   /** `high` = last RAW change row scanned — callers advance to it even when
    *  every row in the window materialized to nothing. */
-  const materialize = (
+  const materialize = async (
     after: Seq,
     kinds?: Change['kind'][],
-  ): { changes: Change[]; high: Seq } => {
+  ): Promise<{ changes: Change[]; high: Seq }> => {
     const kindFilter = kinds?.length
       ? ` AND kind IN (${kinds.map(() => '?').join(',')})`
       : '';
-    const rows = db
-      .prepare(
-        `SELECT seq, kind, ref_id FROM changes WHERE seq > ?${kindFilter}
+    const rows = (await db.all(
+      `SELECT seq, kind, ref_id FROM changes WHERE seq > ?${kindFilter}
          ORDER BY seq LIMIT ${FEED_BATCH}`,
-      )
-      .all(after, ...(kinds?.length ? kinds : [])) as Array<{
+      [after, ...(kinds?.length ? kinds : [])],
+    )) as Array<{
       seq: number;
       kind: Change['kind'];
       ref_id: string;
     }>;
     const changes: Change[] = [];
     for (const r of rows) {
-      const c = materializeRow(r);
+      const c = await materializeRow(r);
       if (c) changes.push(c);
     }
     return { changes, high: rows.length ? rows[rows.length - 1].seq : after };
@@ -678,29 +383,28 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
 
   const query: Query = {
     async document(id) {
-      const r = db.prepare(`SELECT * FROM documents WHERE id = ?`).get(id) as
-        | DocRow
-        | undefined;
+      const r = (
+        await db.all(`SELECT * FROM documents WHERE id = ?`, [id])
+      )[0] as unknown as DocRow | undefined;
       return r ? toDocument(r) : null;
     },
     async children(id) {
-      const rows = db
-        .prepare(
-          `SELECT * FROM documents WHERE parent_id = ? AND archived_at IS NULL
+      const rows = (await db.all(
+        `SELECT * FROM documents WHERE parent_id = ? AND archived_at IS NULL
            ORDER BY created_at`,
-        )
-        .all(id) as DocRow[];
+        [id],
+      )) as unknown as DocRow[];
       return rows.map(toDocument);
     },
     async byExternalId(account, externalId, type) {
-      const r = findDocRow(account, externalId, type);
+      const r = await findDocRow(account, externalId, type);
       return r ? toDocument(r) : null;
     },
     async search(q) {
       const limit = Math.min(q.limit ?? 50, 500);
       const offset = q.offset ?? 0;
       const filters: string[] = [];
-      const params: unknown[] = [];
+      const params: AppDbParam[] = [];
       if (!q.includeArchived) filters.push(`d.archived_at IS NULL`);
       if (q.type) {
         filters.push(`d.type = ?`);
@@ -723,31 +427,27 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
       }
       const where = filters.length ? `AND ${filters.join(' AND ')}` : '';
       if (q.text?.trim()) {
-        const rows = db
-          .prepare(
-            `SELECT d.*, snippet(documents_fts, 2, '<b>', '</b>', '…', 24) AS _snippet
+        const rows = (await db.all(
+          `SELECT d.*, snippet(documents_fts, 2, '<b>', '</b>', '…', 24) AS _snippet
              FROM documents_fts f JOIN documents d ON d.id = f.doc_id
              WHERE documents_fts MATCH ? ${where}
              ORDER BY bm25(documents_fts, 0, 4.0, 1.0)
              LIMIT ? OFFSET ?`,
-          )
-          .all(ftsQuery(q.text), ...params, limit, offset) as Array<
-          DocRow & { _snippet: string }
-        >;
+          [ftsQuery(q.text), ...params, limit, offset],
+        )) as unknown as Array<DocRow & { _snippet: string }>;
         return rows.map((r) => ({ ...toDocument(r), snippet: r._snippet }));
       }
-      const rows = db
-        .prepare(
-          `SELECT d.* FROM documents d WHERE 1=1 ${where}
+      const rows = (await db.all(
+        `SELECT d.* FROM documents d WHERE 1=1 ${where}
            ORDER BY COALESCE(d.created_at, d.ingested_at) DESC
            LIMIT ? OFFSET ?`,
-        )
-        .all(...params, limit, offset) as DocRow[];
+        [...params, limit, offset],
+      )) as unknown as DocRow[];
       return rows.map(toDocument);
     },
     async count(q) {
       const filters: string[] = [];
-      const params: unknown[] = [];
+      const params: AppDbParam[] = [];
       if (!q.includeArchived) filters.push(`archived_at IS NULL`);
       if (q.type) {
         filters.push(`type = ?`);
@@ -758,15 +458,15 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
         params.push(q.account);
       }
       const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-      const r = db
-        .prepare(`SELECT COUNT(*) AS c FROM documents ${where}`)
-        .get(...params) as { c: number };
+      const r = (
+        await db.all(`SELECT COUNT(*) AS c FROM documents ${where}`, params)
+      )[0] as { c: number };
       return r.c;
     },
     async accounts() {
-      const rows = db
-        .prepare(`SELECT * FROM accounts ORDER BY created_at`)
-        .all() as AccountRow[];
+      const rows = (await db.all(
+        `SELECT * FROM accounts ORDER BY created_at`,
+      )) as unknown as AccountRow[];
       return rows.map(toAccount);
     },
   };
@@ -776,38 +476,36 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
   const store: CoreStore = {
     read: query,
 
-    extractionStats() {
+    async extractionStats() {
       // pendingOcr is a display-level approximation of the vision worker's
       // classify eligibility — it ignores size caps and tiny-image rules.
       const pendingOcr = (
-        db
-          .prepare(
+        (
+          await db.all(
             `SELECT COUNT(*) AS c FROM documents
              WHERE json_extract(metadata,'$.extraction') IS NULL
                AND (json_extract(metadata,'$.mime') LIKE 'image/%'
                     OR json_extract(metadata,'$.mime') = 'application/pdf')
                AND archived_at IS NULL`,
           )
-          .get() as { c: number }
+        )[0] as { c: number }
       ).c;
       const processed = (
-        db
-          .prepare(
+        (
+          await db.all(
             `SELECT COUNT(*) AS c FROM documents
              WHERE json_extract(metadata,'$.extraction') IS NOT NULL
                AND archived_at IS NULL`,
           )
-          .get() as { c: number }
+        )[0] as { c: number }
       ).c;
-      const rows = db
-        .prepare(
-          `SELECT id, title, json_extract(metadata,'$.filename') AS filename, type,
+      const rows = (await db.all(
+        `SELECT id, title, json_extract(metadata,'$.filename') AS filename, type,
                   json_extract(metadata,'$.extraction.engine') AS engine, updated_at
            FROM documents
            WHERE json_extract(metadata,'$.extraction') IS NOT NULL AND archived_at IS NULL
            ORDER BY updated_at DESC, seq DESC LIMIT 10`,
-        )
-        .all() as Array<{
+      )) as Array<{
         id: string;
         title: string | null;
         filename: string | null;
@@ -830,7 +528,9 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
     },
 
     async commit(batch) {
-      const seq = commitTx(batch);
+      const seq = writeTx
+        ? writeTx.commit(batch)
+        : ((await db.proc!('commit', batch)) as Seq);
       nudge.emit('commit');
       return seq;
     },
@@ -843,7 +543,10 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
             async next(): Promise<IteratorResult<Change[]>> {
               for (;;) {
                 if (closed) return { done: true, value: undefined };
-                const { changes, high } = materialize(cursor, opts?.kinds);
+                const { changes, high } = await materialize(
+                  cursor,
+                  opts?.kinds,
+                );
                 if (changes.length > 0) {
                   cursor = high;
                   return { done: false, value: changes };
@@ -867,45 +570,50 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
 
     vault: {
       async save(account, c) {
-        db.prepare(
+        // The credential blob is encrypted here on MAIN (Electron safeStorage),
+        // then the ciphertext Buffer is bound like any other parameter.
+        await db.run(
           `INSERT INTO vault(account_id, blob) VALUES(?, ?)
            ON CONFLICT(account_id) DO UPDATE SET blob = excluded.blob`,
-        ).run(account, deps.encrypt(JSON.stringify(c)));
+          [account, deps.encrypt(JSON.stringify(c))],
+        );
       },
       async load(account) {
-        const r = db
-          .prepare(`SELECT blob FROM vault WHERE account_id = ?`)
-          .get(account) as { blob: Buffer } | undefined;
+        const r = (
+          await db.all(`SELECT blob FROM vault WHERE account_id = ?`, [account])
+        )[0] as { blob: Buffer } | undefined;
         if (!r) return null;
         return JSON.parse(deps.decrypt(r.blob)) as Credentials;
       },
       async delete(account) {
-        db.prepare(`DELETE FROM vault WHERE account_id = ?`).run(account);
+        await db.run(`DELETE FROM vault WHERE account_id = ?`, [account]);
       },
     },
 
     identity: {
       async get() {
-        const r = db
-          .prepare(`SELECT value FROM meta WHERE key = 'identity'`)
-          .get() as { value: string } | undefined;
+        const r = (
+          await db.all(`SELECT value FROM meta WHERE key = 'identity'`)
+        )[0] as { value: string } | undefined;
         return r ? (JSON.parse(r.value) as Identity) : null;
       },
       async set(i) {
-        db.prepare(
+        await db.run(
           `INSERT INTO meta(key, value) VALUES('identity', ?)
            ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-        ).run(JSON.stringify(i));
+          [JSON.stringify(i)],
+        );
       },
     },
 
     consents: {
       async latest(extension: ExtensionId) {
-        const r = db
-          .prepare(
+        const r = (
+          await db.all(
             `SELECT * FROM consents WHERE extension_id = ? ORDER BY id DESC LIMIT 1`,
+            [extension],
           )
-          .get(extension) as
+        )[0] as
           | {
               extension_id: string;
               caps: string;
@@ -922,21 +630,22 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
         } as ConsentRecord;
       },
       async record(c) {
-        db.prepare(
+        await db.run(
           `INSERT INTO consents(extension_id, caps, manifest_version, granted_at)
            VALUES(?, ?, ?, ?)`,
-        ).run(
-          c.extensionId,
-          JSON.stringify(c.caps),
-          c.manifestVersion,
-          c.grantedAt,
+          [
+            c.extensionId,
+            JSON.stringify(c.caps),
+            c.manifestVersion,
+            c.grantedAt,
+          ],
         );
       },
     },
 
     maintenance: {
       async compact() {
-        db.exec('VACUUM');
+        await db.exec('VACUUM');
       },
       async export(destDir) {
         fs.mkdirSync(destDir, { recursive: true });
@@ -946,9 +655,11 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
           JSON.stringify(accounts, null, 2),
         );
         const out = fs.createWriteStream(path.join(destDir, 'documents.jsonl'));
-        const rows = db
-          .prepare(`SELECT * FROM documents`)
-          .iterate() as IterableIterator<DocRow>;
+        // The async AppDb has no streaming `.iterate()`; read the set and
+        // serialize it (export is an on-demand maintenance op, not a hot path).
+        const rows = (await db.all(
+          `SELECT * FROM documents`,
+        )) as unknown as DocRow[];
         for (const r of rows) out.write(`${JSON.stringify(toDocument(r))}\n`);
         await new Promise<void>((resolve, reject) => {
           out.end(() => resolve());
@@ -956,11 +667,12 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
         });
       },
       async resetAll() {
-        db.transaction(() => {
-          // 'consents' deliberately survives: installed extensions live on
-          // disk outside the DB, so wiping their grants would strand every
-          // one of them in needs-consent after reset.
-          for (const t of [
+        // 'consents' deliberately survives: installed extensions live on
+        // disk outside the DB, so wiping their grants would strand every
+        // one of them in needs-consent after reset. One batch = one atomic
+        // transaction (the AppDb primitive that replaces db.transaction()).
+        await db.batch([
+          ...[
             'documents_fts',
             'documents',
             'changes',
@@ -969,17 +681,15 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
             'vault',
             'schedule',
             'accounts',
-          ]) {
-            db.prepare(`DELETE FROM ${t}`).run();
-          }
-          db.prepare(`DELETE FROM meta WHERE key != 'schemaVersion'`).run();
-        })();
+          ].map((t) => ({ sql: `DELETE FROM ${t}` })),
+          { sql: `DELETE FROM meta WHERE key != 'schemaVersion'` },
+        ]);
         // DELETE alone never returns pages to the OS — the file (and the
         // WAL) keep their pre-reset size, so the Storage screen would still
         // show gigabytes after "Reset all". VACUUM rebuilds the file;
         // the TRUNCATE checkpoint then zeroes the WAL it wrote through.
-        db.exec('VACUUM');
-        db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
+        await db.exec('VACUUM');
+        await db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
         nudge.emit('commit');
       },
     },
@@ -987,18 +697,19 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
     // ── engine-only surface ──────────────────────────────────────────────────
 
     async createAccount(a) {
-      const tx = db.transaction(() => {
-        const id = newId<'account'>();
-        const row = db
-          .prepare(
-            `INSERT INTO accounts(id, source, identifier, config, status, cadence, created_at)
+      const id = newId<'account'>();
+      // One batch = one atomic transaction: the account UPSERT (RETURNING id
+      // so a conflicting row's EXISTING id feeds the change) plus its feed
+      // change row land together or not at all.
+      const results = await db.batch([
+        {
+          sql: `INSERT INTO accounts(id, source, identifier, config, status, cadence, created_at)
              VALUES(?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(source, identifier) DO UPDATE SET
                config = excluded.config,
                status = excluded.status
              RETURNING id`,
-          )
-          .get(
+          params: [
             id,
             a.source,
             a.identifier,
@@ -1006,56 +717,83 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
             a.status ?? 'connecting',
             a.cadence ? JSON.stringify(a.cadence) : null,
             now(),
-          ) as { id: string };
-        appendChange('account', row.id);
-        return row.id;
-      });
-      const id = tx();
+          ],
+        },
+        {
+          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
+          params: [{ $fromStep: 0, column: 'id' }, now()],
+        },
+      ]);
+      const accId = (results[0].row as { id: string }).id;
       nudge.emit('commit');
-      return toAccount(getAccountRow(id)!);
+      return toAccount((await getAccountRow(accId))!);
     },
 
     async getOrCreateAccount(source, identifier) {
-      const row = db.transaction(() =>
-        getOrCreateAccountTx(source, identifier),
-      )();
+      const found = (
+        await db.all(
+          `SELECT * FROM accounts WHERE source = ? AND identifier = ?`,
+          [source, identifier],
+        )
+      )[0] as unknown as AccountRow | undefined;
+      if (found) {
+        nudge.emit('commit');
+        return toAccount(found);
+      }
+      const id = newId<'account'>();
+      await db.batch([
+        {
+          sql: `INSERT INTO accounts(id, source, identifier, config, status, created_at)
+             VALUES(?, ?, ?, '{}', 'live', ?)`,
+          params: [id, source, identifier, now()],
+        },
+        {
+          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
+          params: [id, now()],
+        },
+      ]);
       nudge.emit('commit');
-      return toAccount(row);
+      return toAccount((await getAccountRow(id))!);
     },
 
     async account(id) {
-      const r = getAccountRow(id);
+      const r = await getAccountRow(id);
       return r ? toAccount(r) : null;
     },
 
     async setAccountCadence(id, cadence) {
-      db.transaction(() => {
-        db.prepare(`UPDATE accounts SET cadence = ? WHERE id = ?`).run(
-          cadence ? JSON.stringify(cadence) : null,
-          id,
-        );
-        appendChange('account', id);
-      })();
+      await db.batch([
+        {
+          sql: `UPDATE accounts SET cadence = ? WHERE id = ?`,
+          params: [cadence ? JSON.stringify(cadence) : null, id],
+        },
+        {
+          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
+          params: [id, now()],
+        },
+      ]);
       nudge.emit('commit');
     },
 
     async setAccountConfig(id, config) {
-      db.transaction(() => {
-        db.prepare(`UPDATE accounts SET config = ? WHERE id = ?`).run(
-          JSON.stringify(config),
-          id,
-        );
-        appendChange('account', id);
-      })();
+      await db.batch([
+        {
+          sql: `UPDATE accounts SET config = ? WHERE id = ?`,
+          params: [JSON.stringify(config), id],
+        },
+        {
+          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
+          params: [id, now()],
+        },
+      ]);
       nudge.emit('commit');
     },
 
-    liveRefs(accountId) {
-      const rows = db
-        .prepare(
-          `SELECT external_id, type, seq FROM documents WHERE account_id = ? AND archived_at IS NULL`,
-        )
-        .all(accountId) as Array<{
+    async liveRefs(accountId) {
+      const rows = (await db.all(
+        `SELECT external_id, type, seq FROM documents WHERE account_id = ? AND archived_at IS NULL`,
+        [accountId],
+      )) as Array<{
         external_id: string;
         type: string;
         seq: number;
@@ -1067,29 +805,29 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
       }));
     },
 
-    consumerCursor(name) {
-      const r = db
-        .prepare(`SELECT cursor FROM consumers WHERE name = ?`)
-        .get(name) as { cursor: number } | undefined;
+    async consumerCursor(name) {
+      const r = (
+        await db.all(`SELECT cursor FROM consumers WHERE name = ?`, [name])
+      )[0] as { cursor: number } | undefined;
       return r?.cursor ?? 0;
     },
 
-    ledgerRecord(consumer, seq, attempts, outcome) {
-      db.prepare(
+    async ledgerRecord(consumer, seq, attempts, outcome) {
+      await db.run(
         `INSERT INTO work_ledger(consumer, seq, attempts, outcome, updated_at)
          VALUES(?, ?, ?, ?, ?)
          ON CONFLICT(consumer, seq) DO UPDATE
            SET attempts = excluded.attempts, outcome = excluded.outcome,
                updated_at = excluded.updated_at`,
-      ).run(consumer, seq, attempts, outcome, now());
+        [consumer, seq, attempts, outcome, now()],
+      );
     },
 
-    ledgerCounts(consumer) {
-      const rows = db
-        .prepare(
-          `SELECT outcome, COUNT(*) AS c FROM work_ledger WHERE consumer = ? GROUP BY outcome`,
-        )
-        .all(consumer) as Array<{ outcome: string | null; c: number }>;
+    async ledgerCounts(consumer) {
+      const rows = (await db.all(
+        `SELECT outcome, COUNT(*) AS c FROM work_ledger WHERE consumer = ? GROUP BY outcome`,
+        [consumer],
+      )) as Array<{ outcome: string | null; c: number }>;
       const counts: LedgerCounts = { done: 0, skip: 0, failed: 0, deferred: 0 };
       for (const r of rows) {
         if (r.outcome && r.outcome in counts) {
@@ -1099,12 +837,10 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
       return counts;
     },
 
-    ledgerCountsAll() {
-      const rows = db
-        .prepare(
-          `SELECT outcome, COUNT(*) AS c FROM work_ledger GROUP BY outcome`,
-        )
-        .all() as Array<{ outcome: string | null; c: number }>;
+    async ledgerCountsAll() {
+      const rows = (await db.all(
+        `SELECT outcome, COUNT(*) AS c FROM work_ledger GROUP BY outcome`,
+      )) as Array<{ outcome: string | null; c: number }>;
       const counts = { done: 0, skip: 0, failed: 0, deferred: 0, pending: 0 };
       for (const r of rows) {
         if (r.outcome && r.outcome in counts) {
@@ -1113,11 +849,11 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
       }
       const head =
         (
-          db.prepare(`SELECT MAX(seq) AS s FROM changes`).get() as {
+          (await db.all(`SELECT MAX(seq) AS s FROM changes`))[0] as {
             s: number | null;
           }
         ).s ?? 0;
-      const lags = db.prepare(`SELECT cursor FROM consumers`).all() as Array<{
+      const lags = (await db.all(`SELECT cursor FROM consumers`)) as Array<{
         cursor: number;
       }>;
       counts.pending = lags.reduce(
@@ -1127,39 +863,40 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
       return counts;
     },
 
-    ledgerDeferred(consumer) {
-      const rows = db
-        .prepare(
-          `SELECT seq FROM work_ledger WHERE consumer = ? AND outcome = 'deferred' ORDER BY seq`,
-        )
-        .all(consumer) as Array<{ seq: number }>;
+    async ledgerDeferred(consumer) {
+      const rows = (await db.all(
+        `SELECT seq FROM work_ledger WHERE consumer = ? AND outcome = 'deferred' ORDER BY seq`,
+        [consumer],
+      )) as Array<{ seq: number }>;
       return rows.map((r) => r.seq);
     },
 
-    changesAt(seqs) {
+    async changesAt(seqs) {
       const out: Change[] = [];
       for (const seq of seqs) {
-        const row = db
-          .prepare(`SELECT seq, kind, ref_id FROM changes WHERE seq = ?`)
-          .get(seq) as
+        const row = (
+          await db.all(`SELECT seq, kind, ref_id FROM changes WHERE seq = ?`, [
+            seq,
+          ])
+        )[0] as
           | { seq: number; kind: Change['kind']; ref_id: string }
           | undefined;
         if (!row) continue;
-        const c = materializeRow(row);
+        const c = await materializeRow(row);
         if (c) out.push(c);
       }
       return out;
     },
 
-    headSeq() {
-      const r = db.prepare(`SELECT MAX(seq) AS s FROM changes`).get() as {
+    async headSeq() {
+      const r = (await db.all(`SELECT MAX(seq) AS s FROM changes`))[0] as {
         s: number | null;
       };
       return r.s ?? 0;
     },
 
-    scheduleAll() {
-      const rows = db.prepare(`SELECT * FROM schedule`).all() as Array<{
+    async scheduleAll() {
+      const rows = (await db.all(`SELECT * FROM schedule`)) as Array<{
         job_id: string;
         cadence: string;
         last_run: string | null;
@@ -1173,23 +910,24 @@ export function openStore(dbPath: string, deps: StoreDeps): CoreStore {
       }));
     },
 
-    scheduleUpsert(row) {
-      db.prepare(
+    async scheduleUpsert(row) {
+      await db.run(
         `INSERT INTO schedule(job_id, cadence, last_run, next_run) VALUES(?, ?, ?, ?)
          ON CONFLICT(job_id) DO UPDATE
            SET cadence = excluded.cadence, last_run = excluded.last_run,
                next_run = excluded.next_run`,
-      ).run(row.jobId, JSON.stringify(row.cadence), row.lastRun, row.nextRun);
+        [row.jobId, JSON.stringify(row.cadence), row.lastRun, row.nextRun],
+      );
     },
 
-    scheduleDelete(jobId) {
-      db.prepare(`DELETE FROM schedule WHERE job_id = ?`).run(jobId);
+    async scheduleDelete(jobId) {
+      await db.run(`DELETE FROM schedule WHERE job_id = ?`, [jobId]);
     },
 
-    close() {
+    async close() {
       closed = true;
       nudge.emit('commit'); // release blocked feed iterators
-      db.close();
+      await db.close();
     },
   };
 

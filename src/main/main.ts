@@ -444,9 +444,9 @@ function registerIpc(
       models: { ...p.prefs.get().models, autoInstall: false },
     });
   });
-  handle('inference:stats', () => ({
-    ...p.store.extractionStats(),
-    awaitingVlm: p.store.ledgerDeferred(VISION_CONSUMER).length,
+  handle('inference:stats', async () => ({
+    ...(await p.store.extractionStats()),
+    awaitingVlm: (await p.store.ledgerDeferred(VISION_CONSUMER)).length,
   }));
   handle('inference:models', async () => {
     const installed = bundled.localLlm.installedModelIds();
@@ -546,7 +546,7 @@ app
     const act = createActivityLog(dataDir);
     activity = act;
     const enc = makeEncryption();
-    platform = bootCore({ dataDir, ...enc, env: schedulerEnv });
+    platform = await bootCore({ dataDir, ...enc, env: schedulerEnv });
     const p = platform;
 
     const bundled = registerBundledProviders(p, {
@@ -588,7 +588,7 @@ app
     // Ownership split: the projection owns the FEED-derived slice (accounts);
     // identity/prefs/processing/mcp live here and change via patchState —
     // seeded from their real sources so the first diff can't regress them.
-    const initialLedger = p.store.ledgerCountsAll();
+    const initialLedger = await p.store.ledgerCountsAll();
     let rev = 0;
     let lastPush: AppStatePush = {
       state: {
@@ -612,7 +612,7 @@ app
       identity: () => p.store.identity.get(),
       mcp: () => ({ port: mcp?.port ?? null, clients: 0 }),
       processing: async () => {
-        const all = p.store.ledgerCountsAll();
+        const all = await p.store.ledgerCountsAll();
         return {
           pending: all.pending,
           done: all.done,
@@ -813,9 +813,9 @@ app
 
     // Non-feed slices (prefs, processing counters) refresh on their own clock.
     p.prefs.onChange((prefs) => patchState({ prefs }));
-    setInterval(() => {
+    setInterval(async () => {
       p.inference.setBackgroundOpen(backgroundLaneOpen(p));
-      const all = p.store.ledgerCountsAll();
+      const all = await p.store.ledgerCountsAll();
       const processing = {
         pending: all.pending,
         done: all.done,

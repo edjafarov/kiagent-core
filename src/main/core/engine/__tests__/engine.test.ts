@@ -11,14 +11,15 @@ import type {
   Worker,
 } from '@shared/contracts';
 
+import { openDb } from '../../../db/app-db';
 import { openStore } from '../../store/store';
 import type { CoreStore } from '../../store/store';
 import { createEngine } from '../engine';
 
 const noopLogs = { log: () => {} };
 
-function makeStore(dir: string): CoreStore {
-  return openStore(path.join(dir, 'test.db'), {
+async function makeStore(dir: string): Promise<CoreStore> {
+  return openStore(await openDb(path.join(dir, 'test.db')), {
     encrypt: (s: string) => Buffer.from(s, 'utf8'),
     decrypt: (b: Buffer) => b.toString('utf8'),
     detectLanguages: () => [],
@@ -71,13 +72,13 @@ describe('engine', () => {
   let dir: string;
   let store: CoreStore;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-engine-'));
-    store = makeStore(dir);
+    store = await makeStore(dir);
   });
 
-  afterEach(() => {
-    store.close();
+  afterEach(async () => {
+    await store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -296,9 +297,9 @@ describe('engine', () => {
     expect(stats.failed).toBe(1); // poison, after 2 attempts
     expect(await store.read.count({ type: 'summary' })).toBe(1);
     // Cursor advanced PAST the poison document — it cannot stall the feed.
-    expect(store.consumerCursor('worker:summarizer:v1')).toBeGreaterThanOrEqual(
-      store.headSeq() - 1,
-    );
+    expect(
+      await store.consumerCursor('worker:summarizer:v1'),
+    ).toBeGreaterThanOrEqual((await store.headSeq()) - 1);
   }, 15_000);
 
   it('remove: one cascade — documents, vault, tombstone in feed', async () => {
@@ -438,7 +439,7 @@ describe('engine', () => {
       documents: [doc('x')],
       cursor: 1,
     });
-    const before = store.headSeq();
+    const before = await store.headSeq();
 
     let attempts = 0;
     const worker: Worker = {
@@ -471,7 +472,7 @@ describe('engine', () => {
     // The failed attempt-1 enrich must not survive into the successful
     // attempt-2 commit — exactly one enrich lands, i.e. exactly one new
     // document change beyond the initial commit.
-    expect(store.headSeq() - before).toBe(1);
+    expect((await store.headSeq()) - before).toBe(1);
   }, 12_000);
 
   it('rerunDeferred: a deferred doc that gained markdown is not re-worked; ledger entry resolves', async () => {
@@ -520,14 +521,14 @@ describe('engine', () => {
     });
     const scan = await store.read.byExternalId(account.id, 'scan', 'note');
     const deferredSeq = scan!.seq;
-    store.ledgerRecord(consumer, deferredSeq, 1, 'deferred');
-    expect(store.ledgerDeferred(consumer)).toEqual([deferredSeq]);
+    await store.ledgerRecord(consumer, deferredSeq, 1, 'deferred');
+    expect(await store.ledgerDeferred(consumer)).toEqual([deferredSeq]);
 
     // The doc gains real markdown before the re-drive (another path enriched
     // it). changesAt() materializes the CURRENT doc, so it no longer matches.
     await store.commit({
       consumer,
-      cursor: store.consumerCursor(consumer),
+      cursor: await store.consumerCursor(consumer),
       enrich: [
         {
           documentId: scan!.id,
@@ -539,7 +540,7 @@ describe('engine', () => {
     await engine.rerunDeferred(worker);
 
     expect(workCalls).toBe(0); // matches() re-checked → worker never ran
-    expect(store.ledgerDeferred(consumer)).toEqual([]); // deferred entry resolved
+    expect(await store.ledgerDeferred(consumer)).toEqual([]); // deferred entry resolved
     const after = await store.read.byExternalId(account.id, 'scan', 'note');
     expect(after?.markdown).toBe('real rich markdown that is plenty long'); // not clobbered
   });
@@ -559,7 +560,7 @@ describe('engine', () => {
       documents: [doc('x')],
       cursor: 1,
     });
-    const before = store.headSeq();
+    const before = await store.headSeq();
 
     const worker: Worker = {
       name: 'always-fails',
@@ -589,14 +590,15 @@ describe('engine', () => {
 
     const handle = engine.attach(worker);
     await waitFor(
-      async () => store.ledgerCounts('worker:always-fails:v1').failed === 1,
+      async () =>
+        (await store.ledgerCounts('worker:always-fails:v1')).failed === 1,
       10_000,
     );
     await handle.stop();
 
     // Nothing partial landed: no emitted summary doc, no enrich change — so
     // the head seq is unchanged (the consumer commit carried no documents).
-    expect(store.headSeq()).toBe(before);
+    expect(await store.headSeq()).toBe(before);
     expect(await store.read.count({ type: 'summary' })).toBe(0);
     const x = await store.read.byExternalId(account.id, 'x', 'note');
     expect(x?.markdown).toBe('body x'); // enrich did not clobber it
@@ -669,7 +671,8 @@ describe('engine', () => {
 
     const handle = engine.attach(worker);
     await waitFor(
-      async () => store.ledgerCounts('worker:dangling-emitter:v1').done === 1,
+      async () =>
+        (await store.ledgerCounts('worker:dangling-emitter:v1')).done === 1,
       10_000,
     );
     await handle.stop();

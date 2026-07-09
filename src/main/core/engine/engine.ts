@@ -167,7 +167,7 @@ async function reconcilePass(
   scope: string,
 ): Promise<void> {
   if (!source.reconcile) return;
-  const startSeq = store.headSeq();
+  const startSeq = await store.headSeq();
   const listed: ExternalRef[] = [];
   try {
     for await (const page of abortable(source.reconcile(session), signal)) {
@@ -189,8 +189,7 @@ async function reconcilePass(
   if (signal.aborted) return; // partial listing — never diff off it
 
   const listedKeys = new Set(listed.map(refKey));
-  const deletions = store
-    .liveRefs(account.id)
+  const deletions = (await store.liveRefs(account.id))
     .filter((r) => r.seq <= startSeq && !listedKeys.has(refKey(r)))
     .map(({ externalId, type }) => ({ externalId, type }));
   if (deletions.length === 0) return;
@@ -322,7 +321,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       };
       try {
         const outcome = (await worker.work(change, session)) ?? 'done';
-        store.ledgerRecord(
+        await store.ledgerRecord(
           consumer,
           change.seq,
           attempt,
@@ -337,7 +336,7 @@ export function createEngine(deps: EngineDeps): Engine & {
           `attempt ${attempt}/${maxAttempts} failed at seq ${change.seq}: ${String(err)}`,
         );
         if (attempt === maxAttempts) {
-          store.ledgerRecord(consumer, change.seq, attempt, 'failed');
+          await store.ledgerRecord(consumer, change.seq, attempt, 'failed');
           // A failed final attempt must not commit its half-finished output.
           // Returning the accumulated emit/enrich would persist a partial
           // document (or clobber an existing one via enrich) under a 'failed'
@@ -671,7 +670,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       let stopped = false;
 
       const done = (async () => {
-        const start = store.consumerCursor(consumer);
+        const start = await store.consumerCursor(consumer);
         try {
           for await (const changes of abortable(
             store.feed(start),
@@ -680,7 +679,7 @@ export function createEngine(deps: EngineDeps): Engine & {
             if (abort.signal.aborted) return;
             let emitted: DocumentInput[] = [];
             let enrich: EnrichInput[] = [];
-            let cursor: Seq = store.consumerCursor(consumer);
+            let cursor: Seq = await store.consumerCursor(consumer);
             for (const change of changes) {
               if (abort.signal.aborted) return;
               if (worker.matches(change)) {
@@ -727,10 +726,10 @@ export function createEngine(deps: EngineDeps): Engine & {
           return stopped ? ('paused' as SyncStatus) : ('live' as SyncStatus);
         },
         async stats() {
-          const c = store.ledgerCounts(consumer);
+          const c = await store.ledgerCounts(consumer);
           const pending = Math.max(
             0,
-            store.headSeq() - store.consumerCursor(consumer),
+            (await store.headSeq()) - (await store.consumerCursor(consumer)),
           );
           return {
             pending,
@@ -754,9 +753,9 @@ export function createEngine(deps: EngineDeps): Engine & {
     async rerunDeferred(worker: Worker): Promise<void> {
       const consumer = workerConsumerName(worker);
       const abort = new AbortController();
-      const seqs = store.ledgerDeferred(consumer);
+      const seqs = await store.ledgerDeferred(consumer);
       if (seqs.length === 0) return;
-      const changes = store.changesAt(seqs);
+      const changes = await store.changesAt(seqs);
       let emitted: DocumentInput[] = [];
       let enrich: EnrichInput[] = [];
       for (const change of changes) {
@@ -768,7 +767,7 @@ export function createEngine(deps: EngineDeps): Engine & {
         // mirroring how a 'done' outcome clears the 'deferred' row via the
         // ledgerRecord upsert) instead of re-selecting it every cadence.
         if (!worker.matches(change)) {
-          store.ledgerRecord(consumer, change.seq, 0, 'skip');
+          await store.ledgerRecord(consumer, change.seq, 0, 'skip');
           continue;
         }
         const r = await workOne(worker, change, abort.signal);
@@ -778,7 +777,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       if (emitted.length || enrich.length) {
         await store.commit({
           consumer,
-          cursor: store.consumerCursor(consumer),
+          cursor: await store.consumerCursor(consumer),
           documents: emitted.length ? emitted : undefined,
           enrich: enrich.length ? enrich : undefined,
         });
@@ -796,7 +795,7 @@ export function createEngine(deps: EngineDeps): Engine & {
         const state0 = (await projection.init(read)) as S;
         // Head captured after init: a change landing mid-init may be applied
         // twice; apply() must tolerate replays (upserts by id do).
-        let seq = store.headSeq();
+        let seq = await store.headSeq();
         let state: S = state0;
         onDiff(state, seq);
         try {

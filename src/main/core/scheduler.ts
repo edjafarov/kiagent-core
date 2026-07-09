@@ -7,9 +7,15 @@ import type { CoreStore } from './store/store';
 const TICK_MS = 30_000;
 
 export interface CoreScheduler extends Scheduler {
-  /** The engine registers every cadence found on contributions here. */
-  register(id: string, cadence: Cadence, run: () => Promise<void>): void;
-  unregister(id: string): void;
+  /** The engine registers every cadence found on contributions here. Async
+   *  because the durable schedule row is persisted through the async AppDb;
+   *  callers fire-and-forget (registration is not on any latency path). */
+  register(
+    id: string,
+    cadence: Cadence,
+    run: () => Promise<void>,
+  ): Promise<void>;
+  unregister(id: string): Promise<void>;
   start(): void;
   stop(): void;
 }
@@ -35,7 +41,7 @@ export function createScheduler(
     if (!job || job.busy) return;
     job.busy = true;
     const now = new Date().toISOString();
-    store.scheduleUpsert({
+    await store.scheduleUpsert({
       jobId: id,
       cadence: job.cadence,
       lastRun: now,
@@ -50,12 +56,14 @@ export function createScheduler(
     }
   };
 
-  const tick = (): void => {
+  const tick = async (): Promise<void> => {
     const e = env();
     // Background work parks on battery; cadence jobs still fire but their
     // inference-heavy work is gated by the inference plane's lane switch.
     if (e.onBattery && e.thermal !== 'nominal') return;
-    const persisted = new Map(store.scheduleAll().map((r) => [r.jobId, r]));
+    const persisted = new Map(
+      (await store.scheduleAll()).map((r) => [r.jobId, r]),
+    );
     const nowD = new Date();
     for (const [id, job] of jobs) {
       if (job.cadence === 'manual') continue;
@@ -67,14 +75,23 @@ export function createScheduler(
     }
   };
 
+  // tick reads the durable schedule through the async AppDb; a rejected read
+  // (e.g. a dead DB worker in Task 4) must not surface as an unhandled
+  // rejection off the interval timer.
+  const safeTick = (): void => {
+    void tick().catch((err) => {
+      logs.log('scheduler', 'error', `tick failed: ${String(err)}`);
+    });
+  };
+
   return {
     get env() {
       return env();
     },
-    register(id, cadence, run) {
+    async register(id, cadence, run) {
       jobs.set(id, { cadence, run, busy: false });
-      const existing = store.scheduleAll().find((r) => r.jobId === id);
-      store.scheduleUpsert({
+      const existing = (await store.scheduleAll()).find((r) => r.jobId === id);
+      await store.scheduleUpsert({
         jobId: id,
         cadence,
         lastRun: existing?.lastRun ?? null,
@@ -88,12 +105,14 @@ export function createScheduler(
           null,
       });
     },
-    unregister(id) {
+    async unregister(id) {
       jobs.delete(id);
-      store.scheduleDelete(id);
+      await store.scheduleDelete(id);
     },
     async jobs() {
-      const persisted = new Map(store.scheduleAll().map((r) => [r.jobId, r]));
+      const persisted = new Map(
+        (await store.scheduleAll()).map((r) => [r.jobId, r]),
+      );
       return [...jobs.entries()].map(([id, j]) => ({
         id,
         cadence: j.cadence,
@@ -106,8 +125,8 @@ export function createScheduler(
     },
     start() {
       if (timer) return;
-      timer = setInterval(tick, TICK_MS);
-      setTimeout(tick, 2_000); // catch up shortly after boot
+      timer = setInterval(safeTick, TICK_MS);
+      setTimeout(safeTick, 2_000); // catch up shortly after boot
     },
     stop() {
       if (timer) clearInterval(timer);

@@ -13,6 +13,7 @@ import type {
   Worker,
 } from '@shared/contracts';
 
+import { openDb } from '../db/app-db';
 import { createAppProjection } from './app-projection';
 import type { AppStateExtras } from './app-projection';
 import { createConverter } from './engine/convert';
@@ -64,10 +65,13 @@ export interface CorePlatform {
  * Construction happens once, here. Everything downstream reads the platform —
  * no DI styles, no lazy getters, no module globals.
  */
-export function bootCore(deps: BootDeps): CorePlatform {
+export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const { store: logStore, sink } = createLogs(path.join(deps.dataDir, 'logs'));
   const prefs = createPrefs(deps.dataDir);
-  const store = openStore(path.join(deps.dataDir, 'kiagent.db'), {
+  // Task 4 swaps this in-process handle for openDbInWorker (moving the corpus
+  // SQLite work off the main thread); the store is AppDb-driven either way.
+  const db = await openDb(path.join(deps.dataDir, 'kiagent.db'));
+  const store = openStore(db, {
     encrypt: deps.encrypt,
     decrypt: deps.decrypt,
     detectLanguages,
@@ -116,7 +120,7 @@ export function bootCore(deps: BootDeps): CorePlatform {
     shutdown: async () => {
       scheduler.stop();
       await engine.stopAll();
-      store.close();
+      await store.close();
     },
   };
 }

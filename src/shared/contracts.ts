@@ -234,7 +234,7 @@ export interface ExtractionStats {
 export interface Store {
   read: Query;
   /** OCR/VLM queue + processed counts — drives Settings → Local processing. */
-  extractionStats(): ExtractionStats;
+  extractionStats(): Promise<ExtractionStats>;
   /** Tail the change log from a position. Live: keeps yielding. */
   feed(
     after: Seq,

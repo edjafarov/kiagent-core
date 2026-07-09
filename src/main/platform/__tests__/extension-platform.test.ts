@@ -5,6 +5,7 @@ import path from 'path';
 
 import type { ExtensionSnapshot, McpTool, Source } from '@shared/contracts';
 
+import { openDb } from '@main/db/app-db';
 import { openStore, type CoreStore } from '@main/core/store/store';
 
 import { googleOAuthProfile, googleRefresher } from '@main/sources/gmail/oauth';
@@ -89,9 +90,9 @@ describe('createExtensionPlatform', () => {
     });
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-extplat-'));
-    store = openStore(path.join(tmp, 'kiagent.db'), {
+    store = openStore(await openDb(path.join(tmp, 'kiagent.db')), {
       encrypt: (s) => Buffer.from(s, 'utf8'),
       decrypt: (b) => b.toString('utf8'),
       detectLanguages: () => [],
@@ -106,7 +107,7 @@ describe('createExtensionPlatform', () => {
 
   afterEach(async () => {
     await platform.stop();
-    store.close();
+    await store.close();
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
@@ -202,8 +203,8 @@ describe('createExtensionPlatform', () => {
     // Drop the consent history by swapping in a fresh DB (resetAll
     // deliberately preserves consents) — the install record lives on disk
     // in extDir, so the extension is still "installed" without a grant.
-    store.close();
-    store = openStore(path.join(tmp, 'kiagent-fresh.db'), {
+    await store.close();
+    store = openStore(await openDb(path.join(tmp, 'kiagent-fresh.db')), {
       encrypt: (s) => Buffer.from(s, 'utf8'),
       decrypt: (b) => b.toString('utf8'),
       detectLanguages: () => [],
@@ -225,8 +226,8 @@ describe('createExtensionPlatform', () => {
     // the only path to 'activated' would be the bundled auto-consent
     // bypass (`e.origin !== 'bundled' && !(await consentCovers(...))`) —
     // proving that path is unreachable via a forged installed.json record.
-    store.close();
-    store = openStore(path.join(tmp, 'kiagent-fresh2.db'), {
+    await store.close();
+    store = openStore(await openDb(path.join(tmp, 'kiagent-fresh2.db')), {
       encrypt: (s) => Buffer.from(s, 'utf8'),
       decrypt: (b) => b.toString('utf8'),
       detectLanguages: () => [],
