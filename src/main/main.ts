@@ -622,6 +622,24 @@ app
       },
       extensions: () => extensionsPlatform?.snapshot() ?? [],
     });
+    // Coalesce push:app-state broadcasts (#5). Core broadcasts on every feed
+    // diff (per DB write) with no throttle, so active backfill re-clones
+    // AppState to every window per write and floods the renderer, freezing the
+    // UI. Trailing-edge throttle: diffs within the window collapse into one
+    // broadcast of the latest lastPush (the renderer already drops out-of-order
+    // revs). Interim mitigation; the real fix is DB/projection work off the
+    // main thread.
+    const APP_STATE_PUSH_THROTTLE_MS = 100;
+    let appStatePushScheduled = false;
+    const flushAppStatePush = () => {
+      appStatePushScheduled = false;
+      broadcast('push:app-state', lastPush);
+    };
+    const scheduleAppStatePush = () => {
+      if (appStatePushScheduled) return;
+      appStatePushScheduled = true;
+      setTimeout(flushAppStatePush, APP_STATE_PUSH_THROTTLE_MS).unref?.();
+    };
     const patchState = (partial: Partial<AppState>) => {
       rev += 1;
       lastPush = {
@@ -629,7 +647,7 @@ app
         seq: lastPush.seq,
         rev,
       };
-      broadcast('push:app-state', lastPush);
+      scheduleAppStatePush();
     };
     // Prod emits `extensionHost.js`; the dev webpack config (`.erb/configs/
     // webpack.config.main.dev.ts`) suffixes every entry with
@@ -790,7 +808,7 @@ app
         seq,
         rev,
       };
-      broadcast('push:app-state', lastPush);
+      scheduleAppStatePush();
     });
 
     // Non-feed slices (prefs, processing counters) refresh on their own clock.
