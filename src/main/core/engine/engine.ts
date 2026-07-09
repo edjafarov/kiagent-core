@@ -792,13 +792,19 @@ export function createEngine(deps: EngineDeps): Engine & {
       let stopped = false;
       const done = (async () => {
         const { read } = store;
-        const state0 = (await projection.init(read)) as S;
-        // Head captured after init: a change landing mid-init may be applied
-        // twice; apply() must tolerate replays (upserts by id do).
-        let seq = await store.headSeq();
-        let state: S = state0;
-        onDiff(state, seq);
+        // The whole body (init + the first async headSeq/onDiff, now that
+        // store reads are worker RPCs, and the feed loop) sits in one try, so
+        // a store rejection anywhere — including a worker death during boot,
+        // before the feed's first await — is logged and settles `done` rather
+        // than escaping as an unhandled rejection. Matches the run/attach twins'
+        // guarantee that `done` never rejects.
         try {
+          const state0 = (await projection.init(read)) as S;
+          // Head captured after init: a change landing mid-init may be applied
+          // twice; apply() must tolerate replays (upserts by id do).
+          let seq = await store.headSeq();
+          let state: S = state0;
+          onDiff(state, seq);
           for await (const changes of abortable(
             store.feed(seq),
             abort.signal,

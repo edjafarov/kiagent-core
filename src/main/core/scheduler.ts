@@ -76,8 +76,8 @@ export function createScheduler(
   };
 
   // tick reads the durable schedule through the async AppDb; a rejected read
-  // (e.g. a dead DB worker in Task 4) must not surface as an unhandled
-  // rejection off the interval timer.
+  // (e.g. a dead DB worker) must not surface as an unhandled rejection off the
+  // interval timer.
   const safeTick = (): void => {
     void tick().catch((err) => {
       logs.log('scheduler', 'error', `tick failed: ${String(err)}`);
