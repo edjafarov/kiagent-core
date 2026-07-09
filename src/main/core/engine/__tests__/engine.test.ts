@@ -996,6 +996,75 @@ describe('engine', () => {
     await handle.stop();
   });
 
+  it('pause during an ACTIVE backfill stops the loop — status stays paused, no further batches', async () => {
+    // Unlike the updateConfig test above — which pauses only AFTER a finite
+    // source has finished pulling — this pauses while the source is still
+    // producing batches. A status-only 'paused' commit (the old accounts:pause)
+    // did not stop the loop, so its next batch commit flipped the status back
+    // to 'backfilling'/'live' — the account silently resumed. engine.pause()
+    // must abort the loop first, so the pause sticks and no further batch lands.
+    let releaseGate: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const source: Source<number, DocumentInput> = {
+      descriptor: {
+        id: 'fake',
+        name: 'Fake',
+        documentTypes: ['note'],
+        auth: 'none',
+      },
+      async connect() {
+        return { identifier: 'fake@test' };
+      },
+      async *pull(_session, cursor) {
+        const pages: Array<Batch<number, DocumentInput>> = [
+          { phase: 'backfill', items: [doc('a')], cursor: 1, estimateTotal: 2 },
+          { phase: 'backfill', items: [doc('b')], cursor: 2, estimateTotal: 2 },
+        ];
+        const remaining = pages.slice(cursor ?? 0);
+        if (remaining[0]) yield remaining[0];
+        // Suspend mid-backfill so the test can pause between batches.
+        await gate;
+        if (remaining[1]) yield remaining[1];
+      },
+      toDocument: (item) => item,
+    };
+    const engine = makeEngine(source);
+    const account = await engine.connect(source, {
+      oauth: async () => ({}),
+      showQr: () => {},
+      prompt: async () => ({}),
+      status: () => {},
+      pickFolders: async () => [],
+    });
+    // Start the sync loop; engine.pause() below stops it (no cleanup handle
+    // needed).
+    engine.run(account);
+    // Wait until batch 1 landed — the account is now actively backfilling.
+    await waitFor(
+      async () => (await store.account(account.id))?.status === 'backfilling',
+    );
+
+    // Pause via the engine (what accounts:pause now delegates to). Start it,
+    // then release the gate so the aborted pull generator can unwind — the same
+    // start/release/await ordering the tail-race test below uses so stop()'s
+    // teardown never deadlocks on the gate.
+    const pausing = engine.pause(account.id);
+    releaseGate!();
+    await pausing;
+
+    // Give a wrongly-alive loop ample time to pull batch 2 and overwrite status.
+    await new Promise((r) => {
+      setTimeout(r, 300);
+    });
+
+    const after = await store.account(account.id);
+    expect(after?.status).toBe('paused'); // stays paused — loop was stopped
+    expect(after?.cursor).toBe(1); // batch 2 was never pulled
+    expect(await store.read.byExternalId(account.id, 'b', 'note')).toBeNull();
+  });
+
   it('updateConfig: while a loop is running, persists config and restarts it (old handle stopped)', async () => {
     const source: Source<number, DocumentInput> = {
       descriptor: {

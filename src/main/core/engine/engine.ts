@@ -221,6 +221,12 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  is still going — for a socket-holding live source (WhatsApp) a
    *  replacement means a full re-login and a fresh history re-send. */
   isRunning(accountId: AccountId): boolean;
+  /** Pause an account: abort any in-flight sync loop, THEN persist
+   *  `status: 'paused'`. A status-only commit alone is not enough — a loop
+   *  still pulling flips the status back on its next batch commit (the
+   *  "backfill resumes itself after pause" bug), so the loop must be stopped
+   *  first. A no-op teardown for an already-idle account. */
+  pause(accountId: AccountId): Promise<void>;
 } {
   const { store, logs } = deps;
   const running = new Map<
@@ -646,6 +652,27 @@ export function createEngine(deps: EngineDeps): Engine & {
       await running.get(`account:${accountId}`)?.stop();
       await store.commit({ removeAccount: accountId });
       logs.log('engine', 'info', `account ${accountId} removed`);
+    },
+
+    async pause(accountId: AccountId): Promise<void> {
+      // Stop the in-flight loop FIRST. A status-only 'paused' commit while the
+      // pull loop is still producing batches gets steamrolled: the loop's next
+      // commit flips status back to 'backfilling' (and, once the stream ends,
+      // 'live'), so the account silently resumes. stop() aborts the loop and
+      // awaits its teardown; optional chaining makes it a no-op for an idle
+      // account, preserving the plain status-only pause in that case.
+      await running.get(`account:${accountId}`)?.stop();
+      // Read the cursor AFTER stop(): the abort window can let one final batch
+      // land and advance the cursor, so a value read before stop() would be
+      // stale — persisting it would re-pull that range on resume.
+      const account = await store.account(accountId);
+      if (!account) return;
+      await store.commit({
+        account: accountId,
+        documents: [],
+        cursor: account.cursor,
+        status: 'paused',
+      });
     },
 
     async updateConfig(

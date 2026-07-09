@@ -300,14 +300,11 @@ function registerIpc(
     }
   });
   handle('accounts:pause', async ({ accountId }) => {
-    const account = await p.store.account(accountId);
-    if (!account) return;
-    await p.store.commit({
-      account: accountId,
-      documents: [],
-      cursor: account.cursor,
-      status: 'paused',
-    });
+    // Delegate to engine.pause: it aborts any in-flight sync loop before
+    // committing 'paused', so an active backfill can't flip the status back on
+    // its next batch commit. A bare status-only commit here caused the account
+    // to silently resume mid-backfill.
+    await p.engine.pause(accountId);
   });
   handle('accounts:resume', async ({ accountId }) => {
     const account = await p.store.account(accountId);
