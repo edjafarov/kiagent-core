@@ -44,12 +44,23 @@ describe('AppDb.batch', () => {
   });
 
   it('is atomic: a failing step rolls back the whole batch', async () => {
+    // Assert the rejection by message, NOT `.rejects.toThrow()`. The batch
+    // rejects with a better-sqlite3 `SqliteError`, a class from a native addon.
+    // jest gives each test FILE its own realm (its own `Error`), but the native
+    // binding is cached process-wide, so `SqliteError` is bound to whichever
+    // test file loaded better-sqlite3 first. In every other file
+    // `sqliteError instanceof Error` is false — and every `.toThrow(...)` form
+    // is instanceof-gated, so it spuriously reports "did not throw" whenever a
+    // sibling suite loaded the addon first (flaky under `--maxWorkers` sharding).
+    // `toMatchObject` checks properties without instanceof, so it is realm-safe.
     await expect(
       db.batch([
         { sql: `INSERT INTO t (v) VALUES (?)`, params: ['keep?'] },
         { sql: `INSERT INTO nonexistent_table (v) VALUES (1)` },
       ]),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('no such table'),
+    });
     expect(await db.all(`SELECT COUNT(*) AS c FROM t`)).toEqual([
       { c: expect.anything() },
     ]);
