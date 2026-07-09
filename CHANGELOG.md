@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.45.0](https://github.com/edjafarov/kiagent-core/compare/v0.44.0...v0.45.0) (2026-07-09)
+
+### Bug Fixes
+
+* **engine:** pause aborts the in-flight sync loop, not just the status ([7ed1ec3](https://github.com/edjafarov/kiagent-core/commit/7ed1ec3c00c59ba6cc992e31a958a5ce813e15eb))
+
+Pausing a connector no longer lets its backfill resume on its own. `accounts:pause`
+committed `status: 'paused'` but left the running pull loop alive, so during an
+active backfill the loop's next batch commit flipped the status back to
+`backfilling` (and to `live` once the stream ended) — the account silently
+resumed with no user action. `engine.pause()` now aborts the in-flight loop
+before committing `paused`, and reads the cursor *after* the loop tears down so a
+final in-flight batch can't leave a stale cursor that re-pulls on resume. Idle
+accounts are unaffected — the abort is a no-op and the status-only pause stands.
+
 ## [0.44.0](https://github.com/edjafarov/kiagent-core/compare/v0.43.0...v0.44.0) (2026-07-09)
 
 ### Features
