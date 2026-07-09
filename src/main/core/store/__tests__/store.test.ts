@@ -4,7 +4,7 @@ import path from 'path';
 
 import type { AccountId, Change, DocumentInput } from '@shared/contracts';
 
-import { openDb } from '../../../db/app-db';
+import { openDb, type AppDb } from '../../../db/app-db';
 import { openStore } from '../store';
 import type { CoreStore } from '../store';
 
@@ -714,5 +714,78 @@ describe('store', () => {
     const doc2 = await store.read.byExternalId(accountId, 'a', 'note');
     expect(doc2?.seq).toBe(doc1?.seq); // document row untouched
     expect((await store.headSeq()) - head1).toBe(1); // only the cursor change
+  });
+});
+
+// Guards the feed lost-wakeup fix: once the DB is worker-hosted, `materialize`
+// is an async RPC, so a producer `commit` can land WHILE the feed's read is in
+// flight. The feed must arm its `nudge` listener BEFORE that read, or the
+// commit's wakeup is missed and the feed parks until the next commit. This
+// reproduces the window deterministically with an AppDb that holds the feed's
+// changes-read open across the commit.
+describe('store feed wakeup (worker-latency read race)', () => {
+  it('delivers a commit that lands during an in-flight (async) materialize read', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-race-'));
+    const real = await openDb(path.join(dir, 'race.db'));
+
+    // Hold the ONE feed changes-read open around the commit. `_conn` is
+    // preserved so the (synchronous, in-process) writeTx commits to the same
+    // connection the read observes. Only the feed's `WHERE seq >` query is
+    // gated; every other read/write passes straight through.
+    let release: () => void = () => {};
+    let armed = false;
+    const gated: AppDb = {
+      exec: (sql) => real.exec(sql),
+      all: async (sql, params) => {
+        if (!armed && /FROM changes WHERE seq >/.test(sql)) {
+          const snapshot = await real.all(sql, params); // pre-commit window
+          await new Promise<void>((r) => {
+            release = r;
+            armed = true;
+          });
+          return snapshot;
+        }
+        return real.all(sql, params);
+      },
+      run: (sql, params) => real.run(sql, params),
+      batch: (steps) => real.batch(steps),
+      isOpen: () => real.isOpen(),
+      close: () => real.close(),
+      get _conn() {
+        return real._conn;
+      },
+    };
+
+    const s = openStore(gated, deps);
+    const account = await s.createAccount({
+      source: 'test',
+      identifier: 'race',
+    });
+    const head = await s.headSeq();
+    const it = s.feed(head)[Symbol.asyncIterator]();
+
+    const pending = it.next(); // arms the wakeup, then blocks in the gated read
+    while (!armed) {
+      await new Promise((r) => setTimeout(r, 0)); // let the read reach the gate
+    }
+
+    // A commit lands DURING the in-flight read: it writes and fires
+    // nudge.emit('commit'). The armed listener must catch it.
+    await s.commit({
+      account: account.id,
+      documents: [doc('race-1')],
+      cursor: null,
+    });
+    release(); // release the empty snapshot — feed now relies on the wakeup
+
+    const res = await pending; // would hang forever under the lost-wakeup bug
+    expect(res.done).toBe(false);
+    expect((res.value as Change[]).some((c) => c.kind === 'document')).toBe(
+      true,
+    );
+
+    await it.return?.();
+    await s.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

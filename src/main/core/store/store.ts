@@ -543,21 +543,39 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
             async next(): Promise<IteratorResult<Change[]>> {
               for (;;) {
                 if (closed) return { done: true, value: undefined };
-                const { changes, high } = await materialize(
-                  cursor,
-                  opts?.kinds,
-                );
-                if (changes.length > 0) {
-                  cursor = high;
-                  return { done: false, value: changes };
-                }
-                if (high > cursor) {
-                  cursor = high; // window held only unmaterializable rows
-                  continue;
-                }
-                await new Promise<void>((resolve) => {
-                  nudge.once('commit', resolve);
+                // Arm the wakeup BEFORE reading. `materialize` is a worker-RPC
+                // macrotask once the DB is off-thread, so a producer `commit`
+                // (which fires `nudge.emit('commit')`) can land while we read.
+                // Registering the listener first guarantees such an emit is not
+                // lost between an empty read and the wait — otherwise the feed
+                // parks until the *next* commit (an intermittent stall).
+                let fire!: () => void;
+                const woke = new Promise<void>((resolve) => {
+                  fire = resolve;
                 });
+                nudge.once('commit', fire);
+                let waiting = false;
+                try {
+                  const { changes, high } = await materialize(
+                    cursor,
+                    opts?.kinds,
+                  );
+                  if (changes.length > 0) {
+                    cursor = high;
+                    return { done: false, value: changes };
+                  }
+                  if (high > cursor) {
+                    cursor = high; // window held only unmaterializable rows
+                    continue;
+                  }
+                  waiting = true;
+                } finally {
+                  // Every path that does NOT wait (return / continue / throw)
+                  // must drop the armed listener, or `next()` leaks one per
+                  // iteration. The wait path keeps it — that's the wakeup.
+                  if (!waiting) nudge.removeListener('commit', fire);
+                }
+                await woke;
               }
             },
             async return(): Promise<IteratorResult<Change[]>> {
