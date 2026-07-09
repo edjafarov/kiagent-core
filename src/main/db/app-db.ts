@@ -145,7 +145,8 @@ export async function openDb(filePath: string): Promise<AppDb> {
   conn.pragma('journal_mode = WAL');
   conn.pragma('synchronous = NORMAL');
   conn.pragma('busy_timeout = 5000');
-  conn.defaultSafeIntegers(true);
+  // Integer columns come back as plain `number` — core's store is number-native
+  // (matches `openStore`'s bare `new Database`); no seq/rowid approaches 2^53.
 
   // Apply core's schema on the raw handle — identical DDL to `openStore`.
   // `migrate` is a versioned, transactional, raw-handle routine (it sets
@@ -182,6 +183,7 @@ export async function openCorpusReadConnection(
   }
   const conn = new Database(filePath, { fileMustExist: true });
   conn.pragma('busy_timeout = 5000');
-  conn.defaultSafeIntegers(true);
+  // Integer columns come back as plain `number` — core's store is number-native
+  // (matches `openStore`'s bare `new Database`); no seq/rowid approaches 2^53.
   return wrapConn(conn);
 }

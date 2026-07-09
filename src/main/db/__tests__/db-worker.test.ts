@@ -133,8 +133,8 @@ Module._resolveFilename = function (request, ...rest) {
       { sql: 'INSERT INTO t(v) VALUES (?) RETURNING id', params: ['x'] },
     ]);
     expect(results).toHaveLength(2);
-    expect(typeof results[1].row?.id).toBe('bigint');
-    expect(Number(results[1].row?.id)).toBe(1);
+    expect(typeof results[1].row?.id).toBe('number');
+    expect(results[1].row?.id).toBe(1);
 
     const exited = new Promise<number>((resolve) => {
       worker!.once('exit', resolve);

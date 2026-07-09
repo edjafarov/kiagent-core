@@ -38,7 +38,7 @@ describe('AppDb.batch', () => {
         params: [{ $fromStep: 0, column: 'id' }, 'linked'],
       },
     ]);
-    const { id } = res[0].row as { id: bigint };
+    const { id } = res[0].row as { id: number };
     const rows = await db.all(`SELECT t_id FROM child WHERE note='linked'`);
     expect(rows[0].t_id).toEqual(id);
   });

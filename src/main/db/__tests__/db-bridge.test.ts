@@ -7,7 +7,7 @@ import { createDbClient, attachDbHost } from '@main/db/bridge';
 
 // The bridge is exercised over a real worker_threads MessageChannel: messages
 // cross a structured-clone boundary exactly as they do between the main thread
-// and the DB worker (bigint preserved, Buffer arrives as Uint8Array, Error
+// and the DB worker (integers return as number, Buffer arrives as Uint8Array, Error
 // objects not cloneable). Only the thread spawn itself is not covered here.
 describe('db bridge (client <-> host over MessageChannel)', () => {
   let host: AppDb;
@@ -30,10 +30,10 @@ describe('db bridge (client <-> host over MessageChannel)', () => {
     if (host.isOpen()) host._conn!.close();
   });
 
-  it('round-trips run + all with bigint preserved', async () => {
+  it('round-trips run + all with integers returned as number', async () => {
     await client.run(`INSERT INTO t (v) VALUES (?)`, ['hello']);
     const rows = await client.all(`SELECT id, v FROM t`);
-    expect(rows).toEqual([{ id: 1n, v: 'hello', ...{} }]);
+    expect(rows).toEqual([{ id: 1, v: 'hello' }]);
   });
 
   it('exec works', async () => {
@@ -66,7 +66,7 @@ describe('db bridge (client <-> host over MessageChannel)', () => {
         params: [{ $fromStep: 0, column: 'id' }],
       },
     ]);
-    expect(typeof (res[0].row as { id: bigint }).id).toBe('bigint');
+    expect((res[0].row as { id: number }).id).toBe(1);
     expect(res[1].changes).toBe(1);
     // failing batch rolls back
     await expect(
