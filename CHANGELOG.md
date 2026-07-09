@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.44.0](https://github.com/edjafarov/kiagent-core/compare/v0.43.0...v0.44.0) (2026-07-09)
+
+### Features
+
+* **db:** async AppDb primitive + worker bridge protocol ([fb58138](https://github.com/edjafarov/kiagent-core/commit/fb5813845ab500436a2d3b82b7e9bde820f46c4e))
+* **db:** host the corpus SQLite connection in a worker thread ([6098de6](https://github.com/edjafarov/kiagent-core/commit/6098de6d83c0e2ce6522a394a2e34852066af0c8))
+* **db:** add a proc op to run host-registered transactions off-thread ([ad252dd](https://github.com/edjafarov/kiagent-core/commit/ad252dd1e9c85f1ba88df70e4605945ec6c77c84))
+* **boot:** back the main-process corpus store with the DB worker ([0c141f8](https://github.com/edjafarov/kiagent-core/commit/0c141f87153c9175c6ba054d33b60e33f0b32037))
+
+### Bug Fixes
+
+* **main:** throttle push:app-state broadcasts to unblock backfill UI ([5d8c56f](https://github.com/edjafarov/kiagent-core/commit/5d8c56fb70e72b4ebd0876785472fb93e6946635))
+* **store:** arm feed wakeup before the async materialize read ([7143ada](https://github.com/edjafarov/kiagent-core/commit/7143ada2aa1b5e81098d546b02cea7a36328a34e))
+* **store:** keep number integer semantics to match core store ([ba61ef1](https://github.com/edjafarov/kiagent-core/commit/ba61ef1d1a44ae9a1017af00c017827521a3553c))
+* **engine:** guard the projection boot window against unhandled store rejections ([108c924](https://github.com/edjafarov/kiagent-core/commit/108c924c60f6ff60a96b917d9318416f7cc5cd34))
+* **store:** reconcile document parent refs after each commit batch ([fa0dc4b](https://github.com/edjafarov/kiagent-core/commit/fa0dc4b7c0e4095990b0ebd5b7d4a45ebd52d3d1))
+* **engine:** isolate worker retry attempts and clean up abort listeners ([e21b253](https://github.com/edjafarov/kiagent-core/commit/e21b25319f547e8d9d5453a36fb72e5470fecf79))
+* **renderer:** retry initial app:get-state instead of hanging the loading gate ([5f10d2d](https://github.com/edjafarov/kiagent-core/commit/5f10d2d6e49505ccd7ea58525873317b29866b75))
+* **gmail:** abort-aware retry backoff and PKCE+state on OAuth ([6ffc4f2](https://github.com/edjafarov/kiagent-core/commit/6ffc4f23de9b08465f0590889050e32faec77422))
+* bound batch and response memory (local-folder, net.fetch, marketplace) ([b80588f](https://github.com/edjafarov/kiagent-core/commit/b80588f354af1a93279e6251441c7524195fc53d))
+
+Backfill no longer freezes the UI. Core opened the corpus SQLite connection
+directly on the Electron main process, so every write, `ledgerCountsAll()`
+count, FTS tokenization and checkpoint ran on the main event loop — an active
+connector backfill saturated it and stalled window drags, tab switches and IPC.
+The corpus connection now lives in a worker thread behind an async `AppDb`
+bridge (generic `exec`/`all`/`run`/`batch`, plus a `proc` op that runs a
+host-registered transaction in the worker as one atomic unit). `store.ts` drives
+the async bridge; reads and the change `feed()` stay on main (the in-memory
+`nudge` wakeup is armed before each async read so a concurrent commit is never
+missed), while the procedural `commit` transaction — read-your-own-writes and
+all — is relocated verbatim into the worker via `proc`. `bootCore` opens the
+corpus with `openDbInWorker`; the stdio MCP server and tests keep the in-process
+synchronous connection. Integer columns stay `number` (core is number-native);
+`CoreStore`'s public contract is unchanged apart from the previously-synchronous
+methods becoming `async`.
+
 ## [0.43.0](https://github.com/edjafarov/kiagent-core/compare/v0.42.0...v0.43.0) (2026-07-08)
 
 ### Features
