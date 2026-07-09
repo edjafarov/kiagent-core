@@ -13,7 +13,7 @@ import type {
   Worker,
 } from '@shared/contracts';
 
-import { openDb } from '../db/app-db';
+import { openDbInWorker } from '../db/worker-client';
 import { createAppProjection } from './app-projection';
 import type { AppStateExtras } from './app-projection';
 import { createConverter } from './engine/convert';
@@ -34,6 +34,9 @@ export interface BootDeps {
   encrypt(plain: string): Buffer;
   decrypt(blob: Buffer): string;
   env(): SchedulerEnv;
+  /** Bundled `dbWorker` entry file — the corpus SQLite connection is hosted in
+   *  this worker thread so its synchronous calls never block the main loop. */
+  dbWorkerFile: string;
 }
 
 export interface SourceRegistry {
@@ -68,9 +71,13 @@ export interface CorePlatform {
 export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const { store: logStore, sink } = createLogs(path.join(deps.dataDir, 'logs'));
   const prefs = createPrefs(deps.dataDir);
-  // Task 4 swaps this in-process handle for openDbInWorker (moving the corpus
-  // SQLite work off the main thread); the store is AppDb-driven either way.
-  const db = await openDb(path.join(deps.dataDir, 'kiagent.db'));
+  // The corpus SQLite connection lives in a worker thread (the store is
+  // AppDb-driven, so every read/write and the relocated commit transaction
+  // cross the bridge); this is what keeps backfill off the main event loop.
+  const db = await openDbInWorker(
+    path.join(deps.dataDir, 'kiagent.db'),
+    deps.dbWorkerFile,
+  );
   const store = openStore(db, {
     encrypt: deps.encrypt,
     decrypt: deps.decrypt,

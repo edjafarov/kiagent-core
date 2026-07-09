@@ -546,7 +546,21 @@ app
     const act = createActivityLog(dataDir);
     activity = act;
     const enc = makeEncryption();
-    platform = await bootCore({ dataDir, ...enc, env: schedulerEnv });
+    // Bundled DB worker (webpack `dbWorker` entry): prod emits `dbWorker.js`,
+    // the dev config `dbWorker.bundle.dev.js` — the same existsSync-fallback
+    // scheme as extensionHostScript below. Hosting the corpus SQLite connection
+    // off the main thread is what keeps backfill from freezing the UI.
+    const dbWorkerFile =
+      [
+        path.join(__dirname, 'dbWorker.js'),
+        path.join(__dirname, 'dbWorker.bundle.dev.js'),
+      ].find((f) => fs.existsSync(f)) ?? path.join(__dirname, 'dbWorker.js');
+    platform = await bootCore({
+      dataDir,
+      ...enc,
+      env: schedulerEnv,
+      dbWorkerFile,
+    });
     const p = platform;
 
     const bundled = registerBundledProviders(p, {
@@ -814,22 +828,29 @@ app
     // Non-feed slices (prefs, processing counters) refresh on their own clock.
     p.prefs.onChange((prefs) => patchState({ prefs }));
     setInterval(async () => {
-      p.inference.setBackgroundOpen(backgroundLaneOpen(p));
-      const all = await p.store.ledgerCountsAll();
-      const processing = {
-        pending: all.pending,
-        done: all.done,
-        skipped: all.skip,
-        failed: all.failed,
-      };
-      const prev = lastPush.state.processing;
-      if (
-        prev.pending !== processing.pending ||
-        prev.done !== processing.done ||
-        prev.skipped !== processing.skipped ||
-        prev.failed !== processing.failed
-      ) {
-        patchState({ processing });
+      // ledgerCountsAll is now an async worker RPC — a transient read failure
+      // (e.g. a dead/restarting DB worker) must not escape as an unhandled
+      // rejection on the timer. Mirrors scheduler.ts's safeTick guard.
+      try {
+        p.inference.setBackgroundOpen(backgroundLaneOpen(p));
+        const all = await p.store.ledgerCountsAll();
+        const processing = {
+          pending: all.pending,
+          done: all.done,
+          skipped: all.skip,
+          failed: all.failed,
+        };
+        const prev = lastPush.state.processing;
+        if (
+          prev.pending !== processing.pending ||
+          prev.done !== processing.done ||
+          prev.skipped !== processing.skipped ||
+          prev.failed !== processing.failed
+        ) {
+          patchState({ processing });
+        }
+      } catch (err) {
+        log.warn(`processing-counter refresh failed: ${String(err)}`);
       }
     }, 5_000);
 
