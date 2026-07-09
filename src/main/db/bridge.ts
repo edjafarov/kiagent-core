@@ -23,8 +23,14 @@ type ReqBody =
       op: 'batch';
       steps: { sql: string; params: (WireParam | FromStepRef)[] }[];
     }
+  | { op: 'proc'; name: string; args: unknown }
   | { op: 'close' };
 type Req = ReqBody & { id: number };
+
+/** A host-registered procedure: runs synchronously inside the worker (it owns
+ *  its own `db.transaction()`), receives the structured-clone-transferred args,
+ *  and returns a structured-clone-able result. */
+export type HostProcedure = (args: unknown) => unknown | Promise<unknown>;
 
 interface FromStepRef {
   $fromStep: number;
@@ -89,6 +95,7 @@ export function attachDbHost(
   port: PortLike,
   db: AppDb,
   onClosed?: () => void,
+  procedures?: Record<string, HostProcedure>,
 ): void {
   port.on('message', async (raw: unknown) => {
     const req = raw as Req;
@@ -110,6 +117,10 @@ export function attachDbHost(
             ) as BatchParam[],
           })),
         );
+      } else if (req.op === 'proc') {
+        const proc = procedures?.[req.name];
+        if (!proc) throw new Error(`unknown db procedure: ${req.name}`);
+        value = await proc(req.args);
       } else if (req.op === 'close') {
         await db.close();
       }
@@ -193,6 +204,7 @@ export function createDbClient(port: PortLike): DbClient {
       })) as BatchStepResult[];
       return results.map((r) => (r.row ? { ...r, row: rewrapRow(r.row) } : r));
     },
+    proc: async (name, args) => request({ op: 'proc', name, args }),
     isOpen: () => !closed && !dead,
     close: async () => {
       if (closed || dead) return;

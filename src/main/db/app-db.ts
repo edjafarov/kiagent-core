@@ -42,6 +42,13 @@ export interface AppDb {
    *  (tests, the stdio MCP server, the DB worker host). Production main-process
    *  code must not touch it: the worker-backed AppDb has none. */
   readonly _conn?: Database.Database;
+  /** Run a named host-registered procedure inside the worker as ONE synchronous
+   *  transaction, returning its result. Present only on the worker-backed
+   *  client; the in-process path has `_conn` and runs such procedures directly.
+   *  This is how a procedural transaction with read-your-own-writes (the corpus
+   *  `commit`) executes off the main thread without being flattened into a
+   *  static `batch()`. */
+  proc?(name: string, args: unknown): Promise<unknown>;
 }
 
 function coerceParam(v: AppDbParam): string | number | bigint | Buffer | null {

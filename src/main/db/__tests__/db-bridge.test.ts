@@ -117,3 +117,70 @@ describe('db bridge (client <-> host over MessageChannel)', () => {
     );
   });
 });
+
+// The `proc` op runs a host-registered procedure inside the worker as ONE
+// synchronous transaction — how the corpus `commit` (procedural, with
+// read-your-own-writes) executes off-thread instead of being flattened into a
+// static batch().
+describe('db bridge proc op (client.proc -> host-registered transaction)', () => {
+  let host: AppDb;
+  let channel: MessageChannel;
+  let client: AppDb & { _markDead(err: Error): void };
+
+  beforeEach(async () => {
+    host = await openDb(':memory:');
+    await host.exec(
+      `CREATE TABLE p (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);`,
+    );
+    const conn = host._conn!;
+    // Host procedures, each owning ONE synchronous transaction.
+    const procedures = {
+      // Inserts each value then returns the new row count (read-your-own-writes).
+      bump: (args: unknown): number =>
+        conn.transaction((vs: string[]): number => {
+          for (const v of vs)
+            conn.prepare(`INSERT INTO p (v) VALUES (?)`).run(v);
+          const r = conn.prepare(`SELECT COUNT(*) AS c FROM p`).get() as {
+            c: number;
+          };
+          return r.c;
+        })(args as string[]),
+      // Inserts one row then throws — the whole transaction must roll back.
+      boom: (): number =>
+        conn.transaction((): number => {
+          conn.prepare(`INSERT INTO p (v) VALUES ('doomed')`).run();
+          throw new Error('procedure blew up');
+        })(),
+    };
+    channel = new MessageChannel();
+    attachDbHost(channel.port1, host, undefined, procedures);
+    client = createDbClient(channel.port2);
+  });
+
+  afterEach(() => {
+    channel.port1.close();
+    channel.port2.close();
+    if (host.isOpen()) host._conn!.close();
+  });
+
+  it('runs a registered procedure and returns its result', async () => {
+    const count = await client.proc!('bump', ['a', 'b', 'c']);
+    expect(count).toBe(3);
+    const rows = await client.all(`SELECT v FROM p ORDER BY id`);
+    expect(rows.map((r) => r.v)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('rejects an unknown procedure name', async () => {
+    await expect(client.proc!('nope', {})).rejects.toThrow(
+      /unknown db procedure: nope/,
+    );
+  });
+
+  it('rolls back the whole transaction when the procedure throws', async () => {
+    await expect(client.proc!('boom', {})).rejects.toThrow(/procedure blew up/);
+    const rows = await client.all(
+      `SELECT COUNT(*) AS c FROM p WHERE v='doomed'`,
+    );
+    expect(Number(rows[0].c)).toBe(0);
+  });
+});
