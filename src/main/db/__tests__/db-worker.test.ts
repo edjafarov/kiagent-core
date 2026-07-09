@@ -82,7 +82,9 @@ Module._resolveFilename = function (request, ...rest) {
     }
   });
 
-  it('spawns, opens+migrates the DB, serves a batch, and closes cleanly', async () => {
+  // Spawn the real worker-entry under ts-node and wait for its `ready`, then
+  // wire a production `createDbClient`. Mirrors openDbInWorker's handshake.
+  async function spawnAndReady(): Promise<void> {
     worker = new Worker(require.resolve('../worker-entry.ts'), {
       workerData: { dbPath },
       execArgv: [
@@ -95,7 +97,6 @@ Module._resolveFilename = function (request, ...rest) {
         'tsconfig-paths/register',
       ],
     });
-
     await new Promise<void>((resolve, reject) => {
       const onMessage = (m: unknown) => {
         const msg = m as { t?: string; message?: string };
@@ -124,11 +125,14 @@ Module._resolveFilename = function (request, ...rest) {
       worker!.on('error', onError);
       worker!.on('exit', onExit);
     });
-
     client = createDbClient(worker);
-    expect(client.isOpen()).toBe(true);
+  }
 
-    const results = await client.batch([
+  it('spawns, opens+migrates the DB, serves a batch, and closes cleanly', async () => {
+    await spawnAndReady();
+    expect(client!.isOpen()).toBe(true);
+
+    const results = await client!.batch([
       { sql: 'CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)' },
       { sql: 'INSERT INTO t(v) VALUES (?) RETURNING id', params: ['x'] },
     ]);
@@ -139,8 +143,54 @@ Module._resolveFilename = function (request, ...rest) {
     const exited = new Promise<number>((resolve) => {
       worker!.once('exit', resolve);
     });
-    await client.close();
-    expect(client.isOpen()).toBe(false);
+    await client!.close();
+    expect(client!.isOpen()).toBe(false);
     expect(await exited).toBe(0);
+  }, 20000);
+
+  // The corpus `commit` transaction is relocated into the worker and invoked
+  // via the `proc` op. No in-process test exercises that RPC path — this drives
+  // a real commit THROUGH the worker: the `consumer` batch variant self-creates
+  // its synthetic account, so getOrCreateAccountTx + upsertDocument + ftsUpsert
+  // + appendChange + detectLanguages (franc-min) all run inside the worker, and
+  // the CommitBatch crosses the structured-clone boundary intact.
+  it('runs the relocated commit procedure inside the worker (proc round-trip)', async () => {
+    await spawnAndReady();
+
+    const seq = await client!.proc!('commit', {
+      consumer: 'worker:test:v1',
+      cursor: 0,
+      documents: [
+        {
+          externalId: 'w-1',
+          type: 'note',
+          title: 'Worker Doc',
+          markdown: 'a document committed through the worker thread',
+          metadata: {},
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    expect(typeof seq).toBe('number');
+    expect(seq as number).toBeGreaterThan(0);
+
+    const docs = await client!.all(
+      `SELECT external_id, title, languages FROM documents`,
+    );
+    expect(docs).toHaveLength(1);
+    expect(docs[0].external_id).toBe('w-1');
+    expect(docs[0].title).toBe('Worker Doc');
+    // languages is a JSON array produced by detectLanguages RUNNING IN THE
+    // WORKER — it must be valid JSON (proves franc-min loaded + ran there).
+    expect(Array.isArray(JSON.parse(docs[0].languages as string))).toBe(true);
+
+    // FTS search (also written inside the worker commit) finds the doc.
+    const fts = await client!.all(
+      `SELECT doc_id FROM documents_fts WHERE documents_fts MATCH ?`,
+      ['committed'],
+    );
+    expect(fts.length).toBeGreaterThan(0);
+
+    await client!.close();
   }, 20000);
 });
