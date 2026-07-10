@@ -79,9 +79,23 @@ export function createAudioWorker(deps: {
           session.log('info', `audio: ${err.message} — skipping ${doc.id}`);
           return 'skip'; // model has no audio encoder — terminal for this model
         }
+        const { status } = err as { status?: number };
+        if (typeof status === 'number' && status >= 400 && status < 500) {
+          // The server rejected the request as invalid — most importantly a
+          // clip that exceeds the context window (a too-long recording).
+          // Permanent for this input: SKIP, or it would re-drive (re-transcode
+          // + re-send) every window forever. Chunking long audio is a
+          // follow-up.
+          session.log(
+            'info',
+            `audio: server rejected input (HTTP ${status}) — skipping ${doc.id}`,
+          );
+          return 'skip';
+        }
         // NoProviderError (model still installing), LaneClosedError (window
-        // closed mid-run), or a transient server fault — DEFER so the
-        // scheduled re-drive retries once a model is ready / the window opens.
+        // closed mid-run), or a transient (5xx / network) server fault — DEFER
+        // so the scheduled re-drive retries once a model is ready / the window
+        // opens.
         return 'defer';
       }
 

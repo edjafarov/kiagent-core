@@ -151,6 +151,38 @@ describe('createAudioWorker', () => {
     expect(outcome).toBe('defer');
   });
 
+  it('skips (permanent) when the server rejects the input with a 4xx (e.g. clip too long for the context)', async () => {
+    const outcome = await worker().work(
+      change(),
+      fakeSession({
+        hear: async () => {
+          const e = new Error('asr request failed: HTTP 400') as Error & {
+            status?: number;
+          };
+          e.status = 400;
+          throw e;
+        },
+      }),
+    );
+    expect(outcome).toBe('skip');
+  });
+
+  it('defers on a transient 5xx server fault', async () => {
+    const outcome = await worker().work(
+      change(),
+      fakeSession({
+        hear: async () => {
+          const e = new Error('asr request failed: HTTP 503') as Error & {
+            status?: number;
+          };
+          e.status = 503;
+          throw e;
+        },
+      }),
+    );
+    expect(outcome).toBe('defer');
+  });
+
   it('throws on an empty transcript so the engine retries (bounded), not skips', async () => {
     await expect(
       worker().work(change(), fakeSession({ hear: async () => '   ' })),

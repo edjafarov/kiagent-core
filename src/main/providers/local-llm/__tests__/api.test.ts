@@ -83,4 +83,23 @@ describe('transcribeAudio', () => {
       transcribeAudio('http://x', new Uint8Array([1]), 'mp3'),
     ).resolves.toBe('');
   });
+
+  it('attaches the HTTP status on a non-ok response (so the worker can 4xx→skip)', async () => {
+    global.fetch = jest.fn(async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: { message: 'exceed_context' } }),
+    })) as unknown as typeof fetch;
+    const err = await transcribeAudio(
+      'http://x',
+      new Uint8Array([1]),
+      'wav',
+    ).then(
+      () => {
+        throw new Error('expected rejection');
+      },
+      (e: Error & { status?: number }) => e,
+    );
+    expect(err.status).toBe(400);
+  });
 });

@@ -150,7 +150,17 @@ export async function transcribeAudio(
         ],
       }),
     });
-    if (!res.ok) throw new Error(`asr request failed: HTTP ${res.status}`);
+    if (!res.ok) {
+      // Attach the status so the worker distinguishes a permanent client
+      // rejection (4xx — notably a clip that exceeds the server context
+      // window) from a transient server fault (5xx). A 4xx must not be retried
+      // forever.
+      const err = new Error(
+        `asr request failed: HTTP ${res.status}`,
+      ) as Error & { status?: number };
+      err.status = res.status;
+      throw err;
+    }
     const json = (await res.json()) as {
       choices?: { message?: { content?: string } }[];
     };
