@@ -6,7 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   openDbInWorker,
-  DB_WORKER_RESTARTING,
+  isDbWorkerTransientError,
+  DB_WORKER_CRASHED,
   DB_WORKER_DEAD,
 } from '@main/db/worker-client';
 import type { AppDb } from '@main/db/app-db';
@@ -116,20 +117,26 @@ Module._resolveFilename = function (request, ...rest) {
     expect(db.isOpen()).toBe(true);
 
     // Kill the worker mid-request: the `crash` proc exits before replying,
-    // so this specific in-flight call must reject.
-    await expect(db.proc!('crash', {})).rejects.toThrow();
+    // so this specific in-flight call must reject — tagged DB_WORKER_CRASHED
+    // so callers can tell a retryable crash from a SQL error.
+    await expect(db.proc!('crash', {})).rejects.toMatchObject({
+      code: DB_WORKER_CRASHED,
+    });
 
-    // Once the supervisor finishes respawning, a fresh query succeeds again
-    // through the SAME returned AppDb (no new object, no re-open call).
-    const rows = await waitUntil(() => db!.all('SELECT 1 AS x'));
+    // A request issued while the respawn is still in flight PARKS until the
+    // fresh worker is up, then succeeds through the SAME returned AppDb — no
+    // rejection burst, no caller-side polling.
+    const rows = await db.all('SELECT 1 AS x');
     expect(rows).toEqual([{ x: 1 }]);
     expect(db.isOpen()).toBe(true);
 
     // The re-registered `crash` proc proves the fresh worker is a full
     // worker-entry re-open, not some degraded fallback — invoke it again to
     // show a second crash/respawn cycle also recovers.
-    await expect(db.proc!('crash', {})).rejects.toThrow();
-    const rows2 = await waitUntil(() => db!.all('SELECT 2 AS x'));
+    await expect(db.proc!('crash', {})).rejects.toMatchObject({
+      code: DB_WORKER_CRASHED,
+    });
+    const rows2 = await db.all('SELECT 2 AS x');
     expect(rows2).toEqual([{ x: 2 }]);
   }, 30000);
 
@@ -148,7 +155,43 @@ Module._resolveFilename = function (request, ...rest) {
     // closed rather than silently coming back to life.
     await new Promise((r) => setTimeout(r, 500));
     expect(db.isOpen()).toBe(false);
-    await expect(db.all('SELECT 1')).rejects.toThrow();
+    // Post-close rejections are deliberately NOT retryable-coded: retrying
+    // into a closed AppDb is never useful, so a feed consumer must not spin.
+    const postClose = await db.all('SELECT 1').then(
+      () => {
+        throw new Error('expected post-close all() to reject');
+      },
+      (e: Error) => e,
+    );
+    expect(isDbWorkerTransientError(postClose)).toBe(false);
+  }, 15000);
+
+  it('a close() landing inside the crash-respawn window rejects further requests NON-transiently', async () => {
+    db = await openDbInWorker(
+      dbPath,
+      require.resolve('./fixtures/respawn-worker-entry.ts'),
+      { execArgv },
+    );
+    expect(db.isOpen()).toBe(true);
+
+    // Crash the worker — the supervisor starts a respawn (backing off before
+    // its next spawn attempt). Close lands INSIDE that window.
+    await expect(db.proc!('crash', {})).rejects.toMatchObject({
+      code: DB_WORKER_CRASHED,
+    });
+    await db.close(); // awaits the racing respawn out; no worker left holding the DB
+    expect(db.isOpen()).toBe(false);
+
+    // Without the intentionalClose guard, requests would forward to the old
+    // crashed client and reject with the transient DB_WORKER_CRASHED code
+    // forever, making a retry-aware consumer spin against a closed AppDb.
+    const postClose = await db.all('SELECT 1').then(
+      () => {
+        throw new Error('expected post-close all() to reject');
+      },
+      (e: Error) => e,
+    );
+    expect(isDbWorkerTransientError(postClose)).toBe(false);
   }, 15000);
 
   it('gives up permanently once the restart budget is exhausted', async () => {
@@ -169,8 +212,8 @@ Module._resolveFilename = function (request, ...rest) {
         await db!.all('SELECT 1');
         throw new Error('expected all() to keep rejecting');
       } catch (e) {
-        if ((e as { code?: string }).code === DB_WORKER_RESTARTING) {
-          throw e; // still mid-respawn — keep polling
+        if (isDbWorkerTransientError(e)) {
+          throw e; // a retryable window — keep polling for the terminal state
         }
         return e as Error & { code?: string };
       }
