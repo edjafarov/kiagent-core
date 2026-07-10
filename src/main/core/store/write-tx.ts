@@ -75,8 +75,34 @@ export function createWriteTx(
       )
       .get(accountId, externalId, type) as DocRow | undefined;
 
+  // FTS rows are rowid-pinned to their document's rowid (schema v2): deletes
+  // and replacements are rowid-equality lookups instead of full virtual-table
+  // scans on the UNINDEXED doc_id. Both callers write the documents row
+  // before touching FTS, so the subselect always resolves.
   const ftsDelete = (docId: string): void => {
-    conn.prepare(`DELETE FROM documents_fts WHERE doc_id = ?`).run(docId);
+    conn
+      .prepare(
+        `DELETE FROM documents_fts
+        WHERE rowid = (SELECT rowid FROM documents WHERE id = ?)`,
+      )
+      .run(docId);
+  };
+
+  /** Insert-only FTS write for a brand-new document — its id was minted in
+   *  this transaction, so there is nothing to delete first (the old
+   *  unconditional delete-then-insert made every fresh ingest pay a full
+   *  FTS scan: O(N²) across a backfill). */
+  const ftsInsert = (
+    docId: string,
+    title: string | null,
+    markdown: string | null,
+  ): void => {
+    conn
+      .prepare(
+        `INSERT INTO documents_fts(rowid, doc_id, title, markdown)
+        VALUES((SELECT rowid FROM documents WHERE id = ?), ?, ?, ?)`,
+      )
+      .run(docId, docId, title ?? '', markdown ?? '');
   };
 
   const ftsUpsert = (
@@ -85,11 +111,7 @@ export function createWriteTx(
     markdown: string | null,
   ): void => {
     ftsDelete(docId);
-    conn
-      .prepare(
-        `INSERT INTO documents_fts(doc_id, title, markdown) VALUES(?, ?, ?)`,
-      )
-      .run(docId, title ?? '', markdown ?? '');
+    ftsInsert(docId, title, markdown);
   };
 
   /** Upsert one document; returns its seq, or null when nothing changed. */
@@ -168,7 +190,7 @@ export function createWriteTx(
         ts,
         ts,
       );
-    ftsUpsert(id, input.title, input.markdown);
+    ftsInsert(id, input.title, input.markdown);
     return seq;
   };
 
@@ -287,15 +309,14 @@ export function createWriteTx(
     if ('removeAccount' in batch) {
       const acc = getAccountRow(batch.removeAccount);
       if (!acc) return last;
-      // One statement, one pass: `doc_id` is UNINDEXED in the fts5 table, so
-      // the per-document ftsDelete loop this replaces was a full FTS scan
-      // PER document — quadratic on exactly the accounts big enough for the
-      // stall to be felt (the whole cascade runs synchronously on the main
-      // process, freezing every IPC until it finishes).
+      // One statement, one pass, by pinned rowid (schema v2) — doc_id is
+      // UNINDEXED, so even a single set-based DELETE on it would still scan
+      // the whole FTS table (the whole cascade runs synchronously in the DB
+      // worker, stalling every queued read until it finishes).
       conn
         .prepare(
           `DELETE FROM documents_fts
-          WHERE doc_id IN (SELECT id FROM documents WHERE account_id = ?)`,
+          WHERE rowid IN (SELECT rowid FROM documents WHERE account_id = ?)`,
         )
         .run(acc.id);
       conn.prepare(`DELETE FROM documents WHERE account_id = ?`).run(acc.id);
@@ -311,8 +332,16 @@ export function createWriteTx(
           `SELECT id FROM documents WHERE archived_at IS NOT NULL AND archived_at < ?`,
         )
         .all(batch.purgeArchived.before) as Array<{ id: string }>;
+      // One set-based FTS delete (same shape as removeAccount) BEFORE the
+      // document rows go away — the rowid subselect resolves nothing after.
+      conn
+        .prepare(
+          `DELETE FROM documents_fts
+          WHERE rowid IN (SELECT rowid FROM documents
+                          WHERE archived_at IS NOT NULL AND archived_at < ?)`,
+        )
+        .run(batch.purgeArchived.before);
       for (const { id } of rows) {
-        ftsDelete(id);
         conn.prepare(`DELETE FROM documents WHERE id = ?`).run(id);
         last = appendChange('purge', id);
       }
