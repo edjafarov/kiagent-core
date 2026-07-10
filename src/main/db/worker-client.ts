@@ -137,8 +137,13 @@ export async function openDbInWorker(
       onDeath(new Error(`db worker message error: ${String(e)}`)),
     );
     w.on('exit', (code) => {
-      if (intentionalClose && code === 0) return; // expected clean shutdown
-      onDeath(new Error(`db worker exited unexpectedly (code ${code})`));
+      // Even the clean exit(0) of an intentional close() marks the client
+      // dead (matching the pre-supervisor behavior): `request()` only
+      // short-circuits on `dead`, so skipping _markDead here would let a
+      // request racing the shutdown post into a terminated worker and hang
+      // forever. handleDeath still never respawns once intentionalClose is
+      // set — dead-without-respawn IS the correct closed terminal state.
+      onDeath(new Error(`db worker exited (code ${code})`));
     });
   }
 
