@@ -1,9 +1,11 @@
 /**
  * The outward MCP surface — Streamable HTTP on loopback, ported from
- * kiagent-ref's src/main/mcp/server.ts. Loopback bind is the ENTIRE auth
- * model (no bearer token): the legacy server's own comment says as much
- * (`bearerToken: null` → `authOk()` always passes), so this port keeps that
- * posture rather than inventing one.
+ * kiagent-ref's src/main/mcp/server.ts. Loopback bind is the auth model (no
+ * bearer token): the legacy server's own comment says as much (`bearerToken:
+ * null` → `authOk()` always passes), so this port keeps that posture rather
+ * than inventing one. Binding to 127.0.0.1 does NOT by itself stop DNS
+ * rebinding, though — see `checkLoopbackRequest` below for the Host/Origin
+ * allowlist that closes that gap.
  *
  * One `McpServer` + `StreamableHTTPServerTransport` per client session (the
  * SDK's documented pattern for stateful transports — see
@@ -111,6 +113,58 @@ function sendJsonRpcError(
       id: null,
     }),
   );
+}
+
+type LoopbackCheck = 'ok' | 'bad-host' | 'bad-origin';
+
+/** DNS-rebinding guard for the loopback listener. Binding to 127.0.0.1 alone
+ *  does not stop DNS rebinding: a page at attacker.com can point its own DNS
+ *  record at 127.0.0.1 and `fetch()` this server with `Host: attacker.com`
+ *  — the OS/browser happily connects since the IP really is loopback, and
+ *  (with no bearer token) the request would otherwise be served as trusted.
+ *
+ *  - Host header must be an EXACT match against this server's own loopback
+ *    bind targets (built from `HOST`/`port`, not hardcoded literals, so a
+ *    reconfigured port is still covered).
+ *  - Origin header, when present at all, must ALSO be an exact match. Real
+ *    MCP clients (Claude Desktop, mcp-remote, CLI tools) are not browsers
+ *    and never send an Origin header — nothing in this repo's own clients
+ *    does either (checked). So "Origin present but not loopback" only ever
+ *    fires for cross-origin browser JS, which is exactly what this blocks;
+ *    an absent Origin is allowed through on Host alone.
+ *
+ *  Scope: this only ever runs from the loopback `handler` below, which is
+ *  the sole request listener for the 127.0.0.1 `httpServer` created in
+ *  `startMcp`. The product-facing `createMcpHandler()` handler is called
+ *  directly by the product's own remote-transport router (which brings its
+ *  own auth, e.g. JWT + real TLS Host semantics for 7422) and never passes
+ *  through this function or the `handler` it gates. */
+function checkLoopbackRequest(
+  req: http.IncomingMessage,
+  host: string,
+  port: number,
+): LoopbackCheck {
+  const allowedHosts = new Set([
+    `${host}:${port}`,
+    `localhost:${port}`,
+    `[::1]:${port}`,
+  ]);
+  const hostHeader = req.headers.host?.toLowerCase();
+  if (!hostHeader || !allowedHosts.has(hostHeader)) return 'bad-host';
+
+  const originHeader = req.headers.origin;
+  if (originHeader === undefined) return 'ok';
+
+  const allowedOrigins = new Set([
+    `http://${host}:${port}`,
+    `http://localhost:${port}`,
+  ]);
+  return allowedOrigins.has(originHeader) ? 'ok' : 'bad-origin';
+}
+
+function sendForbidden(res: http.ServerResponse): void {
+  res.writeHead(403, { 'Content-Type': 'text/plain' });
+  res.end('Forbidden');
 }
 
 /** Bind `server` to the first free port in `candidates`, retrying on the same
@@ -259,8 +313,39 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
 
   const loopback = createSessionDispatcher();
 
+  // Logged at most once per server lifetime per reason — enough to alert an
+  // operator/log-reader that rebinding-style probing is happening without
+  // spamming the log for a script that retries.
+  let hostRejectionLogged = false;
+  let originRejectionLogged = false;
+
   const handler: http.RequestListener = async (req, res) => {
     try {
+      // Single dispatch entry point for the loopback server — runs before
+      // /healthz, before /mcp, before anything else it serves.
+      const loopbackCheck = checkLoopbackRequest(req, HOST, port);
+      if (loopbackCheck !== 'ok') {
+        if (loopbackCheck === 'bad-host' && !hostRejectionLogged) {
+          hostRejectionLogged = true;
+          deps.logSink.log(
+            'mcp',
+            'warn',
+            'rejected request: untrusted Host header',
+            { host: req.headers.host ?? null },
+          );
+        } else if (loopbackCheck === 'bad-origin' && !originRejectionLogged) {
+          originRejectionLogged = true;
+          deps.logSink.log(
+            'mcp',
+            'warn',
+            'rejected request: untrusted Origin header',
+            { origin: req.headers.origin ?? null },
+          );
+        }
+        sendForbidden(res);
+        return;
+      }
+
       if (req.url === '/healthz') {
         res.writeHead(200);
         res.end('ok');

@@ -18,6 +18,7 @@
  * and the read-only clients() listing are covered here.
  */
 import fs from 'fs';
+import http from 'http';
 import os from 'os';
 import path from 'path';
 
@@ -253,5 +254,165 @@ describe('startMcp (HTTP transport)', () => {
     await expect(handle.connectClient('not-a-real-client')).rejects.toThrow(
       /unknown client/,
     );
+  });
+
+  // DNS-rebinding guard: binding to 127.0.0.1 does not by itself stop a page
+  // at attacker.com from pointing its own DNS at 127.0.0.1 and fetch()-ing
+  // this server with an attacker Host/Origin. Driven with raw http.request
+  // (not fetch/the MCP SDK client) because only the raw client API lets a
+  // test set an arbitrary Host header, the exact thing under test.
+  //
+  // Order matters within this block: `hostRejectionLogged`/
+  // `originRejectionLogged` are per-server-lifetime flags (log-once), and
+  // `handle` is the ONE shared server for the whole file, so the very first
+  // bad-Host and first bad-Origin request each own the single log
+  // assertion — later tests in this block that also send bad requests only
+  // assert on status/body, not on logs.
+  describe('loopback request validation (DNS-rebinding guard)', () => {
+    function rawRequest(
+      port: number,
+      headers: Record<string, string>,
+      reqPath = '/healthz',
+    ): Promise<{ status: number; body: string }> {
+      return new Promise((resolve, reject) => {
+        const req = http.request(
+          { host: '127.0.0.1', port, method: 'GET', path: reqPath, headers },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (chunk: Buffer) => chunks.push(chunk));
+            res.on('end', () =>
+              resolve({
+                status: res.statusCode ?? 0,
+                body: Buffer.concat(chunks).toString('utf8'),
+              }),
+            );
+          },
+        );
+        req.on('error', reject);
+        req.end();
+      });
+    }
+
+    it("rejects a request whose Host header is not this server's own loopback bind target (403, plain body, logged once at warn)", async () => {
+      const evilHost = `evil.example.com:${handle.port}`;
+
+      const first = await rawRequest(handle.port as number, {
+        Host: evilHost,
+      });
+      expect(first.status).toBe(403);
+      expect(first.body).toBe('Forbidden');
+
+      const hostWarnLogs = logs.filter(
+        (l) =>
+          l.scope === 'mcp' && l.level === 'warn' && /Host header/.test(l.msg),
+      );
+      expect(hostWarnLogs).toHaveLength(1);
+      expect(hostWarnLogs[0].fields?.host).toBe(evilHost);
+
+      // A second violation within the same server lifetime must not log
+      // again (log-once, so probing doesn't spam the log).
+      const second = await rawRequest(handle.port as number, {
+        Host: evilHost,
+      });
+      expect(second.status).toBe(403);
+      expect(
+        logs.filter(
+          (l) =>
+            l.scope === 'mcp' &&
+            l.level === 'warn' &&
+            /Host header/.test(l.msg),
+        ),
+      ).toHaveLength(1);
+    });
+
+    it('allows a loopback Host (127.0.0.1 form) with no Origin header at all', async () => {
+      const { status, body } = await rawRequest(handle.port as number, {
+        Host: `127.0.0.1:${handle.port}`,
+      });
+      expect(status).toBe(200);
+      expect(body).toBe('ok');
+    });
+
+    it("allows the bare 'localhost' Host form too", async () => {
+      const { status, body } = await rawRequest(handle.port as number, {
+        Host: `localhost:${handle.port}`,
+      });
+      expect(status).toBe(200);
+      expect(body).toBe('ok');
+    });
+
+    it('rejects a cross-origin browser-style Origin even with a loopback Host (logged once at warn)', async () => {
+      const first = await rawRequest(handle.port as number, {
+        Host: `127.0.0.1:${handle.port}`,
+        Origin: 'https://attacker.example.com',
+      });
+      expect(first.status).toBe(403);
+      expect(first.body).toBe('Forbidden');
+
+      const originWarnLogs = logs.filter(
+        (l) =>
+          l.scope === 'mcp' &&
+          l.level === 'warn' &&
+          /Origin header/.test(l.msg),
+      );
+      expect(originWarnLogs).toHaveLength(1);
+      expect(originWarnLogs[0].fields?.origin).toBe(
+        'https://attacker.example.com',
+      );
+    });
+
+    it('allows a loopback Origin alongside a loopback Host', async () => {
+      const { status, body } = await rawRequest(handle.port as number, {
+        Host: `127.0.0.1:${handle.port}`,
+        Origin: `http://127.0.0.1:${handle.port}`,
+      });
+      expect(status).toBe(200);
+      expect(body).toBe('ok');
+    });
+
+    it('gates the /mcp route too, not just /healthz — the check runs at the single dispatch entry point', async () => {
+      const { status } = await rawRequest(
+        handle.port as number,
+        { Host: 'evil.example.com' },
+        '/mcp',
+      );
+      expect(status).toBe(403);
+    });
+
+    it("createMcpHandler()'s product-facing handler is NOT gated by this guard — it's called directly by a product router that brings its own auth", async () => {
+      const productHandler = handle.createMcpHandler();
+      const productServer = http.createServer((req, res) => {
+        void productHandler(req, res);
+      });
+      await new Promise<void>((resolve) => {
+        productServer.listen(0, '127.0.0.1', () => resolve());
+      });
+      const address = productServer.address();
+      const productPort =
+        typeof address === 'object' && address ? address.port : 0;
+
+      try {
+        const { status, body } = await rawRequest(
+          productPort,
+          { Host: 'evil.example.com' },
+          '/mcp',
+        );
+        // Not 403 from the loopback guard — it never runs for this handler.
+        // Falls through to the session dispatcher's own "missing
+        // mcp-session-id" 400 instead, proving the guard is scoped to the
+        // loopback `handler` only.
+        expect(status).not.toBe(403);
+        expect(JSON.parse(body)).toMatchObject({
+          jsonrpc: '2.0',
+          error: expect.objectContaining({
+            message: expect.stringMatching(/missing mcp-session-id/),
+          }),
+        });
+      } finally {
+        await new Promise<void>((resolve) => {
+          productServer.close(() => resolve());
+        });
+      }
+    });
   });
 });
