@@ -92,6 +92,7 @@ describe('engine', () => {
         complete: async () => 'summary!',
         see: async () => 'seen',
         read: async () => 'read!',
+        hear: async () => 'heard!',
       },
       convert: async (input) => input,
       logs: noopLogs,
@@ -379,6 +380,7 @@ describe('engine', () => {
         calls.push('read');
         return 'ocr text';
       },
+      hear: async () => 'transcript',
     };
     const engine = createEngine({
       store,
@@ -483,6 +485,7 @@ describe('engine', () => {
         complete: async () => 'c',
         see: async () => 's',
         read: async () => 'r',
+        hear: async () => 'h',
       },
       convert: async (d: DocumentInput) => d,
       logs: noopLogs,
@@ -922,6 +925,7 @@ describe('engine', () => {
         complete: async () => 'summary!',
         see: async () => 'seen',
         read: async () => 'read!',
+        hear: async () => 'heard!',
       },
       convert: async (input) => input,
       logs: noopLogs,
@@ -1131,6 +1135,7 @@ describe('engine', () => {
         complete: async () => 'summary!',
         see: async () => 'seen',
         read: async () => 'read!',
+        hear: async () => 'heard!',
       },
       convert: async (input) => input,
       logs: noopLogs,

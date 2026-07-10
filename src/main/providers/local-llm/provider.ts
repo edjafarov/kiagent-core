@@ -8,7 +8,9 @@ import type {
   ProviderStatus,
 } from '@shared/contracts';
 
-import { chatText, describeImage } from './api';
+import { CapabilityUnsupportedError } from '@main/core/inference';
+
+import { chatText, describeImage, transcribeAudio } from './api';
 import { checkCapability, readHostProbes } from './capability';
 import { detectHostBackend } from './backend';
 import type { BackendInfo } from './backend';
@@ -248,7 +250,12 @@ export function createLocalLlmProvider(deps: {
 
   return {
     id: 'local-llm',
-    supports: ['complete', 'see'],
+    // 'hear' is advertised unconditionally: the servable model may or may not
+    // carry an audio encoder, so the capability check lives in handle() where
+    // the model is resolved — a vision-only model throws
+    // CapabilityUnsupportedError (a permanent skip) rather than being routed to
+    // silently.
+    supports: ['complete', 'see', 'hear'],
     status(): ProviderStatus {
       if (!capability.ok) return 'unsupported';
       if (downloadPct !== null) return { downloading: { pct: downloadPct } };
@@ -267,6 +274,15 @@ export function createLocalLlmProvider(deps: {
         throw new Error(
           `local-llm not ready (status: ${JSON.stringify(this.status())})`,
         );
+      // Audio support lives in the mmproj, so it's per-model. Fail BEFORE
+      // starting a server for a doomed request: a vision-only model (e.g. the
+      // 12B tier) can't transcribe — signal a PERMANENT capability gap so the
+      // worker skips instead of re-deferring a doomed request every window.
+      if (req.kind === 'hear' && !model.hasAudio) {
+        throw new CapabilityUnsupportedError(
+          `local model '${model.id}' has no audio encoder — cannot transcribe audio`,
+        );
+      }
       const s = await ensureServer(model);
       touchIdle();
       if (req.kind === 'complete') {
@@ -283,6 +299,13 @@ export function createLocalLlmProvider(deps: {
           mime?: string;
         };
         return describeImage(s.baseUrl(), image, prompt, { mime });
+      }
+      if (req.kind === 'hear') {
+        const { audio, format } = req.payload as {
+          audio: Uint8Array;
+          format?: 'wav' | 'mp3';
+        };
+        return transcribeAudio(s.baseUrl(), audio, format ?? 'wav');
       }
       throw new Error(`local-llm does not support '${req.kind}'`);
     },
