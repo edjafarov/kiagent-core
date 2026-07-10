@@ -20,6 +20,7 @@ import type {
   ExtensionBootstrap,
   MainToChild,
 } from '@shared/extension-rpc';
+import { sourceErrorCode } from '@shared/source-errors';
 
 import {
   createRpcEndpoint,
@@ -402,10 +403,14 @@ export function runExtensionHost(
         });
       } catch (e) {
         pulls.delete(msg.pullId);
+        // Forward the taxonomy code (if any) so main can rehydrate an error
+        // that classifies like a bundled source's ('auth' → needsReauth).
+        const code = sourceErrorCode(e);
         endpoint.post({
           kind: 'src-error',
           pullId: msg.pullId,
           error: e instanceof Error ? e.message : String(e),
+          ...(code ? { code } : {}),
         });
       }
     })();

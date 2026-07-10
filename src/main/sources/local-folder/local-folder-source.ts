@@ -12,6 +12,7 @@ import type {
   SourceDescriptor,
 } from '@shared/contracts';
 import { coveringRoots, isUnder } from '@shared/folder-paths';
+import { SourcePermanentError } from '@shared/source-errors';
 
 import { advanceCursor, type LocalFolderCursor } from './cursor';
 import {
@@ -67,7 +68,9 @@ function getRootPaths(account: Account): string[] {
   ) {
     return paths as string[];
   }
-  throw new Error(LEGACY_ERROR);
+  // Permanent by design (hard cutover) — retrying can never fix the config,
+  // so the engine should surface it immediately instead of backing off 5x.
+  throw new SourcePermanentError(LEGACY_ERROR);
 }
 
 /** `config.watch === false` stops `pull()` right after backfill/rescan

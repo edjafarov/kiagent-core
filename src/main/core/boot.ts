@@ -160,7 +160,16 @@ export function runAccount(platform: CorePlatform, account: Account): Handle {
         // paused account.
         if (platform.engine.isRunning(account.id)) return;
         const fresh = await platform.store.account(account.id);
-        if (fresh && fresh.status !== 'paused') platform.engine.run(fresh);
+        // 'needsReauth' is a RESTING state like 'paused': the loop stopped
+        // deliberately (revoked credential — retrying just re-hammers the
+        // provider with doomed requests). Only the user's explicit Retry
+        // (sync-now → runAccount) or a fresh connect starts it again.
+        if (
+          fresh &&
+          fresh.status !== 'paused' &&
+          fresh.status !== 'needsReauth'
+        )
+          platform.engine.run(fresh);
       },
     );
   }
@@ -176,6 +185,9 @@ export async function resumeAccounts(
   for (const account of accounts) {
     if (account.source === 'worker') continue; // synthetic accounts don't sync
     if (account.status === 'paused') continue;
+    // Same resting-state rule as the cadence tick: a needsReauth account
+    // must not resume hammering a revoked credential at every boot.
+    if (account.status === 'needsReauth') continue;
     if (!platform.sources.get(account.source)) {
       platform.logSink.log(
         'engine',
