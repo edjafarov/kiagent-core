@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.46.0](https://github.com/edjafarov/kiagent-core/compare/v0.45.0...v0.46.0) (2026-07-10)
+
+### Bug Fixes
+
+* **mcp:** close DNS-rebinding hole on the loopback MCP listener ([046bcac](https://github.com/edjafarov/kiagent-core/commit/046bcac))
+* **engine:** refuse to (re)start an account that is pausing or paused ([568646c](https://github.com/edjafarov/kiagent-core/commit/568646c))
+* **db:** respawn the DB worker on unexpected crash instead of dying forever ([d4abd18](https://github.com/edjafarov/kiagent-core/commit/d4abd18))
+* **db:** mark the client dead on clean worker exit so post-close requests reject ([b12ef00](https://github.com/edjafarov/kiagent-core/commit/b12ef00))
+
+The MCP fix validates Origin/Host on the unauthenticated loopback listener
+(port 7421) so a malicious web page can't reach it via DNS rebinding. The
+engine fix closes a pause/start race (TOCTOU) that could resurrect a paused
+account. The two db fixes keep the app alive across DB-worker crashes and
+make post-shutdown requests fail fast instead of hanging.
+
 ## [0.45.0](https://github.com/edjafarov/kiagent-core/compare/v0.44.0...v0.45.0) (2026-07-09)
 
 ### Bug Fixes
