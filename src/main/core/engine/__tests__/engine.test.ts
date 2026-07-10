@@ -1065,6 +1065,210 @@ describe('engine', () => {
     expect(await store.read.byExternalId(account.id, 'b', 'note')).toBeNull();
   });
 
+  it('a supervisor restart inside the pause stop-to-commit window is refused — the pause sticks', async () => {
+    // The cadence tick doubles as a loop supervisor: not running + committed
+    // status not 'paused' → it (re)starts the loop. engine.pause() stops the
+    // loop BEFORE committing 'paused', and that commit is worker-RPC-based —
+    // it can queue behind other accounts' batches. Inside that window the
+    // tick's two reads are both stale (isRunning=false, status still
+    // 'backfilling'), so it would resurrect the loop the user just paused,
+    // whose batch commits then overwrite 'paused' — the v0.45.0 bug through a
+    // different door. run() must refuse via the pause intent (window open)
+    // and via the committed status (tick read stale status BEFORE the commit
+    // landed, called run() after the intent cleared).
+    let releaseGate: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const source: Source<number, DocumentInput> = {
+      descriptor: {
+        id: 'fake',
+        name: 'Fake',
+        documentTypes: ['note'],
+        auth: 'none',
+      },
+      async connect() {
+        return { identifier: 'fake@test' };
+      },
+      async *pull(_session, cursor) {
+        const pages: Array<Batch<number, DocumentInput>> = [
+          { phase: 'backfill', items: [doc('a')], cursor: 1, estimateTotal: 2 },
+          { phase: 'backfill', items: [doc('b')], cursor: 2, estimateTotal: 2 },
+        ];
+        const remaining = pages.slice(cursor ?? 0);
+        if (remaining[0]) yield remaining[0];
+        // Suspend mid-backfill so the test can pause between batches.
+        await gate;
+        if (remaining[1]) yield remaining[1];
+      },
+      toDocument: (item) => item,
+    };
+    // Hold the 'paused' status commit in flight to force the stop-to-commit
+    // window open deterministically (in production it's the DB worker's RPC
+    // queue that stretches it).
+    let signalPausedCommitInFlight!: () => void;
+    const pausedCommitInFlight = new Promise<void>((resolve) => {
+      signalPausedCommitInFlight = resolve;
+    });
+    let releasePausedCommit!: () => void;
+    const pausedCommitGate = new Promise<void>((resolve) => {
+      releasePausedCommit = resolve;
+    });
+    const gatedStore: CoreStore = {
+      ...store,
+      async commit(batch) {
+        if ('status' in batch && batch.status === 'paused') {
+          signalPausedCommitInFlight();
+          await pausedCommitGate;
+        }
+        return store.commit(batch);
+      },
+    };
+    const engine = createEngine({
+      store: gatedStore,
+      sources: { get: (id) => (id === 'fake' ? source : undefined) },
+      inference: {
+        complete: async () => 'summary!',
+        see: async () => 'seen',
+        read: async () => 'read!',
+      },
+      convert: async (input) => input,
+      logs: noopLogs,
+    });
+    const account = await engine.connect(source, {
+      oauth: async () => ({}),
+      showQr: () => {},
+      prompt: async () => ({}),
+      status: () => {},
+      pickFolders: async () => [],
+    });
+    engine.run(account);
+    await waitFor(
+      async () => (await store.account(account.id))?.status === 'backfilling',
+    );
+
+    // Pause, release the pull gate so the aborted generator can unwind, then
+    // wait until stop() has settled and the 'paused' commit is IN FLIGHT —
+    // exactly the window the tick fires into.
+    const pausing = engine.pause(account.id);
+    releaseGate!();
+    await pausedCommitInFlight;
+
+    // The tick's exact start path (boot.ts runAccount cadence job): both of
+    // its reads are stale inside the window.
+    expect(engine.isRunning(account.id)).toBe(false);
+    const fresh = await store.account(account.id);
+    expect(fresh?.status).toBe('backfilling'); // stale — the TOCTOU read
+    if (fresh && fresh.status !== 'paused') engine.run(fresh); // refused
+
+    // Let the pause finish (commit lands, intent clears).
+    releasePausedCommit!();
+    await pausing;
+
+    // Second door: a tick that read the stale 'backfilling' BEFORE the commit
+    // landed but reaches run() only after the intent cleared. The loop-entry
+    // committed-status recheck must refuse it.
+    engine.run(fresh!);
+
+    // A resurrected loop would pull batch 2 (its gate is already open) and
+    // overwrite 'paused' — give it ample time to prove it can't.
+    await new Promise((r) => {
+      setTimeout(r, 300);
+    });
+
+    const after = await store.account(account.id);
+    expect(after?.status).toBe('paused'); // never resurrected
+    expect(after?.cursor).toBe(1); // batch 2 was never pulled
+    expect(await store.read.byExternalId(account.id, 'b', 'note')).toBeNull();
+  });
+
+  it('run() on an account whose committed status is paused refuses to start — sync-now cannot undo a pause', async () => {
+    const source = fakeSource();
+    const engine = makeEngine(source);
+    const account = await engine.connect(source, {
+      oauth: async () => ({}),
+      showQr: () => {},
+      prompt: async () => ({}),
+      status: () => {},
+      pickFolders: async () => [],
+    });
+    // Idle-account pause: no loop is running, so this is the plain
+    // status-only 'paused' commit.
+    await engine.pause(account.id);
+    expect((await store.account(account.id))?.status).toBe('paused');
+
+    // Sync-now style start with a STALE caller copy (its status read predates
+    // the pause). The loop re-reads the committed status at entry and must
+    // refuse — only an explicit resume may start a paused account.
+    engine.run({ ...account, status: 'connecting' });
+    await new Promise((r) => {
+      setTimeout(r, 300);
+    });
+
+    const after = await store.account(account.id);
+    expect(after?.status).toBe('paused');
+    expect(await store.read.count({ account: account.id })).toBe(0); // no pull
+  });
+
+  it('explicit resume after pause starts the loop again and finishes the backfill', async () => {
+    let releaseGate: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const source: Source<number, DocumentInput> = {
+      descriptor: {
+        id: 'fake',
+        name: 'Fake',
+        documentTypes: ['note'],
+        auth: 'none',
+      },
+      async connect() {
+        return { identifier: 'fake@test' };
+      },
+      async *pull(_session, cursor) {
+        const pages: Array<Batch<number, DocumentInput>> = [
+          { phase: 'backfill', items: [doc('a')], cursor: 1, estimateTotal: 2 },
+          { phase: 'backfill', items: [doc('b')], cursor: 2, estimateTotal: 2 },
+        ];
+        const remaining = pages.slice(cursor ?? 0);
+        if (remaining[0]) yield remaining[0];
+        // Suspend mid-backfill so the test can pause between batches.
+        await gate;
+        if (remaining[1]) yield remaining[1];
+      },
+      toDocument: (item) => item,
+    };
+    const engine = makeEngine(source);
+    const account = await engine.connect(source, {
+      oauth: async () => ({}),
+      showQr: () => {},
+      prompt: async () => ({}),
+      status: () => {},
+      pickFolders: async () => [],
+    });
+    engine.run(account);
+    await waitFor(
+      async () => (await store.account(account.id))?.status === 'backfilling',
+    );
+    const pausing = engine.pause(account.id);
+    releaseGate!();
+    await pausing;
+    expect((await store.account(account.id))?.status).toBe('paused');
+
+    // Explicit user resume — the ONE door back in. engine.resume clears the
+    // pause intent and commits 'connecting' (what accounts:resume does before
+    // runAccount), so run()'s guards pass and the backfill completes from the
+    // persisted cursor.
+    const resumed = await engine.resume(account.id);
+    expect(resumed?.status).toBe('connecting');
+    const handle = engine.run(resumed!);
+    await waitFor(async () => (await store.account(account.id))?.cursor === 2);
+    expect(
+      await store.read.byExternalId(account.id, 'b', 'note'),
+    ).not.toBeNull();
+    await handle.stop();
+  });
+
   it('updateConfig: while a loop is running, persists config and restarts it (old handle stopped)', async () => {
     const source: Source<number, DocumentInput> = {
       descriptor: {

@@ -227,12 +227,26 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  "backfill resumes itself after pause" bug), so the loop must be stopped
    *  first. A no-op teardown for an already-idle account. */
   pause(accountId: AccountId): Promise<void>;
+  /** Explicitly resume a paused account: clear any pending pause intent and
+   *  persist `status: 'connecting'` BEFORE the caller starts the loop —
+   *  run() refuses paused/pausing accounts, so this is the one door back in.
+   *  Returns the account carrying the new status (feed it to run()), or null
+   *  if the account is gone. */
+  resume(accountId: AccountId): Promise<Account | null>;
 } {
   const { store, logs } = deps;
   const running = new Map<
     string,
     { stop(): Promise<void>; active(): boolean }
   >();
+  /** Accounts with a pause in flight: set BEFORE pause() aborts the loop,
+   *  cleared only after the 'paused' status commit lands. run() consults it
+   *  so the cadence-tick supervisor (or sync-now) can't resurrect the loop
+   *  inside the stop-to-commit window — the tick reads isRunning=false and a
+   *  still-stale 'backfilling' there and would otherwise restart the loop,
+   *  whose batch commits then overwrite 'paused' (the v0.45.0 bug through a
+   *  different door). */
+  const pauseIntents = new Set<AccountId>();
 
   const makeSession = (
     account: Account,
@@ -410,6 +424,38 @@ export function createEngine(deps: EngineDeps): Engine & {
       const source = deps.sources.get(account.source);
       const scope = `source:${account.source}`;
       const key = `account:${account.id}`;
+      // Refuse to start while a pause is in flight. The cadence tick doubles
+      // as a loop supervisor (start-if-idle) and decides from isRunning() +
+      // a status read — both stale inside pause()'s stop-to-commit window
+      // (the 'paused' commit is worker-RPC and can queue behind other
+      // accounts' batches). Starting here would resurrect the loop the user
+      // just paused; its batch commits would then overwrite 'paused'. The
+      // committed-status recheck at loop entry below closes the mirror-image
+      // window (tick read a stale status BEFORE the commit landed, calls
+      // run() after the intent cleared).
+      if (pauseIntents.has(account.id)) {
+        logs.log(
+          scope,
+          'info',
+          `run refused: account ${account.id} is being paused`,
+        );
+        const refused: Handle & { active(): boolean } = {
+          status: 'paused',
+          active: () => false,
+          async stats() {
+            const account2 = await store.account(account.id);
+            return {
+              pending: 0,
+              done: account2?.progress?.done ?? 0,
+              skipped: 0,
+              failed: 0,
+              deferred: 0,
+            };
+          },
+          async stop() {},
+        };
+        return refused;
+      }
       const abort = new AbortController();
       let status: SyncStatus = 'connecting';
       let done: Promise<void>;
@@ -446,6 +492,20 @@ export function createEngine(deps: EngineDeps): Engine & {
               // land a later retry on the replacement.
               const src = deps.sources.get(account.source) ?? source;
               const fresh = (await store.account(account.id)) ?? account;
+              // Paused accounts never start pulling, no matter who called
+              // run(). A cadence tick (or sync-now) can read a stale
+              // pre-pause status, then invoke run() after pause() finished —
+              // the entry-time intent check above already missed it. This
+              // COMMITTED-status read happens after the 'paused' commit
+              // landed (the intent clears only after it), so it catches that
+              // straggler. Explicit resume commits 'connecting' before
+              // running, so it passes. The intent recheck covers a pause
+              // launched between run() and this read (belt to the abort's
+              // braces).
+              if (fresh.status === 'paused' || pauseIntents.has(account.id)) {
+                status = 'paused';
+                return;
+              }
               const session = makeSession(fresh, abort.signal, scope);
               // Backfill progress accumulates across batches — and across
               // restarts, via the persisted account.progress. Only a truly
@@ -655,24 +715,57 @@ export function createEngine(deps: EngineDeps): Engine & {
     },
 
     async pause(accountId: AccountId): Promise<void> {
-      // Stop the in-flight loop FIRST. A status-only 'paused' commit while the
-      // pull loop is still producing batches gets steamrolled: the loop's next
-      // commit flips status back to 'backfilling' (and, once the stream ends,
-      // 'live'), so the account silently resumes. stop() aborts the loop and
-      // awaits its teardown; optional chaining makes it a no-op for an idle
-      // account, preserving the plain status-only pause in that case.
-      await running.get(`account:${accountId}`)?.stop();
-      // Read the cursor AFTER stop(): the abort window can let one final batch
-      // land and advance the cursor, so a value read before stop() would be
-      // stale — persisting it would re-pull that range on resume.
+      // Declare the intent BEFORE stopping: from here until the 'paused'
+      // commit lands, run() refuses to start this account, so the cadence
+      // tick's supervisor (isRunning=false + still-stale status) and
+      // sync-now can't resurrect the loop inside that window.
+      pauseIntents.add(accountId);
+      try {
+        // Stop the in-flight loop FIRST. A status-only 'paused' commit while
+        // the pull loop is still producing batches gets steamrolled: the
+        // loop's next commit flips status back to 'backfilling' (and, once
+        // the stream ends, 'live'), so the account silently resumes. stop()
+        // aborts the loop and awaits its teardown; optional chaining makes
+        // it a no-op for an idle account, preserving the plain status-only
+        // pause in that case.
+        await running.get(`account:${accountId}`)?.stop();
+        // Read the cursor AFTER stop(): the abort window can let one final
+        // batch land and advance the cursor, so a value read before stop()
+        // would be stale — persisting it would re-pull that range on resume.
+        const account = await store.account(accountId);
+        if (!account) return;
+        await store.commit({
+          account: accountId,
+          documents: [],
+          cursor: account.cursor,
+          status: 'paused',
+        });
+      } finally {
+        // Clear even when the commit throws: a stuck intent would silently
+        // brick the account (nothing could ever start it) with no committed
+        // state explaining why. Failing open matches the committed status —
+        // if 'paused' never landed, the supervisor restarting the loop is
+        // consistent with what the store says.
+        pauseIntents.delete(accountId);
+      }
+    },
+
+    async resume(accountId: AccountId): Promise<Account | null> {
+      // The mirror of pause(): drop any in-flight pause intent FIRST so
+      // run() stops refusing this account, then commit 'connecting' so the
+      // loop-entry status recheck passes. Only an explicit user resume walks
+      // this path — the cadence tick and sync-now never flip a 'paused'
+      // status.
+      pauseIntents.delete(accountId);
       const account = await store.account(accountId);
-      if (!account) return;
+      if (!account) return null;
       await store.commit({
         account: accountId,
         documents: [],
         cursor: account.cursor,
-        status: 'paused',
+        status: 'connecting',
       });
+      return { ...account, status: 'connecting' };
     },
 
     async updateConfig(

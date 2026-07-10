@@ -307,19 +307,21 @@ function registerIpc(
     await p.engine.pause(accountId);
   });
   handle('accounts:resume', async ({ accountId }) => {
-    const account = await p.store.account(accountId);
-    if (!account) return;
-    await p.store.commit({
-      account: accountId,
-      documents: [],
-      cursor: account.cursor,
-      status: 'connecting',
-    });
-    runAccount(p, { ...account, status: 'connecting' });
+    // Delegate to engine.resume: it clears any in-flight pause intent and
+    // commits 'connecting' BEFORE the loop starts — engine.run refuses
+    // paused/pausing accounts, and an explicit user resume is the one door
+    // back in.
+    const account = await p.engine.resume(accountId);
+    if (account) runAccount(p, account);
   });
   handle('accounts:sync-now', async ({ accountId }) => {
     const account = await p.store.account(accountId);
-    if (account) runAccount(p, account);
+    // Never start a paused account: sync-now must not undo an explicit pause
+    // (resume is the only door), and this also keeps the cadence job from
+    // being registered for it. engine.run re-checks the pause intent and the
+    // committed status, so a pause landing between this read and the run is
+    // still refused.
+    if (account && account.status !== 'paused') runAccount(p, account);
   });
   handle('accounts:set-cadence', async ({ accountId, cadence }) => {
     await p.store.setAccountCadence(accountId, cadence);

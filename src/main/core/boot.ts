@@ -152,7 +152,12 @@ export function runAccount(platform: CorePlatform, account: Account): Handle {
         // connection and force a fresh login + full history re-send every
         // tick (WhatsApp). The tick doubles as a supervisor: a loop that
         // died (retries exhausted, extension crash) is no longer running
-        // and gets restarted here.
+        // and gets restarted here. Both reads below go stale inside
+        // engine.pause()'s stop-to-commit window (loop stopped, 'paused'
+        // commit still queued behind other accounts' batches) — engine.run
+        // itself re-checks the pause intent and the committed status, so a
+        // tick landing in that window is refused instead of resurrecting a
+        // paused account.
         if (platform.engine.isRunning(account.id)) return;
         const fresh = await platform.store.account(account.id);
         if (fresh && fresh.status !== 'paused') platform.engine.run(fresh);
