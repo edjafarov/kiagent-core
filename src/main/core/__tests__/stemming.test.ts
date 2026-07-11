@@ -9,19 +9,25 @@ describe('normalizeForStem', () => {
 
 describe('buildStemView', () => {
   it('stems German text with the document language', () => {
-    const tokens = buildStemView('Die Rechnungen sind bezahlt', ['deu']).split(' ');
+    const tokens = buildStemView('Die Rechnungen sind bezahlt', ['deu']).split(
+      ' ',
+    );
     expect(tokens).toContain('rechnung');
     expect(tokens).not.toContain('rechnungen');
   });
 
   it('stems English and Russian', () => {
     expect(buildStemView('running daily', ['eng']).split(' ')).toContain('run');
-    expect(buildStemView('Бегущий по лесу', ['rus']).split(' ')).toContain('бегущ');
+    expect(buildStemView('Бегущий по лесу', ['rus']).split(' ')).toContain(
+      'бегущ',
+    );
   });
 
   it('uses the first MAPPED language', () => {
     // 'und' and 'jpn' have no snowball algorithm — 'deu' is the first mapped.
-    const tokens = buildStemView('Rechnungen', ['und', 'jpn', 'deu']).split(' ');
+    const tokens = buildStemView('Rechnungen', ['und', 'jpn', 'deu']).split(
+      ' ',
+    );
     expect(tokens).toContain('rechnung');
   });
 

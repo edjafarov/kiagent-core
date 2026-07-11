@@ -23,12 +23,7 @@ import type {
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { newId } from '../ids';
 import { stemVariants } from '../stemming';
-import {
-  buildSnippet,
-  extractTerms,
-  rrfMerge,
-  toTrigramMatch,
-} from './fuzzy';
+import { buildSnippet, extractTerms, rrfMerge, toTrigramMatch } from './fuzzy';
 import { repopulateSearchIndex } from './schema';
 import { createWriteTx } from './write-tx';
 
