@@ -22,6 +22,7 @@ import type {
 
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { newId } from '../ids';
+import { stemVariants } from '../stemming';
 import { createWriteTx } from './write-tx';
 
 /** Injected so the store stays testable and Electron-free. */
@@ -223,7 +224,7 @@ function tokenizeFts(text: string): FtsToken[] {
   return out;
 }
 
-function ftsQuery(text: string): string {
+function ftsQuery(text: string, expand?: (term: string) => string[]): string {
   const tokens = tokenizeFts(text);
   let pos = 0;
 
@@ -254,8 +255,21 @@ function ftsQuery(text: string): string {
         else throw new Error('search query: missing closing ")"');
         if (!operand) continue; // empty group — ignore
       } else {
-        operand = `"${t.value.replace(/"/g, '""')}"${t.prefix ? ' *' : ''}`;
         negated = negated || t.negated;
+        const quoted = `"${t.value.replace(/"/g, '""')}"${t.prefix ? ' *' : ''}`;
+        // Stem expansion widens POSITIVE plain terms only: phrases (value
+        // contains whitespace), prefix terms and negations stay raw so their
+        // exact semantics survive.
+        const variants =
+          expand && !negated && !t.prefix && !/\s/.test(t.value)
+            ? expand(t.value)
+            : [];
+        operand = variants.length
+          ? `(${[
+              quoted,
+              ...variants.map((v) => `"${v.replace(/"/g, '""')}"`),
+            ].join(' OR ')})`
+          : quoted;
       }
       (negated ? negatives : positives).push(operand);
     }
@@ -301,6 +315,22 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   const writeTx = db._conn
     ? createWriteTx(db._conn, { detectLanguages: deps.detectLanguages, now })
     : null;
+
+  // Distinct languages present in the corpus (∪ 'eng'), feeding query-side
+  // stem expansion. Invalidated on every commit, recomputed lazily — a
+  // search-as-you-type burst pays for the DISTINCT scan once.
+  let corpusLangsCache: string[] | null = null;
+  const corpusLanguages = async (): Promise<string[]> => {
+    if (corpusLangsCache) return corpusLangsCache;
+    const rows = (await db.all(
+      `SELECT DISTINCT languages FROM documents`,
+    )) as unknown as Array<{ languages: string }>;
+    const set = new Set<string>(['eng']);
+    for (const r of rows)
+      for (const l of JSON.parse(r.languages) as string[]) set.add(l);
+    corpusLangsCache = [...set];
+    return corpusLangsCache;
+  };
 
   // ── low-level read helpers ────────────────────────────────────────────────
 
@@ -427,13 +457,19 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       }
       const where = filters.length ? `AND ${filters.join(' AND ')}` : '';
       if (q.text?.trim()) {
+        const langs = await corpusLanguages();
         const rows = (await db.all(
           `SELECT d.*, snippet(documents_fts, 2, '<b>', '</b>', '…', 24) AS _snippet
              FROM documents_fts f JOIN documents d ON d.id = f.doc_id
              WHERE documents_fts MATCH ? ${where}
-             ORDER BY bm25(documents_fts, 0, 4.0, 1.0)
+             ORDER BY bm25(documents_fts, 0, 4.0, 1.0, 2.0, 0.5)
              LIMIT ? OFFSET ?`,
-          [ftsQuery(q.text), ...params, limit, offset],
+          [
+            ftsQuery(q.text, (term) => stemVariants(term, langs)),
+            ...params,
+            limit,
+            offset,
+          ],
         )) as unknown as Array<DocRow & { _snippet: string }>;
         return rows.map((r) => ({ ...toDocument(r), snippet: r._snippet }));
       }
@@ -531,6 +567,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       const seq = writeTx
         ? writeTx.commit(batch)
         : ((await db.proc!('commit', batch)) as Seq);
+      corpusLangsCache = null;
       nudge.emit('commit');
       return seq;
     },
