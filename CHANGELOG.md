@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.47.0](https://github.com/edjafarov/kiagent-core/compare/v0.46.0...v0.47.0) (2026-07-11)
+
+### Features
+
+* **engine:** needsReauth source-error taxonomy and resilient feed consumers ([db2e5f8](https://github.com/edjafarov/kiagent-core/commit/db2e5f8e409272fa312c4b28e2ddb6be31d15e05))
+* **workers:** transcribe audio files locally (closes [#8](https://github.com/edjafarov/kiagent-core/issues/8)) ([06e9c37](https://github.com/edjafarov/kiagent-core/commit/06e9c370d7a4e44d8f1a35337fa74f7e0de318a5))
+
+### Bug Fixes
+
+* **about:** point the About page at kiagent-core and name the app KIAcore ([2386b2b](https://github.com/edjafarov/kiagent-core/commit/2386b2b9eab3843502cfbca4da6678f85ce17b23))
+* **db:** tag worker crashes retryable and survive close racing a respawn ([9539f36](https://github.com/edjafarov/kiagent-core/commit/9539f36afb372569c4a8f3fa3b2a02725721e9db))
+* **store:** pin documents_fts rows to their document rowid ([1b0c1bb](https://github.com/edjafarov/kiagent-core/commit/1b0c1bba0e7714a790accc44f861c959370b097a))
+* **test:** add hear() to Inference mocks after merging audio into dev ([84d6d29](https://github.com/edjafarov/kiagent-core/commit/84d6d29601f4198173a4dd250d8cfdd48b296f37))
+* **workers:** skip too-long audio instead of deferring forever ([9274a48](https://github.com/edjafarov/kiagent-core/commit/9274a48c0b70d598168898afbf54acbe27a205b1))
+
 ## [0.46.0](https://github.com/edjafarov/kiagent-core/compare/v0.45.0...v0.46.0) (2026-07-10)
 
 ### Bug Fixes
