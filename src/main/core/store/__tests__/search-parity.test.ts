@@ -206,6 +206,19 @@ describe('search parity: trigram fuzzy fallback', () => {
     });
     expect(hits).toHaveLength(0);
   });
+
+  it('folds diacritics in the fuzzy negation filter so a folded exclusion still drops the hit', async () => {
+    // Raw JS .includes('uber') can't see 'über' — without folding, this doc
+    // resurfaces via the fuzzy pass despite the negation.
+    await store.commit({
+      account: accountId,
+      documents: [doc('umlaut', { markdown: 'Jahresrechnung über alles' })],
+      cursor: null,
+    });
+    const hits = await store.read.search({ text: 'rechnung -uber' });
+    const bodies = hits.map((h) => h.markdown);
+    expect(bodies).not.toContain('Jahresrechnung über alles');
+  });
 });
 
 describe('search parity: RRF fusion must never evict primary matches', () => {

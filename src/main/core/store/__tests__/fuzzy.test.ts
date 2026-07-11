@@ -1,4 +1,22 @@
-import { buildSnippet, extractTerms, rrfMerge, toTrigramMatch } from '../fuzzy';
+import {
+  buildSnippet,
+  extractTerms,
+  foldForNegation,
+  rrfMerge,
+  toTrigramMatch,
+} from '../fuzzy';
+
+describe('foldForNegation', () => {
+  it('strips diacritics after folding (Über -> uber)', () => {
+    expect(foldForNegation('Über')).toBe('uber');
+  });
+
+  it('folds ё -> е and leaves no combining marks (Ёлка -> елка)', () => {
+    const folded = foldForNegation('Ёлка');
+    expect(folded).toBe('елка');
+    expect(/\p{M}/u.test(folded)).toBe(false);
+  });
+});
 
 describe('extractTerms', () => {
   it('splits positives and negatives, handling -term, NOT, phrases, prefix and parens', () => {

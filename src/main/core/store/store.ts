@@ -23,7 +23,13 @@ import type {
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { newId } from '../ids';
 import { stemVariants } from '../stemming';
-import { buildSnippet, extractTerms, rrfMerge, toTrigramMatch } from './fuzzy';
+import {
+  buildSnippet,
+  extractTerms,
+  foldForNegation,
+  rrfMerge,
+  toTrigramMatch,
+} from './fuzzy';
 import { repopulateSearchIndex } from './schema';
 import { createWriteTx } from './write-tx';
 
@@ -500,14 +506,17 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
             // A NOT-excluded document must never resurface via fuzzy: drop
             // hits containing any negated term (substring match, Unicode
             // lowercase — deliberately broader than FTS token semantics).
-            const safe = triRows.filter(
-              (r) =>
-                !negated.some((n) =>
-                  `${r.title ?? ''}\n${r.markdown ?? ''}`
-                    .toLowerCase()
-                    .includes(n),
-                ),
-            );
+            // Both sides are folded the same way the primary index folds
+            // tokens (NFKC, ё→е, lowercase, diacritics stripped), so this
+            // filter can never be WEAKER than the grammar's own negation
+            // (e.g. -uber must still drop a hit containing über).
+            const negatedFolded = negated.map((n) => foldForNegation(n));
+            const safe = triRows.filter((r) => {
+              const haystack = foldForNegation(
+                `${r.title ?? ''}\n${r.markdown ?? ''}`,
+              );
+              return !negatedFolded.some((n) => haystack.includes(n));
+            });
             const snippets = new Map(rows.map((r) => [r.id, r._snippet]));
             // Fuzzy may only FILL the page's remaining slots, never displace
             // an exact match: rows already in the primary list pass through

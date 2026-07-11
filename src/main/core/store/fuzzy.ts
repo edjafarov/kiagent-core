@@ -6,6 +6,17 @@
  * the legacy semantics, not edit-distance typo correction.
  */
 
+import { normalizeForStem } from '../stemming';
+
+/** Fold a string the way the primary index folds tokens (NFKC, ё→е,
+ *  lowercase, diacritics stripped) so the fuzzy negation post-filter can
+ *  never be WEAKER than the grammar's own negation. Phrase negation across
+ *  punctuation remains narrower than FTS phrase semantics — documented in
+ *  the spec. */
+export function foldForNegation(s: string): string {
+  return normalizeForStem(s).normalize('NFD').replace(/\p{M}/gu, '');
+}
+
 export interface QueryTerms {
   positive: string[];
   negated: string[];
