@@ -3,8 +3,8 @@ import { Spark } from '@shared/web-ui/Spark';
 import { Icon } from '@shared/web-ui/icon-sprite';
 import type { UpdateState } from '@shared/ipc';
 
-const REPO_URL = 'https://github.com/edjafarov/alpha-cent';
-const REPO_LABEL = 'github.com/edjafarov/alpha-cent';
+const REPO_URL = 'https://github.com/edjafarov/kiagent-core';
+const REPO_LABEL = 'github.com/edjafarov/kiagent-core';
 
 /**
  * Human-readable line for the current updater state. Covers the full
@@ -83,7 +83,7 @@ export function About(): React.ReactElement {
           alignItems: 'center',
         }}
       >
-        <span className="about-name">KIAgent</span>
+        <span className="about-name">KIAcore</span>
         <span className="about-version">
           {info ? `v${info.version}` : 'v—'}
         </span>
@@ -158,7 +158,7 @@ export function About(): React.ReactElement {
       </div>
 
       <div className="about-foot">
-        © 2026 KIAgent contributors. Made with care for offline-first knowledge
+        © 2026 KIAcore contributors. Made with care for offline-first knowledge
         work.
       </div>
     </div>
