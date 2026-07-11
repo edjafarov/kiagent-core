@@ -365,7 +365,18 @@ export interface Source<Cursor = unknown, Item = unknown> {
   /** Optional random-access bytes for deep extraction. */
   fetchBytes?(session: Session, doc: Document): Promise<Uint8Array | null>;
   /** Optional full listing of what EXISTS upstream; the engine diffs and
-   *  archives what is no longer listed. */
+   *  archives what is no longer listed.
+   *
+   *  IDENTITY INVARIANT: must yield one ref per LIVE document this source
+   *  has ever emitted — including child documents (attachments etc.) —
+   *  carrying EXACTLY the `{externalId, type}` the corresponding
+   *  DocumentInput carried. An omitted ref is treated as an upstream
+   *  deletion, so a type-string typo, a changed externalId scheme after an
+   *  upgrade, or listing parents while emitting children would archive the
+   *  account's corpus. Derive both sides' keys from one shared builder (the
+   *  imap sources share `buildExternalId`); the engine additionally refuses
+   *  empty and >50% listing shrinkage unless the account's config just
+   *  changed (see reconcilePass in engine.ts). */
   reconcile?(session: Session): AsyncIterable<ExternalRef[]>;
 }
 

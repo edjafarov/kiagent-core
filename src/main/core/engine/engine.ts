@@ -116,6 +116,14 @@ function refKey(r: ExternalRef): string {
   return `${r.type} ${r.externalId}`;
 }
 
+/** Mass-archive breaker thresholds: a reconcile diff that would archive more
+ *  than MASS_ARCHIVE_RATIO of the account's live docs AND more than
+ *  MASS_ARCHIVE_MIN_DOCS absolute is refused unless the account's config
+ *  just changed. Small corpora (≤ the floor) stay breaker-free — a 3-doc
+ *  test account archiving 2 is normal churn, not a listing bug. */
+const MASS_ARCHIVE_MIN_DOCS = 100;
+const MASS_ARCHIVE_RATIO = 0.5;
+
 /**
  * Runs a source's optional `reconcile()` once per pull cycle: drains its full
  * listing, then archives whatever the account still has live that ISN'T in
@@ -154,6 +162,19 @@ function refKey(r: ExternalRef): string {
  * the sync itself, so one failed listing shouldn't flip a healthy account to
  * 'error'.
  *
+ * Mass-archive breaker: nothing structurally enforces the reconcile identity
+ * invariant (contracts.ts) — a silently-empty listing (imap resolving zero
+ * mailboxes, an unmounted drive slipping past a source's own guard) or a
+ * key-scheme drift would diff to "archive the whole account". Two graduated
+ * refusals, both recorded on the account instead of archiving: (1) a listing
+ * that came back EMPTY while live docs exist — no legitimate bundled flow
+ * produces one except deliberately clearing the config; (2) a diff exceeding
+ * MASS_ARCHIVE_RATIO + MASS_ARCHIVE_MIN_DOCS. `allowMassArchive` — granted
+ * for the first pass after the account's config changed (root removed from a
+ * local-folder account, a re-connect) — bypasses both, which is also the
+ * user's escape hatch when the shrinkage is real: re-saving the account's
+ * settings applies the pending cleanup on the next cycle.
+ *
  * TOCTOU guard: `source.reconcile()` takes its listing snapshot once, up
  * front (e.g. local-folder's `listEntries` walks the whole tree before ever
  * yielding), then this drains it, which can take a while for a large
@@ -175,6 +196,7 @@ async function reconcilePass(
   account: Account,
   logs: LogSink,
   scope: string,
+  allowMassArchive: boolean,
 ): Promise<void> {
   if (!source.reconcile) return;
   const startSeq = await store.headSeq();
@@ -199,10 +221,44 @@ async function reconcilePass(
   if (signal.aborted) return; // partial listing — never diff off it
 
   const listedKeys = new Set(listed.map(refKey));
-  const deletions = (await store.liveRefs(account.id))
-    .filter((r) => r.seq <= startSeq && !listedKeys.has(refKey(r)))
+  const live = (await store.liveRefs(account.id)).filter(
+    (r) => r.seq <= startSeq,
+  );
+  const deletions = live
+    .filter((r) => !listedKeys.has(refKey(r)))
     .map(({ externalId, type }) => ({ externalId, type }));
   if (deletions.length === 0) return;
+
+  if (!allowMassArchive) {
+    const refuse = async (why: string): Promise<void> => {
+      const msg =
+        `reconcile: refusing to archive ${deletions.length} of ` +
+        `${live.length} documents (${why}). If this shrinkage is real, ` +
+        `re-save the account's settings to apply the cleanup.`;
+      logs.log(scope, 'error', msg);
+      const fresh2 = (await store.account(account.id)) ?? account;
+      await store.commit({
+        account: account.id,
+        documents: [],
+        cursor: fresh2.cursor,
+        error: msg,
+      });
+    };
+    // Zero-false-positive first: an empty listing over a non-empty corpus is
+    // always a broken listing or a deliberately emptied config — never
+    // normal churn.
+    if (listed.length === 0) {
+      await refuse('the listing came back empty');
+      return;
+    }
+    if (
+      deletions.length > MASS_ARCHIVE_MIN_DOCS &&
+      deletions.length > live.length * MASS_ARCHIVE_RATIO
+    ) {
+      await refuse('the listing shrank suspiciously');
+      return;
+    }
+  }
 
   const fresh = (await store.account(account.id)) ?? account;
   await store.commit({
@@ -257,6 +313,11 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  whose batch commits then overwrite 'paused' (the v0.45.0 bug through a
    *  different door). */
   const pauseIntents = new Set<AccountId>();
+  /** Accounts whose config just changed (updateConfig, re-connect): the NEXT
+   *  reconcile pass may exceed the mass-archive breaker — removing a
+   *  local-folder root or re-scoping an account legitimately archives big
+   *  fractions of the corpus. Consumed (deleted) when the pass starts. */
+  const reconcileAllowances = new Set<AccountId>();
 
   const makeSession = (
     account: Account,
@@ -429,6 +490,9 @@ export function createEngine(deps: EngineDeps): Engine & {
         status: 'connecting',
         cadence: source.descriptor.cadence,
       });
+      // A (re-)connect rewrites the account's config/scope: the next
+      // reconcile pass may legitimately exceed the mass-archive breaker.
+      reconcileAllowances.add(account.id);
       await running.get(`account:${account.id}`)?.stop();
       if (captured) await store.vault.save(account.id, captured);
       logs.log(
@@ -551,6 +615,9 @@ export function createEngine(deps: EngineDeps): Engine & {
                   fresh,
                   logs,
                   scope,
+                  // One-shot: the pass right after a config change may
+                  // legitimately mass-archive (root removal, re-scope).
+                  reconcileAllowances.delete(account.id),
                 ).catch((err) => {
                   // reconcilePass handles its own errors internally and
                   // should never throw — this is a defensive backstop so a
@@ -756,6 +823,7 @@ export function createEngine(deps: EngineDeps): Engine & {
 
     async remove(accountId: AccountId): Promise<void> {
       await running.get(`account:${accountId}`)?.stop();
+      reconcileAllowances.delete(accountId);
       await store.commit({ removeAccount: accountId });
       logs.log('engine', 'info', `account ${accountId} removed`);
     },
@@ -819,6 +887,12 @@ export function createEngine(deps: EngineDeps): Engine & {
       config: Record<string, unknown>,
     ): Promise<void> {
       await store.setAccountConfig(accountId, config);
+      // The config just changed — the next reconcile pass may legitimately
+      // mass-archive (e.g. a root removed from a local-folder account), so
+      // grant it a one-shot pass through the breaker. Also the user's
+      // documented escape hatch: re-saving settings applies a refused
+      // cleanup.
+      reconcileAllowances.add(accountId);
       // Only restart a loop that's actually running — a never-started account
       // just gets its config persisted for the next run(). And a running-map
       // entry alone isn't enough: pause and needsReauth are status-only resting

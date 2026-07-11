@@ -1537,6 +1537,102 @@ describe('engine', () => {
       expect(c?.archivedAt).toBeNull(); // only 'a' was listed before the abort — no diff taken
     });
 
+    /** Seed WITHOUT engine.connect — connect grants a one-shot mass-archive
+     *  allowance (a re-connect legitimately re-scopes an account), and these
+     *  breaker tests need the allowance absent. */
+    async function seedDocsDirect(
+      engine: ReturnType<typeof makeEngine>,
+      source: Source<number, DocumentInput>,
+      externalIds: string[],
+    ): Promise<Account> {
+      const account = await store.createAccount({
+        source: source.descriptor.id,
+        identifier: 'breaker@test',
+      });
+      await store.commit({
+        account: account.id,
+        documents: externalIds.map((id) => doc(id)),
+        cursor: 1,
+      });
+      return account;
+    }
+
+    it('refuses to archive off an EMPTY listing over a non-empty corpus', async () => {
+      // The "silently empty listing" class: imap resolving zero mailboxes,
+      // an unmounted drive slipping past a source guard. Never normal churn.
+      const source = hangingSource({
+        async *reconcile() {
+          yield [];
+        },
+      });
+      const engine = makeEngine(source);
+      const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+
+      const handle = engine.run(account);
+      await waitFor(async () => !!(await store.account(account.id))?.lastError);
+      await handle.stop();
+
+      const acc = await store.account(account.id);
+      expect(acc?.lastError).toMatch(/refusing to archive 3 of 3/);
+      expect(acc?.lastError).toMatch(/listing came back empty/);
+      for (const id of ['a', 'b', 'c']) {
+        const d = await store.read.byExternalId(account.id, id, 'note');
+        expect(d?.archivedAt).toBeNull();
+      }
+    });
+
+    it('refuses a >50% shrinkage over the 100-doc floor (mass-archive breaker)', async () => {
+      const ids = Array.from({ length: 150 }, (_, i) => `d${i}`);
+      const source = hangingSource({
+        async *reconcile() {
+          // Lists only 30 of 150 — the shape of a key-scheme drift or a
+          // partial-listing bug, not plausible upstream churn.
+          yield ids
+            .slice(0, 30)
+            .map((externalId) => ({ externalId, type: 'note' }));
+        },
+      });
+      const engine = makeEngine(source);
+      const account = await seedDocsDirect(engine, source, ids);
+
+      const handle = engine.run(account);
+      await waitFor(async () => !!(await store.account(account.id))?.lastError);
+      await handle.stop();
+
+      expect((await store.account(account.id))?.lastError).toMatch(
+        /refusing to archive 120 of 150/,
+      );
+      // Nothing archived: every live doc still visible to default search.
+      expect(await store.read.count({ account: account.id })).toBe(150);
+    });
+
+    it('a config change lets the next pass through the breaker (root removal / re-scope)', async () => {
+      const ids = Array.from({ length: 150 }, (_, i) => `d${i}`);
+      const source = hangingSource({
+        async *reconcile() {
+          yield ids
+            .slice(0, 30)
+            .map((externalId) => ({ externalId, type: 'note' }));
+        },
+      });
+      const engine = makeEngine(source);
+      const account = await seedDocsDirect(engine, source, ids);
+
+      // The documented escape hatch: re-saving the account's settings.
+      await engine.updateConfig(account.id, { rescoped: true });
+
+      const handle = engine.run(account);
+      await waitFor(
+        async () => (await store.read.count({ account: account.id })) === 30,
+      );
+      await handle.stop();
+
+      expect((await store.account(account.id))?.lastError).toBeFalsy();
+      expect(
+        await store.read.count({ account: account.id, includeArchived: true }),
+      ).toBe(150); // archived, not purged
+    });
+
     it('a document pull() commits WHILE reconcile is still draining is not archived (TOCTOU guard)', async () => {
       let releaseReconcileGate: (() => void) | undefined;
       const reconcileGate = new Promise<void>((resolve) => {

@@ -470,10 +470,31 @@ describe('createImapSource — pull', () => {
     const session = makeSession(CONFIG, { signal: controller.signal });
 
     const batches = await collect(source.pull(session, cursor));
-    expect(batches).toHaveLength(1);
-    expect(batches[0].phase).toBe('backfill');
-    expect(batches[0].items.map((i) => i.uid)).toEqual([1, 2]); // refetched from 0, not from stale lastUid=50
+    expect(batches).toHaveLength(2);
+
+    // First: the old-UIDVALIDITY generation is archived by the pull itself
+    // (issue #26: reconcile must keep no legitimate mass-archive case) —
+    // deletion refs for every old key, cursor deliberately NOT advanced so a
+    // crash here re-triggers the reset on the next pass.
+    expect(batches[0].items).toEqual([]);
+    expect(batches[0].deletions).toHaveLength(50); // 1..prev.lastUid
+    expect(batches[0].deletions?.[0]).toEqual({
+      externalId: 'INBOX:1:1',
+      type: 'email.message',
+    });
+    expect(batches[0].deletions?.[49]).toEqual({
+      externalId: 'INBOX:1:50',
+      type: 'email.message',
+    });
     expect(batches[0].cursor.mailboxes.INBOX).toEqual({
+      uidValidity: '1',
+      lastUid: 50, // stale entry preserved until the resync lands
+    });
+
+    // Then: the from-scratch resync under the new UIDVALIDITY.
+    expect(batches[1].phase).toBe('backfill');
+    expect(batches[1].items.map((i) => i.uid)).toEqual([1, 2]); // refetched from 0, not from stale lastUid=50
+    expect(batches[1].cursor.mailboxes.INBOX).toEqual({
       uidValidity: '999',
       lastUid: 2,
     });

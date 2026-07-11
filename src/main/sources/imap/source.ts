@@ -312,6 +312,15 @@ export function createImapSource(
       try {
         const folders = await client.listFolders();
         const mailboxes = resolveMailboxes(folders).map((f) => f.path);
+        // Mirror pull()'s guard: a listFolders that resolves to zero syncable
+        // mailboxes would otherwise yield a complete-but-EMPTY listing, which
+        // the engine's reconcile diff reads as "everything was deleted
+        // upstream". Fail the pass instead (recorded as a reconcile error).
+        if (mailboxes.length === 0) {
+          throw new Error(
+            'imap: no syncable mailboxes found (expected INBOX/All Mail and/or Sent)',
+          );
+        }
         for (const path of mailboxes) {
           if (session.signal.aborted) return;
           const status = await client.status(path);
@@ -360,6 +369,35 @@ async function* syncMailboxOnce(
   const phase: PullPhase = plan.reset ? 'backfill' : defaultPhase;
   const estimateTotal =
     phase === 'backfill' ? (totalEstimateOverride ?? status.exists) : undefined;
+
+  if (plan.reset && prev) {
+    // Archive the old-UIDVALIDITY generation HERE, not via reconcile(): the
+    // old keys are known exactly (prev.uidValidity × 1..prev.lastUid), and
+    // pulling the cleanup into the sync path means reconcile keeps no
+    // legitimate mass-archive case — its listing after a rollover matches
+    // what this resync re-commits. Refs without a matching row are ignored
+    // by archiveByRef, and a crash mid-resync just re-emits these on the
+    // next pass (prev is only replaced once a batch cursor commits below).
+    for (const uids of chunk(
+      Array.from({ length: prev.lastUid }, (_, i) => i + 1),
+      1000,
+    )) {
+      if (session.signal.aborted) return;
+      yield {
+        phase,
+        items: [],
+        deletions: uids.map((uid) => ({
+          externalId: buildExternalId(path, prev.uidValidity, uid),
+          type: 'email.message' as const,
+        })),
+        // Deliberately does NOT advance this mailbox's cursor entry: the
+        // stale entry keeps plan.reset (and this cleanup) re-triggering
+        // until the resync below lands its first real batch.
+        cursor: cur,
+        estimateTotal,
+      };
+    }
+  }
 
   if (plan.uidsToFetch.length === 0) {
     // Floor the cursor so an empty (or newly-reset) mailbox still gets a
