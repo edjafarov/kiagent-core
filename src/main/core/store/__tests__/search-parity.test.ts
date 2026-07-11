@@ -219,6 +219,16 @@ describe('search parity: trigram fuzzy fallback', () => {
     const bodies = hits.map((h) => h.markdown);
     expect(bodies).not.toContain('Jahresrechnung über alles');
   });
+
+  it('vetoes the fuzzy pass entirely when any positive term is under 3 chars', async () => {
+    // 'ab' is too short for the trigram tokenizer; the whole query must skip
+    // fuzzy rather than silently dropping 'ab' from the AND group (which
+    // would let the compound-only docs resurface as partial matches).
+    const hits = await store.read.search({ text: 'ab Rechnung' });
+    const bodies = hits.map((h) => h.markdown);
+    expect(bodies).not.toContain('Die Jahresrechnung liegt bei');
+    expect(bodies).not.toContain('Jahresrechnung bezahlt und abgelegt');
+  });
 });
 
 describe('search parity: RRF fusion must never evict primary matches', () => {
