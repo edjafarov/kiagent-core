@@ -179,6 +179,14 @@ describe('search parity: trigram fuzzy fallback', () => {
     expect(bodies).toContain('Die Jahresrechnung liegt bei');
   });
 
+  it('never resurfaces a doc excluded by grouped negation via fuzzy', async () => {
+    const hits = await store.read.search({
+      text: 'Rechnung NOT (bezahlt abgelegt)',
+    });
+    const bodies = hits.map((h) => h.markdown);
+    expect(bodies).not.toContain('Jahresrechnung bezahlt und abgelegt');
+  });
+
   it('gives fuzzy-only hits a snippet built from raw markdown', async () => {
     const hits = await store.read.search({ text: 'jahresrech' });
     expect(hits.length).toBeGreaterThan(0);
