@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.48.0](https://github.com/edjafarov/kiagent-core/compare/v0.47.0...v0.48.0) (2026-07-11)
+
+### Features
+
+* **accounts:** cancel verb for in-flight connect flows ([07684ea](https://github.com/edjafarov/kiagent-core/commit/07684ea5ff21b087190c53e4ddefd167274acadf)), closes [#19](https://github.com/edjafarov/kiagent-core/issues/19)
+
+### Bug Fixes
+
+* **engine:** refuse suspicious mass-archives during reconcile ([5a746ca](https://github.com/edjafarov/kiagent-core/commit/5a746ca2911d343c03403c0b3c809b98808a5519)), closes [#26](https://github.com/edjafarov/kiagent-core/issues/26)
+* **engine:** stop accounts:set-cadence from restarting a resting account ([b139e93](https://github.com/edjafarov/kiagent-core/commit/b139e93d1f84637d0c7bfefd537d8df75ffb18c9)), closes [#35](https://github.com/edjafarov/kiagent-core/issues/35)
+* **gmail:** chunk the delta sweep's re-fetch and hold back the watermark ([5fc50f9](https://github.com/edjafarov/kiagent-core/commit/5fc50f9304d92407f76dbdaaa0b3112d16bcfc95)), closes [#10](https://github.com/edjafarov/kiagent-core/issues/10)
+* **local-llm:** restart llama-server when a different model is requested ([a6eab01](https://github.com/edjafarov/kiagent-core/commit/a6eab01dbdf0dd461b92b4596f338a515d7279d5)), closes [#18](https://github.com/edjafarov/kiagent-core/issues/18)
+* **mcp:** reconcile HTTP client configs with the actually-bound port at boot ([c0eec35](https://github.com/edjafarov/kiagent-core/commit/c0eec352e07c43ff5a5c75b0ac60bcdc27f0a0b3)), closes [#13](https://github.com/edjafarov/kiagent-core/issues/13)
+* **mcp:** return 404 Session not found for unknown session ids ([b2f22ac](https://github.com/edjafarov/kiagent-core/commit/b2f22ac900ad014562a640ce68688af6fd81169a)), closes [#12](https://github.com/edjafarov/kiagent-core/issues/12)
+
 ## [0.47.0](https://github.com/edjafarov/kiagent-core/compare/v0.46.0...v0.47.0) (2026-07-11)
 
 ### Features
