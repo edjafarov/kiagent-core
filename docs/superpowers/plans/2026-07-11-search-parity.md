@@ -1274,12 +1274,16 @@ Replace the text branch of `search` (the block from Task 5 Step 3) with:
         // words, truncations) get rescued.
         if (offset === 0 && rows.length < limit) {
           const { positive, negated } = extractTerms(q.text);
-          // Every positive term must survive into the trigram AND group — a
-          // silently dropped <3-char term would smuggle partial matches past
-          // the implicit-AND grammar. Such queries get no fuzzy pass.
-          const triMatch = positive.every((t) => t.length >= 3)
-            ? toTrigramMatch(positive)
-            : null;
+          // Cannot-represent-it ⇒ don't-fuzz: (a) every positive term must
+          // survive into the trigram AND group — a silently dropped <3-char
+          // term would smuggle partial matches past the implicit-AND
+          // grammar; (b) grouped negation (NOT (a b)) has no flat-term
+          // representation, so its exclusions can't be re-applied to fuzzy
+          // hits. Such queries get no fuzzy pass.
+          const triMatch =
+            positive.every((t) => t.length >= 3) && !/\bNOT\s*\(/.test(q.text)
+              ? toTrigramMatch(positive)
+              : null;
           if (triMatch) {
             const triRows = (await db.all(
               `SELECT d.* FROM documents_tri t JOIN documents d ON d.id = t.doc_id

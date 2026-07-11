@@ -181,7 +181,11 @@ fuzzy pass).
 - **Negation safety:** trigram hits whose raw `title + markdown` contains any
   negated term or phrase (JS `toLowerCase().includes(…)` — Unicode-correct,
   deliberately more aggressive than FTS token semantics) are dropped, so a
-  `NOT`-excluded document can never resurface via fuzzy.
+  `NOT`-excluded document can never resurface via fuzzy. Grouped negation
+  (`NOT (a b)`) cannot be represented by the fuzzy pass's flat term
+  extraction, so a query containing `NOT (` skips the fuzzy pass entirely —
+  the same cannot-represent-it-⇒-don't-fuzz principle as the sub-trigram
+  veto.
 - **Fusion:** RRF with k=60 over the two ranked lists
   (`score = Σ 1/(60 + rank + 1)`; docs in both lists sum), sorted descending,
   capped at `limit`.
