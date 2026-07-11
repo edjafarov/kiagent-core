@@ -162,8 +162,12 @@ host surface change not at all.
 ### Fuzzy fallback (trigram + RRF)
 
 Runs only when **all** hold: `q.text` non-empty, `offset === 0`, the primary
-pass returned fewer than `limit` rows, and the query yields at least one
-trigram token (positive plain terms/phrase words, lowercase, length ≥ 3).
+pass returned fewer than `limit` rows, and **every** positive term (plain
+terms and phrases, lowercase) is ≥ 3 chars — the trigram tokenizer cannot
+verify shorter terms, and silently dropping one from the AND group would
+smuggle partial matches past the implicit-AND grammar (same principle as the
+AND-join decision; a query with any sub-3-char positive term simply gets no
+fuzzy pass).
 
 - Trigram query: tokens AND-joined as quoted FTS5 strings against
   `documents_tri MATCH ?`, with the same SQL filters (archived/type/account/
