@@ -693,4 +693,161 @@ describe('LocalLlmProvider', () => {
     // autoInstall must NOT be flipped — quitting isn't the user disabling it.
     expect(deps.prefs.get().models.autoInstall).toBe(true);
   });
+
+  /** Every server makeServer minted, with the modelPath it was started for. */
+  function trackingMakeServer(made: Array<{ modelPath: string; server: any }>) {
+    return jest.fn((args: { modelPath: string }) => {
+      const server = {
+        start: jest.fn(async () => {}),
+        stop: jest.fn(async () => {}),
+        baseUrl: () => 'http://x',
+      };
+      made.push({ modelPath: args.modelPath, server });
+      return server;
+    });
+  }
+
+  async function installModel(dir: string, model: ModelDescriptor) {
+    const d = path.join(dir, model.id);
+    await fsp.mkdir(d, { recursive: true });
+    for (const file of model.files) {
+      await fsp.writeFile(path.join(d, file.name), 'mock-content');
+    }
+  }
+
+  // Issue #18: the ensureServer memo never compared models, so a completed
+  // override switch kept serving the OLD model until idle-stop — which never
+  // fires under steady traffic (every handle() re-arms the timer).
+  it('restarts onto the new model when the override flips between two installed models', async () => {
+    await installModel(tmpDir, CURATED_MODEL);
+    await installModel(tmpDir, E4B_MODEL);
+
+    const made: Array<{ modelPath: string; server: any }> = [];
+    const { deps } = makeDeps({
+      modelsDir: tmpDir,
+      makeServer: trackingMakeServer(made),
+      prefs: { models: { override: CURATED_MODEL.id, autoInstall: false } },
+    });
+    const provider = createLocalLlmProvider(deps);
+    mockApi.chatText.mockResolvedValue('ok');
+
+    await provider.handle({
+      kind: 'complete',
+      payload: { prompt: 'a' },
+      lane: 'interactive',
+    });
+    expect(made).toHaveLength(1);
+    expect(made[0].modelPath).toContain(CURATED_MODEL.id);
+
+    // Status stays 'ready' throughout this switch, so the routing layer keeps
+    // sending traffic — the most-trafficked variant of the stale-model bug.
+    await deps.prefs.patch({
+      models: { override: E4B_MODEL.id, autoInstall: false },
+    });
+
+    await provider.handle({
+      kind: 'complete',
+      payload: { prompt: 'b' },
+      lane: 'interactive',
+    });
+    expect(made).toHaveLength(2);
+    expect(made[1].modelPath).toContain(E4B_MODEL.id);
+    expect(made[0].server.stop).toHaveBeenCalledTimes(1); // old child stopped, not leaked
+  });
+
+  it('restarts onto the selected model once its install completes (was serving the fallback)', async () => {
+    // Only CURATED on disk; the override selects the not-yet-installed E4B,
+    // so handle() serves CURATED as the fallback.
+    await installModel(tmpDir, CURATED_MODEL);
+
+    const made: Array<{ modelPath: string; server: any }> = [];
+    const { deps } = makeDeps({
+      modelsDir: tmpDir,
+      makeServer: trackingMakeServer(made),
+      prefs: { models: { override: E4B_MODEL.id, autoInstall: false } },
+    });
+    const provider = createLocalLlmProvider(deps);
+    mockApi.chatText.mockResolvedValue('ok');
+
+    await provider.handle({
+      kind: 'complete',
+      payload: { prompt: 'a' },
+      lane: 'interactive',
+    });
+    expect(made).toHaveLength(1);
+    expect(made[0].modelPath).toContain(CURATED_MODEL.id);
+
+    // The E4B download completes within the idle window.
+    await installModel(tmpDir, E4B_MODEL);
+
+    await provider.handle({
+      kind: 'complete',
+      payload: { prompt: 'b' },
+      lane: 'interactive',
+    });
+    expect(made).toHaveLength(2);
+    expect(made[1].modelPath).toContain(E4B_MODEL.id);
+    expect(made[0].server.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('a switch detected while the first start is in flight settles it before stopping (no leaked child)', async () => {
+    await installModel(tmpDir, CURATED_MODEL);
+    await installModel(tmpDir, E4B_MODEL);
+
+    let releaseFirstStart!: () => void;
+    const firstStartGate = new Promise<void>((r) => {
+      releaseFirstStart = r;
+    });
+    const made: Array<{ modelPath: string; server: any }> = [];
+    const makeServer = jest.fn((args: { modelPath: string }) => {
+      const isFirstChild = made.length === 0;
+      const server = {
+        // First child's start() hangs until released — the switch lands
+        // while it is still spawning.
+        start: jest.fn(() =>
+          isFirstChild ? firstStartGate : Promise.resolve(),
+        ),
+        stop: jest.fn(async () => {}),
+        baseUrl: () => 'http://x',
+      };
+      made.push({ modelPath: args.modelPath, server });
+      return server;
+    });
+
+    const { deps } = makeDeps({
+      modelsDir: tmpDir,
+      makeServer,
+      prefs: { models: { override: CURATED_MODEL.id, autoInstall: false } },
+    });
+    const provider = createLocalLlmProvider(deps);
+    mockApi.chatText.mockResolvedValue('ok');
+
+    const first = provider.handle({
+      kind: 'complete',
+      payload: { prompt: 'a' },
+      lane: 'interactive',
+    });
+    await new Promise((r) => setTimeout(r, 20)); // first start now in flight
+    await deps.prefs.patch({
+      models: { override: E4B_MODEL.id, autoInstall: false },
+    });
+    const second = provider.handle({
+      kind: 'complete',
+      payload: { prompt: 'b' },
+      lane: 'interactive',
+    });
+
+    // The switch must WAIT for the in-flight start — stopping now would
+    // orphan the still-spawning multi-GB child.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(made).toHaveLength(1);
+    expect(made[0].server.stop).not.toHaveBeenCalled();
+
+    releaseFirstStart();
+    await expect(second).resolves.toBe('ok');
+    expect(made).toHaveLength(2);
+    expect(made[1].modelPath).toContain(E4B_MODEL.id);
+    expect(made[0].server.stop).toHaveBeenCalledTimes(1);
+    await expect(first).resolves.toBe('ok'); // served by the old child before it stopped
+  });
 });

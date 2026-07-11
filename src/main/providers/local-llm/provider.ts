@@ -70,6 +70,11 @@ export function createLocalLlmProvider(deps: {
   let installing: AbortController | null = null;
   let server: ServerLike | null = null;
   let serverStarting: Promise<ServerLike> | null = null;
+  /** The model id the memoized start was created for — set synchronously
+   *  alongside serverStarting so ensureServer can detect a model switch and
+   *  restart instead of serving the stale model until idle-stop (which never
+   *  comes under steady traffic — every handle() re-arms the timer). */
+  let startingModelId: string | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const selectedModel = async (): Promise<ModelDescriptor> => {
@@ -125,8 +130,11 @@ export function createLocalLlmProvider(deps: {
     return scanInstalled();
   };
 
-  // Only callable after a successful first start (idle timer armed in touchIdle),
-  // so `server` is never null mid-first-start when this executes.
+  // Callable after a start has SETTLED: from touchIdle's timer (armed only
+  // after a successful start) and from ensureServer's model-switch path
+  // (which awaits the in-flight start first, dispose()-style). Never call it
+  // with a start still pending — it would clear the memo but leave the
+  // spawning child alive to later assign itself to `server` and leak.
   const stopServer = async (): Promise<void> => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = null;
@@ -201,16 +209,35 @@ export function createLocalLlmProvider(deps: {
     })();
   };
 
-  // Single-flight: the memoized promise is assigned SYNCHRONOUSLY (before any
-  // `await`) so two concurrent first calls can't both slip past a null check
-  // and each build+start their own llama-server (the second overwriting
-  // `server` and orphaning the first as a leaked multi-GB process). Kept
-  // (not cleared) once resolved so later sequential calls reuse it too;
-  // stopServer() is the only place that clears it, for a clean restart.
-  // On rejection (detect() or s.start() throws), the ownership-guarded catch
-  // clears the memo so a retry can attempt a fresh start.
-  const ensureServer = (model: ModelDescriptor): Promise<ServerLike> => {
-    if (serverStarting) return serverStarting;
+  // Single-flight: the memoized promise is assigned SYNCHRONOUSLY (no `await`
+  // between the loop's final memo check and the assignment) so two concurrent
+  // first calls can't both slip past a null check and each build+start their
+  // own llama-server (the second overwriting `server` and orphaning the first
+  // as a leaked multi-GB process). Kept (not cleared) once resolved so later
+  // sequential calls reuse it too; stopServer() is the only place that clears
+  // it, for a clean restart. On rejection (detect() or s.start() throws), the
+  // ownership-guarded catch clears the memo so a retry can attempt a fresh
+  // start.
+  //
+  // Model switch: the memo records which model it was started for
+  // (startingModelId). On mismatch — override flipped between two installed
+  // models, or an override download completing while the old model serves —
+  // settle the in-flight start exactly as dispose() does (so we stop the real
+  // child, never race a spawning one into an orphan), then stop it and start
+  // fresh. The loop re-checks after every await: a concurrent caller may have
+  // already restarted onto the target model (return its memo) or a stop may
+  // have cleared the memo entirely (fall through to a fresh start). Any
+  // in-flight request on the old server dies with it — the architecture
+  // already treats provider crashes as transient DEFER-and-retry faults.
+  const ensureServer = async (model: ModelDescriptor): Promise<ServerLike> => {
+    for (;;) {
+      if (serverStarting && startingModelId === model.id) return serverStarting;
+      if (!serverStarting) break;
+      const starting = serverStarting;
+      await starting.catch(() => {});
+      if (serverStarting === starting) await stopServer();
+    }
+    startingModelId = model.id;
     const starting = (async (): Promise<ServerLike> => {
       const dir = modelDir(deps.modelsDir, model.id);
       const gguf = model.files.find((f) => !f.name.startsWith('mmproj'))!;
