@@ -42,23 +42,29 @@ function doc(
   };
 }
 
-/** Every FTS row must sit at its document's rowid. */
+/** Every search-index row (both tables) must sit at its document's rowid. */
 function assertPinned(dbPath: string): void {
   const raw = new Database(dbPath);
   try {
-    const rows = raw
-      .prepare(
-        `SELECT f.rowid AS fts_rowid, d.rowid AS doc_rowid
-           FROM documents_fts f JOIN documents d ON d.id = f.doc_id`,
-      )
-      .all() as Array<{ fts_rowid: number; doc_rowid: number }>;
-    const ftsCount = (
-      raw.prepare(`SELECT COUNT(*) AS c FROM documents_fts`).get() as {
-        c: number;
-      }
-    ).c;
-    expect(rows.length).toBe(ftsCount); // no orphaned FTS rows
-    for (const r of rows) expect(r.fts_rowid).toBe(r.doc_rowid);
+    for (const table of ['documents_fts', 'documents_tri']) {
+      const rows = raw
+        .prepare(
+          `SELECT f.rowid AS fts_rowid, d.rowid AS doc_rowid
+             FROM ${table} f JOIN documents d ON d.id = f.doc_id`,
+        )
+        .all() as Array<{ fts_rowid: number; doc_rowid: number }>;
+      const count = (
+        raw.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }
+      ).c;
+      const docCount = (
+        raw.prepare(`SELECT COUNT(*) AS c FROM documents`).get() as {
+          c: number;
+        }
+      ).c;
+      expect(rows.length).toBe(count); // no orphaned index rows
+      expect(count).toBe(docCount); // no missing index rows
+      for (const r of rows) expect(r.fts_rowid).toBe(r.doc_rowid);
+    }
   } finally {
     raw.close();
   }
@@ -297,6 +303,40 @@ describe('documents_fts rowid pinning', () => {
     raw.close();
     assertPinned(dbPath);
 
+    store = openStore(await openDb(dbPath), deps); // afterEach close is a no-op
+  });
+
+  it('write path fills stem columns and the trigram table', async () => {
+    // deps.detectLanguages stubs ['eng'] — 'running' stems to 'run'.
+    await store.commit({
+      account: accountId,
+      documents: [doc('s', { markdown: 'running daily' })],
+      cursor: null,
+    });
+    await store.close();
+    const raw = new Database(dbPath);
+    try {
+      expect(
+        (
+          raw
+            .prepare(
+              `SELECT count(*) AS c FROM documents_fts WHERE documents_fts MATCH 'markdown_stem: run'`,
+            )
+            .get() as { c: number }
+        ).c,
+      ).toBe(1);
+      expect(
+        (
+          raw
+            .prepare(
+              `SELECT count(*) AS c FROM documents_tri WHERE documents_tri MATCH '"running"'`,
+            )
+            .get() as { c: number }
+        ).c,
+      ).toBe(1);
+    } finally {
+      raw.close();
+    }
     store = openStore(await openDb(dbPath), deps); // afterEach close is a no-op
   });
 });

@@ -11,6 +11,7 @@ import type {
 } from '@shared/contracts';
 
 import { newId } from '../ids';
+import { buildStemView } from '../stemming';
 import type { AccountRow, DocRow } from './store';
 
 /** Injected so the write path stays testable and Electron-free. Mirrors the
@@ -75,43 +76,63 @@ export function createWriteTx(
       )
       .get(accountId, externalId, type) as DocRow | undefined;
 
-  // FTS rows are rowid-pinned to their document's rowid (schema v2): deletes
-  // and replacements are rowid-equality lookups instead of full virtual-table
-  // scans on the UNINDEXED doc_id. Both callers write the documents row
-  // before touching FTS, so the subselect always resolves.
+  // Search-index rows (documents_fts AND documents_tri) are rowid-pinned to
+  // their document's rowid (schema v2/v3): deletes and replacements are
+  // rowid-equality lookups instead of full virtual-table scans on the
+  // UNINDEXED doc_id. Both callers write the documents row before touching
+  // the index, so the subselect always resolves.
   const ftsDelete = (docId: string): void => {
-    conn
-      .prepare(
-        `DELETE FROM documents_fts
-        WHERE rowid = (SELECT rowid FROM documents WHERE id = ?)`,
-      )
-      .run(docId);
+    for (const table of ['documents_fts', 'documents_tri']) {
+      conn
+        .prepare(
+          `DELETE FROM ${table}
+          WHERE rowid = (SELECT rowid FROM documents WHERE id = ?)`,
+        )
+        .run(docId);
+    }
   };
 
-  /** Insert-only FTS write for a brand-new document — its id was minted in
-   *  this transaction, so there is nothing to delete first (the old
-   *  unconditional delete-then-insert made every fresh ingest pay a full
-   *  FTS scan: O(N²) across a backfill). */
+  /** Insert-only index write for a brand-new document — its id was minted in
+   *  this transaction, so there is nothing to delete first. Stem columns are
+   *  built with the document's just-detected languages; the trigram body is
+   *  the raw title + markdown. */
   const ftsInsert = (
     docId: string,
     title: string | null,
     markdown: string | null,
+    languages: string[],
   ): void => {
+    const t = title ?? '';
+    const m = markdown ?? '';
     conn
       .prepare(
-        `INSERT INTO documents_fts(rowid, doc_id, title, markdown)
-        VALUES((SELECT rowid FROM documents WHERE id = ?), ?, ?, ?)`,
+        `INSERT INTO documents_fts(rowid, doc_id, title, markdown, title_stem, markdown_stem)
+        VALUES((SELECT rowid FROM documents WHERE id = ?), ?, ?, ?, ?, ?)`,
       )
-      .run(docId, docId, title ?? '', markdown ?? '');
+      .run(
+        docId,
+        docId,
+        t,
+        m,
+        buildStemView(t, languages),
+        buildStemView(m, languages),
+      );
+    conn
+      .prepare(
+        `INSERT INTO documents_tri(rowid, doc_id, body)
+        VALUES((SELECT rowid FROM documents WHERE id = ?), ?, ?)`,
+      )
+      .run(docId, docId, `${t}\n${m}`.trim());
   };
 
   const ftsUpsert = (
     docId: string,
     title: string | null,
     markdown: string | null,
+    languages: string[],
   ): void => {
     ftsDelete(docId);
-    ftsInsert(docId, title, markdown);
+    ftsInsert(docId, title, markdown, languages);
   };
 
   /** Upsert one document; returns its seq, or null when nothing changed. */
@@ -161,7 +182,7 @@ export function createWriteTx(
           ts,
           existing.id,
         );
-      ftsUpsert(existing.id, input.title, input.markdown);
+      ftsUpsert(existing.id, input.title, input.markdown, languages);
       return seq;
     }
     const id = newId<'document'>();
@@ -190,7 +211,7 @@ export function createWriteTx(
         ts,
         ts,
       );
-    ftsInsert(id, input.title, input.markdown);
+    ftsInsert(id, input.title, input.markdown, languages);
     return seq;
   };
 
@@ -299,7 +320,7 @@ export function createWriteTx(
               deps.now(),
               row.id,
             );
-          ftsUpsert(row.id, row.title, e.markdown);
+          ftsUpsert(row.id, row.title, e.markdown, languages);
           last = seq;
         }
       }
@@ -316,6 +337,12 @@ export function createWriteTx(
       conn
         .prepare(
           `DELETE FROM documents_fts
+          WHERE rowid IN (SELECT rowid FROM documents WHERE account_id = ?)`,
+        )
+        .run(acc.id);
+      conn
+        .prepare(
+          `DELETE FROM documents_tri
           WHERE rowid IN (SELECT rowid FROM documents WHERE account_id = ?)`,
         )
         .run(acc.id);
@@ -337,6 +364,13 @@ export function createWriteTx(
       conn
         .prepare(
           `DELETE FROM documents_fts
+          WHERE rowid IN (SELECT rowid FROM documents
+                          WHERE archived_at IS NOT NULL AND archived_at < ?)`,
+        )
+        .run(batch.purgeArchived.before);
+      conn
+        .prepare(
+          `DELETE FROM documents_tri
           WHERE rowid IN (SELECT rowid FROM documents
                           WHERE archived_at IS NOT NULL AND archived_at < ?)`,
         )
