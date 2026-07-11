@@ -29,6 +29,7 @@ import {
   rrfMerge,
   toTrigramMatch,
 } from './fuzzy';
+import { repopulateSearchIndex } from './schema';
 import { createWriteTx } from './write-tx';
 
 /** Injected so the store stays testable and Electron-free. */
@@ -752,17 +753,13 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       async compact() {
         await db.exec('VACUUM');
         // documents has a TEXT primary key, so VACUUM may renumber its
-        // implicit rowids — which documents_fts rows are pinned to (schema
-        // v2). Rebuild the pinning right after, in one transaction; a write
-        // that slips in between is also corrected by this rebuild.
-        await db.batch([
-          { sql: `DELETE FROM documents_fts` },
-          {
-            sql: `INSERT INTO documents_fts(rowid, doc_id, title, markdown)
-                  SELECT rowid, id, coalesce(title, ''), coalesce(markdown, '')
-                  FROM documents`,
-          },
-        ]);
+        // implicit rowids — which BOTH search tables' rows are pinned to
+        // (schema v2/v3). Rebuild the pinning right after; the rebuild stems
+        // in JS, so in-process it runs directly on the raw connection and
+        // worker-backed it dispatches to the registered proc (same pattern
+        // as `commit`).
+        if (db._conn) repopulateSearchIndex(db._conn);
+        else await db.proc!('rebuildSearchIndex', null);
       },
       async export(destDir) {
         fs.mkdirSync(destDir, { recursive: true });
@@ -791,6 +788,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         await db.batch([
           ...[
             'documents_fts',
+            'documents_tri',
             'documents',
             'changes',
             'consumers',
@@ -807,6 +805,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         // the TRUNCATE checkpoint then zeroes the WAL it wrote through.
         await db.exec('VACUUM');
         await db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
+        corpusLangsCache = null;
         nudge.emit('commit');
       },
     },

@@ -253,6 +253,40 @@ describe('documents_fts rowid pinning', () => {
     assertPinned(dbPath);
     expect(await store.read.search({ text: 'unique-b' })).toHaveLength(0);
     expect(await store.read.search({ text: 'post-compact' })).toHaveLength(1);
+    // The rebuilt index still carries stems: 'bodies' stems to 'bodi', which
+    // matches the stem view of 'body' in both surviving docs ('a' was purged;
+    // 'b' now reads 'post-compact body', 'c' keeps 'unique-c body').
+    expect(await store.read.search({ text: 'bodies' })).toHaveLength(2);
+  });
+
+  it('resetAll empties the trigram table too', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('r')],
+      cursor: null,
+    });
+    await store.maintenance.resetAll();
+    await store.close();
+    const raw = new Database(dbPath);
+    try {
+      expect(
+        (
+          raw.prepare(`SELECT count(*) AS c FROM documents_tri`).get() as {
+            c: number;
+          }
+        ).c,
+      ).toBe(0);
+      expect(
+        (
+          raw.prepare(`SELECT count(*) AS c FROM documents_fts`).get() as {
+            c: number;
+          }
+        ).c,
+      ).toBe(0);
+    } finally {
+      raw.close();
+    }
+    store = openStore(await openDb(dbPath), deps); // afterEach close is a no-op
   });
 
   it('v3 migration backfills stem columns and the trigram table from a v2 corpus', async () => {

@@ -7,6 +7,7 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import type { CommitBatch } from '@shared/contracts';
 import { detectLanguages } from '@main/core/language';
+import { repopulateSearchIndex } from '@main/core/store/schema';
 import { createWriteTx } from '@main/core/store/write-tx';
 import { openDb } from './app-db';
 import { attachDbHost } from './bridge';
@@ -36,6 +37,10 @@ const { dbPath } = workerData as { dbPath: string };
       },
       {
         commit: (args) => writeTx.commit(args as CommitBatch),
+        rebuildSearchIndex: () => {
+          repopulateSearchIndex(db._conn!);
+          return null;
+        },
       },
     );
     parentPort!.postMessage({ t: 'ready' });
