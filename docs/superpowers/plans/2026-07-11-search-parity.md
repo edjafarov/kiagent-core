@@ -673,9 +673,11 @@ describe('extractTerms', () => {
 });
 
 describe('toTrigramMatch', () => {
-  it('OR-joins quoted tokens of length >= 3', () => {
+  it('AND-joins quoted tokens of length >= 3', () => {
+    // AND, not legacy's OR (decision 2026-07-11): every surviving term must
+    // appear as a substring, preserving the grammar's implicit-AND.
     expect(toTrigramMatch(['rechnung', 'ab', 'a phrase'])).toBe(
-      '"rechnung" OR "a phrase"',
+      '"rechnung" AND "a phrase"',
     );
   });
 
@@ -791,11 +793,14 @@ export function extractTerms(text: string): QueryTerms {
 }
 
 /** MATCH expression for documents_tri: the trigram tokenizer needs >= 3-char
- *  tokens; shorter ones are dropped. Null when no token qualifies. */
+ *  tokens; shorter ones are dropped. Null when no token qualifies. Terms are
+ *  AND-joined (decision 2026-07-11, deviating from legacy's OR): every
+ *  surviving term must appear as a substring, so the fallback can never
+ *  smuggle partial matches into an implicit-AND query. */
 export function toTrigramMatch(terms: string[]): string | null {
   const usable = terms.filter((t) => t.length >= 3);
   if (usable.length === 0) return null;
-  return usable.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ');
+  return usable.map((t) => `"${t.replace(/"/g, '""')}"`).join(' AND ');
 }
 
 const RRF_K = 60;

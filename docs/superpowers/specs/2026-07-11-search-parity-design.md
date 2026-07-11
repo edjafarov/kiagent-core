@@ -165,9 +165,15 @@ Runs only when **all** hold: `q.text` non-empty, `offset === 0`, the primary
 pass returned fewer than `limit` rows, and the query yields at least one
 trigram token (positive plain terms/phrase words, lowercase, length ≥ 3).
 
-- Trigram query: tokens OR-joined as quoted FTS5 strings against
+- Trigram query: tokens AND-joined as quoted FTS5 strings against
   `documents_tri MATCH ?`, with the same SQL filters (archived/type/account/
   date), ordered by `bm25(documents_tri)`, limited to `limit`.
+  (Decision 2026-07-11, deviating from legacy's OR-join: implementation
+  showed OR-joining lets partial single-word matches into implicit-AND
+  queries whenever the first page is thin, breaking the boolean grammar
+  this design promises to preserve. AND requires every ≥3-char positive
+  term as a substring — single-term queries, the main fuzzy case, are
+  unaffected.)
 - **Negation safety:** trigram hits whose raw `title + markdown` contains any
   negated term or phrase (JS `toLowerCase().includes(…)` — Unicode-correct,
   deliberately more aggressive than FTS token semantics) are dropped, so a
