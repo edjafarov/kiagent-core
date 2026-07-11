@@ -74,6 +74,7 @@ const inference = {
   complete: async () => '',
   see: async () => '',
   read: async () => '',
+  hear: async () => '',
 };
 
 function makeEngine(store: CoreStore) {

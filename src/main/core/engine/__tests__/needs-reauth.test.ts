@@ -26,6 +26,7 @@ const inference = {
   complete: async () => '',
   see: async () => '',
   read: async () => '',
+  hear: async () => '',
 };
 
 async function waitUntil(
