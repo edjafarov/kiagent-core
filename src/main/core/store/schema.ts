@@ -163,41 +163,63 @@ const MIGRATIONS: Migration[] = [
  * stemming each row with its stored languages. Used by the v3 migration and
  * by maintenance.compact (VACUUM can renumber documents rowids — see the v2
  * note above).
+ *
+ * Runs as ONE transaction (better-sqlite3 nests as a SAVEPOINT, so calling
+ * this from inside the v3 migration's own transaction is safe): a rebuild
+ * that dies partway must never leave the search tables half-repopulated. The
+ * corpus is read in rowid-ordered pages rather than one `.all()` over every
+ * document — better-sqlite3 forbids `.iterate()` while writing on the same
+ * connection, so a chunked `.all()` loop is the shape that avoids
+ * materializing the whole corpus in memory at once.
  */
 export function repopulateSearchIndex(db: BetterSqlite3.Database): void {
-  db.exec(`DELETE FROM documents_fts; DELETE FROM documents_tri;`);
-  const rows = db
-    .prepare(
-      `SELECT rowid AS rid, id, title, markdown, languages FROM documents`,
-    )
-    .all() as Array<{
-    rid: number;
-    id: string;
-    title: string | null;
-    markdown: string | null;
-    languages: string;
-  }>;
-  const fts = db.prepare(
-    `INSERT INTO documents_fts(rowid, doc_id, title, markdown, title_stem, markdown_stem)
-     VALUES(?, ?, ?, ?, ?, ?)`,
-  );
-  const tri = db.prepare(
-    `INSERT INTO documents_tri(rowid, doc_id, body) VALUES(?, ?, ?)`,
-  );
-  for (const r of rows) {
-    const langs = JSON.parse(r.languages) as string[];
-    const title = r.title ?? '';
-    const markdown = r.markdown ?? '';
-    fts.run(
-      r.rid,
-      r.id,
-      title,
-      markdown,
-      buildStemView(title, langs),
-      buildStemView(markdown, langs),
+  db.transaction(() => {
+    db.exec(`DELETE FROM documents_fts; DELETE FROM documents_tri;`);
+    const page = db.prepare(
+      `SELECT rowid AS rid, id, title, markdown, languages FROM documents
+       WHERE rowid > ? ORDER BY rowid LIMIT 1000`,
     );
-    tri.run(r.rid, r.id, `${title}\n${markdown}`.trim());
-  }
+    const fts = db.prepare(
+      `INSERT INTO documents_fts(rowid, doc_id, title, markdown, title_stem, markdown_stem)
+       VALUES(?, ?, ?, ?, ?, ?)`,
+    );
+    const tri = db.prepare(
+      `INSERT INTO documents_tri(rowid, doc_id, body) VALUES(?, ?, ?)`,
+    );
+    let last = 0;
+    for (;;) {
+      const rows = page.all(last) as Array<{
+        rid: number;
+        id: string;
+        title: string | null;
+        markdown: string | null;
+        languages: string;
+      }>;
+      if (rows.length === 0) break;
+      for (const r of rows) {
+        let langs: string[];
+        try {
+          langs = JSON.parse(r.languages) as string[];
+        } catch {
+          throw new Error(
+            `repopulateSearchIndex: corrupt languages JSON on document ${r.id}`,
+          );
+        }
+        const title = r.title ?? '';
+        const markdown = r.markdown ?? '';
+        fts.run(
+          r.rid,
+          r.id,
+          title,
+          markdown,
+          buildStemView(title, langs),
+          buildStemView(markdown, langs),
+        );
+        tri.run(r.rid, r.id, `${title}\n${markdown}`.trim());
+      }
+      last = rows[rows.length - 1].rid;
+    }
+  })();
 }
 
 export function migrate(db: BetterSqlite3.Database): void {
