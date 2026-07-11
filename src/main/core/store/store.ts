@@ -23,6 +23,12 @@ import type {
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { newId } from '../ids';
 import { stemVariants } from '../stemming';
+import {
+  buildSnippet,
+  extractTerms,
+  rrfMerge,
+  toTrigramMatch,
+} from './fuzzy';
 import { createWriteTx } from './write-tx';
 
 /** Injected so the store stays testable and Electron-free. */
@@ -471,6 +477,46 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
             offset,
           ],
         )) as unknown as Array<DocRow & { _snippet: string }>;
+
+        // Fuzzy fallback (trigram substring recall + RRF, spec 2026-07-11):
+        // only when the exact+stemmed pass left the FIRST page short — good
+        // queries never pay for a second index scan, near-misses (compound
+        // words, truncations) get rescued.
+        if (offset === 0 && rows.length < limit) {
+          const { positive, negated } = extractTerms(q.text);
+          // Every positive term must survive into the trigram AND group — a
+          // silently dropped <3-char term would smuggle partial matches past
+          // the implicit-AND grammar. Such queries get no fuzzy pass.
+          const triMatch = positive.every((t) => t.length >= 3)
+            ? toTrigramMatch(positive)
+            : null;
+          if (triMatch) {
+            const triRows = (await db.all(
+              `SELECT d.* FROM documents_tri t JOIN documents d ON d.id = t.doc_id
+                 WHERE documents_tri MATCH ? ${where}
+                 ORDER BY bm25(documents_tri) LIMIT ?`,
+              [triMatch, ...params, limit],
+            )) as unknown as DocRow[];
+            // A NOT-excluded document must never resurface via fuzzy: drop
+            // hits containing any negated term (substring match, Unicode
+            // lowercase — deliberately broader than FTS token semantics).
+            const safe = triRows.filter(
+              (r) =>
+                !negated.some((n) =>
+                  `${r.title ?? ''}\n${r.markdown ?? ''}`
+                    .toLowerCase()
+                    .includes(n),
+                ),
+            );
+            const snippets = new Map(rows.map((r) => [r.id, r._snippet]));
+            const fused = rrfMerge<DocRow>(rows, safe, (r) => r.id, limit);
+            return fused.map((r) => ({
+              ...toDocument(r),
+              snippet:
+                snippets.get(r.id) ?? buildSnippet(r.markdown ?? '', positive),
+            }));
+          }
+        }
         return rows.map((r) => ({ ...toDocument(r), snippet: r._snippet }));
       }
       const rows = (await db.all(

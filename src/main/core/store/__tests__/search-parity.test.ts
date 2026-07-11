@@ -116,3 +116,83 @@ describe('search parity: stemming', () => {
     expect(await store.read.search({ text: 'runningm*' })).toHaveLength(1);
   });
 });
+
+describe('search parity: trigram fuzzy fallback', () => {
+  let dir: string;
+  let store: CoreStore;
+  let accountId: AccountId;
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-fuzzy-'));
+    store = openStore(await openDb(path.join(dir, 'test.db')), deps);
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'me@example.com',
+    });
+    accountId = account.id;
+    await store.commit({
+      account: accountId,
+      documents: [
+        doc('exact', { markdown: 'Die Rechnung ist offen' }),
+        doc('compound', { markdown: 'Die Jahresrechnung liegt bei' }),
+        doc('paid', { markdown: 'Jahresrechnung bezahlt und abgelegt' }),
+      ],
+      cursor: null,
+    });
+  });
+
+  afterEach(async () => {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('rescues compound words via trigram substring recall', async () => {
+    // 'Rechnung' raw/stem never tokenizes out of 'Jahresrechnung'; the
+    // trigram pass finds it as a substring and RRF fuses it in.
+    const hits = await store.read.search({ text: 'Rechnung' });
+    const bodies = hits.map((h) => h.markdown);
+    expect(bodies).toEqual(
+      expect.arrayContaining([
+        'Die Rechnung ist offen',
+        'Die Jahresrechnung liegt bei',
+      ]),
+    );
+    // Exact/stemmed match outranks a fuzzy-only match.
+    expect(hits[0].markdown).toBe('Die Rechnung ist offen');
+  });
+
+  it('rescues truncated terms (substring of the real word)', async () => {
+    const hits = await store.read.search({ text: 'rechnun' });
+    expect(hits.length).toBeGreaterThan(0);
+  });
+
+  it('skips the fuzzy pass when the first page is already full', async () => {
+    const hits = await store.read.search({ text: 'Rechnung', limit: 1 });
+    expect(hits).toHaveLength(1);
+    expect(hits[0].markdown).toBe('Die Rechnung ist offen'); // no fuzzy row
+  });
+
+  it('never resurfaces a NOT-excluded document via fuzzy', async () => {
+    const hits = await store.read.search({ text: 'Rechnung -bezahlt' });
+    const bodies = hits.map((h) => h.markdown);
+    expect(bodies).not.toContain('Jahresrechnung bezahlt und abgelegt');
+    expect(bodies).toContain('Die Jahresrechnung liegt bei');
+  });
+
+  it('gives fuzzy-only hits a snippet built from raw markdown', async () => {
+    const hits = await store.read.search({ text: 'jahresrech' });
+    expect(hits.length).toBeGreaterThan(0);
+    for (const h of hits) {
+      expect(h.snippet).toBeTruthy();
+      expect(h.snippet!.toLowerCase()).toContain('<b>jahresrech</b>');
+    }
+  });
+
+  it('applies SQL filters to the fuzzy pass too', async () => {
+    const hits = await store.read.search({
+      text: 'Rechnung',
+      type: 'other-type',
+    });
+    expect(hits).toHaveLength(0);
+  });
+});
