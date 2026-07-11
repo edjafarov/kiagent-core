@@ -14,6 +14,8 @@ import type { Account, Batch, Credentials, Source } from '@shared/contracts';
 import { SourceAuthError, SourcePermanentError } from '@shared/source-errors';
 
 import { openDb } from '../../../db/app-db';
+import { setAccountCadence } from '../../boot';
+import type { CorePlatform } from '../../boot';
 import { openStore } from '../../store/store';
 import type { CoreStore } from '../../store/store';
 import { createEngine } from '../engine';
@@ -148,6 +150,76 @@ describe('source error taxonomy', () => {
     await new Promise((r) => setTimeout(r, 150));
     expect(pulls).toBe(1); // no doomed re-pull against the revoked credential
     expect((await store.account(account.id))?.status).toBe('needsReauth');
+  });
+
+  /** The pieces of CorePlatform that setAccountCadence/runAccount touch. */
+  function makePlatform(
+    source: Source,
+    engine: ReturnType<typeof makeEngine>,
+  ): CorePlatform {
+    return {
+      store,
+      engine,
+      sources: {
+        get: (id: string) => (id === source.descriptor.id ? source : undefined),
+      },
+      scheduler: { register: () => {}, unregister: () => {} },
+    } as unknown as CorePlatform;
+  }
+
+  it('setAccountCadence persists the cadence but does NOT restart a resting needsReauth account', async () => {
+    // The accounts:set-cadence IPC path. Same resting-state rule as the
+    // cadence tick / boot / updateConfig: saving a schedule is not a Retry,
+    // so it must not launch one doomed pull against a revoked credential.
+    let pulls = 0;
+    const source = throwingSource(
+      () => new SourceAuthError('gmail 401 token revoked'),
+      () => {
+        pulls += 1;
+      },
+    );
+    const engine = makeEngine(source);
+    const account = await makeAccount(source);
+
+    const handle = engine.run(account) as ReturnType<typeof engine.run> & {
+      active(): boolean;
+    };
+    await waitUntil(() => !handle.active());
+    expect((await store.account(account.id))?.status).toBe('needsReauth');
+    expect(pulls).toBe(1);
+
+    await setAccountCadence(makePlatform(source, engine), account.id, {
+      every: '30m',
+    });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(pulls).toBe(1); // no doomed re-pull against the revoked credential
+    const fresh = await store.account(account.id);
+    expect(fresh?.status).toBe('needsReauth');
+    expect(fresh?.cadence).toEqual({ every: '30m' }); // ...but the save landed
+  });
+
+  it("setAccountCadence still restarts a plain 'error' account (gate is scoped to resting states)", async () => {
+    let pulls = 0;
+    const source = throwingSource(
+      () => new SourcePermanentError('flaky config'),
+      () => {
+        pulls += 1;
+      },
+    );
+    const engine = makeEngine(source);
+    const account = await makeAccount(source);
+
+    const handle = engine.run(account) as ReturnType<typeof engine.run> & {
+      active(): boolean;
+    };
+    await waitUntil(() => !handle.active());
+    expect((await store.account(account.id))?.status).toBe('error');
+    expect(pulls).toBe(1);
+
+    await setAccountCadence(makePlatform(source, engine), account.id, {
+      every: '30m',
+    });
+    await waitUntil(() => pulls === 2); // cadence save re-kicks a retryable error
   });
 
   it("a 'permanent'-coded pull failure commits error after ONE attempt", async () => {

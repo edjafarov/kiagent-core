@@ -2,6 +2,8 @@ import path from 'path';
 
 import type {
   Account,
+  AccountId,
+  Cadence,
   Credentials,
   DocumentInput,
   Handle,
@@ -174,6 +176,25 @@ export function runAccount(platform: CorePlatform, account: Account): Handle {
     );
   }
   return handle;
+}
+
+/** Persist a cadence change and re-apply it. The restart is gated by the
+ *  same resting-state rule as the cadence tick above, boot's resumeAccounts,
+ *  and engine.updateConfig: a cadence save on a 'paused' or 'needsReauth'
+ *  account persists the new cadence but starts NOTHING — saving a schedule is
+ *  not a Retry, and one doomed pull per save would re-hammer a revoked
+ *  credential. The new cadence job registers on the next runAccount (explicit
+ *  Retry via sync-now, resume, or a fresh connect), same as for 'paused'. */
+export async function setAccountCadence(
+  platform: CorePlatform,
+  accountId: AccountId,
+  cadence: Cadence | null,
+): Promise<void> {
+  await platform.store.setAccountCadence(accountId, cadence);
+  const account = await platform.store.account(accountId);
+  if (!account) return;
+  if (account.status === 'paused' || account.status === 'needsReauth') return;
+  runAccount(platform, account);
 }
 
 /** Resume sync for every non-paused account and register cadence jobs. */

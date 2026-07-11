@@ -31,6 +31,7 @@ import {
   bootCore,
   resumeAccounts,
   runAccount,
+  setAccountCadence,
 } from './core/boot';
 import type { CorePlatform } from './core/boot';
 import { createActivityLog, type ActivityLog } from './core/mcp/activity';
@@ -323,11 +324,12 @@ function registerIpc(
     // still refused.
     if (account && account.status !== 'paused') runAccount(p, account);
   });
-  handle('accounts:set-cadence', async ({ accountId, cadence }) => {
-    await p.store.setAccountCadence(accountId, cadence);
-    const account = await p.store.account(accountId);
-    if (account && account.status !== 'paused') runAccount(p, account);
-  });
+  handle('accounts:set-cadence', ({ accountId, cadence }) =>
+    // Delegates to core/boot so the resting-state rule ('paused' AND
+    // 'needsReauth' persist the cadence but start nothing) lives in one
+    // place, next to the cadence tick's identical gate.
+    setAccountCadence(p, accountId, cadence),
+  );
   handle('accounts:update-config', ({ accountId, config }) =>
     p.engine.updateConfig(accountId, config),
   );
