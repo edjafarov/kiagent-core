@@ -7,6 +7,7 @@ import type {
   Session,
   Source,
 } from '@shared/contracts';
+import { SourceAuthError } from '@shared/source-errors';
 
 import { connectImapClient } from './client';
 import { advanceCursor, chunk, planMailboxSync } from './cursor';
@@ -172,10 +173,39 @@ export function createImapSource(
       const config = session.account.config as unknown as ImapAccountConfig;
       const creds = await session.credentials();
       if (!creds?.password) {
-        throw new Error('imap: account has no stored password credential');
+        // Retrying can't conjure a credential — reauth is the only fix.
+        throw new SourceAuthError(
+          'imap: account has no stored password credential',
+        );
       }
 
-      const client = await connectFn(config, creds.password);
+      let client: ImapClient;
+      try {
+        client = await connectFn(config, creds.password);
+      } catch (e) {
+        // imapflow reports auth failures in a structured field, not the
+        // message (see describeConnectError). But it sets authenticationFailed
+        // on EVERY rejected LOGIN — including temporary server conditions
+        // (RFC 5530 [UNAVAILABLE]/[INUSE]/[LIMIT]: auth backend down, too many
+        // connections). Only a genuine credential rejection is 'needsReauth'
+        // (which nothing auto-retries); the transient codes must keep the
+        // plain-Error path so the retry+supervisor machinery self-heals once
+        // the throttle lifts. imapflow puts the bracketed code on
+        // serverResponseCode (uppercased).
+        const err = e as {
+          authenticationFailed?: boolean;
+          serverResponseCode?: string;
+        };
+        const respCode = err.serverResponseCode?.toUpperCase();
+        const transient =
+          respCode === 'UNAVAILABLE' ||
+          respCode === 'INUSE' ||
+          respCode === 'LIMIT';
+        if (err.authenticationFailed === true && !transient) {
+          throw new SourceAuthError(describeConnectError(e));
+        }
+        throw new Error(describeConnectError(e));
+      }
       try {
         const folders = await client.listFolders();
         const mailboxes = resolveMailboxes(folders).map((f) => f.path);

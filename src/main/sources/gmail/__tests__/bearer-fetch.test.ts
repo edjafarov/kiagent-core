@@ -69,4 +69,33 @@ describe('bearerFetch retry/backoff', () => {
     );
     expect(result).toEqual({ ok: true });
   });
+
+  it('401 throws immediately, auth-coded, with the regex-able message format intact', async () => {
+    const fetchMock = jest.fn(async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({}),
+      text: async () => 'Invalid Credentials',
+      headers: { get: () => null },
+    })) as unknown as typeof fetch;
+    global.fetch = fetchMock as never;
+
+    const failure = await bearerFetch(
+      'https://example.test/x',
+      async () => 'tok',
+      { errorPrefix: 'gmail' },
+    ).then(
+      () => {
+        throw new Error('expected 401 to reject');
+      },
+      (e: Error & { code?: string }) => e,
+    );
+    // code 'auth' → the engine maps this to status 'needsReauth', no retries.
+    expect(failure.code).toBe('auth');
+    // `${errorPrefix} ${status} ${url} ${body}` — cursor.ts regexes this.
+    expect(failure.message).toBe(
+      'gmail 401 https://example.test/x Invalid Credentials',
+    );
+    expect(fetchMock as unknown as jest.Mock).toHaveBeenCalledTimes(1); // never retried
+  });
 });

@@ -11,10 +11,26 @@ const RESTART_WINDOW_MS = 60_000;
 /** Small delay between attempts so a rapid crash-loop doesn't hot-spin. */
 const RESTART_BACKOFF_MS = 250;
 
-/** Caller can retry — the worker is being respawned after a crash. */
+/** Caller can retry — the worker is being respawned after a crash. Since
+ *  guard() now PARKS new requests during a respawn instead of rejecting them,
+ *  this code no longer reaches callers; it is kept for compatibility and
+ *  classified as transient below. */
 export const DB_WORKER_RESTARTING = 'DB_WORKER_RESTARTING';
+/** Caller can retry — this request was in flight when the worker crashed.
+ *  SQLite transactions are atomic, so nothing was half-committed; a retry
+ *  after the respawn window re-runs it cleanly. */
+export const DB_WORKER_CRASHED = 'DB_WORKER_CRASHED';
 /** Terminal — crash-loop protection gave up; this AppDb is dead forever. */
 export const DB_WORKER_DEAD = 'DB_WORKER_DEAD';
+
+/** True for store errors an infinite consumer (feed tail, projection, pull
+ *  loop) should treat as "the DB worker hiccuped — back off and resume from
+ *  the durable cursor" rather than as a reason to die. DB_WORKER_DEAD is
+ *  deliberately NOT transient. */
+export function isDbWorkerTransientError(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  return code === DB_WORKER_CRASHED || code === DB_WORKER_RESTARTING;
+}
 
 function taggedError(message: string, code: string): Error & { code: string } {
   const err = new Error(message) as Error & { code: string };
@@ -97,10 +113,12 @@ function spawnWorker(
  * `dbPath` and re-registers its host procedures (worker-entry builds those at
  * startup, so nothing on the main side needs replaying), and requests resume
  * being served through the SAME returned AppDb — callers never see a new
- * object. Requests that arrive while a respawn is in flight are rejected
- * immediately with a `DB_WORKER_RESTARTING`-coded error rather than queued —
- * simpler than a bounded queue, and consistent with how the bridge already
- * rejects once `_markDead` has fired. A deliberate `close()` never respawns.
+ * object. In-flight requests reject with a `DB_WORKER_CRASHED`-coded error so
+ * callers can tell a retryable crash from a SQL error; requests that arrive
+ * while the respawn is in flight are PARKED until it settles (then served by
+ * the fresh worker, or rejected with `DB_WORKER_DEAD` if the supervisor gave
+ * up) — so the respawn window is invisible to well-behaved callers instead of
+ * a burst of rejections. A deliberate `close()` never respawns.
  * Repeated crashes (more than `MAX_RESTARTS` within `RESTART_WINDOW_MS`) give
  * up: the AppDb becomes permanently dead (`DB_WORKER_DEAD`), exactly like the
  * old unconditional `_markDead` behavior, and the failure is logged loudly.
@@ -153,14 +171,24 @@ export async function openDbInWorker(
     // of hanging forever waiting on a worker that will never reply (the
     // bridge only short-circuits pending/future requests once `dead` is set;
     // `closed` alone does not stop `request()` from posting into the void).
-    client._markDead(err);
-    if (intentionalClose || permanentlyDead) return; // no respawn
+    // A crash death is tagged DB_WORKER_CRASHED so in-flight callers can
+    // classify it as retryable; a deliberate close stays untagged (retrying
+    // into a closed AppDb is never useful).
+    const isCrash = !intentionalClose && !permanentlyDead;
+    client._markDead(
+      isCrash ? taggedError(err.message, DB_WORKER_CRASHED) : err,
+    );
+    if (!isCrash) return; // no respawn
     void respawn();
   }
 
   async function respawn(): Promise<void> {
     if (respawning || permanentlyDead || intentionalClose) return;
     respawning = true;
+    let settle!: () => void;
+    respawnSettled = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
     try {
       for (;;) {
         const now = Date.now();
@@ -186,7 +214,13 @@ export async function openDbInWorker(
           await attempt.ready;
           if (intentionalClose) {
             // close() arrived while the respawn was in flight — discard it.
-            void attempt.worker.terminate();
+            // AWAIT the terminate (not fire-and-forget) so close()'s
+            // `await respawnSettled` guarantees this fresh worker — which has
+            // already opened the DB and run migrations — has released its
+            // SQLite/WAL handles before close() resolves. Otherwise a caller
+            // that deletes the data dir right after close() (e.g. a test
+            // afterEach) can race a live WAL handle (EBUSY/EPERM on Windows).
+            await attempt.worker.terminate().catch(() => {});
             return;
           }
           worker = attempt.worker;
@@ -204,22 +238,34 @@ export async function openDbInWorker(
       }
     } finally {
       respawning = false;
+      settle();
     }
   }
 
   attachDeathHandlers(worker);
 
+  /** Resolves when no respawn is in flight. Reassigned at every respawn()
+   *  entry (synchronously — handleDeath → respawn() runs in one turn, so a
+   *  caller can never observe the death without also seeing the pending
+   *  promise) and resolved in its finally, win or lose. */
+  let respawnSettled: Promise<void> = Promise.resolve();
+
   function guard<T>(fn: (c: DbClient) => Promise<T>): Promise<T> {
     if (permanentlyDead) return Promise.reject(permanentlyDead);
-    if (respawning) {
-      return Promise.reject(
-        taggedError(
-          'db worker is restarting after a crash — retry the request',
-          DB_WORKER_RESTARTING,
-        ),
-      );
-    }
-    return fn(client);
+    // A close() that landed inside a crash-respawn window leaves the old
+    // client marked dead with a transient DB_WORKER_CRASHED code (the respawn
+    // abandons without ever re-marking it). Reject deliberately-closed
+    // requests with a NON-transient error instead, so a retry-aware consumer
+    // stops rather than spinning FEED_RETRY_MAX times against a closed AppDb.
+    if (intentionalClose) return Promise.reject(new Error('db worker closed'));
+    if (!respawning) return fn(client);
+    // Park until the respawn settles: served by the fresh worker on success,
+    // rejected DB_WORKER_DEAD if the crash-loop breaker gave up.
+    return respawnSettled.then(() => {
+      if (permanentlyDead) throw permanentlyDead;
+      if (intentionalClose) throw new Error('db worker closed');
+      return fn(client);
+    });
   }
 
   return {
@@ -235,6 +281,12 @@ export async function openDbInWorker(
         await client.close();
       } finally {
         await worker.terminate();
+        // A crash-respawn racing this close may have spawned a fresh worker
+        // that opened the DB before it observed intentionalClose; that path
+        // terminates it, but await the respawn so no worker still holds the
+        // SQLite/WAL handles once close() resolves. Resolved (Promise.resolve)
+        // on the common no-crash path, so this is free there.
+        await respawnSettled;
       }
     },
   };

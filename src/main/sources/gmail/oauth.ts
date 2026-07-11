@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import type { Credentials } from '@shared/contracts';
+import { SourceAuthError } from '@shared/source-errors';
 
 import type { OAuthProfile } from '../../auth/oauth-window';
 import { getGoogleClientCredentials } from './client-credentials';
@@ -62,9 +63,12 @@ async function postToken(
   });
   const body = (await res.json()) as GoogleTokenResponse;
   if (!res.ok || body.error) {
-    throw new Error(
-      `gmail oauth token request failed: ${body.error ?? res.status}${body.error_description ? ` — ${body.error_description}` : ''}`,
-    );
+    const message = `gmail oauth token request failed: ${body.error ?? res.status}${body.error_description ? ` — ${body.error_description}` : ''}`;
+    // invalid_grant = the refresh token itself is revoked/expired — retrying
+    // can never succeed. The engine maps the 'auth' code to 'needsReauth'.
+    throw body.error === 'invalid_grant'
+      ? new SourceAuthError(message)
+      : new Error(message);
   }
   return body;
 }

@@ -6,6 +6,8 @@
  */
 import { fork } from 'child_process';
 
+import { sourceErrorCode, type SourceErrorCode } from '@shared/source-errors';
+
 export interface WireChannel {
   send(msg: unknown): void;
   onMessage(cb: (msg: unknown) => void): () => void;
@@ -203,6 +205,14 @@ interface ReplyMsg {
   ok: boolean;
   value?: unknown;
   error?: string;
+  // Optional source-error taxonomy code, carried symmetrically with the
+  // src-error NOTIFY direction: a rejected handler (e.g. a main-side
+  // session.credentials() whose refresher threw SourceAuthError) keeps its
+  // 'auth'/'permanent' classification across the call/reply leg, so an
+  // extension-hosted source's auth failure lands on 'needsReauth' exactly
+  // like a bundled one. sourceErrorCode narrows on both ends, so unrelated
+  // Node error codes (ENOENT, …) never leak through as a taxonomy code.
+  code?: SourceErrorCode;
 }
 
 export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
@@ -225,13 +235,19 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
     if (msg.kind === 'call') {
       const c = msg as CallMsg;
       const h = handler;
-      const reply = (ok: boolean, value?: unknown, error?: string) =>
+      const reply = (
+        ok: boolean,
+        value?: unknown,
+        error?: string,
+        code?: SourceErrorCode,
+      ) =>
         channel.send({
           kind: 'reply',
           id: c.id,
           ok,
           value,
           error,
+          code,
         } satisfies ReplyMsg);
       if (!h) {
         reply(false, undefined, 'no call handler installed');
@@ -240,7 +256,12 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
       h(c.ns, c.method, c.args).then(
         (value) => reply(true, value),
         (e) =>
-          reply(false, undefined, e instanceof Error ? e.message : String(e)),
+          reply(
+            false,
+            undefined,
+            e instanceof Error ? e.message : String(e),
+            sourceErrorCode(e),
+          ),
       );
       return;
     }
@@ -250,7 +271,13 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
       if (!p) return;
       pending.delete(r.id);
       if (r.ok) p.resolve(r.value);
-      else p.reject(new Error(r.error ?? 'remote error'));
+      else {
+        const err = new Error(r.error ?? 'remote error') as Error & {
+          code?: SourceErrorCode;
+        };
+        if (r.code) err.code = r.code;
+        p.reject(err);
+      }
       return;
     }
     notifySubs.forEach((cb) =>

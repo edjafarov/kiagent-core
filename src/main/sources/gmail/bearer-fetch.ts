@@ -14,10 +14,11 @@
  *  - Thrown HTTP-failure message format is `${errorPrefix} ${status} ${url} ${body}`
  *    — callers regex this to detect invalid-cursor conditions (see
  *    `isInvalidHistoryError` in gmail-api.ts).
- *  - 401 is NOT retried: it is thrown immediately so the caller can surface a
- *    reauth condition. (Turning that into a first-class `needsReauth` signal
- *    is left for later, as noted in the task brief.)
+ *  - 401 is NOT retried: it is thrown immediately as a SourceAuthError (same
+ *    message format), which the engine maps to `status: 'needsReauth'`
+ *    instead of burning its retry budget against a revoked grant.
  */
+import { SourceAuthError } from '@shared/source-errors';
 
 const MAX_ATTEMPTS = 4;
 const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
@@ -144,6 +145,8 @@ export async function bearerFetch<T>(
       continue;
     }
     // 401 (and any other non-retryable status) surfaces immediately here.
-    throw new Error(`${opts.errorPrefix} ${status} ${url} ${body}`);
+    // The message format is identical either way — cursor.ts regexes it.
+    const message = `${opts.errorPrefix} ${status} ${url} ${body}`;
+    throw status === 401 ? new SourceAuthError(message) : new Error(message);
   }
 }

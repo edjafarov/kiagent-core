@@ -1,5 +1,6 @@
 {
   "name": "electron-react-boilerplate",
+  "version": "0.46.1",
   "description": "A foundation for scalable desktop apps",
   "keywords": [
     "electron",
@@ -367,7 +368,7 @@
     "publish": {
       "provider": "github",
       "owner": "edjafarov",
-      "repo": "alpha-cent",
+      "repo": "kiagent-core",
       "releaseType": "draft"
     }
   },

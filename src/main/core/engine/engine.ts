@@ -23,6 +23,10 @@ import type {
   WorkerSession,
 } from '@shared/contracts';
 
+import { sourceErrorCode } from '@shared/source-errors';
+
+import { isDbWorkerTransientError } from '../../db/worker-client';
+
 import type { CoreStore } from '../store/store';
 
 export interface LogSink {
@@ -50,6 +54,12 @@ export interface EngineDeps {
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 5 * 60_000;
 const SOURCE_MAX_RETRIES = 5;
+/** Consecutive DB-worker-crash retries an infinite feed consumer
+ *  (attach/project) tolerates before giving up. The worker supervisor's own
+ *  crash-loop breaker converts a persistent crash into a non-transient
+ *  DB_WORKER_DEAD long before this budget matters — it exists so a bug in
+ *  that classification can never turn a consumer into a hot retry loop. */
+const FEED_RETRY_MAX = 5;
 
 /** Iterate, but stop the moment the signal aborts — even while the source
  *  iterator is parked awaiting new data (the live feed blocks on commits). */
@@ -270,6 +280,12 @@ export function createEngine(deps: EngineDeps): Engine & {
             return fresh;
           }
         } catch (err) {
+          // An auth-coded refresh failure (revoked grant) must PROPAGATE:
+          // returning the stale token would just move the failure to the
+          // next API call as an untyped 401 retry-storm. Swallow-and-warn
+          // stays correct only for transient failures (network, 5xx), where
+          // the stale token may in fact still work.
+          if (sourceErrorCode(err) === 'auth') throw err;
           logs.log(scope, 'warn', `token refresh failed: ${String(err)}`);
         }
       }
@@ -625,8 +641,35 @@ export function createEngine(deps: EngineDeps): Engine & {
             } catch (err) {
               await reconciling;
               if (abort.signal.aborted) return;
-              retries += 1;
               const msg = String(err instanceof Error ? err.message : err);
+              // Taxonomy branch — keyed on the `code` PROPERTY, never
+              // instanceof (extension-proxied errors are rehydrated plain
+              // Errors carrying the wire's `code`). 'auth' → 'needsReauth'
+              // and stop: retries cannot fix a revoked credential, and the
+              // supervisor tick / boot resume skip this status, so only the
+              // user's explicit Retry (or a fresh connect) restarts the
+              // loop. 'permanent' → 'error' and stop, skipping the pointless
+              // 5x backoff. Everything un-coded keeps the transient path.
+              const code = sourceErrorCode(err);
+              if (code) {
+                status = code === 'auth' ? 'needsReauth' : 'error';
+                logs.log(
+                  scope,
+                  'error',
+                  code === 'auth'
+                    ? `authentication required — sync stopped: ${msg}`
+                    : `permanent failure — not retrying: ${msg}`,
+                );
+                await store.commit({
+                  account: account.id,
+                  documents: [],
+                  cursor: ((await store.account(account.id)) ?? account).cursor,
+                  status,
+                  error: msg,
+                });
+                return;
+              }
+              retries += 1;
               logs.log(
                 scope,
                 'error',
@@ -775,13 +818,15 @@ export function createEngine(deps: EngineDeps): Engine & {
       await store.setAccountConfig(accountId, config);
       // Only restart a loop that's actually running — a never-started account
       // just gets its config persisted for the next run(). And a running-map
-      // entry alone isn't enough: pause is a status-only commit that leaves
-      // the entry in place, so restarting on it would silently resume an
-      // explicitly paused account (mirror the status gates in
-      // accounts:set-cadence and boot's cadence job).
+      // entry alone isn't enough: pause and needsReauth are status-only resting
+      // states that leave a finished handle in the map, so restarting on them
+      // would silently resume an explicitly paused account or re-hammer a
+      // revoked credential (mirror the status gates in boot's cadence job and
+      // resumeAccounts).
       if (!running.has(`account:${accountId}`)) return;
       const fresh = await store.account(accountId);
-      if (fresh && fresh.status !== 'paused') engine.run(fresh);
+      if (fresh && fresh.status !== 'paused' && fresh.status !== 'needsReauth')
+        engine.run(fresh);
     },
 
     attach(worker: Worker): Handle {
@@ -789,40 +834,68 @@ export function createEngine(deps: EngineDeps): Engine & {
       const abort = new AbortController();
       let stopped = false;
 
+      // The feed loop is an INFINITE consumer: one uncaught store rejection
+      // would otherwise settle `done` and silently halt background processing
+      // until app restart. The consumer cursor is durable and delivery is
+      // at-least-once, so a DB-worker crash (coded transient by the worker
+      // supervisor) is survivable by construction: back off and resume from
+      // the committed cursor. Anything else — including DB_WORKER_DEAD after
+      // the supervisor gave up — still stops the loop, as before.
       const done = (async () => {
-        const start = await store.consumerCursor(consumer);
-        try {
-          for await (const changes of abortable(
-            store.feed(start),
-            abort.signal,
-          )) {
-            if (abort.signal.aborted) return;
-            let emitted: DocumentInput[] = [];
-            let enrich: EnrichInput[] = [];
-            let cursor: Seq = await store.consumerCursor(consumer);
-            for (const change of changes) {
+        let retries = 0;
+        for (;;) {
+          try {
+            const start = await store.consumerCursor(consumer);
+            for await (const changes of abortable(
+              store.feed(start),
+              abort.signal,
+            )) {
               if (abort.signal.aborted) return;
-              if (worker.matches(change)) {
-                const r = await workOne(worker, change, abort.signal);
-                emitted = emitted.concat(r.docs);
-                enrich = enrich.concat(r.enrich);
+              let emitted: DocumentInput[] = [];
+              let enrich: EnrichInput[] = [];
+              let cursor: Seq = await store.consumerCursor(consumer);
+              for (const change of changes) {
+                if (abort.signal.aborted) return;
+                if (worker.matches(change)) {
+                  const r = await workOne(worker, change, abort.signal);
+                  emitted = emitted.concat(r.docs);
+                  enrich = enrich.concat(r.enrich);
+                }
+                cursor = change.seq;
               }
-              cursor = change.seq;
+              await store.commit({
+                consumer,
+                cursor,
+                documents: emitted.length ? emitted : undefined,
+                enrich: enrich.length ? enrich : undefined,
+              });
+              retries = 0; // durable progress — a later crash starts fresh
             }
-            await store.commit({
-              consumer,
-              cursor,
-              documents: emitted.length ? emitted : undefined,
-              enrich: enrich.length ? enrich : undefined,
-            });
-          }
-        } catch (err) {
-          if (!abort.signal.aborted) {
+            return; // feed ended: only abortable() exhausting on abort
+          } catch (err) {
+            if (abort.signal.aborted) return;
+            if (!isDbWorkerTransientError(err) || retries >= FEED_RETRY_MAX) {
+              logs.log(
+                `worker:${worker.name}`,
+                'error',
+                `stopped: ${String(err)}`,
+              );
+              return;
+            }
+            retries += 1;
             logs.log(
               `worker:${worker.name}`,
-              'error',
-              `stopped: ${String(err)}`,
+              'warn',
+              `feed interrupted by a DB worker crash — resuming (${retries}/${FEED_RETRY_MAX}): ${String(err)}`,
             );
+            try {
+              await sleep(
+                Math.min(BACKOFF_BASE_MS * 2 ** (retries - 1), BACKOFF_CAP_MS),
+                abort.signal,
+              );
+            } catch {
+              return; // stopped while backing off
+            }
           }
         }
       })();
@@ -910,6 +983,12 @@ export function createEngine(deps: EngineDeps): Engine & {
     ): Handle {
       const abort = new AbortController();
       let stopped = false;
+      // Same retry shell as attach's feed loop: this projection is the
+      // renderer's ONE live-state channel (main.ts wires push:app-state
+      // through it), so a single DB-worker crash mid-read must not freeze the
+      // UI until app restart. On a coded-transient store error the projection
+      // re-inits from current state — init() reads CURRENT rows, so replays
+      // are safe by the same argument as the mid-init note below.
       const done = (async () => {
         const { read } = store;
         // The whole body (init + the first async headSeq/onDiff, now that
@@ -918,25 +997,46 @@ export function createEngine(deps: EngineDeps): Engine & {
         // before the feed's first await — is logged and settles `done` rather
         // than escaping as an unhandled rejection. Matches the run/attach twins'
         // guarantee that `done` never rejects.
-        try {
-          const state0 = (await projection.init(read)) as S;
-          // Head captured after init: a change landing mid-init may be applied
-          // twice; apply() must tolerate replays (upserts by id do).
-          let seq = await store.headSeq();
-          let state: S = state0;
-          onDiff(state, seq);
-          for await (const changes of abortable(
-            store.feed(seq),
-            abort.signal,
-          )) {
-            if (abort.signal.aborted) return;
-            state = projection.apply(state, changes);
-            seq = changes[changes.length - 1].seq;
+        let retries = 0;
+        for (;;) {
+          try {
+            const state0 = (await projection.init(read)) as S;
+            // Head captured after init: a change landing mid-init may be applied
+            // twice; apply() must tolerate replays (upserts by id do).
+            let seq = await store.headSeq();
+            let state: S = state0;
             onDiff(state, seq);
-          }
-        } catch (err) {
-          if (!abort.signal.aborted) {
-            logs.log('engine', 'error', `projection stopped: ${String(err)}`);
+            for await (const changes of abortable(
+              store.feed(seq),
+              abort.signal,
+            )) {
+              if (abort.signal.aborted) return;
+              state = projection.apply(state, changes);
+              seq = changes[changes.length - 1].seq;
+              onDiff(state, seq);
+              retries = 0;
+            }
+            return;
+          } catch (err) {
+            if (abort.signal.aborted) return;
+            if (!isDbWorkerTransientError(err) || retries >= FEED_RETRY_MAX) {
+              logs.log('engine', 'error', `projection stopped: ${String(err)}`);
+              return;
+            }
+            retries += 1;
+            logs.log(
+              'engine',
+              'warn',
+              `projection interrupted by a DB worker crash — re-initializing (${retries}/${FEED_RETRY_MAX}): ${String(err)}`,
+            );
+            try {
+              await sleep(
+                Math.min(BACKOFF_BASE_MS * 2 ** (retries - 1), BACKOFF_CAP_MS),
+                abort.signal,
+              );
+            } catch {
+              return; // stopped while backing off
+            }
           }
         }
       })();

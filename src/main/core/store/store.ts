@@ -664,6 +664,18 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     maintenance: {
       async compact() {
         await db.exec('VACUUM');
+        // documents has a TEXT primary key, so VACUUM may renumber its
+        // implicit rowids — which documents_fts rows are pinned to (schema
+        // v2). Rebuild the pinning right after, in one transaction; a write
+        // that slips in between is also corrected by this rebuild.
+        await db.batch([
+          { sql: `DELETE FROM documents_fts` },
+          {
+            sql: `INSERT INTO documents_fts(rowid, doc_id, title, markdown)
+                  SELECT rowid, id, coalesce(title, ''), coalesce(markdown, '')
+                  FROM documents`,
+          },
+        ]);
       },
       async export(destDir) {
         fs.mkdirSync(destDir, { recursive: true });

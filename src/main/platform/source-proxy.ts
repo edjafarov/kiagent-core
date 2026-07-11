@@ -20,6 +20,7 @@ import type {
   Source,
 } from '@shared/contracts';
 import type { Contributions, WireBatch } from '@shared/extension-rpc';
+import { sourceErrorCode, type SourceErrorCode } from '@shared/source-errors';
 
 import type { RpcEndpoint } from './transport';
 
@@ -27,7 +28,7 @@ type Inbox =
   | { kind: 'batch'; batch: WireBatch }
   | { kind: 'refs'; refs: ExternalRef[] }
   | { kind: 'done' }
-  | { kind: 'error'; error: string };
+  | { kind: 'error'; error: string; code?: SourceErrorCode };
 
 interface StreamState {
   inbox: Inbox[];
@@ -89,6 +90,7 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
       batch?: WireBatch;
       refs?: ExternalRef[];
       error?: string;
+      code?: unknown;
     };
     if (m.kind === 'src-batch')
       push(m.pullId!, { kind: 'batch', batch: m.batch! });
@@ -96,7 +98,13 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
       push(m.pullId!, { kind: 'refs', refs: m.refs! });
     else if (m.kind === 'src-done') push(m.pullId!, { kind: 'done' });
     else if (m.kind === 'src-error')
-      push(m.pullId!, { kind: 'error', error: m.error ?? 'source error' });
+      push(m.pullId!, {
+        kind: 'error',
+        error: m.error ?? 'source error',
+        // Never trust the child's value shape — sourceErrorCode narrows to
+        // the two known codes and drops anything else.
+        code: sourceErrorCode({ code: m.code }),
+      });
   });
 
   /** Shared demand-driven stream loop for pull (batches) and reconcile (refs). */
@@ -142,7 +150,16 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
         }
         const msg = state.inbox.shift()!;
         if (msg.kind === 'done') return;
-        if (msg.kind === 'error') throw new Error(msg.error);
+        if (msg.kind === 'error') {
+          // Rehydrate with the wire-carried taxonomy code: the engine keys
+          // off the `code` property, so a proxied source's auth failure
+          // classifies exactly like a bundled one's SourceAuthError.
+          const err = new Error(msg.error) as Error & {
+            code?: SourceErrorCode;
+          };
+          if (msg.code) err.code = msg.code;
+          throw err;
+        }
         yield msg;
       }
     } finally {

@@ -1,6 +1,8 @@
 /** @jest-environment node */
 import path from 'path';
 
+import { SourceAuthError, sourceErrorCode } from '@shared/source-errors';
+
 import {
   createInMemoryHostPair,
   createRpcEndpoint,
@@ -64,6 +66,47 @@ describe('createRpcEndpoint over the in-memory pair', () => {
     await expect(mainEp.call('db', 'exec', [])).rejects.toThrow(
       'CAP_DENIED: nope',
     );
+  });
+
+  it("carries the source-error taxonomy code across the reply (auth → child's rejection)", async () => {
+    // The child's session.credentials() is a main→child call whose main-side
+    // handler can reject with a refresher's SourceAuthError. Without the code
+    // on ReplyMsg, an extension OAuth source's revoked grant would rehydrate
+    // as an uncoded Error and take the transient retry path instead of
+    // 'needsReauth'. Here `main` plays the child, `mainEp.call` the child's
+    // credentials() request.
+    const { main, child } = createInMemoryHostPair();
+    const childCaller = createRpcEndpoint(main);
+    createRpcEndpoint(child).onCall(async () => {
+      throw new SourceAuthError('token refresh failed: invalid_grant');
+    });
+    const err = await childCaller.call('session', 'credentials', [1]).then(
+      () => {
+        throw new Error('expected rejection');
+      },
+      (e: Error & { code?: string }) => e,
+    );
+    expect(err.message).toBe('token refresh failed: invalid_grant');
+    expect(err.code).toBe('auth');
+    expect(sourceErrorCode(err)).toBe('auth');
+  });
+
+  it('drops non-taxonomy error codes (a bare Node ENOENT never becomes a taxonomy code)', async () => {
+    const { main, child } = createInMemoryHostPair();
+    const mainEp = createRpcEndpoint(main);
+    createRpcEndpoint(child).onCall(async () => {
+      const e = new Error('no such file') as Error & { code?: string };
+      e.code = 'ENOENT';
+      throw e;
+    });
+    const err = await mainEp.call('fs', 'read', []).then(
+      () => {
+        throw new Error('expected rejection');
+      },
+      (e: Error & { code?: string }) => e,
+    );
+    expect(err.message).toBe('no such file');
+    expect(err.code).toBeUndefined();
   });
 
   it('delivers non-call messages to onNotify and dispose rejects in-flight calls', async () => {
