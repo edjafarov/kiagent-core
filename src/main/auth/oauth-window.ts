@@ -15,13 +15,21 @@ export interface OAuthProfile {
   exchange(callbackUrl: string, redirectUri: string): Promise<Credentials>;
 }
 
-/** Open an auth window, intercept the redirect, return the full callback URL. */
+/** Open an auth window, intercept the redirect, return the full callback URL.
+ *  `signal` (a connect flow's cancellation) closes the window and rejects —
+ *  without it the window is independent of the wizard and outlives a
+ *  cancelled flow, letting a completed sign-in create an account anyway. */
 export function runOAuthWindow(
   authUrl: string,
   redirectPrefix: string,
   parent?: BrowserWindow,
+  signal?: AbortSignal,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('connect flow cancelled'));
+      return;
+    }
     const win = new BrowserWindow({
       width: 520,
       height: 680,
@@ -31,12 +39,16 @@ export function runOAuthWindow(
       webPreferences: { nodeIntegration: false, contextIsolation: true },
     });
     let settled = false;
+    const onAbort = () =>
+      settle(() => reject(new Error('connect flow cancelled')));
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', onAbort);
       fn();
       if (!win.isDestroyed()) win.close();
     };
+    signal?.addEventListener('abort', onAbort, { once: true });
     win.webContents.session.webRequest.onBeforeRequest(
       { urls: [`${redirectPrefix}*`] },
       (details, callback) => {

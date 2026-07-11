@@ -189,6 +189,27 @@ export function AddSourcePanel(props: {
     picker && pickerAdapter
       ? { requestId: picker.requestId, cancel: () => pickerAdapter.cancel() }
       : null;
+  // The LIVE (unsettled) flow, for the unmount cleanup and the Back button:
+  // leaving the panel mid-flow must cancel it main-side (reject its pending
+  // prompt, close its OAuth window, block a late connect() from creating an
+  // account) — otherwise the suspended connect() frame and its broker/child
+  // entries live until app quit. Render-maintained ref, mirroring
+  // openPickerRef; null once the flow settled (done/error), so a stale
+  // cancel is never sent for a finished flow.
+  const liveFlowRef = useRef<string | null>(null);
+  liveFlowRef.current = flow && !flow.done && !flow.error ? flow.flowId : null;
+
+  const cancelFlowMainSide = (): void => {
+    const flowId = liveFlowRef.current;
+    liveFlowRef.current = null;
+    if (flowId) {
+      // Fire-and-forget: racing a flow that settled a beat earlier is a
+      // main-side no-op by contract.
+      void window.kiagent
+        .invoke('accounts:cancel-flow', { flowId })
+        .catch(() => {});
+    }
+  };
 
   // Roots the CURRENT flow's source already tracks under an existing account
   // (the local-folder machine account's `config.paths`) — recomputed every
@@ -217,7 +238,11 @@ export function AddSourcePanel(props: {
         // "unknown picker request" — swallow it.
         void open.cancel().catch(() => {});
       }
+      // Any unmount with the flow still unsettled (header Cancel →
+      // props.onDone, navigation away) cancels it main-side.
+      cancelFlowMainSide();
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
@@ -345,6 +370,9 @@ export function AddSourcePanel(props: {
   const cancelFlow = (): void => {
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
+    // No-op when the flow already settled (the error-state Back button) —
+    // liveFlowRef is null then.
+    cancelFlowMainSide();
     setFlow(null);
   };
 

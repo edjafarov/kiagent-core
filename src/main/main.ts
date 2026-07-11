@@ -279,6 +279,9 @@ function registerIpc(
   handle('accounts:prompt-answer', ({ requestId, answers }) => {
     broker.answer(requestId, answers);
   });
+  handle('accounts:cancel-flow', ({ flowId }) => {
+    broker.cancel(flowId);
+  });
   handle('accounts:picker-roots', ({ requestId, mode }) =>
     broker.pickerRoots(requestId, mode),
   );

@@ -189,6 +189,11 @@ export interface Invokes {
     req: { requestId: string; answers: Record<string, unknown> };
     res: void;
   };
+  /** Cancels an in-flight connect flow: rejects its pending prompt/pickers,
+   *  closes its OAuth window, and keeps a late connect() success from
+   *  creating+starting an account. No-op for unknown/settled flowIds (the
+   *  renderer's unmount cleanup races flows that settled a beat earlier). */
+  'accounts:cancel-flow': { req: { flowId: string }; res: void };
   /** Lazy tree reads for an open connect-flow folder picker (`folder-picker`
    *  ConnectEvent). All reject on an unknown/settled requestId. */
   'accounts:picker-roots': {
@@ -361,6 +366,7 @@ export const INVOKE_CHANNELS = [
   'sources:list-folders',
   'accounts:add',
   'accounts:prompt-answer',
+  'accounts:cancel-flow',
   'accounts:picker-roots',
   'accounts:picker-children',
   'accounts:picker-count',

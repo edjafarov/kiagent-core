@@ -26,9 +26,16 @@ export function createConnectBroker(
   getParentWindow: () => BrowserWindow | undefined,
 ) {
   const oauthProfiles = new Map<string, OAuthProfile>();
+  // flowId carried per prompt (mirroring pickers) so cancel/settle can sweep
+  // a flow's own prompts; reject is what makes a cancelled flow's awaited
+  // prompt throw inside source.connect().
   const pendingPrompts = new Map<
     string,
-    (answers: Record<string, unknown>) => void
+    {
+      flowId: string;
+      resolve: (answers: Record<string, unknown>) => void;
+      reject: (err: Error) => void;
+    }
   >();
   // An open pickFolders per requestId: the spec's tree callbacks service the
   // renderer's accounts:picker-* invokes; resolve/reject settle the source's
@@ -42,6 +49,27 @@ export function createConnectBroker(
       reject: (err: Error) => void;
     }
   >();
+  // One entry per UNSETTLED flow, created in start() and removed in its
+  // finally. `cancelled` is the flag the flow block checks before runAccount
+  // — the only cover for a cancel landing while connect() is mid-flight
+  // inside the source (post-answer validation, QR pairing) with no
+  // broker-held promise to reject. `abort` closes the flow's OAuth window.
+  const flows = new Map<
+    string,
+    { cancelled: boolean; abort: AbortController }
+  >();
+
+  /** Reject-and-forget every pending prompt/picker belonging to `flowId`. */
+  function sweepFlow(flowId: string, reason: string): void {
+    for (const map of [pendingPrompts, pendingPickers] as const) {
+      for (const [requestId, entry] of map) {
+        if (entry.flowId === flowId) {
+          map.delete(requestId);
+          entry.reject(new Error(reason));
+        }
+      }
+    }
+  }
 
   function picker(requestId: string) {
     const entry = pendingPickers.get(requestId);
@@ -69,6 +97,8 @@ export function createConnectBroker(
         send({ flowId, kind: 'error', msg: `unknown source: ${sourceId}` });
         return { flowId };
       }
+      const flow = { cancelled: false, abort: new AbortController() };
+      flows.set(flowId, flow);
       const auth: AuthChannel = {
         async oauth(scopes: string[]): Promise<Credentials> {
           const profile = oauthProfiles.get(sourceId);
@@ -79,6 +109,7 @@ export function createConnectBroker(
             profile.authUrl(scopes, profile.redirectUri),
             profile.redirectUri,
             getParentWindow(),
+            flow.abort.signal,
           );
           return profile.exchange(callbackUrl, profile.redirectUri);
         },
@@ -87,9 +118,17 @@ export function createConnectBroker(
         },
         async prompt(schema: unknown): Promise<Record<string, unknown>> {
           const requestId = newId<'prompt'>();
-          const answers = new Promise<Record<string, unknown>>((resolve) => {
-            pendingPrompts.set(requestId, resolve);
-          });
+          const answers = new Promise<Record<string, unknown>>(
+            (resolve, reject) => {
+              pendingPrompts.set(requestId, { flowId, resolve, reject });
+            },
+          );
+          // Same guard as pickers below: the cancel/settle sweep may reject
+          // a prompt the flow already abandoned — keep that from surfacing
+          // as an unhandled rejection. The real awaiter (the source's
+          // connect(), possibly across the extension-child RPC) still sees
+          // the rejection.
+          answers.catch(() => {});
           send({ flowId, kind: 'prompt', requestId, schema });
           return answers;
         },
@@ -120,6 +159,16 @@ export function createConnectBroker(
       void (async () => {
         try {
           const account = await platform.engine.connect(source, auth);
+          // A cancel that landed while connect() was mid-flight INSIDE the
+          // source (post-answer credential validation, QR pairing) had no
+          // broker-held promise to reject — connect() completed and
+          // persisted the account anyway. Remove it instead of starting it:
+          // a cancelled wizard must not leave a surprise account syncing.
+          if (flow.cancelled) {
+            await platform.engine.remove(account.id);
+            send({ flowId, kind: 'error', msg: 'connect flow cancelled' });
+            return;
+          }
           runAccount(platform, account);
           send({ flowId, kind: 'done', account });
         } catch (err) {
@@ -129,22 +178,35 @@ export function createConnectBroker(
             msg: String(err instanceof Error ? err.message : err),
           });
         } finally {
-          // The flow settled — none of its pickers can ever be answered again.
-          // (Prompts keep their existing keep-until-answered semantics.)
-          for (const [requestId, entry] of pendingPickers) {
-            if (entry.flowId === flowId) {
-              pendingPickers.delete(requestId);
-              entry.reject(new Error('connect flow ended'));
-            }
-          }
+          flows.delete(flowId);
+          // The flow settled — none of its prompts or pickers can ever be
+          // answered again; an unanswered prompt would otherwise pin the
+          // suspended connect() frame (and its extension-child counterpart)
+          // until app quit.
+          sweepFlow(flowId, 'connect flow ended');
         }
       })();
 
       return { flowId };
     },
 
+    /** Cancel an in-flight flow. No-op for unknown/settled flowIds — the
+     *  renderer's unmount cleanup races flows that settled a beat earlier. */
+    cancel(flowId: string): void {
+      const flow = flows.get(flowId);
+      if (!flow) return;
+      flow.cancelled = true;
+      // Close the flow's OAuth window (if one is open): its 'closed' handler
+      // rejects the pending auth.oauth, so connect() throws and the flow
+      // settles through its normal error path.
+      flow.abort.abort();
+      // Reject any broker-held waits so a flow blocked on user input settles
+      // NOW rather than on app quit.
+      sweepFlow(flowId, 'connect flow cancelled');
+    },
+
     answer(requestId: string, answers: Record<string, unknown>): void {
-      pendingPrompts.get(requestId)?.(answers);
+      pendingPrompts.get(requestId)?.resolve(answers);
       pendingPrompts.delete(requestId);
     },
 

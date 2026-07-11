@@ -8,6 +8,8 @@ import type {
 import type { ConnectEvent } from '@shared/ipc';
 
 import { createConnectBroker } from '../connect-broker';
+import { runOAuthWindow } from '../oauth-window';
+import { runAccount } from '../../core/boot';
 import type { CorePlatform } from '../../core/boot';
 
 // oauth-window pulls in electron at require time; boot pulls in the whole
@@ -37,6 +39,7 @@ function makeSource(
 
 function makeBroker(source: Source) {
   const events: ConnectEvent[] = [];
+  const engineRemove = jest.fn(async () => {});
   const platform = {
     sources: {
       get: (id: string) => (id === source.descriptor.id ? source : undefined),
@@ -46,6 +49,7 @@ function makeBroker(source: Source) {
         const { identifier } = await s.connect(auth);
         return { id: 'acc1', source: s.descriptor.id, identifier } as never;
       },
+      remove: engineRemove,
     },
   } as unknown as CorePlatform;
   const broker = createConnectBroker(
@@ -53,7 +57,7 @@ function makeBroker(source: Source) {
     (e) => events.push(e),
     () => undefined,
   );
-  return { broker, events };
+  return { broker, events, engineRemove };
 }
 
 const NODE_A: FolderNode = { id: 'a', name: 'Alpha', hasChildren: true };
@@ -231,5 +235,145 @@ describe('connect broker — pickFolders', () => {
     expect(() => broker.pickerRoots(requestId, 'drive')).toThrow(
       'unknown picker request',
     );
+  });
+});
+
+describe('connect broker — cancel', () => {
+  beforeEach(() => {
+    (runAccount as jest.Mock).mockClear();
+    (runOAuthWindow as jest.Mock).mockReset();
+  });
+
+  function promptEvent(events: ConnectEvent[]) {
+    const evt = events.find((e) => e.kind === 'prompt');
+    if (!evt || evt.kind !== 'prompt') throw new Error('no prompt event');
+    return evt;
+  }
+
+  it('cancel during a prompt rejects it: connect() throws, the flow errors, the entry is swept', async () => {
+    const { broker, events } = makeBroker(
+      makeSource(async (auth) => {
+        const answers = await auth.prompt({ fields: [] });
+        return { identifier: String(answers.user) };
+      }),
+    );
+    const { flowId } = broker.start('picky');
+    await flush();
+    const { requestId } = promptEvent(events);
+
+    broker.cancel(flowId);
+    await flush();
+
+    const error = events.find((e) => e.kind === 'error');
+    expect(error && error.kind === 'error' && error.msg).toBe(
+      'connect flow cancelled',
+    );
+    expect(events.some((e) => e.kind === 'done')).toBe(false);
+    expect(runAccount).not.toHaveBeenCalled();
+    // The prompt entry is gone — a late answer is a harmless no-op.
+    expect(() => broker.answer(requestId, { user: 'x' })).not.toThrow();
+  });
+
+  it('cancel during pickFolders rejects the picker and settles the flow', async () => {
+    const { broker, events } = makeBroker(
+      makeSource(async (auth) => {
+        const picked = await auth.pickFolders(makeSpec());
+        return { identifier: picked.map((n) => n.id).join(',') };
+      }),
+    );
+    const { flowId } = broker.start('picky');
+    await flush();
+    const { requestId } = pickerEvent(events);
+
+    broker.cancel(flowId);
+    await flush();
+
+    const error = events.find((e) => e.kind === 'error');
+    expect(error && error.kind === 'error' && error.msg).toBe(
+      'connect flow cancelled',
+    );
+    expect(() => broker.pickerRoots(requestId, 'drive')).toThrow(
+      'unknown picker request',
+    );
+  });
+
+  it("cancel closes the flow's OAuth window via the abort signal", async () => {
+    (runOAuthWindow as jest.Mock).mockImplementation(
+      (_url, _redirect, _parent, signal: AbortSignal | undefined) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () =>
+            reject(new Error('connect flow cancelled')),
+          );
+        }),
+    );
+    const { broker, events } = makeBroker(
+      makeSource(async (auth) => {
+        const creds = await auth.oauth(['scope']);
+        return { identifier: String(creds.accessToken) };
+      }),
+    );
+    broker.registerOAuthProfile('picky', {
+      redirectUri: 'http://127.0.0.1/cb',
+      authUrl: () => 'https://auth.example',
+      exchange: async () => ({ accessToken: 'tok' }),
+    });
+    const { flowId } = broker.start('picky');
+    await flush();
+    expect(runOAuthWindow).toHaveBeenCalledTimes(1);
+
+    broker.cancel(flowId);
+    await flush();
+
+    const error = events.find((e) => e.kind === 'error');
+    expect(error && error.kind === 'error' && error.msg).toBe(
+      'connect flow cancelled',
+    );
+  });
+
+  it('a cancelled flow whose connect() still resolves removes the account instead of starting it', async () => {
+    // The impatient-user case: cancel lands while the source is mid-flight
+    // (network validation, QR pairing) with no broker-held promise to
+    // reject — connect() completes and persists the account anyway.
+    let releaseConnect!: () => void;
+    const gate = new Promise<void>((r) => {
+      releaseConnect = r;
+    });
+    const { broker, events, engineRemove } = makeBroker(
+      makeSource(async () => {
+        await gate;
+        return { identifier: 'late@example.com' };
+      }),
+    );
+    const { flowId } = broker.start('picky');
+    await flush();
+
+    broker.cancel(flowId);
+    releaseConnect();
+    await flush();
+
+    expect(engineRemove).toHaveBeenCalledWith('acc1');
+    expect(runAccount).not.toHaveBeenCalled();
+    expect(events.some((e) => e.kind === 'done')).toBe(false);
+    const error = events.find((e) => e.kind === 'error');
+    expect(error && error.kind === 'error' && error.msg).toBe(
+      'connect flow cancelled',
+    );
+  });
+
+  it('cancel is a no-op for unknown and already-settled flowIds', async () => {
+    const { broker, events, engineRemove } = makeBroker(
+      makeSource(async () => ({ identifier: 'ok@example.com' })),
+    );
+    expect(() => broker.cancel('flow_nope')).not.toThrow();
+
+    const { flowId } = broker.start('picky');
+    await flush();
+    expect(events.some((e) => e.kind === 'done')).toBe(true);
+    expect(runAccount).toHaveBeenCalledTimes(1);
+
+    // The renderer's unmount cleanup racing a settled flow: nothing happens.
+    expect(() => broker.cancel(flowId)).not.toThrow();
+    await flush();
+    expect(engineRemove).not.toHaveBeenCalled();
   });
 });

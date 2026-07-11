@@ -54,6 +54,7 @@ beforeEach(() => {
       if (channel === 'accounts:add') return Promise.resolve({ flowId: 'f1' });
       if (channel === 'accounts:prompt-answer')
         return Promise.resolve(undefined);
+      if (channel === 'accounts:cancel-flow') return Promise.resolve(undefined);
       return Promise.reject(new Error(`unexpected invoke: ${channel}`));
     }),
     on: jest.fn((_channel: string, handler: (evt: unknown) => void) => {
@@ -122,6 +123,50 @@ describe('AddSourcePanel wizard card', () => {
     const onDone = await openSlackPrompt();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onDone).toHaveBeenCalled();
+  });
+
+  test('unmounting mid-flow cancels it main-side (accounts:cancel-flow)', async () => {
+    // The real Cancel path: props.onDone → the parent unmounts the panel with
+    // the prompt still pending — without the cancel the suspended connect()
+    // and its broker entries live until app quit.
+    const { unmount } = render(
+      <SourceDescriptorsProvider>
+        <AddSourcePanel onDone={jest.fn()} />
+      </SourceDescriptorsProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /slack/i }));
+    await act(async () => {});
+    act(() => {
+      pushHandler!({
+        flowId: 'f1',
+        kind: 'prompt',
+        requestId: 'r1',
+        schema: ENRICHED_SCHEMA,
+      });
+    });
+
+    unmount();
+    expect(
+      (window as unknown as { kiagent: { invoke: jest.Mock } }).kiagent.invoke,
+    ).toHaveBeenCalledWith('accounts:cancel-flow', { flowId: 'f1' });
+  });
+
+  test('unmounting a settled flow does NOT send a stale cancel', async () => {
+    const { unmount } = render(
+      <SourceDescriptorsProvider>
+        <AddSourcePanel onDone={jest.fn()} />
+      </SourceDescriptorsProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /slack/i }));
+    await act(async () => {});
+    act(() => {
+      pushHandler!({ flowId: 'f1', kind: 'error', msg: 'boom' });
+    });
+
+    unmount();
+    expect(
+      (window as unknown as { kiagent: { invoke: jest.Mock } }).kiagent.invoke,
+    ).not.toHaveBeenCalledWith('accounts:cancel-flow', expect.anything());
   });
 
   test('tile-grid Cancel is a visible bordered button', async () => {
