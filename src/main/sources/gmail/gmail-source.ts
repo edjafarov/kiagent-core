@@ -39,10 +39,13 @@ export const descriptor: SourceDescriptor = {
   cadence: { every: '15m' },
 };
 
-/** Threads fetched per yielded Batch during backfill — matches the task
- *  brief's "~25 threads/batch". Chunked out of a 100-thread threads.list
- *  page (Gmail API page size), so a single page yields ~4 batches. */
-const BACKFILL_CHUNK_SIZE = 25;
+/** Threads fetched per yielded Batch — matches the task brief's "~25
+ *  threads/batch". Backfill chunks a 100-thread threads.list page (Gmail API
+ *  page size) into ~4 batches; the delta sweep chunks its affected-thread
+ *  re-fetch the same way, so a bulk Gmail action (select-all archive touches
+ *  thousands of threads in one history window) neither buffers everything in
+ *  memory nor loses all progress to a mid-sweep failure. */
+const THREAD_CHUNK_SIZE = 25;
 
 export async function connect(
   auth: AuthChannel,
@@ -74,20 +77,29 @@ async function fetchThreadItems(
 
 /** One history.list sweep: pages until exhausted, collects every thread id
  *  touched by messagesAdded/messagesDeleted/labelsAdded/labelsRemoved (union
- *  — matches legacy delta.ts exactly), then re-fetches each affected thread.
+ *  — matches legacy delta.ts exactly), then re-fetches the affected threads
+ *  through the same bounded pool the backfill uses, in ~25-thread chunks.
  *  A 404 on re-fetch means the thread is genuinely gone upstream (Trash/Spam
  *  expunged, hard-deleted) → reported as a deletion; anything else becomes
- *  an updated item so its document gets re-indexed. */
-async function runDeltaSweep(
+ *  an updated item so its document gets re-indexed.
+ *
+ *  Cursor discipline mirrors the backfill's hold-back rule: every
+ *  intermediate chunk batch carries the OLD historyId, and only the FINAL
+ *  batch (which also carries the accumulated deletions) advances to
+ *  latestHistoryId. Advancing early would permanently skip the changes of
+ *  threads not yet re-fetched; holding back means a mid-sweep failure just
+ *  re-sweeps from the old watermark, and the re-fetch is idempotent
+ *  (upserts key on externalId, archiveByRef no-ops on archived rows). */
+async function* runDeltaSweep(
   session: Session,
   state: Extract<GmailCursor, { mode: 'delta' }>,
   accountEmail: string,
-): Promise<Batch<GmailCursor, GmailThreadItem>> {
+): AsyncGenerator<Batch<GmailCursor, GmailThreadItem>> {
   const affected = new Set<string>();
   let pageToken: string | undefined;
   let latestHistoryId: string | undefined;
   do {
-    if (session.signal.aborted) break;
+    if (session.signal.aborted) return;
     // eslint-disable-next-line no-await-in-loop
     const page = await listHistoryPage(session, state.historyId, pageToken);
     for (const entry of page.history ?? []) {
@@ -104,32 +116,50 @@ async function runDeltaSweep(
     pageToken = page.nextPageToken;
   } while (pageToken);
 
-  const items: GmailThreadItem[] = [];
+  const finalCursor: GmailCursor = {
+    mode: 'delta',
+    historyId: latestHistoryId ?? state.historyId,
+  };
+  const ids = [...affected];
   const deletions: ExternalRef[] = [];
-  for (const threadId of affected) {
-    if (session.signal.aborted) break;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const raw = await getThread(session, threadId);
-      items.push({ id: threadId, messages: raw.messages ?? [], accountEmail });
-    } catch (err) {
-      if (isGmailNotFoundError(err)) {
+  for (let i = 0; i < ids.length; i += THREAD_CHUNK_SIZE) {
+    if (session.signal.aborted) return;
+    const chunk = ids.slice(i, i + THREAD_CHUNK_SIZE);
+    const items: GmailThreadItem[] = [];
+    // The 404→deletion catch lives INSIDE the pooled worker: one
+    // hard-deleted thread must not reject the whole chunk.
+    // eslint-disable-next-line no-await-in-loop
+    await mapPool(chunk, async (threadId) => {
+      try {
+        const raw = await getThread(session, threadId);
+        items.push({
+          id: threadId,
+          messages: raw.messages ?? [],
+          accountEmail,
+        });
+      } catch (err) {
+        if (!isGmailNotFoundError(err)) throw err;
         deletions.push({
           externalId: threadId,
           type: GMAIL_THREAD_DOCUMENT_TYPE,
         });
-      } else {
-        throw err;
       }
-    }
+    });
+    const isLastChunk = i + THREAD_CHUNK_SIZE >= ids.length;
+    yield isLastChunk
+      ? {
+          phase: 'live',
+          items,
+          deletions: deletions.length ? deletions : undefined,
+          cursor: finalCursor,
+        }
+      : { phase: 'live', items, cursor: state };
   }
-
-  return {
-    phase: 'live',
-    items,
-    deletions: deletions.length ? deletions : undefined,
-    cursor: { mode: 'delta', historyId: latestHistoryId ?? state.historyId },
-  };
+  // No affected threads: still advance the watermark so the next sweep
+  // doesn't replay the same (empty) history window.
+  if (ids.length === 0) {
+    yield { phase: 'live', items: [], cursor: finalCursor };
+  }
 }
 
 /**
@@ -177,10 +207,10 @@ export async function* pull(
       // eslint-disable-next-line no-await-in-loop
       const page = await listThreadsPage(session, pageToken);
       const ids = (page.threads ?? []).map((t) => t.id);
-      for (let i = 0; i < ids.length; i += BACKFILL_CHUNK_SIZE) {
+      for (let i = 0; i < ids.length; i += THREAD_CHUNK_SIZE) {
         if (session.signal.aborted) return;
-        const chunk = ids.slice(i, i + BACKFILL_CHUNK_SIZE);
-        const isLastChunkOfPage = i + BACKFILL_CHUNK_SIZE >= ids.length;
+        const chunk = ids.slice(i, i + THREAD_CHUNK_SIZE);
+        const isLastChunkOfPage = i + THREAD_CHUNK_SIZE >= ids.length;
         // eslint-disable-next-line no-await-in-loop
         const items = await fetchThreadItems(session, chunk, accountEmail);
         state = {
@@ -208,8 +238,10 @@ export async function* pull(
   if (session.signal.aborted) return;
 
   try {
-    const batch = await runDeltaSweep(session, state, accountEmail);
-    yield batch;
+    // The only 404 that can escape the sweep is history.list's (per-thread
+    // 404s become deletions inside it), so the catch below still means
+    // exactly "history watermark expired".
+    yield* runDeltaSweep(session, state, accountEmail);
   } catch (err) {
     if (!isGmailNotFoundError(err)) throw err;
     // History watermark expired: fall back to a fresh backfill. Re-capture

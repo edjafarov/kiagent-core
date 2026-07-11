@@ -238,6 +238,62 @@ describe('gmail pull() cursor transitions (fetch mocked — no live API calls)',
     });
   });
 
+  it('delta sweep chunks >25 affected threads: intermediates hold the OLD historyId, the final batch advances it and carries deletions', async () => {
+    // 30 affected threads (one hard-deleted) → two batches of 25 + 5. A
+    // mid-sweep failure after batch 1 committed must re-sweep from the OLD
+    // watermark — an early advance would permanently skip batch 2's threads.
+    const threadIds = Array.from({ length: 30 }, (_, i) => `t${i}`);
+    const routes: Array<[string, () => FakeResponse]> = [
+      [
+        '/history?',
+        () =>
+          okJson({
+            historyId: '99',
+            history: threadIds.map((id) => ({
+              messagesAdded: [{ message: { threadId: id } }],
+            })),
+          }),
+      ],
+      // The trailing `?` disambiguates substring routes (t2 vs t20 etc.).
+      ...threadIds
+        .filter((id) => id !== 't7')
+        .map((id): [string, () => FakeResponse] => [
+          `/threads/${id}?`,
+          () => okJson({ id, messages: [minimalMessage(id, '1')] }),
+        ]),
+      ['/threads/t7?', () => notFound()],
+    ];
+    mockFetchByUrl(routes);
+
+    const cursor: GmailCursor = { mode: 'delta', historyId: '42' };
+    const batches = await drain(pull(makeSession(), cursor));
+
+    expect(batches).toHaveLength(2);
+    // t7 (hard-deleted) sits in the first chunk: its deletion is HELD BACK
+    // until the final batch, where it commits atomically with the advanced
+    // watermark.
+    expect(batches[0].items).toHaveLength(24);
+    expect(batches[0].deletions).toBeUndefined();
+    // The intermediate batch must NOT advance the watermark.
+    expect(batches[0].cursor).toEqual<GmailCursor>({
+      mode: 'delta',
+      historyId: '42',
+    });
+    expect(batches[1].items).toHaveLength(5);
+    expect(batches[1].deletions).toEqual([
+      { externalId: 't7', type: 'email.thread' },
+    ]);
+    expect(batches[1].cursor).toEqual<GmailCursor>({
+      mode: 'delta',
+      historyId: '99',
+    });
+    // Every affected thread was either re-fetched or reported deleted.
+    const seen = batches.flatMap((b) =>
+      b.items.map((i: GmailThreadItem) => i.id),
+    );
+    expect(new Set(seen).size).toBe(29);
+  });
+
   it('falls back to a fresh backfill when history.list 404s with an expired watermark', async () => {
     mockFetchByUrl([
       ['/history?', () => notFound()],
