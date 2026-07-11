@@ -509,7 +509,21 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
                 ),
             );
             const snippets = new Map(rows.map((r) => [r.id, r._snippet]));
-            const fused = rrfMerge<DocRow>(rows, safe, (r) => r.id, limit);
+            // Fuzzy may only FILL the page's remaining slots, never displace
+            // an exact match: rows already in the primary list pass through
+            // (they merge, adding rank signal without growing the union),
+            // new rows are capped to the free slots.
+            const seen = new Set(rows.map((r) => r.id));
+            let free = limit - rows.length;
+            const capped: DocRow[] = [];
+            for (const r of safe) {
+              if (seen.has(r.id)) capped.push(r);
+              else if (free > 0) {
+                capped.push(r);
+                free -= 1;
+              }
+            }
+            const fused = rrfMerge<DocRow>(rows, capped, (r) => r.id, limit);
             return fused.map((r) => ({
               ...toDocument(r),
               snippet:

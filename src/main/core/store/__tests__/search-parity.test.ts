@@ -207,3 +207,60 @@ describe('search parity: trigram fuzzy fallback', () => {
     expect(hits).toHaveLength(0);
   });
 });
+
+describe('search parity: RRF fusion must never evict primary matches', () => {
+  let dir: string;
+  let store: CoreStore;
+  let accountId: AccountId;
+
+  // 3 docs with the LITERAL token 'rechnung', bodies padded with filler so
+  // they lose the bm25 density race in the trigram table against the short
+  // compound-only docs below (a length/density mismatch is what lets the
+  // trigram top-N end up disjoint from the primary hits, which is what
+  // exposes the eviction bug).
+  const filler =
+    'Sehr geehrte Damen und Herren bitte prüfen Sie den Vorgang und melden ' +
+    'Sie sich bei Rückfragen jederzeit gerne bei uns im Büro der Buchhaltung';
+  const exactIds = ['exact-1', 'exact-2', 'exact-3'];
+  const exactDocs = [
+    doc('exact-1', { markdown: `${filler} Rechnung eins ${filler}` }),
+    doc('exact-2', { markdown: `${filler} Rechnung zwei ${filler}` }),
+    doc('exact-3', { markdown: `${filler} Rechnung drei ${filler}` }),
+  ];
+  // 4 docs containing the term ONLY inside a compound — short bodies so
+  // they win the bm25 density race in documents_tri.
+  const compoundDocs = [
+    doc('compound-1', { markdown: 'Jahresrechnung eins' }),
+    doc('compound-2', { markdown: 'Jahresrechnung zwei' }),
+    doc('compound-3', { markdown: 'Jahresrechnung drei' }),
+    doc('compound-4', { markdown: 'Jahresrechnung vier' }),
+  ];
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-rrf-'));
+    store = openStore(await openDb(path.join(dir, 'test.db')), deps);
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'me@example.com',
+    });
+    accountId = account.id;
+    await store.commit({
+      account: accountId,
+      documents: [...exactDocs, ...compoundDocs],
+      cursor: null,
+    });
+  });
+
+  afterEach(async () => {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('never evicts an exact (primary) match to make room for fuzzy rows', async () => {
+    const hits = await store.read.search({ text: 'rechnung', limit: 4 });
+    const externalIds = hits.map((h) => h.externalId);
+    for (const id of exactIds) {
+      expect(externalIds).toContain(id);
+    }
+  });
+});
