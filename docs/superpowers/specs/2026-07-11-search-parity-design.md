@@ -12,9 +12,12 @@ of the existing FTS5 pipeline:
 1. **Stemming** — inflected forms match ("Rechnungen" finds "Rechnung",
    "running" finds "run"), using snowball stemmers selected by each document's
    stored `languages` (ISO-639-3, detected at ingest by `core/language.ts`).
-2. **Fuzzy fallback** — typo'd queries still find documents via a trigram
+2. **Fuzzy fallback** — near-miss queries still find documents via a trigram
    index, fused into the ranking with Reciprocal Rank Fusion (RRF, k=60 — the
-   legacy constant).
+   legacy constant). Trigram matching is *substring* recall (FTS5 matches a
+   query token as a contiguous substring): word-parts and compound words
+   ("Rechnung" finds "Jahresrechnung", "rechnun" finds "Rechnung") — the same
+   semantics legacy had, not edit-distance typo correction.
 
 Both live inside `store.read.search`, so every consumer — the Search screen
 (`search:query` IPC), the MCP `search` tool, and extension-host
@@ -116,9 +119,11 @@ New `src/main/core/stemming.ts` (sibling of `language.ts`):
 
 `src/main/core/store/write-tx.ts`:
 
-- `WriteTxDeps` gains `buildStemView(text: string, languages: string[]): string`,
-  wired everywhere `detectLanguages` already is: `core/boot.ts` (in-process
-  store) and `db/worker-entry.ts` (DB worker).
+- `write-tx.ts` imports `buildStemView` directly from `core/stemming` — it is
+  pure, deterministic JS (no Electron, no async), so unlike `detectLanguages`
+  there is nothing to inject: injection would only ripple a new required dep
+  through every `openStore` call site (10 files) for no testability gain. The
+  DB worker gets it transitively through the same import.
 - `ftsInsert`/`ftsUpsert` take the document's `languages` and write all five
   columns, plus the `documents_tri` row (`body` = raw title + `'\n'` +
   markdown) with the same pinned rowid. The enrich path recomputes stems
@@ -202,8 +207,9 @@ Unit — `stemming.test.ts`:
 Store — extend `fts.test.ts` / `store.test.ts`:
 - Inflection: doc "Die Rechnung ist bezahlt" (deu) found by query
   `Rechnungen`; "running daily" found by `runs`.
-- Typo rescue: `Rechnnug` (transposition) finds the doc via trigram fusion;
-  ranking places an exact match above a fuzzy-only match.
+- Substring rescue: `Rechnung` finds a doc containing only `Jahresrechnung`
+  (and a truncated `rechnun` finds `Rechnung`) via trigram fusion; ranking
+  places an exact match above a fuzzy-only match.
 - Thin-results gate: a query already returning `limit` exact hits performs no
   trigram work (observable via a query counter on the AppDb test double, or
   by result identity).
