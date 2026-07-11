@@ -16,6 +16,7 @@ import type {
   PullPhase,
   SourceDescriptor,
 } from './contracts';
+import type { SourceErrorCode } from './source-errors';
 
 export const PLATFORM_API_VERSION = '1.1.0';
 
@@ -80,4 +81,14 @@ export type ChildToMain =
   | { kind: 'src-batch'; pullId: number; batch: WireBatch }
   | { kind: 'src-refs'; pullId: number; refs: ExternalRef[] }
   | { kind: 'src-done'; pullId: number }
-  | { kind: 'src-error'; pullId: number; error: string };
+  /** `code` carries the source-error taxonomy (see source-errors.ts) across
+   *  the process boundary — main rehydrates a plain Error with the same
+   *  `code` property so proxied sources classify exactly like bundled ones
+   *  (e.g. 'auth' → status 'needsReauth', no retries). Optional and additive:
+   *  older children simply never set it. */
+  | {
+      kind: 'src-error';
+      pullId: number;
+      error: string;
+      code?: SourceErrorCode;
+    };

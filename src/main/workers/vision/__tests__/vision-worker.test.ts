@@ -31,6 +31,7 @@ function fakeSession(
     inference: async () => 'x',
     see: async () => 'a description of the page',
     read: async () => 'plenty of ocr text '.repeat(20), // > 200 chars
+    hear: async () => 'a transcript',
     fetchBytes: async () => new Uint8Array(100_000),
     emit: () => {},
     enrich: (e) => enriched.push(e),

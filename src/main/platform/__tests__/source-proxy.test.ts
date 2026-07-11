@@ -169,4 +169,74 @@ describe('source proxy ↔ real child runtime', () => {
       'unknown auth verb valueOf',
     );
   });
+
+  it("a child pull failure's taxonomy code survives the wire", async () => {
+    // Drives the REAL child runtime: the fixture throws a SourceAuthError in
+    // the child, the entry posts src-error with code:'auth', and the proxy
+    // must rehydrate an Error whose `code` PROPERTY carries it — that
+    // property (not instanceof) is what the engine's catch classifies on.
+    const throwingFixture = {
+      async activate() {
+        return {
+          sources: [
+            {
+              descriptor: {
+                id: 'authfail',
+                name: 'AuthFail',
+                documentTypes: ['t'],
+                auth: 'oauth' as const,
+              },
+              async connect() {
+                return { identifier: 'x' };
+              },
+              // eslint-disable-next-line require-yield
+              async *pull() {
+                const err = new Error('401 token revoked') as Error & {
+                  code: string;
+                };
+                err.code = 'auth'; // same shape SourceAuthError carries
+                throw err;
+              },
+              toDocument(item: unknown) {
+                return item as never;
+              },
+            },
+          ],
+        };
+      },
+    };
+    const { main, child } = createInMemoryHostPair();
+    const mainEp = createRpcEndpoint(main);
+    const proxySet = createSourceProxySet(mainEp);
+    mainEp.onCall((ns, m, a) => proxySet.handleCall(ns, m, a));
+    const activated = new Promise<Contributions>((resolve) => {
+      const off = mainEp.onNotify((msg) => {
+        if (msg.kind === 'activated') {
+          off();
+          resolve(msg.contributions as Contributions);
+        }
+      });
+    });
+    runExtensionHost(child, {
+      requireModule: () => throwingFixture,
+      exit: jest.fn(),
+    });
+    mainEp.post({ ...BOOT, extensionId: 'test.authfail' });
+    const contributions = await activated;
+    const source = proxySet.makeSource(contributions.sources[0]);
+
+    const failure = await (async () => {
+      try {
+        // eslint-disable-next-line no-unused-vars, @typescript-eslint/no-unused-vars
+        for await (const b of source.pull(makeSession(), null)) {
+          /* never yields */
+        }
+        throw new Error('expected pull to reject');
+      } catch (e) {
+        return e as Error & { code?: string };
+      }
+    })();
+    expect(failure.message).toContain('401 token revoked');
+    expect(failure.code).toBe('auth');
+  });
 });

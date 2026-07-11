@@ -108,6 +108,22 @@ const MIGRATIONS: string[] = [
     tokenize = 'unicode61 remove_diacritics 2'
   );
   `,
+
+  // v2 — pin each documents_fts row's rowid to its document's rowid.
+  // doc_id is UNINDEXED, so "DELETE FROM documents_fts WHERE doc_id = ?" was
+  // a full virtual-table scan per call — O(N²) across a mail backfill. With
+  // the rowid pinned, delete/replace become rowid-equality lookups while the
+  // search SQL (which joins on doc_id) stays byte-for-byte unchanged.
+  // Archived rows are included: archiving leaves FTS intact today.
+  // NOTE: documents has a TEXT primary key, so its implicit rowids can be
+  // renumbered by VACUUM — every VACUUM of a non-empty corpus must re-run
+  // this same delete-all + repopulate (see maintenance.compact in store.ts).
+  `
+  DELETE FROM documents_fts;
+  INSERT INTO documents_fts(rowid, doc_id, title, markdown)
+    SELECT rowid, id, coalesce(title, ''), coalesce(markdown, '')
+    FROM documents;
+  `,
 ];
 
 export function migrate(db: BetterSqlite3.Database): void {
@@ -124,6 +140,19 @@ export function migrate(db: BetterSqlite3.Database): void {
       .prepare(`SELECT value FROM meta WHERE key='schemaVersion'`)
       .get() as { value: string } | undefined;
     version = row ? Number(row.value) : 0;
+  }
+  // Fail closed on a corpus written by a NEWER build. Migrations are
+  // forward-only, so an older build silently skips the loop and then writes
+  // with its outdated assumptions — since v2 (FTS rowid pinning) the corpus
+  // now carries a cross-version storage invariant, so a downgrade that writes
+  // can corrupt the FTS index. Refuse to open instead. (The corpus is a
+  // rebuildable cache; the user can reinstall the matching build.)
+  if (version > MIGRATIONS.length) {
+    throw new Error(
+      `corpus schema v${version} is newer than this build supports ` +
+        `(v${MIGRATIONS.length}). Update the app to the latest version to open ` +
+        `this database.`,
+    );
   }
   for (let i = version; i < MIGRATIONS.length; i += 1) {
     db.transaction(() => {

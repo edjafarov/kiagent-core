@@ -12,6 +12,8 @@ import type {
   DocumentInput,
   Session,
 } from '@shared/contracts';
+import { sourceErrorCode } from '@shared/source-errors';
+
 import { createImapSource } from '../source';
 import type { ConnectFn } from '../source';
 import type { ImapClient, ImapCursor, ImapMessageItem } from '../types';
@@ -301,6 +303,53 @@ describe('createImapSource — toDocument', () => {
 // ── pull ────────────────────────────────────────────────────────────────────
 
 describe('createImapSource — pull', () => {
+  it("classifies a genuine LOGIN rejection as 'auth' (→ needsReauth)", async () => {
+    const source = createImapSource({
+      connect: async () => {
+        throw Object.assign(new Error('bad creds'), {
+          authenticationFailed: true,
+          responseText: 'NO [AUTHENTICATIONFAILED] Invalid credentials',
+          serverResponseCode: 'AUTHENTICATIONFAILED',
+        });
+      },
+    });
+    const session = makeSession(CONFIG);
+    const err = await collect(source.pull(session, null)).then(
+      () => {
+        throw new Error('expected pull to reject');
+      },
+      (e) => e,
+    );
+    expect(sourceErrorCode(err)).toBe('auth');
+  });
+
+  it('keeps a temporary [UNAVAILABLE]/[INUSE]/[LIMIT] LOGIN rejection on the transient path (self-heals, NOT needsReauth)', async () => {
+    // imapflow tags EVERY rejected LOGIN authenticationFailed=true; a
+    // temporary server condition must not park the account in needsReauth,
+    // where nothing auto-retries — it stays uncoded so the retry+supervisor
+    // machinery restarts it once the throttle lifts.
+    for (const code of ['UNAVAILABLE', 'INUSE', 'LIMIT']) {
+      const source = createImapSource({
+        connect: async () => {
+          throw Object.assign(new Error('Temporary authentication failure'), {
+            authenticationFailed: true,
+            responseText: `NO [${code}] Temporary authentication failure`,
+            serverResponseCode: code,
+          });
+        },
+      });
+      const session = makeSession(CONFIG);
+      // eslint-disable-next-line no-await-in-loop
+      const err = await collect(source.pull(session, null)).then(
+        () => {
+          throw new Error('expected pull to reject');
+        },
+        (e) => e,
+      );
+      expect(sourceErrorCode(err)).toBeUndefined();
+    }
+  });
+
   it('backfills a fresh account in batches of 50, oldest UID first, advancing the cursor each chunk', async () => {
     const messages = new Map<number, string>();
     for (let uid = 1; uid <= 120; uid += 1)
