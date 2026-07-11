@@ -37,7 +37,12 @@ export interface ClientAdapter {
   configPath: string;
   /** Existence of this path means the client is installed. */
   detectPath: string;
-  /** True if our server entry is already present in `text`. */
+  /** True if our server entry is present in `text` at all, current or stale.
+   *  The reconcile pass keys off `hasEntry && !isConnected`. */
+  hasEntry(text: string | null): boolean;
+  /** True if our server entry is present AND current. For HTTP adapters that
+   *  means the stored url matches this boot's actual bind — a config written
+   *  against a port we no longer hold reports disconnected, not a lie. */
   isConnected(text: string | null): boolean;
   /** Return new config text with our entry merged in (preserves everything else). */
   connect(text: string | null): string;
@@ -77,6 +82,15 @@ function jsonContainer(
     : {};
 }
 
+/** The `url` field of our server entry, whatever the entry shape — both the
+ *  standard `{type:'http', url}` and Cursor's bare `{url}` carry one. */
+function entryUrl(container: Record<string, unknown>): string | null {
+  const entry = container[SERVER_KEY];
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  const { url } = entry as Record<string, unknown>;
+  return typeof url === 'string' ? url : null;
+}
+
 function jsonAdapter(opts: {
   id: ClientId;
   label: string;
@@ -85,17 +99,31 @@ function jsonAdapter(opts: {
   detectPath: string;
   containerKey: string;
   entry: unknown;
+  /** HTTP adapters only: the url the entry must carry to count as connected.
+   *  Stdio entries are launch-command-based and port-independent, so deep
+   *  comparison there could false-negative after exePath changes across app
+   *  updates — presence stays the whole test for them. */
+  expectedUrl?: string;
 }): ClientAdapter {
-  const { containerKey, entry } = opts;
+  const { containerKey, entry, expectedUrl } = opts;
   return {
     id: opts.id,
     label: opts.label,
     transport: opts.transport,
     configPath: opts.configPath,
     detectPath: opts.detectPath,
-    isConnected(text) {
+    hasEntry(text) {
       try {
         return SERVER_KEY in jsonContainer(parseJsonRoot(text), containerKey);
+      } catch {
+        return false;
+      }
+    },
+    isConnected(text) {
+      try {
+        const container = jsonContainer(parseJsonRoot(text), containerKey);
+        if (!(SERVER_KEY in container)) return false;
+        return expectedUrl === undefined || entryUrl(container) === expectedUrl;
       } catch {
         return false;
       }
@@ -135,21 +163,24 @@ function tomlAdapter(opts: {
   detectPath: string;
   entry: StdioLaunchDescriptor;
 }): ClientAdapter {
+  function hasEntry(text: string | null): boolean {
+    try {
+      if (!text || !text.trim()) return false;
+      const root = TOML.parse(text) as Record<string, unknown>;
+      return SERVER_KEY in tomlServers(root);
+    } catch {
+      return false;
+    }
+  }
   return {
     id: opts.id,
     label: opts.label,
     transport: 'stdio',
     configPath: opts.configPath,
     detectPath: opts.detectPath,
-    isConnected(text) {
-      try {
-        if (!text || !text.trim()) return false;
-        const root = TOML.parse(text) as Record<string, unknown>;
-        return SERVER_KEY in tomlServers(root);
-      } catch {
-        return false;
-      }
-    },
+    hasEntry,
+    isConnected: hasEntry, // stdio: launch-command entries have no url to go stale
+
     connect(text) {
       const root =
         text && text.trim()
@@ -217,6 +248,7 @@ export function buildClientRegistry(opts: {
       detectPath: path.join(home, '.claude.json'), // the file itself is the install marker
       containerKey: 'mcpServers',
       entry: httpEntry,
+      expectedUrl: opts.localUrl,
     }),
     jsonAdapter({
       id: 'cursor',
@@ -226,6 +258,7 @@ export function buildClientRegistry(opts: {
       detectPath: path.join(home, '.cursor'),
       containerKey: 'mcpServers',
       entry: cursorEntry,
+      expectedUrl: opts.localUrl,
     }),
     jsonAdapter({
       id: 'vscode',
@@ -235,6 +268,7 @@ export function buildClientRegistry(opts: {
       detectPath: path.join(appData, 'Code', 'User'),
       containerKey: 'servers', // NOT mcpServers
       entry: httpEntry,
+      expectedUrl: opts.localUrl,
     }),
     tomlAdapter({
       id: 'codex',
@@ -244,6 +278,51 @@ export function buildClientRegistry(opts: {
       entry: opts.stdioEntry,
     }),
   ];
+}
+
+/**
+ * Rewrite HTTP client configs whose stored url no longer matches the port we
+ * actually bound. PORT_CANDIDATES fallback means a third-party process
+ * squatting the first port silently shifts the server — without this, every
+ * previously connected HTTP client keeps POSTing its handshake at the stale
+ * port. Only fires when our entry is present but stale (`hasEntry &&
+ * !isConnected`), so a normal boot on the usual port writes nothing. Stdio
+ * adapters are skipped — they launch by command and are port-independent.
+ *
+ * Caveat: this re-serializes the whole config file and can last-writer-wins
+ * race a concurrently running client instance (applyConfigChange takes a .bak
+ * first) — acceptable for a write that only fires on an actual port change,
+ * and each rewrite is logged.
+ */
+export function reconcileHttpClientConfigs(
+  adapters: ClientAdapter[],
+  log: (message: string, meta?: Record<string, unknown>) => void,
+): void {
+  for (const adapter of adapters) {
+    if (adapter.transport !== 'http') continue;
+    try {
+      if (!fs.existsSync(adapter.configPath)) continue;
+      const text = fs.readFileSync(adapter.configPath, 'utf8');
+      if (!adapter.hasEntry(text) || adapter.isConnected(text)) continue;
+      const result = applyConfigChange(adapter.configPath, (t) =>
+        adapter.connect(t),
+      );
+      if (result.ok) {
+        log(`reconciled stale ${adapter.id} config to the bound port`, {
+          path: result.path,
+          backup: result.backupPath,
+        });
+      } else {
+        log(`failed to reconcile stale ${adapter.id} config`, {
+          error: result.error,
+        });
+      }
+    } catch (e) {
+      log(`failed to reconcile stale ${adapter.id} config`, {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
 }
 
 export type WriteResult =

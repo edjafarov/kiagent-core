@@ -574,6 +574,9 @@ app
       logSink: p.logSink,
       dataDir,
       onActivity: (rec) => act.append(rec),
+      // Real app boot: heal HTTP client configs left pointing at a port we
+      // no longer hold (candidate-port fallback). Tests never set this.
+      reconcileClientConfigs: true,
     });
     // Onboarding step 2 reconciliation: a client connected in an earlier
     // run (config file already carries our entry) counts as done.

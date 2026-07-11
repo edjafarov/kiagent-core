@@ -29,6 +29,7 @@ import {
   applyConfigChange,
   buildClientRegistry,
   buildStdioLaunchDescriptor,
+  reconcileHttpClientConfigs,
   type ClientAdapter,
 } from './clients';
 import { makeMcpServer } from './make-server';
@@ -44,6 +45,12 @@ export interface McpDeps {
    *  (HTTP sessions — transport 'http' is stamped here). The stdio sibling
    *  produces its own records; see mcp/stdio-entry.ts. */
   onActivity?: (rec: McpActivityRecord) => void;
+  /** Opt-in (real app boot only): rewrite HTTP client configs whose stored
+   *  url doesn't match the port actually bound this boot — see
+   *  reconcileHttpClientConfigs. Deliberately NOT the default: tests call
+   *  startMcp too, bind whatever candidate port is free, and must never
+   *  rewrite the developer's real ~/.claude.json et al. */
+  reconcileClientConfigs?: boolean;
 }
 
 export interface McpServerHandle {
@@ -421,6 +428,15 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
     localUrl: `http://${HOST}:${port}/mcp`,
     stdioEntry,
   });
+
+  // A squatted first candidate port shifts us to a fallback — configs written
+  // by earlier boots still point at the old port and would silently strand
+  // every previously connected HTTP client.
+  if (deps.reconcileClientConfigs) {
+    reconcileHttpClientConfigs(clientAdapters, (message, meta) =>
+      deps.logSink.log('mcp', 'warn', message, meta),
+    );
+  }
 
   return {
     port,
