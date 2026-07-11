@@ -200,6 +200,24 @@ describe('McpServerHandle.createMcpHandler', () => {
     expect(pingA.status).toBe(200);
   });
 
+  it('404s an unknown mcp-session-id so clients know to re-initialize', async () => {
+    // An unknown id is indistinguishable from an evicted one at this code
+    // path, so this also covers the idle-sweep case without shrinking the
+    // 45-minute timeout. 400 would be -32600 Invalid Request — no signal to
+    // re-initialize; the spec mandates 404 for terminated/unknown sessions.
+    const gone = await rawPing(productUrl, 'no-such-session-id');
+    expect(gone.status).toBe(404);
+    expect(JSON.parse(gone.body).error).toMatchObject({
+      code: -32001,
+      message: expect.stringMatching(/session not found/i),
+    });
+
+    // Recovery path: a fresh header-less initialize still mints a session.
+    const fresh = await rawInitialize(productUrl);
+    expect(fresh.status).toBe(200);
+    expect(fresh.sessionId).toBeTruthy();
+  });
+
   it('is memoized: repeated calls return the same handler (one product pool)', () => {
     expect(handle.createMcpHandler()).toBe(handle.createMcpHandler());
   });

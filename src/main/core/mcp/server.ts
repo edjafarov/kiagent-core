@@ -105,11 +105,14 @@ function sendJsonRpcError(
   status: number,
   message: string,
 ): void {
+  // 404 carries -32001 ("Session not found"), matching the SDK server
+  // transport's convention so spec-following clients can key off either.
+  const code = status === 400 ? -32600 : status === 404 ? -32001 : -32603;
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(
     JSON.stringify({
       jsonrpc: '2.0',
-      error: { code: status === 400 ? -32600 : -32603, message },
+      error: { code, message },
       id: null,
     }),
   );
@@ -267,6 +270,16 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
         // pre-reads) so a product router that pre-reads the body before
         // delegating doesn't leave the transport to re-read a consumed stream.
         await entry.transport.handleRequest(req, res, parsedBody);
+        return;
+      }
+
+      // A session id we don't recognize — evicted by the idle sweep, a
+      // restarted server, or bogus. The spec mandates 404 here (400 is
+      // reserved for requests with NO session header): 404 is the one signal
+      // that tells a client its session is gone and it must re-initialize.
+      // Applies to every method — POST/GET/DELETE all carry session ids.
+      if (sessionId) {
+        sendJsonRpcError(res, 404, 'Session not found');
         return;
       }
 
