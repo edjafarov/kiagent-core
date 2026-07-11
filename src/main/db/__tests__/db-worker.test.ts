@@ -193,4 +193,56 @@ Module._resolveFilename = function (request, ...rest) {
 
     await client!.close();
   }, 20000);
+
+  // maintenance.compact() dispatches to this proc (worker-backed AppDb has no
+  // raw connection to call repopulateSearchIndex directly on — see
+  // store.ts#maintenance.compact). Drive it through the REAL bridge against a
+  // real migrated corpus file with a document already committed, having
+  // first blanked both search tables — so the assertion only passes if the
+  // rebuild actually did the repopulating work, not because the prior commit
+  // already left rows behind.
+  it('runs the rebuildSearchIndex procedure inside the worker (proc round-trip)', async () => {
+    await spawnAndReady();
+
+    await client!.proc!('commit', {
+      consumer: 'worker:test:rebuild',
+      cursor: 0,
+      documents: [
+        {
+          externalId: 'r-1',
+          type: 'note',
+          title: 'Rebuild Doc',
+          markdown: 'a document that must survive a search index rebuild',
+          metadata: {},
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+
+    await client!.exec(`DELETE FROM documents_fts; DELETE FROM documents_tri;`);
+    const blanked = await client!.all(
+      `SELECT (SELECT COUNT(*) FROM documents_fts) AS fts,
+              (SELECT COUNT(*) FROM documents_tri) AS tri`,
+    );
+    expect(Number(blanked[0].fts)).toBe(0);
+    expect(Number(blanked[0].tri)).toBe(0);
+
+    const result = await client!.proc!('rebuildSearchIndex', null);
+    expect(result).toBeNull();
+
+    const repopulated = await client!.all(
+      `SELECT (SELECT COUNT(*) FROM documents_fts) AS fts,
+              (SELECT COUNT(*) FROM documents_tri) AS tri`,
+    );
+    expect(Number(repopulated[0].fts)).toBeGreaterThan(0);
+    expect(Number(repopulated[0].tri)).toBeGreaterThan(0);
+
+    const fts = await client!.all(
+      `SELECT doc_id FROM documents_fts WHERE documents_fts MATCH ?`,
+      ['rebuild'],
+    );
+    expect(fts.length).toBeGreaterThan(0);
+
+    await client!.close();
+  }, 20000);
 });
