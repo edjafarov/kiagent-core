@@ -1,7 +1,7 @@
 # Search parity: snowball stemming + trigram fuzzy fallback
 
 **Date:** 2026-07-11
-**Status:** approved
+**Status:** implemented
 **Closes:** LEFTOVERS.md deferred item 5 (search parity)
 
 ## Goal

@@ -49,9 +49,20 @@ differently), **deferred** (planned, tracked as an issue), or a **deviation**
    finishes its auto-download.
 4. **Sources not yet ported** — google-docs, ms365, onedrive, browser
    history; the WhatsApp bundled extension depends on the extension runtime.
-5. **Search parity** — FTS5 (unicode61, diacritics-folded, bm25-weighted,
-   snippets) only. Legacy trigram fuzzy fallback and snowball stemming fed by
-   `Document.languages` are not ported. Languages ARE detected and stored.
+5. **Search parity** — DONE (2026-07-11, spec
+   `docs/superpowers/specs/2026-07-11-search-parity-design.md`): snowball
+   stemming via per-document detected languages (stem columns on
+   `documents_fts`) and a trigram substring-recall fallback
+   (`documents_tri`, RRF k=60) fused inside `store.read.search`. Legacy
+   trigram/stemming behavior is restored with greenfield semantics kept
+   (raw exact match, phrases, snippets, boolean grammar). Legacy's
+   per-paragraph weighted language scores were NOT ported (single-code
+   `detectLanguages` remains). Deliberate deviations from legacy, decided
+   during implementation: trigram fallback terms are AND-joined (legacy
+   OR'd them) so fuzzy can never violate the boolean grammar's
+   implicit-AND, and queries the flat term extraction cannot faithfully
+   represent (sub-3-char positive terms, grouped negation) skip the fuzzy
+   pass entirely.
 6. **Data migration from legacy installs** — new data root is
    `userData/data/` (one root). Legacy `userData/alpha-cent/` is neither
    read nor migrated. The extension platform's `extDir` IS
