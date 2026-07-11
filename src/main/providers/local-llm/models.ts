@@ -19,6 +19,13 @@ export interface ModelDescriptor {
   id: string;
   label: string;
   files: ModelFile[];
+  /** The model's mmproj carries an audio encoder (verified via GGUF tensor
+   *  inspection: `clip.has_audio_encoder` + a populated `a.blk.*` tower), so
+   *  it can serve `hear` (ASR) requests. Absent/false → vision-only; the audio
+   *  worker cleanly skips rather than deferring forever. The E-series (E4B/E2B)
+   *  ship this encoder; the 12B mmproj declares the keys but not the full
+   *  tower, so it is left audio-incapable until separately confirmed. */
+  hasAudio?: boolean;
 }
 
 // Pinned to an immutable commit of unsloth/gemma-4-12b-it-GGUF (re-verify via
@@ -75,6 +82,7 @@ const e4bUrl = (name: string) =>
 export const E4B_MODEL: ModelDescriptor = {
   id: 'gemma-4-E4B-it-Q4_K_M',
   label: 'Gemma 4 E4B (4-bit)',
+  hasAudio: true,
   files: [
     {
       name: 'gemma-4-E4B-it-Q4_K_M.gguf',
@@ -101,6 +109,7 @@ const e2bUrl = (name: string) =>
 export const E2B_MODEL: ModelDescriptor = {
   id: 'gemma-4-E2B-it-Q4_K_M',
   label: 'Gemma 4 E2B (4-bit)',
+  hasAudio: true,
   files: [
     {
       name: 'gemma-4-E2B-it-Q4_K_M.gguf',

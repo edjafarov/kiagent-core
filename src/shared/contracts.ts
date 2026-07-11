@@ -396,6 +396,13 @@ export interface Inference {
     image: Uint8Array,
     opts?: { mime?: string; lane?: Lane },
   ): Promise<string>;
+  /** ASR: spoken audio in, transcript text out. Distinct from `see`/`read`
+   *  (vision) — routed to a provider whose model carries an audio encoder.
+   *  `format` labels the bytes for the runtime (llama.cpp accepts wav/mp3). */
+  hear(
+    audio: Uint8Array,
+    opts?: { format?: 'wav' | 'mp3'; lane?: Lane },
+  ): Promise<string>;
 }
 
 export type ProviderStatus =
@@ -409,10 +416,10 @@ export type ProviderStatus =
  *  cloud tomorrow; callers never know. */
 export interface InferenceProvider {
   readonly id: string; // 'local' | 'lan:mac-studio' | 'anthropic'
-  readonly supports: Array<'complete' | 'see' | 'read'>;
+  readonly supports: Array<'complete' | 'see' | 'read' | 'hear'>;
   status(): ProviderStatus;
   handle(req: {
-    kind: 'complete' | 'see' | 'read';
+    kind: 'complete' | 'see' | 'read' | 'hear';
     payload: unknown;
     lane: Lane;
   }): Promise<unknown>;
@@ -434,6 +441,8 @@ export interface WorkerSession {
   ): Promise<string>;
   /** OCR sugar over the Inference plane, pinned to the 'background' lane. */
   read(image: Uint8Array, opts?: { mime?: string }): Promise<string>;
+  /** ASR sugar over the Inference plane, pinned to the 'background' lane. */
+  hear(audio: Uint8Array, opts?: { format?: 'wav' | 'mp3' }): Promise<string>;
   /** Bytes via the document's own source (its `fetchBytes`). */
   fetchBytes(doc: Document): Promise<Uint8Array | null>;
   /** Emitted docs are committed by the ENGINE (under the worker's synthetic

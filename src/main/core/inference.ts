@@ -18,14 +18,28 @@ export interface InferencePlane extends Inference {
  *  pass), whereas a crash is a transient fault to DEFER and retry so a doc
  *  isn't left permanently un-extracted. */
 export class NoProviderError extends Error {
-  readonly kind: 'complete' | 'see' | 'read';
+  readonly kind: 'complete' | 'see' | 'read' | 'hear';
 
-  constructor(kind: 'complete' | 'see' | 'read') {
+  constructor(kind: 'complete' | 'see' | 'read' | 'hear') {
     super(
       `no inference provider available for '${kind}' — install or enable one in Settings`,
     );
     this.name = 'NoProviderError';
     this.kind = kind;
+  }
+}
+
+/** Thrown by a provider whose model structurally CANNOT serve a kind — e.g.
+ *  an audio `hear` request routed to a llama-server whose loaded model has no
+ *  audio encoder (the RAM-tiered model on a big machine may be vision-only).
+ *  Distinct from NoProviderError (no ready provider yet — transient, a model
+ *  may still be installing): this is PERMANENT for the current model, so a
+ *  worker must SKIP rather than DEFER, or it re-hammers a doomed request every
+ *  scheduled window forever. */
+export class CapabilityUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CapabilityUnsupportedError';
   }
 }
 
@@ -56,7 +70,9 @@ export function createInference(logs: LogSink): InferencePlane {
     if (lane !== 'interactive' && !backgroundOpen) throw new LaneClosedError();
   };
 
-  const pick = (kind: 'complete' | 'see' | 'read'): InferenceProvider => {
+  const pick = (
+    kind: 'complete' | 'see' | 'read' | 'hear',
+  ): InferenceProvider => {
     const p = providers.find(
       (x) => x.supports.includes(kind) && x.status() === 'ready',
     );
@@ -96,6 +112,17 @@ export function createInference(logs: LogSink): InferencePlane {
       const out = await p.handle({
         kind: 'read',
         payload: { image, mime: opts?.mime },
+        lane,
+      });
+      return String(out);
+    },
+    async hear(audio, opts) {
+      const lane = opts?.lane ?? 'interactive';
+      gate(lane);
+      const p = pick('hear');
+      const out = await p.handle({
+        kind: 'hear',
+        payload: { audio, format: opts?.format },
         lane,
       });
       return String(out);

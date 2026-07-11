@@ -260,7 +260,7 @@ export interface Invokes {
     req: void;
     res: Array<{
       id: string;
-      supports: Array<'complete' | 'see' | 'read'>;
+      supports: Array<'complete' | 'see' | 'read' | 'hear'>;
       status: ProviderStatus;
     }>;
   };

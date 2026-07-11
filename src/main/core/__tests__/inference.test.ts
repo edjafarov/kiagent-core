@@ -33,6 +33,32 @@ describe('inference plane', () => {
     );
   });
 
+  it('hear routes to a provider supporting hear and passes the audio format', async () => {
+    const plane = createInference(noopLogs);
+    let seen: unknown;
+    plane.register({
+      id: 'asr',
+      supports: ['complete', 'see', 'hear'],
+      status: () => 'ready',
+      handle: async (req) => {
+        seen = req.payload;
+        return `asr:${req.kind}`;
+      },
+    });
+    await expect(
+      plane.hear(new Uint8Array([1]), { format: 'wav' }),
+    ).resolves.toBe('asr:hear');
+    expect(seen).toMatchObject({ format: 'wav' });
+  });
+
+  it('hear with no audio provider throws NoProviderError', async () => {
+    const plane = createInference(noopLogs);
+    plane.register(provider('ocr', ['read'], 'ocr'));
+    await expect(plane.hear(new Uint8Array([1]))).rejects.toThrow(
+      /no inference provider available for 'hear'/,
+    );
+  });
+
   it('background lane fails fast with LaneClosedError while closed', async () => {
     const plane = createInference(noopLogs);
     plane.register(provider('ocr', ['read'], 'ocr'));

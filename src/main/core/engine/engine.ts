@@ -338,6 +338,9 @@ export function createEngine(deps: EngineDeps): Engine & {
         read(image, opts) {
           return deps.inference.read(image, { ...opts, lane: 'background' });
         },
+        hear(audio, opts) {
+          return deps.inference.hear(audio, { ...opts, lane: 'background' });
+        },
         async fetchBytes(doc: Document) {
           const account = await store.account(doc.accountId);
           if (!account) return null;
