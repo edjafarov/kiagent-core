@@ -179,9 +179,12 @@ describe('search parity: trigram fuzzy fallback', () => {
     expect(bodies).toContain('Die Jahresrechnung liegt bei');
   });
 
-  it('never resurfaces a doc excluded by grouped negation via fuzzy', async () => {
+  it('never resurfaces a doc excluded by grouped negation (NOT (a OR b)) via fuzzy', async () => {
+    // The discriminating shape: flat extraction negates only 'offen' and
+    // flattens 'bezahlt' to POSITIVE, so without the grouped-negation veto
+    // the 'paid' doc (grammar-excluded via 'bezahlt') resurfaces via trigram.
     const hits = await store.read.search({
-      text: 'Rechnung NOT (bezahlt abgelegt)',
+      text: 'Rechnung NOT (offen OR bezahlt)',
     });
     const bodies = hits.map((h) => h.markdown);
     expect(bodies).not.toContain('Jahresrechnung bezahlt und abgelegt');
