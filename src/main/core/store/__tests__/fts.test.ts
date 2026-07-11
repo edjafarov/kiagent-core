@@ -189,7 +189,7 @@ describe('documents_fts rowid pinning', () => {
           value: string;
         }
       ).value,
-    ).toBe('2');
+    ).toBe('3');
     raw.close();
     assertPinned(dbPath);
 
@@ -213,7 +213,7 @@ describe('documents_fts rowid pinning', () => {
     expect(() => migrate(raw)).toThrow(/newer than this build/i);
     // Restore a valid version so the reopen below (which re-runs migrate)
     // doesn't re-trip the guard — this test only pins the guard itself.
-    raw.prepare(`UPDATE meta SET value='2' WHERE key='schemaVersion'`).run();
+    raw.prepare(`UPDATE meta SET value='3' WHERE key='schemaVersion'`).run();
     raw.close();
 
     store = openStore(await openDb(dbPath), deps); // afterEach close is a no-op
@@ -247,5 +247,56 @@ describe('documents_fts rowid pinning', () => {
     assertPinned(dbPath);
     expect(await store.read.search({ text: 'unique-b' })).toHaveLength(0);
     expect(await store.read.search({ text: 'post-compact' })).toHaveLength(1);
+  });
+
+  it('v3 migration backfills stem columns and the trigram table from a v2 corpus', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [
+        doc('g', {
+          title: 'Rechnungen',
+          markdown: 'Die Rechnungen sind offen',
+        }),
+      ],
+      cursor: null,
+    });
+    await store.close();
+
+    // Regress the file to v2 shape: 3-column FTS, no trigram table, version 2.
+    const raw = new Database(dbPath);
+    raw.exec(
+      `DROP TABLE IF EXISTS documents_fts; DROP TABLE IF EXISTS documents_tri;`,
+    );
+    raw.exec(`CREATE VIRTUAL TABLE documents_fts USING fts5(
+      doc_id UNINDEXED, title, markdown, tokenize = 'unicode61 remove_diacritics 2')`);
+    raw
+      .prepare(
+        `INSERT INTO documents_fts(rowid, doc_id, title, markdown)
+         SELECT rowid, id, coalesce(title,''), coalesce(markdown,'') FROM documents`,
+      )
+      .run();
+    // German so the backfill exercises a non-English stemmer (module deps stub
+    // detects everything as 'eng').
+    raw.prepare(`UPDATE documents SET languages='["deu"]'`).run();
+    raw.prepare(`UPDATE meta SET value='2' WHERE key='schemaVersion'`).run();
+
+    migrate(raw);
+
+    const stem = raw
+      .prepare(
+        `SELECT count(*) AS c FROM documents_fts WHERE documents_fts MATCH 'markdown_stem: rechnung'`,
+      )
+      .get() as { c: number };
+    expect(stem.c).toBe(1);
+    const tri = raw
+      .prepare(
+        `SELECT count(*) AS c FROM documents_tri WHERE documents_tri MATCH '"rechnungen"'`,
+      )
+      .get() as { c: number };
+    expect(tri.c).toBe(1);
+    raw.close();
+    assertPinned(dbPath);
+
+    store = openStore(await openDb(dbPath), deps); // afterEach close is a no-op
   });
 });

@@ -1,10 +1,14 @@
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { buildStemView } from '../stemming';
+
 /**
  * Forward-only, versioned migrations. Each entry runs in one transaction;
  * `meta.schemaVersion` tracks the last applied index + 1.
  */
-const MIGRATIONS: string[] = [
+type Migration = string | ((db: BetterSqlite3.Database) => void);
+
+const MIGRATIONS: Migration[] = [
   // v1 — the greenfield schema. Column names are storage detail (snake_case
   // SQL convention); row mappers in store.ts produce the camelCase domain
   // shapes from @shared/contracts.
@@ -124,7 +128,77 @@ const MIGRATIONS: string[] = [
     SELECT rowid, id, coalesce(title, ''), coalesce(markdown, '')
     FROM documents;
   `,
+
+  // v3 — search parity (docs/superpowers/specs/2026-07-11-search-parity-design.md):
+  // stem columns on documents_fts (snowball, per-document language) and a
+  // trigram table for substring-recall fuzzy fallback. A FUNCTION migration:
+  // the backfill stems text in JS, which a SQL string cannot express. DROPs
+  // are IF EXISTS so a re-run against an already-v3-shaped file (version
+  // regression in tests) is idempotent. Raw columns keep positions 1/2, so
+  // snippet(documents_fts, 2, …) and the search JOIN are unchanged.
+  (db: BetterSqlite3.Database): void => {
+    db.exec(`
+      DROP TABLE IF EXISTS documents_fts;
+      DROP TABLE IF EXISTS documents_tri;
+      CREATE VIRTUAL TABLE documents_fts USING fts5(
+        doc_id UNINDEXED,
+        title,
+        markdown,
+        title_stem,
+        markdown_stem,
+        tokenize = 'unicode61 remove_diacritics 2'
+      );
+      CREATE VIRTUAL TABLE documents_tri USING fts5(
+        doc_id UNINDEXED,
+        body,
+        tokenize = 'trigram remove_diacritics 1'
+      );
+    `);
+    repopulateSearchIndex(db);
+  },
 ];
+
+/**
+ * Clear and refill BOTH search tables from `documents`, rowid-pinned,
+ * stemming each row with its stored languages. Used by the v3 migration and
+ * by maintenance.compact (VACUUM can renumber documents rowids — see the v2
+ * note above).
+ */
+export function repopulateSearchIndex(db: BetterSqlite3.Database): void {
+  db.exec(`DELETE FROM documents_fts; DELETE FROM documents_tri;`);
+  const rows = db
+    .prepare(
+      `SELECT rowid AS rid, id, title, markdown, languages FROM documents`,
+    )
+    .all() as Array<{
+    rid: number;
+    id: string;
+    title: string | null;
+    markdown: string | null;
+    languages: string;
+  }>;
+  const fts = db.prepare(
+    `INSERT INTO documents_fts(rowid, doc_id, title, markdown, title_stem, markdown_stem)
+     VALUES(?, ?, ?, ?, ?, ?)`,
+  );
+  const tri = db.prepare(
+    `INSERT INTO documents_tri(rowid, doc_id, body) VALUES(?, ?, ?)`,
+  );
+  for (const r of rows) {
+    const langs = JSON.parse(r.languages) as string[];
+    const title = r.title ?? '';
+    const markdown = r.markdown ?? '';
+    fts.run(
+      r.rid,
+      r.id,
+      title,
+      markdown,
+      buildStemView(title, langs),
+      buildStemView(markdown, langs),
+    );
+    tri.run(r.rid, r.id, `${title}\n${markdown}`.trim());
+  }
+}
 
 export function migrate(db: BetterSqlite3.Database): void {
   db.pragma('journal_mode = WAL');
@@ -156,7 +230,9 @@ export function migrate(db: BetterSqlite3.Database): void {
   }
   for (let i = version; i < MIGRATIONS.length; i += 1) {
     db.transaction(() => {
-      db.exec(MIGRATIONS[i]);
+      const m = MIGRATIONS[i];
+      if (typeof m === 'string') db.exec(m);
+      else m(db);
       db.prepare(
         `INSERT INTO meta(key, value) VALUES('schemaVersion', ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
