@@ -149,7 +149,11 @@ host surface change not at all.
 - The boolean compiler (`ftsQuery`) expands each **positive plain term** to
   an OR-group of the raw term plus its stem variants:
   `running` → `("running" OR "run")`. Phrases, `prefix*` terms, and negated
-  terms stay raw — exact semantics preserved.
+  terms are not expanded. Note: FTS5 MATCH is table-wide, so an unexpanded
+  negated term still matches the stem *columns* — `-run` also excludes a
+  document whose stem view contains `run` (e.g. body "running"). This errs
+  toward hiding, never resurfacing, and matches legacy (which negated
+  against a fully stemmed table).
 - Variant languages = distinct languages present in the corpus ∪ `eng`.
   The distinct set comes from `SELECT DISTINCT languages FROM documents`,
   parsed and unioned, cached in the store closure and invalidated on every
@@ -178,17 +182,30 @@ fuzzy pass).
   this design promises to preserve. AND requires every ≥3-char positive
   term as a substring — single-term queries, the main fuzzy case, are
   unaffected.)
-- **Negation safety:** trigram hits whose raw `title + markdown` contains any
-  negated term or phrase (JS `toLowerCase().includes(…)` — Unicode-correct,
-  deliberately more aggressive than FTS token semantics) are dropped, so a
-  `NOT`-excluded document can never resurface via fuzzy. Grouped negation
+- **Negation safety:** trigram hits whose `title + markdown` contains any
+  negated term or phrase are dropped — with BOTH needle and haystack folded
+  the way the primary index folds tokens (NFKC, ё→е, lowercase, diacritics
+  stripped — `foldForNegation` in fuzzy.ts), so the post-filter can never be
+  *weaker* than the grammar's own negation (`-uber` drops a hit containing
+  "über"). Substring matching makes it broader than FTS token semantics in
+  every other respect. Known residual hole: FTS phrase negation matches
+  across punctuation ("bezahlt, und" matches the phrase `"bezahlt und"`),
+  while the substring post-filter does not — a document excluded only by a
+  punctuation-spanning negated phrase could still resurface via fuzzy.
+  Accepted as a narrow edge; fix would be punctuation-folding both sides.
+  Grouped negation
   (`NOT (a b)`) cannot be represented by the fuzzy pass's flat term
   extraction, so a query containing `NOT (` skips the fuzzy pass entirely —
   the same cannot-represent-it-⇒-don't-fuzz principle as the sub-trigram
   veto.
 - **Fusion:** RRF with k=60 over the two ranked lists
   (`score = Σ 1/(60 + rank + 1)`; docs in both lists sum), sorted descending,
-  capped at `limit`.
+  capped at `limit`. **Primary-membership guarantee:** fuzzy hits may only
+  FILL the page's free slots (`limit − primaryRows`), never displace an
+  exact match — trigram rows already in the primary list pass through the
+  fusion (adding rank signal without growing the union), new rows are capped
+  to the free slots, so every document the boolean query matched stays on
+  the page.
 - **Snippets:** primary-pass rows keep their FTS `snippet()`. Trigram-only
   rows get a JS-built snippet (port of legacy `buildSnippet`): ~240 chars of
   raw markdown anchored at the first case-insensitive occurrence of any
