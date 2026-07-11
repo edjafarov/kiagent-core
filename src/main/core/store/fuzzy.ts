@@ -51,11 +51,14 @@ export function extractTerms(text: string): QueryTerms {
 }
 
 /** MATCH expression for documents_tri: the trigram tokenizer needs >= 3-char
- *  tokens; shorter ones are dropped. Null when no token qualifies. */
+ *  tokens; shorter ones are dropped. Null when no token qualifies. Terms are
+ *  AND-joined (deviating from legacy's OR) so every surviving ≥3-char term
+ *  must appear as a substring — the fallback can never smuggle partial
+ *  matches into an implicit-AND query. */
 export function toTrigramMatch(terms: string[]): string | null {
   const usable = terms.filter((t) => t.length >= 3);
   if (usable.length === 0) return null;
-  return usable.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ');
+  return usable.map((t) => `"${t.replace(/"/g, '""')}"`).join(' AND ');
 }
 
 const RRF_K = 60;

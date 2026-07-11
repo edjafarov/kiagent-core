@@ -24,9 +24,9 @@ describe('extractTerms', () => {
 });
 
 describe('toTrigramMatch', () => {
-  it('OR-joins quoted tokens of length >= 3', () => {
+  it('AND-joins quoted tokens of length >= 3', () => {
     expect(toTrigramMatch(['rechnung', 'ab', 'a phrase'])).toBe(
-      '"rechnung" OR "a phrase"',
+      '"rechnung" AND "a phrase"',
     );
   });
 
