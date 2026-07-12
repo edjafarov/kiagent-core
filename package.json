@@ -60,7 +60,6 @@
     "start:preload": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.preload.dev.ts",
     "start:renderer": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack serve --config ./.erb/configs/webpack.config.renderer.dev.ts",
     "test": "jest",
-    "test:e2e": "npm run build && playwright test --config tests/e2e/playwright.config.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json"
   },
   "browserslist": [
@@ -114,7 +113,6 @@
     "testPathIgnorePatterns": [
       "release/app/dist",
       ".erb/dll",
-      "tests/e2e/",
       "<rootDir>/services/",
       "<rootDir>/.claude/worktrees/"
     ],
@@ -165,7 +163,6 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
-    "@playwright/test": "^1.60.0",
     "@pmmmwh/react-refresh-webpack-plugin": "^0.5.15",
     "@release-it/bumper": "^7.0.5",
     "@release-it/conventional-changelog": "^10.0.6",
