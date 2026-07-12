@@ -31,11 +31,15 @@ differently), **deferred** (planned, tracked as an issue), or a **deviation**
      resumable, cancellable via `inference:cancel`). No user model picking
      in this pass — `prefs.models.override` is the only escape hatch.
    Both run through the same one-front-door/two-lane/provider-registry
-   plane. Deferred to Phase C: Windows WinRT OCR helper
-   (`scripts/build-windows-ocr-helper.mjs`), a GLM-OCR WASM fallback for
-   win/linux hosts without a native OCR helper, and Vulkan/accel probing for
-   non-darwin `local-llm` hosts (today only darwin's Metal-implicit slug is
-   resolved; `resolveLlamaBinary` doesn't yet do `--list-devices` probing).
+   plane. Deferred to Phase C: the Windows WinRT OCR helper now BUILDS and
+   is vendored into win32 packaging (`scripts/build-windows-ocr-helper.mjs`,
+   run by `scripts/vendor-deep-extraction.mjs`) but no runtime `read`
+   provider is registered for it — it ships as dead weight; the GLM-OCR WASM
+   fallback exists only as a model descriptor (`GLM_OCR_MODEL` in
+   `local-llm/models.ts`), never loaded or registered; Vulkan/accel probing
+   has parsing/detection scaffolding (`parseVulkanDevices`, `detectBackend`
+   in `local-llm/backend.ts`) but the `--list-devices` spawn is not wired —
+   non-darwin hosts still resolve platform-arch only.
 3. **Vision/OCR worker** — implemented
    (`src/main/workers/vision/vision-worker.ts`): a two-pass pipeline driven
    by `classifyDocument` (candidate = text-poor PDF/image under the size
@@ -70,30 +74,41 @@ differently), **deferred** (planned, tracked as an issue), or a **deviation**
    the new manifest shape; legacy-format extension dirs fail validation
    and surface as discovery errors (logged, skipped), never migrated. An
    existing install otherwise starts empty.
-7. **needsReauth flow** — platform-side token refresh exists
-   (`EngineDeps.refreshers`), but a 401 does not yet transition the account
-   to `needsReauth` nor re-open the connect flow.
+7. **needsReauth flow** — half landed: an auth-classed sync error now
+   transitions the account to `needsReauth`
+   (`core/engine/engine.ts`, covered by
+   `core/engine/__tests__/needs-reauth.test.ts`) and the Sources UI shows a
+   "Reconnect" label (`Sources/ErrorCard.tsx`). Still open: the action only
+   fires `accounts:sync-now` (a retry) — it does not re-open the
+   connect/OAuth flow, so a genuinely revoked token has no in-app recovery
+   path yet.
 8. **Converter pool isolation** — conversion (pdf/docx/xlsx/csv/html/text)
    runs in-process. `converter/worker.ts` is reserved for the crash-isolated,
    backpressured pool.
-9. **Store off the main thread** — better-sqlite3 runs on the Electron main
-   thread; `db/worker-entry.ts` is reserved for moving large FTS commits off
-   the event loop.
-10. **Tray icon/menu, app menu, launch-at-login side effect** — pref exists,
-    effect not wired; no tray, default menu.
-11. **Auto-updater** — `update:*` channels are stubs returning idle (About
-    pane keeps rendering); electron-updater is the OSS/proprietary seam.
+9. **Store off the main thread** — DONE (2026-07-11): `db/worker-entry.ts`
+   is a real DB worker owning the one writable better-sqlite3 connection; it
+   hosts the full `commit` procedure and `rebuildSearchIndex`, and is the
+   default path (`core/boot.ts` `openDbInWorker`, wired in `main.ts`). The
+   whole store write path runs off the main thread, not just FTS commits.
+10. **Tray icon/menu, app menu, launch-at-login side effect** — tray is
+    DONE (`src/main/tray.ts` + `tray-menu.ts`, created at boot). Still
+    open: launch-at-login (pref exists in `core/prefs.ts`, no
+    `setLoginItemSettings` call anywhere) and a custom app menu
+    (`setApplicationMenu` never called — default menu remains).
+11. **Auto-updater** — DONE: `src/main/updater/` is fully implemented on
+    electron-updater (check, download events, quit-and-install); the
+    `update:*` IPC channels are real (`updater/ipc.ts`) and `main.ts` sets
+    the feed URL.
 12. **`query_sql` / `get_schema` MCP tools** — omitted until the 'powerful'
     tool consent tier exists. The other five legacy tools are ported.
 13. **Retention policy** — `purgeArchived` exists as a commit arm but no
     scheduled maintenance job invokes it yet.
-14. **E2E tests** — `tests/e2e` still targets the legacy UI.
-15. **SDK republication** — `packages/connector-sdk` + `extension-sdk` were
+14. **SDK republication** — `packages/connector-sdk` + `extension-sdk` were
     removed with the legacy surface; the greenfield contract is the new SDK,
     to be packaged when the extension runtime lands.
-16. **Suggestions engine** — legacy `src/main/suggestions` dropped; planned
+15. **Suggestions engine** — legacy `src/main/suggestions` dropped; planned
     as app-layer logic over `Query`, not platform.
-17. **OIDC provider + app sign-in gate** — legacy `oidc/` and the RP OAuth
+16. **OIDC provider + app sign-in gate** — legacy `oidc/` and the RP OAuth
     boot gate are not ported; the SignIn screen stores `Identity` locally.
 
 ## Behavioral changes (by design — the blueprint's wins)
