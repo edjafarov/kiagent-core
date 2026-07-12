@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.49.0](https://github.com/edjafarov/kiagent-core/compare/v0.48.0...v0.49.0) (2026-07-12)
+
+### Features
+
+* **core:** snowball stemming module keyed by detected languages ([20d5435](https://github.com/edjafarov/kiagent-core/commit/20d5435b7b1591ecc8abebbae43e284d738c613f))
+* **store:** commit path maintains stem columns and the trigram table ([af92c6f](https://github.com/edjafarov/kiagent-core/commit/af92c6fc3152c67102fc2b847d62a9f7ee41ba24))
+* **store:** compact/resetAll rebuild both search tables (worker proc included) ([79154ca](https://github.com/edjafarov/kiagent-core/commit/79154ca8680c098fb48ee5d650ce4999a2375c01))
+* **store:** pure fuzzy-search helpers (terms, trigram match, RRF, snippet) ([fd06f07](https://github.com/edjafarov/kiagent-core/commit/fd06f0724bc873c5592bb5e72f83af42fe33ccc8))
+* **store:** schema v3 — FTS stem columns + trigram table, function migrations ([db284cc](https://github.com/edjafarov/kiagent-core/commit/db284cc36915a1b67a2d9c1db3d2dd7e1a10f891))
+* **store:** stem-expanded search terms via corpus languages ([ab69cb0](https://github.com/edjafarov/kiagent-core/commit/ab69cb0b197336e0efc7c15ffccb02dfa86f33a5))
+* **store:** trigram fuzzy fallback fused with RRF in search ([3465a2c](https://github.com/edjafarov/kiagent-core/commit/3465a2c4ec23f75d29971ddc949e76e8f0b92e8f))
+
+### Bug Fixes
+
+* **store:** AND-join trigram fallback terms to preserve implicit-AND semantics ([186217f](https://github.com/edjafarov/kiagent-core/commit/186217fb67e351e4e31e35c2933c3c15992a5413))
+* **store:** cap fuzzy additions in RRF fusion so exact matches survive ([c9899b7](https://github.com/edjafarov/kiagent-core/commit/c9899b77692ccdc838d69c4263850185ad6a94f1))
+* **store:** fold diacritics in the fuzzy negation post-filter ([f016a19](https://github.com/edjafarov/kiagent-core/commit/f016a197b91af2b5446601088861b74499e7ec0d)), closes [fuzzy.ts#foldForNegation](https://github.com/edjafarov/fuzzy.ts/issues/foldForNegation)
+* **store:** make repopulateSearchIndex atomic and chunked ([e59b51f](https://github.com/edjafarov/kiagent-core/commit/e59b51fe3eec399eaf38cfa045396651f057b381))
+* **store:** skip fuzzy pass on grouped negation — flat extraction can't re-apply it ([9c1dd80](https://github.com/edjafarov/kiagent-core/commit/9c1dd80bd0f42597f5ae60348611e852d9013ddb))
+
 ## [0.48.0](https://github.com/edjafarov/kiagent-core/compare/v0.47.0...v0.48.0) (2026-07-11)
 
 ### Features
