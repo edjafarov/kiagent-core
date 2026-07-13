@@ -94,8 +94,12 @@ describe('raw-sql tools over the HTTP transport', () => {
       { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
       sid,
     );
-    const toolNames = list.json.result.tools.map((t: { name: string }) => t.name);
-    expect(toolNames).toEqual(expect.arrayContaining(['query_sql', 'get_schema']));
+    const toolNames = list.json.result.tools.map(
+      (t: { name: string }) => t.name,
+    );
+    expect(toolNames).toEqual(
+      expect.arrayContaining(['query_sql', 'get_schema']),
+    );
 
     const call = await rpc(
       port,
@@ -103,7 +107,10 @@ describe('raw-sql tools over the HTTP transport', () => {
         jsonrpc: '2.0',
         id: 3,
         method: 'tools/call',
-        params: { name: 'query_sql', arguments: { sql: 'SELECT title FROM documents' } },
+        params: {
+          name: 'query_sql',
+          arguments: { sql: 'SELECT title FROM documents' },
+        },
       },
       sid,
     );

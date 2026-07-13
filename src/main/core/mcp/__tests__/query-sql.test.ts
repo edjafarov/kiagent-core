@@ -112,11 +112,14 @@ describe('runQuerySql', () => {
       // would reject the write regardless. Either way it throws and the
       // corpus is unchanged.
       expect(() =>
-        runQuerySql(conn, 'WITH t AS (SELECT 1) INSERT INTO documents DEFAULT VALUES'),
+        runQuerySql(
+          conn,
+          'WITH t AS (SELECT 1) INSERT INTO documents DEFAULT VALUES',
+        ),
       ).toThrow();
-      const n = (
-        conn.prepare('SELECT count(*) AS n FROM documents').get() as { n: number }
-      ).n;
+      const { n } = conn
+        .prepare('SELECT count(*) AS n FROM documents')
+        .get() as { n: number };
       expect(n).toBe(3);
     } finally {
       conn.close();
