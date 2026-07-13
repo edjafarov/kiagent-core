@@ -121,11 +121,11 @@
     ],
     "transform": {
       "\\.(ts|tsx)$": "ts-jest",
-      "node_modules/(franc-min|trigram-utils|n-gram|collapse-white-space|jose|oidc-provider|quick-lru|nanoid|eta)/.+\\.js$": "<rootDir>/.erb/jest/esm-cjs-transformer.js",
+      "node_modules/(franc-min|trigram-utils|n-gram|collapse-white-space|jose|quick-lru|nanoid|eta)/.+\\.js$": "<rootDir>/.erb/jest/esm-cjs-transformer.js",
       "\\.(js|jsx)$": "ts-jest"
     },
     "transformIgnorePatterns": [
-      "node_modules/(?!(franc-min|trigram-utils|n-gram|collapse-white-space|jose|oidc-provider|quick-lru|nanoid|eta)/)"
+      "node_modules/(?!(franc-min|trigram-utils|n-gram|collapse-white-space|jose|quick-lru|nanoid|eta)/)"
     ]
   },
   "dependencies": {
@@ -147,7 +147,6 @@
     "jose": "^6.2.3",
     "mammoth": "^1.12.0",
     "mime": "^3.0.0",
-    "oidc-provider": "^9.8.3",
     "pdf-parse": "^1.1.1",
     "pngjs": "^7.0.0",
     "qrcode": "^1.5.4",

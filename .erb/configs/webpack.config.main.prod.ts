@@ -52,15 +52,15 @@ const configuration: webpack.Configuration = {
     minimizer: [
       new TerserPlugin({
         parallel: true,
-        // oidc-provider dispatches on runtime class names: its token "dynamic"
-        // format resolves `formats.dynamic[this.constructor.name]` (AccessToken,
-        // AuthorizationCode, RefreshToken, …) and other libs key off fn.name.
-        // Terser's default name-mangling renames AccessToken → `c`, so the
-        // lookup returns undefined and the authorization_code → access_token
-        // exchange throws `…dynamic[this.constructor.name] is not a function`,
-        // surfacing to MCP clients as a generic "authorization failed". This
-        // only bites the minified production build (dev is unminified), so keep
-        // class + function names intact.
+        // Preserve runtime class/function names: some bundled libraries
+        // dispatch on `this.constructor.name` / `fn.name`, and Terser's
+        // default mangling (e.g. AccessToken → `c`) makes those lookups return
+        // undefined — a failure that only surfaces at runtime in the minified
+        // production build (dev is unminified). The original offender,
+        // oidc-provider's "dynamic" token format, now lives in the remote-mcp
+        // extension's own (unminified) esbuild bundle rather than this one, but
+        // this guard is retained defensively for the remaining name-sensitive
+        // deps in the main bundle.
         terserOptions: {
           keep_classnames: true,
           keep_fnames: true,
