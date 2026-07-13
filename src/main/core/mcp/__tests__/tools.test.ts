@@ -189,7 +189,7 @@ describe('mcp built-in tools', () => {
 
   it('count: unsupported group_by throws a clear error instead of wrong data', async () => {
     await expect(call('count', { group_by: 'mime_type' })).rejects.toThrow(
-      /requires raw SQL access/,
+      /use query_sql/,
     );
   });
 

@@ -26,7 +26,7 @@ flowchart TB
 
     subgraph ENGINE["core/mcp — shared engine"]
         REG["ToolRegistry<br/>read at request time"]
-        BUILTIN["5 built-in tools"]
+        BUILTIN["7 built-in tools"]
     end
 
     ENTRY --> REG
@@ -39,7 +39,8 @@ flowchart TB
 
 ## Built-in tools
 
-All `tier: 'standard'`, defined in `src/main/core/mcp/tools/`:
+Defined in `src/main/core/mcp/tools/`. Five are `tier: 'standard'`; `query_sql` and `get_schema`
+are `tier: 'powerful'`:
 
 | Tool | Does |
 |---|---|
@@ -48,11 +49,14 @@ All `tier: 'standard'`, defined in `src/main/core/mcp/tools/`:
 | `count` | Aggregate counts (`group_by: source`) |
 | `get_related` | Thread messages, attachments, children, parent of a doc |
 | `digital_memory_info` | Discovery: accounts, counts by source/type/language, date range |
+| `query_sql` | Read-only raw SQL (`SELECT`/`WITH` only, textual gate + readonly driver handle), capped at 500 rows |
+| `get_schema` | Markdown schema doc (tables, columns, relations) — read this before writing `query_sql` |
 
-Deliberately narrower than the legacy app: no `query_sql` / `get_schema` raw-SQL escape hatch.
-That's what the `'powerful'` tier concept is reserved for — **note: `tier` is unenforced wire
-metadata today** (exposed in `_meta.tier` on `tools/list` for a future in-app gate); don't
-assume runtime gating exists.
+`query_sql` and `get_schema` ship on both the HTTP and stdio transports (`tools/raw-sql.ts`).
+They are read-only, not sandboxed by a consent prompt — the `'powerful'` tier concept is
+reserved for that, but the gate is deferred, not built. **`tier` is unenforced wire metadata
+today** (exposed in `_meta.tier` on `tools/list` for a future in-app gate); don't assume runtime
+gating exists.
 
 ## Extension tools
 

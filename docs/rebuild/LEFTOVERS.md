@@ -99,8 +99,14 @@ differently), **deferred** (planned, tracked as an issue), or a **deviation**
     electron-updater (check, download events, quit-and-install); the
     `update:*` IPC channels are real (`updater/ipc.ts`) and `main.ts` sets
     the feed URL.
-12. **`query_sql` / `get_schema` MCP tools** — omitted until the 'powerful'
-    tool consent tier exists. The other five legacy tools are ported.
+12. **`query_sql` / `get_schema` MCP tools** — DONE (2026-07-13, spec
+    `docs/superpowers/specs/2026-07-13-query-sql-get-schema-design.md`): both
+    ship on the HTTP and stdio transports (`tools/raw-sql.ts`), `tier:
+    'powerful'` with no consent gate. `query_sql` is read-only (SELECT/WITH
+    textual gate + readonly driver, 500-row cap); `get_schema` returns a
+    freshly-written greenfield schema doc kept honest by a drift test. The
+    'powerful' tier tag is the hook a future per-transport/consent filter
+    would key off.
 13. **Retention policy** — `purgeArchived` exists as a commit arm but no
     scheduled maintenance job invokes it yet.
 14. **SDK republication** — `packages/connector-sdk` + `extension-sdk` were

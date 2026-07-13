@@ -5,9 +5,9 @@
  * `Query.count` only supports {type, account, includeArchived} — no GROUP BY
  * primitive at all — so only `group_by: 'source'` is really answerable here
  * (by enumerating `accounts()` and summing per-account counts). The other
- * legacy group_by values need raw SQL (query_sql/get_schema), which are
- * intentionally NOT ported (see server.ts) — this tool reports a clear error
- * for those rather than silently returning wrong/partial data.
+ * legacy group_by values need raw SQL — now available via `query_sql` (see
+ * `get_schema` for the tables/columns) — so this tool points callers there
+ * with a clear error rather than silently returning wrong/partial data.
  */
 import type { Query } from '@shared/contracts';
 
@@ -24,7 +24,7 @@ export const COUNT_GROUP_BY_VALUES = [
 export type CountGroupBy = (typeof COUNT_GROUP_BY_VALUES)[number];
 
 export const countDescription = `Aggregate document counts, optionally filtered by \`source\`/\`type\`.
-\`group_by: 'source'\` is supported (grouped by connected account's source id). Other legacy group_by values (type, language, sender_address, month, label, tracked_root, mime_type) require raw SQL access, which this build does not expose over MCP — they will error rather than return partial data.`;
+\`group_by: 'source'\` is supported (grouped by connected account's source id). Other legacy group_by values (type, language, sender_address, month, label, tracked_root, mime_type) require raw SQL access — use \`query_sql\` (see \`get_schema\`) for grouped aggregations; passing one of them here errors rather than returning partial data.`;
 
 export const countInputSchema = {
   type: 'object',
@@ -73,7 +73,7 @@ export function makeCountTool(query: Query) {
     }
 
     throw new Error(
-      `count: group_by '${a.group_by}' requires raw SQL access (query_sql/get_schema), which this MCP build does not expose. Supported without it: 'source'.`,
+      `count: group_by '${a.group_by}' isn't supported directly — use query_sql (see get_schema) for grouped aggregations. Supported here: 'source'.`,
     );
   };
 }
