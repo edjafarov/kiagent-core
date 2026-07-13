@@ -526,7 +526,11 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       // always exists; the product dispatcher only if createMcpHandler() ran).
       loopback.dispose();
       productDispatcher?.dispose();
-      await rawSql.dispose();
+      try {
+        await rawSql.dispose();
+      } catch {
+        /* ignore */
+      }
       await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
         // Idle keep-alive sockets (from a client that never explicitly closed

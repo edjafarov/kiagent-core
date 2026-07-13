@@ -258,7 +258,7 @@ TEXT.`,
       // Hand-maintained (NOT CI-enforced — see file header).
       values: ['email.thread', 'email.message', 'attachment', 'file'],
       notes:
-        'email.thread + email.message + attachment (gmail, imap); file (local-folder).',
+        'email.thread + attachment (gmail); email.message (imap); file (local-folder).',
     },
   ],
 };

@@ -123,6 +123,24 @@ describe('runQuerySql', () => {
     }
   });
 
+  it('rejects a stacked-statement injection attempt', () => {
+    const conn = ro();
+    try {
+      // better-sqlite3's prepare() rejects input containing more than one
+      // statement, so the wrapped `SELECT * FROM (<sql>) LIMIT 501` throws
+      // before the trailing `DROP TABLE` ever runs.
+      expect(() =>
+        runQuerySql(conn, 'SELECT 1) LIMIT 1; DROP TABLE documents;--'),
+      ).toThrow();
+      const { n } = conn
+        .prepare('SELECT count(*) AS n FROM documents')
+        .get() as { n: number };
+      expect(n).toBe(3);
+    } finally {
+      conn.close();
+    }
+  });
+
   it('caps at 500 rows and flags truncation', () => {
     const conn = ro();
     try {

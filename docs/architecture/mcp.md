@@ -37,6 +37,8 @@ flowchart TB
     EXT -.host calls → gate.-> Q
 ```
 
+> Note: `query_sql` and `get_schema` (tier `powerful`) bypass the `Query` path — they read through their own read-only SQLite handle owned by `raw-sql.ts`.
+
 ## Built-in tools
 
 Defined in `src/main/core/mcp/tools/`. Five are `tier: 'standard'`; `query_sql` and `get_schema`
