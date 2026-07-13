@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.50.0](https://github.com/edjafarov/kiagent-core/compare/v0.49.0...v0.50.0) (2026-07-13)
+
+### Features
+
+* **mcp:** createRawSqlTools bundling query_sql + get_schema (WAL-safe open) ([b828ff5](https://github.com/edjafarov/kiagent-core/commit/b828ff55667a9699b0d020fd090f67dbd5623535))
+* **mcp:** expose query_sql + get_schema on http and stdio transports ([39cba47](https://github.com/edjafarov/kiagent-core/commit/39cba47f0bb34e4a7b4dbbdd2d9acf9cb535a661))
+* **mcp:** greenfield schema doc + get_schema renderer with drift test ([da73f60](https://github.com/edjafarov/kiagent-core/commit/da73f60377c4a1fa93387e9099b0406080e398b0))
+* **mcp:** read-only query_sql runner ([e9f7528](https://github.com/edjafarov/kiagent-core/commit/e9f752808d4a040cc5e490dfceae9616dabb9ada))
+
+### Bug Fixes
+
+* name the project in the LICENSE copyright line ([fb34b0a](https://github.com/edjafarov/kiagent-core/commit/fb34b0a81d4523d55727dd4d6d28c1d3b67f7f88))
+
 ## [0.49.0](https://github.com/edjafarov/kiagent-core/compare/v0.48.0...v0.49.0) (2026-07-12)
 
 ### Features
