@@ -26,6 +26,7 @@ import { makeMcpServer } from '../core/mcp/make-server';
 import { attachToolHandlers, createToolRegistry } from '../core/mcp/registry';
 import { attachResourceHandlers } from '../core/mcp/resources';
 import { buildBuiltinTools } from '../core/mcp/tools';
+import { createRawSqlTools } from '../core/mcp/tools/raw-sql';
 import { openCorpusReadConnection } from '../db/app-db';
 import { openStore, type CoreStore } from '../core/store/store';
 
@@ -110,7 +111,11 @@ async function main(): Promise<void> {
   const activity = createActivityLog(path.dirname(dbPath));
 
   const logSink = stderrLogSink();
-  const registry = createToolRegistry(buildBuiltinTools(store.read));
+  const rawSql = createRawSqlTools(dbPath);
+  const registry = createToolRegistry([
+    ...buildBuiltinTools(store.read),
+    ...rawSql.tools,
+  ]);
   const server = makeMcpServer();
   attachToolHandlers(server, registry, logSink, (rec) =>
     activity.append({ ...rec, transport: 'stdio' }),
@@ -124,6 +129,11 @@ async function main(): Promise<void> {
     shuttingDown = true;
     try {
       await server.close();
+    } catch {
+      /* ignore */
+    }
+    try {
+      await rawSql.dispose();
     } catch {
       /* ignore */
     }

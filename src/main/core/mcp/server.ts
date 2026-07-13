@@ -36,6 +36,7 @@ import { makeMcpServer } from './make-server';
 import { attachToolHandlers, createToolRegistry } from './registry';
 import { attachResourceHandlers } from './resources';
 import { buildBuiltinTools } from './tools';
+import { createRawSqlTools } from './tools/raw-sql';
 
 export interface McpDeps {
   query: Query;
@@ -218,8 +219,12 @@ function listenOnFirstFree(
 }
 
 export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
-  const registry = createToolRegistry(buildBuiltinTools(deps.query));
   const dbPath = path.join(deps.dataDir, 'kiagent.db');
+  const rawSql = createRawSqlTools(dbPath);
+  const registry = createToolRegistry([
+    ...buildBuiltinTools(deps.query),
+    ...rawSql.tools,
+  ]);
 
   // A reusable session dispatcher: owns ONE `mcp-session-id`-keyed pool and its
   // own idle-sweep timer, but closes over the SAME live registry/query/logSink/
@@ -521,6 +526,7 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       // always exists; the product dispatcher only if createMcpHandler() ran).
       loopback.dispose();
       productDispatcher?.dispose();
+      await rawSql.dispose();
       await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
         // Idle keep-alive sockets (from a client that never explicitly closed

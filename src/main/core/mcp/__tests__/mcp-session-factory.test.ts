@@ -29,6 +29,7 @@ import type { AddressInfo } from 'net';
 
 import type { Query } from '@shared/contracts';
 
+import { openDb } from '../../../db/app-db';
 import { startMcp } from '../server';
 import type { McpServerHandle } from '../server';
 
@@ -149,6 +150,12 @@ describe('McpServerHandle.createMcpHandler', () => {
 
   beforeAll(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-mcp-factory-'));
+    // startMcp now also wires createRawSqlTools(dbPath), which opens
+    // <dataDir>/kiagent.db readonly and requires the file to already exist —
+    // true in the real app (the db worker always opens it first, see
+    // main.ts), so the fixture here needs a real (if empty) db on disk too.
+    const seedDb = await openDb(path.join(dataDir, 'kiagent.db'));
+    await seedDb.close();
     handle = await startMcp({
       query: fakeQuery(),
       logSink: { log: () => {} },

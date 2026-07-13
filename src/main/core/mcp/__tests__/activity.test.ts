@@ -338,4 +338,27 @@ describe('summarizeCall', () => {
     expect(out.detail).toHaveLength(21);
     expect(out.detail![20]).toBe('…and 5 more');
   });
+
+  it('summarizes query_sql by row count', () => {
+    const out = summarizeCall(
+      'query_sql',
+      { sql: 'SELECT 1' },
+      { rows: [{ x: 1 }, { x: 2 }], truncated: false },
+    );
+    expect(out.summary).toBe('ran SQL → 2 row(s)');
+    expect(out.detail).toBeUndefined();
+  });
+
+  it('marks truncated query_sql results', () => {
+    const out = summarizeCall('query_sql', { sql: 'SELECT 1' }, {
+      rows: new Array(500).fill({ x: 1 }),
+      truncated: true,
+    });
+    expect(out.summary).toBe('ran SQL → 500+ row(s)');
+  });
+
+  it('summarizes get_schema', () => {
+    const out = summarizeCall('get_schema', {}, 'markdown');
+    expect(out.summary).toBe('read schema');
+  });
 });

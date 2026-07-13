@@ -27,6 +27,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 import type { Document, LogLevel, Query } from '@shared/contracts';
 
+import { openDb } from '../../../db/app-db';
 import { PORT_CANDIDATES, startMcp } from '../server';
 import type { McpServerHandle } from '../server';
 
@@ -79,6 +80,8 @@ const BUILTIN_TOOL_NAMES = [
   'digital_memory_info',
   'get',
   'get_related',
+  'get_schema',
+  'query_sql',
   'search',
 ].sort();
 
@@ -95,6 +98,12 @@ describe('startMcp (HTTP transport)', () => {
 
   beforeAll(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-mcp-http-'));
+    // startMcp now also wires createRawSqlTools(dbPath), which opens
+    // <dataDir>/kiagent.db readonly and requires the file to already exist —
+    // true in the real app (the db worker always opens it first, see
+    // main.ts), so the fixture here needs a real (if empty) db on disk too.
+    const seedDb = await openDb(path.join(dataDir, 'kiagent.db'));
+    await seedDb.close();
     logs = [];
     handle = await startMcp({
       query: fakeQuery(),

@@ -288,6 +288,17 @@ export function summarizeCall(
     }
     case 'digital_memory_info':
       return { summary: 'read corpus overview' };
+    case 'query_sql': {
+      const rows = Array.isArray((result as { rows?: unknown }).rows)
+        ? (result as { rows: unknown[] }).rows
+        : [];
+      const truncated = Boolean((result as { truncated?: unknown }).truncated);
+      return {
+        summary: `ran SQL → ${rows.length}${truncated ? '+' : ''} row(s)`,
+      };
+    }
+    case 'get_schema':
+      return { summary: 'read schema' };
     default:
       return { summary: `${tool} ${compactArgs(args)}` };
   }
