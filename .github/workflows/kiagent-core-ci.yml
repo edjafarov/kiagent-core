@@ -5,9 +5,11 @@ name: kiagent-core CI
 # injected) — i.e. DEFAULT_BRAND-only HostExtensions, neutral @host-impl /
 # @host-contracts / @channels-runtime / @renderer-ext.
 #
-# Fast checks run on every push/PR. The cross-platform unsigned `package:oss`
-# matrix (with the native deep-extraction vendor step) lives in
-# kiagent-core-package.yml — manual dispatch or v* tag push.
+# This is the ONLY workflow that runs automatically — tests on every push/PR.
+# Release builds were removed from this repo entirely on 2026-07-13
+# (kiagent-core-package.yml deleted): a v* tag push builds nothing here; the
+# shippable product is built from the alpha-cent overlay's release pipeline,
+# and `npm run package:oss` remains for hand-rolled local OSS builds.
 
 on:
   push:

@@ -1,5 +1,5 @@
 {
-  "$comment": "Release flow: `npm run release` bumps the version in BOTH package.json files (root via the npm plugin, release/app via @release-it/bumper — electron-builder and app.getVersion() read release/app), prepends the conventional-commits section to CHANGELOG.md, commits as chore(release), tags vX.Y.Z and pushes. The v* tag push then triggers .github/workflows/kiagent-core-package.yml, which verifies the tag matches release/app/package.json before building and attaches installers to a draft GitHub release.",
+  "$comment": "Release flow: `npm run release` bumps the version in BOTH package.json files (root via the npm plugin, release/app via @release-it/bumper — electron-builder and app.getVersion() read release/app), prepends the conventional-commits section to CHANGELOG.md, commits as chore(release), tags vX.Y.Z and pushes. Since 2026-07-13 the tag push triggers NO build — release builds were removed from this repo's CI (kiagent-core-package.yml deleted); the tag exists so consumers (alpha-cent core.lock) can pin it. Local unsigned builds: `npm run package:oss`.",
   "git": {
     "requireBranch": "main",
     "requireCleanWorkingDir": true,

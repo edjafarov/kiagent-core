@@ -33,7 +33,10 @@ before flipping it public.
       — BootSplash, the Spark mark and About still hardcode `'KIAgent'`.
       This item stays open until those are ported to `product.productName`
       too. See `docs/architecture/extension-platform.md` § Product builds.
-- [ ] Wire the cross-platform unsigned `package:oss` matrix in CI (needs the
-      native deep-extraction vendor step, incl. .NET 8 for the Windows OCR
-      helper).
+- [x] ~~Wire the cross-platform unsigned `package:oss` matrix in CI~~ —
+      built as `kiagent-core-package.yml`, then REMOVED 2026-07-13: core CI
+      runs tests only; release builds of the core are deliberately not done
+      in CI (the shippable product is built from the alpha-cent overlay's
+      release pipeline; local `npm run package:oss` remains for hand-rolled
+      OSS builds).
 - [ ] Add the Apache-2.0 LICENSE + source headers.
