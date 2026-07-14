@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.52.0](https://github.com/edjafarov/kiagent-core/compare/v0.51.0...v0.52.0) (2026-07-14)
+
+### Features
+
+* **auth:** branded loopback sign-in landing page ([47e55a8](https://github.com/edjafarov/kiagent-core/commit/47e55a80a3c2d5eec59736dfab143f5b93fb8364))
+
 ## [0.51.0](https://github.com/edjafarov/kiagent-core/compare/v0.50.0...v0.51.0) (2026-07-14)
 
 ### Features
