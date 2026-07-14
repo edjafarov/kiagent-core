@@ -1,5 +1,3 @@
-import type { BrowserWindow } from 'electron';
-
 import type {
   AuthChannel,
   Credentials,
@@ -13,17 +11,16 @@ import { runAccount } from '../core/boot';
 import type { CorePlatform } from '../core/boot';
 import { newId } from '../core/ids';
 import type { OAuthProfile } from './oauth-window';
-import { runOAuthWindow } from './oauth-window';
+import { runOAuthLoopback } from './oauth-window';
 
 /**
  * Bridges the Source.connect() AuthChannel to the renderer's AddSource
- * wizard: qr/prompt/status ride push:connect events; OAuth opens a window
- * main-side. One flow at a time per flowId.
+ * wizard: qr/prompt/status ride push:connect events; OAuth opens the system
+ * browser main-side. One flow at a time per flowId.
  */
 export function createConnectBroker(
   platform: CorePlatform,
   send: (event: ConnectEvent) => void,
-  getParentWindow: () => BrowserWindow | undefined,
 ) {
   const oauthProfiles = new Map<string, OAuthProfile>();
   // flowId carried per prompt (mirroring pickers) so cancel/settle can sweep
@@ -105,10 +102,9 @@ export function createConnectBroker(
           if (!profile)
             throw new Error(`no OAuth profile registered for ${sourceId}`);
           send({ flowId, kind: 'status', msg: 'Waiting for sign-in…' });
-          const callbackUrl = await runOAuthWindow(
+          const callbackUrl = await runOAuthLoopback(
             profile.authUrl(scopes, profile.redirectUri),
             profile.redirectUri,
-            getParentWindow(),
             flow.abort.signal,
           );
           return profile.exchange(callbackUrl, profile.redirectUri);

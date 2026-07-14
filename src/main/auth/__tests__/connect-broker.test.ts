@@ -8,14 +8,14 @@ import type {
 import type { ConnectEvent } from '@shared/ipc';
 
 import { createConnectBroker } from '../connect-broker';
-import { runOAuthWindow } from '../oauth-window';
+import { runOAuthLoopback } from '../oauth-window';
 import { runAccount } from '../../core/boot';
 import type { CorePlatform } from '../../core/boot';
 
 // oauth-window pulls in electron at require time; boot pulls in the whole
 // core. Neither is exercised here — the broker only needs engine.connect and
 // sources.get, both stubbed below.
-jest.mock('../oauth-window', () => ({ runOAuthWindow: jest.fn() }));
+jest.mock('../oauth-window', () => ({ runOAuthLoopback: jest.fn() }));
 jest.mock('../../core/boot', () => ({ runAccount: jest.fn() }));
 
 const flush = () => new Promise((r) => setImmediate(r));
@@ -52,11 +52,7 @@ function makeBroker(source: Source) {
       remove: engineRemove,
     },
   } as unknown as CorePlatform;
-  const broker = createConnectBroker(
-    platform,
-    (e) => events.push(e),
-    () => undefined,
-  );
+  const broker = createConnectBroker(platform, (e) => events.push(e));
   return { broker, events, engineRemove };
 }
 
@@ -241,7 +237,7 @@ describe('connect broker — pickFolders', () => {
 describe('connect broker — cancel', () => {
   beforeEach(() => {
     (runAccount as jest.Mock).mockClear();
-    (runOAuthWindow as jest.Mock).mockReset();
+    (runOAuthLoopback as jest.Mock).mockReset();
   });
 
   function promptEvent(events: ConnectEvent[]) {
@@ -297,9 +293,9 @@ describe('connect broker — cancel', () => {
     );
   });
 
-  it("cancel closes the flow's OAuth window via the abort signal", async () => {
-    (runOAuthWindow as jest.Mock).mockImplementation(
-      (_url, _redirect, _parent, signal: AbortSignal | undefined) =>
+  it("cancel closes the flow's OAuth loopback server via the abort signal", async () => {
+    (runOAuthLoopback as jest.Mock).mockImplementation(
+      (_url, _redirect, signal: AbortSignal | undefined) =>
         new Promise((_resolve, reject) => {
           signal?.addEventListener('abort', () =>
             reject(new Error('connect flow cancelled')),
@@ -319,7 +315,7 @@ describe('connect broker — cancel', () => {
     });
     const { flowId } = broker.start('picky');
     await flush();
-    expect(runOAuthWindow).toHaveBeenCalledTimes(1);
+    expect(runOAuthLoopback).toHaveBeenCalledTimes(1);
 
     broker.cancel(flowId);
     await flush();

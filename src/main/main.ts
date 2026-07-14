@@ -690,10 +690,8 @@ app
     // extension platform: extension-contributed oauth sources register
     // their profile into this broker and their refresher into p.refreshers
     // — the SAME Map instance bootCore handed to the engine deps.
-    const broker = createConnectBroker(
-      p,
-      (event: ConnectEvent) => broadcast('push:connect', event),
-      () => mainWindow ?? undefined,
+    const broker = createConnectBroker(p, (event: ConnectEvent) =>
+      broadcast('push:connect', event),
     );
     const bundledRefreshers = registerBundledSources(
       (s) => p.sources.register(s),
