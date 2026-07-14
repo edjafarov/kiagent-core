@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.51.0](https://github.com/edjafarov/kiagent-core/compare/v0.50.0...v0.51.0) (2026-07-14)
+
+### Features
+
+* **auth:** connector OAuth consent in system browser via loopback capture ([786efa7](https://github.com/edjafarov/kiagent-core/commit/786efa77ea400646fb1aea64cf4597baf01f5d11))
+
 ## [0.50.0](https://github.com/edjafarov/kiagent-core/compare/v0.49.0...v0.50.0) (2026-07-13)
 
 ### Features
