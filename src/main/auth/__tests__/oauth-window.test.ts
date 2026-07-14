@@ -82,6 +82,17 @@ describe('runOAuthLoopback', () => {
     expect(callbackUrl).toContain('state=xyz');
   });
 
+  it('an error callback gets the didn’t-complete page but still resolves the URL (exchange owns validation)', async () => {
+    const promise = runOAuthLoopback(AUTH_URL, REDIRECT_URI);
+
+    const res = await fetchWithRetry(`${REDIRECT_URI}?error=access_denied`);
+    expect(res.status).toBe(200);
+    await expect(res.text()).resolves.toMatch(/didn.t complete/);
+
+    const callbackUrl = await promise;
+    expect(callbackUrl).toContain('error=access_denied');
+  });
+
   it('a stray request 404s and does not settle the promise; the real callback still resolves it', async () => {
     const promise = runOAuthLoopback(AUTH_URL, REDIRECT_URI);
 
