@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.53.0](https://github.com/edjafarov/kiagent-core/compare/v0.52.0...v0.53.0) (2026-07-15)
+
+### Bug Fixes
+
+* **store:** announce accountRemoved through feed on resetAll ([98bbbdc](https://github.com/edjafarov/kiagent-core/commit/98bbbdc99d44397b2f8fa3afb02655ff33ee6798))
+
 ## [0.52.0](https://github.com/edjafarov/kiagent-core/compare/v0.51.0...v0.52.0) (2026-07-14)
 
 ### Features
