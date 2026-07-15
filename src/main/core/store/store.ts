@@ -803,6 +803,10 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         // disk outside the DB, so wiping their grants would strand every
         // one of them in needs-consent after reset. One batch = one atomic
         // transaction (the AppDb primitive that replaces db.transaction()).
+        //
+        // Read the pre-reset accounts BEFORE the wipe so the same batch can
+        // announce each removal through the feed.
+        const accounts = await query.accounts();
         await db.batch([
           ...[
             'documents_fts',
@@ -816,6 +820,17 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
             'accounts',
           ].map((t) => ({ sql: `DELETE FROM ${t}` })),
           { sql: `DELETE FROM meta WHERE key != 'schemaVersion'` },
+          // The app projection (and every other feed consumer) derives its
+          // account list incrementally from the change feed; a silent
+          // truncation of `changes` leaves it carrying ghost accounts until
+          // restart. Announce each removal AFTER the deletes — `changes.seq`
+          // is AUTOINCREMENT and `sqlite_sequence` survives DELETE (and the
+          // VACUUM below), so these rows land with fresh, higher seqs and
+          // the feed cursor (`seq > cursor`) stays monotonic.
+          ...accounts.map((a) => ({
+            sql: `INSERT INTO changes(kind, ref_id, at) VALUES('accountRemoved', ?, ?)`,
+            params: [a.id, now()],
+          })),
         ]);
         // DELETE alone never returns pages to the OS — the file (and the
         // WAL) keep their pre-reset size, so the Storage screen would still

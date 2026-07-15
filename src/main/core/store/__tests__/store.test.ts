@@ -624,6 +624,43 @@ describe('store', () => {
     expect(sizeOf()).toBeLessThan(before / 2);
   });
 
+  it('resetAll announces an accountRemoved change per pre-reset account', async () => {
+    // A silent truncation of `changes` leaves every feed consumer (the app
+    // projection chief among them) carrying ghost accounts until restart —
+    // reset must announce each removal through the feed, not just wipe rows.
+    const account2 = await store.createAccount({
+      source: 'test',
+      identifier: 'second@example.com',
+    });
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 1,
+    });
+    await store.commit({
+      account: account2.id,
+      documents: [doc('b')],
+      cursor: 1,
+    });
+    const headBefore = await store.headSeq();
+
+    await store.maintenance.resetAll();
+
+    expect(await store.read.accounts()).toEqual([]);
+
+    const changes: Change[] = [];
+    for await (const batch of store.feed(headBefore)) {
+      changes.push(...batch);
+      if (changes.length >= 2) break;
+    }
+    const removed = changes.filter((c) => c.kind === 'accountRemoved');
+    const removedIds = removed.map(
+      (c) => (c as { accountId: AccountId }).accountId,
+    );
+    expect(removedIds.sort()).toEqual([accountId, account2.id].sort());
+    expect(removed.every((c) => c.seq > headBefore)).toBe(true);
+  });
+
   it('resetAll preserves extension consents', async () => {
     // Installed extensions live on disk outside the DB and survive a factory
     // reset; their consent grants must survive with them, or every installed

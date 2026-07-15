@@ -410,6 +410,18 @@ function registerIpc(
     await p.store.maintenance.export(dir);
   });
   handle('maintenance:reset-all', async () => {
+    // Stop every real account's sync loop BEFORE the wipe. engine.pause is
+    // the one public API that both aborts a running loop and (via its pause
+    // intent) blocks the cadence tick from resurrecting it mid-wipe. Without
+    // this, still-running loops keep committing against deleted accounts
+    // (throwing 'commit: unknown account') while the wipe runs. Worker
+    // consumers are deliberately NOT stopped — nothing restarts them until
+    // relaunch, and the emptied work ledger idles them out on its own.
+    const accounts = await p.store.read.accounts();
+    for (const account of accounts) {
+      if (account.source === 'worker') continue;
+      await p.engine.pause(account.id).catch(() => {});
+    }
     await p.store.maintenance.resetAll();
     // A factory reset is THE legitimate un-latch: the get-started checklist
     // must come back for the now-empty app. Configuration prefs (theme,
