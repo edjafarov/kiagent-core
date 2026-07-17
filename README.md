@@ -65,10 +65,6 @@ flowchart TB
 
 Plugins sit at the center: each one connects to a third-party service (Gmail, Drive, Slack, Notion, ...) or the local filesystem, pulls your data in, uses the local LLM to process it, and lands it in the database — which MCP then serves to AI assistants. Access is mediated and permission-gated; plugins never touch these capabilities directly.
 
-## Get KIAgent
-
-If you just want to use the app, download a signed installer from **[localkiagent.com/download](https://localkiagent.com/download)** — no build step required. Installers are available for macOS, Windows and Linux.
-
 ## This repo: kiagent-core
 
 This repository is the MIT-licensed core that KIAgent is built from, in the same spirit as VS Code and Code-OSS:
