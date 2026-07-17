@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.localkiagent/kiagent",
+  "title": "KIAgent",
+  "description": "Your mail, chats and documents indexed into a local SQLite corpus, served to AI clients over MCP.",
+  "websiteUrl": "https://localkiagent.com",
+  "repository": {
+    "url": "https://github.com/edjafarov/kiagent-core",
+    "source": "github"
+  },
+  "version": "0.53.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://{subdomain}.localkiagent.com/mcp",
+      "variables": {
+        "subdomain": {
+          "description": "Your personal KIAgent subdomain, shown in the app's Remote section after you enable remote access (e.g. 'anna-x7k2' for anna-x7k2.localkiagent.com)",
+          "isRequired": true
+        }
+      }
+    }
+  ]
+}
