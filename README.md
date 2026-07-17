@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/readme/hero.png" alt="KIAgent main window — Sources screen with Gmail and HubSpot syncing" width="800">
+  <img src="docs/assets/readme/hero.png" alt="KIAgent main window — Sources screen with Gmail and HubSpot syncing" width="100%">
 </p>
 
 KIAgent is a desktop app that ingests your personal data — mail, documents, chats, notes — on your own machine, stores it in a local database, and serves it to AI assistants over [MCP](https://modelcontextprotocol.io). Everything stays on your computer: ingestion, parsing, OCR and vision all run locally, so your AI assistant can know your data without your data ever leaving your machine.
