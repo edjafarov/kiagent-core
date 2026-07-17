@@ -113,6 +113,12 @@ native/        Native helper sources (vision/OCR)
 scripts/       Build and vendoring scripts
 ```
 
+## MCP directories
+
+KIAgent is published on the [official MCP registry](https://registry.modelcontextprotocol.io/v0/servers?search=kiagent) as `com.localkiagent/kiagent` (see [`server.json`](server.json)) and listed on Glama:
+
+[![kiagent-core MCP server](https://glama.ai/mcp/servers/edjafarov/kiagent-core/badges/card.svg)](https://glama.ai/mcp/servers/edjafarov/kiagent-core)
+
 ## Acknowledgements
 
 KIAgent's on-device inference is powered by **[llama.cpp](https://github.com/ggml-org/llama.cpp)**, created by Georgi Gerganov and maintained by the ggml-org community (MIT license). The app bundles prebuilt `llama-server` binaries from the official llama.cpp releases (`npm run vendor:inference` fetches them at build time). Running capable models privately on consumer hardware is only practical because of their work — thank you.
