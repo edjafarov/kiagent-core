@@ -17,11 +17,9 @@
   <a href="https://localkiagent.com/download"><img src="https://img.shields.io/badge/platform-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-blue.svg" alt="Platforms"></a>
 </p>
 
-<!-- TODO: replace with a real screenshot, then uncomment:
 <p align="center">
-  <img src="docs/assets/readme/hero.png" alt="KIAgent main window" width="800">
+  <img src="docs/assets/readme/hero.png" alt="KIAgent main window — Sources screen with Gmail and HubSpot syncing" width="800">
 </p>
--->
 
 KIAgent is a desktop app that ingests your personal data — mail, documents, chats, notes — on your own machine, stores it in a local database, and serves it to AI assistants over [MCP](https://modelcontextprotocol.io). Everything stays on your computer: ingestion, parsing, OCR and vision all run locally, so your AI assistant can know your data without your data ever leaving your machine.
 
