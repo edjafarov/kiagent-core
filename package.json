@@ -1,39 +1,31 @@
 {
-  "name": "electron-react-boilerplate",
+  "name": "kiagent-core",
   "version": "0.53.0",
-  "description": "A foundation for scalable desktop apps",
+  "description": "Your knowledge, indexed locally — a desktop app that ingests your personal data on your own machine and serves it to AI assistants over MCP",
   "keywords": [
+    "mcp",
+    "ai",
+    "local-first",
+    "privacy",
+    "knowledge-base",
+    "llm",
     "electron",
-    "boilerplate",
     "react",
-    "typescript",
-    "ts",
-    "sass",
-    "webpack",
-    "hot",
-    "reload"
+    "typescript"
   ],
-  "homepage": "https://github.com/electron-react-boilerplate/electron-react-boilerplate#readme",
+  "homepage": "https://localkiagent.com",
   "bugs": {
-    "url": "https://github.com/electron-react-boilerplate/electron-react-boilerplate/issues"
+    "url": "https://github.com/edjafarov/kiagent-core/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/electron-react-boilerplate/electron-react-boilerplate.git"
+    "url": "git+https://github.com/edjafarov/kiagent-core.git"
   },
   "license": "MIT",
   "author": {
-    "name": "Electron React Boilerplate Maintainers",
-    "email": "electronreactboilerplate@gmail.com",
-    "url": "https://electron-react-boilerplate.js.org"
+    "name": "Eldar Djafarov",
+    "url": "https://github.com/edjafarov"
   },
-  "contributors": [
-    {
-      "name": "Amila Welihinda",
-      "email": "amilajack@gmail.com",
-      "url": "https://github.com/amilajack"
-    }
-  ],
   "main": "./.erb/dll/main.bundle.dev.js",
   "workspaces": [
     "src/shared/web-ui"

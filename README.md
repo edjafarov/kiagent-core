@@ -1,6 +1,29 @@
-# KIAgent core
+<p align="center">
+  <img src="assets/icon.png" alt="KIAgent logo" width="112">
+</p>
 
-**Your knowledge, indexed locally.** KIAgent is a desktop app (Electron + React + TypeScript) that ingests your personal data — mail, documents, chats, notes — on your own machine, stores it in a local database, and serves it to AI assistants over [MCP](https://modelcontextprotocol.io). All stored and served from your computer: ingestion, parsing, OCR and VCR run locally.
+<h1 align="center">KIAgent</h1>
+
+<p align="center"><strong>Your knowledge, indexed locally.</strong></p>
+
+<p align="center">
+  <a href="https://localkiagent.com/">Website</a> ·
+  <a href="https://localkiagent.com/download">Download</a> ·
+  <a href="docs/architecture">Architecture docs</a>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
+  <a href="https://localkiagent.com/download"><img src="https://img.shields.io/badge/platform-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-blue.svg" alt="Platforms"></a>
+</p>
+
+<!-- TODO: replace with a real screenshot, then uncomment:
+<p align="center">
+  <img src="docs/assets/readme/hero.png" alt="KIAgent main window" width="800">
+</p>
+-->
+
+KIAgent is a desktop app that ingests your personal data — mail, documents, chats, notes — on your own machine, stores it in a local database, and serves it to AI assistants over [MCP](https://modelcontextprotocol.io). Everything stays on your computer: ingestion, parsing, OCR and vision all run locally, so your AI assistant can know your data without your data ever leaving your machine.
 
 At its core, KIAgent is a **platform**: a small set of host capabilities (MCP, database, local LLM, filesystem, web access) wired together by an ingestion engine, plus a plugin/extension system that lets sandboxed connectors use those capabilities to bring in new data sources.
 
@@ -42,6 +65,19 @@ flowchart TB
 
 Plugins sit at the center: each one connects to a third-party service (Gmail, Drive, Slack, Notion, ...) or the local filesystem, pulls your data in, uses the local LLM to process it, and lands it in the database — which MCP then serves to AI assistants. Access is mediated and permission-gated; plugins never touch these capabilities directly.
 
+## Get KIAgent
+
+If you just want to use the app, download a signed installer from **[localkiagent.com/download](https://localkiagent.com/download)** — no build step required. Installers are available for macOS, Windows and Linux.
+
+## This repo: kiagent-core
+
+This repository is the MIT-licensed core that KIAgent is built from, in the same spirit as VS Code and Code-OSS:
+
+- **kiagent-core** (this repo) — the open-source core. `npm run package:oss` produces an unbranded `kiagent-core` build you can run and redistribute under the MIT license.
+- **[KIAgent](https://localkiagent.com/)** — the branded, signed product built from this core and distributed at [localkiagent.com/download](https://localkiagent.com/download).
+
+OAuth-backed sources (Gmail, Microsoft) read client credentials from the environment at build time — see `.env.example` / CI secrets. Forks and OSS builds supply their own OAuth client IDs.
+
 ## Main components
 
 - **Ingestion engine** (`src/main/core/engine`) — pulls batches from sources on a cadence, converts raw items (mail, PDFs, images) into indexed documents, and commits them to the store. Built-in sources live in `src/main/sources` (Gmail, IMAP, Microsoft 365, local folders).
@@ -53,7 +89,7 @@ Plugins sit at the center: each one connects to a third-party service (Gmail, Dr
 - **Plugin / extension system** (`src/main/platform`, `src/main/marketplace`) — connectors run in isolated host processes with a manifest-declared, permission-gated view of the platform (sources, auth, storage, network). A GitHub-backed marketplace handles discovery, install and updates. A second, privileged tier lets a product build ship first-party extensions inside the app package itself — see [`docs/architecture/extension-platform.md`](docs/architecture/extension-platform.md) for the full model, including the bundled/`unsafe.mainProcess` tier and `product.json`.
 - **Renderer** (`src/renderer`) — the React UI: source setup, marketplace, MCP connection status, settings and logs.
 
-## Getting started
+## Developing
 
 ```bash
 npm install
@@ -67,10 +103,9 @@ npm test                 # jest test suites
 npm run lint             # eslint + prettier
 npm run typecheck        # tsc, no emit
 npm run package          # build a distributable
+npm run package:oss      # build an unbranded kiagent-core distributable
 npm run vendor:inference # fetch llama.cpp server + build vision helper
 ```
-
-OAuth-backed sources (Gmail, Microsoft) read client credentials from the environment at build time — see `.env.example` / CI secrets. Forks supply their own OAuth client IDs.
 
 ## Repository layout
 
