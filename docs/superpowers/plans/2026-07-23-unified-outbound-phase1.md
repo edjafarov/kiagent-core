@@ -22,6 +22,25 @@
 - New runtime dependency `nodemailer` goes in `release/app/package.json` ONLY (main-process runtime deps live there — same as `imapflow`); `@types/nodemailer` goes in root `package.json` devDependencies. Jest resolves `release/app/node_modules` via `moduleDirectories` — no jest config change needed.
 - Path aliases: `@main/*` → `src/main/*`, `@shared/*` → `src/shared/*` (tsconfig + jest already map them).
 - If jest suddenly fails with a better-sqlite3 ABI/NODE_MODULE_VERSION error, run `npm rebuild better-sqlite3` and retry — do not chase phantom failures.
+- **`Account.identifier` is NOT an email address.** The IMAP source sets it to `` `${user}@${host}` `` (`source.ts` connect flow) — e.g. `me@example.com@imap.example.com`. Every place that needs the user's sending/self address derives it via `senderAddressFor(account)` (Task 5's `identity.ts`): `config.outbound.fromAddress` if set, else `config.user` when it is a valid email, else a clear error. Never put `identifier` in a From header, an SMTP envelope, or a self-exclusion set. Tests use realistic identifiers (`me@example.com@imap.example.com`).
+- **The confirmation mode is frozen per draft** (`confirm_mode` column, written at creation). Settings changes affect FUTURE drafts only; render/list paths read the row, never the account's current mode.
+- **Outbox statuses** include `delivery_unknown`: a row found in `sending` at app boot (the process died between SMTP accept and the `sent` write). Never auto-retried, never re-linked; its page/list copy says the message MAY have been sent and to check the Sent folder before re-drafting.
+- **Remote MCP callers are gated.** The shared registry serves the product's remote transport too; a remote caller would receive dead `127.0.0.1` confirm URLs. The service refuses draft creation when the transport context (AsyncLocalStorage seam, Task 5) says `remote` — phase 4 replaces the refusal with tunnel URLs.
+- **Outbound settings never ride `accounts:update-config`** — that channel goes through `engine.updateConfig`, which restarts a running sync loop and grants a mass-reconcile allowance. Per-account outbound settings use the dedicated `accounts:update-outbound` channel (Task 9) writing via `store.setAccountConfig` directly (engine bypassed).
+
+## Parallel Execution Guide (subagent-driven)
+
+Tasks in the same wave touch disjoint files and may be dispatched as **parallel subagents in this same checkout** (do NOT use git worktrees — jest silently ignores all tests when run from `.claude/worktrees/*`). Two rules when parallelizing: (1) each subagent runs only its own task's test files, and (2) subagents do NOT run the task's commit step — the orchestrator reviews and commits each task's files serially after the wave completes (parallel `git commit` races on the index lock). Implementer subagents run on sonnet.
+
+| Wave | Tasks | Why they're independent |
+| --- | --- | --- |
+| 1 | Task 1 | Everything depends on the contracts + schema. |
+| 2 | Task 2, Task 3, Task 4 | Store module vs pure token crypto vs imap parse/resolve — disjoint files. |
+| 3 | Task 5 | Needs 2+3+4. |
+| 4 | Task 6, Task 7, Task 10, Task 11 | Tools vs service pipeline internals vs imap append vs smtp sender (11 needs 10's `append` on the interface — dispatch 10 first within the wave or give 11 the one-line interface diff). |
+| 5 | Task 8, Task 9 | Routes/server wiring vs settings/IPC/renderer — disjoint. |
+| 6 | Task 12, Task 13 | Boot wiring vs stdio proxy (both small; 13 needs 8's `/outbox/api`). |
+| 7 | Task 14 | Full gates, serial. |
 
 ## File Structure
 
@@ -33,8 +52,10 @@
 | `src/main/core/store/__tests__/outbox.test.ts` | Outbox store tests. |
 | `src/main/outbound/tokens.ts` | Pure HMAC confirm-token sign/verify. |
 | `src/main/outbound/__tests__/tokens.test.ts` | Token tests. |
-| `src/main/outbound/resolve.ts` | Reply resolution from stored IMAP document metadata. |
+| `src/main/outbound/resolve.ts` | Reply resolution from stored IMAP document metadata (inbound vs self-sent aware). |
 | `src/main/outbound/__tests__/resolve.test.ts` | Resolution tests. |
+| `src/main/outbound/identity.ts` | `senderAddressFor(account)` — the ONE place an account becomes a sending/self address. |
+| `src/main/core/mcp/transport-context.ts` | AsyncLocalStorage transport tag (`'remote'`) for the shared registry. |
 | `src/main/outbound/service.ts` | OutboundService: draft creation, mode lookup, URL minting, confirm/cancel/send pipeline. |
 | `src/main/outbound/__tests__/service.test.ts` | Service tests (fake Sender). |
 | `src/main/outbound/pages.ts` | Confirm/result HTML pages via `@shared/web-ui` `renderShell`. |
@@ -59,7 +80,10 @@
 | `src/main/core/store/schema.ts` | Migration v4: `outbox` table. |
 | `src/main/core/store/store.ts` | `CoreStore.outbox` wired to `createOutboxStore`. |
 | `src/main/core/mcp/tools/index.ts` | `buildBuiltinTools(query, outbound?)` + 3 new tools. |
-| `src/main/core/mcp/server.ts` | `McpDeps.outbound`, `/outbox/*` dispatch branch, `setBaseUrl` after listen. |
+| `src/main/core/mcp/tools/digital-memory-info.ts` | Account entries gain `id` (draft_message discoverability). |
+| `src/main/core/mcp/server.ts` | `McpDeps.outbound`, `/outbox/*` dispatch branch, `setBaseUrl` after listen, remote transport tag in `createMcpHandler`. |
+| `src/main/sources/imap/parse.ts` + `types.ts` + `source.ts` | Ingest `cc`, `replyTo`, `references` into message metadata (Task 4). |
+| `src/shared/ipc.ts` | New `accounts:update-outbound` channel. |
 | `src/main/core/mcp/instructions.ts` | Mention outbound tools in server instructions (only if it enumerates tools — check first). |
 | `src/main/core/mcp/__tests__/server.test.ts` | `BUILTIN_TOOL_NAMES` gains the three new tools. |
 | `src/main/core/prefs.ts` | `outbound.defaultMode` default + sanitize + patch merge. |
@@ -126,6 +150,7 @@ describe('outbox schema (migration v4)', () => {
       'subject',
       'body_markdown',
       'threading_json',
+      'confirm_mode',
       'status',
       'error',
       'external_message_id',
@@ -140,8 +165,8 @@ describe('outbox schema (migration v4)', () => {
     await expect(
       db.run(
         `INSERT INTO outbox (id, account_id, kind, recipient_display,
-           body_markdown, status, created_via, created_at, expires_at)
-         VALUES ('x', 'a', 'new', 'r', 'b', 'bogus', 'mcp-local', 't', 't')`,
+           body_markdown, confirm_mode, status, created_via, created_at, expires_at)
+         VALUES ('x', 'a', 'new', 'r', 'b', 'review', 'bogus', 'mcp-local', 't', 't')`,
       ),
     ).rejects.toThrow(/CHECK/);
   });
@@ -178,8 +203,9 @@ In `src/main/core/store/schema.ts`, append to the `MIGRATIONS` array (after the 
     subject TEXT,
     body_markdown TEXT NOT NULL,
     threading_json TEXT,
+    confirm_mode TEXT NOT NULL CHECK (confirm_mode IN ('review','link')),
     status TEXT NOT NULL CHECK (status IN
-      ('draft','sending','sent','failed','discarded','expired')),
+      ('draft','sending','sent','failed','discarded','expired','delivery_unknown')),
     error TEXT,
     external_message_id TEXT,
     created_via TEXT NOT NULL,
@@ -206,7 +232,11 @@ export type OutboxStatus =
   | 'sent'
   | 'failed'
   | 'discarded'
-  | 'expired';
+  | 'expired'
+  /** Found in 'sending' at app boot: the process died between the transport
+   *  accepting the message and the 'sent' write. The message MAY have gone
+   *  out — never auto-retried, never re-linked. */
+  | 'delivery_unknown';
 
 /** How a draft gets user confirmation. 'review' = full app-served review page
  *  (spec mode A, the default); 'link' = in-chat review + short-TTL signed
@@ -231,6 +261,8 @@ export interface OutboxRow {
   subject: string | null;
   bodyMarkdown: string;
   threading: Record<string, unknown> | null;
+  /** Frozen at creation — settings changes affect future drafts only. */
+  confirmMode: ConfirmMode;
   status: OutboxStatus;
   error: string | null;
   externalMessageId: string | null;
@@ -311,6 +343,7 @@ export interface OutboxDraftInput {
   subject?: string | null;
   bodyMarkdown: string;
   threading?: Record<string, unknown> | null;
+  confirmMode: ConfirmMode;
   createdVia: 'mcp-local' | 'mcp-remote';
   expiresAt: string;
 }
@@ -333,6 +366,11 @@ export interface OutboxStore {
   countDrafts(accountId: AccountId): Promise<number>;
   /** draft rows past expires_at → status 'expired'. Called lazily. */
   expireOverdue(): Promise<void>;
+  /** Boot-time sweep: rows still in 'sending' can only mean the previous
+   *  process died mid-send → 'delivery_unknown' (the message MAY have been
+   *  sent; never auto-retried). Sends run in-process, so at boot no send can
+   *  legitimately be in flight. */
+  recoverOrphanedSending(): Promise<void>;
   /** Lazily generated 32-byte HMAC secret, sealed with the store's encrypt
    *  codec, persisted in the meta table under 'outboundSecret'. */
   secret(): Promise<Buffer>;
@@ -378,6 +416,7 @@ describe('outbox store', () => {
     cc: [],
     subject: 'Hi',
     bodyMarkdown: 'Hello Bob',
+    confirmMode: 'review',
     createdVia: 'mcp-local',
     expiresAt: '2099-01-01T00:00:00.000Z',
     ...over,
@@ -388,7 +427,7 @@ describe('outbox store', () => {
     store = openStore(await openDb(path.join(dir, 'test.db')), deps);
     const account = await store.createAccount({
       source: 'imap',
-      identifier: 'me@example.com',
+      identifier: 'me@example.com@imap.example.com',
     });
     accountId = account.id;
   });
@@ -402,8 +441,28 @@ describe('outbox store', () => {
     const row = await store.outbox.create(draft());
     expect(row.status).toBe('draft');
     expect(row.to).toEqual(['bob@example.com']);
+    expect(row.confirmMode).toBe('review');
     const back = await store.outbox.get(row.id);
     expect(back).toEqual(row);
+  });
+
+  it('freezes the confirm mode per row', async () => {
+    const row = await store.outbox.create(draft({ confirmMode: 'link' }));
+    expect((await store.outbox.get(row.id))?.confirmMode).toBe('link');
+  });
+
+  it('recoverOrphanedSending moves sending rows to delivery_unknown', async () => {
+    const row = await store.outbox.create(draft());
+    await store.outbox.transition(row.id, ['draft'], 'sending');
+    await store.outbox.recoverOrphanedSending();
+    const back = await store.outbox.get(row.id);
+    expect(back?.status).toBe('delivery_unknown');
+    expect(back?.error).toMatch(/may have been sent/i);
+    // Terminal rows are untouched.
+    const sent = await store.outbox.create(draft());
+    await store.outbox.transition(sent.id, ['draft'], 'sent');
+    await store.outbox.recoverOrphanedSending();
+    expect((await store.outbox.get(sent.id))?.status).toBe('sent');
   });
 
   it('round-trips threading and outboundRef JSON', async () => {
@@ -487,6 +546,7 @@ import { randomBytes } from 'crypto';
 
 import type {
   AccountId,
+  ConfirmMode,
   DocumentId,
   OutboxRow,
   OutboxStatus,
@@ -543,6 +603,7 @@ interface OutboxRowSql {
   subject: string | null;
   body_markdown: string;
   threading_json: string | null;
+  confirm_mode: ConfirmMode;
   status: OutboxStatus;
   error: string | null;
   external_message_id: string | null;
@@ -568,6 +629,7 @@ function toRow(r: OutboxRowSql): OutboxRow {
       r.threading_json === null
         ? null
         : (JSON.parse(r.threading_json) as Record<string, unknown>),
+    confirmMode: r.confirm_mode,
     status: r.status,
     error: r.error,
     externalMessageId: r.external_message_id,
@@ -623,9 +685,9 @@ export function createOutboxStore(
       await db.run(
         `INSERT INTO outbox (id, account_id, kind, reply_to_document_id,
            outbound_ref, recipient_display, to_json, cc_json, subject,
-           body_markdown, threading_json, status, created_via, created_at,
-           expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
+           body_markdown, threading_json, confirm_mode, status, created_via,
+           created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
         [
           id,
           d.accountId,
@@ -640,6 +702,7 @@ export function createOutboxStore(
           d.subject ?? null,
           d.bodyMarkdown,
           d.threading ? JSON.stringify(d.threading) : null,
+          d.confirmMode,
           d.createdVia,
           deps.now(),
           d.expiresAt,
@@ -687,6 +750,14 @@ export function createOutboxStore(
         `UPDATE outbox SET status = 'expired'
           WHERE status = 'draft' AND expires_at <= ?`,
         [deps.now()],
+      );
+    },
+
+    async recoverOrphanedSending() {
+      await db.run(
+        `UPDATE outbox SET status = 'delivery_unknown',
+           error = 'the app closed while sending — the message may have been sent; check the Sent folder before re-drafting'
+         WHERE status = 'sending'`,
       );
     },
 
@@ -889,14 +960,16 @@ git commit -m "feat(outbound): HMAC confirm tokens — sign/verify with TTL, tim
 
 ---
 
-### Task 4: Reply resolution from IMAP document metadata
+### Task 4: IMAP ingestion enrichment + reply resolution
 
 **Files:**
+- Modify: `src/main/sources/imap/parse.ts` (extract `cc`, `replyTo`, `references`), `src/main/sources/imap/types.ts` (`ImapMessageItem`), `src/main/sources/imap/source.ts` (`toDocument` metadata)
 - Create: `src/main/outbound/resolve.ts`
-- Test: `src/main/outbound/__tests__/resolve.test.ts`
+- Test: `src/main/outbound/__tests__/resolve.test.ts`; extend the existing imap parse/source tests the compiler flags
 
 **Interfaces:**
-- Consumes: `Document` from `@shared/contracts`. IMAP `email.message` metadata shape (written by `src/main/sources/imap/source.ts:291-297`): `{ from: string | null, to: string[], date, mailbox, uid, messageId: string | null }` — `messageId` is stored ANGLE-STRIPPED (`parse.ts` `stripAngle`), `from` is a display string like `"Alice <alice@x.com>"`, and there is NO cc and NO references chain.
+- Consumes: `Document` from `@shared/contracts`. IMAP `email.message` metadata: today `{ from: string | null, to: string[], date, mailbox, uid, messageId: string | null }` — `messageId` ANGLE-STRIPPED (`parse.ts` `stripAngle`), `from` a display string like `"Alice <alice@x.com>"`, NO cc/replyTo/references. This task ADDS `cc: string[]`, `replyTo: string | null`, `references: string[]` (angle-stripped, oldest-first) to newly pulled docs; the resolver must handle BOTH shapes (already-ingested docs keep the old metadata until re-pulled).
+- **Sent-folder trap (the reason this task exists):** the IMAP pull syncs the Sent mailbox too, so a document's `from` can be the user. Replying "to the sender" of such a doc would address the user. Outbound-ness is detected by `from ∈ selfAddresses` — NOT by mailbox name (works for already-ingested docs and All-Mail copies alike; no mailbox-role plumbing needed).
 - Produces (used by Task 5):
 
 ```ts
@@ -904,19 +977,52 @@ export interface ResolvedReply {
   to: string[];
   cc: string[];
   subject: string | null;      // "Re: <original>" (no double-prefix)
-  recipientDisplay: string;    // the original sender display string
+  recipientDisplay: string;
   threading: Record<string, unknown>; // { inReplyTo?, references? } RFC-bracketed
   warnings: string[];          // honest gaps, surfaced in the tool result
 }
-/** Throws Error (message names the gap) when metadata can't ground a reply. */
+/** selfAddresses: every address the account sends as (from senderAddressFor
+ *  + config.user) — lowercased matching. Throws Error when metadata can't
+ *  ground a reply. */
 export function resolveImapReply(
   doc: Document,
-  selfEmail: string,
+  selfAddresses: string[],
   replyAll: boolean,
 ): ResolvedReply;
 ```
 
-- [ ] **Step 1: Write the failing test**
+Resolution rules (encode in tests):
+- **Inbound** (`from` not in selfAddresses): target = `replyTo ?? from` (both missing → error naming the gap). `reply_all` appends stored `to` + `cc` minus selfAddresses minus duplicates; when the doc predates cc ingestion (`cc` undefined), add the honest cc warning.
+- **Self-sent** (`from` in selfAddresses): target = stored `to` minus selfAddresses (empty → error: the stored recipients are only you). `reply_all` additionally appends `cc` minus self. Warning: `Replying to a message you sent — addressing its original recipients.` `recipientDisplay` = the joined targets.
+- **Threading:** `inReplyTo` = `<messageId>`; `references` = stored references chain (re-bracketed) + `<messageId>` last; no `messageId` → `{}` + the no-thread warning.
+
+- [ ] **Step 1: Ingestion enrichment (parse → types → source)**
+
+1. `src/main/sources/imap/types.ts` — `ImapMessageItem` gains, after `to`:
+```ts
+  cc: string[];
+  /** Reply-To display string when the header is present. */
+  replyTo: string | null;
+  /** References chain, angle-stripped like messageId, oldest-first. */
+  references: string[];
+```
+2. `src/main/sources/imap/parse.ts` — read the file first; it extracts `from`/`to` from mailparser's `simpleParser` output. Mirror the existing address-extraction idiom for the three new fields (reference shapes — adapt to the local helpers):
+```ts
+  cc: /* same address-list extraction used for `to`, applied to mail.cc */,
+  replyTo: /* same single-address extraction used for `from`, applied to mail.replyTo */ ?? null,
+  references: (Array.isArray(mail.references)
+    ? mail.references
+    : mail.references
+      ? [mail.references]
+      : []
+  ).map(stripAngle),
+```
+   Also update the module comment that says threading fields are dropped — they no longer are (attachments still are).
+3. `src/main/sources/imap/source.ts` — `toDocument`'s `metadata` object gains `cc: item.cc, replyTo: item.replyTo, references: item.references` after `to`.
+4. Run: `npm run typecheck` — fix every test fixture/fake the compiler flags (imap parse/source tests build `ImapMessageItem` literals).
+5. Run: `npx jest src/main/sources/imap -v` — Expected: PASS (extend existing parse assertions to cover the new fields where the test file already asserts `from`/`to`).
+
+- [ ] **Step 2: Write the failing resolve tests**
 
 Create `src/main/outbound/__tests__/resolve.test.ts`:
 
@@ -945,7 +1051,10 @@ function imapDoc(metadata: Record<string, unknown>): Document {
   } as unknown as Document;
 }
 
-const META = {
+const SELF = ['me@example.com'];
+
+// Old-shape metadata (pre-enrichment): no cc/replyTo/references keys.
+const OLD_META = {
   from: 'Alice Smith <alice@example.com>',
   to: ['me@example.com', 'Bob <bob@example.com>'],
   date: '2026-07-01T00:00:00Z',
@@ -954,22 +1063,49 @@ const META = {
   messageId: 'orig-123@mail.example.com',
 };
 
-describe('resolveImapReply', () => {
-  it('reply targets the sender with RFC-bracketed threading', () => {
-    const r = resolveImapReply(imapDoc(META), 'me@example.com', false);
-    expect(r.to).toEqual(['Alice Smith <alice@example.com>']);
+// New-shape metadata (post-enrichment).
+const NEW_META = {
+  ...OLD_META,
+  cc: ['Carol <carol@example.com>', 'me@example.com'],
+  replyTo: 'Alice List <list@example.com>',
+  references: ['root-1@mail.example.com'],
+};
+
+describe('resolveImapReply — inbound', () => {
+  it('targets Reply-To when stored, with the full references chain', () => {
+    const r = resolveImapReply(imapDoc(NEW_META), SELF, false);
+    expect(r.to).toEqual(['Alice List <list@example.com>']);
     expect(r.cc).toEqual([]);
     expect(r.subject).toBe('Re: Quarterly numbers');
-    expect(r.recipientDisplay).toBe('Alice Smith <alice@example.com>');
+    expect(r.recipientDisplay).toBe('Alice List <list@example.com>');
     expect(r.threading).toEqual({
       inReplyTo: '<orig-123@mail.example.com>',
-      references: ['<orig-123@mail.example.com>'],
+      references: ['<root-1@mail.example.com>', '<orig-123@mail.example.com>'],
     });
     expect(r.warnings).toEqual([]);
   });
 
-  it('reply_all adds To recipients minus self, warns about missing cc', () => {
-    const r = resolveImapReply(imapDoc(META), 'me@example.com', true);
+  it('falls back to From when no Reply-To is stored', () => {
+    const r = resolveImapReply(imapDoc(OLD_META), SELF, false);
+    expect(r.to).toEqual(['Alice Smith <alice@example.com>']);
+    expect(r.threading).toEqual({
+      inReplyTo: '<orig-123@mail.example.com>',
+      references: ['<orig-123@mail.example.com>'],
+    });
+  });
+
+  it('reply_all with enriched metadata includes to+cc minus self, no cc warning', () => {
+    const r = resolveImapReply(imapDoc(NEW_META), SELF, true);
+    expect(r.to).toEqual([
+      'Alice List <list@example.com>',
+      'Bob <bob@example.com>',
+      'Carol <carol@example.com>',
+    ]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('reply_all on a pre-enrichment doc warns about unknown cc', () => {
+    const r = resolveImapReply(imapDoc(OLD_META), SELF, true);
     expect(r.to).toEqual([
       'Alice Smith <alice@example.com>',
       'Bob <bob@example.com>',
@@ -977,45 +1113,86 @@ describe('resolveImapReply', () => {
     expect(r.warnings.join(' ')).toMatch(/cc/i);
   });
 
+  it('throws when both From and Reply-To are missing', () => {
+    expect(() =>
+      resolveImapReply(imapDoc({ ...OLD_META, from: null }), SELF, false),
+    ).toThrow(/sender/i);
+  });
+});
+
+describe('resolveImapReply — self-sent (Sent-folder docs)', () => {
+  const SENT_META = {
+    ...NEW_META,
+    from: 'Me <me@example.com>',
+    to: ['Alice Smith <alice@example.com>', 'Bob <bob@example.com>'],
+    cc: ['Carol <carol@example.com>'],
+    replyTo: null,
+  };
+
+  it('targets the original recipients, never the user', () => {
+    const r = resolveImapReply(imapDoc(SENT_META), SELF, false);
+    expect(r.to).toEqual([
+      'Alice Smith <alice@example.com>',
+      'Bob <bob@example.com>',
+    ]);
+    expect(r.recipientDisplay).toBe(
+      'Alice Smith <alice@example.com>, Bob <bob@example.com>',
+    );
+    expect(r.warnings.join(' ')).toMatch(/you sent/i);
+  });
+
+  it('reply_all adds cc minus self', () => {
+    const r = resolveImapReply(imapDoc(SENT_META), SELF, true);
+    expect(r.to).toEqual([
+      'Alice Smith <alice@example.com>',
+      'Bob <bob@example.com>',
+      'Carol <carol@example.com>',
+    ]);
+  });
+
+  it('throws when the stored recipients are only the user', () => {
+    expect(() =>
+      resolveImapReply(
+        imapDoc({ ...SENT_META, to: ['me@example.com'], cc: [] }),
+        SELF,
+        false,
+      ),
+    ).toThrow(/only you/i);
+  });
+});
+
+describe('resolveImapReply — shared behavior', () => {
   it('does not double-prefix an existing Re:', () => {
-    const doc = imapDoc(META);
+    const doc = imapDoc(OLD_META);
     (doc as { title: string }).title = 'RE: Quarterly numbers';
-    const r = resolveImapReply(doc, 'me@example.com', false);
+    const r = resolveImapReply(doc, SELF, false);
     expect(r.subject).toBe('RE: Quarterly numbers');
   });
 
   it('warns when no Message-ID is stored', () => {
     const r = resolveImapReply(
-      imapDoc({ ...META, messageId: null }),
-      'me@example.com',
+      imapDoc({ ...OLD_META, messageId: null }),
+      SELF,
       false,
     );
     expect(r.threading).toEqual({});
     expect(r.warnings.join(' ')).toMatch(/thread/i);
   });
 
-  it('throws when the sender is missing', () => {
-    expect(() =>
-      resolveImapReply(imapDoc({ ...META, from: null }), 'me@example.com', false),
-    ).toThrow(/sender/i);
-  });
-
   it('rejects non-email documents', () => {
-    const doc = imapDoc(META);
+    const doc = imapDoc(OLD_META);
     (doc as { type: string }).type = 'note';
-    expect(() => resolveImapReply(doc, 'me@example.com', false)).toThrow(
-      /email\.message/,
-    );
+    expect(() => resolveImapReply(doc, SELF, false)).toThrow(/email\.message/);
   });
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [ ] **Step 3: Run to verify failure**
 
 Run: `npx jest src/main/outbound/__tests__/resolve.test.ts -v`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `src/main/outbound/resolve.ts`**
+- [ ] **Step 4: Implement `src/main/outbound/resolve.ts`**
 
 ```ts
 /**
@@ -1023,9 +1200,10 @@ Expected: FAIL — module not found.
  * ONLY from stored document metadata — the model supplies no address, and a
  * gap is an explicit error or warning, never a guess.
  *
- * Phase 1 supports IMAP 'email.message' documents. Metadata shape written by
- * sources/imap/source.ts: { from, to, date, mailbox, uid, messageId } —
- * messageId stored angle-stripped, no cc, no references chain.
+ * Handles both metadata generations: pre-enrichment docs have only
+ * { from, to, messageId }; enriched docs add { cc, replyTo, references }.
+ * The Sent mailbox is synced too, so `from` may be the user — self-sent
+ * docs reply to their stored recipients, never back to the user.
  */
 import type { Document } from '@shared/contracts';
 
@@ -1044,9 +1222,18 @@ function addrOf(display: string): string {
   return (m ? m[1] : display).trim().toLowerCase();
 }
 
+interface ImapReplyMeta {
+  from?: string | null;
+  to?: string[];
+  cc?: string[];
+  replyTo?: string | null;
+  messageId?: string | null;
+  references?: string[];
+}
+
 export function resolveImapReply(
   doc: Document,
-  selfEmail: string,
+  selfAddresses: string[],
   replyAll: boolean,
 ): ResolvedReply {
   if (doc.type !== 'email.message') {
@@ -1055,44 +1242,69 @@ export function resolveImapReply(
         `build — only 'email.message' (IMAP) documents are supported so far.`,
     );
   }
-  const meta = doc.metadata as {
-    from?: string | null;
-    to?: string[];
-    messageId?: string | null;
-  };
-  const from = meta.from ?? null;
-  if (!from) {
-    throw new Error(
-      'draft_reply: the stored document has no sender metadata — cannot ' +
-        'resolve a reply recipient.',
-    );
-  }
-
+  const meta = doc.metadata as ImapReplyMeta;
+  const self = new Set(selfAddresses.map((a) => addrOf(a)));
   const warnings: string[] = [];
-  const self = selfEmail.trim().toLowerCase();
-  const to = [from];
-  if (replyAll) {
-    const seen = new Set([addrOf(from), self]);
-    for (const t of meta.to ?? []) {
-      const a = addrOf(t);
-      if (!seen.has(a)) {
-        seen.add(a);
-        to.push(t);
+  const from = meta.from ?? null;
+  const selfSent = from !== null && self.has(addrOf(from));
+
+  const to: string[] = [];
+  const seen = new Set(self);
+  const push = (display: string): void => {
+    const a = addrOf(display);
+    if (!seen.has(a)) {
+      seen.add(a);
+      to.push(display);
+    }
+  };
+
+  let recipientDisplay: string;
+  if (selfSent) {
+    for (const t of meta.to ?? []) push(t);
+    if (replyAll) for (const c of meta.cc ?? []) push(c);
+    if (to.length === 0) {
+      throw new Error(
+        'draft_reply: this message was sent by you and its stored ' +
+          'recipients are only you — cannot resolve a reply target.',
+      );
+    }
+    recipientDisplay = to.join(', ');
+    warnings.push(
+      'Replying to a message you sent — addressing its original recipients.',
+    );
+  } else {
+    const primary = meta.replyTo ?? from;
+    if (!primary) {
+      throw new Error(
+        'draft_reply: the stored document has no sender metadata — cannot ' +
+          'resolve a reply recipient.',
+      );
+    }
+    push(primary);
+    recipientDisplay = primary;
+    if (replyAll) {
+      for (const t of meta.to ?? []) push(t);
+      if (meta.cc === undefined) {
+        warnings.push(
+          'Cc recipients of the original message are not stored for this ' +
+            'document; the reply goes to its From/To recipients only.',
+        );
+      } else {
+        for (const c of meta.cc) push(c);
       }
     }
-    warnings.push(
-      'Cc recipients of the original message are not stored; the reply goes ' +
-        'to the original From/To recipients only.',
-    );
   }
 
   const threading: Record<string, unknown> = {};
   if (meta.messageId) {
     // Stored angle-stripped (imap/parse.ts stripAngle) — re-bracket for RFC
-    // 5322 In-Reply-To/References headers.
+    // 5322 headers; the references chain (when stored) precedes the message.
     const bracketed = `<${meta.messageId}>`;
     threading.inReplyTo = bracketed;
-    threading.references = [bracketed];
+    threading.references = [
+      ...(meta.references ?? []).map((r) => `<${r}>`),
+      bracketed,
+    ];
   } else {
     warnings.push(
       'No Message-ID is stored for the original — the reply may not thread ' +
@@ -1104,20 +1316,20 @@ export function resolveImapReply(
   const subject =
     title === null ? null : /^re:/i.test(title) ? title : `Re: ${title}`;
 
-  return { to, cc: [], subject, recipientDisplay: from, threading, warnings };
+  return { to, cc: [], subject, recipientDisplay, threading, warnings };
 }
 ```
 
-- [ ] **Step 4: Run tests, expect PASS**
+- [ ] **Step 5: Run tests, expect PASS**
 
-Run: `npx jest src/main/outbound/__tests__/resolve.test.ts -v`
+Run: `npx jest src/main/outbound/__tests__/resolve.test.ts src/main/sources/imap -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/main/outbound/resolve.ts src/main/outbound/__tests__/resolve.test.ts
-git commit -m "feat(outbound): grounded IMAP reply resolution — recipients/threading from stored metadata only"
+git add src/main/sources/imap src/main/outbound/resolve.ts src/main/outbound/__tests__/resolve.test.ts
+git commit -m "feat(outbound): imap cc/replyTo/references ingestion + self-sent-aware reply resolution"
 ```
 
 ---
@@ -1125,11 +1337,40 @@ git commit -m "feat(outbound): grounded IMAP reply resolution — recipients/thr
 ### Task 5: Outbound service — draft creation, modes, URLs
 
 **Files:**
-- Create: `src/main/outbound/service.ts`
-- Test: `src/main/outbound/__tests__/service.test.ts`
+- Create: `src/main/outbound/service.ts`, `src/main/outbound/identity.ts`, `src/main/core/mcp/transport-context.ts`
+- Test: `src/main/outbound/__tests__/service.test.ts`, `src/main/outbound/__tests__/identity.test.ts`
 
 **Interfaces:**
-- Consumes: `CoreStore` (incl. `outbox`, `account(id)`, `read.document`), `Prefs`, `Map<string, Sender>`, `signConfirmToken`, `resolveImapReply`. NOTE: `AppPrefs.outbound` doesn't exist until Task 9 — until then read it defensively: `(prefs.get() as { outbound?: { defaultMode?: ConfirmMode } }).outbound?.defaultMode ?? 'review'`. Task 9 removes the cast.
+- Consumes: `CoreStore` (incl. `outbox`, `account(id)`, `read.document`), `Prefs`, `Map<string, Sender>`, `signConfirmToken`, `resolveImapReply`. NOTE: `AppPrefs.outbound` doesn't exist until Task 9 — read it defensively: `(prefs.get() as { outbound?: { defaultMode?: ConfirmMode } }).outbound?.defaultMode ?? 'review'` (stays that way; partial Prefs fakes in tests carry no `outbound` slice).
+- Produces `src/main/outbound/identity.ts` (also consumed by the SMTP sender, Task 11 — this is the ONLY place an account becomes an address; `Account.identifier` is `` `${user}@${host}` `` and must never be used as one):
+
+```ts
+/** The address this account sends as: config.outbound.fromAddress when set
+ *  and valid, else config.user when it is a valid email; otherwise throws
+ *  (message tells the user to set a From address in the account's Outbound
+ *  settings). */
+export function senderAddressFor(account: Account): string;
+/** All addresses treated as "the user" for reply resolution: the sender
+ *  address + config.user when distinct. */
+export function selfAddressesFor(account: Account): string[];
+```
+
+- Produces `src/main/core/mcp/transport-context.ts` (consumed here and by `server.ts` in Task 8):
+
+```ts
+import { AsyncLocalStorage } from 'node:async_hooks';
+export type McpTransport = 'local' | 'remote';
+const als = new AsyncLocalStorage<McpTransport>();
+export function runWithTransport<T>(t: McpTransport, fn: () => Promise<T>): Promise<T> {
+  return als.run(t, fn);
+}
+/** 'local' when unset — loopback/stdio paths never tag themselves. */
+export function currentTransport(): McpTransport {
+  return als.getStore() ?? 'local';
+}
+```
+
+`draftReply`/`draftMessage` check `currentTransport()` FIRST and refuse `'remote'` before touching the store: `Outbound drafting is local-only for now — remote confirmation arrives in a later release. Use an MCP client on the machine running KIAgent.` (a remote caller would otherwise receive a dead 127.0.0.1 confirm URL). `listOutbox` refuses the same way — its re-issued URLs are equally dead remotely.
 - Produces (used by Tasks 6, 7, 8, 12, 13):
 
 ```ts
@@ -1210,13 +1451,14 @@ export function createOutboundService(deps: {
 This task implements draft creation, mode lookup, URL minting, `listOutbox`, and `peekByToken`. `confirmByToken`/`cancelByToken` are added in Task 7 (stub them here to `throw new Error('not implemented')`).
 
 Behavior contract (encode in tests):
-- `draftReply`: load document (`store.read.document`) — unknown id → Error naming the id. Load account (`store.account(doc.accountId)`). Account's source not in `senders` → Error `sending from '<source>' accounts is not supported yet — supported: <keys>`. If `doc.metadata.outbound` is `{ ref, display }`, use it for `outboundRef`/`recipientDisplay` (universality hook); otherwise resolve via `resolveImapReply(doc, account.identifier, replyAll)`. Create the row (`kind:'reply'`, `createdVia:'mcp-local'`, `expiresAt = now + DRAFT_TTL_MS` as ISO). Result composed per mode.
-- `draftMessage`: account by id (missing → Error), source must be in `senders`, `to` must be non-empty and every entry match `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` (invalid → Error listing the bad entries), `recipient_display = to.join(', ')`, `kind:'new'`.
-- Mode lookup: `account.config.outbound?.mode` when `'review'`/`'link'`, else prefs default (see Consumes note), else `'review'`.
-- Confirm URL: `${baseUrl}/outbox/confirm/${signConfirmToken(secret, row.id, nowMs() + CONFIRM_TTL_MS[mode])}`. `setBaseUrl` not yet called → Error `'outbound: server not ready'`.
+- Remote gate: all three tool methods throw the local-only error (verbatim above) when `currentTransport() === 'remote'`, BEFORE any store access.
+- `draftReply`: load document (`store.read.document`) — unknown id → Error naming the id. Load account (`store.account(doc.accountId)`). Account's source not in `senders` → Error `sending from '<source>' accounts is not supported yet — supported: <keys>`. If `doc.metadata.outbound` is `{ ref, display }`, use it for `outboundRef`/`recipientDisplay` (universality hook); otherwise resolve via `resolveImapReply(doc, selfAddressesFor(account), replyAll)`. Create the row (`kind:'reply'`, `confirmMode: modeFor(account)` — frozen here, `createdVia:'mcp-local'`, `expiresAt = now + DRAFT_TTL_MS` as ISO). Result composed per the row's mode.
+- `draftMessage`: account by id (missing → Error), source must be in `senders`, `senderAddressFor(account)` must resolve (its error propagates), `to` must be non-empty and every entry match `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` (invalid → Error listing the bad entries), `recipient_display = to.join(', ')`, `kind:'new'`, `confirmMode` frozen as above.
+- Mode lookup (draft creation ONLY): `account.config.outbound?.mode` when `'review'`/`'link'`, else prefs default (see Consumes note), else `'review'`. Every read path after creation uses `row.confirmMode`.
+- Confirm URL: `${baseUrl}/outbox/confirm/${signConfirmToken(secret, row.id, nowMs() + CONFIRM_TTL_MS[row.confirmMode])}`. `setBaseUrl` not yet called → Error `'outbound: server not ready'`.
 - Result per mode — `review`: NO to/cc/subject/body; instruction: `Draft created — nothing has been sent. Show the user this link to review and send the message: <url> (it expires in 30 minutes; if it expires, call list_outbox for a fresh one).` `link`: includes to/cc/subject/body; instruction: `Draft created — nothing has been sent. Render the draft exactly as returned (recipient, subject, body) for the user to review in chat, then present this link as the send action: <url>. It opens a page with a Send button; the link expires in 5 minutes — call list_outbox for a fresh one if needed.`
-- `listOutbox`: `expireOverdue()` first; `listRecent(limit ?? 20)`; rows with status `draft` get a fresh `confirm_url` (their account's current mode TTL), all others `confirm_url: null`.
-- `peekByToken`: verify token (bad/expired → `invalid`); row missing → `invalid`; status `draft` → `ok` + current mode; else `gone`.
+- `listOutbox`: `expireOverdue()` first; `listRecent(limit ?? 20)`; rows with status `draft` get a fresh `confirm_url` from `row.confirmMode` (no account lookup), all others `confirm_url: null`.
+- `peekByToken`: verify token (bad/expired → `invalid`); row missing → `invalid`; status `draft` → `{ kind: 'ok', row, mode: row.confirmMode }`; else `gone`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1270,6 +1512,15 @@ const emailDoc = (over: Partial<DocumentInput> = {}): DocumentInput => ({
   ...over,
 });
 
+// Realistic IMAP account shape: identifier is `${user}@${host}` (NOT an
+// address); the sending/self address derives from config.user.
+const IMAP_CFG = {
+  host: 'imap.example.com',
+  port: 993,
+  secure: true,
+  user: 'me@example.com',
+};
+
 describe('outbound service — drafts', () => {
   let dir: string;
   let store: CoreStore;
@@ -1282,7 +1533,8 @@ describe('outbound service — drafts', () => {
     store = openStore(await openDb(path.join(dir, 'test.db')), deps);
     const account = await store.createAccount({
       source: 'imap',
-      identifier: 'me@example.com',
+      identifier: 'me@example.com@imap.example.com',
+      config: IMAP_CFG,
     });
     accountId = account.id;
     await store.commit({
@@ -1328,6 +1580,7 @@ describe('outbound service — drafts', () => {
 
   it('link mode (per-account config) returns the full draft for in-chat review', async () => {
     await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
       outbound: { mode: 'link' },
     });
     const r = await service.draftReply({ documentId: docId, body: 'Hi' });
@@ -1403,6 +1656,111 @@ describe('outbound service — drafts', () => {
       cold.draftReply({ documentId: docId, body: 'x' }),
     ).rejects.toThrow(/not ready/);
   });
+
+  it('freezes the confirm mode at creation — later settings changes do not apply', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'x' });
+    await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
+      outbound: { mode: 'link' },
+    });
+    const token = r.confirm_url.split('/outbox/confirm/')[1];
+    const peek = await service.peekByToken(token);
+    expect(peek.kind).toBe('ok');
+    if (peek.kind === 'ok') expect(peek.mode).toBe('review');
+    const listing = await service.listOutbox({});
+    expect(listing[0].confirm_url).toBeTruthy();
+  });
+
+  it('refuses draft creation from a remote transport before touching the store', async () => {
+    const before = await service.listOutbox({});
+    await expect(
+      runWithTransport('remote', () =>
+        service.draftReply({ documentId: docId, body: 'x' }),
+      ),
+    ).rejects.toThrow(/local-only/i);
+    await expect(
+      runWithTransport('remote', () => service.listOutbox({})),
+    ).rejects.toThrow(/local-only/i);
+    expect((await service.listOutbox({})).length).toBe(before.length);
+  });
+
+  it('self-address never comes from the identifier', async () => {
+    // A reply from Alice addressed to config.user must exclude the user in
+    // reply_all even though the identifier is user@host gibberish.
+    const r = await service.draftReply({
+      documentId: docId,
+      body: 'x',
+      replyAll: true,
+    });
+    expect(r.mode === 'review' ? true : !r.to?.includes('me@example.com')).toBe(
+      true,
+    );
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.to.some((t) => t.includes('me@example.com'))).toBe(false);
+  });
+});
+```
+
+Add `import { runWithTransport } from '../../core/mcp/transport-context';` to the test file's imports.
+
+Create `src/main/outbound/__tests__/identity.test.ts`:
+
+```ts
+import type { Account } from '@shared/contracts';
+
+import { selfAddressesFor, senderAddressFor } from '../identity';
+
+function account(config: Record<string, unknown>): Account {
+  return {
+    id: 'a1',
+    source: 'imap',
+    identifier: 'me@example.com@imap.example.com',
+    config,
+    status: 'live',
+    cursor: null,
+    createdAt: '2026-07-01T00:00:00Z',
+  } as unknown as Account;
+}
+
+describe('senderAddressFor', () => {
+  it('uses config.user when it is an email', () => {
+    expect(senderAddressFor(account({ user: 'me@example.com' }))).toBe(
+      'me@example.com',
+    );
+  });
+
+  it('prefers an explicit outbound.fromAddress', () => {
+    expect(
+      senderAddressFor(
+        account({
+          user: 'me@example.com',
+          outbound: { fromAddress: 'eldar@example.com' },
+        }),
+      ),
+    ).toBe('eldar@example.com');
+  });
+
+  it('never falls back to the identifier', () => {
+    expect(() => senderAddressFor(account({ user: 'plainlogin' }))).toThrow(
+      /From address/i,
+    );
+  });
+});
+
+describe('selfAddressesFor', () => {
+  it('returns sender + user without duplicates', () => {
+    expect(
+      selfAddressesFor(
+        account({
+          user: 'me@example.com',
+          outbound: { fromAddress: 'eldar@example.com' },
+        }),
+      ),
+    ).toEqual(['eldar@example.com', 'me@example.com']);
+    expect(selfAddressesFor(account({ user: 'me@example.com' }))).toEqual([
+      'me@example.com',
+    ]);
+  });
 });
 ```
 
@@ -1411,9 +1769,52 @@ describe('outbound service — drafts', () => {
 Run: `npx jest src/main/outbound/__tests__/service.test.ts -v`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `src/main/outbound/service.ts`**
+- [ ] **Step 3: Implement `identity.ts`, `transport-context.ts`, then `service.ts`**
 
-The type/interface blocks in **Interfaces** above (`CONFIRM_TTL_MS` … `OutboundService`) are normative — copy them into the module verbatim, then:
+Create `src/main/core/mcp/transport-context.ts` exactly as shown in the Interfaces block above.
+
+Create `src/main/outbound/identity.ts`:
+
+```ts
+/**
+ * The ONE place an account becomes an email address. Account.identifier is
+ * `${user}@${host}` (imap source connect flow) — display/uniqueness only,
+ * NEVER an address. Sending identity: explicit config.outbound.fromAddress,
+ * else config.user when it is itself an email (the overwhelmingly common
+ * IMAP setup), else the user must configure one.
+ */
+import type { Account } from '@shared/contracts';
+
+const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+interface OutboundAccountConfig {
+  user?: string;
+  outbound?: { fromAddress?: string };
+}
+
+export function senderAddressFor(account: Account): string {
+  const cfg = account.config as OutboundAccountConfig;
+  const explicit = cfg.outbound?.fromAddress?.trim();
+  if (explicit && EMAIL_RX.test(explicit)) return explicit;
+  const user = cfg.user?.trim();
+  if (user && EMAIL_RX.test(user)) return user;
+  throw new Error(
+    `outbound: account '${account.identifier}' has no usable From address — ` +
+      `set one in the account's Outbound settings.`,
+  );
+}
+
+export function selfAddressesFor(account: Account): string[] {
+  const sender = senderAddressFor(account);
+  const user = (account.config as OutboundAccountConfig).user?.trim();
+  const out = [sender];
+  if (user && EMAIL_RX.test(user) && user.toLowerCase() !== sender.toLowerCase())
+    out.push(user);
+  return out;
+}
+```
+
+Then `src/main/outbound/service.ts`. The type/interface blocks in **Interfaces** above (`CONFIRM_TTL_MS` … `OutboundService`) are normative — copy them into the module verbatim, then:
 
 ```ts
 /**
@@ -1433,8 +1834,10 @@ import type {
   Sender,
 } from '@shared/contracts';
 
+import { currentTransport } from '../core/mcp/transport-context';
 import type { LogSink } from '../core/engine/engine';
 import type { CoreStore } from '../core/store/store';
+import { selfAddressesFor, senderAddressFor } from './identity';
 import { resolveImapReply } from './resolve';
 import { signConfirmToken, verifyConfirmToken } from './tokens';
 
@@ -1451,6 +1854,19 @@ export function createOutboundService(deps: {
 }): OutboundService {
   const nowMs = deps.nowMs ?? (() => Date.now());
   let baseUrl: string | null = null;
+
+  // A remote MCP session shares this registry but cannot reach 127.0.0.1
+  // confirm URLs — refuse before any store access. Phase 4 (remote confirm)
+  // replaces this with tunnel-hosted URLs.
+  const assertLocal = (): void => {
+    if (currentTransport() === 'remote') {
+      throw new Error(
+        'Outbound drafting is local-only for now — remote confirmation ' +
+          'arrives in a later release. Use an MCP client on the machine ' +
+          'running KIAgent.',
+      );
+    }
+  };
 
   const modeFor = (account: Account): ConfirmMode => {
     const cfg = (account.config as { outbound?: { mode?: unknown } }).outbound;
@@ -1491,9 +1907,9 @@ export function createOutboundService(deps: {
 
   const toolResult = async (
     row: OutboxRow,
-    mode: ConfirmMode,
     warnings: string[],
   ): Promise<DraftToolResult> => {
+    const mode = row.confirmMode;
     const url = await confirmUrl(row.id, mode);
     if (mode === 'review') {
       return {
@@ -1536,6 +1952,7 @@ export function createOutboundService(deps: {
     },
 
     async draftReply({ documentId, body, replyAll }) {
+      assertLocal();
       const doc = await deps.store.read.document(documentId as DocumentId);
       if (!doc) throw new Error(`draft_reply: unknown document '${documentId}'`);
       const account = await accountFor(doc.accountId as string);
@@ -1560,11 +1977,16 @@ export function createOutboundService(deps: {
           cc: [],
           subject: null,
           bodyMarkdown: body,
+          confirmMode: mode,
           createdVia: 'mcp-local',
           expiresAt: expiresAt(),
         });
       } else {
-        const r = resolveImapReply(doc, account.identifier, replyAll === true);
+        const r = resolveImapReply(
+          doc,
+          selfAddressesFor(account),
+          replyAll === true,
+        );
         warnings = r.warnings;
         row = await deps.store.outbox.create({
           accountId: account.id,
@@ -1576,22 +1998,24 @@ export function createOutboundService(deps: {
           subject: r.subject,
           bodyMarkdown: body,
           threading: r.threading,
+          confirmMode: mode,
           createdVia: 'mcp-local',
           expiresAt: expiresAt(),
         });
       }
-      return toolResult(row, mode, warnings);
+      return toolResult(row, warnings);
     },
 
     async draftMessage({ accountId, to, subject, body }) {
+      assertLocal();
       const account = await accountFor(accountId);
+      senderAddressFor(account); // fail fast when no From address resolves
       const bad = to.filter((t) => !EMAIL_RX.test(t.trim()));
       if (to.length === 0 || bad.length > 0) {
         throw new Error(
           `draft_message: invalid recipient address(es): ${bad.join(', ') || '(none given)'}`,
         );
       }
-      const mode = modeFor(account);
       const row = await deps.store.outbox.create({
         accountId: account.id,
         kind: 'new',
@@ -1600,21 +2024,22 @@ export function createOutboundService(deps: {
         cc: [],
         subject,
         bodyMarkdown: body,
+        confirmMode: modeFor(account),
         createdVia: 'mcp-local',
         expiresAt: expiresAt(),
       });
-      return toolResult(row, mode, []);
+      return toolResult(row, []);
     },
 
     async listOutbox({ limit }) {
+      assertLocal();
       await deps.store.outbox.expireOverdue();
       const rows = await deps.store.outbox.listRecent(limit ?? 20);
       const out: OutboxListItem[] = [];
       for (const row of rows) {
         let url: string | null = null;
         if (row.status === 'draft') {
-          const account = await deps.store.account(row.accountId);
-          if (account) url = await confirmUrl(row.id, modeFor(account));
+          url = await confirmUrl(row.id, row.confirmMode);
         }
         out.push({
           draft_id: row.id,
@@ -1637,9 +2062,7 @@ export function createOutboundService(deps: {
       const row = await deps.store.outbox.get(parsed.draftId);
       if (!row) return { kind: 'invalid' };
       if (row.status !== 'draft') return { kind: 'gone', row };
-      const account = await deps.store.account(row.accountId);
-      if (!account) return { kind: 'invalid' };
-      return { kind: 'ok', row, mode: modeFor(account) };
+      return { kind: 'ok', row, mode: row.confirmMode };
     },
 
     async confirmByToken() {
@@ -1655,14 +2078,14 @@ export function createOutboundService(deps: {
 
 - [ ] **Step 4: Run tests, expect PASS**
 
-Run: `npx jest src/main/outbound/__tests__/service.test.ts -v`
-Expected: PASS.
+Run: `npx jest src/main/outbound -v`
+Expected: PASS (service + identity + tokens + resolve).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/main/outbound/service.ts src/main/outbound/__tests__/service.test.ts
-git commit -m "feat(outbound): outbound service — grounded drafts, confirm modes, signed URLs"
+git add src/main/outbound/service.ts src/main/outbound/identity.ts src/main/core/mcp/transport-context.ts src/main/outbound/__tests__/service.test.ts src/main/outbound/__tests__/identity.test.ts
+git commit -m "feat(outbound): outbound service — grounded drafts, frozen confirm modes, sender identity, remote gate"
 ```
 
 ---
@@ -1671,12 +2094,13 @@ git commit -m "feat(outbound): outbound service — grounded drafts, confirm mod
 
 **Files:**
 - Create: `src/main/core/mcp/tools/draft-reply.ts`, `src/main/core/mcp/tools/draft-message.ts`, `src/main/core/mcp/tools/list-outbox.ts`
-- Modify: `src/main/core/mcp/tools/index.ts`, `src/main/core/mcp/server.ts` (one line), `src/main/mcp/stdio-entry.ts` (no change yet — verify it still compiles with the optional param), `src/main/core/mcp/__tests__/server.test.ts` (`BUILTIN_TOOL_NAMES`), `src/main/core/mcp/instructions.ts` (only if it enumerates tools)
+- Modify: `src/main/core/mcp/tools/index.ts`, `src/main/core/mcp/tools/digital-memory-info.ts` (accounts gain `id`), `src/main/core/mcp/server.ts` (one line), `src/main/mcp/stdio-entry.ts` (no change yet — verify it still compiles with the optional param), `src/main/core/mcp/__tests__/server.test.ts` (`BUILTIN_TOOL_NAMES`), `src/main/core/mcp/instructions.ts` (only if it enumerates tools)
 - Test: `src/main/core/mcp/__tests__/outbound-tools.test.ts`
 
 **Interfaces:**
 - Consumes: `OutboundToolApi` from `@main/outbound/service` (Task 5).
 - Produces: `buildBuiltinTools(query: Query, outbound?: OutboundToolApi): McpTool[]` — three additional tools named exactly `draft_reply`, `draft_message`, `list_outbox`, every one `tier: 'standard'`. When `outbound` is undefined the tools ARE still registered (no cross-transport tool-list drift) but `call` throws: `Outbound drafting is unavailable on this transport right now — the KIAgent app must be running; its HTTP MCP server handles drafts.` (Task 13 replaces the stdio undefined with a live proxy.)
+- Produces: `DigitalMemoryAccount.id: string` — `draft_message` takes an `account_id`, and `digital_memory_info` is the tool its description points at, so its account entries MUST expose the id (today they don't — only source/identifier/status).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1724,7 +2148,13 @@ describe('outbound MCP tools', () => {
     store = openStore(await openDb(path.join(dir, 'test.db')), deps);
     const account = await store.createAccount({
       source: 'imap',
-      identifier: 'me@example.com',
+      identifier: 'me@example.com@imap.example.com',
+      config: {
+        host: 'imap.example.com',
+        port: 993,
+        secure: true,
+        user: 'me@example.com',
+      },
     });
     accountId = account.id;
     const doc: DocumentInput = {
@@ -1804,6 +2234,13 @@ describe('outbound MCP tools', () => {
     await expect(t!.call({ document_id: docId, body: 'x' })).rejects.toThrow(
       /unavailable on this transport/i,
     );
+  });
+
+  it('digital_memory_info exposes account ids for draft_message', async () => {
+    const info = (await call('digital_memory_info')) as {
+      accounts: Array<{ id: string; identifier: string }>;
+    };
+    expect(info.accounts[0].id).toBe(accountId);
   });
 });
 ```
@@ -2013,6 +2450,8 @@ export function buildBuiltinTools(
 
 In `src/main/core/mcp/server.ts` change nothing yet except the call site compiles unchanged (`buildBuiltinTools(deps.query)` — second param optional). Task 8 threads the real service through.
 
+Then `src/main/core/mcp/tools/digital-memory-info.ts`: add `id: string;` as the FIRST member of `DigitalMemoryAccount` (line ~29) and `id: a.id as string,` to the `digitalAccounts` mapping (`realAccounts.map((a) => ({ … }))`), so `draft_message` callers can discover account ids where the tool description sends them.
+
 - [ ] **Step 5: Update the drifted assertions**
 
 - `src/main/core/mcp/__tests__/server.test.ts`: find `BUILTIN_TOOL_NAMES` (~line 79) and add `'draft_message'`, `'draft_reply'`, `'list_outbox'` keeping the array's existing order convention (alphabetical — verify and match).
@@ -2151,8 +2590,8 @@ export function createOutboundRoutes(outbound: OutboundService): {
 
 - `McpDeps` (server.ts) gains `outbound?: OutboundService;`. `startMcp` builds `const outboundRoutes = deps.outbound ? createOutboundRoutes(deps.outbound) : null;`, registry line becomes `buildBuiltinTools(deps.query, deps.outbound)`, and after `listenOnFirstFree` resolves: `deps.outbound?.setBaseUrl(\`http://${HOST}:${port}\`);`.
 - Route table (all under the existing `checkLoopbackRequest` guard — Host/Origin hygiene comes free):
-  - `GET /outbox/confirm/<token>` → `peekByToken`: `ok`+`review` → `reviewPage`; `ok`+`link` → `linkPage`; `gone` → `resultPage` describing the terminal status (`sent` → "Already sent", `discarded` → "Cancelled", `failed` → "Send failed" + row.error, `expired` → "Draft expired"); `invalid` → 404 `resultPage('Link invalid or expired', …)` telling the user to ask the assistant for a fresh link (list_outbox).
-  - `POST /outbox/confirm/<token>` → `confirmByToken` → `resultPage` per outcome (`sent` → "Message sent" + recipient; `failed` → error text + "the draft is kept — ask the assistant to list_outbox"; `already`/`invalid` as above).
+  - `GET /outbox/confirm/<token>` → `peekByToken`: `ok`+`review` → `reviewPage`; `ok`+`link` → `linkPage`; `gone` → `resultPage` describing the terminal status (`sent` → "Already sent", `discarded` → "Cancelled", `failed` → "Send failed" + row.error + "ask your assistant to create a new draft" — a failed row can NOT get a fresh link, `list_outbox` only re-links `draft` rows; `expired` → "Draft expired"; `delivery_unknown` → "Delivery uncertain" + check-Sent-folder-before-re-drafting copy); `invalid` → 404 `resultPage('Link invalid or expired', …)` telling the user to ask the assistant for a fresh link (list_outbox re-links pending drafts).
+  - `POST /outbox/confirm/<token>` → `confirmByToken` → `resultPage` per outcome (`sent` → "Message sent" + recipient; `failed`/`already`/`invalid` via the same pages as above).
   - `POST /outbox/cancel/<token>` → `cancelByToken` → `resultPage`.
   - `POST /outbox/api` → JSON `{ op: 'ping' } → { ok: true, result: { pong: 'kiagent-outbox' } }`; `{ op: 'draftReply' | 'draftMessage' | 'listOutbox', args } → { ok: true, result } | { ok: false, error: string }` (HTTP 200 always; this is the stdio proxy's seam — Task 13).
   - Anything else under `/outbox/` → `false` (server 404s).
@@ -2210,12 +2649,20 @@ let mcp: McpServerHandle;
 let sendMock: jest.Mock;
 let base: string;
 
+const IMAP_CFG = {
+  host: 'imap.example.com',
+  port: 993,
+  secure: true,
+  user: 'me@example.com',
+};
+
 beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-outroutes-'));
   store = openStore(await openDb(path.join(dir, 'test.db')), deps);
   const account = await store.createAccount({
     source: 'imap',
-    identifier: 'me@example.com',
+    identifier: 'me@example.com@imap.example.com',
+    config: IMAP_CFG,
   });
   accountId = account.id;
   const doc: DocumentInput = {
@@ -2301,13 +2748,16 @@ describe('outbox confirm routes', () => {
   });
 
   it('link mode serves the minimal page', async () => {
-    await store.setAccountConfig(accountId, { outbound: { mode: 'link' } });
+    await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
+      outbound: { mode: 'link' },
+    });
     const url = await draftUrl();
     const html = await (await fetch(url)).text();
     expect(html).toContain('Alice');
     expect(html).not.toContain('Yo'); // minimal page: recipient + button only
     expect(html).toContain('method="POST"');
-    await store.setAccountConfig(accountId, {});
+    await store.setAccountConfig(accountId, IMAP_CFG);
   });
 
   it('a bad token 404s', async () => {
@@ -2462,7 +2912,13 @@ function gonePage(row: OutboxRow): string {
   if (row.status === 'failed')
     return resultPage(
       'Send failed',
-      `${row.error ?? 'Unknown error'} — the draft is kept; ask your assistant to run list_outbox for a fresh link.`,
+      `${row.error ?? 'Unknown error'} — ask your assistant to create a new draft.`,
+    );
+  if (row.status === 'delivery_unknown')
+    return resultPage(
+      'Delivery uncertain',
+      'The app closed while this message was being sent — it MAY have gone ' +
+        'out. Check your Sent folder before creating a new draft.',
     );
   if (row.status === 'expired')
     return resultPage('Draft expired', 'Ask your assistant to create the draft again.');
@@ -2583,6 +3039,17 @@ Per the Interfaces block: add `outbound?: OutboundService;` to `McpDeps` (import
   deps.outbound?.setBaseUrl(`http://${HOST}:${port}`);
 ```
 
+Then tag the product/remote handler: `createMcpHandler()` (the memoized handler the remote extension serves — see its doc comment ~line 74) wraps its returned dispatcher so every request runs inside the remote transport context. Import `runWithTransport` from `./transport-context` and, where `createMcpHandler` returns/creates the product dispatcher's handler, wrap:
+
+```ts
+      return (req, res, parsedBody) =>
+        runWithTransport('remote', () =>
+          productDispatcher!.handleMcp(req, res, parsedBody),
+        );
+```
+
+(match the actual local shape — the point is: the promise chain of every remote MCP request runs under `runWithTransport('remote', …)`, so the outbound service's `assertLocal()` sees `'remote'`; the loopback listener path is untouched and stays `'local'`.)
+
 - [ ] **Step 6: Run tests, expect PASS**
 
 Run: `npx jest src/main/core/mcp/__tests__/outbound-routes.test.ts -v`
@@ -2601,13 +3068,14 @@ git commit -m "feat(outbound): loopback confirm pages + routes — GET renders, 
 ### Task 9: Prefs default mode + Settings/Sources UI
 
 **Files:**
-- Modify: `src/shared/contracts.ts` (`AppPrefs`), `src/main/core/prefs.ts`, `src/renderer/screens/Settings/Advanced.tsx`, `src/renderer/screens/Sources/SourceDetail.tsx`
+- Modify: `src/shared/contracts.ts` (`AppPrefs`), `src/main/core/prefs.ts`, `src/shared/ipc.ts` (new channel), `src/main/main.ts` (channel handler), `src/renderer/screens/Settings/Advanced.tsx`, `src/renderer/screens/Sources/SourceDetail.tsx`
 - Create: `src/renderer/screens/Sources/sections/Outbound.tsx`
 - Test: `src/main/core/__tests__/prefs.test.ts` (extend)
 
 **Interfaces:**
-- Consumes: `ConfirmMode` (Task 1), existing IPC channels `prefs:patch` and `accounts:update-config` — NO new IPC channels (that matters product-side: nothing to add to the overlay's `REMOTE_INVOKE_CHANNELS`). The service keeps its optional-access read of `prefs.get().outbound` (partial Prefs fakes in tests have no `outbound` slice) — this task does NOT change `service.ts`.
-- Produces: `AppPrefs.outbound: { defaultMode: ConfirmMode }` (default `{ defaultMode: 'review' }`), account config convention `config.outbound = { mode?: 'review' | 'link', smtp?: { host?: string; port?: number; secure?: boolean } }` consumed by Tasks 5 (mode) and 11 (smtp).
+- Consumes: `ConfirmMode` (Task 1), existing `prefs:patch` for the global default. **Per-account settings get a DEDICATED channel** — `accounts:update-config` is off-limits for outbound: its handler calls `engine.updateConfig`, which restarts a running sync loop and grants a mass-reconcile allowance (`engine.ts` `updateConfig`); flipping a confirmation mode must never restart IMAP sync. The new handler writes via `store.setAccountConfig` directly (persists + emits the account change row, engine untouched — safe because sources read config at pull start and the `outbound` slice is invisible to them). The service keeps its optional-access read of `prefs.get().outbound` — this task does NOT change `service.ts`.
+- Produces: `AppPrefs.outbound: { defaultMode: ConfirmMode }` (default `{ defaultMode: 'review' }`); IPC channel `accounts:update-outbound` (`req: { accountId: AccountId; outbound: Record<string, unknown> }`, `res: void`); account config convention `config.outbound = { mode?: 'review' | 'link', fromAddress?: string, smtp?: { host?: string; port?: number; secure?: boolean } }` consumed by Tasks 5 (mode, fromAddress via `identity.ts`) and 11 (smtp).
+- **Product handoff note (goes in the Task 14 report):** the alpha-cent overlay must add `accounts:update-outbound` to `REMOTE_INVOKE_CHANNELS` in `build/apply-overlay.mjs` when it picks up this core version — the preload silently rejects unlisted channels renderer-side, and jest never catches it.
 
 - [ ] **Step 1: Write the failing prefs tests**
 
@@ -2650,6 +3118,28 @@ Expected: FAIL — `outbound` undefined.
 ```
   and `patch`'s deep-merge list gains `outbound: { ...current.outbound, ...(p.outbound ?? {}) },`.
 - `src/main/outbound/service.ts` stays untouched — its optional access (`p.outbound?.defaultMode ?? 'review'`) now simply reads the typed slice.
+- `src/shared/ipc.ts`: in the `Invokes` interface, after the `accounts:update-config` entry, add:
+```ts
+  /** Outbound-only config write: persists via the store WITHOUT
+   *  engine.updateConfig — changing a confirmation mode must never restart
+   *  a running sync loop. */
+  'accounts:update-outbound': {
+    req: { accountId: AccountId; outbound: Record<string, unknown> };
+    res: void;
+  };
+```
+  and add `'accounts:update-outbound',` to the `INVOKE_CHANNELS` array (keep its ordering convention).
+- `src/main/main.ts`, in `registerIpc` beside the `accounts:update-config` handler:
+```ts
+  handle('accounts:update-outbound', async ({ accountId, outbound }) => {
+    const account = await p.store.account(accountId);
+    if (!account) return;
+    // Store-direct on purpose: engine.updateConfig would restart a running
+    // pull and grant a reconcile allowance — outbound settings are invisible
+    // to sources, so neither is wanted.
+    await p.store.setAccountConfig(accountId, { ...account.config, outbound });
+  });
+```
 
 - [ ] **Step 4: Run prefs + outbound tests, expect PASS**
 
@@ -2694,27 +3184,45 @@ import React from 'react';
 import type { Account, ConfirmMode } from '@shared/contracts';
 
 /**
- * Per-account outbound settings: confirmation-mode override + SMTP overrides
- * (host/port derived from the IMAP host by default — only unusual providers
- * need these). Rides the existing accounts:update-config channel.
+ * Per-account outbound settings: confirmation-mode override, From address,
+ * and SMTP overrides (host/port derived from the IMAP host by default —
+ * only unusual providers need these). Rides the DEDICATED
+ * accounts:update-outbound channel: accounts:update-config would restart a
+ * running sync loop (engine.updateConfig).
  */
 export function Outbound(props: { account: Account }): React.ReactElement {
   const { account } = props;
   const cfg = (account.config.outbound ?? {}) as {
     mode?: ConfirmMode;
+    fromAddress?: string;
     smtp?: { host?: string; port?: number };
   };
 
   const update = (outbound: Record<string, unknown>) => {
-    void window.kiagent.invoke('accounts:update-config', {
+    void window.kiagent.invoke('accounts:update-outbound', {
       accountId: account.id,
-      config: { ...account.config, outbound },
+      outbound,
     });
   };
 
   return (
     <section>
       <div className="lbl-section">Outbound</div>
+      <div className="field-row">
+        {/* eslint-disable-next-line jsx-a11y/label-has-associated-control */}
+        <label htmlFor="outbound-from" className="lbl">
+          From address
+        </label>
+        <input
+          id="outbound-from"
+          className="input"
+          placeholder="defaults to the account's login email"
+          defaultValue={cfg.fromAddress ?? ''}
+          onBlur={(e) =>
+            update({ ...cfg, fromAddress: e.target.value || undefined })
+          }
+        />
+      </div>
       <div className="field-row">
         {/* eslint-disable-next-line jsx-a11y/label-has-associated-control */}
         <label htmlFor="outbound-mode" className="lbl">
@@ -2797,8 +3305,8 @@ Run: `npm run lint` — Expected: clean.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/shared/contracts.ts src/main/core/prefs.ts src/main/core/__tests__/prefs.test.ts src/renderer/screens/Settings/Advanced.tsx src/renderer/screens/Sources/sections/Outbound.tsx src/renderer/screens/Sources/SourceDetail.tsx
-git commit -m "feat(outbound): confirmation-mode settings — global default + per-account override and SMTP overrides"
+git add src/shared/contracts.ts src/main/core/prefs.ts src/main/core/__tests__/prefs.test.ts src/shared/ipc.ts src/main/main.ts src/renderer/screens/Settings/Advanced.tsx src/renderer/screens/Sources/sections/Outbound.tsx src/renderer/screens/Sources/SourceDetail.tsx
+git commit -m "feat(outbound): outbound settings — global default, per-account channel (engine-bypass), From address + SMTP overrides"
 ```
 
 ---
@@ -2883,10 +3391,10 @@ export function createSmtpSender(deps: {
 ```
 
 Send algorithm (encode in tests):
-1. `account = store.account(intent.accountId)` (missing → throw); `creds = store.vault.load(...)`; missing password → throw `smtp: no password stored for account …`.
+1. `account = store.account(intent.accountId)` (missing → throw); `creds = store.vault.load(...)`; missing password → throw `smtp: no password stored for account …`. `fromAddress = senderAddressFor(account)` (`@main/outbound/identity`, Task 5) — NEVER `account.identifier`, which is `` `${user}@${host}` `` and not an address.
 2. `imapCfg = account.config as unknown as ImapAccountConfig`; `smtpCfg = deriveSmtpConfig(imapCfg, (account.config.outbound as …)?.smtp)`.
-3. Compose ONE RFC822 buffer with `MailComposer` (`import MailComposer from 'nodemailer/lib/mail-composer';`): `{ from: account.identifier, to: intent.to, cc: intent.cc?.length ? intent.cc : undefined, subject: intent.subject, text: intent.bodyMarkdown, inReplyTo: intent.threading?.inReplyTo as string | undefined, references: intent.threading?.references as string[] | undefined }`; `const node = mail.compile(); const messageId = node.messageId(); const raw = await node.build();`
-4. `transport = createTransport({ host, port, secure, auth: { user: imapCfg.user, pass } })`; `await transport.sendMail({ envelope: { from: addr(account.identifier), to: [...to, ...cc].map(addr) }, raw })` where `addr` strips a display name.
+3. Compose ONE RFC822 buffer with `MailComposer` (`import MailComposer from 'nodemailer/lib/mail-composer';`): `{ from: fromAddress, to: intent.to, cc: intent.cc?.length ? intent.cc : undefined, subject: intent.subject, text: intent.bodyMarkdown, inReplyTo: intent.threading?.inReplyTo as string | undefined, references: intent.threading?.references as string[] | undefined }`; `const node = mail.compile(); const messageId = node.messageId(); const raw = await node.build();`
+4. `transport = createTransport({ host, port, secure, auth: { user: imapCfg.user, pass } })` (SMTP AUTH keeps the IMAP login `user` — it may be a bare login name); `await transport.sendMail({ envelope: { from: fromAddress, to: [...to, ...cc].map(addr) }, raw })` where `addr` strips a display name.
 5. Sent-append (best-effort): `client = await connectImap(imapCfg, pass)`; `resolveMailboxes(await client.listFolders())` → the `role === 'sent'` entry; found → `client.append(sent.path, raw)`; always `client.close()`. Append/connect failure must NOT fail the send (the message already left) — log-swallow with a `console.error`-free pattern: accept an optional `log?: (msg: string) => void` dep, default no-op.
 6. Return `{ externalMessageId: messageId }`.
 
@@ -2969,7 +3477,9 @@ describe('smtp sender', () => {
     store = openStore(await openDb(path.join(dir, 'test.db')), deps);
     const account = await store.createAccount({
       source: 'imap',
-      identifier: 'me@example.com',
+      // Realistic identifier shape: `${user}@${host}` — NOT an address; the
+      // sender must derive From/envelope from config.user instead.
+      identifier: 'me@example.com@imap.example.com',
       config: { host: 'imap.example.com', port: 993, secure: true, user: 'me@example.com' },
     });
     accountId = account.id;
@@ -3006,6 +3516,8 @@ describe('smtp sender', () => {
     const { envelope, raw } = sendMail.mock.calls[0][0];
     expect(envelope).toEqual({ from: 'me@example.com', to: ['alice@example.com'] });
     const rfc822 = raw.toString('utf8');
+    expect(rfc822).toContain('From: me@example.com'); // config.user, NOT the identifier
+    expect(rfc822).not.toContain('me@example.com@imap.example.com');
     expect(rfc822).toContain('In-Reply-To: <orig@x>');
     expect(rfc822).toContain('References: <orig@x>');
     expect(rfc822).toContain('Subject: Re: Numbers');
@@ -3058,6 +3570,7 @@ import type { CoreStore } from '../../core/store/store';
 import { connectImapClient } from '../../sources/imap/client';
 import { resolveMailboxes } from '../../sources/imap/folders';
 import type { ImapAccountConfig } from '../../sources/imap/types';
+import { senderAddressFor } from '../identity';
 ```
 
 (If `@types/nodemailer` lacks the `lib/mail-composer` subpath in this version, add a one-line `// eslint-disable-next-line @typescript-eslint/no-var-requires`-free ambient declaration in `src/main/outbound/senders/nodemailer-mail-composer.d.ts` declaring the constructor as `new (opts: Mail.Options) => { compile(): { messageId(): string; build(): Promise<Buffer> } }` — check first with `npm run typecheck`.)
@@ -3138,6 +3651,8 @@ In `src/main/main.ts`, find the `mcp = await startMcp({` call (~line 589). Immed
       senders: buildBundledSenders({ store: p.store }),
       logSink: p.logSink,
     });
+    // Rows stuck in 'sending' can only mean a previous process died mid-send.
+    void p.store.outbox.recoverOrphanedSending();
 ```
 
 and add `outbound,` to the `startMcp({ … })` deps object. Imports at the top of `main.ts`:
@@ -3389,13 +3904,14 @@ git commit -m "test(outbound): full-suite fixes for the outbound layer"
 
 Summarize for the user:
 - What landed (tasks 1–13) and the test counts.
-- Manual smoke checklist (human, needs a real IMAP account): app boots; `draft_reply` from an MCP client returns a review URL; page shows recipient/body; Confirm sends and the message lands in the recipient inbox + own Sent folder; re-clicking the link shows "Already sent"; mode `link` account shows minimal page; Claude Desktop (stdio) drafting works with the app open and errors helpfully with it closed.
-- Release handoff (NOT this plan): core release + tag via the manual runbook, then alpha-cent `core.lock` bump + product fixture smoke (spec §11's product-side check: four outbound tools in `tools/list` — note: three shipped in phase 1; `send_draft` arrives with mode C) + gmail-gate/GTM copy updates ride later phases.
+- Manual smoke checklist (human, needs a real IMAP account): app boots; `draft_reply` from an MCP client returns a review URL; page shows recipient/body; Confirm sends **from the config.user address** (check the received From header) and the message lands in the recipient inbox + own Sent folder; a `draft_reply` against a message in the Sent folder targets its original recipients, not yourself; re-clicking the link shows "Already sent"; mode `link` account shows minimal page; a remote (claude.ai/tunnel) session gets the local-only refusal instead of a dead link; Claude Desktop (stdio) drafting works with the app open and errors helpfully with it closed.
+- Release handoff (NOT this plan): core release + tag via the manual runbook, then alpha-cent `core.lock` bump + **add `accounts:update-outbound` to `REMOTE_INVOKE_CHANNELS` in `build/apply-overlay.mjs`** (the preload silently rejects unlisted channels; jest never catches it) + product fixture smoke (spec §11's product-side check: outbound tools in `tools/list` — three in phase 1; `send_draft` arrives with mode C) + gmail-gate/GTM copy updates ride later phases.
 
 ---
 
-## Self-Review Notes (already applied)
+## Self-Review Notes (already applied, including the 2026-07-23 review round)
 
-- **Spec coverage (phases 1–3):** §3 outbox table → Task 1/2 (TEXT ISO timestamps deviation documented in Global Constraints); §4 tools minus `send_draft` (phase 6) → Task 6; §5 modes A/B, signed URLs, POST-behind-button, Host/Origin → Tasks 3/5/8 (rebind guard covers CSRF hygiene; token in path); §6 Sender contract + opaque-ref hook → Tasks 1/5 (`metadata.outbound` honored in `draftReply`); §7 SMTP + Sent-append + threading → Tasks 10/11 (Gmail transport is phase 5); §8 product overlay → explicitly zero: no new IPC channels used (Task 9 note); §11 testing bullets map to the per-task suites; §12 phase 1–3 build order matches task order.
-- **Known cut lines:** `created_via` is always `'mcp-local'` in this plan — the remote transport can't be distinguished in-process today (no per-call transport context in the registry); phase 4 introduces that seam. Mode C absent everywhere by design. Gmail accounts get honest "not supported yet" errors at draft time (sender-availability gate), unblocking cleanly when the gmail sender registers in phase 5.
-- **Type consistency check:** `OutboundToolApi` names (`draftReply/draftMessage/listOutbox`) are shared verbatim by service (T5), tools (T6), routes' `/outbox/api` ops (T8), and proxy (T13). `ConfirmOutcome`/`PeekResult` kinds used in T7 service tests match T8's route rendering. `OutboxStore.transition(from[], to, patch)` signature identical in T2 impl and T7 pipeline.
+- **Spec coverage (phases 1–3):** §3 outbox table → Task 1/2 (TEXT ISO timestamps deviation documented in Global Constraints; `confirm_mode` frozen per row; `delivery_unknown` added to the state machine); §4 tools minus `send_draft` (phase 6) → Task 6; §5 modes A/B, signed URLs, POST-behind-button, Host/Origin → Tasks 3/5/8 (rebind guard covers CSRF hygiene; token in path); §6 Sender contract + opaque-ref hook → Tasks 1/5 (`metadata.outbound` honored in `draftReply`); §7 SMTP + Sent-append + threading → Tasks 10/11 (Gmail transport is phase 5); §9's cc gap partially pulled forward: IMAP cc/replyTo/references ingest in Task 4 (Gmail enrichment stays phase 7); §11 testing bullets map to the per-task suites; §12 phase 1–3 build order matches task order.
+- **Review-round fixes baked in:** (1) `Account.identifier` is `${user}@${host}` — sending/self identity lives in `identity.ts` only; (2) Sent-folder docs reply to their original recipients (self-sent detection by address, both metadata generations handled); (3) `confirm_mode` frozen at creation — settings changes never re-skin an existing draft's page; (4) `digital_memory_info` exposes account `id` so `draft_message` is discoverable; (5) per-account outbound settings ride a dedicated `accounts:update-outbound` channel writing store-direct — `accounts:update-config` restarts running sync loops via `engine.updateConfig`; (6) remote MCP sessions are refused draft creation via the AsyncLocalStorage transport seam (they'd get dead 127.0.0.1 URLs; the seam is also phase 4's hook); (7) rows orphaned in `sending` become `delivery_unknown` at boot — never auto-retried, page says the message may have gone out; failed-page copy no longer promises a link `list_outbox` can't mint.
+- **Known cut lines:** `created_via` is always `'mcp-local'` (remote is refused outright in phase 1; phase 4 flips the refusal into tunnel URLs + `'mcp-remote'`). Mode C absent everywhere by design. Gmail accounts get honest "not supported yet" errors at draft time (sender-availability gate), unblocking cleanly when the gmail sender registers in phase 5. No content revision/digest in confirm tokens: drafts have no edit path in phase 1, so `draft_id` + the frozen row already pin the content.
+- **Type consistency check:** `OutboundToolApi` names (`draftReply/draftMessage/listOutbox`) are shared verbatim by service (T5), tools (T6), routes' `/outbox/api` ops (T8), and proxy (T13). `ConfirmOutcome`/`PeekResult` kinds used in T7 service tests match T8's route rendering. `OutboxStore.transition(from[], to, patch)` signature identical in T2 impl and T7 pipeline. `confirmMode` flows input→row→toolResult/peek/list with no account re-read after creation.
