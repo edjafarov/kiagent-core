@@ -229,6 +229,13 @@ function compactArgs(args: Record<string, unknown>): string {
  * for batch `queries`), get → LegacyDocument|null (or an array of those for
  * `ids`), get_related → Document[], count → Array<{key, count}>. Unknown
  * (extension) tools fall back to name + compact args, no detail.
+ *
+ * draft_reply/draft_message/list_outbox are outbound-drafting tools
+ * (core/mcp/tools/draft-*.ts, list-outbox.ts): their args/result carry real
+ * email content — recipient addresses, subject, and body text (the result
+ * even echoes `to`/`subject`/`body` back verbatim in 'link' confirm mode).
+ * NONE of that may reach the feed — same invariant as titlesOf() above, just
+ * for a different tool family. Only opaque ids and counts are safe.
  */
 export function summarizeCall(
   tool: string,
@@ -299,6 +306,34 @@ export function summarizeCall(
     }
     case 'get_schema':
       return { summary: 'read schema' };
+    case 'draft_reply': {
+      const documentId =
+        typeof args.document_id === 'string' ? args.document_id : null;
+      const draftId =
+        result != null &&
+        typeof (result as { draft_id?: unknown }).draft_id === 'string'
+          ? (result as { draft_id: string }).draft_id
+          : null;
+      const ref = documentId ? ` for document ${documentId}` : '';
+      const id = draftId ? ` (draft ${draftId})` : '';
+      return { summary: `Drafted a reply${ref}${id}` };
+    }
+    case 'draft_message': {
+      const count = Array.isArray(args.to) ? args.to.length : 0;
+      const draftId =
+        result != null &&
+        typeof (result as { draft_id?: unknown }).draft_id === 'string'
+          ? (result as { draft_id: string }).draft_id
+          : null;
+      const id = draftId ? ` (draft ${draftId})` : '';
+      return {
+        summary: `Drafted a new message to ${count} recipient(s)${id}`,
+      };
+    }
+    case 'list_outbox': {
+      const rows = Array.isArray(result) ? result : [];
+      return { summary: `Listed outbound drafts → ${rows.length} draft(s)` };
+    }
     default:
       return { summary: `${tool} ${compactArgs(args)}` };
   }

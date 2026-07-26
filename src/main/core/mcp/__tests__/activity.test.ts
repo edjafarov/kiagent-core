@@ -365,4 +365,110 @@ describe('summarizeCall', () => {
     const out = summarizeCall('get_schema', {}, 'markdown');
     expect(out.summary).toBe('read schema');
   });
+
+  describe('outbound drafting tools never leak draft content', () => {
+    const SECRET_BODY =
+      'Sure, the wire transfer details are account 12345 routing 67890.';
+    const SECRET_ADDR = 'someone-sensitive@example.com';
+
+    it('draft_reply: fixed summary + document/draft id, no body', () => {
+      const out = summarizeCall(
+        'draft_reply',
+        { document_id: 'doc-42', body: SECRET_BODY, reply_all: false },
+        {
+          draft_id: 'draft-7',
+          mode: 'link',
+          recipient_display: SECRET_ADDR,
+          confirm_url: 'https://x/outbox/confirm/tok',
+          to: [SECRET_ADDR],
+          cc: [],
+          subject: 'Re: Wire transfer',
+          body: SECRET_BODY,
+          warnings: [],
+          instruction: 'do the thing',
+        },
+      );
+      expect(out.summary).toBe(
+        'Drafted a reply for document doc-42 (draft draft-7)',
+      );
+      expect(out.summary).not.toContain(SECRET_BODY);
+      expect(out.summary).not.toContain(SECRET_ADDR);
+      expect(out.summary).not.toContain('Wire transfer');
+      expect(out.detail).toBeUndefined();
+    });
+
+    it('draft_reply: degrades gracefully with no document_id/result shape', () => {
+      const out = summarizeCall('draft_reply', { body: SECRET_BODY }, null);
+      expect(out.summary).toBe('Drafted a reply');
+      expect(out.summary).not.toContain(SECRET_BODY);
+    });
+
+    it('draft_message: fixed summary + recipient COUNT + draft id, no addresses/body', () => {
+      const out = summarizeCall(
+        'draft_message',
+        {
+          account_id: 'acct-1',
+          to: [SECRET_ADDR, 'other@example.com'],
+          subject: 'Confidential subject line',
+          body: SECRET_BODY,
+        },
+        {
+          draft_id: 'draft-9',
+          mode: 'review',
+          recipient_display: `${SECRET_ADDR}, other@example.com`,
+          confirm_url: 'https://x/outbox/confirm/tok2',
+          warnings: [],
+          instruction: 'do the thing',
+        },
+      );
+      expect(out.summary).toBe(
+        'Drafted a new message to 2 recipient(s) (draft draft-9)',
+      );
+      expect(out.summary).not.toContain(SECRET_BODY);
+      expect(out.summary).not.toContain(SECRET_ADDR);
+      expect(out.summary).not.toContain('Confidential subject line');
+      expect(out.detail).toBeUndefined();
+    });
+
+    it('draft_message: degrades gracefully with a non-array `to` and no result', () => {
+      const out = summarizeCall(
+        'draft_message',
+        { to: 'not-an-array', body: SECRET_BODY },
+        null,
+      );
+      expect(out.summary).toBe('Drafted a new message to 0 recipient(s)');
+    });
+
+    it('list_outbox: fixed summary + row count, no per-row subject/recipient', () => {
+      const out = summarizeCall('list_outbox', { limit: 20 }, [
+        {
+          draft_id: 'draft-1',
+          status: 'draft',
+          recipient_display: SECRET_ADDR,
+          subject: 'Confidential subject line',
+          created_at: '2026-07-06T10:00:00.000Z',
+          error: null,
+          confirm_url: 'https://x/outbox/confirm/tok3',
+        },
+        {
+          draft_id: 'draft-2',
+          status: 'sent',
+          recipient_display: 'other@example.com',
+          subject: null,
+          created_at: '2026-07-06T10:01:00.000Z',
+          error: null,
+          confirm_url: null,
+        },
+      ]);
+      expect(out.summary).toBe('Listed outbound drafts → 2 draft(s)');
+      expect(out.summary).not.toContain(SECRET_ADDR);
+      expect(out.summary).not.toContain('Confidential subject line');
+      expect(out.detail).toBeUndefined();
+    });
+
+    it('list_outbox: degrades gracefully when result is not an array', () => {
+      const out = summarizeCall('list_outbox', {}, null);
+      expect(out.summary).toBe('Listed outbound drafts → 0 draft(s)');
+    });
+  });
 });
