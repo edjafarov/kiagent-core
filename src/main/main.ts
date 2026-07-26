@@ -50,6 +50,8 @@ import { registerUpdaterIpc } from './updater/ipc';
 import { createExtensionPlatform } from './platform/extension-platform';
 import type { ExtensionPlatform } from './platform/extension-platform';
 import { utilityProcessTransport } from './platform/transport';
+import { createOutboundService } from './outbound/service';
+import { buildBundledSenders } from './outbound/senders';
 import { loadProductConfig } from './product';
 import { registerBundledProviders } from './providers';
 import { CURATED_TIERS, modelTotalBytes } from './providers/local-llm/models';
@@ -594,6 +596,19 @@ app
     bundledProviders = bundled;
     attachBundledWorkers(p, bundled);
 
+    const outbound = createOutboundService({
+      store: p.store,
+      prefs: p.prefs,
+      senders: buildBundledSenders({ store: p.store }),
+      logSink: p.logSink,
+    });
+    // Rows stuck in 'sending' can only mean a previous process died
+    // mid-send. Awaited (not fire-and-forget): this sweep must complete
+    // before the MCP server starts serving — the store's db.run crosses the
+    // worker-thread bridge, so a floating promise here could still be in
+    // flight when the HTTP listener accepts its first confirm request.
+    await p.store.outbox.recoverOrphanedSending();
+
     mcp = await startMcp({
       query: p.store.read,
       logSink: p.logSink,
@@ -602,6 +617,7 @@ app
       // Real app boot: heal HTTP client configs left pointing at a port we
       // no longer hold (candidate-port fallback). Tests never set this.
       reconcileClientConfigs: true,
+      outbound,
     });
     // Onboarding step 2 reconciliation: a client connected in an earlier
     // run (config file already carries our entry) counts as done.

@@ -15,6 +15,7 @@ import type { AccountId } from '@shared/contracts';
 import { openDb } from '../../../db/app-db';
 import { openStore, type CoreStore } from '../../../core/store/store';
 import { createSmtpSender, deriveSmtpConfig } from '../smtp';
+import { buildBundledSenders } from '../index';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -177,5 +178,16 @@ describe('smtp sender', () => {
   it('throws without a stored password', async () => {
     await store.vault.delete(accountId);
     await expect(sender().send(intent())).rejects.toThrow(/password/i);
+  });
+});
+
+describe('bundled senders', () => {
+  it('ships exactly the imap sender in phase 1', async () => {
+    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-snd-'));
+    const store2 = openStore(await openDb(path.join(dir2, 't.db')), deps);
+    const senders = buildBundledSenders({ store: store2 });
+    expect([...senders.keys()]).toEqual(['imap']);
+    await store2.close();
+    fs.rmSync(dir2, { recursive: true, force: true });
   });
 });
