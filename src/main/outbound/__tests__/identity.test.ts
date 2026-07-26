@@ -54,3 +54,16 @@ describe('selfAddressesFor', () => {
     ]);
   });
 });
+
+describe('gmail identity', () => {
+  it('gmail accounts send as their identifier', () => {
+    const acc = {
+      id: 'g1',
+      source: 'gmail',
+      identifier: 'me@gmail.com',
+      config: {},
+    } as unknown as Account;
+    expect(senderAddressFor(acc)).toBe('me@gmail.com');
+    expect(selfAddressesFor(acc)).toEqual(['me@gmail.com']);
+  });
+});

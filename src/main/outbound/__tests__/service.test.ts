@@ -90,7 +90,10 @@ describe('outbound service — drafts', () => {
     service = createOutboundService({
       store,
       prefs: fakePrefs(),
-      senders: new Map<string, Sender>([['imap', { send: sendMock }]]),
+      senders: new Map<string, Sender>([
+        ['imap', { send: sendMock }],
+        ['gmail', { send: sendMock }],
+      ]),
       logSink,
     });
     service.setBaseUrl('http://127.0.0.1:7421');
@@ -132,6 +135,105 @@ describe('outbound service — drafts', () => {
     expect(r.instruction).toMatch(/render the draft/i);
   });
 
+  it('draftReply on a gmail thread resolves via thread metadata and dispatches to the gmail sender', async () => {
+    const gmailAccount = await store.createAccount({
+      source: 'gmail',
+      identifier: 'me@gmail.com',
+      config: {},
+    });
+    await store.commit({
+      account: gmailAccount.id,
+      documents: [
+        {
+          externalId: 'thread-1',
+          type: 'email.thread',
+          title: 'Gmail Thread',
+          markdown: 'body',
+          metadata: {
+            gmailThreadId: 'gt1',
+            messages: [
+              {
+                id: '<gm1@x>',
+                from: 'Alice <alice@example.com>',
+                date: 'D',
+                snippet: 's',
+              },
+              { id: '<gm2@x>', from: 'me@gmail.com', date: 'D', snippet: 's' },
+            ],
+          },
+          createdAt: '2026-07-02T00:00:00Z',
+        },
+      ],
+      cursor: null,
+    });
+    const gmailHits = await store.read.search({
+      account: gmailAccount.id,
+      type: 'email.thread',
+    });
+    const gmailDocId = gmailHits[0].id as string;
+
+    const r = await service.draftReply({
+      documentId: gmailDocId,
+      body: 'Thanks!',
+    });
+    expect(r.recipient_display).toBe('Alice <alice@example.com>');
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.to).toEqual(['Alice <alice@example.com>']);
+    expect(row?.subject).toBe('Re: Gmail Thread');
+    expect(row?.threading).toEqual({
+      gmailThreadId: 'gt1',
+      inReplyTo: '<gm2@x>',
+      references: ['<gm1@x>', '<gm2@x>'],
+    });
+  });
+
+  it('gmail resolver warnings propagate through draftReply to the tool result', async () => {
+    const gmailAccount = await store.createAccount({
+      source: 'gmail',
+      identifier: 'me@gmail.com',
+      config: {},
+    });
+    await store.commit({
+      account: gmailAccount.id,
+      documents: [
+        {
+          externalId: 'thread-2',
+          type: 'email.thread',
+          title: 'Gmail Thread 2',
+          markdown: 'body',
+          metadata: {
+            gmailThreadId: 'gt2',
+            // Un-enriched (no per-message to/cc) — reply_all must fall back
+            // to reply-to-sender with a warning.
+            messages: [
+              { id: '<gm3@x>', from: 'me@gmail.com', date: 'D', snippet: 's' },
+              {
+                id: '<gm4@x>',
+                from: 'Bob <bob@example.com>',
+                date: 'D',
+                snippet: 's',
+              },
+            ],
+          },
+          createdAt: '2026-07-02T00:00:00Z',
+        },
+      ],
+      cursor: null,
+    });
+    const hits = await store.read.search({
+      account: gmailAccount.id,
+      type: 'email.thread',
+    });
+    const gmailDocId = hits[0].id as string;
+
+    const r = await service.draftReply({
+      documentId: gmailDocId,
+      body: 'Thanks!',
+      replyAll: true,
+    });
+    expect(r.warnings[0]).toMatch(/fell back to reply-to-sender/);
+  });
+
   it('draftMessage validates recipients and account source', async () => {
     const r = await service.draftMessage({
       accountId,
@@ -151,18 +253,37 @@ describe('outbound service — drafts', () => {
   });
 
   it('rejects drafts for accounts with no sender', async () => {
-    const gmail = await store.createAccount({
-      source: 'gmail',
-      identifier: 'g@example.com',
+    // Unregistered source — never in the senders map — still rejects with
+    // "not supported yet" regardless of the identity branch above.
+    const notion = await store.createAccount({
+      source: 'notion',
+      identifier: 'n@example.com',
     });
     await expect(
       service.draftMessage({
-        accountId: gmail.id,
+        accountId: notion.id,
         to: ['b@x.com'],
         subject: 's',
         body: 'b',
       }),
     ).rejects.toThrow(/not supported yet/);
+
+    // A registered source (imap) with no usable From address configured
+    // still rejects — this is the case that stays senderless under the new
+    // gmail identity rules (gmail's identifier always resolves).
+    const bareImap = await store.createAccount({
+      source: 'imap',
+      identifier: 'bare@imap.example.com',
+      config: {},
+    });
+    await expect(
+      service.draftMessage({
+        accountId: bareImap.id,
+        to: ['b@x.com'],
+        subject: 's',
+        body: 'b',
+      }),
+    ).rejects.toThrow(/no usable From address/);
   });
 
   it("clamps list_outbox limit to [1,100] before it reaches the store's LIMIT ? — SQLite treats a bare -1 as UNBOUNDED", async () => {

@@ -4,6 +4,13 @@
  * NEVER an address. Sending identity: explicit config.outbound.fromAddress,
  * else config.user when it is itself an email (the overwhelmingly common
  * IMAP setup), else the user must configure one.
+ *
+ * gmail is the one source where Account.identifier IS the mailbox address
+ * (stamped from users.getProfile at connect time) — it short-circuits both
+ * functions below BEFORE the fromAddress logic, and config.outbound.fromAddress
+ * is deliberately ignored: Gmail rejects a From header that isn't one of the
+ * account's own verified aliases, so honoring an arbitrary override would
+ * just produce a bounce.
  */
 import type { Account } from '@shared/contracts';
 
@@ -15,6 +22,7 @@ interface OutboundAccountConfig {
 }
 
 export function senderAddressFor(account: Account): string {
+  if (account.source === 'gmail') return account.identifier;
   const cfg = account.config as OutboundAccountConfig;
   const explicit = cfg.outbound?.fromAddress?.trim();
   if (explicit && EMAIL_RX.test(explicit)) return explicit;
@@ -27,6 +35,7 @@ export function senderAddressFor(account: Account): string {
 }
 
 export function selfAddressesFor(account: Account): string[] {
+  if (account.source === 'gmail') return [account.identifier];
   const sender = senderAddressFor(account);
   const user = (account.config as OutboundAccountConfig).user?.trim();
   const out = [sender];

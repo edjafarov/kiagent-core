@@ -22,6 +22,7 @@ import type { LogSink } from '../core/engine/engine';
 import type { CoreStore } from '../core/store/store';
 import { EMAIL_RX, selfAddressesFor, senderAddressFor } from './identity';
 import { resolveImapReply } from './resolve';
+import { resolveGmailReply } from './resolve-gmail';
 import { signConfirmToken, verifyConfirmToken } from './tokens';
 
 export const CONFIRM_TTL_MS: Record<ConfirmMode, number> = {
@@ -29,6 +30,14 @@ export const CONFIRM_TTL_MS: Record<ConfirmMode, number> = {
   link: 5 * 60_000,
 };
 export const DRAFT_TTL_MS = 24 * 60 * 60_000;
+
+/** gmail's `GmailReplyResolution` carries no subject — resolve-gmail.ts
+ *  resolves recipients/threading only — so this mirrors resolve.ts's
+ *  `Re: <title>` rule from the thread document's own title, the same way
+ *  the imap path derives one from the message document's title. */
+function subjectFor(title: string | null): string | null {
+  return title === null ? null : /^re:/i.test(title) ? title : `Re: ${title}`;
+}
 
 export interface DraftToolResult {
   draft_id: string;
@@ -263,6 +272,27 @@ export function createOutboundService(deps: {
           cc: [],
           subject: null,
           bodyMarkdown: body,
+          confirmMode: mode,
+          createdVia: createdViaNow(),
+          expiresAt: expiresAt(),
+        });
+      } else if (account.source === 'gmail') {
+        const r = resolveGmailReply(
+          doc,
+          selfAddressesFor(account),
+          replyAll === true,
+        );
+        warnings = r.warnings;
+        row = await deps.store.outbox.create({
+          accountId: account.id,
+          kind: 'reply',
+          replyToDocumentId: doc.id,
+          recipientDisplay: r.recipientDisplay,
+          to: r.to,
+          cc: r.cc,
+          subject: subjectFor(doc.title ?? null),
+          bodyMarkdown: body,
+          threading: r.threading,
           confirmMode: mode,
           createdVia: createdViaNow(),
           expiresAt: expiresAt(),
