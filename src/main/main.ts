@@ -51,6 +51,7 @@ import { createExtensionPlatform } from './platform/extension-platform';
 import type { ExtensionPlatform } from './platform/extension-platform';
 import { utilityProcessTransport } from './platform/transport';
 import { createOutboundService } from './outbound/service';
+import { createOutboundRoutes } from './outbound/routes';
 import { buildBundledSenders } from './outbound/senders';
 import { loadProductConfig } from './product';
 import { registerBundledProviders } from './providers';
@@ -781,6 +782,13 @@ app
       },
     ));
 
+    // Cheap (a closure over the service, no I/O) — safe to build here even
+    // though the loopback server (startMcp above) already built its OWN
+    // instance for server.ts's /outbox/* dispatch. Both share all state
+    // through `outbound`, so having two instances is intentional, not a
+    // duplication bug.
+    const outboundRoutes = createOutboundRoutes(outbound);
+
     extensionsPlatform = createExtensionPlatform({
       extDir: path.join(app.getPath('userData'), 'extensions'),
       bundledDir: bundledExtensionsDir,
@@ -796,6 +804,7 @@ app
         app,
         dataDir,
         tray: trayMenu,
+        outbound: { service: outbound, routes: outboundRoutes },
       }),
       store: p.store,
       sources: p.sources,

@@ -5,6 +5,7 @@ import type { AccountId, Credentials, Identity } from '@shared/contracts';
 import type { McpServerHandle } from './core/mcp/server';
 import type { CoreStore } from './core/store/store';
 import type { TrayMenuController } from './tray-menu';
+import type { OutboundService } from './outbound/service';
 
 /**
  * The MainProcessApi contract handed to in-process bundled extensions
@@ -43,6 +44,19 @@ export interface MainProcessApi {
      *  quit item); returns a disposer that removes them and rebuilds. */
     addTrayMenuItems(items: MenuItemConstructorOptions[]): () => void;
   };
+  /** Outbound confirm-over-tunnel seam (spec phase 4). Optional so older
+   *  product bundles keep working against the type. */
+  outbound?: {
+    /** Push the public device base URL (https://<device-subdomain>) when the
+     *  remote HTTPS server comes up; null when it goes down. */
+    setRemoteBaseUrl(url: string | null): void;
+    /** Serve an /outbox/* request that arrived over the tunnel. Only
+     *  confirm/cancel are handled; false = not ours, caller 404s. */
+    handleRequest(
+      req: import('http').IncomingMessage,
+      res: import('http').ServerResponse,
+    ): Promise<boolean>;
+  };
 }
 
 export interface BuildMainApiDeps {
@@ -53,6 +67,15 @@ export interface BuildMainApiDeps {
   app: Pick<App, 'getPath' | 'getVersion' | 'getName'>;
   dataDir: string;
   tray: TrayMenuController;
+  outbound?: {
+    service: OutboundService;
+    routes: {
+      handleRemote(
+        req: import('http').IncomingMessage,
+        res: import('http').ServerResponse,
+      ): Promise<boolean>;
+    };
+  };
 }
 
 export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
@@ -82,5 +105,13 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
     ui: {
       addTrayMenuItems: (items) => deps.tray.addItems(items),
     },
+    outbound: deps.outbound
+      ? {
+          setRemoteBaseUrl: (url) =>
+            deps.outbound!.service.setRemoteBaseUrl(url),
+          handleRequest: (req, res) =>
+            deps.outbound!.routes.handleRemote(req, res),
+        }
+      : undefined,
   };
 }

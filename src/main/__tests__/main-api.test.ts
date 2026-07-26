@@ -2,6 +2,7 @@ import { buildMainApi } from '../main-api';
 import type { CoreStore } from '../core/store/store';
 import type { McpServerHandle } from '../core/mcp/server';
 import type { TrayMenuController } from '../tray-menu';
+import type { OutboundService } from '../outbound/service';
 
 function stubStore(): {
   store: CoreStore;
@@ -100,6 +101,34 @@ function stubTray(): {
   return { tray, addedGroups, disposed };
 }
 
+function stubOutbound(handleRemoteResult: boolean): {
+  outbound: {
+    service: OutboundService;
+    routes: { handleRemote(req: unknown, res: unknown): Promise<boolean> };
+  };
+  setRemoteBaseUrlArgs: (string | null)[];
+  handleRemoteArgs: unknown[][];
+} {
+  const setRemoteBaseUrlArgs: (string | null)[] = [];
+  const handleRemoteArgs: unknown[][] = [];
+  const service = {
+    setRemoteBaseUrl: (url: string | null) => {
+      setRemoteBaseUrlArgs.push(url);
+    },
+  } as unknown as OutboundService;
+  const routes = {
+    handleRemote: async (req: unknown, res: unknown) => {
+      handleRemoteArgs.push([req, res]);
+      return handleRemoteResult;
+    },
+  };
+  return {
+    outbound: { service, routes },
+    setRemoteBaseUrlArgs,
+    handleRemoteArgs,
+  };
+}
+
 describe('buildMainApi', () => {
   it('assembles the full MainProcessApi shape at apiVersion 1', async () => {
     const { store, identitySetArgs, vaultLoadArgs, vaultSaveArgs } =
@@ -159,5 +188,69 @@ describe('buildMainApi', () => {
 
     dispose();
     expect(disposed).toEqual([[item]]);
+  });
+});
+
+describe('buildMainApi outbound dep', () => {
+  it('delegates outbound.setRemoteBaseUrl and outbound.handleRequest to the service/routes when the dep is present', async () => {
+    const { store } = stubStore();
+    const { mcp } = stubMcp();
+    const { tray } = stubTray();
+    const app = stubApp();
+    const { outbound, setRemoteBaseUrlArgs, handleRemoteArgs } =
+      stubOutbound(true);
+
+    const mainApi = buildMainApi({
+      store,
+      mcp,
+      app,
+      dataDir: '/fake',
+      tray,
+      outbound,
+    });
+
+    expect(mainApi.outbound).toBeDefined();
+    mainApi.outbound!.setRemoteBaseUrl('https://device.example.com');
+    mainApi.outbound!.setRemoteBaseUrl(null);
+    expect(setRemoteBaseUrlArgs).toEqual(['https://device.example.com', null]);
+
+    const req = { fake: 'req' };
+    const res = { fake: 'res' };
+    await expect(
+      mainApi.outbound!.handleRequest(req as never, res as never),
+    ).resolves.toBe(true);
+    expect(handleRemoteArgs).toEqual([[req, res]]);
+  });
+
+  it('outbound.handleRequest propagates false when routes.handleRemote reports not-ours', async () => {
+    const { store } = stubStore();
+    const { mcp } = stubMcp();
+    const { tray } = stubTray();
+    const app = stubApp();
+    const { outbound } = stubOutbound(false);
+
+    const mainApi = buildMainApi({
+      store,
+      mcp,
+      app,
+      dataDir: '/fake',
+      tray,
+      outbound,
+    });
+
+    await expect(
+      mainApi.outbound!.handleRequest({} as never, {} as never),
+    ).resolves.toBe(false);
+  });
+
+  it('mainApi.outbound is undefined when the outbound dep is absent', () => {
+    const { store } = stubStore();
+    const { mcp } = stubMcp();
+    const { tray } = stubTray();
+    const app = stubApp();
+
+    const mainApi = buildMainApi({ store, mcp, app, dataDir: '/fake', tray });
+
+    expect(mainApi.outbound).toBeUndefined();
   });
 });
