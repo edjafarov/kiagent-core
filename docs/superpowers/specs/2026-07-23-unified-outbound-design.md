@@ -69,6 +69,8 @@ outbox (
   body_markdown TEXT NOT NULL,
   threading_json TEXT,            -- e.g. {inReplyTo, references, gmailThreadId}
   status TEXT NOT NULL,           -- 'draft'|'sending'|'sent'|'failed'|'discarded'|'expired'
+                                  -- (+ 'delivery_unknown', added in phase 1: interrupted
+                                  --  mid-send at boot recovery — never auto-redriven)
   error TEXT,
   external_message_id TEXT,       -- transport's id after send
   created_via TEXT NOT NULL,      -- 'mcp-local' | 'mcp-remote'
@@ -155,12 +157,19 @@ default 30) and audit rows still apply.
   effect.
 - **Routing:** tool calls arriving via local transports return `http://127.0.0.1:<port>/outbox/confirm/<token>`
   on the existing loopback server; calls via the remote transport return the device-
-  subdomain HTTPS URL over the tunnel. The `/outbox/confirm/*` routes need a signed-token
-  carve-out from the remote OAuth middleware (a phone browser has no bearer token).
-  Benefit: sends can be approved from a phone. Known exposure: the URL lives in the
-  conversation transcript; TTL + single-use + POST-behind-button bound it.
+  subdomain HTTPS URL over the tunnel. *(As shipped in phase 4: no OAuth-middleware
+  carve-out was needed — the remote Router applies JWT per-route to `/mcp` only, so
+  `/outbox` mounts unauthenticated by construction, the same posture as `/oauth/consent`;
+  each page is gated by its single-use signed token. The remote surface is
+  `GET|POST /outbox/confirm/<token>` plus `POST /outbox/cancel/<token>` — cancel-over-
+  tunnel is benign; worst case a URL holder discards a draft. `/outbox/api` is core-side
+  allowlisted away from the remote entry point.)* Benefit: sends can be approved from a
+  phone. Known exposure: the URL lives in the conversation transcript; TTL + single-use +
+  POST-behind-button bound it.
 - **CSRF/rebinding hygiene on loopback:** validate `Host`/`Origin` on the POST; token in
-  path, not query params that leak via referrer.
+  path, not query params that leak via referrer. *(Decision, phase 4: no Host/Origin
+  check over the tunnel — real TLS host semantics plus token gating make it redundant
+  there; the loopback checks are unchanged.)*
 
 ## 6. Sender contract — plugin-universal from day one
 
@@ -212,10 +221,13 @@ existing IMAP session so normal ingestion closes the loop. Threading from stored
 
 **Gmail API.** `users.messages.send` with `threadId` from stored `gmailThreadId`.
 Requires adding `gmail.send` to the scope list in `sources/gmail/oauth.ts` — a
-restricted scope, acceptable inside the Testing-project founding cohort and for
-BYO-client users, and it rides the existing gmail-gate consent flow in the product
-overlay. Existing accounts need re-consent (incremental auth). The tests that assert
-readonly-only scopes must be updated deliberately, not mechanically.
+sensitive scope in Google's taxonomy (the restricted list covers the content-reading
+Gmail scopes; the distinction is moot while the project stays in Testing) — acceptable
+inside the Testing-project founding cohort and for BYO-client users, and it rides the
+existing gmail-gate consent flow in the product overlay. Existing accounts need
+re-consent — *as shipped in phase 5 that means a full reconnect (`prompt=consent`);
+no incremental-auth machinery exists.* The tests that assert readonly-only scopes must
+be updated deliberately, not mechanically.
 
 ## 8. Product-overlay touches (alpha-cent)
 
