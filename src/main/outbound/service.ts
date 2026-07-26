@@ -12,6 +12,7 @@ import type {
   OutboxRow,
   OutboxStatus,
   Prefs,
+  SendIntent,
   Sender,
 } from '@shared/contracts';
 
@@ -336,12 +337,116 @@ export function createOutboundService(deps: {
       return { kind: 'ok', row, mode: row.confirmMode };
     },
 
-    async confirmByToken() {
-      throw new Error('not implemented'); // Task 7
+    async confirmByToken(token) {
+      const secret = await deps.store.outbox.secret();
+      const parsed = verifyConfirmToken(secret, token, nowMs());
+      if (!parsed) return { kind: 'invalid' };
+      // Mirror peekByToken's lazy sweep: a token minted near the end of its
+      // (short) TTL can still be nominally valid past the draft row's own
+      // (much longer) expires_at if nothing called peekByToken/listOutbox
+      // first to trigger the sweep — without this, the CAS below would
+      // happily move an expired draft into 'sending'.
+      await deps.store.outbox.expireOverdue();
+      const row = await deps.store.outbox.get(parsed.draftId);
+      if (!row) return { kind: 'invalid' };
+      if (row.status !== 'draft') return { kind: 'already', row };
+
+      // The atomicity primitive (spec's CAS gate): only the caller that wins
+      // this UPDATE proceeds to send. A losing concurrent confirm re-reads
+      // the row (now owned by the winner) and reports 'already' — it never
+      // reaches the Sender.
+      const moved = await deps.store.outbox.transition(
+        row.id,
+        ['draft'],
+        'sending',
+      );
+      if (!moved) {
+        const raced = await deps.store.outbox.get(row.id);
+        return { kind: 'already', row: raced ?? row };
+      }
+
+      const fail = async (message: string): Promise<ConfirmOutcome> => {
+        const errMsg = message || 'send failed with no error message';
+        await deps.store.outbox.transition(row.id, ['sending'], 'failed', {
+          error: errMsg,
+        });
+        const failedRow = await deps.store.outbox.get(row.id);
+        deps.logSink.log(
+          'outbound',
+          'error',
+          `confirm ${row.id} failed: ${errMsg}`,
+          {
+            draftId: row.id,
+          },
+        );
+        return { kind: 'failed', row: failedRow ?? row, error: errMsg };
+      };
+
+      let sender: Sender;
+      try {
+        // accountFor already validates the account exists AND that a sender
+        // is registered for its source — the re-check below is defense in
+        // depth (never observed to trip), not a second independent lookup.
+        const account = await accountFor(row.accountId as string);
+        const found = deps.senders.get(account.source);
+        if (!found) {
+          throw new Error(
+            `sending from '${account.source}' accounts is not supported yet — ` +
+              `supported: ${[...deps.senders.keys()].join(', ')}`,
+          );
+        }
+        sender = found;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return fail(message);
+      }
+
+      const intent: SendIntent = {
+        accountId: row.accountId,
+        kind: row.kind,
+        outboundRef: row.outboundRef ?? undefined,
+        to: row.to,
+        cc: row.cc,
+        subject: row.subject ?? undefined,
+        bodyMarkdown: row.bodyMarkdown,
+        threading: row.threading ?? undefined,
+      };
+
+      try {
+        const result = await sender.send(intent);
+        await deps.store.outbox.transition(row.id, ['sending'], 'sent', {
+          sentAt: new Date(nowMs()).toISOString(),
+          externalMessageId: result.externalMessageId ?? null,
+        });
+        const sentRow = await deps.store.outbox.get(row.id);
+        deps.logSink.log('outbound', 'info', `confirm ${row.id} sent`, {
+          draftId: row.id,
+        });
+        return { kind: 'sent', row: sentRow ?? row };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return fail(message);
+      }
     },
 
-    async cancelByToken() {
-      throw new Error('not implemented'); // Task 7
+    async cancelByToken(token) {
+      const secret = await deps.store.outbox.secret();
+      const parsed = verifyConfirmToken(secret, token, nowMs());
+      if (!parsed) return { kind: 'invalid' };
+      const row = await deps.store.outbox.get(parsed.draftId);
+      if (!row) return { kind: 'invalid' };
+
+      const moved = await deps.store.outbox.transition(
+        row.id,
+        ['draft'],
+        'discarded',
+      );
+      if (!moved) {
+        const current = await deps.store.outbox.get(row.id);
+        return { kind: 'already', row: current ?? row };
+      }
+      const discarded = await deps.store.outbox.get(row.id);
+      return { kind: 'cancelled', row: discarded ?? row };
     },
   };
 }

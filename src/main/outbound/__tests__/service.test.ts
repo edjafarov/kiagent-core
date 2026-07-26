@@ -67,6 +67,7 @@ describe('outbound service — drafts', () => {
   let accountId: AccountId;
   let service: OutboundService;
   let docId: string;
+  let sendMock: jest.Mock;
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-outsvc-'));
@@ -85,11 +86,11 @@ describe('outbound service — drafts', () => {
     const hits = await store.read.search({ limit: 10 });
     docId = hits[0].id as string;
 
-    const sender: Sender = { send: async () => ({}) };
+    sendMock = jest.fn(async () => ({ externalMessageId: '<sent@x>' }));
     service = createOutboundService({
       store,
       prefs: fakePrefs(),
-      senders: new Map([['imap', sender]]),
+      senders: new Map<string, Sender>([['imap', { send: sendMock }]]),
       logSink,
     });
     service.setBaseUrl('http://127.0.0.1:7421');
@@ -286,5 +287,86 @@ describe('outbound service — drafts', () => {
     withDefault.setBaseUrl('http://127.0.0.1:7421');
     const r = await withDefault.draftReply({ documentId: docId, body: 'x' });
     expect(r.mode).toBe('link');
+  });
+
+  const tokenOf = (r: { confirm_url: string }) =>
+    r.confirm_url.split('/outbox/confirm/')[1];
+
+  it('confirmByToken sends and records the external id', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const out = await service.confirmByToken(tokenOf(r));
+    expect(out.kind).toBe('sent');
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const intent = sendMock.mock.calls[0][0];
+    expect(intent.to).toEqual(['Alice <alice@example.com>']);
+    expect(intent.threading).toEqual({
+      inReplyTo: '<orig@x>',
+      references: ['<orig@x>'],
+    });
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.status).toBe('sent');
+    expect(row?.externalMessageId).toBe('<sent@x>');
+    expect(row?.sentAt).toBeTruthy();
+  });
+
+  it('a confirm link is single-use', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    await service.confirmByToken(tokenOf(r));
+    const second = await service.confirmByToken(tokenOf(r));
+    expect(second.kind).toBe('already');
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a concurrent second confirm loses the CAS and never double-sends', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const token = tokenOf(r);
+    const [a, b] = await Promise.all([
+      service.confirmByToken(token),
+      service.confirmByToken(token),
+    ]);
+    expect([a.kind, b.kind].sort()).toEqual(['already', 'sent']);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.status).toBe('sent');
+  });
+
+  it('a sender failure lands in failed with the error recorded', async () => {
+    sendMock.mockRejectedValueOnce(new Error('SMTP 535 auth failed'));
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const out = await service.confirmByToken(tokenOf(r));
+    expect(out.kind).toBe('failed');
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.status).toBe('failed');
+    expect(row?.error).toMatch(/535/);
+  });
+
+  it('a missing sender at confirm time lands in failed, never stuck in sending', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const senderless = createOutboundService({
+      store,
+      prefs: fakePrefs(),
+      senders: new Map<string, Sender>(),
+      logSink,
+    });
+    senderless.setBaseUrl('http://127.0.0.1:7421');
+    const out = await senderless.confirmByToken(tokenOf(r));
+    expect(out.kind).toBe('failed');
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.status).toBe('failed');
+    expect(row?.error).toMatch(/not supported yet/);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('cancelByToken discards without sending', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const out = await service.cancelByToken(tokenOf(r));
+    expect(out.kind).toBe('cancelled');
+    expect(sendMock).not.toHaveBeenCalled();
+    expect((await store.outbox.get(r.draft_id))?.status).toBe('discarded');
+  });
+
+  it('garbage tokens are invalid for both operations', async () => {
+    expect((await service.confirmByToken('nope')).kind).toBe('invalid');
+    expect((await service.cancelByToken('nope')).kind).toBe('invalid');
   });
 });
