@@ -11,6 +11,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   processing: { enabled: true, window: 'idle' },
   privacy: { browserHistory: false, sendDiagnostics: false },
   models: { override: 'auto', autoInstall: true },
+  outbound: { defaultMode: 'review' },
   onboarding: {
     sourceBackfilledAt: null,
     mcpConnectedAt: null,
@@ -49,6 +50,9 @@ function sanitize(raw: unknown): AppPrefs {
           : 'auto',
       autoInstall: r.models?.autoInstall !== false,
     },
+    outbound: {
+      defaultMode: r.outbound?.defaultMode === 'link' ? 'link' : 'review',
+    },
     onboarding: {
       sourceBackfilledAt: isoOrNull(r.onboarding?.sourceBackfilledAt),
       mcpConnectedAt: isoOrNull(r.onboarding?.mcpConnectedAt),
@@ -78,6 +82,7 @@ export function createPrefs(dir: string): Prefs {
         processing: { ...current.processing, ...(p.processing ?? {}) },
         privacy: { ...current.privacy, ...(p.privacy ?? {}) },
         models: { ...current.models, ...(p.models ?? {}) },
+        outbound: { ...current.outbound, ...(p.outbound ?? {}) },
         onboarding: { ...current.onboarding, ...(p.onboarding ?? {}) },
       });
       fs.writeFileSync(file, JSON.stringify(current, null, 2));

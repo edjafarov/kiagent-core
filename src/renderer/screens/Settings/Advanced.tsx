@@ -101,6 +101,30 @@ export function Advanced(): React.ReactElement {
           />
         </div>
 
+        <div className="lbl-section">Outbound</div>
+        <div className="field-row">
+          {/* eslint-disable-next-line jsx-a11y/label-has-associated-control */}
+          <label htmlFor="adv-outbound-mode" className="lbl">
+            Send confirmation
+          </label>
+          <select
+            id="adv-outbound-mode"
+            className="cadence-select"
+            value={prefs.outbound.defaultMode}
+            onChange={(e) =>
+              patch({
+                outbound: {
+                  defaultMode: e.target
+                    .value as AppPrefs['outbound']['defaultMode'],
+                },
+              })
+            }
+          >
+            <option value="review">Review page (recommended)</option>
+            <option value="link">One-click confirm link</option>
+          </select>
+        </div>
+
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button
             type="button"

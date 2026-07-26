@@ -228,6 +228,13 @@ export interface Invokes {
     req: { accountId: AccountId; config: Record<string, unknown> };
     res: void;
   };
+  /** Outbound-only config write: persists via the store WITHOUT
+   *  engine.updateConfig — changing a confirmation mode must never restart
+   *  a running sync loop. */
+  'accounts:update-outbound': {
+    req: { accountId: AccountId; outbound: Record<string, unknown> };
+    res: void;
+  };
 
   'search:query': {
     req: SearchRequest;
@@ -378,6 +385,7 @@ export const INVOKE_CHANNELS = [
   'accounts:sync-now',
   'accounts:set-cadence',
   'accounts:update-config',
+  'accounts:update-outbound',
   'search:query',
   'docs:get',
   'docs:children',

@@ -336,6 +336,14 @@ function registerIpc(
   handle('accounts:update-config', ({ accountId, config }) =>
     p.engine.updateConfig(accountId, config),
   );
+  handle('accounts:update-outbound', async ({ accountId, outbound }) => {
+    const account = await p.store.account(accountId);
+    if (!account) return;
+    // Store-direct on purpose: engine.updateConfig would restart a running
+    // pull and grant a reconcile allowance — outbound settings are invisible
+    // to sources, so neither is wanted.
+    await p.store.setAccountConfig(accountId, { ...account.config, outbound });
+  });
 
   handle('search:query', (req) => p.store.read.search(req ?? {}));
   handle('docs:get', ({ id }) => p.store.read.document(id));

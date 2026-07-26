@@ -9,6 +9,7 @@ import { TrackedFolders, trackedFolderPaths } from './sections/TrackedFolders';
 import { TrackedContent } from './sections/TrackedContent';
 import { Cadence } from './sections/Cadence';
 import { ConnectorConfig } from './sections/ConnectorConfig';
+import { Outbound } from './sections/Outbound';
 import { RecentActivity } from './sections/RecentActivity';
 import { DangerZone } from './sections/DangerZone';
 
@@ -99,6 +100,7 @@ export function SourceDetail(props: {
         <TrackedContent account={a} />
         <Cadence account={a} />
         <ConnectorConfig account={a} />
+        {a.source === 'imap' && <Outbound account={a} />}
         <RecentActivity account={a} recent={entry.recent} />
         <DangerZone account={a} />
       </div>

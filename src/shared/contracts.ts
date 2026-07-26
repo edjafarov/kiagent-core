@@ -793,6 +793,10 @@ export interface AppPrefs {
    *  download (a Settings Cancel sets it false). */
   models: { override: string; autoInstall: boolean };
   onboarding: OnboardingPrefs;
+  /** Outbound confirmation default; per-account override lives in
+   *  Account.config.outbound.mode. 'review' = full review page (default);
+   *  'link' = in-chat review + one-click signed link. */
+  outbound: { defaultMode: ConfirmMode };
 }
 
 export interface Prefs {

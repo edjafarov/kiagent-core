@@ -43,6 +43,25 @@ describe('prefs.models', () => {
   });
 });
 
+describe('prefs.outbound', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-prefs-'));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('defaults outbound.defaultMode to review and sanitizes junk', async () => {
+    const prefs = createPrefs(dir);
+    expect(prefs.get().outbound).toEqual({ defaultMode: 'review' });
+    await prefs.patch({
+      outbound: { defaultMode: 'bogus' as unknown as 'review' },
+    });
+    expect(prefs.get().outbound.defaultMode).toBe('review');
+    await prefs.patch({ outbound: { defaultMode: 'link' } });
+    expect(prefs.get().outbound.defaultMode).toBe('link');
+  });
+});
+
 describe('prefs.onboarding', () => {
   let dir: string;
   beforeEach(() => {
