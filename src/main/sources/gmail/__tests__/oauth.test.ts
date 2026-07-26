@@ -1,6 +1,6 @@
 import type { Credentials } from '@shared/contracts';
 
-import { googleOAuthProfile, googleRefresher } from '../oauth';
+import { GMAIL_SCOPES, googleOAuthProfile, googleRefresher } from '../oauth';
 
 // The client id/secret are build-time env injects (webpack DefinePlugin);
 // under jest nothing inlines them, so getGoogleClientCredentials() reads the
@@ -217,6 +217,68 @@ describe('gmail oauth profile', () => {
         errJson(400, { error: 'invalid_grant' }),
       ) as unknown as typeof fetch;
       await expect(googleRefresher(baseCreds)).rejects.toThrow(/invalid_grant/);
+    });
+  });
+
+  describe('scope', () => {
+    it('requests exactly readonly + send (pinned — scope drift must be loud)', () => {
+      expect(GMAIL_SCOPES).toEqual([
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.send',
+      ]);
+    });
+
+    it('exchange persists the granted scope string', async () => {
+      const authUrl = googleOAuthProfile.authUrl(GMAIL_SCOPES, REDIRECT_URI);
+      const state = stateFrom(authUrl);
+
+      global.fetch = jest.fn(async () =>
+        okJson({
+          access_token: 'fake-access-token',
+          refresh_token: 'fake-refresh-token',
+          expires_in: 3600,
+          scope: 'https://www.googleapis.com/auth/gmail.readonly',
+        }),
+      ) as unknown as typeof fetch;
+
+      const callback = `${REDIRECT_URI}?code=fake-auth-code&state=${state}`;
+      const creds = await googleOAuthProfile.exchange(callback, REDIRECT_URI);
+
+      expect(creds.scope).toBe(
+        'https://www.googleapis.com/auth/gmail.readonly',
+      );
+    });
+
+    it('googleRefresher persists the granted scope string, falling back to the existing scope when Google omits it', async () => {
+      const baseCreds: Credentials = {
+        accessToken: 'old-access-token',
+        refreshToken: 'fake-refresh-token',
+        clientId: 'fake-client-id',
+        clientSecret: 'fake-client-secret',
+        expiresAt: new Date(0).toISOString(),
+        scope: 'https://www.googleapis.com/auth/gmail.readonly',
+      };
+
+      global.fetch = jest.fn(async () =>
+        okJson({
+          access_token: 'new-access-token',
+          expires_in: 3600,
+          scope:
+            'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send',
+        }),
+      ) as unknown as typeof fetch;
+
+      const result = await googleRefresher(baseCreds);
+      expect(result?.scope).toBe(
+        'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send',
+      );
+
+      global.fetch = jest.fn(async () =>
+        okJson({ access_token: 'new-access-token-2', expires_in: 3600 }),
+      ) as unknown as typeof fetch;
+
+      const fallback = await googleRefresher(baseCreds);
+      expect(fallback?.scope).toBe(baseCreds.scope);
     });
   });
 });

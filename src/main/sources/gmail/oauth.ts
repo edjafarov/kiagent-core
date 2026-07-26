@@ -7,12 +7,16 @@ import type { OAuthProfile } from '../../auth/oauth-window';
 import { getGoogleClientCredentials } from './client-credentials';
 
 /**
- * Gmail read-only scope — identical to legacy
- * (kiagent-ref src/main/connectors/gmail/oauth.ts GMAIL_SCOPES). Only the
- * gmail.readonly scope is requested; this port does not do the combined
+ * Gmail scopes requested at connect time. gmail.readonly matches legacy
+ * (kiagent-ref src/main/connectors/gmail/oauth.ts GMAIL_SCOPES); gmail.send
+ * was added for the unified outbound layer so KIAgent can send mail through
+ * the same connected account. This port does not do the combined
  * identity+gmail single-consent flow the legacy app offered during sign-in.
  */
-export const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
+export const GMAIL_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/gmail.send',
+];
 
 /**
  * Loopback redirect URI. NOT a secret — it is a registered redirect string
@@ -172,6 +176,7 @@ export const googleOAuthProfile: OAuthProfile = {
       expiresAt: expiresAtFrom(body.expires_in),
       clientId,
       clientSecret,
+      scope: body.scope,
     };
   },
 };
@@ -200,5 +205,6 @@ export async function googleRefresher(
     // existing one (matches legacy google-shared/refresh.ts).
     refreshToken: body.refresh_token ?? creds.refreshToken,
     expiresAt: expiresAtFrom(body.expires_in),
+    scope: body.scope ?? creds.scope,
   };
 }

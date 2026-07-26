@@ -115,6 +115,10 @@ export interface Credentials {
   clientId?: string;
   clientSecret?: string;
   expiresAt?: string;
+  /** Space-separated scopes Google reported as granted at exchange/refresh
+   *  time. Absent on blobs written before this field existed — treat
+   *  undefined as "unknown", never as "missing". */
+  scope?: string;
 }
 
 export interface Identity {
