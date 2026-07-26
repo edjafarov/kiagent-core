@@ -17,12 +17,23 @@ function sendHtml(
   status: number,
   html: string,
 ): void {
-  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
+  // These pages carry draft content (recipient/subject/body) under a
+  // token-bearing URL — keep them out of any disk/shared cache and never
+  // leak the URL (hence the token) via a Referer header to a link the page
+  // itself might contain.
+  res.writeHead(status, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Referrer-Policy': 'no-referrer',
+  });
   res.end(html);
 }
 
 function sendJson(res: http.ServerResponse, body: unknown): void {
-  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.writeHead(200, {
+    'Content-Type': 'application/json',
+    'X-Content-Type-Options': 'nosniff',
+  });
   res.end(JSON.stringify(body));
 }
 

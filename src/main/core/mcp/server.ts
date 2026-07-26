@@ -176,6 +176,7 @@ function checkLoopbackRequest(
   const allowedOrigins = new Set([
     `http://${host}:${port}`,
     `http://localhost:${port}`,
+    `http://[::1]:${port}`,
   ]);
   return allowedOrigins.has(originHeader) ? 'ok' : 'bad-origin';
 }

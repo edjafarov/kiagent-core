@@ -382,6 +382,23 @@ describe('startMcp (HTTP transport)', () => {
       expect(body).toBe('ok');
     });
 
+    it('allows the [::1] Host form with its matching Origin too', async () => {
+      // The Host allowlist already accepted `[::1]:<port>` — a browser
+      // reaching the loopback listener via ::1 would GET a page fine (no
+      // Origin header) but its POST (which carries an Origin) was
+      // previously rejected because the Origin allowlist omitted the
+      // `[::1]` form. Both headers are read from the request, not the
+      // actual socket address, so this exercises the check without needing
+      // a real IPv6 connection (see the evil-Host test above for the same
+      // pattern).
+      const { status, body } = await rawRequest(handle.port as number, {
+        Host: `[::1]:${handle.port}`,
+        Origin: `http://[::1]:${handle.port}`,
+      });
+      expect(status).toBe(200);
+      expect(body).toBe('ok');
+    });
+
     it('gates the /mcp route too, not just /healthz — the check runs at the single dispatch entry point', async () => {
       const { status } = await rawRequest(
         handle.port as number,

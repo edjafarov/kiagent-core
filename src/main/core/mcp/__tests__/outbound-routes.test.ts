@@ -131,6 +131,45 @@ describe('outbox confirm routes', () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  it('escapes recipient/subject/body on the review page — a dropped esc() would leak raw <script> here', async () => {
+    const evilDoc: DocumentInput = {
+      externalId: 'INBOX:1:evil',
+      type: 'email.message',
+      title: '<script>alert(1)</script>',
+      markdown: 'hi',
+      metadata: {
+        from: '"><img src=x> <eve@example.com>',
+        to: ['me@example.com'],
+        mailbox: 'INBOX',
+        uid: 2,
+        messageId: 'm2@x',
+      },
+      // Later than the fixture doc's createdAt so search({limit:1}) (ORDER
+      // BY created_at DESC) deterministically returns THIS row.
+      createdAt: '2026-07-02T00:00:00Z',
+    };
+    await store.commit({
+      account: accountId,
+      documents: [evilDoc],
+      cursor: null,
+    });
+    const evilDocId = (await store.read.search({ limit: 1 }))[0].id as string;
+
+    const r = await service.draftReply({
+      documentId: evilDocId,
+      body: '<script>alert(1)</script>',
+    });
+    const html = await (await fetch(r.confirm_url)).text();
+
+    // Escaped forms present...
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(html).toContain('&quot;&gt;&lt;img src=x&gt;');
+    // ...and the raw, unescaped payloads absent — this is the property the
+    // whole confirm surface's XSS safety rests on.
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).not.toContain('"><img src=x>');
+  });
+
   it('POST confirm sends exactly once; the link then dies', async () => {
     const url = await draftUrl();
     const res = await fetch(url, { method: 'POST' });
@@ -198,6 +237,25 @@ describe('outbox confirm routes', () => {
     };
     expect(body.ok).toBe(true);
     expect(body.result.confirm_url).toContain('/outbox/confirm/');
+  });
+
+  // fakeRes() in the unit-level suite below discards writeHead's header
+  // arg entirely — only a real fetch over real HTTP catches a header
+  // regression, so this pins the actual wire response.
+  it('pins response headers: no-store HTML pages, nosniff JSON', async () => {
+    const url = await draftUrl();
+    const page = await fetch(url);
+    expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(page.headers.get('cache-control')).toBe('no-store');
+    expect(page.headers.get('referrer-policy')).toBe('no-referrer');
+
+    const api = await fetch(`${base}/outbox/api`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ op: 'ping' }),
+    });
+    expect(api.headers.get('content-type')).toContain('application/json');
+    expect(api.headers.get('x-content-type-options')).toBe('nosniff');
   });
 });
 
