@@ -13,6 +13,7 @@ import type {
   OutboxStatus,
   Prefs,
   SendIntent,
+  SendResult,
   Sender,
 } from '@shared/contracts';
 
@@ -366,10 +367,28 @@ export function createOutboundService(deps: {
       }
 
       const fail = async (message: string): Promise<ConfirmOutcome> => {
+        // A blank message is still a legal, non-null string — SQLite's
+        // COALESCE(?, error) only falls back to the existing column on a
+        // NULL param, so '' WOULD get written verbatim — but a 'failed' row
+        // with an empty error tells the user nothing actionable, so give it
+        // one.
         const errMsg = message || 'send failed with no error message';
-        await deps.store.outbox.transition(row.id, ['sending'], 'failed', {
-          error: errMsg,
-        });
+        const failMoved = await deps.store.outbox.transition(
+          row.id,
+          ['sending'],
+          'failed',
+          { error: errMsg },
+        );
+        if (!failMoved) {
+          // Unreachable in-process today — nothing else moves a 'sending'
+          // row concurrently — but if it ever does, this is the trace.
+          deps.logSink.log(
+            'outbound',
+            'error',
+            `confirm ${row.id}: 'sending'->'failed' found no matching row (concurrent mutation?)`,
+            { draftId: row.id },
+          );
+        }
         const failedRow = await deps.store.outbox.get(row.id);
         deps.logSink.log(
           'outbound',
@@ -412,21 +431,48 @@ export function createOutboundService(deps: {
         threading: row.threading ?? undefined,
       };
 
+      // Only the send attempt itself is caught here — a throw from this
+      // block means the message was never accepted, so 'failed' is honest.
+      // Everything AFTER a successful send (the DB transition, the re-read,
+      // the log line) sits outside the catch on purpose: once sender.send()
+      // has resolved, the message may already be gone out over the wire, so
+      // a bookkeeping throw here must never be reported as 'failed' (that
+      // would invite the user to re-draft and double-send). If bookkeeping
+      // throws, the row is simply left in 'sending' — the boot-time
+      // recovery sweep classifies it 'delivery_unknown', which is the
+      // honest "it may have sent, go check" outcome for that case.
+      let result: SendResult;
       try {
-        const result = await sender.send(intent);
-        await deps.store.outbox.transition(row.id, ['sending'], 'sent', {
-          sentAt: new Date(nowMs()).toISOString(),
-          externalMessageId: result.externalMessageId ?? null,
-        });
-        const sentRow = await deps.store.outbox.get(row.id);
-        deps.logSink.log('outbound', 'info', `confirm ${row.id} sent`, {
-          draftId: row.id,
-        });
-        return { kind: 'sent', row: sentRow ?? row };
+        result = await sender.send(intent);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return fail(message);
       }
+
+      const sentMoved = await deps.store.outbox.transition(
+        row.id,
+        ['sending'],
+        'sent',
+        {
+          sentAt: new Date(nowMs()).toISOString(),
+          externalMessageId: result?.externalMessageId ?? null,
+        },
+      );
+      if (!sentMoved) {
+        // Unreachable in-process today — nothing else moves a 'sending'
+        // row concurrently — but if it ever does, this is the trace.
+        deps.logSink.log(
+          'outbound',
+          'error',
+          `confirm ${row.id}: 'sending'->'sent' found no matching row (concurrent mutation?)`,
+          { draftId: row.id },
+        );
+      }
+      const sentRow = await deps.store.outbox.get(row.id);
+      deps.logSink.log('outbound', 'info', `confirm ${row.id} sent`, {
+        draftId: row.id,
+      });
+      return { kind: 'sent', row: sentRow ?? row };
     },
 
     async cancelByToken(token) {

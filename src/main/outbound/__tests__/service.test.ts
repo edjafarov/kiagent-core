@@ -17,7 +17,7 @@ import {
   DRAFT_TTL_MS,
   type OutboundService,
 } from '../service';
-import { verifyConfirmToken } from '../tokens';
+import { signConfirmToken, verifyConfirmToken } from '../tokens';
 import { runWithTransport } from '../../core/mcp/transport-context';
 
 const deps = {
@@ -294,6 +294,13 @@ describe('outbound service — drafts', () => {
 
   it('confirmByToken sends and records the external id', async () => {
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    sendMock.mockImplementationOnce(async () => {
+      // The row must already be CAS-owned ('sending') at the moment the
+      // Sender is invoked — never still 'draft'.
+      const inFlight = await store.outbox.get(r.draft_id);
+      expect(inFlight?.status).toBe('sending');
+      return { externalMessageId: '<sent@x>' };
+    });
     const out = await service.confirmByToken(tokenOf(r));
     expect(out.kind).toBe('sent');
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -307,6 +314,16 @@ describe('outbound service — drafts', () => {
     expect(row?.status).toBe('sent');
     expect(row?.externalMessageId).toBe('<sent@x>');
     expect(row?.sentAt).toBeTruthy();
+  });
+
+  it('a sender that resolves with no fields still lands in sent, not failed', async () => {
+    sendMock.mockResolvedValueOnce(undefined);
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const out = await service.confirmByToken(tokenOf(r));
+    expect(out.kind).toBe('sent');
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.status).toBe('sent');
+    expect(row?.externalMessageId).toBeNull();
   });
 
   it('a confirm link is single-use', async () => {
@@ -357,12 +374,46 @@ describe('outbound service — drafts', () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  it('confirmByToken sweeps an expired-but-unswept draft instead of sending it', async () => {
+    // store.outbox.create() only sweeps BEFORE inserting, so a row created
+    // with a past expiresAt survives creation still marked 'draft' — it's
+    // confirmByToken's own expireOverdue() call that must catch it.
+    const secret = await store.outbox.secret();
+    const stale = await store.outbox.create({
+      accountId,
+      kind: 'new',
+      recipientDisplay: 'x@example.com',
+      to: ['x@example.com'],
+      cc: [],
+      subject: 's',
+      bodyMarkdown: 'b',
+      confirmMode: 'review',
+      createdVia: 'mcp-local',
+      expiresAt: new Date(Date.now() - 1_000).toISOString(),
+    });
+    const token = signConfirmToken(secret, stale.id, Date.now() + 60_000);
+    const out = await service.confirmByToken(token);
+    expect(out.kind).toBe('already');
+    const row = await store.outbox.get(stale.id);
+    expect(row?.status).toBe('expired');
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
   it('cancelByToken discards without sending', async () => {
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
     const out = await service.cancelByToken(tokenOf(r));
     expect(out.kind).toBe('cancelled');
     expect(sendMock).not.toHaveBeenCalled();
     expect((await store.outbox.get(r.draft_id))?.status).toBe('discarded');
+  });
+
+  it('cancelByToken after a completed confirm loses the CAS and leaves the sent row alone', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    await service.confirmByToken(tokenOf(r));
+    const out = await service.cancelByToken(tokenOf(r));
+    expect(out.kind).toBe('already');
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.status).toBe('sent');
   });
 
   it('garbage tokens are invalid for both operations', async () => {
