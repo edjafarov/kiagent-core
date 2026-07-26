@@ -82,6 +82,7 @@ function makeFakeClient(mailboxes: FakeMailbox[]) {
           source: Buffer.from(m.messages.get(u)!, 'utf8'),
         }));
     },
+    async append() {},
     async close() {
       state.closed = true;
     },

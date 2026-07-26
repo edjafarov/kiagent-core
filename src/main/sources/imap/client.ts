@@ -113,6 +113,14 @@ export async function connectImapClient(
       }
     },
 
+    async append(
+      path: string,
+      content: Buffer,
+      flags?: string[],
+    ): Promise<void> {
+      await flow.append(path, content, flags ?? ['\\Seen']);
+    },
+
     async close(): Promise<void> {
       await flow.logout().catch(() => flow.close());
     },

@@ -58,6 +58,8 @@ export interface ImapClient {
   listUids(path: string): Promise<number[]>;
   /** Raw RFC822 sources for a bounded set of UIDs. */
   fetchMany(path: string, uids: number[]): Promise<ImapRawMessage[]>;
+  /** APPEND a raw RFC822 message to a mailbox (Sent-copy after SMTP send). */
+  append(path: string, content: Buffer, flags?: string[]): Promise<void>;
   close(): Promise<void>;
 }
 
