@@ -8,6 +8,7 @@ import { merge } from 'webpack-merge';
 import TerserPlugin from 'terser-webpack-plugin';
 import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer';
 import baseConfig from './webpack.config.base';
+import copySharedCssPlugin from './copy-shared-css';
 import oauthEnvDefines from './oauth-env';
 import webpackPaths from './webpack.paths';
 import checkNodeEnv from '../scripts/check-node-env';
@@ -94,6 +95,10 @@ const configuration: webpack.Configuration = {
       'process.type': '"browser"',
       ...oauthEnvDefines(),
     }),
+
+    // Stage @shared/web-ui's CSS next to the compiled bundle — see
+    // copy-shared-css.ts for why loadShellCss() needs this.
+    copySharedCssPlugin(),
   ],
 
   /**

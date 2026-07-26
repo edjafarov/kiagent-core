@@ -7,6 +7,7 @@ import webpack from 'webpack';
 import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer';
 import { merge } from 'webpack-merge';
 import checkNodeEnv from '../scripts/check-node-env';
+import copySharedCssPlugin from './copy-shared-css';
 import oauthEnvDefines from './oauth-env';
 import baseConfig from './webpack.config.base';
 import webpackPaths from './webpack.paths';
@@ -60,6 +61,10 @@ const configuration: webpack.Configuration = {
       'process.type': '"browser"',
       ...oauthEnvDefines(),
     }),
+
+    // Stage @shared/web-ui's CSS next to the compiled bundle — see
+    // copy-shared-css.ts for why loadShellCss() needs this.
+    copySharedCssPlugin(),
   ],
 
   /**
