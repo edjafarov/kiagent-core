@@ -68,6 +68,16 @@ export function resolveGmailReply(
   selfAddresses: string[],
   replyAll: boolean,
 ): GmailReplyResolution {
+  // Gmail accounts also own `attachment` child docs (to-document.ts) parented
+  // to the thread — those never carry thread metadata, so the missing-
+  // metadata error below would send a user re-syncing in an endless loop.
+  // Gate on type first, precisely, mirroring resolve.ts's own type gate.
+  if (doc.type !== 'email.thread') {
+    throw new Error(
+      `draft_reply: document type '${doc.type}' is not replyable in this ` +
+        `build — only 'email.thread' (Gmail) documents are supported so far.`,
+    );
+  }
   const meta = doc.metadata as GmailThreadMeta;
   if (
     !meta.gmailThreadId ||

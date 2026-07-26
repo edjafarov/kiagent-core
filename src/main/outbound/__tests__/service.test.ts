@@ -187,6 +187,52 @@ describe('outbound service — drafts', () => {
     });
   });
 
+  it('draftReply on a gmail attachment child doc rejects with a precise type error, not the re-sync message', async () => {
+    const gmailAccount = await store.createAccount({
+      source: 'gmail',
+      identifier: 'me@gmail.com',
+      config: {},
+    });
+    // Mirrors to-document.ts's `attachment` child docs: parented to a
+    // thread, but never carrying thread metadata (gmailThreadId/messages).
+    await store.commit({
+      account: gmailAccount.id,
+      documents: [
+        {
+          externalId: 'att-1',
+          type: 'attachment',
+          title: 'file.pdf',
+          markdown: null,
+          metadata: {
+            mime: 'application/pdf',
+            filename: 'file.pdf',
+            sizeBytes: 1234,
+            messageId: '<gm1@x>',
+            partId: '0.1',
+            attachmentId: 'abc',
+          },
+          createdAt: '2026-07-02T00:00:00Z',
+        },
+      ],
+      cursor: null,
+    });
+    const hits = await store.read.search({
+      account: gmailAccount.id,
+      type: 'attachment',
+    });
+    const attachmentDocId = hits[0].id as string;
+
+    let caught: Error | undefined;
+    try {
+      await service.draftReply({ documentId: attachmentDocId, body: 'x' });
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught?.message).toMatch(/not replyable/);
+    expect(caught?.message).not.toMatch(/missing thread metadata/);
+    expect(caught?.message).not.toMatch(/re-sync/);
+  });
+
   it('gmail resolver warnings propagate through draftReply to the tool result', async () => {
     const gmailAccount = await store.createAccount({
       source: 'gmail',

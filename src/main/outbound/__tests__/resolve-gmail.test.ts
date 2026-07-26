@@ -62,6 +62,33 @@ describe('resolveGmailReply', () => {
     expect(r.warnings).toEqual([]);
   });
 
+  it('rejects a non-thread gmail document (e.g. an attachment child doc) with a precise error, not the re-sync message', () => {
+    const attachmentDoc = {
+      id: 'd2',
+      accountId: 'a1',
+      type: 'attachment',
+      title: 'file.pdf',
+      markdown: null,
+      metadata: {
+        mime: 'application/pdf',
+        filename: 'file.pdf',
+        sizeBytes: 1234,
+        messageId: '<m1@x>',
+        partId: '0.1',
+        attachmentId: 'abc',
+      },
+    } as unknown as Document;
+    let caught: Error | undefined;
+    try {
+      resolveGmailReply(attachmentDoc, SELF, false);
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught?.message).toMatch(/not replyable/);
+    expect(caught?.message).not.toMatch(/missing thread metadata/);
+    expect(caught?.message).not.toMatch(/re-sync/);
+  });
+
   it('errors loudly on missing metadata and self-only threads', () => {
     expect(() =>
       resolveGmailReply(doc({ gmailThreadId: undefined }), SELF, false),
