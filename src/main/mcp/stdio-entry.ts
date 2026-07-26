@@ -29,6 +29,7 @@ import { buildBuiltinTools } from '../core/mcp/tools';
 import { createRawSqlTools } from '../core/mcp/tools/raw-sql';
 import { openCorpusReadConnection } from '../db/app-db';
 import { openStore, type CoreStore } from '../core/store/store';
+import { createOutboundProxy } from './outbound-proxy';
 
 function parseDbArg(argv: string[]): string | null {
   const i = argv.indexOf('--db');
@@ -113,7 +114,7 @@ async function main(): Promise<void> {
   const logSink = stderrLogSink();
   const rawSql = createRawSqlTools(dbPath);
   const registry = createToolRegistry([
-    ...buildBuiltinTools(store.read),
+    ...buildBuiltinTools(store.read, createOutboundProxy()),
     ...rawSql.tools,
   ]);
   const server = makeMcpServer();
