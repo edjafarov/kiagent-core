@@ -1,0 +1,321 @@
+/**
+ * The outbound layer's hub (spec §2): draft creation grounded in stored
+ * documents, per-account confirmation modes, signed confirm URLs, and (from
+ * Task 7) the confirm/cancel/send pipeline. Everything a tool returns is
+ * JSON-serializable so the stdio sibling can proxy it verbatim.
+ */
+import type {
+  Account,
+  AccountId,
+  ConfirmMode,
+  DocumentId,
+  OutboxRow,
+  OutboxStatus,
+  Prefs,
+  Sender,
+} from '@shared/contracts';
+
+import { currentTransport } from '../core/mcp/transport-context';
+import type { LogSink } from '../core/engine/engine';
+import type { CoreStore } from '../core/store/store';
+import { selfAddressesFor, senderAddressFor } from './identity';
+import { resolveImapReply } from './resolve';
+import { signConfirmToken, verifyConfirmToken } from './tokens';
+
+export const CONFIRM_TTL_MS: Record<ConfirmMode, number> = {
+  review: 30 * 60_000,
+  link: 5 * 60_000,
+};
+export const DRAFT_TTL_MS = 24 * 60 * 60_000;
+
+export interface DraftToolResult {
+  draft_id: string;
+  mode: ConfirmMode;
+  recipient_display: string;
+  confirm_url: string;
+  to?: string[]; // link mode only
+  cc?: string[]; // link mode only
+  subject?: string | null; // link mode only
+  body?: string; // link mode only
+  warnings: string[];
+  instruction: string;
+}
+
+export interface OutboxListItem {
+  draft_id: string;
+  status: OutboxStatus;
+  recipient_display: string;
+  subject: string | null;
+  created_at: string;
+  error: string | null;
+  confirm_url: string | null; // re-issued for status 'draft', else null
+}
+
+/** The slice the MCP tools (and the stdio proxy) need — JSON-serializable
+ *  args and results on every method. */
+export interface OutboundToolApi {
+  draftReply(a: {
+    documentId: string;
+    body: string;
+    replyAll?: boolean;
+  }): Promise<DraftToolResult>;
+  draftMessage(a: {
+    accountId: string;
+    to: string[];
+    subject: string;
+    body: string;
+  }): Promise<DraftToolResult>;
+  listOutbox(a: { limit?: number }): Promise<OutboxListItem[]>;
+}
+
+export type PeekResult =
+  | { kind: 'ok'; row: OutboxRow; mode: ConfirmMode }
+  | { kind: 'gone'; row: OutboxRow } // any non-draft status
+  | { kind: 'invalid' };
+
+export type ConfirmOutcome =
+  | { kind: 'sent'; row: OutboxRow }
+  | { kind: 'cancelled'; row: OutboxRow }
+  | { kind: 'failed'; row: OutboxRow; error: string }
+  | { kind: 'already'; row: OutboxRow } // link raced/reused
+  | { kind: 'invalid' };
+
+export interface OutboundService extends OutboundToolApi {
+  peekByToken(token: string): Promise<PeekResult>;
+  confirmByToken(token: string): Promise<ConfirmOutcome>; // Task 7 fills in
+  cancelByToken(token: string): Promise<ConfirmOutcome>; // Task 7 fills in
+  setBaseUrl(url: string): void;
+}
+
+const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function createOutboundService(deps: {
+  store: CoreStore;
+  prefs: Prefs;
+  senders: Map<string, Sender>;
+  logSink: LogSink;
+  nowMs?: () => number; // injectable clock for tests; default Date.now
+}): OutboundService {
+  const nowMs = deps.nowMs ?? (() => Date.now());
+  let baseUrl: string | null = null;
+
+  // A remote MCP session shares this registry but cannot reach 127.0.0.1
+  // confirm URLs — refuse before any store access. Phase 4 (remote confirm)
+  // replaces this with tunnel-hosted URLs.
+  const assertLocal = (): void => {
+    if (currentTransport() === 'remote') {
+      throw new Error(
+        'Outbound drafting is local-only for now — remote confirmation ' +
+          'arrives in a later release. Use an MCP client on the machine ' +
+          'running KIAgent.',
+      );
+    }
+  };
+
+  const modeFor = (account: Account): ConfirmMode => {
+    const cfg = (account.config as { outbound?: { mode?: unknown } }).outbound;
+    if (cfg?.mode === 'review' || cfg?.mode === 'link') return cfg.mode;
+    // Optional access on purpose: partial Prefs fakes (tests) and pre-Task-9
+    // pref files have no `outbound` slice yet.
+    const p = deps.prefs.get() as {
+      outbound?: { defaultMode?: ConfirmMode };
+    };
+    return p.outbound?.defaultMode ?? 'review';
+  };
+
+  const accountFor = async (id: string): Promise<Account> => {
+    const account = await deps.store.account(id as AccountId);
+    if (!account) throw new Error(`outbound: unknown account '${id}'`);
+    if (!deps.senders.has(account.source)) {
+      throw new Error(
+        `sending from '${account.source}' accounts is not supported yet — ` +
+          `supported: ${[...deps.senders.keys()].join(', ')}`,
+      );
+    }
+    return account;
+  };
+
+  const confirmUrl = async (
+    draftId: string,
+    mode: ConfirmMode,
+  ): Promise<string> => {
+    if (!baseUrl) throw new Error('outbound: server not ready');
+    const secret = await deps.store.outbox.secret();
+    const token = signConfirmToken(
+      secret,
+      draftId,
+      nowMs() + CONFIRM_TTL_MS[mode],
+    );
+    return `${baseUrl}/outbox/confirm/${token}`;
+  };
+
+  const toolResult = async (
+    row: OutboxRow,
+    warnings: string[],
+  ): Promise<DraftToolResult> => {
+    const mode = row.confirmMode;
+    const url = await confirmUrl(row.id, mode);
+    if (mode === 'review') {
+      return {
+        draft_id: row.id,
+        mode,
+        recipient_display: row.recipientDisplay,
+        confirm_url: url,
+        warnings,
+        instruction:
+          `Draft created — nothing has been sent. Show the user this link ` +
+          `to review and send the message: ${url} (it expires in 30 ` +
+          `minutes; if it expires, call list_outbox for a fresh one).`,
+      };
+    }
+    return {
+      draft_id: row.id,
+      mode,
+      recipient_display: row.recipientDisplay,
+      confirm_url: url,
+      to: row.to,
+      cc: row.cc,
+      subject: row.subject,
+      body: row.bodyMarkdown,
+      warnings,
+      instruction:
+        `Draft created — nothing has been sent. Render the draft exactly ` +
+        `as returned (recipient, subject, body) for the user to review in ` +
+        `chat, then present this link as the send action: ${url}. It opens ` +
+        `a page with a Send button; the link expires in 5 minutes — call ` +
+        `list_outbox for a fresh one if needed.`,
+    };
+  };
+
+  const expiresAt = (): string =>
+    new Date(nowMs() + DRAFT_TTL_MS).toISOString();
+
+  return {
+    setBaseUrl(url) {
+      baseUrl = url;
+    },
+
+    async draftReply({ documentId, body, replyAll }) {
+      assertLocal();
+      const doc = await deps.store.read.document(documentId as DocumentId);
+      if (!doc)
+        throw new Error(`draft_reply: unknown document '${documentId}'`);
+      const account = await accountFor(doc.accountId as string);
+      const mode = modeFor(account);
+
+      // Universality hook (spec §6): a source that wrote metadata.outbound
+      // owns its reply addressing — the ref is opaque and round-trips to
+      // that source's Sender verbatim. Bundled email resolution otherwise.
+      const outboundMeta = doc.metadata.outbound as
+        | { ref?: unknown; display?: unknown }
+        | undefined;
+      let row: OutboxRow;
+      let warnings: string[] = [];
+      if (outboundMeta && typeof outboundMeta.display === 'string') {
+        row = await deps.store.outbox.create({
+          accountId: account.id,
+          kind: 'reply',
+          replyToDocumentId: doc.id,
+          outboundRef: outboundMeta.ref,
+          recipientDisplay: outboundMeta.display,
+          to: [],
+          cc: [],
+          subject: null,
+          bodyMarkdown: body,
+          confirmMode: mode,
+          createdVia: 'mcp-local',
+          expiresAt: expiresAt(),
+        });
+      } else {
+        const r = resolveImapReply(
+          doc,
+          selfAddressesFor(account),
+          replyAll === true,
+        );
+        warnings = r.warnings;
+        row = await deps.store.outbox.create({
+          accountId: account.id,
+          kind: 'reply',
+          replyToDocumentId: doc.id,
+          recipientDisplay: r.recipientDisplay,
+          to: r.to,
+          cc: r.cc,
+          subject: r.subject,
+          bodyMarkdown: body,
+          threading: r.threading,
+          confirmMode: mode,
+          createdVia: 'mcp-local',
+          expiresAt: expiresAt(),
+        });
+      }
+      return toolResult(row, warnings);
+    },
+
+    async draftMessage({ accountId, to, subject, body }) {
+      assertLocal();
+      const account = await accountFor(accountId);
+      senderAddressFor(account); // fail fast when no From address resolves
+      const bad = to.filter((t) => !EMAIL_RX.test(t.trim()));
+      if (to.length === 0 || bad.length > 0) {
+        throw new Error(
+          `draft_message: invalid recipient address(es): ${bad.join(', ') || '(none given)'}`,
+        );
+      }
+      const row = await deps.store.outbox.create({
+        accountId: account.id,
+        kind: 'new',
+        recipientDisplay: to.join(', '),
+        to,
+        cc: [],
+        subject,
+        bodyMarkdown: body,
+        confirmMode: modeFor(account),
+        createdVia: 'mcp-local',
+        expiresAt: expiresAt(),
+      });
+      return toolResult(row, []);
+    },
+
+    async listOutbox({ limit }) {
+      assertLocal();
+      await deps.store.outbox.expireOverdue();
+      const rows = await deps.store.outbox.listRecent(limit ?? 20);
+      const out: OutboxListItem[] = [];
+      for (const row of rows) {
+        let url: string | null = null;
+        if (row.status === 'draft') {
+          url = await confirmUrl(row.id, row.confirmMode);
+        }
+        out.push({
+          draft_id: row.id,
+          status: row.status,
+          recipient_display: row.recipientDisplay,
+          subject: row.subject,
+          created_at: row.createdAt,
+          error: row.error,
+          confirm_url: url,
+        });
+      }
+      return out;
+    },
+
+    async peekByToken(token) {
+      const secret = await deps.store.outbox.secret();
+      const parsed = verifyConfirmToken(secret, token, nowMs());
+      if (!parsed) return { kind: 'invalid' };
+      await deps.store.outbox.expireOverdue();
+      const row = await deps.store.outbox.get(parsed.draftId);
+      if (!row) return { kind: 'invalid' };
+      if (row.status !== 'draft') return { kind: 'gone', row };
+      return { kind: 'ok', row, mode: row.confirmMode };
+    },
+
+    async confirmByToken() {
+      throw new Error('not implemented'); // Task 7
+    },
+
+    async cancelByToken() {
+      throw new Error('not implemented'); // Task 7
+    },
+  };
+}
