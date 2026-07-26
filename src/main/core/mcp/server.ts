@@ -23,6 +23,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
 import type { McpActivityRecord, McpTool, Query } from '@shared/contracts';
+import type { OutboundService } from '@main/outbound/service';
+import { createOutboundRoutes } from '@main/outbound/routes';
 
 import type { LogSink } from '../engine/engine';
 import {
@@ -37,6 +39,7 @@ import { attachToolHandlers, createToolRegistry } from './registry';
 import { attachResourceHandlers } from './resources';
 import { buildBuiltinTools } from './tools';
 import { createRawSqlTools } from './tools/raw-sql';
+import { runWithTransport } from './transport-context';
 
 export interface McpDeps {
   query: Query;
@@ -52,6 +55,10 @@ export interface McpDeps {
    *  startMcp too, bind whatever candidate port is free, and must never
    *  rewrite the developer's real ~/.claude.json et al. */
   reconcileClientConfigs?: boolean;
+  /** When present, wires the draft_reply/draft_message/list_outbox tools to
+   *  a real backend AND turns on the /outbox/* HTTP routes (Task 8) — a
+   *  stdio-only sibling process has neither. */
+  outbound?: OutboundService;
 }
 
 export interface McpServerHandle {
@@ -222,9 +229,12 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   const dbPath = path.join(deps.dataDir, 'kiagent.db');
   const rawSql = createRawSqlTools(dbPath);
   const registry = createToolRegistry([
-    ...buildBuiltinTools(deps.query),
+    ...buildBuiltinTools(deps.query, deps.outbound),
     ...rawSql.tools,
   ]);
+  const outboundRoutes = deps.outbound
+    ? createOutboundRoutes(deps.outbound)
+    : null;
 
   // A reusable session dispatcher: owns ONE `mcp-session-id`-keyed pool and its
   // own idle-sweep timer, but closes over the SAME live registry/query/logSink/
@@ -378,6 +388,16 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       }
 
       const url = new URL(req.url ?? '/', 'http://x');
+
+      if (url.pathname.startsWith('/outbox/')) {
+        if (outboundRoutes && (await outboundRoutes.handle(req, res, url))) {
+          return;
+        }
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
       if (url.pathname !== '/mcp') {
         res.writeHead(404);
         res.end();
@@ -408,10 +428,25 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   const httpServer = http.createServer(handler);
   const port = await listenOnFirstFree(httpServer, HOST, PORT_CANDIDATES);
   deps.logSink.log('mcp', 'info', `listening on http://${HOST}:${port}/mcp`);
+  // Confirm URLs the service mints from here on point at THIS boot's actual
+  // port (PORT_CANDIDATES means it isn't always the first one) — must run
+  // before any tool call can mint a link, so right after listen, before
+  // registerTool()/createMcpHandler() make anything reachable.
+  deps.outbound?.setBaseUrl(`http://${HOST}:${port}`);
 
   // Lazily created on first createMcpHandler() call; disposed in stop().
   let productDispatcher: ReturnType<typeof createSessionDispatcher> | null =
     null;
+  // Memoized alongside productDispatcher itself — createMcpHandler() must
+  // return the SAME function reference on repeated calls (a product build
+  // mounts it once on its own router), so the runWithTransport wrapper below
+  // is built exactly once too, not as a fresh closure per call.
+  type ProductHandler = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    parsedBody?: unknown,
+  ) => Promise<void>;
+  let productHandler: ProductHandler | null = null;
 
   // Built once: the launch descriptor + client registry used by clients()/
   // connectClient()/disconnectClient(). `__dirname` resolves to wherever the
@@ -460,7 +495,22 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       // handler sharing one product session pool — the product mounts it on
       // its remote transport and it serves many sessions + reconnects.
       if (!productDispatcher) productDispatcher = createSessionDispatcher();
-      return productDispatcher.handleMcp;
+      // Every request this handler ever serves is a REMOTE MCP connection —
+      // tag it via the ALS seam so anything deep in the call stack (the
+      // outbound service's assertReady()) can tell loopback and remote
+      // sessions apart without a flag threaded through every signature. The
+      // loopback listener above never calls runWithTransport, so its calls
+      // read 'local' (currentTransport()'s default). Memoized alongside
+      // productDispatcher so repeated calls return the SAME function
+      // reference (a product build mounts it once on its own router).
+      if (!productHandler) {
+        const dispatcher = productDispatcher;
+        productHandler = (req, res, parsedBody) =>
+          runWithTransport('remote', () =>
+            dispatcher.handleMcp(req, res, parsedBody),
+          );
+      }
+      return productHandler;
     },
 
     async clients(): Promise<
