@@ -87,6 +87,9 @@ export interface OutboundService extends OutboundToolApi {
   confirmByToken(token: string): Promise<ConfirmOutcome>; // Task 7 fills in
   cancelByToken(token: string): Promise<ConfirmOutcome>; // Task 7 fills in
   setBaseUrl(url: string): void;
+  /** Product pushes the public device base URL (https://<device-subdomain>)
+   *  when the remote HTTPS server is up, null when it goes down. */
+  setRemoteBaseUrl(url: string | null): void;
 }
 
 export function createOutboundService(deps: {
@@ -103,22 +106,35 @@ export function createOutboundService(deps: {
   // versa. Don't assume the two are the same clock.
   const nowMs = deps.nowMs ?? (() => Date.now());
   let baseUrl: string | null = null;
+  let remoteBaseUrl: string | null = null;
 
-  // A remote MCP session shares this registry but cannot reach 127.0.0.1
-  // confirm URLs — refuse before any store access. Phase 4 (remote confirm)
-  // replaces this with tunnel-hosted URLs. Also folds in the "server not
-  // wired up yet" check so a cold service can't leave an orphan draft row
-  // behind before failing on the confirm-URL mint.
-  const assertReady = (): void => {
+  // Picks the confirm-URL origin for the CURRENT call's transport, at mint
+  // time — so a draft created locally but listed via list_outbox on the
+  // remote transport gets a remote URL (the user is on their phone), and
+  // vice versa. Also doubles as the readiness gate: called first thing in
+  // every tool method (via assertReady) so a cold/unset base refuses before
+  // any store access, never leaving an orphan draft row behind.
+  const baseFor = (): string => {
     if (currentTransport() === 'remote') {
-      throw new Error(
-        'Outbound drafting is local-only for now — remote confirmation ' +
-          'arrives in a later release. Use an MCP client on the machine ' +
-          'running KIAgent.',
-      );
+      if (!remoteBaseUrl) {
+        throw new Error(
+          'Outbound drafting over the remote connection needs remote ' +
+            'access fully set up on the KIAgent machine — or use an MCP ' +
+            'client on that machine directly.',
+        );
+      }
+      return remoteBaseUrl;
     }
     if (!baseUrl) throw new Error('outbound: server not ready');
+    return baseUrl;
   };
+
+  const assertReady = (): void => {
+    baseFor();
+  };
+
+  const createdViaNow = (): 'mcp-local' | 'mcp-remote' =>
+    currentTransport() === 'remote' ? 'mcp-remote' : 'mcp-local';
 
   const modeFor = (account: Account): ConfirmMode => {
     const cfg = (account.config as { outbound?: { mode?: unknown } }).outbound;
@@ -151,13 +167,13 @@ export function createOutboundService(deps: {
     draftId: string,
     mode: ConfirmMode,
   ): string => {
-    if (!baseUrl) throw new Error('outbound: server not ready');
+    const base = baseFor();
     const token = signConfirmToken(
       secret,
       draftId,
       nowMs() + CONFIRM_TTL_MS[mode],
     );
-    return `${baseUrl}/outbox/confirm/${token}`;
+    return `${base}/outbox/confirm/${token}`;
   };
 
   const confirmUrl = async (
@@ -216,6 +232,10 @@ export function createOutboundService(deps: {
       baseUrl = url;
     },
 
+    setRemoteBaseUrl(url) {
+      remoteBaseUrl = url;
+    },
+
     async draftReply({ documentId, body, replyAll }) {
       assertReady();
       const doc = await deps.store.read.document(documentId as DocumentId);
@@ -244,7 +264,7 @@ export function createOutboundService(deps: {
           subject: null,
           bodyMarkdown: body,
           confirmMode: mode,
-          createdVia: 'mcp-local',
+          createdVia: createdViaNow(),
           expiresAt: expiresAt(),
         });
       } else {
@@ -265,7 +285,7 @@ export function createOutboundService(deps: {
           bodyMarkdown: body,
           threading: r.threading,
           confirmMode: mode,
-          createdVia: 'mcp-local',
+          createdVia: createdViaNow(),
           expiresAt: expiresAt(),
         });
       }
@@ -292,7 +312,7 @@ export function createOutboundService(deps: {
         subject,
         bodyMarkdown: body,
         confirmMode: modeFor(account),
-        createdVia: 'mcp-local',
+        createdVia: createdViaNow(),
         expiresAt: expiresAt(),
       });
       return toolResult(row, []);

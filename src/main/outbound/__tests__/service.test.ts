@@ -229,10 +229,10 @@ describe('outbound service — drafts', () => {
       runWithTransport('remote', () =>
         service.draftReply({ documentId: docId, body: 'x' }),
       ),
-    ).rejects.toThrow(/local-only/i);
+    ).rejects.toThrow(/remote access fully set up/i);
     await expect(
       runWithTransport('remote', () => service.listOutbox({})),
-    ).rejects.toThrow(/local-only/i);
+    ).rejects.toThrow(/remote access fully set up/i);
     expect((await service.listOutbox({})).length).toBe(before.length);
   });
 
@@ -430,5 +430,53 @@ describe('outbound service — drafts', () => {
   it('garbage tokens are invalid for both operations', async () => {
     expect((await service.confirmByToken('nope')).kind).toBe('invalid');
     expect((await service.cancelByToken('nope')).kind).toBe('invalid');
+  });
+
+  describe('remote transport', () => {
+    const REMOTE = 'https://ig6uj5qu.localkiagent.com';
+
+    it('refuses remote drafting until a remote base url is pushed', async () => {
+      await expect(
+        runWithTransport('remote', () =>
+          service.draftReply({ documentId: docId, body: 'Yo' }),
+        ),
+      ).rejects.toThrow(/remote access fully set up/i);
+    });
+
+    it('mints remote urls and tags createdVia once the base url is set', async () => {
+      service.setRemoteBaseUrl(REMOTE);
+      const r = await runWithTransport('remote', () =>
+        service.draftReply({ documentId: docId, body: 'Yo' }),
+      );
+      expect(r.confirm_url).toMatch(
+        /^https:\/\/ig6uj5qu\.localkiagent\.com\/outbox\/confirm\//,
+      );
+      expect((await store.outbox.get(r.draft_id))?.createdVia).toBe(
+        'mcp-remote',
+      );
+    });
+
+    it('list_outbox re-links per the CURRENT transport', async () => {
+      service.setRemoteBaseUrl(REMOTE);
+      const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+      expect(r.confirm_url).toContain('http://127.0.0.1');
+      const remoteListing = await runWithTransport('remote', () =>
+        service.listOutbox({}),
+      );
+      const item = remoteListing.find((x) => x.draft_id === r.draft_id);
+      expect(item?.confirm_url).toContain('ig6uj5qu.localkiagent.com');
+      const localListing = await service.listOutbox({});
+      expect(
+        localListing.find((x) => x.draft_id === r.draft_id)?.confirm_url,
+      ).toContain('http://127.0.0.1');
+    });
+
+    it('clearing the remote base restores the refusal', async () => {
+      service.setRemoteBaseUrl(REMOTE);
+      service.setRemoteBaseUrl(null);
+      await expect(
+        runWithTransport('remote', () => service.listOutbox({})),
+      ).rejects.toThrow(/remote access fully set up/i);
+    });
   });
 });
