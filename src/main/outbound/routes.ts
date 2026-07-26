@@ -134,107 +134,170 @@ function invalidPage(): string {
   );
 }
 
+type PageResult = { status: number; html: string };
+
+// Shared per-path handlers (Task 2): both `handle` (loopback) and
+// `handleRemote` (remote HTTPS tunnel) dispatch into these so the
+// pages/outcomes/status codes stay byte-identical across transports —
+// the only difference between the two entry points is which paths are
+// allowlisted and how the request URL gets parsed.
+async function getConfirm(
+  outbound: OutboundService,
+  token: string,
+): Promise<PageResult> {
+  try {
+    const peek = await outbound.peekByToken(token);
+    if (peek.kind === 'invalid') return { status: 404, html: invalidPage() };
+    if (peek.kind === 'gone') return { status: 200, html: gonePage(peek.row) };
+    const confirmPath = `/outbox/confirm/${token}`;
+    const cancelPath = `/outbox/cancel/${token}`;
+    return {
+      status: 200,
+      html:
+        peek.mode === 'review'
+          ? reviewPage(peek.row, { confirmPath, cancelPath })
+          : linkPage(peek.row, { confirmPath }),
+    };
+  } catch {
+    return {
+      status: 500,
+      html: resultPage(
+        'Something went wrong',
+        'This link could not be opened right now. Nothing was sent — try again in a moment.',
+      ),
+    };
+  }
+}
+
+async function postConfirm(
+  outbound: OutboundService,
+  token: string,
+): Promise<PageResult> {
+  try {
+    const out = await outbound.confirmByToken(token);
+    if (out.kind === 'invalid') return { status: 404, html: invalidPage() };
+    if (out.kind === 'sent')
+      return {
+        status: 200,
+        html: resultPage(
+          'Message sent',
+          `Sent to ${out.row.recipientDisplay}${sentWhen(out.row)}.`,
+        ),
+      };
+    // 'failed' and 'already' (a raced/reused link) both render the same
+    // terminal page as any other non-draft row.
+    return { status: 200, html: gonePage(out.row) };
+  } catch {
+    // This catch can't tell a pre-send throw (secret(), expireOverdue,
+    // outbox.get — nothing sent yet) apart from a post-send bookkeeping
+    // throw (sender.send() already resolved — the message may be on the
+    // wire per confirmByToken's own comment). Since both land here
+    // indistinguishably, the copy below stays conservative for BOTH cases
+    // rather than risk ever reading "failed to send" for a message that
+    // actually went out. Honest unknown-state copy only; the boot-time
+    // sweep classifies the row itself for the post-send case.
+    return {
+      status: 500,
+      html: resultPage(
+        'Status unknown',
+        'Something went wrong after this was submitted. It may have ' +
+          'already been sent — check your Sent folder before asking ' +
+          'for a new draft.',
+      ),
+    };
+  }
+}
+
+async function postCancel(
+  outbound: OutboundService,
+  token: string,
+): Promise<PageResult> {
+  try {
+    const out = await outbound.cancelByToken(token);
+    if (out.kind === 'invalid') return { status: 404, html: invalidPage() };
+    if (out.kind === 'cancelled')
+      return {
+        status: 200,
+        html: resultPage('Cancelled', 'This draft was cancelled.'),
+      };
+    return { status: 200, html: gonePage(out.row) };
+  } catch {
+    return {
+      status: 500,
+      html: resultPage(
+        'Status unknown',
+        'Something went wrong while cancelling. Check list_outbox for this draft’s current status.',
+      ),
+    };
+  }
+}
+
+type OutboxMatch =
+  | { kind: 'get-confirm'; token: string }
+  | { kind: 'post-confirm'; token: string }
+  | { kind: 'post-cancel'; token: string };
+
+// Routing decision for the THREE token-gated confirm/cancel routes shared by
+// both transports — deliberately a PLAIN (non-async) function. `handle` must
+// stay synchronous right up to the point it actually starts one of the
+// per-path handlers below, because the /outbox/api branch's readJsonBody
+// attaches its 'data' listener synchronously too (the 64 KB-cap unit test
+// emits chunks on a bare EventEmitter immediately after calling handle(),
+// with no listener-attachment delay tolerated) — routing this match through
+// so much as one `await` would push that attach past a microtask tick and
+// silently drop that test's emitted chunks. Returns null for anything else
+// (notably `/outbox/api`, which only `handle` — the loopback entry point —
+// serves) so each caller decides what a non-match means (loopback falls
+// through to the JSON dispatcher; remote just 404s).
+function matchOutboxPage(
+  method: string | undefined,
+  pathname: string,
+): OutboxMatch | null {
+  const confirm = /^\/outbox\/confirm\/([^/]+)$/.exec(pathname);
+  if (confirm && method === 'GET')
+    return { kind: 'get-confirm', token: confirm[1] };
+  if (confirm && method === 'POST')
+    return { kind: 'post-confirm', token: confirm[1] };
+
+  const cancel = /^\/outbox\/cancel\/([^/]+)$/.exec(pathname);
+  if (cancel && method === 'POST')
+    return { kind: 'post-cancel', token: cancel[1] };
+
+  return null;
+}
+
+function runOutboxMatch(
+  outbound: OutboundService,
+  match: OutboxMatch,
+): Promise<PageResult> {
+  if (match.kind === 'get-confirm') return getConfirm(outbound, match.token);
+  if (match.kind === 'post-confirm') return postConfirm(outbound, match.token);
+  return postCancel(outbound, match.token);
+}
+
 export function createOutboundRoutes(outbound: OutboundService): {
   handle(
     req: http.IncomingMessage,
     res: http.ServerResponse,
     url: URL,
   ): Promise<boolean>;
+  /** Remote-transport entry: serves ONLY GET/POST /outbox/confirm/<token>
+   *  and POST /outbox/cancel/<token>. Everything else under /outbox/ —
+   *  including /outbox/api — returns false (caller 404s). No Host/Origin
+   *  loopback check: the remote server has real TLS Host semantics and the
+   *  pages are HMAC-token-gated. Parses the path itself since the remote
+   *  Router hands over a raw request with no pre-parsed URL. */
+  handleRemote(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<boolean>;
 } {
   return {
     async handle(req, res, url) {
-      const confirm = /^\/outbox\/confirm\/([^/]+)$/.exec(url.pathname);
-      const cancel = /^\/outbox\/cancel\/([^/]+)$/.exec(url.pathname);
-
-      if (confirm && req.method === 'GET') {
-        try {
-          const peek = await outbound.peekByToken(confirm[1]);
-          if (peek.kind === 'invalid') sendHtml(res, 404, invalidPage());
-          else if (peek.kind === 'gone') sendHtml(res, 200, gonePage(peek.row));
-          else {
-            const confirmPath = `/outbox/confirm/${confirm[1]}`;
-            const cancelPath = `/outbox/cancel/${confirm[1]}`;
-            sendHtml(
-              res,
-              200,
-              peek.mode === 'review'
-                ? reviewPage(peek.row, { confirmPath, cancelPath })
-                : linkPage(peek.row, { confirmPath }),
-            );
-          }
-        } catch {
-          sendHtml(
-            res,
-            500,
-            resultPage(
-              'Something went wrong',
-              'This link could not be opened right now. Nothing was sent — try again in a moment.',
-            ),
-          );
-        }
-        return true;
-      }
-
-      if (confirm && req.method === 'POST') {
-        try {
-          const out = await outbound.confirmByToken(confirm[1]);
-          if (out.kind === 'invalid') sendHtml(res, 404, invalidPage());
-          else if (out.kind === 'sent')
-            sendHtml(
-              res,
-              200,
-              resultPage(
-                'Message sent',
-                `Sent to ${out.row.recipientDisplay}${sentWhen(out.row)}.`,
-              ),
-            );
-          else if (out.kind === 'failed') sendHtml(res, 200, gonePage(out.row));
-          else sendHtml(res, 200, gonePage(out.row));
-        } catch {
-          // This catch can't tell a pre-send throw (secret(), expireOverdue,
-          // outbox.get — nothing sent yet) apart from a post-send bookkeeping
-          // throw (sender.send() already resolved — the message may be on
-          // the wire per confirmByToken's own comment). Since both land
-          // here indistinguishably, the copy below stays conservative for
-          // BOTH cases rather than risk ever reading "failed to send" for a
-          // message that actually went out. Honest unknown-state copy only;
-          // the boot-time sweep classifies the row itself for the post-send
-          // case.
-          sendHtml(
-            res,
-            500,
-            resultPage(
-              'Status unknown',
-              'Something went wrong after this was submitted. It may have ' +
-                'already been sent — check your Sent folder before asking ' +
-                'for a new draft.',
-            ),
-          );
-        }
-        return true;
-      }
-
-      if (cancel && req.method === 'POST') {
-        try {
-          const out = await outbound.cancelByToken(cancel[1]);
-          if (out.kind === 'invalid') sendHtml(res, 404, invalidPage());
-          else if (out.kind === 'cancelled')
-            sendHtml(
-              res,
-              200,
-              resultPage('Cancelled', 'This draft was cancelled.'),
-            );
-          else sendHtml(res, 200, gonePage(out.row));
-        } catch {
-          sendHtml(
-            res,
-            500,
-            resultPage(
-              'Status unknown',
-              'Something went wrong while cancelling. Check list_outbox for this draft’s current status.',
-            ),
-          );
-        }
+      const match = matchOutboxPage(req.method, url.pathname);
+      if (match) {
+        const page = await runOutboxMatch(outbound, match);
+        sendHtml(res, page.status, page.html);
         return true;
       }
 
@@ -289,6 +352,15 @@ export function createOutboundRoutes(outbound: OutboundService): {
       }
 
       return false;
+    },
+
+    async handleRemote(req, res) {
+      const url = new URL(req.url ?? '/', 'http://x');
+      const match = matchOutboxPage(req.method, url.pathname);
+      if (!match) return false;
+      const page = await runOutboxMatch(outbound, match);
+      sendHtml(res, page.status, page.html);
+      return true;
     },
   };
 }

@@ -264,6 +264,68 @@ describe('outbox confirm routes', () => {
   });
 });
 
+// handleRemote is the second entry point (Task 2 of the remote-confirm
+// phase): the same confirm/cancel pages served over the remote HTTPS
+// tunnel, with NO Host/Origin loopback check (the remote server has real
+// TLS Host semantics and the pages are HMAC-token-gated) — but /outbox/api
+// must stay unreachable since it mints drafts with no token at all. This
+// suite drives handleRemote through its own throwaway plain-HTTP server,
+// reusing the outer scope's `service`/`store`/`docId` fixtures.
+describe('handleRemote', () => {
+  let remoteBase: string;
+  let remoteSrv: http.Server;
+
+  beforeAll(async () => {
+    const routes = createOutboundRoutes(service);
+    remoteSrv = http.createServer((req, res) => {
+      void routes.handleRemote(req, res).then((handled) => {
+        if (!handled) {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+    });
+    await new Promise<void>((r) => remoteSrv.listen(0, '127.0.0.1', r));
+    const addr = remoteSrv.address() as AddressInfo;
+    remoteBase = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(() => remoteSrv.close());
+
+  it('serves the review page and confirms via POST', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Remote!' });
+    const token = r.confirm_url!.split('/outbox/confirm/')[1];
+    const page = await fetch(`${remoteBase}/outbox/confirm/${token}`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain('Remote!');
+    const sent = await fetch(`${remoteBase}/outbox/confirm/${token}`, {
+      method: 'POST',
+    });
+    expect(sent.status).toBe(200);
+    expect((await store.outbox.get(r.draft_id))?.status).toBe('sent');
+  });
+
+  it('never exposes /outbox/api remotely', async () => {
+    const res = await fetch(`${remoteBase}/outbox/api`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ op: 'ping' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('cancel works and unknown outbox paths 404', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'bye' });
+    const token = r.confirm_url!.split('/outbox/confirm/')[1];
+    const cancelled = await fetch(`${remoteBase}/outbox/cancel/${token}`, {
+      method: 'POST',
+    });
+    expect(cancelled.status).toBe(200);
+    expect((await store.outbox.get(r.draft_id))?.status).toBe('discarded');
+    expect((await fetch(`${remoteBase}/outbox/bogus`)).status).toBe(404);
+  });
+});
+
 // Confirms the ALS transport tag server.ts wires through createMcpHandler()
 // actually reaches the outbound service — not just by reading the code, but
 // by driving a real tools/call for draft_reply over BOTH transports sharing
@@ -297,7 +359,7 @@ describe('createMcpHandler() tags every call transport=remote', () => {
     return client;
   }
 
-  it('a draft_reply over the product/remote handler is refused local-only', async () => {
+  it('a draft_reply over the product/remote handler is refused while no remote base url is set', async () => {
     const client = await connect(productUrl);
     const result = await client.callTool({
       name: 'draft_reply',
@@ -305,7 +367,7 @@ describe('createMcpHandler() tags every call transport=remote', () => {
     });
     expect(result.isError).toBe(true);
     const text = (result.content as Array<{ text?: string }>)[0]?.text ?? '';
-    expect(text).toMatch(/local-only|running kiagent/i);
+    expect(text).toMatch(/remote access fully set up/i);
   });
 
   it('the SAME draft_reply over loopback (local) succeeds', async () => {
