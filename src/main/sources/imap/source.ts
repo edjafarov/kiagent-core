@@ -291,6 +291,9 @@ export function createImapSource(
         metadata: {
           from: item.from,
           to: item.to,
+          cc: item.cc,
+          replyTo: item.replyTo,
+          references: item.references,
           date: item.date,
           mailbox: item.mailbox,
           uid: item.uid,

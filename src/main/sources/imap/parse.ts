@@ -9,9 +9,10 @@ import { stripAngle } from './ids';
  * Buffer in is a fixture ImapMessageItem out, so this is unit-tested with
  * fixtures rather than a live server.
  *
- * Mirrors kiagent-ref/src/main/connectors/imap/message-parser.ts, minus the
- * threading fields (references/inReplyTo/attachments) that only mattered for
- * legacy's thread rebuild.
+ * Mirrors kiagent-ref/src/main/connectors/imap/message-parser.ts, minus
+ * attachments (which only mattered for legacy's thread rebuild) — the
+ * threading fields (cc/replyTo/references) ARE preserved, for reply
+ * resolution (see src/main/outbound/resolve.ts).
  */
 export async function parseImapMessage(
   raw: ImapRawMessage,
@@ -30,6 +31,15 @@ export async function parseImapMessage(
 
   const from = addrText(mail.from);
   const to = addrList(mail.to);
+  const cc = addrList(mail.cc);
+  const replyTo = addrText(mail.replyTo) || null;
+  const references = (
+    Array.isArray(mail.references)
+      ? mail.references
+      : mail.references
+        ? [mail.references]
+        : []
+  ).map(stripAngle);
 
   const rawText =
     mail.text ?? (typeof mail.html === 'string' ? stripHtml(mail.html) : '');
@@ -43,6 +53,9 @@ export async function parseImapMessage(
     subject: mail.subject ?? null,
     from: from || null,
     to,
+    cc,
+    replyTo,
+    references,
     date: mail.date ? mail.date.toISOString() : null,
     bodyText,
     headers,

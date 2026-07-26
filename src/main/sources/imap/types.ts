@@ -85,6 +85,11 @@ export interface ImapMessageItem {
   subject: string | null;
   from: string | null;
   to: string[];
+  cc: string[];
+  /** Reply-To display string when the header is present. */
+  replyTo: string | null;
+  /** References chain, angle-stripped like messageId, oldest-first. */
+  references: string[];
   /** ISO-8601, or null if the message carried no parseable Date header. */
   date: string | null;
   /** Cleaned (quoted-reply-stripped) plain-text body. */

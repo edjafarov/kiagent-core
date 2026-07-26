@@ -247,6 +247,9 @@ describe('createImapSource — toDocument', () => {
       subject: 'Hello',
       from: 'Alice <alice@example.com>',
       to: ['bob@example.com'],
+      cc: [],
+      replyTo: null,
+      references: [],
       date: '2025-01-01T12:00:00.000Z',
       bodyText: 'Hi there',
       headers: {},
@@ -264,6 +267,9 @@ describe('createImapSource — toDocument', () => {
       metadata: {
         from: 'Alice <alice@example.com>',
         to: ['bob@example.com'],
+        cc: [],
+        replyTo: null,
+        references: [],
         date: '2025-01-01T12:00:00.000Z',
         mailbox: 'INBOX',
         uid: 7,
@@ -271,6 +277,21 @@ describe('createImapSource — toDocument', () => {
       },
       createdAt: '2025-01-01T12:00:00.000Z',
       url: undefined,
+    });
+  });
+
+  it('carries cc/replyTo/references through to metadata when present', () => {
+    const doc = source.toDocument(
+      item({
+        cc: ['Carol <carol@example.com>'],
+        replyTo: 'Alice List <list@example.com>',
+        references: ['root-1@mail.example.com'],
+      }),
+    ) as DocumentInput;
+    expect(doc.metadata).toMatchObject({
+      cc: ['Carol <carol@example.com>'],
+      replyTo: 'Alice List <list@example.com>',
+      references: ['root-1@mail.example.com'],
     });
   });
 

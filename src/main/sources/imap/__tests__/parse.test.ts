@@ -14,8 +14,11 @@ function rawMessage(uid: number, source: string): ImapRawMessage {
 const REPLY_MESSAGE = [
   'From: Alice <alice@example.com>',
   'To: Bob <bob@example.com>, carol@example.com',
+  'Cc: Dave <dave@example.com>',
+  'Reply-To: Alice List <list@example.com>',
   'Subject: Re: Hello there',
   'Message-ID: <abc123@mail.example.com>',
+  'References: <root-1@mail.example.com> <root-2@mail.example.com>',
   'Date: Wed, 01 Jan 2025 12:00:00 +0000',
   'Content-Type: text/plain; charset=utf-8',
   '',
@@ -44,6 +47,12 @@ describe('parseImapMessage', () => {
     expect(item.subject).toBe('Re: Hello there');
     expect(item.from).toBe('Alice <alice@example.com>');
     expect(item.to).toEqual(['Bob <bob@example.com>', 'carol@example.com']);
+    expect(item.cc).toEqual(['Dave <dave@example.com>']);
+    expect(item.replyTo).toBe('Alice List <list@example.com>');
+    expect(item.references).toEqual([
+      'root-1@mail.example.com',
+      'root-2@mail.example.com',
+    ]);
     expect(item.date).toBe(new Date('2025-01-01T12:00:00.000Z').toISOString());
     expect(item.bodyText).toContain('This is the reply body.');
     expect(item.bodyText).not.toContain('original message text');
@@ -67,5 +76,8 @@ describe('parseImapMessage', () => {
     expect(item.subject).toBeNull();
     expect(item.date).toBeNull();
     expect(item.bodyText).toBe('just a body');
+    expect(item.cc).toEqual([]);
+    expect(item.replyTo).toBeNull();
+    expect(item.references).toEqual([]);
   });
 });
