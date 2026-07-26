@@ -35,8 +35,9 @@ export interface BearerFetchOpts {
   body?: string;
   /** content-type header, set only when body is present. */
   contentType?: string;
-  /** Retry-attempt cap override; default the module's MAX_ATTEMPTS. Pass 1
-   *  for non-idempotent calls (send) — a retried send can double-deliver. */
+  /** Total attempts including the first (1 = try once, never retry);
+   *  default 5. Pass 1 for non-idempotent calls (send) — a retried send
+   *  can double-deliver. */
   maxAttempts?: number;
 }
 

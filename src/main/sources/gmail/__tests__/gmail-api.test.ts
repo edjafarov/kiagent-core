@@ -27,6 +27,7 @@ describe('sendGmailMessage', () => {
     expect(url).toBe(
       'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
     );
+    expect(init.method).toBe('POST');
     const body = JSON.parse(init.body);
     expect(body.threadId).toBe('t3');
     expect(Buffer.from(body.raw, 'base64url').toString()).toContain('hi');
