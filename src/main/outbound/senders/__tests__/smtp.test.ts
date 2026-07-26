@@ -185,9 +185,12 @@ describe('bundled senders', () => {
   it('ships exactly the imap sender in phase 1', async () => {
     const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-snd-'));
     const store2 = openStore(await openDb(path.join(dir2, 't.db')), deps);
-    const senders = buildBundledSenders({ store: store2 });
-    expect([...senders.keys()]).toEqual(['imap']);
-    await store2.close();
-    fs.rmSync(dir2, { recursive: true, force: true });
+    try {
+      const senders = buildBundledSenders({ store: store2 });
+      expect([...senders.keys()]).toEqual(['imap']);
+    } finally {
+      await store2.close();
+      fs.rmSync(dir2, { recursive: true, force: true });
+    }
   });
 });

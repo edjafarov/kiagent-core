@@ -607,7 +607,20 @@ app
     // before the MCP server starts serving — the store's db.run crosses the
     // worker-thread bridge, so a floating promise here could still be in
     // flight when the HTTP listener accepts its first confirm request.
-    await p.store.outbox.recoverOrphanedSending();
+    // A transient DB-bridge failure here must not abort boot (mirrors the
+    // extensionsPlatform.start() guard below) — startMcp/createTray/
+    // resumeAccounts/createWindow must all still run; any 'sending' rows
+    // left behind are simply picked up by the next boot's sweep.
+    try {
+      await p.store.outbox.recoverOrphanedSending();
+    } catch (err) {
+      p.logSink.log(
+        'outbound',
+        'error',
+        'boot-time recoverOrphanedSending sweep failed — sending rows left in place for the next boot',
+        { error: err instanceof Error ? err.message : String(err) },
+      );
+    }
 
     mcp = await startMcp({
       query: p.store.read,
