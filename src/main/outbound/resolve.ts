@@ -12,6 +12,8 @@ import type { Document } from '@shared/contracts';
 
 export interface ResolvedReply {
   to: string[];
+  /** Always `[]` in this phase — reply_all folds the original Cc recipients
+   *  into `to` rather than populating this field. Do not assume otherwise. */
   cc: string[];
   subject: string | null;
   recipientDisplay: string;
@@ -84,7 +86,6 @@ export function resolveImapReply(
       );
     }
     push(primary);
-    recipientDisplay = primary;
     if (replyAll) {
       for (const t of meta.to ?? []) push(t);
       if (meta.cc === undefined) {
@@ -96,6 +97,16 @@ export function resolveImapReply(
         for (const c of meta.cc) push(c);
       }
     }
+    if (to.length === 0) {
+      // `primary` was a self address (e.g. a Reply-To pointing back at the
+      // user) and `seen` is seeded with self, so the push above was a no-op —
+      // never silently draft a reply to nobody.
+      throw new Error(
+        'draft_reply: the stored reply target resolves to your own address ' +
+          '— there is nothing to send to.',
+      );
+    }
+    recipientDisplay = to.join(', ');
   }
 
   const threading: Record<string, unknown> = {};

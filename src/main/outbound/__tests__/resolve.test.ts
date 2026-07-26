@@ -72,6 +72,9 @@ describe('resolveImapReply — inbound', () => {
       'Bob <bob@example.com>',
       'Carol <carol@example.com>',
     ]);
+    expect(r.recipientDisplay).toBe(
+      'Alice List <list@example.com>, Bob <bob@example.com>, Carol <carol@example.com>',
+    );
     expect(r.warnings).toEqual([]);
   });
 
@@ -88,6 +91,16 @@ describe('resolveImapReply — inbound', () => {
     expect(() =>
       resolveImapReply(imapDoc({ ...OLD_META, from: null }), SELF, false),
     ).toThrow(/sender/i);
+  });
+
+  it('throws when the stored Reply-To resolves to the user, leaving no target', () => {
+    expect(() =>
+      resolveImapReply(
+        imapDoc({ ...OLD_META, replyTo: 'Me <me@example.com>' }),
+        SELF,
+        false,
+      ),
+    ).toThrow(/own address|nothing to send/i);
   });
 });
 
