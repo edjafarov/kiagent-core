@@ -57,6 +57,7 @@ describe('smtp sender', () => {
   let store: CoreStore;
   let accountId: AccountId;
   let sendMail: jest.Mock;
+  let createTransport: jest.Mock;
   let appended: Array<{ path: string; content: Buffer }>;
 
   const fakeImapClient = () => ({
@@ -91,6 +92,7 @@ describe('smtp sender', () => {
     accountId = account.id;
     await store.vault.save(accountId, { password: 'hunter2' });
     sendMail = jest.fn(async () => ({}));
+    createTransport = jest.fn((_opts: unknown) => ({ sendMail }));
     appended = [];
   });
 
@@ -102,7 +104,7 @@ describe('smtp sender', () => {
   const sender = () =>
     createSmtpSender({
       store,
-      createTransport: () => ({ sendMail }),
+      createTransport,
       connectImap: (async () => fakeImapClient()) as never,
     });
 
@@ -123,6 +125,19 @@ describe('smtp sender', () => {
   it('sends a composed RFC822 message with threading headers', async () => {
     const result = await sender().send(intent());
     expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(createTransport).toHaveBeenCalledTimes(1);
+    const transportOpts = createTransport.mock.calls[0][0];
+    expect(transportOpts).toEqual(
+      expect.objectContaining({
+        host: 'smtp.example.com',
+        port: 465,
+        secure: true,
+        auth: expect.objectContaining({ user: 'me@example.com' }),
+      }),
+    );
+    // The identifier (`${user}@${host}`) must never silently take over SMTP
+    // AUTH in place of config.user.
+    expect(transportOpts.auth.user).not.toBe('me@example.com@imap.example.com');
     const { envelope, raw } = sendMail.mock.calls[0][0];
     expect(envelope).toEqual({
       from: 'me@example.com',
@@ -150,7 +165,7 @@ describe('smtp sender', () => {
   it('a Sent-append failure does not fail the send', async () => {
     const broken = createSmtpSender({
       store,
-      createTransport: () => ({ sendMail }),
+      createTransport: jest.fn((_opts: unknown) => ({ sendMail })),
       connectImap: (async () => {
         throw new Error('imap down');
       }) as never,
