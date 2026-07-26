@@ -599,7 +599,7 @@ app
     const outbound = createOutboundService({
       store: p.store,
       prefs: p.prefs,
-      senders: buildBundledSenders({ store: p.store }),
+      senders: buildBundledSenders({ store: p.store, logSink: p.logSink }),
       logSink: p.logSink,
     });
     // Rows stuck in 'sending' can only mean a previous process died

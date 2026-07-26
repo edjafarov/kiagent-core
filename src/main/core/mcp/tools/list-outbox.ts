@@ -4,7 +4,7 @@
  */
 import type { OutboundToolApi } from '@main/outbound/service';
 
-export const listOutboxDescription = `List recent outbound drafts and their statuses (draft/sending/sent/failed/discarded/expired). Pending drafts include a fresh confirmation link — use this when a confirm link has expired.`;
+export const listOutboxDescription = `List recent outbound drafts and their statuses (draft/sending/sent/failed/discarded/delivery_unknown/expired). Pending drafts include a fresh confirmation link — use this when a confirm link has expired.`;
 
 export const listOutboxInputSchema = {
   type: 'object',

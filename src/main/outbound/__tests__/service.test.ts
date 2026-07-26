@@ -165,6 +165,17 @@ describe('outbound service — drafts', () => {
     ).rejects.toThrow(/not supported yet/);
   });
 
+  it("clamps list_outbox limit to [1,100] before it reaches the store's LIMIT ? — SQLite treats a bare -1 as UNBOUNDED", async () => {
+    const spy = jest.spyOn(store.outbox, 'listRecent');
+    await service.listOutbox({});
+    expect(spy).toHaveBeenLastCalledWith(20); // unchanged default
+    await service.listOutbox({ limit: -1 });
+    expect(spy).toHaveBeenLastCalledWith(1);
+    await service.listOutbox({ limit: 10_000 });
+    expect(spy).toHaveBeenLastCalledWith(100);
+    spy.mockRestore();
+  });
+
   it('listOutbox re-issues confirm URLs for pending drafts only', async () => {
     const a = await service.draftReply({ documentId: docId, body: 'one' });
     await store.outbox.transition(a.draft_id, ['draft'], 'discarded');

@@ -301,7 +301,17 @@ export function createOutboundService(deps: {
     async listOutbox({ limit }) {
       assertReady();
       await deps.store.outbox.expireOverdue();
-      const rows = await deps.store.outbox.listRecent(limit ?? 20);
+      // The model supplies `limit` straight from tool args (list-outbox.ts
+      // only checks `typeof === 'number'`, so NaN/Infinity can still arrive)
+      // and it reaches outbox.ts's `LIMIT ?` unclamped — SQLite treats a
+      // negative LIMIT as UNBOUNDED, so an unclamped -1 would return the
+      // entire table. Clamp here, at the service boundary, to a sane
+      // [1, 100] window regardless of what was asked for.
+      const clampedLimit =
+        typeof limit === 'number' && Number.isFinite(limit)
+          ? Math.min(100, Math.max(1, Math.floor(limit)))
+          : 20;
+      const rows = await deps.store.outbox.listRecent(clampedLimit);
       // Fetch the (decrypted) secret at most once per call rather than once
       // per draft row — with OUTBOX_PENDING_CAP-sized listings this avoids
       // up to 20 sequential meta-reads+decrypts for the same 32 bytes.

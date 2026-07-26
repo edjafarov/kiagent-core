@@ -33,7 +33,13 @@ interface SmtpOverride {
  * Derive SMTP connection settings from the account's IMAP config: an
  * explicit per-field override always wins; otherwise an `imap.` host prefix
  * is swapped for `smtp.` (any other shape passes through unchanged), on
- * port 465 with implicit TLS — the common submission default.
+ * port 465 with implicit TLS — the common submission default. When `secure`
+ * is not explicitly overridden it is INFERRED from the port: only 465
+ * (implicit TLS) defaults to `secure: true` — every other port (587, 25,
+ * office365's 587, etc.) defaults to `secure: false` so nodemailer runs the
+ * STARTTLS upgrade instead of speaking implicit TLS at a plaintext-first
+ * STARTTLS server. There is no UI field for `secure` today, so a user who
+ * points `outbound.smtp.port` at 587 has no other way to fix this.
  */
 export function deriveSmtpConfig(
   imap: ImapAccountConfig,
@@ -45,7 +51,7 @@ export function deriveSmtpConfig(
       ? `smtp.${imap.host.slice('imap.'.length)}`
       : imap.host);
   const port = override?.port ?? 465;
-  const secure = override?.secure ?? true;
+  const secure = override?.secure ?? port === 465;
   return { host, port, secure };
 }
 

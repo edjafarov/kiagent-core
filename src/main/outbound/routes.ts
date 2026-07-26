@@ -29,19 +29,53 @@ function sendHtml(
   res.end(html);
 }
 
-function sendJson(res: http.ServerResponse, body: unknown): void {
-  res.writeHead(200, {
+function sendJson(res: http.ServerResponse, body: unknown, status = 200): void {
+  res.writeHead(status, {
     'Content-Type': 'application/json',
     'X-Content-Type-Options': 'nosniff',
   });
   res.end(JSON.stringify(body));
 }
 
+// 64 KB is plenty for the op protocol's largest legitimate payload (a
+// draft's subject + body). Past that, this is either a misbehaving client or
+// an attempt to make the loopback server buffer an unbounded amount of
+// memory per request — reject it instead of accumulating chunks forever.
+const MAX_JSON_BODY_BYTES = 64 * 1024;
+
+class BodyTooLargeError extends Error {
+  constructor() {
+    super(`request body exceeds ${MAX_JSON_BODY_BYTES} bytes`);
+    this.name = 'BodyTooLargeError';
+  }
+}
+
 function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (c: Buffer) => chunks.push(c));
+    let size = 0;
+    let settled = false;
+
+    req.on('data', (c: Buffer) => {
+      if (settled) return;
+      size += c.length;
+      if (size > MAX_JSON_BODY_BYTES) {
+        settled = true;
+        // Stop retaining chunks (bounds memory) and reject so the caller can
+        // send its 413 — but do NOT destroy the request/socket here: an
+        // IncomingMessage.destroy() tears down the underlying socket, and
+        // doing that before the response has been written would race the
+        // 413 itself and can surface to the client as a connection reset
+        // instead of a clean JSON error. The caller destroys the connection
+        // (if it wants to) only after res.end() has gone out.
+        reject(new BodyTooLargeError());
+        return;
+      }
+      chunks.push(c);
+    });
     req.on('end', () => {
+      if (settled) return;
+      settled = true;
       try {
         const text = Buffer.concat(chunks).toString('utf8');
         resolve(text ? JSON.parse(text) : null);
@@ -49,7 +83,11 @@ function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
         reject(e);
       }
     });
-    req.on('error', reject);
+    req.on('error', (e) => {
+      if (settled) return;
+      settled = true;
+      reject(e);
+    });
   });
 }
 
@@ -153,11 +191,15 @@ export function createOutboundRoutes(outbound: OutboundService): {
           else if (out.kind === 'failed') sendHtml(res, 200, gonePage(out.row));
           else sendHtml(res, 200, gonePage(out.row));
         } catch {
-          // A throw here can only come from POST-send bookkeeping (the
-          // service's own comment: sender.send() already resolved before
-          // this could throw) — the message may already be on the wire, so
-          // this must NEVER read as "failed to send". Honest unknown-state
-          // copy only; the boot-time sweep will classify the row itself.
+          // This catch can't tell a pre-send throw (secret(), expireOverdue,
+          // outbox.get — nothing sent yet) apart from a post-send bookkeeping
+          // throw (sender.send() already resolved — the message may be on
+          // the wire per confirmByToken's own comment). Since both land
+          // here indistinguishably, the copy below stays conservative for
+          // BOTH cases rather than risk ever reading "failed to send" for a
+          // message that actually went out. Honest unknown-state copy only;
+          // the boot-time sweep classifies the row itself for the post-send
+          // case.
           sendHtml(
             res,
             500,
@@ -231,10 +273,17 @@ export function createOutboundRoutes(outbound: OutboundService): {
             sendJson(res, { ok: false, error: `unknown op '${body?.op}'` });
           }
         } catch (err) {
-          sendJson(res, {
-            ok: false,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          if (err instanceof BodyTooLargeError) {
+            sendJson(res, { ok: false, error: err.message }, 413);
+            // Safe only now: the 413 response has already been written, so
+            // tearing down the connection can't race it.
+            req.destroy();
+          } else {
+            sendJson(res, {
+              ok: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         return true;
       }

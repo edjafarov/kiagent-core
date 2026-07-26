@@ -51,6 +51,25 @@ describe('deriveSmtpConfig', () => {
       }),
     ).toEqual({ host: 'send.fastmail.com', port: 587, secure: false });
   });
+  it('infers secure:false (STARTTLS) for a non-465 port with no explicit secure override — office365 etc. run on 587', () => {
+    expect(deriveSmtpConfig(imap, { port: 587 })).toEqual({
+      host: 'smtp.fastmail.com',
+      port: 587,
+      secure: false,
+    });
+  });
+  it('an explicit secure override always wins over the port inference', () => {
+    expect(deriveSmtpConfig(imap, { port: 587, secure: true })).toEqual({
+      host: 'smtp.fastmail.com',
+      port: 587,
+      secure: true,
+    });
+  });
+  it('the default (no override at all) is still port 465 / secure true', () => {
+    expect(deriveSmtpConfig(imap)).toEqual(
+      expect.objectContaining({ port: 465, secure: true }),
+    );
+  });
 });
 
 describe('smtp sender', () => {
@@ -154,6 +173,21 @@ describe('smtp sender', () => {
     expect(result.externalMessageId).toMatch(/^<.+>$/);
   });
 
+  it('a port-587 account override reaches the transport as {port: 587, secure: false} — no implicit TLS against a STARTTLS-only server', async () => {
+    await store.setAccountConfig(accountId, {
+      host: 'imap.example.com',
+      port: 993,
+      secure: true,
+      user: 'me@example.com',
+      outbound: { smtp: { port: 587 } },
+    });
+    await sender().send(intent());
+    const transportOpts = createTransport.mock.calls[0][0];
+    expect(transportOpts).toEqual(
+      expect.objectContaining({ port: 587, secure: false }),
+    );
+  });
+
   it('appends the same raw bytes to the Sent mailbox', async () => {
     await sender().send(intent());
     expect(appended).toHaveLength(1);
@@ -175,6 +209,27 @@ describe('smtp sender', () => {
     expect(sendMail).toHaveBeenCalledTimes(1);
   });
 
+  it('a Sent-append failure is logged (never silently swallowed) with the account id and error text — but never the message subject/body', async () => {
+    const log = jest.fn();
+    const broken = createSmtpSender({
+      store,
+      createTransport: jest.fn((_opts: unknown) => ({ sendMail })),
+      connectImap: (async () => {
+        throw new Error('imap down');
+      }) as never,
+      log,
+    });
+    await broken.send(intent());
+    expect(log).toHaveBeenCalledTimes(1);
+    const [msg] = log.mock.calls[0];
+    expect(msg).toContain(accountId);
+    expect(msg).toContain('imap down');
+    // Content-free: the log line must never carry the subject or body of
+    // the message that was (successfully) sent over SMTP.
+    expect(msg).not.toContain('Re: Numbers');
+    expect(msg).not.toContain('Thanks!');
+  });
+
   it('throws without a stored password', async () => {
     await store.vault.delete(accountId);
     await expect(sender().send(intent())).rejects.toThrow(/password/i);
@@ -186,7 +241,10 @@ describe('bundled senders', () => {
     const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-snd-'));
     const store2 = openStore(await openDb(path.join(dir2, 't.db')), deps);
     try {
-      const senders = buildBundledSenders({ store: store2 });
+      const senders = buildBundledSenders({
+        store: store2,
+        logSink: { log: () => {} },
+      });
       expect([...senders.keys()]).toEqual(['imap']);
     } finally {
       await store2.close();

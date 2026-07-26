@@ -26,7 +26,17 @@ const css = (): ShellCss => {
   if (cachedCss) return cachedCss;
   try {
     cachedCss = loadShellCss('minimal');
-  } catch {
+  } catch (err) {
+    // The build fix (staging the shared web-ui CSS beside the main bundle)
+    // has landed, so this SHOULD never trip in a packaged app any more — if
+    // it does, that's a build regression, and the fallback that swallows it
+    // must not also swallow the signal. No logSink in this module; a main-
+    // process console.warn is the idiomatic fallback here (see .eslintrc.js:
+    // no-console is off for exactly this kind of case).
+    console.warn(
+      'outbound: shared web-ui CSS missing — confirm pages render unstyled',
+      err,
+    );
     cachedCss = EMPTY_CSS;
   }
   return cachedCss;

@@ -1,6 +1,7 @@
 /**
  * @jest-environment node
  */
+import { EventEmitter } from 'events';
 import fs from 'fs';
 import http from 'http';
 import type { AddressInfo } from 'net';
@@ -347,6 +348,28 @@ function fakeReq(method: string): http.IncomingMessage {
   return { method } as unknown as http.IncomingMessage;
 }
 
+// A streaming POST req for readJsonBody (routes.ts): a real EventEmitter so
+// 'data'/'end'/'error' listeners behave like the genuine IncomingMessage
+// they attach to, but with no real socket underneath — driving this at the
+// unit level (rather than over a live loopback fetch()) tests the exact
+// same size-cap code path without adding another real TCP server+client to
+// an already server-heavy suite; a same-process HTTP req that gets
+// genuinely destroy()'d (as the 64 KB cap does) proved to make the ambient
+// jest run flaky (macOS ephemeral-port/TIME_WAIT churn across the many
+// http.Server instances this file and its siblings spin up), independent of
+// whether the destroy() call itself was correct.
+function fakeStreamingPostReq(): http.IncomingMessage & {
+  destroy: jest.Mock;
+} {
+  const req = new EventEmitter() as unknown as http.IncomingMessage & {
+    method: string;
+    destroy: jest.Mock;
+  };
+  req.method = 'POST';
+  req.destroy = jest.fn();
+  return req;
+}
+
 function fakeRes(): {
   res: http.ServerResponse;
   status(): number;
@@ -508,5 +531,25 @@ describe('outbox routes — honest errors and terminal statuses (unit, fake serv
     );
     expect(body()).toContain('SMTP auth rejected');
     expect(body()).not.toContain('method="POST"');
+  });
+
+  it('/outbox/api caps the buffered body at 64 KB — an oversized POST gets a clean 413, never unbounded buffering or a hang', async () => {
+    const routes = createOutboundRoutes(fakeService({}));
+    const req = fakeStreamingPostReq();
+    const { res, status, body } = fakeRes();
+    const handled = routes.handle(req, res, new URL('http://x/outbox/api'));
+    // Two 40 KB chunks comfortably clear the 64 KB cap in routes.ts.
+    req.emit('data', Buffer.alloc(40 * 1024, 'a'));
+    req.emit('data', Buffer.alloc(40 * 1024, 'a'));
+    expect(await handled).toBe(true);
+    expect(status()).toBe(413);
+    const parsed = JSON.parse(body()) as { ok: boolean; error: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error).toMatch(/exceeds/i);
+    // The connection is only destroyed AFTER the 413 was written (never
+    // before — that would race the response itself) — and it IS destroyed,
+    // so an oversized/never-ending client can't hold the request open
+    // forever once it's over cap.
+    expect(req.destroy).toHaveBeenCalledTimes(1);
   });
 });
