@@ -59,6 +59,16 @@ export interface McpDeps {
    *  a real backend AND turns on the /outbox/* HTTP routes (Task 8) — a
    *  stdio-only sibling process has neither. */
   outbound?: OutboundService;
+  /** Defaults to `PORT_CANDIDATES`. Tests that start a REAL server (as
+   *  opposed to driving handlers in-process) should override this to `[0]`
+   *  so the OS assigns an ephemeral port instead of racing every other
+   *  parallel jest worker's `startMcp()` over the same fixed 4-port list —
+   *  under `npm test`'s parallel workers that race intermittently exhausts
+   *  the list (`EADDRINUSE`) even before counting a real dev instance that
+   *  may already be squatting the first candidate. Production callers never
+   *  pass this — the mirrored pattern lives in
+   *  `../../mcp/outbound-proxy.ts`'s `ports` param (commit fd4dbfb). */
+  portCandidates?: readonly number[];
 }
 
 export interface McpServerHandle {
@@ -191,7 +201,7 @@ function sendForbidden(res: http.ServerResponse): void {
 function listenOnFirstFree(
   server: http.Server,
   host: string,
-  candidates: number[],
+  candidates: readonly number[],
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     let i = 0;
@@ -216,7 +226,15 @@ function listenOnFirstFree(
       };
       const onListening = () => {
         server.removeListener('error', onError);
-        resolve(port);
+        // Read the ACTUAL bound port back from the socket rather than
+        // trusting the requested candidate: with a concrete port (7421 et
+        // al.) the two are always equal, but `port === 0` (tests requesting
+        // an OS-assigned ephemeral port to dodge PORT_CANDIDATES
+        // contention under parallel jest workers) binds to a real,
+        // different, non-zero port — resolving with the literal `0` would
+        // hand callers an unconnectable address.
+        const addr = server.address();
+        resolve(typeof addr === 'object' && addr ? addr.port : port);
       };
       server.once('error', onError);
       server.once('listening', onListening);
@@ -427,7 +445,11 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   };
 
   const httpServer = http.createServer(handler);
-  const port = await listenOnFirstFree(httpServer, HOST, PORT_CANDIDATES);
+  const port = await listenOnFirstFree(
+    httpServer,
+    HOST,
+    deps.portCandidates ?? PORT_CANDIDATES,
+  );
   deps.logSink.log('mcp', 'info', `listening on http://${HOST}:${port}/mcp`);
   // Confirm URLs the service mints from here on point at THIS boot's actual
   // port (PORT_CANDIDATES means it isn't always the first one) — must run

@@ -67,7 +67,15 @@ describe('raw-sql tools over the HTTP transport', () => {
     });
     await store.close();
 
-    handle = await startMcp({ query: store.read, logSink, dataDir: dir });
+    handle = await startMcp({
+      query: store.read,
+      logSink,
+      dataDir: dir,
+      // Ephemeral (OS-assigned) port — this file doesn't test the candidate
+      // walk, so avoid racing every other parallel jest worker's startMcp()
+      // over the same fixed PORT_CANDIDATES list.
+      portCandidates: [0],
+    });
   });
 
   afterAll(async () => {

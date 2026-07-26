@@ -101,6 +101,10 @@ beforeAll(async () => {
     logSink,
     dataDir: dir,
     outbound: service,
+    // Ephemeral (OS-assigned) port — this suite's subject is /outbox/*
+    // routing, not the candidate walk, so avoid racing every other parallel
+    // jest worker's startMcp() over the same fixed PORT_CANDIDATES list.
+    portCandidates: [0],
   });
   base = `http://127.0.0.1:${mcp.port}`;
 });

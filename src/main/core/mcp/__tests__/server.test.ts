@@ -115,6 +115,15 @@ describe('startMcp (HTTP transport)', () => {
           logs.push({ scope, level, msg, fields }),
       },
       dataDir,
+      // Ephemeral (OS-assigned) port: this file's shared handle is a REAL
+      // bound socket, and under `npm test`'s parallel workers many suites
+      // binding real servers over the same fixed PORT_CANDIDATES list can
+      // exhaust it (EADDRINUSE) — worse with a long-running dev instance
+      // already squatting the first candidate. `handle.port` still comes
+      // back from the OS via the returned handle either way. The one test
+      // whose SUBJECT is the real candidate-walk starts its own short-lived
+      // server against the actual list instead (see below).
+      portCandidates: [0],
     });
   });
 
@@ -138,9 +147,29 @@ describe('startMcp (HTTP transport)', () => {
     return client;
   }
 
-  it('binds to loopback on one of the candidate ports', () => {
-    expect(handle.port).not.toBeNull();
-    expect(PORT_CANDIDATES).toContain(handle.port);
+  it('binds to loopback on one of the candidate ports', async () => {
+    // The shared `handle` above is started with portCandidates:[0]
+    // (ephemeral) to avoid port contention under parallel jest workers —
+    // this is the one test whose SUBJECT is the real candidate walk, so it
+    // starts its own short-lived server against the actual PORT_CANDIDATES
+    // list instead (a single extra bind here is low-contention).
+    const candDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'kiagent-mcp-http-candidates-'),
+    );
+    const seedDb = await openDb(path.join(candDir, 'kiagent.db'));
+    await seedDb.close();
+    const real = await startMcp({
+      query: fakeQuery(),
+      logSink: { log: () => {} },
+      dataDir: candDir,
+    });
+    try {
+      expect(real.port).not.toBeNull();
+      expect(PORT_CANDIDATES).toContain(real.port);
+    } finally {
+      await real.stop();
+      fs.rmSync(candDir, { recursive: true, force: true });
+    }
   });
 
   it('reserves port 7422 for the product remote server', () => {

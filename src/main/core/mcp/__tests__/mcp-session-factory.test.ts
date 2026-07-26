@@ -160,6 +160,10 @@ describe('McpServerHandle.createMcpHandler', () => {
       query: fakeQuery(),
       logSink: { log: () => {} },
       dataDir,
+      // Ephemeral (OS-assigned) port — this file doesn't test the candidate
+      // walk, so avoid racing every other parallel jest worker's startMcp()
+      // over the same fixed PORT_CANDIDATES list.
+      portCandidates: [0],
     });
 
     // A product-owned transport that has NOTHING to do with server.ts's own
