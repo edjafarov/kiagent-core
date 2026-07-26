@@ -13,6 +13,7 @@ type ApiResponse = { ok: true; result: unknown } | { ok: false; error: string };
 
 export function createOutboundProxy(
   fetchFn: typeof fetch = fetch,
+  ports: readonly number[] = PORT_CANDIDATES,
 ): OutboundToolApi {
   let cachedPort: number | null = null;
 
@@ -27,7 +28,7 @@ export function createOutboundProxy(
   };
 
   const probe = async (): Promise<number> => {
-    for (const port of PORT_CANDIDATES) {
+    for (const port of ports) {
       try {
         const res = await fetchFn(`http://127.0.0.1:${port}/outbox/api`, {
           method: 'POST',

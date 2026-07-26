@@ -2,12 +2,31 @@
  * @jest-environment node
  */
 import http from 'http';
+import net from 'net';
 
-import { PORT_CANDIDATES } from '../../core/mcp/server';
 import { createOutboundProxy } from '../outbound-proxy';
 
 let server: http.Server;
 let hits: Array<{ op: string }>;
+
+// Deliberately does NOT use the real PORT_CANDIDATES: those are shared with
+// every other suite's `listenOnFirstFree` (server.test.ts, routes tests,
+// etc.) — run in parallel jest workers, those race this test's fixed-port
+// stub for the same handful of ports and produce EADDRINUSE flakes (and on
+// a dev machine with the real app running, one of those candidates may
+// already be squatted). An ephemeral port bound then released is dead by
+// construction and not shared with any other suite.
+function ephemeralPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const addr = probe.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      probe.close(() => resolve(port));
+    });
+  });
+}
 
 function startStub(port: number, behave: 'ok' | 'error'): Promise<void> {
   server = http.createServer((req, res) => {
@@ -46,8 +65,10 @@ beforeEach(() => {
 
 describe('outbound proxy', () => {
   it('probes candidates, then forwards ops to the discovered port', async () => {
-    await startStub(PORT_CANDIDATES[1], 'ok'); // 7421 free → probe advances
-    const proxy = createOutboundProxy();
+    const deadPort = await ephemeralPort(); // freed, nothing listens here
+    const stubPort = await ephemeralPort();
+    await startStub(stubPort, 'ok'); // deadPort free → probe advances
+    const proxy = createOutboundProxy(undefined, [deadPort, stubPort]);
     const r = (await proxy.draftReply({ documentId: 'x', body: 'b' })) as {
       draft_id: string;
     };
@@ -56,16 +77,9 @@ describe('outbound proxy', () => {
   });
 
   it('surfaces app-side errors verbatim', async () => {
-    // Brief's verbatim test bound PORT_CANDIDATES[0] (7421). Deviation: this
-    // dev machine has a real app already listening on 7421 (a long-running
-    // sibling product's dev instance, unrelated to this checkout), so the
-    // stub can't bind there — EADDRINUSE. The probe walks PORT_CANDIDATES in
-    // order regardless of which index answers with the outbox pong (proven
-    // by the test above, which already relies on the stub sitting at index
-    // 1), so binding the stub at PORT_CANDIDATES[1] instead exercises the
-    // exact same mechanism and keeps the assertion intact.
-    await startStub(PORT_CANDIDATES[1], 'error');
-    const proxy = createOutboundProxy();
+    const stubPort = await ephemeralPort();
+    await startStub(stubPort, 'error');
+    const proxy = createOutboundProxy(undefined, [stubPort]);
     await expect(
       proxy.draftMessage({
         accountId: 'a',
@@ -77,7 +91,9 @@ describe('outbound proxy', () => {
   });
 
   it('explains when the app is not running', async () => {
-    const proxy = createOutboundProxy();
+    const deadPortA = await ephemeralPort();
+    const deadPortB = await ephemeralPort();
+    const proxy = createOutboundProxy(undefined, [deadPortA, deadPortB]);
     await expect(proxy.listOutbox({})).rejects.toThrow(/app is not running/i);
   });
 });
