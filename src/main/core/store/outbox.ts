@@ -39,7 +39,13 @@ export interface OutboxStore {
   create(d: OutboxDraftInput): Promise<OutboxRow>; // throws on pending cap
   get(id: string): Promise<OutboxRow | null>;
   listRecent(limit: number): Promise<OutboxRow[]>; // newest first
-  /** Atomic compare-and-set; true iff exactly one row moved. */
+  /** Atomic compare-and-set; true iff exactly one row moved.
+   *
+   *  `patch` fields only ever SET a value — `null` and "field omitted" are
+   *  the same instruction: leave the stored column unchanged (COALESCE
+   *  against the existing value). No transition ever clears a patch field
+   *  back to null; the table is an audit log, and a retry/redraft is a NEW
+   *  row, never a scrub of an old one's `error`/`externalMessageId`/`sentAt`. */
   transition(
     id: string,
     from: OutboxStatus[],
@@ -154,6 +160,11 @@ export function createOutboxStore(
     async create(d) {
       // Lazy sweep first so stale drafts never occupy cap slots.
       await expireOverdue();
+      // Advisory, not a hard invariant: this check-then-insert is not atomic
+      // with the insert below, so two concurrent create() calls for the same
+      // account can briefly land the count one or two over the cap.
+      // OUTBOX_PENDING_CAP exists to stop runaway drafting, not to guarantee
+      // an exact ceiling — accepted.
       const pending = await countDrafts(d.accountId);
       if (pending >= OUTBOX_PENDING_CAP) {
         throw new Error(

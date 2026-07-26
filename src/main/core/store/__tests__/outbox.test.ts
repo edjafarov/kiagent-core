@@ -162,6 +162,22 @@ describe('outbox store', () => {
     expect(back?.sentAt).toBe('2026-07-23T12:00:00.000Z');
   });
 
+  it('a patch field of null leaves the previously stored value unchanged', async () => {
+    const row = await store.outbox.create(draft());
+    await store.outbox.transition(row.id, ['draft'], 'failed', {
+      error: 'boom',
+    });
+    expect((await store.outbox.get(row.id))?.error).toBe('boom');
+    // failed -> discarded is a legal status value per the CHECK constraint;
+    // passing error: null must NOT clear the previously recorded error.
+    await store.outbox.transition(row.id, ['failed'], 'discarded', {
+      error: null,
+    });
+    const back = await store.outbox.get(row.id);
+    expect(back?.status).toBe('discarded');
+    expect(back?.error).toBe('boom');
+  });
+
   it('enforces the per-account pending cap', async () => {
     for (let i = 0; i < OUTBOX_PENDING_CAP; i += 1) {
       // eslint-disable-next-line no-await-in-loop
