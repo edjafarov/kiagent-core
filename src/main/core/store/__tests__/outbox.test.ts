@@ -2,7 +2,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import type { AccountId } from '@shared/contracts';
+
 import { openDb, type AppDb } from '../../../db/app-db';
+import { openStore, type CoreStore } from '../store';
+import { OUTBOX_PENDING_CAP, type OutboxDraftInput } from '../outbox';
 
 describe('outbox schema (migration v4)', () => {
   let dir: string;
@@ -53,5 +57,135 @@ describe('outbox schema (migration v4)', () => {
          VALUES ('x', 'a', 'new', 'r', 'b', 'review', 'bogus', 'mcp-local', 't', 't')`,
       ),
     ).rejects.toThrow(/CHECK/);
+  });
+});
+
+const deps = {
+  encrypt: (s: string) => Buffer.from(s, 'utf8'),
+  decrypt: (b: Buffer) => b.toString('utf8'),
+  detectLanguages: () => ['eng'],
+};
+
+describe('outbox store', () => {
+  let dir: string;
+  let store: CoreStore;
+  let accountId: AccountId;
+
+  const draft = (over: Partial<OutboxDraftInput> = {}): OutboxDraftInput => ({
+    accountId,
+    kind: 'new',
+    recipientDisplay: 'bob@example.com',
+    to: ['bob@example.com'],
+    cc: [],
+    subject: 'Hi',
+    bodyMarkdown: 'Hello Bob',
+    confirmMode: 'review',
+    createdVia: 'mcp-local',
+    expiresAt: '2099-01-01T00:00:00.000Z',
+    ...over,
+  });
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-outbox-'));
+    store = openStore(await openDb(path.join(dir, 'test.db')), deps);
+    const account = await store.createAccount({
+      source: 'imap',
+      identifier: 'me@example.com@imap.example.com',
+    });
+    accountId = account.id;
+  });
+
+  afterEach(async () => {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('creates and reads back a draft row', async () => {
+    const row = await store.outbox.create(draft());
+    expect(row.status).toBe('draft');
+    expect(row.to).toEqual(['bob@example.com']);
+    expect(row.confirmMode).toBe('review');
+    const back = await store.outbox.get(row.id);
+    expect(back).toEqual(row);
+  });
+
+  it('freezes the confirm mode per row', async () => {
+    const row = await store.outbox.create(draft({ confirmMode: 'link' }));
+    expect((await store.outbox.get(row.id))?.confirmMode).toBe('link');
+  });
+
+  it('recoverOrphanedSending moves sending rows to delivery_unknown', async () => {
+    const row = await store.outbox.create(draft());
+    await store.outbox.transition(row.id, ['draft'], 'sending');
+    await store.outbox.recoverOrphanedSending();
+    const back = await store.outbox.get(row.id);
+    expect(back?.status).toBe('delivery_unknown');
+    expect(back?.error).toMatch(/may have been sent/i);
+    // Terminal rows are untouched.
+    const sent = await store.outbox.create(draft());
+    await store.outbox.transition(sent.id, ['draft'], 'sent');
+    await store.outbox.recoverOrphanedSending();
+    expect((await store.outbox.get(sent.id))?.status).toBe('sent');
+  });
+
+  it('round-trips threading and outboundRef JSON', async () => {
+    const row = await store.outbox.create(
+      draft({
+        kind: 'reply',
+        outboundRef: { channel: 'C123' },
+        threading: { inReplyTo: '<m1@x>' },
+      }),
+    );
+    const back = await store.outbox.get(row.id);
+    expect(back?.outboundRef).toEqual({ channel: 'C123' });
+    expect(back?.threading).toEqual({ inReplyTo: '<m1@x>' });
+  });
+
+  it('transition is an atomic compare-and-set', async () => {
+    const row = await store.outbox.create(draft());
+    expect(await store.outbox.transition(row.id, ['draft'], 'sending')).toBe(
+      true,
+    );
+    // Second attempt from 'draft' must lose: the row is already 'sending'.
+    expect(await store.outbox.transition(row.id, ['draft'], 'sending')).toBe(
+      false,
+    );
+    expect(
+      await store.outbox.transition(row.id, ['sending'], 'sent', {
+        sentAt: '2026-07-23T12:00:00.000Z',
+        externalMessageId: '<out@x>',
+      }),
+    ).toBe(true);
+    const back = await store.outbox.get(row.id);
+    expect(back?.status).toBe('sent');
+    expect(back?.externalMessageId).toBe('<out@x>');
+    expect(back?.sentAt).toBe('2026-07-23T12:00:00.000Z');
+  });
+
+  it('enforces the per-account pending cap', async () => {
+    for (let i = 0; i < OUTBOX_PENDING_CAP; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await store.outbox.create(draft());
+    }
+    await expect(store.outbox.create(draft())).rejects.toThrow(/pending/i);
+    // Non-draft rows don't count against the cap.
+    const rows = await store.outbox.listRecent(OUTBOX_PENDING_CAP);
+    await store.outbox.transition(rows[0].id, ['draft'], 'discarded');
+    await expect(store.outbox.create(draft())).resolves.toBeTruthy();
+  });
+
+  it('expireOverdue moves overdue drafts to expired', async () => {
+    const row = await store.outbox.create(
+      draft({ expiresAt: '2000-01-01T00:00:00.000Z' }),
+    );
+    await store.outbox.expireOverdue();
+    expect((await store.outbox.get(row.id))?.status).toBe('expired');
+  });
+
+  it('secret is stable across calls and 32 bytes', async () => {
+    const a = await store.outbox.secret();
+    const b = await store.outbox.secret();
+    expect(a.length).toBe(32);
+    expect(a.equals(b)).toBe(true);
   });
 });

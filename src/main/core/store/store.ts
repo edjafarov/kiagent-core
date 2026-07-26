@@ -30,6 +30,7 @@ import {
   rrfMerge,
   toTrigramMatch,
 } from './fuzzy';
+import { createOutboxStore, type OutboxStore } from './outbox';
 import { repopulateSearchIndex } from './schema';
 import { createWriteTx } from './write-tx';
 
@@ -100,6 +101,7 @@ export interface CoreStore extends Store {
   scheduleUpsert(row: ScheduleRow): Promise<void>;
   scheduleDelete(jobId: string): Promise<void>;
   close(): Promise<void>;
+  outbox: OutboxStore;
 }
 
 const FEED_BATCH = 500;
@@ -691,6 +693,12 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         },
       };
     },
+
+    outbox: createOutboxStore(db, {
+      now,
+      encrypt: deps.encrypt,
+      decrypt: deps.decrypt,
+    }),
 
     vault: {
       async save(account, c) {
