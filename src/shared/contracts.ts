@@ -381,6 +381,80 @@ export interface Source<Cursor = unknown, Item = unknown> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 3b. OUTBOUND — frozen drafts, user-gated sending
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type OutboxStatus =
+  | 'draft'
+  | 'sending'
+  | 'sent'
+  | 'failed'
+  | 'discarded'
+  | 'expired'
+  /** Found in 'sending' at app boot: the process died between the transport
+   *  accepting the message and the 'sent' write. The message MAY have gone
+   *  out — never auto-retried, never re-linked. */
+  | 'delivery_unknown';
+
+/** How a draft gets user confirmation. 'review' = full app-served review page
+ *  (spec mode A, the default); 'link' = in-chat review + short-TTL signed
+ *  link landing on a minimal Send-button page (spec mode B). Mode C ('chat',
+ *  send_draft) arrives in a later phase. */
+export type ConfirmMode = 'review' | 'link';
+
+/** One outbox row, frozen at creation. Confirm surfaces render from this row;
+ *  nothing the model does after creation can alter what would be sent. */
+export interface OutboxRow {
+  id: string;
+  accountId: AccountId;
+  kind: 'reply' | 'new';
+  replyToDocumentId: DocumentId | null;
+  /** Opaque per-source reply target, round-tripped verbatim to the same
+   *  source's Sender. Null unless the source's toDocument wrote
+   *  metadata.outbound. */
+  outboundRef: unknown;
+  recipientDisplay: string;
+  to: string[];
+  cc: string[];
+  subject: string | null;
+  bodyMarkdown: string;
+  threading: Record<string, unknown> | null;
+  /** Frozen at creation — settings changes affect future drafts only. */
+  confirmMode: ConfirmMode;
+  status: OutboxStatus;
+  error: string | null;
+  externalMessageId: string | null;
+  createdVia: 'mcp-local' | 'mcp-remote';
+  createdAt: string;
+  sentAt: string | null;
+  expiresAt: string;
+}
+
+/** What a Sender is asked to send — plain data in, plain data out, no
+ *  callbacks: third-party senders run out-of-process over Connector RPC. */
+export interface SendIntent {
+  accountId: AccountId;
+  kind: 'reply' | 'new';
+  outboundRef?: unknown;
+  to?: string[];
+  cc?: string[];
+  subject?: string;
+  bodyMarkdown: string;
+  threading?: Record<string, unknown>;
+}
+
+export interface SendResult {
+  externalMessageId?: string;
+}
+
+/** Outbound transport for one source id. Reachable ONLY from the send
+ *  pipeline — i.e. only after a confirmation gate — never from the MCP
+ *  plane directly. */
+export interface Sender {
+  send(intent: SendIntent): Promise<SendResult>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 4. THE INFERENCE PLANE — LLM / vision behind one queue
 // ─────────────────────────────────────────────────────────────────────────────
 

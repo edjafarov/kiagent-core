@@ -156,6 +156,42 @@ const MIGRATIONS: Migration[] = [
     `);
     repopulateSearchIndex(db);
   },
+
+  // v4 — the outbox: frozen outbound drafts + their audit trail
+  // (docs/superpowers/specs/2026-07-23-unified-outbound-design.md). Dedicated
+  // table, NOT a document type: drafts are mutable workflow state, and the
+  // sent copy re-enters the corpus through normal ingestion. Sent/failed/
+  // discarded rows are retained — the table IS the audit log. ON DELETE
+  // CASCADE: removing an account removes its outbox history, matching the
+  // removeAccount cascade for every other per-account table. IF NOT EXISTS
+  // (table + index): matches the v2/v3 replay-safe convention — fts.test.ts
+  // fakes schemaVersion backward and re-runs migrate() to exercise older
+  // migrations, which replays this entry too.
+  `
+  CREATE TABLE IF NOT EXISTS outbox (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('reply','new')),
+    reply_to_document_id TEXT,
+    outbound_ref TEXT,
+    recipient_display TEXT NOT NULL,
+    to_json TEXT NOT NULL DEFAULT '[]',
+    cc_json TEXT NOT NULL DEFAULT '[]',
+    subject TEXT,
+    body_markdown TEXT NOT NULL,
+    threading_json TEXT,
+    confirm_mode TEXT NOT NULL CHECK (confirm_mode IN ('review','link')),
+    status TEXT NOT NULL CHECK (status IN
+      ('draft','sending','sent','failed','discarded','expired','delivery_unknown')),
+    error TEXT,
+    external_message_id TEXT,
+    created_via TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    sent_at TEXT,
+    expires_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_outbox_account_status ON outbox(account_id, status);
+  `,
 ];
 
 /**
