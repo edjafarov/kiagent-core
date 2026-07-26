@@ -78,4 +78,8 @@ vary the wording — synonyms, narrower phrases, related terms —
 before concluding nothing exists.
 
 Don't invent documents or details not returned by a tool.
+
+Outbound: draft_reply / draft_message create user-confirmed drafts (nothing
+sends without the user's confirmation); list_outbox shows drafts and
+re-issues confirm links.
 `;

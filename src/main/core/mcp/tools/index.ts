@@ -6,6 +6,7 @@
  * exposes, nothing more.
  */
 import type { McpTool, Query } from '@shared/contracts';
+import type { OutboundToolApi } from '@main/outbound/service';
 
 import { countDescription, countInputSchema, makeCountTool } from './count';
 import {
@@ -13,15 +14,49 @@ import {
   digitalMemoryInfoInputSchema,
   makeDigitalMemoryInfoTool,
 } from './digital-memory-info';
+import {
+  draftMessageDescription,
+  draftMessageInputSchema,
+  makeDraftMessageTool,
+} from './draft-message';
+import {
+  draftReplyDescription,
+  draftReplyInputSchema,
+  makeDraftReplyTool,
+} from './draft-reply';
 import { getDescription, getInputSchema, makeGetTool } from './get';
 import {
   getRelatedDescription,
   getRelatedInputSchema,
   makeGetRelatedTool,
 } from './get-related';
+import {
+  listOutboxDescription,
+  listOutboxInputSchema,
+  makeListOutboxTool,
+} from './list-outbox';
 import { makeSearchTool, searchDescription, searchInputSchema } from './search';
 
-export function buildBuiltinTools(query: Query): McpTool[] {
+/** When no outbound service exists on this transport (a stdio sibling with
+ *  no proxy), the tools still register — the tool LIST must not drift
+ *  between transports — but every call explains the situation. */
+const unavailableOutbound: OutboundToolApi = {
+  draftReply: unavailable,
+  draftMessage: unavailable,
+  listOutbox: unavailable,
+};
+async function unavailable(): Promise<never> {
+  throw new Error(
+    'Outbound drafting is unavailable on this transport right now — the ' +
+      'KIAgent app must be running; its HTTP MCP server handles drafts.',
+  );
+}
+
+export function buildBuiltinTools(
+  query: Query,
+  outbound?: OutboundToolApi,
+): McpTool[] {
+  const out = outbound ?? unavailableOutbound;
   const digitalMemoryInfo = makeDigitalMemoryInfoTool(query);
   return [
     {
@@ -58,6 +93,27 @@ export function buildBuiltinTools(query: Query): McpTool[] {
       inputSchema: digitalMemoryInfoInputSchema,
       tier: 'standard',
       call: async () => digitalMemoryInfo(),
+    },
+    {
+      name: 'draft_reply',
+      description: draftReplyDescription,
+      inputSchema: draftReplyInputSchema,
+      tier: 'standard',
+      call: makeDraftReplyTool(out),
+    },
+    {
+      name: 'draft_message',
+      description: draftMessageDescription,
+      inputSchema: draftMessageInputSchema,
+      tier: 'standard',
+      call: makeDraftMessageTool(out),
+    },
+    {
+      name: 'list_outbox',
+      description: listOutboxDescription,
+      inputSchema: listOutboxInputSchema,
+      tier: 'standard',
+      call: makeListOutboxTool(out),
     },
   ];
 }

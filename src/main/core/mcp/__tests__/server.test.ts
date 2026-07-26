@@ -78,9 +78,12 @@ function fakeQuery(): Query {
 const BUILTIN_TOOL_NAMES = [
   'count',
   'digital_memory_info',
+  'draft_message',
+  'draft_reply',
   'get',
   'get_related',
   'get_schema',
+  'list_outbox',
   'query_sql',
   'search',
 ].sort();

@@ -27,6 +27,7 @@ export const digitalMemoryInfoInputSchema = {
 const SAMPLE_SIZE = 500; // Query.search's own cap (store.ts)
 
 export interface DigitalMemoryAccount {
+  id: string;
   source: string;
   identifier: string;
   status: string;
@@ -52,6 +53,7 @@ export function makeDigitalMemoryInfoTool(query: Query) {
     const realAccounts = accounts.filter((a) => a.source !== 'worker');
 
     const digitalAccounts: DigitalMemoryAccount[] = realAccounts.map((a) => ({
+      id: a.id as string,
       source: a.source,
       identifier: a.identifier,
       status: a.status,
