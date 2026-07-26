@@ -25,15 +25,16 @@
     "electron-updater": "^6.8.9",
     "email-reply-parser": "^1.9.4",
     "fast-glob": "^3.3.3",
-    "imapflow": "^1.0.171",
     "google-auth-library": "^10.6.2",
+    "imapflow": "^1.0.171",
     "mailparser": "^3.7.1",
     "mammoth": "^1.12.0",
     "mime": "^3.0.0",
+    "nodemailer": "^6.10.1",
     "pdf-parse": "^1.1.1",
+    "semver": "^7.6.0",
     "tar": "^7.4.3",
     "turndown": "^7.2.4",
-    "semver": "^7.6.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   }
 }
