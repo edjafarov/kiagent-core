@@ -18,7 +18,7 @@ import type {
 import { currentTransport } from '../core/mcp/transport-context';
 import type { LogSink } from '../core/engine/engine';
 import type { CoreStore } from '../core/store/store';
-import { selfAddressesFor, senderAddressFor } from './identity';
+import { EMAIL_RX, selfAddressesFor, senderAddressFor } from './identity';
 import { resolveImapReply } from './resolve';
 import { signConfirmToken, verifyConfirmToken } from './tokens';
 
@@ -87,8 +87,6 @@ export interface OutboundService extends OutboundToolApi {
   setBaseUrl(url: string): void;
 }
 
-const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 export function createOutboundService(deps: {
   store: CoreStore;
   prefs: Prefs;
@@ -96,13 +94,20 @@ export function createOutboundService(deps: {
   logSink: LogSink;
   nowMs?: () => number; // injectable clock for tests; default Date.now
 }): OutboundService {
+  // Token expiry (CONFIRM_TTL_MS) and draft-row expiresAt (DRAFT_TTL_MS) are
+  // both minted off THIS clock. The store's own expireOverdue() sweep reads
+  // `expires_at` against its OWN wall clock (outbox.ts's `deps.now()`) —
+  // a test that fast-forwards nowMs here does NOT move that sweep, and vice
+  // versa. Don't assume the two are the same clock.
   const nowMs = deps.nowMs ?? (() => Date.now());
   let baseUrl: string | null = null;
 
   // A remote MCP session shares this registry but cannot reach 127.0.0.1
   // confirm URLs — refuse before any store access. Phase 4 (remote confirm)
-  // replaces this with tunnel-hosted URLs.
-  const assertLocal = (): void => {
+  // replaces this with tunnel-hosted URLs. Also folds in the "server not
+  // wired up yet" check so a cold service can't leave an orphan draft row
+  // behind before failing on the confirm-URL mint.
+  const assertReady = (): void => {
     if (currentTransport() === 'remote') {
       throw new Error(
         'Outbound drafting is local-only for now — remote confirmation ' +
@@ -110,6 +115,7 @@ export function createOutboundService(deps: {
           'running KIAgent.',
       );
     }
+    if (!baseUrl) throw new Error('outbound: server not ready');
   };
 
   const modeFor = (account: Account): ConfirmMode => {
@@ -135,18 +141,29 @@ export function createOutboundService(deps: {
     return account;
   };
 
-  const confirmUrl = async (
+  // Sync half — takes an already-fetched secret so a caller minting several
+  // URLs in one pass (listOutbox) pays for the secret's meta-read+decrypt
+  // once, not once per row.
+  const buildConfirmUrl = (
+    secret: Buffer,
     draftId: string,
     mode: ConfirmMode,
-  ): Promise<string> => {
+  ): string => {
     if (!baseUrl) throw new Error('outbound: server not ready');
-    const secret = await deps.store.outbox.secret();
     const token = signConfirmToken(
       secret,
       draftId,
       nowMs() + CONFIRM_TTL_MS[mode],
     );
     return `${baseUrl}/outbox/confirm/${token}`;
+  };
+
+  const confirmUrl = async (
+    draftId: string,
+    mode: ConfirmMode,
+  ): Promise<string> => {
+    const secret = await deps.store.outbox.secret();
+    return buildConfirmUrl(secret, draftId, mode);
   };
 
   const toolResult = async (
@@ -164,8 +181,9 @@ export function createOutboundService(deps: {
         warnings,
         instruction:
           `Draft created — nothing has been sent. Show the user this link ` +
-          `to review and send the message: ${url} (it expires in 30 ` +
-          `minutes; if it expires, call list_outbox for a fresh one).`,
+          `to review and send the message: ${url} (it expires in ` +
+          `${CONFIRM_TTL_MS.review / 60_000} minutes; if it expires, call ` +
+          `list_outbox for a fresh one).`,
       };
     }
     return {
@@ -182,8 +200,9 @@ export function createOutboundService(deps: {
         `Draft created — nothing has been sent. Render the draft exactly ` +
         `as returned (recipient, subject, body) for the user to review in ` +
         `chat, then present this link as the send action: ${url}. It opens ` +
-        `a page with a Send button; the link expires in 5 minutes — call ` +
-        `list_outbox for a fresh one if needed.`,
+        `a page with a Send button; the link expires in ` +
+        `${CONFIRM_TTL_MS.link / 60_000} minutes — call list_outbox for a ` +
+        `fresh one if needed.`,
     };
   };
 
@@ -196,7 +215,7 @@ export function createOutboundService(deps: {
     },
 
     async draftReply({ documentId, body, replyAll }) {
-      assertLocal();
+      assertReady();
       const doc = await deps.store.read.document(documentId as DocumentId);
       if (!doc)
         throw new Error(`draft_reply: unknown document '${documentId}'`);
@@ -252,11 +271,12 @@ export function createOutboundService(deps: {
     },
 
     async draftMessage({ accountId, to, subject, body }) {
-      assertLocal();
+      assertReady();
       const account = await accountFor(accountId);
       senderAddressFor(account); // fail fast when no From address resolves
-      const bad = to.filter((t) => !EMAIL_RX.test(t.trim()));
-      if (to.length === 0 || bad.length > 0) {
+      const trimmed = to.map((t) => t.trim());
+      const bad = trimmed.filter((t) => !EMAIL_RX.test(t));
+      if (trimmed.length === 0 || bad.length > 0) {
         throw new Error(
           `draft_message: invalid recipient address(es): ${bad.join(', ') || '(none given)'}`,
         );
@@ -264,8 +284,8 @@ export function createOutboundService(deps: {
       const row = await deps.store.outbox.create({
         accountId: account.id,
         kind: 'new',
-        recipientDisplay: to.join(', '),
-        to,
+        recipientDisplay: trimmed.join(', '),
+        to: trimmed,
         cc: [],
         subject,
         bodyMarkdown: body,
@@ -277,14 +297,20 @@ export function createOutboundService(deps: {
     },
 
     async listOutbox({ limit }) {
-      assertLocal();
+      assertReady();
       await deps.store.outbox.expireOverdue();
       const rows = await deps.store.outbox.listRecent(limit ?? 20);
+      // Fetch the (decrypted) secret at most once per call rather than once
+      // per draft row — with OUTBOX_PENDING_CAP-sized listings this avoids
+      // up to 20 sequential meta-reads+decrypts for the same 32 bytes.
+      const secret = rows.some((r) => r.status === 'draft')
+        ? await deps.store.outbox.secret()
+        : null;
       const out: OutboxListItem[] = [];
       for (const row of rows) {
         let url: string | null = null;
         if (row.status === 'draft') {
-          url = await confirmUrl(row.id, row.confirmMode);
+          url = buildConfirmUrl(secret as Buffer, row.id, row.confirmMode);
         }
         out.push({
           draft_id: row.id,

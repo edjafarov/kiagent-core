@@ -7,7 +7,7 @@
  */
 import type { Account } from '@shared/contracts';
 
-const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 interface OutboundAccountConfig {
   user?: string;

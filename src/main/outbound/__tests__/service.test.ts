@@ -11,7 +11,13 @@ import type {
 
 import { openDb } from '../../db/app-db';
 import { openStore, type CoreStore } from '../../core/store/store';
-import { createOutboundService, type OutboundService } from '../service';
+import {
+  CONFIRM_TTL_MS,
+  createOutboundService,
+  DRAFT_TTL_MS,
+  type OutboundService,
+} from '../service';
+import { verifyConfirmToken } from '../tokens';
 import { runWithTransport } from '../../core/mcp/transport-context';
 
 const deps = {
@@ -231,5 +237,54 @@ describe('outbound service — drafts', () => {
     );
     const row = await store.outbox.get(r.draft_id);
     expect(row?.to.some((t) => t.includes('me@example.com'))).toBe(false);
+  });
+
+  it('mints confirm-URL TTLs and the draft-row expiry exactly off CONFIRM_TTL_MS/DRAFT_TTL_MS', async () => {
+    const fixedNow = 1_753_500_000_000;
+    const clocked = createOutboundService({
+      store,
+      prefs: fakePrefs(),
+      senders: new Map([['imap', { send: async () => ({}) }]]),
+      logSink,
+      nowMs: () => fixedNow,
+    });
+    clocked.setBaseUrl('http://127.0.0.1:7421');
+
+    const review = await clocked.draftReply({ documentId: docId, body: 'r' });
+    expect(review.mode).toBe('review');
+    const reviewToken = review.confirm_url.split('/outbox/confirm/')[1];
+    const secret = await store.outbox.secret();
+    const reviewParsed = verifyConfirmToken(secret, reviewToken, fixedNow);
+    expect(reviewParsed).not.toBeNull();
+    expect((reviewParsed?.expiresAtMs ?? 0) - fixedNow).toBe(
+      CONFIRM_TTL_MS.review,
+    );
+    const reviewRow = await store.outbox.get(review.draft_id);
+    expect(reviewRow?.expiresAt).toBe(
+      new Date(fixedNow + DRAFT_TTL_MS).toISOString(),
+    );
+
+    await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
+      outbound: { mode: 'link' },
+    });
+    const link = await clocked.draftReply({ documentId: docId, body: 'l' });
+    expect(link.mode).toBe('link');
+    const linkToken = link.confirm_url.split('/outbox/confirm/')[1];
+    const linkParsed = verifyConfirmToken(secret, linkToken, fixedNow);
+    expect(linkParsed).not.toBeNull();
+    expect((linkParsed?.expiresAtMs ?? 0) - fixedNow).toBe(CONFIRM_TTL_MS.link);
+  });
+
+  it('falls back to the prefs default mode when the account has no per-account mode', async () => {
+    const withDefault = createOutboundService({
+      store,
+      prefs: fakePrefs('link'),
+      senders: new Map([['imap', { send: async () => ({}) }]]),
+      logSink,
+    });
+    withDefault.setBaseUrl('http://127.0.0.1:7421');
+    const r = await withDefault.draftReply({ documentId: docId, body: 'x' });
+    expect(r.mode).toBe('link');
   });
 });
