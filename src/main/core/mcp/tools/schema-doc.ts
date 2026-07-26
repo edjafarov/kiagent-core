@@ -214,6 +214,116 @@ TEXT.`,
       ],
     },
     {
+      name: 'outbox',
+      description:
+        'Frozen outbound drafts + their audit trail (replies/new messages awaiting user confirmation, and the sent/failed/discarded/expired history). NOT a document type: drafts are mutable workflow state, and the sent copy re-enters the corpus through normal ingestion.',
+      columns: [
+        { name: 'id', type: 'TEXT PK', notes: 'UUIDv7.' },
+        {
+          name: 'account_id',
+          type: 'TEXT',
+          notes:
+            'FK → accounts.id (ON DELETE CASCADE). Owning (sending) account.',
+        },
+        {
+          name: 'kind',
+          type: 'TEXT',
+          notes: "Enum — 'reply' or 'new'.",
+        },
+        {
+          name: 'reply_to_document_id',
+          type: 'TEXT',
+          notes: "FK → documents.id when kind='reply'; NULL for a new message.",
+        },
+        {
+          name: 'outbound_ref',
+          type: 'TEXT (JSON)',
+          notes:
+            "Opaque per-source reply target, round-tripped verbatim to the same source's Sender. NULL unless the source's toDocument wrote metadata.outbound.",
+        },
+        {
+          name: 'recipient_display',
+          type: 'TEXT',
+          notes: 'Human-readable recipient summary shown on confirm surfaces.',
+        },
+        {
+          name: 'to_json',
+          type: 'TEXT (JSON array)',
+          notes: 'Recipient addresses. Default "[]".',
+        },
+        {
+          name: 'cc_json',
+          type: 'TEXT (JSON array)',
+          notes: 'CC addresses. Default "[]".',
+        },
+        {
+          name: 'subject',
+          type: 'TEXT',
+          notes: 'May be NULL (e.g. threaded replies that inherit a subject).',
+        },
+        {
+          name: 'body_markdown',
+          type: 'TEXT',
+          notes: 'The frozen draft body.',
+        },
+        {
+          name: 'threading_json',
+          type: 'TEXT (JSON)',
+          notes:
+            'Opaque per-source threading headers/ids; may be NULL for a new (non-reply) message.',
+        },
+        {
+          name: 'confirm_mode',
+          type: 'TEXT',
+          notes:
+            "Enum — 'review' (full app-served review page) or 'link' (in-chat review + short-TTL signed link). Frozen at creation.",
+        },
+        {
+          name: 'status',
+          type: 'TEXT',
+          notes:
+            "Enum — 'draft', 'sending', 'sent', 'failed', 'discarded', 'expired', 'delivery_unknown'. 'delivery_unknown' means the process died mid-send; never auto-retried.",
+        },
+        {
+          name: 'error',
+          type: 'TEXT',
+          notes: "Send failure detail; NULL unless status='failed'.",
+        },
+        {
+          name: 'external_message_id',
+          type: 'TEXT',
+          notes: 'Transport-assigned id once sent; NULL until then.',
+        },
+        {
+          name: 'created_via',
+          type: 'TEXT',
+          notes: "'mcp-local' or 'mcp-remote' — which MCP plane created it.",
+        },
+        {
+          name: 'created_at',
+          type: 'TEXT (ISO-8601)',
+          notes: 'When the draft was frozen.',
+        },
+        {
+          name: 'sent_at',
+          type: 'TEXT (ISO-8601)',
+          notes:
+            'When the send transport accepted the message; NULL until sent.',
+        },
+        {
+          name: 'expires_at',
+          type: 'TEXT (ISO-8601)',
+          notes: 'Confirmation deadline; past this a pending draft expires.',
+        },
+      ],
+      relations: [
+        'outbox.account_id → accounts.id',
+        "outbox.reply_to_document_id → documents.id (kind='reply')",
+      ],
+      prep_notes:
+        'Sent/failed/discarded/expired rows are retained — this table IS the audit log, not just a queue.',
+    },
+    {
       name: 'documents_fts',
       description:
         'FTS5 stemmed full-text index over title/markdown (+ per-language stem columns). Query with MATCH; join back by doc_id.',
