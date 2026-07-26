@@ -1,4 +1,4 @@
-import type { Session } from '@shared/contracts';
+import type { Credentials, Session } from '@shared/contracts';
 
 import { bearerFetch } from './bearer-fetch';
 import type { GmailApiMessage } from './parser';
@@ -9,8 +9,13 @@ const BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 // this port uses (~25 threads/batch vs legacy's 500-thread pages).
 const THREAD_FETCH_CONCURRENCY = 4;
 
-async function tokenFor(session: Session): Promise<string> {
-  const creds = await session.credentials();
+// Loosened beyond `Session`: the outbound Sender that calls sendGmailMessage
+// is not a pull Session (no `account`/`signal`/`log`) — it only ever needs
+// the credentials verb.
+async function tokenFor(auth: {
+  credentials(): Promise<Credentials | null>;
+}): Promise<string> {
+  const creds = await auth.credentials();
   if (!creds?.accessToken)
     throw new Error('gmail: no credentials available for account');
   return creds.accessToken;
@@ -147,4 +152,35 @@ export function getMessage(
   id: string,
 ): Promise<GmailApiMessage> {
   return fetchGmail(session, `${BASE}/messages/${id}?format=full`);
+}
+
+export interface GmailSendResult {
+  id: string;
+  threadId: string;
+}
+
+/** POST users/me/messages/send. `raw` is the full RFC822 message; `threadId`
+ *  (the Gmail API thread id, NOT an RFC Message-ID) threads the reply.
+ *  Never retried — a retried send can double-deliver. */
+export function sendGmailMessage(
+  auth: { credentials(): Promise<Credentials | null> },
+  raw: Buffer,
+  threadId?: string,
+): Promise<GmailSendResult> {
+  return bearerFetch<GmailSendResult>(
+    `${BASE}/messages/send`,
+    () => tokenFor(auth),
+    {
+      errorPrefix: 'gmail',
+      logTag: '[gmail]',
+      method: 'POST',
+      contentType: 'application/json',
+      body: JSON.stringify({
+        raw: raw.toString('base64url'),
+        ...(threadId ? { threadId } : {}),
+      }),
+      // Sending is not idempotent: a retried 5xx could double-deliver.
+      maxAttempts: 1,
+    },
+  );
 }

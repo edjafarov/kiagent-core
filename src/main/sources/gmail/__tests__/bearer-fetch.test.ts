@@ -98,4 +98,49 @@ describe('bearerFetch retry/backoff', () => {
     );
     expect(fetchMock as unknown as jest.Mock).toHaveBeenCalledTimes(1); // never retried
   });
+
+  it('passes method, body, and content-type through', async () => {
+    const fetchMock = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ done: true }),
+      text: async () => '{"done":true}',
+      headers: { get: () => null },
+    })) as unknown as jest.Mock;
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await bearerFetch('https://x/y', async () => 'tok', {
+      errorPrefix: 'gmail',
+      method: 'POST',
+      body: '{"a":1}',
+      contentType: 'application/json',
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.method).toBe('POST');
+    expect(init.body).toBe('{"a":1}');
+    expect(init.headers['content-type']).toBe('application/json');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+  });
+
+  it('maxAttempts 1 never retries a retryable failure', async () => {
+    const fetchMock = jest.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+      text: async () => 'boom',
+      headers: { get: () => null },
+    })) as unknown as jest.Mock;
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      bearerFetch('https://x/y', async () => 'tok', {
+        errorPrefix: 'gmail',
+        method: 'POST',
+        body: '{}',
+        maxAttempts: 1,
+      }),
+    ).rejects.toThrow(/gmail 500/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

@@ -29,6 +29,15 @@ export interface BearerFetchOpts {
   errorPrefix: string;
   logTag?: string;
   signal?: AbortSignal;
+  /** HTTP method; default GET. */
+  method?: string;
+  /** Request body — a STRING (reusable across retry attempts, never a stream). */
+  body?: string;
+  /** content-type header, set only when body is present. */
+  contentType?: string;
+  /** Retry-attempt cap override; default the module's MAX_ATTEMPTS. Pass 1
+   *  for non-idempotent calls (send) — a retried send can double-deliver. */
+  maxAttempts?: number;
 }
 
 function isRetryableGoogleFailure(status: number, body: string): boolean {
@@ -70,6 +79,13 @@ export async function bearerFetch<T>(
 ): Promise<T> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const responseType = opts.responseType ?? 'json';
+  // `opts.maxAttempts` counts TOTAL attempts (1 = try once, never retry) —
+  // one fewer than the loop's own retry-permission threshold, which counts
+  // retries-remaining-after-this-one. Falling back to MAX_ATTEMPTS here
+  // (rather than MAX_ATTEMPTS - 1) keeps existing GET callers byte-for-byte
+  // unchanged.
+  const attemptCap =
+    opts.maxAttempts !== undefined ? opts.maxAttempts - 1 : MAX_ATTEMPTS;
   for (let attempt = 0; ; attempt += 1) {
     if (opts.signal?.aborted) throw new Error('aborted');
     const token = await getToken();
@@ -84,8 +100,16 @@ export async function bearerFetch<T>(
       | undefined;
     let netError: Error | undefined;
     try {
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+      };
+      if (opts.body !== undefined && opts.contentType) {
+        headers['content-type'] = opts.contentType;
+      }
       const r = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
+        method: opts.method,
+        body: opts.body,
+        headers,
         signal: controller.signal,
       });
       if (r.ok) {
@@ -111,7 +135,7 @@ export async function bearerFetch<T>(
 
     if (netError) {
       if (opts.signal?.aborted) throw netError;
-      if (attempt < MAX_ATTEMPTS) {
+      if (attempt < attemptCap) {
         const delay =
           Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 250;
         if (opts.logTag) {
@@ -120,7 +144,7 @@ export async function bearerFetch<T>(
               ? `timeout(${timeoutMs}ms)`
               : netError.message;
           console.warn(
-            `${opts.logTag} ${reason} ${url} — retry ${attempt + 1}/${MAX_ATTEMPTS} after ${Math.round(delay)}ms`,
+            `${opts.logTag} ${reason} ${url} — retry ${attempt + 1}/${attemptCap} after ${Math.round(delay)}ms`,
           );
         }
         await sleep(delay, opts.signal);
@@ -130,7 +154,7 @@ export async function bearerFetch<T>(
     }
 
     const { status, body, retryAfter } = httpFail!;
-    if (attempt < MAX_ATTEMPTS && isRetryableGoogleFailure(status, body)) {
+    if (attempt < attemptCap && isRetryableGoogleFailure(status, body)) {
       const retryAfterMs = Number(retryAfter);
       const delay =
         Number.isFinite(retryAfterMs) && retryAfterMs > 0
@@ -138,7 +162,7 @@ export async function bearerFetch<T>(
           : Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 250;
       if (opts.logTag) {
         console.warn(
-          `${opts.logTag} ${status} ${url} — retry ${attempt + 1}/${MAX_ATTEMPTS} after ${Math.round(delay)}ms`,
+          `${opts.logTag} ${status} ${url} — retry ${attempt + 1}/${attemptCap} after ${Math.round(delay)}ms`,
         );
       }
       await sleep(delay, opts.signal);
