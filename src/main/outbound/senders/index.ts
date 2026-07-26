@@ -8,6 +8,7 @@ import type { Sender } from '@shared/contracts';
 
 import type { LogSink } from '../../core/engine/engine';
 import type { CoreStore } from '../../core/store/store';
+import { createGmailSender } from './gmail';
 import { createSmtpSender } from './smtp';
 
 export function buildBundledSenders(deps: {
@@ -27,5 +28,6 @@ export function buildBundledSenders(deps: {
         log: (msg) => deps.logSink.log('outbound', 'error', msg),
       }),
     ],
+    ['gmail', createGmailSender({ store: deps.store })],
   ]);
 }

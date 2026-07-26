@@ -237,7 +237,7 @@ describe('smtp sender', () => {
 });
 
 describe('bundled senders', () => {
-  it('ships exactly the imap sender in phase 1', async () => {
+  it('ships the imap and gmail senders (phase 5 adds gmail)', async () => {
     const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-snd-'));
     const store2 = openStore(await openDb(path.join(dir2, 't.db')), deps);
     try {
@@ -245,7 +245,7 @@ describe('bundled senders', () => {
         store: store2,
         logSink: { log: () => {} },
       });
-      expect([...senders.keys()]).toEqual(['imap']);
+      expect([...senders.keys()]).toEqual(['imap', 'gmail']);
     } finally {
       await store2.close();
       fs.rmSync(dir2, { recursive: true, force: true });
