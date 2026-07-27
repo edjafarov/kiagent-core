@@ -51,7 +51,10 @@ function sanitize(raw: unknown): AppPrefs {
       autoInstall: r.models?.autoInstall !== false,
     },
     outbound: {
-      defaultMode: r.outbound?.defaultMode === 'link' ? 'link' : 'review',
+      defaultMode:
+        r.outbound?.defaultMode === 'link' || r.outbound?.defaultMode === 'chat'
+          ? r.outbound.defaultMode
+          : 'review',
     },
     onboarding: {
       sourceBackfilledAt: isoOrNull(r.onboarding?.sourceBackfilledAt),

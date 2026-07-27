@@ -60,6 +60,20 @@ describe('prefs.outbound', () => {
     await prefs.patch({ outbound: { defaultMode: 'link' } });
     expect(prefs.get().outbound.defaultMode).toBe('link');
   });
+
+  it('accepts chat as the global outbound default (mode C, decision 2026-07-27)', async () => {
+    const prefs = createPrefs(dir);
+    await prefs.patch({ outbound: { defaultMode: 'chat' } });
+    expect(prefs.get().outbound.defaultMode).toBe('chat');
+  });
+
+  it('still sanitizes junk modes to review', async () => {
+    const prefs = createPrefs(dir);
+    await prefs.patch({
+      outbound: { defaultMode: 'bogus' as unknown as 'review' },
+    });
+    expect(prefs.get().outbound.defaultMode).toBe('review');
+  });
 });
 
 describe('prefs.onboarding', () => {

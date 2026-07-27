@@ -122,8 +122,19 @@ export function Advanced(): React.ReactElement {
           >
             <option value="review">Review page (recommended)</option>
             <option value="link">One-click confirm link</option>
+            <option value="chat">
+              Chat confirmation (trusts the assistant)
+            </option>
           </select>
         </div>
+        {prefs.outbound.defaultMode === 'chat' && (
+          <div className="t-meta">
+            The assistant sends after you agree in chat — the app will not show
+            a review page. Applies to every account set to “App default”; give
+            an account its own Outbound mode to keep page confirmation there.
+            Sends are capped at 30 per hour per account.
+          </div>
+        )}
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button

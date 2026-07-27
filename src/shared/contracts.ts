@@ -800,9 +800,10 @@ export interface AppPrefs {
    *  download (a Settings Cancel sets it false). */
   models: { override: string; autoInstall: boolean };
   onboarding: OnboardingPrefs;
-  /** Outbound confirmation default; per-account override lives in
-   *  Account.config.outbound.mode. 'review' = full review page (default);
-   *  'link' = in-chat review + one-click signed link. */
+  /** Outbound confirmation default for every account without a per-account
+   *  override. 'chat' (mode C) is a deliberate GLOBAL opt-in here (decision
+   *  2026-07-27) — the per-account setting offers only review/link and acts
+   *  as the opt-out for individual accounts. */
   outbound: { defaultMode: ConfirmMode };
 }
 
