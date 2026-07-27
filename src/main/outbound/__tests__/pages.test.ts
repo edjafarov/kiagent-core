@@ -103,7 +103,7 @@ describe('failedPage', () => {
     expect(html).toContain('stroke="#d97706"'); // warn icon
   });
 
-  it('unknown (ambiguous): no form, no "Try again", "Delivery uncertain" title matching the check-Sent-folder copy, error icon', () => {
+  it('unknown (ambiguous): no form, no "Try again", "Delivery uncertain" title matching the check-Sent-folder copy, warn icon', () => {
     const shaped = shapeOutboundError('send failed: boom');
     expect(shaped.kind).toBe('unknown');
     expect(shaped.canRetry).toBe(false);
@@ -120,7 +120,10 @@ describe('failedPage', () => {
     expect(html).toContain(
       "If it's not in your Sent folder, ask your assistant to create a new draft.",
     );
-    expect(html).toContain('stroke="#e11d48"'); // error icon
+    // Amber warn, not red error: this page's whole point is uncertainty,
+    // mirroring the delivery_unknown status page's icon.
+    expect(html).toContain('stroke="#d97706"');
+    expect(html).not.toContain('stroke="#e11d48"');
   });
 
   it('unsupported: certain failure, still title "Not sent", no retry form', () => {
@@ -139,6 +142,7 @@ describe('failedPage', () => {
     expect(html).not.toContain('method="POST"');
     expect(html).not.toContain('Try again');
     expect(html).toContain('Ask your assistant to create a new draft.');
+    expect(html).toContain('stroke="#e11d48"'); // certain failure keeps the error icon
   });
 });
 

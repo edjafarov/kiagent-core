@@ -201,9 +201,11 @@ export function failedPage(
   // ever rejected — its own message already says the send "MAY still have
   // been sent — check your Sent folder". A headline of 'Not sent' plus
   // "create a new draft" contradicts that outright, so this kind alone gets
-  // its own title and non-retryable note. Every other non-retryable kind
-  // ('unsupported') IS certain the send never went out, so 'Not sent' and
-  // the plain "create a new draft" note stay correct for it.
+  // its own title, non-retryable note, and the amber warn icon (matching
+  // the delivery_unknown status page, which frames the same uncertainty).
+  // Every other non-retryable kind ('unsupported') IS certain the send
+  // never went out, so 'Not sent', the plain "create a new draft" note,
+  // and the red error icon stay correct for it.
   const uncertain = p.shaped.kind === 'unknown';
   const retry = p.shaped.canRetry
     ? `<div class="ob-actions">${sendForm(p.confirmPath, 'Try again')}</div>`
@@ -214,7 +216,7 @@ export function failedPage(
       }</p>`;
   const body =
     chrome(`
-  ${ICON_SVGS[p.shaped.canRetry ? 'warn' : 'error']}
+  ${ICON_SVGS[p.shaped.canRetry || uncertain ? 'warn' : 'error']}
   <p class="ob-msg">${esc(p.shaped.message)}</p>
   <div class="ob-to-list">To ${esc(row.recipientDisplay)}</div>
   ${retry}
