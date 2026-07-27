@@ -159,9 +159,23 @@ export interface GmailSendResult {
   threadId: string;
 }
 
+const SEND_RETRY_MARKERS =
+  /rateLimitExceeded|userRateLimitExceeded|quotaExceeded/i;
+
+/** Send-safe retry predicate: ONLY proven request-rejections. A 429 or a
+ *  quota-403 means Google refused the request — nothing was sent, so a
+ *  retry can never double-deliver. Everything else (5xx, other 403s,
+ *  network errors, timeouts) is ambiguous and must fail fast. */
+export function isSendSafeRetry(status: number, body: string): boolean {
+  return status === 429 || (status === 403 && SEND_RETRY_MARKERS.test(body));
+}
+
 /** POST users/me/messages/send. `raw` is the full RFC822 message; `threadId`
  *  (the Gmail API thread id, NOT an RFC Message-ID) threads the reply.
- *  Never retried — a retried send can double-deliver. */
+ *  Retried ONLY via isSendSafeRetry (quota/rate rejections, with backoff +
+ *  Retry-After via bearerFetch); never on ambiguous failures — a retried
+ *  timeout/5xx could double-deliver. 30s per-attempt timeout: a hang must
+ *  not pin the confirm page for bearerFetch's default 90s. */
 export function sendGmailMessage(
   auth: { credentials(): Promise<Credentials | null> },
   raw: Buffer,
@@ -179,8 +193,10 @@ export function sendGmailMessage(
         raw: raw.toString('base64url'),
         ...(threadId ? { threadId } : {}),
       }),
-      // Sending is not idempotent: a retried 5xx could double-deliver.
-      maxAttempts: 1,
+      maxAttempts: 4,
+      timeoutMs: 30_000,
+      retryNetErrors: false,
+      retryOn: isSendSafeRetry,
     },
   );
 }
