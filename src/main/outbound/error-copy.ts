@@ -5,6 +5,18 @@
  * it on the stored summary to pick page copy and gate the Try-again button.
  * Summaries are produced by this module, so re-classification is a fixed
  * point: shape(shape(x).summary) preserves kind/canRetry (tested).
+ *
+ * DESIGN RULE (load-bearing — do not reintroduce per-branch normalization):
+ * all classification happens on the single-line projection of the input,
+ * computed ONCE at the top of `shapeOutboundError`. Every marker regex and
+ * every summary construction reads that same normalized `text`, so pass 1
+ * (raw input) and pass 2 (re-shaping the stored summary) always see the
+ * same kind of view — a summary can only match what its raw input already
+ * matched once flattened. Normalizing per-branch instead (as an earlier
+ * version of this module did) lets an embedded newline defeat a marker on
+ * pass 1 while the flattened summary satisfies it on pass 2, silently
+ * flipping canRetry false→true for a send never proven pre-delivery
+ * rejected.
  */
 export type OutboundErrorKind =
   | 'transient'
@@ -53,7 +65,9 @@ function truncate(s: string, n: number): string {
 }
 
 export function shapeOutboundError(raw: string): ShapedOutboundError {
-  const text = (raw ?? '').trim();
+  // Normalize ONCE — every classifier below reads this same single-line
+  // projection (see the module docstring's design rule).
+  const text = singleLine((raw ?? '').trim());
   if (!text) {
     return {
       kind: 'unknown',
@@ -87,7 +101,7 @@ export function shapeOutboundError(raw: string): ShapedOutboundError {
     if (/^rate-limited:/.test(text)) {
       return {
         kind: 'transient',
-        summary: truncate(singleLine(text), 200),
+        summary: truncate(text, 200),
         message: BUSY_MESSAGE,
         canRetry: true,
       };
@@ -100,7 +114,7 @@ export function shapeOutboundError(raw: string): ShapedOutboundError {
     };
   }
   if (status === '401' || AUTH_MARKERS.test(text)) {
-    const summary = truncate(singleLine(text), 200);
+    const summary = truncate(text, 200);
     return {
       kind: 'auth',
       summary,
@@ -111,7 +125,7 @@ export function shapeOutboundError(raw: string): ShapedOutboundError {
   if (UNSUPPORTED.test(text)) {
     return {
       kind: 'unsupported',
-      summary: truncate(singleLine(text), 200),
+      summary: truncate(text, 200),
       message:
         'This account type cannot send messages yet — ask your assistant to use a supported account.',
       canRetry: false,
@@ -124,8 +138,8 @@ export function shapeOutboundError(raw: string): ShapedOutboundError {
   return {
     kind: 'unknown',
     summary: already
-      ? truncate(singleLine(text), 220)
-      : `send failed: ${truncate(singleLine(text), 200)}`,
+      ? truncate(text, 220)
+      : `send failed: ${truncate(text, 200)}`,
     message: UNKNOWN_MESSAGE,
     canRetry: false,
   };

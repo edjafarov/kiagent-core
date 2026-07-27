@@ -17,6 +17,29 @@ const EMBEDDED_STATUS_DECOY =
 // generated reconnect phrases — must not be classified as auth.
 const UNRELATED_RECONNECT_WORD =
   'smtp permanent 550: mailbox unavailable, contact reconnect-notify@vendor.com for help';
+// An embedded newline splits the bearerFetch head token from its status on
+// the RAW input; once flattened to a single line by the classifier, "429"
+// becomes the second token — must classify as transient/true on BOTH the
+// raw pass and the re-shaped pass (no unsupported/false → transient/true
+// flip from per-branch normalization).
+const REPRO_MULTILINE_STATUS_TOKEN =
+  'gmail\n429 https://x is not supported yet';
+// An embedded newline splits the auth reconnect phrase across two lines on
+// the RAW input; once flattened, the full `reconnect … in Settings` phrase
+// is present — must classify as auth/true on BOTH passes (no
+// unknown/false → auth/true flip).
+const REPRO_MULTILINE_AUTH_PHRASE = 'boom reconnect x\nin Settings';
+// A stack-trace-shaped raw with "429" embedded deep in the body, NOT at
+// the trusted bearerFetch head-token position — must stay unknown/false
+// on both passes (the anchored HTTP_STATUS regex must not do a raw
+// substring search).
+const STACK_TRACE_WITH_EMBEDDED_429 =
+  'Error: x\n    at foo (bar.ts:1:2)\n    429';
+// `rateLimitExceeded` on its own line, unrelated to the head-token
+// position — QUOTA_MARKERS' bare-word alternative is unanchored so this
+// was already immune, but it belongs in the corpus as a regression guard.
+const QUOTA_MARKER_ON_OWN_LINE =
+  'some upstream error\nrateLimitExceeded\nplease retry';
 
 describe('shapeOutboundError', () => {
   it('classifies the smoke-test quota 403 as transient/retryable', () => {
@@ -89,12 +112,37 @@ describe('shapeOutboundError', () => {
       '',
       EMBEDDED_STATUS_DECOY,
       UNRELATED_RECONNECT_WORD,
+      REPRO_MULTILINE_STATUS_TOKEN,
+      REPRO_MULTILINE_AUTH_PHRASE,
+      STACK_TRACE_WITH_EMBEDDED_429,
+      QUOTA_MARKER_ON_OWN_LINE,
     ]) {
       const first = shapeOutboundError(raw);
       const second = shapeOutboundError(first.summary);
       expect(second.kind).toBe(first.kind);
       expect(second.canRetry).toBe(first.canRetry);
     }
+  });
+  it('a marker split across lines by an embedded newline classifies identically on both passes (no false→true flip)', () => {
+    for (const raw of [
+      REPRO_MULTILINE_STATUS_TOKEN,
+      REPRO_MULTILINE_AUTH_PHRASE,
+    ]) {
+      const first = shapeOutboundError(raw);
+      const second = shapeOutboundError(first.summary);
+      expect(second.kind).toBe(first.kind);
+      expect(second.canRetry).toBe(first.canRetry);
+    }
+    // Pinned exact values (not just cross-pass equality): once flattened,
+    // the marker IS present on pass 1 too — that's the fix, not a new bug.
+    expect(shapeOutboundError(REPRO_MULTILINE_STATUS_TOKEN).kind).toBe(
+      'transient',
+    );
+    expect(shapeOutboundError(REPRO_MULTILINE_STATUS_TOKEN).canRetry).toBe(
+      true,
+    );
+    expect(shapeOutboundError(REPRO_MULTILINE_AUTH_PHRASE).kind).toBe('auth');
+    expect(shapeOutboundError(REPRO_MULTILINE_AUTH_PHRASE).canRetry).toBe(true);
   });
   it('never lets an unrelated embedded "(HTTP nnn)" promote unknown to transient on re-shape', () => {
     const first = shapeOutboundError(EMBEDDED_STATUS_DECOY);
