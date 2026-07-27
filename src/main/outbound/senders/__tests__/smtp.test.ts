@@ -234,6 +234,69 @@ describe('smtp sender', () => {
     await store.vault.delete(accountId);
     await expect(sender().send(intent())).rejects.toThrow(/password/i);
   });
+
+  it('retries a transient (451) sendMail rejection once then succeeds', async () => {
+    let calls = 0;
+    sendMail = jest.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        const err = new Error('4.3.0 Try again later') as Error & {
+          responseCode?: number;
+        };
+        err.responseCode = 451;
+        throw err;
+      }
+      return {};
+    });
+    createTransport = jest.fn((_opts: unknown) => ({ sendMail }));
+    const result = await createSmtpSender({
+      store,
+      createTransport,
+      connectImap: (async () => fakeImapClient()) as never,
+      sleep: async () => {},
+    }).send(intent());
+    expect(result.externalMessageId).toMatch(/^<.+>$/);
+    expect(sendMail).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up on an always-451 sendMail rejection and labels it for the error-copy classifier', async () => {
+    sendMail = jest.fn(async () => {
+      const err = new Error('4.3.0 Try again later') as Error & {
+        responseCode?: number;
+      };
+      err.responseCode = 451;
+      throw err;
+    });
+    createTransport = jest.fn((_opts: unknown) => ({ sendMail }));
+    await expect(
+      createSmtpSender({
+        store,
+        createTransport,
+        connectImap: (async () => fakeImapClient()) as never,
+        sleep: async () => {},
+      }).send(intent()),
+    ).rejects.toThrow(/^smtp transient 451: /);
+  });
+
+  it('does not retry a non-transient (550) sendMail rejection', async () => {
+    sendMail = jest.fn(async () => {
+      const err = new Error('5.1.1 No such user') as Error & {
+        responseCode?: number;
+      };
+      err.responseCode = 550;
+      throw err;
+    });
+    createTransport = jest.fn((_opts: unknown) => ({ sendMail }));
+    const rejection = createSmtpSender({
+      store,
+      createTransport,
+      connectImap: (async () => fakeImapClient()) as never,
+      sleep: async () => {},
+    }).send(intent());
+    await expect(rejection).rejects.toThrow(/5\.1\.1 No such user/);
+    await expect(rejection).rejects.not.toThrow(/^smtp transient/);
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('bundled senders', () => {

@@ -15,6 +15,7 @@ import { connectImapClient } from '../../sources/imap/client';
 import { resolveMailboxes } from '../../sources/imap/folders';
 import type { ImapAccountConfig } from '../../sources/imap/types';
 import { senderAddressFor } from '../identity';
+import { withTransientRetry } from './retry';
 
 export interface SMTPTransportOptions {
   host: string;
@@ -61,6 +62,19 @@ function bareAddress(addr: string): string {
   return (m ? m[1] : addr).trim();
 }
 
+// SMTP transient pre-acceptance rejections (RFC 5321 4yz): the server
+// refused to take the message NOW but a retry may succeed. Connection
+// and timeout errors are deliberately absent — ambiguous once DATA has
+// started (spec §1).
+const TRANSIENT_SMTP_CODES = new Set([421, 450, 451, 452]);
+
+function transientSmtpCode(err: unknown): number | null {
+  const code = (err as { responseCode?: unknown } | null)?.responseCode;
+  return typeof code === 'number' && TRANSIENT_SMTP_CODES.has(code)
+    ? code
+    : null;
+}
+
 export function createSmtpSender(deps: {
   store: CoreStore;
   /** Test seams — default to the real nodemailer/imapflow paths. */
@@ -72,6 +86,8 @@ export function createSmtpSender(deps: {
   };
   connectImap?: typeof connectImapClient;
   log?: (msg: string) => void;
+  /** Test seam, threaded through to withTransientRetry; default real sleep. */
+  sleep?: (ms: number) => Promise<void>;
 }): Sender {
   const createTransport = deps.createTransport ?? realCreateTransport;
   const connectImap = deps.connectImap ?? connectImapClient;
@@ -119,13 +135,33 @@ export function createSmtpSender(deps: {
         secure,
         auth: { user: imapCfg.user, pass },
       });
-      await transport.sendMail({
-        envelope: {
-          from: fromAddress,
-          to: [...to, ...(cc ?? [])].map(bareAddress),
-        },
-        raw,
-      });
+      try {
+        await withTransientRetry(
+          () =>
+            transport.sendMail({
+              envelope: {
+                from: fromAddress,
+                to: [...to, ...(cc ?? [])].map(bareAddress),
+              },
+              raw,
+            }),
+          {
+            isTransient: (err) => transientSmtpCode(err) !== null,
+            sleep: deps.sleep,
+          },
+        );
+      } catch (err) {
+        const code = transientSmtpCode(err);
+        // Label exhausted-transient failures so the error-copy classifier
+        // (and the Try-again gate) can recognize a provably-unsent failure;
+        // raw nodemailer messages are not reliably regexable.
+        if (code !== null) {
+          throw new Error(
+            `smtp transient ${code}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        throw err;
+      }
 
       // Sent-append is best-effort: the message already left over SMTP, so a
       // failure here must never fail the send.
