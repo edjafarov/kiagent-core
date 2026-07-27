@@ -89,6 +89,14 @@ export function toDocument(
         from: m.from,
         date: m.date.toISOString(),
         snippet: m.body.slice(0, 200),
+        // Per-message recipients: a reply-all has to reconstruct the
+        // audience of the message being replied to, not the thread's
+        // first message. `replyTo` stays the RAW header (a string, not a
+        // split list) — it is a single mailbox in practice and the reply
+        // resolver treats it as the one address that overrides From:.
+        to: m.to,
+        cc: m.cc,
+        replyTo: m.headers['reply-to'] ?? null,
       })),
     },
     // Last message date, per the task brief's design — a deliberate

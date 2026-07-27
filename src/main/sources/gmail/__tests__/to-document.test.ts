@@ -112,6 +112,82 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
     expect(messages[1].snippet).toContain('Works for me.');
   });
 
+  it('projects per-message to/cc/replyTo into metadata.messages[]', () => {
+    // Inline fixture (not thread.json — three tests above assert exact
+    // values against that shared file). Message 2 is the reply-all shape
+    // the outbound reply resolver consumes: multiple To:, a Cc:, and a
+    // Reply-To: that must win over From:.
+    const item: GmailThreadItem = {
+      id: 'thread-reply-all',
+      accountEmail: 'me@gmail.com',
+      messages: [
+        {
+          id: 'rm1',
+          threadId: 'thread-reply-all',
+          labelIds: ['INBOX'],
+          internalDate: '1704106800000',
+          payload: {
+            mimeType: 'text/plain',
+            headers: [
+              { name: 'From', value: 'Alice <alice@x.com>' },
+              { name: 'To', value: 'me@gmail.com' },
+              { name: 'Subject', value: 'Kickoff' },
+              { name: 'Message-ID', value: '<rm1@x.com>' },
+            ],
+            body: { data: 'S2lja29mZiBhZ2VuZGEgYXR0YWNoZWQu', size: 24 },
+          },
+        },
+        {
+          id: 'rm2',
+          threadId: 'thread-reply-all',
+          labelIds: ['INBOX'],
+          internalDate: '1704110400000',
+          payload: {
+            mimeType: 'text/plain',
+            headers: [
+              { name: 'From', value: 'Bob <bob@x.com>' },
+              { name: 'To', value: 'me@gmail.com, Carol <carol@x.com>' },
+              { name: 'Cc', value: 'dave@x.com' },
+              { name: 'Reply-To', value: 'list@x.com' },
+              { name: 'Subject', value: 'Re: Kickoff' },
+              { name: 'Message-ID', value: '<rm2@x.com>' },
+            ],
+            body: { data: 'QWRkaW5nIENhcm9sIGFuZCBEYXZlIGhlcmUu', size: 27 },
+          },
+        },
+      ],
+    };
+
+    const out = toDocument(item);
+    const out_array = Array.isArray(out) ? out : [out];
+    const meta = (out_array[0] as DocumentInput).metadata;
+    const messages = meta.messages as Array<{
+      id: string;
+      from: string;
+      date: string;
+      snippet: string;
+      to: string[];
+      cc: string[];
+      replyTo: string | null;
+    }>;
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0].to).toEqual(['me@gmail.com']);
+    expect(messages[0].cc).toEqual([]);
+    expect(messages[0].replyTo).toBeNull();
+    expect(messages[1].to).toEqual(['me@gmail.com', 'Carol <carol@x.com>']);
+    expect(messages[1].cc).toEqual(['dave@x.com']);
+    expect(messages[1].replyTo).toBe('list@x.com');
+
+    // Purely additive — the pre-existing per-message fields still stand.
+    expect(messages[1]).toMatchObject({
+      id: '<rm2@x.com>',
+      from: 'Bob <bob@x.com>',
+      date: new Date(1704110400000).toISOString(),
+    });
+    expect(messages[1].snippet).toContain('Adding Carol and Dave here.');
+  });
+
   it('returns null for an empty thread (no messages)', () => {
     const doc = toDocument({
       id: 'empty-thread',
