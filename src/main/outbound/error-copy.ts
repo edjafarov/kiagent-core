@@ -29,8 +29,11 @@ const QUOTA_MARKERS =
 // bearerFetch failure format is `${errorPrefix} ${status} ${url} ${body}`.
 const HTTP_STATUS = /^\S+ (\d{3}) /;
 const SMTP_TRANSIENT = /^smtp transient (\d{3}):/;
+// Scoped to the app's own generated reconnect phrases (senders/gmail.ts) —
+// a bare `reconnect` would over-match unrelated text that merely contains
+// that word (e.g. an SMTP bounce echoing a `reconnect-notify@` address).
 const AUTH_MARKERS =
-  /reconnect|no Gmail credentials|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficientPermissions/i;
+  /reconnect .* in Settings|no Gmail credentials|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficientPermissions/i;
 const UNSUPPORTED = /is not supported yet/;
 
 const BUSY_MESSAGE =
@@ -69,15 +72,22 @@ export function shapeOutboundError(raw: string): ShapedOutboundError {
       canRetry: true,
     };
   }
-  // A re-shaped summary starts with `rate-limited:` and carries its own
-  // `(SMTP nnn)` / `(HTTP nnn)` — preserve that status on re-shape.
-  const status =
-    HTTP_STATUS.exec(text)?.[1] ?? /\((?:HTTP|SMTP) (\d{3})\)/.exec(text)?.[1];
+  // A re-shaped `rate-limited:` summary returns early below, verbatim,
+  // before `status` is ever read — so there is no re-shape case that needs
+  // a status recovered from inside the text body. Do NOT add a fallback
+  // that scans the whole string for a parenthesized `(HTTP nnn)` /
+  // `(SMTP nnn)`: an unrelated error body can embed that exact substring
+  // (e.g. an upstream message quoting a *different* failure's status),
+  // which would silently reclassify an `unknown` summary as `transient` on
+  // re-shape — flipping canRetry false→true for a send we never proved was
+  // rejected pre-delivery. Only the bearerFetch head token format
+  // (`${prefix} ${status} ${url} ...`) is trusted.
+  const status = HTTP_STATUS.exec(text)?.[1];
   if (QUOTA_MARKERS.test(text) || status === '429') {
     if (/^rate-limited:/.test(text)) {
       return {
         kind: 'transient',
-        summary: text,
+        summary: truncate(singleLine(text), 200),
         message: BUSY_MESSAGE,
         canRetry: true,
       };
@@ -107,10 +117,15 @@ export function shapeOutboundError(raw: string): ShapedOutboundError {
       canRetry: false,
     };
   }
-  const already = /^send failed: /.test(text);
+  // Matches both the `send failed: <detail>` shape and the bare empty-input
+  // placeholder (`send failed with no error message`), so re-shaping either
+  // one is a no-op instead of double-prefixing on a second pass.
+  const already = /^send failed( with no error message$|: )/.test(text);
   return {
     kind: 'unknown',
-    summary: already ? text : `send failed: ${truncate(singleLine(text), 200)}`,
+    summary: already
+      ? truncate(singleLine(text), 220)
+      : `send failed: ${truncate(singleLine(text), 200)}`,
     message: UNKNOWN_MESSAGE,
     canRetry: false,
   };

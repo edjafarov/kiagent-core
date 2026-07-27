@@ -7,6 +7,17 @@ const SMOKE_403 =
   '"errors": [ { "reason": "rateLimitExceeded", "domain": "usageLimits" } ], ' +
   '"status": "PERMISSION_DENIED" } }';
 
+// A genuine `unknown` failure whose body happens to quote a DIFFERENT
+// failure's status in parens — must never let re-shaping promote it to
+// transient (that would flip canRetry false→true for a send never proven
+// pre-delivery-rejected).
+const EMBEDDED_STATUS_DECOY =
+  'gmail 500 https://x {"error":{"message":"upstream returned (HTTP 429) after retry"}}';
+// Contains the substring `reconnect` but not one of the app's own
+// generated reconnect phrases — must not be classified as auth.
+const UNRELATED_RECONNECT_WORD =
+  'smtp permanent 550: mailbox unavailable, contact reconnect-notify@vendor.com for help';
+
 describe('shapeOutboundError', () => {
   it('classifies the smoke-test quota 403 as transient/retryable', () => {
     const s = shapeOutboundError(SMOKE_403);
@@ -76,11 +87,33 @@ describe('shapeOutboundError', () => {
       "sending from 'x' accounts is not supported yet — supported: gmail",
       'totally novel failure',
       '',
+      EMBEDDED_STATUS_DECOY,
+      UNRELATED_RECONNECT_WORD,
     ]) {
       const first = shapeOutboundError(raw);
       const second = shapeOutboundError(first.summary);
       expect(second.kind).toBe(first.kind);
       expect(second.canRetry).toBe(first.canRetry);
     }
+  });
+  it('never lets an unrelated embedded "(HTTP nnn)" promote unknown to transient on re-shape', () => {
+    const first = shapeOutboundError(EMBEDDED_STATUS_DECOY);
+    expect(first.kind).toBe('unknown');
+    expect(first.canRetry).toBe(false);
+    const second = shapeOutboundError(first.summary);
+    expect(second.kind).toBe('unknown');
+    expect(second.canRetry).toBe(false);
+  });
+  it('does not classify an unrelated "reconnect" substring as auth', () => {
+    const s = shapeOutboundError(UNRELATED_RECONNECT_WORD);
+    expect(s.kind).toBe('unknown');
+    expect(s.canRetry).toBe(false);
+  });
+  it('treats the empty-input placeholder as already-shaped on re-shape', () => {
+    const first = shapeOutboundError('');
+    const second = shapeOutboundError(first.summary);
+    expect(second.summary).toBe('send failed with no error message');
+    expect(second.kind).toBe('unknown');
+    expect(second.canRetry).toBe(false);
   });
 });
