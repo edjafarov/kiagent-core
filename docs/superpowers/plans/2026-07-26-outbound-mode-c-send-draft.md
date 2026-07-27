@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add spec phase 6 — chat-confirmation mode ('chat', spec's "mode C"): a per-account opt-in where the model renders the draft in chat, the user agrees, and the model calls a new `send_draft` tool; guarded by a per-account sends/hour rate limit.
+**Goal:** Add spec phase 6 — chat-confirmation mode ('chat', spec's "mode C"): a **global opt-in in Settings** where the model renders the draft in chat, the user agrees, and the model calls a new `send_draft` tool; guarded by a per-account sends/hour rate limit.
 
-**Architecture:** Everything builds on the phase-1 plan's surfaces (`docs/superpowers/plans/2026-07-23-unified-outbound-phase1.md` — **prerequisite: fully landed**). `ConfirmMode` gains `'chat'` (migration v5 widens the `confirm_mode` CHECK via table rebuild). The service gains `sendDraft`, which reuses the exact send pipeline `confirmByToken` uses (extracted into a shared `executeSend`). Chat-mode draft results omit the confirm URL and instruct the model to get explicit user agreement. The global default mode stays restricted to `'review' | 'link'` — mode C is per-account-only relaxation (spec §5).
+**Architecture:** Everything builds on the phase-1 plan's surfaces (`docs/superpowers/plans/2026-07-23-unified-outbound-phase1.md` — **prerequisite: fully landed**). `ConfirmMode` gains `'chat'` (migration v5 widens the `confirm_mode` CHECK via table rebuild). The service gains `sendDraft`, which reuses the exact send pipeline `confirmByToken` uses (extracted into a shared `executeSend`). Chat-mode draft results omit the confirm URL and instruct the model to get explicit user agreement. **Mode C is enabled via the GLOBAL default (`AppPrefs.outbound.defaultMode`, Settings → Advanced → Outbound) — spec §5 decision 2026-07-27.** The per-account `config.outbound.mode` stays `'review' | 'link'` only: it is the per-account opt-OUT (an account explicitly set to review/link keeps page confirmation even when the global default is chat), and `modeFor` must never honor `'chat'` from account config.
 
 **Tech Stack:** TypeScript, Electron main process, SQLite (forward-only migrations), jest. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-07-23-unified-outbound-design.md` §4 (`send_draft`), §5 (mode C), §12 phase 6.
+**Spec:** `docs/superpowers/specs/2026-07-23-unified-outbound-design.md` §4 (`send_draft`), §5 (mode C incl. the 2026-07-27 global-opt-in decision), §12 phase 6.
 
 ## Global Constraints
 
@@ -16,16 +16,16 @@
 - Never `git commit --amend`, never rebase, never `git reset` — the user runs concurrent sessions on this checkout. Never bypass commit hooks. Commit messages: NO `Co-Authored-By`, NO promo lines.
 - Subagents do NOT commit; the orchestrator commits serially after review. No worktrees (jest silently ignores tests under `.claude/worktrees/*`).
 - Timestamps are TEXT ISO-8601 strings (`new Date(ms).toISOString()`), matching the rest of the store.
-- The global default mode (prefs) must NEVER become `'chat'` — sanitize keeps it `'review' | 'link'`. Only `Account.config.outbound.mode` may be `'chat'`, set by explicit user action in the account's Outbound settings.
+- **USER DECISION 2026-07-27 (supersedes the plan's original per-account posture):** the chat opt-in is GLOBAL — `AppPrefs.outbound.defaultMode` may be `'chat'` (prefs sanitize accepts it; Settings → Advanced offers it with a trust warning). The per-account `Account.config.outbound.mode` remains `'review' | 'link'` only: the per-account select must NOT gain a chat option, and `modeFor`'s per-account branch must NOT accept `'chat'` (a hand-edited `config.outbound.mode: 'chat'` falls through to the global default).
 - `send_draft` has NO transport gate (unlike the drafting tools' phase-1 `assertLocal`): a draft row can only exist if drafting was permitted on that transport, the user's consent is observed by the model regardless of transport, and the app-side gates are the chat-mode opt-in + the rate limit. Known accepted edge: a chat-mode draft created locally could be sent by a remote caller holding a valid JWT — bounded by the opt-in, the rate limit, and the draft cap.
 - Final gate: FULL `npm test` + `npm run lint` + `npm run typecheck` — all green before the last commit.
 
 ## Parallel Execution Guide (subagent-driven)
 
-Implementer subagents run on **sonnet** (standing repo rule), one per task, same checkout:
+Implementer subagents run on **opus** (user directive 2026-07-27 for this arc), one per task, same checkout:
 
 - **Wave 1:** Task 1 (contracts + migration v5 + store)
-- **Wave 2:** Task 2 (service: `sendDraft` + chat results) ∥ Task 4 (settings UI + prefs guard) — disjoint files
+- **Wave 2:** Task 2 (service: `sendDraft` + chat results) ∥ Task 4 (prefs + Settings UI) — disjoint files
 - **Wave 3:** Task 3 (tool + proxy + routes)
 - **Wave 4:** Task 5 (full gates + handoff)
 
@@ -33,15 +33,16 @@ Implementer subagents run on **sonnet** (standing repo rule), one per task, same
 
 | File | Change | Responsibility |
 | --- | --- | --- |
-| `src/shared/contracts.ts` | modify | `ConfirmMode` gains `'chat'` |
+| `src/shared/contracts.ts` | modify | `ConfirmMode` gains `'chat'`; `AppPrefs.outbound` doc comment |
 | `src/main/core/store/schema.ts` | modify | migration v5: rebuild `outbox` with widened CHECK |
 | `src/main/core/store/outbox.ts` | modify | `countSentSince` for the rate limit |
 | `src/main/outbound/service.ts` | modify | `executeSend` extraction, `sendDraft`, chat tool results, `CONFIRM_TTL_MS.chat` |
+| `src/main/core/prefs.ts` | modify | sanitize accepts `'chat'` as global default |
 | `src/main/core/mcp/tools/send-draft.ts` | create | the `send_draft` MCP tool |
 | `src/main/core/mcp/tools.ts` | modify | register `send_draft` (+ unavailable fallback) |
 | `src/main/outbound/routes.ts` | modify | `/outbox/api` op `sendDraft`; chat rows render the review page |
 | `src/main/mcp/outbound-proxy.ts` | modify | proxy op `sendDraft` |
-| `src/renderer/screens/Sources/sections/Outbound.tsx` | modify | chat option + trust warning |
+| `src/renderer/screens/Settings/Advanced.tsx` | modify | chat option in the GLOBAL select + trust warning |
 
 ---
 
@@ -142,8 +143,9 @@ In `src/shared/contracts.ts`, replace the phase-1 `ConfirmMode` declaration (and
  *  (spec mode A, the default); 'link' = in-chat review + short-TTL signed
  *  link landing on a minimal Send-button page (spec mode B); 'chat' =
  *  in-chat review + explicit user agreement observed by the model, sent via
- *  the send_draft tool (spec mode C — per-account opt-in, never the global
- *  default). */
+ *  the send_draft tool (spec mode C — GLOBAL opt-in in Settings, decision
+ *  2026-07-27; per-account config stays review/link and acts as the
+ *  per-account opt-out). */
 export type ConfirmMode = 'review' | 'link' | 'chat';
 ```
 
@@ -271,56 +273,12 @@ export const CONFIRM_TTL_MS: Record<ConfirmMode, number> = {
 ```
 
 Behavior contract (encode in tests):
-- `modeFor(account)` accepts `'chat'` from `config.outbound.mode` (if phase-1 validated against a literal list, extend it; the prefs default can never be `'chat'` — Task 4 guards that).
+- `modeFor(account)` is structurally UNCHANGED: the per-account branch keeps accepting ONLY `'review' | 'link'`; `'chat'` arrives exclusively via the prefs global default (`p.outbound?.defaultMode`). A hand-edited `config.outbound.mode: 'chat'` falls through to the global default — pin this with a test.
 - Chat-mode draft results: `to`/`cc`/`subject`/`body` populated (like link mode — the model must render the draft verbatim), NO `confirm_url`, and `instruction` exactly:
   `Show the user this draft exactly as written — recipient, subject, and body verbatim — and ask whether to send it. Call send_draft with this draft_id ONLY after the user explicitly agrees in this conversation. If they want changes, create a new draft instead. Never call send_draft without a clear yes.`
 - `listOutbox` still re-issues confirm URLs for chat-mode `draft` rows (page confirm is a strictly-stronger fallback; TTL = 30 min per `CONFIRM_TTL_MS.chat`).
-- **Refactor:** extract the post-CAS portion of `confirmByToken` (account+sender lookup → build `SendIntent` → `sender.send` → terminal transition + log) into a private `executeSend(row: OutboxRow): Promise<ConfirmOutcome>`; `confirmByToken` becomes verify → CAS → `executeSend`. Behavior byte-identical — the phase-1 pipeline tests must pass untouched. Reference shape:
-
-```ts
-  async function executeSend(row: OutboxRow): Promise<ConfirmOutcome> {
-    const account = await deps.store.account(row.accountId);
-    const sender = account ? senders.get(account.source) : undefined;
-    if (!account || !sender) {
-      const error = account
-        ? `no sender for source '${account.source}'`
-        : 'account no longer exists';
-      await deps.store.outbox.transition(row.id, ['sending'], 'failed', { error });
-      deps.logSink.log('outbound', 'error', `send failed: ${error}`);
-      const failed = (await deps.store.outbox.get(row.id)) ?? row;
-      return { kind: 'failed', row: failed, error };
-    }
-    const intent: SendIntent = {
-      accountId: row.accountId,
-      kind: row.kind,
-      outboundRef: row.outboundRef ?? undefined,
-      to: row.to,
-      cc: row.cc,
-      subject: row.subject ?? undefined,
-      bodyMarkdown: row.bodyMarkdown,
-      threading: row.threading ?? undefined,
-    };
-    try {
-      const result = await sender.send(intent);
-      await deps.store.outbox.transition(row.id, ['sending'], 'sent', {
-        sentAt: nowIso(),
-        externalMessageId: result.externalMessageId ?? null,
-      });
-      deps.logSink.log('outbound', 'info', `sent draft ${row.id}`);
-      const sent = (await deps.store.outbox.get(row.id)) ?? row;
-      return { kind: 'sent', row: sent };
-    } catch (e) {
-      const error = e instanceof Error ? e.message : String(e);
-      await deps.store.outbox.transition(row.id, ['sending'], 'failed', { error });
-      deps.logSink.log('outbound', 'error', `send failed: ${error}`);
-      const failed = (await deps.store.outbox.get(row.id)) ?? row;
-      return { kind: 'failed', row: failed, error };
-    }
-  }
-```
-
-  (Reconcile with the landed phase-1 body — keep whatever it does; the extraction only removes duplication.)
-- `sendDraft` (full implementation below): NO transport gate (see Global Constraints), lazy expiry sweep first, then: unknown id → Error naming it; row mode ≠ `'chat'` → Error `send_draft is only honored for chat-mode drafts — this draft is mode '<mode>'. Use list_outbox to get its confirmation link instead.`; account gone → Error; account's CURRENT mode ≠ `'chat'` → Error naming the current mode (frozen row mode AND live opt-in must both be chat); rate limit `countSentSince(accountId, iso(now − 1h)) >= sendsPerHourFor(account)` → Error naming count + limit + the Outbound settings; CAS `transition(['draft'],'sending')` false → Error naming the current status (races/single-use); then `executeSend` — `sent` → `SendDraftResult`, anything else → throw `send failed: <error>` (the row is already recorded `failed`).
+- **Refactor:** extract the post-CAS portion of `confirmByToken` (account+sender lookup → build `SendIntent` → `sender.send` → terminal transition + log) into a private `executeSend(row: OutboxRow): Promise<ConfirmOutcome>`; `confirmByToken` becomes verify → CAS → `executeSend`. Behavior byte-identical — the phase-1 pipeline tests must pass untouched. Reconcile with the landed body (including the send-UX arc's error classification in `fail()`) — the extraction only removes duplication; keep whatever the landed pipeline does.
+- `sendDraft` (behavior below): NO transport gate (see Global Constraints), lazy expiry sweep first, then: unknown id → Error naming it; row mode ≠ `'chat'` → Error `send_draft is only honored for chat-mode drafts — this draft is mode '<mode>'. Use list_outbox to get its confirmation link instead.`; account gone → Error; account's CURRENT EFFECTIVE mode `modeFor(account)` ≠ `'chat'` → Error naming the current mode (frozen row mode AND live opt-in must both be chat — leaving chat mode globally, or overriding the account back to review/link, kills pending chat sends); rate limit `countSentSince(accountId, iso(now − 1h)) >= sendsPerHourFor(account)` → Error naming count + limit; CAS `transition(['draft'],'sending')` false → Error naming the current status (races/single-use); then `executeSend` — `sent` → `SendDraftResult`, anything else → throw `send failed: <error>` (the row is already recorded `failed`).
 
 ```ts
 function sendsPerHourFor(account: Account): number {
@@ -330,20 +288,30 @@ function sendsPerHourFor(account: Account): number {
 }
 ```
 
+(`sendsPerHour` stays a per-account hidden config knob — no UI; the limit itself is per account regardless of the global opt-in.)
+
 - [ ] **Step 1: Write the failing tests**
 
-Append to `src/main/outbound/__tests__/service.test.ts` inside the top-level describe (reuses `service`, `store`, `accountId`, `docId`, `sendMock` and the phase-1 `IMAP_CFG`; the helper below opts the account into chat):
+Append to `src/main/outbound/__tests__/service.test.ts` inside the top-level describe (reuses `store`, `accountId`, `docId`, `sendMock`, `logSink`, `fakePrefs` and the phase-1 `IMAP_CFG`). Chat tests build their own service over the SAME store with the global default set to chat — mirroring the existing link-mode-prefs test's pattern:
 
 ```ts
-  const optIntoChat = (extra: Record<string, unknown> = {}) =>
-    store.setAccountConfig(accountId, {
-      ...IMAP_CFG,
-      outbound: { mode: 'chat', ...extra },
+  const chatService = (): OutboundService => {
+    const s = createOutboundService({
+      store,
+      prefs: fakePrefs('chat'),
+      senders: new Map<string, Sender>([
+        ['imap', { send: sendMock }],
+        ['gmail', { send: sendMock }],
+      ]),
+      logSink,
     });
+    s.setBaseUrl('http://127.0.0.1:7421');
+    return s;
+  };
 
-  it('chat-mode draft results carry the body but no confirm url', async () => {
-    await optIntoChat();
-    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+  it('chat global default: draft results carry the body but no confirm url', async () => {
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
     expect(r.mode).toBe('chat');
     expect(r.confirm_url).toBeUndefined();
     expect(r.body).toBe('Yo');
@@ -351,10 +319,30 @@ Append to `src/main/outbound/__tests__/service.test.ts` inside the top-level des
     expect((await store.outbox.get(r.draft_id))?.confirmMode).toBe('chat');
   });
 
-  it('sendDraft sends a chat-mode draft', async () => {
-    await optIntoChat();
+  it('per-account config can NEVER opt into chat (global-only opt-in)', async () => {
+    await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
+      outbound: { mode: 'chat' }, // hand-edited config — must not be honored
+    });
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    const out = await service.sendDraft({ draftId: r.draft_id });
+    expect(r.mode).toBe('review'); // falls through to the (review) global default
+  });
+
+  it('per-account review override beats the chat global default', async () => {
+    await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
+      outbound: { mode: 'review' },
+    });
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    expect(r.mode).toBe('review');
+    expect(r.confirm_url).toContain('/outbox/confirm/');
+  });
+
+  it('sendDraft sends a chat-mode draft', async () => {
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    const out = await svc.sendDraft({ draftId: r.draft_id });
     expect(out.status).toBe('sent');
     expect(out.recipient_display).toBe(r.recipient_display);
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -369,45 +357,60 @@ Append to `src/main/outbound/__tests__/service.test.ts` inside the top-level des
     expect(sendMock).not.toHaveBeenCalled();
   });
 
-  it('sendDraft refuses when the account left chat mode after drafting', async () => {
-    await optIntoChat();
-    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    await store.setAccountConfig(accountId, {
-      ...IMAP_CFG,
-      outbound: { mode: 'review' },
-    });
+  it('sendDraft refuses when the global default left chat after drafting', async () => {
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    // Same store, but the service whose prefs default is 'review' — models
+    // the user turning the global setting back off before the model sends.
     await expect(service.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
       /no longer/i,
     );
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  it('sendDraft refuses when the account overrode back to review', async () => {
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
+      outbound: { mode: 'review' },
+    });
+    await expect(svc.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
+      /no longer/i,
+    );
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
   it('sendDraft enforces the per-account hourly rate limit', async () => {
-    await optIntoChat({ sendsPerHour: 1 });
-    const a = await service.draftReply({ documentId: docId, body: 'one' });
-    await service.sendDraft({ draftId: a.draft_id });
-    const b = await service.draftReply({ documentId: docId, body: 'two' });
-    await expect(service.sendDraft({ draftId: b.draft_id })).rejects.toThrow(
+    await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
+      outbound: { sendsPerHour: 1 }, // knob only — no mode override
+    });
+    const svc = chatService();
+    const a = await svc.draftReply({ documentId: docId, body: 'one' });
+    await svc.sendDraft({ draftId: a.draft_id });
+    const b = await svc.draftReply({ documentId: docId, body: 'two' });
+    await expect(svc.sendDraft({ draftId: b.draft_id })).rejects.toThrow(
       /rate limit/i,
     );
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
   it('sendDraft is single-use', async () => {
-    await optIntoChat();
-    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    await service.sendDraft({ draftId: r.draft_id });
-    await expect(service.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    await svc.sendDraft({ draftId: r.draft_id });
+    await expect(svc.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
       /'sent'/,
     );
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
   it('sendDraft surfaces a transport failure and records it', async () => {
-    await optIntoChat();
+    const svc = chatService();
     sendMock.mockRejectedValueOnce(new Error('SMTP 550 relay denied'));
-    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    await expect(service.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    await expect(svc.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
       /550/,
     );
     const row = await store.outbox.get(r.draft_id);
@@ -416,20 +419,22 @@ Append to `src/main/outbound/__tests__/service.test.ts` inside the top-level des
   });
 
   it('list_outbox still re-links pending chat drafts (page fallback)', async () => {
-    await optIntoChat();
-    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    const listing = await service.listOutbox({});
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    const listing = await svc.listOutbox({});
     const item = listing.find((x) => x.draft_id === r.draft_id);
     expect(item?.confirm_url).toContain('/outbox/confirm/');
   });
 ```
+
+(If `fakePrefs`'s parameter is typed narrower than `'chat'` allows, widen the helper's parameter type — after Task 1, `ConfirmMode` includes `'chat'`, so `fakePrefs(defaultMode?: ConfirmMode)` is the natural signature.)
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `npx jest src/main/outbound/__tests__/service.test.ts -v`
 Expected: FAIL — `sendDraft` is not a function; chat drafts fall into the review branch.
 
-- [ ] **Step 3: Implement** per the behavior contract and code above: widen `CONFIRM_TTL_MS`, make `confirm_url` optional on `DraftToolResult`, add the chat branch to the result composer, extract `executeSend`, add `sendsPerHourFor` + `sendDraft`, and add `sendDraft` to `OutboundToolApi`/`OutboundService`.
+- [ ] **Step 3: Implement** per the behavior contract and code above: widen `CONFIRM_TTL_MS`, make `confirm_url` optional on `DraftToolResult`, add the chat branch to the result composer, extract `executeSend`, add `sendsPerHourFor` + `sendDraft`, and add `sendDraft` to `OutboundToolApi`/`OutboundService`. Do NOT touch `modeFor`'s per-account branch.
 
 - [ ] **Step 4: Run the full outbound suite, expect PASS**
 
@@ -456,19 +461,27 @@ git commit -m "feat(outbound): sendDraft — chat-mode pipeline with live opt-in
 - Consumes: `OutboundToolApi.sendDraft` (Task 2), phase-1 tool/registration/proxy/route patterns.
 - Produces: MCP tool named exactly `send_draft`, `tier: 'standard'`; `/outbox/api` accepts `{ op: 'sendDraft', args }`; the stdio proxy forwards `sendDraft`; `GET /outbox/confirm/<token>` on a chat-mode draft renders the FULL review page (chat's page fallback is the strictly-stronger surface).
 
+**Harness note (global opt-in):** both test files build their service with a module-level `const fakePrefs`. Make the fake's default mode mutable so tests can opt into chat globally:
+
+```ts
+let defaultMode: ConfirmMode = 'review';
+const fakePrefs = {
+  get: () => ({ outbound: { defaultMode } }),
+  // ...keep the fake's existing patch/onChange stubs
+};
+// beforeEach: defaultMode = 'review';
+// chat tests set: defaultMode = 'chat';
+```
+
+(Adapt to each file's actual fake shape — the point is a per-test global default, resetting in `beforeEach`.)
+
 - [ ] **Step 1: Write the failing tests**
 
-Append to `src/main/core/mcp/__tests__/outbound-tools.test.ts` (harness from phase-1 Task 6; note `IMAP_CFG` — mirror the config object used in `beforeEach`):
+Append to `src/main/core/mcp/__tests__/outbound-tools.test.ts` (harness from phase-1 Task 6):
 
 ```ts
   it('send_draft sends a chat-mode draft end to end', async () => {
-    await store.setAccountConfig(accountId, {
-      host: 'imap.example.com',
-      port: 993,
-      secure: true,
-      user: 'me@example.com',
-      outbound: { mode: 'chat' },
-    });
+    defaultMode = 'chat'; // global opt-in
     const draft = (await call('draft_reply', {
       document_id: docId,
       body: 'Yes, works for me.',
@@ -481,7 +494,7 @@ Append to `src/main/core/mcp/__tests__/outbound-tools.test.ts` (harness from pha
     expect((await store.outbox.get(draft.draft_id))?.status).toBe('sent');
   });
 
-  it('send_draft names the mode for non-chat accounts', async () => {
+  it('send_draft names the mode for non-chat drafts', async () => {
     const draft = (await call('draft_reply', {
       document_id: docId,
       body: 'Hi',
@@ -501,14 +514,11 @@ Append to `src/main/core/mcp/__tests__/outbound-tools.test.ts` (harness from pha
   });
 ```
 
-Append to `src/main/core/mcp/__tests__/outbound-routes.test.ts` (harness from phase-1 Task 8 — `base`, `accountId`, `docId`, `store`, the `api` helper if one exists; otherwise post JSON to `${base}/outbox/api` exactly as the phase-1 tests do):
+Append to `src/main/core/mcp/__tests__/outbound-routes.test.ts` (harness from phase-1 Task 8 — `base`, `accountId`, `docId`, `store`, `service`; post JSON to `${base}/outbox/api` exactly as the phase-1 tests do):
 
 ```ts
   it('/outbox/api handles the sendDraft op', async () => {
-    await store.setAccountConfig(accountId, {
-      ...IMAP_CFG,
-      outbound: { mode: 'chat' },
-    });
+    defaultMode = 'chat'; // global opt-in
     const draftRes = await fetch(`${base}/outbox/api`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -538,10 +548,7 @@ Append to `src/main/core/mcp/__tests__/outbound-routes.test.ts` (harness from ph
   });
 
   it('a chat-mode draft renders the full review page as fallback', async () => {
-    await store.setAccountConfig(accountId, {
-      ...IMAP_CFG,
-      outbound: { mode: 'chat' },
-    });
+    defaultMode = 'chat'; // global opt-in
     const r = await service.draftReply({ documentId: docId, body: 'page me' });
     const item = (await service.listOutbox({})).find(
       (x) => x.draft_id === r.draft_id,
@@ -567,11 +574,11 @@ Expected: FAIL — no `send_draft` tool; `/outbox/api` rejects the `sendDraft` o
 /**
  * `send_draft` — sends a pending draft after the user explicitly agreed in
  * chat (spec §5 mode C). Only honored when BOTH the draft's frozen mode and
- * the account's current mode are 'chat'; other accounts confirm on an
- * app-served page (the draft result carries the link). The app-side gates
- * are the per-account chat opt-in and an hourly rate limit — the user's
- * consent itself is observed by the model, which is why chat mode is
- * opt-in and never the default.
+ * the effective current mode are 'chat'; other drafts confirm on an
+ * app-served page (the draft result carries the link). Chat mode is a
+ * GLOBAL Settings opt-in (decision 2026-07-27); the app-side gates are that
+ * opt-in and an hourly rate limit — the user's consent itself is observed
+ * by the model, which is why chat mode is opt-in and never the default.
  */
 import type { OutboundToolApi } from '../../../outbound/service';
 import type { McpTool } from '../tools';
@@ -581,7 +588,7 @@ export function sendDraftTool(outbound: OutboundToolApi): McpTool {
     name: 'send_draft',
     tier: 'standard',
     description:
-      'Send a pending outbound draft after the user has explicitly agreed in this conversation. Only works for accounts set to chat confirmation mode; for every other account, present the confirm link from the draft result instead. The draft must have been shown to the user verbatim first.',
+      'Send a pending outbound draft after the user has explicitly agreed in this conversation. Only works when chat confirmation mode is enabled in the app settings; otherwise present the confirm link from the draft result instead. The draft must have been shown to the user verbatim first.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -625,77 +632,106 @@ git commit -m "feat(outbound): send_draft tool — registered, proxied over /out
 
 ---
 
-### Task 4: Settings — chat opt-in UI + global-default guard
+### Task 4: Settings — GLOBAL chat opt-in (prefs + Advanced.tsx)
 
 **Files:**
-- Modify: `src/renderer/screens/Sources/sections/Outbound.tsx`
-- Test: `src/main/core/__tests__/prefs.test.ts` (append)
+- Modify: `src/main/core/prefs.ts` (sanitize accepts `'chat'`)
+- Modify: `src/shared/contracts.ts` (`AppPrefs.outbound` doc comment)
+- Modify: `src/renderer/screens/Settings/Advanced.tsx` (chat option + trust warning)
+- Test: `src/main/core/__tests__/prefs.test.ts` (append/extend)
 
 **Interfaces:**
-- Consumes: `ConfirmMode` (Task 1), the phase-1 `Outbound.tsx` section + `accounts:update-outbound` channel (no IPC changes here).
-- Produces: the per-account mode select offers `chat`; the GLOBAL default (Settings → Advanced) does NOT — and prefs sanitize proves it.
+- Consumes: `ConfirmMode` (Task 1). No IPC changes — the Advanced screen already patches `prefs.outbound.defaultMode`.
+- Produces: the GLOBAL default select (Settings → Advanced → Outbound) offers `chat` with a trust warning; prefs sanitize persists it; the per-account select in `src/renderer/screens/Sources/sections/Outbound.tsx` is NOT touched (it keeps App default / Review page / One-click link — the per-account opt-out).
 
 - [ ] **Step 1: Write the failing prefs test**
 
-Append to `src/main/core/__tests__/prefs.test.ts` beside the phase-1 outbound test:
+In `src/main/core/__tests__/prefs.test.ts`, extend the existing `prefs.outbound` describe:
 
 ```ts
-  it('never allows chat as the global outbound default', async () => {
+  it('accepts chat as the global outbound default (mode C, decision 2026-07-27)', async () => {
+    const prefs = createPrefs(dir);
+    await prefs.patch({ outbound: { defaultMode: 'chat' } });
+    expect(prefs.get().outbound.defaultMode).toBe('chat');
+  });
+
+  it('still sanitizes junk modes to review', async () => {
     const prefs = createPrefs(dir);
     await prefs.patch({
-      outbound: { defaultMode: 'chat' as unknown as 'review' },
+      outbound: { defaultMode: 'bogus' as unknown as 'review' },
     });
     expect(prefs.get().outbound.defaultMode).toBe('review');
   });
 ```
 
-- [ ] **Step 2: Run it**
+(Match the file's actual `createPrefs` construction — mirror the existing outbound test's setup lines.)
+
+- [ ] **Step 2: Run to verify failure**
 
 Run: `npx jest src/main/core/__tests__/prefs.test.ts -v`
-Expected: PASS already — phase-1's sanitize (`=== 'link' ? 'link' : 'review'`) maps everything else to `review`. This test pins that this stays true now that `ConfirmMode` includes `'chat'` (a future "helpful" widening of sanitize would fail it). If it FAILS, sanitize drifted — restrict it back to `'review' | 'link'`.
+Expected: FAIL — sanitize maps `'chat'` to `'review'` today.
 
-Also confirm the `AppPrefs.outbound` doc comment and the type still say the default is `'review' | 'link'` territory: in `src/shared/contracts.ts` change the `AppPrefs` slice to make the restriction explicit in the type system:
+- [ ] **Step 3: Widen sanitize**
+
+In `src/main/core/prefs.ts`, replace the outbound line of `sanitize`:
 
 ```ts
-  /** Outbound confirmation default; per-account override lives in
-   *  Account.config.outbound.mode. 'chat' (mode C) is deliberately NOT
-   *  allowed as a global default — it can only be chosen per account, in
-   *  that account's Outbound settings (spec §5). */
-  outbound: { defaultMode: Exclude<ConfirmMode, 'chat'> };
+    outbound: {
+      defaultMode:
+        r.outbound?.defaultMode === 'link' || r.outbound?.defaultMode === 'chat'
+          ? r.outbound.defaultMode
+          : 'review',
+    },
 ```
 
-Run: `npm run typecheck` — Expected: clean (the Advanced.tsx select only offers review/link, so the narrowed type holds).
+In `src/shared/contracts.ts`, update the `AppPrefs.outbound` slice's doc comment (type stays `{ defaultMode: ConfirmMode }`):
 
-- [ ] **Step 3: Add the chat option to the per-account section**
-
-In `src/renderer/screens/Sources/sections/Outbound.tsx`, in the mode `<select>`, after the `link` option add:
-
-```tsx
-          <option value="chat">Chat confirmation (trusts the assistant)</option>
+```ts
+  /** Outbound confirmation default for every account without a per-account
+   *  override. 'chat' (mode C) is a deliberate GLOBAL opt-in here (decision
+   *  2026-07-27) — the per-account setting offers only review/link and acts
+   *  as the opt-out for individual accounts. */
+  outbound: { defaultMode: ConfirmMode };
 ```
 
-and immediately after the closing `</select>` of that field-row, add a conditional warning (reuse the muted/hint text class that `ConnectorConfig.tsx` uses for helper copy — check before inventing one):
+- [ ] **Step 4: Run tests, expect PASS**
+
+Run: `npx jest src/main/core/__tests__/prefs.test.ts -v`
+Expected: PASS.
+
+- [ ] **Step 5: Add the chat option to the GLOBAL select**
+
+In `src/renderer/screens/Settings/Advanced.tsx`, in the Outbound `<select>` (id `adv-outbound-mode`), after the `link` option add:
 
 ```tsx
-        {cfg.mode === 'chat' && (
-          <div className="hint">
-            The assistant sends after you agree in chat — the app itself will
-            not show a review page. Sends are capped at 30 per hour for this
-            account.
+            <option value="chat">Chat confirmation (trusts the assistant)</option>
+```
+
+and immediately after the closing `</div>` of that `field-row`, add a conditional warning (reuse the muted helper-text class this file already uses for descriptions — check before inventing one):
+
+```tsx
+        {prefs.outbound.defaultMode === 'chat' && (
+          <div className="t-meta">
+            The assistant sends after you agree in chat — the app will not
+            show a review page. Applies to every account set to “App
+            default”; give an account its own Outbound mode to keep page
+            confirmation there. Sends are capped at 30 per hour per account.
           </div>
         )}
 ```
 
-- [ ] **Step 4: Gates**
+Do NOT touch `src/renderer/screens/Sources/sections/Outbound.tsx` — the per-account select must not gain a chat option.
+
+- [ ] **Step 6: Gates**
 
 Run: `npm run typecheck` — Expected: clean.
 Run: `npm run lint` — Expected: clean.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/shared/contracts.ts src/renderer/screens/Sources/sections/Outbound.tsx src/main/core/__tests__/prefs.test.ts
-git commit -m "feat(outbound): per-account chat-mode opt-in in settings; global default stays page-based"
+git add src/main/core/prefs.ts src/shared/contracts.ts src/renderer/screens/Settings/Advanced.tsx src/main/core/__tests__/prefs.test.ts
+git commit -m "feat(outbound): chat mode is a global Settings opt-in; per-account stays the opt-out"
 ```
 
 ---
@@ -717,10 +753,10 @@ Run: `npm run typecheck` — Expected: clean.
 - [ ] **Step 3: Write the completion report** (chat message, not a file), including:
 
 - Manual smoke checklist:
-  1. Settings → source account → Outbound → set mode to "Chat confirmation"; confirm the warning copy renders.
-  2. In an MCP client: `draft_reply` on a doc from that account → result has body but no URL; agree in chat → `send_draft` → sent; check the Sent mailbox.
-  3. `send_draft` on a review-mode account's draft → error names the mode and points at `list_outbox`.
-  4. Two quick sends with `sendsPerHour: 1` set manually in config → second is rate-limited.
+  1. Settings → Advanced → Outbound → set "Send confirmation" to "Chat confirmation"; confirm the warning copy renders.
+  2. In an MCP client: `draft_reply` on a doc → result has body but no URL; agree in chat → `send_draft` → sent; check the Sent mailbox.
+  3. Set one account's Outbound mode to "Review page" (Sources → account → Outbound) → drafts for THAT account carry a confirm URL again; `send_draft` on them errors naming the mode.
+  4. Two quick sends with `sendsPerHour: 1` set manually in that account's config → second is rate-limited.
   5. DB with pre-existing v4 outbox rows upgrades cleanly (open an existing profile; confirm history intact).
 - Release handoff: core version bump + tag ride the NEXT core release; alpha-cent picks it up via `core.lock`. No new renderer IPC channels — `REMOTE_INVOKE_CHANNELS` in `build/apply-overlay.mjs` needs NO change for this phase.
-- Spec cross-off: phase 6 of `docs/superpowers/specs/2026-07-23-unified-outbound-design.md` §12.
+- Spec cross-off: phase 6 of `docs/superpowers/specs/2026-07-23-unified-outbound-design.md` §12 (incl. the 2026-07-27 global-opt-in decision note in §5).

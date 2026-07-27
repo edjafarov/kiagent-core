@@ -121,9 +121,14 @@ guessed recipient list.
 
 ## 5. Confirmation modes
 
-Per-account setting with a global default; default is **mode A**. Policy can only be
-relaxed (A → B → C) by explicit per-account user action in Settings. Stored in the
-existing account `config` JSON.
+Per-account setting with a global default; default is **mode A**. Per-account overrides
+are stored in the existing account `config` JSON.
+
+> **Decision 2026-07-27 (supersedes the original per-account posture for mode C):**
+> mode C is enabled **globally** in Settings (Advanced → Outbound → Send confirmation),
+> not per account. The per-account setting stays a review/link override only — an
+> account explicitly set to A or B keeps page confirmation even when the global default
+> is C, and the per-account select never offers C.
 
 **Mode A — review page (default).** The confirm URL renders the full draft from the DB:
 resolved recipient/channel (prominent), subject, body, link to the source thread, and
@@ -278,7 +283,8 @@ Each phase is independently landable:
    verified.
 4. **Remote confirm** — tunnel routing, OAuth carve-out for `/outbox/confirm/*`.
 5. **Gmail transport** — `gmail.send` scope, re-consent via gmail-gate, gmail sender.
-6. **Mode C** — `send_draft` tool, per-account opt-in, rate limit.
+6. **Mode C** — `send_draft` tool, global opt-in in Settings (decision 2026-07-27),
+   rate limit.
 7. **Gmail reply-all enrichment** (§9).
 8. **Slack pilot sender** — `send` cap + `contributes.senders` in manifest, extension
    sender RPC, pilot in `kia-plugins/slack-kia-connector` (`chat.postMessage`; user adds
