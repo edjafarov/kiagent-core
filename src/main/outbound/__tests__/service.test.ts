@@ -590,6 +590,28 @@ describe('outbound service — drafts', () => {
     expect(sendMock).toHaveBeenCalledTimes(2);
   });
 
+  it('listOutbox reports error:null for a row retried from failed to sent — a stale failure summary must never reach the model surface for a message that has since sent', async () => {
+    sendMock.mockRejectedValueOnce(new Error(SMOKE_403));
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const token = tokenOf(r);
+    const first = await service.confirmByToken(token);
+    expect(first.kind).toBe('failed');
+
+    const failedListing = await service.listOutbox({});
+    const failedItem = failedListing.find((i) => i.draft_id === r.draft_id);
+    expect(failedItem?.status).toBe('failed');
+    expect(failedItem?.error).toBeTruthy();
+
+    sendMock.mockResolvedValueOnce({ externalMessageId: '<retry@x>' });
+    const second = await service.confirmByToken(token);
+    expect(second.kind).toBe('sent');
+
+    const sentListing = await service.listOutbox({});
+    const sentItem = sentListing.find((i) => i.draft_id === r.draft_id);
+    expect(sentItem?.status).toBe('sent');
+    expect(sentItem?.error).toBeNull();
+  });
+
   it('a permanently failed row stays terminal — Try again is refused, sender never re-invoked', async () => {
     sendMock.mockRejectedValueOnce(new Error('completely novel explosion'));
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
@@ -602,6 +624,16 @@ describe('outbound service — drafts', () => {
     const row = await store.outbox.get(r.draft_id);
     expect(row?.status).toBe('failed');
     expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('the first confirm of a plain draft row pins the CAS from-arg to [draft]', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const token = tokenOf(r);
+    const spy = jest.spyOn(store.outbox, 'transition');
+    await service.confirmByToken(token);
+    const toSending = spy.mock.calls.find((c) => c[2] === 'sending');
+    expect(toSending?.[1]).toEqual(['draft']);
+    spy.mockRestore();
   });
 
   it('the CAS transition uses the OBSERVED status, never the union [draft,failed]', async () => {

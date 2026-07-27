@@ -381,7 +381,12 @@ export function createOutboundService(deps: {
           recipient_display: row.recipientDisplay,
           subject: row.subject,
           created_at: row.createdAt,
-          error: row.error,
+          // A retried failed->sent row keeps its stale error string in the DB
+          // by design (audit trail — see confirmByToken's fail() comment);
+          // gate what the MODEL sees on the row's CURRENT status so a
+          // successfully-retried send is never reported back as still
+          // failed.
+          error: row.status === 'failed' ? row.error : null,
           confirm_url: url,
         });
       }

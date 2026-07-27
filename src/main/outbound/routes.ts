@@ -9,7 +9,8 @@ import type http from 'http';
 
 import type { OutboxRow } from '@shared/contracts';
 
-import { linkPage, resultPage, reviewPage } from './pages';
+import { shapeOutboundError } from './error-copy';
+import { failedPage, linkPage, resultPage, reviewPage } from './pages';
 import type { OutboundService } from './service';
 
 function sendHtml(
@@ -95,31 +96,38 @@ function sentWhen(row: OutboxRow): string {
   return row.sentAt ? ` (${row.sentAt})` : '';
 }
 
-function gonePage(row: OutboxRow): string {
+function gonePage(row: OutboxRow, confirmPath: string): string {
   if (row.status === 'sent')
     return resultPage(
       'Already sent',
       `This message to ${row.recipientDisplay} was already sent${sentWhen(row)}.`,
+      { icon: 'success' },
     );
   if (row.status === 'discarded')
-    return resultPage('Cancelled', 'This draft was cancelled.');
+    return resultPage('Cancelled', 'This draft was cancelled.', {
+      icon: 'info',
+    });
   if (row.status === 'failed')
-    return resultPage(
-      'Send failed',
-      `${row.error ?? 'Unknown error'} — ask your assistant to create a new draft.`,
-    );
+    return failedPage(row, {
+      shaped: shapeOutboundError(row.error ?? ''),
+      confirmPath,
+    });
   if (row.status === 'delivery_unknown')
     return resultPage(
       'Delivery uncertain',
       'The app closed while this message was being sent — it MAY have gone ' +
         'out. Check your Sent folder before creating a new draft.',
+      { icon: 'warn' },
     );
   if (row.status === 'expired')
     return resultPage(
       'Draft expired',
       'Ask your assistant to create the draft again.',
+      { icon: 'info' },
     );
-  return resultPage('In progress', 'This draft is being sent.');
+  return resultPage('In progress', 'This draft is being sent.', {
+    icon: 'info',
+  });
 }
 
 // Lazy, not module-level: `resultPage` reads shell CSS off disk via
@@ -131,6 +139,7 @@ function invalidPage(): string {
   return resultPage(
     'Link invalid or expired',
     'Ask your assistant to run list_outbox for a fresh confirmation link.',
+    { icon: 'error' },
   );
 }
 
@@ -145,11 +154,12 @@ async function getConfirm(
   outbound: OutboundService,
   token: string,
 ): Promise<PageResult> {
+  const confirmPath = `/outbox/confirm/${token}`;
   try {
     const peek = await outbound.peekByToken(token);
     if (peek.kind === 'invalid') return { status: 404, html: invalidPage() };
-    if (peek.kind === 'gone') return { status: 200, html: gonePage(peek.row) };
-    const confirmPath = `/outbox/confirm/${token}`;
+    if (peek.kind === 'gone')
+      return { status: 200, html: gonePage(peek.row, confirmPath) };
     const cancelPath = `/outbox/cancel/${token}`;
     return {
       status: 200,
@@ -164,6 +174,7 @@ async function getConfirm(
       html: resultPage(
         'Something went wrong',
         'This link could not be opened right now. Nothing was sent — try again in a moment.',
+        { icon: 'warn' },
       ),
     };
   }
@@ -173,6 +184,7 @@ async function postConfirm(
   outbound: OutboundService,
   token: string,
 ): Promise<PageResult> {
+  const confirmPath = `/outbox/confirm/${token}`;
   try {
     const out = await outbound.confirmByToken(token);
     if (out.kind === 'invalid') return { status: 404, html: invalidPage() };
@@ -182,11 +194,12 @@ async function postConfirm(
         html: resultPage(
           'Message sent',
           `Sent to ${out.row.recipientDisplay}${sentWhen(out.row)}.`,
+          { icon: 'success', footNote: 'You can close this page.' },
         ),
       };
     // 'failed' and 'already' (a raced/reused link) both render the same
     // terminal page as any other non-draft row.
-    return { status: 200, html: gonePage(out.row) };
+    return { status: 200, html: gonePage(out.row, confirmPath) };
   } catch {
     // This catch can't tell a pre-send throw (secret(), expireOverdue,
     // outbox.get — nothing sent yet) apart from a post-send bookkeeping
@@ -203,6 +216,7 @@ async function postConfirm(
         'Something went wrong after this was submitted. It may have ' +
           'already been sent — check your Sent folder before asking ' +
           'for a new draft.',
+        { icon: 'warn' },
       ),
     };
   }
@@ -212,21 +226,25 @@ async function postCancel(
   outbound: OutboundService,
   token: string,
 ): Promise<PageResult> {
+  const confirmPath = `/outbox/confirm/${token}`;
   try {
     const out = await outbound.cancelByToken(token);
     if (out.kind === 'invalid') return { status: 404, html: invalidPage() };
     if (out.kind === 'cancelled')
       return {
         status: 200,
-        html: resultPage('Cancelled', 'This draft was cancelled.'),
+        html: resultPage('Cancelled', 'This draft was cancelled.', {
+          icon: 'info',
+        }),
       };
-    return { status: 200, html: gonePage(out.row) };
+    return { status: 200, html: gonePage(out.row, confirmPath) };
   } catch {
     return {
       status: 500,
       html: resultPage(
         'Status unknown',
         'Something went wrong while cancelling. Check list_outbox for this draft’s current status.',
+        { icon: 'warn' },
       ),
     };
   }
