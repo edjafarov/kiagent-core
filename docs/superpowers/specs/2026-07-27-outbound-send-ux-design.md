@@ -211,8 +211,10 @@ native form POST plus the server-side retry and better result pages.
 branch can render the Try-again form; both call sites (`getConfirm`,
 `postConfirm`) already hold the token.
 
-Dark mode and `prefers-reduced-motion` come free from
-tokens.css/components.css.
+The shell pages are light-only (tokens.css defines a single palette —
+consistent with every existing `sh-min` page); `prefers-reduced-motion`
+comes free from components.css. tokens.css has no success/warn colors, so
+`OUTBOX_CSS` defines local ones (`--ob-ok: #059669; --ob-warn: #d97706`).
 
 ### 5. Out of scope
 
