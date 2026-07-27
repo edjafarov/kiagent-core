@@ -402,9 +402,12 @@ export type OutboxStatus =
 
 /** How a draft gets user confirmation. 'review' = full app-served review page
  *  (spec mode A, the default); 'link' = in-chat review + short-TTL signed
- *  link landing on a minimal Send-button page (spec mode B). Mode C ('chat',
- *  send_draft) arrives in a later phase. */
-export type ConfirmMode = 'review' | 'link';
+ *  link landing on a minimal Send-button page (spec mode B); 'chat' =
+ *  in-chat review + explicit user agreement observed by the model, sent via
+ *  the send_draft tool (spec mode C — GLOBAL opt-in in Settings, decision
+ *  2026-07-27; per-account config stays review/link and acts as the
+ *  per-account opt-out). */
+export type ConfirmMode = 'review' | 'link' | 'chat';
 
 /** One outbox row, frozen at creation. Confirm surfaces render from this row;
  *  nothing the model does after creation can alter what would be sent. */

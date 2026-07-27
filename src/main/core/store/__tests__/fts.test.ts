@@ -195,10 +195,10 @@ describe('documents_fts rowid pinning', () => {
           value: string;
         }
       ).value,
-      // Tracks MIGRATIONS.length in schema.ts (currently 4 — v1..v4);
+      // Tracks MIGRATIONS.length in schema.ts (currently 5 — v1..v5);
       // MIGRATIONS isn't exported, so this is not import-derived. Bump
       // whenever a new migration is appended.
-    ).toBe('4');
+    ).toBe('5');
     raw.close();
     assertPinned(dbPath);
 

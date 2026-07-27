@@ -8,7 +8,7 @@ import { openDb, type AppDb } from '../../../db/app-db';
 import { openStore, type CoreStore } from '../store';
 import { OUTBOX_PENDING_CAP, type OutboxDraftInput } from '../outbox';
 
-describe('outbox schema (migration v4)', () => {
+describe('outbox schema', () => {
   let dir: string;
   let db: AppDb;
 
@@ -57,6 +57,39 @@ describe('outbox schema (migration v4)', () => {
          VALUES ('x', 'a', 'new', 'r', 'b', 'review', 'bogus', 'mcp-local', 't', 't')`,
       ),
     ).rejects.toThrow(/CHECK/);
+  });
+
+  it('accepts chat as a confirm mode (migration v5)', async () => {
+    // The only INSERT here that clears every CHECK, so it is also the only one
+    // that reaches the account_id foreign key — give it a parent row.
+    await db.run(
+      `INSERT INTO accounts (id, source, identifier, status, created_at)
+       VALUES ('a', 'imap', 'me@example.com', 'idle', 't')`,
+    );
+    await expect(
+      db.run(
+        `INSERT INTO outbox (id, account_id, kind, recipient_display,
+           body_markdown, confirm_mode, status, created_via, created_at, expires_at)
+         VALUES ('c1', 'a', 'new', 'r', 'b', 'chat', 'draft', 'mcp-local', 't', 't')`,
+      ),
+    ).resolves.not.toThrow();
+  });
+
+  it('still rejects unknown confirm modes after the rebuild', async () => {
+    await expect(
+      db.run(
+        `INSERT INTO outbox (id, account_id, kind, recipient_display,
+           body_markdown, confirm_mode, status, created_via, created_at, expires_at)
+         VALUES ('c2', 'a', 'new', 'r', 'b', 'bogus', 'draft', 'mcp-local', 't', 't')`,
+      ),
+    ).rejects.toThrow(/CHECK/);
+  });
+
+  it('keeps the account-status index across the rebuild', async () => {
+    const idx = (await db.all(`PRAGMA index_list(outbox)`)).map(
+      (r) => r.name as string,
+    );
+    expect(idx).toContain('idx_outbox_account_status');
   });
 });
 
@@ -196,6 +229,31 @@ describe('outbox store', () => {
     );
     await store.outbox.expireOverdue();
     expect((await store.outbox.get(row.id))?.status).toBe('expired');
+  });
+
+  it('countSentSince counts only sent rows inside the window', async () => {
+    const a = await store.outbox.create(draft());
+    const b = await store.outbox.create(draft());
+    await store.outbox.create(draft()); // stays a draft
+    await store.outbox.transition(a.id, ['draft'], 'sending');
+    await store.outbox.transition(a.id, ['sending'], 'sent', {
+      sentAt: '2026-07-26T10:30:00.000Z',
+    });
+    await store.outbox.transition(b.id, ['draft'], 'sending');
+    await store.outbox.transition(b.id, ['sending'], 'sent', {
+      sentAt: '2026-07-26T09:00:00.000Z', // outside the window below
+    });
+    expect(
+      await store.outbox.countSentSince(accountId, '2026-07-26T10:00:00.000Z'),
+    ).toBe(1);
+    expect(
+      await store.outbox.countSentSince(accountId, '2026-07-26T08:00:00.000Z'),
+    ).toBe(2);
+  });
+
+  it('stores and returns chat confirm mode', async () => {
+    const row = await store.outbox.create(draft({ confirmMode: 'chat' }));
+    expect((await store.outbox.get(row.id))?.confirmMode).toBe('chat');
   });
 
   it('secret is stable across calls and 32 bytes', async () => {

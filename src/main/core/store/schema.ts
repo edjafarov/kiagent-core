@@ -192,6 +192,48 @@ const MIGRATIONS: Migration[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_outbox_account_status ON outbox(account_id, status);
   `,
+
+  // v5 — widen outbox.confirm_mode to allow 'chat' (spec mode C). SQLite
+  // cannot ALTER a CHECK, so rebuild the table; the explicit column lists
+  // make the copy total and order-independent. Nothing references outbox,
+  // so the rename/drop is FK-safe.
+  `
+  DROP INDEX idx_outbox_account_status;
+  ALTER TABLE outbox RENAME TO outbox_v4;
+  CREATE TABLE outbox (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('reply','new')),
+    reply_to_document_id TEXT,
+    outbound_ref TEXT,
+    recipient_display TEXT NOT NULL,
+    to_json TEXT NOT NULL DEFAULT '[]',
+    cc_json TEXT NOT NULL DEFAULT '[]',
+    subject TEXT,
+    body_markdown TEXT NOT NULL,
+    threading_json TEXT,
+    confirm_mode TEXT NOT NULL CHECK (confirm_mode IN ('review','link','chat')),
+    status TEXT NOT NULL CHECK (status IN
+      ('draft','sending','sent','failed','discarded','expired','delivery_unknown')),
+    error TEXT,
+    external_message_id TEXT,
+    created_via TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    sent_at TEXT,
+    expires_at TEXT NOT NULL
+  );
+  INSERT INTO outbox (id, account_id, kind, reply_to_document_id, outbound_ref,
+    recipient_display, to_json, cc_json, subject, body_markdown, threading_json,
+    confirm_mode, status, error, external_message_id, created_via, created_at,
+    sent_at, expires_at)
+  SELECT id, account_id, kind, reply_to_document_id, outbound_ref,
+    recipient_display, to_json, cc_json, subject, body_markdown, threading_json,
+    confirm_mode, status, error, external_message_id, created_via, created_at,
+    sent_at, expires_at
+  FROM outbox_v4;
+  DROP TABLE outbox_v4;
+  CREATE INDEX idx_outbox_account_status ON outbox(account_id, status);
+  `,
 ];
 
 /**

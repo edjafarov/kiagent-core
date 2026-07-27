@@ -57,6 +57,8 @@ export interface OutboxStore {
     },
   ): Promise<boolean>;
   countDrafts(accountId: AccountId): Promise<number>;
+  /** Rows that reached 'sent' at or after sinceIso, for the mode-C rate limit. */
+  countSentSince(accountId: AccountId, sinceIso: string): Promise<number>;
   /** draft rows past expires_at → status 'expired'. Called lazily. */
   expireOverdue(): Promise<void>;
   /** Boot-time sweep: rows still in 'sending' can only mean the previous
@@ -156,6 +158,15 @@ export function createOutboxStore(
     get,
     countDrafts,
     expireOverdue,
+
+    async countSentSince(accountId, sinceIso) {
+      const rows = await db.all(
+        `SELECT COUNT(*) AS n FROM outbox
+         WHERE account_id = ? AND status = 'sent' AND sent_at >= ?`,
+        [accountId, sinceIso],
+      );
+      return Number(rows[0]?.n ?? 0);
+    },
 
     async create(d) {
       // Lazy sweep first so stale drafts never occupy cap slots.
