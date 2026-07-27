@@ -39,6 +39,13 @@ export interface BearerFetchOpts {
    *  default 5. Pass 1 for non-idempotent calls (send) — a retried send
    *  can double-deliver. */
   maxAttempts?: number;
+  /** Override the default HTTP-failure retry classifier
+   *  (isRetryableGoogleFailure). Non-idempotent calls pass a stricter
+   *  predicate that only matches proven request-rejections. */
+  retryOn?: (status: number, body: string) => boolean;
+  /** Retry network errors / timeouts (default true). Pass false for
+   *  non-idempotent calls — a timed-out request may have been processed. */
+  retryNetErrors?: boolean;
 }
 
 function isRetryableGoogleFailure(status: number, body: string): boolean {
@@ -136,6 +143,7 @@ export async function bearerFetch<T>(
 
     if (netError) {
       if (opts.signal?.aborted) throw netError;
+      if (opts.retryNetErrors === false) throw netError;
       if (attempt < attemptCap) {
         const delay =
           Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 250;
@@ -155,7 +163,8 @@ export async function bearerFetch<T>(
     }
 
     const { status, body, retryAfter } = httpFail!;
-    if (attempt < attemptCap && isRetryableGoogleFailure(status, body)) {
+    const retryable = (opts.retryOn ?? isRetryableGoogleFailure)(status, body);
+    if (attempt < attemptCap && retryable) {
       const retryAfterMs = Number(retryAfter);
       const delay =
         Number.isFinite(retryAfterMs) && retryAfterMs > 0
