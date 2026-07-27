@@ -115,13 +115,35 @@ function findBody(p: GmailPart, mt: string): string | null {
   return null;
 }
 
+/** Split an address-list header on top-level commas — a comma inside a
+ *  double-quoted display name ("Doe, Jane" <j@x.com>) is part of the name,
+ *  not a separator. These strings feed outbound To: headers, so a corrupted
+ *  entry would become a bogus recipient. */
 function split(s: string | undefined): string[] {
-  return s
-    ? s
-        .split(',')
-        .map((x) => x.trim())
-        .filter(Boolean)
-    : [];
+  if (!s) return [];
+  const trimAll = (parts: string[]): string[] =>
+    parts.map((p) => p.trim()).filter(Boolean);
+  // An odd quote count means the header is malformed. The scanner below would
+  // stay "inside" a quote to the end of the string and merge every remaining
+  // recipient into one entry — and the reply path resolves an entry by its
+  // first <...>, so a merged entry starting with the user's own address is
+  // self-filtered and the co-recipient vanishes silently. Prefer the old naive
+  // split there: still one recipient per entry, just with a stray quote.
+  if ((s.match(/"/g)?.length ?? 0) % 2 !== 0) return trimAll(s.split(','));
+  const out: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (const ch of s) {
+    if (ch === '"') inQuotes = !inQuotes;
+    if (ch === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return trimAll(out);
 }
 
 function collectAttachments(
