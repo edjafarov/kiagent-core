@@ -93,7 +93,18 @@ function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
 }
 
 function sentWhen(row: OutboxRow): string {
-  return row.sentAt ? ` (${row.sentAt})` : '';
+  if (!row.sentAt) return '';
+  // Human-readable, in the machine's locale + timezone — the server IS the
+  // user's own computer, so its clock is the right frame of reference.
+  const d = new Date(row.sentAt);
+  if (Number.isNaN(d.getTime())) return ` (${row.sentAt})`;
+  const when = d.toLocaleString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return ` (${when})`;
 }
 
 function gonePage(row: OutboxRow, confirmPath: string): string {

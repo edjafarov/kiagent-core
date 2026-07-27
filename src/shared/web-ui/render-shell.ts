@@ -87,10 +87,16 @@ function renderVariant(opts: RenderShellOpts): string {
 </div>`;
   }
 
-  // minimal
+  // minimal — opts.wordmark opts in a brand row above the title (framed
+  // Bracket mark + wordmark text); omitted, the shell stays the bare
+  // accent-stripe card the existing error/consent pages use.
+  const brand = opts.wordmark
+    ? `<div class="wordmark sh-min__brand">${sparkSvgMarkup({ frame: true, className: 'mark' })}<span>${esc(opts.wordmark)}</span></div>
+    `
+    : '';
   return `<div class="sh-min">
   <div class="sh-min__card">
-    <h1 class="sh-min__h1">${esc(opts.title)}</h1>
+    ${brand}<h1 class="sh-min__h1">${esc(opts.title)}</h1>
     <div class="sh-min__body">${opts.body}</div>
     ${renderFoot(opts)}
   </div>

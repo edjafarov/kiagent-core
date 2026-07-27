@@ -49,6 +49,19 @@ describe('reviewPage', () => {
     expect(html).toContain('<script>');
   });
 
+  it('carries the kia brand row and stays sharp-cornered (brand: no radius)', () => {
+    const html = reviewPage(baseRow(), {
+      confirmPath: '/outbox/confirm/tok',
+      cancelPath: '/outbox/cancel/tok',
+    });
+    expect(html).toContain('sh-min__brand');
+    expect(html).toContain('>kia</span>');
+    // Outbox's own CSS (the <style> block inside <body>) must not soften
+    // corners — tokens.css mandates sharp radii; the shared sheet in <head>
+    // keeps its own radius rules (e.g. the round spinner ring).
+    expect(html.split('<body>')[1]).not.toContain('border-radius');
+  });
+
   it('escapes a script-bearing subject and body', () => {
     const row = baseRow({
       subject: '<script>alert(1)</script>',
@@ -100,7 +113,7 @@ describe('failedPage', () => {
     expect(html).toContain('Try again');
     expect(html).toContain('<details class="ob-detail">');
     expect(html).toContain(shaped.summary);
-    expect(html).toContain('stroke="#d97706"'); // warn icon
+    expect(html).toContain('stroke="#c2410c"'); // warn icon
   });
 
   it('unknown (ambiguous): no form, no "Try again", "Delivery uncertain" title matching the check-Sent-folder copy, warn icon', () => {
@@ -122,7 +135,7 @@ describe('failedPage', () => {
     );
     // Amber warn, not red error: this page's whole point is uncertainty,
     // mirroring the delivery_unknown status page's icon.
-    expect(html).toContain('stroke="#d97706"');
+    expect(html).toContain('stroke="#c2410c"');
     expect(html).not.toContain('stroke="#e11d48"');
   });
 
@@ -154,7 +167,7 @@ describe('resultPage', () => {
     });
     expect(html).toContain('All done');
     expect(html).toContain('It worked.');
-    expect(html).toContain('stroke="#059669"'); // success icon
+    expect(html).toContain('stroke="#0d9488"'); // success icon
     expect(html).toContain('You can close this page.');
   });
 

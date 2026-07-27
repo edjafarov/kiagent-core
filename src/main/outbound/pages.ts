@@ -46,24 +46,24 @@ const css = (): ShellCss => {
 
 export type OutboxIcon = 'success' | 'warn' | 'error' | 'info';
 
-// Local status colors: tokens.css is a single light palette with no
-// success/warn entries (see spec §4) — these stay scoped to outbox pages.
+// Corners stay SQUARE (tokens.css: "Radius — SHARP throughout") — no
+// border-radius anywhere here. Layout-only overrides of the shared shell.
 const OUTBOX_CSS = `
 .ob { display: flex; flex-direction: column; gap: 14px; }
 .sh-min__card { max-width: 520px; width: 100%; }
-.ob-to-label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; }
-.ob-to-name { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.ob-to-label { font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
+.ob-to-name { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; color: var(--text-primary); }
 .ob-to-list { font-size: 12.5px; color: var(--text-secondary); overflow-wrap: anywhere; }
-.ob-subject { font-size: 15px; font-weight: 600; }
+.ob-subject { font-size: 15px; font-weight: 600; color: var(--text-primary); }
 .ob-body { white-space: pre-wrap; font-family: inherit; font-size: 14px; line-height: 1.55;
   color: var(--text-primary); background: var(--bg-muted);
-  border: 1px solid var(--border-subtle); border-radius: 8px;
+  border: 1px solid var(--border-subtle);
   padding: 12px 14px; max-height: 50vh; overflow: auto; margin: 0; }
 .ob-actions { display: flex; flex-direction: column; gap: 10px;
   position: sticky; bottom: 0; background: var(--bg-canvas); padding: 10px 0 2px; }
 .ob-actions form { margin: 0; }
-.ob-btn { height: 48px; width: 100%; font-size: 16px; border-radius: 10px; }
-.ob-btn-secondary { height: 44px; width: 100%; font-size: 15px; border-radius: 10px; }
+.ob-btn { height: 48px; width: 100%; font-size: 15px; }
+.ob-btn-secondary { height: 44px; width: 100%; font-size: 14px; }
 .ob-status { min-height: 20px; display: flex; gap: 8px; align-items: center;
   justify-content: center; font-size: 13px; color: var(--text-secondary); }
 .ob-icon { width: 44px; height: 44px; }
@@ -73,16 +73,21 @@ const OUTBOX_CSS = `
 .ob-detail summary { cursor: pointer; }
 .ob-detail pre { white-space: pre-wrap; overflow-wrap: anywhere;
   font-family: var(--font-mono); font-size: 11px; background: var(--bg-muted);
-  border: 1px solid var(--border-subtle); border-radius: 6px;
+  border: 1px solid var(--border-subtle);
   padding: 8px 10px; margin: 6px 0 0; }
 @media (max-width: 480px) {
-  .sh-min { align-items: flex-start; padding-top: 40px; }
+  .sh-min { align-items: flex-start; padding-top: 36px; }
 }
 `;
 
+// Stroke hexes mirror tokens.css status colors (--live-solid,
+// --working-solid, --error-solid, --paused-solid) — inline SVG attributes
+// can't read CSS custom properties when the shell CSS fails to load, and
+// keeping the literal values means the unstyled fallback page still gets
+// correctly-colored icons. Update both places if the palette ever moves.
 const ICON_SVGS: Record<OutboxIcon, string> = {
-  success: `<svg class="ob-icon" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="m8.2 12.4 2.6 2.6 5-5.4"/></svg>`,
-  warn: `<svg class="ob-icon" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5 21.5 20h-19L12 3.5Z"/><path d="M12 10v4.5"/><path d="M12 17.4v.1"/></svg>`,
+  success: `<svg class="ob-icon" viewBox="0 0 24 24" fill="none" stroke="#0d9488" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="m8.2 12.4 2.6 2.6 5-5.4"/></svg>`,
+  warn: `<svg class="ob-icon" viewBox="0 0 24 24" fill="none" stroke="#c2410c" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5 21.5 20h-19L12 3.5Z"/><path d="M12 10v4.5"/><path d="M12 17.4v.1"/></svg>`,
   error: `<svg class="ob-icon" viewBox="0 0 24 24" fill="none" stroke="#e11d48" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="m9 9 6 6M15 9l-6 6"/></svg>`,
   info: `<svg class="ob-icon" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M12 11v5"/><path d="M12 7.6v.1"/></svg>`,
 };
@@ -176,6 +181,7 @@ export function reviewPage(
   return renderShell(css(), {
     title: 'Review and send',
     variant: 'minimal',
+    wordmark: 'kia',
     body,
   });
 }
@@ -189,6 +195,7 @@ export function linkPage(row: OutboxRow, p: { confirmPath: string }): string {
   return renderShell(css(), {
     title: 'Send message?',
     variant: 'minimal',
+    wordmark: 'kia',
     body,
   });
 }
@@ -225,6 +232,7 @@ export function failedPage(
   return renderShell(css(), {
     title: uncertain ? 'Delivery uncertain' : 'Not sent',
     variant: 'minimal',
+    wordmark: 'kia',
     body,
   });
 }
@@ -239,5 +247,10 @@ export function resultPage(
   <p class="ob-msg">${esc(message)}</p>
   ${opts?.footNote ? `<p class="ob-note">${esc(opts.footNote)}</p>` : ''}
   ${opts?.detail ? detailBlock(opts.detail) : ''}`);
-  return renderShell(css(), { title, variant: 'minimal', body });
+  return renderShell(css(), {
+    title,
+    variant: 'minimal',
+    wordmark: 'kia',
+    body,
+  });
 }

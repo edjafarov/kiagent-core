@@ -95,6 +95,22 @@ describe('renderShell', () => {
     });
     expect(html).toContain('class="sh-min"');
     expect(html).toContain('<p>bye</p>');
+    // No wordmark → no brand row: existing error/consent pages keep the
+    // bare accent-stripe card.
+    expect(html).not.toContain('sh-min__brand');
+  });
+
+  it('minimal variant renders a brand row when wordmark is given', () => {
+    const html = renderShell(css, {
+      title: 'Hello',
+      variant: 'minimal',
+      body: '<p>bye</p>',
+      wordmark: 'kia',
+    });
+    expect(html).toContain('class="wordmark sh-min__brand"');
+    expect(html).toContain('>kia</span>');
+    // Framed Bracket mark (reticle stroke), same as the app topbar brand.
+    expect(html).toContain('stroke="#a78bfa"');
   });
 
   it('sets meta description when given', () => {

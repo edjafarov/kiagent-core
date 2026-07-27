@@ -22,6 +22,16 @@
   border-left: 3px solid var(--accent-solid);
   padding-left: 22px;
 }
+.sh-min__brand {
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+.sh-min__brand .mark {
+  width: 15px;
+  height: 15px;
+}
 .sh-min__h1 {
   font-size: 22px;
   font-weight: 600;
