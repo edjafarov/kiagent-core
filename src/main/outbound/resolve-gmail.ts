@@ -4,10 +4,11 @@
  * no address, and a gap is an explicit error or warning, never a guess.
  *
  * Handles both metadata generations written by sources/gmail/to-document.ts:
- * the current shape has only `{ from, id, date, snippet }` per message —
- * per-message `to`/`cc` are added by a later re-sync (phase 7). This
- * resolver treats the enriched shape as an upgrade it detects per-call
- * (`Array.isArray(last.to)`), never assumes it.
+ * the legacy shape has only `{ from, id, date, snippet }` per message, while
+ * documents synced since the enrichment also carry per-message `to`/`cc` and
+ * the raw `replyTo` header. This resolver treats the enriched shape as an
+ * upgrade it detects per-call (`Array.isArray(last.to)`), never assumes it —
+ * docs stored before the change keep their old behavior until a re-sync.
  */
 import type { Document } from '@shared/contracts';
 
@@ -28,6 +29,8 @@ interface GmailThreadMessage {
   from?: string | null;
   to?: string[];
   cc?: string[];
+  /** RAW `Reply-To` header as stored by to-document.ts. */
+  replyTo?: string | null;
   date?: string;
   snippet?: string;
 }
@@ -47,6 +50,24 @@ function addrOf(display: string): string {
  *  `<>` only when it's missing them. */
 function bracket(id: string): string {
   return id.startsWith('<') && id.endsWith('>') ? id : `<${id}>`;
+}
+
+/**
+ * The address a reply to `m` is aimed at: `Reply-To` when the sender set one,
+ * otherwise `From` — matching resolve.ts (imap) and RFC 5322 §3.6.2.
+ *
+ * Deliberately `||`, not `??`: gmail's projection is
+ * `m.headers['reply-to'] ?? null`, so a bare `Reply-To:` header survives as an
+ * EMPTY STRING rather than null (imap's parser normalizes it away, gmail's
+ * does not). An empty or whitespace-only header means "no Reply-To" — treating
+ * it as present would address the reply to nobody. The returned address is
+ * trimmed: it goes on the wire as a `To:` header, not just through addrOf().
+ */
+function replyTarget(m: GmailThreadMessage): string | null {
+  if (typeof m.replyTo === 'string' && m.replyTo.trim() !== '') {
+    return m.replyTo.trim();
+  }
+  return typeof m.from === 'string' ? m.from : null;
 }
 
 /** Filters a display-string list down to non-self entries, preserving the
@@ -103,25 +124,36 @@ export function resolveGmailReply(
   const lastEnriched = Array.isArray(last.to);
 
   if (replyAll && lastEnriched) {
+    const primary = replyTarget(last);
     const candidates = [
-      ...(typeof last.from === 'string' ? [last.from] : []),
+      ...(primary !== null ? [primary] : []),
       ...(last.to ?? []),
     ];
     to = minusSelf(candidates, self);
     cc = minusSelf(last.cc ?? [], self);
   } else {
     // Plain reply, or reply_all falling back on an un-enriched doc: target
-    // the last message whose sender is not self.
+    // the last message whose sender is not self. Self-detection stays on
+    // `From` (a Reply-To never makes a message yours), but the address the
+    // reply is ADDRESSED to comes from that same target message — which is
+    // not necessarily `last`, e.g. when you sent the newest message.
+    let target: GmailThreadMessage | null = null;
     let targetFrom: string | null = null;
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const { from } = messages[i];
       if (typeof from === 'string' && !self.has(addrOf(from))) {
+        target = messages[i];
         targetFrom = from;
         break;
       }
     }
-    if (targetFrom !== null) {
-      to = [targetFrom];
+    if (target !== null && targetFrom !== null) {
+      // Reply-To wins over From — EXCEPT when it points back at the user.
+      // A plain reply must never be addressed to the user themselves (before
+      // Reply-To was honored, the loop above made that impossible), so fall
+      // back to From, which the loop already proved is not self.
+      const primary = replyTarget(target) ?? targetFrom;
+      to = self.has(addrOf(primary)) ? [targetFrom] : [primary];
     } else if (lastIsSelf && lastEnriched) {
       to = minusSelf(last.to ?? [], self);
       if (to.length > 0) {
