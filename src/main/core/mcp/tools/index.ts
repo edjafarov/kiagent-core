@@ -2,8 +2,11 @@
  * The built-in MCP tool set — a straight port of kiagent-ref's
  * src/main/mcp/register.ts tool dictionary (minus `query_sql`/`get_schema`;
  * see server.ts), rebuilt against `Query` instead of raw SQL. Every tool here
- * is `tier: 'standard'` — the reach is bounded by whatever `Query` already
- * exposes, nothing more.
+ * is `tier: 'standard'` — and for the read tools the reach is bounded by
+ * whatever `Query` already exposes, nothing more. `send_draft` is the one
+ * exception: it performs an irreversible external side effect, bounded
+ * instead by the user's consent observed in chat plus the per-account hourly
+ * rate limit (see outbound/service.ts).
  */
 import type { McpTool, Query } from '@shared/contracts';
 import type { OutboundToolApi } from '@main/outbound/service';
@@ -36,6 +39,11 @@ import {
   makeListOutboxTool,
 } from './list-outbox';
 import { makeSearchTool, searchDescription, searchInputSchema } from './search';
+import {
+  makeSendDraftTool,
+  sendDraftDescription,
+  sendDraftInputSchema,
+} from './send-draft';
 
 /** When no outbound service exists on this transport (a stdio sibling with
  *  no proxy), the tools still register — the tool LIST must not drift
@@ -44,6 +52,7 @@ const unavailableOutbound: OutboundToolApi = {
   draftReply: unavailable,
   draftMessage: unavailable,
   listOutbox: unavailable,
+  sendDraft: unavailable,
 };
 async function unavailable(): Promise<never> {
   throw new Error(
@@ -114,6 +123,13 @@ export function buildBuiltinTools(
       inputSchema: listOutboxInputSchema,
       tier: 'standard',
       call: makeListOutboxTool(out),
+    },
+    {
+      name: 'send_draft',
+      description: sendDraftDescription,
+      inputSchema: sendDraftInputSchema,
+      tier: 'standard',
+      call: makeSendDraftTool(out),
     },
   ];
 }

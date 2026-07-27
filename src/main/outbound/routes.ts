@@ -175,9 +175,15 @@ async function getConfirm(
     return {
       status: 200,
       html:
-        peek.mode === 'review'
-          ? reviewPage(peek.row, { confirmPath, cancelPath })
-          : linkPage(peek.row, { confirmPath }),
+        // Only 'link' gets the minimal page. 'chat' falls through to the FULL
+        // review page on purpose: a chat draft's page confirm is a FALLBACK
+        // (the model never showed a link), so it must be the strictly
+        // stronger surface — whole draft rendered, plus a Cancel button —
+        // rather than a bare Send button for a message the user may never
+        // have seen on this device.
+        peek.mode === 'link'
+          ? linkPage(peek.row, { confirmPath })
+          : reviewPage(peek.row, { confirmPath, cancelPath }),
     };
   } catch {
     return {
@@ -359,6 +365,13 @@ export function createOutboundRoutes(outbound: OutboundService): {
                 (body.args ?? {}) as Parameters<
                   OutboundService['listOutbox']
                 >[0],
+              ),
+            });
+          } else if (body?.op === 'sendDraft') {
+            sendJson(res, {
+              ok: true,
+              result: await outbound.sendDraft(
+                body.args as Parameters<OutboundService['sendDraft']>[0],
               ),
             });
           } else {

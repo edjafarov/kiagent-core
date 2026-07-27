@@ -4,6 +4,7 @@ import path from 'path';
 
 import type {
   AccountId,
+  ConfirmMode,
   DocumentInput,
   Prefs,
   Sender,
@@ -20,8 +21,13 @@ const deps = {
   detectLanguages: () => ['eng'],
 };
 const logSink = { log: () => {} };
+// Chat confirmation is a GLOBAL Settings opt-in (decision 2026-07-27), so the
+// prefs fake — not per-account config — is how these tests turn it on. Mutable
+// and reset to 'review' in beforeEach so one chat test can't leak into the
+// page-confirm ones.
+let defaultMode: ConfirmMode = 'review';
 const fakePrefs = {
-  get: () => ({}) as ReturnType<Prefs['get']>,
+  get: () => ({ outbound: { defaultMode } }) as ReturnType<Prefs['get']>,
   patch: async () => {},
   onChange: () => () => {},
 } as unknown as Prefs;
@@ -40,6 +46,7 @@ describe('outbound MCP tools', () => {
   };
 
   beforeEach(async () => {
+    defaultMode = 'review';
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-outtools-'));
     store = openStore(await openDb(path.join(dir, 'test.db')), deps);
     const account = await store.createAccount({
@@ -137,5 +144,38 @@ describe('outbound MCP tools', () => {
       accounts: Array<{ id: string; identifier: string }>;
     };
     expect(info.accounts[0].id).toBe(accountId);
+  });
+
+  it('send_draft sends a chat-mode draft end to end', async () => {
+    defaultMode = 'chat'; // global opt-in
+    const draft = (await call('draft_reply', {
+      document_id: docId,
+      body: 'Yes, works for me.',
+    })) as { draft_id: string; confirm_url?: string };
+    expect(draft.confirm_url).toBeUndefined();
+    const sent = (await call('send_draft', { draft_id: draft.draft_id })) as {
+      status: string;
+    };
+    expect(sent.status).toBe('sent');
+    expect((await store.outbox.get(draft.draft_id))?.status).toBe('sent');
+  });
+
+  it('send_draft names the mode for non-chat drafts', async () => {
+    const draft = (await call('draft_reply', {
+      document_id: docId,
+      body: 'Hi',
+    })) as { draft_id: string };
+    await expect(
+      call('send_draft', { draft_id: draft.draft_id }),
+    ).rejects.toThrow(/chat-mode/);
+  });
+
+  it('send_draft is registered but unavailable without an outbound service', async () => {
+    const cold = buildBuiltinTools(store.read);
+    const t = cold.find((x) => x.name === 'send_draft');
+    expect(t).toBeDefined();
+    await expect(t!.call({ draft_id: 'x' })).rejects.toThrow(
+      /unavailable on this transport/i,
+    );
   });
 });

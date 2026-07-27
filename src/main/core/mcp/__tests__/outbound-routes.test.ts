@@ -13,6 +13,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 import type {
   AccountId,
+  ConfirmMode,
   DocumentInput,
   OutboxRow,
   Prefs,
@@ -36,11 +37,21 @@ const deps = {
   detectLanguages: () => ['eng'],
 };
 const logSink = { log: () => {} };
+// Chat confirmation is a GLOBAL Settings opt-in (decision 2026-07-27) — this
+// prefs fake is the only way in. Mutable, and reset to 'review' by the
+// file-scope beforeEach below so a chat test can never leak into the
+// page-confirm suites (handleRemote's tests unwrap `confirm_url!`, which a
+// leaked 'chat' would make undefined).
+let defaultMode: ConfirmMode = 'review';
 const fakePrefs = {
-  get: () => ({}),
+  get: () => ({ outbound: { defaultMode } }),
   patch: async () => {},
   onChange: () => () => {},
 } as unknown as Prefs;
+
+beforeEach(() => {
+  defaultMode = 'review';
+});
 
 let dir: string;
 let store: CoreStore;
@@ -115,9 +126,11 @@ afterAll(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// Non-null: every caller below drafts under the default 'review'/'link'
+// modes, which always carry a confirm_url (only chat mode omits it).
 const draftUrl = async () => {
   const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-  return r.confirm_url;
+  return r.confirm_url!;
 };
 
 describe('outbox confirm routes', () => {
@@ -164,7 +177,7 @@ describe('outbox confirm routes', () => {
       documentId: evilDocId,
       body: '<script>alert(1)</script>',
     });
-    const html = await (await fetch(r.confirm_url)).text();
+    const html = await (await fetch(r.confirm_url!)).text();
 
     // Escaped forms present...
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
@@ -261,6 +274,53 @@ describe('outbox confirm routes', () => {
     });
     expect(api.headers.get('content-type')).toContain('application/json');
     expect(api.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it('/outbox/api handles the sendDraft op', async () => {
+    defaultMode = 'chat'; // global opt-in
+    const draftRes = await fetch(`${base}/outbox/api`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        op: 'draftReply',
+        args: { documentId: docId, body: 'ok' },
+      }),
+    });
+    const draft = (await draftRes.json()) as {
+      ok: boolean;
+      result: { draft_id: string };
+    };
+    const sendRes = await fetch(`${base}/outbox/api`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        op: 'sendDraft',
+        args: { draftId: draft.result.draft_id },
+      }),
+    });
+    const sent = (await sendRes.json()) as {
+      ok: boolean;
+      result: { status: string };
+    };
+    expect(sent.ok).toBe(true);
+    expect(sent.result.status).toBe('sent');
+  });
+
+  it('a chat-mode draft renders the full review page as fallback', async () => {
+    defaultMode = 'chat'; // global opt-in
+    const r = await service.draftReply({ documentId: docId, body: 'page me' });
+    // Load-bearing: listOutbox re-links ANY pending row, so without this the
+    // assertions below would pass on a review-mode draft and pin nothing
+    // about the chat->reviewPage mapping in routes.ts.
+    expect((await store.outbox.get(r.draft_id))?.confirmMode).toBe('chat');
+    const item = (await service.listOutbox({})).find(
+      (x) => x.draft_id === r.draft_id,
+    );
+    const page = await fetch(item!.confirm_url!);
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain('page me');
+    expect(html).toContain('Cancel'); // review page, not the minimal link page
   });
 });
 
@@ -463,6 +523,7 @@ function fakeService(overrides: Partial<OutboundService>): OutboundService {
     draftReply: notImplemented,
     draftMessage: notImplemented,
     listOutbox: notImplemented,
+    sendDraft: notImplemented,
     peekByToken: notImplemented,
     confirmByToken: notImplemented,
     cancelByToken: notImplemented,

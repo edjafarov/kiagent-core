@@ -276,7 +276,7 @@ TEXT.`,
           name: 'confirm_mode',
           type: 'TEXT',
           notes:
-            "Enum — 'review' (full app-served review page) or 'link' (in-chat review + short-TTL signed link). Frozen at creation.",
+            "Enum — 'review' (full app-served review page), 'link' (in-chat review + short-TTL signed link), or 'chat' (in-chat review, confirmed by the user in conversation and sent via send_draft; no link is issued up front). Frozen at creation.",
         },
         {
           name: 'status',

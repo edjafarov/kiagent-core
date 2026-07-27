@@ -86,6 +86,7 @@ const BUILTIN_TOOL_NAMES = [
   'list_outbox',
   'query_sql',
   'search',
+  'send_draft',
 ].sort();
 
 describe('startMcp (HTTP transport)', () => {
@@ -244,6 +245,10 @@ describe('startMcp (HTTP transport)', () => {
     const instructions = client.getInstructions();
     expect(instructions).toContain('digital_memory_info');
     expect(instructions).toContain('get_related(thread_messages)');
+    // Mode C is only discoverable from tools/list unless the handshake names
+    // it — pin that send_draft is taught here, with its gating condition.
+    expect(instructions).toContain('send_draft');
+    expect(instructions).toMatch(/chat confirmation\s+mode/);
 
     const serverInfo = client.getServerVersion() as
       | { name: string; icons?: Array<{ src: string; mimeType?: string }> }

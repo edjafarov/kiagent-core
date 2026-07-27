@@ -81,5 +81,7 @@ Don't invent documents or details not returned by a tool.
 
 Outbound: draft_reply / draft_message create user-confirmed drafts (nothing
 sends without the user's confirmation); list_outbox shows drafts and
-re-issues confirm links.
+re-issues confirm links. send_draft sends one — only in chat confirmation
+mode, and only after the user has explicitly agreed in this conversation;
+in any other mode present the draft's confirm link instead.
 `;
