@@ -102,7 +102,7 @@ and remote transports:
 | `draft_reply(document_id, body, reply_all?)` | writes outbox row | host resolves recipients + threading from the doc; model supplies no address |
 | `draft_message(account_id, to, subject, body)` | writes outbox row | email accounts only; free-form recipients |
 | `list_outbox(limit?)` | read | recent drafts + statuses; re-issues confirm URLs for still-pending drafts |
-| `send_draft(draft_id)` | sends | **only** honored for accounts configured in mode C; otherwise returns an error naming the account's mode |
+| `send_draft(draft_id)` | sends | **only** honored when mode C is the effective mode (global opt-in, decision 2026-07-27) for the draft's account; otherwise returns an error naming the mode |
 
 Tool results carry mode-specific instructions for the model:
 
