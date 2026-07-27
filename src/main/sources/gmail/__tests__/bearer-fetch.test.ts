@@ -164,8 +164,13 @@ describe('bearerFetch retry/backoff', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('retryOn can retry a failure, then resolve once the retried attempt succeeds', async () => {
-    const failBody = 'rateLimitExceeded';
+  it('retryOn can retry a failure the default classifier genuinely rejects, then resolve once the retried attempt succeeds', async () => {
+    // A 403 without a quota/rate-limit marker in the body is NOT retryable
+    // under the default classifier (isRetryableGoogleFailure only retries
+    // 403 when the body matches rateLimitExceeded/userRateLimitExceeded/
+    // quotaExceeded) — so this body genuinely proves retryOn widens what
+    // gets retried, rather than merely restating the default's own verdict.
+    const failBody = 'transient upstream hiccup';
     const fetchMock = jest
       .fn()
       .mockResolvedValueOnce({
@@ -189,8 +194,7 @@ describe('bearerFetch retry/backoff', () => {
       async () => 'tok',
       {
         errorPrefix: 'gmail',
-        retryOn: (status, body) =>
-          status === 403 && /rateLimitExceeded/.test(body),
+        retryOn: (status, body) => status === 403 && /hiccup/.test(body),
       },
     );
 
