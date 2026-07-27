@@ -103,8 +103,9 @@ describe('failedPage', () => {
     expect(html).toContain('stroke="#d97706"'); // warn icon
   });
 
-  it('permanent: no form, no "Try again", check-Sent-style copy, error icon', () => {
+  it('unknown (ambiguous): no form, no "Try again", "Delivery uncertain" title matching the check-Sent-folder copy, error icon', () => {
     const shaped = shapeOutboundError('send failed: boom');
+    expect(shaped.kind).toBe('unknown');
     expect(shaped.canRetry).toBe(false);
     const row = baseRow({ status: 'failed', error: shaped.summary });
     const html = failedPage(row, {
@@ -113,8 +114,31 @@ describe('failedPage', () => {
     });
     expect(html).not.toContain('method="POST"');
     expect(html).not.toContain('Try again');
+    expect(html).toContain('Delivery uncertain');
+    expect(html).not.toContain('<h1 class="sh-min__h1">Not sent</h1>');
     expect(html).toMatch(/could not confirm delivery|sent folder/i);
+    expect(html).toContain(
+      "If it's not in your Sent folder, ask your assistant to create a new draft.",
+    );
     expect(html).toContain('stroke="#e11d48"'); // error icon
+  });
+
+  it('unsupported: certain failure, still title "Not sent", no retry form', () => {
+    const shaped = shapeOutboundError(
+      "sending from 'slack' accounts is not supported yet — supported: gmail, imap",
+    );
+    expect(shaped.kind).toBe('unsupported');
+    expect(shaped.canRetry).toBe(false);
+    const row = baseRow({ status: 'failed', error: shaped.summary });
+    const html = failedPage(row, {
+      shaped,
+      confirmPath: '/outbox/confirm/tok5',
+    });
+    expect(html).toContain('<h1 class="sh-min__h1">Not sent</h1>');
+    expect(html).not.toContain('Delivery uncertain');
+    expect(html).not.toContain('method="POST"');
+    expect(html).not.toContain('Try again');
+    expect(html).toContain('Ask your assistant to create a new draft.');
   });
 });
 

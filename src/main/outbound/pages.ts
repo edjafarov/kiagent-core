@@ -197,9 +197,21 @@ export function failedPage(
   row: OutboxRow,
   p: { shaped: ShapedOutboundError; confirmPath: string },
 ): string {
+  // kind 'unknown' means shapeOutboundError could not prove the send was
+  // ever rejected — its own message already says the send "MAY still have
+  // been sent — check your Sent folder". A headline of 'Not sent' plus
+  // "create a new draft" contradicts that outright, so this kind alone gets
+  // its own title and non-retryable note. Every other non-retryable kind
+  // ('unsupported') IS certain the send never went out, so 'Not sent' and
+  // the plain "create a new draft" note stay correct for it.
+  const uncertain = p.shaped.kind === 'unknown';
   const retry = p.shaped.canRetry
     ? `<div class="ob-actions">${sendForm(p.confirmPath, 'Try again')}</div>`
-    : `<p class="ob-note">Ask your assistant to create a new draft.</p>`;
+    : `<p class="ob-note">${
+        uncertain
+          ? "If it's not in your Sent folder, ask your assistant to create a new draft."
+          : 'Ask your assistant to create a new draft.'
+      }</p>`;
   const body =
     chrome(`
   ${ICON_SVGS[p.shaped.canRetry ? 'warn' : 'error']}
@@ -208,7 +220,11 @@ export function failedPage(
   ${retry}
   ${detailBlock(p.shaped.summary)}`) +
     (p.shaped.canRetry ? CONFIRM_SCRIPT : '');
-  return renderShell(css(), { title: 'Not sent', variant: 'minimal', body });
+  return renderShell(css(), {
+    title: uncertain ? 'Delivery uncertain' : 'Not sent',
+    variant: 'minimal',
+    body,
+  });
 }
 
 export function resultPage(

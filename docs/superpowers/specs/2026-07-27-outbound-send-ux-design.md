@@ -77,8 +77,11 @@ function isSendSafeRetry(status: number, body: string): boolean {
 }
 ```
 
-(The case-insensitive regex also covers the `RATE_LIMIT_EXCEEDED`
-ErrorInfo reason observed in the smoke.) Backoff, jitter, and
+(The case-insensitive regex matches the `errors[].reason` camelCase forms
+— `rateLimitExceeded`/`userRateLimitExceeded`/`quotaExceeded`; it does NOT
+match the SCREAMING_SNAKE `RATE_LIMIT_EXCEEDED` ErrorInfo duplicate some
+payloads also carry, which is fine since real Gmail 403 quota bodies carry
+both forms and only one needs to hit.) Backoff, jitter, and
 `Retry-After` honoring come from `bearerFetch` unchanged (1s/2s/4s +
 jitter; realistic retry window ≈ 8s while the user watches the page).
 

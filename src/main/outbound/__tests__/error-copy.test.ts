@@ -40,6 +40,15 @@ const STACK_TRACE_WITH_EMBEDDED_429 =
 // was already immune, but it belongs in the corpus as a regression guard.
 const QUOTA_MARKER_ON_OWN_LINE =
   'some upstream error\nrateLimitExceeded\nplease retry';
+// A genuine 5xx (server-side, NOT a proven quota rejection) whose body
+// happens to also mention a quota-shaped marker word — the bearerFetch
+// head-token status (503) disqualifies the QUOTA_MARKERS branch, so this
+// must stay unknown/false on BOTH the raw pass and the re-shaped pass (the
+// `already` guard keeps the disqualification a fixed point even though
+// re-shaping's `send failed: ` prefix pushes "503" out of the anchored
+// head-token position that `status` reads).
+const QUOTA_MARKER_WITH_DISQUALIFYING_STATUS =
+  'gmail 503 https://x internal error quotaExceeded backend';
 
 describe('shapeOutboundError', () => {
   it('classifies the smoke-test quota 403 as transient/retryable', () => {
@@ -116,6 +125,7 @@ describe('shapeOutboundError', () => {
       REPRO_MULTILINE_AUTH_PHRASE,
       STACK_TRACE_WITH_EMBEDDED_429,
       QUOTA_MARKER_ON_OWN_LINE,
+      QUOTA_MARKER_WITH_DISQUALIFYING_STATUS,
     ]) {
       const first = shapeOutboundError(raw);
       const second = shapeOutboundError(first.summary);
@@ -151,6 +161,24 @@ describe('shapeOutboundError', () => {
     const second = shapeOutboundError(first.summary);
     expect(second.kind).toBe('unknown');
     expect(second.canRetry).toBe(false);
+  });
+  it('a quota-shaped marker word riding along a disqualifying (non-403/429) head-token status stays unknown/false on BOTH passes', () => {
+    const first = shapeOutboundError(QUOTA_MARKER_WITH_DISQUALIFYING_STATUS);
+    expect(first.kind).toBe('unknown');
+    expect(first.canRetry).toBe(false);
+    const second = shapeOutboundError(first.summary);
+    expect(second.kind).toBe('unknown');
+    expect(second.canRetry).toBe(false);
+  });
+  it('the verbatim smoke-403 (head-token status 403) still classifies transient/retryable', () => {
+    const s = shapeOutboundError(SMOKE_403);
+    expect(s.kind).toBe('transient');
+    expect(s.canRetry).toBe(true);
+  });
+  it('a bare quota marker with no head-token status at all still classifies transient/retryable', () => {
+    const s = shapeOutboundError('rateLimitExceeded during send');
+    expect(s.kind).toBe('transient');
+    expect(s.canRetry).toBe(true);
   });
   it('does not classify an unrelated "reconnect" substring as auth', () => {
     const s = shapeOutboundError(UNRELATED_RECONNECT_WORD);

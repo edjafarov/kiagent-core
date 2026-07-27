@@ -507,9 +507,12 @@ export function createOutboundService(deps: {
         threading: row.threading ?? undefined,
       };
 
-      // Only the send attempt itself is caught here — a throw from this
-      // block means the message was never accepted, so 'failed' is honest.
-      // Everything AFTER a successful send (the DB transition, the re-read,
+      // Only the send attempt itself is caught here. A throw from this
+      // block is recorded as 'failed' and classified by shapeOutboundError:
+      // provably-rejected kinds (quota/auth) render a retryable page,
+      // ambiguous kinds (timeout/5xx/network) render delivery-uncertain
+      // copy — the row status alone no longer claims the message never
+      // left. Everything AFTER a successful send (the DB transition, the re-read,
       // the log line) sits outside the catch on purpose: once sender.send()
       // has resolved, the message may already be gone out over the wire, so
       // a bookkeeping throw here must never be reported as 'failed' (that

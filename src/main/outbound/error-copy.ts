@@ -76,6 +76,20 @@ export function shapeOutboundError(raw: string): ShapedOutboundError {
       canRetry: false,
     };
   }
+  // Matches both the `send failed: <detail>` shape and the bare empty-input
+  // placeholder (`send failed with no error message`), so re-shaping either
+  // one is a no-op instead of double-prefixing on a second pass. Computed
+  // once, up front (same reasoning as `text` above): a summary this module
+  // already decided was `unknown` was, by construction, already run past
+  // every other classifier on its ORIGINAL (unwrapped) text and rejected —
+  // the quota-marker gate below relies on that to stay a fixed point (see
+  // its comment). Nothing else in this codebase generates raw error text
+  // that starts with `send failed` (only this function's own `unknown`
+  // branch does, below) — so in practice `already` only ever fires on a
+  // genuine re-shape. If that ever changes, a raw string wearing this
+  // prefix by coincidence would be treated as already-shaped too, same as
+  // the pre-existing empty-input placeholder case already is.
+  const already = /^send failed( with no error message$|: )/.test(text);
 
   const smtp = SMTP_TRANSIENT.exec(text);
   if (smtp) {
@@ -96,8 +110,30 @@ export function shapeOutboundError(raw: string): ShapedOutboundError {
   // re-shape — flipping canRetry false→true for a send we never proved was
   // rejected pre-delivery. Only the bearerFetch head token format
   // (`${prefix} ${status} ${url} ...`) is trusted.
+  //
+  // A bare marker with NO head-token status (`status` undefined) keeps the
+  // old behavior — unanchored marker words alone still mean transient. But
+  // when a head-token status IS present, it must be '403' or '429' to let
+  // QUOTA_MARKERS drive a transient classification: a marker word riding
+  // along in a 5xx body (a genuine server-side failure, not a proven quota
+  // rejection) must not be waved through as retryable just because it also
+  // happens to mention a quota-shaped phrase. `!already` guards this: once
+  // a marker+disqualifying-status body has been rejected to `unknown` and
+  // wrapped in the `send failed: ` prefix, that prefix pushes the original
+  // head token out of the anchored position `status` reads — without this
+  // guard, the SAME marker word (unanchored, so still visible post-wrap)
+  // would satisfy the condition again on re-shape with `status` now
+  // undefined, flipping unknown/false → transient/true. Gating on `already`
+  // instead of on `status` keeps this a fixed point: a body this module has
+  // already rejected once stays rejected, no matter what the wrapper text
+  // does to token positions.
   const status = HTTP_STATUS.exec(text)?.[1];
-  if (QUOTA_MARKERS.test(text) || status === '429') {
+  const statusAllowsQuota =
+    status === undefined || status === '403' || status === '429';
+  if (
+    !already &&
+    ((QUOTA_MARKERS.test(text) && statusAllowsQuota) || status === '429')
+  ) {
     if (/^rate-limited:/.test(text)) {
       return {
         kind: 'transient',
@@ -131,10 +167,6 @@ export function shapeOutboundError(raw: string): ShapedOutboundError {
       canRetry: false,
     };
   }
-  // Matches both the `send failed: <detail>` shape and the bare empty-input
-  // placeholder (`send failed with no error message`), so re-shaping either
-  // one is a no-op instead of double-prefixing on a second pass.
-  const already = /^send failed( with no error message$|: )/.test(text);
   return {
     kind: 'unknown',
     summary: already
