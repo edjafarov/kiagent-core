@@ -7,15 +7,17 @@
  * Retains the load-bearing behaviors from legacy:
  *  - 429 / 5xx / Google-quota-403 are retried with exponential backoff
  *    (honoring `Retry-After` when present); network errors and timeouts are
- *    always retryable.
+ *    always retryable (defaults — see retryOn/retryNetErrors for
+ *    non-idempotent callers).
  *  - The abort signal stays armed across BOTH header and body read — fetch()
  *    resolves as soon as headers arrive, so clearing the timeout early can
  *    leave a slow body read unprotected (legacy hit multi-hour hangs this way).
  *  - Thrown HTTP-failure message format is `${errorPrefix} ${status} ${url} ${body}`
  *    — callers regex this to detect invalid-cursor conditions (see
  *    `isInvalidHistoryError` in gmail-api.ts).
- *  - 401 is NOT retried: it is thrown immediately as a SourceAuthError (same
- *    message format), which the engine maps to `status: 'needsReauth'`
+ *  - 401 is NOT retried (defaults — see retryOn/retryNetErrors for
+ *    non-idempotent callers): it is thrown immediately as a SourceAuthError
+ *    (same message format), which the engine maps to `status: 'needsReauth'`
  *    instead of burning its retry budget against a revoked grant.
  */
 import { SourceAuthError } from '@shared/source-errors';
@@ -46,6 +48,10 @@ export interface BearerFetchOpts {
   /** Retry network errors / timeouts (default true). Pass false for
    *  non-idempotent calls — a timed-out request may have been processed. */
   retryNetErrors?: boolean;
+  /** Ceiling on ANY single retry delay, including Retry-After-driven ones;
+   *  default: no extra cap beyond the exponential branch's built-in 60s.
+   *  Pass for user-facing waits. */
+  maxRetryDelayMs?: number;
 }
 
 function isRetryableGoogleFailure(status: number, body: string): boolean {
@@ -145,8 +151,10 @@ export async function bearerFetch<T>(
       if (opts.signal?.aborted) throw netError;
       if (opts.retryNetErrors === false) throw netError;
       if (attempt < attemptCap) {
-        const delay =
-          Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 250;
+        let delay = Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 250;
+        if (opts.maxRetryDelayMs !== undefined) {
+          delay = Math.min(delay, opts.maxRetryDelayMs);
+        }
         if (opts.logTag) {
           const reason =
             netError.name === 'AbortError'
@@ -166,10 +174,13 @@ export async function bearerFetch<T>(
     const retryable = (opts.retryOn ?? isRetryableGoogleFailure)(status, body);
     if (attempt < attemptCap && retryable) {
       const retryAfterMs = Number(retryAfter);
-      const delay =
+      let delay =
         Number.isFinite(retryAfterMs) && retryAfterMs > 0
           ? retryAfterMs * 1000
           : Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 250;
+      if (opts.maxRetryDelayMs !== undefined) {
+        delay = Math.min(delay, opts.maxRetryDelayMs);
+      }
       if (opts.logTag) {
         console.warn(
           `${opts.logTag} ${status} ${url} — retry ${attempt + 1}/${attemptCap} after ${Math.round(delay)}ms`,

@@ -217,6 +217,33 @@ describe('bearerFetch retry/backoff', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('maxRetryDelayMs caps a huge Retry-After so the wait stays bounded, not the full 3600s', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(retryable429(3600) as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true }),
+        text: async () => '{"ok":true}',
+        headers: { get: () => null },
+      } as unknown as Response);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const started = Date.now();
+    const result = await bearerFetch<{ ok: boolean }>(
+      'https://example.test/x',
+      async () => 'tok',
+      { errorPrefix: 'gmail', maxRetryDelayMs: 50 },
+    );
+
+    expect(result).toEqual({ ok: true });
+    // Without the cap this would wait out the full 3600s (1hr) Retry-After;
+    // with it, the wait is bounded to maxRetryDelayMs (50ms) plus overhead.
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('default path unchanged: a network error still retries when retryNetErrors is not set', async () => {
     const fetchMock = jest.fn(async () => {
       throw new TypeError('fetch failed');

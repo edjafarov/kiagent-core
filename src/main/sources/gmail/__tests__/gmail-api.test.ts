@@ -153,9 +153,22 @@ describe('sendGmailMessage', () => {
     global.fetch = fetchMock as unknown as typeof fetch;
 
     const auth = { credentials: async () => ({ accessToken: 'tok' }) };
-    await expect(
-      sendGmailMessage(auth, Buffer.from('From: a\r\n\r\nhi')),
-    ).rejects.toThrow(/gmail 403/);
+    const failure = await sendGmailMessage(
+      auth,
+      Buffer.from('From: a\r\n\r\nhi'),
+    ).then(
+      () => {
+        throw new Error('expected the send to reject');
+      },
+      (e: Error) => e,
+    );
+    // Pin the full thrown-message shape the downstream error-copy classifier
+    // depends on (see SMOKE_403 in error-copy.test.ts): the bearerFetch head
+    // token plus a body that still carries the quota marker.
+    expect(failure.message).toMatch(
+      /^gmail 403 https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/messages\/send /,
+    );
+    expect(failure.message).toContain('rateLimitExceeded');
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 

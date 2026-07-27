@@ -3,7 +3,9 @@
  * Token refresh mirrors the engine's session semantics (60s margin, vault
  * write-back) because sends run outside any pull session. The sent message
  * re-enters the corpus through the normal history.list delta — no append.
- * Never auto-retried: a duplicate email is worse than a failed row.
+ * Auto-retried ONLY on proven request-rejections (429/quota-403 — see
+ * isSendSafeRetry); ambiguous failures (timeout/5xx/network) are never
+ * retried: a duplicate email is worse than a failed row.
  */
 import MailComposer from 'nodemailer/lib/mail-composer';
 

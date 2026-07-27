@@ -173,9 +173,11 @@ export function isSendSafeRetry(status: number, body: string): boolean {
 /** POST users/me/messages/send. `raw` is the full RFC822 message; `threadId`
  *  (the Gmail API thread id, NOT an RFC Message-ID) threads the reply.
  *  Retried ONLY via isSendSafeRetry (quota/rate rejections, with backoff +
- *  Retry-After via bearerFetch); never on ambiguous failures — a retried
- *  timeout/5xx could double-deliver. 30s per-attempt timeout: a hang must
- *  not pin the confirm page for bearerFetch's default 90s. */
+ *  Retry-After via bearerFetch, capped at 10s/wait via maxRetryDelayMs so a
+ *  large Retry-After can't stall the confirm page for minutes/hours); never
+ *  on ambiguous failures — a retried timeout/5xx could double-deliver.
+ *  Worst case across the 4 attempts: a 30s per-attempt timeout plus up to
+ *  10s per backoff wait. */
 export function sendGmailMessage(
   auth: { credentials(): Promise<Credentials | null> },
   raw: Buffer,
@@ -197,6 +199,7 @@ export function sendGmailMessage(
       timeoutMs: 30_000,
       retryNetErrors: false,
       retryOn: isSendSafeRetry,
+      maxRetryDelayMs: 10_000,
     },
   );
 }
