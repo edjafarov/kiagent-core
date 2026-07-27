@@ -356,7 +356,7 @@ describe('outbound service — drafts', () => {
 
   it('peekByToken: ok for pending, gone for handled, invalid for garbage', async () => {
     const r = await service.draftReply({ documentId: docId, body: 'x' });
-    const token = r.confirm_url.split('/outbox/confirm/')[1];
+    const token = r.confirm_url!.split('/outbox/confirm/')[1];
     const peek = await service.peekByToken(token);
     expect(peek.kind).toBe('ok');
     await store.outbox.transition(r.draft_id, ['draft'], 'discarded');
@@ -382,7 +382,7 @@ describe('outbound service — drafts', () => {
       ...IMAP_CFG,
       outbound: { mode: 'link' },
     });
-    const token = r.confirm_url.split('/outbox/confirm/')[1];
+    const token = r.confirm_url!.split('/outbox/confirm/')[1];
     const peek = await service.peekByToken(token);
     expect(peek.kind).toBe('ok');
     if (peek.kind === 'ok') expect(peek.mode).toBe('review');
@@ -431,7 +431,7 @@ describe('outbound service — drafts', () => {
 
     const review = await clocked.draftReply({ documentId: docId, body: 'r' });
     expect(review.mode).toBe('review');
-    const reviewToken = review.confirm_url.split('/outbox/confirm/')[1];
+    const reviewToken = review.confirm_url!.split('/outbox/confirm/')[1];
     const secret = await store.outbox.secret();
     const reviewParsed = verifyConfirmToken(secret, reviewToken, fixedNow);
     expect(reviewParsed).not.toBeNull();
@@ -449,7 +449,7 @@ describe('outbound service — drafts', () => {
     });
     const link = await clocked.draftReply({ documentId: docId, body: 'l' });
     expect(link.mode).toBe('link');
-    const linkToken = link.confirm_url.split('/outbox/confirm/')[1];
+    const linkToken = link.confirm_url!.split('/outbox/confirm/')[1];
     const linkParsed = verifyConfirmToken(secret, linkToken, fixedNow);
     expect(linkParsed).not.toBeNull();
     expect((linkParsed?.expiresAtMs ?? 0) - fixedNow).toBe(CONFIRM_TTL_MS.link);
@@ -467,8 +467,8 @@ describe('outbound service — drafts', () => {
     expect(r.mode).toBe('link');
   });
 
-  const tokenOf = (r: { confirm_url: string }) =>
-    r.confirm_url.split('/outbox/confirm/')[1];
+  const tokenOf = (r: { confirm_url?: string }) =>
+    r.confirm_url!.split('/outbox/confirm/')[1];
 
   it('confirmByToken sends and records the external id', async () => {
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
@@ -696,6 +696,143 @@ describe('outbound service — drafts', () => {
   it('garbage tokens are invalid for both operations', async () => {
     expect((await service.confirmByToken('nope')).kind).toBe('invalid');
     expect((await service.cancelByToken('nope')).kind).toBe('invalid');
+  });
+
+  // ——— mode C: chat confirmation (send_draft) ———
+  // The opt-in is GLOBAL (prefs default mode), never per-account config.
+
+  const chatService = (): OutboundService => {
+    const s = createOutboundService({
+      store,
+      prefs: fakePrefs('chat'),
+      senders: new Map<string, Sender>([
+        ['imap', { send: sendMock }],
+        ['gmail', { send: sendMock }],
+      ]),
+      logSink,
+    });
+    s.setBaseUrl('http://127.0.0.1:7421');
+    return s;
+  };
+
+  it('chat global default: draft results carry the body but no confirm url', async () => {
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    expect(r.mode).toBe('chat');
+    expect(r.confirm_url).toBeUndefined();
+    expect(r.body).toBe('Yo');
+    expect(r.instruction).toMatch(/explicitly agrees/);
+    expect((await store.outbox.get(r.draft_id))?.confirmMode).toBe('chat');
+  });
+
+  it('per-account config can NEVER opt into chat (global-only opt-in)', async () => {
+    await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
+      outbound: { mode: 'chat' }, // hand-edited config — must not be honored
+    });
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    expect(r.mode).toBe('review'); // falls through to the (review) global default
+  });
+
+  it('per-account review override beats the chat global default', async () => {
+    await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
+      outbound: { mode: 'review' },
+    });
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    expect(r.mode).toBe('review');
+    expect(r.confirm_url).toContain('/outbox/confirm/');
+  });
+
+  it('sendDraft sends a chat-mode draft', async () => {
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    const out = await svc.sendDraft({ draftId: r.draft_id });
+    expect(out.status).toBe('sent');
+    expect(out.recipient_display).toBe(r.recipient_display);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect((await store.outbox.get(r.draft_id))?.status).toBe('sent');
+  });
+
+  it('sendDraft refuses non-chat drafts, naming the mode', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    await expect(service.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
+      /mode 'review'.*list_outbox/,
+    );
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('sendDraft refuses when the global default left chat after drafting', async () => {
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    // Same store, but the service whose prefs default is 'review' — models
+    // the user turning the global setting back off before the model sends.
+    await expect(service.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
+      /no longer/i,
+    );
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('sendDraft refuses when the account overrode back to review', async () => {
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
+      outbound: { mode: 'review' },
+    });
+    await expect(svc.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
+      /no longer/i,
+    );
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('sendDraft enforces the per-account hourly rate limit', async () => {
+    await store.setAccountConfig(accountId, {
+      ...IMAP_CFG,
+      outbound: { sendsPerHour: 1 }, // knob only — no mode override
+    });
+    const svc = chatService();
+    const a = await svc.draftReply({ documentId: docId, body: 'one' });
+    await svc.sendDraft({ draftId: a.draft_id });
+    const b = await svc.draftReply({ documentId: docId, body: 'two' });
+    await expect(svc.sendDraft({ draftId: b.draft_id })).rejects.toThrow(
+      /rate limit/i,
+    );
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sendDraft is single-use', async () => {
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    await svc.sendDraft({ draftId: r.draft_id });
+    await expect(svc.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
+      /'sent'/,
+    );
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sendDraft surfaces a transport failure and records it', async () => {
+    const svc = chatService();
+    sendMock.mockRejectedValueOnce(new Error('SMTP 550 relay denied'));
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    // Anchored on purpose: the stored summary is ALREADY prefixed
+    // `send failed: ` by the classifier, so a naive re-prefix would produce
+    // `send failed: send failed: SMTP 550 …` and fail this assertion.
+    await expect(svc.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
+      /^send failed: SMTP 550/,
+    );
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.status).toBe('failed');
+    expect(row?.error).toMatch(/550/);
+  });
+
+  it('list_outbox still re-links pending chat drafts (page fallback)', async () => {
+    const svc = chatService();
+    const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
+    const listing = await svc.listOutbox({});
+    const item = listing.find((x) => x.draft_id === r.draft_id);
+    expect(item?.confirm_url).toContain('/outbox/confirm/');
   });
 
   describe('remote transport', () => {

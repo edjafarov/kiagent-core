@@ -20,7 +20,7 @@ import type {
 import { currentTransport } from '../core/mcp/transport-context';
 import type { LogSink } from '../core/engine/engine';
 import type { CoreStore } from '../core/store/store';
-import { shapeOutboundError } from './error-copy';
+import { isShapedSummary, shapeOutboundError } from './error-copy';
 import { EMAIL_RX, selfAddressesFor, senderAddressFor } from './identity';
 import { resolveImapReply } from './resolve';
 import { resolveGmailReply } from './resolve-gmail';
@@ -29,6 +29,9 @@ import { signConfirmToken, verifyConfirmToken } from './tokens';
 export const CONFIRM_TTL_MS: Record<ConfirmMode, number> = {
   review: 30 * 60_000,
   link: 5 * 60_000,
+  // Chat drafts carry no confirm URL of their own; this TTL is only spent on
+  // the page-confirm fallback list_outbox re-links for them (spec mode C).
+  chat: 30 * 60_000,
 };
 export const DRAFT_TTL_MS = 24 * 60 * 60_000;
 
@@ -44,11 +47,13 @@ export interface DraftToolResult {
   draft_id: string;
   mode: ConfirmMode;
   recipient_display: string;
-  confirm_url: string;
-  to?: string[]; // link mode only
-  cc?: string[]; // link mode only
-  subject?: string | null; // link mode only
-  body?: string; // link mode only
+  /** Absent for chat mode: the model confirms in conversation and calls
+   *  send_draft — the page fallback link is re-issued by list_outbox. */
+  confirm_url?: string;
+  to?: string[]; // link + chat modes
+  cc?: string[]; // link + chat modes
+  subject?: string | null; // link + chat modes
+  body?: string; // link + chat modes
   warnings: string[];
   instruction: string;
 }
@@ -61,6 +66,16 @@ export interface OutboxListItem {
   created_at: string;
   error: string | null;
   confirm_url: string | null; // re-issued for status 'draft', else null
+}
+
+/** What `send_draft` reports back once a chat-confirmed draft has been sent
+ *  (spec mode C). Terminal by construction: the only status it can carry is
+ *  'sent' — every other outcome throws. */
+export interface SendDraftResult {
+  draft_id: string;
+  status: 'sent';
+  recipient_display: string;
+  external_message_id: string | null;
 }
 
 /** The slice the MCP tools (and the stdio proxy) need — JSON-serializable
@@ -78,6 +93,7 @@ export interface OutboundToolApi {
     body: string;
   }): Promise<DraftToolResult>;
   listOutbox(a: { limit?: number }): Promise<OutboxListItem[]>;
+  sendDraft(a: { draftId: string }): Promise<SendDraftResult>;
 }
 
 export type PeekResult =
@@ -199,6 +215,29 @@ export function createOutboundService(deps: {
     warnings: string[],
   ): Promise<DraftToolResult> => {
     const mode = row.confirmMode;
+    if (mode === 'chat') {
+      // Mode C: no link at all — the model renders the draft, the user says
+      // yes in the conversation, and send_draft carries out the send. The
+      // page confirm stays available as a fallback via list_outbox, which
+      // re-issues a URL for any pending row (including this one), so nothing
+      // is lost if the model never calls send_draft.
+      return {
+        draft_id: row.id,
+        mode,
+        recipient_display: row.recipientDisplay,
+        to: row.to,
+        cc: row.cc,
+        subject: row.subject,
+        body: row.bodyMarkdown,
+        warnings,
+        instruction:
+          `Show the user this draft exactly as written — recipient, ` +
+          `subject, and body verbatim — and ask whether to send it. Call ` +
+          `send_draft with this draft_id ONLY after the user explicitly ` +
+          `agrees in this conversation. If they want changes, create a new ` +
+          `draft instead. Never call send_draft without a clear yes.`,
+      };
+    }
     const url = await confirmUrl(row.id, mode);
     if (mode === 'review') {
       return {
@@ -236,6 +275,136 @@ export function createOutboundService(deps: {
 
   const expiresAt = (): string =>
     new Date(nowMs() + DRAFT_TTL_MS).toISOString();
+
+  /** The send pipeline itself, shared by every confirmation surface (page
+   *  confirm and chat's send_draft). PRECONDITION: the caller has already
+   *  won the CAS that moved this row into 'sending' — this function owns the
+   *  row from there on and always leaves it in a terminal state (or, for a
+   *  bookkeeping throw after a successful send, in 'sending' for the
+   *  boot-time recovery sweep; see the comment on the send attempt below).
+   *  `row` is the pre-CAS snapshot: nothing the CAS writes is read here. */
+  const executeSend = async (row: OutboxRow): Promise<ConfirmOutcome> => {
+    const fail = async (message: string): Promise<ConfirmOutcome> => {
+      // Store the classifier's short summary, never the raw error — the
+      // page, list_outbox, and logs all read this column, and render-time
+      // re-classification of the summary gates the Try-again button
+      // (fixed-point property tested in error-copy.test.ts).
+      const errMsg = shapeOutboundError(message).summary;
+      const failMoved = await deps.store.outbox.transition(
+        row.id,
+        ['sending'],
+        'failed',
+        { error: errMsg },
+      );
+      if (!failMoved) {
+        // Unreachable in-process today — nothing else moves a 'sending'
+        // row concurrently — but if it ever does, this is the trace.
+        deps.logSink.log(
+          'outbound',
+          'error',
+          `confirm ${row.id}: 'sending'->'failed' found no matching row (concurrent mutation?)`,
+          { draftId: row.id },
+        );
+      }
+      const failedRow = await deps.store.outbox.get(row.id);
+      deps.logSink.log(
+        'outbound',
+        'error',
+        `confirm ${row.id} failed: ${errMsg}`,
+        {
+          draftId: row.id,
+        },
+      );
+      return { kind: 'failed', row: failedRow ?? row, error: errMsg };
+    };
+
+    let sender: Sender;
+    try {
+      // accountFor already validates the account exists AND that a sender
+      // is registered for its source — the re-check below is defense in
+      // depth (never observed to trip), not a second independent lookup.
+      const account = await accountFor(row.accountId as string);
+      const found = deps.senders.get(account.source);
+      if (!found) {
+        throw new Error(
+          `sending from '${account.source}' accounts is not supported yet — ` +
+            `supported: ${[...deps.senders.keys()].join(', ')}`,
+        );
+      }
+      sender = found;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return fail(message);
+    }
+
+    const intent: SendIntent = {
+      accountId: row.accountId,
+      kind: row.kind,
+      outboundRef: row.outboundRef ?? undefined,
+      to: row.to,
+      cc: row.cc,
+      subject: row.subject ?? undefined,
+      bodyMarkdown: row.bodyMarkdown,
+      threading: row.threading ?? undefined,
+    };
+
+    // Only the send attempt itself is caught here. A throw from this
+    // block is recorded as 'failed' and classified by shapeOutboundError:
+    // provably-rejected kinds (quota/auth) render a retryable page,
+    // ambiguous kinds (timeout/5xx/network) render delivery-uncertain
+    // copy — the row status alone no longer claims the message never
+    // left. Everything AFTER a successful send (the DB transition, the re-read,
+    // the log line) sits outside the catch on purpose: once sender.send()
+    // has resolved, the message may already be gone out over the wire, so
+    // a bookkeeping throw here must never be reported as 'failed' (that
+    // would invite the user to re-draft and double-send). If bookkeeping
+    // throws, the row is simply left in 'sending' — the boot-time
+    // recovery sweep classifies it 'delivery_unknown', which is the
+    // honest "it may have sent, go check" outcome for that case.
+    let result: SendResult;
+    try {
+      result = await sender.send(intent);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return fail(message);
+    }
+
+    const sentMoved = await deps.store.outbox.transition(
+      row.id,
+      ['sending'],
+      'sent',
+      {
+        sentAt: new Date(nowMs()).toISOString(),
+        externalMessageId: result?.externalMessageId ?? null,
+      },
+    );
+    if (!sentMoved) {
+      // Unreachable in-process today — nothing else moves a 'sending'
+      // row concurrently — but if it ever does, this is the trace.
+      deps.logSink.log(
+        'outbound',
+        'error',
+        `confirm ${row.id}: 'sending'->'sent' found no matching row (concurrent mutation?)`,
+        { draftId: row.id },
+      );
+    }
+    const sentRow = await deps.store.outbox.get(row.id);
+    deps.logSink.log('outbound', 'info', `confirm ${row.id} sent`, {
+      draftId: row.id,
+    });
+    return { kind: 'sent', row: sentRow ?? row };
+  };
+
+  /** Per-account hourly send cap for mode C — a hidden `config.outbound`
+   *  knob (no UI). The chat opt-in is global; this bound stays per account
+   *  so one runaway conversation cannot drain an account. */
+  const sendsPerHourFor = (account: Account): number => {
+    const cfg =
+      (account.config as { outbound?: { sendsPerHour?: unknown } }).outbound ??
+      {};
+    const n = Number(cfg.sendsPerHour);
+    return Number.isFinite(n) && n > 0 ? n : 30;
+  };
 
   return {
     setBaseUrl(url) {
@@ -382,7 +551,7 @@ export function createOutboundService(deps: {
           subject: row.subject,
           created_at: row.createdAt,
           // A retried failed->sent row keeps its stale error string in the DB
-          // by design (audit trail — see confirmByToken's fail() comment);
+          // by design (audit trail — see executeSend's fail() comment);
           // gate what the MODEL sees on the row's CURRENT status so a
           // successfully-retried send is never reported back as still
           // failed.
@@ -391,6 +560,96 @@ export function createOutboundService(deps: {
         });
       }
       return out;
+    },
+
+    async sendDraft({ draftId }) {
+      // Deliberately NO transport gate (unlike the drafting tools): a draft
+      // row can only exist if drafting was permitted on the transport that
+      // created it, and the user's agreement is observed by the model
+      // wherever the conversation happens. The gates that matter here are
+      // the live chat opt-in and the per-account rate limit, both below.
+      await deps.store.outbox.expireOverdue();
+      const row = await deps.store.outbox.get(draftId);
+      if (!row) throw new Error(`send_draft: unknown draft '${draftId}'`);
+
+      // The FROZEN mode: a draft created under page confirmation is never
+      // sendable by tool call, no matter what the settings say now.
+      if (row.confirmMode !== 'chat') {
+        throw new Error(
+          `send_draft is only honored for chat-mode drafts — this draft is ` +
+            `mode '${row.confirmMode}'. Use list_outbox to get its ` +
+            `confirmation link instead.`,
+        );
+      }
+
+      const account = await accountFor(row.accountId as string);
+
+      // ...and the LIVE opt-in: turning chat mode off globally, or setting
+      // this account back to review/link, must kill pending chat sends
+      // rather than leaving a tool call armed against the user's current
+      // intent. Both must be chat for the send to proceed.
+      const mode = modeFor(account);
+      if (mode !== 'chat') {
+        throw new Error(
+          `send_draft: this account is no longer in chat mode (it is now ` +
+            `'${mode}') — chat sending was turned off after this draft was ` +
+            `created. Use list_outbox to get a confirmation link instead.`,
+        );
+      }
+
+      const limit = sendsPerHourFor(account);
+      const sinceIso = new Date(nowMs() - 60 * 60_000).toISOString();
+      const sentLastHour = await deps.store.outbox.countSentSince(
+        account.id,
+        sinceIso,
+      );
+      if (sentLastHour >= limit) {
+        throw new Error(
+          `send_draft: rate limit reached — ${sentLastHour} message(s) ` +
+            `already sent from this account in the last hour (limit ` +
+            `${limit}). The draft is still pending; try again later or use ` +
+            `list_outbox for a confirmation link.`,
+        );
+      }
+
+      // Same CAS gate the page confirm uses — the single-use property and
+      // the race protection live here, not in the checks above.
+      const moved = await deps.store.outbox.transition(
+        row.id,
+        ['draft'],
+        'sending',
+      );
+      if (!moved) {
+        const current = await deps.store.outbox.get(row.id);
+        throw new Error(
+          `send_draft: this draft can no longer be sent — its status is ` +
+            `'${current?.status ?? 'unknown'}'.`,
+        );
+      }
+
+      const outcome = await executeSend(row);
+      if (outcome.kind !== 'sent') {
+        const detail =
+          outcome.kind === 'failed'
+            ? outcome.error
+            : `the draft ended in state '${outcome.kind}'`;
+        // shapeOutboundError's `unknown` branch already emits summaries
+        // prefixed `send failed: `, so re-prefixing here would double it on
+        // the commonest failure path. The prefix convention belongs to
+        // error-copy.ts — ask it rather than re-testing its regex here, so
+        // this stays correct if that convention ever changes.
+        throw new Error(
+          isShapedSummary(detail) ? detail : `send failed: ${detail}`,
+        );
+      }
+      return {
+        draft_id: row.id,
+        status: 'sent',
+        // Read off the post-transition re-read, never the pre-CAS snapshot:
+        // that one still carries a null external id.
+        recipient_display: outcome.row.recipientDisplay,
+        external_message_id: outcome.row.externalMessageId ?? null,
+      };
     },
 
     async peekByToken(token) {
@@ -443,115 +702,7 @@ export function createOutboundService(deps: {
         return { kind: 'already', row: raced ?? row };
       }
 
-      const fail = async (message: string): Promise<ConfirmOutcome> => {
-        // Store the classifier's short summary, never the raw error — the
-        // page, list_outbox, and logs all read this column, and render-time
-        // re-classification of the summary gates the Try-again button
-        // (fixed-point property tested in error-copy.test.ts).
-        const errMsg = shapeOutboundError(message).summary;
-        const failMoved = await deps.store.outbox.transition(
-          row.id,
-          ['sending'],
-          'failed',
-          { error: errMsg },
-        );
-        if (!failMoved) {
-          // Unreachable in-process today — nothing else moves a 'sending'
-          // row concurrently — but if it ever does, this is the trace.
-          deps.logSink.log(
-            'outbound',
-            'error',
-            `confirm ${row.id}: 'sending'->'failed' found no matching row (concurrent mutation?)`,
-            { draftId: row.id },
-          );
-        }
-        const failedRow = await deps.store.outbox.get(row.id);
-        deps.logSink.log(
-          'outbound',
-          'error',
-          `confirm ${row.id} failed: ${errMsg}`,
-          {
-            draftId: row.id,
-          },
-        );
-        return { kind: 'failed', row: failedRow ?? row, error: errMsg };
-      };
-
-      let sender: Sender;
-      try {
-        // accountFor already validates the account exists AND that a sender
-        // is registered for its source — the re-check below is defense in
-        // depth (never observed to trip), not a second independent lookup.
-        const account = await accountFor(row.accountId as string);
-        const found = deps.senders.get(account.source);
-        if (!found) {
-          throw new Error(
-            `sending from '${account.source}' accounts is not supported yet — ` +
-              `supported: ${[...deps.senders.keys()].join(', ')}`,
-          );
-        }
-        sender = found;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return fail(message);
-      }
-
-      const intent: SendIntent = {
-        accountId: row.accountId,
-        kind: row.kind,
-        outboundRef: row.outboundRef ?? undefined,
-        to: row.to,
-        cc: row.cc,
-        subject: row.subject ?? undefined,
-        bodyMarkdown: row.bodyMarkdown,
-        threading: row.threading ?? undefined,
-      };
-
-      // Only the send attempt itself is caught here. A throw from this
-      // block is recorded as 'failed' and classified by shapeOutboundError:
-      // provably-rejected kinds (quota/auth) render a retryable page,
-      // ambiguous kinds (timeout/5xx/network) render delivery-uncertain
-      // copy — the row status alone no longer claims the message never
-      // left. Everything AFTER a successful send (the DB transition, the re-read,
-      // the log line) sits outside the catch on purpose: once sender.send()
-      // has resolved, the message may already be gone out over the wire, so
-      // a bookkeeping throw here must never be reported as 'failed' (that
-      // would invite the user to re-draft and double-send). If bookkeeping
-      // throws, the row is simply left in 'sending' — the boot-time
-      // recovery sweep classifies it 'delivery_unknown', which is the
-      // honest "it may have sent, go check" outcome for that case.
-      let result: SendResult;
-      try {
-        result = await sender.send(intent);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return fail(message);
-      }
-
-      const sentMoved = await deps.store.outbox.transition(
-        row.id,
-        ['sending'],
-        'sent',
-        {
-          sentAt: new Date(nowMs()).toISOString(),
-          externalMessageId: result?.externalMessageId ?? null,
-        },
-      );
-      if (!sentMoved) {
-        // Unreachable in-process today — nothing else moves a 'sending'
-        // row concurrently — but if it ever does, this is the trace.
-        deps.logSink.log(
-          'outbound',
-          'error',
-          `confirm ${row.id}: 'sending'->'sent' found no matching row (concurrent mutation?)`,
-          { draftId: row.id },
-        );
-      }
-      const sentRow = await deps.store.outbox.get(row.id);
-      deps.logSink.log('outbound', 'info', `confirm ${row.id} sent`, {
-        draftId: row.id,
-      });
-      return { kind: 'sent', row: sentRow ?? row };
+      return executeSend(row);
     },
 
     async cancelByToken(token) {

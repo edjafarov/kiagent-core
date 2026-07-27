@@ -64,6 +64,21 @@ function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
 }
 
+const SHAPED_SUMMARY = /^send failed( with no error message$|: )/;
+
+/** This module's fixed-point predicate: true when `text` is already one of
+ *  the summaries the `unknown` branch below produces (the `send failed: `
+ *  wrapper, or the bare `send failed with no error message` placeholder).
+ *
+ *  Exported so callers that wrap a stored summary in their own
+ *  `send failed: ` prefix — service.ts's `sendDraft` — ask THIS module
+ *  whether the prefix is already there instead of copy-pasting the regex.
+ *  The prefix convention lives here and only here: change it in one place
+ *  and every caller follows. */
+export function isShapedSummary(text: string): boolean {
+  return SHAPED_SUMMARY.test(text);
+}
+
 export function shapeOutboundError(raw: string): ShapedOutboundError {
   // Normalize ONCE — every classifier below reads this same single-line
   // projection (see the module docstring's design rule).
@@ -89,7 +104,7 @@ export function shapeOutboundError(raw: string): ShapedOutboundError {
   // genuine re-shape. If that ever changes, a raw string wearing this
   // prefix by coincidence would be treated as already-shaped too, same as
   // the pre-existing empty-input placeholder case already is.
-  const already = /^send failed( with no error message$|: )/.test(text);
+  const already = isShapedSummary(text);
 
   const smtp = SMTP_TRANSIENT.exec(text);
   if (smtp) {
