@@ -552,6 +552,73 @@ describe('outbound service — drafts', () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  // Verbatim smoke-test 403 blob from error-copy.test.ts — duplicated here
+  // (not exported there) so this file pins the same fixture independently.
+  const SMOKE_403 =
+    'gmail 403 https://gmail.googleapis.com/gmail/v1/users/me/messages/send ' +
+    '{ "error": { "code": 403, "message": "Quota exceeded for quota metric ' +
+    "'Queries' and limit 'Previous quota: Units per minute per user'\", " +
+    '"errors": [ { "reason": "rateLimitExceeded", "domain": "usageLimits" } ], ' +
+    '"status": "PERMISSION_DENIED" } }';
+
+  it('fail() stores the classifier shaped summary, never the raw error blob', async () => {
+    sendMock.mockRejectedValueOnce(new Error(SMOKE_403));
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const out = await service.confirmByToken(tokenOf(r));
+    expect(out.kind).toBe('failed');
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.status).toBe('failed');
+    expect(row?.error).toBe(
+      'rate-limited: the mail service rejected the send (HTTP 403) — nothing was sent',
+    );
+  });
+
+  it('a retryable failed row re-confirms through the same token (Try again)', async () => {
+    sendMock.mockRejectedValueOnce(new Error(SMOKE_403));
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const token = tokenOf(r);
+    const first = await service.confirmByToken(token);
+    expect(first.kind).toBe('failed');
+    expect((await store.outbox.get(r.draft_id))?.status).toBe('failed');
+
+    sendMock.mockResolvedValueOnce({ externalMessageId: '<retry@x>' });
+    const second = await service.confirmByToken(token);
+    expect(second.kind).toBe('sent');
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.status).toBe('sent');
+    expect(row?.externalMessageId).toBe('<retry@x>');
+    expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('a permanently failed row stays terminal — Try again is refused, sender never re-invoked', async () => {
+    sendMock.mockRejectedValueOnce(new Error('completely novel explosion'));
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const token = tokenOf(r);
+    const first = await service.confirmByToken(token);
+    expect(first.kind).toBe('failed');
+
+    const second = await service.confirmByToken(token);
+    expect(second.kind).toBe('already');
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.status).toBe('failed');
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('the CAS transition uses the OBSERVED status, never the union [draft,failed]', async () => {
+    sendMock.mockRejectedValueOnce(new Error(SMOKE_403));
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const token = tokenOf(r);
+    await service.confirmByToken(token); // drive draft -> failed (retryable)
+    expect((await store.outbox.get(r.draft_id))?.status).toBe('failed');
+
+    const spy = jest.spyOn(store.outbox, 'transition');
+    sendMock.mockResolvedValueOnce({ externalMessageId: '<retry@x>' });
+    await service.confirmByToken(token);
+    const toSending = spy.mock.calls.find((c) => c[2] === 'sending');
+    expect(toSending?.[1]).toEqual(['failed']);
+    spy.mockRestore();
+  });
+
   it('confirmByToken sweeps an expired-but-unswept draft instead of sending it', async () => {
     // store.outbox.create() only sweeps BEFORE inserting, so a row created
     // with a past expiresAt survives creation still marked 'draft' — it's

@@ -20,6 +20,7 @@ import type {
 import { currentTransport } from '../core/mcp/transport-context';
 import type { LogSink } from '../core/engine/engine';
 import type { CoreStore } from '../core/store/store';
+import { shapeOutboundError } from './error-copy';
 import { EMAIL_RX, selfAddressesFor, senderAddressFor } from './identity';
 import { resolveImapReply } from './resolve';
 import { resolveGmailReply } from './resolve-gmail';
@@ -410,15 +411,26 @@ export function createOutboundService(deps: {
       await deps.store.outbox.expireOverdue();
       const row = await deps.store.outbox.get(parsed.draftId);
       if (!row) return { kind: 'invalid' };
-      if (row.status !== 'draft') return { kind: 'already', row };
+      if (row.status !== 'draft') {
+        // A failed row may be re-confirmed (Try again, spec §3) ONLY when
+        // its stored error classifies as provably-not-sent — ambiguous
+        // failures stay terminal so a duplicate can never be user-invited.
+        const retryableFailed =
+          row.status === 'failed' &&
+          shapeOutboundError(row.error ?? '').canRetry;
+        if (!retryableFailed) return { kind: 'already', row };
+      }
 
       // The atomicity primitive (spec's CAS gate): only the caller that wins
-      // this UPDATE proceeds to send. A losing concurrent confirm re-reads
+      // this UPDATE proceeds to send. The from-state is the OBSERVED status
+      // — never the union ['draft','failed'] — so a confirm that read
+      // 'draft' can't steal a row that concurrently became 'failed' and
+      // bypass the canRetry gate above. A losing concurrent confirm re-reads
       // the row (now owned by the winner) and reports 'already' — it never
       // reaches the Sender.
       const moved = await deps.store.outbox.transition(
         row.id,
-        ['draft'],
+        [row.status],
         'sending',
       );
       if (!moved) {
@@ -427,12 +439,11 @@ export function createOutboundService(deps: {
       }
 
       const fail = async (message: string): Promise<ConfirmOutcome> => {
-        // A blank message is still a legal, non-null string — SQLite's
-        // COALESCE(?, error) only falls back to the existing column on a
-        // NULL param, so '' WOULD get written verbatim — but a 'failed' row
-        // with an empty error tells the user nothing actionable, so give it
-        // one.
-        const errMsg = message || 'send failed with no error message';
+        // Store the classifier's short summary, never the raw error — the
+        // page, list_outbox, and logs all read this column, and render-time
+        // re-classification of the summary gates the Try-again button
+        // (fixed-point property tested in error-copy.test.ts).
+        const errMsg = shapeOutboundError(message).summary;
         const failMoved = await deps.store.outbox.transition(
           row.id,
           ['sending'],
