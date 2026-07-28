@@ -21,7 +21,14 @@
  * crash-respawned) resolve it by activating, so an early crash can never
  * fail start() out from under a respawn that goes on to activate.
  */
-import type { Cap, ExtensionStatus, Source } from '@shared/contracts';
+import type {
+  Cap,
+  ExtensionStatus,
+  SendIntent,
+  SendResult,
+  SenderContext,
+  Source,
+} from '@shared/contracts';
 import type { Contributions } from '@shared/extension-rpc';
 import type { LogSink } from '@main/core/engine/engine';
 
@@ -69,6 +76,11 @@ export function createExtensionHost(deps: HostDeps): {
   start(): Promise<void>;
   stop(): Promise<void>;
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
+  callSender(
+    sourceId: string,
+    intent: SendIntent,
+    ctx: SenderContext,
+  ): Promise<SendResult>;
 } {
   const now = deps.now ?? Date.now;
   const killAfterMs = deps.killAfterMs ?? 2000;
@@ -321,6 +333,18 @@ export function createExtensionHost(deps: HostDeps): {
       if (!current)
         return Promise.reject(new Error('extension is not running'));
       return current.endpoint.call('tool', name, [args]);
+    },
+    // Reachable only from the send pipeline, i.e. only past a confirmation
+    // gate. A child that has no sender for `sourceId` — including a pre-1.2
+    // child with no 'send' namespace at all — rejects cleanly; callers must
+    // read that as "no sender", never crash on it.
+    callSender(sourceId, intent, ctx) {
+      if (!current)
+        return Promise.reject(new Error('extension is not running'));
+      return current.endpoint.call('send', sourceId, [
+        intent,
+        ctx,
+      ]) as Promise<SendResult>;
     },
   };
 }

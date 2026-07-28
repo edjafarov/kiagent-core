@@ -1,5 +1,10 @@
 /** @jest-environment node */
-import type { Cap, ExtensionStatus } from '@shared/contracts';
+import type {
+  Cap,
+  ExtensionStatus,
+  SendIntent,
+  SenderContext,
+} from '@shared/contracts';
 import type { Contributions } from '@shared/extension-rpc';
 
 import { runExtensionHost } from '../extension-host-entry';
@@ -58,6 +63,34 @@ const okModule = {
   deactivate: jest.fn(),
 };
 
+// Echoes back both halves of what the send RPC must carry across the process
+// boundary: the intent's source-specific outboundRef, and the credentials the
+// host resolves at send time (an out-of-process sender has no vault of its own).
+const senderModule = {
+  async activate() {
+    return {
+      sources: [],
+      tools: [],
+      senders: {
+        fixsrc: {
+          send: async (intent: SendIntent, ctx?: SenderContext) => ({
+            externalMessageId: `sent:${ctx?.credentials?.password}:${
+              (intent.outboundRef as { channel: string }).channel
+            }`,
+          }),
+        },
+      },
+    };
+  },
+};
+
+const intent: SendIntent = {
+  accountId: 'acc1',
+  kind: 'reply',
+  outboundRef: { channel: 'C1' },
+  bodyMarkdown: 'hi',
+};
+
 // Never settles either hook — used to pin the incarnation mid-handshake so
 // a crash/stop can be simulated deterministically while a wait is pending,
 // without racing an activate() or deactivate() that resolves on its own.
@@ -99,6 +132,27 @@ describe('createExtensionHost', () => {
     await expect(host.callTool('t', {})).resolves.toBe(1);
     await host.stop();
     await expect(host.callTool('t', {})).rejects.toThrow(/not running/);
+  });
+
+  it('callSender routes intent + credentials to the contributed sender, and the ids reach Contributions', async () => {
+    const { deps, registered } = makeDeps(senderModule);
+    const host = createExtensionHost(deps as never);
+    await host.start();
+    expect(registered[0].senders).toEqual(['fixsrc']);
+    await expect(
+      host.callSender('fixsrc', intent, { credentials: { password: 'tok' } }),
+    ).resolves.toEqual({ externalMessageId: 'sent:tok:C1' });
+    await host.stop();
+  });
+
+  it('callSender rejects for a source the extension contributed no sender for', async () => {
+    const { deps } = makeDeps(senderModule);
+    const host = createExtensionHost(deps as never);
+    await host.start();
+    await expect(
+      host.callSender('unknown', intent, { credentials: null }),
+    ).rejects.toThrow(/unknown sender/);
+    await host.stop();
   });
 
   it('stop() deactivates cleanly and unregisters', async () => {

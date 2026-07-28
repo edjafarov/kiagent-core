@@ -162,6 +162,42 @@ describe('runExtensionHost — bootstrap/activate', () => {
     expect(seen).toEqual([{ n: 1 }]);
   });
 
+  it('a module contributing no senders reports [] and survives a send call it cannot serve', async () => {
+    const mod = {
+      async activate() {
+        return {
+          tools: [
+            {
+              name: 'ping',
+              description: '',
+              inputSchema: {},
+              call: async () => 'pong',
+            },
+          ],
+        };
+      },
+    };
+    const { mainEp, waitFor, exit } = boot(mod);
+    const activated = waitFor('activated');
+    mainEp.post(BOOT);
+    const { contributions } = (await activated) as {
+      contributions: Contributions;
+    };
+    expect(contributions.senders).toEqual([]);
+    // Pins the compat contract from the other side too: whether the child is
+    // pre-1.2 (no 'send' namespace at all → 'unexpected …namespace') or new
+    // but sender-less ('unknown sender'), main sees a clean rejection.
+    await expect(
+      mainEp.call('send', 'x', [{ kind: 'new', bodyMarkdown: 'hi' }]),
+    ).rejects.toThrow(/unknown sender|unexpected/);
+    await expect(mainEp.call('nosuchns', 'x', [])).rejects.toThrow(
+      /unexpected/,
+    );
+    // The child stayed alive through both — a later call still works.
+    await expect(mainEp.call('tool', 'ping', [{}])).resolves.toBe('pong');
+    expect(exit).not.toHaveBeenCalled();
+  });
+
   it('passes extras.mainProcess to activate() when the cap is granted and mainApi is provided', async () => {
     const seen: unknown[] = [];
     const mod = {

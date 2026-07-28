@@ -13,6 +13,9 @@ import type {
   ExtensionModule,
   FolderPickerSpec,
   McpTool,
+  SendIntent,
+  Sender,
+  SenderContext,
   Source,
 } from '@shared/contracts';
 import type {
@@ -119,6 +122,10 @@ export function runExtensionHost(
   let mod: ExtensionModule | null = null;
   const sources = new Map<string, Source>();
   const tools = new Map<string, McpTool>();
+  // Keyed by SOURCE id, not by extension id — one source, one outbound
+  // transport. Lives here (not in onBootstrap) so the onCall dispatcher,
+  // registered once below, can reach it.
+  const senders = new Map<string, Sender>();
   const eventCbs = new Map<string, Set<(p: unknown) => void>>();
   // Task 8 fills these in: active pulls keyed by pullId.
   const pulls = new Map<
@@ -157,6 +164,8 @@ export function runExtensionHost(
       const contrib = await mod.activate(host as never, extras);
       for (const s of contrib.sources ?? []) sources.set(s.descriptor.id, s);
       for (const t of contrib.tools ?? []) tools.set(t.name, t);
+      for (const [sourceId, sender] of Object.entries(contrib.senders ?? {}))
+        senders.set(sourceId, sender);
       const contributions: Contributions = {
         sources: [...sources.values()].map((s) => ({
           descriptor: s.descriptor,
@@ -169,6 +178,7 @@ export function runExtensionHost(
           inputSchema: t.inputSchema,
           tier: t.tier,
         })),
+        senders: [...senders.keys()],
       };
       endpoint.post({ kind: 'activated', contributions });
     } catch (e) {
@@ -184,6 +194,17 @@ export function runExtensionHost(
     }
     if (ns === 'source') {
       return handleSourceCall(method, args); // Task 8
+    }
+    if (ns === 'send') {
+      // `method` is the SOURCE id. Credentials arrive in ctx because an
+      // out-of-process sender has no vault access of its own; main resolves
+      // them at send time, after the confirmation gate.
+      const sender = senders.get(method);
+      if (!sender) throw new Error(`unknown sender ${method}`);
+      return sender.send(
+        args[0] as SendIntent,
+        args[1] as SenderContext | undefined,
+      );
     }
     throw new Error(`unexpected main→child namespace ${ns}`);
   });

@@ -5,9 +5,9 @@
  * lives here.
  *
  * Direction of `call`: host-surface calls originate child→main (ns = a Cap,
- * 'base', or the 'auth'/'session' callback namespaces); source/tool
- * invocations originate main→child (ns 'source' | 'tool'). Replies mirror
- * the call's id. Everything else is a one-way notification.
+ * 'base', or the 'auth'/'session' callback namespaces); source/tool/send
+ * invocations originate main→child (ns 'source' | 'tool' | 'send'). Replies
+ * mirror the call's id. Everything else is a one-way notification.
  */
 import type {
   Cap,
@@ -18,7 +18,7 @@ import type {
 } from './contracts';
 import type { SourceErrorCode } from './source-errors';
 
-export const PLATFORM_API_VERSION = '1.1.0';
+export const PLATFORM_API_VERSION = '1.2.0';
 
 /** A Batch after the child mapped items through the source's toDocument —
  *  the generic Item type never crosses the wire. */
@@ -46,6 +46,9 @@ export interface Contributions {
     hasReconcile: boolean;
   }>;
   tools: ToolDescriptor[];
+  /** Source ids this extension provides a Sender for (declared AND returned
+   *  from activate). Absent from pre-1.2 children — default []. */
+  senders?: string[];
 }
 
 export interface ExtensionBootstrap {
@@ -62,7 +65,7 @@ export type MainToChild =
   | {
       kind: 'call';
       id: number;
-      ns: 'source' | 'tool';
+      ns: 'source' | 'tool' | 'send';
       method: string;
       args: unknown[];
     }
