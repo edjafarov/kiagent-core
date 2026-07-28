@@ -41,9 +41,10 @@ const QUOTA_MARKERS =
 // bearerFetch failure format is `${errorPrefix} ${status} ${url} ${body}`.
 const HTTP_STATUS = /^\S+ (\d{3}) /;
 const SMTP_TRANSIENT = /^smtp transient (\d{3}):/;
-// Scoped to the app's own generated reconnect phrases (senders/gmail.ts) —
-// a bare `reconnect` would over-match unrelated text that merely contains
-// that word (e.g. an SMTP bounce echoing a `reconnect-notify@` address).
+// `reconnect .* in Settings` is a CROSS-REPO compatibility contract: extension
+// senders (first pilot: the marketplace-released Slack connector) end their
+// auth-failure strings that way so they classify 'auth'/canRetry. Tightening or
+// rephrasing it, or loosening to a bare `reconnect`, breaks shipped connectors.
 const AUTH_MARKERS =
   /reconnect .* in Settings|no Gmail credentials|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficientPermissions/i;
 const UNSUPPORTED = /is not supported yet/;
