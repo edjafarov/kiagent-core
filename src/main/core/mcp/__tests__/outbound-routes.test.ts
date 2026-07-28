@@ -257,6 +257,24 @@ describe('outbox confirm routes', () => {
     expect(body.result.confirm_url).toContain('/outbox/confirm/');
   });
 
+  // Invariant: confirmUrlFor/redraft are PANEL-ONLY (service.ts) — the
+  // loopback JSON dispatcher's closed if/else chain must never grow a case
+  // for either, so they fall through to the same unknown-op rejection as
+  // any other bogus op name.
+  it('panel-only service methods are not /outbox/api ops', async () => {
+    for (const op of ['redraft', 'confirmUrlFor']) {
+      const res = await fetch(`${base}/outbox/api`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op, draftId: 'x' }),
+      });
+      expect(await res.json()).toEqual({
+        ok: false,
+        error: `unknown op '${op}'`,
+      });
+    }
+  });
+
   // fakeRes() in the unit-level suite below discards writeHead's header
   // arg entirely — only a real fetch over real HTTP catches a header
   // regression, so this pins the actual wire response.
