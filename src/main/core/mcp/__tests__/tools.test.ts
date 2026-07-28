@@ -9,7 +9,7 @@ import { openStore } from '../../store/store';
 import type { CoreStore } from '../../store/store';
 import { buildBuiltinTools } from '../tools';
 import type { SearchHit } from '../tools/search';
-import type { LegacyDocument } from '../tools/get';
+import type { McpDocument } from '../tools/get';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -152,12 +152,12 @@ describe('mcp built-in tools', () => {
     );
   });
 
-  it('get: single id maps to the legacy document shape', async () => {
+  it('get: single id maps to the MCP document shape', async () => {
     const thread = (await call('search', {
       type: 'email.thread',
     })) as SearchHit[];
     const { id } = thread[0];
-    const got = (await call('get', { id })) as LegacyDocument;
+    const got = (await call('get', { id })) as McpDocument;
     expect(got.source).toBe('gmail');
     expect(got.title).toBe('Budget thread');
     expect(got.markdown).toContain('quarterly budget review');
@@ -167,7 +167,7 @@ describe('mcp built-in tools', () => {
     const all = (await call('search', {})) as SearchHit[];
     const got = (await call('get', {
       ids: [all[0].id, 'not-a-real-id'],
-    })) as (LegacyDocument | null)[];
+    })) as (McpDocument | null)[];
     expect(got).toHaveLength(2);
     expect(got[0]?.id).toBe(all[0].id);
     expect(got[1]).toBeNull();

@@ -135,7 +135,7 @@ export function buildBuiltinTools(
 }
 
 export type { SearchArgs, SearchHit } from './search';
-export type { LegacyDocument } from './get';
+export type { McpDocument } from './get';
 export type { CountGroupBy } from './count';
 export type { GetRelatedRelation } from './get-related';
 export type { DigitalMemoryAccount } from './digital-memory-info';

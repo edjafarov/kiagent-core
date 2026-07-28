@@ -1,8 +1,8 @@
 /**
- * `get` — ported from kiagent-ref's src/main/mcp/tools/get.ts. Legacy ids were
- * bigints serialized as strings; greenfield `DocumentId`s are already plain
- * strings, so no bigint conversion is needed — the wire shape (`id`/`ids`,
- * batch semantics, output field names) is kept identical.
+ * `get` — fetches documents by id, projecting the internal `Document` into
+ * the snake_case wire shape (`McpDocument`) MCP clients see. `id`/`ids`
+ * batch semantics: an array in, an order-preserving array out with `null`
+ * per miss.
  */
 import type { Document, DocumentId, Query } from '@shared/contracts';
 
@@ -25,7 +25,7 @@ export const getInputSchema = {
   },
 } as const;
 
-export interface LegacyDocument {
+export interface McpDocument {
   id: string;
   source: string;
   type: string;
@@ -38,10 +38,7 @@ export interface LegacyDocument {
   created_at: string | null;
 }
 
-function toLegacyDoc(
-  d: Document,
-  sourceOf: Map<string, string>,
-): LegacyDocument {
+function toMcpDoc(d: Document, sourceOf: Map<string, string>): McpDocument {
   return {
     id: d.id,
     source: sourceOf.get(d.accountId) ?? 'unknown',
@@ -69,7 +66,7 @@ export function makeGetTool(query: Query) {
       const docs = await Promise.all(
         a.ids.map((id) => query.document(id as DocumentId)),
       );
-      return docs.map((d) => (d ? toLegacyDoc(d, sourceOf) : null));
+      return docs.map((d) => (d ? toMcpDoc(d, sourceOf) : null));
     }
 
     if (a.id == null) throw new Error('missing `id` (or `ids` for batch mode)');
@@ -79,6 +76,6 @@ export function makeGetTool(query: Query) {
     const sourceOf = new Map(
       accounts.map((acc) => [acc.id as string, acc.source]),
     );
-    return toLegacyDoc(doc, sourceOf);
+    return toMcpDoc(doc, sourceOf);
   };
 }
