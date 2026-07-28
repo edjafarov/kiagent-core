@@ -45,20 +45,9 @@ export const descriptor: SourceDescriptor = {
  *  live in `config.paths`, not in the identifier — see `connect()`. */
 const MACHINE_IDENTIFIER = 'this-machine';
 
-/** Pre-multi-root accounts stored a single `config.path` (or, older still,
- *  used the folder path itself as the account identifier). Neither shape
- *  carries a `config.paths` array, so `getRootPaths` can't recover a root
- *  list from them — auto-migrating would silently re-key every document
- *  under a new externalId scheme anyway (root-relative → absolute), which is
- *  equivalent to re-indexing, so a hard failure asking the user to re-add
- *  the folder is the deliberate, honest choice (see the design doc's
- *  "Migration: hard cutover" section). */
-const LEGACY_ERROR =
-  'Legacy single-folder account — remove this source and re-add its folder.';
-
-/** `config.paths` when it's a non-empty array of strings; throws the
- *  hard-cutover legacy error otherwise (covers both the old single-`path`
- *  shape and the original identifier-as-path shape). */
+/** `config.paths` when it's a non-empty array of strings; a permanent error
+ *  otherwise — retrying can never fix a malformed config, so the engine
+ *  should surface it immediately instead of backing off 5x. */
 function getRootPaths(account: Account): string[] {
   const paths = account.config?.paths;
   if (
@@ -68,9 +57,9 @@ function getRootPaths(account: Account): string[] {
   ) {
     return paths as string[];
   }
-  // Permanent by design (hard cutover) — retrying can never fix the config,
-  // so the engine should surface it immediately instead of backing off 5x.
-  throw new SourcePermanentError(LEGACY_ERROR);
+  throw new SourcePermanentError(
+    'Local-folder account has no tracked folders — remove this source and re-add its folder.',
+  );
 }
 
 /** `config.watch === false` stops `pull()` right after backfill/rescan
@@ -374,8 +363,8 @@ export async function* pull(
 /** Guard: only ever read bytes for a path resolving inside ONE of the
  *  account's own configured roots — a doc whose stored `metadata.absPath`
  *  has been tampered with (or points at a since-removed/relocated root) must
- *  never leak bytes from elsewhere on disk. Throws the legacy-config error
- *  (via `getRootPaths`) for a pre-multi-root account, like pull()/reconcile(). */
+ *  never leak bytes from elsewhere on disk. Throws the no-roots permanent
+ *  error (via `getRootPaths`) for a malformed config, like pull()/reconcile(). */
 export async function fetchBytes(
   session: Session,
   doc: Document,

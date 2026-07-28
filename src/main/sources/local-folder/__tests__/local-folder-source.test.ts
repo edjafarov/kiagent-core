@@ -27,8 +27,8 @@ import {
 } from '../local-folder-source';
 import type { LocalFolderCursor } from '../cursor';
 
-const LEGACY_ERROR =
-  'Legacy single-folder account — remove this source and re-add its folder.';
+const NO_ROOTS_ERROR =
+  'Local-folder account has no tracked folders — remove this source and re-add its folder.';
 
 type RootsCursor = { roots: Record<string, { completedAt: string }> };
 
@@ -87,7 +87,7 @@ function makeSessionWithConfig(
 ): Session {
   return {
     account: {
-      id: 'acct-legacy',
+      id: 'acct-no-roots',
       source: 'local-folder',
       identifier: 'this-machine',
       config,
@@ -727,36 +727,28 @@ describe('reconcile', () => {
   });
 });
 
-describe('legacy single-folder accounts', () => {
-  it('pull() fails fast with the exact legacy error for an old { path } config', async () => {
-    const dir = mkTmpDir();
-    const controller = new AbortController();
-    const session = makeSessionWithConfig({ path: dir }, controller.signal);
-    await expect(collect(pull(session, null))).rejects.toThrow(LEGACY_ERROR);
-  });
-
-  it('pull() fails fast for the original identifier-as-path shape (empty config)', async () => {
+describe('accounts with no tracked roots (malformed config)', () => {
+  it('pull() fails fast with a permanent error when config.paths is missing', async () => {
     const controller = new AbortController();
     const session = makeSessionWithConfig({}, controller.signal);
-    await expect(collect(pull(session, null))).rejects.toThrow(LEGACY_ERROR);
+    await expect(collect(pull(session, null))).rejects.toThrow(NO_ROOTS_ERROR);
   });
 
-  it('reconcile() also fails fast for a legacy config', async () => {
-    const dir = mkTmpDir();
+  it('reconcile() also fails fast', async () => {
     const controller = new AbortController();
-    const session = makeSessionWithConfig({ path: dir }, controller.signal);
-    await expect(collect(reconcile(session))).rejects.toThrow(LEGACY_ERROR);
+    const session = makeSessionWithConfig({}, controller.signal);
+    await expect(collect(reconcile(session))).rejects.toThrow(NO_ROOTS_ERROR);
   });
 
-  it('fetchBytes() also fails fast for a legacy config', async () => {
+  it('fetchBytes() also fails fast', async () => {
     const dir = mkTmpDir();
     const abs = writeFile(dir, 'a.txt', 'x');
     const controller = new AbortController();
-    const session = makeSessionWithConfig({ path: dir }, controller.signal);
+    const session = makeSessionWithConfig({}, controller.signal);
     const doc = { metadata: { absPath: abs } } as unknown as Parameters<
       typeof fetchBytes
     >[1];
-    await expect(fetchBytes(session, doc)).rejects.toThrow(LEGACY_ERROR);
+    await expect(fetchBytes(session, doc)).rejects.toThrow(NO_ROOTS_ERROR);
   });
 });
 

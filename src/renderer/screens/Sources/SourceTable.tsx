@@ -25,19 +25,10 @@ function stopPropagation(e: React.MouseEvent): void {
  * `local-folder-source.ts`). Show the root count instead, matching the
  * "N folders"/"N sources" pluralization style already used in
  * `SourcesList`'s header line.
- *
- * A legacy account (pre-multi-root: no `config.paths` array) has an empty
- * path list — `trackedFolderPaths` can't recover a root from it (see
- * `getRootPaths`'s hard-cutover doc in `local-folder-source.ts`). Rendering
- * "0 folders" for it would hide the one identifying string this column used
- * to carry: the folder path itself, stored as `identifier` pre-multi-root.
- * Fall back to that raw identifier whenever the derived list is empty.
  */
 function identifierLabel(a: Account): string {
   if (a.source !== 'local-folder') return a.identifier;
-  const paths = trackedFolderPaths(a);
-  if (paths.length === 0) return a.identifier;
-  const n = paths.length;
+  const n = trackedFolderPaths(a).length;
   return `${n} ${n === 1 ? 'folder' : 'folders'}`;
 }
 
