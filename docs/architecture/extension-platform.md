@@ -59,13 +59,14 @@ const extension: ExtensionModule<Caps> = {
 main process wraps each in an RPC proxy and registers the proxy into the real registries
 (SourceRegistry, MCP Handle). The extension never holds a reference to anything trusted.
 
-> Note: the contract type allows `{ sources, workers, tools, providers }`, but the wire protocol
-> (`Contributions` in `extension-rpc.ts`) currently carries **sources and tools only** — extension
-> workers/providers are declared-but-not-yet-plumbed. Only built-ins register those today.
+> Note: the contract type allows `{ sources, workers, tools, providers, senders }`, but the wire
+> protocol (`Contributions` in `extension-rpc.ts`) currently carries **sources, tools and senders
+> only** — extension workers/providers are declared-but-not-yet-plumbed. Only built-ins register
+> those today.
 
 ## Capabilities
 
-Eight caps, each mapping 1:1 to a host namespace (`CapSurfaces` in contracts.ts):
+These eight caps each map 1:1 to a host namespace (`CapSurfaces` in contracts.ts):
 
 | Cap         | Host surface             | Grants                                                                                                       |
 | ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------ |
@@ -77,6 +78,14 @@ Eight caps, each mapping 1:1 to a host namespace (`CapSurfaces` in contracts.ts)
 | `commands`  | `host.commands.register` | Register invokable commands — _declared in the contract, rejected at runtime today_                          |
 | `inference` | `host.inference`         | Local AI: `complete`, `see`, `read`                                                                          |
 | `events`    | `host.events`            | Cross-extension pub/sub: `on`, `emit`                                                                        |
+
+Two further caps grant **no host namespace at all** — they gate what the main process will accept
+_back_ from the extension rather than what the extension may call:
+
+| Cap                  | Grants                                                                                                                                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `send`               | Registration of the extension's `contributes.senders` as outbound transports. Main calls _in_ (`callSender`), past a confirmation gate; the extension gets no new surface. Bundled senders shadow it. |
+| `unsafe.mainProcess` | Bundled tier only: `activate()` receives `extras.mainProcess`, and the extension runs in-process instead of a forked child.                                                                           |
 
 Always present, no cap needed: `host.self` (`id`, `dataDir`) and `host.log(level, msg)`.
 Real implementations live in `src/main/platform/host-surfaces.ts`.

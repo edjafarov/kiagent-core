@@ -52,7 +52,7 @@ import type { ExtensionPlatform } from './platform/extension-platform';
 import { utilityProcessTransport } from './platform/transport';
 import { createOutboundService } from './outbound/service';
 import { createOutboundRoutes } from './outbound/routes';
-import { buildBundledSenders } from './outbound/senders';
+import { buildBundledSenders, composeSenders } from './outbound/senders';
 import { loadProductConfig } from './product';
 import { registerBundledProviders } from './providers';
 import { CURATED_TIERS, modelTotalBytes } from './providers/local-llm/models';
@@ -600,7 +600,13 @@ app
     const outbound = createOutboundService({
       store: p.store,
       prefs: p.prefs,
-      senders: buildBundledSenders({ store: p.store, logSink: p.logSink }),
+      // Bundled transports SHADOW extension senders on a colliding source
+      // id, and both sides are read live on every send — so an extension
+      // activating after this point is picked up without re-composing.
+      senders: composeSenders(
+        buildBundledSenders({ store: p.store, logSink: p.logSink }),
+        p.senders,
+      ),
       logSink: p.logSink,
     });
     // Rows stuck in 'sending' can only mean a previous process died
@@ -808,6 +814,7 @@ app
       }),
       store: p.store,
       sources: p.sources,
+      senders: p.senders,
       scheduler: p.scheduler,
       registerTool: (t) => (mcp ? mcp.registerTool(t) : () => {}),
       inference: p.inference,

@@ -3,7 +3,12 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import type { ExtensionSnapshot, McpTool, Source } from '@shared/contracts';
+import type {
+  ExtensionSnapshot,
+  McpTool,
+  Sender,
+  Source,
+} from '@shared/contracts';
 
 import { openDb } from '@main/db/app-db';
 import { openStore, type CoreStore } from '@main/core/store/store';
@@ -25,6 +30,17 @@ const FIXTURE_UNDECLARED = path.join(
   'ext-undeclared-source',
 );
 const FIXTURE_OAUTH = path.join(__dirname, 'fixtures', 'ext-oauth');
+const FIXTURE_SENDER = path.join(__dirname, 'fixtures', 'ext-sender');
+const FIXTURE_SENDER_NOCAP = path.join(
+  __dirname,
+  'fixtures',
+  'ext-sender-nocap',
+);
+const FIXTURE_SENDER_UNDECLARED = path.join(
+  __dirname,
+  'fixtures',
+  'ext-sender-undeclared',
+);
 
 describe('createExtensionPlatform', () => {
   let tmp: string;
@@ -32,6 +48,11 @@ describe('createExtensionPlatform', () => {
   let platform: ExtensionPlatform;
   let snapshots: ExtensionSnapshot[][];
   let registry: Map<string, Source>;
+  // The SenderRegistry fake — same role `registry` plays for sources: the
+  // real one lives on CorePlatform (boot.ts) and is a plain Map behind the
+  // same four methods, so asserting on this map is asserting on what the
+  // platform registered.
+  let senderRegistry: Map<string, Sender>;
   let tools: Map<string, McpTool>;
   // Proxy for the internal 'extension.activated' bus emit: registerContributions()
   // calls registerTool() for the fixture's one tool and unconditionally
@@ -55,6 +76,12 @@ describe('createExtensionPlatform', () => {
         get: (id: string) => registry.get(id),
         list: () => [...registry.values()].map((s) => s.descriptor),
         unregister: (id: string) => void registry.delete(id),
+      },
+      senders: {
+        register: (id: string, s: Sender) => void senderRegistry.set(id, s),
+        get: (id: string) => senderRegistry.get(id),
+        ids: () => [...senderRegistry.keys()],
+        unregister: (id: string) => void senderRegistry.delete(id),
       },
       scheduler: {
         register: jest.fn(),
@@ -99,6 +126,7 @@ describe('createExtensionPlatform', () => {
     });
     snapshots = [];
     registry = new Map();
+    senderRegistry = new Map();
     tools = new Map();
     activationsCount = 0;
     logs = [];
@@ -633,6 +661,12 @@ describe('createExtensionPlatform', () => {
         list: () => [...registry.values()].map((s) => s.descriptor),
         unregister: (id: string) => void registry.delete(id),
       },
+      senders: {
+        register: (id: string, s: Sender) => void senderRegistry.set(id, s),
+        get: (id: string) => senderRegistry.get(id),
+        ids: () => [...senderRegistry.keys()],
+        unregister: (id: string) => void senderRegistry.delete(id),
+      },
       scheduler: {
         register: jest.fn(),
         unregister: jest.fn(),
@@ -758,6 +792,12 @@ describe('createExtensionPlatform', () => {
         get: (id: string) => registry.get(id),
         list: () => [...registry.values()].map((s) => s.descriptor),
         unregister: (id: string) => void registry.delete(id),
+      },
+      senders: {
+        register: (id: string, s: Sender) => void senderRegistry.set(id, s),
+        get: (id: string) => senderRegistry.get(id),
+        ids: () => [...senderRegistry.keys()],
+        unregister: (id: string) => void senderRegistry.delete(id),
       },
       scheduler: {
         register: jest.fn(),
@@ -1236,6 +1276,237 @@ describe('createExtensionPlatform', () => {
         .find((e) => e.id === 'test.bundled-nonpriv');
       expect(snap?.origin).toBe('bundled');
       expect(snap?.status).toBe('activated');
+    });
+  });
+
+  describe('extension sender contributions', () => {
+    async function installSenderFixture(fixture: string, id: string) {
+      const preview = await platform.installPreview(fixture);
+      if (!('token' in preview))
+        throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+      await expect(platform.installCommit(preview.token)).resolves.toEqual({
+        ok: true,
+        id,
+      });
+    }
+
+    it('registers a cap-gated sender proxy that resolves credentials from the vault and forwards them as SenderContext', async () => {
+      await platform.start(); // empty dir — no-op
+      await installSenderFixture(FIXTURE_SENDER, 'test.sender');
+
+      expect(registry.has('fixsrc')).toBe(true);
+      expect([...senderRegistry.keys()]).toContain('fixsrc');
+
+      // A real credential blob in the vault under the intent's account id —
+      // an out-of-process sender has no vault access, so the ONLY way this
+      // can reach the child is the host resolving it and passing it in ctx.
+      const account = await store.createAccount({
+        source: 'fixsrc',
+        identifier: 'fix-account',
+        config: {},
+        status: 'live',
+      });
+      await store.vault.save(account.id, {
+        accessToken: 'FAKE-VAULT-TOKEN-NOT-REAL',
+      });
+      const loadSpy = jest.spyOn(store.vault, 'load');
+
+      await expect(
+        senderRegistry.get('fixsrc')!.send({
+          accountId: account.id,
+          kind: 'new',
+          to: ['someone@example.com'],
+          bodyMarkdown: 'hi',
+        }),
+      ).resolves.toEqual({ externalMessageId: 'fix-1' });
+
+      expect(loadSpy).toHaveBeenCalledWith(account.id);
+      // Sender.send's `ctx` is optional in the contract, so a host that
+      // forgot to pass it would compile and still return this same green
+      // result — the fixture echoes back what it actually received.
+      await expect(tools.get('sender_last_ctx')!.call({})).resolves.toEqual({
+        ctx: { credentials: { accessToken: 'FAKE-VAULT-TOKEN-NOT-REAL' } },
+      });
+
+      loadSpy.mockRestore();
+    });
+
+    it('refuses to register a sender from an extension without the send cap: warns, registers nothing, source still registers', async () => {
+      await platform.start(); // empty dir — no-op
+      await installSenderFixture(FIXTURE_SENDER_NOCAP, 'test.sender-nocap');
+
+      // contributes.senders alone is not a grant — the cap is.
+      expect([...senderRegistry.keys()]).not.toContain('fixsrc');
+      expect(senderRegistry.size).toBe(0);
+      // The rest of the extension activates normally.
+      expect(registry.has('fixsrc')).toBe(true);
+      expect(platform.snapshot()).toEqual([
+        expect.objectContaining({
+          id: 'test.sender-nocap',
+          status: 'activated',
+          sourceIds: ['fixsrc'],
+        }),
+      ]);
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          scope: 'extension:test.sender-nocap',
+          level: 'warn',
+          msg: expect.stringContaining("'send' cap"),
+        }),
+      );
+    });
+
+    it('skips sender ids the manifest never declared and ids with no source behind them (the gate the child cannot see)', async () => {
+      await platform.start(); // empty dir — no-op
+      await installSenderFixture(
+        FIXTURE_SENDER_UNDECLARED,
+        'test.sender-undeclared',
+      );
+
+      // Only the id that is BOTH declared in contributes.senders and backed
+      // by a source this activation registered survives.
+      expect([...senderRegistry.keys()]).toEqual(['okaysrc']);
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          scope: 'extension:test.sender-undeclared',
+          level: 'warn',
+          msg: expect.stringContaining(
+            "sender id 'sneakysrc' is not declared in contributes.senders",
+          ),
+        }),
+      );
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          scope: 'extension:test.sender-undeclared',
+          level: 'warn',
+          msg: expect.stringContaining(
+            "sender id 'ghostsrc' has no registered source",
+          ),
+        }),
+      );
+    });
+
+    it('deactivation unregisters the sender — a disabled extension can no longer send', async () => {
+      await platform.start(); // empty dir — no-op
+      await installSenderFixture(FIXTURE_SENDER, 'test.sender');
+      expect(senderRegistry.get('fixsrc')).toBeDefined();
+
+      await expect(platform.setEnabled('test.sender', false)).resolves.toEqual({
+        ok: true,
+      });
+      expect(senderRegistry.get('fixsrc')).toBeUndefined();
+      expect(registry.has('fixsrc')).toBe(false);
+
+      // Re-enabling re-registers it — no dead sender after a disable/enable
+      // cycle (same lifecycle as the source registration).
+      await expect(platform.setEnabled('test.sender', true)).resolves.toEqual({
+        ok: true,
+      });
+      expect(senderRegistry.get('fixsrc')).toBeDefined();
+    });
+
+    it('a crash respawn re-registers exactly one working sender — the old disposer never clobbers the fresh one', async () => {
+      const pairs: ReturnType<typeof createInMemoryHostPair>[] = [];
+      const crashPlatform = makePlatform({
+        transportFactory: () => {
+          const pair = createInMemoryHostPair();
+          pairs.push(pair);
+          runExtensionHost(pair.child, { exit: (c) => pair.simulateExit(c) });
+          return pair.main;
+        },
+      });
+      await crashPlatform.start();
+      const preview = await crashPlatform.installPreview(FIXTURE_SENDER);
+      if (!('token' in preview))
+        throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+      await expect(crashPlatform.installCommit(preview.token)).resolves.toEqual(
+        { ok: true, id: 'test.sender' },
+      );
+      expect(pairs).toHaveLength(1);
+      expect(senderRegistry.size).toBe(1);
+
+      // Crash the running host. Unlike a deliberate disable, deactivate()
+      // never runs and the Entry is never rebuilt — the disposer fires from
+      // the supervisor's own crash cleanup. If it landed AFTER the respawn's
+      // registerContributions, it would unregister the FRESH sender and
+      // leave a live extension with no outbound transport at all.
+      pairs[0].simulateExit(1);
+      await new Promise<void>((resolve, reject) => {
+        const start = Date.now();
+        const iv = setInterval(() => {
+          const s = crashPlatform
+            .snapshot()
+            .find((x) => x.id === 'test.sender');
+          if (s?.status === 'activated' && pairs.length === 2) {
+            clearInterval(iv);
+            resolve();
+          } else if (Date.now() - start > 4000) {
+            clearInterval(iv);
+            reject(new Error('respawn did not re-activate in time'));
+          }
+        }, 5);
+      });
+
+      // Exactly one entry (a duplicate would show as a stale registration
+      // surviving alongside the fresh one), and it is genuinely usable: the
+      // proxy's `e.host!` must resolve to the NEW incarnation, not the dead
+      // one — a send is the only thing that proves that.
+      expect(senderRegistry.size).toBe(1);
+      const account = await store.createAccount({
+        source: 'fixsrc',
+        identifier: 'fix-account',
+        config: {},
+        status: 'live',
+      });
+      await expect(
+        senderRegistry.get('fixsrc')!.send({
+          accountId: account.id,
+          kind: 'new',
+          bodyMarkdown: 'after the crash',
+        }),
+      ).resolves.toEqual({ externalMessageId: 'fix-1' });
+
+      // A deliberate stop still tears it down cleanly.
+      await crashPlatform.stop();
+      expect(senderRegistry.size).toBe(0);
+    }, 10000);
+
+    it('a consent that predates the send cap no longer covers the manifest: same version, narrower caps → needs-consent', async () => {
+      await platform.start(); // empty dir — no-op
+      await installSenderFixture(FIXTURE_SENDER, 'test.sender');
+      await expect(platform.setEnabled('test.sender', false)).resolves.toEqual({
+        ok: true,
+      });
+
+      // Consent for the SAME manifest version but WITHOUT 'send' — the
+      // version prong (covered by the sibling '0.0.0-stale' test) passes
+      // here, so only the caps-subset prong can refuse this activation.
+      await store.consents.record({
+        extensionId: 'test.sender',
+        caps: [],
+        manifestVersion: '1.0.0',
+        grantedAt: new Date().toISOString(),
+      } as never);
+
+      await expect(platform.setEnabled('test.sender', true)).resolves.toEqual({
+        ok: true,
+      });
+      expect(platform.snapshot()).toEqual([
+        expect.objectContaining({
+          id: 'test.sender',
+          status: 'needs-consent',
+          caps: ['send'],
+        }),
+      ]);
+      expect(senderRegistry.size).toBe(0);
+      expect(registry.has('fixsrc')).toBe(false);
+
+      // Granting consent for the on-disk manifest (which declares 'send')
+      // restores both the source and the sender.
+      await expect(platform.grantConsent('test.sender')).resolves.toEqual({
+        ok: true,
+      });
+      expect(senderRegistry.get('fixsrc')).toBeDefined();
     });
   });
 });

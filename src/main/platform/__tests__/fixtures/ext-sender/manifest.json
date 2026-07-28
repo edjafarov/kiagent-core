@@ -1,0 +1,9 @@
+{
+  "id": "test.sender",
+  "name": "Sender Fixture",
+  "version": "1.0.0",
+  "engine": "^1.0.0",
+  "entry": "index.js",
+  "caps": ["send"],
+  "contributes": { "sources": ["fixsrc"], "senders": ["fixsrc"] }
+}

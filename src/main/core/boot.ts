@@ -10,6 +10,7 @@ import type {
   LogStore,
   Prefs,
   SchedulerEnv,
+  Sender,
   Source,
   SourceDescriptor,
   Worker,
@@ -48,6 +49,23 @@ export interface SourceRegistry {
   unregister(id: string): void;
 }
 
+/** Outbound Senders contributed by EXTENSIONS, keyed by source id — the
+ *  mirror of SourceRegistry for the send pipeline. Bundled transports do NOT
+ *  live here (they are built directly in outbound/senders); the two sides are
+ *  joined by `composeSenders`, which lets bundled shadow extension on a
+ *  colliding id. Registration is cap-gated in the extension platform: an
+ *  entry existing here already means the manifest declared 'send'.
+ *
+ *  `get` is on the hot path — the send service materializes a Sender on
+ *  EVERY outbound tool call — so it must stay a cheap, side-effect-free map
+ *  read: no lazy host wake-up, no per-call allocation. */
+export interface SenderRegistry {
+  register(sourceId: string, sender: Sender): void;
+  get(sourceId: string): Sender | undefined;
+  ids(): string[];
+  unregister(sourceId: string): void;
+}
+
 export interface CorePlatform {
   store: CoreStore;
   engine: ReturnType<typeof createEngine>;
@@ -57,6 +75,7 @@ export interface CorePlatform {
   logs: LogStore;
   logSink: LogSink;
   sources: SourceRegistry;
+  senders: SenderRegistry;
   /** Per-source OAuth refreshers; source families add theirs at registration. */
   refreshers: Map<string, (creds: Credentials) => Promise<Credentials | null>>;
   convert(input: DocumentInput): Promise<DocumentInput>;
@@ -101,6 +120,18 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     },
   };
 
+  const senderRegistry = new Map<string, Sender>();
+  const senders: SenderRegistry = {
+    register(sourceId, sender) {
+      senderRegistry.set(sourceId, sender);
+    },
+    get: (sourceId) => senderRegistry.get(sourceId),
+    ids: () => [...senderRegistry.keys()],
+    unregister(sourceId) {
+      senderRegistry.delete(sourceId);
+    },
+  };
+
   const refreshers = new Map<
     string,
     (creds: Credentials) => Promise<Credentials | null>
@@ -123,6 +154,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     logs: logStore,
     logSink: sink,
     sources,
+    senders,
     refreshers,
     convert,
     createAppProjection,

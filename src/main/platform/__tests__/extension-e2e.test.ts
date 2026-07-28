@@ -3,7 +3,12 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import type { AuthChannel, ExtensionSnapshot, Source } from '@shared/contracts';
+import type {
+  AuthChannel,
+  ExtensionSnapshot,
+  Sender,
+  Source,
+} from '@shared/contracts';
 
 import { createEngine } from '@main/core/engine/engine';
 import { openDb } from '@main/db/app-db';
@@ -26,6 +31,7 @@ describe('extension runtime e2e (real forked child)', () => {
   let store: CoreStore;
   let platform: ExtensionPlatform;
   const registry = new Map<string, Source>();
+  const senderRegistry = new Map<string, Sender>();
   const snapshots: ExtensionSnapshot[][] = [];
 
   beforeAll(async () => {
@@ -43,6 +49,12 @@ describe('extension runtime e2e (real forked child)', () => {
         get: (id) => registry.get(id),
         list: () => [...registry.values()].map((s) => s.descriptor),
         unregister: (id) => void registry.delete(id),
+      },
+      senders: {
+        register: (id, s) => void senderRegistry.set(id, s),
+        get: (id) => senderRegistry.get(id),
+        ids: () => [...senderRegistry.keys()],
+        unregister: (id) => void senderRegistry.delete(id),
       },
       scheduler: {
         register: jest.fn(),

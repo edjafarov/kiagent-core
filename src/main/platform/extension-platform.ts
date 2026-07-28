@@ -26,7 +26,7 @@ import type { Contributions } from '@shared/extension-rpc';
 
 import type { CoreStore } from '@main/core/store/store';
 import type { CoreScheduler } from '@main/core/scheduler';
-import type { SourceRegistry } from '@main/core/boot';
+import type { SenderRegistry, SourceRegistry } from '@main/core/boot';
 import type { LogSink } from '@main/core/engine/engine';
 import type { OAuthProfile } from '@main/auth/oauth-window';
 
@@ -38,6 +38,7 @@ import {
 import {
   loadIconDataUrl,
   oauthSourceBindings,
+  senderContributions,
   sourceContributions,
 } from './manifest';
 import { oauthProviders } from './oauth-providers';
@@ -87,6 +88,27 @@ function bustRequireCacheUnder(dir: string): void {
   }
 }
 
+/** Promise.race against a rejecting timer — the timer is always cleared (and
+ *  unref'd, so a pending one never holds the process open). Used for the
+ *  extension-sender RPC, which has NO timeout of its own: a child that hangs
+ *  mid-send would otherwise wedge the confirmation pipeline forever, leaving
+ *  the outbox row parked in 'sending' with no terminal state and no way for
+ *  the user to retry. */
+function withTimeout<T>(
+  p: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    p,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 // A hand-edited installed.json is untrusted input (readInstalled is a bare
 // JSON.parse cast, spec §3.1 gap): only 'marketplace' is ever honored from
 // disk, everything else (including a forged 'bundled') collapses to 'dev'.
@@ -131,6 +153,10 @@ export interface ExtensionPlatformDeps {
   mainApi?: unknown;
   store: CoreStore;
   sources: SourceRegistry;
+  /** Where cap-gated extension Senders land. Same lifecycle as `sources`:
+   *  registered on activation, dropped on every host exit (crash included),
+   *  re-registered by the respawn. */
+  senders: SenderRegistry;
   scheduler: CoreScheduler;
   registerTool(tool: McpTool): () => void;
   inference: SurfaceDeps['inference'];
@@ -285,8 +311,10 @@ export function createExtensionPlatform(
     const declared = new Map(
       sourceContributions(e.manifest).map((d) => [d.id, d]),
     );
+    const declaredSenders = new Set(senderContributions(e.manifest));
     const registeredSources: string[] = [];
     const registeredOAuthSources: string[] = [];
+    const registeredSenders: string[] = [];
     const toolDisposers: Array<() => void> = [];
     for (const s of c.sources) {
       const contribution = declared.get(s.descriptor.id);
@@ -325,6 +353,63 @@ export function createExtensionPlatform(
       }
     }
     e.sourceIds = registeredSources;
+    // Senders, AFTER e.sourceIds is refreshed above so the third gate below
+    // can test against the ids this activation genuinely registered.
+    //
+    // `c.senders` arrives UNFILTERED from the child — it is built purely
+    // from activate()'s return value and the child has no access to the
+    // manifest — so this triple gate is the ONLY filter between "the
+    // extension said so" and a live outbound transport:
+    //   (a) the manifest declares the 'send' cap (consented at install),
+    //   (b) the id is listed in contributes.senders (disclosed up front),
+    //   (c) the id is a source this extension actually registered just now
+    //       (never someone else's source, never a phantom id).
+    for (const id of c.senders ?? []) {
+      const scope = `extension:${e.manifest.id}`;
+      if (!e.manifest.caps.includes('send')) {
+        deps.logSink.log(
+          scope,
+          'warn',
+          `sender for source '${id}' requires the 'send' cap, which this extension does not declare — skipping`,
+        );
+        continue;
+      }
+      if (!declaredSenders.has(id)) {
+        deps.logSink.log(
+          scope,
+          'warn',
+          `sender id '${id}' is not declared in contributes.senders — skipping`,
+        );
+        continue;
+      }
+      if (!registeredSources.includes(id)) {
+        deps.logSink.log(
+          scope,
+          'warn',
+          `sender id '${id}' has no registered source of that id — skipping`,
+        );
+        continue;
+      }
+      deps.senders.register(id, {
+        send: async (intent) => {
+          // An out-of-process sender has no vault access of its own, so the
+          // host resolves the account's credentials here — at send time,
+          // past the confirmation gate — and hands them over in the ctx.
+          // Passed UNCONDITIONALLY: SenderContext is optional on the
+          // Sender contract, so a dropped argument would compile silently.
+          const credentials = await deps.store.vault.load(intent.accountId);
+          const call = e.host!.callSender(id, intent, { credentials });
+          // The RPC has no timeout; a hung child must not wedge the
+          // confirmation pipeline (the row would sit in 'sending').
+          return await withTimeout(
+            call,
+            60_000,
+            `extension sender '${id}' timed out after 60s`,
+          );
+        },
+      });
+      registeredSenders.push(id);
+    }
     for (const t of c.tools) {
       toolDisposers.push(
         deps.registerTool({
@@ -354,6 +439,11 @@ export function createExtensionPlatform(
         deps.oauth?.unregisterProfile(sid);
         deps.oauth?.refreshers.delete(sid);
       });
+      // Only the ids THIS activation registered — never a re-derivation from
+      // the manifest. A sender the gates above skipped was never ours to
+      // unregister, and blindly dropping it would tear down whatever else
+      // holds that id.
+      registeredSenders.forEach((sid) => deps.senders.unregister(sid));
       toolDisposers.forEach((d) => d());
       bus.emit('platform', 'extension.deactivated', { id: e.manifest.id });
     };
