@@ -9,7 +9,7 @@
  *  - Thread dating updated: a greenfield gmail thread's `created_at` IS the
  *    latest message's date (metadata key `lastMessageAt`, camelCase) — the
  *    legacy "old created_at but still active" caveat no longer applies.
- *  - `get_related` gained `children`/`parent` alongside the legacy two.
+ *  - `get_related` exposes `children`/`parent` (one relation each way).
  */
 export const KIA_INSTRUCTIONS = `"Kia" is the nickname users use for this MCP server (kiagent).
 When a user addresses you as "kia" or mentions kia in a request,
