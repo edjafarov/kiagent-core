@@ -9,6 +9,7 @@ import {
   loadIconDataUrl,
   oauthSourceBindings,
   parseManifest,
+  senderContributions,
   sourceContributions,
   validateManifestDir,
 } from '../manifest';
@@ -186,6 +187,22 @@ describe('source contributions (string | { id, oauth })', () => {
       { id: 'google-docs', provider: 'google' },
     ]);
     expect(oauthSourceBindings(parseManifest(GOOD))).toEqual([]);
+  });
+});
+
+describe('sender contributions', () => {
+  it('accepts the send cap and contributes.senders', () => {
+    const m = parseManifest({
+      ...GOOD,
+      caps: ['net', 'send'],
+      contributes: { sources: ['slack'], senders: ['slack'] },
+    });
+    expect(m.caps).toContain('send');
+    expect(senderContributions(m)).toEqual(['slack']);
+  });
+
+  it('senders default to empty', () => {
+    expect(senderContributions(parseManifest(GOOD))).toEqual([]);
   });
 });
 

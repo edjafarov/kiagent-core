@@ -454,11 +454,19 @@ export interface SendResult {
   externalMessageId?: string;
 }
 
+/** What the host hands a Sender alongside the intent. Bundled senders read
+ *  the vault themselves and ignore it; an extension's Sender cannot — it
+ *  runs out-of-process with no vault access, so the host resolves the
+ *  account's credentials and passes them in at send time. */
+export interface SenderContext {
+  credentials: Credentials | null;
+}
+
 /** Outbound transport for one source id. Reachable ONLY from the send
  *  pipeline — i.e. only after a confirmation gate — never from the MCP
  *  plane directly. */
 export interface Sender {
-  send(intent: SendIntent): Promise<SendResult>;
+  send(intent: SendIntent, ctx?: SenderContext): Promise<SendResult>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -600,6 +608,11 @@ export type Cap =
   | 'commands'
   | 'inference'
   | 'events'
+  /** May deliver outbound messages through the host's send pipeline — the
+   *  host calls the extension's Sender only AFTER a user confirmation gate;
+   *  extensions never initiate sends. Not a host namespace: there is no
+   *  host.send.* surface. */
+  | 'send'
   /** Privileged, bundled-tier only: run in the main process and receive the
    *  opaque main-process handle as activate()'s extras.mainProcess. Rejected
    *  for marketplace/dev extensions at manifest validation. */
@@ -652,6 +665,7 @@ export interface Manifest {
     workers?: string[];
     tools?: string[];
     providers?: string[];
+    senders?: string[];
     commands?: Array<{ id: string; title: string }>;
   };
   caps: Cap[];
@@ -707,6 +721,8 @@ export interface CapSurfaces {
       emit(event: string, payload: unknown): void;
     };
   };
+  /** Host-initiated only — no extension→host surface. */
+  send: {};
   /** Privileged, bundled-tier only: main-process handle passed as
    *  extras.mainProcess in activate(), not as a host surface. */
   'unsafe.mainProcess': {};
@@ -741,6 +757,9 @@ export interface ExtensionModule<G extends Cap = Cap> {
     workers?: Worker[];
     tools?: McpTool[];
     providers?: InferenceProvider[];
+    /** Senders keyed by SOURCE id — each must be listed in
+     *  contributes.senders and its source contributed by this extension. */
+    senders?: Record<string, Sender>;
   }>;
   deactivate?(): void | Promise<void>;
 }

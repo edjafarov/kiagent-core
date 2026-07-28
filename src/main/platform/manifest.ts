@@ -34,6 +34,7 @@ const CAPS = [
   'commands',
   'inference',
   'events',
+  'send',
   'unsafe.mainProcess',
 ] as const satisfies readonly Cap[];
 
@@ -91,6 +92,7 @@ const schema = z.object({
       workers: z.array(z.string()).optional(),
       tools: z.array(z.string()).optional(),
       providers: z.array(z.string()).optional(),
+      senders: z.array(z.string()).optional(),
       commands: z
         .array(z.object({ id: z.string(), title: z.string() }))
         .optional(),
@@ -145,6 +147,14 @@ export function sourceContributions(
   return (manifest.contributes.sources ?? []).map((s) =>
     typeof s === 'string' ? { id: s } : { id: s.id, oauth: s.oauth },
   );
+}
+
+/** The source ids this extension declares an outbound Sender for — THE way
+ *  to consume `contributes.senders`. Defaults to none. */
+export function senderContributions(
+  manifest: Pick<Manifest, 'contributes'>,
+): string[] {
+  return manifest.contributes.senders ?? [];
 }
 
 /** The oauth-bound subset of `contributes.sources`, in the shape the consent

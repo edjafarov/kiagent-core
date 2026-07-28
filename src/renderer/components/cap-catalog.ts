@@ -70,6 +70,14 @@ export const CAP_CATALOG: Record<Cap, CapInfo> = {
     risk: 'normal',
     icon: 'log',
   },
+  send: {
+    label: 'Send messages',
+    description:
+      'Can deliver outbound messages from its accounts — only after you ' +
+      'confirm each one through the app’s send flow.',
+    risk: 'elevated',
+    icon: 'external',
+  },
   'unsafe.mainProcess': {
     label: 'Full app access (bundled only)',
     description:
