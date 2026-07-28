@@ -59,7 +59,7 @@ describe('outbox schema', () => {
     ).rejects.toThrow(/CHECK/);
   });
 
-  it('accepts chat as a confirm mode (migration v5)', async () => {
+  it('accepts chat as a confirm mode', async () => {
     // The only INSERT here that clears every CHECK, so it is also the only one
     // that reaches the account_id foreign key — give it a parent row.
     await db.run(

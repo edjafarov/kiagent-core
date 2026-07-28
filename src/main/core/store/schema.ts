@@ -9,9 +9,18 @@ import { buildStemView } from '../stemming';
 type Migration = string | ((db: BetterSqlite3.Database) => void);
 
 const MIGRATIONS: Migration[] = [
-  // v1 — the greenfield schema. Column names are storage detail (snake_case
-  // SQL convention); row mappers in store.ts produce the camelCase domain
-  // shapes from @shared/contracts.
+  // v1 — the full schema (2026-07-28 collapse of the original v1..v5 chain;
+  // corpora predating the collapse must be rebuilt — the corpus is a
+  // rebuildable cache). Column names are storage detail (snake_case SQL
+  // convention); row mappers in store.ts produce the camelCase domain shapes
+  // from @shared/contracts.
+  //
+  // documents_fts rows are rowid-PINNED to their document's rowid, so
+  // delete/replace are rowid-equality lookups (not full virtual-table scans)
+  // while the search SQL joins on doc_id unchanged. documents has a TEXT
+  // primary key, so its implicit rowids can be renumbered by VACUUM — every
+  // VACUUM of a non-empty corpus must re-run repopulateSearchIndex (see
+  // maintenance.compact in store.ts).
   `
   CREATE TABLE meta (
     key TEXT PRIMARY KEY,
@@ -104,102 +113,32 @@ const MIGRATIONS: Migration[] = [
     next_run TEXT
   );
 
-  -- Full-text index, maintained INSIDE the commit transaction.
+  -- Full-text index, maintained INSIDE the commit transaction. Raw columns
+  -- keep positions 1/2 so snippet(documents_fts, 2, …) and the search JOIN
+  -- stay stable; *_stem carry the snowball stem view (search parity design,
+  -- docs/superpowers/specs/2026-07-11-search-parity-design.md).
   CREATE VIRTUAL TABLE documents_fts USING fts5(
     doc_id UNINDEXED,
     title,
     markdown,
+    title_stem,
+    markdown_stem,
     tokenize = 'unicode61 remove_diacritics 2'
   );
-  `,
-
-  // v2 — pin each documents_fts row's rowid to its document's rowid.
-  // doc_id is UNINDEXED, so "DELETE FROM documents_fts WHERE doc_id = ?" was
-  // a full virtual-table scan per call — O(N²) across a mail backfill. With
-  // the rowid pinned, delete/replace become rowid-equality lookups while the
-  // search SQL (which joins on doc_id) stays byte-for-byte unchanged.
-  // Archived rows are included: archiving leaves FTS intact today.
-  // NOTE: documents has a TEXT primary key, so its implicit rowids can be
-  // renumbered by VACUUM — every VACUUM of a non-empty corpus must re-run
-  // this same delete-all + repopulate (see maintenance.compact in store.ts).
-  `
-  DELETE FROM documents_fts;
-  INSERT INTO documents_fts(rowid, doc_id, title, markdown)
-    SELECT rowid, id, coalesce(title, ''), coalesce(markdown, '')
-    FROM documents;
-  `,
-
-  // v3 — search parity (docs/superpowers/specs/2026-07-11-search-parity-design.md):
-  // stem columns on documents_fts (snowball, per-document language) and a
-  // trigram table for substring-recall fuzzy fallback. A FUNCTION migration:
-  // the backfill stems text in JS, which a SQL string cannot express. DROPs
-  // are IF EXISTS so a re-run against an already-v3-shaped file (version
-  // regression in tests) is idempotent. Raw columns keep positions 1/2, so
-  // snippet(documents_fts, 2, …) and the search JOIN are unchanged.
-  (db: BetterSqlite3.Database): void => {
-    db.exec(`
-      DROP TABLE IF EXISTS documents_fts;
-      DROP TABLE IF EXISTS documents_tri;
-      CREATE VIRTUAL TABLE documents_fts USING fts5(
-        doc_id UNINDEXED,
-        title,
-        markdown,
-        title_stem,
-        markdown_stem,
-        tokenize = 'unicode61 remove_diacritics 2'
-      );
-      CREATE VIRTUAL TABLE documents_tri USING fts5(
-        doc_id UNINDEXED,
-        body,
-        tokenize = 'trigram remove_diacritics 1'
-      );
-    `);
-    repopulateSearchIndex(db);
-  },
-
-  // v4 — the outbox: frozen outbound drafts + their audit trail
-  // (docs/superpowers/specs/2026-07-23-unified-outbound-design.md). Dedicated
-  // table, NOT a document type: drafts are mutable workflow state, and the
-  // sent copy re-enters the corpus through normal ingestion. Sent/failed/
-  // discarded rows are retained — the table IS the audit log. ON DELETE
-  // CASCADE: removing an account removes its outbox history, matching the
-  // removeAccount cascade for every other per-account table. IF NOT EXISTS
-  // (table + index): matches the v2/v3 replay-safe convention — fts.test.ts
-  // fakes schemaVersion backward and re-runs migrate() to exercise older
-  // migrations, which replays this entry too.
-  `
-  CREATE TABLE IF NOT EXISTS outbox (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('reply','new')),
-    reply_to_document_id TEXT,
-    outbound_ref TEXT,
-    recipient_display TEXT NOT NULL,
-    to_json TEXT NOT NULL DEFAULT '[]',
-    cc_json TEXT NOT NULL DEFAULT '[]',
-    subject TEXT,
-    body_markdown TEXT NOT NULL,
-    threading_json TEXT,
-    confirm_mode TEXT NOT NULL CHECK (confirm_mode IN ('review','link')),
-    status TEXT NOT NULL CHECK (status IN
-      ('draft','sending','sent','failed','discarded','expired','delivery_unknown')),
-    error TEXT,
-    external_message_id TEXT,
-    created_via TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    sent_at TEXT,
-    expires_at TEXT NOT NULL
+  -- Trigram table for substring-recall fuzzy fallback.
+  CREATE VIRTUAL TABLE documents_tri USING fts5(
+    doc_id UNINDEXED,
+    body,
+    tokenize = 'trigram remove_diacritics 1'
   );
-  CREATE INDEX IF NOT EXISTS idx_outbox_account_status ON outbox(account_id, status);
-  `,
 
-  // v5 — widen outbox.confirm_mode to allow 'chat' (spec mode C). SQLite
-  // cannot ALTER a CHECK, so rebuild the table; the explicit column lists
-  // make the copy total and order-independent. Nothing references outbox,
-  // so the rename/drop is FK-safe.
-  `
-  DROP INDEX idx_outbox_account_status;
-  ALTER TABLE outbox RENAME TO outbox_v4;
+  -- The outbox: frozen outbound drafts + their audit trail
+  -- (docs/superpowers/specs/2026-07-23-unified-outbound-design.md). Dedicated
+  -- table, NOT a document type: drafts are mutable workflow state, and the
+  -- sent copy re-enters the corpus through normal ingestion. Sent/failed/
+  -- discarded rows are retained — the table IS the audit log. ON DELETE
+  -- CASCADE: removing an account removes its outbox history, matching the
+  -- removeAccount cascade for every other per-account table.
   CREATE TABLE outbox (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -222,28 +161,17 @@ const MIGRATIONS: Migration[] = [
     sent_at TEXT,
     expires_at TEXT NOT NULL
   );
-  INSERT INTO outbox (id, account_id, kind, reply_to_document_id, outbound_ref,
-    recipient_display, to_json, cc_json, subject, body_markdown, threading_json,
-    confirm_mode, status, error, external_message_id, created_via, created_at,
-    sent_at, expires_at)
-  SELECT id, account_id, kind, reply_to_document_id, outbound_ref,
-    recipient_display, to_json, cc_json, subject, body_markdown, threading_json,
-    confirm_mode, status, error, external_message_id, created_via, created_at,
-    sent_at, expires_at
-  FROM outbox_v4;
-  DROP TABLE outbox_v4;
   CREATE INDEX idx_outbox_account_status ON outbox(account_id, status);
   `,
 ];
 
 /**
  * Clear and refill BOTH search tables from `documents`, rowid-pinned,
- * stemming each row with its stored languages. Used by the v3 migration and
- * by maintenance.compact (VACUUM can renumber documents rowids — see the v2
- * note above).
+ * stemming each row with its stored languages. Used by maintenance.compact
+ * (VACUUM can renumber documents rowids — see the rowid-pinning note in the
+ * schema above).
  *
- * Runs as ONE transaction (better-sqlite3 nests as a SAVEPOINT, so calling
- * this from inside the v3 migration's own transaction is safe): a rebuild
+ * Runs as ONE transaction (better-sqlite3 nests as a SAVEPOINT): a rebuild
  * that dies partway must never leave the search tables half-repopulated. The
  * corpus is read in rowid-ordered pages rather than one `.all()` over every
  * document — better-sqlite3 forbids `.iterate()` while writing on the same
@@ -315,17 +243,16 @@ export function migrate(db: BetterSqlite3.Database): void {
       .get() as { value: string } | undefined;
     version = row ? Number(row.value) : 0;
   }
-  // Fail closed on a corpus written by a NEWER build. Migrations are
-  // forward-only, so an older build silently skips the loop and then writes
-  // with its outdated assumptions — since v2 (FTS rowid pinning) the corpus
-  // now carries a cross-version storage invariant, so a downgrade that writes
-  // can corrupt the FTS index. Refuse to open instead. (The corpus is a
-  // rebuildable cache; the user can reinstall the matching build.)
+  // Fail closed on a corpus at a version this build doesn't know: a corpus
+  // written by a newer build (or by the pre-collapse v1..v5 chain) carries
+  // storage invariants — FTS rowid pinning above all — that writing with the
+  // wrong assumptions would corrupt. Refuse to open instead. (The corpus is
+  // a rebuildable cache: update the app, or erase and re-sync.)
   if (version > MIGRATIONS.length) {
     throw new Error(
       `corpus schema v${version} is newer than this build supports ` +
         `(v${MIGRATIONS.length}). Update the app to the latest version to open ` +
-        `this database.`,
+        `this database, or erase and re-sync it.`,
     );
   }
   for (let i = version; i < MIGRATIONS.length; i += 1) {
