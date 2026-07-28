@@ -119,6 +119,22 @@ export interface OutboundService extends OutboundToolApi {
   /** Product pushes the public device base URL (https://<device-subdomain>)
    *  when the remote HTTPS server is up, null when it goes down. */
   setRemoteBaseUrl(url: string | null): void;
+  /** Panel support (spec §10): a fresh confirm URL for a row the user can
+   *  still act on — a pending draft, or a `failed` row whose stored error
+   *  PROVES the message was never accepted (that one lands on failedPage's
+   *  shipped "Try again"). Null for everything else.
+   *
+   *  PANEL-ONLY — never an `/outbox/api` op, never on `OutboundToolApi`:
+   *  routes.ts:339-379 dispatches that interface by name over the loopback
+   *  JSON plane, and these two must stay off it. */
+  confirmUrlFor(draftId: string): Promise<string | null>;
+  /** Panel support (spec §10): duplicate a terminal row (`failed`,
+   *  `expired`, `discarded` — NEVER `delivery_unknown`) into a fresh draft.
+   *  Content, recipients and threading copied verbatim; mode re-frozen from
+   *  the account's effective setting; fresh 24h TTL; createdVia 'panel'.
+   *
+   *  PANEL-ONLY — see confirmUrlFor. */
+  redraft(draftId: string): Promise<OutboxRow>;
 }
 
 export function createOutboundService(deps: {
@@ -752,6 +768,92 @@ export function createOutboundService(deps: {
       }
       const discarded = await deps.store.outbox.get(row.id);
       return { kind: 'cancelled', row: discarded ?? row };
+    },
+
+    async confirmUrlFor(draftId) {
+      // No assertReady() on purpose: a row that is not openable must return
+      // null so the caller can name its status, rather than throwing a
+      // readiness error. A cold base still surfaces from confirmUrl below.
+      await deps.store.outbox.expireOverdue();
+      const row = await deps.store.outbox.get(draftId);
+      if (!row) return null;
+      if (row.status === 'draft') return confirmUrl(row.id, row.confirmMode);
+      // A failed row is re-confirmable ONLY when its stored error classifies
+      // as provably-not-sent — the same gate confirmByToken applies
+      // (service.ts:706-714). The token lands on gonePage → failedPage,
+      // which ships a live "Try again" POST, and the CAS there uses the
+      // OBSERVED status as its from-state, so this cannot double-send.
+      // Strictly better than re-drafting for this class: same row, shipped
+      // page, shipped copy.
+      if (
+        row.status === 'failed' &&
+        shapeOutboundError(row.error ?? '').canRetry
+      ) {
+        return confirmUrl(row.id, row.confirmMode);
+      }
+      return null;
+    },
+
+    async redraft(draftId) {
+      // Same readiness gate every drafting tool uses, and for the same
+      // reason (service.ts:155-158): refuse BEFORE the insert, so a cold or
+      // unset base can never leave an orphan draft row behind.
+      assertReady();
+      await deps.store.outbox.expireOverdue();
+      const row = await deps.store.outbox.get(draftId);
+      if (!row) throw new Error(`redraft: unknown draft '${draftId}'`);
+      if (row.status === 'delivery_unknown') {
+        // Deliberately NOT re-draftable. executeSend's fail() comment
+        // (service.ts:370-378) and routes.ts:126-132 both exist to stop the
+        // app from inviting a duplicate send on a message that MAY have gone
+        // out. This refusal is that policy at the service boundary.
+        throw new Error(
+          `this message may already have been sent — its status is ` +
+            `'delivery_unknown'. Check your Sent folder before creating a ` +
+            `new draft.`,
+        );
+      }
+      if (
+        row.status !== 'failed' &&
+        row.status !== 'expired' &&
+        row.status !== 'discarded'
+      ) {
+        throw new Error(
+          `only failed, expired, or discarded drafts can be re-drafted — ` +
+            `this one is '${row.status}'`,
+        );
+      }
+      // Account-gone and unsupported-source refusals, identical to
+      // draft_reply time (service.ts:191-201), read live off the lookup.
+      const account = await accountFor(row.accountId as string);
+      // Deliberately NO re-resolution: outboundRef / to / cc / threading are
+      // copied verbatim off the frozen row. Re-running the resolver could
+      // surface the "this document has no reply target" refusal
+      // (service.ts:494-498) for a row that already HAS a valid target, and
+      // could silently re-target a reply if the thread moved.
+      // create() itself runs expireOverdue() and enforces
+      // OUTBOX_PENDING_CAP (outbox.ts:171-217) — no extra gate needed here.
+      return deps.store.outbox.create({
+        accountId: row.accountId,
+        kind: row.kind,
+        replyToDocumentId: row.replyToDocumentId,
+        outboundRef: row.outboundRef,
+        recipientDisplay: row.recipientDisplay,
+        to: row.to,
+        cc: row.cc,
+        subject: row.subject,
+        bodyMarkdown: row.bodyMarkdown,
+        threading: row.threading,
+        // The account's effective mode — per-account override, else the
+        // global default. NOT the old row's frozen mode, which is history.
+        // Note this can resolve to 'chat' from a GLOBAL setting flipped
+        // since: the fresh row then carries no confirm URL of its own, and
+        // the panel's own link falls through to the FULL review page
+        // (routes.ts:176-187). Intended, and strictly stronger.
+        confirmMode: modeFor(account),
+        createdVia: 'panel',
+        expiresAt: expiresAt(),
+      });
     },
   };
 }

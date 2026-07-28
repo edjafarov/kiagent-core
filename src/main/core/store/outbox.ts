@@ -31,7 +31,7 @@ export interface OutboxDraftInput {
   bodyMarkdown: string;
   threading?: Record<string, unknown> | null;
   confirmMode: ConfirmMode;
-  createdVia: 'mcp-local' | 'mcp-remote';
+  createdVia: 'mcp-local' | 'mcp-remote' | 'panel';
   expiresAt: string;
 }
 
@@ -87,7 +87,7 @@ interface OutboxRowSql {
   status: OutboxStatus;
   error: string | null;
   external_message_id: string | null;
-  created_via: 'mcp-local' | 'mcp-remote';
+  created_via: 'mcp-local' | 'mcp-remote' | 'panel';
   created_at: string;
   sent_at: string | null;
   expires_at: string;

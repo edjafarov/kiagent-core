@@ -431,7 +431,7 @@ export interface OutboxRow {
   status: OutboxStatus;
   error: string | null;
   externalMessageId: string | null;
-  createdVia: 'mcp-local' | 'mcp-remote';
+  createdVia: 'mcp-local' | 'mcp-remote' | 'panel';
   createdAt: string;
   sentAt: string | null;
   expiresAt: string;

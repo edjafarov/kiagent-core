@@ -954,6 +954,110 @@ describe('outbound service — drafts', () => {
     expect(slackSend).not.toHaveBeenCalled();
   });
 
+  it('confirmUrlFor mints a link for a pending draft and stops at terminal rows', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+    const url = await service.confirmUrlFor(r.draft_id);
+    expect(url).toContain('/outbox/confirm/');
+    await service.cancelByToken(tokenOf(r));
+    expect(await service.confirmUrlFor(r.draft_id)).toBeNull();
+    expect(await service.confirmUrlFor('nope')).toBeNull();
+  });
+
+  it('confirmUrlFor re-mints for a provably-not-sent failure (Try again)', async () => {
+    // `smtp transient 421: …` matches SMTP_TRANSIENT (error-copy.ts:108-117)
+    // → kind 'transient', canRetry true. The stored summary re-shapes to the
+    // same verdict (the module is a fixed point), which is what the panel and
+    // failedPage both read.
+    sendMock.mockRejectedValueOnce(
+      new Error('smtp transient 421: mailbox busy'),
+    );
+    const r = await service.draftReply({ documentId: docId, body: 'Retry me' });
+    await service.confirmByToken(tokenOf(r));
+    expect((await store.outbox.get(r.draft_id))?.status).toBe('failed');
+
+    const url = await service.confirmUrlFor(r.draft_id);
+    expect(url).toContain('/outbox/confirm/');
+    // …and that URL really is a live retry: confirming it sends.
+    const outcome = await service.confirmByToken(
+      url!.split('/outbox/confirm/')[1],
+    );
+    expect(outcome.kind).toBe('sent');
+  });
+
+  it('confirmUrlFor returns null for an ambiguous failure', async () => {
+    // No transient/auth/unsupported marker → kind 'unknown', canRetry false:
+    // the message MAY have gone out, so no retry affordance.
+    sendMock.mockRejectedValueOnce(new Error('socket hang up'));
+    const r = await service.draftReply({
+      documentId: docId,
+      body: 'Uncertain',
+    });
+    await service.confirmByToken(tokenOf(r));
+    expect(await service.confirmUrlFor(r.draft_id)).toBeNull();
+  });
+
+  it('redraft duplicates a failed row verbatim under the current mode', async () => {
+    sendMock.mockRejectedValueOnce(
+      new Error('smtp transient 421: mailbox busy'),
+    );
+    const r = await service.draftReply({ documentId: docId, body: 'Original' });
+    await service.confirmByToken(tokenOf(r));
+
+    const old = await store.outbox.get(r.draft_id);
+    const fresh = await service.redraft(r.draft_id);
+    expect(fresh.id).not.toBe(r.draft_id);
+    expect(fresh.status).toBe('draft');
+    expect(fresh.createdVia).toBe('panel');
+    expect(fresh.accountId).toBe(old!.accountId);
+    expect(fresh.bodyMarkdown).toBe('Original');
+    expect(fresh.recipientDisplay).toBe(r.recipient_display);
+    expect(fresh.to).toEqual(old!.to);
+    expect(fresh.cc).toEqual(old!.cc);
+    expect(fresh.subject).toBe(old!.subject);
+    expect(fresh.threading).toEqual(old!.threading);
+    expect(fresh.replyToDocumentId).toBe(old!.replyToDocumentId);
+    // The old row is history, never scrubbed.
+    expect((await store.outbox.get(r.draft_id))?.status).toBe('failed');
+  });
+
+  it('redraft works on a discarded row', async () => {
+    const r = await service.draftReply({
+      documentId: docId,
+      body: 'Cancelled',
+    });
+    await service.cancelByToken(tokenOf(r));
+    const fresh = await service.redraft(r.draft_id);
+    expect(fresh.status).toBe('draft');
+    expect(fresh.bodyMarkdown).toBe('Cancelled');
+  });
+
+  it('redraft refuses pending and sent rows', async () => {
+    const pending = await service.draftReply({ documentId: docId, body: 'a' });
+    await expect(service.redraft(pending.draft_id)).rejects.toThrow(/'draft'/);
+
+    const ok = await service.draftReply({ documentId: docId, body: 'b' });
+    await service.confirmByToken(tokenOf(ok));
+    await expect(service.redraft(ok.draft_id)).rejects.toThrow(/'sent'/);
+  });
+
+  it('redraft refuses delivery_unknown rows — check Sent first', async () => {
+    const r = await service.draftReply({
+      documentId: docId,
+      body: 'maybe sent',
+    });
+    // Simulate a process death mid-send WITHOUT touching either clock:
+    // a row parked in 'sending' is what the boot sweep converts.
+    await store.outbox.transition(r.draft_id, ['draft'], 'sending');
+    await store.outbox.recoverOrphanedSending();
+    expect((await store.outbox.get(r.draft_id))?.status).toBe(
+      'delivery_unknown',
+    );
+
+    await expect(service.redraft(r.draft_id)).rejects.toThrow(
+      /delivery_unknown[\s\S]*Sent folder/,
+    );
+  });
+
   describe('remote transport', () => {
     const REMOTE = 'https://ig6uj5qu.localkiagent.com';
 

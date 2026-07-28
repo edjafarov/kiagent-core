@@ -14,6 +14,7 @@ import type {
   LogRecord,
   McpActivityRecord,
   OAuthSourceBinding,
+  OutboxStatus,
   ProviderStatus,
   RecentExtraction,
   Seq,
@@ -157,6 +158,37 @@ export interface UpdateState {
   reason?: string;
 }
 
+/** One row of the in-app Outbox history panel (spec §10).
+ *
+ *  The error fields are a MAIN-SIDE projection: `error-copy.ts` lives under
+ *  `src/main/` and the renderer must not import across that layer, so the
+ *  IPC mapper runs `shapeOutboundError` and ships the verdict. */
+export interface OutboxPanelRow {
+  draftId: string;
+  status: OutboxStatus;
+  kind: 'reply' | 'new';
+  /** The account's `identifier`; '(removed)' if it vanished. */
+  accountLabel: string;
+  recipientDisplay: string;
+  subject: string | null;
+  /** First 140 chars of the body, whitespace-collapsed to one line. */
+  bodyPreview: string;
+  /** Human sentence for the row: `shaped.message` for 'failed', the stored
+   *  sentence verbatim for 'delivery_unknown', null for every other status
+   *  (a retried failed→sent row keeps its stale error in the DB by design). */
+  error: string | null;
+  /** `shaped.summary` — the technical one-liner, rendered behind a
+   *  <details>Technical details</details>. Null unless status is 'failed'. */
+  errorDetail: string | null;
+  /** `shaped.canRetry` — gates the "Try again" action (re-confirm the SAME
+   *  row; provably-not-sent failures only). */
+  canRetry: boolean;
+  /** The message MAY have gone out — gates OFF one-click "Draft again". */
+  deliveryUncertain: boolean;
+  createdAt: string;
+  sentAt: string | null;
+}
+
 /** invoke(channel, payload) → response. */
 export interface Invokes {
   'app:get-state': { req: void; res: AppStatePush };
@@ -255,6 +287,16 @@ export interface Invokes {
   };
   'logs:export': { req: void; res: string };
   'mcp-activity:recent': { req: void; res: McpActivityRecord[] };
+
+  /** Outbox history panel: recent outbound rows, newest first. */
+  'outbox:list': { req: { limit?: number }; res: OutboxPanelRow[] };
+  /** Discard a pending draft (no-op if it left 'draft' meanwhile). */
+  'outbox:discard': { req: { draftId: string }; res: void };
+  /** Duplicate a terminal row into a fresh draft and open its confirm page. */
+  'outbox:redraft': { req: { draftId: string }; res: { draftId: string } };
+  /** Open the confirm page for a still-actionable row in the default
+   *  browser (pending drafts, and retryable failures → "Try again"). */
+  'outbox:open-confirm': { req: { draftId: string }; res: void };
 
   'mcp:info': { req: void; res: McpInfo };
   'mcp:connect-client': { req: { id: string }; res: void };
@@ -396,6 +438,10 @@ export const INVOKE_CHANNELS = [
   'logs:recent',
   'logs:export',
   'mcp-activity:recent',
+  'outbox:list',
+  'outbox:discard',
+  'outbox:redraft',
+  'outbox:open-confirm',
   'mcp:info',
   'mcp:connect-client',
   'mcp:disconnect-client',

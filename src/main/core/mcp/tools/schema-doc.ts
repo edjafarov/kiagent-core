@@ -297,7 +297,9 @@ TEXT.`,
         {
           name: 'created_via',
           type: 'TEXT',
-          notes: "'mcp-local' or 'mcp-remote' — which MCP plane created it.",
+          notes:
+            "'mcp-local' or 'mcp-remote' — which MCP plane created it — or " +
+            "'panel' when the user re-drafted it from the in-app Outbox screen.",
         },
         {
           name: 'created_at',
