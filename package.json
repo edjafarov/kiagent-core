@@ -1,6 +1,6 @@
 {
   "name": "kiagent-core",
-  "version": "0.57.0",
+  "version": "0.58.0",
   "description": "Your knowledge, indexed locally — a desktop app that ingests your personal data on your own machine and serves it to AI assistants over MCP",
   "keywords": [
     "mcp",
