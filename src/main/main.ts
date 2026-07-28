@@ -88,30 +88,10 @@ let trayMenu: TrayMenuController | null = null;
 if (process.env.KIAGENT_USER_DATA) {
   app.setPath('userData', process.env.KIAGENT_USER_DATA);
 } else if (!app.isPackaged) {
-  // Dev runs under the boilerplate app name, which lands userData in
-  // '.../electron-react-boilerplate' — a dir nobody associates with this
-  // app (resets aimed at "the KIAgent folder" miss it entirely). Pin a
-  // dedicated dev dir, distinct from the packaged app's 'KIAgent' so a
-  // real install and a dev tree never share state. One-time migration
-  // keeps existing dev pairings/extensions; the rename only fires when
-  // the legacy dir provably holds OUR data and the new dir doesn't exist.
-  const devDir = path.join(app.getPath('appData'), 'KIAgent-dev');
-  const legacy = path.join(
-    app.getPath('appData'),
-    'electron-react-boilerplate',
-  );
-  if (
-    !fs.existsSync(devDir) &&
-    fs.existsSync(path.join(legacy, 'data', 'kiagent.db'))
-  ) {
-    try {
-      fs.renameSync(legacy, devDir);
-    } catch {
-      // Locked by a running instance or cross-device: fall through to a
-      // fresh dir; the legacy data stays intact where it was.
-    }
-  }
-  app.setPath('userData', devDir);
+  // Pin a dedicated dev dir (the default would be the package.json app
+  // name's dir), distinct from the packaged app's 'KIAgent' so a real
+  // install and a dev tree never share state.
+  app.setPath('userData', path.join(app.getPath('appData'), 'KIAgent-dev'));
 }
 
 // Product identity (spec 2026-07-07 §3.1.4): OSS ships no product.json and
