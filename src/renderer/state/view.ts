@@ -11,6 +11,7 @@ export type View =
   | 'sources'
   | 'connection'
   | 'logs'
+  | 'outbox'
   | 'marketplace'
   | 'settings';
 

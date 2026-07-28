@@ -3,6 +3,7 @@ import type { View, ViewParams } from '@renderer/state/view';
 import { Sources } from '@renderer/screens/Sources';
 import { Connection } from '@renderer/screens/Connection';
 import { Logs } from '@renderer/screens/Logs';
+import { Outbox } from '@renderer/screens/Outbox';
 import { Marketplace } from '@renderer/screens/Marketplace';
 import { Settings } from '@renderer/screens/Settings';
 
@@ -37,6 +38,7 @@ export function getDefaultScreens(): ScreenDefinitions {
     // Logs draws its own dedicated top bar (back button, wordmark, live
     // pill) instead of the shared <TopBar/> — see ui-inventory.md §2.5.
     logs: { factory: () => <Logs />, usesTopBar: false },
+    outbox: { factory: () => <Outbox />, usesTopBar: true },
     marketplace: { factory: () => <Marketplace />, usesTopBar: true },
     settings: { factory: () => <Settings />, usesTopBar: true },
   };

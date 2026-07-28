@@ -39,6 +39,7 @@ export function TopBar(): React.ReactElement {
   const mcpOnline = mcpPort != null;
   const isSourcesActive = view === 'sources';
   const isConnectionActive = view === 'connection';
+  const isOutboxActive = view === 'outbox';
   const isMarketplaceActive = view === 'marketplace';
 
   return (
@@ -60,6 +61,12 @@ export function TopBar(): React.ReactElement {
         icon="database"
         active={isSourcesActive}
         onClick={() => navigate('sources')}
+      />
+      <NavTab
+        label="Outbox"
+        icon="mail"
+        active={isOutboxActive}
+        onClick={() => navigate('outbox')}
       />
       <NavTab
         label="Marketplace"

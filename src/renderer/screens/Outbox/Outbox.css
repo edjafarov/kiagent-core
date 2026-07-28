@@ -1,0 +1,62 @@
+/* Outbox history list — matches the density of the Connection lists.
+   Corners stay SQUARE: tokens.css:96-100 sets every radius token to 0
+   ("Radius — SHARP throughout. Do not soften."). No border-radius here. */
+.outbox-screen {
+  padding: 16px 20px;
+  max-width: 860px;
+}
+.outbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.outbox-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+}
+.outbox-main {
+  flex: 1;
+  min-width: 0;
+}
+.outbox-recipient {
+  font-weight: 600;
+}
+.outbox-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.outbox-error {
+  color: var(--error-solid);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.outbox-detail {
+  margin-top: 2px;
+  color: var(--text-secondary);
+}
+.outbox-detail summary {
+  cursor: pointer;
+}
+.outbox-when {
+  white-space: nowrap;
+}
+.outbox-actions {
+  display: flex;
+  gap: 6px;
+}
+.outbox-empty {
+  margin-top: 12px;
+}
+/* Load failure — deliberately distinct from .outbox-empty: an unreadable
+   outbox must never be reported as an empty one. */
+.outbox-load-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
