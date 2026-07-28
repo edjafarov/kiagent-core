@@ -193,13 +193,13 @@ describe('mcp built-in tools', () => {
     );
   });
 
-  it('get_related: attachments/children return the thread messages', async () => {
+  it('get_related: children returns the thread messages', async () => {
     const thread = (await call('search', {
       type: 'email.thread',
     })) as SearchHit[];
     const related = (await call('get_related', {
       document_id: thread[0].id,
-      relation: 'attachments',
+      relation: 'children',
     })) as Document[];
     expect(related).toHaveLength(2);
   });

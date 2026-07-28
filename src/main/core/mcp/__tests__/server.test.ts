@@ -244,7 +244,7 @@ describe('startMcp (HTTP transport)', () => {
     // names the tools it teaches, not just that something non-empty came back.
     const instructions = client.getInstructions();
     expect(instructions).toContain('digital_memory_info');
-    expect(instructions).toContain('get_related(thread_messages)');
+    expect(instructions).toContain('get_related(children)');
     // Mode C is only discoverable from tools/list unless the handshake names
     // it — pin that send_draft is taught here, with its gating condition.
     expect(instructions).toContain('send_draft');

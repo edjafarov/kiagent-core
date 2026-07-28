@@ -296,10 +296,10 @@ describe('summarizeCall', () => {
   it('get_related names the relation', () => {
     const out = summarizeCall(
       'get_related',
-      { document_id: 'd', relation: 'attachments' },
+      { document_id: 'd', relation: 'children' },
       [{ title: 'invoice.pdf' }],
     );
-    expect(out.summary).toBe('related "attachments" → 1 documents');
+    expect(out.summary).toBe('related "children" → 1 documents');
     expect(out.detail).toEqual(['invoice.pdf']);
   });
 

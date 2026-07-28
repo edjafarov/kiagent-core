@@ -43,9 +43,8 @@ window you applied.
 
 Email threads carry their LATEST message's date as created_at (also
 metadata.lastMessageAt), so recency ordering reflects activity.
-Expand a thread's individual messages with
-get_related(thread_messages); its attachments with
-get_related(attachments).
+Expand a thread's individual messages — or any document's
+attachments — with get_related(children).
 
 Common patterns:
   find / what about X      → search
@@ -53,8 +52,8 @@ Common patterns:
   what's in your memory    → digital_memory_info
   how many docs per source → count
   full doc body            → search → get
-  expand an email thread   → get → get_related(thread_messages)
-  email attachments        → get → get_related(attachments)
+  expand an email thread   → get → get_related(children)
+  email attachments        → get → get_related(children)
 
 Batch / parallel queries:
   search and get both accept batched input so you can run N queries
