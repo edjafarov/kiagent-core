@@ -50,7 +50,11 @@ import { registerUpdaterIpc } from './updater/ipc';
 import { createExtensionPlatform } from './platform/extension-platform';
 import type { ExtensionPlatform } from './platform/extension-platform';
 import { utilityProcessTransport } from './platform/transport';
-import { createOutboundService } from './outbound/service';
+import {
+  createOutboundService,
+  type OutboundService,
+} from './outbound/service';
+import { registerOutboundIpc } from './outbound/ipc';
 import { createOutboundRoutes } from './outbound/routes';
 import { buildBundledSenders, composeSenders } from './outbound/senders';
 import { loadProductConfig } from './product';
@@ -246,6 +250,7 @@ function registerIpc(
   extensions: ExtensionPlatform,
   catalog: MarketplaceCatalog,
   broker: ConnectBroker,
+  outbound: OutboundService,
 ): void {
   const handle = <C extends keyof Invokes>(
     channel: C,
@@ -339,14 +344,20 @@ function registerIpc(
   handle('accounts:update-config', ({ accountId, config }) =>
     p.engine.updateConfig(accountId, config),
   );
-  handle('accounts:update-outbound', async ({ accountId, outbound }) => {
-    const account = await p.store.account(accountId);
-    if (!account) return;
-    // Store-direct on purpose: engine.updateConfig would restart a running
-    // pull and grant a reconcile allowance — outbound settings are invisible
-    // to sources, so neither is wanted.
-    await p.store.setAccountConfig(accountId, { ...account.config, outbound });
-  });
+  handle(
+    'accounts:update-outbound',
+    async ({ accountId, outbound: outboundCfg }) => {
+      const account = await p.store.account(accountId);
+      if (!account) return;
+      // Store-direct on purpose: engine.updateConfig would restart a running
+      // pull and grant a reconcile allowance — outbound settings are invisible
+      // to sources, so neither is wanted.
+      await p.store.setAccountConfig(accountId, {
+        ...account.config,
+        outbound: outboundCfg,
+      });
+    },
+  );
 
   handle('search:query', (req) => p.store.read.search(req ?? {}));
   handle('docs:get', ({ id }) => p.store.read.document(id));
@@ -554,6 +565,16 @@ function registerIpc(
     extensions.setEnabled(id, enabled),
   );
   handle('extension:grant-consent', ({ id }) => extensions.grantConsent(id));
+
+  // Outbox history panel (spec §10). `handle` is the local generic helper
+  // (main.ts:250-257); the `as never` double-cast is the same bridge the
+  // updater delegate uses at main.ts:520-524.
+  registerOutboundIpc({
+    handle: (channel, fn) => handle(channel as never, fn as never),
+    service: outbound,
+    store: p.store,
+    openExternal: (url) => shell.openExternal(url),
+  });
 }
 
 app
@@ -869,6 +890,7 @@ app
       extensionsPlatform,
       catalog,
       broker,
+      outbound,
     );
     p.engine.project(projection, (state: AppState, seq: Seq) => {
       rev += 1;
