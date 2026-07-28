@@ -37,11 +37,11 @@ describe('resolveGmailReply', () => {
     expect(r.warnings).toEqual([]);
   });
 
-  it('reply_all on an un-enriched doc falls back with a warning', () => {
+  it('reply_all on a doc without recipient lists targets just the sender', () => {
     const r = resolveGmailReply(doc(), SELF, true);
     expect(r.to).toEqual(['Bob <bob@x.com>']);
     expect(r.cc).toEqual([]);
-    expect(r.warnings[0]).toMatch(/fell back to reply-to-sender/);
+    expect(r.warnings).toEqual([]);
   });
 
   it('reply_all uses enriched per-message recipients minus self', () => {

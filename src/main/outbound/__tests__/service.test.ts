@@ -250,13 +250,14 @@ describe('outbound service — drafts', () => {
           markdown: 'body',
           metadata: {
             gmailThreadId: 'gt2',
-            // Un-enriched (no per-message to/cc) — reply_all must fall back
-            // to reply-to-sender with a warning.
+            // Every message is self-sent — replying targets the last
+            // message's own recipients, with the resolver's warning.
             messages: [
               { id: '<gm3@x>', from: 'me@gmail.com', date: 'D', snippet: 's' },
               {
                 id: '<gm4@x>',
-                from: 'Bob <bob@example.com>',
+                from: 'me@gmail.com',
+                to: ['Bob <bob@example.com>'],
                 date: 'D',
                 snippet: 's',
               },
@@ -276,9 +277,9 @@ describe('outbound service — drafts', () => {
     const r = await service.draftReply({
       documentId: gmailDocId,
       body: 'Thanks!',
-      replyAll: true,
     });
-    expect(r.warnings[0]).toMatch(/fell back to reply-to-sender/);
+    expect(r.recipient_display).toBe('Bob <bob@example.com>');
+    expect(r.warnings[0]).toMatch(/you sent the last message/);
   });
 
   it('draftMessage validates recipients and account source', async () => {
@@ -846,7 +847,7 @@ describe('outbound service — drafts', () => {
     slackSend: jest.Mock;
     slackAccountId: AccountId;
     hookDocId: string; // written with metadata.outbound
-    preHookDocId: string; // indexed before the source wrote one
+    preHookDocId: string; // no metadata.outbound written for it
   }> => {
     const slackSend: jest.Mock = jest.fn(async () => ({
       externalMessageId: '1719.42',

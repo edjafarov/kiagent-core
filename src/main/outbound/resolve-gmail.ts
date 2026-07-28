@@ -2,13 +2,8 @@
  * Grounded gmail reply resolution (spec §1, §4): recipients and threading
  * come ONLY from the thread document's stored metadata — the model supplies
  * no address, and a gap is an explicit error or warning, never a guess.
- *
- * Handles both metadata generations written by sources/gmail/to-document.ts:
- * the legacy shape has only `{ from, id, date, snippet }` per message, while
- * documents synced since the enrichment also carry per-message `to`/`cc` and
- * the raw `replyTo` header. This resolver treats the enriched shape as an
- * upgrade it detects per-call (`Array.isArray(last.to)`), never assumes it —
- * docs stored before the change keep their old behavior until a re-sync.
+ * Per-message `to`/`cc` and the raw `replyTo` header come from
+ * sources/gmail/to-document.ts; absent lists are treated as empty.
  */
 import type { Document } from '@shared/contracts';
 
@@ -121,9 +116,8 @@ export function resolveGmailReply(
 
   const lastIsSelf =
     typeof last.from === 'string' && self.has(addrOf(last.from));
-  const lastEnriched = Array.isArray(last.to);
 
-  if (replyAll && lastEnriched) {
+  if (replyAll) {
     const primary = replyTarget(last);
     const candidates = [
       ...(primary !== null ? [primary] : []),
@@ -132,11 +126,11 @@ export function resolveGmailReply(
     to = minusSelf(candidates, self);
     cc = minusSelf(last.cc ?? [], self);
   } else {
-    // Plain reply, or reply_all falling back on an un-enriched doc: target
-    // the last message whose sender is not self. Self-detection stays on
-    // `From` (a Reply-To never makes a message yours), but the address the
-    // reply is ADDRESSED to comes from that same target message — which is
-    // not necessarily `last`, e.g. when you sent the newest message.
+    // Plain reply: target the last message whose sender is not self.
+    // Self-detection stays on `From` (a Reply-To never makes a message
+    // yours), but the address the reply is ADDRESSED to comes from that
+    // same target message — which is not necessarily `last`, e.g. when you
+    // sent the newest message.
     let target: GmailThreadMessage | null = null;
     let targetFrom: string | null = null;
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -154,7 +148,7 @@ export function resolveGmailReply(
       // back to From, which the loop already proved is not self.
       const primary = replyTarget(target) ?? targetFrom;
       to = self.has(addrOf(primary)) ? [targetFrom] : [primary];
-    } else if (lastIsSelf && lastEnriched) {
+    } else if (lastIsSelf) {
       to = minusSelf(last.to ?? [], self);
       if (to.length > 0) {
         warnings.push(
@@ -162,13 +156,6 @@ export function resolveGmailReply(
             'targeting its original recipients',
         );
       }
-    }
-    if (replyAll && !lastEnriched) {
-      warnings.push(
-        'reply_all fell back to reply-to-sender: this thread was synced ' +
-          'before per-message recipients were stored; it will carry them ' +
-          'after its next re-sync',
-      );
     }
   }
 

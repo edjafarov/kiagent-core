@@ -500,17 +500,15 @@ export function createOutboundService(deps: {
         });
       } else if (account.source !== 'imap') {
         // A document from an extension-sender source that carries no
-        // metadata.outbound: indexed before its source started writing the
-        // universality hook. Falling through to the imap resolver would call
-        // selfAddressesFor() and surface identity.ts's COMPOSE refusal
-        // ('compose is email-only') on a REPLY — true, and useless. Pre-hook
-        // documents never gain a ref in place either (latched backfill, a
-        // short delta window, no reconcile), so the copy has to name the two
-        // things that actually produce a replyable document.
+        // metadata.outbound: its source never wrote a reply ref for it (not
+        // every document type is replyable). Falling through to the imap
+        // resolver would call selfAddressesFor() and surface identity.ts's
+        // COMPOSE refusal ('compose is email-only') on a REPLY — true, and
+        // useless — so name the real gap instead.
         throw new Error(
-          `this document has no reply target — it was indexed before its source ` +
-            `gained reply support; it gains one when its channel next syncs new ` +
-            `activity, or after a full account re-sync`,
+          `this document has no reply target — its source did not record ` +
+            `one for it; only documents synced with reply support can be ` +
+            `replied to`,
         );
       } else {
         const r = resolveImapReply(

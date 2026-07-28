@@ -3,8 +3,8 @@
  * ONLY from stored document metadata — the model supplies no address, and a
  * gap is an explicit error or warning, never a guess.
  *
- * Handles both metadata generations: pre-enrichment docs have only
- * { from, to, messageId }; enriched docs add { cc, replyTo, references }.
+ * Metadata carries { from, to, messageId, cc, replyTo, references }; absent
+ * lists are treated as empty.
  * The Sent mailbox is synced too, so `from` may be the user — self-sent
  * docs reply to their stored recipients, never back to the user.
  */
