@@ -122,7 +122,7 @@
   },
   "dependencies": {
     "@chainsafe/libp2p-yamux": "^7.0.4",
-    "@electron/notarize": "^3.0.0",
+    "@electron/notarize": "^3.1.0",
     "@hyzyla/pdfium": "^2.1.13",
     "@iarna/toml": "^2.2.5",
     "@modelcontextprotocol/sdk": "^1.29.0",
