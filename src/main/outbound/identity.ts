@@ -22,6 +22,20 @@ interface OutboundAccountConfig {
 }
 
 export function senderAddressFor(account: Account): string {
+  // Compose is email-only. A source that sends through an extension Sender
+  // (slack, …) can still REPLY — its target is the opaque
+  // `metadata.outbound.ref` the source itself wrote, never an address — but
+  // it has no From address to originate a new message from, and no account
+  // configuration could ever produce one. Say that, rather than falling
+  // through to the config-shaped advice below, which would send the user
+  // hunting for an Outbound setting that cannot help.
+  // Safe for the bundled senders that call this (smtp.ts, gmail.ts): each
+  // only ever runs for its own source.
+  if (account.source !== 'imap' && account.source !== 'gmail') {
+    throw new Error(
+      `compose is email-only — '${account.source}' accounts are reply-only`,
+    );
+  }
   if (account.source === 'gmail') return account.identifier;
   const cfg = account.config as OutboundAccountConfig;
   const explicit = cfg.outbound?.fromAddress?.trim();

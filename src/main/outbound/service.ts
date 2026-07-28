@@ -24,6 +24,9 @@ import { isShapedSummary, shapeOutboundError } from './error-copy';
 import { EMAIL_RX, selfAddressesFor, senderAddressFor } from './identity';
 import { resolveImapReply } from './resolve';
 import { resolveGmailReply } from './resolve-gmail';
+// Type-only on purpose: the bundled senders (and their nodemailer/imapflow
+// dependencies) must not be pulled into this module's runtime graph.
+import type { SenderLookup } from './senders';
 import { signConfirmToken, verifyConfirmToken } from './tokens';
 
 export const CONFIRM_TTL_MS: Record<ConfirmMode, number> = {
@@ -121,10 +124,22 @@ export interface OutboundService extends OutboundToolApi {
 export function createOutboundService(deps: {
   store: CoreStore;
   prefs: Prefs;
-  senders: Map<string, Sender>;
+  /** Either the bare bundled Map or an already-composed lookup (bundled +
+   *  extension senders). Normalized to a lookup immediately below, so every
+   *  existing caller keeps passing a Map unchanged. */
+  senders: Map<string, Sender> | SenderLookup;
   logSink: LogSink;
   nowMs?: () => number; // injectable clock for tests; default Date.now
 }): OutboundService {
+  // Bound to a local first: property narrowing on `deps.senders` would not
+  // survive into the closures below. Lazy by construction — the Map is read
+  // on every call, never copied — so a sender registered after the service
+  // was built is still visible to it.
+  const { senders } = deps;
+  const lookup: SenderLookup =
+    senders instanceof Map
+      ? { get: (id) => senders.get(id), ids: () => [...senders.keys()] }
+      : senders;
   // Token expiry (CONFIRM_TTL_MS) and draft-row expiresAt (DRAFT_TTL_MS) are
   // both minted off THIS clock. The store's own expireOverdue() sweep reads
   // `expires_at` against its OWN wall clock (outbox.ts's `deps.now()`) —
@@ -176,10 +191,10 @@ export function createOutboundService(deps: {
   const accountFor = async (id: string): Promise<Account> => {
     const account = await deps.store.account(id as AccountId);
     if (!account) throw new Error(`outbound: unknown account '${id}'`);
-    if (!deps.senders.has(account.source)) {
+    if (!lookup.get(account.source)) {
       throw new Error(
         `sending from '${account.source}' accounts is not supported yet — ` +
-          `supported: ${[...deps.senders.keys()].join(', ')}`,
+          `supported: ${lookup.ids().join(', ')}`,
       );
     }
     return account;
@@ -324,11 +339,11 @@ export function createOutboundService(deps: {
       // is registered for its source — the re-check below is defense in
       // depth (never observed to trip), not a second independent lookup.
       const account = await accountFor(row.accountId as string);
-      const found = deps.senders.get(account.source);
+      const found = lookup.get(account.source);
       if (!found) {
         throw new Error(
           `sending from '${account.source}' accounts is not supported yet — ` +
-            `supported: ${[...deps.senders.keys()].join(', ')}`,
+            `supported: ${lookup.ids().join(', ')}`,
         );
       }
       sender = found;
@@ -467,6 +482,20 @@ export function createOutboundService(deps: {
           createdVia: createdViaNow(),
           expiresAt: expiresAt(),
         });
+      } else if (account.source !== 'imap') {
+        // A document from an extension-sender source that carries no
+        // metadata.outbound: indexed before its source started writing the
+        // universality hook. Falling through to the imap resolver would call
+        // selfAddressesFor() and surface identity.ts's COMPOSE refusal
+        // ('compose is email-only') on a REPLY — true, and useless. Pre-hook
+        // documents never gain a ref in place either (latched backfill, a
+        // short delta window, no reconcile), so the copy has to name the two
+        // things that actually produce a replyable document.
+        throw new Error(
+          `this document has no reply target — it was indexed before its source ` +
+            `gained reply support; it gains one when its channel next syncs new ` +
+            `activity, or after a full account re-sync`,
+        );
       } else {
         const r = resolveImapReply(
           doc,

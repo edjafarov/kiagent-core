@@ -11,6 +11,7 @@ import type {
 
 import { openDb } from '../../db/app-db';
 import { openStore, type CoreStore } from '../../core/store/store';
+import { composeSenders } from '../senders';
 import {
   CONFIRM_TTL_MS,
   createOutboundService,
@@ -835,6 +836,124 @@ describe('outbound service — drafts', () => {
     expect(item?.confirm_url).toContain('/outbox/confirm/');
   });
 
+  // ——— extension senders (spec §6 universality hook) ———
+  // Everything below hands the service a LOOKUP literal, never a Map: that
+  // is the shape bundled + extension senders compose into, and the service
+  // must accept it unchanged.
+
+  const slackSetup = async (): Promise<{
+    svc: OutboundService;
+    slackSend: jest.Mock;
+    slackAccountId: AccountId;
+    hookDocId: string; // written with metadata.outbound
+    preHookDocId: string; // indexed before the source wrote one
+  }> => {
+    const slackSend: jest.Mock = jest.fn(async () => ({
+      externalMessageId: '1719.42',
+    }));
+    const lookup = {
+      get: (id: string) => (id === 'slack' ? { send: slackSend } : undefined),
+      ids: () => ['slack'],
+    };
+    const svc = createOutboundService({
+      store,
+      prefs: fakePrefs(),
+      senders: lookup,
+      logSink,
+    });
+    svc.setBaseUrl('http://127.0.0.1:7421');
+    const slackAccount = await store.createAccount({
+      source: 'slack',
+      identifier: 'T123:me',
+      config: {},
+    });
+    await store.commit({
+      account: slackAccount.id,
+      documents: [
+        {
+          externalId: 'C9:1719',
+          type: 'slack.thread',
+          title: 'thread',
+          markdown: 'hi',
+          metadata: {
+            outbound: {
+              ref: { channel: 'C9', thread_ts: '1719.00' },
+              display: '#general (thread)',
+            },
+          },
+          createdAt: '2026-07-01T00:00:00Z',
+        },
+        {
+          // A pre-hook document: indexed by a build whose Slack source did
+          // not write metadata.outbound yet. These never self-heal in place.
+          externalId: 'C9:1600',
+          type: 'slack.legacy',
+          title: 'old thread',
+          markdown: 'hi',
+          metadata: {},
+          createdAt: '2026-07-01T00:00:00Z',
+        },
+      ],
+      cursor: null,
+    });
+    const idOf = async (type: string): Promise<string> => {
+      const hits = await store.read.search({
+        account: slackAccount.id,
+        type,
+      });
+      return hits[0].id as string;
+    };
+    return {
+      svc,
+      slackSend,
+      slackAccountId: slackAccount.id,
+      hookDocId: await idOf('slack.thread'),
+      preHookDocId: await idOf('slack.legacy'),
+    };
+  };
+
+  it('drafts replies for extension-sender sources via metadata.outbound', async () => {
+    const { svc, slackSend, hookDocId } = await slackSetup();
+    const r = await svc.draftReply({ documentId: hookDocId, body: 'On it!' });
+    expect(r.recipient_display).toBe('#general (thread)');
+    const out = await svc.confirmByToken(tokenOf(r));
+    expect(out.kind).toBe('sent');
+    // The opaque ref round-trips to the source's own Sender verbatim —
+    // still an object, not the JSON string the outbox column stores.
+    expect(slackSend.mock.calls[0][0].outboundRef).toEqual({
+      channel: 'C9',
+      thread_ts: '1719.00',
+    });
+  });
+
+  it('draft_message refuses non-email sources honestly', async () => {
+    const { svc, slackAccountId } = await slackSetup();
+    await expect(
+      svc.draftMessage({
+        accountId: slackAccountId,
+        to: ['x@y.com'],
+        subject: 's',
+        body: 'b',
+      }),
+    ).rejects.toThrow(/email-only.*reply-only/);
+  });
+
+  it('a pre-hook document rejects with reply copy, never the compose copy', async () => {
+    const { svc, slackSend, preHookDocId } = await slackSetup();
+    let caught: Error | undefined;
+    try {
+      await svc.draftReply({ documentId: preHookDocId, body: 'x' });
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught?.message).toMatch(/no reply target/);
+    // The compose refusal is true but useless on a reply — and the imap
+    // resolver's email-shaped copy is worse still.
+    expect(caught?.message).not.toMatch(/email-only/);
+    expect(caught?.message).not.toMatch(/From address/);
+    expect(slackSend).not.toHaveBeenCalled();
+  });
+
   describe('remote transport', () => {
     const REMOTE = 'https://ig6uj5qu.localkiagent.com';
 
@@ -881,5 +1000,26 @@ describe('outbound service — drafts', () => {
         runWithTransport('remote', () => service.listOutbox({})),
       ).rejects.toThrow(/remote access fully set up/i);
     });
+  });
+});
+
+describe('composeSenders', () => {
+  it('bundled senders shadow extension senders on a colliding source id', () => {
+    const bundled: Sender = { send: async () => ({}) };
+    const extension: Sender = { send: async () => ({}) };
+    const lookup = composeSenders(
+      new Map<string, Sender>([['gmail', bundled]]),
+      {
+        // An installed extension claiming 'gmail' must never intercept the
+        // bundled transport — bundled wins, and only 'slack' comes from it.
+        get: (id) => (id === 'gmail' || id === 'slack' ? extension : undefined),
+        ids: () => ['gmail', 'slack'],
+      },
+    );
+    expect(lookup.get('gmail')).toBe(bundled);
+    expect(lookup.get('slack')).toBe(extension);
+    expect(lookup.get('notion')).toBeUndefined();
+    // Deduped, so the service's "supported: …" line never lists one twice.
+    expect(lookup.ids().sort()).toEqual(['gmail', 'slack']);
   });
 });

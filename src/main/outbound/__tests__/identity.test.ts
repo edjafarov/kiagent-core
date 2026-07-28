@@ -2,7 +2,10 @@ import type { Account } from '@shared/contracts';
 
 import { selfAddressesFor, senderAddressFor } from '../identity';
 
-function account(config: Record<string, unknown>): Account {
+function account(
+  config: Record<string, unknown>,
+  over: Partial<Account> = {},
+): Account {
   return {
     id: 'a1',
     source: 'imap',
@@ -11,6 +14,7 @@ function account(config: Record<string, unknown>): Account {
     status: 'live',
     cursor: null,
     createdAt: '2026-07-01T00:00:00Z',
+    ...over,
   } as unknown as Account;
 }
 
@@ -36,6 +40,17 @@ describe('senderAddressFor', () => {
     expect(() => senderAddressFor(account({ user: 'plainlogin' }))).toThrow(
       /From address/i,
     );
+  });
+
+  it('refuses non-email sources outright — compose is email-only', () => {
+    // An extension-sender source (slack) can REPLY (its target comes from
+    // the document's metadata.outbound), but it has no From address to
+    // compose from — and must say so instead of falling through to the
+    // config-shaped "no usable From address" advice, which no amount of
+    // account configuration could satisfy.
+    expect(() =>
+      senderAddressFor(account({}, { source: 'slack', identifier: 'T123:me' })),
+    ).toThrow(/email-only/);
   });
 });
 

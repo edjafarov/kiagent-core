@@ -185,6 +185,17 @@ describe('shapeOutboundError', () => {
     expect(s.kind).toBe('unknown');
     expect(s.canRetry).toBe(false);
   });
+  it('an extension-sender timeout stays unknown/not-retryable — delivery is unproven', () => {
+    // The host's own timeout string for an out-of-process extension Sender.
+    // Deliberately ambiguous: the extension may well have completed the send
+    // before the host gave up, so this must NEVER offer Try again.
+    const s = shapeOutboundError(
+      "extension sender 'slack' timed out after 60s",
+    );
+    expect(s.kind).toBe('unknown');
+    expect(s.canRetry).toBe(false);
+  });
+
   it('treats the empty-input placeholder as already-shaped on re-shape', () => {
     const first = shapeOutboundError('');
     const second = shapeOutboundError(first.summary);
