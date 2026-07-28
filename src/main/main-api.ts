@@ -44,9 +44,8 @@ export interface MainProcessApi {
      *  quit item); returns a disposer that removes them and rebuilds. */
     addTrayMenuItems(items: MenuItemConstructorOptions[]): () => void;
   };
-  /** Outbound confirm-over-tunnel seam (spec phase 4). Optional so older
-   *  product bundles keep working against the type. */
-  outbound?: {
+  /** Outbound confirm-over-tunnel seam (spec phase 4). */
+  outbound: {
     /** Push the public device base URL (https://<device-subdomain>) when the
      *  remote HTTPS server comes up; null when it goes down. */
     setRemoteBaseUrl(url: string | null): void;
@@ -67,7 +66,7 @@ export interface BuildMainApiDeps {
   app: Pick<App, 'getPath' | 'getVersion' | 'getName'>;
   dataDir: string;
   tray: TrayMenuController;
-  outbound?: {
+  outbound: {
     service: OutboundService;
     routes: {
       handleRemote(
@@ -105,13 +104,9 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
     ui: {
       addTrayMenuItems: (items) => deps.tray.addItems(items),
     },
-    outbound: deps.outbound
-      ? {
-          setRemoteBaseUrl: (url) =>
-            deps.outbound!.service.setRemoteBaseUrl(url),
-          handleRequest: (req, res) =>
-            deps.outbound!.routes.handleRemote(req, res),
-        }
-      : undefined,
+    outbound: {
+      setRemoteBaseUrl: (url) => deps.outbound.service.setRemoteBaseUrl(url),
+      handleRequest: (req, res) => deps.outbound.routes.handleRemote(req, res),
+    },
   };
 }

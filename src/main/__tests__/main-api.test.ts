@@ -144,6 +144,7 @@ describe('buildMainApi', () => {
       app,
       dataDir: '/fake/data',
       tray,
+      outbound: stubOutbound(true).outbound,
     });
 
     expect(mainApi.apiVersion).toBe(1);
@@ -179,7 +180,14 @@ describe('buildMainApi', () => {
     const { tray, addedGroups, disposed } = stubTray();
     const app = stubApp();
 
-    const mainApi = buildMainApi({ store, mcp, app, dataDir: '/fake', tray });
+    const mainApi = buildMainApi({
+      store,
+      mcp,
+      app,
+      dataDir: '/fake',
+      tray,
+      outbound: stubOutbound(true).outbound,
+    });
 
     const item = { label: 'Extension item' };
     const dispose = mainApi.ui.addTrayMenuItems([item]);
@@ -192,7 +200,7 @@ describe('buildMainApi', () => {
 });
 
 describe('buildMainApi outbound dep', () => {
-  it('delegates outbound.setRemoteBaseUrl and outbound.handleRequest to the service/routes when the dep is present', async () => {
+  it('delegates outbound.setRemoteBaseUrl and outbound.handleRequest to the service/routes', async () => {
     const { store } = stubStore();
     const { mcp } = stubMcp();
     const { tray } = stubTray();
@@ -209,15 +217,14 @@ describe('buildMainApi outbound dep', () => {
       outbound,
     });
 
-    expect(mainApi.outbound).toBeDefined();
-    mainApi.outbound!.setRemoteBaseUrl('https://device.example.com');
-    mainApi.outbound!.setRemoteBaseUrl(null);
+    mainApi.outbound.setRemoteBaseUrl('https://device.example.com');
+    mainApi.outbound.setRemoteBaseUrl(null);
     expect(setRemoteBaseUrlArgs).toEqual(['https://device.example.com', null]);
 
     const req = { fake: 'req' };
     const res = { fake: 'res' };
     await expect(
-      mainApi.outbound!.handleRequest(req as never, res as never),
+      mainApi.outbound.handleRequest(req as never, res as never),
     ).resolves.toBe(true);
     expect(handleRemoteArgs).toEqual([[req, res]]);
   });
@@ -239,18 +246,7 @@ describe('buildMainApi outbound dep', () => {
     });
 
     await expect(
-      mainApi.outbound!.handleRequest({} as never, {} as never),
+      mainApi.outbound.handleRequest({} as never, {} as never),
     ).resolves.toBe(false);
-  });
-
-  it('mainApi.outbound is undefined when the outbound dep is absent', () => {
-    const { store } = stubStore();
-    const { mcp } = stubMcp();
-    const { tray } = stubTray();
-    const app = stubApp();
-
-    const mainApi = buildMainApi({ store, mcp, app, dataDir: '/fake', tray });
-
-    expect(mainApi.outbound).toBeUndefined();
   });
 });
