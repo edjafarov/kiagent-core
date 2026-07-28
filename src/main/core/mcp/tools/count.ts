@@ -1,30 +1,17 @@
 /**
- * `count` — ported from kiagent-ref's src/main/mcp/tools/count.ts. Legacy
- * grouped by arbitrary SQL expressions (source, type, language, sender
- * address, month, label, tracked_root, mime_type) against the raw table.
- * `Query.count` only supports {type, account, includeArchived} — no GROUP BY
- * primitive at all — so only `group_by: 'source'` is really answerable here
- * (by enumerating `accounts()` and summing per-account counts). The other
- * legacy group_by values need raw SQL — now available via `query_sql` (see
- * `get_schema` for the tables/columns) — so this tool points callers there
- * with a clear error rather than silently returning wrong/partial data.
+ * `count` — document totals per connected source. `Query.count` only supports
+ * {type, account, includeArchived} — no GROUP BY primitive — so the only
+ * grouping offered is `group_by: 'source'` (enumerate `accounts()` and sum
+ * per-account counts). Any other aggregation belongs in `query_sql` (see
+ * `get_schema` for the tables/columns).
  */
 import type { Query } from '@shared/contracts';
 
-export const COUNT_GROUP_BY_VALUES = [
-  'source',
-  'type',
-  'language',
-  'sender_address',
-  'month',
-  'label',
-  'tracked_root',
-  'mime_type',
-] as const;
+export const COUNT_GROUP_BY_VALUES = ['source'] as const;
 export type CountGroupBy = (typeof COUNT_GROUP_BY_VALUES)[number];
 
 export const countDescription = `Aggregate document counts, optionally filtered by \`source\`/\`type\`.
-\`group_by: 'source'\` is supported (grouped by connected account's source id). Other legacy group_by values (type, language, sender_address, month, label, tracked_root, mime_type) require raw SQL access — use \`query_sql\` (see \`get_schema\`) for grouped aggregations; passing one of them here errors rather than returning partial data.`;
+\`group_by: 'source'\` groups by connected account's source id. For any other grouped aggregation use \`query_sql\` (see \`get_schema\`).`;
 
 export const countInputSchema = {
   type: 'object',
