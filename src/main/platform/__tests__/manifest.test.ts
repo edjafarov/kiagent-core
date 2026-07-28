@@ -43,20 +43,6 @@ describe('parseManifest', () => {
     );
   });
 
-  it('rejects a legacy-format manifest with the exact message', () => {
-    const legacy = {
-      id: 'kia.notion',
-      displayName: 'Notion',
-      version: '1.2.0',
-      hostApi: '^2.0.0',
-      entry: 'dist/index.js',
-      permissions: ['net'],
-    };
-    expect(() => parseManifest(legacy)).toThrow(
-      'This extension was built for the legacy app and is not compatible with this build.',
-    );
-  });
-
   it('rejects bad ids (must be publisher.name)', () => {
     expect(() => parseManifest({ ...GOOD, id: 'gmail' })).toThrow(
       ManifestError,

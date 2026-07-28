@@ -105,16 +105,6 @@ export function parseManifest(
   opts: { tier?: ManifestTier } = {},
 ): Manifest {
   const tier = opts.tier ?? 'external';
-  if (raw !== null && typeof raw === 'object') {
-    const o = raw as Record<string, unknown>;
-    const looksLegacy =
-      ('hostApi' in o || 'permissions' in o) && !('engine' in o && 'caps' in o);
-    if (looksLegacy) {
-      throw new ManifestError(
-        'This extension was built for the legacy app and is not compatible with this build.',
-      );
-    }
-  }
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     const first = parsed.error.issues[0];
