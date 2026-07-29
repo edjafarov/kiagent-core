@@ -38,10 +38,15 @@ flowchart TB
 
 ## The contract IS the SDK
 
-There is no published npm SDK. The extension-facing API is §7 of
-[`src/shared/contracts.ts`](../../src/shared/contracts.ts) — extensions vendor a snapshot of it
-(e.g. as `src/kiagent-contracts.ts`) and compile against it. The platform checks the manifest's
-`engine` semver range against `PLATFORM_API_VERSION` (`src/shared/extension-rpc.ts`).
+The extension-facing API is §7 of [`src/shared/contracts.ts`](../../src/shared/contracts.ts) plus
+the runtime error classes in [`src/shared/source-errors.ts`](../../src/shared/source-errors.ts),
+republished — generated verbatim at pack time — as
+[`@kiagent/connector-sdk`](../../sdk/connector-sdk), together with shared utilities (chat-day
+rendering, the HTTP retry ladder, a test kit). It ships as a GitHub-release tgz on this repo
+(`sdk-vX.Y.Z`); connectors pin it as a devDependency and compile against it. See
+[`docs/connectors-authoring-guide.md`](../connectors-authoring-guide.md) and
+[`sdk/connector-sdk/README.md`](../../sdk/connector-sdk/README.md). The platform checks the
+manifest's `engine` semver range against `PLATFORM_API_VERSION` (`src/shared/extension-rpc.ts`).
 
 An extension is a CJS bundle whose default export is:
 

@@ -138,10 +138,10 @@ test('renderDay: golden output byte-identical to the ported implementation', () 
     },
   ];
 
-  // Golden captured by running the source connector's ORIGINAL renderDay
-  // (unmodified chat-day.ts + types.ts copied verbatim to a scratch dir,
-  // compiled with tsc, executed under TZ=UTC) against this exact fixture.
-  // See task-3-report.md for the full reproduction steps and command output.
+  // Golden captured by compiling and running the original whatsapp-connector
+  // renderDay implementation (unmodified chat-day.ts + types.ts copied
+  // verbatim to a scratch dir, compiled with tsc) under TZ=UTC against this
+  // exact fixture.
   const golden =
     '_Alice created the group_\n' +
     '09:05 Alice: Hello there\n' +

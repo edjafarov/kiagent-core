@@ -1,10 +1,11 @@
 /**
- * Shared chat-day helpers: normalize, merge, and render a day's worth of
- * messages from a connector's ingest path into the day-doc markdown body.
- * Every rendering rule (voice-note duration label, document label, quote
- * line) is a byte-for-byte contract with existing day docs, so this module
- * carries no per-platform knowledge — each connector keeps its own
- * `DOC_TYPE` string.
+ * Shared chat-day helpers: merge and render a day's worth of already-
+ * normalized messages from a connector's ingest path into the day-doc
+ * markdown body. Normalization itself is per-connector; this module only
+ * declares the `NormalizedMessage` shape it expects. Every rendering rule
+ * (voice-note duration label, document label, quote line) is a byte-for-byte
+ * contract with existing day docs, so this module carries no per-platform
+ * knowledge — each connector keeps its own `DOC_TYPE` string.
  */
 
 /** A single chat message after normalization from a connector's ingest path. */
