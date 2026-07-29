@@ -1,0 +1,20 @@
+{
+  "name": "@kiagent/connector-sdk",
+  "version": "1.0.0",
+  "description": "Contracts, source-error taxonomy, and shared utilities for KIAgent connector plugins",
+  "license": "MIT",
+  "kiagentCore": "0.64.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "http.js", "http.d.ts", "chat-day.js", "chat-day.d.ts", "testing.js", "testing.d.ts", "README.md"],
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "build": "npm run generate && tsc -p tsconfig.json",
+    "test": "npm run build && node --test \"test/**/*.test.mjs\"",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.6.0"
+  }
+}
