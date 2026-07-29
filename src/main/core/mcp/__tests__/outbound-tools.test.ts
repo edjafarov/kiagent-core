@@ -109,6 +109,18 @@ describe('outbound MCP tools', () => {
     expect((await store.outbox.get(r.draft_id))?.status).toBe('draft');
   });
 
+  it('draft_reply declares and forwards the optional target key', async () => {
+    const t = tools.find((x) => x.name === 'draft_reply');
+    expect(
+      (t!.inputSchema as { properties: Record<string, unknown> }).properties,
+    ).toHaveProperty('target');
+    // The imap doc stores no per-message targets, so the forwarded key must
+    // surface the service's refusal — proving target reaches the service.
+    await expect(
+      call('draft_reply', { document_id: docId, body: 'x', target: '1719.1' }),
+    ).rejects.toThrow(/no per-message reply targets/);
+  });
+
   it('draft_message requires valid recipients', async () => {
     await expect(
       call('draft_message', {

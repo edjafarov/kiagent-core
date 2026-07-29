@@ -848,6 +848,7 @@ describe('outbound service — drafts', () => {
     slackAccountId: AccountId;
     hookDocId: string; // written with metadata.outbound
     preHookDocId: string; // no metadata.outbound written for it
+    dayDocId: string; // metadata.outbound with per-message targets
   }> => {
     const slackSend: jest.Mock = jest.fn(async () => ({
       externalMessageId: '1719.42',
@@ -894,6 +895,33 @@ describe('outbound service — drafts', () => {
           metadata: {},
           createdAt: '2026-07-01T00:00:00Z',
         },
+        {
+          // A day doc: channel-level default ref PLUS per-message targets,
+          // the shape slack-kia-connector ≥2.2.0 writes for slack.day.
+          externalId: 'C9:2026-07-01',
+          type: 'slack.day',
+          title: '#general — 2026-07-01',
+          markdown: 'hi',
+          metadata: {
+            outbound: {
+              ref: { channel: 'C9' },
+              display: '#general',
+              targets: [
+                {
+                  key: '1719.10',
+                  ref: { channel: 'C9', thread_ts: '1719.10' },
+                  display: '#general (thread on Alice · 2026-07-01 09:00)',
+                },
+                {
+                  key: '1719.20',
+                  ref: { channel: 'C9', thread_ts: '1719.20' },
+                  display: '#general (thread on Bob · 2026-07-01 10:00)',
+                },
+              ],
+            },
+          },
+          createdAt: '2026-07-01T00:00:00Z',
+        },
       ],
       cursor: null,
     });
@@ -910,6 +938,7 @@ describe('outbound service — drafts', () => {
       slackAccountId: slackAccount.id,
       hookDocId: await idOf('slack.thread'),
       preHookDocId: await idOf('slack.legacy'),
+      dayDocId: await idOf('slack.day'),
     };
   };
 
@@ -925,6 +954,53 @@ describe('outbound service — drafts', () => {
       channel: 'C9',
       thread_ts: '1719.00',
     });
+  });
+
+  it('target picks a stored per-message target — ref and display', async () => {
+    const { svc, slackSend, dayDocId } = await slackSetup();
+    const r = await svc.draftReply({
+      documentId: dayDocId,
+      body: 'Nice!',
+      target: '1719.20',
+    });
+    expect(r.recipient_display).toBe(
+      '#general (thread on Bob · 2026-07-01 10:00)',
+    );
+    const out = await svc.confirmByToken(tokenOf(r));
+    expect(out.kind).toBe('sent');
+    // The SELECTED sub-ref round-trips to the sender, not the day default.
+    expect(slackSend.mock.calls[0][0].outboundRef).toEqual({
+      channel: 'C9',
+      thread_ts: '1719.20',
+    });
+  });
+
+  it('omitting target keeps the day default — top-level channel ref', async () => {
+    const { svc, slackSend, dayDocId } = await slackSetup();
+    const r = await svc.draftReply({ documentId: dayDocId, body: 'Hi all' });
+    expect(r.recipient_display).toBe('#general');
+    await svc.confirmByToken(tokenOf(r));
+    expect(slackSend.mock.calls[0][0].outboundRef).toEqual({ channel: 'C9' });
+  });
+
+  it('an unknown target is refused before any row is created', async () => {
+    const { svc, slackSend, dayDocId, hookDocId } = await slackSetup();
+    // Wrong key on a doc that HAS targets, and any key on a doc without
+    // them (thread docs store only the default ref) — same refusal.
+    await expect(
+      svc.draftReply({ documentId: dayDocId, body: 'x', target: '9999.99' }),
+    ).rejects.toThrow(/matches none of the reply targets/);
+    await expect(
+      svc.draftReply({ documentId: hookDocId, body: 'x', target: '1719.10' }),
+    ).rejects.toThrow(/matches none of the reply targets/);
+    expect(slackSend).not.toHaveBeenCalled();
+    expect(await svc.listOutbox({})).toHaveLength(0);
+  });
+
+  it('target on an email document is refused honestly', async () => {
+    await expect(
+      service.draftReply({ documentId: docId, body: 'x', target: '1719.10' }),
+    ).rejects.toThrow(/stores no per-message reply targets/);
   });
 
   it('draft_message refuses non-email sources honestly', async () => {

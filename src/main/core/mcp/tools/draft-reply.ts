@@ -21,6 +21,14 @@ export const draftReplyInputSchema = {
       description:
         'Also address the other stored recipients of the original (default false)',
     },
+    target: {
+      type: 'string',
+      description:
+        'Optional reply-target key shown in the document (e.g. the `ts` ' +
+        'value next to a message in a Slack day document) — threads the ' +
+        'reply under that specific message. Omit to use the document’s ' +
+        'default reply target.',
+    },
   },
   required: ['document_id', 'body'],
 } as const;
@@ -33,6 +41,7 @@ export function makeDraftReplyTool(outbound: OutboundToolApi) {
       document_id?: string;
       body?: string;
       reply_all?: boolean;
+      target?: string;
     };
     if (!a.document_id) throw new Error('draft_reply: document_id is required');
     if (!a.body) throw new Error('draft_reply: body is required');
@@ -40,6 +49,7 @@ export function makeDraftReplyTool(outbound: OutboundToolApi) {
       documentId: a.document_id,
       body: a.body,
       replyAll: a.reply_all === true,
+      ...(typeof a.target === 'string' ? { target: a.target } : {}),
     });
   };
 }

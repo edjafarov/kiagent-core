@@ -46,6 +46,28 @@ function subjectFor(title: string | null): string | null {
   return title === null ? null : /^re:/i.test(title) ? title : `Re: ${title}`;
 }
 
+/** Resolve a `draft_reply` target key against `metadata.outbound.targets` —
+ *  the optional per-message reply targets a source may store alongside the
+ *  document's default ref (a Slack day doc lists one per message so a reply
+ *  can thread under it). The metadata is source-written and untyped, so
+ *  every field is validated before use; a malformed entry is treated as
+ *  absent, never half-used. */
+function pickReplyTarget(
+  targets: unknown,
+  key: string,
+): { ref: unknown; display: string } | undefined {
+  if (!Array.isArray(targets)) return undefined;
+  const hit = targets.find(
+    (t): t is { key: string; ref?: unknown; display?: unknown } =>
+      typeof t === 'object' &&
+      t !== null &&
+      (t as { key?: unknown }).key === key,
+  );
+  if (!hit || hit.ref === undefined || typeof hit.display !== 'string')
+    return undefined;
+  return { ref: hit.ref, display: hit.display };
+}
+
 export interface DraftToolResult {
   draft_id: string;
   mode: ConfirmMode;
@@ -88,6 +110,10 @@ export interface OutboundToolApi {
     documentId: string;
     body: string;
     replyAll?: boolean;
+    /** Key of one of the document's stored per-message reply targets
+     *  (`metadata.outbound.targets[].key`) — threads the reply under that
+     *  message. Omit for the document's default `metadata.outbound.ref`. */
+    target?: string;
   }): Promise<DraftToolResult>;
   draftMessage(a: {
     accountId: string;
@@ -446,7 +472,7 @@ export function createOutboundService(deps: {
       remoteBaseUrl = url;
     },
 
-    async draftReply({ documentId, body, replyAll }) {
+    async draftReply({ documentId, body, replyAll, target }) {
       assertReady();
       const doc = await deps.store.read.document(documentId as DocumentId);
       if (!doc)
@@ -458,17 +484,32 @@ export function createOutboundService(deps: {
       // owns its reply addressing — the ref is opaque and round-trips to
       // that source's Sender verbatim. Bundled email resolution otherwise.
       const outboundMeta = doc.metadata.outbound as
-        | { ref?: unknown; display?: unknown }
+        | { ref?: unknown; display?: unknown; targets?: unknown }
         | undefined;
       let row: OutboxRow;
       let warnings: string[] = [];
       if (outboundMeta && typeof outboundMeta.display === 'string') {
+        // `target` selects among the STORED per-message targets — grounding
+        // holds because the model picks a key, never supplies a ref.
+        let { ref } = outboundMeta;
+        let { display } = outboundMeta;
+        if (target !== undefined) {
+          const picked = pickReplyTarget(outboundMeta.targets, target);
+          if (!picked)
+            throw new Error(
+              `draft_reply: target '${target}' matches none of the reply ` +
+                `targets stored in this document — use a target key the ` +
+                `document shows, or omit target for its default`,
+            );
+          ref = picked.ref;
+          display = picked.display;
+        }
         row = await deps.store.outbox.create({
           accountId: account.id,
           kind: 'reply',
           replyToDocumentId: doc.id,
-          outboundRef: outboundMeta.ref,
-          recipientDisplay: outboundMeta.display,
+          outboundRef: ref,
+          recipientDisplay: display,
           to: [],
           cc: [],
           subject: null,
@@ -477,6 +518,13 @@ export function createOutboundService(deps: {
           createdVia: createdViaNow(),
           expiresAt: expiresAt(),
         });
+      } else if (target !== undefined) {
+        // Per-message targets live only in metadata.outbound.targets; email
+        // replies thread from stored headers, not model-picked keys.
+        throw new Error(
+          `draft_reply: this document stores no per-message reply targets — ` +
+            `omit 'target'`,
+        );
       } else if (account.source === 'gmail') {
         const r = resolveGmailReply(
           doc,
