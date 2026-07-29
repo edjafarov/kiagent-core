@@ -6,6 +6,7 @@
  */
 import { fork } from 'child_process';
 
+import type { ChildToMain } from '@shared/extension-rpc';
 import { sourceErrorCode, type SourceErrorCode } from '@shared/source-errors';
 
 export interface WireChannel {
@@ -192,28 +193,22 @@ export interface RpcEndpoint {
   dispose(reason: string): void;
 }
 
-interface CallMsg {
-  kind: 'call';
-  id: number;
-  ns: string;
-  method: string;
-  args: unknown[];
-}
-interface ReplyMsg {
-  kind: 'reply';
-  id: number;
-  ok: boolean;
-  value?: unknown;
-  error?: string;
-  // Optional source-error taxonomy code, carried symmetrically with the
-  // src-error NOTIFY direction: a rejected handler (e.g. a main-side
-  // session.credentials() whose refresher threw SourceAuthError) keeps its
-  // 'auth'/'permanent' classification across the call/reply leg, so an
-  // extension-hosted source's auth failure lands on 'needsReauth' exactly
-  // like a bundled one. sourceErrorCode narrows on both ends, so unrelated
-  // Node error codes (ENOENT, …) never leak through as a taxonomy code.
-  code?: SourceErrorCode;
-}
+// The call/reply shapes come FROM the declared protocol rather than being
+// restated here, so extension-rpc.ts can't drift from what this endpoint
+// actually puts on the wire. Both are taken from the ChildToMain side: it is
+// the wider of the two (MainToChild narrows `ns` to 'source'|'tool'|'send',
+// which only the dispatch end — extension-host-entry's onCall — needs), and
+// ONE endpoint implementation serves both directions.
+//
+// ReplyMsg's `code` is the source-error taxonomy carried symmetrically with
+// the src-error NOTIFY direction: a rejected handler (e.g. a main-side
+// session.credentials() whose refresher threw SourceAuthError) keeps its
+// 'auth'/'permanent' classification across the call/reply leg, so an
+// extension-hosted source's auth failure lands on 'needsReauth' exactly like
+// a bundled one. sourceErrorCode narrows on both ends, so unrelated Node
+// error codes (ENOENT, …) never leak through as a taxonomy code.
+type CallMsg = Extract<ChildToMain, { kind: 'call' }>;
+type ReplyMsg = Extract<ChildToMain, { kind: 'reply' }>;
 
 export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
   let nextId = 1;

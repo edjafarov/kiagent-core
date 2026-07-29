@@ -69,7 +69,19 @@ export type MainToChild =
       method: string;
       args: unknown[];
     }
-  | { kind: 'reply'; id: number; ok: boolean; value?: unknown; error?: string }
+  | {
+      kind: 'reply';
+      id: number;
+      ok: boolean;
+      value?: unknown;
+      error?: string;
+      /** Same taxonomy code the `src-error` notify carries (see below), on
+       *  the call/reply leg — a rejected main-side handler (e.g. a
+       *  session.credentials() whose refresher threw SourceAuthError) keeps
+       *  its classification across the boundary. Both directions declare it:
+       *  ONE endpoint implementation (transport.ts) serves both. */
+      code?: SourceErrorCode;
+    }
   | { kind: 'event'; name: string; payload: unknown }
   | { kind: 'src-next'; pullId: number }
   | { kind: 'src-abort'; pullId: number }
@@ -80,7 +92,15 @@ export type ChildToMain =
   | { kind: 'activated'; contributions: Contributions }
   | { kind: 'errored'; error: string }
   | { kind: 'call'; id: number; ns: string; method: string; args: unknown[] }
-  | { kind: 'reply'; id: number; ok: boolean; value?: unknown; error?: string }
+  | {
+      kind: 'reply';
+      id: number;
+      ok: boolean;
+      value?: unknown;
+      error?: string;
+      /** See MainToChild's reply variant — symmetric by construction. */
+      code?: SourceErrorCode;
+    }
   | { kind: 'src-batch'; pullId: number; batch: WireBatch }
   | { kind: 'src-refs'; pullId: number; refs: ExternalRef[] }
   | { kind: 'src-done'; pullId: number }

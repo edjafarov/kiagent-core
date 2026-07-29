@@ -677,8 +677,13 @@ export interface McpTool {
   readonly name: string; // 'find_receipts', 'archive_thread'
   readonly description: string;
   readonly inputSchema: unknown; // JSON Schema
-  /** 'powerful' = raw-SQL-class reach: off by default, individually
-   *  consented — not bundled into install. */
+  /** Advisory reach label, defaulting to 'standard'; 'powerful' marks
+   *  raw-SQL-class tools. It is METADATA ONLY: the registry surfaces it to
+   *  clients on `tools/list` as `_meta.tier` (registry.ts) so a
+   *  consent-aware client can tell the two apart, and nothing else reads it.
+   *  There is no consent gate behind it — a 'powerful' tool is listed and
+   *  callable exactly like a 'standard' one, and a tool's reach is bounded
+   *  solely by the caps its module was granted at install. */
   readonly tier?: 'standard' | 'powerful';
   call(args: Record<string, unknown>): Promise<unknown>;
 }

@@ -10,15 +10,19 @@
 import { createRequire } from 'module';
 
 import type {
+  DocumentInput,
+  ExternalRef,
   ExtensionModule,
   FolderPickerSpec,
   McpTool,
+  PullPhase,
   SendIntent,
   Sender,
   SenderContext,
   Source,
 } from '@shared/contracts';
 import type {
+  ChildToMain,
   Contributions,
   ExtensionBootstrap,
   MainToChild,
@@ -40,7 +44,9 @@ export interface ChildDeps {
   mainApi?: unknown;
 }
 
-const NS_METHODS: Record<string, string[]> = {
+/** Exported for the drift guard (cap-table-completeness.test.ts), which
+ *  compares each list against the real surface buildSurfaces() constructs. */
+export const NS_METHODS: Record<string, string[]> = {
   query: [
     'search',
     'document',
@@ -52,7 +58,7 @@ const NS_METHODS: Record<string, string[]> = {
   net: ['fetch'],
   db: ['exec', 'query'],
   ui: ['notify'],
-  inference: ['complete', 'see', 'read'],
+  inference: ['complete', 'see', 'read', 'hear'],
   files: ['list', 'read', 'write', 'move'],
   commands: ['register'],
 };
@@ -145,7 +151,7 @@ export function runExtensionHost(
     endpoint.post({
       kind: 'errored',
       error: e instanceof Error ? e.message : String(e),
-    });
+    } satisfies ChildToMain);
 
   async function onBootstrap(boot: ExtensionBootstrap): Promise<void> {
     try {
@@ -155,7 +161,7 @@ export function runExtensionHost(
       mod = (loaded.default ?? loaded) as ExtensionModule;
       if (typeof mod.activate !== 'function')
         throw new Error('extension has no activate()');
-      endpoint.post({ kind: 'ready' });
+      endpoint.post({ kind: 'ready' } satisfies ChildToMain);
       const host = buildRemoteHost(endpoint, boot, eventCbs);
       const extras =
         boot.caps.includes('unsafe.mainProcess') && deps.mainApi !== undefined
@@ -180,7 +186,7 @@ export function runExtensionHost(
         })),
         senders: [...senders.keys()],
       };
-      endpoint.post({ kind: 'activated', contributions });
+      endpoint.post({ kind: 'activated', contributions } satisfies ChildToMain);
     } catch (e) {
       fail(e);
     }
@@ -226,8 +232,8 @@ export function runExtensionHost(
     };
   }
 
-  function toWireItems(source: Source, items: unknown[]): unknown[] {
-    const out: unknown[] = [];
+  function toWireItems(source: Source, items: unknown[]): DocumentInput[] {
+    const out: DocumentInput[] = [];
     for (const item of items) {
       const d = source.toDocument(item);
       if (d == null) continue;
@@ -393,21 +399,30 @@ export function runExtensionHost(
         const r = await pull.iterator.next();
         if (r.done) {
           pulls.delete(msg.pullId);
-          endpoint.post({ kind: 'src-done', pullId: msg.pullId });
+          endpoint.post({
+            kind: 'src-done',
+            pullId: msg.pullId,
+          } satisfies ChildToMain);
           return;
         }
         if (pull.mode === 'refs') {
           endpoint.post({
             kind: 'src-refs',
             pullId: msg.pullId,
-            refs: r.value,
-          });
+            // The iterator is typed AsyncIterator<unknown> (it drives both
+            // modes) — `mode` is what says which of the two shapes yielded.
+            refs: r.value as ExternalRef[],
+          } satisfies ChildToMain);
           return;
         }
+        // Same untyped-iterator story as src-refs: the extension's own Batch
+        // is only structurally known here, so it is asserted into the wire
+        // shape at this one boundary rather than loosening WireBatch (which
+        // would degrade every main-side consumer's typing for no gain).
         const b = r.value as {
-          phase: unknown;
+          phase: PullPhase;
           items: unknown[];
-          deletions?: unknown;
+          deletions?: ExternalRef[];
           cursor: unknown;
           estimateTotal?: number;
         };
@@ -421,7 +436,7 @@ export function runExtensionHost(
             cursor: b.cursor,
             estimateTotal: b.estimateTotal,
           },
-        });
+        } satisfies ChildToMain);
       } catch (e) {
         pulls.delete(msg.pullId);
         // Forward the taxonomy code (if any) so main can rehydrate an error
@@ -432,7 +447,7 @@ export function runExtensionHost(
           pullId: msg.pullId,
           error: e instanceof Error ? e.message : String(e),
           ...(code ? { code } : {}),
-        });
+        } satisfies ChildToMain);
       }
     })();
   }

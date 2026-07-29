@@ -17,6 +17,7 @@ const logSink = {
 const surfaces = {
   query: { count: jest.fn(async () => 3) },
   net: { fetch: jest.fn(async () => ({ status: 200 })) },
+  inference: { hear: jest.fn(async () => 'transcript') },
 } as never;
 
 function router(granted: Cap[]) {
@@ -46,6 +47,17 @@ describe('createHostRouter', () => {
         scope: 'extension:test.basic',
         msg: 'permission-violation',
       }),
+    );
+  });
+
+  it("inference.hear rides the namespace's existing gate — granted dispatches, ungranted is CAP_DENIED", async () => {
+    await expect(
+      router(['inference']).dispatch('inference', 'hear', [new Uint8Array()]),
+    ).resolves.toBe('transcript');
+    await expect(
+      router([]).dispatch('inference', 'hear', [new Uint8Array()]),
+    ).rejects.toThrow(
+      "CAP_DENIED: extension was not granted the 'inference' capability",
     );
   });
 

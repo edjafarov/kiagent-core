@@ -68,6 +68,7 @@ describe('extension runtime e2e (real forked child)', () => {
         complete: async () => '',
         see: async () => '',
         read: async () => '',
+        hear: async () => '',
       },
       logSink: {
         log: (...a) => process.stderr.write(`${JSON.stringify(a)}\n`),

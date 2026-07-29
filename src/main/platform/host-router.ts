@@ -9,7 +9,9 @@ import type { LogSink } from '@main/core/engine/engine';
 
 import type { Surfaces } from './host-surfaces';
 
-const NS_CAP: Record<string, Cap> = {
+/** Exported for the drift guard (cap-table-completeness.test.ts), which
+ *  derives the expected key set from manifest.ts's CAPS. */
+export const NS_CAP: Record<string, Cap> = {
   query: 'query',
   net: 'net',
   files: 'files',

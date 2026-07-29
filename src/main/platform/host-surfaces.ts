@@ -66,6 +66,10 @@ export interface SurfaceDeps {
       image: Uint8Array,
       opts?: { mime?: string; lane?: 'interactive' | 'background' },
     ): Promise<string>;
+    hear(
+      audio: Uint8Array,
+      opts?: { format?: 'wav' | 'mp3'; lane?: 'interactive' | 'background' },
+    ): Promise<string>;
   };
   notify(msg: string, level?: LogLevel): void;
   bus: EventBus;
@@ -218,6 +222,11 @@ export function buildSurfaces(deps: SurfaceDeps): {
         }),
       read: (image, opts) =>
         deps.inference.read(image as Uint8Array, {
+          ...(opts as object),
+          lane: 'interactive',
+        }),
+      hear: (audio, opts) =>
+        deps.inference.hear(audio as Uint8Array, {
           ...(opts as object),
           lane: 'interactive',
         }),

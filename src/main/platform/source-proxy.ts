@@ -19,7 +19,11 @@ import type {
   Session,
   Source,
 } from '@shared/contracts';
-import type { Contributions, WireBatch } from '@shared/extension-rpc';
+import type {
+  Contributions,
+  MainToChild,
+  WireBatch,
+} from '@shared/extension-rpc';
 import { sourceErrorCode, type SourceErrorCode } from '@shared/source-errors';
 
 import type { RpcEndpoint } from './transport';
@@ -121,7 +125,7 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
       log: (l, m) => session.log(l, m),
     });
     const onAbort = () => {
-      endpoint.post({ kind: 'src-abort', pullId });
+      endpoint.post({ kind: 'src-abort', pullId } satisfies MainToChild);
       state.wake?.();
       state.wake = null;
       // If abort lands exactly when the consumer's for-await body checks
@@ -140,7 +144,7 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
       await endpoint.call('source', openMethod, [pullId, ...openArgs]);
       for (;;) {
         if (session.signal.aborted) return;
-        endpoint.post({ kind: 'src-next', pullId });
+        endpoint.post({ kind: 'src-next', pullId } satisfies MainToChild);
         while (state.inbox.length === 0) {
           if (session.signal.aborted) return;
           // eslint-disable-next-line no-await-in-loop

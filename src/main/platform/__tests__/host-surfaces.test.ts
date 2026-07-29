@@ -34,6 +34,10 @@ function makeDeps(
         ),
         see: jest.fn(async () => 'seen'),
         read: jest.fn(async () => 'read'),
+        hear: jest.fn(
+          async (_a: Uint8Array, opts?: { format?: string; lane?: string }) =>
+            `heard:${opts?.format}:${opts?.lane}`,
+        ),
       },
       notify: jest.fn(),
       bus,
@@ -129,6 +133,25 @@ describe('buildSurfaces', () => {
     await expect(
       surfaces.inference.complete('p', { lane: 'background' } as never),
     ).resolves.toBe('lane:interactive');
+    close();
+  });
+
+  it('inference.hear delegates to the plane, keeping format and forcing the lane', async () => {
+    // CapSurfaces.inference promises the WHOLE Inference plane, so a child
+    // granted 'inference' may call hear() — before it was wired here that
+    // call reached an undefined surface method.
+    const { deps } = makeDeps();
+    const { surfaces, close } = buildSurfaces(deps);
+    await expect(
+      surfaces.inference.hear(new Uint8Array([1, 2]), {
+        format: 'wav',
+        lane: 'background',
+      } as never),
+    ).resolves.toBe('heard:wav:interactive');
+    expect(deps.inference.hear).toHaveBeenCalledWith(new Uint8Array([1, 2]), {
+      format: 'wav',
+      lane: 'interactive',
+    });
     close();
   });
 

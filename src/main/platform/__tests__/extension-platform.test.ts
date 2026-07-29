@@ -99,6 +99,7 @@ describe('createExtensionPlatform', () => {
         complete: async () => '',
         see: async () => '',
         read: async () => '',
+        hear: async () => '',
       },
       logSink: {
         log: (scope: string, level: string, msg: string) =>
@@ -683,6 +684,7 @@ describe('createExtensionPlatform', () => {
         complete: async () => '',
         see: async () => '',
         read: async () => '',
+        hear: async () => '',
       },
       logSink: { log: jest.fn() },
       notify: jest.fn(),
@@ -814,6 +816,7 @@ describe('createExtensionPlatform', () => {
         complete: async () => '',
         see: async () => '',
         read: async () => '',
+        hear: async () => '',
       },
       logSink: { log: jest.fn() },
       notify: jest.fn(),

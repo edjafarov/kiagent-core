@@ -10,6 +10,7 @@ import type http from 'http';
 import type { OutboxRow } from '@shared/contracts';
 
 import { shapeOutboundError } from './error-copy';
+import { isOutboundToolOp } from './ops';
 import { failedPage, linkPage, resultPage, reviewPage } from './pages';
 import type { OutboundService } from './service';
 
@@ -342,40 +343,51 @@ export function createOutboundRoutes(outbound: OutboundService): {
             op?: string;
             args?: Record<string, unknown>;
           } | null;
-          if (body?.op === 'ping') {
+          const op = body?.op;
+          const args = body?.args;
+          // Screened against the SHARED op list (ops.ts) before dispatch, so
+          // the "unknown op" reply and the set this plane actually serves
+          // cannot disagree with the client's idea of it.
+          if (!isOutboundToolOp(op)) {
+            sendJson(res, { ok: false, error: `unknown op '${op}'` });
+          } else if (op === 'ping') {
             sendJson(res, { ok: true, result: { pong: 'kiagent-outbox' } });
-          } else if (body?.op === 'draftReply') {
+          } else if (op === 'draftReply') {
             sendJson(res, {
               ok: true,
               result: await outbound.draftReply(
-                body.args as Parameters<OutboundService['draftReply']>[0],
+                args as Parameters<OutboundService['draftReply']>[0],
               ),
             });
-          } else if (body?.op === 'draftMessage') {
+          } else if (op === 'draftMessage') {
             sendJson(res, {
               ok: true,
               result: await outbound.draftMessage(
-                body.args as Parameters<OutboundService['draftMessage']>[0],
+                args as Parameters<OutboundService['draftMessage']>[0],
               ),
             });
-          } else if (body?.op === 'listOutbox') {
+          } else if (op === 'listOutbox') {
             sendJson(res, {
               ok: true,
+              // Its arg is the one all-optional payload on the interface —
+              // a payload-less call must still reach it as {}.
               result: await outbound.listOutbox(
-                (body.args ?? {}) as Parameters<
-                  OutboundService['listOutbox']
-                >[0],
+                (args ?? {}) as Parameters<OutboundService['listOutbox']>[0],
               ),
             });
-          } else if (body?.op === 'sendDraft') {
+          } else if (op === 'sendDraft') {
             sendJson(res, {
               ok: true,
               result: await outbound.sendDraft(
-                body.args as Parameters<OutboundService['sendDraft']>[0],
+                args as Parameters<OutboundService['sendDraft']>[0],
               ),
             });
           } else {
-            sendJson(res, { ok: false, error: `unknown op '${body?.op}'` });
+            // Unreachable — `op` is `never` here, and that is the point:
+            // adding an op to OUTBOUND_TOOL_OPS without a branch above is a
+            // compile error on this line, not a runtime "unknown op".
+            const unhandled: never = op;
+            sendJson(res, { ok: false, error: `unknown op '${unhandled}'` });
           }
         } catch (err) {
           if (err instanceof BodyTooLargeError) {

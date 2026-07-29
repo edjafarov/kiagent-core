@@ -29,7 +29,7 @@ import type {
   SenderContext,
   Source,
 } from '@shared/contracts';
-import type { Contributions } from '@shared/extension-rpc';
+import type { Contributions, MainToChild } from '@shared/extension-rpc';
 import type { LogSink } from '@main/core/engine/engine';
 
 import { createHostRouter } from './host-router';
@@ -168,7 +168,7 @@ export function createExtensionHost(deps: HostDeps): {
       endpoint = createRpcEndpoint(transport);
       const proxySet = createSourceProxySet(endpoint);
       const surfacesHandle = deps.makeSurfaces((name, payload) =>
-        endpoint!.post({ kind: 'event', name, payload }),
+        endpoint!.post({ kind: 'event', name, payload } satisfies MainToChild),
       );
       const router = createHostRouter({
         extensionId: deps.extensionId,
@@ -237,7 +237,7 @@ export function createExtensionHost(deps: HostDeps): {
         entryAbsPath: deps.entryAbsPath,
         dataDir: deps.dataDir,
         caps: deps.caps,
-      });
+      } satisfies MainToChild);
       const first = await readyOrError;
       if (first.kind === 'errored') throw new Error(String(first.error));
       const outcome = await waitNotify(
@@ -321,7 +321,7 @@ export function createExtensionHost(deps: HostDeps): {
         const exited = new Promise<void>((resolve) => {
           inc.transport.onExit(() => resolve());
         });
-        inc.endpoint.post({ kind: 'deactivate' });
+        inc.endpoint.post({ kind: 'deactivate' } satisfies MainToChild);
         const timer = setTimeout(() => inc.transport.kill(), killAfterMs);
         await exited;
         clearTimeout(timer);

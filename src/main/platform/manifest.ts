@@ -25,7 +25,7 @@ const ID_RE = /^[a-z0-9-]+\.[a-z0-9-]+$/;
 // `satisfies readonly Cap[]` fails compile the moment this array drifts
 // from the real Cap union (a member added/renamed on one side but not the
 // other) instead of silently validating against a stale list.
-const CAPS = [
+export const CAPS = [
   'query',
   'net',
   'files',

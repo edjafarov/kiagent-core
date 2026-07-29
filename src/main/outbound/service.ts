@@ -151,8 +151,8 @@ export interface OutboundService extends OutboundToolApi {
    *  shipped "Try again"). Null for everything else.
    *
    *  PANEL-ONLY — never an `/outbox/api` op, never on `OutboundToolApi`:
-   *  routes.ts:339-379 dispatches that interface by name over the loopback
-   *  JSON plane, and these two must stay off it. */
+   *  `OUTBOUND_TOOL_OPS` (ops.ts) dispatches that interface by name over the
+   *  loopback JSON plane, and these two must stay off it. */
   confirmUrlFor(draftId: string): Promise<string | null>;
   /** Panel support (spec §10): duplicate a terminal row (`failed`,
    *  `expired`, `discarded` — NEVER `delivery_unknown`) into a fresh draft.

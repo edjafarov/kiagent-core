@@ -7,6 +7,7 @@
  * there).
  */
 import { PORT_CANDIDATES } from '../core/mcp/server';
+import type { OutboundToolOp } from '../outbound/ops';
 import type { OutboundToolApi } from '../outbound/service';
 
 type ApiResponse = { ok: true; result: unknown } | { ok: false; error: string };
@@ -33,7 +34,7 @@ export function createOutboundProxy(
         const res = await fetchFn(`http://127.0.0.1:${port}/outbox/api`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ op: 'ping' }),
+          body: JSON.stringify({ op: 'ping' satisfies OutboundToolOp }),
           signal: AbortSignal.timeout(1000),
         });
         const parsed = (await res.json()) as ApiResponse;
@@ -53,7 +54,10 @@ export function createOutboundProxy(
     );
   };
 
-  const call = async (op: string, args: unknown): Promise<unknown> => {
+  // `op: OutboundToolOp` (not `string`) is what keeps this client's four
+  // forwards below spelled the way the route dispatcher reads them — the
+  // shared list in ops.ts is the referee for both.
+  const call = async (op: OutboundToolOp, args: unknown): Promise<unknown> => {
     if (cachedPort === null) cachedPort = await probe();
     let response: ApiResponse;
     try {
