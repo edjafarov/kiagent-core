@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.63.0](https://github.com/edjafarov/kiagent-core/compare/v0.62.0...v0.63.0) (2026-07-29)
+
+### Features
+
+* coherence pass on the extension-facing interfaces ([970e26a](https://github.com/edjafarov/kiagent-core/commit/970e26a65de64ca3f3545ab6a919e1ac58569807))
+
 ## [0.62.0](https://github.com/edjafarov/kiagent-core/compare/v0.61.0...v0.62.0) (2026-07-29)
 
 ### Features
