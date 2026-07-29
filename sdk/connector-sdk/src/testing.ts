@@ -197,7 +197,12 @@ interface SmokeActivateResult {
  *
  *  Framework-agnostic (node:assert), so the caller can wrap it in `it(...)`,
  *  `test(...)`, or run it directly. Building is slow — give the wrapping test
- *  a generous timeout (the repos use 30s). */
+ *  a generous timeout (the repos use 30s).
+ *
+ *  Uses plain `require`, so Node's module cache is keyed by resolved path:
+ *  two smokes against the SAME `root` in one process reuse the FIRST build's
+ *  cached module and never see a subsequent rebuild — run one smoke per
+ *  process, or give each its own root. */
 export async function bundleLoadSmoke(opts: {
   /** Plugin repo root — the directory holding package.json and dist/. */
   root: string;

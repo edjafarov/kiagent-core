@@ -20,34 +20,43 @@ here.
 
 ## 1. The contract is the SDK
 
-There is no npm package to install. The extension-facing API is
+The extension-facing API is
 [`src/shared/contracts.ts`](../src/shared/contracts.ts) (§7 in particular) plus
 the runtime error classes in
-[`src/shared/source-errors.ts`](../src/shared/source-errors.ts). You **vendor a
-snapshot** of both into your repo and compile against them.
+[`src/shared/source-errors.ts`](../src/shared/source-errors.ts) — republished,
+generated verbatim at build time, as
+[`@kiagent/connector-sdk`](https://github.com/edjafarov/kiagent-core/tree/main/sdk/connector-sdk).
+Add it as a devDependency, pointed at the tagged release tarball (not the npm
+registry):
 
-Vendoring discipline — copy it exactly:
-
-```ts
-/**
- * Vendored snapshot of kiagent-core src/shared/contracts.ts @ c2a91d1 — the
- * contract IS the SDK; do not edit, re-vendor.
- */
+```json
+"devDependencies": {
+  "@kiagent/connector-sdk": "https://github.com/edjafarov/kiagent-core/releases/download/sdk-v1.0.0/kiagent-connector-sdk-1.0.0.tgz"
+}
 ```
 
+and import from it:
+
 ```ts
-// Vendored snapshot of kiagent-core src/shared/source-errors.ts @ 7859d6f… — re-copy when re-vendoring kiagent-contracts.ts.
+import type { ExtensionModule, Source, Session } from '@kiagent/connector-sdk';
+import { SourceAuthError } from '@kiagent/connector-sdk';
 ```
+
+`devDependency` doesn't mean types-only here: `SourceAuthError` and friends
+are real runtime classes, and esbuild bundles whatever you `import` straight
+into your `dist/index.js` — nothing resolves `@kiagent/connector-sdk` at the
+installed extension's runtime. (The one exception is `@kiagent/connector-sdk/testing`,
+§8 below — never import it from your entry.)
 
 Two rules:
 
-- **Provenance header with the source commit sha, on every vendored file.**
-  Without it nobody — including you in six months — can tell which platform
-  version your types describe.
-- **Never edit a vendored file.** Re-copy it. `contracts.ts` is type-only, so
-  it costs you nothing at runtime; `source-errors.ts` ships real classes, and
-  the platform is deliberately built so that *your* copy of `SourceAuthError`
-  classifies identically to the platform's (see §6).
+- **Match the SDK version to the platform you're building against.** The
+  package's own `kiagentCore` field (in its `package.json`) names the
+  `kiagent-core` version its contracts were generated from — that's your
+  provenance, in place of a hand-written commit-sha header.
+- **Never patch the SDK's files.** Bump the devDependency instead — a new
+  `sdk-v*` release is cut whenever the contracts change (see the SDK's own
+  README for the release flow).
 
 The platform's own API version is `PLATFORM_API_VERSION` in
 [`src/shared/extension-rpc.ts`](../src/shared/extension-rpc.ts) — **`1.2.0`** at
@@ -86,8 +95,6 @@ src/
   source.ts            # the Source
   sender.ts            # optional Sender
   client.ts            # your API client
-  kiagent-contracts.ts       # vendored, with provenance header
-  kiagent-source-errors.ts   # vendored, with provenance header
   __tests__/
 dist/index.js          # build output — what `entry` points at
 ```
@@ -111,7 +118,7 @@ accepts either shape, but shipping both is what keeps it working across
 esbuild upgrades (and §8 has a test for exactly that):
 
 ```ts
-import type { ExtensionModule } from './kiagent-contracts';
+import type { ExtensionModule } from '@kiagent/connector-sdk';
 import { createSlackSender } from './sender';
 import { createSlackSource } from './source';
 
@@ -467,7 +474,7 @@ The model supplies a key at most.
 
 ## 6. Errors and the auth taxonomy
 
-Vendor `kiagent-source-errors.ts` and use it. The two classes:
+Import them from `@kiagent/connector-sdk`. The two classes:
 
 ```ts
 export class SourceAuthError extends Error { readonly code = 'auth'; }
@@ -483,8 +490,9 @@ What the engine does with them:
 | anything else | transient: up to **5** retries with backoff, then `error` |
 
 **The engine classifies on the `code` property, never `instanceof`.** That is
-deliberate and it is why vendoring works: your bundled copy of
-`SourceAuthError` is a different class object from the platform's, and errors
+deliberate and it is why a bundled copy works: esbuild inlines
+`@kiagent/connector-sdk`'s `SourceAuthError` into your `dist/index.js`, so
+your copy is a different class object from the platform's, and errors
 crossing the process boundary arrive as plain `Error`s carrying `code`
 rehydrated from the wire. All three classify identically. It also means you
 can skip the class entirely and set `code = 'auth'` on your own API-error
@@ -588,27 +596,53 @@ failure — that bug has no symptom at ingest time.
 
 **Load the built bundle.** The CJS/ESM interop in `src/index.ts` is exactly
 what breaks silently on an esbuild upgrade, and it breaks at *install* time,
-in the user's app, not in your unit tests:
+in the user's app, not in your unit tests. Use `bundleLoadSmoke` from
+`@kiagent/connector-sdk/testing` (see below) instead of hand-rolling this.
+
+Building a `HostFor<G>` literal for the smoke is also how you prove your cap
+list is honest: if the object type-checks with only the namespaces you
+declared, you aren't reaching for anything you didn't ask for.
+
+### The testing kit — `@kiagent/connector-sdk/testing`
+
+The SDK ships a test-only subpath with the pieces every connector's suite
+re-invents: `bundleLoadSmoke`, `jsonRes`, `scriptedFetch`, `fakeSession`,
+`fakeAuthChannel`, `instantClock`. It is a **separate subpath, never
+re-exported from the root** — it pulls in `node:child_process` and
+`node:assert`, so importing it from anything your entry bundles would drag
+both into `dist/index.js`. Import it only from test files.
+
+`bundleLoadSmoke` replaces the hand-rolled snippet above:
 
 ```ts
-execSync('npm run build', { cwd: root });
-const mod = require(join(root, 'dist', 'index.js'));
-const entry = mod.default ?? mod;
-expect(typeof entry.activate).toBe('function');
+import { bundleLoadSmoke } from '@kiagent/connector-sdk/testing';
 
-const host: HostFor<'net'> = {
-  self: { id: 'slack', dataDir: '/tmp' },
-  log: () => {},
-  net: { fetch: async () => { throw new Error('unused in this smoke test'); } },
-};
-const result = await entry.activate(host);
-expect(result.sources?.[0]?.descriptor.id).toBe('slack');
-expect(result.senders?.slack).toBeDefined();
+test('bundle loads and activates', async () => {
+  const host: HostFor<'net'> = {
+    self: { id: 'slack', dataDir: '/tmp' },
+    log: () => {},
+    net: { fetch: async () => { throw new Error('unused in this smoke test'); } },
+  };
+  await bundleLoadSmoke({
+    root: join(__dirname, '..'),
+    selfId: 'slack',
+    sourceIds: ['slack'],
+    senderIds: ['slack'],
+    host,
+  });
+}, 30_000);
 ```
 
-Building a `HostFor<G>` literal in tests is also how you prove your cap list
-is honest: if the object type-checks with only the namespaces you declared,
-you aren't reaching for anything you didn't ask for.
+Two gotchas worth knowing before you script around them:
+
+- **One process (or one root) per smoke.** `bundleLoadSmoke` `require()`s
+  your built `dist/index.js`. Node's module cache is keyed by resolved path,
+  so a second `bundleLoadSmoke` call against the same `root` in the same
+  process gets back the first call's cached module, never a rebuild in
+  between — run one smoke per process, or give each its own root.
+- **`sourceIds` / `senderIds` are opt-in assertions, not defaults.** Each is
+  only checked when you pass it; there's no "assert empty" fallback. A
+  typo'd option name silently asserts nothing instead of failing loud.
 
 ---
 
@@ -727,8 +761,8 @@ so in your README if your connector is likely to be trialled and dropped.
 - [ ] `manifest.json` `id` is `publisher.name`, `engine` range covers the
       platform you tested against
 - [ ] `caps` lists only what you use; typed as `ExtensionModule<…>` to match
-- [ ] Vendored `kiagent-contracts.ts` + `kiagent-source-errors.ts` carry
-      provenance headers with a commit sha
+- [ ] `@kiagent/connector-sdk` devDependency present, pinned to a `sdk-v*`
+      release tarball, `kiagentCore` matching the platform you tested against
 - [ ] Secret collected in a prompt field named exactly `password` (or via
       `auth.oauth`) — nothing secret in `connect()`'s returned `config`
 - [ ] `fetchBytes` implemented if you emit any binary content
