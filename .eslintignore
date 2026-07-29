@@ -25,6 +25,10 @@ release/build
 # Self-contained backend services with their own toolchains (own tsconfig, jest).
 services
 
+# Self-contained public npm package with its own toolchain (own tsconfig,
+# own node:test runner) and its own build output under sdk/connector-sdk/dist.
+sdk
+
 # Vendored bundled-connector builds (minified third-party bundles, not source).
 assets/bundled-connectors/
 

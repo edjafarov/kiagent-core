@@ -28,6 +28,7 @@
     "services/registration",
     "release/build",
     "release/app/dist",
-    ".erb/dll"
+    ".erb/dll",
+    "sdk"
   ]
 }
