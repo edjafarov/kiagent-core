@@ -34,6 +34,12 @@ export interface UpdaterDeps {
   currentVersion: string;
   /** `process.env.KIAGENT_DEV_UPDATES === '1'` — allow update checks in dev. */
   devUpdates?: boolean;
+  /**
+   * `product.json` → `macUpdatesEnabled`. Opens the macOS eligibility gate for
+   * a product build that ships a Developer ID signature. Absent/false keeps
+   * macOS disabled with reason 'unsigned-macos' — core's default.
+   */
+  macUpdatesEnabled?: boolean;
   /** Injectable clock for `checkedAt` (defaults to Date.now). */
   now?: () => number;
 }

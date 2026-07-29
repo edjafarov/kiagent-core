@@ -26,13 +26,14 @@ before flipping it public.
       channels that don't exist in the OSS base channel map, so the updater
       section is inert in OSS. This is the renderer analog of the main.ts
       updater guarding.
-- [ ] Neutralize hardcoded `'KIAgent'` brand strings (BootSplash / Spark /
-      About) as part of the brand-asset work. **Partially addressed:**
-      `product.json` (`src/main/product.ts`, wired in `main.ts`) now
-      supplies `productName`, but only `Notification` titles read it so far
-      — BootSplash, the Spark mark and About still hardcode `'KIAgent'`.
-      This item stays open until those are ported to `product.productName`
-      too. See `docs/architecture/extension-platform.md` § Product builds.
+- [ ] Neutralize hardcoded brand strings (BootSplash / Spark / TitleBar) as
+      part of the brand-asset work. **Partially addressed:** `product.json`
+      (`src/main/product.ts`, wired in `main.ts`) supplies `productName`, and
+      `Notification` titles + the About pane (title and copyright line, via
+      the `app:info` IPC response) now read it — BootSplash, the Spark mark
+      and TitleBar still hardcode `'KIAgent'`. This item stays open until
+      those are ported too. See
+      `docs/architecture/extension-platform.md` § Product builds.
 - [x] ~~Wire the cross-platform unsigned `package:oss` matrix in CI~~ —
       built as `kiagent-core-package.yml`, then REMOVED 2026-07-13: core CI
       runs tests only; release builds of the core are deliberately not done

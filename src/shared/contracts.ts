@@ -872,19 +872,6 @@ export interface McpActivityRecord {
  *  and the renderer's list cap (shared: the renderer can't import main). */
 export const MCP_ACTIVITY_RECENT_MAX = 200;
 
-/** The outward MCP surface. Local transport = loopback (auth-free by
- *  binding); anything remote requires bearer/OAuth. */
-export interface Mcp {
-  readonly http: { port: number; auth: 'loopback' | { bearer: string } } | null;
-  readonly stdio: boolean;
-  clients: {
-    detected(): Promise<
-      Array<{ id: string; name: string; connected: boolean }>
-    >;
-    connect(id: string): Promise<void>;
-  };
-}
-
 /** THE canonical renderer projection — shipped by the platform so main and
  *  renderer cannot drift. Derived fields live in init() and apply() only. */
 export interface AppState {
@@ -958,15 +945,4 @@ export interface Scheduler {
     }>
   >;
   trigger(id: string): Promise<void>; // "Sync now" / "Run now"
-}
-
-export interface Platform {
-  store: Store;
-  engine: Engine;
-  scheduler: Scheduler;
-  inference: Inference;
-  prefs: Prefs;
-  logs: LogStore;
-  mcp: Mcp;
-  sources: { get(id: string): Source | undefined; list(): SourceDescriptor[] };
 }

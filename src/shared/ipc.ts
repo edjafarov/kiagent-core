@@ -347,7 +347,12 @@ export interface Invokes {
     };
   };
 
-  'app:info': { req: void; res: { version: string; platform: string } };
+  /** Build identity. `productName` is the resolved product.json name (falls
+   *  back to DEFAULT_PRODUCT_NAME) — the renderer never hardcodes a brand. */
+  'app:info': {
+    req: void;
+    res: { version: string; platform: string; productName: string };
+  };
   /** Reveal a path in the system file manager. */
   'app:open-path': { req: { path: string }; res: void };
 

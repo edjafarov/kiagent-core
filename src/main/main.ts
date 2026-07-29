@@ -483,6 +483,7 @@ function registerIpc(
   handle('app:info', () => ({
     version: app.getVersion(),
     platform: process.platform,
+    productName: product.productName,
   }));
   handle('app:open-path', ({ path: target }) => {
     shell.showItemInFolder(target);
@@ -507,6 +508,7 @@ function registerIpc(
     platform: process.platform,
     currentVersion: app.getVersion(),
     devUpdates: process.env.KIAGENT_DEV_UPDATES === '1',
+    macUpdatesEnabled: product.macUpdatesEnabled === true,
   });
   registerUpdaterIpc(updater, {
     handle: (channel, fn) => handle(channel as never, fn as never),

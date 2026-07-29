@@ -6,13 +6,6 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/**
- * macOS auto-update is impossible without a Developer ID signature; an unsigned
- * build makes electron-updater throw "Could not get code signature". Keep macOS
- * gated off until the Apple cert lands (Phase 2), then flip this to `true`.
- */
-export const MAC_UPDATES_ENABLED = false;
-
 const CHECK_DELAY_MS = 10_000;
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -21,10 +14,13 @@ export function createUpdater(deps: UpdaterDeps): UpdaterManager {
   const now = deps.now ?? (() => Date.now());
   const subscribers = new Set<(s: UpdateState) => void>();
 
-  // Eligibility gate (no network when disabled).
+  // Eligibility gate (no network when disabled). macOS auto-update is
+  // impossible without a Developer ID signature — electron-updater throws
+  // "Could not get code signature" — so it stays off unless the product config
+  // opts in (`product.json` → `macUpdatesEnabled`).
   let disabledReason: string | null = null;
   if (!isPackaged && !deps.devUpdates) disabledReason = 'dev';
-  else if (platform === 'darwin' && !MAC_UPDATES_ENABLED)
+  else if (platform === 'darwin' && !deps.macUpdatesEnabled)
     disabledReason = 'unsigned-macos';
 
   let state: UpdateState = disabledReason

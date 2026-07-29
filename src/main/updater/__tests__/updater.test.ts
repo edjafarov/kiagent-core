@@ -58,6 +58,42 @@ describe('createUpdater eligibility gate', () => {
     });
   });
 
+  it('is disabled on macOS when macUpdatesEnabled is explicitly false', () => {
+    const { deps } = makeDeps({ platform: 'darwin', macUpdatesEnabled: false });
+    expect(createUpdater(deps).getState()).toMatchObject({
+      status: 'disabled',
+      reason: 'unsigned-macos',
+    });
+  });
+
+  it('is eligible on macOS when the product opts into mac updates', () => {
+    const { deps } = makeDeps({ platform: 'darwin', macUpdatesEnabled: true });
+    expect(createUpdater(deps).getState().status).toBe('idle');
+  });
+
+  it('macUpdatesEnabled does not override the dev gate', () => {
+    const { deps } = makeDeps({
+      platform: 'darwin',
+      isPackaged: false,
+      macUpdatesEnabled: true,
+    });
+    expect(createUpdater(deps).getState()).toMatchObject({
+      status: 'disabled',
+      reason: 'dev',
+    });
+  });
+
+  it('non-macOS platforms ignore macUpdatesEnabled entirely', () => {
+    expect(
+      createUpdater(makeDeps({ platform: 'win32' }).deps).getState().status,
+    ).toBe('idle');
+    expect(
+      createUpdater(
+        makeDeps({ platform: 'linux', macUpdatesEnabled: false }).deps,
+      ).getState().status,
+    ).toBe('idle');
+  });
+
   it('check() on a disabled updater never touches the network', async () => {
     const { deps, au } = makeDeps({ isPackaged: false });
     const m = createUpdater(deps);

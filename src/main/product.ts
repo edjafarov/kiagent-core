@@ -9,21 +9,35 @@ import path from 'path';
 
 import { z } from 'zod';
 
+import { DEFAULT_PRODUCT_NAME } from '@shared/product';
+
 const schema = z
   .object({
     productName: z.string().min(1).optional(),
     updateFeedUrl: z.string().url().optional(),
     bundledExtensionsDir: z.string().min(1).optional(),
+    macUpdatesEnabled: z.boolean().optional(),
   })
   .strict();
 
 export interface ProductConfig {
+  /** User-facing name: About pane, Notification titles. */
   productName: string;
   updateFeedUrl?: string;
   bundledExtensionsDir?: string;
+  /**
+   * macOS auto-update opt-in. electron-updater cannot update an unsigned
+   * macOS build ("Could not get code signature"), so the gate stays CLOSED
+   * unless a product build that ships a Developer ID signature opens it.
+   * Absent/false → macOS updates disabled ('unsigned-macos'). Other platforms
+   * ignore this entirely.
+   */
+  macUpdatesEnabled?: boolean;
 }
 
-export const DEFAULT_PRODUCT: ProductConfig = { productName: 'KIAgent' };
+export const DEFAULT_PRODUCT: ProductConfig = {
+  productName: DEFAULT_PRODUCT_NAME,
+};
 
 export function loadProductConfig(
   candidates: Array<string | null | undefined>,

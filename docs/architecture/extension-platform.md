@@ -328,17 +328,20 @@ identity: `product.json`, resolved by `loadProductConfig()`
 (`src/main/product.ts`). Fields — all optional, and the schema is
 `.strict()` (an unknown key rejects the whole file):
 
-| Field                  | Type         | Effect                                                                                                                         |
-| ---------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `productName`          | string       | User-facing product name — today only `Notification` titles in `main.ts` read it.                                              |
-| `updateFeedUrl`        | string (URL) | Reserved for update-feed wiring; not yet consumed anywhere.                                                                    |
-| `bundledExtensionsDir` | string       | Overrides the bundled-extensions directory name/path (default `'bundled-extensions'`), resolved relative to the resource root. |
+| Field                  | Type         | Effect                                                                                                                                                             |
+| ---------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `productName`          | string       | User-facing product name. Read by `Notification` titles in `main.ts` and, via the `app:info` IPC response, by the About pane (title + copyright line).              |
+| `updateFeedUrl`        | string (URL) | Overrides the electron-builder-baked `app-update.yml` feed (`autoUpdater.setFeedURL`).                                                                              |
+| `bundledExtensionsDir` | string       | Overrides the bundled-extensions directory name/path (default `'bundled-extensions'`), resolved relative to the resource root.                                      |
+| `macUpdatesEnabled`    | boolean      | Opens the macOS auto-update eligibility gate. Absent/`false` → macOS updates stay `disabled`/`unsigned-macos`. Only a Developer ID-signed product build sets `true`. |
 
 `loadProductConfig(candidates, log?)` **never throws**: it takes the first
 candidate whose `product.json` exists (a candidate ending in `.json` is
 used as a literal file path; anything else has `product.json` appended),
-parses it, and falls back to `DEFAULT_PRODUCT = { productName: 'KIAgent' }`
-on a missing file, parse error, or schema violation (logging the reason via
+parses it, and falls back to `DEFAULT_PRODUCT = { productName:
+DEFAULT_PRODUCT_NAME }` (`'KIAcore'`, from `src/shared/product.ts` — the one
+constant main and renderer share so a pre-`app:info` render cannot show a
+different name) on a missing file, parse error, or schema violation (logging the reason via
 the optional `log` callback on error, never throwing). `main.ts` calls it
 with `[process.env.KIA_PRODUCT_CONFIG, app.isPackaged ?
 process.resourcesPath : null, app.getAppPath()]` — so `KIA_PRODUCT_CONFIG`

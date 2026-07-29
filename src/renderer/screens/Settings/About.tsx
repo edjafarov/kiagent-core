@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Spark } from '@shared/web-ui/Spark';
 import { Icon } from '@shared/web-ui/icon-sprite';
 import type { UpdateState } from '@shared/ipc';
+import { DEFAULT_PRODUCT_NAME } from '@shared/product';
 
 const REPO_URL = 'https://github.com/edjafarov/kiagent-core';
 const REPO_LABEL = 'github.com/edjafarov/kiagent-core';
@@ -47,6 +48,7 @@ export function About(): React.ReactElement {
   const [info, setInfo] = useState<{
     version: string;
     platform: string;
+    productName: string;
   } | null>(null);
   const [checking, setChecking] = useState(false);
   const [update, setUpdate] = useState<UpdateState | null>(null);
@@ -60,6 +62,12 @@ export function About(): React.ReactElement {
     });
     return off;
   }, []);
+
+  // Brand name comes from the resolved product config (app:info), never from a
+  // literal here — a product build supplies product.json and needs no source
+  // edit. DEFAULT_PRODUCT_NAME covers the pre-response frame and is the same
+  // constant main defaults to, so the two can't disagree.
+  const productName = info?.productName ?? DEFAULT_PRODUCT_NAME;
 
   const checkForUpdates = () => {
     setChecking(true);
@@ -83,7 +91,7 @@ export function About(): React.ReactElement {
           alignItems: 'center',
         }}
       >
-        <span className="about-name">KIAcore</span>
+        <span className="about-name">{productName}</span>
         <span className="about-version">
           {info ? `v${info.version}` : 'v—'}
         </span>
@@ -158,8 +166,8 @@ export function About(): React.ReactElement {
       </div>
 
       <div className="about-foot">
-        © 2026 KIAcore contributors. Made with care for offline-first knowledge
-        work.
+        © 2026 {productName} contributors. Made with care for offline-first
+        knowledge work.
       </div>
     </div>
   );
