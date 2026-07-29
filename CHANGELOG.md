@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.62.0](https://github.com/edjafarov/kiagent-core/compare/v0.61.0...v0.62.0) (2026-07-29)
+
+### Features
+
+* **outbound:** draft_reply target key selects a stored per-message reply target ([5282879](https://github.com/edjafarov/kiagent-core/commit/528287975a0c8773158b362b902d4de23ea1f312))
+
 ## [0.53.0](https://github.com/edjafarov/kiagent-core/compare/v0.52.0...v0.53.0) (2026-07-15)
 
 ### Bug Fixes
