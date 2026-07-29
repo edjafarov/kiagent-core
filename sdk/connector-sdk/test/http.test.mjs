@@ -207,6 +207,19 @@ test('transientBackoffMs overrides the 2s base', async () => {
   assert.deepEqual(slept, [100, 200]);
 });
 
+test('transientBackoffMs: 0 is honored (?? not ||)', async () => {
+  const { slept, sleep } = recorder();
+  const s = scripted(res(500), res(200));
+
+  await requestWithRetry(s.attempt, {
+    label: 'x',
+    transientBackoffMs: 0,
+    sleep,
+  });
+
+  assert.deepEqual(slept, [0]);
+});
+
 // --------------------------------------------------------------- rate limit
 
 test('429 honors retry-after, then returns the success', async () => {
@@ -400,6 +413,13 @@ test('retryAfterMs: zero-valued overrides are honored (?? not ||)', () => {
   const policy = { label: 'x', retryAfterDefaultSec: 0, retryAfterMinSec: 0 };
   assert.equal(retryAfterMs({}, policy), 0);
   assert.equal(retryAfterMs({ 'retry-after': '0' }, policy), 0);
+  assert.equal(
+    retryAfterMs(
+      { 'retry-after': '7' },
+      { label: 'x', retryAfterMinSec: 0, retryAfterMaxSec: 0 },
+    ),
+    0,
+  );
 });
 
 test('requestWithRetry sleeps the clamped retry-after from the policy', async () => {
