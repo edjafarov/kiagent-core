@@ -1,256 +1,747 @@
 # Connector authoring guide
 
-How to add a new data-source connector to KIAgent **without re-introducing the
-mistakes we've already paid for**. This is the cross-cutting guide; per-source
-design rationale lives in `docs/superpowers/specs/*-connector-design.md`.
+How to build, test and ship a third-party connector for KIAgent.
 
-A connector pulls a personal/team source (Gmail, Slack, Notion, WhatsApp,
-browser history, a local folder…) into the indexed corpus. The subsystem
-already carries a real shared layer — **your job is mostly to fill in
-source-specific gaps, not to rebuild the pipeline.** Most of the recurring bugs
-below came from re-implementing something that was already shared, or from
-forgetting one of the ~7 places a connector has to be wired in.
+A **connector is an extension** — there is no separate connector concept. You
+write one CJS bundle, declare a manifest, and return a `Source` (and
+optionally a `Sender`) from `activate()`. The app installs it from a GitHub
+release, runs it in its own process, and drives it.
 
----
+This guide is the build-and-ship walkthrough. For *how the platform works*
+— process model, the capability gate, the bundled/privileged tier — read
+[`docs/architecture/extension-platform.md`](architecture/extension-platform.md)
+first; it is the model, this is the recipe.
 
-## 1. The contract
-
-Two interfaces in `src/main/connectors/types.ts`:
-
-- **`Connector`** (`types.ts:42`) — the static descriptor, one per source:
-  `id`, `displayName`, `capabilities` (`multiAccount`, `requiresAuth`,
-  `supportsBackfill`, `supportsDelta`, `supportsRealtime`), plus
-  `getAccountSchema()`, `validateAccount(input)`, `createInstance(account, ctx)`.
-- **`ConnectorInstance`** (`types.ts:54`) — the live per-account object the
-  scheduler drives: `startBackfill(progress)`, `pollDelta()`, optional
-  `startRealtime?/stopRealtime?`, `requestStop?()`, `shutdown()`,
-  `buildSourceUrl(...)`.
-
-Register it in **one** place: `registerBuiltinConnectors` in
-`src/main/connectors/index.ts`. The `ConnectorRegistry`
-(`src/main/scheduler/registry.ts`) throws on duplicate ids.
-
-The scheduler (`src/main/scheduler/scheduler.ts`) does the rest automatically:
-it builds a per-account `ctx`, runs backfill **detached** (a Gmail backfill can
-take hours), flips `sync_state.status` to `live`, then polls `pollDelta` on a
-focus-aware cadence (30s focused / 120s unfocused / 600s tray, overridable per
-source via the `connector_cadence` table). Auth failures flip to
-`needs_reauth`; other errors to `error`. **You do not write the sync loop.**
+The worked example throughout is the published Slack connector
+(`kia-plugins/slack-kia-connector`), which uses every mechanism described
+here.
 
 ---
 
-## 2. Reuse the shared layer — do not rebuild it
+## 1. The contract is the SDK
 
-Before writing anything, know what already exists. Most duplication bugs are
-"I didn't know this was shared."
+There is no npm package to install. The extension-facing API is
+[`src/shared/contracts.ts`](../src/shared/contracts.ts) (§7 in particular) plus
+the runtime error classes in
+[`src/shared/source-errors.ts`](../src/shared/source-errors.ts). You **vendor a
+snapshot** of both into your repo and compile against them.
 
-| Need | Use | Where |
-|---|---|---|
-| Write a doc (UPSERT + FTS + trigram + language + `account_id`) | `ctx.upsertDocument(pending)` | `context/connector-context.ts:111` |
-| Delete / archive a doc | `ctx.deleteDocument` / `ctx.archiveDocument` | `connector-context.ts:173` |
-| Dedupe by source id / content hash | `ctx.findBySourceId` / `ctx.findByContentHash` | `connector-context.ts:202` |
-| Load/save the delta cursor & status | `ctx.loadSyncState` / `ctx.saveSyncState` | `connector-context.ts:258` |
-| Reset sync-state for re-backfill | `resetSyncStateForBackfill` / `setSyncStatus` | `db/sync-state.ts:24` |
-| Create / restart an account | `upsertAccountWithFreshSyncState` + `restartAccountAndBroadcast` | `accounts/persist.ts:40` |
-| Full OAuth instance (backfill/delta/token-refresh skeleton) | `createOAuthInstance` | `connectors/oauth-shared/create-instance.ts:51` |
-| Encrypted token blob (encode/decode/save/load) | `oauth-shared/safe-storage-blob.ts` | — |
-| GET HTTP client with retry/timeout/backoff | `http-shared/bearer-fetch.ts` | — |
-| Convert raw html/text/pdf/docx/xlsx → markdown | `ctx.converter.convert(...)` | `converter/index.ts` |
-| Counts / last-doc / purge | `countDocumentsForAccount`, `recentDocumentsForAccount`, `collectAccountDocumentIds` | `db/recompute-counts.ts` |
-| Per-source UI row, badge, doc count, actions | one `CONNECTOR_REGISTRY` entry | `renderer/connectors-registry.ts` |
-| Management IPC (list/sync/pause/remove/retry/cadence) | already generic | `ipc/connector-lifecycle-handlers.ts` |
+Vendoring discipline — copy it exactly:
 
-**OAuth connectors** (gmail, google-docs, ms365, onedrive) are ~30-line adapters
-around `createOAuthInstance` — copy `gmail/index.ts:37`, not the whole thing.
-**Paste-token connectors** (slack, notion) are near-twins; copy the cleaner
-**Notion** (`connectors/notion/`, flat account, no tracked_roots, no migration).
+```ts
+/**
+ * Vendored snapshot of kiagent-core src/shared/contracts.ts @ c2a91d1 — the
+ * contract IS the SDK; do not edit, re-vendor.
+ */
+```
 
----
+```ts
+// Vendored snapshot of kiagent-core src/shared/source-errors.ts @ 7859d6f… — re-copy when re-vendoring kiagent-contracts.ts.
+```
 
-## 3. The data model in one screen
+Two rules:
 
-- **`accounts`** (`db/schema.sql:29`) — one row per connected account.
-  `config_json` = non-secret config; secrets go in an encrypted blob referenced
-  by `credentials_blob_path` (never in the DB).
-- **`sync_state`** (`schema.sql:41`) — one row per account: `status`,
-  backfill progress counters, and **`cursor_json`** (your connector-defined
-  delta cursor — the only sync state you own).
-- **`tracked_roots`** (`schema.sql:51`) — sub-units (folders / drives / browser
-  profiles). Only "folder-bearing" connectors use these (local-folder=`fs`,
-  google-docs=`drive`, onedrive=`ms-drive`, browser=`browser`). Flat connectors
-  (gmail, slack, notion, whatsapp) use none.
-- **`documents`** (`schema.sql:2`) — UPSERT key is `UNIQUE(source, source_id,
-  type)`. Ownership is the **`account_id` column**, stamped automatically by
-  `upsertDocument` because the ctx is account-scoped. **Use the column. Do not
-  invent a new `metadata.account_id`-style ownership convention** (see §5.1).
+- **Provenance header with the source commit sha, on every vendored file.**
+  Without it nobody — including you in six months — can tell which platform
+  version your types describe.
+- **Never edit a vendored file.** Re-copy it. `contracts.ts` is type-only, so
+  it costs you nothing at runtime; `source-errors.ts` ships real classes, and
+  the platform is deliberately built so that *your* copy of `SourceAuthError`
+  classifies identically to the platform's (see §6).
 
----
+The platform's own API version is `PLATFORM_API_VERSION` in
+[`src/shared/extension-rpc.ts`](../src/shared/extension-rpc.ts) — **`1.2.0`** at
+the time of writing. Your manifest's `engine` range is checked against it at
+install.
 
-## 4. End-to-end checklist for a new connector
+### What is not plumbed yet
 
-Touch every box or the feature ships half-wired. The cleanest reference is
-**Notion** (paste-token) or **Gmail** (OAuth).
+`ExtensionModule.activate()` is typed to return
+`{ sources, workers, tools, providers, senders }`, but the wire protocol
+(`Contributions` in `extension-rpc.ts`) carries **sources, tools and senders
+only**. Returning `workers` or `providers` from a third-party extension is
+silently dropped — only built-ins register those today. Don't build on them.
 
-**Connector logic** — `src/main/connectors/<name>/`
-- [ ] `index.ts` — export the `Connector` object. Paste-token: build client →
-      directory → return instance. OAuth: delegate to `createOAuthInstance`.
-- [ ] `client.ts` — API client. GET-based? wrap `bearer-fetch.ts`. POST-based?
-      bespoke, but **parse `Retry-After` defensively** (§5.6).
-- [ ] `backfill.ts` — write via `ctx.upsertDocument`; call
-      `progress.update(done, total)`; save the **initial cursor** even if the
-      source is empty (§5.3).
-- [ ] `delta.ts` — load cursor (guard "backfill first"), upsert changes,
-      **advance the cursor to the newest _observed_ item, not the newest
-      _ingested_ one** (§5.3); save `{status:'live', cursor_json, last_sync_at}`.
-- [ ] `add-account.ts` (auth connectors) — `validate<Name>...()` returning
-      `{ok, error?, message?}`.
-
-**Registration & DB**
-- [ ] `reg.register(<name>Connector)` in `connectors/index.ts`.
-- [ ] **Ownership: nothing to do for new rows** — `upsertDocument` stamps
-      `account_id`. Add a branch to `backfillDocumentAccountIds`
-      (`db/recompute-counts.ts`) **only** if you're migrating pre-existing rows.
-- [ ] If you have **binary content** (images / PDFs / attachments), register a
-      `ByteSource` in `deep-extraction/byte-sources.ts` — otherwise OCR/VLM
-      never re-fetches your bytes (§5.7).
-- [ ] A **migration** in `db/migrations.ts` **only** if you change the
-      account/tracked-root cardinality model — and that means a *destructive*
-      migration; gate it with a test (§5.5).
-
-**IPC**
-- [ ] Add channel constant(s) in `ipc/channels.ts` (the exhaustive
-      `ipc-channels.test.ts` contract is now single-sourced from `ChannelMap`).
-- [ ] Register the add-account handler in `ipc/connector-account-handlers.ts`.
-      Management channels are already generic — nothing to add.
-
-**Renderer / UI**
-- [ ] One `CONNECTOR_REGISTRY` entry in `renderer/connectors-registry.ts` wires
-      the row, status badge, doc count, and actions via the generic `AccountRow`.
-- [ ] Paste-token / QR flow only: add a dialog — extend the existing token
-      dialog rather than cloning `SlackConnectDialog`/`NotionConnectDialog`.
-- [ ] Expose the channel through the preload bridge.
-
-**Dependencies** (the qrcode incident — §5.2)
-- [ ] Main-process-only SDKs → `release/app/package.json` (externalized).
-- [ ] Anything the **renderer** value-imports → **ROOT** `package.json`
-      (webpack bundles it). `import type` is fine either way.
-
-**Tests** — full jest suite is the merge gate (per-file runs hide breakage).
-The two guard tests below already protect you; keep them green.
+Likewise, the `files` and `commands` capabilities validate and consent
+normally but **throw on every call** (`the 'files' capability is not supported
+in this build yet` — see `src/main/platform/host-surfaces.ts`). Declaring them
+buys you a scarier consent screen and nothing else.
 
 ---
 
-## 5. The recurring mistakes (and the one-line rule for each)
+## 2. Repo skeleton
 
-These are mined from git history. Each bit us on **two or more** connectors.
+Copy this shape; it is what the Slack connector ships.
 
-### 5.1 "Indexed 0 documents" — bit Slack, WhatsApp, **and** Notion
-**Symptom:** docs index fine but the UI shows `Indexed 0` and disconnect-purge
-deletes nothing (orphaning every doc). **Cause:** ownership used to be encoded
-per-connector in ad-hoc `metadata` JSON, and the counting functions in
-`recompute-counts.ts` had to know all 6+ conventions; a new source fell through
-to 0. **Fixed structurally** (`9555f90`, `150b0c3`): a real
-`documents.account_id` column + a registry-cross-checked guard test
-(`src/__tests__/recompute-counts-all-sources.test.ts`).
-> **Rule:** rely on the `account_id` column written by `upsertDocument`; never
-> invent a new metadata ownership key. Keep the all-sources guard test green.
+```
+manifest.json          # the platform reads this
+package.json           # names + versions the npm-pack tarball
+build.mjs              # esbuild → single CJS file
+tsconfig.json
+jest.config.js
+icon.png               # optional, ≤200 KB, also read from the repo root pre-install
+README.md              # rendered on the marketplace detail page
+src/
+  index.ts             # entry: default-exports the ExtensionModule
+  source.ts            # the Source
+  sender.ts            # optional Sender
+  client.ts            # your API client
+  kiagent-contracts.ts       # vendored, with provenance header
+  kiagent-source-errors.ts   # vendored, with provenance header
+  __tests__/
+dist/index.js          # build output — what `entry` points at
+```
 
-### 5.2 Renderer dep in `release/app` → broken `require()` — the qrcode incident
-**Symptom:** `qrcode` was added to `release/app/package.json`; webpack
-externalizes all `release/app` deps, so the contextIsolated renderer emitted an
-unresolvable `require("qrcode")` and the WhatsApp pairing QR never rendered.
-Fails only at runtime. **Fixed** (`8bfee42`) + guard test
-`src/__tests__/renderer-externals.test.ts`.
-> **Rule:** renderer value-imports go in ROOT `package.json`; only
-> main-process deps go in `release/app`. (Same trap at build-time: any `@main`
-> module the renderer value-imports must be node-builtin-free — split node-free
-> catalogs out, e.g. `models.ts`.)
+`build.mjs` — the whole thing:
 
-### 5.3 Delta cursor stalls forever — bit Notion twice
-**Symptoms:** (a) a trashed/filtered item at the head was skipped *without
-advancing the cursor*, so it re-walked every tick; (b) an empty workspace left
-the cursor undefined → `JSON.stringify` dropped it → "no cursor" thrown forever.
-> **Rule:** advance the cursor to the newest **observed** timestamp (not the
-> newest ingested), and **always persist a cursor** — floor it at epoch
-> (`new Date(0)`) so an empty source still has one.
+```js
+import { build } from 'esbuild';
+await build({
+  entryPoints: ['src/index.ts'],
+  bundle: true,
+  platform: 'node',
+  target: 'node20',
+  format: 'cjs',
+  outfile: 'dist/index.js',
+});
+```
 
-### 5.4 Multi-account queries not scoped to the owning account — Notion
-**Symptom:** with two Notion workspaces connected, workspace A's nightly
-deletion-reconcile archived workspace B's pages (B's pages aren't in A's live
-set). Fixed (`b4da211`) — but note `notion/reconcile.ts` still scopes by the
-*renameable* `metadata.workspace`, a latent bug now that `account_id` exists.
-> **Rule:** every reconcile/purge/count query must filter by
-> `account_id = ctx.accountId`. Never join on a renameable display string.
+`src/index.ts` — note the dual export; the host `require()`s the bundle and
+accepts either shape, but shipping both is what keeps it working across
+esbuild upgrades (and §8 has a test for exactly that):
 
-### 5.5 Account-model changes force a destructive migration — local-folder, browser
-Changing cardinality (per-profile → unified "Browsers"; per-folder → one
-machine account) has no in-place reshape — it deletes legacy accounts +
-`sync_state` + `tracked_roots` + their docs and rebuilds.
-> **Rule:** a shipped connector's account-model change = a destructive,
-> **idempotent** (sentinel-guarded, re-runs every boot) migration. Gate it with
-> a dedicated test (purge X / preserve Y) and require a manual smoke before
-> shipping.
+```ts
+import type { ExtensionModule } from './kiagent-contracts';
+import { createSlackSender } from './sender';
+import { createSlackSource } from './source';
 
-### 5.6 `Retry-After` → `NaN` → busy-retry loop — Notion then Slack
-`Number(retryAfter)` returns `NaN` for an HTTP-date Retry-After;
-`sleep(NaN*1000)` resolves immediately → near-busy retry loop until the budget
-aborts. Notion fixed it first; Slack ported the fix (`3ef11a8`).
-> **Rule:** clamp non-finite Retry-After to a default; floor 1s, cap 60s. If you
-> don't share a retry core, you *will* reintroduce this per connector.
+const mod = {
+  async activate(host) {
+    return {
+      sources: [createSlackSource(host)],
+      // Keyed by SOURCE id, and listed in manifest contributes.senders.
+      senders: { slack: createSlackSender(host) },
+    };
+  },
+} satisfies ExtensionModule<'net' | 'send'>;
 
-### 5.7 Binary content with no `ByteSource` → never OCR'd
-The deep-extraction drain re-fetches original bytes through
-`deep-extraction/byte-sources.ts`. A connector with images/PDFs that doesn't
-register one ships those docs text-poor forever, silently.
-> **Rule:** binary content ⇒ register a `ByteSource` (return `'gone'` for
-> permanently lost bytes, `'unavailable'` for retryable).
+export default mod;
+module.exports = mod;
+```
 
-### 5.8 Backfill progress in the wrong unit — Slack
-Slack's `backfill_done_count` counts *conversations*, not docs, so the UI showed
-"5,582 documents of ~442" and the generic `recomputeMissingDocCounts` would
-clobber it. Fixed by a per-source backfill-units helper + excluding slack from
-the recompute (`recompute-counts.ts:139`).
-> **Rule:** if your backfill counter isn't in documents, declare its unit and
-> exclude it from the generic doc-count recompute.
-
-### 5.9 Live-socket connectors (WhatsApp) — the ban-risk cluster
-Two sockets sharing one Signal key store corrupted auth and lost messages.
-> **Rule:** exactly one socket behind an `ensureStarted` gate, serialized
-> ingest, backoff+jitter reconnect, an abandoned-session reaper, and atomic
-> auth-blob writes that preserve a corrupt blob rather than overwriting it.
+The `ExtensionModule<'net' | 'send'>` type parameter is your cap list.
+`HostFor<G>` builds the host's shape from it, so an ungranted namespace does
+not exist at compile time either — if you type it honestly, TypeScript catches
+a `host.query.…` call you never asked permission for.
 
 ---
 
-## 6. Auth: prefer paste-token from a user-created internal app
+## 3. The manifest
 
-For Slack the rate-limit exemption is **load-bearing**: since 2025-05-29 Slack
-throttles non-Marketplace apps to ~1 req/min, while a user's *internal* app
-keeps Tier 3 (~50 req/min). A bundled OAuth app would be marketplace-distributed
-and crippled — so each user creates their own internal app from a bundled
-manifest and pastes the `xoxp-` token (which also removes the need for a
-token-refresh worker). Notion followed the same pattern; WhatsApp avoids cloud
-auth entirely.
-> **Rule:** for personal-corpus connectors, prefer paste-token from a
-> user-created internal app/integration. Reach for bundled OAuth only when the
-> API gives internal apps no rate advantage (the Google/MS family). Secrets
-> always go in an encrypted `safeStorage` blob, never in `config_json` or the DB.
+Validated by [`src/main/platform/manifest.ts`](../src/main/platform/manifest.ts)
+before any of your code is loaded. Rejections are shown to the user verbatim,
+so a bad manifest is a visible install failure, not a silent one.
+
+```json
+{
+  "id": "kia.slack",
+  "name": "Slack",
+  "version": "2.2.1",
+  "engine": "^1.2.0",
+  "entry": "dist/index.js",
+  "caps": ["net", "send"],
+  "contributes": {
+    "sources": ["slack"],
+    "senders": ["slack"]
+  },
+  "icon": "icon.png"
+}
+```
+
+| Field | Rule |
+|---|---|
+| `id` | must match `^[a-z0-9-]+\.[a-z0-9-]+$` — `publisher.name`. It is the install directory name and the consent key. |
+| `name` | non-empty display string |
+| `version` | valid semver. **This is the version the platform compares for updates** — see §10. |
+| `engine` | valid semver *range*, checked against `PLATFORM_API_VERSION`. Install fails with `requires platform <range>; this build is <version>`. |
+| `entry` | relative path to your CJS bundle; must resolve *inside* the package directory |
+| `icon` | optional, must end `.png`, must resolve inside the package, ≤ 200 KB (`MAX_ICON_BYTES`) |
+| `caps` | array from the fixed `CAPS` list |
+| `contributes` | what you register |
+
+### caps
+
+The eight namespace-granting caps (`query`, `net`, `files`, `db`, `ui`,
+`commands`, `inference`, `events`) are tabulated in the
+[architecture doc](architecture/extension-platform.md#capabilities). What you
+need to *do* about them:
+
+- Declare only what you use. Every cap is shown to the user before install.
+- `send` grants **no host namespace**. It gates whether the main process will
+  register your `contributes.senders` — see §7.
+- `unsafe.mainProcess` is rejected outright for anything not shipped inside
+  the app bundle. You cannot use it.
+- `inference` calls are **forced onto the `'interactive'` lane** by the host
+  surface, whatever `lane` you pass. Don't design around a background lane.
+- `net.fetch` accepts `http(s)` URLs only and caps a response body at 50 MiB.
+- `db` gives you `private.db` in your own `host.self.dataDir` — never the
+  shared corpus. There is no write path to the corpus except returning
+  documents.
+- `events` refuses to emit names starting `extension.` or `platform.` (those
+  are platform-emitted).
+
+### contributes
+
+- `sources: ["slack"]` — plain source ids, or `{ "id": "google-docs", "oauth":
+  "google" }` to bind a source to a platform OAuth provider (`google` or
+  `microsoft`, per `OAUTH_PROVIDER_IDS`). The binding is what makes
+  `auth.oauth(scopes)` work in your connect flow and gets you platform-side
+  token refresh before each pull — **the client secret stays main-side and you
+  never see it.** OAuth-bound sources are surfaced separately at consent, so
+  the user knows a provider sign-in window is coming before they install.
+- `senders: ["slack"]` — source ids you provide an outbound transport for.
+  Each must also be a source *this same extension* contributes; the platform
+  drops senders for ids you didn't declare or didn't return.
+- `workers`, `providers`, `tools`, `commands` — `tools` aside, see §1's
+  "not plumbed yet".
+
+A source id already registered by another extension makes the install fail
+(`source id 'slack' is already provided by kia.other`). Namespace yours if
+there's any chance of collision.
 
 ---
 
-## 7. Known shared-layer gaps worth closing first
+## 4. The Source
 
-If you're about to copy-paste, consider factoring instead — these are the
-highest-leverage refactors the audit surfaced:
+```ts
+interface Source<Cursor, Item> {
+  readonly descriptor: SourceDescriptor;
+  connect(auth: AuthChannel): Promise<{ identifier: string; config?: Record<string, unknown> }>;
+  pull(session: Session, cursor: Cursor | null): AsyncIterable<Batch<Cursor, Item>>;
+  toDocument(item: Item): DocumentInput | DocumentInput[] | null;
+  fetchBytes?(session: Session, doc: Document): Promise<Uint8Array | null>;
+  reconcile?(session: Session): AsyncIterable<ExternalRef[]>;
+}
+```
 
-1. **`createPasteTokenConnector()` factory + a shared `TokenPasteDialog`** —
-   Slack/Notion duplicate `index.ts` / `token.ts` / `add-account.ts` / dialog
-   almost verbatim. (`token.ts` in both is a no-op wrapper around
-   `safe-storage-blob` — call it directly.)
-2. **A `runDelta(ctx, …)` envelope** — 8 delta files repeat
-   load-cursor → guard "backfill first" → save-live.
-3. **Fix `notion/reconcile.ts` to scope by `account_id`** (§5.4) — latent
-   multi-workspace data loss, not just cleanup.
-4. **Route `gmail/delta.ts` through `bearer-fetch`** — it has its own retry-less,
-   timeout-less `fetchJson`, the exact freeze `bearer-fetch` exists to prevent.
-5. **`findOrCreateSingletonAccount` + a `NameDirectory` base** — browser /
-   local-folder / whatsapp each re-implement both.
+You do not write a sync loop, a retry policy, a backoff, a progress counter,
+or a cursor store. The engine
+([`src/main/core/engine/engine.ts`](../src/main/core/engine/engine.ts)) owns all
+of it and commits your batch and your cursor in **one transaction**, so
+"cursor advanced but rows lost" is not a state the store can reach.
+
+### descriptor
+
+```ts
+descriptor: {
+  id: 'slack',
+  name: 'Slack',
+  documentTypes: ['slack.day', 'slack.thread', 'file'],
+  auth: 'password',
+  multiAccount: true,
+  cadence: { every: '15m' },
+}
+```
+
+`cadence` is the field with teeth: it becomes the account's default re-pull
+schedule at connect (`{ every: '15m' }`, `{ cron: '0 9 * * 1' }`, or
+`'manual'`), and the user can override it per account. `documentTypes` and
+`multiAccount` render in the source's config panel; `auth` is declarative and
+currently has no runtime consumer. `id` must match a `contributes.sources`
+entry or the platform logs a warning and skips your source.
+
+### connect() and the AuthChannel
+
+`connect()` returns **`{ identifier, config }` and no secrets**. Secrets reach
+the encrypted vault by a different route, and this is the single most
+important thing to get right:
+
+```ts
+interface AuthChannel {
+  oauth(scopes: string[]): Promise<Credentials>;
+  showQr(qr: string): void;
+  prompt(schema: unknown): Promise<Record<string, unknown>>;
+  status(msg: string): void;
+  pickFolders(spec: FolderPickerSpec): Promise<FolderNode[]>;
+}
+```
+
+The engine wraps the `AuthChannel` it hands you and captures credentials out
+of the flow:
+
+- whatever `auth.oauth(scopes)` resolves to is captured wholesale;
+- from `auth.prompt(schema)`, **only the answer field literally named
+  `password`** is captured, into `Credentials.password`.
+
+Whatever was captured is written to the vault under the new account id after
+`connect()` returns. Nothing else you collect is persisted as a secret — it
+lands in `config`, which is *not* encrypted and is meant for non-secret
+settings (workspace url, team id, selected folders).
+
+> **If your token is not in a prompt field named `password`, it is never
+> saved.** `session.credentials()` will return `null` on the first pull and
+> your source will look broken. The Slack connector's `xoxp-` token is
+> collected as `properties.password` for exactly this reason.
+
+The prompt schema is a JSON-Schema-ish object read best-effort by
+[`src/renderer/screens/Sources/prompt-guidance.ts`](../src/renderer/screens/Sources/prompt-guidance.ts).
+Conventions it understands:
+
+- top-level `description` → intro paragraph
+- top-level `x-steps: [{ title, body?, link?, copy? }]` → numbered setup steps.
+  `link` must be `https://` (anything else is dropped); `copy` renders as a
+  copyable preformatted block — how the Slack connector hands the user its
+  Slack-app manifest YAML. A step without a `title` is skipped, not an error.
+- `properties.<key>` → one input each. `title` is the label, `description` the
+  help text, `examples[0]` the placeholder. `format: 'password'` masks it (as
+  does a key matching `/password|secret|token/i`); `format: 'folder-path'` and
+  `'folder-paths'` render folder pickers.
+
+Validate the credential inside `connect()` — a real API call, checking the
+granted scopes — and `throw` a plain `Error` with an actionable message if it
+fails. The user sees that string. The Slack connector rejects an `xoxb-` bot
+token by prefix before touching the network, then calls `auth.test` and lists
+any missing scopes by name.
+
+`connect()` upserts on `(source, identifier)`: returning the same identifier
+for a re-authenticated account keeps its existing id and its documents.
+
+### pull()
+
+```ts
+async *pull(session, cursor) {
+  const token = await requireToken(session);   // session.credentials()
+  // ... yield { phase, items, deletions?, cursor, estimateTotal? }
+}
+```
+
+`cursor === null` means "from the beginning". Yield `phase: 'backfill'` while
+catching up (it drives the progress bar) and `phase: 'live'` once current.
+Each yielded `Batch` is committed with its cursor atomically.
+
+The iterator is **demand-driven**: the main process asks for exactly one batch
+at a time (`src-next`), so engine backpressure applies to you for free — just
+`yield` and let the platform pace you. `session.signal` is an `AbortSignal`;
+honour it. `session.credentials()` is the one credential verb, and the
+platform refreshes OAuth tokens before returning them.
+
+Set `estimateTotal` when you can; it is what turns the progress bar from a
+spinner into a bar.
+
+### toDocument()
+
+Pure and synchronous — one upstream item to zero, one, or many
+`DocumentInput`s. Keep it pure: it is the part of your connector that unit-
+tests against fixtures with no network and no host.
+
+### fetchBytes() — not optional in practice
+
+It is typed optional, and if you ship binary content without it, that content
+is **silently never OCR'd or transcribed, forever**. The vision and audio
+workers call `session.fetchBytes(doc)`, and a `null` return is a *terminal*
+`'skip'` — the document is never revisited.
+
+If your documents carry images, PDFs, or audio, implement `fetchBytes`.
+
+### reconcile() — and the identity invariant
+
+`reconcile()` is the offline-deletion channel: yield the full listing of what
+exists upstream, and the engine archives everything live that isn't in it.
+
+The invariant is unforgiving. Yield **one ref per live document you have ever
+emitted, including children (attachments, files inside a thread), carrying
+exactly the `{ externalId, type }` the corresponding `DocumentInput`
+carried.** A typo'd type string, a changed externalId scheme after an upgrade,
+or listing parents while you emit children will read as "everything was
+deleted upstream". Derive both sides' keys from one shared builder function —
+never write the key twice.
+
+There is a backstop, not a safety net. Unless the account's config just
+changed, the engine refuses a reconcile pass that either:
+
+- came back **empty** over a non-empty corpus (always a broken listing, never
+  normal churn — this one applies at any size), or
+- would archive **more than 100 documents and more than 50% of the account's
+  live documents**.
+
+It logs and surfaces `refusing to archive N of M documents`, and the user's
+escape hatch is re-saving the account's settings. Note the absolute floor: a
+partial-but-not-empty listing bug on an account under ~100 documents sails
+straight through. Test reconcile on a big corpus.
+
+---
+
+## 5. The document model
+
+```ts
+interface DocumentInput {
+  externalId: string;
+  type: string;          // 'email.thread' | 'file' | 'chat.message' | …
+  title: string | null;
+  markdown: string | null;
+  binary?: { bytes: Uint8Array; mime: string; filename?: string };
+  url?: string;          // deep link back into the origin
+  metadata: Record<string, unknown>;
+  createdAt: string | null;   // ISO-8601, origin time
+  parent?: ExternalRef;       // engine resolves in-transaction
+}
+```
+
+`externalId` + `type` is your document's natural key, and the only way you
+ever refer to a document (parentage, deletions, reconcile). You never hold a
+DB id.
+
+### type literals are load-bearing
+
+`type` is a free string *except* for two literals. Both the vision classifier
+([`src/main/workers/vision/classify.ts`](../src/main/workers/vision/classify.ts))
+and the audio classifier
+([`src/main/workers/audio/classify.ts`](../src/main/workers/audio/classify.ts))
+open with the same gate:
+
+```ts
+if (doc.type !== 'attachment' && doc.type !== 'file') return 'skip';
+```
+
+If you type your PDFs `'slack.file'` instead of `'file'`, they will index as
+metadata and never be OCR'd. The Slack connector's `documentTypes` are
+`['slack.day', 'slack.thread', 'file']` — the shared literal is deliberate.
+
+### metadata keys the platform reads
+
+`metadata` is yours, but these keys are consumed:
+
+| Key | Read by |
+|---|---|
+| `mime` | vision + audio classifiers (`image/*`, `audio/*`, `application/pdf`), and the VLM decodability check |
+| `filename` | both classifiers, falling back to `title`, for extension sniffing |
+| `sizeBytes` | vision classifier — images under 8 KB are skipped as decoration |
+| `ext` | audio classifier's extension hint when there is no mime |
+| `extraction` | **set by the workers, not by you.** It is the re-entrancy marker: once present, both classifiers skip the document. Do not write it yourself or you will permanently suppress extraction. |
+| `outbound` | reply targets — below |
+
+### Letting the engine convert binaries
+
+Set `markdown: null` and pass `binary` and the engine converts on the commit
+path: PDF, DOCX, HTML, CSV, XLSX and text go through deterministic parsers
+([`src/main/core/engine/convert.ts`](../src/main/core/engine/convert.ts)).
+Images, unknown binaries and text-poor PDFs (a scan) stay `markdown: null` and
+fall through to the vision worker's two-pass OCR/VLM pipeline. Conversion
+keys off `binary.mime` and `binary.filename`, not off `type` — but the
+*second* pass keys off `type`, so you need both right.
+
+### metadata.outbound — reply targets
+
+If your source can be replied to, write an `outbound` object and the app's
+`draft_reply` MCP tool works against your documents without any platform
+change:
+
+```ts
+metadata: {
+  outbound: {
+    ref: { channel: 'C123', ts: '1700000000.000100' },  // opaque, yours
+    display: '#general',                                 // MUST be a string
+    targets: [                                           // optional
+      { key: '09:15', ref: { channel: 'C123', ts: '…' }, display: '#general — 09:15 alice' },
+    ],
+  },
+}
+```
+
+- `ref` is **opaque to the platform** and round-trips verbatim to your
+  `Sender` as `SendIntent.outboundRef`. Put whatever addressing you need in
+  it.
+- `display` **must be a string**, or the whole hook is inert — the resolver
+  checks `typeof outboundMeta.display === 'string'` before taking this branch
+  and otherwise falls through to bundled email resolution (which will reject
+  your document's type).
+- `targets[]` is optional per-message addressing: the model picks a `key` it
+  can see in the document body, never a ref it invents. An entry missing `ref`
+  or with a non-string `display` is treated as absent, never half-used. This
+  is how a Slack day-document lets a reply thread under one specific message.
+
+Grounding is the point: recipients come only from stored document metadata.
+The model supplies a key at most.
+
+---
+
+## 6. Errors and the auth taxonomy
+
+Vendor `kiagent-source-errors.ts` and use it. The two classes:
+
+```ts
+export class SourceAuthError extends Error { readonly code = 'auth'; }
+export class SourcePermanentError extends Error { readonly code = 'permanent'; }
+```
+
+What the engine does with them:
+
+| What you throw from `pull()` | Result |
+|---|---|
+| `SourceAuthError` (or anything with `code: 'auth'`) | account → `needsReauth`, sync **stops**. No retries, no supervisor restart, no boot resume. Only the user's explicit Retry or a fresh connect restarts it. |
+| `SourcePermanentError` (or `code: 'permanent'`) | account → `error` immediately, skipping the retry budget |
+| anything else | transient: up to **5** retries with backoff, then `error` |
+
+**The engine classifies on the `code` property, never `instanceof`.** That is
+deliberate and it is why vendoring works: your bundled copy of
+`SourceAuthError` is a different class object from the platform's, and errors
+crossing the process boundary arrive as plain `Error`s carrying `code`
+rehydrated from the wire. All three classify identically. It also means you
+can skip the class entirely and set `code = 'auth'` on your own API-error
+type — the taxonomy is the property, not the hierarchy.
+
+Get this right or you burn the retry budget on a revoked token and land the
+account in a generic `error` state with no re-auth affordance:
+
+```ts
+async function requireToken(session: Session): Promise<string> {
+  const creds = await session.credentials();
+  const token = creds?.password;
+  if (!token)
+    throw new SourceAuthError('no Slack credentials — reconnect the account');
+  return token;
+}
+```
+
+Throw it for a 401/403 from upstream too, not just a missing credential.
+
+---
+
+## 7. Senders (outbound)
+
+To send, declare `caps: ["send"]` **and** `contributes.senders: ["<source
+id>"]`, and return `senders` from `activate()` keyed by source id.
+
+`send` grants no host namespace. The direction is inward: the host calls your
+`Sender.send(intent, ctx)` — and only ever *after* a user confirmation gate.
+Extensions cannot initiate a send.
+
+```ts
+async send(intent: SendIntent, ctx?: SenderContext): Promise<SendResult> {
+  const token = ctx?.credentials?.password;
+  if (!token)
+    throw new Error('no Slack credentials — reconnect the account in Settings');
+  // intent.outboundRef is exactly what your toDocument wrote as metadata.outbound.ref
+  …
+  return { externalMessageId: ts };
+}
+```
+
+Note `ctx.credentials`. Your child process has no vault access, so the host
+resolves the account's credentials and passes them in at send time. Do not
+cache a token across sends.
+
+**Extension senders are reply-only today.** `SendIntent.kind` is typed
+`'reply' | 'new'`, but composing a new message goes through `draft_message`,
+which resolves a From address via `senderAddressFor` — and that throws
+`compose is email-only — '<source>' accounts are reply-only` for any source
+that isn't `imap` or `gmail`. So in practice your `send()` only ever sees
+`kind: 'reply'`, always with an `outboundRef`. You still need to have written
+`metadata.outbound` (§5) for any of it to happen: no `outbound` metadata, no
+reply target, no send.
+
+### The auth-marker string contract
+
+This one is a genuine cross-repo string contract. The outbound error
+classifier
+([`src/main/outbound/error-copy.ts`](../src/main/outbound/error-copy.ts)) picks
+page copy and gates the Try-again button off:
+
+```ts
+const AUTH_MARKERS =
+  /reconnect .* in Settings|no Gmail credentials|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficientPermissions/i;
+```
+
+**End your sender's auth-failure messages with `reconnect … in Settings`** and
+they classify as `auth` / retryable, with your message shown to the user.
+Anything else falls through to `unknown` — "the app could not confirm
+delivery… the message MAY still have been sent" — with no Try-again button.
+The literal `in Settings` is required; a bare "reconnect the account" does not
+match. (Your *source* errors are a different mechanism — those classify by
+`code`, per §6. Slack's source throws `— reconnect the account`; its sender
+throws `— reconnect the account in Settings`. Both are correct for their
+path.)
+
+---
+
+## 8. Testing
+
+Your test suite is yours, but three things earn their keep:
+
+**Pin the timezone.** If you bucket anything by day — a per-day document, a
+day-start cursor clamp — put this at the top of `jest.config.js`:
+
+```js
+process.env.TZ = 'UTC';
+module.exports = { testEnvironment: 'node', transform: { '^.+\\.tsx?$': ['ts-jest', { diagnostics: false }] } };
+```
+
+Then, because that pin *masks* local/UTC conflation bugs, add one suite that
+actually varies the zone. A runtime `process.env.TZ` flip does not reach
+Jest's test context (V8 caches dates per vm-context), so the honest version
+bundles the real module with esbuild and runs it in child processes spawned
+with different `TZ` values — see the Slack connector's `timezone.test.ts`.
+
+**Assert the doc-type literals.** A test that pins `type` to `'file'` for
+attachments is the cheapest possible guard against §5's silent-no-OCR
+failure — that bug has no symptom at ingest time.
+
+**Load the built bundle.** The CJS/ESM interop in `src/index.ts` is exactly
+what breaks silently on an esbuild upgrade, and it breaks at *install* time,
+in the user's app, not in your unit tests:
+
+```ts
+execSync('npm run build', { cwd: root });
+const mod = require(join(root, 'dist', 'index.js'));
+const entry = mod.default ?? mod;
+expect(typeof entry.activate).toBe('function');
+
+const host: HostFor<'net'> = {
+  self: { id: 'slack', dataDir: '/tmp' },
+  log: () => {},
+  net: { fetch: async () => { throw new Error('unused in this smoke test'); } },
+};
+const result = await entry.activate(host);
+expect(result.sources?.[0]?.descriptor.id).toBe('slack');
+expect(result.senders?.slack).toBeDefined();
+```
+
+Building a `HostFor<G>` literal in tests is also how you prove your cap list
+is honest: if the object type-checks with only the namespaces you declared,
+you aren't reaching for anything you didn't ask for.
+
+---
+
+## 9. Running it locally before you publish
+
+You do not need to cut a release to see your connector run. Boot-time
+discovery scans the app's extensions directory for **any** subdirectory
+containing a valid `manifest.json`:
+
+```
+<userData>/extensions/<any-dir-name>/
+    manifest.json
+    dist/index.js
+    icon.png
+```
+
+The directory name is irrelevant (entries are keyed by manifest id). Build,
+copy the package in, restart the app. The extension is discovered with
+`origin: 'dev'` and is enabled by default.
+
+Then two things will happen that look like bugs and aren't:
+
+1. **It parks at `needs-consent` instead of activating.** A dev-dropped
+   extension has no consent record. Open **Marketplace** — your extension
+   appears as its own row below the catalog ones, subtitled
+   `v1.0.0 · dev install` — and click **Review permissions**. It activates
+   immediately after you confirm.
+2. **Every version bump re-parks it.** Consent is recorded against an exact
+   manifest version, so bumping `manifest.version` during development sends
+   you back to "Review permissions" each time. Expected; not a broken install.
+   Leave the version alone while iterating and bump it once at release time.
+
+Two caveats. There is **no UI for installing from an arbitrary path** — the
+installer's local-path branch exists, but the only ref the app's Install
+button ever passes comes from a catalog row, so the copy-the-directory route
+above is the dev loop. And a dev install records no integrity pin, so none of
+§10's TOFU rules bite yet — the first *marketplace* install of a given
+id+version is what freezes the hash.
+
+---
+
+## 10. Releasing
+
+The marketplace catalog is a GitHub search: **`org:kia-plugins topic:kia-plugin`**.
+So your repo must live in the `kia-plugins` org and carry the `kia-plugin`
+topic to be discoverable. The detail page renders your repo's `README.md` at
+HEAD, and the pre-install icon is fetched from the fixed path `icon.png` at
+the repo root (the manifest's icon path isn't knowable before download).
+
+### Which version matters
+
+Bump the version in **both** `manifest.json` and `package.json`, but they do
+different jobs and it's worth knowing which is which:
+
+- **`manifest.version` is what the platform compares.** The installed
+  extension's version comes from its manifest, and `checkUpdates` compares it
+  against `semver.coerce(release.tag_name)` of the repo's newest non-
+  prerelease release. **The load-bearing pairing is `manifest.version` ↔ the
+  git tag.** Tag `v2.2.1` (or `2.2.1`) for manifest version `2.2.1`.
+- `package.json.version` names the `npm pack` tarball and nothing else. The
+  installer takes the *first* `.tgz` asset on the release regardless of its
+  name. Keep it in sync anyway — a mismatch is a lie in your repo that will
+  eventually cost someone an hour.
+
+### The release itself
+
+```
+npm test && npm run build
+npm pack            # → slack-kia-connector-2.2.1.tgz
+gh release create v2.2.1 slack-kia-connector-2.2.1.tgz
+```
+
+Your `package.json` `files` array must include `manifest.json`, `dist`, and
+your icon:
+
+```json
+"files": ["manifest.json", "dist", "README.md", "icon.png"]
+```
+
+The tarball is extracted with `strip: 1`, which is exactly right for `npm
+pack`'s `package/` prefix — `manifest.json` must land at the top level after
+that strip.
+
+Two package-level rejections to know about:
+
+- **Never ship a `data/` directory.** `data/` is reserved for extension-private
+  state and a package containing one is refused at preview.
+- A source id another installed extension already provides fails the install.
+
+### Integrity pinning and consent
+
+The first install of a given **id + version** freezes a `sha512` integrity
+hash. Re-installing that same id+version with different bytes is rejected
+(`integrity check failed: bytes differ from the pinned install for this
+version`). Practical consequence: **never re-tag or replace a published
+release's tarball.** Cut a new patch version instead. Plain `http:` refs are
+rejected outright.
+
+Install and update both run the same three phases: preview (download, pin,
+extract to staging, validate the manifest — *no extension code executes*),
+consent, commit. The consent sheet shows the **full capability list** every
+time, not a diff of what changed — so an update that adds a cap is visible,
+but so is every cap you already had. Consent is recorded against the exact
+manifest version and cap set; an installed extension whose manifest no longer
+matches its consent record parks at `needs-consent` and the user gets a
+"Review permissions" button instead of a running extension.
+
+One last thing: an extension **cannot be uninstalled while accounts exist for
+its sources** ("Remove this connector's sources before uninstalling it"). Say
+so in your README if your connector is likely to be trialled and dropped.
+
+---
+
+## Checklist
+
+- [ ] `manifest.json` `id` is `publisher.name`, `engine` range covers the
+      platform you tested against
+- [ ] `caps` lists only what you use; typed as `ExtensionModule<…>` to match
+- [ ] Vendored `kiagent-contracts.ts` + `kiagent-source-errors.ts` carry
+      provenance headers with a commit sha
+- [ ] Secret collected in a prompt field named exactly `password` (or via
+      `auth.oauth`) — nothing secret in `connect()`'s returned `config`
+- [ ] `fetchBytes` implemented if you emit any binary content
+- [ ] Binary documents typed `'file'` or `'attachment'`, with `metadata.mime`
+      / `filename` / `sizeBytes`
+- [ ] `reconcile` (if any) yields the same `{externalId, type}` keys
+      `toDocument` emits, from a shared builder — tested on a corpus over 100
+      documents
+- [ ] Auth failures throw `SourceAuthError` (or `code: 'auth'`)
+- [ ] Sender auth failures end with `reconnect … in Settings`
+- [ ] `TZ=UTC` pinned in jest config; bundle-load test present
+- [ ] `manifest.version` == `package.json` version == git tag
+- [ ] `files` in `package.json` includes `manifest.json`, `dist`, `icon.png`;
+      no `data/` directory in the tarball
+- [ ] Repo in `kia-plugins` with the `kia-plugin` topic, `icon.png` and
+      `README.md` at the root
