@@ -154,6 +154,34 @@ test('scriptedFetch: calls records every url in order, including throwers', asyn
   ]);
 });
 
+test('scriptedFetch: inits records the second fetch argument per call', async () => {
+  // Senders POST — method/body live in `init`, so a sender test needs them.
+  const { fetchFn, calls, inits } = scriptedFetch({
+    urls: { 'https://x.test/send': { ok: true } },
+  });
+  const init = { method: 'POST', body: JSON.stringify({ text: 'hi' }) };
+  await fetchFn('https://x.test/send', init);
+  assert.deepEqual(calls, ['https://x.test/send']);
+  assert.equal(inits[0], init); // identity — recorded, never copied
+  assert.equal(JSON.parse(inits[0].body).text, 'hi');
+});
+
+test('scriptedFetch: inits stays index-aligned with calls, undefined included', async () => {
+  const { fetchFn, calls, inits } = scriptedFetch({
+    urls: { 'https://x.test/a': {}, 'https://x.test/b': {} },
+  });
+  await fetchFn('https://x.test/a'); // no init at all
+  await fetchFn('https://x.test/b', { method: 'PUT' });
+  await assert.rejects(() => fetchFn('https://x.test/z', { method: 'DELETE' }));
+  assert.equal(calls.length, inits.length);
+  assert.deepEqual(inits, [undefined, { method: 'PUT' }, { method: 'DELETE' }]);
+  assert.deepEqual(calls, [
+    'https://x.test/a',
+    'https://x.test/b',
+    'https://x.test/z',
+  ]);
+});
+
 test('scriptedFetch: a non-absolute table key is served without URL parsing', async () => {
   const { fetchFn } = scriptedFetch({ urls: { '/v1/relative': { ok: 1 } } });
   assert.deepEqual(decode(await fetchFn('/v1/relative')), { ok: 1 });

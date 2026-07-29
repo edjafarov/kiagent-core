@@ -90,13 +90,18 @@ export function scriptedFetch(
      *  seam for "fails N times, then succeeds" retry fixtures. */
     custom?: (url: URL, count: number) => HostResponse | undefined;
   } = {},
-): { fetchFn: NetFetch; calls: string[] } {
+): { fetchFn: NetFetch; calls: string[]; inits: unknown[] } {
   const calls: string[] = [];
+  const inits: unknown[] = [];
   const counts = new Map<string, number>();
 
-  const fetchFn: NetFetch = async (rawUrl) => {
+  const fetchFn: NetFetch = async (rawUrl, init) => {
     const urlStr = String(rawUrl);
     calls.push(urlStr);
+    // Index-aligned with `calls` — `undefined` is pushed for an init-less GET
+    // so `inits[i]` always describes `calls[i]`. Senders POST their payload in
+    // here, so this is the only seam a send test can assert method/body on.
+    inits.push(init);
     const count = counts.get(urlStr) ?? 0;
     counts.set(urlStr, count + 1);
 
@@ -112,7 +117,7 @@ export function scriptedFetch(
     throw new Error(`scriptedFetch: unhandled url ${urlStr}`);
   };
 
-  return { fetchFn, calls };
+  return { fetchFn, calls, inits };
 }
 
 /** A Session for pull/backfill tests. `.logs` collects every `log()` call as a
@@ -200,7 +205,9 @@ export async function bundleLoadSmoke(opts: {
   selfId: string;
   /** Expected `result.sources[i].descriptor.id`, in order. */
   sourceIds?: string[];
-  /** Expected `Object.keys(result.senders)`, in order. */
+  /** Expected `Object.keys(result.senders)` — compared order-insensitively:
+   *  senders are a Record looked up BY KEY, so their declaration order carries
+   *  no meaning and must never decide a test. */
   senderIds?: string[];
   /** Replaces the whole default host when a connector's activate() reads more
    *  than `net` (files, db, …). */
@@ -258,9 +265,11 @@ export async function bundleLoadSmoke(opts: {
     );
   }
   if (opts.senderIds) {
+    // Both sides sorted — key enumeration order can never flake the assertion.
+    // `[...]` first: `.sort()` mutates, and opts belongs to the caller.
     assert.deepEqual(
-      Object.keys(result.senders ?? {}),
-      opts.senderIds,
+      Object.keys(result.senders ?? {}).sort(),
+      [...opts.senderIds].sort(),
       'bundleLoadSmoke: contributed sender ids',
     );
   }
