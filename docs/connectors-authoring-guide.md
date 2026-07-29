@@ -615,6 +615,8 @@ both into `dist/index.js`. Import it only from test files.
 `bundleLoadSmoke` replaces the hand-rolled snippet above:
 
 ```ts
+import { join } from 'node:path';
+import type { HostFor } from '@kiagent/connector-sdk';
 import { bundleLoadSmoke } from '@kiagent/connector-sdk/testing';
 
 test('bundle loads and activates', async () => {
@@ -633,7 +635,7 @@ test('bundle loads and activates', async () => {
 }, 30_000);
 ```
 
-Two gotchas worth knowing before you script around them:
+Three gotchas worth knowing before you script around them:
 
 - **One process (or one root) per smoke.** `bundleLoadSmoke` `require()`s
   your built `dist/index.js`. Node's module cache is keyed by resolved path,
@@ -643,6 +645,10 @@ Two gotchas worth knowing before you script around them:
 - **`sourceIds` / `senderIds` are opt-in assertions, not defaults.** Each is
   only checked when you pass it; there's no "assert empty" fallback. A
   typo'd option name silently asserts nothing instead of failing loud.
+- **`scriptedFetch`'s `inits` is index-aligned with `calls`.** `inits[i]` is
+  the `init` argument passed to the request recorded at `calls[i]`
+  (`undefined` for an init-less GET, recorded even for a call that throws) —
+  the seam a send test uses to assert method/body on one specific call.
 
 ---
 
