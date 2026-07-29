@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.64.0](https://github.com/edjafarov/kiagent-core/compare/v0.63.0...v0.64.0) (2026-07-29)
+
+### Features
+
+* product identity and mac-updates come from ProductConfig ([e82bd9a](https://github.com/edjafarov/kiagent-core/commit/e82bd9ac248f2e120b2364905f353f6d99501b70))
+
 ## [0.63.0](https://github.com/edjafarov/kiagent-core/compare/v0.62.0...v0.63.0) (2026-07-29)
 
 ### Features
