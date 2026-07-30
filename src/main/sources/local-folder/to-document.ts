@@ -22,6 +22,12 @@ export interface LocalFolderItem {
   createdIso: string;
   /** Lower-cased extension, no leading dot (`'pdf'`, `''` if none). */
   ext: string;
+  /** Resolved mime type (never empty — falls back to
+   *  `application/octet-stream`). Persisted into metadata so downstream
+   *  consumers that key on mime — the vision worker's classifier, the
+   *  store's pending-OCR stat, the VLM decodability check — see local files
+   *  the same way they see mail attachments. */
+  mime: string;
   /** Set for plain-text files — decoded utf-8 by `pull()` itself. */
   markdownText: string | null;
   /** Set for parseable binaries (pdf/docx/xlsx/csv/html) — `markdown` stays
@@ -43,8 +49,11 @@ export function toDocument(item: LocalFolderItem): DocumentInput | null {
     url: `file://${encodeURI(item.absPath)}`,
     metadata: {
       size: item.size,
+      sizeBytes: item.size,
       mtime: item.mtimeIso,
       ext: item.ext,
+      mime: item.mime,
+      filename: path.basename(item.absPath),
       absPath: item.absPath,
     },
     createdAt: item.createdIso,

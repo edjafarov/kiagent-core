@@ -1,6 +1,22 @@
 import type { Document } from '@shared/contracts';
 
-const VISUAL_EXT_RE = /\.(pdf|png|jpe?g|gif|webp|heic|heif|tiff?|bmp)$/i;
+/** Canonical visual-candidate extensions. Also consumed by the store's
+ *  `extractionStats` display query, which mirrors this classifier in SQL —
+ *  keep the regexp derived from this list so the two can never drift. */
+export const VISUAL_EXTS = [
+  'pdf',
+  'png',
+  'jpg',
+  'jpeg',
+  'gif',
+  'webp',
+  'heic',
+  'heif',
+  'tif',
+  'tiff',
+  'bmp',
+] as const;
+const VISUAL_EXT_RE = new RegExp(`\\.(${VISUAL_EXTS.join('|')})$`, 'i');
 const TINY_IMAGE_BYTES = 8 * 1024;
 export const OCR_SUFFICIENT_CHARS = 200;
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -11,6 +27,8 @@ interface VisualMeta {
   mime?: string;
   filename?: string;
   sizeBytes?: number;
+  /** Local-folder docs ingested before 2026-07 carry only this key. */
+  size?: number;
   extraction?: unknown;
 }
 
@@ -56,7 +74,10 @@ export function classifyDocument(doc: Document): 'candidate' | 'skip' {
     (meta.mime ?? '').startsWith('image/') ||
     (!pdf && VISUAL_EXT_RE.test(name) && !/\.pdf$/i.test(name));
   if (!pdf && !image) return 'skip';
-  if (image && (meta.sizeBytes ?? Number.MAX_SAFE_INTEGER) < TINY_IMAGE_BYTES)
+  if (
+    image &&
+    (meta.sizeBytes ?? meta.size ?? Number.MAX_SAFE_INTEGER) < TINY_IMAGE_BYTES
+  )
     return 'skip';
   if ((doc.markdown ?? '').trim().length >= 16) return 'skip'; // has real text already
   return 'candidate';

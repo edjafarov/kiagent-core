@@ -20,6 +20,8 @@ import type {
   SyncStatus,
 } from '@shared/contracts';
 
+import { VISUAL_EXTS } from '@main/workers/vision/classify';
+
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { newId } from '../ids';
 import { stemVariants } from '../stemming';
@@ -585,14 +587,22 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
     async extractionStats() {
       // pendingOcr is a display-level approximation of the vision worker's
-      // classify eligibility — it ignores size caps and tiny-image rules.
+      // classify eligibility (workers/vision/classify.ts) — it ignores size
+      // caps and tiny-image rules but mirrors the type gate, the has-real-
+      // text gate, and both candidate shapes: mime-carrying docs (gmail
+      // attachments) and ext-carrying ones (local-folder files, which store
+      // no mime).
+      const extList = VISUAL_EXTS.map((e) => `'${e}'`).join(',');
       const pendingOcr = (
         (
           await db.all(
             `SELECT COUNT(*) AS c FROM documents
              WHERE json_extract(metadata,'$.extraction') IS NULL
+               AND type IN ('attachment','file')
+               AND (markdown IS NULL OR length(trim(markdown)) < 16)
                AND (json_extract(metadata,'$.mime') LIKE 'image/%'
-                    OR json_extract(metadata,'$.mime') = 'application/pdf')
+                    OR json_extract(metadata,'$.mime') = 'application/pdf'
+                    OR lower(json_extract(metadata,'$.ext')) IN (${extList}))
                AND archived_at IS NULL`,
           )
         )[0] as { c: number }

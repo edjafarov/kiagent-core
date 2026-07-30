@@ -44,6 +44,26 @@ it.each([
     'skip',
   ],
   [
+    'tiny local-folder image (legacy `size` key, no sizeBytes)',
+    {
+      ...base,
+      type: 'file',
+      title: 'icon.png',
+      metadata: { ext: 'png', size: 500, absPath: '/x/icon.png' },
+    },
+    'skip',
+  ],
+  [
+    'local-folder image with only ext metadata',
+    {
+      ...base,
+      type: 'file',
+      title: 'photo.jpg',
+      metadata: { ext: 'jpg', size: 90_000, absPath: '/x/photo.jpg' },
+    },
+    'candidate',
+  ],
+  [
     'image by extension',
     {
       ...base,

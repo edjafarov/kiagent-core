@@ -221,6 +221,7 @@ export async function buildItem(
     mtimeIso,
     createdIso,
     ext,
+    mime: mt,
     markdownText,
     binary,
   };

@@ -446,18 +446,63 @@ describe('store', () => {
     expect(await store.consumerCursor('worker:vision:v1')).toBe(8);
   });
 
+  it('extractionStats: pendingOcr counts ext-shaped candidates and gates on type + markdown', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [
+        // Local-folder image: `ext` metadata, no mime — must count.
+        doc('lf-img', {
+          type: 'file',
+          markdown: null,
+          metadata: { ext: 'jpg', size: 12345, absPath: '/x/a.jpg' },
+        }),
+        // Local-folder scanned PDF: converter left markdown null — counts.
+        doc('lf-pdf', {
+          type: 'file',
+          markdown: null,
+          metadata: { ext: 'pdf', absPath: '/x/b.pdf' },
+        }),
+        // Text-rich PDF: real extracted markdown — the worker skips it, so
+        // the stat must too.
+        doc('lf-pdf-rich', {
+          type: 'file',
+          markdown: 'A long extracted body of text',
+          metadata: { ext: 'pdf', absPath: '/x/c.pdf' },
+        }),
+        // Image mime on a type the vision worker never matches.
+        doc('note-img', { markdown: null, metadata: { mime: 'image/png' } }),
+        // Non-visual local file.
+        doc('lf-txt', {
+          type: 'file',
+          markdown: null,
+          metadata: { ext: 'txt', absPath: '/x/d.txt' },
+        }),
+      ],
+      cursor: 1,
+    });
+    const stats = await store.extractionStats();
+    expect(stats.pendingOcr).toBe(2); // lf-img + lf-pdf only
+  });
+
   it('extractionStats: counts exclude archived/non-image; recent carries filename', async () => {
     await store.commit({
       account: accountId,
       documents: [
-        // OCR-eligible, not yet processed: two images + one PDF.
+        // OCR-eligible, not yet processed: two images + one PDF — shaped
+        // like real worker candidates (attachment/file type, no text yet).
         doc('img-1', {
+          type: 'attachment',
+          markdown: null,
           metadata: { mime: 'image/png', filename: 'scan-1.png' },
         }),
         doc('img-2', {
+          type: 'attachment',
+          markdown: null,
           metadata: { mime: 'image/jpeg', filename: 'scan-2.jpg' },
         }),
         doc('pdf-1', {
+          type: 'file',
+          markdown: null,
           metadata: { mime: 'application/pdf', filename: 'doc.pdf' },
         }),
         // Already processed — nested marker, as the vision worker writes it.

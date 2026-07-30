@@ -293,7 +293,20 @@ describe('pull — backfill (cursor === null)', () => {
     const pngDoc = localFolderSource.toDocument(pngItem)! as DocumentInput;
     expect(pngDoc.markdown).toBeNull();
     expect(pngDoc.binary).toBeUndefined();
-    expect(pngDoc.metadata.ext).toBe('png');
+    // The vision worker's classifier and the store's pending-OCR stat key on
+    // this trio — a local image must carry the same metadata shape as a mail
+    // attachment, not just ext/absPath.
+    expect(pngDoc.metadata).toMatchObject({
+      ext: 'png',
+      mime: 'image/png',
+      filename: 'photo.png',
+      sizeBytes: pngItem.size,
+    });
+    expect(textDoc.metadata).toMatchObject({
+      mime: 'text/plain',
+      filename: 'readme.txt',
+      sizeBytes: textItem.size,
+    });
   });
 
   it('yields an empty completed batch (plus the status flip) for an empty root', async () => {
