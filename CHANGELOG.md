@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.65.0](https://github.com/edjafarov/kiagent-core/compare/v0.64.0...v0.65.0) (2026-07-30)
+
+### ⚠ BREAKING CHANGES
+
+* **platform:** PLATFORM_API 2.0.0 — strict manifests, explicit senders
+
+### Features
+
+* **platform:** PLATFORM_API 2.0.0 — strict manifests, explicit senders ([416fc1f](https://github.com/edjafarov/kiagent-core/commit/416fc1f9e5936c721217275a000d7780963cecd6))
+* **sdk:** chat-day helpers (dayKey/dayTitle/mergeMessages/renderDay) ([19f4175](https://github.com/edjafarov/kiagent-core/commit/19f41755481698cf3205fdc73213121dc12361c6))
+* **sdk:** connector-sdk package scaffold — generated contracts + source-errors re-export ([cd30d7e](https://github.com/edjafarov/kiagent-core/commit/cd30d7e95972de5fca5d13bd601195a2d4a84e54))
+* **sdk:** http retry ladder (transient backoff + Retry-After clamp) ([aa37436](https://github.com/edjafarov/kiagent-core/commit/aa374361038a2350ce3b1ca9562078e5c39a0654))
+* **sdk:** scriptedFetch records per-call inits ([521e356](https://github.com/edjafarov/kiagent-core/commit/521e3569f462f8bf687b4962c7c320cd48c1cd3f))
+* **sdk:** testing kit (scripted fetch, fake session/auth-channel, bundle smoke) ([70ec30d](https://github.com/edjafarov/kiagent-core/commit/70ec30d94991336b411b725a47e931e64aada7c8))
+
+### Bug Fixes
+
+* **platform:** label root-level manifest errors (root) instead of an empty path ([1773055](https://github.com/edjafarov/kiagent-core/commit/1773055714b0886bfc05bd89cd15aefb373bb99c))
+
 ## [0.64.0](https://github.com/edjafarov/kiagent-core/compare/v0.63.0...v0.64.0) (2026-07-29)
 
 ### Features
