@@ -7,6 +7,7 @@ import type {
   Credentials,
   DocumentInput,
   Handle,
+  LaneState,
   LogStore,
   Prefs,
   SchedulerEnv,
@@ -270,24 +271,32 @@ export function attachWorker(platform: CorePlatform, worker: Worker): Handle {
   return handle;
 }
 
+/** Evaluate the processing window and say WHY it's closed when it is. */
+export function backgroundLaneState(
+  platform: CorePlatform,
+  now = new Date(),
+): LaneState {
+  const p = platform.prefs.get().processing;
+  if (!p.enabled) return 'disabled';
+  const { env } = platform.scheduler;
+  if (env.onBattery) return 'battery';
+  switch (p.window) {
+    case 'always':
+      return 'open';
+    case 'night': {
+      const h = now.getHours();
+      return h >= 22 || h < 7 ? 'open' : 'until-night';
+    }
+    case 'idle':
+    default:
+      return env.userActive ? 'until-idle' : 'open';
+  }
+}
+
 /** Evaluate the processing window: is the background inference lane open? */
 export function backgroundLaneOpen(
   platform: CorePlatform,
   now = new Date(),
 ): boolean {
-  const p = platform.prefs.get().processing;
-  if (!p.enabled) return false;
-  const { env } = platform.scheduler;
-  if (env.onBattery) return false;
-  switch (p.window) {
-    case 'always':
-      return true;
-    case 'night': {
-      const h = now.getHours();
-      return h >= 22 || h < 7;
-    }
-    case 'idle':
-    default:
-      return !env.userActive;
-  }
+  return backgroundLaneState(platform, now) === 'open';
 }

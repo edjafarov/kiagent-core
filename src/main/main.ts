@@ -28,6 +28,7 @@ import { createConnectBroker } from './auth/connect-broker';
 import type { ConnectBroker } from './auth/connect-broker';
 import {
   backgroundLaneOpen,
+  backgroundLaneState,
   bootCore,
   resumeAccounts,
   runAccount,
@@ -71,7 +72,7 @@ import {
 import { createTray } from './tray';
 import type { TrayMenuController } from './tray-menu';
 import { resolveHtmlPath } from './util';
-import { attachBundledWorkers, VISION_CONSUMER } from './workers';
+import { attachBundledWorkers } from './workers';
 
 let mainWindow: BrowserWindow | null = null;
 let platform: CorePlatform | null = null;
@@ -464,7 +465,7 @@ function registerIpc(
   });
   handle('inference:stats', async () => ({
     ...(await p.store.extractionStats()),
-    awaitingVlm: (await p.store.ledgerDeferred(VISION_CONSUMER)).length,
+    lane: backgroundLaneState(p),
   }));
   handle('inference:models', async () => {
     const installed = bundled.localLlm.installedModelIds();

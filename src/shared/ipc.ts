@@ -10,6 +10,7 @@ import type {
   FolderCount,
   FolderNode,
   Identity,
+  LaneState,
   LogLevel,
   LogRecord,
   McpActivityRecord,
@@ -327,9 +328,10 @@ export interface Invokes {
     req: void;
     res: {
       pendingOcr: number;
-      awaitingVlm: number;
       processed: number;
       recent: RecentExtraction[];
+      /** Why background processing is (or isn't) running right now. */
+      lane: LaneState;
     };
   };
   /** The local-llm model catalog + the resolved selection, for the Settings

@@ -930,6 +930,16 @@ export interface SchedulerEnv {
   userActive: boolean;
 }
 
+/** Why the background inference lane is (or isn't) open right now. Every
+ *  non-'open' value is a reason the UI can name — without this, queued work
+ *  parked on a closed lane looks like a dead pipeline. */
+export type LaneState =
+  | 'open'
+  | 'disabled'
+  | 'battery'
+  | 'until-idle'
+  | 'until-night';
+
 /** The ONE timing authority — nothing else owns a timer. Durable:
  *  lastRun/nextRun persist; a missed window catches up on boot. */
 export interface Scheduler {

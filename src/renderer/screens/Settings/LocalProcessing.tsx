@@ -4,7 +4,7 @@ import { formatRelative } from '@renderer/screens/Sources/format';
 import { Pill } from '@shared/web-ui/components';
 import type { PillVariant } from '@shared/web-ui/components';
 import { Icon } from '@shared/web-ui/icon-sprite';
-import type { AppPrefs, ProviderStatus } from '@shared/contracts';
+import type { AppPrefs, LaneState, ProviderStatus } from '@shared/contracts';
 import type { Invokes } from '@shared/ipc';
 
 type ProcessingWindow = 'always' | 'night' | 'idle';
@@ -21,6 +21,23 @@ const WINDOW_OPTIONS: ReadonlyArray<[ProcessingWindow, string, string]> = [
 
 /** One decimal place, e.g. 7121860000 -> "6.6". */
 const gb = (totalBytes: number): string => (totalBytes / 1024 ** 3).toFixed(1);
+
+/** Why queued work isn't moving right now — or null when it is (lane open)
+ *  or there's nothing waiting (a pause reason with an empty queue is noise). */
+export function pausedLine(lane: LaneState, queued: number): string | null {
+  if (lane === 'open' || queued === 0) return null;
+  switch (lane) {
+    case 'disabled':
+      return 'Paused — background processing is turned off.';
+    case 'battery':
+      return 'Paused — on battery power.';
+    case 'until-night':
+      return 'Paused — runs overnight (22:00–07:00).';
+    case 'until-idle':
+    default:
+      return 'Paused — waiting for this Mac to be idle.';
+  }
+}
 
 /** "Active model: {label} — {GB} GB[ · installed| · downloads when needed]",
  *  or null when the catalog hasn't resolved yet or `selectedId` doesn't
@@ -248,8 +265,13 @@ export function LocalProcessing(): React.ReactElement {
 
         {stats != null && (
           <div className="t-meta">
-            {stats.pendingOcr} pending OCR · {stats.awaitingVlm} awaiting
-            description · {stats.processed} processed
+            {stats.pendingOcr} queued for processing · {stats.processed}{' '}
+            processed
+          </div>
+        )}
+        {stats != null && pausedLine(stats.lane, stats.pendingOcr) != null && (
+          <div className="t-meta">
+            {pausedLine(stats.lane, stats.pendingOcr)}
           </div>
         )}
       </div>
