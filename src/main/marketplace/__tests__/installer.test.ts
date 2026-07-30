@@ -11,10 +11,10 @@ const MANIFEST = {
   id: 'test.basic',
   name: 'Basic',
   version: '1.0.0',
-  engine: '^1.0.0',
+  engine: '^2.0.0',
   entry: 'index.js',
   caps: ['net'],
-  contributes: { sources: ['basicsrc'] },
+  contributes: { sources: ['basicsrc'], senders: [] },
 };
 
 function makeExtDirFixture(root: string, manifest: unknown = MANIFEST): string {

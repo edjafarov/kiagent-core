@@ -54,7 +54,7 @@ An extension is a CJS bundle whose default export is:
 const extension: ExtensionModule<Caps> = {
   async activate(host) {
     // host has ONLY the namespaces you declared in caps
-    return { sources: [...], workers: [...], tools: [...], providers: [...] };
+    return { sources: [...], tools: [...], senders: {...} };
   },
   async deactivate() { /* optional */ },
 };
@@ -64,10 +64,8 @@ const extension: ExtensionModule<Caps> = {
 main process wraps each in an RPC proxy and registers the proxy into the real registries
 (SourceRegistry, MCP Handle). The extension never holds a reference to anything trusted.
 
-> Note: the contract type allows `{ sources, workers, tools, providers, senders }`, but the wire
-> protocol (`Contributions` in `extension-rpc.ts`) currently carries **sources, tools and senders
-> only** — extension workers/providers are declared-but-not-yet-plumbed. Only built-ins register
-> those today.
+> Note: the contract type and the wire protocol (`Contributions` in `extension-rpc.ts`) agree
+> since platform 2.0.0: `{ sources, tools, senders }` is the whole contribution surface.
 
 ## Capabilities
 
@@ -118,9 +116,9 @@ sequenceDiagram
     P->>P: validate manifest (zod), pin integrity (TOFU SRI)
     M->>P: enable
     P->>H: fork utilityProcess (extension-host-entry)
-    H->>H: handshake (PLATFORM_API_VERSION)
+    P->>H: bootstrap (extensionId, entry, dataDir, caps)
     H->>E: require(entry).activate(host)
-    E-->>H: { sources, workers, tools, providers }
+    E-->>H: { sources, tools, senders }
     H-->>P: contribution descriptors
     P->>P: register RPC proxies (SourceRegistry, MCP Handle, ...)
     Note over P,E: running — host calls gate-checked per call

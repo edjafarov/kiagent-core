@@ -60,14 +60,17 @@ const sourceIdSchema = z.string().min(1, 'source id must not be empty');
 const sourceEntrySchema = z.union(
   [
     sourceIdSchema,
-    z.object({ id: sourceIdSchema, oauth: z.enum(OAUTH_PROVIDER_IDS) }),
+    z.strictObject({ id: sourceIdSchema, oauth: z.enum(OAUTH_PROVIDER_IDS) }),
   ],
   {
     error: `each sources entry must be a source id string or { id, oauth } — oauth must be one of: ${OAUTH_PROVIDER_IDS.join(', ')}`,
   },
 );
 
-const schema = z.object({
+// Strict throughout (platform 2.0.0): unknown keys are rejected, never
+// silently stripped — a manifest field that does nothing is a lie to the
+// author and to the consent surface.
+const schema = z.strictObject({
   id: z.string().regex(ID_RE, "extension id must look like 'publisher.name'"),
   name: z.string().min(1),
   version: z
@@ -86,18 +89,19 @@ const schema = z.object({
     .refine((p) => p.toLowerCase().endsWith('.png'), 'icon must be a .png file')
     .optional(),
   caps: z.array(z.enum(CAPS)),
-  contributes: z
-    .object({
-      sources: z.array(sourceEntrySchema).optional(),
-      workers: z.array(z.string()).optional(),
-      tools: z.array(z.string()).optional(),
-      providers: z.array(z.string()).optional(),
-      senders: z.array(z.string()).optional(),
-      commands: z
-        .array(z.object({ id: z.string(), title: z.string() }))
-        .optional(),
-    })
-    .default({}),
+  // Required, with an explicit senders list (platform 2.0.0): a manifest
+  // states outright whether it ships outbound Senders — [] for none.
+  contributes: z.strictObject({
+    sources: z.array(sourceEntrySchema).optional(),
+    tools: z.array(z.string()).optional(),
+    senders: z.array(z.string(), {
+      error:
+        'contributes.senders is required — the source ids this extension provides an outbound Sender for, or []',
+    }),
+    commands: z
+      .array(z.strictObject({ id: z.string(), title: z.string() }))
+      .optional(),
+  }),
 });
 
 export function parseManifest(
@@ -140,11 +144,11 @@ export function sourceContributions(
 }
 
 /** The source ids this extension declares an outbound Sender for — THE way
- *  to consume `contributes.senders`. Defaults to none. */
+ *  to consume `contributes.senders`. */
 export function senderContributions(
   manifest: Pick<Manifest, 'contributes'>,
 ): string[] {
-  return manifest.contributes.senders ?? [];
+  return manifest.contributes.senders;
 }
 
 /** The oauth-bound subset of `contributes.sources`, in the shape the consent

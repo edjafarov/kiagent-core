@@ -18,10 +18,10 @@ const GOOD = {
   id: 'test.basic',
   name: 'Basic',
   version: '1.0.0',
-  engine: '^1.0.0',
+  engine: '^2.0.0',
   entry: 'dist/index.js',
   caps: ['net'],
-  contributes: { sources: ['basicsrc'] },
+  contributes: { sources: ['basicsrc'], senders: [] },
 };
 
 describe('parseManifest', () => {
@@ -32,9 +32,42 @@ describe('parseManifest', () => {
     expect(m.contributes.sources).toEqual(['basicsrc']);
   });
 
-  it('defaults contributes to {}', () => {
+  it('rejects a manifest without contributes (required since 2.0.0)', () => {
     const { contributes: _drop, ...rest } = GOOD;
-    expect(parseManifest(rest).contributes).toEqual({});
+    expect(() => parseManifest(rest)).toThrow(ManifestError);
+  });
+
+  it('rejects contributes without an explicit senders list', () => {
+    expect(() =>
+      parseManifest({ ...GOOD, contributes: { sources: ['basicsrc'] } }),
+    ).toThrow(/contributes\.senders is required/);
+  });
+
+  it('rejects unknown keys instead of silently stripping them', () => {
+    expect(() => parseManifest({ ...GOOD, hostApi: '1.0' })).toThrow(
+      ManifestError,
+    );
+    expect(() =>
+      parseManifest({
+        ...GOOD,
+        contributes: { ...GOOD.contributes, workers: ['w'] },
+      }),
+    ).toThrow(ManifestError);
+    expect(() =>
+      parseManifest({
+        ...GOOD,
+        contributes: { ...GOOD.contributes, providers: ['p'] },
+      }),
+    ).toThrow(ManifestError);
+    expect(() =>
+      parseManifest({
+        ...GOOD,
+        contributes: {
+          sources: [{ id: 'x', oauth: 'google', scopes: ['mail'] }],
+          senders: [],
+        },
+      }),
+    ).toThrow(ManifestError);
   });
 
   it('rejects unknown caps (legacy silently dropped them — we refuse)', () => {
@@ -53,8 +86,17 @@ describe('parseManifest', () => {
   });
 
   it('rejects an engine range this platform does not satisfy', () => {
-    expect(() => parseManifest({ ...GOOD, engine: '^2.0.0' })).toThrow(
+    expect(() => parseManifest({ ...GOOD, engine: '^1.2.0' })).toThrow(
       /requires platform/,
+    );
+    expect(() => parseManifest({ ...GOOD, engine: '^3.0.0' })).toThrow(
+      /requires platform/,
+    );
+  });
+
+  it('accepts the cross-platform range >=1.2.0 <3.0.0', () => {
+    expect(parseManifest({ ...GOOD, engine: '>=1.2.0 <3.0.0' }).engine).toBe(
+      '>=1.2.0 <3.0.0',
     );
   });
 
@@ -72,7 +114,10 @@ describe('source contributions (string | { id, oauth })', () => {
   it('accepts the object form with oauth: "google"', () => {
     const m = parseManifest({
       ...GOOD,
-      contributes: { sources: [{ id: 'google-docs', oauth: 'google' }] },
+      contributes: {
+        sources: [{ id: 'google-docs', oauth: 'google' }],
+        senders: [],
+      },
     });
     expect(m.contributes.sources).toEqual([
       { id: 'google-docs', oauth: 'google' },
@@ -82,7 +127,10 @@ describe('source contributions (string | { id, oauth })', () => {
   it('accepts the object form with oauth: "microsoft"', () => {
     const m = parseManifest({
       ...GOOD,
-      contributes: { sources: [{ id: 'ms365-mail', oauth: 'microsoft' }] },
+      contributes: {
+        sources: [{ id: 'ms365-mail', oauth: 'microsoft' }],
+        senders: [],
+      },
     });
     expect(m.contributes.sources).toEqual([
       { id: 'ms365-mail', oauth: 'microsoft' },
@@ -94,6 +142,7 @@ describe('source contributions (string | { id, oauth })', () => {
       ...GOOD,
       contributes: {
         sources: ['plainsrc', { id: 'google-docs', oauth: 'google' }],
+        senders: [],
       },
     });
     expect(m.contributes.sources).toEqual([
@@ -106,13 +155,19 @@ describe('source contributions (string | { id, oauth })', () => {
     expect(() =>
       parseManifest({
         ...GOOD,
-        contributes: { sources: [{ id: 'gh-docs', oauth: 'github' }] },
+        contributes: {
+          sources: [{ id: 'gh-docs', oauth: 'github' }],
+          senders: [],
+        },
       }),
     ).toThrow(ManifestError);
     expect(() =>
       parseManifest({
         ...GOOD,
-        contributes: { sources: [{ id: 'gh-docs', oauth: 'github' }] },
+        contributes: {
+          sources: [{ id: 'gh-docs', oauth: 'github' }],
+          senders: [],
+        },
       }),
     ).toThrow(/oauth must be one of: google, microsoft/);
   });
@@ -121,28 +176,28 @@ describe('source contributions (string | { id, oauth })', () => {
     expect(() =>
       parseManifest({
         ...GOOD,
-        contributes: { sources: [{ oauth: 'google' }] },
+        contributes: { sources: [{ oauth: 'google' }], senders: [] },
       }),
     ).toThrow(ManifestError);
     expect(() =>
       parseManifest({
         ...GOOD,
-        contributes: { sources: [{ oauth: 'google' }] },
+        contributes: { sources: [{ oauth: 'google' }], senders: [] },
       }),
     ).toThrow(/source id string or \{ id, oauth \}/);
   });
 
   it('rejects an empty-string source id in both forms, with a user-facing message', () => {
     expect(() =>
-      parseManifest({ ...GOOD, contributes: { sources: [''] } }),
+      parseManifest({ ...GOOD, contributes: { sources: [''], senders: [] } }),
     ).toThrow(ManifestError);
     expect(() =>
-      parseManifest({ ...GOOD, contributes: { sources: [''] } }),
+      parseManifest({ ...GOOD, contributes: { sources: [''], senders: [] } }),
     ).toThrow(/source id must not be empty/);
     expect(() =>
       parseManifest({
         ...GOOD,
-        contributes: { sources: [{ id: '', oauth: 'google' }] },
+        contributes: { sources: [{ id: '', oauth: 'google' }], senders: [] },
       }),
     ).toThrow(/source id must not be empty/);
   });
@@ -152,14 +207,18 @@ describe('source contributions (string | { id, oauth })', () => {
       ...GOOD,
       contributes: {
         sources: ['plainsrc', { id: 'google-docs', oauth: 'google' }],
+        senders: [],
       },
     });
     expect(sourceContributions(m)).toEqual([
       { id: 'plainsrc' },
       { id: 'google-docs', oauth: 'google' },
     ]);
-    const { contributes: _drop, ...rest } = GOOD;
-    expect(sourceContributions(parseManifest(rest))).toEqual([]);
+    expect(
+      sourceContributions(
+        parseManifest({ ...GOOD, contributes: { senders: [] } }),
+      ),
+    ).toEqual([]);
   });
 
   it('oauthSourceBindings keeps only oauth-bound sources, as {id, provider}', () => {
@@ -167,6 +226,7 @@ describe('source contributions (string | { id, oauth })', () => {
       ...GOOD,
       contributes: {
         sources: ['plainsrc', { id: 'google-docs', oauth: 'google' }],
+        senders: [],
       },
     });
     expect(oauthSourceBindings(m)).toEqual([
@@ -277,9 +337,10 @@ describe('privileged caps by tier', () => {
     id: 'pub.priv',
     name: 'Priv',
     version: '1.0.0',
-    engine: '^1.0.0',
+    engine: '^2.0.0',
     entry: 'index.js',
     caps: ['unsafe.mainProcess'],
+    contributes: { senders: [] },
   };
 
   it('rejects unsafe.mainProcess for the default (external) tier', () => {

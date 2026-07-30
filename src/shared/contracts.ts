@@ -6,7 +6,7 @@
  * durable cursor — over the outside world, over the document feed, over the
  * document feed — advanced by one Engine through one transactional write
  * primitive (`Store.commit`). Extensions are ONE plugin type whose activate()
- * returns any mix of contributions (sources / workers / tools / providers).
+ * returns any mix of contributions (sources / tools / senders).
  *
  * This file is imported by main, renderer, and extension host alike. It must
  * stay runtime-free: types and interfaces only.
@@ -662,10 +662,10 @@ export interface Manifest {
   icon?: string;
   contributes: {
     sources?: SourceContribution[];
-    workers?: string[];
     tools?: string[];
-    providers?: string[];
-    senders?: string[];
+    /** Source ids this extension provides an outbound Sender for — []
+     *  for none. Required since platform 2.0.0. */
+    senders: string[];
     commands?: Array<{ id: string; title: string }>;
   };
   caps: Cap[];
@@ -759,9 +759,7 @@ export interface ExtensionModule<G extends Cap = Cap> {
     extras?: { mainProcess: unknown },
   ): Promise<{
     sources?: Source[];
-    workers?: Worker[];
     tools?: McpTool[];
-    providers?: InferenceProvider[];
     /** Senders keyed by SOURCE id — each must be listed in
      *  contributes.senders and its source contributed by this extension. */
     senders?: Record<string, Sender>;

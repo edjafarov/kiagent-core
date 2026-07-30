@@ -2,8 +2,15 @@
   "id": "test.sender-nocap",
   "name": "Sender Fixture (no send cap)",
   "version": "1.0.0",
-  "engine": "^1.0.0",
+  "engine": "^2.0.0",
   "entry": "index.js",
   "caps": [],
-  "contributes": { "sources": ["fixsrc"], "senders": ["fixsrc"] }
+  "contributes": {
+    "sources": [
+      "fixsrc"
+    ],
+    "senders": [
+      "fixsrc"
+    ]
+  }
 }

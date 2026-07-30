@@ -2,11 +2,18 @@
   "id": "test.sender-undeclared",
   "name": "Sender Fixture (undeclared ids)",
   "version": "1.0.0",
-  "engine": "^1.0.0",
+  "engine": "^2.0.0",
   "entry": "index.js",
-  "caps": ["send"],
+  "caps": [
+    "send"
+  ],
   "contributes": {
-    "sources": ["okaysrc"],
-    "senders": ["okaysrc", "ghostsrc"]
+    "sources": [
+      "okaysrc"
+    ],
+    "senders": [
+      "okaysrc",
+      "ghostsrc"
+    ]
   }
 }

@@ -59,19 +59,20 @@ Two rules:
   README for the release flow).
 
 The platform's own API version is `PLATFORM_API_VERSION` in
-[`src/shared/extension-rpc.ts`](../src/shared/extension-rpc.ts) — **`1.2.0`** at
+[`src/shared/extension-rpc.ts`](../src/shared/extension-rpc.ts) — **`2.0.0`** at
 the time of writing. Your manifest's `engine` range is checked against it at
-install.
+install. 2.0.0 removed tolerance, not surface: manifests are parsed strictly
+(unknown keys reject instead of being silently stripped) and
+`contributes.senders` must be stated explicitly. An extension that works on
+both the 1.2.0 and 2.0.0 platforms can declare `"engine": ">=1.2.0 <3.0.0"`.
 
 ### What is not plumbed yet
 
-`ExtensionModule.activate()` is typed to return
-`{ sources, workers, tools, providers, senders }`, but the wire protocol
-(`Contributions` in `extension-rpc.ts`) carries **sources, tools and senders
-only**. Returning `workers` or `providers` from a third-party extension is
-silently dropped — only built-ins register those today. Don't build on them.
+`ExtensionModule.activate()` returns any mix of `{ sources, tools, senders }`
+— exactly what the wire protocol (`Contributions` in `extension-rpc.ts`)
+carries.
 
-Likewise, the `files` and `commands` capabilities validate and consent
+The `files` and `commands` capabilities validate and consent
 normally but **throw on every call** (`the 'files' capability is not supported
 in this build yet` — see `src/main/platform/host-surfaces.ts`). Declaring them
 buys you a scarier consent screen and nothing else.
@@ -154,7 +155,7 @@ so a bad manifest is a visible install failure, not a silent one.
   "id": "kia.slack",
   "name": "Slack",
   "version": "2.2.1",
-  "engine": "^1.2.0",
+  "engine": "^2.0.0",
   "entry": "dist/index.js",
   "caps": ["net", "send"],
   "contributes": {
@@ -174,7 +175,11 @@ so a bad manifest is a visible install failure, not a silent one.
 | `entry` | relative path to your CJS bundle; must resolve *inside* the package directory |
 | `icon` | optional, must end `.png`, must resolve inside the package, ≤ 200 KB (`MAX_ICON_BYTES`) |
 | `caps` | array from the fixed `CAPS` list |
-| `contributes` | what you register |
+| `contributes` | what you register. **Required**, and `contributes.senders` must be present — the source ids you ship an outbound Sender for, or `[]` for none. |
+
+The whole manifest is parsed **strictly**: a key the platform doesn't know
+(top-level, inside `contributes`, or inside a `sources` object entry) rejects
+the manifest instead of being silently ignored.
 
 ### caps
 
@@ -207,10 +212,11 @@ need to *do* about them:
   never see it.** OAuth-bound sources are surfaced separately at consent, so
   the user knows a provider sign-in window is coming before they install.
 - `senders: ["slack"]` — source ids you provide an outbound transport for.
-  Each must also be a source *this same extension* contributes; the platform
-  drops senders for ids you didn't declare or didn't return.
-- `workers`, `providers`, `tools`, `commands` — `tools` aside, see §1's
-  "not plumbed yet".
+  **Required** (use `[]` for none). Each entry must also be a source *this
+  same extension* contributes; the platform drops senders for ids you didn't
+  declare or didn't return.
+- `tools`, `commands` — declared tool/command ids; see §1's "not plumbed
+  yet" for the `commands` capability caveat.
 
 A source id already registered by another extension makes the install fail
 (`source id 'slack' is already provided by kia.other`). Namespace yours if

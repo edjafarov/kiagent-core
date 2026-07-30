@@ -18,7 +18,7 @@ import type {
 } from './contracts';
 import type { SourceErrorCode } from './source-errors';
 
-export const PLATFORM_API_VERSION = '1.2.0';
+export const PLATFORM_API_VERSION = '2.0.0';
 
 /** A Batch after the child mapped items through the source's toDocument —
  *  the generic Item type never crosses the wire. */
@@ -47,8 +47,8 @@ export interface Contributions {
   }>;
   tools: ToolDescriptor[];
   /** Source ids this extension provides a Sender for (declared AND returned
-   *  from activate). Absent from pre-1.2 children — default []. */
-  senders?: string[];
+   *  from activate) — [] when none. */
+  senders: string[];
 }
 
 export interface ExtensionBootstrap {

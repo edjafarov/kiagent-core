@@ -364,7 +364,7 @@ export function createExtensionPlatform(
     //   (b) the id is listed in contributes.senders (disclosed up front),
     //   (c) the id is a source this extension actually registered just now
     //       (never someone else's source, never a phantom id).
-    for (const id of c.senders ?? []) {
+    for (const id of c.senders) {
       const scope = `extension:${e.manifest.id}`;
       if (!e.manifest.caps.includes('send')) {
         deps.logSink.log(
@@ -588,7 +588,7 @@ export function createExtensionPlatform(
     const state = readEnabledState(deps.extDir);
     const records = readInstalled(deps.extDir);
     if (!found.manifest || !found.entryAbsPath) {
-      // Invalid on disk — track it as errored so the UI can show why.
+      // Invalid on disk — dropped; boot discovery logs the reason.
       return null;
     }
     const record = records.find((r) => r.id === found.manifest!.id);

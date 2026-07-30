@@ -2,8 +2,16 @@
   "id": "test.bundled",
   "name": "Bundled Test Extension",
   "version": "1.0.0",
-  "engine": "^1.0.0",
+  "engine": "^2.0.0",
   "entry": "index.js",
-  "caps": ["unsafe.mainProcess"],
-  "contributes": { "tools": ["bundled.probe", "bundled.dataDir"] }
+  "caps": [
+    "unsafe.mainProcess"
+  ],
+  "contributes": {
+    "tools": [
+      "bundled.probe",
+      "bundled.dataDir"
+    ],
+    "senders": []
+  }
 }
