@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.66.0](https://github.com/edjafarov/kiagent-core/compare/v0.65.0...v0.66.0) (2026-07-30)
+
+### Features
+
+* **processing:** name the reason background processing is paused ([5b07588](https://github.com/edjafarov/kiagent-core/commit/5b0758869bb589a2f4367f92dc0979f38ad8c4fc))
+
+### Bug Fixes
+
+* **vision:** make local-folder files first-class vision candidates ([ecde16a](https://github.com/edjafarov/kiagent-core/commit/ecde16a73c4536b4b14defc07ffbe00c841f9401))
+
 ## [0.65.0](https://github.com/edjafarov/kiagent-core/compare/v0.64.0...v0.65.0) (2026-07-30)
 
 ### ⚠ BREAKING CHANGES
