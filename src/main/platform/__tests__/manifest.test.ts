@@ -44,8 +44,10 @@ describe('parseManifest', () => {
   });
 
   it('rejects unknown keys instead of silently stripping them', () => {
+    // Top-level issues carry an empty zod path — the message labels them
+    // (root) rather than degrading to "invalid manifest:  — …".
     expect(() => parseManifest({ ...GOOD, hostApi: '1.0' })).toThrow(
-      ManifestError,
+      /invalid manifest: \(root\) — .*hostApi/,
     );
     expect(() =>
       parseManifest({

@@ -112,9 +112,10 @@ export function parseManifest(
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     const first = parsed.error.issues[0];
-    throw new ManifestError(
-      `invalid manifest: ${first.path.join('.')} — ${first.message}`,
-    );
+    // A top-level issue (e.g. an unrecognized root key) has an empty path —
+    // label it (root) instead of emitting "invalid manifest:  — …".
+    const where = first.path.length > 0 ? first.path.join('.') : '(root)';
+    throw new ManifestError(`invalid manifest: ${where} — ${first.message}`);
   }
   const m = parsed.data;
   if (!semver.satisfies(PLATFORM_API_VERSION, m.engine)) {
