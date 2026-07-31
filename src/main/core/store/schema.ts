@@ -35,17 +35,37 @@ const STATS_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [
  * drops+recreates on mismatch — so a future VISUAL_EXTS change rebuilds the
  * pending index automatically instead of silently regressing to a full scan.
  * First build on a large corpus is a one-time table scan at boot.
+ *
+ * Degrade, don't fail: this runs synchronously inside migrate(), which
+ * openDb() awaits before the corpus is usable at all. A failed build (e.g.
+ * SQLITE_BUSY, or disk pressure mid-scan while indexing a 324k-row table) is
+ * caught per-index, logged, and skipped — it must NEVER throw out of here and
+ * block opening the corpus. Worst case on failure: sqlite_master keeps
+ * whatever it had (stale/missing index, rolled back by the failed
+ * transaction), extractionStats silently falls back to a full table scan,
+ * and the next migrate() (next app start) retries the build.
  */
 export function ensureStatsIndexes(db: BetterSqlite3.Database): void {
   for (const { name, sql } of STATS_INDEXES) {
-    const row = db
-      .prepare(`SELECT sql FROM sqlite_master WHERE type='index' AND name=?`)
-      .get(name) as { sql: string } | undefined;
-    if (row?.sql === sql) continue;
-    db.transaction(() => {
-      db.exec(`DROP INDEX IF EXISTS ${name}`);
-      db.exec(sql);
-    })();
+    try {
+      const row = db
+        .prepare(`SELECT sql FROM sqlite_master WHERE type='index' AND name=?`)
+        .get(name) as { sql: string } | undefined;
+      if (row?.sql === sql) continue;
+      db.transaction(() => {
+        db.exec(`DROP INDEX IF EXISTS ${name}`);
+        db.exec(sql);
+      })();
+    } catch (err) {
+      // A main-process console.warn is the idiomatic fallback for a
+      // non-fatal, no-logSink-available case (see outbound/pages.ts's css()
+      // for the same pattern) — this is purely a query-performance index,
+      // never a reason to fail opening the corpus.
+      console.warn(
+        `ensureStatsIndexes: failed to build index ${name} — extractionStats falls back to a full scan until this succeeds`,
+        err,
+      );
+    }
   }
 }
 

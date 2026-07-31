@@ -157,4 +157,54 @@ describe('schema: extraction-stats partial indexes', () => {
       `CREATE INDEX docs_pending_visual ON documents(id) WHERE ${PENDING_VISUAL_WHERE}`,
     );
   });
+
+  it('ensureStatsIndexes degrades instead of throwing when a build fails, then heals once the failure clears', () => {
+    // Force docs_pending_visual to need a rebuild.
+    db.exec(`DROP INDEX docs_pending_visual`);
+    db.exec(
+      `CREATE INDEX docs_pending_visual ON documents(id) WHERE archived_at IS NULL`,
+    );
+
+    const realExec = db.exec.bind(db);
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    // Own-property shadow over the prototype method (this instance only):
+    // simulate a build failure (e.g. SQLITE_BUSY / disk pressure) on the
+    // CREATE INDEX statement specifically, leaving DROP/other exec calls
+    // (including migrate()'s own, which already ran in beforeEach) working.
+    db.exec = ((sql: string) => {
+      if (/^CREATE INDEX/.test(sql)) {
+        throw new Error('simulated disk pressure');
+      }
+      return realExec(sql);
+    }) as typeof db.exec;
+
+    try {
+      expect(() => ensureStatsIndexes(db)).not.toThrow();
+    } finally {
+      db.exec = realExec;
+    }
+
+    expect(warnSpy).toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls.some((args) =>
+        args.some(
+          (a) => typeof a === 'string' && a.includes('docs_pending_visual'),
+        ),
+      ),
+    ).toBe(true);
+    warnSpy.mockRestore();
+
+    // The failed build must not have left a partial/corrupt state — the
+    // decoy is still there, untouched (the transaction rolled back).
+    expect(indexSql(db, 'docs_pending_visual')).toBe(
+      `CREATE INDEX docs_pending_visual ON documents(id) WHERE archived_at IS NULL`,
+    );
+
+    // With the injected failure gone, the very next ensureStatsIndexes call
+    // (e.g. the next app restart) heals it.
+    ensureStatsIndexes(db);
+    expect(indexSql(db, 'docs_pending_visual')).toBe(
+      `CREATE INDEX docs_pending_visual ON documents(id) WHERE ${PENDING_VISUAL_WHERE}`,
+    );
+  });
 });
