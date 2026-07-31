@@ -37,6 +37,7 @@ function makeAppState(): AppState {
       },
     },
     extensions: [],
+    ready: true,
   };
 }
 

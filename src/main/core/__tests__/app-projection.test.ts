@@ -1,4 +1,10 @@
-import type { Account, AccountId, Change, Document } from '@shared/contracts';
+import type {
+  Account,
+  AccountId,
+  Change,
+  Document,
+  Query,
+} from '@shared/contracts';
 
 import { createAppProjection } from '../app-projection';
 import { DEFAULT_PREFS } from '../prefs';
@@ -54,6 +60,26 @@ function docChange(
   };
 }
 
+describe('appProjection.init', () => {
+  const projection = createAppProjection(extras);
+
+  function fakeQuery(accounts: Account[]): Query {
+    return {
+      document: jest.fn(async () => null),
+      children: jest.fn(async () => []),
+      byExternalId: jest.fn(async () => null),
+      search: jest.fn(async () => []),
+      count: jest.fn(async () => 0),
+      accounts: jest.fn(async () => accounts),
+    } as unknown as Query;
+  }
+
+  it('marks the snapshot ready — the first-hydration signal for renderers', async () => {
+    const s = await projection.init(fakeQuery([]));
+    expect(s.ready).toBe(true);
+  });
+});
+
 describe('appProjection.apply', () => {
   const projection = createAppProjection(extras);
   const base = {
@@ -63,7 +89,13 @@ describe('appProjection.apply', () => {
     identity: null,
     prefs: DEFAULT_PREFS,
     extensions: [],
+    ready: true,
   };
+
+  it('preserves ready through apply (spread, not recomputed)', () => {
+    const s = projection.apply(base, [docChange(1, 'a1', 'd1')]);
+    expect(s.ready).toBe(true);
+  });
 
   it('counts new documents and tracks recents', () => {
     const s = projection.apply(base, [

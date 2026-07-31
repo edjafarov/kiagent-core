@@ -684,6 +684,7 @@ app
         identity: await p.store.identity.get(),
         prefs: p.prefs.get(),
         extensions: [],
+        ready: false,
       },
       seq: 0,
       rev,

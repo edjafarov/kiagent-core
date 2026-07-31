@@ -888,6 +888,12 @@ export interface AppState {
   identity: Identity | null;
   prefs: AppPrefs;
   extensions: ExtensionSnapshot[];
+  /** False until the feed projection's first init() snapshot has been
+   *  applied. Boot seeds `accounts: []` before that snapshot lands (which
+   *  can take seconds on a big corpus), so renderers use this to
+   *  distinguish "still hydrating" from "genuinely no sources" rather than
+   *  reading an empty `accounts` array as the latter. */
+  ready: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -59,6 +59,7 @@ export function createAppProjection(
         identity: await extras.identity(),
         prefs: extras.prefs(),
         extensions: extras.extensions(),
+        ready: true,
       };
     },
 

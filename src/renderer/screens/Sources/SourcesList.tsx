@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { useAppState } from '@renderer/state/app-state';
 import { Icon } from '@shared/web-ui/icon-sprite';
+import { Busy } from '@shared/web-ui/components';
 import type { Account, AccountId } from '@shared/contracts';
 import { ErrorCard } from './ErrorCard';
 import { SourceTable, type SourceTableEntry } from './SourceTable';
@@ -16,6 +17,7 @@ export function SourcesList(props: {
   onOpenConnection: () => void;
 }): React.ReactElement {
   const accountEntries = useAppState((s) => s.accounts);
+  const ready = useAppState((s) => s.ready);
   const [adding, setAdding] = useState(false);
   // Drives the refresh-icon spin for a fixed beat so "Sync all" reads as a
   // real action even when every accounts:sync-now call resolves near-instantly.
@@ -104,6 +106,8 @@ export function SourcesList(props: {
           ))}
           {healthyEntries.length > 0 || erroring.length > 0 ? (
             <SourceTable entries={healthyEntries} onRowClick={onRowClick} />
+          ) : !ready ? (
+            <Busy label="Loading sources…" />
           ) : (
             <div className="src-empty">
               <Icon
