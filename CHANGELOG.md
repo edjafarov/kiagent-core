@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.67.1](https://github.com/edjafarov/kiagent-core/compare/v0.67.0...v0.67.1) (2026-07-31)
+
+### Bug Fixes
+
+* **store:** pin the stats counts to their partial indexes with INDEXED BY ([478ddf0](https://github.com/edjafarov/kiagent-core/commit/478ddf0931822ba2233ae8e66bf129039cbdb990))
+
 ## [0.67.0](https://github.com/edjafarov/kiagent-core/compare/v0.66.0...v0.67.0) (2026-07-31)
 
 ### Bug Fixes
