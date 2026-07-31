@@ -1,6 +1,53 @@
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { VISUAL_EXTS } from '@main/workers/vision/classify';
+
 import { buildStemView } from '../stemming';
+
+/** WHERE text shared VERBATIM by the stats queries in store.ts and the partial
+ *  indexes below — SQLite only uses a partial index when the query's WHERE
+ *  implies the index's WHERE, which identical text guarantees. Never edit one
+ *  side without the other (they can't drift: both read these constants). */
+export const EXTRACTED_DOCS_WHERE = `json_extract(metadata,'$.extraction') IS NOT NULL AND archived_at IS NULL`;
+
+export const PENDING_VISUAL_WHERE = `json_extract(metadata,'$.extraction') IS NULL
+   AND type IN ('attachment','file')
+   AND (markdown IS NULL OR length(trim(markdown)) < 16)
+   AND (json_extract(metadata,'$.mime') LIKE 'image/%'
+        OR json_extract(metadata,'$.mime') = 'application/pdf'
+        OR lower(json_extract(metadata,'$.ext')) IN (${VISUAL_EXTS.map((e) => `'${e}'`).join(',')}))
+   AND archived_at IS NULL`;
+
+const STATS_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [
+  {
+    name: 'docs_extracted',
+    sql: `CREATE INDEX docs_extracted ON documents(updated_at DESC, seq DESC) WHERE ${EXTRACTED_DOCS_WHERE}`,
+  },
+  {
+    name: 'docs_pending_visual',
+    sql: `CREATE INDEX docs_pending_visual ON documents(id) WHERE ${PENDING_VISUAL_WHERE}`,
+  },
+];
+
+/**
+ * Idempotent, self-healing stats indexes. Runs on every open (end of migrate):
+ * compares each desired CREATE INDEX text against sqlite_master and
+ * drops+recreates on mismatch — so a future VISUAL_EXTS change rebuilds the
+ * pending index automatically instead of silently regressing to a full scan.
+ * First build on a large corpus is a one-time table scan at boot.
+ */
+export function ensureStatsIndexes(db: BetterSqlite3.Database): void {
+  for (const { name, sql } of STATS_INDEXES) {
+    const row = db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type='index' AND name=?`)
+      .get(name) as { sql: string } | undefined;
+    if (row?.sql === sql) continue;
+    db.transaction(() => {
+      db.exec(`DROP INDEX IF EXISTS ${name}`);
+      db.exec(sql);
+    })();
+  }
+}
 
 /**
  * Forward-only, versioned migrations. Each entry runs in one transaction;
@@ -266,4 +313,5 @@ export function migrate(db: BetterSqlite3.Database): void {
       ).run(String(i + 1));
     })();
   }
+  ensureStatsIndexes(db);
 }

@@ -20,8 +20,6 @@ import type {
   SyncStatus,
 } from '@shared/contracts';
 
-import { VISUAL_EXTS } from '@main/workers/vision/classify';
-
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { newId } from '../ids';
 import { stemVariants } from '../stemming';
@@ -33,7 +31,11 @@ import {
   toTrigramMatch,
 } from './fuzzy';
 import { createOutboxStore, type OutboxStore } from './outbox';
-import { repopulateSearchIndex } from './schema';
+import {
+  EXTRACTED_DOCS_WHERE,
+  PENDING_VISUAL_WHERE,
+  repopulateSearchIndex,
+} from './schema';
 import { createWriteTx } from './write-tx';
 
 /** Injected so the store stays testable and Electron-free. */
@@ -591,28 +593,20 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       // caps and tiny-image rules but mirrors the type gate, the has-real-
       // text gate, and both candidate shapes: mime-carrying docs (gmail
       // attachments) and ext-carrying ones (local-folder files, which store
-      // no mime).
-      const extList = VISUAL_EXTS.map((e) => `'${e}'`).join(',');
+      // no mime). The WHERE text below is shared verbatim with the
+      // docs_pending_visual / docs_extracted partial indexes (schema.ts) so
+      // the planner can use them instead of scanning all 300k+ rows.
       const pendingOcr = (
         (
           await db.all(
-            `SELECT COUNT(*) AS c FROM documents
-             WHERE json_extract(metadata,'$.extraction') IS NULL
-               AND type IN ('attachment','file')
-               AND (markdown IS NULL OR length(trim(markdown)) < 16)
-               AND (json_extract(metadata,'$.mime') LIKE 'image/%'
-                    OR json_extract(metadata,'$.mime') = 'application/pdf'
-                    OR lower(json_extract(metadata,'$.ext')) IN (${extList}))
-               AND archived_at IS NULL`,
+            `SELECT COUNT(*) AS c FROM documents WHERE ${PENDING_VISUAL_WHERE}`,
           )
         )[0] as { c: number }
       ).c;
       const processed = (
         (
           await db.all(
-            `SELECT COUNT(*) AS c FROM documents
-             WHERE json_extract(metadata,'$.extraction') IS NOT NULL
-               AND archived_at IS NULL`,
+            `SELECT COUNT(*) AS c FROM documents WHERE ${EXTRACTED_DOCS_WHERE}`,
           )
         )[0] as { c: number }
       ).c;
@@ -620,7 +614,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         `SELECT id, title, json_extract(metadata,'$.filename') AS filename, type,
                   json_extract(metadata,'$.extraction.engine') AS engine, updated_at
            FROM documents
-           WHERE json_extract(metadata,'$.extraction') IS NOT NULL AND archived_at IS NULL
+           WHERE ${EXTRACTED_DOCS_WHERE}
            ORDER BY updated_at DESC, seq DESC LIMIT 10`,
       )) as Array<{
         id: string;
