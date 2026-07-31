@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAppState } from '@renderer/state/app-state';
 import { formatRelative } from '@renderer/screens/Sources/format';
-import { Pill } from '@shared/web-ui/components';
+import { Busy, Pill } from '@shared/web-ui/components';
 import type { PillVariant } from '@shared/web-ui/components';
 import { Icon } from '@shared/web-ui/icon-sprite';
 import type { AppPrefs, LaneState, ProviderStatus } from '@shared/contracts';
@@ -78,25 +78,31 @@ export function LocalProcessing(): React.ReactElement {
       })
       .catch(() => setProvidersError(true))
       .finally(() => setLoadingProviders(false));
-    // Piggybacked queue/processed stats — same clock as the provider reads
-    // (mount, Refresh, download poll). On failure keep the last-known values.
-    window.kiagent
-      .invoke('inference:stats', undefined)
-      .then(setStats)
-      .catch(() => {});
-    // Piggybacked model catalog + resolved selection — same clock as above.
-    // Safe to ride the download poll: selectedModel() memoizes the hardware
-    // probe on the provider (`backend`, detected once, lazily), so repeated
-    // calls don't re-detect. On failure keep the last-known values.
+    // Piggybacked model catalog + resolved selection — same clock as the
+    // provider reads (mount, Refresh, download poll). Safe to ride the
+    // download poll: selectedModel() memoizes the hardware probe on the
+    // provider (`backend`, detected once, lazily), so repeated calls don't
+    // re-detect. On failure keep the last-known values.
     window.kiagent
       .invoke('inference:models', undefined)
       .then(setModelCatalog)
       .catch(() => {});
   }, []);
 
+  // Queue/processed stats — an expensive query, deliberately NOT on the 2s
+  // download poll's clock (mount + manual Refresh only). On failure keep
+  // the last-known values.
+  const loadStats = useCallback(() => {
+    window.kiagent
+      .invoke('inference:stats', undefined)
+      .then(setStats)
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     loadProviders();
-  }, [loadProviders]);
+    loadStats();
+  }, [loadProviders, loadStats]);
 
   // No push channel carries download progress, so poll while any provider
   // is mid-download; stop as soon as none are (and on unmount).
@@ -223,7 +229,10 @@ export function LocalProcessing(): React.ReactElement {
             type="button"
             className="btn ghost sm"
             disabled={loadingProviders}
-            onClick={loadProviders}
+            onClick={() => {
+              loadProviders();
+              loadStats();
+            }}
           >
             <Icon name="refresh-cw" size={12} />{' '}
             {loadingProviders ? 'Refreshing…' : 'Refresh'}
@@ -263,6 +272,7 @@ export function LocalProcessing(): React.ReactElement {
           </div>
         )}
 
+        {stats == null && <Busy label="Loading processing status…" />}
         {stats != null && (
           <div className="t-meta">
             {stats.pendingOcr} queued for processing · {stats.processed}{' '}
