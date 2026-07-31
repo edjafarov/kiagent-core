@@ -170,7 +170,8 @@ describe('LocalProcessing: stats off the download poll', () => {
       });
     }
 
-    expect(countOf('inference:providers')).toBeGreaterThan(1);
+    // 1 (mount) + 3 (one per 2s tick advanced above).
+    expect(countOf('inference:providers')).toBe(4);
     expect(countOf('inference:stats')).toBe(1);
   });
 });
