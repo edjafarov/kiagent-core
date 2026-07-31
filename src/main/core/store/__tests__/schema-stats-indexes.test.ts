@@ -6,7 +6,11 @@
  * expressions textually identical to their queries (so SQLite's planner can
  * prove the index applies), and the self-heal in ensureQueryIndexes()
  * rebuilds a stale/decoy index rather than silently regressing to a full
- * table scan or a temp B-tree sort.
+ * table scan or a temp B-tree sort. The two stats COUNT queries are
+ * additionally pinned with INDEXED BY (store.ts): on a no-stat1 DB the
+ * planner's default estimates prefer docs_account_recency for them, which
+ * turns each count back into the full-corpus json_extract scan the indexes
+ * exist to kill.
  */
 import Database from 'better-sqlite3';
 
@@ -16,6 +20,7 @@ import {
   migrate,
   PENDING_VISUAL_WHERE,
 } from '../schema';
+import { EXTRACTED_COUNT_SQL, PENDING_VISUAL_COUNT_SQL } from '../store';
 
 /** Join EXPLAIN QUERY PLAN's `detail` rows into one string for substring checks. */
 function planDetail(db: Database.Database, sql: string): string {
@@ -35,11 +40,14 @@ function indexSql(db: Database.Database, name: string): string | undefined {
 }
 
 /**
- * Seed a non-trivial, mixed-selectivity `documents` table and run ANALYZE so
- * the EQP assertions below reflect a planner with real cardinality stats
- * (sqlite_stat1) rather than the trivial "empty table" case, where SQLite's
- * default heuristics can favor an index for reasons unrelated to whether it
- * actually helps at corpus scale.
+ * Seed a non-trivial, mixed-selectivity `documents` table WITHOUT running
+ * ANALYZE: production corpora never carry sqlite_stat1 (nothing in the app
+ * runs ANALYZE), so the no-stats planner mode is the ONLY mode these
+ * assertions may run in. An earlier version of this fixture ANALYZEd, and
+ * that masked a real production mis-plan: with stats the planner chose the
+ * covering count indexes, without stats it planned both stats COUNTs onto
+ * docs_account_recency — a per-row json_extract scan measured at ~9s per
+ * count on a 324k-doc corpus.
  */
 function seedMixedDocuments(db: Database.Database): void {
   db.exec(
@@ -113,7 +121,6 @@ function seedMixedDocuments(db: Database.Database): void {
     });
   }
   insertMany(rows);
-  db.exec('ANALYZE');
 }
 
 describe('schema: query-performance partial indexes', () => {
@@ -137,16 +144,18 @@ describe('schema: query-performance partial indexes', () => {
     );
   });
 
-  it('planner uses docs_pending_visual for the pendingOcr query', () => {
+  it("store's pendingOcr count uses docs_pending_visual on a no-stat1 DB (the production planner mode)", () => {
     seedMixedDocuments(db);
-    const sql = `SELECT COUNT(*) AS c FROM documents WHERE ${PENDING_VISUAL_WHERE}`;
-    expect(planDetail(db, sql)).toContain('USING INDEX docs_pending_visual');
+    expect(planDetail(db, PENDING_VISUAL_COUNT_SQL)).toContain(
+      'USING INDEX docs_pending_visual',
+    );
   });
 
-  it('planner uses docs_extracted for the processed-count query', () => {
+  it("store's processed count uses docs_extracted on a no-stat1 DB (the production planner mode)", () => {
     seedMixedDocuments(db);
-    const sql = `SELECT COUNT(*) AS c FROM documents WHERE ${EXTRACTED_DOCS_WHERE}`;
-    expect(planDetail(db, sql)).toContain('USING INDEX docs_extracted');
+    expect(planDetail(db, EXTRACTED_COUNT_SQL)).toContain(
+      'USING INDEX docs_extracted',
+    );
   });
 
   it('planner uses docs_extracted for the recent-list query', () => {

@@ -38,6 +38,18 @@ import {
 } from './schema';
 import { createWriteTx } from './write-tx';
 
+// The two stats COUNTs are pinned to their covering partial indexes with
+// INDEXED BY: production corpora carry no sqlite_stat1 (nothing ever runs
+// ANALYZE), and without stats the planner's default estimates prefer
+// docs_account_recency for both — which re-runs the per-row json_extract
+// scan over the whole corpus (~9s per count at 324k docs) that these
+// indexes exist to kill. The unpinned fallback in extractionStats()
+// preserves ensureQueryIndexes' degrade-don't-fail contract: if the index
+// is missing, INDEXED BY fails to prepare ("no query solution") and the
+// count falls back to the scan instead of erroring.
+export const PENDING_VISUAL_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_pending_visual WHERE ${PENDING_VISUAL_WHERE}`;
+export const EXTRACTED_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_extracted WHERE ${EXTRACTED_DOCS_WHERE}`;
+
 /** Injected so the store stays testable and Electron-free. */
 export interface StoreDeps {
   /** Credential blob encryption (Electron safeStorage in production). */
@@ -584,6 +596,24 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
   // ── public surface ────────────────────────────────────────────────────────
 
+  /** Index-pinned count with the unpinned scan as the degraded-boot fallback. */
+  async function countDocs(
+    pinnedSql: string,
+    unpinnedWhere: string,
+  ): Promise<number> {
+    try {
+      return ((await db.all(pinnedSql))[0] as { c: number }).c;
+    } catch {
+      return (
+        (
+          await db.all(
+            `SELECT COUNT(*) AS c FROM documents WHERE ${unpinnedWhere}`,
+          )
+        )[0] as { c: number }
+      ).c;
+    }
+  }
+
   const store: CoreStore = {
     read: query,
 
@@ -593,23 +623,18 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       // caps and tiny-image rules but mirrors the type gate, the has-real-
       // text gate, and both candidate shapes: mime-carrying docs (gmail
       // attachments) and ext-carrying ones (local-folder files, which store
-      // no mime). The WHERE text below is shared verbatim with the
+      // no mime). The WHERE text is shared verbatim with the
       // docs_pending_visual / docs_extracted partial indexes (schema.ts) so
-      // the planner can use them instead of scanning all 300k+ rows.
-      const pendingOcr = (
-        (
-          await db.all(
-            `SELECT COUNT(*) AS c FROM documents WHERE ${PENDING_VISUAL_WHERE}`,
-          )
-        )[0] as { c: number }
-      ).c;
-      const processed = (
-        (
-          await db.all(
-            `SELECT COUNT(*) AS c FROM documents WHERE ${EXTRACTED_DOCS_WHERE}`,
-          )
-        )[0] as { c: number }
-      ).c;
+      // the planner can prove they apply — and the counts are pinned to
+      // them besides (see PENDING_VISUAL_COUNT_SQL above for why).
+      const pendingOcr = await countDocs(
+        PENDING_VISUAL_COUNT_SQL,
+        PENDING_VISUAL_WHERE,
+      );
+      const processed = await countDocs(
+        EXTRACTED_COUNT_SQL,
+        EXTRACTED_DOCS_WHERE,
+      );
       const rows = (await db.all(
         `SELECT id, title, json_extract(metadata,'$.filename') AS filename, type,
                   json_extract(metadata,'$.extraction.engine') AS engine, updated_at

@@ -2,6 +2,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import Database from 'better-sqlite3';
+
 import type { AccountId, Change, DocumentInput } from '@shared/contracts';
 
 import { openDb, type AppDb } from '../../../db/app-db';
@@ -482,6 +484,32 @@ describe('store', () => {
     });
     const stats = await store.extractionStats();
     expect(stats.pendingOcr).toBe(2); // lf-img + lf-pdf only
+  });
+
+  it('extractionStats: counts survive missing partial indexes (degraded boot falls back to the unpinned scan)', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [
+        doc('lf-img', {
+          type: 'file',
+          markdown: null,
+          metadata: { ext: 'jpg', size: 12345, absPath: '/x/a.jpg' },
+        }),
+        doc('done', { metadata: { extraction: { engine: 'local-ocr' } } }),
+      ],
+      cursor: 1,
+    });
+    // Simulate ensureQueryIndexes' degrade path (index build failed at boot):
+    // drop the indexes the counts are INDEXED BY-pinned to. The store
+    // re-prepares per call, so the next extractionStats hits "no query
+    // solution" on the pinned SQL and must fall back, not throw.
+    const raw = new Database(path.join(dir, 'test.db'));
+    raw.exec('DROP INDEX docs_pending_visual; DROP INDEX docs_extracted;');
+    raw.close();
+
+    const stats = await store.extractionStats();
+    expect(stats.pendingOcr).toBe(1);
+    expect(stats.processed).toBe(1);
   });
 
   it('extractionStats: counts exclude archived/non-image; recent carries filename', async () => {
