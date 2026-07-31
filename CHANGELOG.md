@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.68.0](https://github.com/edjafarov/kiagent-core/compare/v0.67.1...v0.68.0) (2026-07-31)
+
+### Features
+
+* **auth:** per-flow OAuth client override + state-keyed pending in google profile ([7818cbe](https://github.com/edjafarov/kiagent-core/commit/7818cbe3101c9fd86062e40df093bcd3cd0ce662))
+* **connect:** accounts:add oauthClient override threads to the OAuth profile ([fb3b849](https://github.com/edjafarov/kiagent-core/commit/fb3b849d2814f378d04a7ebc5b681185ed13fddb))
+
+### Bug Fixes
+
+* **auth:** address review — verifier-provenance test, clear-all invariant doc, real test isolation, state-mismatch semantics note, type dedup ([7cce6fb](https://github.com/edjafarov/kiagent-core/commit/7cce6fb8b9f22929fc9b8af066bba0d13d95324d))
+
 ## [0.67.1](https://github.com/edjafarov/kiagent-core/compare/v0.67.0...v0.67.1) (2026-07-31)
 
 ### Bug Fixes
