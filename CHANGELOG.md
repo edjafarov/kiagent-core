@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.67.0](https://github.com/edjafarov/kiagent-core/compare/v0.66.0...v0.67.0) (2026-07-31)
+
+### Bug Fixes
+
+* **renderer:** distinguish loading from empty on the sources list ([5c3ba1a](https://github.com/edjafarov/kiagent-core/commit/5c3ba1a0d10993f5ade6ade1f88432347182f279))
+* **renderer:** loading state for processing stats, fetched off the download poll ([2f372b2](https://github.com/edjafarov/kiagent-core/commit/2f372b2ad158e67738d42f0cd878ec165b3efe2f))
+* **store:** never fail corpus open over a stats-index build error ([d8608e6](https://github.com/edjafarov/kiagent-core/commit/d8608e6d88ea09484ae67dbc4ec3a7d7aa3e714c))
+
+### Performance Improvements
+
+* **store:** index the extraction-stats queries ([5843cf2](https://github.com/edjafarov/kiagent-core/commit/5843cf2b1a74b4f7c9377a26d77677836dd29da0))
+* **store:** index the per-account startup queries ([5d3b40c](https://github.com/edjafarov/kiagent-core/commit/5d3b40c052d97b9bef026f22cbe753da6c7beeaa))
+
 ## [0.66.0](https://github.com/edjafarov/kiagent-core/compare/v0.65.0...v0.66.0) (2026-07-30)
 
 ### Features
