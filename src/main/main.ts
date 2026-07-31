@@ -264,7 +264,9 @@ function registerIpc(
     return { entries: await listChildren(path.resolve(req.path)) };
   });
 
-  handle('accounts:add', ({ sourceId }) => broker.start(sourceId));
+  handle('accounts:add', ({ sourceId, oauthClient }) =>
+    broker.start(sourceId, { oauthClient }),
+  );
   handle('accounts:prompt-answer', ({ requestId, answers }) => {
     broker.answer(requestId, answers);
   });

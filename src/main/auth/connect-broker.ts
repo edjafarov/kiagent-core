@@ -10,7 +10,7 @@ import type { ConnectEvent } from '@shared/ipc';
 import { runAccount } from '../core/boot';
 import type { CorePlatform } from '../core/boot';
 import { newId } from '../core/ids';
-import type { OAuthProfile } from './oauth-window';
+import type { OAuthClientOverride, OAuthProfile } from './oauth-window';
 import { runOAuthLoopback } from './oauth-window';
 
 /**
@@ -87,7 +87,10 @@ export function createConnectBroker(
     },
 
     /** Kick off an interactive connect; resolves immediately with the flowId. */
-    start(sourceId: string): { flowId: string } {
+    start(
+      sourceId: string,
+      opts?: { oauthClient?: OAuthClientOverride },
+    ): { flowId: string } {
       const flowId = newId<'flow'>();
       const source = platform.sources.get(sourceId);
       if (!source) {
@@ -103,7 +106,7 @@ export function createConnectBroker(
             throw new Error(`no OAuth profile registered for ${sourceId}`);
           send({ flowId, kind: 'status', msg: 'Waiting for sign-in…' });
           const callbackUrl = await runOAuthLoopback(
-            profile.authUrl(scopes, profile.redirectUri),
+            profile.authUrl(scopes, profile.redirectUri, opts?.oauthClient),
             profile.redirectUri,
             flow.abort.signal,
           );

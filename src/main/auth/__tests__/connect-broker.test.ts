@@ -373,3 +373,51 @@ describe('connect broker — cancel', () => {
     expect(engineRemove).not.toHaveBeenCalled();
   });
 });
+
+describe('connect broker — oauth client override', () => {
+  it('start() threads opts.oauthClient into profile.authUrl', async () => {
+    (runOAuthLoopback as jest.Mock).mockResolvedValue('http://cb/?code=c');
+    const source = makeSource(async (auth) => {
+      await auth.oauth(['scope-x']);
+      return { identifier: 'me@x' };
+    });
+    const { broker } = makeBroker(source);
+    const authUrl = jest.fn().mockReturnValue('https://auth');
+    const exchange = jest.fn().mockResolvedValue({ accessToken: 't' });
+    broker.registerOAuthProfile('picky', {
+      redirectUri: 'http://127.0.0.1:1/cb',
+      authUrl,
+      exchange,
+    });
+    const client = { clientId: 'byo-id', clientSecret: 'byo-secret' };
+    broker.start('picky', { oauthClient: client });
+    await flush();
+    expect(authUrl).toHaveBeenCalledWith(
+      ['scope-x'],
+      'http://127.0.0.1:1/cb',
+      client,
+    );
+  });
+
+  it('start() without opts passes undefined (env-client fallback)', async () => {
+    (runOAuthLoopback as jest.Mock).mockResolvedValue('http://cb/?code=c');
+    const source = makeSource(async (auth) => {
+      await auth.oauth(['scope-x']);
+      return { identifier: 'me@x' };
+    });
+    const { broker } = makeBroker(source);
+    const authUrl = jest.fn().mockReturnValue('https://auth');
+    broker.registerOAuthProfile('picky', {
+      redirectUri: 'http://127.0.0.1:1/cb',
+      authUrl,
+      exchange: jest.fn().mockResolvedValue({ accessToken: 't' }),
+    });
+    broker.start('picky');
+    await flush();
+    expect(authUrl).toHaveBeenCalledWith(
+      ['scope-x'],
+      'http://127.0.0.1:1/cb',
+      undefined,
+    );
+  });
+});

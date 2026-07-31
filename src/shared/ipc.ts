@@ -216,8 +216,16 @@ export interface Invokes {
     };
   };
 
-  /** Starts an interactive connect flow; progress arrives via push:connect. */
-  'accounts:add': { req: { sourceId: string }; res: { flowId: string } };
+  /** Starts an interactive connect flow; progress arrives via push:connect.
+   *  `oauthClient` (issue #89) overrides the build-time OAuth client for this
+   *  one flow — the gate's restricted/BYO Google client. */
+  'accounts:add': {
+    req: {
+      sourceId: string;
+      oauthClient?: { clientId: string; clientSecret: string };
+    };
+    res: { flowId: string };
+  };
   'accounts:prompt-answer': {
     req: { requestId: string; answers: Record<string, unknown> };
     res: void;
