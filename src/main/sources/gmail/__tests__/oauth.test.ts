@@ -220,6 +220,87 @@ describe('gmail oauth profile', () => {
     });
   });
 
+  describe('client override', () => {
+    const OVERRIDE = { clientId: 'byo-id', clientSecret: 'byo-secret' };
+
+    it('authUrl uses the override client_id instead of the env client', () => {
+      const url = new URL(
+        googleOAuthProfile.authUrl(
+          ['https://www.googleapis.com/auth/gmail.readonly'],
+          REDIRECT_URI,
+          OVERRIDE,
+        ),
+      );
+      expect(url.searchParams.get('client_id')).toBe('byo-id');
+    });
+
+    it('exchange posts the override client and embeds it in the returned Credentials', async () => {
+      const authUrl = googleOAuthProfile.authUrl(
+        ['https://www.googleapis.com/auth/gmail.readonly'],
+        REDIRECT_URI,
+        OVERRIDE,
+      );
+      const state = stateFrom(authUrl);
+
+      let sentBody = '';
+      global.fetch = jest.fn(async (_input, init) => {
+        sentBody = String(init?.body ?? '');
+        return okJson({
+          access_token: 'fake-access-token',
+          refresh_token: 'fake-refresh-token',
+          expires_in: 3600,
+        });
+      }) as unknown as typeof fetch;
+
+      const callback = `${REDIRECT_URI}?code=fake-auth-code&state=${state}`;
+      const creds = await googleOAuthProfile.exchange(callback, REDIRECT_URI);
+
+      const sentParams = new URLSearchParams(sentBody);
+      expect(sentParams.get('client_id')).toBe('byo-id');
+      expect(sentParams.get('client_secret')).toBe('byo-secret');
+      expect(creds.clientId).toBe('byo-id');
+      expect(creds.clientSecret).toBe('byo-secret');
+    });
+
+    it('two interleaved flows do not clobber each other (pending keyed by state)', async () => {
+      const scopes = ['https://www.googleapis.com/auth/gmail.readonly'];
+      const urlA = new URL(
+        googleOAuthProfile.authUrl(scopes, REDIRECT_URI, OVERRIDE),
+      );
+      const urlB = new URL(googleOAuthProfile.authUrl(scopes, REDIRECT_URI)); // env client
+      const stateA = stateFrom(urlA.toString());
+      const stateB = stateFrom(urlB.toString());
+
+      global.fetch = jest.fn(async () =>
+        okJson({
+          access_token: 'fake-access-token',
+          refresh_token: 'fake-refresh-token',
+          expires_in: 3600,
+        }),
+      ) as unknown as typeof fetch;
+
+      // Exchange B first, then A — both must succeed with their OWN
+      // verifier+client.
+      const credsB = await googleOAuthProfile.exchange(
+        `${REDIRECT_URI}?code=fake-auth-code&state=${stateB}`,
+        REDIRECT_URI,
+      );
+      const credsA = await googleOAuthProfile.exchange(
+        `${REDIRECT_URI}?code=fake-auth-code&state=${stateA}`,
+        REDIRECT_URI,
+      );
+      expect(credsA.clientId).toBe('byo-id');
+      expect(credsB.clientId).not.toBe('byo-id');
+
+      // verifier isolation: each exchange posted the code_verifier from ITS
+      // authUrl.
+      const bodies = (global.fetch as jest.Mock).mock.calls.map((c) =>
+        new URLSearchParams(c[1].body as string).get('code_verifier'),
+      );
+      expect(bodies[0]).not.toBe(bodies[1]);
+    });
+  });
+
   describe('scope', () => {
     it('requests exactly readonly + send (pinned — scope drift must be loud)', () => {
       expect(GMAIL_SCOPES).toEqual([

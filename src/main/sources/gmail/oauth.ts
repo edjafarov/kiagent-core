@@ -3,8 +3,14 @@ import crypto from 'node:crypto';
 import type { Credentials } from '@shared/contracts';
 import { SourceAuthError } from '@shared/source-errors';
 
-import type { OAuthProfile } from '../../auth/oauth-window';
-import { getGoogleClientCredentials } from './client-credentials';
+import type {
+  OAuthClientOverride,
+  OAuthProfile,
+} from '../../auth/oauth-window';
+import {
+  getGoogleClientCredentials,
+  type OAuthClientCreds,
+} from './client-credentials';
 
 /**
  * Gmail scopes requested at connect time. gmail.readonly matches legacy
@@ -79,15 +85,19 @@ async function postToken(
 
 /**
  * `OAuthProfile` is a two-phase API (authUrl, then exchange) with no way to
- * thread state between the calls — so the PKCE code_verifier and the
- * anti-CSRF state param generated in `authUrl` are held here in module
- * closure state, consumed (and cleared) by the following `exchange` call.
- * Same single-pending-flow stance as microsoft/oauth.ts: only one Gmail auth
- * window runs at a time (UI-enforced, not broker-enforced), and a second
- * concurrent `authUrl` call would clobber this one's pending verifier/state —
- * the loser fails safe on the state-mismatch throw.
+ * thread state between the calls — so the PKCE code_verifier (and, when the
+ * caller passed one, the per-flow client override) generated in `authUrl`
+ * are held here in module closure state, keyed by the anti-CSRF `state`
+ * param, consumed (and cleared) by the matching `exchange` call. Keying by
+ * state (rather than a single `pending` slot) lets concurrent Gmail auth
+ * flows — e.g. a BYO-client Drive connect racing a plain Gmail connect —
+ * coexist without clobbering each other; each `exchange` finds its own
+ * entry via the state it was handed back.
  */
-let pending: { codeVerifier: string; state: string } | null = null;
+const pending = new Map<
+  string,
+  { codeVerifier: string; client: OAuthClientCreds | null }
+>();
 
 /**
  * `OAuthProfile` for Google/Gmail. `authUrl` is a pure URL builder (no
@@ -104,12 +114,16 @@ let pending: { codeVerifier: string; state: string } | null = null;
 export const googleOAuthProfile: OAuthProfile = {
   redirectUri: REDIRECT_URI,
 
-  authUrl(scopes: string[], redirectUri: string): string {
-    const { clientId } = getGoogleClientCredentials();
+  authUrl(
+    scopes: string[],
+    redirectUri: string,
+    client?: OAuthClientOverride,
+  ): string {
+    const { clientId } = client ?? getGoogleClientCredentials();
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = deriveCodeChallenge(codeVerifier);
     const state = crypto.randomBytes(16).toString('hex');
-    pending = { codeVerifier, state };
+    pending.set(state, { codeVerifier, client: client ?? null });
 
     const url = new URL(AUTH_ENDPOINT);
     url.searchParams.set('client_id', clientId);
@@ -133,37 +147,45 @@ export const googleOAuthProfile: OAuthProfile = {
     redirectUri: string,
   ): Promise<Credentials> {
     const cb = new URL(callbackUrl);
+    const state = cb.searchParams.get('state');
     const error = cb.searchParams.get('error');
     if (error) {
-      pending = null;
+      // A stateless error callback can't be attributed to one flow, so it
+      // fails safe by dropping ALL outstanding flows — the direct analogue
+      // of the old single-slot `pending = null`, which nuked its one slot
+      // on any errored exchange regardless of which flow it belonged to.
+      if (state) pending.delete(state);
+      else pending.clear();
       const desc = cb.searchParams.get('error_description');
       throw new Error(`gmail oauth error: ${error}${desc ? ` — ${desc}` : ''}`);
     }
     const code = cb.searchParams.get('code');
     if (!code) {
-      pending = null;
+      if (state) pending.delete(state);
+      else pending.clear();
       throw new Error('gmail oauth callback missing code');
     }
 
-    const current = pending;
-    pending = null;
-    if (!current) {
+    if (pending.size === 0) {
       throw new Error(
         'gmail oauth exchange called with no pending authUrl request',
       );
     }
-    if (cb.searchParams.get('state') !== current.state) {
+    const entry = state ? pending.get(state) : undefined;
+    if (!state || !entry) {
       throw new Error('gmail oauth state mismatch — possible CSRF, aborting');
     }
+    pending.delete(state);
 
-    const { clientId, clientSecret } = getGoogleClientCredentials();
+    const { clientId, clientSecret } =
+      entry.client ?? getGoogleClientCredentials();
     const body = await postToken({
       grant_type: 'authorization_code',
       code,
       client_id: clientId,
       client_secret: clientSecret,
       redirect_uri: redirectUri,
-      code_verifier: current.codeVerifier,
+      code_verifier: entry.codeVerifier,
     });
     if (!body.refresh_token) {
       throw new Error(

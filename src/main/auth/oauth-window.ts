@@ -17,9 +17,20 @@ import type { Credentials } from '@shared/contracts';
  * server already has the port bound, EADDRINUSE surfaces as a friendly
  * "already in progress" error instead of a raw errno.
  */
+/** Optional per-flow OAuth client (issue #89: the gate's restricted/BYO
+ *  client rides the connect flow instead of the build-time env client). */
+export interface OAuthClientOverride {
+  clientId: string;
+  clientSecret: string;
+}
+
 export interface OAuthProfile {
   redirectUri: string;
-  authUrl(scopes: string[], redirectUri: string): string;
+  authUrl(
+    scopes: string[],
+    redirectUri: string,
+    client?: OAuthClientOverride,
+  ): string;
   /** Exchange the captured callback URL for tokens. */
   exchange(callbackUrl: string, redirectUri: string): Promise<Credentials>;
 }
