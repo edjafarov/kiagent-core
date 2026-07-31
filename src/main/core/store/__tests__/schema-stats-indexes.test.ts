@@ -156,7 +156,12 @@ describe('schema: query-performance partial indexes', () => {
            FROM documents
            WHERE ${EXTRACTED_DOCS_WHERE}
            ORDER BY updated_at DESC, seq DESC LIMIT 10`;
-    expect(planDetail(db, sql)).toContain('USING INDEX docs_extracted');
+    const plan = planDetail(db, sql);
+    expect(plan).toContain('USING INDEX docs_extracted');
+    // The index's (updated_at DESC, seq DESC) column order exists precisely
+    // so this ORDER BY comes from the index — a sort step would mean the
+    // column order regressed while the index-usage assertion stayed green.
+    expect(plan).not.toContain('USE TEMP B-TREE FOR ORDER BY');
   });
 
   it('ensureQueryIndexes self-heals a decoy docs_pending_visual back to the desired definition', () => {
@@ -175,21 +180,28 @@ describe('schema: query-performance partial indexes', () => {
     );
   });
 
-  it('ensureQueryIndexes degrades instead of throwing when a build fails, then heals once the failure clears', () => {
-    // Force docs_pending_visual to need a rebuild.
+  it('ensureQueryIndexes degrades instead of throwing when a build fails — and still ensures the LATER indexes in the same call', () => {
+    // Force BOTH docs_pending_visual and docs_account_recency (which comes
+    // after it in QUERY_INDEXES) to need a rebuild, so a failure on the
+    // earlier one must not stop the later one from being ensured — the
+    // per-index isolation a whole-loop try/catch would silently lose.
     db.exec(`DROP INDEX docs_pending_visual`);
     db.exec(
       `CREATE INDEX docs_pending_visual ON documents(id) WHERE archived_at IS NULL`,
+    );
+    db.exec(`DROP INDEX docs_account_recency`);
+    db.exec(
+      `CREATE INDEX docs_account_recency ON documents(account_id) WHERE archived_at IS NULL`,
     );
 
     const realExec = db.exec.bind(db);
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     // Own-property shadow over the prototype method (this instance only):
-    // simulate a build failure (e.g. SQLITE_BUSY / disk pressure) on the
-    // CREATE INDEX statement specifically, leaving DROP/other exec calls
-    // (including migrate()'s own, which already ran in beforeEach) working.
+    // simulate a build failure (e.g. SQLITE_BUSY / disk pressure) on
+    // docs_pending_visual's CREATE INDEX specifically, leaving every other
+    // exec (DROPs, docs_account_recency's CREATE) working.
     db.exec = ((sql: string) => {
-      if (/^CREATE INDEX/.test(sql)) {
+      if (/^CREATE INDEX docs_pending_visual/.test(sql)) {
         throw new Error('simulated disk pressure');
       }
       return realExec(sql);
@@ -197,24 +209,27 @@ describe('schema: query-performance partial indexes', () => {
 
     try {
       expect(() => ensureQueryIndexes(db)).not.toThrow();
+      expect(
+        warnSpy.mock.calls.some((args) =>
+          args.some(
+            (a) => typeof a === 'string' && a.includes('docs_pending_visual'),
+          ),
+        ),
+      ).toBe(true);
     } finally {
       db.exec = realExec;
+      warnSpy.mockRestore();
     }
-
-    expect(warnSpy).toHaveBeenCalled();
-    expect(
-      warnSpy.mock.calls.some((args) =>
-        args.some(
-          (a) => typeof a === 'string' && a.includes('docs_pending_visual'),
-        ),
-      ),
-    ).toBe(true);
-    warnSpy.mockRestore();
 
     // The failed build must not have left a partial/corrupt state — the
     // decoy is still there, untouched (the transaction rolled back).
     expect(indexSql(db, 'docs_pending_visual')).toBe(
       `CREATE INDEX docs_pending_visual ON documents(id) WHERE archived_at IS NULL`,
+    );
+    // …while docs_account_recency, later in the array, was ensured in the
+    // SAME call despite the earlier failure.
+    expect(indexSql(db, 'docs_account_recency')).toBe(
+      `CREATE INDEX docs_account_recency ON documents(account_id, COALESCE(created_at, ingested_at) DESC) WHERE archived_at IS NULL`,
     );
 
     // With the injected failure gone, the very next ensureQueryIndexes call
@@ -231,7 +246,7 @@ describe('schema: query-performance partial indexes', () => {
     );
   });
 
-  it('planner uses docs_account_recency for the per-account count query, with no filter step', () => {
+  it('planner uses docs_account_recency for the per-account count query', () => {
     seedMixedDocuments(db);
     const sql = `SELECT COUNT(*) FROM documents WHERE archived_at IS NULL AND account_id='acc-1'`;
     expect(planDetail(db, sql)).toContain('USING INDEX docs_account_recency');
