@@ -100,6 +100,37 @@ const pending = new Map<
 >();
 
 /**
+ * Drops the pending entry a callback belongs to. Called on the `error`- and
+ * missing-`code` paths, neither of which can ever finish a flow — an entry
+ * left behind here would just leak for the rest of the process's life
+ * (nothing else revisits it).
+ *
+ * When the callback carries no `state` at all, the WHOLE map is cleared
+ * instead of one entry. `runOAuthLoopback` (oauth-window.ts) settles its
+ * promise on ANY request that hits the callback path — a stray address-bar
+ * hit or a state-less prefetch reaches here too, not just real provider
+ * redirects — so this branch is production-reachable, not just a test
+ * artifact.
+ *
+ * Clearing everything (rather than doing nothing, or guessing) is safe
+ * ONLY because of this invariant: every Google-family profile shares the
+ * SAME loopback redirect (`http://127.0.0.1:34123/oauth/callback`). The
+ * loopback server binds that one port for the lifetime of a flow, so
+ * EADDRINUSE guarantees at most one flow is ever live-capturing a callback
+ * at a time — whatever else is sitting in `pending` at that moment is
+ * necessarily orphaned (a flow that already errored, already finished, or
+ * was abandoned before its callback arrived), never the flow that could
+ * still complete. If a future Google-family source ever takes its OWN
+ * loopback port, that invariant breaks and this becomes a defect: a stray
+ * stateless request on THAT port could wipe a concurrent flow's entry here
+ * and produce a false 'state mismatch — possible CSRF'.
+ */
+function dropUnfinishable(state: string | null): void {
+  if (state) pending.delete(state);
+  else pending.clear();
+}
+
+/**
  * `OAuthProfile` for Google/Gmail. `authUrl` is a pure URL builder (no
  * network); `exchange` performs the authorization_code grant directly
  * against Google's token endpoint per the task brief, rather than going
@@ -150,19 +181,13 @@ export const googleOAuthProfile: OAuthProfile = {
     const state = cb.searchParams.get('state');
     const error = cb.searchParams.get('error');
     if (error) {
-      // A stateless error callback can't be attributed to one flow, so it
-      // fails safe by dropping ALL outstanding flows — the direct analogue
-      // of the old single-slot `pending = null`, which nuked its one slot
-      // on any errored exchange regardless of which flow it belonged to.
-      if (state) pending.delete(state);
-      else pending.clear();
+      dropUnfinishable(state);
       const desc = cb.searchParams.get('error_description');
       throw new Error(`gmail oauth error: ${error}${desc ? ` — ${desc}` : ''}`);
     }
     const code = cb.searchParams.get('code');
     if (!code) {
-      if (state) pending.delete(state);
-      else pending.clear();
+      dropUnfinishable(state);
       throw new Error('gmail oauth callback missing code');
     }
 
@@ -173,6 +198,12 @@ export const googleOAuthProfile: OAuthProfile = {
     }
     const entry = state ? pending.get(state) : undefined;
     if (!state || !entry) {
+      // Unlike the old single-slot `pending`, which was burned (`pending =
+      // null`) BEFORE the state comparison — so any wrong-state probe
+      // destroyed the real in-flight request too — a mismatched/unknown
+      // state here leaves the real entry (if any) untouched. A probe can no
+      // longer DoS a legitimate concurrent flow; only the probe itself
+      // fails.
       throw new Error('gmail oauth state mismatch — possible CSRF, aborting');
     }
     pending.delete(state);

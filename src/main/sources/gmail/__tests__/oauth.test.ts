@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 import type { Credentials } from '@shared/contracts';
 
 import { GMAIL_SCOPES, googleOAuthProfile, googleRefresher } from '../oauth';
@@ -35,6 +37,14 @@ function stateFrom(authUrl: string): string {
   return state;
 }
 
+/** S256 PKCE transform — mirrors oauth.ts's private `deriveCodeChallenge`,
+ *  so a test can prove a posted `code_verifier` really is the preimage of a
+ *  given authUrl's `code_challenge`, not merely "different from some other
+ *  verifier" (which a verifier SWAP between two flows would also satisfy). */
+function codeChallengeFrom(verifier: string): string {
+  return crypto.createHash('sha256').update(verifier).digest('base64url');
+}
+
 describe('gmail oauth profile', () => {
   afterEach(() => {
     jest.restoreAllMocks();
@@ -63,8 +73,26 @@ describe('gmail oauth profile', () => {
   });
 
   describe('exchange', () => {
+    // Each test gets a FRESH module instance — jest.resetModules() plus a
+    // dynamic re-require — so its `pending` map starts genuinely empty on
+    // its own merits. Previously the "no pending" test manufactured an
+    // empty map via "authUrl, then an errored exchange with no state",
+    // relying on production's clear-all behavior as a side-channel test
+    // reset; that made a test convenience the thing exercising/justifying
+    // shipping behavior. Real isolation removes that coupling — the
+    // clear-all path (see dropUnfinishable in oauth.ts) is still covered
+    // directly by the "callback URL carries an error param" test above,
+    // which itself resets per-test now too.
+    let oauth: typeof import('../oauth');
+
+    beforeEach(() => {
+      jest.resetModules();
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      oauth = require('../oauth');
+    });
+
     it('happy path: sends the code_verifier from the preceding authUrl call and returns Credentials with clientId/clientSecret', async () => {
-      const authUrl = googleOAuthProfile.authUrl(
+      const authUrl = oauth.googleOAuthProfile.authUrl(
         ['https://www.googleapis.com/auth/gmail.readonly'],
         REDIRECT_URI,
       );
@@ -81,7 +109,10 @@ describe('gmail oauth profile', () => {
       }) as unknown as typeof fetch;
 
       const callback = `${REDIRECT_URI}?code=fake-auth-code&state=${state}`;
-      const creds = await googleOAuthProfile.exchange(callback, REDIRECT_URI);
+      const creds = await oauth.googleOAuthProfile.exchange(
+        callback,
+        REDIRECT_URI,
+      );
 
       expect(creds).toEqual({
         accessToken: 'fake-access-token',
@@ -99,18 +130,18 @@ describe('gmail oauth profile', () => {
     });
 
     it('throws when the callback URL carries an error param', async () => {
-      googleOAuthProfile.authUrl(
+      oauth.googleOAuthProfile.authUrl(
         ['https://www.googleapis.com/auth/gmail.readonly'],
         REDIRECT_URI,
       );
       const callback = `${REDIRECT_URI}?error=access_denied&error_description=user+cancelled`;
       await expect(
-        googleOAuthProfile.exchange(callback, REDIRECT_URI),
+        oauth.googleOAuthProfile.exchange(callback, REDIRECT_URI),
       ).rejects.toThrow(/access_denied/);
     });
 
     it('throws when the token response is missing refresh_token', async () => {
-      const authUrl = googleOAuthProfile.authUrl(
+      const authUrl = oauth.googleOAuthProfile.authUrl(
         ['https://www.googleapis.com/auth/gmail.readonly'],
         REDIRECT_URI,
       );
@@ -121,38 +152,27 @@ describe('gmail oauth profile', () => {
 
       const callback = `${REDIRECT_URI}?code=fake-auth-code&state=${state}`;
       await expect(
-        googleOAuthProfile.exchange(callback, REDIRECT_URI),
+        oauth.googleOAuthProfile.exchange(callback, REDIRECT_URI),
       ).rejects.toThrow(/refresh_token/);
     });
 
     it('throws on a state mismatch (possible CSRF)', async () => {
-      googleOAuthProfile.authUrl(
+      oauth.googleOAuthProfile.authUrl(
         ['https://www.googleapis.com/auth/gmail.readonly'],
         REDIRECT_URI,
       );
       const callback = `${REDIRECT_URI}?code=fake-auth-code&state=not-the-right-state`;
       await expect(
-        googleOAuthProfile.exchange(callback, REDIRECT_URI),
+        oauth.googleOAuthProfile.exchange(callback, REDIRECT_URI),
       ).rejects.toThrow(/state mismatch/);
     });
 
     it('throws when exchange is called with no pending authUrl request', async () => {
-      // Ensure no pending flow is outstanding regardless of prior test
-      // order: an authUrl call followed by an errored exchange clears the
-      // module-closure `pending` as a side effect (same as the
-      // callback-carries-error path above), leaving it empty for the real
-      // assertion below.
-      googleOAuthProfile.authUrl(
-        ['https://www.googleapis.com/auth/gmail.readonly'],
-        REDIRECT_URI,
-      );
-      await googleOAuthProfile
-        .exchange(`${REDIRECT_URI}?error=user_cancelled`, REDIRECT_URI)
-        .catch(() => {});
-
+      // Fresh module (see beforeEach) — `pending` starts empty on its own,
+      // no authUrl call and no reliance on any clear-all side effect.
       const callback = `${REDIRECT_URI}?code=fake-auth-code&state=whatever`;
       await expect(
-        googleOAuthProfile.exchange(callback, REDIRECT_URI),
+        oauth.googleOAuthProfile.exchange(callback, REDIRECT_URI),
       ).rejects.toThrow(/no pending authUrl request/);
     });
   });
@@ -270,6 +290,11 @@ describe('gmail oauth profile', () => {
       const urlB = new URL(googleOAuthProfile.authUrl(scopes, REDIRECT_URI)); // env client
       const stateA = stateFrom(urlA.toString());
       const stateB = stateFrom(urlB.toString());
+      const challengeA = urlA.searchParams.get('code_challenge');
+      const challengeB = urlB.searchParams.get('code_challenge');
+      if (!challengeA || !challengeB) {
+        throw new Error('authUrl produced no code_challenge param');
+      }
 
       global.fetch = jest.fn(async () =>
         okJson({
@@ -292,12 +317,21 @@ describe('gmail oauth profile', () => {
       expect(credsA.clientId).toBe('byo-id');
       expect(credsB.clientId).not.toBe('byo-id');
 
-      // verifier isolation: each exchange posted the code_verifier from ITS
-      // authUrl.
-      const bodies = (global.fetch as jest.Mock).mock.calls.map((c) =>
-        new URLSearchParams(c[1].body as string).get('code_verifier'),
-      );
-      expect(bodies[0]).not.toBe(bodies[1]);
+      // Verifier isolation, proven properly: each exchange's posted
+      // code_verifier must hash (S256) back to ITS OWN authUrl's
+      // code_challenge — not merely "differs from the other one", which a
+      // verifier SWAP between the two flows would also satisfy.
+      const verifierB = new URLSearchParams(
+        (global.fetch as jest.Mock).mock.calls[0][1].body as string,
+      ).get('code_verifier');
+      const verifierA = new URLSearchParams(
+        (global.fetch as jest.Mock).mock.calls[1][1].body as string,
+      ).get('code_verifier');
+      if (!verifierA || !verifierB) {
+        throw new Error('exchange posted no code_verifier');
+      }
+      expect(codeChallengeFrom(verifierB)).toBe(challengeB);
+      expect(codeChallengeFrom(verifierA)).toBe(challengeA);
     });
   });
 

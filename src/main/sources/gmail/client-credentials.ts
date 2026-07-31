@@ -10,10 +10,16 @@
 // secret is not a secret in the security sense — keeping it out of the repo
 // is source hygiene, not runtime protection.
 
-export interface OAuthClientCreds {
-  clientId: string;
-  clientSecret: string;
-}
+import type { OAuthClientOverride } from '../../auth/oauth-window';
+
+/** Structurally identical to `OAuthClientOverride` (oauth-window.ts) — this
+ *  IS that type, aliased under the name this module's callers already use.
+ *  One shape, one name each in each file: oauth-window.ts stays free of
+ *  any gmail-specific import (it defines the shape), this module just
+ *  renames it for its own local vocabulary ("credentials", not "override" —
+ *  every value here, override or env-sourced, is a client credentials
+ *  pair). */
+export type OAuthClientCreds = OAuthClientOverride;
 
 export function getGoogleClientCredentials(): OAuthClientCreds {
   const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
