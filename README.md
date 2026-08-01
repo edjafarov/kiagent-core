@@ -4,7 +4,7 @@
 
 <h1 align="center">KIAgent</h1>
 
-<p align="center"><strong>Your knowledge, indexed locally.</strong></p>
+<p align="center"><strong>Your personal AI brain — local, open source, speaks MCP.</strong></p>
 
 <p align="center">
   <a href="https://localkiagent.com/">Website</a> ·
@@ -21,7 +21,9 @@
   <img src="docs/assets/readme/hero.png" alt="KIAgent main window — Sources screen with Gmail and HubSpot syncing" width="100%">
 </p>
 
-KIAgent is a desktop app that ingests your personal data — mail, documents, chats, notes — on your own machine, stores it in a local database, and serves it to AI assistants over [MCP](https://modelcontextprotocol.io). Everything stays on your computer: ingestion, parsing, OCR and vision all run locally — with on-device inference powered by [llama.cpp](https://github.com/ggml-org/llama.cpp) — so your AI assistant can know your data without your data ever leaving your machine.
+Everyone is building the company a brain — a knowledge layer that ingests everything an organization knows, so AI can answer and act with real context. **KIAgent is that layer for you personally.** A company brain lives in someone else's cloud and belongs to your employer; your personal AI brain runs on your own machine, works with whatever AI you choose, and is yours forever.
+
+Concretely, KIAgent is a desktop app that ingests your personal data — mail, documents, chats, notes — on your own machine, stores it in a local database, and serves it to AI assistants over [MCP](https://modelcontextprotocol.io). Everything stays on your computer: ingestion, parsing, OCR and vision all run locally — with on-device inference powered by [llama.cpp](https://github.com/ggml-org/llama.cpp) — so your AI assistant can know your world without your data ever leaving your machine.
 
 At its core, KIAgent is a **platform**: a small set of host capabilities (MCP, database, local LLM, filesystem, web access) wired together by an ingestion engine, plus a plugin/extension system that lets sandboxed connectors use those capabilities to bring in new data sources.
 
