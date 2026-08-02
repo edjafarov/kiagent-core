@@ -71,6 +71,7 @@ Three process kinds:
 | [storage.md](storage.md) | SQLite schema, change feed, FTS, vault, invariants |
 | [extension-platform.md](extension-platform.md) | Caps, the gate, extension lifecycle, marketplace |
 | [mcp.md](mcp.md) | How AI clients connect; built-in + extension tools |
+| [headless.md](headless.md) | Running the engine without Electron — server/container deployment |
 
 Deeper design history lives in [`docs/superpowers/specs/`](../superpowers/specs/) and
 [`docs/rebuild/`](../rebuild/) (including `LEFTOVERS.md` — known gaps, all deliberate).
