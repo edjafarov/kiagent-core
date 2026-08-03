@@ -28,7 +28,15 @@ export default function copySharedCssPlugin(): CopyWebpackPlugin {
   return new CopyWebpackPlugin({
     patterns: [
       {
-        from: path.join(webpackPaths.srcPath, 'shared/web-ui/*.css'),
+        // POSIX separators, always: copy-webpack-plugin globs via fast-glob,
+        // where `\` is an ESCAPE character, not a separator. path.join emits
+        // backslashes on Windows, so this pattern matched nothing there and
+        // noErrorOnMissing:false turned that into a hard build failure —
+        // `unable to locate '...\src\shared\web-ui\*.css' glob`. No Windows
+        // product build could complete until this was fixed.
+        from: path
+          .join(webpackPaths.srcPath, 'shared/web-ui/*.css')
+          .replace(/\\/g, '/'),
         to: '[name][ext]',
         noErrorOnMissing: false,
       },
