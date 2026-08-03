@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.68.1](https://github.com/edjafarov/kiagent-core/compare/v0.68.0...v0.68.1) (2026-08-03)
+
+### Bug Fixes
+
+* **build:** use POSIX separators in glob patterns so Windows builds work ([591fbcd](https://github.com/edjafarov/kiagent-core/commit/591fbcdddc2d3b0e32ebaf4815be7d11407c7487))
+
 ## [0.68.0](https://github.com/edjafarov/kiagent-core/compare/v0.67.1...v0.68.0) (2026-07-31)
 
 ### Features
