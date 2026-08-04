@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.68.2](https://github.com/edjafarov/kiagent-core/compare/v0.68.1...v0.68.2) (2026-08-04)
+
+### Bug Fixes
+
+* **build:** pin electron-builder >=26.15.7 — NSIS silently drops arm64 executables ([c9079a2](https://github.com/edjafarov/kiagent-core/commit/c9079a27b557d16bdcb1012fbbf9cd4ed22fd630)), closes [electron-builder#9983](https://github.com/edjafarov/electron-builder/issues/9983)
+
 ## [0.68.1](https://github.com/edjafarov/kiagent-core/compare/v0.68.0...v0.68.1) (2026-08-03)
 
 ### Bug Fixes
