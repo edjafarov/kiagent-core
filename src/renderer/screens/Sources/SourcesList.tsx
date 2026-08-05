@@ -18,7 +18,11 @@ export function SourcesList(props: {
 }): React.ReactElement {
   const accountEntries = useAppState((s) => s.accounts);
   const ready = useAppState((s) => s.ready);
-  const [adding, setAdding] = useState(false);
+  // null = not adding; initialSourceId set = the ErrorCard Reconnect path,
+  // which skips the tile grid and re-enters that source's connect flow.
+  const [adding, setAdding] = useState<{ initialSourceId?: string } | null>(
+    null,
+  );
   // Drives the refresh-icon spin for a fixed beat so "Sync all" reads as a
   // real action even when every accounts:sync-now call resolves near-instantly.
   const [syncSpin, setSyncSpin] = useState(false);
@@ -83,7 +87,7 @@ export function SourcesList(props: {
             <button
               type="button"
               className="btn primary sm"
-              onClick={() => setAdding(true)}
+              onClick={() => setAdding({})}
             >
               <Icon name="plus" size={13} />
               Add
@@ -94,15 +98,20 @@ export function SourcesList(props: {
 
       {adding ? (
         <AddSourcePanel
+          initialSourceId={adding.initialSourceId}
           onDone={(accountId) => {
-            setAdding(false);
+            setAdding(null);
             if (accountId) props.onOpenDetail(accountId);
           }}
         />
       ) : (
         <>
           {erroring.map((a) => (
-            <ErrorCard key={a.id} account={a} />
+            <ErrorCard
+              key={a.id}
+              account={a}
+              onReconnect={() => setAdding({ initialSourceId: a.source })}
+            />
           ))}
           {healthyEntries.length > 0 || erroring.length > 0 ? (
             <SourceTable entries={healthyEntries} onRowClick={onRowClick} />

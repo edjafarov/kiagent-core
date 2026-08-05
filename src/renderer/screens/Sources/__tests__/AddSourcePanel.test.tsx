@@ -181,6 +181,20 @@ describe('AddSourcePanel wizard card', () => {
     expect(cancel).not.toHaveClass('ghost');
   });
 
+  test('initialSourceId auto-starts that source’s flow on mount (Reconnect path)', async () => {
+    render(
+      <SourceDescriptorsProvider>
+        <AddSourcePanel onDone={jest.fn()} initialSourceId="slack" />
+      </SourceDescriptorsProvider>,
+    );
+    await act(async () => {});
+    expect(
+      (window as unknown as { kiagent: { invoke: jest.Mock } }).kiagent.invoke,
+    ).toHaveBeenCalledWith('accounts:add', { sourceId: 'slack' });
+    // The wizard card is up (not the tile grid) — the flow owns the panel.
+    expect(screen.getByText('Connect Slack')).toBeInTheDocument();
+  });
+
   test('schema without conventions still renders the plain form', async () => {
     const plain = {
       type: 'object',

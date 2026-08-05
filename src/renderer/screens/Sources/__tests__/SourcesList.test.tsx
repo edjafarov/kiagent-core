@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { render, screen } from '@testing-library/react';
-import type { AppState } from '@shared/contracts';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import type { Account, AppState } from '@shared/contracts';
 import { SourcesList } from '../SourcesList';
 
 /**
@@ -35,6 +35,43 @@ function stateWith(ready: boolean): Partial<AppState> {
 }
 
 const noop = () => {};
+
+describe('SourcesList: ErrorCard Reconnect re-enters the connect flow', () => {
+  it('clicking Reconnect on a needsReauth card starts that source’s flow', async () => {
+    (window as unknown as { kiagent: unknown }).kiagent = {
+      invoke: jest.fn((channel: string) => {
+        if (channel === 'sources:list') return Promise.resolve([]);
+        if (channel === 'accounts:add')
+          return Promise.resolve({ flowId: 'f1' });
+        return Promise.resolve(undefined);
+      }),
+      on: jest.fn(() => () => {}),
+    };
+    const account: Account = {
+      id: 'a1' as Account['id'],
+      source: 'gmail',
+      identifier: 'user@example.com',
+      config: {},
+      status: 'needsReauth',
+      cursor: null,
+      lastError: 'invalid_grant',
+      createdAt: '2026-01-01T00:00:00Z',
+    };
+    mockState = {
+      ...stateWith(true),
+      extensions: [],
+      accounts: [{ account, docCount: 0, recent: [] }],
+    } as unknown as Partial<AppState>;
+
+    render(<SourcesList onOpenDetail={noop} onOpenConnection={noop} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    await act(async () => {});
+
+    expect(
+      (window as unknown as { kiagent: { invoke: jest.Mock } }).kiagent.invoke,
+    ).toHaveBeenCalledWith('accounts:add', { sourceId: 'gmail' });
+  });
+});
 
 describe('SourcesList: loading vs. genuinely empty', () => {
   it('shows a loading status, not the empty state, while hydrating', async () => {

@@ -15,7 +15,13 @@ import { useSourceDescriptors } from './sources-registry';
  * which re-runs the account's pull loop) — a real command, not a fabricated
  * reconnect flow.
  */
-export function ErrorCard(props: { account: Account }): React.ReactElement {
+export function ErrorCard(props: {
+  account: Account;
+  /** Re-enters the source's connect flow for a needsReauth account — safe
+   *  because createAccount upserts on (source, identifier), so re-auth with
+   *  the same identity keeps the account and its documents. */
+  onReconnect?: () => void;
+}): React.ReactElement {
   const a = props.account;
   const descriptors = useSourceDescriptors();
   const meta = connectorMeta(a.source);
@@ -62,9 +68,23 @@ export function ErrorCard(props: { account: Account }): React.ReactElement {
             <span className="dot" />
             {needsReauth ? 'Reconnect' : 'Error'}
           </span>
+          {needsReauth && props.onReconnect && (
+            // Retry can't recover an expired/revoked token — re-enter the
+            // source's connect flow instead (upsert keeps the account).
+            <button
+              type="button"
+              className="btn primary sm"
+              onClick={props.onReconnect}
+            >
+              <Icon name="link" size={11} />
+              Reconnect
+            </button>
+          )}
           <button
             type="button"
-            className="btn primary sm"
+            className={
+              needsReauth && props.onReconnect ? 'btn sm' : 'btn primary sm'
+            }
             disabled={retrying}
             onClick={() => void retry()}
           >

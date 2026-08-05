@@ -145,6 +145,10 @@ function QrCode(props: { data: string }): React.ReactElement {
 
 export function AddSourcePanel(props: {
   onDone: (accountId?: AccountId) => void;
+  /** Auto-start this source's connect flow on mount, exactly as if its tile
+   *  was clicked — the ErrorCard Reconnect path (re-auth upserts on
+   *  (source, identifier), so the account and its documents survive). */
+  initialSourceId?: string;
 }): React.ReactElement {
   const descriptors = useSourceDescriptors();
   // Every account currently in the app-state projection — read unconditionally
@@ -245,6 +249,14 @@ export function AddSourcePanel(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+
+  // Mount-only: the Reconnect path skips the tile grid and goes straight
+  // into the flow. `pick` is a hoisted function declaration, so calling it
+  // from here is safe; the unmount cleanup above covers this flow too.
+  useEffect(() => {
+    if (props.initialSourceId) void pick(props.initialSourceId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function pick(sourceId: string): Promise<void> {
     setAddError(null);
