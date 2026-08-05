@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.69.0](https://github.com/edjafarov/kiagent-core/compare/v0.68.2...v0.69.0) (2026-08-05)
+
+### Features
+
+* **sources:** ErrorCard Reconnect re-enters the connect flow for needsReauth accounts ([882da07](https://github.com/edjafarov/kiagent-core/commit/882da07e0878dc4ebb8037ff368f0a988605d604))
+
 ## [0.68.2](https://github.com/edjafarov/kiagent-core/compare/v0.68.1...v0.68.2) (2026-08-04)
 
 ### Bug Fixes
