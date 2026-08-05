@@ -93,5 +93,14 @@ describe('source_url guidance', () => {
       expect(KIA_INSTRUCTIONS).toContain('file://');
       expect(KIA_INSTRUCTIONS).toMatch(/empty/i);
     });
+
+    it('name the field get_related actually returns, and the raw path', () => {
+      // get_related projects the internal Document rows verbatim — the link
+      // is `url` there, NOT the `source_url` wire name search/get use.
+      expect(KIA_INSTRUCTIONS).toMatch(/get_related[^.]*\burl\b/);
+      // `url` is percent-escaped (file://${encodeURI(absPath)}); the raw
+      // filesystem path an agent should show the user is metadata.absPath.
+      expect(KIA_INSTRUCTIONS).toContain('absPath');
+    });
   });
 });

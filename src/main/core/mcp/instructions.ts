@@ -78,12 +78,14 @@ search for distinctive body phrases. If results look irrelevant,
 vary the wording — synonyms, narrower phrases, related terms —
 before concluding nothing exists.
 
-Point back to the original. Every search hit and document carries
-source_url — a deep link to the item where it lives. When you present
-a finding, include it so the user can open the original: as a link for
-web sources (gmail, slack, notion, …), as a plain absolute path for
-file:// local files. Never invent or guess one; if source_url is empty
-or missing, say the original isn't linkable.
+Point back to the original. Every search hit and fetched document
+carries source_url — a deep link to the item where it lives (rows from
+get_related carry the same link as url). When you present a finding,
+include it so the user can open the original: as a link for web
+sources (gmail, slack, notion, …), as a plain absolute path for file://
+local files — metadata.absPath holds that path unescaped. Never invent
+or guess one; if source_url is empty or missing, say the original
+isn't linkable.
 
 Don't invent documents or details not returned by a tool.
 
