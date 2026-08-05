@@ -6,7 +6,8 @@
  */
 import type { Document, DocumentId, Query } from '@shared/contracts';
 
-export const getDescription = `Fetch a document by id; returns full markdown body, source URL, and metadata. Use after \`search\` when snippets aren't enough.
+export const getDescription = `Fetch a document by id; returns full markdown body, \`source_url\`, and metadata. Use after \`search\` when snippets aren't enough.
+\`source_url\` is a deep link back to the original (a \`file://\` absolute path for local files, the app's web link for cloud sources; null when the source has none) — pass it on when the user may want to open the original.
 Batch mode: pass \`ids\` (array of document ids) to fetch several documents in one round-trip. Returns an array in the same order, with \`null\` for ids that don't exist.`;
 
 export const getInputSchema = {

@@ -43,6 +43,8 @@ Filters: \`source\` (account's source id, e.g. "gmail"), \`type\`, \`from_date\`
 
 Batch mode: pass \`queries\` (array of independent search arg objects) to run several searches in one round-trip. Cannot be combined with top-level filters.
 
+Every hit carries \`source_url\` — a deep link back to the original (a \`file://\` absolute path for local files, the app's web link for cloud sources; empty when the source has none). Give it to the user whenever they'd want to open the original.
+
 Follow-up: fetch the full body with \`get(id)\` (or \`get(ids=[...])\`).`;
 
 export const searchInputSchema = {

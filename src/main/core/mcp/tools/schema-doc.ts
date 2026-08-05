@@ -70,12 +70,14 @@ TEXT.`,
         {
           name: 'url',
           type: 'TEXT',
-          notes: 'Canonical source URL; may be NULL.',
+          notes:
+            "Deep link back to the original, meant to be handed to the user. gmail: a https://mail.google.com/... thread deep link (attachment docs inherit their thread's). local-folder: file:// + the absolute file path (also in metadata.absPath). Extension-provided sources: that app's web permalink (slack archive link, notion / google-docs / onedrive / ms365 / hubspot page URL). NULL for imap mail, and empty on some extension-provided file/attachment docs.",
         },
         {
           name: 'metadata',
           type: 'TEXT (JSON)',
-          notes: 'Polymorphic per source/type. Default "{}".',
+          notes:
+            'Polymorphic per source/type. Default "{}". gmail email.thread: {from, to, cc, labels, participants, messageCount, firstMessageAt, lastMessageAt, messages[]}. local-folder file: {absPath (absolute filesystem path), filename, ext, mime, sizeBytes, mtime}. attachment / file docs generally: {filename, mime, sizeBytes}.',
         },
         {
           name: 'created_at',

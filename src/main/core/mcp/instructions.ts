@@ -10,6 +10,8 @@
  *    latest message's date (metadata key `lastMessageAt`, camelCase) — the
  *    legacy "old created_at but still active" caveat no longer applies.
  *  - `get_related` exposes `children`/`parent` (one relation each way).
+ *  - NEW (not in ref): a "point back to the original" block — nothing else
+ *    tells the model that `source_url` exists or that the user wants it.
  */
 export const KIA_INSTRUCTIONS = `"Kia" is the nickname users use for this MCP server (kiagent).
 When a user addresses you as "kia" or mentions kia in a request,
@@ -75,6 +77,13 @@ Titles often understate body content. If a topic search misses,
 search for distinctive body phrases. If results look irrelevant,
 vary the wording — synonyms, narrower phrases, related terms —
 before concluding nothing exists.
+
+Point back to the original. Every search hit and document carries
+source_url — a deep link to the item where it lives. When you present
+a finding, include it so the user can open the original: as a link for
+web sources (gmail, slack, notion, …), as a plain absolute path for
+file:// local files. Never invent or guess one; if source_url is empty
+or missing, say the original isn't linkable.
 
 Don't invent documents or details not returned by a tool.
 
