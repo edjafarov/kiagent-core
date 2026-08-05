@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.70.0](https://github.com/edjafarov/kiagent-core/compare/v0.69.0...v0.70.0) (2026-08-05)
+
+### Features
+
+* **mcp:** surface source_url so answers point back to the originals ([d4fa360](https://github.com/edjafarov/kiagent-core/commit/d4fa36014df5ccb9fa064920539fadd2e34ade0d))
+
+### Bug Fixes
+
+* **mcp:** name the field get_related really returns in the source_url block ([00be86c](https://github.com/edjafarov/kiagent-core/commit/00be86ce2abc93d4a4955196635c64d6c7acae7e))
+
 ## [0.69.0](https://github.com/edjafarov/kiagent-core/compare/v0.68.2...v0.69.0) (2026-08-05)
 
 ### Features
