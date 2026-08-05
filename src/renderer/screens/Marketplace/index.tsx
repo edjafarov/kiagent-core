@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppState } from '@renderer/state/app-state';
 import { Icon } from '@shared/web-ui/icon-sprite';
+import { Busy } from '@shared/web-ui/components';
 import { ExtGlyph } from '@renderer/components/ExtGlyph';
 import type { MarketplaceListItem, UpdateInfo } from '@shared/ipc';
 import { buildRows } from './rows';
@@ -110,7 +111,7 @@ export function Marketplace(): React.ReactElement {
 
         {items === null && !listError ? (
           <div className="mkt-list mkt-list-empty">
-            <p className="t-meta">Loading catalog…</p>
+            <Busy label="Loading catalog…" />
           </div>
         ) : listError ? (
           <div className="mkt-list mkt-list-empty">

@@ -52,7 +52,16 @@ export function buildRows(
   filter: MarketplaceFilter,
   query: string,
 ): MarketplaceRow[] {
-  const updateIds = new Set(updates.map((u) => u.id));
+  const updateById = new Map(updates.map((u) => [u.id, u]));
+  // An update entry is only as fresh as the check that produced it: it
+  // records the installedVersion it compared against. Once the live
+  // snapshot's version moves off that (the update was applied — AppState
+  // pushes the bump, but nothing re-runs check-updates), the entry is
+  // stale and must not keep the Update badge/button alive.
+  const updateAvailableFor = (e: ExtensionSnapshot): boolean => {
+    const u = updateById.get(e.id);
+    return u !== undefined && u.installedVersion === e.version;
+  };
   const matchedIds = new Set<string>();
 
   const catalogRows: MarketplaceRow[] = items.map((item) => {
@@ -65,7 +74,7 @@ export function buildRows(
       iconDataUrl: item.iconDataUrl ?? installed?.iconDataUrl,
       catalog: item,
       installed,
-      updateAvailable: installed != null && updateIds.has(installed.id),
+      updateAvailable: installed != null && updateAvailableFor(installed),
     };
   });
 
@@ -86,7 +95,7 @@ export function buildRows(
             : `v${e.version}`,
       iconDataUrl: e.iconDataUrl,
       installed: e,
-      updateAvailable: updateIds.has(e.id),
+      updateAvailable: updateAvailableFor(e),
     }));
 
   let rows = [...catalogRows, ...installedOnlyRows];

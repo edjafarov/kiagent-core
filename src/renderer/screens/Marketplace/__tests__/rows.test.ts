@@ -290,6 +290,41 @@ describe('buildRows', () => {
     expect(rows[0].updateAvailable).toBe(false);
   });
 
+  it('updateAvailable clears on a catalog row once the installed version moves off the check-time snapshot (update applied)', () => {
+    const e = ext({ version: '1.1.0' });
+    const rows = buildRows(
+      [item()],
+      [e],
+      [update({ id: e.id, installedVersion: '1.0.0', latestVersion: '1.1.0' })],
+      'all',
+      '',
+    );
+    expect(rows[0].updateAvailable).toBe(false);
+  });
+
+  it('updateAvailable clears on an installed-only row once the installed version moves off the check-time snapshot', () => {
+    const devInstall = ext({
+      id: 'ext.local-tool',
+      name: 'Local Tool',
+      version: '1.1.0',
+      ref: 'file:/x',
+    });
+    const rows = buildRows(
+      [],
+      [devInstall],
+      [
+        update({
+          id: 'ext.local-tool',
+          installedVersion: '1.0.0',
+          latestVersion: '1.1.0',
+        }),
+      ],
+      'all',
+      '',
+    );
+    expect(rows[0].updateAvailable).toBe(false);
+  });
+
   it('an uninstalled catalog row is never flagged with updateAvailable even if its repo id happens to appear in updates', () => {
     const rows = buildRows(
       [item()],

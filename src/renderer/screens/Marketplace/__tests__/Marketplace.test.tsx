@@ -98,10 +98,23 @@ describe('Marketplace', () => {
 
     render(<Marketplace />);
 
-    expect(screen.getByText('Loading catalog…')).toBeInTheDocument();
-
     expect(await screen.findByText('Gmail Tools')).toBeInTheDocument();
     expect(screen.getByText('Other Plugin')).toBeInTheDocument();
+  });
+
+  test('a slow list fetch shows the delayed Busy loading status', async () => {
+    // List never resolves — the loading state must appear (after Busy's
+    // 200ms anti-flash delay) as a role="status" spinner + label.
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'marketplace:list') return new Promise(() => {});
+      if (channel === 'marketplace:check-updates') return Promise.resolve([]);
+      return Promise.reject(new Error(`unexpected channel ${channel}`));
+    });
+
+    render(<Marketplace />);
+
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent('Loading catalog…');
   });
 
   test('a file:-ref installed snapshot appears as an installed-only row', async () => {
@@ -224,6 +237,35 @@ describe('Marketplace', () => {
     // Scoped to the row: the left-pane filter pills also render an
     // "Installed" label, so an unscoped getByText would be ambiguous.
     expect(await within(row).findByText('Update')).toBeInTheDocument();
+    expect(within(row).getByText('Installed')).toBeInTheDocument();
+  });
+
+  test('Update badge clears once the installed snapshot version moves off the check-time snapshot (update applied)', async () => {
+    mockInvokes(
+      [catalogItem()],
+      [
+        {
+          id: 'ext.gmail-tools',
+          installedVersion: '1.0.0',
+          latestVersion: '1.1.0',
+          ref: 'github:kia-plugins/gmail-tools@v1.1.0',
+        },
+      ],
+    );
+    mockState.extensions = [extSnapshot()];
+
+    const { rerender } = render(<Marketplace />);
+
+    const title = await screen.findByText('Gmail Tools');
+    const row = title.closest('.mkt-row') as HTMLElement;
+    expect(await within(row).findByText('Update')).toBeInTheDocument();
+
+    // The install commit lands and AppState pushes the bumped snapshot —
+    // no refetch of marketplace:check-updates happens.
+    mockState.extensions = [extSnapshot({ version: '1.1.0' })];
+    rerender(<Marketplace />);
+
+    expect(within(row).queryByText('Update')).not.toBeInTheDocument();
     expect(within(row).getByText('Installed')).toBeInTheDocument();
   });
 

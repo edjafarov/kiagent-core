@@ -115,11 +115,13 @@
   flex-direction: column;
   gap: 2px;
 }
+/* Loading / error / no-results states sit at the top of the list area,
+   where the first row would be, instead of floating mid-pane. */
 .mkt-list-empty {
   align-items: flex-start;
-  justify-content: center;
-  padding-top: 24px;
-  text-align: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 12px 10px;
 }
 
 .mkt-row {
