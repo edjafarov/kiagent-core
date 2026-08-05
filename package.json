@@ -1,6 +1,6 @@
 {
   "name": "kiagent-core",
-  "version": "0.68.0",
+  "version": "0.68.2",
   "description": "Your knowledge, indexed locally — a desktop app that ingests your personal data on your own machine and serves it to AI assistants over MCP",
   "keywords": [
     "mcp",
@@ -193,7 +193,7 @@
     "detect-port": "^2.1.0",
     "dotenv": "^16.6.1",
     "electron": "^42.4.0",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "^26.15.7",
     "electron-devtools-installer": "^4.0.0",
     "electronmon": "^2.0.3",
     "eslint": "^8.57.1",
