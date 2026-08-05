@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.70.1](https://github.com/edjafarov/kiagent-core/compare/v0.70.0...v0.70.1) (2026-08-05)
+
+### Bug Fixes
+
+* **marketplace:** clear Update button once applied + top-aligned Busy loading state ([fad02f6](https://github.com/edjafarov/kiagent-core/commit/fad02f67a7ba56aecb26edf9d0786b6e135b9036))
+
 ## [0.70.0](https://github.com/edjafarov/kiagent-core/compare/v0.69.0...v0.70.0) (2026-08-05)
 
 ### Features
