@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.70.2](https://github.com/edjafarov/kiagent-core/compare/v0.70.1...v0.70.2) (2026-08-07)
+
+### Bug Fixes
+
+* **ipc:** make channel declaration and handler registration compile-enforced ([3e2c9b6](https://github.com/edjafarov/kiagent-core/commit/3e2c9b6f9bc915918bc0c2dc43fb9fa7625f82b8)), closes [#23](https://github.com/edjafarov/kiagent-core/issues/23)
+* **main:** make main-process crashes and boot failures visible ([f334da2](https://github.com/edjafarov/kiagent-core/commit/f334da23b8a645a70e2d1b37653336561b61abd9)), closes [#83](https://github.com/edjafarov/kiagent-core/issues/83)
+* **main:** stop pretending the plain: credential fallback is dev-only — log it loudly ([d0cf974](https://github.com/edjafarov/kiagent-core/commit/d0cf974f8b9a3d37d777db4a393d37f9b35fddcc))
+* **platform:** net.fetch reaches public destinations only ([293af14](https://github.com/edjafarov/kiagent-core/commit/293af14d7185ad856f640445290af30417bbed07)), closes [#47](https://github.com/edjafarov/kiagent-core/issues/47)
+* **platform:** police statements at the db capability surface ([2064355](https://github.com/edjafarov/kiagent-core/commit/206435540a313b6582343b728d34cc6a1fdfd7fd)), closes [#48](https://github.com/edjafarov/kiagent-core/issues/48)
+
 ## [0.70.1](https://github.com/edjafarov/kiagent-core/compare/v0.70.0...v0.70.1) (2026-08-05)
 
 ### Bug Fixes
