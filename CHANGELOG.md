@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.71.0](https://github.com/edjafarov/kiagent-core/compare/v0.70.2...v0.71.0) (2026-08-07)
+
+### Features
+
+* **main:** offer Move-to-Applications on first macOS run — before the first keystore touch ([7f26084](https://github.com/edjafarov/kiagent-core/commit/7f26084d98a6e1e459200d987ec9ce49d2c62fbf))
+
 ## [0.70.2](https://github.com/edjafarov/kiagent-core/compare/v0.70.1...v0.70.2) (2026-08-07)
 
 ### Bug Fixes
