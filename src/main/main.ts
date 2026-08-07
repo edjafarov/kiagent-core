@@ -5,6 +5,7 @@ import {
   BrowserWindow,
   Notification,
   app,
+  crashReporter,
   dialog,
   ipcMain,
   powerMonitor,
@@ -25,6 +26,11 @@ import type {
 } from '@shared/ipc';
 
 import { createConnectBroker } from './auth/connect-broker';
+import {
+  installCrashHandlers,
+  reportBootFailure,
+  type CrashDeps,
+} from './crash-handlers';
 import type { ConnectBroker } from './auth/connect-broker';
 import {
   backgroundLaneOpen,
@@ -94,6 +100,24 @@ if (process.env.KIAGENT_USER_DATA) {
   // install and a dev tree never share state.
   app.setPath('userData', path.join(app.getPath('appData'), 'KIAgent-dev'));
 }
+
+// Crash visibility is wired before anything else can fail. In a packaged build
+// console output goes nowhere, so without this a boot failure is "no window
+// appeared" and an uncaught exception is a silent disappearance. Placed after
+// the userData overrides above so the log path follows them.
+const crashDeps: CrashDeps = {
+  logDir: path.join(app.getPath('userData'), 'data', 'logs'),
+  sink: () => platform?.logSink ?? null,
+  showErrorBox: (title, content) => dialog.showErrorBox(title, content),
+  exit: (code) => app.exit(code),
+  onAppEvent: (event, handler) => {
+    app.on(event as never, handler as never);
+  },
+};
+installCrashHandlers(crashDeps);
+// Native crashes (renderer/GPU/utility) never reach a JS handler. Minidumps
+// stay on the machine — nothing is uploaded — and land in app.getPath('crashDumps').
+crashReporter.start({ uploadToServer: false });
 
 // Product identity (spec 2026-07-07 §3.1.4): OSS ships no product.json and
 // runs on DEFAULT_PRODUCT; a product build drops one into resources. Loaded
@@ -959,8 +983,7 @@ app
     });
   })
   .catch((err) => {
-    // eslint-disable-next-line no-console
-    console.error('boot failed', err);
+    reportBootFailure(crashDeps, err);
   });
 
 app.on('window-all-closed', () => {
