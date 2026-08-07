@@ -206,7 +206,13 @@ need to *do* about them:
   than working around this.
 - `db` gives you `private.db` in your own `host.self.dataDir` — never the
   shared corpus. There is no write path to the corpus except returning
-  documents.
+  documents. Statements are policed by leading keyword: ordinary DML, DDL and
+  transaction control are fine, but anything that can name a second database
+  file is refused — `ATTACH`, `DETACH`, `VACUUM INTO`. `PRAGMA` is refused
+  except for a self-scoped set (`user_version`, `application_id`, `table_info`,
+  `table_list`, `table_xinfo`, `index_info`, `index_list`, `foreign_keys`,
+  `foreign_key_list`, `page_count`, `freelist_count`, `integrity_check`,
+  `quick_check`) — `user_version` is there so the usual migration idiom works.
 - `events` refuses to emit names starting `extension.` or `platform.` (those
   are platform-emitted).
 

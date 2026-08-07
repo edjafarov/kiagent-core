@@ -11,6 +11,7 @@ import Database from 'better-sqlite3';
 
 import type { LogLevel, Query } from '@shared/contracts';
 
+import { assertAllowedSql } from './db-guard';
 import { createNetFetch } from './net-guard';
 
 export class CapError extends Error {}
@@ -120,13 +121,17 @@ export function buildSurfaces(deps: SurfaceDeps): {
       fetch: (url, init) => netFetch(url, init),
     },
     db: {
+      // Every statement is policed first — see db-guard.ts for why "your own
+      // database" was not, on its own, a boundary.
       async exec(sql, params) {
+        assertAllowedSql(String(sql));
         const d = openDb();
         const p = (params ?? []) as unknown[];
         if (p.length === 0) d.exec(String(sql));
         else d.prepare(String(sql)).run(...p);
       },
       async query(sql, params) {
+        assertAllowedSql(String(sql));
         return openDb()
           .prepare(String(sql))
           .all(...((params ?? []) as unknown[]));

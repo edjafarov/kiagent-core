@@ -81,6 +81,38 @@ describe('buildSurfaces', () => {
     expect(fs.existsSync(path.join(deps.dataDir, 'private.db'))).toBe(true);
   });
 
+  /* The escape this policy exists for: ATTACH opens — and creates — any path
+   * through the same handle, so "your own database" meant the filesystem and
+   * the corpus. Asserting the refusal is not enough; assert no file appeared. */
+  it('db refuses ATTACH and VACUUM INTO, and writes no file outside dataDir', async () => {
+    const { deps } = makeDeps();
+    const { surfaces, close } = buildSurfaces(deps);
+    const escape = path.join(os.tmpdir(), `kia-attach-escape-${Date.now()}.db`);
+
+    await expect(
+      surfaces.db.exec(`ATTACH DATABASE '${escape}' AS out`),
+    ).rejects.toThrow(/ATTACH/);
+    await expect(
+      surfaces.db.query(`ATTACH DATABASE '${escape}' AS out`),
+    ).rejects.toThrow(/ATTACH/);
+    await expect(
+      surfaces.db.exec(`SELECT 1; ATTACH DATABASE '${escape}' AS out`),
+    ).rejects.toThrow(/ATTACH/);
+    await expect(surfaces.db.exec(`VACUUM INTO '${escape}'`)).rejects.toThrow(
+      /VACUUM INTO/,
+    );
+    // The second hop of the chain: with no attachment, the alias resolves to
+    // nothing rather than to a file the extension just made.
+    await expect(
+      surfaces.db.exec('CREATE TABLE out.stolen (x TEXT)'),
+    ).rejects.toThrow(/unknown database/i);
+
+    // Load-bearing, not decorative: ATTACH alone creates the file, so before
+    // this policy the very first call above would have left one here.
+    expect(fs.existsSync(escape)).toBe(false);
+    close();
+  });
+
   /* The success path, redirect re-validation and the byte cap are covered
    * hermetically in net-guard.test.ts. What matters here is that the wiring is
    * real: a live loopback server — the shape of the loopback MCP listener an
