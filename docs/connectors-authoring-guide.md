@@ -195,7 +195,15 @@ need to *do* about them:
   the app bundle. You cannot use it.
 - `inference` calls are **forced onto the `'interactive'` lane** by the host
   surface, whatever `lane` you pass. Don't design around a background lane.
-- `net.fetch` accepts `http(s)` URLs only and caps a response body at 50 MiB.
+- `net.fetch` accepts `http(s)` URLs only, reaches **public internet
+  destinations only**, and caps a response body at 50 MiB. Loopback, RFC1918
+  LAN, link-local (including cloud metadata endpoints), CGNAT, IPv6
+  unique-local, multicast and reserved addresses are refused — both when named
+  directly and when a hostname resolves to one. Redirects are followed
+  manually, up to 5 hops, and every hop is re-checked against the same policy;
+  `authorization`/`cookie` headers are dropped when a redirect changes origin.
+  If your service genuinely lives on a private address, open an issue rather
+  than working around this.
 - `db` gives you `private.db` in your own `host.self.dataDir` — never the
   shared corpus. There is no write path to the corpus except returning
   documents.

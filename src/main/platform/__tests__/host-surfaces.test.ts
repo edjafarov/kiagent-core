@@ -81,10 +81,14 @@ describe('buildSurfaces', () => {
     expect(fs.existsSync(path.join(deps.dataDir, 'private.db'))).toBe(true);
   });
 
-  it('net.fetch hits a real server and returns bytes; rejects non-http urls', async () => {
+  /* The success path, redirect re-validation and the byte cap are covered
+   * hermetically in net-guard.test.ts. What matters here is that the wiring is
+   * real: a live loopback server — the shape of the loopback MCP listener an
+   * extension would target — must not be reachable through the surface. */
+  it('net.fetch refuses a live loopback server and non-http urls', async () => {
     const srv = http.createServer((_req, res) => {
-      res.writeHead(201, { 'x-kia': 'yes' });
-      res.end('body!');
+      res.writeHead(200);
+      res.end('should never be read');
     });
     await new Promise<void>((r) => {
       srv.listen(0, '127.0.0.1', r);
@@ -92,37 +96,16 @@ describe('buildSurfaces', () => {
     const { port } = srv.address() as { port: number };
     const { deps } = makeDeps();
     const { surfaces, close } = buildSurfaces(deps);
-    const res = (await surfaces.net.fetch(`http://127.0.0.1:${port}/`)) as {
-      status: number;
-      headers: Record<string, string>;
-      body: Uint8Array;
-    };
-    expect(res.status).toBe(201);
-    expect(res.headers['x-kia']).toBe('yes');
-    expect(Buffer.from(res.body).toString()).toBe('body!');
+
+    await expect(
+      surfaces.net.fetch(`http://127.0.0.1:${port}/`),
+    ).rejects.toThrow(/loopback/);
+    await expect(
+      surfaces.net.fetch(`http://localhost:${port}/`),
+    ).rejects.toThrow(/loopback/);
     await expect(surfaces.net.fetch('file:///etc/passwd')).rejects.toThrow(
       /http/,
     );
-    close();
-    srv.close();
-  });
-
-  it('net.fetch rejects a response whose declared content-length exceeds the 50 MiB cap, without buffering the (tiny, lying) body', async () => {
-    const srv = http.createServer((_req, res) => {
-      // Lies: declares far more than the tiny body actually sent, so the
-      // test never has to allocate anything close to the real cap.
-      res.writeHead(200, { 'content-length': String(60 * 1024 * 1024) });
-      res.end('tiny-body');
-    });
-    await new Promise<void>((r) => {
-      srv.listen(0, '127.0.0.1', r);
-    });
-    const { port } = srv.address() as { port: number };
-    const { deps } = makeDeps();
-    const { surfaces, close } = buildSurfaces(deps);
-    await expect(
-      surfaces.net.fetch(`http://127.0.0.1:${port}/`),
-    ).rejects.toThrow(/50 MiB/);
     close();
     srv.close();
   });
