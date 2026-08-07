@@ -180,17 +180,49 @@ function schedulerEnv(): SchedulerEnv {
 
 function makeEncryption() {
   const canEncrypt = safeStorage.isEncryptionAvailable();
+  if (!canEncrypt) {
+    // NOT a dev-only path: on macOS a locked login keychain (IT password
+    // rotation) or a denied Keychain prompt lands here in production
+    // (observed in the wild 2026-08-07). Deliberate fail-open: source
+    // credentials keep working, stored obfuscated rather than encrypted —
+    // disclosed on localkiagent.com/data. Loud so it is never invisible:
+    // this line is the difference between a documented tradeoff and a
+    // hidden one.
+    log.warn(
+      '[encryption] OS keystore unavailable (locked keychain or denied prompt) — ' +
+        'credentials will be stored obfuscated, NOT encrypted, until the app ' +
+        'restarts with the keystore accessible',
+    );
+  }
   return {
     encrypt(plain: string): Buffer {
-      if (canEncrypt) return safeStorage.encryptString(plain);
-      // Dev fallback only — a machine without a keychain stores obfuscated,
-      // not encrypted. Production platforms all support safeStorage.
+      if (canEncrypt) {
+        try {
+          return safeStorage.encryptString(plain);
+        } catch (e) {
+          // isEncryptionAvailable() lied (keystore revoked mid-session) —
+          // same documented fallback, same loud trail.
+          log.warn(
+            '[encryption] encryptString failed — storing obfuscated:',
+            e,
+          );
+        }
+      }
       return Buffer.from(`plain:${plain}`, 'utf8');
     },
     decrypt(blob: Buffer): string {
       const s = blob.toString('utf8');
       if (s.startsWith('plain:')) return s.slice('plain:'.length);
-      return safeStorage.decryptString(blob);
+      try {
+        return safeStorage.decryptString(blob);
+      } catch (e) {
+        // Never silent: a keystore refusal here surfaces to the caller (the
+        // source shows a reconnect error) but leaves a diagnosable trail —
+        // the absence of exactly this line cost a day of broker-side
+        // forensics on 2026-08-07.
+        log.warn('[encryption] decryptString failed (OS keystore):', e);
+        throw e;
+      }
     },
   };
 }
