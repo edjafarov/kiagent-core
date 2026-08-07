@@ -48,6 +48,7 @@ import { createActivityLog, type ActivityLog } from './core/mcp/activity';
 import { startMcp } from './core/mcp/server';
 import type { McpServerHandle } from './core/mcp/server';
 import { markOnboardingOnce } from './core/prefs';
+import { maybeOfferMoveToApplications } from './move-to-applications';
 import { createGitHubCache } from './marketplace/github-cache';
 import { createGitHubSource } from './marketplace/github-source';
 import { parseGitHubRef, formatGitHubRef } from './marketplace/github-ref';
@@ -635,6 +636,22 @@ app
     if (process.platform === 'darwin' && !app.isPackaged) {
       app.dock?.setIcon(getAssetPath('icons', '1024x1024.png'));
     }
+    // MUST run before the first keystore touch (makeEncryption below): a
+    // quarantine-translocated first run would otherwise create the
+    // "<name> Safe Storage" keychain item under a throwaway app identity,
+    // dooming every later launch to a macOS password prompt.
+    const move = await maybeOfferMoveToApplications({
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      userDataDir: app.getPath('userData'),
+      productName: product.productName,
+      isInApplicationsFolder: () => app.isInApplicationsFolder(),
+      moveToApplicationsFolder: (opts) => app.moveToApplicationsFolder(opts),
+      showMessageBox: (opts) =>
+        dialog.showMessageBox(opts as Electron.MessageBoxOptions),
+      log,
+    });
+    if (move === 'moving') return; // quitting; relaunches from /Applications
     const dataDir = path.join(app.getPath('userData'), 'data');
     fs.mkdirSync(dataDir, { recursive: true });
     const act = createActivityLog(dataDir);
