@@ -7,7 +7,7 @@ import type { Invokes } from '@shared/ipc';
 
 import { openDb } from '../../db/app-db';
 import { openStore, type CoreStore } from '../../core/store/store';
-import { registerOutboundIpc } from '../ipc';
+import { outboundInvokeHandlers } from '../ipc';
 import { createOutboundService, type OutboundService } from '../service';
 
 const deps = {
@@ -82,16 +82,18 @@ describe('outbound ipc delegate', () => {
     });
     service.setBaseUrl('http://127.0.0.1:7421');
 
-    handlers = new Map();
     opened = [];
-    registerOutboundIpc({
-      handle: (channel, fn) => handlers.set(channel, fn as Handler),
-      service,
-      store,
-      openExternal: async (url) => {
-        opened.push(url);
-      },
-    });
+    handlers = new Map(
+      Object.entries(
+        outboundInvokeHandlers({
+          service,
+          store,
+          openExternal: async (url) => {
+            opened.push(url);
+          },
+        }),
+      ) as Array<[string, Handler]>,
+    );
   });
 
   afterEach(async () => {
@@ -309,13 +311,15 @@ describe('outbound ipc delegate', () => {
       senders: new Map<string, Sender>([['imap', { send: sendMock }]]),
       logSink,
     }); // never setBaseUrl'd
-    const coldHandlers = new Map<string, Handler>();
-    registerOutboundIpc({
-      handle: (channel, fn) => coldHandlers.set(channel, fn as Handler),
-      service: cold,
-      store,
-      openExternal: async () => {},
-    });
+    const coldHandlers = new Map(
+      Object.entries(
+        outboundInvokeHandlers({
+          service: cold,
+          store,
+          openExternal: async () => {},
+        }),
+      ) as Array<[string, Handler]>,
+    );
     const r = await service.draftReply({ documentId: docId, body: 'x' });
     await expect(
       coldHandlers.get('outbox:open-confirm')!({ draftId: r.draft_id }),

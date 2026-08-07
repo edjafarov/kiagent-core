@@ -421,78 +421,111 @@ export interface Pushes {
 export type InvokeChannel = keyof Invokes;
 export type PushChannel = keyof Pushes;
 
-/** Runtime allowlists for preload — must stay in sync with the interfaces
- *  above; the satisfies clauses enforce it at compile time. */
-export const INVOKE_CHANNELS = [
-  'app:get-state',
-  'sources:list',
-  'sources:count-files',
-  'sources:list-folders',
-  'accounts:add',
-  'accounts:prompt-answer',
-  'accounts:cancel-flow',
-  'accounts:picker-roots',
-  'accounts:picker-children',
-  'accounts:picker-count',
-  'accounts:picker-confirm',
-  'accounts:picker-cancel',
-  'accounts:remove',
-  'accounts:pause',
-  'accounts:resume',
-  'accounts:sync-now',
-  'accounts:set-cadence',
-  'accounts:update-config',
-  'accounts:update-outbound',
-  'search:query',
-  'docs:get',
-  'docs:children',
-  'prefs:get',
-  'prefs:patch',
-  'identity:get',
-  'identity:set',
-  'logs:recent',
-  'logs:export',
-  'mcp-activity:recent',
-  'outbox:list',
-  'outbox:discard',
-  'outbox:redraft',
-  'outbox:open-confirm',
-  'mcp:info',
-  'mcp:connect-client',
-  'mcp:disconnect-client',
-  'scheduler:jobs',
-  'scheduler:trigger',
-  'storage:stats',
-  'maintenance:compact',
-  'maintenance:export',
-  'maintenance:reset-all',
-  'inference:providers',
-  'inference:install',
-  'inference:cancel',
-  'inference:stats',
-  'inference:models',
-  'app:info',
-  'app:open-path',
-  'update:get-state',
-  'update:check',
-  'update:quit-and-install',
-  'marketplace:list',
-  'marketplace:detail',
-  'marketplace:check-updates',
-  'extension:install-preview',
-  'extension:install-commit',
-  'extension:uninstall',
-  'extension:set-enabled',
-  'extension:grant-consent',
-] as const satisfies readonly InvokeChannel[];
+/**
+ * The handler main must supply for every declared channel. Both IPC seams
+ * (`updaterInvokeHandlers`, `outboundInvokeHandlers`) return `Pick`s of this
+ * so their slices compose into main's one exhaustive map; it lives here
+ * rather than in main.ts so neither seam has to import from the entrypoint.
+ */
+export type InvokeHandlers = {
+  [C in InvokeChannel]: (
+    req: Invokes[C]['req'],
+  ) => Invokes[C]['res'] | Promise<Invokes[C]['res']>;
+};
 
-export const PUSH_CHANNELS = [
-  'push:app-state',
-  'push:connect',
-  'push:logs',
-  'push:mcp-activity',
-  'push:update-state',
-] as const satisfies readonly PushChannel[];
+/**
+ * Runtime allowlists for preload, derived from maps rather than written as
+ * arrays.
+ *
+ * The reason is the shape, not the style. `[...] as const satisfies readonly
+ * InvokeChannel[]` — what these used to be — only rejects names that aren't
+ * channels; it accepts an INCOMPLETE list, so a list holding a single entry
+ * compiled clean and a forgotten entry surfaced as preload's runtime
+ * "unknown invoke channel" instead. `Record<InvokeChannel, 0>` says *exactly
+ * these keys*, so a missing one is a compile error (TS1360) and a typo still
+ * is (TS2353). The values carry nothing — 0 is just the cheapest inhabitant.
+ *
+ * The `Object.keys` cast is sound precisely because the satisfies clause
+ * above it holds, and preload only ever builds Sets from these.
+ */
+const INVOKE_CHANNEL_MAP = {
+  'app:get-state': 0,
+  'sources:list': 0,
+  'sources:count-files': 0,
+  'sources:list-folders': 0,
+  'accounts:add': 0,
+  'accounts:prompt-answer': 0,
+  'accounts:cancel-flow': 0,
+  'accounts:picker-roots': 0,
+  'accounts:picker-children': 0,
+  'accounts:picker-count': 0,
+  'accounts:picker-confirm': 0,
+  'accounts:picker-cancel': 0,
+  'accounts:remove': 0,
+  'accounts:pause': 0,
+  'accounts:resume': 0,
+  'accounts:sync-now': 0,
+  'accounts:set-cadence': 0,
+  'accounts:update-config': 0,
+  'accounts:update-outbound': 0,
+  'search:query': 0,
+  'docs:get': 0,
+  'docs:children': 0,
+  'prefs:get': 0,
+  'prefs:patch': 0,
+  'identity:get': 0,
+  'identity:set': 0,
+  'logs:recent': 0,
+  'logs:export': 0,
+  'mcp-activity:recent': 0,
+  'outbox:list': 0,
+  'outbox:discard': 0,
+  'outbox:redraft': 0,
+  'outbox:open-confirm': 0,
+  'mcp:info': 0,
+  'mcp:connect-client': 0,
+  'mcp:disconnect-client': 0,
+  'scheduler:jobs': 0,
+  'scheduler:trigger': 0,
+  'storage:stats': 0,
+  'maintenance:compact': 0,
+  'maintenance:export': 0,
+  'maintenance:reset-all': 0,
+  'inference:providers': 0,
+  'inference:install': 0,
+  'inference:cancel': 0,
+  'inference:stats': 0,
+  'inference:models': 0,
+  'app:info': 0,
+  'app:open-path': 0,
+  'update:get-state': 0,
+  'update:check': 0,
+  'update:quit-and-install': 0,
+  'marketplace:list': 0,
+  'marketplace:detail': 0,
+  'marketplace:check-updates': 0,
+  'extension:install-preview': 0,
+  'extension:install-commit': 0,
+  'extension:uninstall': 0,
+  'extension:set-enabled': 0,
+  'extension:grant-consent': 0,
+} as const satisfies Record<InvokeChannel, 0>;
+
+export const INVOKE_CHANNELS = Object.keys(
+  INVOKE_CHANNEL_MAP,
+) as readonly InvokeChannel[];
+
+const PUSH_CHANNEL_MAP = {
+  'push:app-state': 0,
+  'push:connect': 0,
+  'push:logs': 0,
+  'push:mcp-activity': 0,
+  'push:update-state': 0,
+} as const satisfies Record<PushChannel, 0>;
+
+export const PUSH_CHANNELS = Object.keys(
+  PUSH_CHANNEL_MAP,
+) as readonly PushChannel[];
 
 /** What preload exposes on window.kiagent. */
 export interface RendererApi {

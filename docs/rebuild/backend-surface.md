@@ -96,7 +96,7 @@ Source: `src/main/main.ts`, `src/main/boot/*.ts`.
 - 4 s fallback `show()` if `ready-to-show` never fires.
 - **Hide-on-close**: `close` is `preventDefault()`ed and hides; only tray "Quit" sets `isQuitting`. `window-all-closed` is a deliberate no-op (`main.ts:867-871`).
 - `focus/blur/show/hide/minimize/restore` → `scheduler.onWindowStateChange()` (drives 30 s / 120 s / 600 s delta cadence).
-- Constructs `updater` via `host.createUpdater(...)` + `registerUpdaterIpc` (host-provided; proprietary overlay in prod).
+- Constructs `updater` via `host.createUpdater(...)`; its three invoke channels come from `updaterInvokeHandlers()` into main's handler map, and `subscribeUpdaterState()` owns the push (host-provided; proprietary overlay in prod).
 
 ### 1.4 Teardown (`app.on('before-quit')`, `main.ts:790-865`) — drain order matters
 

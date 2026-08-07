@@ -34,8 +34,9 @@ export function createUpdater(deps: UpdaterDeps): UpdaterManager {
 
   function set(next: Partial<UpdateState>): void {
     state = { ...state, ...next };
-    // The renderer push is owned solely by registerUpdaterIpc via onStateChange;
-    // do not broadcast here or every transition would be pushed twice.
+    // The renderer push is owned solely by subscribeUpdaterState via
+    // onStateChange; do not broadcast here or every transition would be
+    // pushed twice.
     for (const cb of subscribers) cb(state);
   }
 

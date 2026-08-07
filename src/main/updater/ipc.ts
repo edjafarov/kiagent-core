@@ -1,26 +1,36 @@
 // src/main/updater/ipc.ts
+import type { InvokeHandlers } from '@shared/ipc';
+
 import type { UpdateState, UpdaterManager } from './types';
 
-/** The handle/broadcast seam from main.ts, injected for tests. */
-export interface IpcBus {
-  handle: (
-    channel: string,
-    fn: (e: unknown, payload: unknown) => unknown,
-  ) => void;
-  broadcast: (channel: string, payload: unknown) => void;
+/** The three update channels, as a slice of main's exhaustive handler map.
+ *
+ *  These are RETURNED rather than registered. Registering them here — through
+ *  a stringly-typed `handle(channel: string, …)` seam, which is what this was
+ *  — put them outside the one place that can be checked for completeness, and
+ *  cost two `as never` casts at the call site to bridge the untyped bus back
+ *  to the typed contract. Handing main a `Pick` keeps the module's test seam
+ *  (the record is directly callable) without the hole. */
+export function updaterInvokeHandlers(
+  manager: UpdaterManager,
+): Pick<
+  InvokeHandlers,
+  'update:get-state' | 'update:check' | 'update:quit-and-install'
+> {
+  return {
+    'update:get-state': () => manager.getState(),
+    'update:check': () => manager.check(),
+    'update:quit-and-install': () => {
+      manager.quitAndInstall();
+    },
+  };
 }
 
-/** Wire the update channels to the manager. Returns an unsubscribe fn. */
-export function registerUpdaterIpc(
+/** The push half, which has no channel-completeness question to answer.
+ *  Returns an unsubscribe fn. */
+export function subscribeUpdaterState(
   manager: UpdaterManager,
-  bus: IpcBus,
+  broadcast: (state: UpdateState) => void,
 ): () => void {
-  bus.handle('update:get-state', () => manager.getState());
-  bus.handle('update:check', () => manager.check());
-  bus.handle('update:quit-and-install', () => {
-    manager.quitAndInstall();
-  });
-  return manager.onStateChange((s: UpdateState) =>
-    bus.broadcast('push:update-state', s),
-  );
+  return manager.onStateChange(broadcast);
 }

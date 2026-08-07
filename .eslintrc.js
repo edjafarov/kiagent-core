@@ -1,5 +1,12 @@
 module.exports = {
   extends: 'erb',
+  // Pin the parser to the same @typescript-eslint major as the plugin below.
+  // `erb` brings its own nested v6 parser, whose TSMappedType nodes carry
+  // `typeParameter`; the v8 plugin's no-unused-vars visitor reads `key` and
+  // crashed the whole run ("Cannot use 'in' operator to search for 'type' in
+  // undefined") on the first mapped type in the tree — see the InvokeHandlers
+  // map in src/shared/ipc.ts.
+  parser: '@typescript-eslint/parser',
   plugins: ['@typescript-eslint'],
   rules: {
     // A temporary hack related to IDE not resolving correct package.json
