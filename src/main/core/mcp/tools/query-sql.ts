@@ -13,7 +13,7 @@
  */
 import type BetterSqlite3 from 'better-sqlite3';
 
-export const querySqlDescription = `Run a read-only SELECT or WITH query against the digital-memory database. Capped at 500 rows — add your own LIMIT/ORDER BY when order matters. Use when search/count/get_related aren't expressive enough: joins, custom aggregations, time bucketing, grouping. Call \`get_schema\` FIRST for table/column names and how the tables relate — notably a document's source lives on \`accounts.source\`, reached by joining \`documents.account_id = accounts.id\` (there is no source column on documents). The connection is read-only; writes fail at the driver.`;
+export const querySqlDescription = `Run a read-only SELECT or WITH query against the digital-memory database. Capped at 500 rows — add your own LIMIT/ORDER BY when order matters. Use when search/count/get_related aren't expressive enough: joins, custom aggregations, time bucketing, grouping. Call \`get_schema\` FIRST for table/column names and how the tables relate — notably a document's source lives on \`accounts.source\`, reached by joining \`documents.account_id = accounts.id\` (there is no source column on documents). Canonical starting point: \`SELECT d.id, d.title, d.created_at, d.url, a.source FROM documents d JOIN accounts a ON a.id = d.account_id WHERE d.archived_at IS NULL\` — keep \`d.url\` in the projection. Every document has a url — when presenting documents to the user, link each one, not just the first; if url is empty or non-http, cite by title and date. The connection is read-only; writes fail at the driver.`;
 
 export const querySqlInputSchema = {
   type: 'object',
@@ -29,6 +29,7 @@ export const querySqlInputSchema = {
 export interface QuerySqlResult {
   rows: Record<string, unknown>[];
   truncated: boolean;
+  hint?: string;
 }
 
 const MAX_ROWS = 500;
@@ -47,5 +48,14 @@ export function runQuerySql(
   const rows = conn
     .prepare(`SELECT * FROM (${stripped}) LIMIT ${MAX_ROWS + 1}`)
     .all() as Record<string, unknown>[];
-  return { rows: rows.slice(0, MAX_ROWS), truncated: rows.length > MAX_ROWS };
+  const kept = rows.slice(0, MAX_ROWS);
+  const first = kept[0];
+  const hint =
+    first &&
+    ('id' in first || 'doc_id' in first) &&
+    !('url' in first) &&
+    !('source_url' in first)
+      ? 'these rows look like documents — include d.url in the SELECT so each one can be cited/linked when presented.'
+      : undefined;
+  return { rows: kept, truncated: rows.length > MAX_ROWS, hint };
 }

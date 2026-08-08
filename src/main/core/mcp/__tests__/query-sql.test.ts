@@ -157,4 +157,35 @@ describe('runQuerySql', () => {
       conn.close();
     }
   });
+
+  it('appends a url hint when rows look like documents without a url column', () => {
+    const conn = ro();
+    try {
+      const { hint } = runQuerySql(
+        conn,
+        `SELECT 'doc-1' AS id, 'Title' AS title`,
+      );
+      expect(hint).toMatch(/include d\.url/);
+    } finally {
+      conn.close();
+    }
+  });
+
+  it('no hint when url or source_url is selected, or rows are not documents', () => {
+    const conn = ro();
+    try {
+      expect(
+        runQuerySql(conn, `SELECT 'doc-1' AS id, 'u' AS url`).hint,
+      ).toBeUndefined();
+      expect(
+        runQuerySql(conn, `SELECT 'doc-1' AS doc_id, 'u' AS source_url`).hint,
+      ).toBeUndefined();
+      expect(runQuerySql(conn, `SELECT 1 AS n`).hint).toBeUndefined();
+      expect(
+        runQuerySql(conn, `SELECT 'x' AS id WHERE 0`).hint,
+      ).toBeUndefined(); // empty result — nothing to cite
+    } finally {
+      conn.close();
+    }
+  });
 });
