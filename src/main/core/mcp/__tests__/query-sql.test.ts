@@ -171,6 +171,19 @@ describe('runQuerySql', () => {
     }
   });
 
+  it('appends the hint for a doc_id-shaped row without a url column', () => {
+    const conn = ro();
+    try {
+      const { hint } = runQuerySql(
+        conn,
+        `SELECT 'doc-1' AS doc_id, 'Title' AS title`,
+      );
+      expect(hint).toMatch(/include d\.url/);
+    } finally {
+      conn.close();
+    }
+  });
+
   it('no hint when url or source_url is selected, or rows are not documents', () => {
     const conn = ro();
     try {

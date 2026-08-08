@@ -34,7 +34,9 @@ digital_memory_info to see what languages are present.
 Operators (gmail-style, inside the query string):
   from: / to: / participant: — people, case-insensitive substring
     on name or address: from:sebastian, from:@zoolatech.com,
-    from:"Roman Kaplun"
+    from:"Roman Kaplun" (case folding is ASCII-only — for non-ASCII
+    names like Ünal or MÜLLER, match the lowercase stored casing or
+    use the address instead)
   label:inbox   has:attachment   filename:report   ext:pdf
   in:gmail (alias source:)   type:email.thread
   order:newest | order:relevance (default: relevance with text,

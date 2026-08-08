@@ -104,6 +104,11 @@ describe('Query.search structured filters', () => {
     expect(both.map((d) => d.externalId)).toEqual(['t1']);
   });
 
+  it('people.to is a case-insensitive substring over name and address', async () => {
+    const hits = await store.read.search({ people: { to: ['eldar'] } });
+    expect(hits.map((d) => d.externalId)).toEqual(['t1']);
+  });
+
   it('people.participant matches any people-ish metadata path', async () => {
     const hits = await store.read.search({
       people: { participant: ['me@example.com'] },
@@ -152,6 +157,20 @@ describe('Query.search structured filters', () => {
     const newest = await store.read.search({
       text: 'common-word',
       orderBy: 'newest',
+    });
+    expect(newest.map((d) => d.externalId)).toEqual(['t1', 't2', 't3']);
+  });
+
+  it('orderBy newest on a FULL FTS page pins the SQL ORDER BY itself (fuzzy fallback skipped)', async () => {
+    // All 3 seeded docs match 'common-word'; limit:3 makes the primary FTS
+    // pass fill the page exactly (rows.length === limit), so the
+    // rows.length < limit fallback guard in store.ts short-circuits and this
+    // ordering can only come from the orderSql ternary, not the fallback's
+    // own re-sort.
+    const newest = await store.read.search({
+      text: 'common-word',
+      orderBy: 'newest',
+      limit: 3,
     });
     expect(newest.map((d) => d.externalId)).toEqual(['t1', 't2', 't3']);
   });

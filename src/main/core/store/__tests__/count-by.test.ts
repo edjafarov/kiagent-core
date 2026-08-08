@@ -100,4 +100,16 @@ describe('Query.countBy', () => {
       2,
     );
   });
+
+  it('applies the toDate upper bound on the origin date', async () => {
+    const rows = await store.read.countBy({
+      field: 'from',
+      toDate: '2026-07-31T23:59:59Z',
+    });
+    expect(rows).toEqual([{ key: 'Sebastian <s@x.se>', count: 1 }]);
+  });
+
+  it('count(q) accepts the toDate bound', async () => {
+    expect(await store.read.count({ toDate: '2026-07-31T23:59:59Z' })).toBe(1);
+  });
 });
