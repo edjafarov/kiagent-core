@@ -192,7 +192,12 @@ export interface Query {
    *  Without `text` the result is a recency listing ordered by the
    *  document's origin date (createdAt, falling back to ingestedAt) —
    *  NOT by write order, which inverts after a newest-first backfill.
-   *  `fromDate`/`toDate` bound that same origin date (inclusive). */
+   *  `fromDate`/`toDate` bound that same origin date (inclusive).
+   *
+   *  Structured metadata filters (people/label/hasAttachment/filename/ext)
+   *  are case-insensitive matches over documents.metadata JSON — arrays OR
+   *  within a field, fields AND. `orderBy: 'newest'` forces origin-date
+   *  ordering even with `text`. */
   search(q: {
     text?: string;
     type?: string;
@@ -202,6 +207,12 @@ export interface Query {
     toDate?: string;
     limit?: number;
     offset?: number;
+    people?: { from?: string[]; to?: string[]; participant?: string[] };
+    label?: string[];
+    hasAttachment?: boolean;
+    filename?: string[];
+    ext?: string[];
+    orderBy?: 'newest' | 'relevance';
   }): Promise<Array<Document & { snippet?: string }>>;
   count(q: {
     type?: string;

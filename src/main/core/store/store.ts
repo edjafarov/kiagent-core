@@ -50,6 +50,17 @@ import { createWriteTx } from './write-tx';
 export const PENDING_VISUAL_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_pending_visual WHERE ${PENDING_VISUAL_WHERE}`;
 export const EXTRACTED_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_extracted WHERE ${EXTRACTED_DOCS_WHERE}`;
 
+/** Metadata paths scanned by the `participant:` filter — extend as new
+ *  connector metadata shapes appear (slack/whatsapp senders etc.). */
+const PARTICIPANT_METADATA_PATHS = [
+  '$.from',
+  '$.to',
+  '$.cc',
+  '$.participants',
+  '$.sender',
+  '$.author',
+] as const;
+
 /** Injected so the store stays testable and Electron-free. */
 export interface StoreDeps {
   /** Credential blob encryption (Electron safeStorage in production). */
@@ -481,14 +492,66 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         filters.push(`COALESCE(d.created_at, d.ingested_at) <= ?`);
         params.push(q.toDate);
       }
+      // Structured metadata filters (spec 2026-08-08): all json_extract over
+      // documents.metadata, appended to the SAME filters/params arrays so
+      // they apply to the FTS pass, the trigram fallback, and the recency
+      // path alike. Substring matches are lower()-folded — ASCII-only, a
+      // documented v1 limitation.
+      const likeEsc = (v: string) =>
+        `%${v.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      const jsonLower = (p: string) =>
+        `lower(COALESCE(json_extract(d.metadata,'${p}'),''))`;
+      const orLike = (expr: string, values: string[]) => {
+        filters.push(
+          `(${values.map(() => `${expr} LIKE ? ESCAPE '\\'`).join(' OR ')})`,
+        );
+        for (const v of values) params.push(likeEsc(v));
+      };
+      if (q.people?.from?.length) orLike(jsonLower('$.from'), q.people.from);
+      if (q.people?.to?.length) orLike(jsonLower('$.to'), q.people.to);
+      if (q.people?.participant?.length) {
+        const haystack =
+          PARTICIPANT_METADATA_PATHS.map(jsonLower).join(` || char(10) || `);
+        orLike(`(${haystack})`, q.people.participant);
+      }
+      if (q.label?.length) {
+        // Quoted-token match inside the JSON array text: label:in must not
+        // match "INBOX".
+        filters.push(
+          `(${q.label
+            .map(() => `${jsonLower('$.labels')} LIKE ? ESCAPE '\\'`)
+            .join(' OR ')})`,
+        );
+        for (const v of q.label)
+          params.push(
+            `%"${v.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}"%`,
+          );
+      }
+      if (q.hasAttachment) {
+        filters.push(
+          `EXISTS (SELECT 1 FROM documents c WHERE c.parent_id = d.id
+             AND c.type = 'attachment' AND c.archived_at IS NULL)`,
+        );
+      }
+      if (q.filename?.length) orLike(jsonLower('$.filename'), q.filename);
+      if (q.ext?.length) {
+        filters.push(
+          `(${q.ext.map(() => `${jsonLower('$.ext')} = ?`).join(' OR ')})`,
+        );
+        for (const v of q.ext) params.push(v.toLowerCase().replace(/^\./, ''));
+      }
       const where = filters.length ? `AND ${filters.join(' AND ')}` : '';
       if (q.text?.trim()) {
         const langs = await corpusLanguages();
+        const orderSql =
+          q.orderBy === 'newest'
+            ? `ORDER BY COALESCE(d.created_at, d.ingested_at) DESC`
+            : `ORDER BY bm25(documents_fts, 0, 4.0, 1.0, 2.0, 0.5)`;
         const rows = (await db.all(
           `SELECT d.*, snippet(documents_fts, 2, '<b>', '</b>', '…', 24) AS _snippet
              FROM documents_fts f JOIN documents d ON d.id = f.doc_id
              WHERE documents_fts MATCH ? ${where}
-             ORDER BY bm25(documents_fts, 0, 4.0, 1.0, 2.0, 0.5)
+             ${orderSql}
              LIMIT ? OFFSET ?`,
           [
             ftsQuery(q.text, (term) => stemVariants(term, langs)),
@@ -551,6 +614,12 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
               }
             }
             const fused = rrfMerge<DocRow>(rows, capped, (r) => r.id, limit);
+            if (q.orderBy === 'newest') {
+              const dateOf = (r: DocRow) => r.created_at ?? r.ingested_at;
+              fused.sort((a, b) =>
+                dateOf(a) < dateOf(b) ? 1 : dateOf(a) > dateOf(b) ? -1 : 0,
+              );
+            }
             return fused.map((r) => ({
               ...toDocument(r),
               snippet:
