@@ -128,7 +128,7 @@ TEXT.`,
         'documents_tri.doc_id = documents.id',
       ],
       prep_notes:
-        'To filter/group by source, join accounts: `SELECT a.source, count(*) FROM documents d JOIN accounts a ON a.id = d.account_id GROUP BY a.source`. Exclude soft-deleted rows with `archived_at IS NULL`.',
+        'To filter/group by source, join accounts: `SELECT a.source, count(*) FROM documents d JOIN accounts a ON a.id = d.account_id GROUP BY a.source`. Exclude soft-deleted rows with `archived_at IS NULL`. Always include `d.url` in projections whose rows will be shown to the user — it is the citation link (see the url column).',
     },
     {
       name: 'accounts',

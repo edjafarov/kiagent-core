@@ -6,7 +6,7 @@
  */
 import { SCHEMA_DOC } from './schema-doc';
 
-export const getSchemaDescription = `Annotated schema of the digital-memory database — tables, columns, enum values, relations, and prep notes. Call this before \`query_sql\` when search/count/get_related aren't expressive enough and you need custom SQL. Key relation: a document's source is \`accounts.source\`, joined via \`documents.account_id = accounts.id\`. For live counts/sync state use \`digital_memory_info\` instead — this tool is layout, not contents. Returns markdown.`;
+export const getSchemaDescription = `Annotated schema of the digital-memory database — tables, columns, enum values, relations, and prep notes. Call this before \`query_sql\` when search/count/get_related aren't expressive enough and you need custom SQL. Key relation: a document's source is \`accounts.source\`, joined via \`documents.account_id = accounts.id\`. For live counts/sync state use \`digital_memory_info\` instead — this tool is layout, not contents. Every document has a url — when presenting documents to the user, link each one, not just the first; if url is empty or non-http, cite by title and date. Returns markdown.`;
 
 export function renderSchema(): string {
   const lines: string[] = [];

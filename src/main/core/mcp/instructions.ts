@@ -4,8 +4,9 @@
  * how clients drive the tools. Ported from kiagent-ref's
  * src/main/mcp/instructions.ts, ADAPTED to the greenfield tool surface:
  *  - `query_sql`/`get_schema` patterns dropped (not exposed — see tools/).
- *  - "English stemming" dropped: search is FTS5 unicode61 (diacritics-folded)
- *    with NO stemmer, so the text now tells the model to vary word forms.
+ *  - Search is FTS5 unicode61 (diacritics-folded) with stemming applied via
+ *    `stemVariants` on every term, so the text tells the model when stemming
+ *    won't help (brand names, codes) and to vary word forms there.
  *  - Thread dating updated: a greenfield gmail thread's `created_at` IS the
  *    latest message's date (metadata key `lastMessageAt`, camelCase) — the
  *    legacy "old created_at but still active" caveat no longer applies.
@@ -24,12 +25,23 @@ saved, or been involved in.
 
 Full-text search: bare terms are ANDed; "quoted phrases" match
 exactly; -term excludes; UPPERCASE OR alternates; term* prefix-
-matches; parentheses group. There is NO stemming — "invoice" will
-not match "invoices" — so prefer prefix matches (invoice*) or
-OR-of-variants when word form is uncertain. The digital memory is
-multilingual — if a search returns nothing, retry in the likely
-source language. Call digital_memory_info to see what languages are
-present.
+matches; parentheses group. Terms are stemmed — "invoice" matches
+"invoices"; use term* or OR-of-variants only when a stem might miss
+(brand names, codes). The digital memory is multilingual — if a
+search returns nothing, retry in the likely source language. Call
+digital_memory_info to see what languages are present.
+
+Operators (gmail-style, inside the query string):
+  from: / to: / participant: — people, case-insensitive substring
+    on name or address: from:sebastian, from:@zoolatech.com,
+    from:"Roman Kaplun"
+  label:inbox   has:attachment   filename:report   ext:pdf
+  in:gmail (alias source:)   type:email.thread
+  order:newest | order:relevance (default: relevance with text,
+    newest without)
+Repeat an operator to OR within it (from:a from:b); different
+operators AND. Operators-only queries list matching docs newest
+first. Example: from:@zoolatech.com has:attachment order:newest
 
 Recency & dates. The digital memory can span many years and holds
 outdated, superseded material. Every date — created_at and the
@@ -53,6 +65,9 @@ Common patterns:
   recent X / lately        → search + from_date
   what's in your memory    → digital_memory_info
   how many docs per source → count
+  who sent what / per-sender or per-label counts
+                            → count group_by:'from'|'label'
+  latest from a person     → search "from:x order:newest"
   full doc body            → search → get
   expand an email thread   → get → get_related(children)
   email attachments        → get → get_related(children)
@@ -84,8 +99,7 @@ get_related carry the same link as url). When you present a finding,
 include it so the user can open the original: as a link for web
 sources (gmail, slack, notion, …), as a plain absolute path for file://
 local files — metadata.absPath holds that path unescaped. Never invent
-or guess one; if source_url is empty or missing, say the original
-isn't linkable.
+or guess one. Every document has a url — when presenting documents to the user, link each one, not just the first; if url is empty or non-http, cite by title and date.
 
 Don't invent documents or details not returned by a tool.
 
