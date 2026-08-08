@@ -73,6 +73,17 @@ describe('Query.search structured filters', () => {
           metadata: { filename: 'Invoice-2026.pdf', ext: 'pdf' },
           createdAt: '2026-07-01T10:00:00Z',
         }),
+        // Mirrors gmail attachments (src/main/sources/gmail/to-document.ts):
+        // filename/mime only, no metadata.ext. No parent — a top-level doc,
+        // not anyone's attachment child.
+        doc('att2', {
+          type: 'attachment',
+          metadata: {
+            filename: 'Quarterly Report.PDF',
+            mime: 'application/pdf',
+          },
+          createdAt: '2026-06-01T10:00:00Z',
+        }),
       ],
       cursor: null,
     });
@@ -131,6 +142,28 @@ describe('Query.search structured filters', () => {
     expect(await store.read.search({ ext: ['pd'] })).toHaveLength(0);
   });
 
+  it('ext falls back to a filename suffix when metadata.ext is absent (gmail attachments)', async () => {
+    // t3 matches via exact metadata.ext; att2 (gmail-shaped: filename/mime,
+    // no ext key) matches only via the filename-suffix fallback.
+    const hits = await store.read.search({ ext: ['pdf'] });
+    expect(new Set(hits.map((d) => d.externalId))).toEqual(
+      new Set(['t3', 'att2']),
+    );
+  });
+
+  it('ext filename-suffix fallback is a suffix match, not a substring match', async () => {
+    // att2's filename is 'Quarterly Report.PDF' — ext:pd must not match the
+    // '.PDF' suffix via substring.
+    expect(await store.read.search({ ext: ['pd'] })).toHaveLength(0);
+  });
+
+  it('ext filename-suffix fallback tolerates a leading dot, like the exact-match path', async () => {
+    const hits = await store.read.search({ ext: ['.pdf'] });
+    expect(new Set(hits.map((d) => d.externalId))).toEqual(
+      new Set(['t3', 'att2']),
+    );
+  });
+
   it('hasAttachment keeps only docs with live attachment children', async () => {
     const [t1] = await store.read.search({ people: { from: ['roman'] } });
     await store.commit({
@@ -158,7 +191,9 @@ describe('Query.search structured filters', () => {
       text: 'common-word',
       orderBy: 'newest',
     });
-    expect(newest.map((d) => d.externalId)).toEqual(['t1', 't2', 't3']);
+    // att2 also has the default 'common-word' body (doc() helper) and is
+    // the oldest of the four seeded docs, so it sorts last.
+    expect(newest.map((d) => d.externalId)).toEqual(['t1', 't2', 't3', 'att2']);
   });
 
   it('orderBy newest on a FULL FTS page pins the SQL ORDER BY itself (fuzzy fallback skipped)', async () => {

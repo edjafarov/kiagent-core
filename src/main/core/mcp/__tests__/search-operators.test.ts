@@ -64,4 +64,23 @@ describe('parseOperators', () => {
     expect(p.text).toBe('"term sheet"');
     expect(p.from).toEqual(['vc@fund.com']);
   });
+
+  it('treats an unterminated quoted value as literal text, not a filter', () => {
+    const p = parseOperators('from:"Roman logs');
+    expect(p.from).toEqual([]);
+    expect(p.text).toBe('from:"Roman logs');
+  });
+
+  it('treats ext:. (empty after normalization) as literal text, not a filter', () => {
+    const p = parseOperators('ext:. deadline');
+    expect(p.ext).toEqual([]);
+    expect(p.text).toBe('ext:. deadline');
+  });
+
+  it('regression: a leading-dot ext and a balanced quoted from: still parse', () => {
+    expect(parseOperators('ext:.PDF').ext).toEqual(['pdf']);
+    expect(parseOperators('from:"Roman Kaplun"').from).toEqual([
+      'Roman Kaplun',
+    ]);
+  });
 });

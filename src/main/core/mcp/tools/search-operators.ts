@@ -47,6 +47,12 @@ export function parseOperators(raw: string): ParsedQuery {
     if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
       value = value.slice(1, -1);
     }
+    if (value.includes('"')) {
+      // Unbalanced/embedded quote after the unwrap attempt — malformed, not
+      // a filter value. Stays literal FTS text.
+      rest.push(tok);
+      continue;
+    }
     if (!value) {
       rest.push(tok);
       continue;
@@ -67,9 +73,15 @@ export function parseOperators(raw: string): ParsedQuery {
       case 'filename':
         out.filename.push(value);
         break;
-      case 'ext':
-        out.ext.push(value.replace(/^\./, '').toLowerCase());
+      case 'ext': {
+        const ext = value.replace(/^\./, '').toLowerCase();
+        if (!ext) {
+          rest.push(tok);
+          break;
+        }
+        out.ext.push(ext);
         break;
+      }
       case 'has':
         if (value.toLowerCase() === 'attachment') out.hasAttachment = true;
         else rest.push(tok);

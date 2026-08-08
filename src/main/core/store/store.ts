@@ -535,10 +535,25 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       }
       if (q.filename?.length) orLike(jsonLower('$.filename'), q.filename);
       if (q.ext?.length) {
+        // Only local-folder docs write metadata.ext; gmail attachments only
+        // have filename/mime (spec follow-up, 2026-08-08 review round 2).
+        // Each value matches EITHER the exact ext field OR a filename
+        // suffix, so `ext:pdf in:gmail` can find attachments too.
         filters.push(
-          `(${q.ext.map(() => `${jsonLower('$.ext')} = ?`).join(' OR ')})`,
+          `(${q.ext
+            .map(
+              () =>
+                `(${jsonLower('$.ext')} = ? OR ${jsonLower(
+                  '$.filename',
+                )} LIKE ? ESCAPE '\\')`,
+            )
+            .join(' OR ')})`,
         );
-        for (const v of q.ext) params.push(v.toLowerCase().replace(/^\./, ''));
+        for (const raw of q.ext) {
+          const v = raw.toLowerCase().replace(/^\./, '');
+          params.push(v);
+          params.push(`%.${v.replace(/[\\%_]/g, (c) => `\\${c}`)}`);
+        }
       }
       const where = filters.length ? `AND ${filters.join(' AND ')}` : '';
       if (q.text?.trim()) {
