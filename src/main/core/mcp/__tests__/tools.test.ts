@@ -193,6 +193,114 @@ describe('mcp built-in tools', () => {
     );
   });
 
+  it('count: group_by from/label delegates to Query.countBy, with date bounds', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [
+        doc('mail-1', {
+          type: 'email.message',
+          title: 'Mail 1',
+          metadata: {
+            from: 'Roman Kaplun <rkaplun@zoolatech.com>',
+            labels: ['INBOX'],
+          },
+          createdAt: '2026-08-01T00:00:00Z',
+        }),
+        doc('mail-2', {
+          type: 'email.message',
+          title: 'Mail 2',
+          metadata: {
+            from: 'Roman Kaplun <rkaplun@zoolatech.com>',
+            labels: ['INBOX', 'IMPORTANT'],
+          },
+          createdAt: '2026-08-07T00:00:00Z',
+        }),
+        doc('mail-3', {
+          type: 'email.message',
+          title: 'Mail 3',
+          metadata: { from: 'Sebastian <s@x.se>', labels: [] },
+          createdAt: '2026-07-01T00:00:00Z',
+        }),
+      ],
+      cursor: 5,
+    });
+
+    // The beforeEach seed (thread-1/msg-1/msg-2) has no metadata.from, so it
+    // groups under the '(none)' bucket ahead of these by count (3 > 2 > 1).
+    const byFrom = (await call('count', { group_by: 'from' })) as Array<{
+      key: string;
+      count: number;
+    }>;
+    expect(byFrom).toEqual([
+      { key: '(none)', count: 3 },
+      { key: 'Roman Kaplun <rkaplun@zoolatech.com>', count: 2 },
+      { key: 'Sebastian <s@x.se>', count: 1 },
+    ]);
+
+    const byFromBounded = (await call('count', {
+      group_by: 'from',
+      from_date: '2026-08-01T00:00:00Z',
+    })) as Array<{ key: string; count: number }>;
+    expect(byFromBounded).toEqual([
+      { key: 'Roman Kaplun <rkaplun@zoolatech.com>', count: 2 },
+    ]);
+
+    const byLabel = (await call('count', { group_by: 'label' })) as Array<{
+      key: string;
+      count: number;
+    }>;
+    expect(byLabel).toEqual([
+      { key: 'INBOX', count: 2 },
+      { key: 'IMPORTANT', count: 1 },
+    ]);
+  });
+
+  it('count: group_by from merges Query.countBy across accounts of the same source', async () => {
+    const account2 = await store.createAccount({
+      source: 'gmail',
+      identifier: 'me2@example.com',
+    });
+    await store.commit({
+      account: accountId,
+      documents: [
+        doc('mail-1', {
+          type: 'email.message',
+          title: 'Mail 1',
+          metadata: { from: 'Roman Kaplun <rkaplun@zoolatech.com>' },
+        }),
+      ],
+      cursor: 6,
+    });
+    await store.commit({
+      account: account2.id,
+      documents: [
+        doc('mail-2', {
+          type: 'email.message',
+          title: 'Mail 2',
+          metadata: { from: 'Roman Kaplun <rkaplun@zoolatech.com>' },
+        }),
+        doc('mail-3', {
+          type: 'email.message',
+          title: 'Mail 3',
+          metadata: { from: 'Sebastian <s@x.se>' },
+        }),
+      ],
+      cursor: 1,
+    });
+
+    // Same '(none)' bucket from the beforeEach seed (all on accountId,
+    // source gmail) folds into the merge — merge sorts count DESC, key ASC.
+    const bySource = (await call('count', {
+      group_by: 'from',
+      source: 'gmail',
+    })) as Array<{ key: string; count: number }>;
+    expect(bySource).toEqual([
+      { key: '(none)', count: 3 },
+      { key: 'Roman Kaplun <rkaplun@zoolatech.com>', count: 2 },
+      { key: 'Sebastian <s@x.se>', count: 1 },
+    ]);
+  });
+
   it('get_related: children returns the thread messages', async () => {
     const thread = (await call('search', {
       type: 'email.thread',

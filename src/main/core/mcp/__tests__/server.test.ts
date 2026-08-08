@@ -69,6 +69,9 @@ function fakeQuery(): Query {
     async count() {
       return 0;
     },
+    async countBy() {
+      return [];
+    },
     async accounts() {
       return [];
     },

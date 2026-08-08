@@ -218,7 +218,22 @@ export interface Query {
     type?: string;
     account?: AccountId;
     includeArchived?: boolean;
+    fromDate?: string;
+    toDate?: string;
   }): Promise<number>;
+  /** Per-sender / per-label aggregation over documents.metadata JSON.
+   *  Bounds (`fromDate`/`toDate`) apply to the same
+   *  `COALESCE(created_at, ingested_at)` origin date as `search`/`count`.
+   *  A document missing the field groups under the literal key `'(none)'`.
+   *  Result is capped at 100 groups, biggest first (count DESC, key ASC). */
+  countBy(q: {
+    field: 'from' | 'label';
+    type?: string;
+    account?: AccountId;
+    fromDate?: string;
+    toDate?: string;
+    includeArchived?: boolean;
+  }): Promise<Array<{ key: string; count: number }>>;
   accounts(): Promise<Account[]>;
 }
 

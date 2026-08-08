@@ -649,11 +649,56 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         filters.push(`account_id = ?`);
         params.push(q.account);
       }
+      if (q.fromDate) {
+        filters.push(`COALESCE(created_at, ingested_at) >= ?`);
+        params.push(q.fromDate);
+      }
+      if (q.toDate) {
+        filters.push(`COALESCE(created_at, ingested_at) <= ?`);
+        params.push(q.toDate);
+      }
       const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
       const r = (
         await db.all(`SELECT COUNT(*) AS c FROM documents ${where}`, params)
       )[0] as { c: number };
       return r.c;
+    },
+    async countBy(q) {
+      const filters = [`1=1`];
+      const params: AppDbParam[] = [];
+      if (!q.includeArchived) filters.push(`d.archived_at IS NULL`);
+      if (q.type) {
+        filters.push(`d.type = ?`);
+        params.push(q.type);
+      }
+      if (q.account) {
+        filters.push(`d.account_id = ?`);
+        params.push(q.account);
+      }
+      if (q.fromDate) {
+        filters.push(`COALESCE(d.created_at, d.ingested_at) >= ?`);
+        params.push(q.fromDate);
+      }
+      if (q.toDate) {
+        filters.push(`COALESCE(d.created_at, d.ingested_at) <= ?`);
+        params.push(q.toDate);
+      }
+      const where = filters.join(' AND ');
+      const sql =
+        q.field === 'from'
+          ? `SELECT COALESCE(json_extract(d.metadata,'$.from'),'(none)') AS key,
+                    COUNT(*) AS count
+               FROM documents d WHERE ${where}
+               GROUP BY key ORDER BY count DESC, key LIMIT 100`
+          : `SELECT je.value AS key, COUNT(*) AS count
+               FROM documents d,
+                    json_each(COALESCE(json_extract(d.metadata,'$.labels'),'[]')) je
+               WHERE ${where}
+               GROUP BY je.value ORDER BY count DESC, key LIMIT 100`;
+      return (await db.all(sql, params)) as Array<{
+        key: string;
+        count: number;
+      }>;
     },
     async accounts() {
       const rows = (await db.all(
