@@ -10,6 +10,7 @@
  * prompts keep working.
  */
 import type { Account, AccountId, Document, Query } from '@shared/contracts';
+import { parseOperators } from './search-operators';
 
 export interface SearchArgs {
   query?: string;
@@ -36,14 +37,16 @@ export interface SearchHit {
 export const searchDescription = `Search everything ingested so far — emails, chat messages, files, notes, attachments — across all connected accounts.
 START by calling \`digital_memory_info\` to see which sources/accounts/types exist.
 
-Query syntax: bare terms are ANDed ("a b" = both must match); "quoted phrases" match exactly; \`-term\` or NOT excludes; UPPERCASE OR alternates (lowercase and/or/not are ordinary terms); \`term*\` prefix-matches; parentheses group. Example: \`("term sheet" OR investor*) -newsletter\`. Prefer OR-of-synonyms over long AND chains — every bare term narrows the result.
-Omit \`query\` for a recency listing ordered by the document's own date, newest first.
+Query syntax: bare terms are ANDed ("a b" = both must match); "quoted phrases" match exactly; \`-term\` or NOT excludes; UPPERCASE OR alternates (lowercase and/or/not are ordinary terms); \`term*\` prefix-matches; parentheses group. Terms are stemmed ("invoice" matches "invoices"). Example: \`("term sheet" OR investor*) -newsletter\`. Prefer OR-of-synonyms over long AND chains — every bare term narrows the result.
+
+Operators (gmail-style, inside the query string): \`from:\` \`to:\` \`participant:\` match people by case-insensitive substring on name or address — \`from:sebastian\`, \`from:@zoolatech.com\`, \`from:"Roman Kaplun"\`. \`label:inbox\`; \`has:attachment\`; \`filename:report\`; \`ext:pdf\`; \`in:gmail\` (alias \`source:\`) and \`type:email.thread\` mirror the JSON params; \`order:newest\`/\`order:relevance\` picks the sort (default: relevance with text, newest without). Repeat an operator to OR within it (\`from:a from:b\`); different operators AND. Example: \`from:@zoolatech.com has:attachment order:newest log*\`.
+Omit \`query\` (or pass operators only) for a recency listing ordered by the document's own date, newest first.
 
 Filters: \`source\` (account's source id, e.g. "gmail"), \`type\`, \`from_date\`/\`to_date\` (ISO, inclusive bounds on the document's origin \`created_at\`), \`limit\` (default 10, max 50). \`context_lines\` controls how many lines of surrounding context are included in the snippet (default 2, max 30) when a snippet has to be built client-side.
 
 Batch mode: pass \`queries\` (array of independent search arg objects) to run several searches in one round-trip. Cannot be combined with top-level filters.
 
-Every hit carries \`source_url\` — a deep link back to the original (a \`file://\` absolute path for local files, the app's web link for cloud sources; empty when the source has none). Give it to the user whenever they'd want to open the original.
+Every hit carries \`source_url\` — a deep link back to the original (a \`file://\` absolute path for local files, the app's web link for cloud sources; empty when the source has none). Every document has a url — when presenting documents to the user, link each one, not just the first; if url is empty or non-http, cite by title and date.
 
 Follow-up: fetch the full body with \`get(id)\` (or \`get(ids=[...])\`).`;
 
@@ -53,7 +56,7 @@ export const searchInputSchema = {
     query: {
       type: 'string',
       description:
-        'optional — full-text search. Terms AND by default; "phrases", -exclusions, UPPERCASE OR, prefix*, (grouping). Omit/empty for a recency listing (newest first by document date).',
+        'optional — full-text search. Terms AND by default (stemmed); "phrases", -exclusions, UPPERCASE OR, prefix*, (grouping); gmail-style operators from:/to:/participant:/label:/has:attachment/filename:/ext:/in:/type:/order:. Omit/empty for a recency listing (newest first by document date).',
     },
     source: {
       type: 'string',
@@ -180,26 +183,45 @@ export function makeSearchTool(query: Query) {
   async function runOne(args: SearchArgs): Promise<SearchHit[]> {
     const limit = resolveLimit(args.limit);
     const contextLines = resolveContextLines(args.context_lines);
+    const parsed = parseOperators(args.query ?? '');
+    const effSource = parsed.source ?? args.source;
+    const effType = parsed.type ?? args.type;
 
     const accounts: Account[] = await query.accounts();
     const sourceOf = new Map<string, string>(
       accounts.map((a) => [a.id as string, a.source]),
     );
     let accountIds: AccountId[] | undefined;
-    if (args.source) {
+    if (effSource) {
       accountIds = accounts
-        .filter((a) => a.source === args.source)
+        .filter((a) => a.source === effSource)
         .map((a) => a.id);
       if (accountIds.length === 0) return []; // no account for that source — no results
     }
 
-    const rawText = args.query?.trim() ? args.query : undefined;
+    const rawText = parsed.text.trim() ? parsed.text : undefined;
+    const people =
+      parsed.from.length || parsed.to.length || parsed.participant.length
+        ? {
+            from: parsed.from.length ? parsed.from : undefined,
+            to: parsed.to.length ? parsed.to : undefined,
+            participant: parsed.participant.length
+              ? parsed.participant
+              : undefined,
+          }
+        : undefined;
     const base = {
       text: rawText,
-      type: args.type,
+      type: effType,
       fromDate: args.from_date,
       toDate: args.to_date,
       limit,
+      people,
+      label: parsed.label.length ? parsed.label : undefined,
+      hasAttachment: parsed.hasAttachment || undefined,
+      filename: parsed.filename.length ? parsed.filename : undefined,
+      ext: parsed.ext.length ? parsed.ext : undefined,
+      orderBy: parsed.order,
     };
 
     let docs: Array<Document & { snippet?: string }>;
