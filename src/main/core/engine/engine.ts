@@ -62,34 +62,47 @@ const SOURCE_MAX_RETRIES = 5;
 const FEED_RETRY_MAX = 5;
 
 /** Iterate, but stop the moment the signal aborts — even while the source
- *  iterator is parked awaiting new data (the live feed blocks on commits). */
-async function* abortable<T>(
+ *  iterator is parked awaiting new data (the live feed blocks on commits).
+ *
+ *  Exported for `__tests__/abortable-leak.test.ts` only — the retention this
+ *  guards against is invisible through the public engine surface. */
+export async function* abortable<T>(
   iterable: AsyncIterable<T>,
   signal: AbortSignal,
 ): AsyncGenerator<T> {
   const it = iterable[Symbol.asyncIterator]();
-  let onAbort: (() => void) | null = null;
-  const aborted = new Promise<'aborted'>((resolve) => {
-    if (signal.aborted) resolve('aborted');
-    else {
-      onAbort = () => resolve('aborted');
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
-  });
   try {
     for (;;) {
-      const r = await Promise.race([it.next(), aborted]);
-      if (r === 'aborted' || r.done) return;
-      yield r.value;
+      if (signal.aborted) return;
+      // The wakeup is armed FRESH each iteration and dropped on every exit
+      // path. Racing one long-lived `aborted` promise instead — as this did
+      // until 2026-08-09 — leaks: Promise.race subscribes a new reaction to
+      // each input on every call, and a promise that never settles (the
+      // healthy case: nothing ever aborts) never drains its reaction list. So
+      // each iteration left a reaction pinning that iteration's settled race
+      // promise, whose result is the yielded value. store.feed() yields up to
+      // FEED_BATCH changes carrying whole Documents — markdown included — and
+      // the attach/project consumers below iterate forever, so every batch
+      // ever read stayed reachable: 3.09 GiB of a 4 GiB heap after ~25h, and
+      // a main-process OOM. Same arm-then-drop discipline as feed()'s next().
+      let fire!: () => void;
+      const woke = new Promise<'aborted'>((resolve) => {
+        fire = () => resolve('aborted');
+      });
+      signal.addEventListener('abort', fire, { once: true });
+      try {
+        const r = await Promise.race([it.next(), woke]);
+        if (r === 'aborted' || r.done) return;
+        yield r.value;
+      } finally {
+        // Also covers the suspended-at-yield case: a consumer that stops
+        // iterating runs this through the generator's return path, so a
+        // long-lived flaky source can never accrue listeners on the shared
+        // per-account signal (Node warns past 10).
+        signal.removeEventListener('abort', fire);
+      }
     }
   } finally {
-    // run()'s retry loop calls abortable() fresh on every iteration (once for
-    // src.pull, once inside reconcilePass) against the SAME per-account
-    // AbortSignal. Without removing the listener here, a long-lived flaky
-    // source that iterates indefinitely accrues one listener + one pending
-    // promise per iteration forever (Node warns past 10 listeners on a
-    // signal) — remove it the moment this generator is done with the signal.
-    if (onAbort) signal.removeEventListener('abort', onAbort);
     void it.return?.();
   }
 }
