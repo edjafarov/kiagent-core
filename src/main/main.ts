@@ -141,6 +141,16 @@ const bundledExtensionsDir = path.resolve(
   product.bundledExtensionsDir ?? 'bundled-extensions',
 );
 
+// The launchAtLogin pref maps to an OS login item (macOS/Windows). Packaged
+// builds only: in dev this would register the bare Electron binary to run at
+// every sign-in. Read-before-write so an unchanged pref never re-registers
+// (macOS 13+ surfaces a "runs in the background" notice on registration).
+function applyLoginItemSettings(launchAtLogin: boolean): void {
+  if (!app.isPackaged) return;
+  if (app.getLoginItemSettings().openAtLogin !== launchAtLogin)
+    app.setLoginItemSettings({ openAtLogin: launchAtLogin });
+}
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -982,7 +992,11 @@ app
     });
 
     // Non-feed slices (prefs, processing counters) refresh on their own clock.
-    p.prefs.onChange((prefs) => patchState({ prefs }));
+    p.prefs.onChange((prefs) => {
+      patchState({ prefs });
+      applyLoginItemSettings(prefs.launchAtLogin);
+    });
+    applyLoginItemSettings(p.prefs.get().launchAtLogin);
     setInterval(async () => {
       // ledgerCountsAll is now an async worker RPC — a transient read failure
       // (e.g. a dead/restarting DB worker) must not escape as an unhandled

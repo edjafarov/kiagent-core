@@ -43,6 +43,30 @@ describe('prefs.models', () => {
   });
 });
 
+describe('prefs.launchAtLogin', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-prefs-'));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('defaults to true on fresh installs', () => {
+    expect(DEFAULT_PREFS.launchAtLogin).toBe(true);
+    expect(createPrefs(dir).get().launchAtLogin).toBe(true);
+  });
+
+  it('treats an absent key as true', () => {
+    fs.writeFileSync(path.join(dir, 'prefs.json'), JSON.stringify({}));
+    expect(createPrefs(dir).get().launchAtLogin).toBe(true);
+  });
+
+  it('keeps an explicit false (users who turned it off stay off)', async () => {
+    const p = createPrefs(dir);
+    await p.patch({ launchAtLogin: false });
+    expect(createPrefs(dir).get().launchAtLogin).toBe(false);
+  });
+});
+
 describe('prefs.outbound', () => {
   let dir: string;
   beforeEach(() => {

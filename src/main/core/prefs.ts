@@ -6,7 +6,7 @@ import type { AppPrefs, OnboardingPrefs, Prefs } from '@shared/contracts';
 export const DEFAULT_PREFS: AppPrefs = {
   theme: 'system',
   logLevel: 'info',
-  launchAtLogin: false,
+  launchAtLogin: true,
   showInMenuBar: true,
   processing: { enabled: true, window: 'idle' },
   privacy: { browserHistory: false, sendDiagnostics: false },
@@ -30,7 +30,7 @@ function sanitize(raw: unknown): AppPrefs {
     theme: r.theme === 'light' || r.theme === 'dark' ? r.theme : 'system',
     logLevel:
       r.logLevel === 'warn' || r.logLevel === 'error' ? r.logLevel : 'info',
-    launchAtLogin: r.launchAtLogin === true,
+    launchAtLogin: r.launchAtLogin !== false,
     showInMenuBar: r.showInMenuBar !== false,
     processing: {
       enabled: r.processing?.enabled !== false,
