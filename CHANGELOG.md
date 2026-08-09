@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.72.1](https://github.com/edjafarov/kiagent-core/compare/v0.72.0...v0.72.1) (2026-08-09)
+
+### Bug Fixes
+
+* **build:** bump Electron 42.4.0 -> 42.8.1 — one keychain prompt max on macOS ([16597b8](https://github.com/edjafarov/kiagent-core/commit/16597b83f3609b211e2558f315a15fb199daeb28)), closes [electron#50419](https://github.com/edjafarov/electron/issues/50419)
+
 ## [0.72.0](https://github.com/edjafarov/kiagent-core/compare/v0.71.0...v0.72.0) (2026-08-09)
 
 ### Features
