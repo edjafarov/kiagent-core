@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.72.0](https://github.com/edjafarov/kiagent-core/compare/v0.71.0...v0.72.0) (2026-08-09)
+
+### Features
+
+* **main:** heap telemetry — periodic V8 sample, env-gated snapshot ([e4643c4](https://github.com/edjafarov/kiagent-core/commit/e4643c4d63607d62046cb7575826b66b42d3ea47))
+* **mcp:** count group_by from/label + date bounds via Query.countBy ([4b90369](https://github.com/edjafarov/kiagent-core/commit/4b9036985e1194845364e7b098b48e3d2c456023))
+* **mcp:** gmail-style operator parser for search queries ([8adca3a](https://github.com/edjafarov/kiagent-core/commit/8adca3a3820308079c710b812c680c183cc7dc0e))
+* **mcp:** query_sql url hint + canonical starter query in description ([a28df4d](https://github.com/edjafarov/kiagent-core/commit/a28df4d5ffa6bf69c3e22472528236949171859f))
+* **mcp:** search tool speaks gmail-style operators ([adf55cf](https://github.com/edjafarov/kiagent-core/commit/adf55cf1b05e94acde8159e7c0ff216400864278))
+* **prefs:** drop unimplemented privacy toggles — browser history and diagnostics rows removed with their prefs ([717a1f9](https://github.com/edjafarov/kiagent-core/commit/717a1f900011f0ba236c023254e44e79c7a02f42))
+* **prefs:** launch-at-login defaults on and now registers a real OS login item (packaged builds only) ([3f908e5](https://github.com/edjafarov/kiagent-core/commit/3f908e50686d250b4fbdb9837ebbbae42c705e02))
+* **store:** metadata filters (people/label/attachment/filename/ext) + orderBy on Query.search ([f458cbd](https://github.com/edjafarov/kiagent-core/commit/f458cbd7801f531ab4987e98755e8ae21dd0e36b))
+
+### Bug Fixes
+
+* **mcp:** ext: falls back to filename suffix, malformed operators stay literal, honest non-ASCII docs ([ef6c051](https://github.com/edjafarov/kiagent-core/commit/ef6c0517e269f4510881846a17391e2bdf9e8845))
+
 ## [0.71.0](https://github.com/edjafarov/kiagent-core/compare/v0.70.2...v0.71.0) (2026-08-07)
 
 ### Features
