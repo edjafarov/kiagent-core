@@ -516,7 +516,7 @@ function registerIpc(
       await p.store.maintenance.resetAll();
       // A factory reset is THE legitimate un-latch: the get-started checklist
       // must come back for the now-empty app. Configuration prefs (theme,
-      // processing, privacy) survive — only the onboarding latches reset.
+      // processing) survive — only the onboarding latches reset.
       await p.prefs.patch({
         onboarding: {
           sourceBackfilledAt: null,

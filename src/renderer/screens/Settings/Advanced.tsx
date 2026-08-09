@@ -83,22 +83,6 @@ export function Advanced(): React.ReactElement {
             checked={prefs.showInMenuBar}
             onChange={(v) => patch({ showInMenuBar: v })}
           />
-          <ToggleRow
-            label="Browser history"
-            desc="Allow the browser connector to read history for indexing."
-            checked={prefs.privacy.browserHistory}
-            onChange={(v) =>
-              patch({ privacy: { ...prefs.privacy, browserHistory: v } })
-            }
-          />
-          <ToggleRow
-            label="Send anonymous diagnostics"
-            desc="Crash reports and performance metrics. No corpus content."
-            checked={prefs.privacy.sendDiagnostics}
-            onChange={(v) =>
-              patch({ privacy: { ...prefs.privacy, sendDiagnostics: v } })
-            }
-          />
         </div>
 
         <div className="lbl-section">Outbound</div>

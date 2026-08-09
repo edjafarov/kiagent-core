@@ -842,7 +842,6 @@ export interface AppPrefs {
   launchAtLogin: boolean;
   showInMenuBar: boolean;
   processing: { enabled: boolean; window: 'always' | 'night' | 'idle' };
-  privacy: { browserHistory: boolean; sendDiagnostics: boolean };
   /** Local model management: `override` pins a catalog model id ('auto' =
    *  hardware tier), `autoInstall` lets deferred vision work trigger the
    *  download (a Settings Cancel sets it false). */

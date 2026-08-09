@@ -9,7 +9,6 @@ export const DEFAULT_PREFS: AppPrefs = {
   launchAtLogin: true,
   showInMenuBar: true,
   processing: { enabled: true, window: 'idle' },
-  privacy: { browserHistory: false, sendDiagnostics: false },
   models: { override: 'auto', autoInstall: true },
   outbound: { defaultMode: 'review' },
   onboarding: {
@@ -38,10 +37,6 @@ function sanitize(raw: unknown): AppPrefs {
         r.processing?.window === 'always' || r.processing?.window === 'night'
           ? r.processing.window
           : 'idle',
-    },
-    privacy: {
-      browserHistory: r.privacy?.browserHistory === true,
-      sendDiagnostics: r.privacy?.sendDiagnostics === true,
     },
     models: {
       override:
@@ -83,7 +78,6 @@ export function createPrefs(dir: string): Prefs {
         ...current,
         ...p,
         processing: { ...current.processing, ...(p.processing ?? {}) },
-        privacy: { ...current.privacy, ...(p.privacy ?? {}) },
         models: { ...current.models, ...(p.models ?? {}) },
         outbound: { ...current.outbound, ...(p.outbound ?? {}) },
         onboarding: { ...current.onboarding, ...(p.onboarding ?? {}) },

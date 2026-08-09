@@ -25,7 +25,6 @@ function fakePrefs(overrides?: {
     launchAtLogin: false,
     showInMenuBar: false,
     processing: { enabled: true, window: 'always' as const },
-    privacy: { browserHistory: false, sendDiagnostics: false },
     models: { override: 'auto', autoInstall: true, ...overrides?.models },
   };
 

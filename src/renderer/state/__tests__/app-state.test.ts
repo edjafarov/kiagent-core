@@ -26,7 +26,6 @@ function makeAppState(): AppState {
       launchAtLogin: false,
       showInMenuBar: false,
       processing: { enabled: false, window: 'always' },
-      privacy: { browserHistory: false, sendDiagnostics: false },
       models: { override: 'auto', autoInstall: false },
       outbound: { defaultMode: 'review' },
       onboarding: {
