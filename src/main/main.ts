@@ -868,6 +868,17 @@ app
     for (const [sourceId, refresher] of bundledRefreshers)
       p.refreshers.set(sourceId, refresher);
 
+    // Shared by the tray's "Open KIAgent" and MainProcessApi.ui.openWindow
+    // (extension escape hatches like remote-mcp's "Fix connection…").
+    const openMainWindow = (): void => {
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.focus();
+      } else {
+        void createWindow();
+      }
+    };
+
     // Built here (rather than at its historical spot right before
     // createWindow) so its TrayMenuController exists in time to hand to
     // buildMainApi below — bundled `unsafe.mainProcess` extensions can
@@ -876,14 +887,7 @@ app
     ({ tray, menu: trayMenu } = createTray(
       getAssetPath('icons', 'tray', 'trayTemplate.png'),
       {
-        openWindow: () => {
-          if (mainWindow) {
-            mainWindow.show();
-            mainWindow.focus();
-          } else {
-            void createWindow();
-          }
-        },
+        openWindow: openMainWindow,
         syncNow: () => {
           void (async () => {
             const jobs = await p.scheduler.jobs();
@@ -922,6 +926,7 @@ app
         app,
         dataDir,
         tray: trayMenu,
+        ui: { openWindow: openMainWindow },
         outbound: { service: outbound, routes: outboundRoutes },
       }),
       store: p.store,

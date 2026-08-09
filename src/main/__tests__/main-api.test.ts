@@ -144,6 +144,7 @@ describe('buildMainApi', () => {
       app,
       dataDir: '/fake/data',
       tray,
+      ui: { openWindow: () => {} },
       outbound: stubOutbound(true).outbound,
     });
 
@@ -186,6 +187,7 @@ describe('buildMainApi', () => {
       app,
       dataDir: '/fake',
       tray,
+      ui: { openWindow: () => {} },
       outbound: stubOutbound(true).outbound,
     });
 
@@ -196,6 +198,58 @@ describe('buildMainApi', () => {
 
     dispose();
     expect(disposed).toEqual([[item]]);
+  });
+
+  it('ui.addTrayMenuItems threads the position opts through to the tray', () => {
+    const { store } = stubStore();
+    const { mcp } = stubMcp();
+    const addArgs: unknown[][] = [];
+    const tray = {
+      addItems: (items: unknown, opts?: unknown) => {
+        addArgs.push([items, opts]);
+        return () => {};
+      },
+    };
+    const app = stubApp();
+
+    const mainApi = buildMainApi({
+      store,
+      mcp,
+      app,
+      dataDir: '/fake',
+      tray: tray as never,
+      ui: { openWindow: () => {} },
+      outbound: stubOutbound(true).outbound,
+    });
+
+    const item = { label: 'Status' };
+    mainApi.ui.addTrayMenuItems([item], { position: 'top' });
+    expect(addArgs).toEqual([[[item], { position: 'top' }]]);
+  });
+
+  it('ui.openWindow delegates to the injected dep', () => {
+    const { store } = stubStore();
+    const { mcp } = stubMcp();
+    const { tray } = stubTray();
+    const app = stubApp();
+    let opened = 0;
+
+    const mainApi = buildMainApi({
+      store,
+      mcp,
+      app,
+      dataDir: '/fake',
+      tray,
+      ui: {
+        openWindow: () => {
+          opened += 1;
+        },
+      },
+      outbound: stubOutbound(true).outbound,
+    });
+
+    mainApi.ui.openWindow();
+    expect(opened).toBe(1);
   });
 });
 
@@ -214,6 +268,7 @@ describe('buildMainApi outbound dep', () => {
       app,
       dataDir: '/fake',
       tray,
+      ui: { openWindow: () => {} },
       outbound,
     });
 
@@ -242,6 +297,7 @@ describe('buildMainApi outbound dep', () => {
       app,
       dataDir: '/fake',
       tray,
+      ui: { openWindow: () => {} },
       outbound,
     });
 

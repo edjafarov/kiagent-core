@@ -40,9 +40,18 @@ export interface MainProcessApi {
   paths: { userData: string; dataDir: string };
   app: { version: string; name: string };
   ui: {
-    /** Appends items to the app tray's context menu (spliced before the
-     *  quit item); returns a disposer that removes them and rebuilds. */
-    addTrayMenuItems(items: MenuItemConstructorOptions[]): () => void;
+    /** Splices items into the app tray's context menu — before the quit item
+     *  by default, or before the whole base template with
+     *  `{ position: 'top' }` (status-style rows). Returns a disposer that
+     *  removes them and rebuilds. */
+    addTrayMenuItems(
+      items: MenuItemConstructorOptions[],
+      opts?: { position?: 'top' | 'bottom' },
+    ): () => void;
+    /** Opens (or focuses) the main app window — the same behavior as the
+     *  tray's "Open KIAgent". For extension escape hatches that need the
+     *  user in the app (e.g. a stuck remote connection). */
+    openWindow(): void;
   };
   /** Outbound confirm-over-tunnel seam (spec phase 4). */
   outbound: {
@@ -66,6 +75,9 @@ export interface BuildMainApiDeps {
   app: Pick<App, 'getPath' | 'getVersion' | 'getName'>;
   dataDir: string;
   tray: TrayMenuController;
+  /** Window opener shared with the tray's "Open KIAgent" action —
+   *  show/focus if a window exists, create it otherwise. */
+  ui: { openWindow: () => void };
   outbound: {
     service: OutboundService;
     routes: {
@@ -102,7 +114,8 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
       name: deps.app.getName(),
     },
     ui: {
-      addTrayMenuItems: (items) => deps.tray.addItems(items),
+      addTrayMenuItems: (items, opts) => deps.tray.addItems(items, opts),
+      openWindow: () => deps.ui.openWindow(),
     },
     outbound: {
       setRemoteBaseUrl: (url) => deps.outbound.service.setRemoteBaseUrl(url),
