@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.73.0](https://github.com/edjafarov/kiagent-core/compare/v0.72.1...v0.73.0) (2026-08-09)
+
+### Features
+
+* **main-api:** ui.openWindow + tray position pass-through for extension status rows ([ee07fc8](https://github.com/edjafarov/kiagent-core/commit/ee07fc8248739537e08c8171652645af25525dda))
+* **tray:** addItems position option — top groups render before the base template ([f1a2c67](https://github.com/edjafarov/kiagent-core/commit/f1a2c67a67397cfbd9317598385abc5b63907b7f))
+
 ## [0.72.1](https://github.com/edjafarov/kiagent-core/compare/v0.72.0...v0.72.1) (2026-08-09)
 
 ### Bug Fixes
