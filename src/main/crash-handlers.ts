@@ -76,6 +76,36 @@ export function describeError(err: unknown): Record<string, unknown> {
 }
 
 /**
+ * Appends one record to the sink's own JSONL **synchronously**. Shared with
+ * `heap-watch`, which needs the same guarantee for the opposite reason: the
+ * sink's async append does not flush when the process is about to be killed
+ * from outside JS (an OOM abort runs no further JS at all).
+ *
+ * Never throws — a failure to log must not become the thing that takes the
+ * process down.
+ */
+export function appendRecordSync(
+  logDir: string,
+  record: {
+    ts: string;
+    level: LogLevel;
+    scope: string;
+    msg: string;
+    fields?: Record<string, unknown>;
+  },
+): void {
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(
+      path.join(logDir, CRASH_LOG_FILE),
+      `${JSON.stringify(record)}\n`,
+    );
+  } catch {
+    // Disk full, permissions, a read-only volume — nothing useful left to do.
+  }
+}
+
+/**
  * Writes one crash record durably, then tells the sink. Never throws — a
  * failure to log must not become the thing that takes the process down.
  */
@@ -86,22 +116,13 @@ export function recordCrash(
   err: unknown,
 ): void {
   const fields = describeError(err);
-  const record = {
+  appendRecordSync(deps.logDir, {
     ts: new Date().toISOString(),
-    level: 'error' as const,
+    level: 'error',
     scope,
     msg,
     fields,
-  };
-  try {
-    fs.mkdirSync(deps.logDir, { recursive: true });
-    fs.appendFileSync(
-      path.join(deps.logDir, CRASH_LOG_FILE),
-      `${JSON.stringify(record)}\n`,
-    );
-  } catch {
-    // Disk full, permissions, a read-only volume — nothing useful left to do.
-  }
+  });
   try {
     deps.sink()?.log(scope, 'error', msg, fields);
   } catch {

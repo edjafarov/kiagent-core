@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import v8 from 'v8';
 
 import {
   BrowserWindow,
@@ -35,6 +36,7 @@ import {
   type CrashDeps,
 } from './crash-handlers';
 import type { ConnectBroker } from './auth/connect-broker';
+import { startHeapWatch } from './heap-watch';
 import {
   backgroundLaneOpen,
   backgroundLaneState,
@@ -122,6 +124,21 @@ installCrashHandlers(crashDeps);
 // Native crashes (renderer/GPU/utility) never reach a JS handler. Minidumps
 // stay on the machine — nothing is uploaded — and land in app.getPath('crashDumps').
 crashReporter.start({ uploadToServer: false });
+// A V8 out-of-memory abort leaves no JS trace at all — only Crashpad
+// annotations, after the fact. The periodic sample is what turns "it died
+// overnight" into a growth curve. Snapshots stay behind an env gate: the write
+// freezes the main thread and the file is heap-sized.
+startHeapWatch({
+  logDir: crashDeps.logDir,
+  dataDir: path.join(app.getPath('userData'), 'data'),
+  sink: () => platform?.logSink ?? null,
+  getHeapStatistics: () => v8.getHeapStatistics(),
+  rss: () => process.memoryUsage.rss(),
+  writeHeapSnapshot: (file) => {
+    v8.writeHeapSnapshot(file);
+  },
+  snapshotEnabled: process.env.KIA_HEAP_SNAPSHOT === '1',
+});
 
 // Product identity (spec 2026-07-07 §3.1.4): OSS ships no product.json and
 // runs on DEFAULT_PRODUCT; a product build drops one into resources. Loaded
