@@ -77,4 +77,86 @@ describe('createTrayMenuController', () => {
     expect(labels).not.toContain('A item');
     expect(labels).toContain('B item');
   });
+
+  it('renders a position:top group before the entire base template', () => {
+    const rebuilds: { label?: string; type?: string }[][] = [];
+    const controller = createTrayMenuController(base(), (t) =>
+      rebuilds.push(t as { label?: string; type?: string }[]),
+    );
+    rebuilds.length = 0;
+
+    controller.addItems(
+      [{ label: 'Status row' }, { type: 'separator' as const }],
+      { position: 'top' },
+    );
+
+    expect(rebuilds).toHaveLength(1);
+    const labels = rebuilds[0].map((i) => i.label ?? i.type);
+    expect(labels).toEqual([
+      'Status row',
+      'separator',
+      'Open KIAgent',
+      'Sync now',
+      'separator',
+      'Quit KIAgent',
+    ]);
+  });
+
+  it('mixes top and bottom groups: top before base, bottom before Quit', () => {
+    const rebuilds: { label?: string; type?: string }[][] = [];
+    const controller = createTrayMenuController(base(), (t) =>
+      rebuilds.push(t as { label?: string; type?: string }[]),
+    );
+
+    controller.addItems([{ label: 'Bottom item' }]);
+    controller.addItems([{ label: 'Top item' }], { position: 'top' });
+
+    const labels = rebuilds[rebuilds.length - 1].map((i) => i.label ?? i.type);
+    expect(labels).toEqual([
+      'Top item',
+      'Open KIAgent',
+      'Sync now',
+      'separator',
+      'Bottom item',
+      'Quit KIAgent',
+    ]);
+  });
+
+  it('disposing a top group removes it and leaves other groups intact', () => {
+    const rebuilds: { label?: string; type?: string }[][] = [];
+    const controller = createTrayMenuController(base(), (t) =>
+      rebuilds.push(t as { label?: string; type?: string }[]),
+    );
+
+    const disposeTop = controller.addItems([{ label: 'Top item' }], {
+      position: 'top',
+    });
+    controller.addItems([{ label: 'Bottom item' }]);
+    rebuilds.length = 0;
+
+    disposeTop();
+
+    const labels = rebuilds[rebuilds.length - 1].map((i) => i.label ?? i.type);
+    expect(labels).not.toContain('Top item');
+    expect(labels).toContain('Bottom item');
+    expect(labels[0]).toBe('Open KIAgent');
+  });
+
+  it('an explicit position:bottom behaves exactly like the default', () => {
+    const rebuilds: { label?: string; type?: string }[][] = [];
+    const controller = createTrayMenuController(base(), (t) =>
+      rebuilds.push(t as { label?: string; type?: string }[]),
+    );
+    rebuilds.length = 0;
+
+    controller.addItems([{ label: 'Extension item' }], { position: 'bottom' });
+
+    const labels = rebuilds[0].map((i) => i.label ?? i.type);
+    expect(labels.indexOf('Extension item')).toBeGreaterThan(
+      labels.indexOf('Sync now'),
+    );
+    expect(labels.indexOf('Extension item')).toBeLessThan(
+      labels.indexOf('Quit KIAgent'),
+    );
+  });
 });
