@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.73.1](https://github.com/edjafarov/kiagent-core/compare/v0.73.0...v0.73.1) (2026-08-09)
+
+### Bug Fixes
+
+* **engine:** stop abortable() pinning every batch it yields — main-process OOM ([7e0cdac](https://github.com/edjafarov/kiagent-core/commit/7e0cdaca6ff0e35daf514957a9c64c9b13e94cbd))
+
 ## [0.73.0](https://github.com/edjafarov/kiagent-core/compare/v0.72.1...v0.73.0) (2026-08-09)
 
 ### Features
