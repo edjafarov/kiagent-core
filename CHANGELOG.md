@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.73.2](https://github.com/edjafarov/kiagent-core/compare/v0.73.1...v0.73.2) (2026-08-11)
+
+### Bug Fixes
+
+* **imap:** heartbeat batch so a healthy reconnect clears a stale error ([7012f14](https://github.com/edjafarov/kiagent-core/commit/7012f14b58139e0542dc12d21d8be1c6bde75bda))
+
 ## [0.73.1](https://github.com/edjafarov/kiagent-core/compare/v0.73.0...v0.73.1) (2026-08-09)
 
 ### Bug Fixes
