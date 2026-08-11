@@ -251,6 +251,23 @@ export function createImapSource(
           }
         }
 
+        // Heartbeat: one empty batch per session, right after the catch-up
+        // pass. This is the ONLY commit a quiet account ever produces — no
+        // new mail means syncMailboxOnce yields nothing, reconcile() with no
+        // deletions commits nothing, and the live loop below never returns,
+        // so the engine's end-of-pull commit is unreachable by design.
+        // Without it the engine cannot tell a healthy connection from a dead
+        // one: a stale `error` (and the Sources error card, which is keyed on
+        // the committed status) survives every reconnect AND every manual
+        // Retry until mail happens to arrive, and the engine's retry counter
+        // — reset only on a batch commit — keeps climbing across socket
+        // deaths HOURS apart until it hits SOURCE_MAX_RETRIES and parks the
+        // account. Carries the cursor forward untouched, with no
+        // estimateTotal, so it reads as "connected and caught up" and never
+        // as sync progress.
+        if (session.signal.aborted) return;
+        yield { phase: 'live', items: [], cursor: cur };
+
         // Live phase: poll each mailbox for new mail until the engine aborts
         // this session (see LIVE_POLL_INTERVAL_MS doc above for why poll
         // instead of imapflow idle()).

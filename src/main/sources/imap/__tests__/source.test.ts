@@ -407,12 +407,12 @@ describe('createImapSource — pull', () => {
     expect(state.closed).toBe(true);
   });
 
-  it('a returning account with nothing new produces no batches during the first pass', async () => {
+  it('a returning account with nothing new fetches no mail, but still yields the heartbeat', async () => {
     const messages = new Map<number, string>([
       [1, rfc822(1, 'one')],
       [2, rfc822(2, 'two')],
     ]);
-    const { client } = makeFakeClient([
+    const { client, state } = makeFakeClient([
       { path: 'INBOX', uidValidity: 1, messages },
     ]);
     let pollCount = 0;
@@ -430,8 +430,44 @@ describe('createImapSource — pull', () => {
     const session = makeSession(CONFIG, { signal: controller.signal });
 
     const batches = await collect(source.pull(session, cursor));
-    expect(batches).toEqual([]);
+    expect(batches.every((b) => b.items.length === 0)).toBe(true);
+    expect(state.fetchCalls).toBe(0);
     expect(pollCount).toBe(1);
+  });
+
+  it('yields exactly one empty heartbeat batch once the catch-up pass is done', async () => {
+    // A quiet account yields nothing else — no new mail means no batch, and
+    // the live loop never returns — so this heartbeat is the ONLY thing that
+    // lets the engine commit for a healthy connection. Without it a stale
+    // `error` survives every reconnect and every manual Retry (the Sources
+    // error card is keyed on the committed status), and the engine's retry
+    // counter never resets, so socket deaths hours apart still accumulate to
+    // SOURCE_MAX_RETRIES and park the account.
+    const messages = new Map<number, string>([[1, rfc822(1, 'one')]]);
+    const { client } = makeFakeClient([
+      { path: 'INBOX', uidValidity: 1, messages },
+    ]);
+    const controller = new AbortController();
+    const source = createImapSource({
+      connect: async () => client,
+      sleep: async () => controller.abort(),
+    });
+    const cursor: ImapCursor = {
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 1 } },
+    };
+    const session = makeSession(CONFIG, { signal: controller.signal });
+
+    const batches = await collect(source.pull(session, cursor));
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0].phase).toBe('live');
+    expect(batches[0].items).toEqual([]);
+    expect(batches[0].deletions ?? []).toEqual([]);
+    // Carries the cursor forward untouched — a heartbeat must never look like
+    // sync progress, and estimateTotal stays absent so the progress bar (and
+    // the engine's progressDone accumulator) is left alone.
+    expect(batches[0].cursor).toEqual(cursor);
+    expect(batches[0].estimateTotal).toBeUndefined();
   });
 
   it('picks up new mail that appears between live-phase polls', async () => {
@@ -462,10 +498,12 @@ describe('createImapSource — pull', () => {
     const session = makeSession(CONFIG, { signal: controller.signal });
 
     const batches = await collect(source.pull(session, cursor));
-    expect(batches).toHaveLength(1);
-    expect(batches[0].phase).toBe('live');
-    expect(batches[0].items.map((i) => i.uid)).toEqual([3]);
-    expect(batches[0].cursor.mailboxes.INBOX).toEqual({
+    // [0] is the post-catch-up heartbeat; the new mail follows it.
+    expect(batches).toHaveLength(2);
+    expect(batches[0].items).toEqual([]);
+    expect(batches[1].phase).toBe('live');
+    expect(batches[1].items.map((i) => i.uid)).toEqual([3]);
+    expect(batches[1].cursor.mailboxes.INBOX).toEqual({
       uidValidity: '1',
       lastUid: 3,
     });
@@ -492,7 +530,7 @@ describe('createImapSource — pull', () => {
     const session = makeSession(CONFIG, { signal: controller.signal });
 
     const batches = await collect(source.pull(session, cursor));
-    expect(batches).toHaveLength(2);
+    expect(batches).toHaveLength(3); // archive, resync, then the heartbeat
 
     // First: the old-UIDVALIDITY generation is archived by the pull itself
     // (issue #26: reconcile must keep no legitimate mass-archive case) —
@@ -517,6 +555,15 @@ describe('createImapSource — pull', () => {
     expect(batches[1].phase).toBe('backfill');
     expect(batches[1].items.map((i) => i.uid)).toEqual([1, 2]); // refetched from 0, not from stale lastUid=50
     expect(batches[1].cursor.mailboxes.INBOX).toEqual({
+      uidValidity: '999',
+      lastUid: 2,
+    });
+
+    // Finally the heartbeat, on the post-rollover cursor — the resync it
+    // follows is a completed catch-up like any other.
+    expect(batches[2].phase).toBe('live');
+    expect(batches[2].items).toEqual([]);
+    expect(batches[2].cursor.mailboxes.INBOX).toEqual({
       uidValidity: '999',
       lastUid: 2,
     });
