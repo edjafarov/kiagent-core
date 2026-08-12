@@ -96,6 +96,19 @@ describe('App shell', () => {
     expect(screen.queryByTestId('settings-modal')).not.toBeInTheDocument();
   });
 
+  // The modal is mocked, but its DOM *position* is App.tsx's call, not the
+  // mock's — so this asserts the real contract: everything the modal mounts
+  // must sit inside `.ac`, whose `.ac *` rule is the only source of
+  // `box-sizing: border-box` (web-ui/components.css — no global fallback).
+  it('mounts the settings modal inside the .ac scope', () => {
+    const { container } = render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    const scope = container.querySelector('.ac');
+    expect(scope).not.toBeNull();
+    expect(scope!.contains(screen.getByTestId('settings-modal'))).toBe(true);
+  });
+
   it('shows no sidebar while signed out', () => {
     mockState = { ...signedInState(), identity: null } as unknown as AppState;
     render(<App />);

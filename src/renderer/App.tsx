@@ -119,8 +119,17 @@ export default function App(): React.ReactElement {
             {screen}
           </React.Fragment>
         </main>
+        {/* Inside `.ac`, not a sibling of it: `box-sizing: border-box` is
+            scoped to `.ac *` (web-ui/components.css) with no global
+            fallback, so a modal mounted outside this div would render its
+            .input/.btn children as content-box. The backdrop is
+            `position: fixed` and no ancestor here creates a containing
+            block (no transform/filter/contain), so it still covers the
+            whole viewport, sidebar included. */}
+        {settingsOpen && (
+          <SettingsModal onClose={() => setSettingsOpen(false)} />
+        )}
       </div>
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </ViewContext.Provider>
   );
 }
