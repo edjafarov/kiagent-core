@@ -1,4 +1,6 @@
 import '@testing-library/jest-dom';
+import fs from 'fs';
+import path from 'path';
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { AppState } from '@shared/contracts';
@@ -73,6 +75,48 @@ describe('Sidebar nav', () => {
     expect(
       screen.getByRole('button', { name: 'Connection online' }),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * The MCP dot's on/off COLOURS live under a `.kg-tab` ancestor in
+ * components.css, and the sidebar renders no `.kg-tab` — so the markup below
+ * is only visible if Sidebar.css re-scopes those backgrounds. jsdom cannot
+ * compute that (CSS imports are stubbed by identity-obj-proxy), so the pairing
+ * is asserted in two halves: the class the markup emits, and the presence of a
+ * sidebar-scoped background rule for it. Same shape as the ipc-handler
+ * coverage test — scrape the source for what the compiler cannot see.
+ */
+describe('Sidebar MCP dot', () => {
+  it('emits the on/off state class the stylesheet keys off', () => {
+    renderSidebar();
+    expect(
+      document.body.querySelector('.kg-sb-item .tab-dot.on'),
+    ).not.toBeNull();
+  });
+
+  it('falls back to the off class when the local server is down', () => {
+    mockState = stateWith({
+      mcp: { port: null },
+    } as unknown as Partial<AppState>);
+    renderSidebar();
+    expect(
+      document.body.querySelector('.kg-sb-item .tab-dot.off'),
+    ).not.toBeNull();
+  });
+
+  it('Sidebar.css gives both dot states a sidebar-scoped background', () => {
+    const css = fs.readFileSync(
+      path.resolve(__dirname, '../Sidebar.css'),
+      'utf8',
+    );
+    for (const state of ['on', 'off']) {
+      expect(css).toMatch(
+        new RegExp(
+          `\\.kg-s[\\w.-]*\\s+\\.tab-dot\\.${state}\\b[^{]*\\{[^}]*background\\s*:`,
+        ),
+      );
+    }
   });
 });
 

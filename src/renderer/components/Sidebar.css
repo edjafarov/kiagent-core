@@ -67,6 +67,11 @@ button.kg-sb-item {
   width: 6px; height: 6px; border-radius: 50%;
   margin-left: auto;
 }
+/* The on/off colours live under a `.kg-tab` ancestor in components.css, which
+   the sidebar has no instance of — re-scope them here or the dot is a 6px
+   transparent circle (spec §4 requires a visible MCP dot). */
+.kg-sb-item .tab-dot.on  { background: var(--live-solid); }
+.kg-sb-item .tab-dot.off { background: var(--paused-solid); }
 .kg-sidebar.collapsed .kg-sb-item .tab-dot {
   position: absolute; top: 4px; right: 8px; margin: 0;
 }
