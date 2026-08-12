@@ -28,6 +28,16 @@
   --sidebar-item-active-bg: #ece7fb;
   --sidebar-item-active:    #5b21b6;
 
+  /* ── Brand violet ──────────────────────────────────────────────────
+     Surfaces that stay violet no matter what the shell palette does:
+     the SignIn gate's brand panel and the web hero panels. These used
+     to borrow --bg-sidebar / --bg-rail, which silently repainted them
+     when the shell went neutral — keep them on their own tokens. */
+  --brand-violet:      #7c3aed;
+  --brand-violet-deep: #4c1d95;
+  --brand-violet-dark: #2e1065;
+  --text-on-brand:     #ede9fe;
+
   /* ── Foundation: text ──────────────────────────────────────────── */
   --text-primary:    #0f172a;
   --text-secondary:  #64748b;

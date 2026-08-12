@@ -12,8 +12,8 @@
 .si-brand {
   width: 42%;
   min-width: 240px;
-  background: var(--bg-sidebar);
-  color: var(--text-on-sidebar);
+  background: var(--brand-violet-deep);
+  color: var(--text-on-brand);
   padding: 32px 28px;
   display: flex;
   flex-direction: column;

@@ -1,6 +1,6 @@
 /* Hero shell — left brand panel + right content pane.
    Used by web /login, /signed-out, hero help; server-rendered MCP consent and
-   verify pages. The brand panel uses the app's violet (sidebar → rail gradient
+   verify pages. The brand panel uses the brand violet (deep → dark gradient
    + faint design-canvas grid) so sign-in feels like the product. */
 
 .sh-hero {
@@ -14,8 +14,8 @@
 .sh-hero__brand {
   width: 42%;
   min-width: 260px;
-  background: linear-gradient(160deg, var(--bg-sidebar) 0%, var(--bg-rail) 100%);
-  color: var(--text-on-sidebar);
+  background: linear-gradient(160deg, var(--brand-violet-deep) 0%, var(--brand-violet-dark) 100%);
+  color: var(--text-on-brand);
   padding: 32px 30px;
   display: flex;
   flex-direction: column;
