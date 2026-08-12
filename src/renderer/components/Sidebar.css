@@ -1,0 +1,174 @@
+/* App sidebar — full-height neutral shell (spec §4). Traffic lights float
+   over .kg-sb-head on macOS (main.ts trafficLightPosition), so the header
+   is taller there (.mac) and is the window drag region. */
+
+.kg-sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--sidebar-border);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.kg-sidebar.collapsed { width: 56px; }
+
+.kg-sb-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 12px 10px 12px 14px;
+  -webkit-app-region: drag;
+}
+.kg-sidebar.mac .kg-sb-head { padding-top: 40px; }
+.kg-sb-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.kg-sb-brand svg { color: var(--accent-solid); }
+.kg-sb-collapse {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px 4px;
+  -webkit-app-region: no-drag;
+}
+.kg-sb-collapse:hover { color: var(--text-secondary); }
+.kg-sidebar.collapsed .kg-sb-head { padding-left: 0; justify-content: center; }
+.kg-sidebar.collapsed .kg-sb-collapse { margin-left: 0; }
+.kg-sidebar.collapsed .kg-sb-collapse svg { transform: rotate(180deg); }
+
+.kg-sb-nav {
+  flex: 1;
+  min-height: 0;
+  padding: 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+button.kg-sb-item {
+  border: none;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  width: 100%;
+  position: relative;
+}
+.kg-sidebar.collapsed .kg-sb-item { justify-content: center; padding: 0; }
+.kg-sb-item .tab-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  margin-left: auto;
+}
+.kg-sidebar.collapsed .kg-sb-item .tab-dot {
+  position: absolute; top: 4px; right: 8px; margin: 0;
+}
+
+.kg-sb-foot {
+  padding: 10px 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kg-sb-divider { border-top: 1px solid var(--sidebar-border); margin: 0 4px 4px; }
+.kg-sb-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: left;
+}
+.kg-sb-status .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--live-solid);
+  flex-shrink: 0;
+}
+button.kg-sb-status.error { cursor: pointer; color: var(--error-solid); }
+.kg-sb-status.error .dot { background: var(--error-solid); }
+.kg-sidebar.collapsed .kg-sb-status { justify-content: center; padding: 4px 0; }
+
+/* Account chip + popover */
+.kg-acct { position: relative; }
+.kg-acct-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--sidebar-border);
+  background: var(--bg-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.kg-acct-chip:hover { border-color: var(--border-strong); }
+.kg-acct-avatar {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent-solid);
+  color: var(--accent-contrast);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.kg-acct-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.kg-acct-who { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
+.kg-acct-name {
+  font-size: 12px; font-weight: 600; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kg-acct-mail {
+  font-size: 10px; color: var(--text-tertiary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kg-sidebar.collapsed .kg-acct-chip {
+  justify-content: center;
+  border: none;
+  background: transparent;
+  padding: 4px 0;
+}
+.kg-acct-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  width: 190px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  z-index: 40;
+}
+.kg-acct-menu-head { padding: 10px 12px 8px; border-bottom: 1px solid var(--border-subtle); }
+.kg-acct-menu-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.kg-acct-menu-mail { font-size: 11px; color: var(--text-secondary); }
+.kg-acct-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.kg-acct-menu-item:hover { background: var(--accent-subtle); }
+.kg-acct-menu-item svg { color: var(--text-secondary); }
+.kg-acct-menu-item.destructive,
+.kg-acct-menu-item.destructive svg { color: var(--error-solid); }
+.kg-acct-menu-sep { border-top: 1px solid var(--border-subtle); }

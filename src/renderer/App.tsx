@@ -65,6 +65,9 @@ export default function App(): React.ReactElement {
       params: resolved?.params ?? {},
       navigate,
       back,
+      // Stopgap while Settings is still a routed view: the sidebar shell
+      // (Task 4) replaces this with the real Settings-modal opener.
+      openSettings: () => navigate('settings'),
     }),
     [resolved, navigate, back],
   );

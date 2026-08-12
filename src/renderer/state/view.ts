@@ -25,6 +25,8 @@ export interface ViewContextValue {
   params: ViewParams;
   navigate: (to: View, params?: ViewParams) => void;
   back: () => void;
+  /** Opens the Settings modal (spec §6). Settings is NOT a routed view. */
+  openSettings: () => void;
 }
 
 export const ViewContext = createContext<ViewContextValue>({
@@ -32,6 +34,7 @@ export const ViewContext = createContext<ViewContextValue>({
   params: {},
   navigate: () => {},
   back: () => {},
+  openSettings: () => {},
 });
 
 export function useView(): ViewContextValue {
