@@ -38,9 +38,22 @@ describe('SettingsModal', () => {
   it('closes on backdrop click but not on dialog click', () => {
     const onClose = jest.fn();
     render(<SettingsModal onClose={onClose} />);
-    fireEvent.click(screen.getByTestId('settings-backdrop'));
+    const backdrop = screen.getByTestId('settings-backdrop');
+    fireEvent.mouseDown(backdrop);
+    fireEvent.click(backdrop);
     expect(onClose).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('dialog', { name: 'Settings' }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // A text-selection drag that starts inside the dialog and is released over
+  // the backdrop dispatches its `click` on the backdrop (the nearest common
+  // ancestor of the two targets) — it must not dismiss the modal.
+  it('stays open when a drag started inside the dialog ends on the backdrop', () => {
+    const onClose = jest.fn();
+    render(<SettingsModal onClose={onClose} />);
+    fireEvent.mouseDown(screen.getByTestId('settings-body'));
+    fireEvent.click(screen.getByTestId('settings-backdrop'));
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
