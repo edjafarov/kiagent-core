@@ -5,14 +5,12 @@ import { Connection } from '@renderer/screens/Connection';
 import { Logs } from '@renderer/screens/Logs';
 import { Outbox } from '@renderer/screens/Outbox';
 import { Marketplace } from '@renderer/screens/Marketplace';
-import { Settings } from '@renderer/screens/Settings';
 
 export interface ScreenFactory {
   factory: (
     params: ViewParams,
     navigate: (to: View, params?: ViewParams) => void,
   ) => React.ReactElement;
-  usesTopBar: boolean;
 }
 
 export type ScreenDefinitions = Partial<Record<View, ScreenFactory>>;
@@ -23,7 +21,6 @@ export interface ScreenRegistry {
     params: ViewParams,
     navigate: (to: View, params?: ViewParams) => void,
   ): React.ReactElement | null;
-  usesTopBar(view: View): boolean;
 }
 
 export function getDefaultScreens(): ScreenDefinitions {
@@ -32,15 +29,13 @@ export function getDefaultScreens(): ScreenDefinitions {
       factory: (_params, navigate) => (
         <Sources onOpenConnection={() => navigate('connection')} />
       ),
-      usesTopBar: true,
     },
-    connection: { factory: () => <Connection />, usesTopBar: true },
-    // Logs draws its own dedicated top bar (back button, wordmark, live
-    // pill) instead of the shared <TopBar/> — see ui-inventory.md §2.5.
-    logs: { factory: () => <Logs />, usesTopBar: false },
-    outbox: { factory: () => <Outbox />, usesTopBar: true },
-    marketplace: { factory: () => <Marketplace />, usesTopBar: true },
-    settings: { factory: () => <Settings />, usesTopBar: true },
+    connection: { factory: () => <Connection /> },
+    // Logs draws its own header row inside the main pane; the sidebar
+    // stays visible (it has no nav entry — entered programmatically).
+    logs: { factory: () => <Logs /> },
+    outbox: { factory: () => <Outbox /> },
+    marketplace: { factory: () => <Marketplace /> },
   };
 }
 
@@ -52,9 +47,6 @@ export function createScreenRegistry(
       const screen = screens[view];
       if (!screen) return null;
       return screen.factory(params, navigate);
-    },
-    usesTopBar(view) {
-      return screens[view]?.usesTopBar ?? false;
     },
   };
 }

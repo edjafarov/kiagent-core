@@ -1,19 +1,11 @@
 import { createContext, useContext } from 'react';
 
 /**
- * Routed screens. Deliberately smaller than the legacy `View` union
- * (no `sources:detail` / `settings:account|storage|...` sub-routes): the
- * Sources and Settings screens are visual-skeleton stubs for now and own
- * their own in-screen navigation (e.g. Settings' sidebar, Sources' inline
- * add-source panel) rather than pushing new top-level views.
+ * Routed screens. Deliberately small: Sources and Settings own their own
+ * in-screen navigation. Settings is NOT routed at all — it is a modal
+ * (ViewContextValue.openSettings), so closing it never disturbs the view.
  */
-export type View =
-  | 'sources'
-  | 'connection'
-  | 'logs'
-  | 'outbox'
-  | 'marketplace'
-  | 'settings';
+export type View = 'sources' | 'connection' | 'logs' | 'outbox' | 'marketplace';
 
 export interface ViewParams {
   accountId?: string;

@@ -168,7 +168,7 @@ export function Logs(): React.ReactElement {
   }, []);
 
   const { live, totalDocs } = useAppState(selectLogsTopBarSlice);
-  const { back, navigate } = useView();
+  const { back, openSettings } = useView();
 
   return (
     <div className="logs-shell">
@@ -192,7 +192,7 @@ export function Logs(): React.ReactElement {
           type="button"
           className="btn ghost sm"
           aria-label="Settings"
-          onClick={() => navigate('settings')}
+          onClick={openSettings}
         >
           <Icon name="settings" size={14} />
         </button>

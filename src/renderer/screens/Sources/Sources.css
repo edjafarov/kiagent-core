@@ -1,5 +1,5 @@
 /* Sources screens (list + detail). .dash-shell / .dash-topbar / .row-flex
-   live in ../../App.css (shared by every <TopBar/> screen — see that file's
+   live in ../../App.css (shared by every routed screen — see that file's
    header comment for why). Everything below is specific to this directory. */
 
 .dash-body {

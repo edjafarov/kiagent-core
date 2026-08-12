@@ -232,7 +232,7 @@
 .stat-label { font-size: 0.8rem; color: var(--text-secondary); }
 .stat-value { font-size: 1.4rem; font-weight: 600; }
 
-/* ── Nav tabs (TopBar's Sources / MCP) ────────────────────────── */
+/* ── Nav tabs (legacy top-bar Sources / MCP tabs) ──────────────── */
 .kg-tab {
   display: inline-flex; align-items: center; gap: 6px;
   height: 26px; padding: 0 10px;

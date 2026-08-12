@@ -14,7 +14,8 @@ import {
   type ViewParams,
 } from '@renderer/state/view';
 import { TitleBar } from '@renderer/components/TitleBar';
-import { TopBar } from '@renderer/components/TopBar';
+import { Sidebar } from '@renderer/components/Sidebar';
+import { SettingsModal } from '@renderer/components/SettingsModal';
 import { BootSplash } from '@renderer/components/BootSplash';
 import { SignIn } from '@renderer/screens/SignIn';
 import { IconSprite } from '@shared/web-ui/icon-sprite';
@@ -25,12 +26,15 @@ import {
 
 const screenRegistry = createScreenRegistry(getDefaultScreens());
 
-const SHELL_STYLE: React.CSSProperties = {
+const GATE_STYLE: React.CSSProperties = {
   flex: 1,
   display: 'flex',
   flexDirection: 'column',
   minHeight: 0,
 };
+
+const isWin =
+  typeof navigator !== 'undefined' && /Win/i.test(navigator.platform);
 
 export default function App(): React.ReactElement {
   // Raw store access (not the `useAppState` selector hook): the gate below
@@ -42,6 +46,9 @@ export default function App(): React.ReactElement {
   // BrowserWindow and no back/forward browser chrome to sync with.
   const [resolved, setResolved] = useState<ResolvedView | null>(null);
   const historyRef = useRef<ResolvedView[]>([]);
+  // Settings is a modal, not a view (spec §6): opening it never touches
+  // `resolved`, so closing restores the exact screen state underneath.
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const navigate = useCallback((to: View, params?: ViewParams) => {
     setResolved((prev) => {
@@ -59,17 +66,17 @@ export default function App(): React.ReactElement {
     setResolved(prev);
   }, []);
 
+  const openSettings = useCallback(() => setSettingsOpen(true), []);
+
   const viewContextValue = useMemo(
     () => ({
       view: resolved?.view ?? ('sources' as View),
       params: resolved?.params ?? {},
       navigate,
       back,
-      // Stopgap while Settings is still a routed view: the sidebar shell
-      // (Task 4) replaces this with the real Settings-modal opener.
-      openSettings: () => navigate('settings'),
+      openSettings,
     }),
-    [resolved, navigate, back],
+    [resolved, navigate, back, openSettings],
   );
 
   // Gate 1: nothing loaded yet.
@@ -77,21 +84,19 @@ export default function App(): React.ReactElement {
     return (
       <>
         <TitleBar />
-        <div className="ac" style={SHELL_STYLE}>
+        <div className="ac" style={GATE_STYLE}>
           <BootSplash />
         </div>
       </>
     );
   }
 
-  // Gate 2: no identity — full-window sign-in, per contracts.ts's AppState
-  // (there is no legacy "use kia locally" skip; every window either has an
-  // identity or shows SignIn).
+  // Gate 2: no identity — full-window sign-in, no sidebar.
   if (state.identity === null) {
     return (
       <>
         <TitleBar />
-        <div className="ac" style={SHELL_STYLE}>
+        <div className="ac" style={GATE_STYLE}>
           <IconSprite />
           <SignIn />
         </div>
@@ -105,14 +110,17 @@ export default function App(): React.ReactElement {
 
   return (
     <ViewContext.Provider value={viewContextValue}>
-      <TitleBar />
       <IconSprite />
-      <div className="ac" style={SHELL_STYLE}>
-        {screenRegistry.usesTopBar(view) && <TopBar />}
-        <React.Fragment key={`${view}:${resolved?.epoch ?? 0}`}>
-          {screen}
-        </React.Fragment>
+      <div className="ac kg-shell">
+        <Sidebar />
+        <main className="kg-main">
+          {isWin && <div className="kg-caption-drag" />}
+          <React.Fragment key={`${view}:${resolved?.epoch ?? 0}`}>
+            {screen}
+          </React.Fragment>
+        </main>
       </div>
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </ViewContext.Provider>
   );
 }
