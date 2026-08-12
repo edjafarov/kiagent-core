@@ -13,7 +13,7 @@
 .set-sidebar {
   width: 168px;
   flex-shrink: 0;
-  border-right: 1px solid rgba(0, 0, 0, 0.2);
+  border-right: 1px solid var(--sidebar-border);
   background: var(--bg-sidebar);
   padding: 10px 6px;
   display: flex;
@@ -21,7 +21,7 @@
   gap: 1px;
 }
 .set-sidebar .lbl-section {
-  color: rgba(237, 233, 254, 0.6);
+  color: var(--text-tertiary);
   padding: 3px 8px;
   margin-bottom: 2px;
 }
@@ -30,7 +30,7 @@ button.side-item {
   background: transparent;
   text-align: left;
   font: inherit;
-  color: var(--text-on-sidebar);
+  color: var(--sidebar-item);
   width: 100%;
 }
 
