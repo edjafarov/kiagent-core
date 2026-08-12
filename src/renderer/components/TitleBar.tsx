@@ -3,9 +3,10 @@ import React from 'react';
 const isMac =
   typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 
-/** 30px `titleBarStyle:hidden` overlay strip — see ui-inventory.md §1.6.
- *  No custom traffic lights: the OS chrome draws those, this is purely a
- *  colored strip + centered title sitting above the window content. */
+/** 30px drag strip shown ONLY on the signed-out gates (BootSplash, SignIn).
+ *  The signed-in shell has no titlebar — the sidebar header is the drag
+ *  region and macOS traffic lights float inside it (main.ts
+ *  trafficLightPosition). */
 export function TitleBar(): React.ReactElement {
   return (
     <div

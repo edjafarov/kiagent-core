@@ -272,10 +272,10 @@ async function createWindow(): Promise<void> {
     backgroundColor: '#fafafa',
     icon: getAssetPath('icon.png'),
     titleBarStyle: 'hidden',
-    trafficLightPosition: { x: 12, y: 10 },
+    trafficLightPosition: { x: 12, y: 18 },
     titleBarOverlay: {
-      color: '#2e1065',
-      symbolColor: '#ffffff',
+      color: '#fafafa',
+      symbolColor: '#0f172a',
       height: 30,
     },
     webPreferences: {

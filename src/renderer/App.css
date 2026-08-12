@@ -62,14 +62,15 @@ body {
   scrollbar-color: rgba(124, 58, 237, 0.45) transparent;
 }
 
+/* Gate-only titlebar strip (BootSplash / SignIn — the signed-in shell has
+   no strip; the sidebar header is the drag region there). */
 .kg-titlebar {
   height: 30px;
   flex-shrink: 0;
   position: relative;
   display: flex;
   align-items: center;
-  background: var(--bg-rail);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+  background: var(--bg-app);
   -webkit-app-region: drag;
   -webkit-user-select: none;
   user-select: none;
@@ -82,7 +83,7 @@ body {
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--text-tertiary);
   letter-spacing: -0.01em;
 }
 
