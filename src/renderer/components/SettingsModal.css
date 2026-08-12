@@ -1,0 +1,53 @@
+.kg-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.kg-settings-modal {
+  width: 680px;
+  max-width: calc(100vw - 48px);
+  height: 70vh;
+  max-height: calc(100vh - 48px);
+  min-height: 360px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  /* Radius — SHARP throughout. Do not soften. */
+  border-radius: 0;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+}
+.kg-settings-modal-title {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.kg-settings-modal-title h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.kg-settings-modal-title button {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.kg-settings-modal-title button:hover {
+  color: var(--text-primary);
+}
+/* Settings' own .set-shell (sidebar + pane) fills the body. */
+.kg-settings-modal-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
