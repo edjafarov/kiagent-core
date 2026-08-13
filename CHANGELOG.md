@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.74.0](https://github.com/edjafarov/kiagent-core/compare/v0.73.2...v0.74.0) (2026-08-13)
+
+### Features
+
+* **renderer:** SettingsModal wrapping the Settings screen ([6dc90ea](https://github.com/edjafarov/kiagent-core/commit/6dc90ea6cdc830589abc008612bb6f2f7ce72b9a))
+* **renderer:** Sidebar + AccountMenu components for the sidebar shell ([0345a80](https://github.com/edjafarov/kiagent-core/commit/0345a805ab6cc7473adfc020e5d0833144f34a7a))
+* **renderer:** sidebar shell — Sidebar replaces TopBar, Settings becomes a modal ([6c15116](https://github.com/edjafarov/kiagent-core/commit/6c15116611c46b0513203a8815769c7a1b376ae4))
+* **shell:** neutral platform chrome — lights in sidebar, fafafa caption overlay ([cc08516](https://github.com/edjafarov/kiagent-core/commit/cc085169e3a6c7c8e02cf3d33f862402fe90741f))
+
+### Bug Fixes
+
+* **renderer:** mount SettingsModal inside the .ac scope ([509453c](https://github.com/edjafarov/kiagent-core/commit/509453ce08805adc056bf9661d68edaefafee7bf))
+* **renderer:** only close SettingsModal when the press began on the backdrop ([4a27a69](https://github.com/edjafarov/kiagent-core/commit/4a27a69b51a275f540bc6d83b5af64c335348742))
+
 ## [0.73.2](https://github.com/edjafarov/kiagent-core/compare/v0.73.1...v0.73.2) (2026-08-11)
 
 ### Bug Fixes
