@@ -139,7 +139,7 @@ export function Outbox(): React.ReactElement {
 
   return (
     <div className="outbox-screen">
-      <div className="h-section">Outbox</div>
+      {/* Title lives in the shell's .kg-topline; only the explainer here. */}
       <p className="t-meta">
         Recent outbound drafts. Nothing is sent without your confirmation —
         pending drafts wait for you on their own review page.

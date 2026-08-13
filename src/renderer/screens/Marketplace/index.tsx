@@ -76,8 +76,8 @@ export function Marketplace(): React.ReactElement {
   return (
     <div className="dash-shell mkt-shell">
       <div className="mkt-pane mkt-left">
+        {/* Title lives in the shell's .kg-topline; only the explainer here. */}
         <div className="mkt-header">
-          <span className="h-section">Marketplace</span>
           <span className="t-meta">
             Browse and install connector extensions.
           </span>

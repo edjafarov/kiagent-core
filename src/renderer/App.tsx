@@ -26,6 +26,20 @@ import {
 
 const screenRegistry = createScreenRegistry(getDefaultScreens());
 
+const isMac =
+  typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+
+// Page titles shown in the top line (.kg-topline) — the band doubles as the
+// window drag region, ChatGPT/Claude-Desktop style. Detail panes keep their
+// own in-pane topbars; this is the routed view's name only.
+const VIEW_TITLES: Partial<Record<View, string>> = {
+  sources: 'Sources',
+  outbox: 'Outbox',
+  connection: 'Connection',
+  marketplace: 'Marketplace',
+  logs: 'Logs',
+};
+
 const GATE_STYLE: React.CSSProperties = {
   flex: 1,
   display: 'flex',
@@ -111,7 +125,11 @@ export default function App(): React.ReactElement {
       <div className="ac kg-shell">
         <Sidebar />
         <main className="kg-main">
-          <div className="kg-caption-drag" />
+          <div className={`kg-topline${isMac ? ' mac' : ''}`}>
+            {VIEW_TITLES[view] != null && (
+              <span className="kg-topline-title">{VIEW_TITLES[view]}</span>
+            )}
+          </div>
           <React.Fragment key={`${view}:${resolved?.epoch ?? 0}`}>
             {screen}
           </React.Fragment>

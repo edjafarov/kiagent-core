@@ -100,14 +100,29 @@ body {
   display: flex;
   flex-direction: column;
 }
-/* Full-width top drag band over the main pane, every platform — with the
-   (also draggable) sidebar header it makes the window's whole top line
-   draggable. On Windows it additionally clears the titleBarOverlay caption
-   buttons drawn over the pane's top-right. */
-.kg-caption-drag {
+/* Top line over the main pane, every platform — the window drag band
+   (with the also-draggable sidebar header it makes the whole top line
+   draggable) AND the page-title bar, ChatGPT/Codex style, so the strip
+   isn't dead space. On Windows it clears the titleBarOverlay caption
+   buttons drawn over the pane's top-right (title is left-aligned, away
+   from them). Taller on macOS (.mac) so the title centers on the traffic
+   lights' line (lights sit at y 18–32 in the sidebar). */
+.kg-topline {
   height: 30px;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
   -webkit-app-region: drag;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.kg-topline.mac { height: 50px; }
+.kg-topline-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
 }
 
 /* ── Shared screen-shell chrome ───────────────────────────────────────────

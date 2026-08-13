@@ -62,14 +62,6 @@ export function SourcesList(props: {
   return (
     <div className="dash-body">
       <GetStartedPanel onOpenConnection={props.onOpenConnection} />
-      <div className="row-flex">
-        <span className="h-section">Sources</span>
-        <span className="t-meta">
-          {connectorCount} {connectorCount === 1 ? 'type' : 'types'} ·{' '}
-          {accountCount} {accountCount === 1 ? 'source' : 'sources'}
-        </span>
-      </div>
-
       {adding ? (
         <AddSourcePanel
           initialSourceId={adding.initialSourceId}
@@ -128,6 +120,10 @@ export function SourcesList(props: {
               />
               Sync all
             </button>
+            <span className="t-meta" style={{ marginLeft: 'auto' }}>
+              {connectorCount} {connectorCount === 1 ? 'type' : 'types'} ·{' '}
+              {accountCount} {accountCount === 1 ? 'source' : 'sources'}
+            </span>
           </div>
         </>
       )}
