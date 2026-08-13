@@ -2,7 +2,7 @@
    Corners stay SQUARE: tokens.css:96-100 sets every radius token to 0
    ("Radius — SHARP throughout. Do not soften."). No border-radius here. */
 .outbox-screen {
-  padding: 16px 20px;
+  padding: 14px 20px 18px; /* same gutter as .dash-body */
   max-width: 860px;
 }
 .outbox-list {
@@ -17,6 +17,8 @@
   gap: 12px;
   padding: 10px 12px;
   border: 1px solid var(--border-subtle);
+  /* White card like .conn-list — the pane behind is --bg-app now. */
+  background: var(--bg-surface);
 }
 .outbox-main {
   flex: 1;

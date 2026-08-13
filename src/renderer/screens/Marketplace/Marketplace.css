@@ -21,7 +21,7 @@
   flex-shrink: 0;
   border-right: 1px solid var(--border-subtle);
   background: var(--bg-muted);
-  padding: 14px 16px;
+  padding: 14px 20px;
   gap: 10px;
   overflow-y: auto;
 }

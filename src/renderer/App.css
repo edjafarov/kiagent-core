@@ -99,6 +99,9 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* Painted here, not per-screen: `.ac` is --bg-canvas (#fff), so a screen
+     that forgets its own background (Outbox) reads as a different pane. */
+  background: var(--bg-app);
 }
 /* Top line over the main pane, every platform — the window drag band
    (with the also-draggable sidebar header it makes the whole top line
@@ -112,7 +115,7 @@ body {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  padding: 0 20px; /* matches the 20px pane gutter every screen uses */
   -webkit-app-region: drag;
   -webkit-user-select: none;
   user-select: none;
@@ -146,7 +149,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
+  padding: 8px 20px;
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }

@@ -5,7 +5,7 @@
 .dash-body {
   flex: 1;
   min-height: 0;
-  padding: 14px 16px 18px;
+  padding: 14px 20px 18px;
   display: flex;
   flex-direction: column;
   gap: 12px;

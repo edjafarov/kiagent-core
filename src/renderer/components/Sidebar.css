@@ -24,7 +24,9 @@
   padding: 12px 10px 12px 14px;
   -webkit-app-region: drag;
 }
-.kg-sidebar.mac .kg-sb-head { padding-top: 40px; }
+/* Lights end at y 32 — 50px keeps a real gap between them and the brand
+   row instead of the two visually touching. */
+.kg-sidebar.mac .kg-sb-head { padding-top: 50px; }
 .kg-sb-brand {
   display: flex;
   align-items: center;
@@ -45,6 +47,9 @@
 }
 .kg-sb-collapse:hover { color: var(--text-secondary); }
 .kg-sidebar.collapsed .kg-sb-head { padding-left: 0; justify-content: center; }
+/* Collapsed rail is 56/72px — spark + chevron side by side read as clutter,
+   so the head keeps only the expand affordance. */
+.kg-sidebar.collapsed .kg-sb-brand { display: none; }
 .kg-sidebar.collapsed .kg-sb-collapse { margin-left: 0; }
 .kg-sidebar.collapsed .kg-sb-collapse svg { transform: rotate(180deg); }
 
