@@ -48,9 +48,24 @@
 .kg-sb-collapse:hover { color: var(--text-secondary); }
 .kg-sidebar.collapsed .kg-sb-head { padding-left: 0; justify-content: center; }
 /* Collapsed rail is 56/72px — spark + chevron side by side read as clutter,
-   so the head keeps only the expand affordance. */
+   so the head keeps only the expand affordance, dressed as a nav-column
+   icon button (same 26px box + hover as .side-item) so it doesn't float
+   as a bare glyph. */
 .kg-sidebar.collapsed .kg-sb-brand { display: none; }
-.kg-sidebar.collapsed .kg-sb-collapse { margin-left: 0; }
+.kg-sidebar.collapsed .kg-sb-collapse {
+  margin-left: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+}
+.kg-sidebar.collapsed .kg-sb-collapse:hover {
+  background: rgba(0, 0, 0, 0.045);
+  color: var(--text-secondary);
+}
 .kg-sidebar.collapsed .kg-sb-collapse svg { transform: rotate(180deg); }
 
 .kg-sb-nav {

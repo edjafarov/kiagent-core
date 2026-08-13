@@ -68,7 +68,7 @@ export function Sidebar(): React.ReactElement {
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           onClick={toggleCollapsed}
         >
-          <Icon name="chevs-left" size={12} />
+          <Icon name="chevs-left" size={collapsed ? 14 : 12} />
         </button>
       </div>
 
