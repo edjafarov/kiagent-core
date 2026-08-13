@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useAppState } from '@renderer/state/app-state';
 import { useView } from '@renderer/state/view';
 import { Icon } from '@shared/web-ui/icon-sprite';
+import { BracketMark } from '@shared/web-ui/components';
 import { AccountMenu } from '@renderer/components/AccountMenu';
 import type { AppState } from '@shared/contracts';
 import './Sidebar.css';
 
-const COLLAPSE_KEY = 'kia.sidebar.collapsed';
 const isMac =
   typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 
@@ -40,36 +40,16 @@ export function Sidebar(): React.ReactElement {
     useAppState(selectSidebarSlice);
   const identity = useAppState((s) => s.identity);
   const { view, navigate, openSettings } = useView();
-  const [collapsed, setCollapsed] = useState(
-    () => localStorage.getItem(COLLAPSE_KEY) === '1',
-  );
-
-  const toggleCollapsed = () => {
-    setCollapsed((v) => {
-      localStorage.setItem(COLLAPSE_KEY, v ? '0' : '1');
-      return !v;
-    });
-  };
 
   const mcpOnline = mcpPort != null;
 
   return (
-    <aside
-      className={`kg-sidebar${collapsed ? ' collapsed' : ''}${isMac ? ' mac' : ''}`}
-    >
+    <aside className={`kg-sidebar${isMac ? ' mac' : ''}`}>
       <div className="kg-sb-head">
         <span className="kg-sb-brand">
-          <Icon name="spark" size={14} />
-          {!collapsed && <span className="kg-sb-wordmark">KIAgent</span>}
+          <BracketMark size={22} />
+          <span className="kg-sb-wordmark">KIAgent</span>
         </span>
-        <button
-          type="button"
-          className="kg-sb-collapse"
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          onClick={toggleCollapsed}
-        >
-          <Icon name="chevs-left" size={collapsed ? 14 : 12} />
-        </button>
       </div>
 
       <nav className="kg-sb-nav">
@@ -77,21 +57,18 @@ export function Sidebar(): React.ReactElement {
           label="Sources"
           icon="database"
           active={view === 'sources'}
-          collapsed={collapsed}
           onClick={() => navigate('sources')}
         />
         <SideNavItem
           label="Outbox"
           icon="mail"
           active={view === 'outbox'}
-          collapsed={collapsed}
           onClick={() => navigate('outbox')}
         />
         <SideNavItem
           label="Connection"
           icon="link"
           active={view === 'connection'}
-          collapsed={collapsed}
           onClick={() => navigate('connection')}
           badge={mcpOnline ? 'on' : 'off'}
           badgeTitle={
@@ -104,7 +81,6 @@ export function Sidebar(): React.ReactElement {
           label="Marketplace"
           icon="puzzle"
           active={view === 'marketplace'}
-          collapsed={collapsed}
           onClick={() => navigate('marketplace')}
         />
       </nav>
@@ -119,28 +95,23 @@ export function Sidebar(): React.ReactElement {
             onClick={() => navigate('sources')}
           >
             <span className="dot" />
-            {!collapsed && (
-              <span>
-                {erroringCount}{' '}
-                {erroringCount === 1 ? 'source needs' : 'sources need'}{' '}
-                attention
-              </span>
-            )}
+            <span>
+              {erroringCount}{' '}
+              {erroringCount === 1 ? 'source needs' : 'sources need'} attention
+            </span>
           </button>
         ) : (
           <div className="kg-sb-status">
             <span className="dot" />
-            {!collapsed && (
-              <span>
-                {liveCount} live · {totalDocs.toLocaleString()} docs
-              </span>
-            )}
+            <span>
+              {liveCount} live · {totalDocs.toLocaleString()} docs
+            </span>
           </div>
         )}
         {identity && (
           <AccountMenu
             identity={identity}
-            collapsed={collapsed}
+            collapsed={false}
             onOpenSettings={openSettings}
           />
         )}
@@ -153,7 +124,6 @@ function SideNavItem(props: {
   label: string;
   icon: string;
   active: boolean;
-  collapsed: boolean;
   onClick: () => void;
   badge?: 'on' | 'off';
   badgeTitle?: string;
@@ -165,11 +135,11 @@ function SideNavItem(props: {
       type="button"
       aria-label={ariaLabel}
       onClick={props.onClick}
-      title={props.collapsed ? props.label : props.badgeTitle}
+      title={props.badgeTitle}
       className={`side-item kg-sb-item${props.active ? ' active' : ''}`}
     >
       <Icon name={props.icon} size={13} />
-      {!props.collapsed && <span>{props.label}</span>}
+      <span>{props.label}</span>
       {props.badge && (
         <span
           className={`tab-dot ${props.badge}`}

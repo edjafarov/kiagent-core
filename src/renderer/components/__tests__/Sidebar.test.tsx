@@ -139,20 +139,25 @@ describe('Sidebar status line', () => {
   });
 });
 
-describe('Sidebar collapse', () => {
-  it('toggles collapsed state and persists it to localStorage', () => {
+describe('Sidebar brand row', () => {
+  it('has no collapse control — the rail is fixed-width', () => {
     renderSidebar();
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
-    expect(localStorage.getItem('kia.sidebar.collapsed')).toBe('1');
-    expect(screen.getByRole('complementary')).toHaveClass('collapsed');
-    fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
-    expect(localStorage.getItem('kia.sidebar.collapsed')).toBe('0');
+    expect(
+      screen.queryByRole('button', { name: 'Collapse sidebar' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('complementary')).not.toHaveClass('collapsed');
   });
 
-  it('starts collapsed when localStorage says so', () => {
+  it('renders the KIAgent wordmark', () => {
+    renderSidebar();
+    expect(screen.getByText('KIAgent')).toBeInTheDocument();
+  });
+
+  it('ignores a stale collapse preference from older builds', () => {
     localStorage.setItem('kia.sidebar.collapsed', '1');
     renderSidebar();
-    expect(screen.getByRole('complementary')).toHaveClass('collapsed');
+    expect(screen.getByRole('complementary')).not.toHaveClass('collapsed');
+    expect(screen.getByText('Sources')).toBeInTheDocument();
   });
 });
 

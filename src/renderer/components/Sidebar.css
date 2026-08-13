@@ -1,6 +1,7 @@
-/* App sidebar — full-height neutral shell (spec §4). Traffic lights float
-   over .kg-sb-head on macOS (main.ts trafficLightPosition), so the header
-   is taller there (.mac) and is the window drag region. */
+/* App sidebar — full-height neutral shell (spec §4). Fixed 200px — no
+   collapse. Traffic lights float over .kg-sb-head on macOS (main.ts
+   trafficLightPosition); the head is the window drag region and, on mac,
+   shares the lights line with the brand mark. */
 
 .kg-sidebar {
   width: 200px;
@@ -12,21 +13,22 @@
   -webkit-user-select: none;
   user-select: none;
 }
-.kg-sidebar.collapsed { width: 56px; }
-/* macOS traffic lights span x 12–64 — keep the rail wide enough that the
-   green light doesn't cross the sidebar border. */
-.kg-sidebar.mac.collapsed { width: 72px; }
 
+/* Brand row. Left edge lines up with the nav icons below it
+   (8px nav gutter + 10px .side-item padding = 18px). */
 .kg-sb-head {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 12px 10px 12px 14px;
+  padding: 14px 10px 10px 18px;
   -webkit-app-region: drag;
 }
-/* Lights end at y 32 — 50px keeps a real gap between them and the brand
-   row instead of the two visually touching. */
-.kg-sidebar.mac .kg-sb-head { padding-top: 50px; }
+/* macOS: the logo sits ON the traffic-lights line — lights span x 12–64,
+   centered at y 25, so a 50px head (same as .kg-topline.mac) centers the
+   mark on that line, right of the lights. */
+.kg-sidebar.mac .kg-sb-head {
+  height: 50px;
+  padding: 0 10px 0 76px;
+}
 .kg-sb-brand {
   display: flex;
   align-items: center;
@@ -35,38 +37,9 @@
   font-weight: 600;
   color: var(--text-primary);
 }
+/* Duotone Bracket: the Spark fills currentColor (brand violet); the
+   reticle's lighter frame stroke is inlined in the component. */
 .kg-sb-brand svg { color: var(--accent-solid); }
-.kg-sb-collapse {
-  margin-left: auto;
-  border: none;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  padding: 2px 4px;
-  -webkit-app-region: no-drag;
-}
-.kg-sb-collapse:hover { color: var(--text-secondary); }
-.kg-sidebar.collapsed .kg-sb-head { padding-left: 0; justify-content: center; }
-/* Collapsed rail is 56/72px — spark + chevron side by side read as clutter,
-   so the head keeps only the expand affordance, dressed as a nav-column
-   icon button (same 26px box + hover as .side-item) so it doesn't float
-   as a bare glyph. */
-.kg-sidebar.collapsed .kg-sb-brand { display: none; }
-.kg-sidebar.collapsed .kg-sb-collapse {
-  margin-left: 0;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-}
-.kg-sidebar.collapsed .kg-sb-collapse:hover {
-  background: rgba(0, 0, 0, 0.045);
-  color: var(--text-secondary);
-}
-.kg-sidebar.collapsed .kg-sb-collapse svg { transform: rotate(180deg); }
 
 .kg-sb-nav {
   flex: 1;
@@ -85,7 +58,6 @@ button.kg-sb-item {
   width: 100%;
   position: relative;
 }
-.kg-sidebar.collapsed .kg-sb-item { justify-content: center; padding: 0; }
 .kg-sb-item .tab-dot {
   width: 6px; height: 6px; border-radius: 50%;
   margin-left: auto;
@@ -95,9 +67,6 @@ button.kg-sb-item {
    transparent circle (spec §4 requires a visible MCP dot). */
 .kg-sb-item .tab-dot.on  { background: var(--live-solid); }
 .kg-sb-item .tab-dot.off { background: var(--paused-solid); }
-.kg-sidebar.collapsed .kg-sb-item .tab-dot {
-  position: absolute; top: 4px; right: 8px; margin: 0;
-}
 
 .kg-sb-foot {
   padding: 10px 8px 12px;
@@ -125,7 +94,6 @@ button.kg-sb-item {
 }
 button.kg-sb-status.error { cursor: pointer; color: var(--error-solid); }
 .kg-sb-status.error .dot { background: var(--error-solid); }
-.kg-sidebar.collapsed .kg-sb-status { justify-content: center; padding: 4px 0; }
 
 /* Account chip + popover */
 .kg-acct { position: relative; }
@@ -161,12 +129,6 @@ button.kg-sb-status.error { cursor: pointer; color: var(--error-solid); }
 .kg-acct-mail {
   font-size: 10px; color: var(--text-tertiary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.kg-sidebar.collapsed .kg-acct-chip {
-  justify-content: center;
-  border: none;
-  background: transparent;
-  padding: 4px 0;
 }
 .kg-acct-menu {
   position: absolute;
