@@ -9,8 +9,9 @@ import './Settings.css';
 /**
  * 5-pane settings shell (ui-inventory.md §2.9), matching the legacy
  * `SettingsShell` layout: a violet `.set-sidebar` nav + scrollable
- * `.set-pane`. `View` only has a single top-level `'settings'` entry (see
- * state/view.ts) — pane selection is in-screen local state, not routed.
+ * `.set-pane`. Settings is not routed at all — it is mounted by
+ * SettingsModal (see state/view.ts) and pane selection is in-screen local
+ * state.
  */
 
 const ITEMS = [

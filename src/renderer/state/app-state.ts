@@ -178,7 +178,7 @@ function shallowEqual(a: unknown, b: unknown): boolean {
  * previous one, so returning a fresh object each call (e.g.
  * `s => ({ live: s.accounts.length })`) is safe and still cheap — this is
  * the mechanism that stops (say) a Logs-only backend push from repainting
- * TopBar.
+ * the Sidebar.
  */
 export function useAppState<T>(selector: (s: AppState) => T): T {
   const selectorRef = useRef(selector);

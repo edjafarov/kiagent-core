@@ -18,15 +18,30 @@
   --bg-elevated:    #ffffff;
   --bg-muted:       #f8fafc;
   --bg-app:         #fafafa;
-  --bg-sidebar:     #4c1d95;
+  --bg-sidebar:     #f3f3f7;
   --bg-rail:        #2e1065;
   --bg-canvas-warm: #f0eee9;
+
+  /* ── Sidebar (2026-08 neutral shell) ───────────────────────────── */
+  --sidebar-border:         #e4e4ef;
+  --sidebar-item:           #52525b;
+  --sidebar-item-active-bg: #ece7fb;
+  --sidebar-item-active:    #5b21b6;
+
+  /* ── Brand violet ──────────────────────────────────────────────────
+     Surfaces that stay violet no matter what the shell palette does:
+     the SignIn gate's brand panel and the web hero panels. These used
+     to borrow --bg-sidebar / --bg-rail, which silently repainted them
+     when the shell went neutral — keep them on their own tokens. */
+  --brand-violet-deep: #4c1d95;
+  --brand-violet-dark: #2e1065;
+  --text-on-brand:     #ede9fe;
 
   /* ── Foundation: text ──────────────────────────────────────────── */
   --text-primary:    #0f172a;
   --text-secondary:  #64748b;
   --text-tertiary:   #9ca3af;
-  --text-on-sidebar: #ede9fe;
+  --text-on-sidebar: #3f3f46;
   --text-on-rail:    #ffffff;
 
   /* ── Foundation: borders ───────────────────────────────────────── */

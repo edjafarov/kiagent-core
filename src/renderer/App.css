@@ -62,14 +62,15 @@ body {
   scrollbar-color: rgba(124, 58, 237, 0.45) transparent;
 }
 
+/* Gate-only titlebar strip (BootSplash / SignIn — the signed-in shell has
+   no strip; the sidebar header is the drag region there). */
 .kg-titlebar {
   height: 30px;
   flex-shrink: 0;
   position: relative;
   display: flex;
   align-items: center;
-  background: var(--bg-rail);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+  background: var(--bg-app);
   -webkit-app-region: drag;
   -webkit-user-select: none;
   user-select: none;
@@ -82,13 +83,34 @@ body {
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--text-tertiary);
   letter-spacing: -0.01em;
 }
 
+/* ── Sidebar shell (2026-08 redesign) ──────────────────────────────── */
+.kg-shell {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.kg-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Windows: titleBarStyle hidden + titleBarOverlay draws caption buttons
+   over the main pane's top-right; this strip keeps a drag area and pushes
+   content below them. mac needs neither (lights live in the sidebar). */
+.kg-caption-drag {
+  height: 30px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+
 /* ── Shared screen-shell chrome ───────────────────────────────────────────
-   Reused by every screen that opts into <TopBar/> (Sources, Connection,
-   Marketplace, Settings). In the legacy renderer these lived in
+   Reused by every routed screen (Sources, Connection, Marketplace) and by
+   the Settings modal's body. In the legacy renderer these lived in
    screens/Sources/Sources.css and only worked everywhere because
    screen-registry.tsx statically imports every screen module (so its CSS
    side-effect always loads regardless of the active route). That's an
