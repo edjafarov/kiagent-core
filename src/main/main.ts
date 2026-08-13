@@ -273,11 +273,16 @@ async function createWindow(): Promise<void> {
     icon: getAssetPath('icon.png'),
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 12, y: 18 },
-    titleBarOverlay: {
-      color: '#fafafa',
-      symbolColor: '#0f172a',
-      height: 30,
-    },
+    // Windows/Linux caption buttons only. On macOS a titleBarOverlay
+    // OVERRIDES trafficLightPosition and drops the lights below the overlay
+    // height, right onto the sidebar brand row.
+    ...(process.platform !== 'darwin' && {
+      titleBarOverlay: {
+        color: '#fafafa',
+        symbolColor: '#0f172a',
+        height: 30,
+      },
+    }),
     webPreferences: {
       // Packaged and unpackaged-prod runs have preload.js beside main.js;
       // the dev server serves it from the dll dir.

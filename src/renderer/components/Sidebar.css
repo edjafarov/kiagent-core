@@ -13,6 +13,9 @@
   user-select: none;
 }
 .kg-sidebar.collapsed { width: 56px; }
+/* macOS traffic lights span x 12–64 — keep the rail wide enough that the
+   green light doesn't cross the sidebar border. */
+.kg-sidebar.mac.collapsed { width: 72px; }
 
 .kg-sb-head {
   display: flex;

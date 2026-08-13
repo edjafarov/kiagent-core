@@ -102,7 +102,7 @@ export function Sidebar(): React.ReactElement {
         />
         <SideNavItem
           label="Marketplace"
-          icon="search"
+          icon="puzzle"
           active={view === 'marketplace'}
           collapsed={collapsed}
           onClick={() => navigate('marketplace')}

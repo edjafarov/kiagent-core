@@ -65,7 +65,7 @@ body {
 /* Gate-only titlebar strip (BootSplash / SignIn — the signed-in shell has
    no strip; the sidebar header is the drag region there). */
 .kg-titlebar {
-  height: 30px;
+  height: 30px; /* matches the Windows titleBarOverlay caption height */
   flex-shrink: 0;
   position: relative;
   display: flex;
@@ -75,6 +75,7 @@ body {
   -webkit-user-select: none;
   user-select: none;
 }
+.kg-titlebar.mac { height: 38px; }
 
 .kg-titlebar-title {
   position: absolute;
@@ -99,9 +100,10 @@ body {
   display: flex;
   flex-direction: column;
 }
-/* Windows: titleBarStyle hidden + titleBarOverlay draws caption buttons
-   over the main pane's top-right; this strip keeps a drag area and pushes
-   content below them. mac needs neither (lights live in the sidebar). */
+/* Full-width top drag band over the main pane, every platform — with the
+   (also draggable) sidebar header it makes the window's whole top line
+   draggable. On Windows it additionally clears the titleBarOverlay caption
+   buttons drawn over the pane's top-right. */
 .kg-caption-drag {
   height: 30px;
   flex-shrink: 0;

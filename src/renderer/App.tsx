@@ -33,9 +33,6 @@ const GATE_STYLE: React.CSSProperties = {
   minHeight: 0,
 };
 
-const isWin =
-  typeof navigator !== 'undefined' && /Win/i.test(navigator.platform);
-
 export default function App(): React.ReactElement {
   // Raw store access (not the `useAppState` selector hook): the gate below
   // must observe the `null` not-yet-loaded moment, which `useAppState`
@@ -114,7 +111,7 @@ export default function App(): React.ReactElement {
       <div className="ac kg-shell">
         <Sidebar />
         <main className="kg-main">
-          {isWin && <div className="kg-caption-drag" />}
+          <div className="kg-caption-drag" />
           <React.Fragment key={`${view}:${resolved?.epoch ?? 0}`}>
             {screen}
           </React.Fragment>

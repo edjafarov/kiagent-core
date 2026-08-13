@@ -68,32 +68,6 @@ export function SourcesList(props: {
           {connectorCount} {connectorCount === 1 ? 'type' : 'types'} ·{' '}
           {accountCount} {accountCount === 1 ? 'source' : 'sources'}
         </span>
-        <div style={{ flex: 1 }} />
-        {!adding && (
-          <>
-            <button
-              type="button"
-              className="btn sm"
-              disabled={syncSpin || accountCount === 0}
-              onClick={syncAll}
-            >
-              <Icon
-                name="refresh-cw"
-                size={13}
-                className={syncSpin ? 'i kg-spin' : 'i'}
-              />
-              Sync all
-            </button>
-            <button
-              type="button"
-              className="btn primary sm"
-              onClick={() => setAdding({})}
-            >
-              <Icon name="plus" size={13} />
-              Add
-            </button>
-          </>
-        )}
       </div>
 
       {adding ? (
@@ -129,6 +103,32 @@ export function SourcesList(props: {
               </div>
             </div>
           )}
+          {/* Actions live below the list, not in the header: on Windows the
+              titleBarOverlay caption buttons overlay the pane's top-right,
+              exactly where header-row buttons would sit. */}
+          <div className="row-flex src-actions">
+            <button
+              type="button"
+              className="btn primary sm"
+              onClick={() => setAdding({})}
+            >
+              <Icon name="plus" size={13} />
+              Add
+            </button>
+            <button
+              type="button"
+              className="btn sm"
+              disabled={syncSpin || accountCount === 0}
+              onClick={syncAll}
+            >
+              <Icon
+                name="refresh-cw"
+                size={13}
+                className={syncSpin ? 'i kg-spin' : 'i'}
+              />
+              Sync all
+            </button>
+          </div>
         </>
       )}
     </div>
