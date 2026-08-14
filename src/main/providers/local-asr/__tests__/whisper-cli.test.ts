@@ -14,19 +14,23 @@ class FakeChild extends EventEmitter {
 
   killed: string[] = [];
 
-  kill(sig?: string) {
-    this.killed.push(sig ?? 'SIGTERM');
+  kill(sig?: NodeJS.Signals | number) {
+    this.killed.push(String(sig ?? 'SIGTERM'));
     return true;
   }
 }
 
+// `SpawnFn` is now a narrow structural type (see whisper-cli.ts), so this
+// fake satisfies it directly — no `as unknown as` cast, meaning a drift
+// between the fake's shape and what runWhisperCli actually calls (wrong
+// arg types, missing `on`/`kill` overloads) is a real compile error here.
 function fakeSpawn(): { spawnFn: SpawnFn; child: FakeChild; argv: string[][] } {
   const child = new FakeChild();
   const argv: string[][] = [];
-  const spawnFn = ((cmd: string, args: string[]) => {
+  const spawnFn: SpawnFn = (cmd, args) => {
     argv.push([cmd, ...args]);
     return child;
-  }) as unknown as SpawnFn;
+  };
   return { spawnFn, child, argv };
 }
 
@@ -127,14 +131,49 @@ describe('runWhisperCli', () => {
     await expect(p).rejects.toThrow(/SIGTERM/);
   });
 
+  it('a pre-aborted signal rejects without ever spawning the child', async () => {
+    const { spawnFn, argv } = fakeSpawn();
+    const ctl = new AbortController();
+    ctl.abort();
+    const p = runWhisperCli({ ...ARGS, signal: ctl.signal, spawnFn });
+    await expect(p).rejects.toThrow(/aborted before start/);
+    expect(argv).toHaveLength(0);
+  });
+
   it('caps retained stderr (bounded capture)', async () => {
     const { spawnFn, child } = fakeSpawn();
     const p = runWhisperCli({ ...ARGS, spawnFn });
     for (let i = 0; i < 100; i += 1)
       child.stderr.emit('data', Buffer.alloc(1024, 0x62));
     child.emit('close', 5, null);
-    await p.catch((e: Error) => {
-      expect(e.message.length).toBeLessThan(16 * 1024);
-    });
+    await expect(p).rejects.toThrow();
+    let err: Error | undefined;
+    try {
+      await p;
+    } catch (e) {
+      err = e as Error;
+    }
+    // Cap is 8 KiB plus a short "whisper-cli exited N: " prefix — bounded
+    // tightly enough that a regression to a materially larger cap (the
+    // previous, looser 16 KiB bound would have missed e.g. a 15 KiB cap) trips.
+    expect(err?.message.length).toBeLessThan(8.5 * 1024);
+  });
+
+  it('a diagnostic seen before the stderr cap trims it out still rejects as AsrInputRejectedError', async () => {
+    // The diagnostic must be caught the instant it streams by, before a
+    // later flood of noise can push it out of the retained tail window —
+    // otherwise an undecodable file gets misclassified as transient and
+    // loops forever instead of being skipped once.
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn });
+    child.stderr.emit(
+      'data',
+      Buffer.from(`error: ${INPUT_REJECTED_DIAGNOSTIC} '/tmp/in.wav'\n`),
+    );
+    for (let i = 0; i < 16; i += 1)
+      child.stderr.emit('data', Buffer.alloc(1024, 0x63));
+    child.emit('close', 0, null);
+    await expect(p).rejects.toBeInstanceOf(AsrInputRejectedError);
+    await expect(p).rejects.toMatchObject({ status: 400 });
   });
 });

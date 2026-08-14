@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type SpawnOptions } from 'node:child_process';
 
 /** Deterministic input rejection: whisper-cli could not decode THIS file.
  *  Carries status=400 so the audio worker's existing 4xx branch maps it to a
@@ -23,7 +23,28 @@ export const INPUT_REJECTED_DIAGNOSTIC = 'failed to read audio file';
 
 const STDERR_CAP_BYTES = 8 * 1024;
 
-export type SpawnFn = typeof spawn;
+/** The minimal child-process shape this wrapper actually touches. Narrow on
+ *  purpose: `typeof spawn` is a heavily overloaded signature that no
+ *  hand-rolled test fake can satisfy without an `as unknown as` cast that
+ *  disables checking of the fake entirely. Node's real `ChildProcess`
+ *  satisfies this structurally for free (Readable extends EventEmitter),
+ *  so the real `spawn` needs no cast to flow through `SpawnFn` below. */
+export interface WhisperChildProcess {
+  readonly stdout: NodeJS.EventEmitter | null;
+  readonly stderr: NodeJS.EventEmitter | null;
+  on(event: 'error', listener: (err: Error) => void): this;
+  on(
+    event: 'close',
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
+  ): this;
+  kill(signal?: NodeJS.Signals | number): boolean;
+}
+
+export type SpawnFn = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => WhisperChildProcess;
 
 /**
  * One whisper-cli run: audio file path in → transcript text out.
@@ -51,6 +72,16 @@ export function runWhisperCli(args: {
 }): Promise<string> {
   const spawnFn = args.spawnFn ?? spawn;
   return new Promise<string>((resolve, reject) => {
+    // A signal handed to us already aborted (e.g. the caller's dispose() ran
+    // before this job was scheduled) must never launch the child — otherwise
+    // a cancelled job silently runs a full CPU-tier transcription (hours) to
+    // completion as if nothing were wrong, because nothing is left to fire
+    // the 'abort' event.
+    if (args.signal?.aborted) {
+      reject(new Error('whisper-cli aborted before start'));
+      return;
+    }
+
     const child = spawnFn(
       args.binaryPath,
       [
@@ -68,31 +99,48 @@ export function runWhisperCli(args: {
 
     const out: Buffer[] = [];
     let err = Buffer.alloc(0);
+    // Sticky: once the diagnostic is seen, remember it independent of the
+    // trimmed retention window below — the tail-cap must never be able to
+    // un-see a diagnostic it already scanned (see cap comment).
+    let sawDiagnostic = false;
     child.stdout?.on('data', (c: Buffer) => out.push(c));
+    // An EPIPE/ECONNRESET on a stdio stream emits 'error' on the Readable,
+    // not on the ChildProcess — unhandled, that's an uncaught exception and
+    // takes down the whole Electron main process. Swallow here; the child's
+    // own 'error'/'close' handlers already carry the outcome.
+    child.stdout?.on('error', () => {});
     child.stderr?.on('data', (c: Buffer) => {
       err = Buffer.concat([err, c]);
+      if (err.toString('utf8').includes(INPUT_REJECTED_DIAGNOSTIC))
+        sawDiagnostic = true;
       if (err.length > STDERR_CAP_BYTES) err = err.subarray(-STDERR_CAP_BYTES);
     });
+    child.stderr?.on('error', () => {});
 
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     const onAbort = (): void => {
       child.kill('SIGTERM');
-      const t = setTimeout(() => child.kill('SIGKILL'), 2000);
-      (t as unknown as { unref?: () => void }).unref?.();
+      killTimer = setTimeout(() => child.kill('SIGKILL'), 2000);
+      (killTimer as unknown as { unref?: () => void }).unref?.();
     };
     args.signal?.addEventListener('abort', onAbort, { once: true });
-    const cleanup = (): void =>
+    const cleanup = (): void => {
       args.signal?.removeEventListener('abort', onAbort);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+    };
 
     child.on('error', (e: Error) => {
       cleanup();
-      reject(new Error(`whisper-cli failed to launch: ${e.message}`));
+      reject(
+        new Error(`whisper-cli failed to launch: ${e.message}`, { cause: e }),
+      );
     });
     child.on('close', (code: number | null, sig: string | null) => {
       cleanup();
       const stderr = err.toString('utf8');
       // Diagnostic FIRST: a failed audio read exits 0 (see const doc above),
       // so an exit-code check first would misread it as an empty success.
-      if (stderr.includes(INPUT_REJECTED_DIAGNOSTIC)) {
+      if (sawDiagnostic) {
         reject(
           new AsrInputRejectedError(
             `whisper-cli could not decode the input: ${stderr.trim()}`,
