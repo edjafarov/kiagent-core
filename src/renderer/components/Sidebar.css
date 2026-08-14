@@ -14,20 +14,22 @@
   user-select: none;
 }
 
-/* Brand row. Left edge lines up with the nav icons below it
-   (8px nav gutter + 10px .side-item padding = 18px). */
+/* Brand row, right-aligned against the sidebar edge. 18px right inset
+   mirrors the nav column's left inset (8px gutter + 10px item padding). */
 .kg-sb-head {
   display: flex;
   align-items: center;
-  padding: 14px 10px 10px 18px;
+  justify-content: flex-end;
+  padding: 14px 18px 10px;
   -webkit-app-region: drag;
 }
 /* macOS: the logo sits ON the traffic-lights line — lights span x 12–64,
    centered at y 25, so a 50px head (same as .kg-topline.mac) centers the
-   mark on that line, right of the lights. */
+   mark on that line. 76px left padding keeps the brand clear of the
+   lights even on narrow fits. */
 .kg-sidebar.mac .kg-sb-head {
   height: 50px;
-  padding: 0 10px 0 76px;
+  padding: 0 18px 0 76px;
 }
 .kg-sb-brand {
   display: flex;
