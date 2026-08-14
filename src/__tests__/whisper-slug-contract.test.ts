@@ -8,8 +8,10 @@
  */
 import {
   WHISPER_ASSETS,
+  WHISPER_DARWIN_SLUGS,
   WHISPER_TAG,
   whisperAssetUrl,
+  whisperDir,
   whisperSlugsForHost,
 } from '../../scripts/whisper-assets.mjs';
 
@@ -21,15 +23,37 @@ describe('whisper vendor slug contract', () => {
     ]);
   });
 
+  // build-whisper.mjs derives its build TARGETS from WHISPER_DARWIN_SLUGS
+  // (not an inline literal), so this pins the one other producer of whisper
+  // vendor slugs — the darwin source build — to the same module that claims
+  // to be the single source of truth. Someone introducing e.g.
+  // `darwin-arm64-metal` there without updating this list fails here first.
+  it('darwin source-build slugs are exactly darwin-arm64 and darwin-x64', () => {
+    expect([...WHISPER_DARWIN_SLUGS].sort()).toEqual([
+      'darwin-arm64',
+      'darwin-x64',
+    ]);
+  });
+
   it('every slug is accel-less platform-arch', () => {
     const all = [
       ...Object.keys(WHISPER_ASSETS),
+      ...WHISPER_DARWIN_SLUGS,
       ...whisperSlugsForHost('darwin', 'arm64'),
       ...whisperSlugsForHost('linux', 'x64'),
       ...whisperSlugsForHost('win32', 'x64'),
     ];
     for (const slug of all) {
       expect(slug).toMatch(/^(darwin|linux|win32)-(arm64|x64)$/);
+    }
+  });
+
+  it('whisperDir resolves every producer (fetched or built) under the same assets/whisper root', () => {
+    for (const slug of [
+      ...Object.keys(WHISPER_ASSETS),
+      ...WHISPER_DARWIN_SLUGS,
+    ]) {
+      expect(whisperDir(slug)).toBe(`assets/whisper/${slug}`);
     }
   });
 

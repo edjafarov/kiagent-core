@@ -39,6 +39,22 @@ export function whisperSlugsForHost(platform, arch) {
   throw new Error(`no whisper vendor set for platform ${platform}`);
 }
 
+/** Slugs build-whisper.mjs produces from source (darwin has no prebuilt
+ *  upstream binary — see WHISPER_ASSETS above). Kept here, not inline in the
+ *  build script, so the accel-less-slug contract test in
+ *  whisper-slug-contract.test.ts covers the source-build producer too, not
+ *  just the fetched ones — this module claims to be the single source of
+ *  truth for every whisper vendor slug, fetched or built. */
+export const WHISPER_DARWIN_SLUGS = ['darwin-arm64', 'darwin-x64'];
+
 export function whisperAssetUrl(asset) {
   return `https://github.com/ggml-org/whisper.cpp/releases/download/${WHISPER_TAG}/${asset}`;
+}
+
+/** Vendor directory for any whisper slug, fetched or built from source.
+ *  Relative to the repo root — callers join it with their own base (ROOT for
+ *  build-whisper.mjs, cwd for fetch-whisper-cli.mjs, both of which already
+ *  run with cwd == repo root). */
+export function whisperDir(slug) {
+  return `assets/whisper/${slug}`;
 }

@@ -3,7 +3,10 @@
 //   node scripts/fetch-whisper-cli.mjs <slug> [<slug>] # specific slug(s)
 //   node scripts/fetch-whisper-cli.mjs --print-sha      # download host slugs, print sha256
 // Downloads pinned whisper.cpp release binaries into assets/whisper/<slug>/.
-// Idempotent per slug. Fail-closed: unknown slug or sha mismatch aborts.
+// Idempotent per slug, keyed on a `.whisper-tag` stamp file (not just binary
+// existence) — a WHISPER_TAG bump must re-vendor rather than silently keep
+// serving a stale binary that happens to already be on disk.
+// Fail-closed: unknown slug or sha mismatch aborts.
 // A clean no-op on darwin (whisperSlugsForHost returns [] there — see
 // build-whisper.mjs, which builds macOS from source instead).
 //
@@ -17,7 +20,7 @@
 //     does not ship the resident server.
 //   - smoke gate: run the fetched binary with `-h` when the slug matches the
 //     host, since a cross-fetched foreign-arch binary can't run here.
-import { mkdirSync, existsSync, createWriteStream, readFileSync } from 'node:fs';
+import { mkdirSync, existsSync, createWriteStream, readFileSync, writeFileSync } from 'node:fs';
 import { rm, readdir, rename, copyFile, unlink, chmod } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -26,7 +29,9 @@ import os from 'node:os';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import AdmZip from 'adm-zip';
-import { WHISPER_TAG, WHISPER_ASSETS, whisperSlugsForHost, whisperAssetUrl } from './whisper-assets.mjs';
+import { WHISPER_TAG, WHISPER_ASSETS, whisperSlugsForHost, whisperAssetUrl, whisperDir } from './whisper-assets.mjs';
+
+const TAG_STAMP = '.whisper-tag';
 
 const args = process.argv.slice(2);
 const printSha = args.includes('--print-sha');
@@ -82,12 +87,18 @@ async function fetchSlug(slug) {
     process.exit(1);
   }
   const { asset, sha256 } = entry;
-  const destDir = path.join('assets', 'whisper', slug);
+  const destDir = whisperDir(slug);
   const binName = slug.startsWith('win32') ? 'whisper-cli.exe' : 'whisper-cli';
   const binary = path.join(destDir, binName);
-  if (existsSync(binary) && !printSha) {
-    console.log(`whisper-cli already vendored at ${binary}`);
+  const stampPath = path.join(destDir, TAG_STAMP);
+  const stampCurrent = existsSync(stampPath) && readFileSync(stampPath, 'utf8').trim() === WHISPER_TAG;
+  if (existsSync(binary) && stampCurrent && !printSha) {
+    console.log(`whisper-cli already vendored at ${binary} (${WHISPER_TAG})`);
     return;
+  }
+  if (existsSync(destDir) && !stampCurrent) {
+    console.log(`Vendored whisper-cli at ${destDir} is stale or unstamped — re-vendoring for ${WHISPER_TAG}`);
+    await rm(destDir, { recursive: true, force: true });
   }
   mkdirSync(destDir, { recursive: true });
 
@@ -129,6 +140,15 @@ async function fetchSlug(slug) {
     if (!shouldVendor(e)) continue;
     await move(path.join(binDir, e), path.join(destDir, e));
   }
+  // Post-move existence gate (vendor-ships-inert guard): if upstream renamed
+  // the CLI, or shouldVendor() over-filters against a future archive layout,
+  // fail loudly here rather than logging "Vendored" over an empty directory
+  // — on a non-native slug the smoke gate below never runs, so this is the
+  // only check standing between a layout change and a silent exit 0.
+  if (!existsSync(binary)) {
+    console.error(`whisper-cli not vendored — expected ${binary} after moving ${asset}'s contents. shouldVendor()/findBin() likely need updating for this archive's layout.`);
+    process.exit(1);
+  }
   // adm-zip drops the unix mode; ensure the binary is executable on posix.
   if (!slug.startsWith('win32')) {
     await chmod(binary, 0o755).catch(() => {});
@@ -149,6 +169,12 @@ async function fetchSlug(slug) {
   } else {
     console.log(`whisper-cli (${slug}) is not native to this host (${process.platform}-${process.arch}) — skipping smoke run`);
   }
+
+  // Version stamp (written last, only once every gate above has passed):
+  // the idempotency check at the top of this function keys off this file,
+  // not binary existence, so a WHISPER_TAG bump re-vendors instead of
+  // silently keeping a stale binary that happens to already be on disk.
+  writeFileSync(stampPath, `${WHISPER_TAG}\n`);
 }
 
 for (const slug of slugs) {
