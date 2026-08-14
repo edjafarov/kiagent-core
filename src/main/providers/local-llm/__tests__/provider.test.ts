@@ -3,7 +3,6 @@ import path from 'path';
 import fsp, { mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 import type { Prefs } from '@shared/contracts';
-import { CapabilityUnsupportedError } from '@main/core/inference';
 import { createLocalLlmProvider } from '../provider';
 import type { ServerLike } from '../provider';
 import type { ModelDescriptor } from '../models';
@@ -293,59 +292,22 @@ describe('LocalLlmProvider', () => {
     ).rejects.toThrow(/does not support 'read'/);
   });
 
-  it('advertises hear (audio support is decided per-model in handle)', () => {
-    const { deps } = makeDeps({ modelsDir: tmpDir });
-    const provider = createLocalLlmProvider(deps);
-    expect(provider.supports).toContain('hear');
-  });
-
-  it('handle(hear) transcribes on an audio-capable model (E-series)', async () => {
-    const dir = path.join(tmpDir, E4B_MODEL.id);
-    await fsp.mkdir(dir, { recursive: true });
-    for (const file of E4B_MODEL.files) {
-      await fsp.writeFile(path.join(dir, file.name), 'mock-content');
-    }
-    const { deps } = makeDeps({
-      modelsDir: tmpDir,
-      prefs: { models: { override: E4B_MODEL.id, autoInstall: true } },
-    });
-    const provider = createLocalLlmProvider(deps);
-    mockApi.transcribeAudio.mockResolvedValue('the transcript');
-
-    const out = await provider.handle({
-      kind: 'hear',
-      payload: { audio: new Uint8Array([1, 2, 3]), format: 'wav' },
-      lane: 'background',
-    });
-    expect(out).toBe('the transcript');
-    expect(mockApi.transcribeAudio).toHaveBeenCalledWith(
-      'http://x',
-      expect.any(Uint8Array),
-      'wav',
-    );
-  });
-
-  it('handle(hear) throws CapabilityUnsupportedError on a vision-only model (12B), without starting a server', async () => {
-    const dir = path.join(tmpDir, CURATED_MODEL.id); // 12B — hasAudio absent
+  it('no longer advertises hear, and a hear request is rejected outright', async () => {
+    const dir = path.join(tmpDir, CURATED_MODEL.id);
     await fsp.mkdir(dir, { recursive: true });
     for (const file of CURATED_MODEL.files) {
       await fsp.writeFile(path.join(dir, file.name), 'mock-content');
     }
-    const { deps, server } = makeDeps({
-      modelsDir: tmpDir,
-      prefs: { models: { override: CURATED_MODEL.id, autoInstall: true } },
-    });
+    const { deps } = makeDeps({ modelsDir: tmpDir });
     const provider = createLocalLlmProvider(deps);
-
+    expect(provider.supports).toEqual(['complete', 'see']);
     await expect(
       provider.handle({
         kind: 'hear',
-        payload: { audio: new Uint8Array([1]), format: 'wav' },
+        payload: { audio: new Uint8Array(4) },
         lane: 'background',
       }),
-    ).rejects.toBeInstanceOf(CapabilityUnsupportedError);
-    expect(mockApi.transcribeAudio).not.toHaveBeenCalled();
-    expect(server.start).not.toHaveBeenCalled();
+    ).rejects.toThrow(/does not support 'hear'/);
   });
 
   it('selectedModel', async () => {

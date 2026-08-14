@@ -5,6 +5,8 @@ import type { CorePlatform } from '../core/boot';
 import { createAppleVisionProvider } from './apple-vision/provider';
 import { makeVisionHelper } from './apple-vision/vision-helper';
 import type { VisionHelper } from './apple-vision/vision-helper';
+import { createLocalAsrProvider } from './local-asr';
+import type { LocalAsrProvider } from './local-asr';
 import { createLocalLlmProvider } from './local-llm/provider';
 import type { LocalLlmProvider } from './local-llm/provider';
 
@@ -20,11 +22,26 @@ function resolveLlamaBinary(llamaDir: string): string {
   return path.join(llamaDir, slug, binName);
 }
 
+/** Whisper slugs are accel-less BY DESIGN (scripts/whisper-assets.mjs), so
+ *  platform-arch resolution is exact on every platform — the llama accel
+ *  mismatch above cannot recur here. A missing dir (win32-arm64: no upstream
+ *  build) simply fails the capability check → provider reports unsupported. */
+function resolveWhisperBinary(whisperDir: string): string {
+  const slug = `${process.platform}-${process.arch}`;
+  const binName =
+    process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
+  return path.join(whisperDir, slug, binName);
+}
+
 /** Mirrors registerBundledSources: main.ts calls this once after bootCore. */
 export function registerBundledProviders(
   platform: CorePlatform,
   opts: { assetsDir: string; dataDir: string },
-): { localLlm: LocalLlmProvider; visionHelper: VisionHelper | null } {
+): {
+  localLlm: LocalLlmProvider;
+  localAsr: LocalAsrProvider;
+  visionHelper: VisionHelper | null;
+} {
   const log =
     (scope: string) => (level: 'info' | 'warn' | 'error', msg: string) =>
       platform.logSink.log(scope, level, msg);
@@ -57,5 +74,14 @@ export function registerBundledProviders(
     log: log('inference'),
   });
   platform.inference.register(localLlm);
-  return { localLlm, visionHelper };
+
+  const localAsr = createLocalAsrProvider({
+    binaryPath: resolveWhisperBinary(path.join(opts.assetsDir, 'whisper')),
+    asrModelsDir: path.join(opts.dataDir, 'models', 'asr'),
+    prefs: platform.prefs,
+    log: log('inference'),
+  });
+  platform.inference.register(localAsr);
+
+  return { localLlm, localAsr, visionHelper };
 }

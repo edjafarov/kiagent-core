@@ -1,6 +1,10 @@
 import type { InferenceProvider } from '@shared/contracts';
 
-import { createInference, LaneClosedError } from '../inference';
+import {
+  createInference,
+  LaneClosedError,
+  NoProviderError,
+} from '../inference';
 
 const noopLogs = { log: () => {} };
 
@@ -56,6 +60,22 @@ describe('inference plane', () => {
     plane.register(provider('ocr', ['read'], 'ocr'));
     await expect(plane.hear(new Uint8Array([1]))).rejects.toThrow(
       /no inference provider available for 'hear'/,
+    );
+  });
+
+  it('hear with only local-llm registered throws NoProviderError — Gemma is not an ASR fallback', async () => {
+    const plane = createInference(noopLogs);
+    plane.register(provider('local-llm', ['complete', 'see'], 'llm'));
+    await expect(plane.hear(new Uint8Array([1]))).rejects.toBeInstanceOf(
+      NoProviderError,
+    );
+  });
+
+  it('hear routes to a ready local-asr provider', async () => {
+    const plane = createInference(noopLogs);
+    plane.register(provider('local-asr', ['hear'], 'transcript'));
+    await expect(plane.hear(new Uint8Array([1]))).resolves.toBe(
+      'transcript:hear',
     );
   });
 

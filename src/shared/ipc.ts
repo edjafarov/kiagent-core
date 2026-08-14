@@ -325,11 +325,18 @@ export interface Invokes {
       id: string;
       supports: Array<'complete' | 'see' | 'read' | 'hear'>;
       status: ProviderStatus;
+      /** True only for providers the main process can install on demand
+       *  (local-llm, local-asr) — the renderer gates Download/Cancel/Retry on
+       *  this, NOT on status (apple-vision reports non-ready statuses but has
+       *  nothing to install). */
+      installable: boolean;
     }>;
   };
-  /** Start (or retry) the local model download; also re-enables autoInstall. */
-  'inference:install': { req: void; res: void };
-  /** Abort the download and disable autoInstall until re-enabled. */
+  /** Start (or retry) the named provider's model download; also re-enables
+   *  the SHARED autoInstall consent. Unknown providerId is a no-op. */
+  'inference:install': { req: { providerId: string }; res: void };
+  /** Abort EVERY active installer and disable autoInstall until re-enabled
+   *  (cancel is global — the consent is one shared pref). */
   'inference:cancel': { req: void; res: void };
   /** Vision-pipeline queue counts + the "Recently processed" list. */
   'inference:stats': {

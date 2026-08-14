@@ -72,6 +72,8 @@ import { createOutboundRoutes } from './outbound/routes';
 import { buildBundledSenders, composeSenders } from './outbound/senders';
 import { loadProductConfig } from './product';
 import { registerBundledProviders } from './providers';
+import { createInstallRegistry } from './providers/install-registry';
+import type { LocalAsrProvider } from './providers/local-asr';
 import { CURATED_TIERS, modelTotalBytes } from './providers/local-llm/models';
 import type { LocalLlmProvider } from './providers/local-llm/provider';
 import { registerBundledSources } from './sources';
@@ -90,7 +92,10 @@ let mainWindow: BrowserWindow | null = null;
 let platform: CorePlatform | null = null;
 let mcp: McpServerHandle | null = null;
 let extensionsPlatform: ExtensionPlatform | null = null;
-let bundledProviders: { localLlm: LocalLlmProvider } | null = null;
+let bundledProviders: {
+  localLlm: LocalLlmProvider;
+  localAsr: LocalAsrProvider;
+} | null = null;
 let activity: ActivityLog | null = null;
 let stopActivityWatch: (() => void) | null = null;
 // Must stay referenced for the app's lifetime or GC destroys the icon.
@@ -319,7 +324,7 @@ function registerIpc(
   p: CorePlatform,
   getLastPush: () => AppStatePush,
   patchState: (partial: Partial<AppState>) => void,
-  bundled: { localLlm: LocalLlmProvider },
+  bundled: { localLlm: LocalLlmProvider; localAsr: LocalAsrProvider },
   extensions: ExtensionPlatform,
   catalog: MarketplaceCatalog,
   broker: ConnectBroker,
@@ -343,6 +348,13 @@ function registerIpc(
     currentVersion: app.getVersion(),
     devUpdates: process.env.KIAGENT_DEV_UPDATES === '1',
     macUpdatesEnabled: product.macUpdatesEnabled === true,
+  });
+
+  // Built once, near where the bundled providers are registered — the
+  // dispatch map behind inference:install/cancel (install-registry.ts).
+  const installable = createInstallRegistry({
+    'local-llm': bundled.localLlm,
+    'local-asr': bundled.localAsr,
   });
 
   /**
@@ -559,15 +571,17 @@ function registerIpc(
         id: prov.id,
         supports: prov.supports,
         status: prov.status(),
+        installable: installable.installable(prov.id),
       })),
-    'inference:install': async () => {
+    'inference:install': async ({ providerId }) => {
+      if (!installable.installable(providerId)) return; // unknown id: no-op
       await p.prefs.patch({
         models: { ...p.prefs.get().models, autoInstall: true },
       });
-      bundled.localLlm.ensureInstalled();
+      installable.install(providerId);
     },
     'inference:cancel': async () => {
-      await bundled.localLlm.cancelInstall();
+      await installable.cancelAll();
       await p.prefs.patch({
         models: { ...p.prefs.get().models, autoInstall: false },
       });
@@ -1086,11 +1100,13 @@ app.on('window-all-closed', () => {
 });
 
 // Clean shutdown must actually COMPLETE before the process exits, or the
-// llama-server child (non-detached, idle-stopped up to 10 min later) outlives
-// the app. Take over the quit: dispose the local-llm provider (stops the
-// child + aborts any in-flight install) BEFORE tearing down the platform,
-// then re-quit. Every step is bounded (LlamaServer.stop escalates to SIGKILL
-// after a grace window), so quit can't hang.
+// llama-server/whisper-cli children (non-detached, idle-stopped up to 10 min
+// later) outlive the app. Take over the quit: dispose the local-llm and
+// local-asr providers (stops their children + aborts any in-flight install)
+// BEFORE tearing down the platform, then re-quit. Every step is bounded, so
+// quit can't hang: LlamaServer.stop escalates to SIGKILL after a grace window,
+// and localAsr.dispose() awaits the signalled whisper-cli child whose own
+// SIGTERM→SIGKILL escalation is capped at ~2s (whisper-cli.ts).
 let quitting = false;
 app.on('before-quit', (event) => {
   if (quitting) return;
@@ -1101,6 +1117,7 @@ app.on('before-quit', (event) => {
     tray = null;
     stopActivityWatch?.();
     await bundledProviders?.localLlm.dispose().catch(() => {});
+    await bundledProviders?.localAsr.dispose().catch(() => {});
     await mcp?.stop().catch(() => {});
     await extensionsPlatform?.stop().catch(() => {});
     await platform?.shutdown().catch(() => {});
