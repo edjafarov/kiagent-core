@@ -72,6 +72,7 @@ import { createOutboundRoutes } from './outbound/routes';
 import { buildBundledSenders, composeSenders } from './outbound/senders';
 import { loadProductConfig } from './product';
 import { registerBundledProviders } from './providers';
+import type { LocalAsrProvider } from './providers/local-asr';
 import { CURATED_TIERS, modelTotalBytes } from './providers/local-llm/models';
 import type { LocalLlmProvider } from './providers/local-llm/provider';
 import { registerBundledSources } from './sources';
@@ -90,7 +91,10 @@ let mainWindow: BrowserWindow | null = null;
 let platform: CorePlatform | null = null;
 let mcp: McpServerHandle | null = null;
 let extensionsPlatform: ExtensionPlatform | null = null;
-let bundledProviders: { localLlm: LocalLlmProvider } | null = null;
+let bundledProviders: {
+  localLlm: LocalLlmProvider;
+  localAsr: LocalAsrProvider;
+} | null = null;
 let activity: ActivityLog | null = null;
 let stopActivityWatch: (() => void) | null = null;
 // Must stay referenced for the app's lifetime or GC destroys the icon.
@@ -1086,11 +1090,12 @@ app.on('window-all-closed', () => {
 });
 
 // Clean shutdown must actually COMPLETE before the process exits, or the
-// llama-server child (non-detached, idle-stopped up to 10 min later) outlives
-// the app. Take over the quit: dispose the local-llm provider (stops the
-// child + aborts any in-flight install) BEFORE tearing down the platform,
-// then re-quit. Every step is bounded (LlamaServer.stop escalates to SIGKILL
-// after a grace window), so quit can't hang.
+// llama-server/whisper-cli children (non-detached, idle-stopped up to 10 min
+// later) outlive the app. Take over the quit: dispose the local-llm and
+// local-asr providers (stops their children + aborts any in-flight install)
+// BEFORE tearing down the platform, then re-quit. Every step is bounded
+// (LlamaServer.stop escalates to SIGKILL after a grace window), so quit
+// can't hang.
 let quitting = false;
 app.on('before-quit', (event) => {
   if (quitting) return;
@@ -1101,6 +1106,7 @@ app.on('before-quit', (event) => {
     tray = null;
     stopActivityWatch?.();
     await bundledProviders?.localLlm.dispose().catch(() => {});
+    await bundledProviders?.localAsr.dispose().catch(() => {});
     await mcp?.stop().catch(() => {});
     await extensionsPlatform?.stop().catch(() => {});
     await platform?.shutdown().catch(() => {});
