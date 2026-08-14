@@ -138,6 +138,37 @@ describe('isTranscribableDoc / audioExt', () => {
     expect(audioExt(doc({ metadata: { filename: 'song.OGG' } }))).toBe('ogg');
     expect(audioExt(doc({ title: 'no-extension', metadata: {} }))).toBe('');
   });
+
+  it('audioExt ALLOWLISTS metadata.ext — a traversal ext never reaches a path', () => {
+    // metadata is Record<string, unknown> filled by third-party connectors;
+    // this value is interpolated into a temp-file name by the transcoder, so
+    // anything outside [a-z0-9]{1,8} must come back empty (the transcoder then
+    // falls back to its mime map).
+    expect(
+      audioExt(doc({ metadata: { ext: '../../../../Users/u/target' } })),
+    ).toBe('');
+    expect(audioExt(doc({ metadata: { ext: '/etc/passwd' } }))).toBe('');
+    expect(audioExt(doc({ metadata: { ext: 'm4a/../x' } }))).toBe('');
+    expect(audioExt(doc({ metadata: { ext: 'wav wav' } }))).toBe('');
+    expect(audioExt(doc({ metadata: { ext: 'verylongext' } }))).toBe('');
+    expect(audioExt(doc({ metadata: { ext: '.MP3' } }))).toBe('mp3'); // still normalized
+  });
+
+  it('a traversal ext still classifies on the mime (the allowlist does not break the gate)', () => {
+    expect(
+      classifyTranscribable(
+        doc({
+          metadata: { mime: 'audio/mpeg', ext: '../../../../tmp/pwn' },
+        }),
+      ),
+    ).toBe('candidate');
+    // …and with no mime to fall back on, an unusable ext is simply not audio.
+    expect(
+      classifyTranscribable(
+        doc({ type: 'file', title: 'x', metadata: { ext: '../../x' } }),
+      ),
+    ).toBe('skip');
+  });
 });
 
 const tdoc = (meta: Record<string, unknown>, title = 'x'): Document =>

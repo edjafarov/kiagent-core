@@ -127,7 +127,7 @@ describe('LocalProcessing: stats loading state', () => {
 
     expect(
       await screen.findByText(
-        '3 visual documents queued for processing · 7 processed',
+        '3 visual documents queued for processing · 7 extracted or transcribed',
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
@@ -185,7 +185,7 @@ describe('LocalProcessing: Refresh', () => {
     render(<LocalProcessing />);
 
     await screen.findByText(
-      '3 visual documents queued for processing · 7 processed',
+      '3 visual documents queued for processing · 7 extracted or transcribed',
     );
     invoke.mockClear();
 

@@ -40,21 +40,31 @@ const change = (doc: Partial<Document> = {}): Change =>
   ({ seq: 1, kind: 'document', document: { ...baseDoc, ...doc } }) as Change;
 
 // ── temp-file plumbing ──────────────────────────────────────────────────────
-// Every stub `prepareFile` writes a REAL (tiny) file, so the deletion
-// assertions test the worker's `finally`, not a mock.
+// Every stub `prepareFile` writes a REAL (tiny) file in its own REAL mkdtemp
+// directory — exactly what production's prepareAudioFile hands back — so the
+// deletion assertions test the worker's `finally`, not a mock. The mkdtemp is
+// not optional: the worker removes `prepared.dir` RECURSIVELY, so a stub that
+// reported `dir: os.tmpdir()` would wipe the machine's temp directory.
 
-let tmpCounter = 0;
-const madeFiles: string[] = [];
+const madeDirs: string[] = [];
 
-async function makeTempFile(): Promise<string> {
-  tmpCounter += 1;
-  const p = path.join(
-    os.tmpdir(),
-    `kiagent-asr-wtest-${process.pid}-${Date.now()}-${tmpCounter}.bin`,
-  );
+async function makeTempFile(): Promise<{ path: string; dir: string }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiagent-asr-wtest-'));
+  madeDirs.push(dir);
+  const p = path.join(dir, 'audio.bin');
   await fs.writeFile(p, Buffer.alloc(4));
-  madeFiles.push(p);
-  return p;
+  return { path: p, dir };
+}
+
+/** The worker must remove the prepared file AND the temp DIRECTORY it lives
+ *  in: prepare owns a fresh 0700 dir per call, so a file-only `rm` leaks one
+ *  empty directory per transcribed document. */
+async function expectCleaned(
+  p: { paths: string[]; dirs: string[] },
+  i = 0,
+): Promise<void> {
+  expect(await isGone(p.paths[i])).toBe(true);
+  expect(await isGone(p.dirs[i])).toBe(true);
 }
 
 async function isGone(p: string): Promise<boolean> {
@@ -68,7 +78,9 @@ async function isGone(p: string): Promise<boolean> {
 
 afterEach(async () => {
   await Promise.all(
-    madeFiles.splice(0).map((p) => fs.rm(p, { force: true }).catch(() => {})),
+    madeDirs
+      .splice(0)
+      .map((d) => fs.rm(d, { recursive: true, force: true }).catch(() => {})),
   );
 });
 
@@ -78,13 +90,15 @@ interface PrepareSpec {
 }
 
 /**
- * A `prepareFile` stub that writes a real temp file per call and reports the
- * given format/size. `onForceWav` drives the re-probe branch: a spec (the
- * re-prepare succeeds) or an Error (the re-prepare rejects). `.paths` records
- * every path handed out, in order.
+ * A `prepareFile` stub that writes a real temp file in its own real temp
+ * directory per call and reports the given format/size. `onForceWav` drives
+ * the re-probe branch: a spec (the re-prepare succeeds) or an Error (the
+ * re-prepare rejects). `.paths` records every path handed out, in order, and
+ * `.dirs` the directory each one lived in.
  */
 function preparer(first: PrepareSpec, onForceWav?: PrepareSpec | Error) {
   const paths: string[] = [];
+  const dirs: string[] = [];
   const fn = jest.fn(
     async (
       _bytes: Uint8Array,
@@ -97,15 +111,17 @@ function preparer(first: PrepareSpec, onForceWav?: PrepareSpec | Error) {
         }
         if (onForceWav instanceof Error) throw onForceWav;
         const p = await makeTempFile();
-        paths.push(p);
-        return { path: p, ...onForceWav };
+        paths.push(p.path);
+        dirs.push(p.dir);
+        return { ...p, ...onForceWav };
       }
       const p = await makeTempFile();
-      paths.push(p);
-      return { path: p, ...first };
+      paths.push(p.path);
+      dirs.push(p.dir);
+      return { ...p, ...first };
     },
   );
-  return Object.assign(fn, { paths });
+  return Object.assign(fn, { paths, dirs });
 }
 
 type Deps = Parameters<typeof createAudioWorker>[0];
@@ -311,7 +327,7 @@ describe('createAudioWorker — decoded-size caps', () => {
       const outcome = await h.worker.work(change(), h.session);
       expect(outcome).toBe('skip');
       expect(h.transcribeFile).not.toHaveBeenCalled();
-      expect(await isGone(prepareFile.paths[0])).toBe(true);
+      await expectCleaned(prepareFile);
     },
   );
 
@@ -338,7 +354,7 @@ describe('createAudioWorker — decoded-size caps', () => {
     expect(outcome).toBe('skip');
     expect(h.transcribeFile).not.toHaveBeenCalled();
     expect(h.logs.some((l) => /exceeds decoded cap/.test(l.msg))).toBe(true);
-    expect(await isGone(prepareFile.paths[0])).toBe(true);
+    await expectCleaned(prepareFile);
   });
 
   it('transcribes an mp3 whose probed duration fits the cap (passthrough, no re-prepare)', async () => {
@@ -369,24 +385,37 @@ describe('createAudioWorker — unprobeable mp3 WITH a transcoder', () => {
     expect(prepareFile.mock.calls[1][2]).toEqual({ forceWav: true });
     expect(h.transcribeFile).not.toHaveBeenCalled();
     // The ORIGINAL mp3 temp file must not leak when `prepared` is replaced.
-    expect(await isGone(prepareFile.paths[0])).toBe(true);
-    expect(await isGone(prepareFile.paths[1])).toBe(true);
+    await expectCleaned(prepareFile);
+    await expectCleaned(prepareFile, 1);
   });
 
-  it('re-prepares as WAV and transcribes the NEW path when it fits (original mp3 deleted)', async () => {
+  it('re-prepares as WAV and transcribes the NEW path when it fits (original mp3 deleted, the replacement still on disk)', async () => {
     const prepareFile = preparer(
       { format: 'mp3', sizeBytes: 1 * MiB },
       { format: 'wav', sizeBytes: 10 * MiB },
     );
+    // Deleting the SUPERSEDED mp3 must not take the replacement's directory
+    // with it — whisper is about to read that file.
+    let presentAtTranscribe: boolean | undefined;
+    const transcribeFile = jest.fn(async (p: string) => {
+      presentAtTranscribe = !(await isGone(p));
+      return 'the transcript';
+    });
     const h = setup({
-      deps: { prepareFile, mp3Duration: () => null, totalMemBytes: 8 * GiB },
+      deps: {
+        prepareFile,
+        transcribeFile,
+        mp3Duration: () => null,
+        totalMemBytes: 8 * GiB,
+      },
     });
     expect(await h.worker.work(mp3Change(), h.session)).toBe('done');
-    expect(h.transcribeFile).toHaveBeenCalledWith(prepareFile.paths[1], {
+    expect(presentAtTranscribe).toBe(true);
+    expect(transcribeFile).toHaveBeenCalledWith(prepareFile.paths[1], {
       format: 'wav',
     });
-    expect(await isGone(prepareFile.paths[0])).toBe(true);
-    expect(await isGone(prepareFile.paths[1])).toBe(true);
+    await expectCleaned(prepareFile);
+    await expectCleaned(prepareFile, 1);
   });
 
   it('defers when the forceWav re-prepare fails transiently', async () => {
@@ -399,7 +428,7 @@ describe('createAudioWorker — unprobeable mp3 WITH a transcoder', () => {
     });
     expect(await h.worker.work(mp3Change(), h.session)).toBe('defer');
     expect(h.transcribeFile).not.toHaveBeenCalled();
-    expect(await isGone(prepareFile.paths[0])).toBe(true);
+    await expectCleaned(prepareFile);
   });
 });
 
@@ -423,7 +452,7 @@ describe('createAudioWorker — unprobeable mp3 with NO transcoder (/32 floor)',
     expect(outcome).toBe('skip');
     expect(h.transcribeFile).not.toHaveBeenCalled();
     expect(h.logs.some((l) => /\/32 floor/.test(l.msg))).toBe(true);
-    expect(await isGone(prepareFile.paths[0])).toBe(true);
+    await expectCleaned(prepareFile);
   });
 
   it('lets a small unprobeable mp3 through as a passthrough', async () => {
@@ -440,7 +469,7 @@ describe('createAudioWorker — unprobeable mp3 with NO transcoder (/32 floor)',
     expect(h.transcribeFile).toHaveBeenCalledWith(prepareFile.paths[0], {
       format: 'mp3',
     });
-    expect(await isGone(prepareFile.paths[0])).toBe(true);
+    await expectCleaned(prepareFile);
   });
 });
 
@@ -458,7 +487,7 @@ describe('createAudioWorker — transcribe outcomes', () => {
     expect(await h.worker.work(change(), h.session)).toBe('skip');
     expect(h.logs.some((l) => /input rejected/.test(l.msg))).toBe(true);
     // Cleanup covers the failure path too.
-    expect(await isGone(prepareFile.paths[0])).toBe(true);
+    await expectCleaned(prepareFile);
   });
 
   it('defers on a plain transcribe failure (spawn fault, exit-by-signal…)', async () => {
@@ -472,7 +501,7 @@ describe('createAudioWorker — transcribe outcomes', () => {
       },
     });
     expect(await h.worker.work(change(), h.session)).toBe('defer');
-    expect(await isGone(prepareFile.paths[0])).toBe(true);
+    await expectCleaned(prepareFile);
   });
 
   it('defers on the NoProviderError race backstop', async () => {
@@ -494,7 +523,7 @@ describe('createAudioWorker — transcribe outcomes', () => {
     await expect(h.worker.work(change(), h.session)).rejects.toThrow(
       /empty transcript/,
     );
-    expect(await isGone(prepareFile.paths[0])).toBe(true);
+    await expectCleaned(prepareFile);
   });
 
   it('enriches with the transcript and deletes the temp file on success', async () => {
@@ -511,7 +540,7 @@ describe('createAudioWorker — transcribe outcomes', () => {
       h.enriched[0] as { metadata: { extraction: { at: string } } }
     ).metadata.extraction;
     expect(Number.isNaN(Date.parse(at))).toBe(false);
-    expect(await isGone(prepareFile.paths[0])).toBe(true);
+    await expectCleaned(prepareFile);
   });
 });
 

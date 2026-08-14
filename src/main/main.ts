@@ -1103,9 +1103,10 @@ app.on('window-all-closed', () => {
 // llama-server/whisper-cli children (non-detached, idle-stopped up to 10 min
 // later) outlive the app. Take over the quit: dispose the local-llm and
 // local-asr providers (stops their children + aborts any in-flight install)
-// BEFORE tearing down the platform, then re-quit. Every step is bounded
-// (LlamaServer.stop escalates to SIGKILL after a grace window), so quit
-// can't hang.
+// BEFORE tearing down the platform, then re-quit. Every step is bounded, so
+// quit can't hang: LlamaServer.stop escalates to SIGKILL after a grace window,
+// and localAsr.dispose() awaits the signalled whisper-cli child whose own
+// SIGTERM→SIGKILL escalation is capped at ~2s (whisper-cli.ts).
 let quitting = false;
 app.on('before-quit', (event) => {
   if (quitting) return;

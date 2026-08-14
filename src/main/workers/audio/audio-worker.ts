@@ -144,10 +144,15 @@ export function createAudioWorker(deps: {
           } else {
             try {
               const rewav = await prepareFile(bytes, meta, { forceWav: true });
-              // `prepared` is about to be replaced — delete the mp3 the
-              // finally below will no longer see.
-              await fs.rm(prepared.path, { force: true }).catch(() => {});
+              // `prepared` is about to be replaced — delete the superseded
+              // mp3's whole temp DIRECTORY, which the finally below will no
+              // longer see. The re-prepare got its own fresh directory, so
+              // this never touches the file we just switched to.
+              const superseded = prepared.dir;
               prepared = rewav; // exact WAV stat check below
+              await fs
+                .rm(superseded, { recursive: true, force: true })
+                .catch(() => {});
             } catch (err) {
               if (!(err instanceof AudioUnsupportedFormatError)) return 'defer';
               // No transcoder: the format's true floor bounds decoded size.
@@ -210,8 +215,12 @@ export function createAudioWorker(deps: {
         return 'done';
       } finally {
         // Covers EVERY exit path: the caps, the transcribe failure, the empty
-        // transcript throw, and success.
-        await fs.rm(prepared.path, { force: true }).catch(() => {});
+        // transcript throw, and success. Removes the DIRECTORY, not just the
+        // file — prepare owns a fresh 0700 dir per call, so deleting the file
+        // alone would leak one empty directory per transcribed document.
+        await fs
+          .rm(prepared.dir, { recursive: true, force: true })
+          .catch(() => {});
       }
     },
   };

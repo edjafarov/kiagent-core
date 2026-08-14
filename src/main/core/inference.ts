@@ -29,20 +29,6 @@ export class NoProviderError extends Error {
   }
 }
 
-/** Thrown by a provider whose model structurally CANNOT serve a kind — e.g.
- *  an audio `hear` request routed to a llama-server whose loaded model has no
- *  audio encoder (the RAM-tiered model on a big machine may be vision-only).
- *  Distinct from NoProviderError (no ready provider yet — transient, a model
- *  may still be installing): this is PERMANENT for the current model, so a
- *  worker must SKIP rather than DEFER, or it re-hammers a doomed request every
- *  scheduled window forever. */
-export class CapabilityUnsupportedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'CapabilityUnsupportedError';
-  }
-}
-
 /** Thrown to background-lane callers while the lane is closed. Fail-fast on
  *  purpose: parking the request as a pending promise would pin the caller's
  *  entire async chain — including batches of loaded documents — in memory

@@ -52,8 +52,12 @@ function isMp3(mime: string | undefined, ext: string): boolean {
 /** Bytes ready for llama.cpp's `input_audio`, but as a FILE on disk. Nothing
  *  here ever materialises decoded PCM in the JS heap (spec §6). */
 export interface PreparedAudioFile {
-  /** Temp file owned by the CALLER — delete in a finally. */
+  /** The prepared file, always INSIDE `dir`. */
   path: string;
+  /** The 0700 temp DIRECTORY holding `path` (and nothing else that outlives
+   *  this call). Owned by the CALLER — remove it recursively in a finally;
+   *  removing `path` alone leaks a directory per document. */
+  dir: string;
   format: 'wav' | 'mp3';
   /** On-disk size. For wav this bounds decoded PCM exactly; for a
    *  passthrough mp3 it does NOT (compressed) — the worker probes duration
@@ -62,10 +66,13 @@ export interface PreparedAudioFile {
 }
 
 export interface TranscodeFileDeps {
-  /** Override the transcoder. Takes source bytes + ext hint, returns the
-   *  PATH of a 16 kHz mono PCM wav temp file (caller deletes). `null` means
-   *  "no transcoder on this platform". */
-  transcode?: ((input: Uint8Array, ext: string) => Promise<string>) | null;
+  /** Override the transcoder. Takes source bytes + ext hint + the caller's
+   *  0700 temp DIRECTORY to work in, and returns the PATH of a 16 kHz mono
+   *  PCM wav file inside that directory (the caller removes the whole
+   *  directory). `null` means "no transcoder on this platform". */
+  transcode?:
+    | ((input: Uint8Array, ext: string, dir: string) => Promise<string>)
+    | null;
   platform?: NodeJS.Platform;
 }
 
@@ -109,26 +116,32 @@ export async function prepareAudioFile(
     );
   }
   const hintExt = ext || MIME_EXT[meta.mime ?? ''] || 'audio';
-  const outPath = await transcode(bytes, hintExt);
-  try {
+  return withTempDir(async (dir) => {
+    const outPath = await transcode(bytes, hintExt, dir);
+    // No local catch for the stat: withTempDir removes the whole directory —
+    // including the transcoder's output, whose path never reaches the caller.
     const { size } = await fs.stat(outPath);
-    return { path: outPath, format: 'wav', sizeBytes: size };
-  } catch (e) {
-    // The transcoder already produced the file, but the path never reaches the
-    // caller — so nobody else can delete it.
-    await fs.rm(outPath, { force: true }).catch(() => {});
-    throw e;
-  }
+    return { path: outPath, dir, format: 'wav', sizeBytes: size };
+  });
 }
 
-let counter = 0;
-
-function tempPath(ext: string): string {
-  counter += 1;
-  return path.join(
-    os.tmpdir(),
-    `kiagent-asr-${process.pid}-${Date.now()}-${counter}.${ext}`,
-  );
+/**
+ * Run `fn` against a FRESH 0700 temp directory, removing it if `fn` throws.
+ * mkdtemp is what makes the temp path unguessable: the old
+ * `kiagent-asr-<pid>-<Date.now()>-<counter>` scheme was predictable, so on a
+ * shared /tmp another user could pre-plant a symlink at the name (a
+ * write-through primitive) or simply read the private audio out of a
+ * default-0644 file. Same shape as local-asr's `handle('hear')`.
+ * On SUCCESS the directory is the caller's to remove — recursively.
+ */
+async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiagent-asr-'));
+  try {
+    return await fn(dir);
+  } catch (e) {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
 }
 
 /** Spill already-container-native bytes to a temp file so every downstream
@@ -137,35 +150,33 @@ async function writePassthrough(
   bytes: Uint8Array,
   format: 'wav' | 'mp3',
 ): Promise<PreparedAudioFile> {
-  const outPath = tempPath(format);
-  try {
-    await fs.writeFile(outPath, bytes);
+  return withTempDir(async (dir) => {
+    const outPath = path.join(dir, `audio.${format}`);
+    // 0600 keeps private audio unreadable to other users on a shared /tmp;
+    // `wx` refuses to follow anything already at the name.
+    await fs.writeFile(outPath, bytes, { mode: 0o600, flag: 'wx' });
     const { size } = await fs.stat(outPath);
-    return { path: outPath, format, sizeBytes: size };
-  } catch (e) {
-    await fs.rm(outPath, { force: true }).catch(() => {});
-    throw e;
-  }
+    return { path: outPath, dir, format, sizeBytes: size };
+  });
 }
 
 /** macOS `afconvert`: any CoreAudio-decodable input → 16 kHz mono 16-bit PCM
  *  WAVE, left ON DISK. Uses temp files (afconvert is file-in/file-out, not a
- *  pipe). The caller owns `outPath` and must delete it.
+ *  pipe). Both files live in the CALLER's 0700 `dir`; the caller owns the
+ *  directory (and with it `outPath`) and must remove it recursively.
  *
  *  `run` is a seam so the failure-cleanup path can be tested without spawning
  *  a real (platform-dependent) afconvert; production always uses the default. */
 export async function afconvertToWavFile(
   input: Uint8Array,
   ext: string,
+  dir: string,
   run: (inPath: string, outPath: string) => Promise<void> = runAfconvert,
 ): Promise<string> {
-  const dir = os.tmpdir();
-  counter += 1;
-  const stamp = `${process.pid}-${Date.now()}-${counter}`;
-  const inPath = path.join(dir, `kiagent-asr-${stamp}.${ext}`);
-  const outPath = path.join(dir, `kiagent-asr-${stamp}.wav`);
+  const inPath = path.join(dir, `source.${ext}`);
+  const outPath = path.join(dir, 'audio.wav');
   try {
-    await fs.writeFile(inPath, input);
+    await fs.writeFile(inPath, input, { mode: 0o600, flag: 'wx' });
     await run(inPath, outPath);
     return outPath;
   } catch (e) {

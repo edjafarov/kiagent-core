@@ -20,35 +20,33 @@ async function isGone(p: string): Promise<boolean> {
   }
 }
 
-let tmpCounter = 0;
-
-/** A fake file-returning transcoder: writes `size` bytes and returns the path. */
+/** A fake file-returning transcoder: writes `size` bytes INTO THE CALLER'S
+ *  temp dir (as the real afconvert route now does) and returns the path. */
 function fakeTranscodeToFile(size: number, written: string[]) {
-  return jest.fn(async (_input: Uint8Array, _ext: string) => {
-    tmpCounter += 1;
-    const p = path.join(
-      os.tmpdir(),
-      `kiagent-asr-test-${process.pid}-${Date.now()}-${tmpCounter}.wav`,
-    );
+  return jest.fn(async (_input: Uint8Array, _ext: string, dir: string) => {
+    const p = path.join(dir, 'audio.wav');
     await fs.writeFile(p, Buffer.alloc(size, 0x7f));
     written.push(p);
     return p;
   });
 }
 
+/** Recursive so it covers both a prepared file and its owning temp dir. */
+async function rmrf(p: string): Promise<void> {
+  await fs.rm(p, { recursive: true, force: true }).catch(() => {});
+}
+
 describe('prepareAudioFile', () => {
   const cleanup: string[] = [];
 
   afterEach(async () => {
-    await Promise.all(
-      cleanup.splice(0).map((p) => fs.rm(p, { force: true }).catch(() => {})),
-    );
+    await Promise.all(cleanup.splice(0).map(rmrf));
   });
 
   it('passthrough writes the bytes to a temp file and stats it', async () => {
     const bytes = new Uint8Array([1, 2, 3, 4]);
     const p = await prepareAudioFile(bytes, { mime: 'audio/mpeg' });
-    cleanup.push(p.path);
+    cleanup.push(p.dir);
     expect(p.format).toBe('mp3');
     expect(p.sizeBytes).toBe(4);
     expect(new Uint8Array(await fs.readFile(p.path))).toEqual(bytes);
@@ -56,10 +54,23 @@ describe('prepareAudioFile', () => {
 
   it('wav passthrough writes a .wav temp file', async () => {
     const p = await prepareAudioFile(BYTES, { ext: 'wav' });
-    cleanup.push(p.path);
+    cleanup.push(p.dir);
     expect(p.format).toBe('wav');
     expect(p.path.endsWith('.wav')).toBe(true);
     expect(p.sizeBytes).toBe(4);
+  });
+
+  it('the prepared file lives in a fresh 0700 dir and is itself 0600 (unguessable, unreadable by other users on a shared /tmp)', async () => {
+    const a = await prepareAudioFile(BYTES, { ext: 'wav' });
+    const b = await prepareAudioFile(BYTES, { ext: 'wav' });
+    cleanup.push(a.dir, b.dir);
+    // A fresh mkdtemp dir per prepare: no predictable name to pre-plant a
+    // symlink at, and one prepare can never clobber another's file.
+    expect(a.dir).not.toBe(b.dir);
+    expect(path.dirname(a.path)).toBe(a.dir);
+    expect((await fs.stat(a.dir)).mode & 0o777).toBe(0o700);
+    expect((await fs.stat(a.path)).mode & 0o777).toBe(0o600);
+    expect(path.basename(a.dir).startsWith('kiagent-asr-')).toBe(true);
   });
 
   it('transcode branch returns the WAV PATH without reading it back (injected transcoder)', async () => {
@@ -69,7 +80,10 @@ describe('prepareAudioFile', () => {
       { mime: 'audio/mp4', ext: 'm4a' },
       { transcode },
     );
-    expect(transcode).toHaveBeenCalledWith(BYTES, 'm4a');
+    cleanup.push(p.dir);
+    // The transcoder is handed the prepare's OWN dir to work in — nothing
+    // lands at a caller-guessable path in the bare tmpdir.
+    expect(transcode).toHaveBeenCalledWith(BYTES, 'm4a', p.dir);
     expect(p.path).toBe(await transcode.mock.results[0].value);
     expect(p.format).toBe('wav');
     expect(p.sizeBytes).toBe(10);
@@ -80,8 +94,15 @@ describe('prepareAudioFile', () => {
 
   it('hints the transcoder with a mime-derived extension when the filename has none', async () => {
     const transcode = fakeTranscodeToFile(2, cleanup);
-    await prepareAudioFile(BYTES, { mime: 'audio/ogg' }, { transcode });
-    expect(transcode).toHaveBeenCalledWith(BYTES, 'ogg');
+    const p = await prepareAudioFile(
+      BYTES,
+      { mime: 'audio/ogg' },
+      {
+        transcode,
+      },
+    );
+    cleanup.push(p.dir);
+    expect(transcode).toHaveBeenCalledWith(BYTES, 'ogg', p.dir);
   });
 
   it('forceWav routes an mp3 through the transcoder instead of passthrough', async () => {
@@ -92,7 +113,8 @@ describe('prepareAudioFile', () => {
       { transcode },
       { forceWav: true },
     );
-    expect(transcode).toHaveBeenCalledWith(BYTES, 'mp3');
+    cleanup.push(p.dir);
+    expect(transcode).toHaveBeenCalledWith(BYTES, 'mp3', p.dir);
     expect(p.format).toBe('wav');
     expect(p.sizeBytes).toBe(10);
   });
@@ -116,7 +138,7 @@ describe('prepareAudioFile', () => {
       { transcode },
       { forceWav: true },
     );
-    cleanup.push(p.path);
+    cleanup.push(p.dir);
     expect(transcode).not.toHaveBeenCalled();
     expect(p.format).toBe('wav');
     expect(p.sizeBytes).toBe(4);
@@ -140,6 +162,7 @@ describe('prepareAudioFile', () => {
     const readSpy = jest.spyOn(fs, 'readFile');
     try {
       const p = await prepareAudioFile(BYTES, { ext: 'm4a' }, { transcode });
+      cleanup.push(p.dir);
       expect(readSpy).not.toHaveBeenCalled();
       expect(p.sizeBytes).toBe(10);
     } finally {
@@ -163,6 +186,8 @@ describe('prepareAudioFile', () => {
     expect(produced).toHaveLength(1);
     cleanup.push(...produced); // belt-and-braces if the assertion below fails
     expect(await isGone(produced[0])).toBe(true);
+    // The whole temp DIRECTORY goes, not just the file inside it.
+    expect(await isGone(path.dirname(produced[0]))).toBe(true);
   });
 
   it('passthrough deletes its own temp file when stat fails', async () => {
@@ -189,23 +214,31 @@ describe('prepareAudioFile', () => {
     expect(written).toHaveLength(1);
     cleanup.push(...written);
     expect(await isGone(written[0])).toBe(true);
+    expect(await isGone(path.dirname(written[0]))).toBe(true);
   });
 });
 
 describe('afconvertToWavFile', () => {
   const cleanup: string[] = [];
 
+  /** The caller-owned 0700 dir afconvert now works inside. */
+  async function tempDir(): Promise<string> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiagent-asr-aftest-'));
+    cleanup.push(dir);
+    return dir;
+  }
+
   afterEach(async () => {
-    await Promise.all(
-      cleanup.splice(0).map((p) => fs.rm(p, { force: true }).catch(() => {})),
-    );
+    await Promise.all(cleanup.splice(0).map(rmrf));
   });
 
   it('leaves the WAV on disk on success and deletes only the input', async () => {
+    const dir = await tempDir();
     let seen: { inPath: string; outPath: string } | undefined;
     const out = await afconvertToWavFile(
       BYTES,
       'm4a',
+      dir,
       async (inPath, outPath) => {
         seen = { inPath, outPath };
         // The real afconvert reads inPath; prove we actually wrote the source.
@@ -213,17 +246,38 @@ describe('afconvertToWavFile', () => {
         await fs.writeFile(outPath, Buffer.alloc(64));
       },
     );
-    cleanup.push(out);
     expect(seen).toBeDefined();
     expect(out).toBe(seen?.outPath);
+    // Both temp files stay INSIDE the caller's dir — nothing at a guessable
+    // name in the bare tmpdir — and the source is written 0600.
+    expect(path.dirname(out)).toBe(dir);
+    expect(path.dirname(seen?.inPath as string)).toBe(dir);
     expect(await isGone(seen?.inPath as string)).toBe(true);
     expect((await fs.stat(out)).size).toBe(64);
   });
 
+  it('writes the decoder input 0600 and refuses to follow a pre-planted name', async () => {
+    const dir = await tempDir();
+    let mode = 0;
+    await afconvertToWavFile(BYTES, 'm4a', dir, async (inPath, outPath) => {
+      mode = (await fs.stat(inPath)).mode & 0o777;
+      await fs.writeFile(outPath, Buffer.alloc(1));
+    });
+    expect(mode).toBe(0o600);
+
+    // `wx` — a name that already exists is an error, never a write-through.
+    const dir2 = await tempDir();
+    await fs.writeFile(path.join(dir2, 'source.m4a'), Buffer.alloc(1));
+    await expect(
+      afconvertToWavFile(BYTES, 'm4a', dir2, async () => {}),
+    ).rejects.toThrow(/EEXIST/);
+  });
+
   it('deletes BOTH temp files when the transcode fails', async () => {
+    const dir = await tempDir();
     let seen: { inPath: string; outPath: string } | undefined;
     await expect(
-      afconvertToWavFile(BYTES, 'm4a', async (inPath, outPath) => {
+      afconvertToWavFile(BYTES, 'm4a', dir, async (inPath, outPath) => {
         seen = { inPath, outPath };
         // afconvert can leave a partial output behind before it exits non-zero.
         await fs.writeFile(outPath, Buffer.alloc(64));
@@ -231,7 +285,6 @@ describe('afconvertToWavFile', () => {
       }),
     ).rejects.toBeInstanceOf(AudioUnsupportedFormatError);
     expect(seen).toBeDefined();
-    cleanup.push(seen?.inPath as string, seen?.outPath as string);
     expect(await isGone(seen?.inPath as string)).toBe(true);
     expect(await isGone(seen?.outPath as string)).toBe(true);
   });

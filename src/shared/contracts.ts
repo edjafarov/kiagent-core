@@ -250,7 +250,7 @@ export interface RecentExtraction {
   title: string | null;
   filename: string | null;
   type: string;
-  engine: string; // 'local-ocr' | 'local-ocr+vlm' — from metadata.extraction.engine
+  engine: string; // 'local-ocr' | 'local-ocr+vlm' | 'local-asr' — from metadata.extraction.engine
   updatedAt: string;
 }
 

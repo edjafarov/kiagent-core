@@ -91,7 +91,6 @@ export function createLocalAsrProvider(deps: {
     // Assigned before the `finally` callback can run (it is a microtask), so
     // dispose() never observes a null activeRun for a job that is still going.
     activeRun = run;
-    void run;
   };
 
   const transcribeFile = (

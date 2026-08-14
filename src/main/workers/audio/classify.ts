@@ -31,12 +31,24 @@ interface TranscribableMeta {
   size?: number;
 }
 
+/** Extensions are ALLOWLISTED, never sanitized: this value is interpolated
+ *  into a temp-file name by the transcoder, and `metadata` is
+ *  `Record<string, unknown>` filled by third-party marketplace connectors — an
+ *  ext of `../../../../Users/<u>/target` would escape tmpdir into an
+ *  arbitrary-file write-and-delete. Same charset the filename fallback below
+ *  has always enforced. */
+const SAFE_EXT_RE = /^[a-z0-9]{1,8}$/;
+
 /** Best-effort source extension (lower-case, no leading dot) from the doc's
  *  metadata/filename/title — local-folder files carry `metadata.ext` but no
- *  mime, so the transcoder needs this to hint the decoder. */
+ *  mime, so the transcoder needs this to hint the decoder. Anything outside
+ *  the allowlist yields '' (the transcoder falls back to its mime map). */
 export function audioExt(doc: Document): string {
   const meta = doc.metadata as TranscribableMeta;
-  if (meta.ext) return meta.ext.toLowerCase().replace(/^\./, '');
+  if (meta.ext) {
+    const ext = meta.ext.toLowerCase().replace(/^\./, '');
+    return SAFE_EXT_RE.test(ext) ? ext : '';
+  }
   const name = meta.filename ?? doc.title ?? '';
   const m = /\.([a-z0-9]+)$/i.exec(name);
   return m ? m[1].toLowerCase() : '';

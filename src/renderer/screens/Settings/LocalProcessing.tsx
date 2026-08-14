@@ -261,8 +261,8 @@ export function LocalProcessing(): React.ReactElement {
             <div className="t-meta">No local model is installed yet.</div>
             <div className="t-meta">
               Local inference runs entirely on this machine once a provider is
-              available. The local model downloads automatically when scanned
-              documents need it, or on demand above.
+              available. The local models download automatically when scanned
+              documents or audio need them, or on demand above.
             </div>
           </div>
         ) : (
@@ -284,7 +284,7 @@ export function LocalProcessing(): React.ReactElement {
         {stats != null && (
           <div className="t-meta">
             {stats.pendingOcr} visual documents queued for processing ·{' '}
-            {stats.processed} processed
+            {stats.processed} extracted or transcribed
           </div>
         )}
         {stats != null && pausedLine(stats.lane, stats.pendingOcr) != null && (
