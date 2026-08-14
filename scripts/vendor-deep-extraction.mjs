@@ -2,6 +2,8 @@
 // so a locally packaged build can never silently ship the feature inert.
 // Mirrors the per-OS vendor step in .github/workflows/release.yml.
 //   - llama-server: fetched for every slug this host packages (all platforms).
+//   - whisper-cli: fetched (linux/win) or built from source (darwin) for
+//     local ASR — see scripts/whisper-assets.mjs.
 //   - kia-vision: built only on darwin (native OCR via Swift Vision framework).
 //   - windows-ocr: built only on win32 (native OCR via .NET 8 + Windows.Media.Ocr).
 //     Win/Linux without a native helper use the WASM rasterizer + GLM-OCR.
@@ -13,7 +15,9 @@ function run(script, args = []) {
 }
 
 run('fetch-llama-server.mjs'); // defaults to slugsForHost(process.platform, process.arch)
+run('fetch-whisper-cli.mjs'); // prebuilt whisper-cli (linux/win); clean no-op on darwin
 if (process.platform === 'darwin') {
+  run('build-whisper.mjs'); // whisper-cli from source, both mac arches (no upstream macOS binary)
   run('build-vision-helper.mjs');
 } else if (process.platform === 'win32') {
   run('build-windows-ocr-helper.mjs');

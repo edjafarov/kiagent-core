@@ -80,6 +80,7 @@
     "moduleFileExtensions": [
       "js",
       "jsx",
+      "mjs",
       "ts",
       "tsx",
       "json"
@@ -114,6 +115,7 @@
     "transform": {
       "\\.(ts|tsx)$": "ts-jest",
       "node_modules/(franc-min|trigram-utils|n-gram|collapse-white-space|jose|quick-lru|nanoid|eta)/.+\\.js$": "<rootDir>/.erb/jest/esm-cjs-transformer.js",
+      "\\.mjs$": "<rootDir>/.erb/jest/mjs-cjs-transformer.js",
       "\\.(js|jsx)$": "ts-jest"
     },
     "transformIgnorePatterns": [

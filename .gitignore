@@ -42,6 +42,10 @@ test-results/
 # Vendored llama.cpp runtime (fetched via scripts/fetch-llama-server.mjs)
 assets/llama/
 
+# Vendored whisper.cpp runtime (fetched via scripts/fetch-whisper-cli.mjs;
+# darwin built from source via scripts/build-whisper.mjs)
+assets/whisper/
+
 # Compiled kia-vision helper (built via scripts/build-vision-helper.mjs)
 assets/vision/
 
