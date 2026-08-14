@@ -59,6 +59,83 @@ function mpeg2CbrFile(
   return new Uint8Array(buf);
 }
 
+type Version = 'mpeg1' | 'mpeg2' | 'mpeg25';
+
+const VERSION_BITS: Record<Version, number> = { mpeg25: 0, mpeg2: 2, mpeg1: 3 };
+const V_BITRATES: Record<Version, number[]> = {
+  mpeg1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+  mpeg2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+  mpeg25: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+};
+const V_RATES: Record<Version, number[]> = {
+  mpeg1: [44100, 48000, 32000],
+  mpeg2: [22050, 24000, 16000],
+  mpeg25: [11025, 12000, 8000],
+};
+
+/** Generic Layer III frame header for any version / channel mode. */
+function l3Header(
+  version: Version,
+  bitrateKbps: number,
+  sampleRate: number,
+  mono: boolean,
+): Buffer {
+  const b = V_BITRATES[version].indexOf(bitrateKbps);
+  const r = V_RATES[version].indexOf(sampleRate);
+  if (b < 1 || r < 0)
+    throw new Error(`bad ${version} ${bitrateKbps}/${sampleRate}`);
+  return Buffer.from([
+    0xff,
+    0xe0 | (VERSION_BITS[version] << 3) | 0x03, // layer III, no CRC
+    (b << 4) | (r << 2),
+    mono ? 0xc0 : 0x00, // mode 3 = mono, mode 0 = stereo
+  ]);
+}
+
+function sideInfoBytes(version: Version, mono: boolean): number {
+  if (version === 'mpeg1') return mono ? 17 : 32;
+  return mono ? 9 : 17;
+}
+
+/**
+ * A single-frame file whose Xing tag carries `frames`. Parameterised over
+ * version + channel mode so every side-info branch (32 / 17 / 9) and every
+ * sample-rate table gets a fixture.
+ */
+function xingFrame(
+  version: Version,
+  bitrateKbps: number,
+  sampleRate: number,
+  mono: boolean,
+  frames: number,
+): Uint8Array {
+  const samples = version === 'mpeg1' ? 1152 : 576;
+  const size = Math.floor(((samples / 8) * bitrateKbps * 1000) / sampleRate);
+  const buf = Buffer.alloc(Math.max(size, 64));
+  l3Header(version, bitrateKbps, sampleRate, mono).copy(buf, 0);
+  const tagOff = 4 + sideInfoBytes(version, mono);
+  buf.write('Xing', tagOff, 'ascii');
+  buf.writeUInt32BE(0x0001, tagOff + 4);
+  buf.writeUInt32BE(frames, tagOff + 8);
+  return new Uint8Array(buf);
+}
+
+/**
+ * A stream whose first frame carries a VBR/CBR tag with NO frame count,
+ * followed by identical-bitrate frames — so the CBR consistency check would
+ * happily pass and produce a size/byterate number.
+ */
+function taggedCbrStream(fourcc: 'Xing' | 'Info', frames = 4): Uint8Array {
+  const rate = 44100;
+  const frameSize = Math.floor((144 * 128 * 1000) / rate);
+  const buf = Buffer.alloc(frameSize * frames);
+  for (let i = 0; i < frames; i += 1)
+    frameHeader(128, rate).copy(buf, i * frameSize);
+  buf.write(fourcc, 36, 'ascii');
+  buf.writeUInt32BE(0x0000, 40); // flags: no frame count
+  return new Uint8Array(buf);
+}
+
 /** A VBR file: first frame carries a Xing header with a frame count. */
 function xingFile(frames: number): Uint8Array {
   const rate = 44100;
@@ -149,28 +226,52 @@ describe('mp3DurationSeconds', () => {
     expect(mp3DurationSeconds(new Uint8Array(reservedVersion))).toBeNull();
   });
 
-  it('accepts an Info (CBR) header but falls back to CBR when no frame count flag', () => {
-    const rate = 44100;
-    const frameSize = Math.floor((144 * 128 * 1000) / rate);
-    const buf = Buffer.alloc(frameSize * 4);
-    for (let i = 0; i < 4; i += 1)
-      frameHeader(128, rate).copy(buf, i * frameSize);
-    buf.write('Info', 36, 'ascii');
-    buf.writeUInt32BE(0x0000, 40); // no flags → no frame count
-    const d = mp3DurationSeconds(new Uint8Array(buf));
-    expect(d).toBeCloseTo((frameSize * 4 * 8) / 128000, 3);
-  });
-
-  it('reads a Xing header from an MPEG-2 mono frame (side info = 9 bytes)', () => {
-    const frameSize = Math.floor((72 * 64 * 1000) / 22050);
-    const buf = Buffer.alloc(frameSize);
-    mpeg2MonoFrameHeader(64, 22050).copy(buf, 0);
-    buf.write('Xing', 4 + 9, 'ascii');
-    buf.writeUInt32BE(0x0001, 4 + 9 + 4);
-    buf.writeUInt32BE(5000, 4 + 9 + 8);
-    expect(mp3DurationSeconds(new Uint8Array(buf))).toBeCloseTo(
-      (5000 * 576) / 22050,
+  it('accepts an Info (CBR) header and falls back to CBR when no frame count flag', () => {
+    // `Info` is LAME's CONSTANT-bitrate marker, so size/byterate is valid.
+    const bytes = taggedCbrStream('Info');
+    expect(mp3DurationSeconds(bytes)).toBeCloseTo(
+      (bytes.length * 8) / 128000,
       3,
     );
   });
+
+  it('returns null for a Xing tag with no usable frame count, even when the CBR check would pass', () => {
+    // `Xing` declares VARIABLE bitrate: the first frame's 128 kbps is not the
+    // file average, so size/byterate would be confidently wrong — and it
+    // UNDER-estimates for low-bitrate VBR speech, slipping past the decoded-
+    // size cap. The following frames here are deliberately identical, so the
+    // CBR consistency gate passes; only the Xing/Info distinction saves us.
+    expect(mp3DurationSeconds(taggedCbrStream('Xing'))).toBeNull();
+    // …and the Info twin of the exact same bytes still resolves, proving the
+    // fourcc is what decides it.
+    expect(mp3DurationSeconds(taggedCbrStream('Info'))).not.toBeNull();
+  });
+
+  it('returns null for a Xing tag whose frame count is 0 or truncated away', () => {
+    const zero = Buffer.from(xingFrame('mpeg1', 128, 44100, false, 0));
+    expect(mp3DurationSeconds(new Uint8Array(zero))).toBeNull();
+    // Truncated so the count field (offset 44..47) is missing entirely.
+    const truncated = Buffer.from(xingFrame('mpeg1', 128, 44100, false, 500));
+    expect(
+      mp3DurationSeconds(new Uint8Array(truncated.subarray(0, 46))),
+    ).toBeNull();
+  });
+
+  // Every side-info branch (MPEG-1 32/17, MPEG-2 & 2.5 17/9) and every
+  // sample-rate table, each reached through the Xing path so a wrong offset or
+  // a wrong samples-per-frame shows up as a wrong duration rather than silence.
+  it.each([
+    ['mpeg1 stereo (side info 32)', 'mpeg1', 128, 44100, false, 1152],
+    ['mpeg1 mono   (side info 17)', 'mpeg1', 128, 32000, true, 1152],
+    ['mpeg2 stereo (side info 17)', 'mpeg2', 64, 24000, false, 576],
+    ['mpeg2 mono   (side info 9)', 'mpeg2', 64, 22050, true, 576],
+    ['mpeg2.5 mono (side info 9)', 'mpeg25', 16, 8000, true, 576],
+    ['mpeg2.5 stereo (side info 17)', 'mpeg25', 32, 11025, false, 576],
+  ] as const)(
+    'reads a Xing frame count from %s',
+    (_label, version, kbps, rate, mono, samples) => {
+      const bytes = xingFrame(version, kbps, rate, mono, 5000);
+      expect(mp3DurationSeconds(bytes)).toBeCloseTo((5000 * samples) / rate, 3);
+    },
+  );
 });

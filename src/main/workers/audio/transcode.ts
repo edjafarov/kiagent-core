@@ -156,8 +156,15 @@ export async function prepareAudioFile(
   }
   const hintExt = ext || MIME_EXT[meta.mime ?? ''] || 'audio';
   const outPath = await transcode(bytes, hintExt);
-  const { size } = await fs.stat(outPath);
-  return { path: outPath, format: 'wav', sizeBytes: size };
+  try {
+    const { size } = await fs.stat(outPath);
+    return { path: outPath, format: 'wav', sizeBytes: size };
+  } catch (e) {
+    // The transcoder already produced the file, but the path never reaches the
+    // caller — so nobody else can delete it.
+    await fs.rm(outPath, { force: true }).catch(() => {});
+    throw e;
+  }
 }
 
 let counter = 0;
@@ -189,10 +196,14 @@ async function writePassthrough(
 
 /** macOS `afconvert`: any CoreAudio-decodable input → 16 kHz mono 16-bit PCM
  *  WAVE, left ON DISK. Uses temp files (afconvert is file-in/file-out, not a
- *  pipe). The caller owns `outPath` and must delete it. */
-async function afconvertToWavFile(
+ *  pipe). The caller owns `outPath` and must delete it.
+ *
+ *  `run` is a seam so the failure-cleanup path can be tested without spawning
+ *  a real (platform-dependent) afconvert; production always uses the default. */
+export async function afconvertToWavFile(
   input: Uint8Array,
   ext: string,
+  run: (inPath: string, outPath: string) => Promise<void> = runAfconvert,
 ): Promise<string> {
   const dir = os.tmpdir();
   counter += 1;
@@ -201,7 +212,7 @@ async function afconvertToWavFile(
   const outPath = path.join(dir, `kiagent-asr-${stamp}.wav`);
   try {
     await fs.writeFile(inPath, input);
-    await runAfconvert(inPath, outPath);
+    await run(inPath, outPath);
     return outPath;
   } catch (e) {
     // Only on failure — on success the WAV is the caller's to delete.

@@ -128,11 +128,20 @@ function readU32BE(b: Uint8Array, off: number): number {
   );
 }
 
-function xingFrameCount(
-  b: Uint8Array,
-  off: number,
-  info: FrameInfo,
-): number | null {
+/**
+ * What the first frame's VBR tag told us. The `Xing` / `Info` distinction is
+ * load-bearing, not cosmetic: `Xing` means the encoder declared the stream
+ * VARIABLE-bitrate, so the first frame's bitrate is not the file average and
+ * the CBR `size/byterate` estimate is invalid. `Info` is LAME's marker for a
+ * constant-bitrate stream, where that estimate is exactly right.
+ */
+type VbrTag =
+  | { kind: 'none' } // no tag — an ordinary CBR stream
+  | { kind: 'frames'; frames: number } // authoritative frame count
+  | { kind: 'info-no-count' } // CBR declared, no count: CBR math is still fine
+  | { kind: 'xing-no-count' }; // VBR declared but unusable → caller must bail
+
+function readVbrTag(b: Uint8Array, off: number, info: FrameInfo): VbrTag {
   // The VBR tag lives in the first frame, right after the header + side info.
   // Side-info size depends on BOTH version and channel mode.
   const sideInfo =
@@ -144,19 +153,23 @@ function xingFrameCount(
         ? 9
         : 17;
   const tagOff = off + 4 + sideInfo;
-  if (tagOff + 8 > b.length) return null;
+  // Too short to even hold a fourcc + flags: we cannot claim a tag exists.
+  if (tagOff + 8 > b.length) return { kind: 'none' };
   const fourcc = String.fromCharCode(
     b[tagOff],
     b[tagOff + 1],
     b[tagOff + 2],
     b[tagOff + 3],
   );
-  if (fourcc !== 'Xing' && fourcc !== 'Info') return null;
+  if (fourcc !== 'Xing' && fourcc !== 'Info') return { kind: 'none' };
+  const noCount: VbrTag =
+    fourcc === 'Xing' ? { kind: 'xing-no-count' } : { kind: 'info-no-count' };
   const flags = readU32BE(b, tagOff + 4);
-  if ((flags & 0x01) === 0) return null; // frame count not present
-  if (tagOff + 12 > b.length) return null;
+  if ((flags & 0x01) === 0) return noCount; // frame count not present
+  if (tagOff + 12 > b.length) return noCount; // truncated before the count
   const frames = readU32BE(b, tagOff + 8);
-  return frames > 0 ? frames : null;
+  if (frames <= 0) return noCount;
+  return { kind: 'frames', frames };
 }
 
 export function mp3DurationSeconds(bytes: Uint8Array): number | null {
@@ -164,17 +177,26 @@ export function mp3DurationSeconds(bytes: Uint8Array): number | null {
   if (!first) return null;
   const { off, info } = first;
 
-  const frames = xingFrameCount(bytes, off, info);
-  if (frames !== null) {
-    const seconds = (frames * info.samplesPerFrame) / info.sampleRate;
+  const tag = readVbrTag(bytes, off, info);
+  if (tag.kind === 'frames') {
+    const seconds = (tag.frames * info.samplesPerFrame) / info.sampleRate;
     return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
   }
+  // A `Xing` tag with no usable count is the one case we must NOT guess at.
+  // The stream has self-identified as variable-bitrate, so `size/byterate`
+  // computed from the first frame is wrong by whatever the true average is —
+  // and it UNDER-estimates whenever the declared bitrate exceeds that average
+  // (low-bitrate VBR speech behind a 128 kbps header: the aligned workload for
+  // voice-note ASR). An under-estimate slips past the decoded-size cap and
+  // hands an over-long file to the transcriber, which is the OOM the cap
+  // exists to prevent. The CBR consistency check below cannot save us: it
+  // passes exactly when frame 2 agrees with frame 1, which is the very
+  // coincidence that produces the bad number. Bail; a transcode is cheap.
+  if (tag.kind === 'xing-no-count') return null;
 
   // CBR fallback: only trustworthy if the stream really is constant-bitrate,
   // so demand that the next frame header sits exactly where this frame's size
-  // predicts AND declares the same version/rate/bitrate. A VBR stream whose
-  // Xing tag lacks a frame count fails this check and returns null rather than
-  // reporting a duration derived from one frame's bitrate.
+  // predicts AND declares the same version/rate/bitrate.
   const nextOff = off + info.frameBytes;
   if (nextOff + 4 <= bytes.length) {
     const second = parseFrameHeader(bytes, nextOff);

@@ -3,12 +3,23 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  afconvertToWavFile,
   AudioUnsupportedFormatError,
   prepareAudio,
   prepareAudioFile,
 } from '../transcode';
 
 const BYTES = new Uint8Array([1, 2, 3, 4]);
+
+/** True when nothing exists at `p`. */
+async function isGone(p: string): Promise<boolean> {
+  try {
+    await fs.stat(p);
+    return false;
+  } catch {
+    return true;
+  }
+}
 
 let tmpCounter = 0;
 
@@ -183,5 +194,109 @@ describe('prepareAudioFile', () => {
         { platform: 'linux' },
       ),
     ).rejects.toBeInstanceOf(AudioUnsupportedFormatError);
+  });
+
+  it('NEVER reads the transcoded WAV back into the heap', async () => {
+    // The whole point of the path-based API (spec §6): a 2 h voice note is
+    // ~230 MB of PCM16. This fails the moment someone reintroduces the
+    // fs.readFile(outPath) that afconvertToWav used to do.
+    const transcode = fakeTranscodeToFile(10, cleanup);
+    const readSpy = jest.spyOn(fs, 'readFile');
+    try {
+      const p = await prepareAudioFile(BYTES, { ext: 'm4a' }, { transcode });
+      expect(readSpy).not.toHaveBeenCalled();
+      expect(p.sizeBytes).toBe(10);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it('deletes the transcoder output when stat fails (the path never reaches the caller)', async () => {
+    const produced: string[] = [];
+    const transcode = fakeTranscodeToFile(10, produced);
+    const statSpy = jest
+      .spyOn(fs, 'stat')
+      .mockRejectedValue(new Error('stat boom') as never);
+    try {
+      await expect(
+        prepareAudioFile(BYTES, { ext: 'm4a' }, { transcode }),
+      ).rejects.toThrow('stat boom');
+    } finally {
+      statSpy.mockRestore();
+    }
+    expect(produced).toHaveLength(1);
+    cleanup.push(...produced); // belt-and-braces if the assertion below fails
+    expect(await isGone(produced[0])).toBe(true);
+  });
+
+  it('passthrough deletes its own temp file when stat fails', async () => {
+    const realWriteFile = fs.writeFile;
+    const written: string[] = [];
+    const writeSpy = jest.spyOn(fs, 'writeFile').mockImplementation((async (
+      p: string,
+      data: Uint8Array,
+    ) => {
+      written.push(p);
+      await realWriteFile(p, data);
+    }) as never);
+    const statSpy = jest
+      .spyOn(fs, 'stat')
+      .mockRejectedValue(new Error('stat boom') as never);
+    try {
+      await expect(prepareAudioFile(BYTES, { ext: 'wav' })).rejects.toThrow(
+        'stat boom',
+      );
+    } finally {
+      writeSpy.mockRestore();
+      statSpy.mockRestore();
+    }
+    expect(written).toHaveLength(1);
+    cleanup.push(...written);
+    expect(await isGone(written[0])).toBe(true);
+  });
+});
+
+describe('afconvertToWavFile', () => {
+  const cleanup: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      cleanup.splice(0).map((p) => fs.rm(p, { force: true }).catch(() => {})),
+    );
+  });
+
+  it('leaves the WAV on disk on success and deletes only the input', async () => {
+    let seen: { inPath: string; outPath: string } | undefined;
+    const out = await afconvertToWavFile(
+      BYTES,
+      'm4a',
+      async (inPath, outPath) => {
+        seen = { inPath, outPath };
+        // The real afconvert reads inPath; prove we actually wrote the source.
+        expect(new Uint8Array(await fs.readFile(inPath))).toEqual(BYTES);
+        await fs.writeFile(outPath, Buffer.alloc(64));
+      },
+    );
+    cleanup.push(out);
+    expect(seen).toBeDefined();
+    expect(out).toBe(seen?.outPath);
+    expect(await isGone(seen?.inPath as string)).toBe(true);
+    expect((await fs.stat(out)).size).toBe(64);
+  });
+
+  it('deletes BOTH temp files when the transcode fails', async () => {
+    let seen: { inPath: string; outPath: string } | undefined;
+    await expect(
+      afconvertToWavFile(BYTES, 'm4a', async (inPath, outPath) => {
+        seen = { inPath, outPath };
+        // afconvert can leave a partial output behind before it exits non-zero.
+        await fs.writeFile(outPath, Buffer.alloc(64));
+        throw new AudioUnsupportedFormatError('afconvert exited 1');
+      }),
+    ).rejects.toBeInstanceOf(AudioUnsupportedFormatError);
+    expect(seen).toBeDefined();
+    cleanup.push(seen?.inPath as string, seen?.outPath as string);
+    expect(await isGone(seen?.inPath as string)).toBe(true);
+    expect(await isGone(seen?.outPath as string)).toBe(true);
   });
 });
