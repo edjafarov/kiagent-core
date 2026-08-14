@@ -3,12 +3,6 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-/** Bytes ready for llama.cpp's `input_audio` part, which accepts wav or mp3. */
-export interface PreparedAudio {
-  data: Uint8Array;
-  format: 'wav' | 'mp3';
-}
-
 /** Thrown when the audio can't be turned into wav/mp3 on THIS host — e.g. an
  *  opus voice note on a non-macOS build, where no transcoder is bundled. A
  *  permanent condition for this platform, so the worker skips rather than
@@ -55,52 +49,6 @@ function isMp3(mime: string | undefined, ext: string): boolean {
   return (mime !== undefined && MP3_MIMES.has(mime)) || ext === 'mp3';
 }
 
-export interface TranscodeDeps {
-  /** Override the transcoder (tests / non-darwin strategies). Returns 16 kHz
-   *  mono PCM wav bytes. `null` means "no transcoder on this platform". */
-  transcode?: ((input: Uint8Array, ext: string) => Promise<Uint8Array>) | null;
-  platform?: NodeJS.Platform;
-}
-
-/**
- * Turn arbitrary audio bytes into something llama.cpp's `input_audio` accepts.
- * wav/mp3 pass through untouched; every other container (m4a, ogg/opus, aac,
- * flac…) is transcoded to 16 kHz mono PCM wav. On macOS the transcode uses the
- * built-in `afconvert` (CoreAudio) — no bundled dependency, and verified to
- * decode m4a/aac/mp3/opus/ogg. On other platforms only wav/mp3 pass; anything
- * else raises AudioUnsupportedFormatError (a cross-platform ffmpeg/wasm decoder
- * is a follow-up).
- *
- * @deprecated Superseded by `prepareAudioFile`, which never brings decoded PCM
- * into the heap. Kept transitionally while the worker migrates; deleted in
- * Task 9.
- */
-export async function prepareAudio(
-  bytes: Uint8Array,
-  meta: { mime?: string; ext?: string },
-  deps: TranscodeDeps = {},
-): Promise<PreparedAudio> {
-  const ext = (meta.ext ?? '').toLowerCase().replace(/^\./, '');
-  if (isWav(meta.mime, ext)) return { data: bytes, format: 'wav' };
-  if (isMp3(meta.mime, ext)) return { data: bytes, format: 'mp3' };
-
-  const platform = deps.platform ?? process.platform;
-  const transcode =
-    deps.transcode !== undefined
-      ? deps.transcode
-      : platform === 'darwin'
-        ? afconvertToWav
-        : null;
-  if (!transcode) {
-    throw new AudioUnsupportedFormatError(
-      `cannot transcode audio (mime=${meta.mime ?? '?'} ext=${ext || '?'}) on ` +
-        `${platform}: only wav/mp3 are supported without a bundled transcoder`,
-    );
-  }
-  const hintExt = ext || MIME_EXT[meta.mime ?? ''] || 'audio';
-  return { data: await transcode(bytes, hintExt), format: 'wav' };
-}
-
 /** Bytes ready for llama.cpp's `input_audio`, but as a FILE on disk. Nothing
  *  here ever materialises decoded PCM in the JS heap (spec §6). */
 export interface PreparedAudioFile {
@@ -122,11 +70,17 @@ export interface TranscodeFileDeps {
 }
 
 /**
- * Path-based sibling of `prepareAudio`. Same format policy, except the result
- * is a temp-file path the caller owns and deletes: the transcoded WAV is never
- * read back into the heap, which is the whole point (a 2 h voice note is
- * ~230 MB of PCM16). `forceWav` routes an mp3 through the transcoder too, for
- * callers that need real PCM rather than a compressed container.
+ * Turn arbitrary audio bytes into a file whisper.cpp accepts, as a PATH the
+ * caller owns and deletes — the transcoded WAV is never read back into the
+ * heap, which is the whole point (a 2 h voice note is ~230 MB of PCM16).
+ * wav/mp3 pass through to a temp file untouched; every other container (m4a,
+ * ogg/opus, aac, flac…) is transcoded to 16 kHz mono PCM wav. On macOS that
+ * uses the built-in `afconvert` (CoreAudio) — no bundled dependency. On other
+ * platforms only wav/mp3 pass; anything else raises
+ * AudioUnsupportedFormatError (a cross-platform decoder is a follow-up).
+ * `forceWav` routes an mp3 through the transcoder too, for callers that need
+ * real PCM rather than a compressed container whose size says nothing about
+ * its decoded size.
  */
 export async function prepareAudioFile(
   bytes: Uint8Array,
@@ -220,21 +174,6 @@ export async function afconvertToWavFile(
     throw e;
   } finally {
     await fs.rm(inPath, { force: true }).catch(() => {});
-  }
-}
-
-/** @deprecated Transitional wrapper keeping the legacy bytes-based
- *  `prepareAudio` compiling; both are deleted in Task 9. Reads the decoded WAV
- *  back into the heap — exactly what `afconvertToWavFile` exists to avoid. */
-async function afconvertToWav(
-  input: Uint8Array,
-  ext: string,
-): Promise<Uint8Array> {
-  const outPath = await afconvertToWavFile(input, ext);
-  try {
-    return new Uint8Array(await fs.readFile(outPath));
-  } finally {
-    await fs.rm(outPath, { force: true }).catch(() => {});
   }
 }
 

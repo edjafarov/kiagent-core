@@ -33,6 +33,17 @@ export function attachBundledWorkers(
   // every attached worker via engine.stopAll().
   const audioWorker = createAudioWorker({
     laneOpen: () => backgroundLaneOpen(platform),
+    // Demand-driven: every audio candidate asks for the install, so the
+    // download runs during the closed processing window (spec §5).
+    requestAsr: () => deps.localAsr.ensureInstalled(),
+    // Read the INFERENCE PLANE, not the ASR provider: any ready `hear`
+    // provider counts, so the worker stays provider-agnostic.
+    hearReady: () =>
+      platform.inference
+        .providers()
+        .some((p) => p.supports.includes('hear') && p.status() === 'ready'),
+    // The bundled file-path route — deliberately NOT on WorkerSession (spec §3).
+    transcribeFile: (p, o) => deps.localAsr.transcribeFile(p, o),
   });
   platform.engine.attach(audioWorker);
   registerRedrive(platform, audioWorker, [deps.localAsr]);

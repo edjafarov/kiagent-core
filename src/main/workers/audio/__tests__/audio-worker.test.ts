@@ -1,14 +1,22 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import type { Change, Document, WorkerSession } from '@shared/contracts';
 
-import {
-  CapabilityUnsupportedError,
-  LaneClosedError,
-  NoProviderError,
-} from '@main/core/inference';
+import { workerConsumerName } from '@main/core/engine/engine';
+import { NoProviderError } from '@main/core/inference';
+import { AsrInputRejectedError } from '@main/providers/local-asr/whisper-cli';
 
-import { createAudioWorker } from '../audio-worker';
+import { createAudioWorker, maxDecodedBytes } from '../audio-worker';
 import { MAX_SOURCE_BYTES } from '../classify';
-import { AudioUnsupportedFormatError } from '../transcode';
+import {
+  AudioUnsupportedFormatError,
+  type PreparedAudioFile,
+} from '../transcode';
+
+const GiB = 1024 ** 3;
+const MiB = 1024 * 1024;
 
 const baseDoc = {
   id: 'd',
@@ -28,188 +36,485 @@ const baseDoc = {
   updatedAt: '2026-01-01',
 } as Document;
 
-function fakeSession(
-  over: Partial<WorkerSession> = {},
-): WorkerSession & { enriched: any[] } {
-  const enriched: any[] = [];
-  return {
-    enriched,
+const change = (doc: Partial<Document> = {}): Change =>
+  ({ seq: 1, kind: 'document', document: { ...baseDoc, ...doc } }) as Change;
+
+// ── temp-file plumbing ──────────────────────────────────────────────────────
+// Every stub `prepareFile` writes a REAL (tiny) file, so the deletion
+// assertions test the worker's `finally`, not a mock.
+
+let tmpCounter = 0;
+const madeFiles: string[] = [];
+
+async function makeTempFile(): Promise<string> {
+  tmpCounter += 1;
+  const p = path.join(
+    os.tmpdir(),
+    `kiagent-asr-wtest-${process.pid}-${Date.now()}-${tmpCounter}.bin`,
+  );
+  await fs.writeFile(p, Buffer.alloc(4));
+  madeFiles.push(p);
+  return p;
+}
+
+async function isGone(p: string): Promise<boolean> {
+  try {
+    await fs.stat(p);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+afterEach(async () => {
+  await Promise.all(
+    madeFiles.splice(0).map((p) => fs.rm(p, { force: true }).catch(() => {})),
+  );
+});
+
+interface PrepareSpec {
+  format: 'wav' | 'mp3';
+  sizeBytes: number;
+}
+
+/**
+ * A `prepareFile` stub that writes a real temp file per call and reports the
+ * given format/size. `onForceWav` drives the re-probe branch: a spec (the
+ * re-prepare succeeds) or an Error (the re-prepare rejects). `.paths` records
+ * every path handed out, in order.
+ */
+function preparer(first: PrepareSpec, onForceWav?: PrepareSpec | Error) {
+  const paths: string[] = [];
+  const fn = jest.fn(
+    async (
+      _bytes: Uint8Array,
+      _meta: { mime?: string; ext?: string },
+      opts?: { forceWav?: boolean },
+    ): Promise<PreparedAudioFile> => {
+      if (opts?.forceWav) {
+        if (onForceWav === undefined) {
+          throw new Error('unexpected forceWav re-prepare');
+        }
+        if (onForceWav instanceof Error) throw onForceWav;
+        const p = await makeTempFile();
+        paths.push(p);
+        return { path: p, ...onForceWav };
+      }
+      const p = await makeTempFile();
+      paths.push(p);
+      return { path: p, ...first };
+    },
+  );
+  return Object.assign(fn, { paths });
+}
+
+type Deps = Parameters<typeof createAudioWorker>[0];
+
+/** Worker + fake session, with every gate recorded into a shared `order`. */
+function setup(
+  over: { deps?: Partial<Deps>; session?: Partial<WorkerSession> } = {},
+) {
+  const order: string[] = [];
+  const state = { hearReady: true, laneOpen: true };
+  const logs: Array<{ level: string; msg: string }> = [];
+  const enriched: unknown[] = [];
+
+  const requestAsr = jest.fn(() => {
+    order.push('requestAsr');
+  });
+  const hearReady = jest.fn(() => {
+    order.push('hearReady');
+    return state.hearReady;
+  });
+  const laneOpen = jest.fn(() => {
+    order.push('laneOpen');
+    return state.laneOpen;
+  });
+  const transcribeFile = jest.fn(
+    async (_p: string, _o: { format: 'wav' | 'mp3' }) => {
+      order.push('transcribeFile');
+      return 'the transcript';
+    },
+  );
+  const fetchBytes = jest.fn(async () => {
+    order.push('fetchBytes');
+    return new Uint8Array([1, 2, 3]);
+  });
+  // The v2 worker NEVER routes audio through WorkerSession (spec §3).
+  const hear = jest.fn(async () => 'from session.hear — must never happen');
+
+  const deps: Deps = {
+    laneOpen,
+    requestAsr,
+    hearReady,
+    transcribeFile,
+    prepareFile: preparer({ format: 'wav', sizeBytes: 4 }),
+    mp3Duration: () => null,
+    totalMemBytes: 32 * GiB,
+    ...over.deps,
+  };
+  const session = {
     signal: new AbortController().signal,
     inference: async () => 'x',
     see: async () => '',
     read: async () => '',
-    hear: async () => 'the transcript',
-    fetchBytes: async () => new Uint8Array([1, 2, 3]),
+    hear,
+    fetchBytes,
     emit: () => {},
-    enrich: (e) => enriched.push(e),
-    log: () => {},
-    ...over,
+    enrich: (e: unknown) => enriched.push(e),
+    log: (level: string, msg: string) => logs.push({ level, msg }),
+    ...over.session,
+  } as unknown as WorkerSession;
+
+  return {
+    worker: createAudioWorker(deps),
+    session,
+    order,
+    state,
+    logs,
+    enriched,
+    requestAsr,
+    hearReady,
+    laneOpen,
+    transcribeFile,
+    fetchBytes,
+    hear,
+    prepareFile: deps.prepareFile as ReturnType<typeof preparer>,
   };
 }
 
-const change = (doc: Partial<Document> = {}): Change =>
-  ({ seq: 1, kind: 'document', document: { ...baseDoc, ...doc } }) as Change;
+const mp3Doc = {
+  title: 'long.mp3',
+  metadata: { mime: 'audio/mpeg', filename: 'long.mp3' },
+} as Partial<Document>;
 
-// A default worker whose transcode is a no-op passthrough (wav), so tests
-// exercise the worker's control flow without spawning afconvert.
-const worker = (over: Partial<Parameters<typeof createAudioWorker>[0]> = {}) =>
-  createAudioWorker({
-    laneOpen: () => true,
-    prepare: async (data) => ({ data, format: 'wav' }),
-    ...over,
+describe('maxDecodedBytes', () => {
+  it('tiers on total RAM: 512 / 256 / 128 MiB', () => {
+    expect(maxDecodedBytes(32 * GiB)).toBe(512 * MiB);
+    expect(maxDecodedBytes(16 * GiB)).toBe(512 * MiB);
+    expect(maxDecodedBytes(16 * GiB - 1)).toBe(256 * MiB);
+    expect(maxDecodedBytes(8 * GiB)).toBe(256 * MiB);
+    expect(maxDecodedBytes(8 * GiB - 1)).toBe(128 * MiB);
+    expect(maxDecodedBytes(4 * GiB)).toBe(128 * MiB);
+  });
+});
+
+describe('createAudioWorker — identity', () => {
+  it('is audio v2, and the re-drive consumer moves with the bump', () => {
+    const { worker } = setup();
+    expect(worker.name).toBe('audio');
+    expect(worker.version).toBe(2);
+    expect(workerConsumerName(worker)).toBe('worker:audio:v2');
   });
 
-describe('createAudioWorker', () => {
   it('matches audio documents and skips non-audio ones', () => {
-    const w = worker();
-    expect(w.matches(change())).toBe(true);
+    const { worker } = setup();
+    expect(worker.matches(change())).toBe(true);
     expect(
-      w.matches(change({ metadata: { mime: 'image/png', filename: 'a.png' } })),
+      worker.matches(
+        change({ metadata: { mime: 'image/png', filename: 'a.png' } }),
+      ),
     ).toBe(false);
   });
+});
 
-  it('transcribes and enriches the document body with the transcript', async () => {
-    const session = fakeSession();
-    const outcome = await worker().work(change(), session);
-    expect(outcome).toBe('done');
-    expect(session.enriched).toHaveLength(1);
-    expect(session.enriched[0]).toMatchObject({
+describe('createAudioWorker — call order and gates', () => {
+  it('requests the ASR install on EVERY candidate, even when no hear provider is ready', async () => {
+    const h = setup();
+    h.state.hearReady = false;
+    const outcome = await h.worker.work(change(), h.session);
+    expect(outcome).toBe('defer');
+    expect(h.requestAsr).toHaveBeenCalledTimes(1);
+  });
+
+  it('requests the install before anything else, on the happy path too', async () => {
+    const h = setup();
+    await h.worker.work(change(), h.session);
+    expect(h.order[0]).toBe('requestAsr');
+  });
+
+  it('defers BEFORE fetching bytes when no hear provider is ready (no 200 MB materialisation)', async () => {
+    const h = setup();
+    h.state.hearReady = false;
+    const outcome = await h.worker.work(change(), h.session);
+    expect(outcome).toBe('defer');
+    expect(h.fetchBytes).not.toHaveBeenCalled();
+    expect(h.laneOpen).not.toHaveBeenCalled();
+    expect(h.order).toEqual(['requestAsr', 'hearReady']);
+  });
+
+  it('defers when the processing window is closed — after the hearReady gate', async () => {
+    const h = setup();
+    h.state.laneOpen = false;
+    const outcome = await h.worker.work(change(), h.session);
+    expect(outcome).toBe('defer');
+    expect(h.fetchBytes).not.toHaveBeenCalled();
+    expect(h.order).toEqual(['requestAsr', 'hearReady', 'laneOpen']);
+  });
+
+  it('never routes audio through session.hear', async () => {
+    const h = setup();
+    await h.worker.work(change(), h.session);
+    expect(h.hear).not.toHaveBeenCalled();
+    expect(h.transcribeFile).toHaveBeenCalled();
+  });
+});
+
+describe('createAudioWorker — fetch and prepare', () => {
+  it('skips when the source cannot serve the bytes', async () => {
+    const h = setup({ session: { fetchBytes: async () => null } });
+    expect(await h.worker.work(change(), h.session)).toBe('skip');
+  });
+
+  it('the fetch backstop rejects over MAX_SOURCE_BYTES when metadata carried no size', async () => {
+    // Duck-typed, not a real ~200 MB allocation: only `.length` is read.
+    const oversized = { length: MAX_SOURCE_BYTES + 1 } as unknown as Uint8Array;
+    const h = setup({ session: { fetchBytes: async () => oversized } });
+    expect(await h.worker.work(change(), h.session)).toBe('skip');
+    expect(h.prepareFile).not.toHaveBeenCalled();
+  });
+
+  it('skips (permanent) when the host cannot decode the format', async () => {
+    const h = setup({
+      deps: {
+        prepareFile: async () => {
+          throw new AudioUnsupportedFormatError('no transcoder on linux');
+        },
+      },
+    });
+    expect(await h.worker.work(change(), h.session)).toBe('skip');
+    expect(h.transcribeFile).not.toHaveBeenCalled();
+  });
+
+  it('defers on a transient transcode fault (temp I/O)', async () => {
+    const h = setup({
+      deps: {
+        prepareFile: async () => {
+          throw new Error('ENOSPC');
+        },
+      },
+    });
+    expect(await h.worker.work(change(), h.session)).toBe('defer');
+  });
+});
+
+describe('createAudioWorker — decoded-size caps', () => {
+  it.each([
+    ['16 GiB', 16 * GiB, 512 * MiB],
+    ['8 GiB', 8 * GiB, 256 * MiB],
+    ['4 GiB', 4 * GiB, 128 * MiB],
+  ])(
+    'skips an over-cap decoded WAV at the %s tier — no throw, no transcribe, temp file deleted',
+    async (_label, totalMemBytes, cap) => {
+      const prepareFile = preparer({ format: 'wav', sizeBytes: cap + 1 });
+      const h = setup({ deps: { prepareFile, totalMemBytes } });
+      const outcome = await h.worker.work(change(), h.session);
+      expect(outcome).toBe('skip');
+      expect(h.transcribeFile).not.toHaveBeenCalled();
+      expect(await isGone(prepareFile.paths[0])).toBe(true);
+    },
+  );
+
+  it('transcribes a WAV exactly at the cap', async () => {
+    const prepareFile = preparer({ format: 'wav', sizeBytes: 256 * MiB });
+    const h = setup({ deps: { prepareFile, totalMemBytes: 8 * GiB } });
+    expect(await h.worker.work(change(), h.session)).toBe('done');
+    expect(h.transcribeFile).toHaveBeenCalledWith(prepareFile.paths[0], {
+      format: 'wav',
+    });
+  });
+
+  it('skips a LONG compressed mp3 on the probed duration, not the tiny on-disk stat', async () => {
+    // 1 MiB on disk, 20 000 s long: 20 000 × 32 000 B/s = 640 MB > 256 MiB.
+    const prepareFile = preparer({ format: 'mp3', sizeBytes: 1 * MiB });
+    const h = setup({
+      deps: {
+        prepareFile,
+        mp3Duration: () => 20_000,
+        totalMemBytes: 8 * GiB,
+      },
+    });
+    const outcome = await h.worker.work(mp3Change(), h.session);
+    expect(outcome).toBe('skip');
+    expect(h.transcribeFile).not.toHaveBeenCalled();
+    expect(h.logs.some((l) => /exceeds decoded cap/.test(l.msg))).toBe(true);
+    expect(await isGone(prepareFile.paths[0])).toBe(true);
+  });
+
+  it('transcribes an mp3 whose probed duration fits the cap (passthrough, no re-prepare)', async () => {
+    const prepareFile = preparer({ format: 'mp3', sizeBytes: 1 * MiB });
+    const h = setup({
+      deps: { prepareFile, mp3Duration: () => 60, totalMemBytes: 8 * GiB },
+    });
+    expect(await h.worker.work(mp3Change(), h.session)).toBe('done');
+    expect(prepareFile).toHaveBeenCalledTimes(1);
+    expect(h.transcribeFile).toHaveBeenCalledWith(prepareFile.paths[0], {
+      format: 'mp3',
+    });
+  });
+});
+
+describe('createAudioWorker — unprobeable mp3 WITH a transcoder', () => {
+  it('re-prepares as WAV and skips when the exact WAV size is over cap (both temp files gone)', async () => {
+    const prepareFile = preparer(
+      { format: 'mp3', sizeBytes: 1 * MiB },
+      { format: 'wav', sizeBytes: 256 * MiB + 1 },
+    );
+    const h = setup({
+      deps: { prepareFile, mp3Duration: () => null, totalMemBytes: 8 * GiB },
+    });
+    const outcome = await h.worker.work(mp3Change(), h.session);
+    expect(outcome).toBe('skip');
+    expect(prepareFile).toHaveBeenCalledTimes(2);
+    expect(prepareFile.mock.calls[1][2]).toEqual({ forceWav: true });
+    expect(h.transcribeFile).not.toHaveBeenCalled();
+    // The ORIGINAL mp3 temp file must not leak when `prepared` is replaced.
+    expect(await isGone(prepareFile.paths[0])).toBe(true);
+    expect(await isGone(prepareFile.paths[1])).toBe(true);
+  });
+
+  it('re-prepares as WAV and transcribes the NEW path when it fits (original mp3 deleted)', async () => {
+    const prepareFile = preparer(
+      { format: 'mp3', sizeBytes: 1 * MiB },
+      { format: 'wav', sizeBytes: 10 * MiB },
+    );
+    const h = setup({
+      deps: { prepareFile, mp3Duration: () => null, totalMemBytes: 8 * GiB },
+    });
+    expect(await h.worker.work(mp3Change(), h.session)).toBe('done');
+    expect(h.transcribeFile).toHaveBeenCalledWith(prepareFile.paths[1], {
+      format: 'wav',
+    });
+    expect(await isGone(prepareFile.paths[0])).toBe(true);
+    expect(await isGone(prepareFile.paths[1])).toBe(true);
+  });
+
+  it('defers when the forceWav re-prepare fails transiently', async () => {
+    const prepareFile = preparer(
+      { format: 'mp3', sizeBytes: 1 * MiB },
+      new Error('ENOSPC'),
+    );
+    const h = setup({
+      deps: { prepareFile, mp3Duration: () => null, totalMemBytes: 8 * GiB },
+    });
+    expect(await h.worker.work(mp3Change(), h.session)).toBe('defer');
+    expect(h.transcribeFile).not.toHaveBeenCalled();
+    expect(await isGone(prepareFile.paths[0])).toBe(true);
+  });
+});
+
+describe('createAudioWorker — unprobeable mp3 with NO transcoder (/32 floor)', () => {
+  const noTranscoder = new AudioUnsupportedFormatError(
+    'cannot transcode audio on linux',
+  );
+
+  it('skips when source bytes × 32 exceed the cap', async () => {
+    // 4 GiB tier → 128 MiB cap → floor is 4 MiB of source.
+    const bytes = { length: 5 * MiB } as unknown as Uint8Array;
+    const prepareFile = preparer(
+      { format: 'mp3', sizeBytes: 5 * MiB },
+      noTranscoder,
+    );
+    const h = setup({
+      deps: { prepareFile, mp3Duration: () => null, totalMemBytes: 4 * GiB },
+      session: { fetchBytes: async () => bytes },
+    });
+    const outcome = await h.worker.work(mp3Change(), h.session);
+    expect(outcome).toBe('skip');
+    expect(h.transcribeFile).not.toHaveBeenCalled();
+    expect(h.logs.some((l) => /\/32 floor/.test(l.msg))).toBe(true);
+    expect(await isGone(prepareFile.paths[0])).toBe(true);
+  });
+
+  it('lets a small unprobeable mp3 through as a passthrough', async () => {
+    const bytes = { length: 1024 } as unknown as Uint8Array;
+    const prepareFile = preparer(
+      { format: 'mp3', sizeBytes: 1024 },
+      noTranscoder,
+    );
+    const h = setup({
+      deps: { prepareFile, mp3Duration: () => null, totalMemBytes: 4 * GiB },
+      session: { fetchBytes: async () => bytes },
+    });
+    expect(await h.worker.work(mp3Change(), h.session)).toBe('done');
+    expect(h.transcribeFile).toHaveBeenCalledWith(prepareFile.paths[0], {
+      format: 'mp3',
+    });
+    expect(await isGone(prepareFile.paths[0])).toBe(true);
+  });
+});
+
+describe('createAudioWorker — transcribe outcomes', () => {
+  it('skips (permanent) when whisper rejects the input (AsrInputRejectedError, status 400)', async () => {
+    const prepareFile = preparer({ format: 'wav', sizeBytes: 4 });
+    const h = setup({
+      deps: {
+        prepareFile,
+        transcribeFile: async () => {
+          throw new AsrInputRejectedError('failed to read audio data');
+        },
+      },
+    });
+    expect(await h.worker.work(change(), h.session)).toBe('skip');
+    expect(h.logs.some((l) => /input rejected/.test(l.msg))).toBe(true);
+    // Cleanup covers the failure path too.
+    expect(await isGone(prepareFile.paths[0])).toBe(true);
+  });
+
+  it('defers on a plain transcribe failure (spawn fault, exit-by-signal…)', async () => {
+    const prepareFile = preparer({ format: 'wav', sizeBytes: 4 });
+    const h = setup({
+      deps: {
+        prepareFile,
+        transcribeFile: async () => {
+          throw new Error('whisper-cli exited by signal SIGKILL');
+        },
+      },
+    });
+    expect(await h.worker.work(change(), h.session)).toBe('defer');
+    expect(await isGone(prepareFile.paths[0])).toBe(true);
+  });
+
+  it('defers on the NoProviderError race backstop', async () => {
+    const h = setup({
+      deps: {
+        transcribeFile: async () => {
+          throw new NoProviderError('hear');
+        },
+      },
+    });
+    expect(await h.worker.work(change(), h.session)).toBe('defer');
+  });
+
+  it('throws on an empty transcript so the engine retries (bounded), not skips', async () => {
+    const prepareFile = preparer({ format: 'wav', sizeBytes: 4 });
+    const h = setup({
+      deps: { prepareFile, transcribeFile: async () => '   ' },
+    });
+    await expect(h.worker.work(change(), h.session)).rejects.toThrow(
+      /empty transcript/,
+    );
+    expect(await isGone(prepareFile.paths[0])).toBe(true);
+  });
+
+  it('enriches with the transcript and deletes the temp file on success', async () => {
+    const prepareFile = preparer({ format: 'wav', sizeBytes: 4 });
+    const h = setup({ deps: { prepareFile } });
+    expect(await h.worker.work(change(), h.session)).toBe('done');
+    expect(h.enriched).toHaveLength(1);
+    expect(h.enriched[0]).toMatchObject({
       documentId: 'd',
       markdown: 'the transcript',
       metadata: { extraction: { engine: 'local-asr' } },
     });
-  });
-
-  it('defers (no work) when the processing window is closed', async () => {
-    const fetchBytes = jest.fn(async () => new Uint8Array([1]));
-    const outcome = await worker({ laneOpen: () => false }).work(
-      change(),
-      fakeSession({ fetchBytes }),
-    );
-    expect(outcome).toBe('defer');
-    expect(fetchBytes).not.toHaveBeenCalled();
-  });
-
-  it('skips when the source cannot serve the bytes', async () => {
-    const outcome = await worker().work(
-      change(),
-      fakeSession({ fetchBytes: async () => null }),
-    );
-    expect(outcome).toBe('skip');
-  });
-
-  it('a ~30 MB no-size-metadata doc passes the fetch backstop (the old 25 MiB cap is gone)', async () => {
-    const prepare = jest.fn(async (data: Uint8Array) => ({
-      data,
-      format: 'wav' as const,
-    }));
-    const bytes = new Uint8Array(30 * 1024 * 1024);
-    const outcome = await worker({ prepare }).work(
-      change(),
-      fakeSession({ fetchBytes: async () => bytes }),
-    );
-    expect(outcome).toBe('done');
-    expect(prepare).toHaveBeenCalled();
-  });
-
-  it('the fetch backstop still rejects over MAX_SOURCE_BYTES when metadata carried no size', async () => {
-    const prepare = jest.fn(async (data: Uint8Array) => ({
-      data,
-      format: 'wav' as const,
-    }));
-    // Duck-typed, not a real ~200 MB allocation: only `.length` is read by
-    // the backstop check, so a real buffer would just be a flake-prone
-    // allocation under this suite's concurrent-load runs for no coverage
-    // gain.
-    const oversized = { length: MAX_SOURCE_BYTES + 1 } as unknown as Uint8Array;
-    const outcome = await worker({ prepare }).work(
-      change(),
-      fakeSession({ fetchBytes: async () => oversized }),
-    );
-    expect(outcome).toBe('skip');
-    expect(prepare).not.toHaveBeenCalled();
-  });
-
-  it('skips (permanent) when the host cannot decode the format', async () => {
-    const outcome = await worker({
-      prepare: async () => {
-        throw new AudioUnsupportedFormatError('no transcoder on linux');
-      },
-    }).work(change(), fakeSession());
-    expect(outcome).toBe('skip');
-  });
-
-  it('skips (permanent) when the loaded model has no audio encoder', async () => {
-    const outcome = await worker().work(
-      change(),
-      fakeSession({
-        hear: async () => {
-          throw new CapabilityUnsupportedError('model has no audio encoder');
-        },
-      }),
-    );
-    expect(outcome).toBe('skip');
-  });
-
-  it('defers when no audio provider is ready yet (model still installing)', async () => {
-    const outcome = await worker().work(
-      change(),
-      fakeSession({
-        hear: async () => {
-          throw new NoProviderError('hear');
-        },
-      }),
-    );
-    expect(outcome).toBe('defer');
-  });
-
-  it('defers when the inference lane closes mid-run', async () => {
-    const outcome = await worker().work(
-      change(),
-      fakeSession({
-        hear: async () => {
-          throw new LaneClosedError();
-        },
-      }),
-    );
-    expect(outcome).toBe('defer');
-  });
-
-  it('skips (permanent) when the server rejects the input with a 4xx (e.g. clip too long for the context)', async () => {
-    const outcome = await worker().work(
-      change(),
-      fakeSession({
-        hear: async () => {
-          const e = new Error('asr request failed: HTTP 400') as Error & {
-            status?: number;
-          };
-          e.status = 400;
-          throw e;
-        },
-      }),
-    );
-    expect(outcome).toBe('skip');
-  });
-
-  it('defers on a transient 5xx server fault', async () => {
-    const outcome = await worker().work(
-      change(),
-      fakeSession({
-        hear: async () => {
-          const e = new Error('asr request failed: HTTP 503') as Error & {
-            status?: number;
-          };
-          e.status = 503;
-          throw e;
-        },
-      }),
-    );
-    expect(outcome).toBe('defer');
-  });
-
-  it('throws on an empty transcript so the engine retries (bounded), not skips', async () => {
-    await expect(
-      worker().work(change(), fakeSession({ hear: async () => '   ' })),
-    ).rejects.toThrow(/empty transcript/);
+    const { at } = (
+      h.enriched[0] as { metadata: { extraction: { at: string } } }
+    ).metadata.extraction;
+    expect(Number.isNaN(Date.parse(at))).toBe(false);
+    expect(await isGone(prepareFile.paths[0])).toBe(true);
   });
 });
+
+function mp3Change(): Change {
+  return change(mp3Doc);
+}
