@@ -382,7 +382,7 @@ function ProviderRowView(props: {
         {canInstall && kind === 'standby' && (
           <span className="pref-desc">
             {models.autoInstall
-              ? 'Downloads automatically when documents need it.'
+              ? 'Downloads automatically when needed.'
               : 'Automatic download is off.'}
           </span>
         )}
