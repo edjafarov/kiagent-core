@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.75.0](https://github.com/edjafarov/kiagent-core/compare/v0.74.0...v0.75.0) (2026-08-14)
+
+### Features
+
+* **shell:** fixed sidebar with branded Bracket mark, no collapse ([c3f2633](https://github.com/edjafarov/kiagent-core/commit/c3f2633295c01c3b2597fdaf42a8a08ff4d5b183))
+* **shell:** page title in the top line — the drag band doubles as the header ([9a5b7af](https://github.com/edjafarov/kiagent-core/commit/9a5b7afa98ab53532c9d7df8324d5faaf5959fe5))
+
+### Bug Fixes
+
+* **shell:** post-merge design feedback — lights, drag band, bottom actions, puzzle icon ([c108f7c](https://github.com/edjafarov/kiagent-core/commit/c108f7ccc408fd9b766d1444624fc0eb3b13f7c5))
+
 ## [0.74.0](https://github.com/edjafarov/kiagent-core/compare/v0.73.2...v0.74.0) (2026-08-13)
 
 ### Features
