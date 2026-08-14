@@ -5,7 +5,7 @@
 // not a CLI), so macOS is a cmake build on the runner that already compiles
 // two other native helpers. Requires cmake + Xcode CLT (present on
 // macos-latest runners and any dev Mac with CLT).
-import { existsSync, mkdirSync, rmSync, copyFileSync, chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, renameSync, copyFileSync, chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
@@ -49,8 +49,16 @@ const TARGETS = WHISPER_DARWIN_SLUGS.map((slug) => {
   const arch = slug.replace(/^darwin-/, '');
   const osxArch = OSX_ARCH[arch];
   if (!osxArch) throw new Error(`build-whisper.mjs has no -DCMAKE_OSX_ARCHITECTURES mapping for slug "${slug}"`);
-  return { arch, osxArch, destDir: path.join(ROOT, whisperDir(slug)) };
+  const destDir = path.join(ROOT, whisperDir(slug));
+  return { arch, osxArch, destDir, stagingDir: `${destDir}.tmp` };
 });
+
+// Clear any leftover staging dirs from a prior aborted run, unconditionally —
+// a stagingDir is by definition never the known-good artifact (that's always
+// destDir), so it's always safe to delete before starting.
+for (const { stagingDir } of TARGETS) {
+  rmSync(stagingDir, { recursive: true, force: true });
+}
 
 // Idempotency is keyed on a `.whisper-tag` stamp (tag + verified commit), not
 // just binary existence: a WHISPER_TAG bump must trigger a rebuild rather
@@ -70,8 +78,10 @@ if (todo.length === 0) {
 }
 for (const { arch, destDir } of todo) {
   if (existsSync(destDir)) {
+    // Not deleted here: destDir stays exactly as-is (previous good build)
+    // until the replacement below is fully built and gated. See the swap at
+    // the end of the build loop — that is the only place destDir is mutated.
     console.log(`Vendored whisper-cli (${arch}) at ${destDir} is stale or unstamped — rebuilding for ${WHISPER_TAG}`);
-    rmSync(destDir, { recursive: true, force: true });
   }
 }
 
@@ -94,8 +104,13 @@ if (head.stdout?.trim() !== WHISPER_COMMIT) {
   process.exit(1);
 }
 
-for (const { arch, osxArch, destDir } of todo) {
-  const binary = path.join(destDir, 'whisper-cli');
+for (const { arch, osxArch, destDir, stagingDir } of todo) {
+  // Build and gate into a sibling staging dir, never destDir directly: a
+  // failure anywhere below (cmake error, architecture mismatch, failed
+  // smoke run) must leave the previous good destDir completely untouched.
+  // destDir is mutated in exactly one place — the swap at the end of this
+  // iteration — and only once every gate below has passed.
+  const binary = path.join(stagingDir, 'whisper-cli');
   const buildDir = path.join(src, `build-${arch}`);
   console.log(`Building whisper-cli (${arch})`);
   run('cmake', ['-B', buildDir, '-S', src,
@@ -122,7 +137,7 @@ for (const { arch, osxArch, destDir } of todo) {
     '-DGGML_NATIVE=OFF',
   ]);
   run('cmake', ['--build', buildDir, '--config', 'Release', '--target', 'whisper-cli', '-j']);
-  mkdirSync(destDir, { recursive: true });
+  mkdirSync(stagingDir, { recursive: true });
   copyFileSync(path.join(buildDir, 'bin', 'whisper-cli'), binary);
   chmodSync(binary, 0o755);
 
@@ -165,5 +180,13 @@ for (const { arch, osxArch, destDir } of todo) {
   // Version stamp (written last, only once every gate above has passed): the
   // idempotency check above keys off this file, not binary existence, so a
   // WHISPER_TAG bump rebuilds instead of silently keeping a stale binary.
-  writeFileSync(path.join(destDir, TAG_STAMP), `${WHISPER_TAG}\n${WHISPER_COMMIT}\n`);
+  writeFileSync(path.join(stagingDir, TAG_STAMP), `${WHISPER_TAG}\n${WHISPER_COMMIT}\n`);
+
+  // Swap (the only place destDir is mutated): every gate above passed, so
+  // stagingDir is now the known-good artifact. destDir is replaced in one
+  // shot — at no instant is it missing or partially written; it is always
+  // either the previous good build or the new one.
+  rmSync(destDir, { recursive: true, force: true });
+  renameSync(stagingDir, destDir);
+  console.log(`Vendored whisper-cli (${arch}) at ${destDir}`);
 }

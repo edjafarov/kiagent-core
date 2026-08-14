@@ -88,19 +88,33 @@ async function fetchSlug(slug) {
   }
   const { asset, sha256 } = entry;
   const destDir = whisperDir(slug);
+  const stagingDir = `${destDir}.tmp`;
   const binName = slug.startsWith('win32') ? 'whisper-cli.exe' : 'whisper-cli';
-  const binary = path.join(destDir, binName);
-  const stampPath = path.join(destDir, TAG_STAMP);
-  const stampCurrent = existsSync(stampPath) && readFileSync(stampPath, 'utf8').trim() === WHISPER_TAG;
-  if (existsSync(binary) && stampCurrent && !printSha) {
-    console.log(`whisper-cli already vendored at ${binary} (${WHISPER_TAG})`);
+  const destBinary = path.join(destDir, binName);
+  const destStampPath = path.join(destDir, TAG_STAMP);
+
+  // Clear any leftover staging dir from a prior aborted run. This one IS safe
+  // to delete unconditionally — by definition it's not the known-good
+  // artifact (that's always destDir, never destDir.tmp).
+  await rm(stagingDir, { recursive: true, force: true });
+
+  const stampCurrent = existsSync(destStampPath) && readFileSync(destStampPath, 'utf8').trim() === WHISPER_TAG;
+  if (existsSync(destBinary) && stampCurrent && !printSha) {
+    console.log(`whisper-cli already vendored at ${destBinary} (${WHISPER_TAG})`);
     return;
   }
   if (existsSync(destDir) && !stampCurrent) {
-    console.log(`Vendored whisper-cli at ${destDir} is stale or unstamped — re-vendoring for ${WHISPER_TAG}`);
-    await rm(destDir, { recursive: true, force: true });
+    console.log(`Vendored whisper-cli at ${destDir} is stale or unstamped — re-vendoring for ${WHISPER_TAG} (destDir is left untouched until the replacement is fully verified)`);
   }
-  mkdirSync(destDir, { recursive: true });
+
+  // Stage into a sibling directory rather than destDir directly: a failure
+  // anywhere below (network, sha mismatch, unexpected archive layout, failed
+  // smoke run) must leave the previous good destDir completely untouched —
+  // never deleted-then-never-replaced. destDir is mutated in exactly one
+  // place, at the very end of this function, after every gate has passed.
+  mkdirSync(stagingDir, { recursive: true });
+  const binary = path.join(stagingDir, binName);
+  const stampPath = path.join(stagingDir, TAG_STAMP);
 
   const url = whisperAssetUrl(asset);
   const tmp = path.join(os.tmpdir(), asset);
@@ -138,7 +152,7 @@ async function fetchSlug(slug) {
   }
   for (const e of await readdir(binDir)) {
     if (!shouldVendor(e)) continue;
-    await move(path.join(binDir, e), path.join(destDir, e));
+    await move(path.join(binDir, e), path.join(stagingDir, e));
   }
   // Post-move existence gate (vendor-ships-inert guard): if upstream renamed
   // the CLI, or shouldVendor() over-filters against a future archive layout,
@@ -154,7 +168,7 @@ async function fetchSlug(slug) {
     await chmod(binary, 0o755).catch(() => {});
   }
   await rm(tmp, { force: true }).catch(() => {});
-  console.log(`Vendored whisper-cli + libs into ${destDir}`);
+  console.log(`Staged whisper-cli + libs into ${stagingDir}`);
 
   // Smoke gate (vendor-ships-inert guard): only runnable when the fetched
   // slug is native to this host — a cross-fetched foreign-arch binary can't
@@ -175,6 +189,14 @@ async function fetchSlug(slug) {
   // not binary existence, so a WHISPER_TAG bump re-vendors instead of
   // silently keeping a stale binary that happens to already be on disk.
   writeFileSync(stampPath, `${WHISPER_TAG}\n`);
+
+  // Swap (the only place destDir is mutated): every gate above passed, so
+  // stagingDir is now the known-good artifact. destDir is replaced in one
+  // shot — at no instant is it missing or partially written; it is always
+  // either the previous good copy or the new one.
+  await rm(destDir, { recursive: true, force: true });
+  await rename(stagingDir, destDir);
+  console.log(`Vendored whisper-cli + libs into ${destDir}`);
 }
 
 for (const slug of slugs) {
