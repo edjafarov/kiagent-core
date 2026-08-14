@@ -72,6 +72,7 @@ import { createOutboundRoutes } from './outbound/routes';
 import { buildBundledSenders, composeSenders } from './outbound/senders';
 import { loadProductConfig } from './product';
 import { registerBundledProviders } from './providers';
+import { createInstallRegistry } from './providers/install-registry';
 import type { LocalAsrProvider } from './providers/local-asr';
 import { CURATED_TIERS, modelTotalBytes } from './providers/local-llm/models';
 import type { LocalLlmProvider } from './providers/local-llm/provider';
@@ -323,7 +324,7 @@ function registerIpc(
   p: CorePlatform,
   getLastPush: () => AppStatePush,
   patchState: (partial: Partial<AppState>) => void,
-  bundled: { localLlm: LocalLlmProvider },
+  bundled: { localLlm: LocalLlmProvider; localAsr: LocalAsrProvider },
   extensions: ExtensionPlatform,
   catalog: MarketplaceCatalog,
   broker: ConnectBroker,
@@ -347,6 +348,13 @@ function registerIpc(
     currentVersion: app.getVersion(),
     devUpdates: process.env.KIAGENT_DEV_UPDATES === '1',
     macUpdatesEnabled: product.macUpdatesEnabled === true,
+  });
+
+  // Built once, near where the bundled providers are registered — the
+  // dispatch map behind inference:install/cancel (install-registry.ts).
+  const installable = createInstallRegistry({
+    'local-llm': bundled.localLlm,
+    'local-asr': bundled.localAsr,
   });
 
   /**
@@ -563,15 +571,17 @@ function registerIpc(
         id: prov.id,
         supports: prov.supports,
         status: prov.status(),
+        installable: installable.installable(prov.id),
       })),
-    'inference:install': async () => {
+    'inference:install': async ({ providerId }) => {
+      if (!installable.installable(providerId)) return; // unknown id: no-op
       await p.prefs.patch({
         models: { ...p.prefs.get().models, autoInstall: true },
       });
-      bundled.localLlm.ensureInstalled();
+      installable.install(providerId);
     },
     'inference:cancel': async () => {
-      await bundled.localLlm.cancelInstall();
+      await installable.cancelAll();
       await p.prefs.patch({
         models: { ...p.prefs.get().models, autoInstall: false },
       });

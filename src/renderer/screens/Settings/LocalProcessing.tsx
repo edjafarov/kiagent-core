@@ -343,7 +343,7 @@ function ProviderRowView(props: {
 
   const install = () => {
     void window.kiagent
-      .invoke('inference:install', undefined)
+      .invoke('inference:install', { providerId: provider.id })
       .then(refresh)
       .catch(() => setProvidersError(true));
   };

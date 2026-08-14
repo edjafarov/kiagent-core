@@ -84,6 +84,7 @@ function downloadingProvider(): ProviderRow {
     id: 'local-llm',
     supports: [],
     status: { downloading: { pct: 50 } },
+    installable: true,
   };
 }
 
