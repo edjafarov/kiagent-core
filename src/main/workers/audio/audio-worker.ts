@@ -7,7 +7,7 @@ import type {
 
 import { CapabilityUnsupportedError } from '@main/core/inference';
 
-import { AUDIO_MAX_BYTES, audioExt, classifyAudio } from './classify';
+import { MAX_SOURCE_BYTES, audioExt, classifyTranscribable } from './classify';
 import {
   AudioUnsupportedFormatError,
   prepareAudio,
@@ -44,7 +44,7 @@ export function createAudioWorker(deps: {
     schedule: { every: '30m' }, // deferred re-drive cadence; the live tail always runs
     matches: (change: Change) =>
       change.kind === 'document' &&
-      classifyAudio(change.document) === 'candidate',
+      classifyTranscribable(change.document) === 'candidate',
 
     async work(change: Change, session: WorkerSession): Promise<WorkOutcome> {
       if (change.kind !== 'document') return 'skip';
@@ -55,7 +55,8 @@ export function createAudioWorker(deps: {
 
       const bytes = await session.fetchBytes(doc);
       if (!bytes) return 'skip'; // source can't serve the audio — terminal
-      if (bytes.length > AUDIO_MAX_BYTES) return 'skip'; // too large for one pass
+      // backstop for docs whose metadata carried no size (classify gates the rest)
+      if (bytes.length > MAX_SOURCE_BYTES) return 'skip';
 
       const { mime } = doc.metadata as { mime?: string };
       let prepared;

@@ -7,6 +7,7 @@ import {
 } from '@main/core/inference';
 
 import { createAudioWorker } from '../audio-worker';
+import { MAX_SOURCE_BYTES } from '../classify';
 import { AudioUnsupportedFormatError } from '../transcode';
 
 const baseDoc = {
@@ -97,13 +98,32 @@ describe('createAudioWorker', () => {
     expect(outcome).toBe('skip');
   });
 
-  it('skips oversized audio (one-pass cap)', async () => {
-    const huge = new Uint8Array(26 * 1024 * 1024);
-    const outcome = await worker().work(
+  it('a ~30 MB no-size-metadata doc passes the fetch backstop (the old 25 MiB cap is gone)', async () => {
+    const prepare = jest.fn(async (data: Uint8Array) => ({
+      data,
+      format: 'wav' as const,
+    }));
+    const bytes = new Uint8Array(30 * 1024 * 1024);
+    const outcome = await worker({ prepare }).work(
       change(),
-      fakeSession({ fetchBytes: async () => huge }),
+      fakeSession({ fetchBytes: async () => bytes }),
+    );
+    expect(outcome).toBe('done');
+    expect(prepare).toHaveBeenCalled();
+  });
+
+  it('the fetch backstop still rejects over MAX_SOURCE_BYTES when metadata carried no size', async () => {
+    const prepare = jest.fn(async (data: Uint8Array) => ({
+      data,
+      format: 'wav' as const,
+    }));
+    const oversized = new Uint8Array(MAX_SOURCE_BYTES + 1);
+    const outcome = await worker({ prepare }).work(
+      change(),
+      fakeSession({ fetchBytes: async () => oversized }),
     );
     expect(outcome).toBe('skip');
+    expect(prepare).not.toHaveBeenCalled();
   });
 
   it('skips (permanent) when the host cannot decode the format', async () => {

@@ -1,6 +1,11 @@
 import type { Document } from '@shared/contracts';
 
-import { audioExt, classifyAudio, isAudioDoc } from '../classify';
+import {
+  audioExt,
+  classifyTranscribable,
+  isTranscribableDoc,
+  MAX_SOURCE_BYTES,
+} from '../classify';
 
 function doc(over: Partial<Document> = {}): Document {
   return {
@@ -23,15 +28,15 @@ function doc(over: Partial<Document> = {}): Document {
   } as Document;
 }
 
-describe('classifyAudio', () => {
+describe('classifyTranscribable', () => {
   it('accepts an attachment with an audio/* mime (gmail/extension attachments)', () => {
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({ metadata: { mime: 'audio/mp4', filename: 'vn.m4a' } }),
       ),
     ).toBe('candidate');
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({ metadata: { mime: 'audio/ogg', filename: 'note.ogg' } }),
       ),
     ).toBe('candidate');
@@ -40,12 +45,12 @@ describe('classifyAudio', () => {
   it('accepts a local-folder file by extension when no mime is present', () => {
     // local-folder stamps `metadata.ext` (no dot) and NO mime.
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({ type: 'file', title: 'memo.mp3', metadata: { ext: 'mp3' } }),
       ),
     ).toBe('candidate');
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({ type: 'file', title: 'voice.opus', metadata: { ext: 'opus' } }),
       ),
     ).toBe('candidate');
@@ -53,17 +58,17 @@ describe('classifyAudio', () => {
 
   it('skips non-audio documents (images, pdfs, plain files)', () => {
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({ metadata: { mime: 'image/png', filename: 'a.png' } }),
       ),
     ).toBe('skip');
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({ metadata: { mime: 'application/pdf', filename: 'a.pdf' } }),
       ),
     ).toBe('skip');
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({ type: 'file', title: 'notes.txt', metadata: { ext: 'txt' } }),
       ),
     ).toBe('skip');
@@ -71,13 +76,13 @@ describe('classifyAudio', () => {
 
   it('does not treat .webm/.mkv (usually video) as audio unless the mime says so', () => {
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({ type: 'file', title: 'clip.webm', metadata: { ext: 'webm' } }),
       ),
     ).toBe('skip');
     // An audio-only webm with an explicit audio mime still matches.
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({ metadata: { mime: 'audio/webm', filename: 'a.webm' } }),
       ),
     ).toBe('candidate');
@@ -85,7 +90,7 @@ describe('classifyAudio', () => {
 
   it('skips already-extracted docs (the extraction marker guards re-entrancy)', () => {
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({
           metadata: {
             mime: 'audio/mpeg',
@@ -99,28 +104,32 @@ describe('classifyAudio', () => {
 
   it('skips archived docs and non-file/attachment types', () => {
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({ metadata: { mime: 'audio/mpeg' }, archivedAt: '2026-01-01' }),
       ),
     ).toBe('skip');
     expect(
-      classifyAudio(
+      classifyTranscribable(
         doc({ type: 'email.message', metadata: { mime: 'audio/mpeg' } }),
       ),
     ).toBe('skip');
   });
 });
 
-describe('isAudioDoc / audioExt', () => {
+describe('isTranscribableDoc / audioExt', () => {
   it('detects audio by mime OR extension', () => {
-    expect(isAudioDoc(doc({ metadata: { mime: 'audio/flac' } }))).toBe(true);
+    expect(isTranscribableDoc(doc({ metadata: { mime: 'audio/flac' } }))).toBe(
+      true,
+    );
     expect(
-      isAudioDoc(
+      isTranscribableDoc(
         doc({ type: 'file', title: 'x.wav', metadata: { ext: 'wav' } }),
       ),
     ).toBe(true);
     expect(
-      isAudioDoc(doc({ metadata: { mime: 'text/plain' }, title: 'x.txt' })),
+      isTranscribableDoc(
+        doc({ metadata: { mime: 'text/plain' }, title: 'x.txt' }),
+      ),
     ).toBe(false);
   });
 
@@ -128,5 +137,83 @@ describe('isAudioDoc / audioExt', () => {
     expect(audioExt(doc({ metadata: { ext: 'M4A' } }))).toBe('m4a');
     expect(audioExt(doc({ metadata: { filename: 'song.OGG' } }))).toBe('ogg');
     expect(audioExt(doc({ title: 'no-extension', metadata: {} }))).toBe('');
+  });
+});
+
+const tdoc = (meta: Record<string, unknown>, title = 'x'): Document =>
+  doc({ title, metadata: meta });
+
+describe('classifyTranscribable — video widening (4-step order)', () => {
+  // step 4: video mimes and extensions are candidates
+  it.each(['video/mp4', 'video/quicktime', 'video/x-m4v'])(
+    'allows %s mime',
+    (mime) => {
+      expect(classifyTranscribable(tdoc({ mime }))).toBe('candidate');
+    },
+  );
+  it.each(['clip.mp4', 'clip.m4v', 'clip.mov'])(
+    'allows extension %s (no mime)',
+    (filename) => {
+      expect(classifyTranscribable(tdoc({ filename }))).toBe('candidate');
+    },
+  );
+
+  // step 1: undemuxable video containers denied even filename-less
+  it.each(['video/webm', 'video/x-matroska'])(
+    'denies %s mime with no filename',
+    (mime) => {
+      expect(classifyTranscribable(tdoc({ mime }, ''))).toBe('skip');
+    },
+  );
+
+  // step 2 beats step 3: audio-webm with a .webm filename is STILL accepted
+  it('audio/webm mime with a .webm filename stays a candidate (current behaviour preserved)', () => {
+    expect(
+      classifyTranscribable(
+        tdoc({ mime: 'audio/webm', filename: 'note.webm' }),
+      ),
+    ).toBe('candidate');
+  });
+
+  // step 3: no-mime local-folder files with denied extensions
+  it.each(['movie.mkv', 'movie.webm'])('denies no-mime %s', (filename) => {
+    expect(classifyTranscribable(tdoc({ filename }))).toBe('skip');
+  });
+  it('denies metadata.ext mkv (local-folder shape)', () => {
+    expect(classifyTranscribable(tdoc({ ext: 'mkv' }))).toBe('skip');
+  });
+
+  // step 1 beats step 4: video/webm never sneaks in via the video/* allow
+  it('video/webm with an innocent filename is denied', () => {
+    expect(
+      classifyTranscribable(tdoc({ mime: 'video/webm', filename: 'clip.mp4' })),
+    ).toBe('skip');
+  });
+});
+
+describe('classify-time size gate', () => {
+  it('rejects sizeBytes over MAX_SOURCE_BYTES before any fetch', () => {
+    expect(
+      classifyTranscribable(
+        tdoc({ mime: 'video/mp4', sizeBytes: MAX_SOURCE_BYTES + 1 }),
+      ),
+    ).toBe('skip');
+  });
+  it('accepts exactly MAX_SOURCE_BYTES, and falls back to metadata.size', () => {
+    expect(
+      classifyTranscribable(
+        tdoc({ mime: 'audio/mpeg', sizeBytes: MAX_SOURCE_BYTES }),
+      ),
+    ).toBe('candidate');
+    expect(
+      classifyTranscribable(
+        tdoc({ mime: 'audio/mpeg', size: MAX_SOURCE_BYTES + 1 }),
+      ),
+    ).toBe('skip');
+  });
+  it('no size metadata → still a candidate (post-fetch backstop covers it)', () => {
+    expect(classifyTranscribable(tdoc({ mime: 'audio/mpeg' }))).toBe(
+      'candidate',
+    );
   });
 });
