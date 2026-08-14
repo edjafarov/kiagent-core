@@ -283,6 +283,14 @@ async function reconcilePass(
   });
 }
 
+/** Derives a worker's ledger consumer key. MUST be derived (never a hard-coded
+ *  constant): the engine keys deferred work as `worker:<name>:v<version>`, so
+ *  a caller that hard-codes this string desyncs the moment a worker's
+ *  `version` bumps — deferred work then accrues under the new key while the
+ *  caller keeps querying the old, now-permanently-empty one. */
+export const workerConsumerName = (w: Worker): string =>
+  `worker:${w.name}:v${w.version}`;
+
 export function createEngine(deps: EngineDeps): Engine & {
   /** Re-drive a worker's deferred changes (scheduler calls this on cadence). */
   rerunDeferred(worker: Worker): Promise<void>;
@@ -369,9 +377,6 @@ export function createEngine(deps: EngineDeps): Engine & {
       logs.log(scope, level, msg);
     },
   });
-
-  const workerConsumerName = (w: Worker): string =>
-    `worker:${w.name}:v${w.version}`;
 
   /** Run one change through a worker with bounded retries. Returns emitted docs and enrich batch. */
   const workOne = async (
