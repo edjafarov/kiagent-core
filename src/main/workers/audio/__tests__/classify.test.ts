@@ -189,6 +189,28 @@ describe('classifyTranscribable — video widening (4-step order)', () => {
       classifyTranscribable(tdoc({ mime: 'video/webm', filename: 'clip.mp4' })),
     ).toBe('skip');
   });
+
+  // step 3 beats step 4: a video/* mime with a denied extension in the
+  // filename is still denied — deleting step 3 would let this fall through
+  // to step 4's video/* allow.
+  it('video/mp4 mime with a .webm filename is denied (step 3 beats step 4)', () => {
+    expect(
+      classifyTranscribable(tdoc({ mime: 'video/mp4', filename: 'clip.webm' })),
+    ).toBe('skip');
+  });
+
+  // step 1: mime parameters (Content-Type "; codecs=...") must not bypass
+  // the deny list via exact-string matching.
+  it('denies video/webm with a codecs parameter', () => {
+    expect(classifyTranscribable(tdoc({ mime: 'video/webm;codecs=vp9' }))).toBe(
+      'skip',
+    );
+  });
+  it('still allows audio/webm with a codecs parameter (normalization does not break step 2)', () => {
+    expect(
+      classifyTranscribable(tdoc({ mime: 'audio/webm;codecs=opus' })),
+    ).toBe('candidate');
+  });
 });
 
 describe('classify-time size gate', () => {

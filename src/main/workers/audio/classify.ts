@@ -50,7 +50,13 @@ export function audioExt(doc: Document): string {
  *  video/webm and silently defeat the mkv/webm exclusion. */
 export function isTranscribableDoc(doc: Document): boolean {
   const meta = doc.metadata as TranscribableMeta;
-  const mime = (meta.mime ?? '').toLowerCase();
+  // Normalize ONCE, before all four steps: a `Content-Type`-style mime can
+  // legally carry parameters (`video/webm;codecs=vp9`), and steps 2/4 use
+  // `startsWith` (parameter-tolerant) while step 1's `Set.has` is an exact
+  // match — without stripping the parameter here, a parameterized deny-mime
+  // would fail step 1, fail step 2, and fall through to step 4's `video/*`
+  // allow, silently defeating the exclusion.
+  const mime = (meta.mime ?? '').toLowerCase().split(';')[0].trim();
   const name = meta.filename ?? doc.title ?? '';
   const dotExt = `.${audioExt(doc)}`;
 

@@ -117,7 +117,11 @@ describe('createAudioWorker', () => {
       data,
       format: 'wav' as const,
     }));
-    const oversized = new Uint8Array(MAX_SOURCE_BYTES + 1);
+    // Duck-typed, not a real ~200 MB allocation: only `.length` is read by
+    // the backstop check, so a real buffer would just be a flake-prone
+    // allocation under this suite's concurrent-load runs for no coverage
+    // gain.
+    const oversized = { length: MAX_SOURCE_BYTES + 1 } as unknown as Uint8Array;
     const outcome = await worker({ prepare }).work(
       change(),
       fakeSession({ fetchBytes: async () => oversized }),
