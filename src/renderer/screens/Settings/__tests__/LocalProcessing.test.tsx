@@ -126,7 +126,9 @@ describe('LocalProcessing: stats loading state', () => {
     resolveStats(statsRes({ pendingOcr: 3, processed: 7 }));
 
     expect(
-      await screen.findByText('3 queued for processing · 7 processed'),
+      await screen.findByText(
+        '3 visual documents queued for processing · 7 processed',
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
@@ -182,7 +184,9 @@ describe('LocalProcessing: Refresh', () => {
     mockInvoke();
     render(<LocalProcessing />);
 
-    await screen.findByText('3 queued for processing · 7 processed');
+    await screen.findByText(
+      '3 visual documents queued for processing · 7 processed',
+    );
     invoke.mockClear();
 
     await act(async () => {
@@ -195,5 +199,131 @@ describe('LocalProcessing: Refresh', () => {
 
     expect(invoke).toHaveBeenCalledWith('inference:providers', undefined);
     expect(invoke).toHaveBeenCalledWith('inference:stats', undefined);
+  });
+});
+
+describe('LocalProcessing: install gating on `installable`', () => {
+  test('local-asr standby row shows Download now; clicking it installs THAT provider', async () => {
+    mockInvoke({
+      providers: [
+        {
+          id: 'local-asr',
+          supports: ['hear'],
+          status: 'standby',
+          installable: true,
+        },
+      ],
+    });
+    render(<LocalProcessing />);
+
+    const button = await screen.findByRole('button', {
+      name: /download now/i,
+    });
+
+    await act(async () => {
+      fireEvent.click(button);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(invoke).toHaveBeenCalledWith('inference:install', {
+      providerId: 'local-asr',
+    });
+  });
+
+  test('apple-vision unsupported/error rows get NO install/retry controls (installable:false)', async () => {
+    mockInvoke({
+      providers: [
+        {
+          id: 'apple-vision',
+          supports: ['read'],
+          status: { error: 'x' },
+          installable: false,
+        },
+      ],
+    });
+    render(<LocalProcessing />);
+
+    await screen.findByText('apple-vision');
+
+    expect(
+      screen.queryByRole('button', { name: /retry/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /download now/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /cancel/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  test('local-asr downloading row shows Cancel and the progress bar', async () => {
+    mockInvoke({
+      providers: [
+        {
+          id: 'local-asr',
+          supports: ['hear'],
+          status: { downloading: { pct: 40 } },
+          installable: true,
+        },
+      ],
+    });
+    const { container } = render(<LocalProcessing />);
+
+    await screen.findByRole('button', { name: /cancel/i });
+
+    const bar = container.querySelector('.progress i');
+    expect(bar).toHaveStyle({ width: '40%' });
+  });
+});
+
+describe('LocalProcessing: recently-processed engine labels', () => {
+  test('local-asr labeled Transcript, local-ocr+vlm and local-ocr unchanged', async () => {
+    mockInvoke({
+      stats: statsRes({
+        recent: [
+          {
+            id: 'd1',
+            title: 'voice memo',
+            filename: null,
+            type: 'audio',
+            engine: 'local-asr',
+            updatedAt: new Date().toISOString(),
+          },
+          {
+            id: 'd2',
+            title: 'scan',
+            filename: null,
+            type: 'doc',
+            engine: 'local-ocr+vlm',
+            updatedAt: new Date().toISOString(),
+          },
+          {
+            id: 'd3',
+            title: 'plain scan',
+            filename: null,
+            type: 'doc',
+            engine: 'local-ocr',
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      }),
+    });
+    render(<LocalProcessing />);
+
+    expect(await screen.findByText('Transcript')).toBeInTheDocument();
+    expect(screen.getByText('OCR + description')).toBeInTheDocument();
+    expect(screen.getByText('OCR')).toBeInTheDocument();
+  });
+});
+
+describe('LocalProcessing: queue count copy', () => {
+  test('says visual documents', async () => {
+    mockInvoke({ stats: statsRes({ pendingOcr: 3, processed: 7 }) });
+    render(<LocalProcessing />);
+
+    expect(
+      await screen.findByText(/3 visual documents queued for processing/),
+    ).toBeInTheDocument();
   });
 });

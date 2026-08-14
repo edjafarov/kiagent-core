@@ -39,6 +39,14 @@ export function pausedLine(lane: LaneState, queued: number): string | null {
   }
 }
 
+/** Human label for metadata.extraction.engine values. Every engine except
+ *  these two is an OCR variant. */
+function engineLabel(engine: string): string {
+  if (engine === 'local-ocr+vlm') return 'OCR + description';
+  if (engine === 'local-asr') return 'Transcript';
+  return 'OCR';
+}
+
 /** "Active model: {label} — {GB} GB[ · installed| · downloads when needed]",
  *  or null when the catalog hasn't resolved yet or `selectedId` doesn't
  *  match any option (defensive; shouldn't happen). */
@@ -275,8 +283,8 @@ export function LocalProcessing(): React.ReactElement {
         {stats == null && <Busy label="Loading processing status…" />}
         {stats != null && (
           <div className="t-meta">
-            {stats.pendingOcr} queued for processing · {stats.processed}{' '}
-            processed
+            {stats.pendingOcr} visual documents queued for processing ·{' '}
+            {stats.processed} processed
           </div>
         )}
         {stats != null && pausedLine(stats.lane, stats.pendingOcr) != null && (
@@ -308,11 +316,7 @@ export function LocalProcessing(): React.ReactElement {
                         }}
                       >
                         {r.title ?? r.filename ?? r.type}
-                        <Pill variant="info">
-                          {r.engine === 'local-ocr+vlm'
-                            ? 'OCR + description'
-                            : 'OCR'}
-                        </Pill>
+                        <Pill variant="info">{engineLabel(r.engine)}</Pill>
                       </span>
                     </div>
                     <span className="t-meta">
@@ -339,6 +343,7 @@ function ProviderRowView(props: {
   const { provider, models, modelCatalog, refresh, setProvidersError } = props;
   const { kind, pill, detail, percent } = describeStatus(provider.status);
   const isLocalLlm = provider.id === 'local-llm';
+  const canInstall = provider.installable;
   const activeModel = isLocalLlm ? activeModelLine(modelCatalog) : null;
 
   const install = () => {
@@ -374,10 +379,10 @@ function ProviderRowView(props: {
             {detail}
           </span>
         )}
-        {isLocalLlm && kind === 'standby' && (
+        {canInstall && kind === 'standby' && (
           <span className="pref-desc">
             {models.autoInstall
-              ? 'Downloads automatically when scanned documents need it.'
+              ? 'Downloads automatically when documents need it.'
               : 'Automatic download is off.'}
           </span>
         )}
@@ -387,17 +392,17 @@ function ProviderRowView(props: {
           </div>
         )}
       </div>
-      {isLocalLlm && kind === 'standby' && (
+      {canInstall && kind === 'standby' && (
         <button type="button" className="btn ghost sm" onClick={install}>
           Download now
         </button>
       )}
-      {isLocalLlm && kind === 'downloading' && (
+      {canInstall && kind === 'downloading' && (
         <button type="button" className="btn ghost sm" onClick={cancel}>
           Cancel
         </button>
       )}
-      {isLocalLlm && kind === 'error' && (
+      {canInstall && kind === 'error' && (
         <button type="button" className="btn ghost sm" onClick={install}>
           Retry
         </button>
