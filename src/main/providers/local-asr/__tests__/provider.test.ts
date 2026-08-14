@@ -364,6 +364,57 @@ describe('LocalAsrProvider', () => {
     expect(deps.prefs.get().models.autoInstall).toBe(true);
   });
 
+  // Review finding 2: abort() dispatches SIGTERM synchronously, but the
+  // wrapper's SIGKILL escalation sits on a 2s unref'd timer. If dispose()
+  // resolves at abort time, before-quit's remaining teardown can finish first
+  // and the escalation is never sent — "SIGTERM then SIGKILL after a bounded
+  // wait" implemented as a mechanism but not guaranteed at the call site.
+  // dispose() must therefore live through the escalation window.
+  it('dispose does not resolve until the signalled child actually settles', async () => {
+    const { fn } = keyedFilesPresent([
+      path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
+    ]);
+    const signals: AbortSignal[] = [];
+    let killChild!: (e: Error) => void;
+    // Unlike the previous test's fake, this one does NOT reject on abort — it
+    // models a child that has been signalled but has not yet exited (the real
+    // wrapper only settles on the child's 'close' event).
+    const runCli = jest.fn(
+      (args: any) =>
+        new Promise<string>((_res, rej) => {
+          signals.push(args.signal);
+          killChild = rej;
+        }),
+    );
+
+    const provider = createLocalAsrProvider(
+      makeDeps({ asrModelsDir: tmpDir, filesPresent: fn, runCli }),
+    );
+
+    const p1 = provider.transcribeFile('/active.wav', { format: 'wav' });
+    const p1Err: Promise<Error> = p1.then(
+      () => new Error('expected rejection'),
+      (e: Error) => e,
+    );
+    await tick();
+    expect(runCli).toHaveBeenCalledTimes(1);
+
+    let disposed = false;
+    const disposing = provider.dispose().then(() => {
+      disposed = true;
+    });
+
+    await tick();
+    expect(signals[0].aborted).toBe(true); // SIGTERM issued …
+    expect(disposed).toBe(false); // … but dispose is still waiting.
+
+    // The escalation lands and the child finally exits.
+    killChild(new Error('whisper-cli killed by SIGKILL'));
+    await disposing;
+    expect(disposed).toBe(true);
+    expect((await p1Err).message).toMatch(/SIGKILL/);
+  });
+
   it('dispose aborts an in-flight install', async () => {
     let captured: AbortSignal | undefined;
     const download = jest.fn(
@@ -456,6 +507,80 @@ describe('LocalAsrProvider', () => {
 
     expect(seenPath!.endsWith('.mp3')).toBe(true);
     expect(fs.existsSync(seenPath!)).toBe(false);
+  });
+
+  // Review finding 1 (SECURITY): the `'wav' | 'mp3'` annotation is erased at
+  // runtime — InferenceProvider.handle takes `payload: unknown` and the
+  // extension RPC forwards caller arguments verbatim, so third-party
+  // extension code reaches this with any string. Interpolated into a path it
+  // would be an arbitrary-file WRITE-and-DELETE primitive.
+  it("handle('hear') allowlists format — a traversal string cannot escape the temp dir", async () => {
+    const { fn } = keyedFilesPresent([
+      path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
+    ]);
+    // A file OUTSIDE the temp dir that the attack would overwrite and then
+    // delete via handle()'s cleanup.
+    const target = path.join(tmpDir, 'precious.txt');
+    await fsp.writeFile(target, 'do not touch');
+    // path.join normalizes `..` and clamps at root, so this resolves straight
+    // onto `target` if the format is interpolated unchecked.
+    const evilFormat = `${'../'.repeat(16)}${target.replace(/^\/+/, '')}`;
+
+    let seenPath: string | undefined;
+    const runCli = jest.fn(async (args: any) => {
+      seenPath = args.inputPath;
+      return 'ok';
+    });
+
+    const provider = createLocalAsrProvider(
+      makeDeps({ asrModelsDir: tmpDir, filesPresent: fn, runCli }),
+    );
+
+    const out = await provider.handle({
+      kind: 'hear',
+      payload: { audio: new Uint8Array([7, 7, 7]), format: evilFormat },
+      lane: 'background',
+    });
+
+    expect(out).toBe('ok');
+    // Fell back to the allowlisted default, INSIDE the OS temp dir.
+    expect(seenPath!.endsWith('.wav')).toBe(true);
+    expect(seenPath!.startsWith(path.join(tmpdir(), 'kiagent-asr-hear-'))).toBe(
+      true,
+    );
+    expect(path.relative(tmpdir(), seenPath!).startsWith('..')).toBe(false);
+    // Nothing outside the temp dir was written OR deleted.
+    expect(fs.existsSync(target)).toBe(true);
+    expect(fs.readFileSync(target, 'utf8')).toBe('do not touch');
+  });
+
+  // Review finding 3: private user audio in a shared /tmp must not be
+  // world-readable, and the path must not be pre-plantable as a symlink.
+  it("handle('hear') writes the audio 0600 inside a 0700 private dir", async () => {
+    const { fn } = keyedFilesPresent([
+      path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
+    ]);
+    let fileMode = -1;
+    let dirMode = -1;
+    const runCli = jest.fn(async (args: any) => {
+      // Stat SYNCHRONOUSLY — cleanup removes the whole dir once we settle.
+      fileMode = fs.statSync(args.inputPath).mode & 0o777;
+      dirMode = fs.statSync(path.dirname(args.inputPath)).mode & 0o777;
+      return 'ok';
+    });
+
+    const provider = createLocalAsrProvider(
+      makeDeps({ asrModelsDir: tmpDir, filesPresent: fn, runCli }),
+    );
+
+    await provider.handle({
+      kind: 'hear',
+      payload: { audio: new Uint8Array([1]), format: 'wav' },
+      lane: 'background',
+    });
+
+    expect(fileMode).toBe(0o600);
+    expect(dirMode).toBe(0o700);
   });
 
   it('advertises only hear and rejects other kinds', async () => {

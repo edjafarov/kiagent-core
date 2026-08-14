@@ -74,16 +74,24 @@ export function createLocalAsrProvider(deps: {
   const queue: QueuedJob[] = [];
   let busy = false;
   let active: AbortController | null = null;
+  /** The in-flight job's settlement, so dispose() can AWAIT the child it just
+   *  signalled instead of racing the wrapper's SIGTERM→SIGKILL escalation. */
+  let activeRun: Promise<void> | null = null;
 
   const pump = (): void => {
     if (busy) return;
     const job = queue.shift();
     if (!job) return;
     busy = true;
-    void job.run().finally(() => {
+    const run = job.run().finally(() => {
       busy = false;
+      if (activeRun === run) activeRun = null;
       pump();
     });
+    // Assigned before the `finally` callback can run (it is a microtask), so
+    // dispose() never observes a null activeRun for a job that is still going.
+    activeRun = run;
+    void run;
   };
 
   const transcribeFile = (
@@ -198,16 +206,28 @@ export function createLocalAsrProvider(deps: {
         audio: Uint8Array;
         format?: 'wav' | 'mp3';
       };
-      const fmt = format ?? 'wav';
-      const tmp = path.join(
-        os.tmpdir(),
-        `kiagent-asr-hear-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.${fmt}`,
+      // ALLOWLIST, never sanitize. The `'wav' | 'mp3'` annotation is erased at
+      // runtime: InferenceProvider.handle takes `payload: unknown` and the
+      // extension RPC forwards caller arguments verbatim, so a third-party
+      // extension can send any string. Interpolating it into a path would
+      // hand it an arbitrary-file WRITE-and-DELETE primitive (path.join
+      // normalizes `..`, and the finally below removes what it created) —
+      // strictly worse than the arbitrary-file READ this byte seam exists to
+      // prevent.
+      const fmt: 'wav' | 'mp3' = format === 'mp3' ? 'mp3' : 'wav';
+      // mkdtemp gives a fresh 0700 directory, so the file name is no longer
+      // guessable and cannot be pre-planted as a symlink; `wx` + mode 0600
+      // close the last of that race and keep private audio unreadable to
+      // other users on a shared /tmp.
+      const dir = await fsp.mkdtemp(
+        path.join(os.tmpdir(), 'kiagent-asr-hear-'),
       );
       try {
-        await fsp.writeFile(tmp, audio);
+        const tmp = path.join(dir, `audio.${fmt}`);
+        await fsp.writeFile(tmp, audio, { mode: 0o600, flag: 'wx' });
         return await transcribeFile(tmp, { format: fmt });
       } finally {
-        await fsp.rm(tmp, { force: true }).catch(() => {});
+        await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
       }
     },
     ensureInstalled,
@@ -230,6 +250,14 @@ export function createLocalAsrProvider(deps: {
         queue.shift()!.reject(new Error('local-asr disposed — app quitting'));
       }
       active?.abort();
+      // (4) AWAIT the signalled job. abort() dispatches SIGTERM synchronously,
+      // but the SIGKILL escalation lives on a 2s unref'd timer inside the
+      // wrapper — resolving now would let before-quit finish teardown first
+      // and the escalation would simply never be sent. Awaiting bounds the
+      // wait at ~2s and makes SIGKILL reachable by construction, the same
+      // shape as LlamaServer.stop() awaiting its child's 'exit'.
+      const run = activeRun;
+      if (run) await run.catch(() => {});
     },
     transcribeFile,
   };
