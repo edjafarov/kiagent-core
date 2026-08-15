@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.76.0](https://github.com/edjafarov/kiagent-core/compare/v0.75.0...v0.76.0) (2026-08-15)
+
+### Features
+
+* **asr:** audio worker v2 — demand-driven whisper install, path-based pipeline, RAM-tiered decoded caps ([65cc620](https://github.com/edjafarov/kiagent-core/commit/65cc6203724bb2b66263625bb3239930d5d3e31b))
+* **asr:** classify video for transcription — exact webm/mkv order, 200 MiB classify-time size gate ([b276f2d](https://github.com/edjafarov/kiagent-core/commit/b276f2dd61be6a9c372c1afd60c6a282967d0217))
+* **asr:** local-asr is the only hear provider — Gemma's audio path removed, whisper registered + disposed on quit ([e849293](https://github.com/edjafarov/kiagent-core/commit/e849293f224fc6a4c475deeb261dfa5b01cddfa0))
+* **asr:** local-asr provider — spawn-per-request, single-flight, closing-flag dispose, lazy install ([14f2403](https://github.com/edjafarov/kiagent-core/commit/14f24037aaccb37c19629abb1d5e9de53e3823cb))
+* **asr:** path-based prepareAudioFile (decoded PCM never re-enters heap) + mp3 duration probe ([abe07d5](https://github.com/edjafarov/kiagent-core/commit/abe07d56cd1ed37ced5d3ccaf5a248e508c939f7))
+* **asr:** provider-aware install IPC — {providerId} req, installable flag, global cancel ([0c050f2](https://github.com/edjafarov/kiagent-core/commit/0c050f2f721a0abbc67fe2cebc24debe4c07a7b2))
+* **asr:** Settings gates install controls on installable; local-asr transcripts labeled Transcript ([f1f0298](https://github.com/edjafarov/kiagent-core/commit/f1f0298d70c6746bfcd0652a12cf4ac207872494))
+* **asr:** vendor whisper.cpp v1.9.2 runtime — prebuilt linux/win archives, darwin cmake build, per-OS prepackage gate ([a539f01](https://github.com/edjafarov/kiagent-core/commit/a539f01311826889bdc0c4899c55cf82afa1f728))
+* **asr:** whisper model catalog — metal/RAM tiers, pinned HF revision ([8863946](https://github.com/edjafarov/kiagent-core/commit/8863946ddd001968508f4017d90fa3e17ad57313))
+* **asr:** whisper-cli spawn wrapper — streamed stdout, diagnostic-keyed input rejection ([33049ab](https://github.com/edjafarov/kiagent-core/commit/33049abe39a5109902156da70188a2c3195cb1e6))
+
+### Bug Fixes
+
+* **asr:** allowlist the hear format, harden the temp file, and make dispose await the signalled child ([69c4d6d](https://github.com/edjafarov/kiagent-core/commit/69c4d6dc1322fe831cd62222cbc250b03e528974))
+* **asr:** bail on a Xing tag with no frame count instead of guessing CBR duration ([d181fad](https://github.com/edjafarov/kiagent-core/commit/d181fad2f373a6a1973a0b4c955bd448f56cb28f))
+* **asr:** harden whisper-cli wrapper — pre-abort guard, sticky diagnostic, pipe error handlers, timer cleanup, narrow SpawnFn type ([5615ec7](https://github.com/edjafarov/kiagent-core/commit/5615ec7b104b9111cf7e921c174cf900bb94a259))
+* **asr:** harden worker temp files, allowlist the ext, drop dead code ([4b39207](https://github.com/edjafarov/kiagent-core/commit/4b39207ff2c4c114adea2f15a8319ada8ad9f33b))
+* **asr:** normalize mime params in classify, pin step ordering, drop 200MB test fixture ([25c0c8d](https://github.com/edjafarov/kiagent-core/commit/25c0c8d276233dcfe64959ed6c30ccd35bdaf690))
+* **asr:** provider-row download copy is engine-neutral ([036b3df](https://github.com/edjafarov/kiagent-core/commit/036b3dfa5d8b9138f82285194a5986ab5d6dcd29))
+* **engine,workers:** non-string metadata can no longer kill a feed loop ([847efed](https://github.com/edjafarov/kiagent-core/commit/847efed73bc3101c928ed24c70c4adefba0fb9f9))
+* **inference:** address whisper vendoring review findings ([0b41841](https://github.com/edjafarov/kiagent-core/commit/0b418414477b40a01d2aee7697304c94ef3100c7))
+* **inference:** stage whisper vendor output before swapping into place ([0d53a05](https://github.com/edjafarov/kiagent-core/commit/0d53a058d4e59957485a2dfec4357f9f57ff9b58))
+* **workers:** derive re-drive consumers from the worker; per-worker installer lists ([4c0d740](https://github.com/edjafarov/kiagent-core/commit/4c0d7400f6d4c632c5ac7a18aacd6702ce9ba477))
+
 ## [0.75.0](https://github.com/edjafarov/kiagent-core/compare/v0.74.0...v0.75.0) (2026-08-14)
 
 ### Features
