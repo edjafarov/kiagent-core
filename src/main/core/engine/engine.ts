@@ -951,7 +951,21 @@ export function createEngine(deps: EngineDeps): Engine & {
               let cursor: Seq = await store.consumerCursor(consumer);
               for (const change of changes) {
                 if (abort.signal.aborted) return;
-                if (worker.matches(change)) {
+                // A matcher throw is a worker bug over untrusted connector
+                // metadata, not a store failure — contained here so one
+                // poisoned document can't stop the loop permanently (the
+                // commit below still advances the cursor past it).
+                let matched = false;
+                try {
+                  matched = worker.matches(change);
+                } catch (err) {
+                  logs.log(
+                    `worker:${worker.name}`,
+                    'warn',
+                    `matches() threw on seq ${change.seq} — treated as non-match: ${String(err)}`,
+                  );
+                }
+                if (matched) {
                   const r = await workOne(worker, change, abort.signal);
                   emitted = emitted.concat(r.docs);
                   enrich = enrich.concat(r.enrich);

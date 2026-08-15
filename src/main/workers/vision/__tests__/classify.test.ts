@@ -1,5 +1,5 @@
 import type { Document } from '@shared/contracts';
-import { classifyDocument } from '../classify';
+import { classifyDocument, isVlmDecodable } from '../classify';
 
 const base = {
   id: 'd',
@@ -80,3 +80,40 @@ it.each([
 ])('%s → %s', (_n, doc, want) =>
   expect(classifyDocument(doc as Document)).toBe(want),
 );
+
+describe('non-string metadata (connector-supplied JSON) never throws', () => {
+  // A throw out of matches() stops the vision feed loop permanently and
+  // re-poisons it on every restart — non-string values classify as absent.
+  it('non-string mime is treated as absent by classifyDocument', () => {
+    expect(
+      classifyDocument({
+        ...base,
+        title: 'photo.png',
+        metadata: { mime: 42, sizeBytes: 90_000 },
+      } as Document),
+    ).toBe('candidate'); // extension fallback still classifies it
+    expect(
+      classifyDocument({
+        ...base,
+        title: 'notes.txt',
+        metadata: { mime: 42 },
+      } as Document),
+    ).toBe('skip');
+  });
+  it('non-string mime is treated as absent by isVlmDecodable', () => {
+    expect(
+      isVlmDecodable({
+        ...base,
+        title: 'photo.webp',
+        metadata: { mime: 42 },
+      } as Document),
+    ).toBe(false); // filename fallback: webp is VLM-undecodable
+    expect(
+      isVlmDecodable({
+        ...base,
+        title: 'photo.png',
+        metadata: { mime: 42 },
+      } as Document),
+    ).toBe(true);
+  });
+});

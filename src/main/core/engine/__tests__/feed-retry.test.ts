@@ -160,6 +160,65 @@ describe('feed consumer crash recovery', () => {
     await handle.stop();
   });
 
+  it('attach survives a matcher that throws on a poisoned document', async () => {
+    const seen: string[] = [];
+    const worker: Worker = {
+      name: 'poison-probe',
+      version: 1,
+      matches: (c: Change) => {
+        if (c.kind !== 'document') return false;
+        if (c.document.title === 'poison')
+          throw new TypeError('meta.ext.toLowerCase is not a function');
+        return true;
+      },
+      work: async (c: Change) => {
+        if (c.kind === 'document') seen.push(c.document.title ?? '');
+        return 'done';
+      },
+    };
+    const engine = makeEngine(store);
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'me@example.com',
+    });
+    const handle = engine.attach(worker);
+    await store.commit({
+      account: account.id,
+      documents: [
+        {
+          externalId: 'p',
+          type: 'note',
+          title: 'poison',
+          markdown: 'body',
+          metadata: { ext: 42 },
+          createdAt: null,
+        },
+        {
+          externalId: 'g',
+          type: 'note',
+          title: 'good',
+          markdown: 'body',
+          metadata: {},
+          createdAt: null,
+        },
+      ],
+      cursor: null,
+    });
+    await waitUntil(() => seen.includes('good'));
+    expect(seen).not.toContain('poison');
+    // The cursor must advance PAST the poisoned change — a restart resumes
+    // from here, so the same document can never re-kill the loop.
+    const head = await store.headSeq();
+    const consumer = 'worker:poison-probe:v1';
+    const deadline = Date.now() + 15_000;
+    while ((await store.consumerCursor(consumer)) < head) {
+      if (Date.now() > deadline) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(await store.consumerCursor(consumer)).toBe(head);
+    await handle.stop();
+  });
+
   it('project re-initializes after a DB_WORKER_CRASHED store rejection', async () => {
     const diffs: number[] = [];
     const projection: Projection<number> = {

@@ -270,3 +270,25 @@ describe('classify-time size gate', () => {
     );
   });
 });
+
+describe('non-string metadata (connector-supplied JSON) never throws', () => {
+  // A throw out of matches() stops the worker's feed loop permanently and
+  // re-poisons it on every restart — non-string values classify as absent.
+  it('non-string ext falls back to the filename/title', () => {
+    expect(audioExt(doc({ metadata: { ext: 42 } }))).toBe('m4a');
+    expect(audioExt(doc({ metadata: { ext: ['mp3'] }, title: 'x' }))).toBe('');
+  });
+  it('non-string ext still classifies via the title', () => {
+    expect(classifyTranscribable(doc({ metadata: { ext: 42 } }))).toBe(
+      'candidate',
+    );
+  });
+  it('non-string mime is treated as absent', () => {
+    expect(classifyTranscribable(tdoc({ mime: 42 }, 'clip.m4a'))).toBe(
+      'candidate',
+    );
+    expect(classifyTranscribable(tdoc({ mime: { bad: true } }, ''))).toBe(
+      'skip',
+    );
+  });
+});

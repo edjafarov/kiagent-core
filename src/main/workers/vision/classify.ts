@@ -58,7 +58,10 @@ const VLM_UNDECODABLE_EXT_RE = /\.(webp|heic|heif|tiff?)$/i;
 export function isVlmDecodable(doc: Document): boolean {
   const meta = doc.metadata as VisualMeta;
   const { mime } = meta;
-  if (mime && mime.startsWith('image/')) return VLM_DECODABLE_MIME.has(mime);
+  // metadata is connector-supplied JSON — non-string values count as absent
+  // (same guard as classifyDocument; a throw here would defer-loop the doc).
+  if (typeof mime === 'string' && mime.startsWith('image/'))
+    return VLM_DECODABLE_MIME.has(mime);
   const name = meta.filename ?? doc.title ?? '';
   return !VLM_UNDECODABLE_EXT_RE.test(name);
 }
@@ -70,8 +73,11 @@ export function classifyDocument(doc: Document): 'candidate' | 'skip' {
   if (meta.extraction != null) return 'skip'; // already enriched
   const name = meta.filename ?? doc.title ?? '';
   const pdf = isPdfDoc(doc);
+  // typeof guard: metadata is connector-supplied JSON and a throw out of
+  // `matches()` stops the worker's feed loop permanently — a non-string
+  // mime must classify as absent, not crash.
   const image =
-    (meta.mime ?? '').startsWith('image/') ||
+    (typeof meta.mime === 'string' && meta.mime.startsWith('image/')) ||
     (!pdf && VISUAL_EXT_RE.test(name) && !/\.pdf$/i.test(name));
   if (!pdf && !image) return 'skip';
   if (

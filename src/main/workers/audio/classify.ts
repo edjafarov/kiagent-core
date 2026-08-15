@@ -45,7 +45,10 @@ const SAFE_EXT_RE = /^[a-z0-9]{1,8}$/;
  *  the allowlist yields '' (the transcoder falls back to its mime map). */
 export function audioExt(doc: Document): string {
   const meta = doc.metadata as TranscribableMeta;
-  if (meta.ext) {
+  // The typed view above is a hope, not a guarantee: metadata is
+  // connector-supplied JSON, and a throw out of `matches()` stops the
+  // worker's feed loop permanently. Non-string values classify as absent.
+  if (typeof meta.ext === 'string' && meta.ext) {
     const ext = meta.ext.toLowerCase().replace(/^\./, '');
     return SAFE_EXT_RE.test(ext) ? ext : '';
   }
@@ -68,7 +71,10 @@ export function isTranscribableDoc(doc: Document): boolean {
   // match — without stripping the parameter here, a parameterized deny-mime
   // would fail step 1, fail step 2, and fall through to step 4's `video/*`
   // allow, silently defeating the exclusion.
-  const mime = (meta.mime ?? '').toLowerCase().split(';')[0].trim();
+  const mime =
+    typeof meta.mime === 'string'
+      ? meta.mime.toLowerCase().split(';')[0].trim()
+      : '';
   const name = meta.filename ?? doc.title ?? '';
   const dotExt = `.${audioExt(doc)}`;
 
