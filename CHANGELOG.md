@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.77.0](https://github.com/edjafarov/kiagent-core/compare/v0.76.0...v0.77.0) (2026-08-16)
+
+### Features
+
+* **inference:** generic timestamps option on hear() — whisper keeps segment-timestamp prefixes ([e81a897](https://github.com/edjafarov/kiagent-core/commit/e81a89791b7bc8e48c1d58e08ec0216f540159b2))
+
+### Bug Fixes
+
+* **deps:** patch CVEs in tar, sharp, adm-zip, webpack-dev-server ([2c86f3d](https://github.com/edjafarov/kiagent-core/commit/2c86f3d8b98b28fdcb9db9a8da94bb43c384c3f0))
+
 ## [0.76.0](https://github.com/edjafarov/kiagent-core/compare/v0.75.0...v0.76.0) (2026-08-15)
 
 ### Features
