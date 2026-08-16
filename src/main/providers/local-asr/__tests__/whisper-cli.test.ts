@@ -159,6 +159,24 @@ describe('runWhisperCli', () => {
     expect(err?.message.length).toBeLessThan(8.5 * 1024);
   });
 
+  it('default run passes --no-timestamps', async () => {
+    const { spawnFn, child, argv } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn });
+    child.emit('close', 0, null);
+    await p;
+    expect(argv[0]).toContain('--no-timestamps');
+  });
+
+  it('timestamps: true drops --no-timestamps and changes nothing else', async () => {
+    const { spawnFn, child, argv } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, timestamps: true, spawnFn });
+    child.emit('close', 0, null);
+    await p;
+    expect(argv[0]).not.toContain('--no-timestamps');
+    expect(argv[0]).toContain('--no-prints');
+    expect(argv[0]).toContain('-l');
+  });
+
   it('a diagnostic seen before the stderr cap trims it out still rejects as AsrInputRejectedError', async () => {
     // The diagnostic must be caught the instant it streams by, before a
     // later flood of noise can push it out of the retained tail window —

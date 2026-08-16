@@ -67,6 +67,8 @@ export function runWhisperCli(args: {
   binaryPath: string;
   modelPath: string;
   inputPath: string;
+  /** Keep whisper's `[HH:MM:SS.mmm --> HH:MM:SS.mmm]` line prefixes. */
+  timestamps?: boolean;
   signal?: AbortSignal;
   spawnFn?: SpawnFn;
 }): Promise<string> {
@@ -91,7 +93,7 @@ export function runWhisperCli(args: {
         args.inputPath,
         '-l',
         'auto',
-        '--no-timestamps',
+        ...(args.timestamps === true ? [] : ['--no-timestamps']),
         '--no-prints',
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },

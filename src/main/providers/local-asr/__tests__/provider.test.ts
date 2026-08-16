@@ -583,6 +583,38 @@ describe('LocalAsrProvider', () => {
     expect(dirMode).toBe(0o700);
   });
 
+  it('handle() forwards timestamps to the CLI only when payload.timestamps === true', async () => {
+    const { fn } = keyedFilesPresent([
+      path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
+    ]);
+    const seen: Array<{ timestamps?: boolean }> = [];
+    const runCli = jest.fn(async (args: any) => {
+      seen.push({ timestamps: args.timestamps });
+      return 'ok';
+    });
+    const provider = createLocalAsrProvider(
+      makeDeps({ asrModelsDir: tmpDir, filesPresent: fn, runCli }),
+    );
+
+    await provider.handle({
+      kind: 'hear',
+      payload: { audio: new Uint8Array([1]), timestamps: true },
+      lane: 'interactive',
+    });
+    await provider.handle({
+      kind: 'hear',
+      payload: { audio: new Uint8Array([1]), timestamps: 'yes' },
+      lane: 'interactive',
+    });
+    await provider.handle({
+      kind: 'hear',
+      payload: { audio: new Uint8Array([1]) },
+      lane: 'interactive',
+    });
+
+    expect(seen.map((s) => s.timestamps)).toEqual([true, false, false]);
+  });
+
   it('advertises only hear and rejects other kinds', async () => {
     const provider = createLocalAsrProvider(makeDeps({ asrModelsDir: tmpDir }));
     expect(provider.id).toBe('local-asr');

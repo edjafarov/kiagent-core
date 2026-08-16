@@ -71,7 +71,11 @@ export interface SurfaceDeps {
     ): Promise<string>;
     hear(
       audio: Uint8Array,
-      opts?: { format?: 'wav' | 'mp3'; lane?: 'interactive' | 'background' },
+      opts?: {
+        format?: 'wav' | 'mp3';
+        timestamps?: boolean;
+        lane?: 'interactive' | 'background';
+      },
     ): Promise<string>;
   };
   notify(msg: string, level?: LogLevel): void;

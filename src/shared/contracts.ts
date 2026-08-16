@@ -524,10 +524,13 @@ export interface Inference {
   ): Promise<string>;
   /** ASR: spoken audio in, transcript text out. Distinct from `see`/`read`
    *  (vision) — routed to a provider whose model carries an audio encoder.
-   *  `format` labels the bytes for the runtime (llama.cpp accepts wav/mp3). */
+   *  `format` labels the bytes for the runtime (llama.cpp accepts wav/mp3).
+   *  `timestamps: true` keeps the ASR runtime's segment-timestamp line
+   *  prefixes (`[HH:MM:SS.mmm --> HH:MM:SS.mmm] …`) in the returned text;
+   *  the return stays plain text either way. */
   hear(
     audio: Uint8Array,
-    opts?: { format?: 'wav' | 'mp3'; lane?: Lane },
+    opts?: { format?: 'wav' | 'mp3'; timestamps?: boolean; lane?: Lane },
   ): Promise<string>;
 }
 

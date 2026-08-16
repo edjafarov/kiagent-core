@@ -21,7 +21,10 @@ export interface LocalAsrProvider extends InferenceProvider {
   cancelInstall(): Promise<void>;
   dispose(): Promise<void>;
   /** Bundled-only file-path route (never on WorkerSession/CapSurfaces). */
-  transcribeFile(p: string, opts: { format: 'wav' | 'mp3' }): Promise<string>;
+  transcribeFile(
+    p: string,
+    opts: { format: 'wav' | 'mp3'; timestamps?: boolean },
+  ): Promise<string>;
 }
 
 interface QueuedJob {
@@ -95,7 +98,7 @@ export function createLocalAsrProvider(deps: {
 
   const transcribeFile = (
     p: string,
-    _opts: { format: 'wav' | 'mp3' },
+    opts: { format: 'wav' | 'mp3'; timestamps?: boolean },
   ): Promise<string> =>
     new Promise<string>((resolve, reject) => {
       if (closing) {
@@ -123,6 +126,7 @@ export function createLocalAsrProvider(deps: {
                 model.files[0].name,
               ),
               inputPath: p,
+              timestamps: opts.timestamps === true,
               signal: abort.signal,
             });
             resolve(text);
@@ -201,9 +205,10 @@ export function createLocalAsrProvider(deps: {
       // The PUBLIC hear seam stays byte-based (extensions reach it through
       // CapSurfaces — a path API there would be an arbitrary-file-read hole).
       // Extension audio payloads are small; write to a temp file and delegate.
-      const { audio, format } = req.payload as {
+      const { audio, format, timestamps } = req.payload as {
         audio: Uint8Array;
         format?: 'wav' | 'mp3';
+        timestamps?: unknown;
       };
       // ALLOWLIST, never sanitize. The `'wav' | 'mp3'` annotation is erased at
       // runtime: InferenceProvider.handle takes `payload: unknown` and the
@@ -214,6 +219,7 @@ export function createLocalAsrProvider(deps: {
       // strictly worse than the arbitrary-file READ this byte seam exists to
       // prevent.
       const fmt: 'wav' | 'mp3' = format === 'mp3' ? 'mp3' : 'wav';
+      const ts: boolean = timestamps === true;
       // mkdtemp gives a fresh 0700 directory, so the file name is no longer
       // guessable and cannot be pre-planted as a symlink; `wx` + mode 0600
       // close the last of that race and keep private audio unreadable to
@@ -224,7 +230,7 @@ export function createLocalAsrProvider(deps: {
       try {
         const tmp = path.join(dir, `audio.${fmt}`);
         await fsp.writeFile(tmp, audio, { mode: 0o600, flag: 'wx' });
-        return await transcribeFile(tmp, { format: fmt });
+        return await transcribeFile(tmp, { format: fmt, timestamps: ts });
       } finally {
         await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
       }

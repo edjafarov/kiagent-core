@@ -108,7 +108,7 @@ export function createInference(logs: LogSink): InferencePlane {
       const p = pick('hear');
       const out = await p.handle({
         kind: 'hear',
-        payload: { audio, format: opts?.format },
+        payload: { audio, format: opts?.format, timestamps: opts?.timestamps },
         lane,
       });
       return String(out);
