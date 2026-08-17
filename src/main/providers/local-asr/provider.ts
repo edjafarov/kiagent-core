@@ -1,6 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
-import { promises as fsp } from 'node:fs';
+import { existsSync, promises as fsp } from 'node:fs';
 
 import type {
   InferenceProvider,
@@ -43,10 +43,14 @@ export function createLocalAsrProvider(deps: {
   filesPresent?: typeof modelFilesPresent;
   runCli?: typeof runWhisperCli;
   binaryPresent?: (p: string) => boolean;
+  /** Vendored Silero VAD model (assets/whisper/…). Absent → no VAD. */
+  vadModelPath?: string;
+  fileExists?: (p: string) => boolean;
 }): LocalAsrProvider {
   const download = deps.download ?? downloadModel;
   const filesPresent = deps.filesPresent ?? modelFilesPresent;
   const runCli = deps.runCli ?? runWhisperCli;
+  const fileExists = deps.fileExists ?? existsSync;
   const probes = deps.probes ?? {
     platform: process.platform,
     totalMemBytes: os.totalmem(),
@@ -96,9 +100,28 @@ export function createLocalAsrProvider(deps: {
     activeRun = run;
   };
 
-  const transcribeFile = (
+  // Resolved once, warned about once: a vendoring regression that drops the
+  // VAD model must be loud in the log rather than silently restoring the
+  // hallucinated-silence behaviour VAD exists to prevent.
+  let vadWarned = false;
+  const vadModelForHear = (): string | undefined => {
+    const p = deps.vadModelPath;
+    if (p === undefined) return undefined;
+    if (fileExists(p)) return p;
+    if (!vadWarned) {
+      vadWarned = true;
+      deps.log(
+        'warn',
+        `VAD model missing at ${p} — transcribing without it; silence will produce hallucinated repeats`,
+      );
+    }
+    return undefined;
+  };
+
+  const runTranscribe = (
     p: string,
     opts: { format: 'wav' | 'mp3'; timestamps?: boolean },
+    vadModelPath: string | undefined,
   ): Promise<string> =>
     new Promise<string>((resolve, reject) => {
       if (closing) {
@@ -127,6 +150,7 @@ export function createLocalAsrProvider(deps: {
               ),
               inputPath: p,
               timestamps: opts.timestamps === true,
+              vadModelPath,
               signal: abort.signal,
             });
             resolve(text);
@@ -141,6 +165,16 @@ export function createLocalAsrProvider(deps: {
       });
       pump();
     });
+
+  /** Indexing route: deliberately NO VAD. The audio worker throws on an empty
+   *  transcript into a bounded retry, and VAD legitimately returns empty for
+   *  speechless audio — enabling it here would turn silent files into retried
+   *  failures. Follow-up: enable once that path treats "no speech detected"
+   *  as a terminal skip (it would also gain VAD's ~7× speed-up). */
+  const transcribeFile = (
+    p: string,
+    opts: { format: 'wav' | 'mp3'; timestamps?: boolean },
+  ): Promise<string> => runTranscribe(p, opts, undefined);
 
   const ensureInstalled = (): void => {
     if (installing) return;
@@ -230,7 +264,15 @@ export function createLocalAsrProvider(deps: {
       try {
         const tmp = path.join(dir, `audio.${fmt}`);
         await fsp.writeFile(tmp, audio, { mode: 0o600, flag: 'wx' });
-        return await transcribeFile(tmp, { format: fmt, timestamps: ts });
+        // VAD on: extension audio is meeting-shaped (per-speaker channels
+        // that are mostly silence), and an empty result is a normal answer
+        // here — the meetings pipeline commits zero rows for a silent
+        // segment rather than throwing (unlike the indexing worker above).
+        return await runTranscribe(
+          tmp,
+          { format: fmt, timestamps: ts },
+          vadModelForHear(),
+        );
       } finally {
         await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
       }

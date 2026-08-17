@@ -29,6 +29,30 @@ export const WHISPER_ASSETS = {
   },
 };
 
+/** Silero VAD model, used by the `hear` route to skip non-speech audio
+ *  (whisper hallucinates repeated text on silence — see whisper-cli.ts).
+ *  Platform-INDEPENDENT: one file for every slug, so it is fetched outside
+ *  the per-slug loop — hanging it off whisperSlugsForHost() would skip macOS
+ *  entirely (that returns [] there) and ship the feature inert on the only
+ *  platform meetings runs on. Pinned to an immutable HF revision, not
+ *  `resolve/main`, so the bytes cannot drift under the sha. */
+export const WHISPER_VAD_MODEL = {
+  name: 'ggml-silero-v5.1.2.bin',
+  revision: '9ffd54a1e1ee413ddf265af9913beaf518d1639b',
+  sha256: '29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf',
+};
+
+export function whisperVadModelUrl() {
+  const { name, revision } = WHISPER_VAD_MODEL;
+  return `https://huggingface.co/ggml-org/whisper-vad/resolve/${revision}/${name}`;
+}
+
+/** Where the VAD model is vendored — one copy shared by every slug, resolved
+ *  by the provider as <assetsDir>/whisper/<name>. */
+export function whisperVadModelPath() {
+  return `assets/whisper/${WHISPER_VAD_MODEL.name}`;
+}
+
 /** Which slugs a given CI runner must FETCH (build-whisper.mjs covers darwin).
  *  win32 is x64-only: upstream publishes no win-arm64 build, so arm64 Windows
  *  ships no ASR (the provider reports `unsupported` there — spec §1). */

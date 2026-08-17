@@ -69,6 +69,10 @@ export function runWhisperCli(args: {
   inputPath: string;
   /** Keep whisper's `[HH:MM:SS.mmm --> HH:MM:SS.mmm]` line prefixes. */
   timestamps?: boolean;
+  /** Silero VAD model path. Present → whisper skips non-speech regions
+   *  instead of decoding them, which is the only effective cure for
+   *  silence hallucination (see the VAD comment on the argv below). */
+  vadModelPath?: string;
   signal?: AbortSignal;
   spawnFn?: SpawnFn;
 }): Promise<string> {
@@ -95,6 +99,17 @@ export function runWhisperCli(args: {
         'auto',
         ...(args.timestamps === true ? [] : ['--no-timestamps']),
         '--no-prints',
+        // Whisper hallucinates on silence: given a mostly-silent track it
+        // emits the last real utterance again once per 30s window, with
+        // timestamps stretched across the gap. Per-speaker meeting channels
+        // are mostly silence by construction (each side is quiet while the
+        // other talks), so a 6-minute call came back with 25 phantom repeats
+        // and smeared timings that mis-interleaved the two speakers.
+        // Decoder-side knobs do NOT fix it (-mc 0, -sns, -nth all measured:
+        // no effect); skipping non-speech audio outright does.
+        ...(args.vadModelPath !== undefined
+          ? ['--vad', '-vm', args.vadModelPath]
+          : []),
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );

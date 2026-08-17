@@ -675,4 +675,55 @@ describe('LocalAsrProvider', () => {
       path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
     );
   });
+
+  // ── 8. VAD on the extension `hear` seam ────────────────────────────────────
+  // Silence hallucination (2026-08-17) makes per-speaker meeting channels
+  // unusable without VAD. It is enabled for the `hear` route only: the
+  // indexing worker's transcribeFile path THROWS on an empty transcript into
+  // a bounded retry, and VAD legitimately returns empty for speechless audio.
+
+  const VAD = '/assets/whisper/ggml-silero-v5.1.2.bin';
+
+  async function hearOnce(over: Record<string, any> = {}) {
+    const { fn } = keyedFilesPresent([
+      path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
+    ]);
+    const deps = makeDeps({ asrModelsDir: tmpDir, filesPresent: fn, ...over });
+    const provider = createLocalAsrProvider(deps);
+    await provider.handle({
+      kind: 'hear',
+      payload: { audio: new Uint8Array([1, 2, 3]), format: 'wav' },
+    } as any);
+    return deps;
+  }
+
+  it('passes the VAD model to whisper on the hear route', async () => {
+    const deps = await hearOnce({ vadModelPath: VAD, fileExists: () => true });
+    expect(deps.runCli.mock.calls[0][0].vadModelPath).toBe(VAD);
+  });
+
+  it('falls back to no-VAD (and warns) when the model file is missing', async () => {
+    const deps = await hearOnce({ vadModelPath: VAD, fileExists: () => false });
+    expect(deps.runCli.mock.calls[0][0].vadModelPath).toBeUndefined();
+    expect(
+      deps.log.mock.calls.some(
+        (c: string[]) => c[0] === 'warn' && c[1].includes('VAD'),
+      ),
+    ).toBe(true);
+  });
+
+  it('never enables VAD on the indexing transcribeFile route', async () => {
+    const { fn } = keyedFilesPresent([
+      path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
+    ]);
+    const deps = makeDeps({
+      asrModelsDir: tmpDir,
+      filesPresent: fn,
+      vadModelPath: VAD,
+      fileExists: () => true,
+    });
+    const provider = createLocalAsrProvider(deps);
+    await provider.transcribeFile('/podcast.mp3', { format: 'mp3' });
+    expect(deps.runCli.mock.calls[0][0].vadModelPath).toBeUndefined();
+  });
 });

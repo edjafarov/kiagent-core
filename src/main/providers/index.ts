@@ -77,6 +77,13 @@ export function registerBundledProviders(
 
   const localAsr = createLocalAsrProvider({
     binaryPath: resolveWhisperBinary(path.join(opts.assetsDir, 'whisper')),
+    // One copy for every slug (scripts/whisper-assets.mjs: the model is
+    // platform-independent), so it sits beside the slug dirs, not inside one.
+    vadModelPath: path.join(
+      opts.assetsDir,
+      'whisper',
+      'ggml-silero-v5.1.2.bin',
+    ),
     asrModelsDir: path.join(opts.dataDir, 'models', 'asr'),
     prefs: platform.prefs,
     log: log('inference'),

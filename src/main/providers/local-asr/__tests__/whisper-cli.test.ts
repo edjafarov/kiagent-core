@@ -195,3 +195,36 @@ describe('runWhisperCli', () => {
     await expect(p).rejects.toMatchObject({ status: 400 });
   });
 });
+
+// Whisper decodes silence into hallucinated text — a channel that is mostly
+// one person listening comes back as the last real utterance repeated once
+// per window, with timestamps smeared across the silence (2026-08-17: a real
+// 6-minute call produced 25× "yes" on one side). Silero VAD skips non-speech
+// outright, which removes the hallucinations AND tightens the timestamps.
+describe('runWhisperCli VAD', () => {
+  it('enables VAD with the model path when one is given', async () => {
+    const { spawnFn, child, argv } = fakeSpawn();
+    const p = runWhisperCli({
+      ...ARGS,
+      vadModelPath: '/assets/whisper/ggml-silero-v5.1.2.bin',
+      spawnFn,
+    });
+    child.emit('close', 0, null);
+    await p;
+    expect(argv[0]).toContain('--vad');
+    expect(argv[0].slice(argv[0].indexOf('--vad'))).toEqual([
+      '--vad',
+      '-vm',
+      '/assets/whisper/ggml-silero-v5.1.2.bin',
+    ]);
+  });
+
+  it('omits every VAD flag when no model path is given', async () => {
+    const { spawnFn, child, argv } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn });
+    child.emit('close', 0, null);
+    await p;
+    expect(argv[0]).not.toContain('--vad');
+    expect(argv[0]).not.toContain('-vm');
+  });
+});
