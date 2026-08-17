@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.77.1](https://github.com/edjafarov/kiagent-core/compare/v0.77.0...v0.77.1) (2026-08-17)
+
+### Bug Fixes
+
+* **inference:** disable chat-template thinking on llama-server requests ([d2130b8](https://github.com/edjafarov/kiagent-core/commit/d2130b8a2ac6af9a7f5153ef37877e3eaa7b613c))
+
 ## [0.77.0](https://github.com/edjafarov/kiagent-core/compare/v0.76.0...v0.77.0) (2026-08-16)
 
 ### Features
