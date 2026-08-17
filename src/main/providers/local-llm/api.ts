@@ -14,6 +14,13 @@ const VLM_TEMPERATURE = 0.1;
 // discouraging wholesale verbatim transcription (OCR's job).
 const VLM_MAX_TOKENS = 1500;
 
+// Thinking-enabled chat templates (gemma's thinking=1) fill max_tokens with
+// reasoning_content before any visible content — a bounded-budget call can
+// finish with content empty. Every consumer here wants the answer, not the
+// deliberation; llama-server ignores the kwarg on templates without a
+// thinking branch. (reasoning_effort / reasoning_budget do not disable it.)
+const CHAT_TEMPLATE_KWARGS = { enable_thinking: false };
+
 export async function chatText(
   baseUrl: string,
   prompt: string,
@@ -30,6 +37,7 @@ export async function chatText(
       body: JSON.stringify({
         temperature: VLM_TEMPERATURE,
         max_tokens: opts?.maxTokens ?? VLM_MAX_TOKENS,
+        chat_template_kwargs: CHAT_TEMPLATE_KWARGS,
         messages: [
           {
             role: 'user',
@@ -72,6 +80,7 @@ export async function describeImage(
       body: JSON.stringify({
         temperature: VLM_TEMPERATURE,
         max_tokens: VLM_MAX_TOKENS,
+        chat_template_kwargs: CHAT_TEMPLATE_KWARGS,
         messages: [
           {
             role: 'user',
