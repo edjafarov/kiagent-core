@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.77.2](https://github.com/edjafarov/kiagent-core/compare/v0.77.1...v0.77.2) (2026-08-17)
+
+### Bug Fixes
+
+* **asr:** skip silence with Silero VAD on the hear route ([b493f2a](https://github.com/edjafarov/kiagent-core/commit/b493f2a41b6e21df4eafab1dc0db2743023f27e0))
+
 ## [0.77.1](https://github.com/edjafarov/kiagent-core/compare/v0.77.0...v0.77.1) (2026-08-17)
 
 ### Bug Fixes
