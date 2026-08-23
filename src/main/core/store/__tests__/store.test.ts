@@ -864,6 +864,157 @@ describe('store', () => {
     expect(doc2?.seq).toBe(doc1?.seq); // document row untouched
     expect((await store.headSeq()) - head1).toBe(1); // only the cursor change
   });
+
+  // ── reconcile: the whole diff stays inside the DB ────────────────────────
+  //
+  // A multi-million-document account (a local-folder root walked through a
+  // symlink cycle) made every heap-resident piece of the reconcile diff a
+  // crash: the unpaged live-ref read blew the structured-clone ceiling and
+  // killed the DB worker, and the `deletions[]` the main thread built in its
+  // place blew the 4 GiB main heap. Nothing proportional to the account may
+  // cross the worker boundary — the listing goes IN a batch at a time, the
+  // diff is computed by anti-join, and only counts come back.
+
+  it('reconcileDiff: counts the anti-join without returning any refs', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b'), doc('c')],
+      cursor: 1,
+    });
+    const startSeq = await store.headSeq();
+
+    await store.reconcileBegin(accountId);
+    await store.reconcileStage(accountId, [{ externalId: 'a', type: 'note' }]);
+    await store.reconcileStage(accountId, [{ externalId: 'b', type: 'note' }]);
+
+    expect(await store.reconcileDiff(accountId, startSeq)).toEqual({
+      listedCount: 2,
+      liveCount: 3,
+      deletionCount: 1, // 'c' is live but unlisted
+    });
+    await store.reconcileEnd(accountId);
+  });
+
+  it('reconcileArchive: archives exactly the unlisted docs and feeds a change per doc', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b'), doc('c')],
+      cursor: 1,
+    });
+    const startSeq = await store.headSeq();
+
+    await store.reconcileBegin(accountId);
+    await store.reconcileStage(accountId, [{ externalId: 'a', type: 'note' }]);
+    expect(await store.reconcileArchive(accountId, startSeq)).toBe(2);
+
+    expect(await store.read.count({ account: accountId })).toBe(1);
+    expect(
+      (await store.read.byExternalId(accountId, 'a', 'note'))?.archivedAt,
+    ).toBeNull();
+    for (const gone of ['b', 'c']) {
+      const row = await store.read.byExternalId(accountId, gone, 'note');
+      expect(row?.archivedAt).not.toBeNull();
+      // Each archived document advances the feed, exactly as a per-ref
+      // deletion commit does — downstream consumers reindex off these.
+      expect(row!.seq).toBeGreaterThan(startSeq);
+    }
+  });
+
+  it('reconcileArchive: honours the startSeq TOCTOU guard — never archives a doc pull() landed mid-pass', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 1,
+    });
+    const startSeq = await store.headSeq();
+    // pull() commits 'late' AFTER reconcile's listing snapshot was taken, so
+    // the listing cannot know about it and it must not count as a deletion.
+    await store.commit({
+      account: accountId,
+      documents: [doc('late')],
+      cursor: 2,
+    });
+
+    await store.reconcileBegin(accountId);
+    await store.reconcileStage(accountId, [{ externalId: 'a', type: 'note' }]);
+
+    expect(await store.reconcileDiff(accountId, startSeq)).toEqual({
+      listedCount: 1,
+      liveCount: 1,
+      deletionCount: 0,
+    });
+    expect(await store.reconcileArchive(accountId, startSeq)).toBe(0);
+    expect(
+      (await store.read.byExternalId(accountId, 'late', 'note'))?.archivedAt,
+    ).toBeNull();
+  });
+
+  it('reconcile staging is per-account — two accounts reconciling at once cannot archive each other', async () => {
+    const other = await store.createAccount({
+      source: 'test',
+      identifier: 'other@example.com',
+    });
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b')],
+      cursor: 1,
+    });
+    await store.commit({
+      account: other.id,
+      documents: [doc('x'), doc('y')],
+      cursor: 1,
+    });
+    const startSeq = await store.headSeq();
+
+    // Interleaved, as concurrent per-account sync loops actually run.
+    await store.reconcileBegin(accountId);
+    await store.reconcileBegin(other.id);
+    await store.reconcileStage(accountId, [{ externalId: 'a', type: 'note' }]);
+    await store.reconcileStage(other.id, [{ externalId: 'x', type: 'note' }]);
+
+    expect((await store.reconcileDiff(accountId, startSeq)).deletionCount).toBe(
+      1,
+    );
+    expect((await store.reconcileDiff(other.id, startSeq)).deletionCount).toBe(
+      1,
+    );
+    expect(await store.reconcileArchive(accountId, startSeq)).toBe(1);
+    expect(await store.reconcileArchive(other.id, startSeq)).toBe(1);
+
+    expect(
+      (await store.read.byExternalId(accountId, 'a', 'note'))?.archivedAt,
+    ).toBeNull();
+    expect(
+      (await store.read.byExternalId(other.id, 'x', 'note'))?.archivedAt,
+    ).toBeNull();
+  });
+
+  it('reconcileBegin clears a previous pass — a stale listing can never survive into the next diff', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b')],
+      cursor: 1,
+    });
+    const startSeq = await store.headSeq();
+
+    await store.reconcileBegin(accountId);
+    await store.reconcileStage(accountId, [
+      { externalId: 'a', type: 'note' },
+      { externalId: 'b', type: 'note' },
+    ]);
+    await store.reconcileEnd(accountId);
+
+    // Next pass lists only 'a'. If begin() leaked the previous listing, 'b'
+    // would look listed and never be archived.
+    await store.reconcileBegin(accountId);
+    await store.reconcileStage(accountId, [{ externalId: 'a', type: 'note' }]);
+    expect(await store.reconcileDiff(accountId, startSeq)).toEqual({
+      listedCount: 1,
+      liveCount: 2,
+      deletionCount: 1,
+    });
+    await store.reconcileEnd(accountId);
+  });
 });
 
 // Guards the feed lost-wakeup fix: once the DB is worker-hosted, `materialize`

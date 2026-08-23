@@ -125,10 +125,6 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function refKey(r: ExternalRef): string {
-  return `${r.type} ${r.externalId}`;
-}
-
 /** Mass-archive breaker thresholds: a reconcile diff that would archive more
  *  than MASS_ARCHIVE_RATIO of the account's live docs AND more than
  *  MASS_ARCHIVE_MIN_DOCS absolute is refused unless the account's config
@@ -136,9 +132,11 @@ function refKey(r: ExternalRef): string {
  *  test account archiving 2 is normal churn, not a listing bug. */
 const MASS_ARCHIVE_MIN_DOCS = 100;
 const MASS_ARCHIVE_RATIO = 0.5;
-/** Live-ref window size for reconcile's deletion diff. Bounds one bridge reply
- *  to ~10k rows regardless of how large the account has grown. */
-const LIVE_REFS_PAGE = 10_000;
+/** How many listing refs reconcile hands the store at a time. This is the ONLY
+ *  reconcile structure that ever sits on this thread, so it — not the account —
+ *  bounds the pass's memory. A connector may yield pages of any size; they get
+ *  re-chunked to this. */
+export const RECONCILE_STAGE_BATCH = 10_000;
 
 /**
  * Runs a source's optional `reconcile()` once per pull cycle: drains its full
@@ -216,12 +214,33 @@ async function reconcilePass(
 ): Promise<void> {
   if (!source.reconcile) return;
   const startSeq = await store.headSeq();
-  const listed: ExternalRef[] = [];
+  // Stream the connector's listing straight into the store, re-chunked. The
+  // pass used to build `listed[]` + a key Set here and then a `deletions[]`
+  // off a paged live-ref read: all three scale with the ACCOUNT, and on a
+  // 3.7M-document local-folder root (the fs watcher walking a symlink cycle
+  // back into its own root) they took ~3.2 GiB against V8's 4 GiB cap and
+  // killed the main process with an OOM SIGTRAP. Only counts come back now.
+  await store.reconcileBegin(account.id);
+  let listedCount = 0;
   try {
+    let batch: ExternalRef[] = [];
     for await (const page of abortable(source.reconcile(session), signal)) {
-      listed.push(...page);
+      for (const ref of page) {
+        batch.push(ref);
+        if (batch.length >= RECONCILE_STAGE_BATCH) {
+          // eslint-disable-next-line no-await-in-loop
+          await store.reconcileStage(account.id, batch);
+          listedCount += batch.length;
+          batch = [];
+        }
+      }
+    }
+    if (batch.length > 0) {
+      await store.reconcileStage(account.id, batch);
+      listedCount += batch.length;
     }
   } catch (err) {
+    await store.reconcileEnd(account.id);
     if (signal.aborted) return; // cancellation-caused — not a real failure
     const msg = String(err instanceof Error ? err.message : err);
     logs.log(scope, 'error', `reconcile failed: ${msg}`);
@@ -234,42 +253,30 @@ async function reconcilePass(
     });
     return;
   }
-  if (signal.aborted) return; // partial listing — never diff off it
-
-  const listedKeys = new Set(listed.map(refKey));
-  // Walk the account's live refs in keyset-paged windows, keeping only the
-  // deletions. Reading them all at once puts the whole account on the wire in
-  // ONE structured-clone message — a multi-million-document account (a
-  // local-folder root over a big tree) blows V8's ~2 GB clone ceiling and
-  // takes the DB worker down with a SIGTRAP. Deletions are normally a handful,
-  // so only `liveCount` grows with the account.
-  const deletions: Array<{ externalId: string; type: string }> = [];
-  let liveCount = 0;
-  let after: { externalId: string; type: string } | null = null;
-  for (;;) {
-    if (signal.aborted) return;
-    // eslint-disable-next-line no-await-in-loop
-    const page = await store.liveRefs(account.id, after, LIVE_REFS_PAGE);
-    if (page.length === 0) break;
-    for (const r of page) {
-      // Same TOCTOU guard as before: only docs already live when this pass
-      // started are archiving candidates.
-      if (r.seq > startSeq) continue;
-      liveCount += 1;
-      if (!listedKeys.has(refKey(r))) {
-        deletions.push({ externalId: r.externalId, type: r.type });
-      }
-    }
-    if (page.length < LIVE_REFS_PAGE) break;
-    const last = page[page.length - 1];
-    after = { externalId: last.externalId, type: last.type };
+  if (signal.aborted) {
+    // partial listing — never diff off it
+    await store.reconcileEnd(account.id);
+    return;
   }
-  if (deletions.length === 0) return;
+
+  // `startSeq` is the TOCTOU guard, applied inside the diff: only documents
+  // already live when this pass began are archiving candidates, so anything
+  // pull() commits mid-drain (newer than the listing could know about) is
+  // excluded rather than archived the instant it lands.
+  const { liveCount, deletionCount } = await store.reconcileDiff(
+    account.id,
+    startSeq,
+  );
+  if (deletionCount === 0) {
+    await store.reconcileEnd(account.id);
+    return;
+  }
 
   if (!allowMassArchive) {
     const refuse = async (why: string): Promise<void> => {
+      await store.reconcileEnd(account.id);
       const msg =
-        `reconcile: refusing to archive ${deletions.length} of ` +
+        `reconcile: refusing to archive ${deletionCount} of ` +
         `${liveCount} documents (${why}). If this shrinkage is real, ` +
         `re-save the account's settings to apply the cleanup.`;
       logs.log(scope, 'error', msg);
@@ -284,24 +291,26 @@ async function reconcilePass(
     // Zero-false-positive first: an empty listing over a non-empty corpus is
     // always a broken listing or a deliberately emptied config — never
     // normal churn.
-    if (listed.length === 0) {
+    if (listedCount === 0) {
       await refuse('the listing came back empty');
       return;
     }
     if (
-      deletions.length > MASS_ARCHIVE_MIN_DOCS &&
-      deletions.length > liveCount * MASS_ARCHIVE_RATIO
+      deletionCount > MASS_ARCHIVE_MIN_DOCS &&
+      deletionCount > liveCount * MASS_ARCHIVE_RATIO
     ) {
       await refuse('the listing shrank suspiciously');
       return;
     }
   }
 
+  // Archives (and clears the staged listing) inside the store — the ids never
+  // come back here either.
+  await store.reconcileArchive(account.id, startSeq);
   const fresh = (await store.account(account.id)) ?? account;
   await store.commit({
     account: account.id,
     documents: [],
-    deletions,
     cursor: fresh.cursor,
     error: null,
   });

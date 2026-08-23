@@ -36,7 +36,7 @@ import {
   PENDING_VISUAL_WHERE,
   repopulateSearchIndex,
 } from './schema';
-import { createWriteTx } from './write-tx';
+import { createWriteTx, type ReconcileCounts } from './write-tx';
 
 // The two stats COUNTs are pinned to their covering partial indexes with
 // INDEXED BY: production corpora carry no sqlite_stat1 (nothing ever runs
@@ -119,6 +119,16 @@ export interface CoreStore extends Store {
     after?: { externalId: string; type: string } | null,
     limit?: number,
   ): Promise<Array<ExternalRef & { seq: Seq }>>;
+  /** Reconcile a connector listing against the corpus without either side
+   *  of the diff crossing the worker boundary. Stage the listing in bounded
+   *  batches, ask for counts, then archive — see write-tx.ts for why nothing
+   *  proportional to the account may be returned. */
+  reconcileBegin(accountId: AccountId): Promise<void>;
+  reconcileStage(accountId: AccountId, refs: ExternalRef[]): Promise<void>;
+  reconcileDiff(accountId: AccountId, startSeq: Seq): Promise<ReconcileCounts>;
+  /** Archives every eligible-but-unlisted document; returns the count. */
+  reconcileArchive(accountId: AccountId, startSeq: Seq): Promise<number>;
+  reconcileEnd(accountId: AccountId): Promise<void>;
   consumerCursor(name: string): Promise<Seq>;
   ledgerRecord(
     consumer: string,
@@ -1137,6 +1147,48 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         type: r.type,
         seq: r.seq,
       }));
+    },
+
+    // Each of these runs on the RAW connection — in-process directly, worker-
+    // backed via the matching registered procedure (db/worker-entry). They
+    // MUST share one connection: the staging table is TEMP, so a listing
+    // staged on one connection is invisible to any other.
+    async reconcileBegin(accountId) {
+      if (writeTx) writeTx.reconcileBegin(accountId);
+      else await db.proc!('reconcileBegin', { accountId });
+    },
+
+    async reconcileStage(accountId, refs) {
+      if (writeTx) writeTx.reconcileStage(accountId, refs);
+      else await db.proc!('reconcileStage', { accountId, refs });
+    },
+
+    async reconcileDiff(accountId, startSeq) {
+      return writeTx
+        ? writeTx.reconcileDiff(accountId, startSeq)
+        : ((await db.proc!('reconcileDiff', {
+            accountId,
+            startSeq,
+          })) as ReconcileCounts);
+    },
+
+    async reconcileArchive(accountId, startSeq) {
+      const archived = writeTx
+        ? writeTx.reconcileArchive(accountId, startSeq)
+        : ((await db.proc!('reconcileArchive', {
+            accountId,
+            startSeq,
+          })) as number);
+      if (archived > 0) {
+        corpusLangsCache = null;
+        nudge.emit('commit');
+      }
+      return archived;
+    },
+
+    async reconcileEnd(accountId) {
+      if (writeTx) writeTx.reconcileEnd(accountId);
+      else await db.proc!('reconcileEnd', { accountId });
     },
 
     async consumerCursor(name) {

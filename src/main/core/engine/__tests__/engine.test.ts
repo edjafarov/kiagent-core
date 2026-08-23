@@ -14,7 +14,7 @@ import type {
 import { openDb } from '../../../db/app-db';
 import { openStore } from '../../store/store';
 import type { CoreStore } from '../../store/store';
-import { createEngine } from '../engine';
+import { createEngine, RECONCILE_STAGE_BATCH } from '../engine';
 
 const noopLogs = { log: () => {} };
 
@@ -1471,6 +1471,52 @@ describe('engine', () => {
       expect(cAfter?.archivedAt).toBe(c?.archivedAt); // unchanged — idempotent
       const accAfter = await store.account(account.id);
       expect(accAfter?.lastError).toBeFalsy();
+    });
+
+    // The invariant two production OOMs were bought with: NOTHING whose size
+    // scales with the account may sit on this thread. A 3.7M-document
+    // local-folder root (the watcher walking a symlink cycle) first killed
+    // the DB worker with an unpaged live-ref read, then — once that was
+    // paged — killed the MAIN process with the `deletions[]`/`listed[]` the
+    // pass built here instead. Reconcile now stages the listing in bounded
+    // batches and reads back only counts.
+    it('holds no per-account structure on the caller: listing is staged in bounded batches and live refs are never read', async () => {
+      const HUGE = 25_000;
+      const source = hangingSource({
+        // ONE oversized page — a connector is free to yield whatever it
+        // likes, so the re-chunking has to happen on our side.
+        async *reconcile() {
+          yield Array.from({ length: HUGE }, (_, i) => ({
+            externalId: `doc-${i}`,
+            type: 'note',
+          }));
+        },
+      });
+      const { engine, account } = await seedThreeDocs(source);
+
+      const liveRefs = jest.spyOn(store, 'liveRefs');
+      const staged = jest.spyOn(store, 'reconcileStage');
+
+      const handle = engine.run(account);
+      await waitFor(async () => {
+        const c = await store.read.byExternalId(account.id, 'c', 'note');
+        return c?.archivedAt != null;
+      });
+      await handle.stop();
+
+      // The whole listing got there...
+      expect(
+        staged.mock.calls.reduce((n, [, refs]) => n + refs.length, 0),
+      ).toBe(HUGE);
+      // ...but never more than a batch at a time, and never via liveRefs.
+      expect(staged.mock.calls.length).toBeGreaterThan(1);
+      for (const [, refs] of staged.mock.calls) {
+        expect(refs.length).toBeLessThanOrEqual(RECONCILE_STAGE_BATCH);
+      }
+      expect(liveRefs).not.toHaveBeenCalled();
+
+      liveRefs.mockRestore();
+      staged.mockRestore();
     });
 
     it('reconcile that throws surfaces an error like other sync failures, but archives nothing', async () => {

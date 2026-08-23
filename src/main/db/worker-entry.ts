@@ -5,7 +5,7 @@
  * through the bridge protocol (see ./bridge.ts) via openDbInWorker.
  */
 import { parentPort, workerData } from 'node:worker_threads';
-import type { CommitBatch } from '@shared/contracts';
+import type { CommitBatch, ExternalRef, Seq } from '@shared/contracts';
 import { detectLanguages } from '@main/core/language';
 import { repopulateSearchIndex } from '@main/core/store/schema';
 import { createWriteTx } from '@main/core/store/write-tx';
@@ -37,6 +37,31 @@ const { dbPath } = workerData as { dbPath: string };
       },
       {
         commit: (args) => writeTx.commit(args as CommitBatch),
+        // The reconcile pass runs entirely on this connection: its staging
+        // table is TEMP (connection-scoped), and the point of the whole
+        // procedure set is that neither the listing nor the deletion set ever
+        // crosses back over this boundary. See core/store/write-tx.ts.
+        reconcileBegin: (args) => {
+          writeTx.reconcileBegin((args as { accountId: string }).accountId);
+          return null;
+        },
+        reconcileStage: (args) => {
+          const a = args as { accountId: string; refs: ExternalRef[] };
+          writeTx.reconcileStage(a.accountId, a.refs);
+          return null;
+        },
+        reconcileDiff: (args) => {
+          const a = args as { accountId: string; startSeq: Seq };
+          return writeTx.reconcileDiff(a.accountId, a.startSeq);
+        },
+        reconcileArchive: (args) => {
+          const a = args as { accountId: string; startSeq: Seq };
+          return writeTx.reconcileArchive(a.accountId, a.startSeq);
+        },
+        reconcileEnd: (args) => {
+          writeTx.reconcileEnd((args as { accountId: string }).accountId);
+          return null;
+        },
         rebuildSearchIndex: () => {
           repopulateSearchIndex(db._conn!);
           return null;

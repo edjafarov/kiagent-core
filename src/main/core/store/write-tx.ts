@@ -36,6 +36,31 @@ function contentHash(d: DocumentInput): string {
     .digest('hex');
 }
 
+/** What one reconcile pass learned about an account, in scalars only. */
+export interface ReconcileCounts {
+  /** Rows the connector's listing staged this pass. */
+  listedCount: number;
+  /** Live documents eligible for archiving (committed at or before startSeq). */
+  liveCount: number;
+  /** Of those, the ones the listing did not mention. */
+  deletionCount: number;
+}
+
+export interface WriteTx {
+  commit(batch: CommitBatch): Seq;
+  /** Start a pass: drop whatever the previous one staged for this account. */
+  reconcileBegin(accountId: string): void;
+  /** Stage one bounded slice of the connector's listing. */
+  reconcileStage(accountId: string, refs: ExternalRef[]): void;
+  /** Count the anti-join. Returns scalars — never the refs themselves. */
+  reconcileDiff(accountId: string, startSeq: Seq): ReconcileCounts;
+  /** Archive every staged-as-missing document, in worker-side batches.
+   *  Returns how many were archived, and ends the pass. */
+  reconcileArchive(accountId: string, startSeq: Seq): number;
+  /** End a pass without archiving (refused, aborted, or nothing to do). */
+  reconcileEnd(accountId: string): void;
+}
+
 /**
  * The corpus write primitive, hosted on the RAW better-sqlite3 connection.
  * In-process (tests, stdio) this runs directly on the main store's handle;
@@ -50,7 +75,7 @@ function contentHash(d: DocumentInput): string {
 export function createWriteTx(
   conn: BetterSqlite3.Database,
   deps: WriteTxDeps,
-): { commit(batch: CommitBatch): Seq } {
+): WriteTx {
   // ── low-level helpers (all run inside the caller's transaction) ──────────
 
   const appendChange = (kind: Change['kind'], refId: string): Seq => {
@@ -434,5 +459,136 @@ export function createWriteTx(
     return getAccountRow(id)!;
   };
 
-  return { commit: (batch: CommitBatch): Seq => commitTx(batch) };
+  // ── reconcile: the diff never leaves this thread ─────────────────────────
+  //
+  // The connector's listing and the resulting deletion set are both
+  // proportional to the ACCOUNT, and both used to live on the main heap: a
+  // 3.7M-document local-folder root (a symlink cycle walked by the watcher)
+  // put ~3.2 GiB of `listed[]`/`deletions[]` against V8's 4 GiB cap and
+  // killed the main process with an OOM SIGTRAP. Paging the live-ref read
+  // only moved the death from the DB worker to the main heap.
+  //
+  // So the listing is staged here a bounded batch at a time, the diff is an
+  // anti-join, and the caller only ever sees counts. `reconcile_listing` is a
+  // TEMP table: it lives on this connection alone (which is where every one
+  // of these procedures runs), never touches the WAL, and cannot outlive the
+  // process. It is keyed by account because per-account sync loops reconcile
+  // CONCURRENTLY — an unkeyed staging table would let one account's listing
+  // archive another's corpus.
+  const RECONCILE_ARCHIVE_BATCH = 5_000;
+
+  const ensureListingTable = (): void => {
+    conn.exec(
+      `CREATE TEMP TABLE IF NOT EXISTS reconcile_listing (
+         account_id TEXT NOT NULL,
+         external_id TEXT NOT NULL,
+         type TEXT NOT NULL,
+         PRIMARY KEY (account_id, external_id, type)
+       ) WITHOUT ROWID`,
+    );
+  };
+
+  const clearListing = (accountId: string): void => {
+    ensureListingTable();
+    conn
+      .prepare(`DELETE FROM reconcile_listing WHERE account_id = ?`)
+      .run(accountId);
+  };
+
+  const stageTx = conn.transaction(
+    (accountId: string, refs: ExternalRef[]): void => {
+      const ins = conn.prepare(
+        `INSERT OR IGNORE INTO reconcile_listing(account_id, external_id, type)
+         VALUES(?, ?, ?)`,
+      );
+      for (const r of refs) ins.run(accountId, r.externalId, r.type);
+    },
+  );
+
+  // Live and eligible: committed at or before the caller's snapshot. Anything
+  // pull() landed mid-pass is newer than the listing could possibly know
+  // about, so it is excluded rather than treated as a deletion (the TOCTOU
+  // guard that used to live in reconcilePass).
+  const ELIGIBLE = `account_id = ? AND archived_at IS NULL AND seq <= ?`;
+  const UNLISTED = `NOT EXISTS (
+      SELECT 1 FROM reconcile_listing l
+       WHERE l.account_id = documents.account_id
+         AND l.external_id = documents.external_id
+         AND l.type = documents.type)`;
+
+  const archiveBatchTx = conn.transaction(
+    (accountId: string, startSeq: Seq): number => {
+      const rows = conn
+        .prepare(
+          `SELECT id FROM documents
+            WHERE ${ELIGIBLE} AND ${UNLISTED}
+            LIMIT ?`,
+        )
+        .all(accountId, startSeq, RECONCILE_ARCHIVE_BATCH) as Array<{
+        id: string;
+      }>;
+      const upd = conn.prepare(
+        `UPDATE documents SET archived_at = ?, seq = ?, updated_at = ? WHERE id = ?`,
+      );
+      for (const { id } of rows) {
+        const seq = appendChange('document', id);
+        upd.run(deps.now(), seq, deps.now(), id);
+      }
+      return rows.length;
+    },
+  );
+
+  return {
+    commit: (batch: CommitBatch): Seq => commitTx(batch),
+
+    reconcileBegin: (accountId) => clearListing(accountId),
+
+    reconcileStage: (accountId, refs) => {
+      if (refs.length === 0) return;
+      ensureListingTable();
+      stageTx(accountId, refs);
+    },
+
+    reconcileDiff: (accountId, startSeq) => {
+      ensureListingTable();
+      const listedCount = Number(
+        (
+          conn
+            .prepare(
+              `SELECT COUNT(*) AS n FROM reconcile_listing WHERE account_id = ?`,
+            )
+            .get(accountId) as { n: number }
+        ).n,
+      );
+      const counts = conn
+        .prepare(
+          `SELECT COUNT(*) AS live,
+                  SUM(CASE WHEN ${UNLISTED} THEN 1 ELSE 0 END) AS gone
+             FROM documents WHERE ${ELIGIBLE}`,
+        )
+        .get(accountId, startSeq) as { live: number; gone: number | null };
+      return {
+        listedCount,
+        liveCount: Number(counts.live),
+        deletionCount: Number(counts.gone ?? 0),
+      };
+    },
+
+    reconcileArchive: (accountId, startSeq) => {
+      ensureListingTable();
+      // Batched so one cleanup of a poisoned multi-million-document account
+      // is a series of bounded transactions rather than a single one holding
+      // a write lock (and its rollback journal) over the whole corpus.
+      let archived = 0;
+      for (;;) {
+        const n = archiveBatchTx(accountId, startSeq);
+        archived += n;
+        if (n < RECONCILE_ARCHIVE_BATCH) break;
+      }
+      clearListing(accountId);
+      return archived;
+    },
+
+    reconcileEnd: (accountId) => clearListing(accountId),
+  };
 }
