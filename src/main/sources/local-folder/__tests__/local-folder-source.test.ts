@@ -835,3 +835,56 @@ describe('watchLoop', () => {
     jest.resetModules();
   });
 });
+
+// The bug that cost two out-of-memory crashes. A CrossOver bottle under a
+// user's Documents root symlinked `…/crossover/Documents` back to
+// `~/Documents`; chokidar walked the cycle and turned ~9.9k real files into
+// 3.7M documents. Reconcile then had millions of docs to archive that the
+// scanner would never list again — first killing the DB worker, then the main
+// process.
+//
+// The invariant is parity: the watcher and the scanner must enumerate the
+// SAME set. chokidar's own `followSymlinks: false` does NOT provide it — it
+// only reports the link instead of its target while readdirp still descends
+// (on this fixture: 17 phantom adds with the option on, 32 with it off, the
+// walk ending only when the OS returns ELOOP). Hence the explicit guard.
+describe('watch enumeration parity (symlink cycles)', () => {
+  it('enumerates exactly what the scanner lists, through a self-referential symlink', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const chokidar = require('chokidar') as typeof import('chokidar');
+    const { WATCH_ENUMERATION_OPTIONS } =
+      require('../watch') as typeof import('../watch');
+    const { listEntries } =
+      require('../scanner') as typeof import('../scanner');
+
+    const dir = mkTmpDir();
+    fs.mkdirSync(path.join(dir, 'sub'));
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'a');
+    fs.writeFileSync(path.join(dir, 'sub', 'b.txt'), 'b');
+    // The cycle: sub/loop -> the root itself.
+    fs.symlinkSync(dir, path.join(dir, 'sub', 'loop'));
+    // And a symlink to a FILE — the scanner drops these too, so the watcher
+    // must as well, or every one becomes a document reconcile can't re-list.
+    fs.symlinkSync(path.join(dir, 'a.txt'), path.join(dir, 'linkfile.txt'));
+
+    const scanned = (await listEntries(dir))
+      .map((e) => e.absPath.slice(dir.length))
+      .sort();
+
+    const watcher = chokidar.watch([dir], {
+      ...WATCH_ENUMERATION_OPTIONS,
+      ignoreInitial: false, // we are checking the walk itself
+    });
+    const seen: string[] = [];
+    watcher.on('add', (p: string) => seen.push(p.slice(dir.length)));
+    await new Promise<void>((resolve) => {
+      watcher.on('ready', () => resolve());
+    });
+    await watcher.close();
+
+    expect(seen.sort()).toEqual(scanned);
+    expect(scanned).toEqual(['/a.txt', '/sub/b.txt']);
+    // Belt and braces: not one path may have gone through the loop.
+    expect(seen.some((p) => p.includes('loop'))).toBe(false);
+  }, 20_000);
+});

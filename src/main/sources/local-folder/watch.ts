@@ -15,6 +15,49 @@ type FsEvent =
   | { kind: 'unlink'; absPath: string };
 
 /**
+ * Symlink guard — the watcher's half of "watcher and scanner enumerate the
+ * same set".
+ *
+ * The scanner walks with fast-glob's `followSymbolicLinks: false` + `onlyFiles`,
+ * which drops EVERY symlink, to a directory or a file. chokidar does not have
+ * an equivalent: its `followSymlinks: false` only makes it report the link
+ * itself instead of its target — readdirp still descends through a symlinked
+ * directory either way (measured: a self-referential link yields 17 phantom
+ * adds with the option on and 32 with it off, the walk ending only when macOS
+ * returns ELOOP). So the exclusion has to be ours.
+ *
+ * This is not hypothetical. A CrossOver bottle under a user's Documents root
+ * symlinked `…/crossover/Documents` back to `~/Documents`; the watcher walked
+ * the cycle and turned ~9.9k real files into 3.7M documents, each a distinct
+ * `externalId` under a different nesting of the same loop. Reconcile then saw
+ * millions of docs the scanner would never list again — which is how a
+ * symlink became two out-of-memory crashes.
+ *
+ * `lstat` (never `stat`): the whole point is to see the link, not its target.
+ * An unreadable/vanished path is ignored — chokidar will fail it anyway, and
+ * this must never throw inside the matcher.
+ */
+export function isSymlink(absPath: string): boolean {
+  try {
+    return fs.lstatSync(absPath).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** The watcher's enumeration rules. Exported so the parity test can drive a
+ *  real chokidar with the SAME object this ships — a test that restated the
+ *  options would pass while the shipped ones drifted. `ignoreInitial` is NOT
+ *  here: it is a watchLoop concern, and the parity check needs the initial
+ *  walk it suppresses. */
+export const WATCH_ENUMERATION_OPTIONS: chokidar.WatchOptions = {
+  ignored: [...DEFAULT_EXCLUDE_GLOBS, isSymlink],
+  // Belt to the braces above: keeps chokidar from RESOLVING a link it somehow
+  // still reaches. It is not sufficient on its own — see isSymlink.
+  followSymlinks: false,
+};
+
+/**
  * The ongoing "delta" for local-folder: kiagent-ref has
  * `supportsDelta: false` and relies entirely on a chokidar watcher for live
  * updates (kiagent-ref instance.ts:86-105); this translates the same
@@ -42,7 +85,7 @@ export async function* watchLoop(
   startCursor: LocalFolderCursor,
 ): AsyncGenerator<Batch<LocalFolderCursor, LocalFolderItem>> {
   const watcher = chokidar.watch(rootPaths, {
-    ignored: DEFAULT_EXCLUDE_GLOBS,
+    ...WATCH_ENUMERATION_OPTIONS,
     ignoreInitial: true,
   });
   let cursor = startCursor;
