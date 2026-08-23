@@ -199,6 +199,45 @@ describe('store', () => {
     );
   });
 
+  it('liveRefs: keyset-pages by (externalId, type) — no gaps or repeats across the seam', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [
+        doc('a'),
+        doc('b'),
+        doc('c'),
+        doc('c', { type: 'attachment' }),
+        doc('d'),
+      ],
+      cursor: 1,
+    });
+
+    const seen: Array<{ externalId: string; type: string }> = [];
+    let after: { externalId: string; type: string } | null = null;
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const page = await store.liveRefs(accountId, after, 2);
+      expect(page.length).toBeLessThanOrEqual(2);
+      if (page.length === 0) break;
+      seen.push(...page.map(({ externalId, type }) => ({ externalId, type })));
+      if (page.length < 2) break;
+      const last = page[page.length - 1];
+      after = { externalId: last.externalId, type: last.type };
+    }
+
+    // The compound cursor is what makes this safe: 'c' exists under two types,
+    // so paging on externalId alone would either drop one or repeat it.
+    expect(seen).toEqual([
+      { externalId: 'a', type: 'note' },
+      { externalId: 'b', type: 'note' },
+      { externalId: 'c', type: 'attachment' },
+      { externalId: 'c', type: 'note' },
+      { externalId: 'd', type: 'note' },
+    ]);
+    // Unpaged callers are unchanged — the whole set, one reply.
+    expect(await store.liveRefs(accountId)).toHaveLength(5);
+  });
+
   it('purges archived documents with tombstones into the feed', async () => {
     await store.commit({
       account: accountId,

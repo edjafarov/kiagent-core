@@ -110,7 +110,15 @@ export interface CoreStore extends Store {
    *  paying for full Document rows (title/markdown/metadata) just to compare
    *  keys. `seq` lets a caller exclude documents committed after some point
    *  in time (see reconcilePass's TOCTOU guard in engine.ts). */
-  liveRefs(accountId: AccountId): Promise<Array<ExternalRef & { seq: Seq }>>;
+  /** Live (unarchived) refs for an account, ordered by (externalId, type).
+   *  Pass `after`/`limit` to walk the account in keyset-paged windows —
+   *  required for large accounts: one unpaged read of a multi-million-document
+   *  account exceeds the structured-clone ceiling and kills the DB worker. */
+  liveRefs(
+    accountId: AccountId,
+    after?: { externalId: string; type: string } | null,
+    limit?: number,
+  ): Promise<Array<ExternalRef & { seq: Seq }>>;
   consumerCursor(name: string): Promise<Seq>;
   ledgerRecord(
     consumer: string,
@@ -1104,10 +1112,21 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       nudge.emit('commit');
     },
 
-    async liveRefs(accountId) {
+    async liveRefs(accountId, after, limit) {
+      // Ordered by (external_id, type) so the UNIQUE(account_id, external_id,
+      // type) index serves both the range seek and the ordering — no sort, and
+      // each page is an index range scan rather than a rescan of the account.
       const rows = (await db.all(
-        `SELECT external_id, type, seq FROM documents WHERE account_id = ? AND archived_at IS NULL`,
-        [accountId],
+        `SELECT external_id, type, seq FROM documents
+           WHERE account_id = ? AND archived_at IS NULL
+                 ${after ? `AND (external_id, type) > (?, ?)` : ''}
+           ORDER BY external_id, type
+                 ${typeof limit === 'number' ? `LIMIT ?` : ''}`,
+        [
+          accountId,
+          ...(after ? [after.externalId, after.type] : []),
+          ...(typeof limit === 'number' ? [limit] : []),
+        ],
       )) as Array<{
         external_id: string;
         type: string;

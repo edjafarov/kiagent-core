@@ -136,6 +136,9 @@ function refKey(r: ExternalRef): string {
  *  test account archiving 2 is normal churn, not a listing bug. */
 const MASS_ARCHIVE_MIN_DOCS = 100;
 const MASS_ARCHIVE_RATIO = 0.5;
+/** Live-ref window size for reconcile's deletion diff. Bounds one bridge reply
+ *  to ~10k rows regardless of how large the account has grown. */
+const LIVE_REFS_PAGE = 10_000;
 
 /**
  * Runs a source's optional `reconcile()` once per pull cycle: drains its full
@@ -234,19 +237,40 @@ async function reconcilePass(
   if (signal.aborted) return; // partial listing — never diff off it
 
   const listedKeys = new Set(listed.map(refKey));
-  const live = (await store.liveRefs(account.id)).filter(
-    (r) => r.seq <= startSeq,
-  );
-  const deletions = live
-    .filter((r) => !listedKeys.has(refKey(r)))
-    .map(({ externalId, type }) => ({ externalId, type }));
+  // Walk the account's live refs in keyset-paged windows, keeping only the
+  // deletions. Reading them all at once puts the whole account on the wire in
+  // ONE structured-clone message — a multi-million-document account (a
+  // local-folder root over a big tree) blows V8's ~2 GB clone ceiling and
+  // takes the DB worker down with a SIGTRAP. Deletions are normally a handful,
+  // so only `liveCount` grows with the account.
+  const deletions: Array<{ externalId: string; type: string }> = [];
+  let liveCount = 0;
+  let after: { externalId: string; type: string } | null = null;
+  for (;;) {
+    if (signal.aborted) return;
+    // eslint-disable-next-line no-await-in-loop
+    const page = await store.liveRefs(account.id, after, LIVE_REFS_PAGE);
+    if (page.length === 0) break;
+    for (const r of page) {
+      // Same TOCTOU guard as before: only docs already live when this pass
+      // started are archiving candidates.
+      if (r.seq > startSeq) continue;
+      liveCount += 1;
+      if (!listedKeys.has(refKey(r))) {
+        deletions.push({ externalId: r.externalId, type: r.type });
+      }
+    }
+    if (page.length < LIVE_REFS_PAGE) break;
+    const last = page[page.length - 1];
+    after = { externalId: last.externalId, type: last.type };
+  }
   if (deletions.length === 0) return;
 
   if (!allowMassArchive) {
     const refuse = async (why: string): Promise<void> => {
       const msg =
         `reconcile: refusing to archive ${deletions.length} of ` +
-        `${live.length} documents (${why}). If this shrinkage is real, ` +
+        `${liveCount} documents (${why}). If this shrinkage is real, ` +
         `re-save the account's settings to apply the cleanup.`;
       logs.log(scope, 'error', msg);
       const fresh2 = (await store.account(account.id)) ?? account;
@@ -266,7 +290,7 @@ async function reconcilePass(
     }
     if (
       deletions.length > MASS_ARCHIVE_MIN_DOCS &&
-      deletions.length > live.length * MASS_ARCHIVE_RATIO
+      deletions.length > liveCount * MASS_ARCHIVE_RATIO
     ) {
       await refuse('the listing shrank suspiciously');
       return;
