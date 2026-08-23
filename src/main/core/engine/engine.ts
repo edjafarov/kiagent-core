@@ -221,7 +221,6 @@ async function reconcilePass(
   // back into its own root) they took ~3.2 GiB against V8's 4 GiB cap and
   // killed the main process with an OOM SIGTRAP. Only counts come back now.
   await store.reconcileBegin(account.id);
-  let listedCount = 0;
   try {
     let batch: ExternalRef[] = [];
     for await (const page of abortable(source.reconcile(session), signal)) {
@@ -230,14 +229,12 @@ async function reconcilePass(
         if (batch.length >= RECONCILE_STAGE_BATCH) {
           // eslint-disable-next-line no-await-in-loop
           await store.reconcileStage(account.id, batch);
-          listedCount += batch.length;
           batch = [];
         }
       }
     }
     if (batch.length > 0) {
       await store.reconcileStage(account.id, batch);
-      listedCount += batch.length;
     }
   } catch (err) {
     await store.reconcileEnd(account.id);
@@ -263,7 +260,12 @@ async function reconcilePass(
   // already live when this pass began are archiving candidates, so anything
   // pull() commits mid-drain (newer than the listing could know about) is
   // excluded rather than archived the instant it lands.
-  const { liveCount, deletionCount } = await store.reconcileDiff(
+  // `listedCount` comes from the DIFF, never from counting what we staged.
+  // Staging lives in a connection-scoped TEMP table, so a DB-worker restart
+  // between the drain and the diff silently empties it — and a local tally
+  // would still claim the listing was fine, walking straight past the
+  // empty-listing guard below into archiving the entire account.
+  const { listedCount, liveCount, deletionCount } = await store.reconcileDiff(
     account.id,
     startSeq,
   );

@@ -1519,6 +1519,50 @@ describe('engine', () => {
       staged.mockRestore();
     });
 
+    // Staging is a connection-scoped TEMP table, so a DB-worker restart
+    // between the drain and the diff empties it — and the worker DOES restart
+    // ("db worker closed" appears in production logs). A pass that tallied
+    // what it staged locally would insist the listing was fine while the diff
+    // reported every document missing, and for an account under the
+    // mass-archive floor it would archive the lot. The listing count must come
+    // from the same read as the diff.
+    it('a listing lost with the DB worker refuses instead of archiving the account', async () => {
+      const source = hangingSource({
+        async *reconcile() {
+          yield [{ externalId: 'a', type: 'note' }];
+        },
+      });
+      const engine = makeEngine(source);
+      const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+
+      // The staged listing evaporated; the diff sees nothing listed and so
+      // everything missing — exactly what a restarted worker reports.
+      const diff = jest
+        .spyOn(store, 'reconcileDiff')
+        .mockResolvedValue({ listedCount: 0, liveCount: 3, deletionCount: 3 });
+      const archive = jest.spyOn(store, 'reconcileArchive');
+
+      const handle = engine.run(account);
+      await waitFor(async () => {
+        const acc = await store.account(account.id);
+        return Boolean(acc?.lastError);
+      });
+      await handle.stop();
+
+      expect(await store.account(account.id)).toMatchObject({
+        lastError: expect.stringMatching(/listing came back empty/),
+      });
+      expect(archive).not.toHaveBeenCalled();
+      for (const id of ['a', 'b', 'c']) {
+        expect(
+          (await store.read.byExternalId(account.id, id, 'note'))?.archivedAt,
+        ).toBeNull();
+      }
+
+      diff.mockRestore();
+      archive.mockRestore();
+    });
+
     it('reconcile that throws surfaces an error like other sync failures, but archives nothing', async () => {
       const source = hangingSource({
         // Always throws before any yield — a fixed AsyncIterable<ExternalRef[]>
