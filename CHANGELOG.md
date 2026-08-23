@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.78.0](https://github.com/edjafarov/kiagent-core/compare/v0.77.2...v0.78.0) (2026-08-23)
+
+### Bug Fixes
+
+* **engine:** keep the whole reconcile diff inside the DB ([313967f](https://github.com/edjafarov/kiagent-core/commit/313967f5ac2b0cc0128247af431fedb5317e3656))
+* **engine:** page reconcile's live-ref read so a large account can't kill the DB worker ([e4a9017](https://github.com/edjafarov/kiagent-core/commit/e4a9017a6adbb4a6bc1713639dbeeb094409a35b))
+* **engine:** take reconcile's listed count from the diff, not a local tally ([316ff25](https://github.com/edjafarov/kiagent-core/commit/316ff25f0a876e7e433dc011082051890ba92c96))
+* **local-folder:** stop the watcher walking symlink cycles ([92a5301](https://github.com/edjafarov/kiagent-core/commit/92a53014d6200dd10342f487535093c9af19ffab))
+
 ## [0.77.2](https://github.com/edjafarov/kiagent-core/compare/v0.77.1...v0.77.2) (2026-08-17)
 
 ### Bug Fixes
