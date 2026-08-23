@@ -194,6 +194,81 @@ Module._resolveFilename = function (request, ...rest) {
     await client!.close();
   }, 20000);
 
+  // The reconcile procedure set is the one place a piece of app state lives
+  // ACROSS separate RPCs: the listing is staged into a TEMP table by one
+  // proc call and read by another. TEMP tables are connection-scoped, so
+  // that only works because every proc runs on the worker's single
+  // connection — an assumption no in-process test can check, since there the
+  // whole thing collapses onto one handle. This drives the real sequence over
+  // the real bridge.
+  //
+  // It is also the shape that took the app down twice: on a 3.7M-document
+  // account the old pass returned the live refs (2.16 GB clone → dead worker)
+  // and then built the deletion set on the main heap (~3.2 GiB → dead main
+  // process). Nothing here may come back but counts.
+  it('runs the reconcile procedures inside the worker, staging across calls (proc round-trip)', async () => {
+    await spawnAndReady();
+
+    await client!.proc!('commit', {
+      consumer: 'worker:test:reconcile',
+      cursor: 0,
+      documents: ['keep-1', 'keep-2', 'gone-1'].map((externalId) => ({
+        externalId,
+        type: 'note',
+        title: externalId,
+        markdown: `document ${externalId}`,
+        metadata: {},
+        createdAt: '2026-01-01T00:00:00Z',
+      })),
+    });
+
+    const [{ id: accountId }] = (await client!.all(
+      `SELECT id FROM accounts`,
+    )) as Array<{ id: string }>;
+    const [{ s: startSeq }] = (await client!.all(
+      `SELECT MAX(seq) AS s FROM changes`,
+    )) as Array<{ s: number }>;
+
+    await client!.proc!('reconcileBegin', { accountId });
+    // TWO staging calls: separate messages, separate proc invocations. If the
+    // TEMP table did not survive between them, the second would find an empty
+    // table and the diff would report both keeps as deletions.
+    await client!.proc!('reconcileStage', {
+      accountId,
+      refs: [{ externalId: 'keep-1', type: 'note' }],
+    });
+    await client!.proc!('reconcileStage', {
+      accountId,
+      refs: [{ externalId: 'keep-2', type: 'note' }],
+    });
+
+    expect(
+      await client!.proc!('reconcileDiff', { accountId, startSeq }),
+    ).toEqual({ listedCount: 2, liveCount: 3, deletionCount: 1 });
+
+    expect(
+      await client!.proc!('reconcileArchive', { accountId, startSeq }),
+    ).toBe(1);
+
+    const rows = (await client!.all(
+      `SELECT external_id, archived_at FROM documents ORDER BY external_id`,
+    )) as Array<{ external_id: string; archived_at: string | null }>;
+    expect(rows.map((r) => [r.external_id, r.archived_at !== null])).toEqual([
+      ['gone-1', true],
+      ['keep-1', false],
+      ['keep-2', false],
+    ]);
+
+    // The archive ends the pass: a second diff sees an empty listing, so
+    // every live doc now reads as unlisted. Proves the staging was cleared
+    // rather than left behind to poison the next account's pass.
+    expect(
+      await client!.proc!('reconcileDiff', { accountId, startSeq }),
+    ).toEqual({ listedCount: 0, liveCount: 2, deletionCount: 2 });
+
+    await client!.close();
+  }, 20000);
+
   // maintenance.compact() dispatches to this proc (worker-backed AppDb has no
   // raw connection to call repopulateSearchIndex directly on — see
   // store.ts#maintenance.compact). Drive it through the REAL bridge against a
