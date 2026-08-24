@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.79.0](https://github.com/edjafarov/kiagent-core/compare/v0.78.0...v0.79.0) (2026-08-24)
+
+### Features
+
+* **convert:** read locally-saved email ([48b0018](https://github.com/edjafarov/kiagent-core/commit/48b00183f6d3e659f31004a1eca9074e0943b23a))
+* **local-folder:** ingest only what a pipeline can read ([04ee759](https://github.com/edjafarov/kiagent-core/commit/04ee75973ba272f0e3fdc73a133db205882c0daf))
+
+### Bug Fixes
+
+* **local-folder:** never record a lookup mime for a text-extension file ([10ca1cc](https://github.com/edjafarov/kiagent-core/commit/10ca1ccecffaf958dae7c301410c67bee98e0269))
+
 ## [0.78.0](https://github.com/edjafarov/kiagent-core/compare/v0.77.2...v0.78.0) (2026-08-23)
 
 ### Bug Fixes
