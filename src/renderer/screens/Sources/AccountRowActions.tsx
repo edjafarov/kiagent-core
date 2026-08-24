@@ -58,11 +58,16 @@ export function AccountRowActions(props: {
         <RemoveAccountModal
           identifier={account.identifier}
           onCancel={() => setConfirmRemove(false)}
-          onConfirm={() => {
-            setConfirmRemove(false);
-            void window.kiagent.invoke('accounts:remove', {
+          // RETURN the promise and close only after it settles — the modal
+          // renders its busy state off `await onConfirm()`. Closing first
+          // (and `void`ing the invoke) resolved this on the same tick, which
+          // left a multi-minute `removeAccount` cascade running with no
+          // surface at all: the dialog vanished and the app looked hung.
+          onConfirm={async () => {
+            await window.kiagent.invoke('accounts:remove', {
               accountId: account.id,
             });
+            setConfirmRemove(false);
           }}
         />
       )}
