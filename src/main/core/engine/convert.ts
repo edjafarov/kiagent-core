@@ -88,6 +88,14 @@ async function parse(
     return parts.join('\n\n');
   }
 
+  if (
+    mime === 'message/rfc822' ||
+    mime === 'application/mbox' ||
+    ['eml', 'emlx', 'mbox'].includes(ext)
+  ) {
+    return emailToMarkdown(buf, ext);
+  }
+
   if (mime.startsWith('text/') || ['md', 'txt', 'json', 'log'].includes(ext)) {
     return buf.toString('utf8');
   }
@@ -116,4 +124,78 @@ function csvToMarkdown(csv: string): string {
   const sep = `| ${rows[0].map(() => '---').join(' | ')} |`;
   const body = rows.slice(1).map((r) => `| ${r.join(' | ')} |`);
   return [header, sep, ...body].join('\n');
+}
+
+/** Messages rendered from one mbox. An archive can hold tens of thousands;
+ *  this file becomes ONE document, so the cap bounds both the parse time and
+ *  the markdown a single row carries. */
+const MBOX_MAX_MESSAGES = 500;
+
+/**
+ * Locally-saved email → markdown, via the same `mailparser` the IMAP source
+ * uses (src/main/sources/imap/parse.ts) rather than a second implementation.
+ *
+ * Raw decoding is NOT an option even though these files look like text: a
+ * body is quoted-printable or base64, and an attachment is a base64 blob that
+ * would otherwise land in the search index as thousands of meaningless
+ * "words". Attachments are reduced to their filenames, which is the part a
+ * person actually searches for.
+ */
+async function emailToMarkdown(buf: Buffer, ext: string): Promise<string> {
+  const { simpleParser } = await import('mailparser');
+
+  const render = async (raw: Buffer): Promise<string> => {
+    const mail = await simpleParser(raw);
+    const head: string[] = [];
+    const addr = (v: unknown): string =>
+      v && typeof v === 'object' && 'text' in (v as Record<string, unknown>)
+        ? String((v as { text?: string }).text ?? '')
+        : '';
+    if (mail.subject) head.push(`# ${mail.subject}`);
+    if (mail.from) head.push(`**From:** ${addr(mail.from)}`);
+    const to = Array.isArray(mail.to)
+      ? mail.to.map(addr).join(', ')
+      : addr(mail.to);
+    if (to) head.push(`**To:** ${to}`);
+    if (mail.date) head.push(`**Date:** ${mail.date.toISOString()}`);
+    const names = (mail.attachments ?? [])
+      .map((a) => a.filename)
+      .filter((n): n is string => Boolean(n));
+    if (names.length > 0) head.push(`**Attachments:** ${names.join(', ')}`);
+    // `text` is the decoded text/plain part; fall back to the HTML part.
+    const body =
+      mail.text ?? (mail.html ? await htmlToMarkdown(mail.html) : '');
+    return [head.join('\n\n'), body.trim()].filter(Boolean).join('\n\n');
+  };
+
+  if (ext === 'emlx') {
+    // Apple Mail: a byte count on line 1, the RFC 5322 message, then a plist
+    // trailer. Slice by the declared length rather than hunting for the plist.
+    const nl = buf.indexOf(0x0a);
+    const declared = Number.parseInt(buf.subarray(0, nl).toString('ascii'), 10);
+    const body =
+      Number.isFinite(declared) && declared > 0
+        ? buf.subarray(nl + 1, nl + 1 + declared)
+        : buf.subarray(nl + 1);
+    return render(body);
+  }
+
+  if (ext === 'mbox') {
+    // mbox separates messages with a line beginning "From " (no colon).
+    const parts = buf
+      .toString('utf8')
+      .split(/^From .*$/m)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .slice(0, MBOX_MAX_MESSAGES);
+    const out: string[] = [];
+    for (const part of parts) {
+      // eslint-disable-next-line no-await-in-loop -- sequential by design:
+      // parsing 500 messages concurrently would defeat the memory bound.
+      out.push(await render(Buffer.from(part, 'utf8')));
+    }
+    return out.join('\n\n---\n\n');
+  }
+
+  return render(buf);
 }
