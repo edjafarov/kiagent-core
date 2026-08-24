@@ -1,6 +1,11 @@
 import { VISUAL_EXTS } from '@main/workers/vision/classify';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { isIngestible, INGESTIBLE_DENY_RE } from '../ingestible';
-import { classifyPath } from '../mime';
+import { classifyPath, resolvePathMime } from '../mime';
+import { buildItem } from '../scanner';
 
 describe('isIngestible', () => {
   it('accepts every format a pipeline can actually read', () => {
@@ -163,5 +168,52 @@ describe('classifyPath', () => {
   it('leaves genuinely unreadable formats unsupported', () => {
     expect(classifyPath('/d/x.scache')).toBe('unsupported');
     expect(classifyPath('/d/x.dcm')).toBe('unsupported');
+  });
+});
+
+describe('text-extension files that are secretly binary', () => {
+  function write(name: string, bytes: Buffer): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lf-textsniff-'));
+    const p = path.join(dir, name);
+    fs.writeFileSync(p, bytes);
+    return p;
+  }
+
+  it('reports text/plain for a TEXT_EXTS file, never the lookup mime', async () => {
+    // `mime` calls .ts video/mp2t. Storing that verbatim is not cosmetic: the
+    // audio worker's candidate gate allows any `video/*` and does NOT check
+    // whether the doc already has content, so every TypeScript file in a
+    // watched folder would queue for speech transcription.
+    expect(resolvePathMime('/d/a.ts')).toBe('text/plain');
+    expect(resolvePathMime('/d/a.json')).toBe('text/plain');
+    // formats with a real parser keep their true mime
+    expect(resolvePathMime('/d/a.pdf')).toBe('application/pdf');
+    expect(resolvePathMime('/d/a.jpg')).toBe('image/jpeg');
+
+    const p = write('mod.ts', Buffer.from('export const x = 1;\n', 'utf8'));
+    const item = await buildItem(p, fs.statSync(p));
+    expect(item.mime).toBe('text/plain');
+    expect(item.markdownText).toContain('export const x = 1;');
+  });
+
+  it('does not decode a real MPEG-TS video as if it were TypeScript', async () => {
+    // A genuine .ts transport stream: NUL bytes throughout. Decoding it as
+    // UTF-8 would push megabytes of mojibake into markdown and the search
+    // index. It stays a metadata-only document instead.
+    const ts = Buffer.alloc(4096);
+    ts.writeUInt8(0x47, 0); // MPEG-TS sync byte
+    const p = write('stream.ts', ts);
+    const item = await buildItem(p, fs.statSync(p));
+    expect(item.markdownText).toBeNull();
+    expect(item.binary).toBeNull();
+  });
+
+  it('still decodes text that merely looks unusual', async () => {
+    const p = write(
+      'notes.md',
+      Buffer.from('héllo — em dash, no NULs', 'utf8'),
+    );
+    const item = await buildItem(p, fs.statSync(p));
+    expect(item.markdownText).toContain('héllo');
   });
 });

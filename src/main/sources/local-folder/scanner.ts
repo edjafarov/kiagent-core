@@ -6,7 +6,7 @@ import type { Entry } from 'fast-glob';
 
 import { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
 import { isIngestible } from './ingestible';
-import { classifyPath, resolveMime } from './mime';
+import { classifyPath, resolvePathMime } from './mime';
 import type { LocalFolderItem } from './to-document';
 
 /** ~50 files per yielded Batch — matches the porting brief's chunk size. */
@@ -194,7 +194,7 @@ export async function buildItem(
 ): Promise<LocalFolderItem> {
   const externalId = toAbsPosix(absPath);
   const ext = path.extname(absPath).slice(1).toLowerCase();
-  const mt = resolveMime(absPath);
+  const mt = resolvePathMime(absPath);
   const bucket = classifyPath(absPath);
   const { size } = stats;
   const mtimeIso = stats.mtime.toISOString();
@@ -209,7 +209,13 @@ export async function buildItem(
 
   try {
     if (bucket === 'text' && size <= MAX_INLINE_TEXT_BYTES) {
-      markdownText = await fs.promises.readFile(absPath, 'utf-8');
+      const bytes = await fs.promises.readFile(absPath);
+      // TEXT_EXTS routes by extension, and an extension can lie: `.ts` is
+      // TypeScript almost always and an MPEG transport stream occasionally.
+      // A NUL byte means this is not text, whatever it is called — decoding
+      // it would push megabytes of mojibake into markdown and the search
+      // index. Metadata-only is the honest answer.
+      markdownText = bytes.includes(0) ? null : bytes.toString('utf-8');
     } else if (bucket === 'binary' && size <= MAX_BINARY_READ_BYTES) {
       const bytes = await fs.promises.readFile(absPath);
       binary = {

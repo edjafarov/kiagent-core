@@ -95,6 +95,7 @@ export const TEXT_EXTS = new Set([
   // structured data and config
   'json',
   'jsonl',
+  'geojson',
   'ndjson',
   'yaml',
   'yml',
@@ -142,6 +143,22 @@ export const TEXT_EXTS = new Set([
   'cs',
   'php',
 ]);
+
+/**
+ * Mime to RECORD for a real path. Prefer this over `resolveMime` for anything
+ * that gets persisted.
+ *
+ * A TEXT_EXTS file reports `text/plain`, not what the lookup said. That is not
+ * cosmetic tidying: the lookup calls .ts `video/mp2t`, `metadata.mime` is what
+ * downstream workers read, and the audio worker's candidate gate allows any
+ * `video/*` without checking whether the document already has content — so
+ * recording the lookup's answer queues every TypeScript file in a watched
+ * folder for speech transcription.
+ */
+export function resolvePathMime(absPath: string): string {
+  const ext = path.extname(absPath).slice(1).toLowerCase();
+  return TEXT_EXTS.has(ext) ? 'text/plain' : resolveMime(absPath);
+}
 
 /**
  * Bucket for a real path — the form every caller in this source actually has.
