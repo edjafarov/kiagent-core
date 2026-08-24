@@ -9,6 +9,7 @@ import {
   crashReporter,
   dialog,
   ipcMain,
+  nativeImage,
   powerMonitor,
   safeStorage,
   shell,
@@ -87,6 +88,7 @@ import { createTray } from './tray';
 import type { TrayMenuController } from './tray-menu';
 import { resolveHtmlPath } from './util';
 import { attachBundledWorkers } from './workers';
+import { makeNativeImageDownscaler } from './workers/vision/downscale';
 
 let mainWindow: BrowserWindow | null = null;
 let platform: CorePlatform | null = null;
@@ -725,7 +727,12 @@ app
       dataDir,
     });
     bundledProviders = bundled;
-    attachBundledWorkers(p, bundled);
+    attachBundledWorkers(p, {
+      ...bundled,
+      // Built HERE so the worker and its module stay Electron-free (and so
+      // jest never has to mock `electron` to exercise them).
+      downscale: makeNativeImageDownscaler(nativeImage),
+    });
 
     const outbound = createOutboundService({
       store: p.store,

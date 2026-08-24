@@ -7,6 +7,7 @@ import type { VisionHelper } from '../providers/apple-vision/vision-helper';
 import type { LocalAsrProvider } from '../providers/local-asr';
 import type { LocalLlmProvider } from '../providers/local-llm/provider';
 import { createAudioWorker } from './audio/audio-worker';
+import type { ImageDownscaler } from './vision/downscale';
 import { pickRasterizer } from './vision/rasterize';
 import { createVisionWorker } from './vision/vision-worker';
 
@@ -16,11 +17,15 @@ export function attachBundledWorkers(
     visionHelper: VisionHelper | null;
     localLlm: LocalLlmProvider;
     localAsr: LocalAsrProvider;
+    /** Absent in tests / non-Electron hosts — the worker falls back to a
+     *  pass-through, i.e. today's behaviour. */
+    downscale?: ImageDownscaler;
   },
 ): Handle {
   const worker = createVisionWorker({
     rasterizer: pickRasterizer(deps.visionHelper),
     laneOpen: () => backgroundLaneOpen(platform),
+    downscale: deps.downscale,
   });
   const handle = platform.engine.attach(worker);
   // NOT boot.attachWorker: the re-drive job additionally (1) skips outside
@@ -69,7 +74,10 @@ export function registerRedrive(
     async () => {
       if (!backgroundLaneOpen(platform)) return;
       const consumer = workerConsumerName(worker);
-      if ((await platform.store.ledgerDeferred(consumer)).length === 0) return;
+      // Existence probe, NOT a fetch: this gate used to pull every deferred
+      // seq across the DB worker boundary — 2.1M rows in one structured-clone
+      // reply — merely to ask whether the backlog was empty.
+      if (!(await platform.store.ledgerHasDeferred(consumer))) return;
       for (const i of installers) i.ensureInstalled(); // no-op if installed/downloading/opted-out
       await platform.engine.rerunDeferred(worker);
     },

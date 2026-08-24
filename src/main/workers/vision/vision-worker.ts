@@ -16,6 +16,7 @@ import {
   MAX_PDF_BYTES,
   OCR_SUFFICIENT_CHARS,
 } from './classify';
+import { passthroughDownscaler, type ImageDownscaler } from './downscale';
 import { INDEXING_PROMPT, mergeExtraction } from './merge';
 import type { PageResult } from './merge';
 import type { Rasterizer } from './rasterize';
@@ -30,7 +31,11 @@ import type { Rasterizer } from './rasterize';
 export function createVisionWorker(deps: {
   rasterizer: Rasterizer;
   laneOpen(): boolean;
+  /** Clamps a page to the VLM's usable resolution before pass 2 encodes it.
+   *  Optional so non-Electron hosts and tests get the identity function. */
+  downscale?: ImageDownscaler;
 }): Worker {
+  const downscale = deps.downscale ?? passthroughDownscaler;
   return {
     name: 'vision',
     version: 1,
@@ -111,8 +116,16 @@ export function createVisionWorker(deps: {
       try {
         const results: PageResult[] = [];
         for (let i = 0; i < pages.length; i += 1) {
-          const description = await session.see(pages[i], INDEXING_PROMPT, {
-            mime: pageMime,
+          // Pass 2 ONLY. Pass 1 (OCR) above deliberately reads the full-size
+          // page: transcription accuracy scales with resolution, and the OCR
+          // helper takes a temp-file PATH rather than a base64 payload, so it
+          // costs no JS heap. The VLM is the one that pays three full-size
+          // heap strings per call — and the one that discards the extra
+          // pixels anyway.
+          // eslint-disable-next-line no-await-in-loop
+          const page = await downscale(pages[i], pageMime);
+          const description = await session.see(page.bytes, INDEXING_PROMPT, {
+            mime: page.mime,
           });
           results.push({ ocrText: ocr[i], description });
         }

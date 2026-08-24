@@ -19,9 +19,18 @@ function makePlatform(deferred: string[]) {
       },
     },
     store: {
-      ledgerDeferred: async (consumer: string) => {
+      // The gate must ask "is there any?", never "give me all of them".
+      // Pulling the whole backlog here returned 2,136,099 rows in ONE
+      // structured-clone reply and killed the DB worker thread
+      // (SIGTRAP on V8Worker, 2026-08-24 11:26, ~2.5 min after the tick).
+      ledgerHasDeferred: async (consumer: string) => {
         ledgerQueries.push(consumer);
-        return deferred.includes(consumer) ? [{ id: 'x' }] : [];
+        return deferred.includes(consumer);
+      },
+      ledgerDeferred: async () => {
+        throw new Error(
+          'registerRedrive must not materialize the backlog to gate on it',
+        );
       },
     },
     engine: {

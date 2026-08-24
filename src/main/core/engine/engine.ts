@@ -138,6 +138,13 @@ const MASS_ARCHIVE_RATIO = 0.5;
  *  re-chunked to this. */
 export const RECONCILE_STAGE_BATCH = 10_000;
 
+/** Deferred entries pulled — and Documents materialized — per re-drive page.
+ *  The re-drive's peak memory is a function of THIS, never of the backlog
+ *  size: an unbounded read of a 2.1M-entry vision backlog put ~2 GB of live
+ *  Documents on the main heap and killed the process (2026-08-24). Matched to
+ *  FEED_BATCH, the live tail's equivalent bound. */
+export const REDRIVE_PAGE = 500;
+
 /**
  * Runs a source's optional `reconcile()` once per pull cycle: drains its full
  * listing, then archives whatever the account still has live that ISN'T in
@@ -1090,34 +1097,73 @@ export function createEngine(deps: EngineDeps): Engine & {
     async rerunDeferred(worker: Worker): Promise<void> {
       const consumer = workerConsumerName(worker);
       const abort = new AbortController();
-      const seqs = await store.ledgerDeferred(consumer);
-      if (seqs.length === 0) return;
-      const changes = await store.changesAt(seqs);
-      let emitted: DocumentInput[] = [];
-      let enrich: EnrichInput[] = [];
-      for (const change of changes) {
-        // changesAt materializes the CURRENT document, so a doc that gained
-        // real markdown between defer and re-drive no longer matches. Re-check
-        // matches() — running workOne anyway would re-OCR and OVERWRITE that
-        // fresh content. A non-matching deferred change no longer needs this
-        // worker at all, so resolve its ledger entry terminally ('skip',
-        // mirroring how a 'done' outcome clears the 'deferred' row via the
-        // ledgerRecord upsert) instead of re-selecting it every cadence.
-        if (!worker.matches(change)) {
-          await store.ledgerRecord(consumer, change.seq, 0, 'skip');
-          continue;
+      // Keyset paging over the backlog, NOT a snapshot of it.
+      //
+      // This loop used to read every deferred seq at once and hand the whole
+      // list to changesAt(), which materializes one full Document per entry.
+      // A vision backlog of 2,136,099 deferred entries made that array ~2 GB
+      // of live main heap, held for the entire loop — the app went from 6% to
+      // 93% heap at the first 30m re-drive tick and died there. Both the seq
+      // list and the materialized page are now bounded by REDRIVE_PAGE, so
+      // peak footprint is a function of the page size and never of the
+      // backlog size.
+      //
+      // `after` advances monotonically, which is also what terminates the
+      // loop: an entry that defers AGAIN stays 'deferred' but sits below the
+      // watermark, so this run will not re-select it and spin forever. It is
+      // simply picked up by the next scheduled re-drive.
+      let after: Seq = 0;
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        const seqs = await store.ledgerDeferred(consumer, after, REDRIVE_PAGE);
+        if (seqs.length === 0) return;
+        after = seqs[seqs.length - 1];
+        // eslint-disable-next-line no-await-in-loop
+        const changes = await store.changesAt(seqs);
+
+        const emitted: DocumentInput[] = [];
+        const enrich: EnrichInput[] = [];
+        const skips: Array<{ seq: Seq; attempts: number; outcome: 'skip' }> =
+          [];
+        for (const change of changes) {
+          // changesAt materializes the CURRENT document, so a doc that gained
+          // real markdown between defer and re-drive no longer matches, and an
+          // ARCHIVED doc stops matching too (both bundled classifiers return
+          // 'skip' on archivedAt). Re-check matches() — running workOne anyway
+          // would re-OCR and OVERWRITE that fresh content. A non-matching
+          // deferred change no longer needs this worker at all, so resolve its
+          // ledger entry terminally ('skip', mirroring how a 'done' outcome
+          // clears the 'deferred' row via the upsert) instead of re-selecting
+          // it every cadence.
+          if (!worker.matches(change)) {
+            skips.push({ seq: change.seq, attempts: 0, outcome: 'skip' });
+            continue;
+          }
+          // eslint-disable-next-line no-await-in-loop
+          const r = await workOne(worker, change, abort.signal);
+          emitted.push(...r.docs);
+          enrich.push(...r.enrich);
         }
-        const r = await workOne(worker, change, abort.signal);
-        emitted = emitted.concat(r.docs);
-        enrich = enrich.concat(r.enrich);
-      }
-      if (emitted.length || enrich.length) {
-        await store.commit({
-          consumer,
-          cursor: await store.consumerCursor(consumer),
-          documents: emitted.length ? emitted : undefined,
-          enrich: enrich.length ? enrich : undefined,
-        });
+
+        // One statement for the page's terminal skips. Previously one round
+        // trip per entry — 2.1M of them through the DB worker bridge.
+        if (skips.length) {
+          // eslint-disable-next-line no-await-in-loop
+          await store.ledgerRecordMany(consumer, skips);
+        }
+        // Commit per page rather than accumulating across the whole backlog:
+        // the old cross-loop `concat` accumulators grew without bound (and
+        // reallocated on every iteration).
+        if (emitted.length || enrich.length) {
+          // eslint-disable-next-line no-await-in-loop
+          await store.commit({
+            consumer,
+            // eslint-disable-next-line no-await-in-loop
+            cursor: await store.consumerCursor(consumer),
+            documents: emitted.length ? emitted : undefined,
+            enrich: enrich.length ? enrich : undefined,
+          });
+        }
       }
     },
 

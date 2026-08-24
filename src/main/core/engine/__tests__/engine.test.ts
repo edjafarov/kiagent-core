@@ -14,7 +14,7 @@ import type {
 import { openDb } from '../../../db/app-db';
 import { openStore } from '../../store/store';
 import type { CoreStore } from '../../store/store';
-import { createEngine, RECONCILE_STAGE_BATCH } from '../engine';
+import { createEngine, RECONCILE_STAGE_BATCH, REDRIVE_PAGE } from '../engine';
 
 const noopLogs = { log: () => {} };
 
@@ -525,7 +525,7 @@ describe('engine', () => {
     const scan = await store.read.byExternalId(account.id, 'scan', 'note');
     const deferredSeq = scan!.seq;
     await store.ledgerRecord(consumer, deferredSeq, 1, 'deferred');
-    expect(await store.ledgerDeferred(consumer)).toEqual([deferredSeq]);
+    expect(await store.ledgerDeferred(consumer, 0, 10)).toEqual([deferredSeq]);
 
     // The doc gains real markdown before the re-drive (another path enriched
     // it). changesAt() materializes the CURRENT doc, so it no longer matches.
@@ -543,10 +543,128 @@ describe('engine', () => {
     await engine.rerunDeferred(worker);
 
     expect(workCalls).toBe(0); // matches() re-checked → worker never ran
-    expect(await store.ledgerDeferred(consumer)).toEqual([]); // deferred entry resolved
+    expect(await store.ledgerDeferred(consumer, 0, 10)).toEqual([]); // deferred entry resolved
     const after = await store.read.byExternalId(account.id, 'scan', 'note');
     expect(after?.markdown).toBe('real rich markdown that is plenty long'); // not clobbered
   });
+
+  it('rerunDeferred: pages the backlog — never materializes the whole deferred set at once', async () => {
+    // REGRESSION (main-process OOM, 2026-08-24): rerunDeferred used to call
+    // store.ledgerDeferred() unbounded and hand every seq to changesAt(),
+    // materializing one full Document per deferred entry into a single array.
+    // With a 2.1M-entry backlog that array measured ~2 GB and pinned the main
+    // heap for the whole loop — the app died at the first 30m re-drive tick.
+    // The loop must consume the backlog one bounded page at a time.
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'p',
+    });
+    const consumer = 'worker:vision:v1';
+    const total = REDRIVE_PAGE + 7;
+
+    await store.commit({
+      account: account.id,
+      documents: Array.from({ length: total }, (_, i) => doc(`scan-${i}`, '')),
+      cursor: 1,
+    });
+    for (let i = 0; i < total; i += 1) {
+      const d = await store.read.byExternalId(account.id, `scan-${i}`, 'note');
+      // eslint-disable-next-line no-await-in-loop
+      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+    }
+
+    const pageSizes: number[] = [];
+    const spy: CoreStore = {
+      ...store,
+      changesAt: async (seqs) => {
+        pageSizes.push(seqs.length);
+        return store.changesAt(seqs);
+      },
+    };
+
+    const engine = createEngine({
+      store: spy,
+      sources: { get: () => undefined },
+      inference: {
+        complete: async () => 'c',
+        see: async () => 's',
+        read: async () => 'r',
+        hear: async () => 'h',
+      },
+      convert: async (d: DocumentInput) => d,
+      logs: noopLogs,
+    });
+
+    const worker: Worker = {
+      name: 'vision',
+      version: 1,
+      schedule: { every: '30m' },
+      matches: () => false, // every entry resolves terminally to 'skip'
+      work: async () => 'skip',
+    };
+
+    await engine.rerunDeferred(worker);
+
+    expect(pageSizes.length).toBeGreaterThan(1); // actually paged
+    expect(Math.max(...pageSizes)).toBeLessThanOrEqual(REDRIVE_PAGE);
+    // and the whole backlog still drained
+    expect(await store.ledgerDeferred(consumer, 0, total + 1)).toEqual([]);
+  }, 30_000);
+
+  it('rerunDeferred: batches the terminal skips instead of one write per entry', async () => {
+    // The same 2.1M backlog also issued 2.1M single-row ledgerRecord calls,
+    // each a separate round trip through the DB worker bridge.
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'b',
+    });
+    const consumer = 'worker:vision:v1';
+    const total = 40;
+
+    await store.commit({
+      account: account.id,
+      documents: Array.from({ length: total }, (_, i) => doc(`b-${i}`, '')),
+      cursor: 1,
+    });
+    for (let i = 0; i < total; i += 1) {
+      const d = await store.read.byExternalId(account.id, `b-${i}`, 'note');
+      // eslint-disable-next-line no-await-in-loop
+      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+    }
+
+    let singleWrites = 0;
+    const spy: CoreStore = {
+      ...store,
+      ledgerRecord: async (...args) => {
+        singleWrites += 1;
+        return store.ledgerRecord(...args);
+      },
+    };
+
+    const engine = createEngine({
+      store: spy,
+      sources: { get: () => undefined },
+      inference: {
+        complete: async () => 'c',
+        see: async () => 's',
+        read: async () => 'r',
+        hear: async () => 'h',
+      },
+      convert: async (d: DocumentInput) => d,
+      logs: noopLogs,
+    });
+
+    await engine.rerunDeferred({
+      name: 'vision',
+      version: 1,
+      schedule: { every: '30m' },
+      matches: () => false,
+      work: async () => 'skip',
+    } as Worker);
+
+    expect(singleWrites).toBe(0); // batched, not one-per-entry
+    expect(await store.ledgerDeferred(consumer, 0, total + 1)).toEqual([]);
+  }, 30_000);
 
   it('workOne: a failed final attempt commits no partial emit/enrich', async () => {
     const source = fakeSource();

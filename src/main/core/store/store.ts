@@ -139,7 +139,27 @@ export interface CoreStore extends Store {
   ledgerCounts(consumer: string): Promise<LedgerCounts>;
   /** Across every consumer — drives the app-wide processing panel. */
   ledgerCountsAll(): Promise<LedgerCounts & { pending: number }>;
-  ledgerDeferred(consumer: string): Promise<Seq[]>;
+  /** ONE bounded page of deferred seqs, keyset-paged: seqs strictly greater
+   *  than `after`, ascending, at most `limit`. Deliberately has no unbounded
+   *  form — a 2.1M-entry backlog returned in one reply both blew the
+   *  structured-clone budget crossing the DB worker boundary and, once
+   *  materialized by `changesAt`, pinned ~2 GB of main heap for the whole
+   *  re-drive loop (main-process OOM, 2026-08-24). */
+  ledgerDeferred(consumer: string, after: Seq, limit: number): Promise<Seq[]>;
+  /** Cheap existence probe for the re-drive gate — never materializes the
+   *  backlog just to ask whether it is empty. */
+  ledgerHasDeferred(consumer: string): Promise<boolean>;
+  /** Resolve many ledger entries in ONE statement. The re-drive terminally
+   *  skips every entry whose document no longer matches; one round trip per
+   *  entry meant 2.1M round trips through the worker bridge. */
+  ledgerRecordMany(
+    consumer: string,
+    entries: Array<{
+      seq: Seq;
+      attempts: number;
+      outcome: 'done' | 'skip' | 'failed' | 'deferred' | null;
+    }>,
+  ): Promise<void>;
   changesAt(seqs: Seq[]): Promise<Change[]>;
   headSeq(): Promise<Seq>;
   scheduleAll(): Promise<ScheduleRow[]>;
@@ -1249,12 +1269,47 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       return counts;
     },
 
-    async ledgerDeferred(consumer) {
+    async ledgerDeferred(consumer, after, limit) {
       const rows = (await db.all(
-        `SELECT seq FROM work_ledger WHERE consumer = ? AND outcome = 'deferred' ORDER BY seq`,
-        [consumer],
+        `SELECT seq FROM work_ledger
+          WHERE consumer = ? AND outcome = 'deferred' AND seq > ?
+          ORDER BY seq LIMIT ?`,
+        [consumer, after, limit],
       )) as Array<{ seq: number }>;
       return rows.map((r) => r.seq);
+    },
+
+    async ledgerHasDeferred(consumer) {
+      const rows = await db.all(
+        `SELECT 1 FROM work_ledger WHERE consumer = ? AND outcome = 'deferred' LIMIT 1`,
+        [consumer],
+      );
+      return rows.length > 0;
+    },
+
+    async ledgerRecordMany(consumer, entries) {
+      if (entries.length === 0) return;
+      const ts = now();
+      // 5 bound params per row against SQLite's 32766-variable ceiling; the
+      // chunk is sized well under it so a caller's page size can grow without
+      // silently tripping "too many SQL variables".
+      const PER_STATEMENT = 500;
+      for (let i = 0; i < entries.length; i += PER_STATEMENT) {
+        const slice = entries.slice(i, i + PER_STATEMENT);
+        const values = slice.map(() => '(?, ?, ?, ?, ?)').join(', ');
+        const params: AppDbParam[] = [];
+        for (const e of slice)
+          params.push(consumer, e.seq, e.attempts, e.outcome, ts);
+        // eslint-disable-next-line no-await-in-loop
+        await db.run(
+          `INSERT INTO work_ledger(consumer, seq, attempts, outcome, updated_at)
+           VALUES ${values}
+           ON CONFLICT(consumer, seq) DO UPDATE
+             SET attempts = excluded.attempts, outcome = excluded.outcome,
+                 updated_at = excluded.updated_at`,
+          params,
+        );
+      }
     },
 
     async changesAt(seqs) {

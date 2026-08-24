@@ -294,3 +294,58 @@ it('worker has correct metadata', () => {
   expect(worker.version).toBe(1);
   expect(worker.schedule).toEqual({ every: '30m' });
 });
+
+it('downscales for `see` but hands `read` the FULL-SIZE page', async () => {
+  // OCR accuracy scales with resolution and the helper takes a temp-file
+  // path (no JS heap cost); the VLM is the one that base64-encodes the bytes
+  // into three full-size heap strings AND discards the extra pixels. So the
+  // clamp must land on pass 2 only.
+  const full = new Uint8Array(9_000_000);
+  const shrunk = new Uint8Array(190_000);
+  const session = fakeSession({
+    fetchBytes: async () => full,
+    read: async () => 'too short', // < OCR_SUFFICIENT_CHARS → falls to pass 2
+  });
+  const see = jest.spyOn(session, 'see');
+  const read = jest.spyOn(session, 'read');
+
+  const worker = createVisionWorker({
+    rasterizer: { pdfToPngs: jest.fn() },
+    laneOpen: () => true,
+    downscale: async () => ({ bytes: shrunk, mime: 'image/jpeg' }),
+  });
+
+  const result = await worker.work(
+    change({ metadata: { mime: 'image/jpeg', filename: 'photo.jpg' } }),
+    session,
+  );
+
+  expect(result).toBe('done');
+  expect(read).toHaveBeenCalledWith(full, { mime: 'image/jpeg' });
+  expect(see).toHaveBeenCalledWith(shrunk, expect.any(String), {
+    mime: 'image/jpeg',
+  });
+});
+
+it('with no downscaler wired, `see` gets the original bytes (identity fallback)', async () => {
+  const full = new Uint8Array(9_000_000);
+  const session = fakeSession({
+    fetchBytes: async () => full,
+    read: async () => 'too short',
+  });
+  const see = jest.spyOn(session, 'see');
+
+  const worker = createVisionWorker({
+    rasterizer: { pdfToPngs: jest.fn() },
+    laneOpen: () => true,
+  });
+
+  await worker.work(
+    change({ metadata: { mime: 'image/jpeg', filename: 'photo.jpg' } }),
+    session,
+  );
+
+  expect(see).toHaveBeenCalledWith(full, expect.any(String), {
+    mime: 'image/jpeg',
+  });
+});
