@@ -888,3 +888,102 @@ describe('watch enumeration parity (symlink cycles)', () => {
     expect(seen.some((p) => p.includes('loop'))).toBe(false);
   }, 20_000);
 });
+
+describe('ingestion allowlist parity (scanner vs watcher)', () => {
+  /** One fixture, used by both halves: a mix of ingestible and not. */
+  function mkMixedFixture(): { dir: string; ingestible: string[] } {
+    const dir = mkTmpDir();
+    fs.mkdirSync(path.join(dir, 'shadercache'));
+    fs.mkdirSync(path.join(dir, 'Horos.noindex'));
+    for (const f of [
+      'notes.md',
+      'report.pdf',
+      'photo.jpg',
+      'config.json',
+      'mail.eml',
+      'shadercache/000.scache',
+      'shadercache/000.bin',
+      'Horos.noindex/scan.jpg',
+      'save.eu5',
+      'archive.zip',
+      '.env',
+    ]) {
+      fs.writeFileSync(path.join(dir, f), 'x');
+    }
+    return {
+      dir,
+      ingestible: [
+        '/config.json',
+        '/mail.eml',
+        '/notes.md',
+        '/photo.jpg',
+        '/report.pdf',
+      ],
+    };
+  }
+
+  it('the scanner lists only ingestible files, and countFiles agrees', async () => {
+    const { listEntries, countFiles } =
+      require('../scanner') as typeof import('../scanner');
+    const { dir, ingestible } = mkMixedFixture();
+
+    const scanned = (await listEntries(dir))
+      .map((e) => e.absPath.slice(dir.length))
+      .sort();
+    expect(scanned).toEqual(ingestible);
+
+    // The add-folder preview must report the number of documents the folder
+    // would actually produce — a pre-filter count would promise 11 and
+    // deliver 5.
+    expect((await countFiles(dir)).count).toBe(ingestible.length);
+  }, 20_000);
+
+  it('the watcher emits for exactly the files the scanner lists', async () => {
+    const { listEntries } =
+      require('../scanner') as typeof import('../scanner');
+    const { watchLoop } = require('../watch') as typeof import('../watch');
+    const { dir, ingestible } = mkMixedFixture();
+
+    // watchLoop runs with ignoreInitial, so drive it with LIVE events: start
+    // the loop over an empty dir, then create the same mix underneath it.
+    const live = mkTmpDir();
+    const ctl = new AbortController();
+    const session = { signal: ctl.signal } as unknown as Session;
+    const seen: string[] = [];
+    const pump = (async () => {
+      for await (const batch of watchLoop([live], session, { roots: {} })) {
+        for (const item of batch.items)
+          seen.push(item.externalId.slice(live.length));
+      }
+    })();
+
+    await sleep(600); // chokidar's initial walk of an empty dir
+    fs.mkdirSync(path.join(live, 'shadercache'));
+    fs.mkdirSync(path.join(live, 'Horos.noindex'));
+    for (const f of [
+      'notes.md',
+      'report.pdf',
+      'photo.jpg',
+      'config.json',
+      'mail.eml',
+      'shadercache/000.scache',
+      'shadercache/000.bin',
+      'Horos.noindex/scan.jpg',
+      'save.eu5',
+      'archive.zip',
+      '.env',
+    ]) {
+      fs.writeFileSync(path.join(live, f), 'x');
+    }
+    await sleep(2500);
+    ctl.abort();
+    await pump;
+
+    expect([...new Set(seen)].sort()).toEqual(ingestible);
+    // and the scanner, walking the same tree, agrees exactly
+    const scanned = (await listEntries(dir))
+      .map((e) => e.absPath.slice(dir.length))
+      .sort();
+    expect([...new Set(seen)].sort()).toEqual(scanned);
+  }, 30_000);
+});

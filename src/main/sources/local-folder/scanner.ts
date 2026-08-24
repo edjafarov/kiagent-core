@@ -5,7 +5,8 @@ import fg from 'fast-glob';
 import type { Entry } from 'fast-glob';
 
 import { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
-import { classifyMime, resolveMime } from './mime';
+import { isIngestible } from './ingestible';
+import { classifyPath, resolveMime } from './mime';
 import type { LocalFolderItem } from './to-document';
 
 /** ~50 files per yielded Batch — matches the porting brief's chunk size. */
@@ -60,7 +61,7 @@ export const MAX_BATCH_READ_BYTES = 64 * 1024 * 1024; // 64 MiB
  * bucket's own cap) cost 0 since `buildItem` never reads their bytes.
  */
 export function entryReadCost(entry: ScannedEntry): number {
-  const bucket = classifyMime(resolveMime(entry.absPath));
+  const bucket = classifyPath(entry.absPath);
   const { size } = entry.stats;
   if (bucket === 'text' && size <= MAX_INLINE_TEXT_BYTES) return size;
   if (bucket === 'binary' && size <= MAX_BINARY_READ_BYTES) return size;
@@ -125,7 +126,9 @@ export async function listEntries(rootPath: string): Promise<ScannedEntry[]> {
     absolute: true,
     stats: true,
   })) as Entry[];
-  return entries.map((e) => ({ absPath: e.path, stats: e.stats as fs.Stats }));
+  return entries
+    .filter((e) => isIngestible(e.path))
+    .map((e) => ({ absPath: e.path, stats: e.stats as fs.Stats }));
 }
 
 export interface FileCount {
@@ -145,9 +148,15 @@ export async function countFiles(
   cap = 50_000,
 ): Promise<FileCount> {
   let count = 0;
-  const stream = fg.stream(['**/*'], { ...ENUMERATION_OPTIONS, cwd: rootPath });
+  const stream = fg.stream(['**/*'], {
+    ...ENUMERATION_OPTIONS,
+    cwd: rootPath,
+    absolute: true,
+  });
   for await (const entry of stream) {
-    void entry;
+    // Same gate as listEntries: the preview must promise the number of
+    // documents this folder will actually produce, not the file count.
+    if (!isIngestible(String(entry))) continue;
     count += 1;
     if (count >= cap) return { count, capped: true };
   }
@@ -186,7 +195,7 @@ export async function buildItem(
   const externalId = toAbsPosix(absPath);
   const ext = path.extname(absPath).slice(1).toLowerCase();
   const mt = resolveMime(absPath);
-  const bucket = classifyMime(mt);
+  const bucket = classifyPath(absPath);
   const { size } = stats;
   const mtimeIso = stats.mtime.toISOString();
   const createdIso = (

@@ -6,6 +6,7 @@ import type { Batch, ExternalRef, Session } from '@shared/contracts';
 import { isUnder } from '@shared/folder-paths';
 
 import { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
+import { isIngestible } from './ingestible';
 import { buildItem, toAbsPosix } from './scanner';
 import { advanceCursor, type LocalFolderCursor } from './cursor';
 import type { LocalFolderItem } from './to-document';
@@ -102,9 +103,23 @@ export async function* watchLoop(
       w();
     }
   };
-  watcher.on('add', (p: string) => enqueue({ kind: 'add', absPath: p }));
-  watcher.on('change', (p: string) => enqueue({ kind: 'change', absPath: p }));
-  watcher.on('unlink', (p: string) => enqueue({ kind: 'unlink', absPath: p }));
+  // The type allowlist is applied HERE, at the event, not in chokidar's
+  // `ignored`: `ignored` is consulted for directories too, and a directory has
+  // no ingestible extension — putting it there would prune the entire tree on
+  // the first subdirectory. `isSymlink` can live in `ignored` precisely
+  // because pruning a symlinked directory is the intent.
+  //
+  // `unlink` is filtered on the same rule: emitting a deletion for a file that
+  // was never ingested would ask the store to archive a document that does not
+  // exist. Filtering all three keeps the watcher's view of the tree identical
+  // to `listEntries`', which is the invariant reconcile depends on.
+  const onEvent = (kind: FsEvent['kind']) => (p: string) => {
+    if (!isIngestible(p)) return;
+    enqueue({ kind, absPath: p } as FsEvent);
+  };
+  watcher.on('add', onEvent('add'));
+  watcher.on('change', onEvent('change'));
+  watcher.on('unlink', onEvent('unlink'));
 
   const aborted = new Promise<void>((resolve) => {
     if (session.signal.aborted) resolve();

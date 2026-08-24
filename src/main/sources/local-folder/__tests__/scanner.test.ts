@@ -28,12 +28,13 @@ function writeFile(dir: string, rel: string, content: string): string {
   return abs;
 }
 
-/** Files at depth 0/1/2, one dotfile at root, one excluded file under
- *  node_modules/, one excluded file under .git/. */
+/** Files at depth 0/1/2, two dotfiles at root (one ordinary, one carrying
+ *  credentials), one excluded file under node_modules/, one under .git/. */
 function writeNestedTree(dir: string): void {
   writeFile(dir, 'root.txt', 'root');
   writeFile(dir, 'level1/file1.txt', 'level1');
   writeFile(dir, 'level1/level2/file2.txt', 'level2');
+  writeFile(dir, '.notes.md', '# hidden but ordinary');
   writeFile(dir, '.env', 'SECRET=1');
   writeFile(dir, 'node_modules/pkg/index.js', 'module.exports = {};');
   writeFile(dir, '.git/HEAD', 'ref: refs/heads/main');
@@ -46,9 +47,26 @@ describe('countFiles', () => {
 
     const result = await countFiles(dir);
 
-    // root.txt, level1/file1.txt, level1/level2/file2.txt, .env = 4.
-    // node_modules/pkg/index.js and .git/HEAD are excluded.
+    // root.txt, level1/file1.txt, level1/level2/file2.txt, .notes.md = 4.
+    // node_modules/pkg/index.js and .git/HEAD are excluded as junk dirs;
+    // .env is excluded as credential material (ingestible.ts) — dotfiles as
+    // such are still counted, which is what .notes.md pins.
     expect(result).toEqual({ count: 4, capped: false });
+  });
+
+  it('never counts or lists credential files', async () => {
+    // The allowlist admits plain text broadly, and a .env IS plain text. It
+    // must still never reach a searchable corpus.
+    const dir = mkTmpDir();
+    writeFile(dir, 'ok.md', '# fine');
+    writeFile(dir, '.env', 'SECRET=1');
+    writeFile(dir, 'id_ed25519', 'PRIVATE KEY');
+    writeFile(dir, 'server.pem', 'PRIVATE KEY');
+
+    expect((await countFiles(dir)).count).toBe(1);
+    expect(
+      (await listEntries(dir)).map((e) => path.basename(e.absPath)),
+    ).toEqual(['ok.md']);
   });
 
   it('caps the count and reports capped: true when the walk exceeds the cap', async () => {

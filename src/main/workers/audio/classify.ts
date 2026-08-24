@@ -13,6 +13,22 @@ const VIDEO_EXT_RE = /\.(mp4|m4v|mov)$/i;
 const DENY_EXT_RE = /\.(mkv|webm)$/i;
 const DENY_MIMES = new Set(['video/webm', 'video/x-matroska']);
 
+/**
+ * Path-level view of the same rules, for callers that hold a filename rather
+ * than a Document — notably the local-folder source's ingestion allowlist,
+ * which must not restate this list (a hand-copied copy drifts the moment a
+ * container is added or denied here).
+ *
+ * `ext` is bare and lower-cased ('mp3', not '.mp3'). Deny wins over allow,
+ * mirroring `isTranscribableDoc`'s ordered steps for the no-mime case that
+ * local files always are.
+ */
+export function isTranscribableExt(ext: string): boolean {
+  const dotExt = `.${ext.toLowerCase().replace(/^\./, '')}`;
+  if (DENY_EXT_RE.test(dotExt)) return false;
+  return AUDIO_EXT_RE.test(dotExt) || VIDEO_EXT_RE.test(dotExt);
+}
+
 /** Max SOURCE bytes fetched into main-process heap for one pass, checked at
  *  classify time against the doc's size metadata (and re-checked post-fetch
  *  as a backstop for docs whose metadata carries no size). 200 MiB: whisper
