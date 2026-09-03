@@ -853,6 +853,32 @@ describe('LocalAsrProvider', () => {
       { detectLanguage: true },
     );
     expect(deps.runCli.mock.calls[0][0].vadModelPath).toBe(VAD);
+    expect(deps.runCli.mock.calls[0][0].detectLanguage).toBe(true);
+  });
+
+  it("a detect run also fails closed under vad:'required' when the VAD model is missing", async () => {
+    const { fn } = keyedFilesPresent([
+      path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
+    ]);
+    const deps = makeDeps({
+      asrModelsDir: tmpDir,
+      filesPresent: fn,
+      vadModelPath: VAD,
+      fileExists: () => false,
+    });
+    const provider = createLocalAsrProvider(deps);
+    await expect(
+      provider.handle({
+        kind: 'hear',
+        payload: {
+          audio: new Uint8Array([1, 2, 3]),
+          format: 'wav',
+          detectLanguage: true,
+          vad: 'required',
+        },
+      } as any),
+    ).rejects.toThrow(/refusing/);
+    expect(deps.runCli).not.toHaveBeenCalled();
   });
 
   it('never enables VAD on the indexing transcribeFile route', async () => {
