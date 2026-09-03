@@ -4,6 +4,7 @@ import {
   AsrInputRejectedError,
   INPUT_REJECTED_DIAGNOSTIC,
   runWhisperCli,
+  WHISPER_LANGUAGES,
   WHISPER_VAD_PARAMS,
 } from '../whisper-cli';
 import type { SpawnFn } from '../whisper-cli';
@@ -194,6 +195,137 @@ describe('runWhisperCli', () => {
     child.emit('close', 0, null);
     await expect(p).rejects.toBeInstanceOf(AsrInputRejectedError);
     await expect(p).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('language pins -l to the given code', async () => {
+    const { spawnFn, child, argv } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn, language: 'uk' });
+    child.emit('close', 0, null);
+    await p;
+    const i = argv[0].indexOf('-l');
+    expect(argv[0][i + 1]).toBe('uk');
+    expect(argv[0]).not.toContain('auto');
+  });
+
+  it('detectLanguage forces -l auto even when a pinned language is also given', async () => {
+    // A detect run must never pass a pinned language: `language` is ignored
+    // on a detect run, and if whisper ever echoed the pin back as a
+    // "detection" the app would lock it in.
+    const { spawnFn, child, argv } = fakeSpawn();
+    const p = runWhisperCli({
+      ...ARGS,
+      spawnFn,
+      language: 'de',
+      detectLanguage: true,
+    });
+    child.emit('close', 0, null);
+    await p;
+    const i = argv[0].indexOf('-l');
+    expect(argv[0][i + 1]).toBe('auto');
+    expect(argv[0]).toContain('-dl');
+    expect(argv[0]).not.toContain('de');
+  });
+
+  it('detectLanguage adds -dl, drops --no-prints, and maps the stderr line to JSON', async () => {
+    const { spawnFn, child, argv } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn, detectLanguage: true });
+    child.stderr.emit(
+      'data',
+      Buffer.from(
+        'whisper_full_with_state: auto-detected language: uk (p = 0.463610)\n',
+      ),
+    );
+    child.emit('close', 0, null);
+    await expect(p).resolves.toBe(
+      JSON.stringify({ language: 'uk', probability: 0.46361 }),
+    );
+    expect(argv[0]).toContain('-dl');
+    expect(argv[0]).not.toContain('--no-prints');
+  });
+
+  it('detectLanguage without a detection line (VAD found no speech) resolves {"language":null}', async () => {
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn, detectLanguage: true });
+    child.stderr.emit('data', Buffer.from('whisper_vad: VAD is enabled\n'));
+    child.emit('close', 0, null);
+    await expect(p).resolves.toBe(JSON.stringify({ language: null }));
+  });
+
+  it('the detection line survives the stderr tail cap (sticky capture)', async () => {
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn, detectLanguage: true });
+    child.stderr.emit(
+      'data',
+      Buffer.from(
+        'whisper_full_with_state: auto-detected language: de (p = 0.91)\n',
+      ),
+    );
+    for (let i = 0; i < 20; i += 1)
+      child.stderr.emit('data', Buffer.alloc(1024, 0x62));
+    child.emit('close', 0, null);
+    await expect(p).resolves.toBe(
+      JSON.stringify({ language: 'de', probability: 0.91 }),
+    );
+  });
+
+  it('a malformed probability (non-finite Number()) resolves {"language":null} instead of null-poisoning JSON', async () => {
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn, detectLanguage: true });
+    child.stderr.emit(
+      'data',
+      Buffer.from(
+        'whisper_full_with_state: auto-detected language: uk (p = 0.4.6)\n',
+      ),
+    );
+    child.emit('close', 0, null);
+    await expect(p).resolves.toBe(JSON.stringify({ language: null }));
+  });
+
+  it('a detection line split across two stderr chunks still resolves the parsed JSON', async () => {
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn, detectLanguage: true });
+    child.stderr.emit(
+      'data',
+      Buffer.from(
+        'whisper_full_with_state: auto-detected language: uk (p = 0.4',
+      ),
+    );
+    child.stderr.emit('data', Buffer.from('63610)\n'));
+    child.emit('close', 0, null);
+    await expect(p).resolves.toBe(
+      JSON.stringify({ language: 'uk', probability: 0.46361 }),
+    );
+  });
+
+  it('a plain transcribe run whose stderr happens to contain a detection line still resolves stdout text', async () => {
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn });
+    child.stdout.emit('data', Buffer.from('hello world'));
+    child.stderr.emit(
+      'data',
+      Buffer.from(
+        'whisper_full_with_state: auto-detected language: uk (p = 0.463610)\n',
+      ),
+    );
+    child.emit('close', 0, null);
+    await expect(p).resolves.toBe('hello world');
+  });
+
+  it('an unknown-language diagnostic rejects with a plain Error even at exit 0', async () => {
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn, language: 'zz' });
+    child.stderr.emit('data', Buffer.from("error: unknown language 'zz'\n"));
+    child.emit('close', 0, null);
+    await expect(p).rejects.toThrow(/unknown language/);
+    await expect(p).rejects.not.toBeInstanceOf(AsrInputRejectedError);
+  });
+
+  it('WHISPER_LANGUAGES is the v1.9.2 table', () => {
+    for (const code of ['en', 'de', 'uk', 'ru', 'zh', 'yue', 'haw'])
+      expect(WHISPER_LANGUAGES.has(code)).toBe(true);
+    expect(WHISPER_LANGUAGES.has('zz')).toBe(false);
+    expect(WHISPER_LANGUAGES.has('auto')).toBe(false);
+    expect(WHISPER_LANGUAGES.size).toBe(100);
   });
 });
 

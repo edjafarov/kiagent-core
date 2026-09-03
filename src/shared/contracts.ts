@@ -536,6 +536,14 @@ export interface Inference {
       /** Fail-closed: reject instead of transcribing when the VAD model is
        *  unavailable, rather than the default warn-once-and-continue path. */
       vad?: 'required';
+      /** whisper language code ('en', 'de', 'uk', …) — pins `-l`. Anything
+       *  not in whisper's language table is ignored (auto-detect). */
+      language?: string;
+      /** Detect the spoken language instead of transcribing. Resolves to
+       *  the JSON string `{"language":"uk","probability":0.46}`, or
+       *  `{"language":null}` when no speech was found. `timestamps` and
+       *  `language` are ignored on a detect run. */
+      detectLanguage?: true;
       lane?: Lane;
     },
   ): Promise<string>;

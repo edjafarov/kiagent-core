@@ -55,6 +55,33 @@ describe('inference plane', () => {
     expect(seen).toMatchObject({ format: 'wav' });
   });
 
+  it('hear forwards vad, language and detectLanguage to the provider payload', async () => {
+    const plane = createInference(noopLogs);
+    let seen: unknown;
+    plane.register({
+      id: 'asr',
+      supports: ['complete', 'see', 'hear'],
+      status: () => 'ready',
+      handle: async (req) => {
+        seen = req.payload;
+        return `asr:${req.kind}`;
+      },
+    });
+    await expect(
+      plane.hear(new Uint8Array([1]), {
+        format: 'wav',
+        vad: 'required',
+        language: 'uk',
+        detectLanguage: true,
+      }),
+    ).resolves.toBe('asr:hear');
+    expect(seen).toMatchObject({
+      vad: 'required',
+      language: 'uk',
+      detectLanguage: true,
+    });
+  });
+
   it('hear with no audio provider throws NoProviderError', async () => {
     const plane = createInference(noopLogs);
     plane.register(provider('ocr', ['read'], 'ocr'));

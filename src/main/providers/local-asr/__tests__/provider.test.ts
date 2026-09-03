@@ -823,6 +823,64 @@ describe('LocalAsrProvider', () => {
     ).toBe(true);
   });
 
+  // ── 8c. language pin / detect mode (spec: language lock) ────────────────
+
+  it('forwards language when it is a whisper code', async () => {
+    const deps = await hearOnce({}, { language: 'uk' });
+    expect(deps.runCli.mock.calls[0][0].language).toBe('uk');
+    expect(deps.runCli.mock.calls[0][0].detectLanguage).toBeUndefined();
+  });
+
+  it('drops an unknown or non-string language (allowlist, never sanitize)', async () => {
+    for (const bad of ['zz', 'auto', '../x', 7, null, { code: 'en' }]) {
+      const deps = await hearOnce({}, { language: bad });
+      expect(deps.runCli.mock.calls[0][0].language).toBeUndefined();
+    }
+  });
+
+  it('forwards detectLanguage only when exactly true', async () => {
+    const on = await hearOnce({}, { detectLanguage: true });
+    expect(on.runCli.mock.calls[0][0].detectLanguage).toBe(true);
+    for (const bad of ['yes', 1, 'true']) {
+      const deps = await hearOnce({}, { detectLanguage: bad });
+      expect(deps.runCli.mock.calls[0][0].detectLanguage).toBeUndefined();
+    }
+  });
+
+  it('a detect run still gets the VAD model (detection must look at speech)', async () => {
+    const deps = await hearOnce(
+      { vadModelPath: VAD, fileExists: () => true },
+      { detectLanguage: true },
+    );
+    expect(deps.runCli.mock.calls[0][0].vadModelPath).toBe(VAD);
+    expect(deps.runCli.mock.calls[0][0].detectLanguage).toBe(true);
+  });
+
+  it("a detect run also fails closed under vad:'required' when the VAD model is missing", async () => {
+    const { fn } = keyedFilesPresent([
+      path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
+    ]);
+    const deps = makeDeps({
+      asrModelsDir: tmpDir,
+      filesPresent: fn,
+      vadModelPath: VAD,
+      fileExists: () => false,
+    });
+    const provider = createLocalAsrProvider(deps);
+    await expect(
+      provider.handle({
+        kind: 'hear',
+        payload: {
+          audio: new Uint8Array([1, 2, 3]),
+          format: 'wav',
+          detectLanguage: true,
+          vad: 'required',
+        },
+      } as any),
+    ).rejects.toThrow(/refusing/);
+    expect(deps.runCli).not.toHaveBeenCalled();
+  });
+
   it('never enables VAD on the indexing transcribeFile route', async () => {
     const { fn } = keyedFilesPresent([
       path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),

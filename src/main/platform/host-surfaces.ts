@@ -75,6 +75,8 @@ export interface SurfaceDeps {
         format?: 'wav' | 'mp3';
         timestamps?: boolean;
         vad?: 'required';
+        language?: string;
+        detectLanguage?: true;
         lane?: 'interactive' | 'background';
       },
     ): Promise<string>;
