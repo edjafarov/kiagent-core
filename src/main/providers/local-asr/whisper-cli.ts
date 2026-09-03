@@ -21,6 +21,127 @@ export class AsrInputRejectedError extends Error {
  *  reminder also lives in scripts/whisper-assets.mjs). */
 export const INPUT_REJECTED_DIAGNOSTIC = 'failed to read audio file';
 
+/** whisper.cpp v1.9.2 `g_lang` table (whisper.cpp:whisper_lang_id). 99
+ *  Whisper languages plus `yue`. `-l` with any other code prints
+ *  `error: unknown language '<code>'` and exits 0 with an EMPTY transcript
+ *  (measured 2026-09-03), so callers must allowlist against this set BEFORE
+ *  spawning. ⚠️ Re-verify on every WHISPER_TAG bump. */
+export const WHISPER_LANGUAGES: ReadonlySet<string> = new Set([
+  'en',
+  'zh',
+  'de',
+  'es',
+  'ru',
+  'ko',
+  'fr',
+  'ja',
+  'pt',
+  'tr',
+  'pl',
+  'ca',
+  'nl',
+  'ar',
+  'sv',
+  'it',
+  'id',
+  'hi',
+  'fi',
+  'vi',
+  'he',
+  'uk',
+  'el',
+  'ms',
+  'cs',
+  'ro',
+  'da',
+  'hu',
+  'ta',
+  'no',
+  'th',
+  'ur',
+  'hr',
+  'bg',
+  'lt',
+  'la',
+  'mi',
+  'ml',
+  'cy',
+  'sk',
+  'te',
+  'fa',
+  'lv',
+  'bn',
+  'sr',
+  'az',
+  'sl',
+  'kn',
+  'et',
+  'mk',
+  'br',
+  'eu',
+  'is',
+  'hy',
+  'ne',
+  'mn',
+  'bs',
+  'kk',
+  'sq',
+  'sw',
+  'gl',
+  'mr',
+  'pa',
+  'si',
+  'km',
+  'sn',
+  'yo',
+  'so',
+  'af',
+  'oc',
+  'ka',
+  'be',
+  'tg',
+  'sd',
+  'gu',
+  'am',
+  'yi',
+  'lo',
+  'uz',
+  'fo',
+  'ht',
+  'ps',
+  'tk',
+  'nn',
+  'mt',
+  'sa',
+  'lb',
+  'my',
+  'bo',
+  'tl',
+  'mg',
+  'as',
+  'tt',
+  'haw',
+  'ln',
+  'ha',
+  'ba',
+  'jw',
+  'su',
+  'yue',
+]);
+
+/** `-dl` prints exactly one line on stderr through the whisper log callback
+ *  (so it is LOST under --no-prints — detect runs must not pass it):
+ *  `whisper_full_with_state: auto-detected language: uk (p = 0.463610)`.
+ *  With VAD on and no speech, no line is printed and the exit is still 0.
+ *  ⚠️ Re-verify on every WHISPER_TAG bump. */
+export const DETECTED_LANGUAGE_DIAGNOSTIC = 'auto-detected language:';
+const DETECTED_LANGUAGE_RE =
+  /auto-detected language: ([a-z]+) \(p = ([0-9.]+)\)/;
+
+/** `-l <unknown>`: `error: unknown language '<code>'` on stderr, exit 0, no
+ *  transcript. Defensive second line behind WHISPER_LANGUAGES. */
+export const UNKNOWN_LANGUAGE_DIAGNOSTIC = 'unknown language';
+
 /** Explicit VAD parameters (whisper.cpp v1.9.2 flags). Pinned so a whisper
  *  bump cannot silently change meeting segmentation. Bump `version` whenever
  *  a value changes. */
@@ -74,6 +195,8 @@ export type SpawnFn = (
  * AsrInputRejectedError regardless of exit code; exit 0 → resolve stdout
  * (empty string feeds the worker's own empty-transcript throw); non-zero →
  * plain Error carrying the bounded stderr (host fault, worker defers).
+ * Detect runs resolve the parsed stderr line as JSON; an `unknown language`
+ * diagnostic rejects as a plain Error.
  */
 export function runWhisperCli(args: {
   binaryPath: string;
@@ -85,6 +208,11 @@ export function runWhisperCli(args: {
    *  instead of decoding them, which is the only effective cure for
    *  silence hallucination (see the VAD comment on the argv below). */
   vadModelPath?: string;
+  /** Pre-validated whisper language code (WHISPER_LANGUAGES). Absent → `-l auto`. */
+  language?: string;
+  /** `-dl`: detect and exit. Resolves to JSON `{language, probability}` or
+   *  `{language: null}`; stdout is empty by construction. */
+  detectLanguage?: boolean;
   signal?: AbortSignal;
   spawnFn?: SpawnFn;
 }): Promise<string> {
@@ -108,9 +236,9 @@ export function runWhisperCli(args: {
         '-f',
         args.inputPath,
         '-l',
-        'auto',
+        args.language ?? 'auto',
         ...(args.timestamps === true ? [] : ['--no-timestamps']),
-        '--no-prints',
+        ...(args.detectLanguage === true ? ['-dl'] : ['--no-prints']),
         // Whisper hallucinates on silence: given a mostly-silent track it
         // emits the last real utterance again once per 30s window, with
         // timestamps stretched across the gap. Per-speaker meeting channels
@@ -146,6 +274,8 @@ export function runWhisperCli(args: {
     // trimmed retention window below — the tail-cap must never be able to
     // un-see a diagnostic it already scanned (see cap comment).
     let sawDiagnostic = false;
+    let sawUnknownLanguage = false;
+    let detected: { language: string; probability: number } | null = null;
     child.stdout?.on('data', (c: Buffer) => out.push(c));
     // An EPIPE/ECONNRESET on a stdio stream emits 'error' on the Readable,
     // not on the ChildProcess — unhandled, that's an uncaught exception and
@@ -154,8 +284,13 @@ export function runWhisperCli(args: {
     child.stdout?.on('error', () => {});
     child.stderr?.on('data', (c: Buffer) => {
       err = Buffer.concat([err, c]);
-      if (err.toString('utf8').includes(INPUT_REJECTED_DIAGNOSTIC))
-        sawDiagnostic = true;
+      const text = err.toString('utf8');
+      if (text.includes(INPUT_REJECTED_DIAGNOSTIC)) sawDiagnostic = true;
+      if (text.includes(UNKNOWN_LANGUAGE_DIAGNOSTIC)) sawUnknownLanguage = true;
+      if (detected === null) {
+        const m = DETECTED_LANGUAGE_RE.exec(text);
+        if (m) detected = { language: m[1], probability: Number(m[2]) };
+      }
       if (err.length > STDERR_CAP_BYTES) err = err.subarray(-STDERR_CAP_BYTES);
     });
     child.stderr?.on('error', () => {});
@@ -191,12 +326,24 @@ export function runWhisperCli(args: {
         );
         return;
       }
+      if (sawUnknownLanguage) {
+        reject(
+          new Error(`whisper-cli rejected the language: ${stderr.trim()}`),
+        );
+        return;
+      }
       if (sig) {
         reject(new Error(`whisper-cli killed by ${sig}`));
         return;
       }
       if (code !== 0) {
         reject(new Error(`whisper-cli exited ${code}: ${stderr.trim()}`));
+        return;
+      }
+      if (args.detectLanguage === true) {
+        resolve(
+          JSON.stringify(detected === null ? { language: null } : detected),
+        );
         return;
       }
       resolve(Buffer.concat(out).toString('utf8'));
