@@ -530,7 +530,14 @@ export interface Inference {
    *  the return stays plain text either way. */
   hear(
     audio: Uint8Array,
-    opts?: { format?: 'wav' | 'mp3'; timestamps?: boolean; lane?: Lane },
+    opts?: {
+      format?: 'wav' | 'mp3';
+      timestamps?: boolean;
+      /** Fail-closed: reject instead of transcribing when the VAD model is
+       *  unavailable, rather than the default warn-once-and-continue path. */
+      vad?: 'required';
+      lane?: Lane;
+    },
   ): Promise<string>;
 }
 
