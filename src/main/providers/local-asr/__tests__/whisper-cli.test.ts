@@ -4,6 +4,7 @@ import {
   AsrInputRejectedError,
   INPUT_REJECTED_DIAGNOSTIC,
   runWhisperCli,
+  WHISPER_VAD_PARAMS,
 } from '../whisper-cli';
 import type { SpawnFn } from '../whisper-cli';
 
@@ -202,7 +203,7 @@ describe('runWhisperCli', () => {
 // 6-minute call produced 25× "yes" on one side). Silero VAD skips non-speech
 // outright, which removes the hallucinations AND tightens the timestamps.
 describe('runWhisperCli VAD', () => {
-  it('enables VAD with the model path when one is given', async () => {
+  it('enables VAD with the model path and the pinned tuning params when one is given', async () => {
     const { spawnFn, child, argv } = fakeSpawn();
     const p = runWhisperCli({
       ...ARGS,
@@ -216,7 +217,28 @@ describe('runWhisperCli VAD', () => {
       '--vad',
       '-vm',
       '/assets/whisper/ggml-silero-v5.1.2.bin',
+      '-vt',
+      '0.5',
+      '-vspd',
+      '150',
+      '-vsd',
+      '100',
+      '-vp',
+      '120',
+      '-vo',
+      '0.1',
     ]);
+  });
+
+  it('pins the exact VAD tuning params (version 1)', () => {
+    expect(WHISPER_VAD_PARAMS).toEqual({
+      version: 1,
+      threshold: 0.5,
+      minSpeechMs: 150,
+      minSilenceMs: 100,
+      speechPadMs: 120,
+      samplesOverlapS: 0.1,
+    });
   });
 
   it('omits every VAD flag when no model path is given', async () => {

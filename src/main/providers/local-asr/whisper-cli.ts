@@ -21,6 +21,18 @@ export class AsrInputRejectedError extends Error {
  *  reminder also lives in scripts/whisper-assets.mjs). */
 export const INPUT_REJECTED_DIAGNOSTIC = 'failed to read audio file';
 
+/** Explicit VAD parameters (whisper.cpp v1.9.2 flags). Pinned so a whisper
+ *  bump cannot silently change meeting segmentation. Bump `version` whenever
+ *  a value changes. */
+export const WHISPER_VAD_PARAMS = {
+  version: 1,
+  threshold: 0.5, // -vt   (whisper default 0.50)
+  minSpeechMs: 150, // -vspd (whisper default 250) — keep short backchannels ("mhm")
+  minSilenceMs: 100, // -vsd  (whisper default 100)
+  speechPadMs: 120, // -vp   (whisper default 30) — protect quiet word onsets/offsets
+  samplesOverlapS: 0.1, // -vo   (whisper default 0.10)
+} as const;
+
 const STDERR_CAP_BYTES = 8 * 1024;
 
 /** The minimal child-process shape this wrapper actually touches. Narrow on
@@ -108,7 +120,21 @@ export function runWhisperCli(args: {
         // Decoder-side knobs do NOT fix it (-mc 0, -sns, -nth all measured:
         // no effect); skipping non-speech audio outright does.
         ...(args.vadModelPath !== undefined
-          ? ['--vad', '-vm', args.vadModelPath]
+          ? [
+              '--vad',
+              '-vm',
+              args.vadModelPath,
+              '-vt',
+              String(WHISPER_VAD_PARAMS.threshold),
+              '-vspd',
+              String(WHISPER_VAD_PARAMS.minSpeechMs),
+              '-vsd',
+              String(WHISPER_VAD_PARAMS.minSilenceMs),
+              '-vp',
+              String(WHISPER_VAD_PARAMS.speechPadMs),
+              '-vo',
+              String(WHISPER_VAD_PARAMS.samplesOverlapS),
+            ]
           : []),
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
