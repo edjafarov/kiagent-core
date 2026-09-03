@@ -14,7 +14,7 @@ import { modelDir } from '../local-llm/models';
 import type { ModelDescriptor } from '../local-llm/models';
 import { checkAsrCapability } from './capability';
 import { asrAccel, selectAsrModel } from './models';
-import { runWhisperCli } from './whisper-cli';
+import { runWhisperCli, WHISPER_LANGUAGES } from './whisper-cli';
 
 export interface LocalAsrProvider extends InferenceProvider {
   ensureInstalled(): void;
@@ -132,7 +132,12 @@ export function createLocalAsrProvider(deps: {
 
   const runTranscribe = (
     p: string,
-    opts: { format: 'wav' | 'mp3'; timestamps?: boolean },
+    opts: {
+      format: 'wav' | 'mp3';
+      timestamps?: boolean;
+      language?: string;
+      detectLanguage?: boolean;
+    },
     vadModelPath: string | undefined,
   ): Promise<string> =>
     new Promise<string>((resolve, reject) => {
@@ -162,6 +167,8 @@ export function createLocalAsrProvider(deps: {
               ),
               inputPath: p,
               timestamps: opts.timestamps === true,
+              language: opts.language,
+              detectLanguage: opts.detectLanguage === true ? true : undefined,
               vadModelPath,
               signal: abort.signal,
             });
@@ -251,12 +258,15 @@ export function createLocalAsrProvider(deps: {
       // The PUBLIC hear seam stays byte-based (extensions reach it through
       // CapSurfaces — a path API there would be an arbitrary-file-read hole).
       // Extension audio payloads are small; write to a temp file and delegate.
-      const { audio, format, timestamps, vad } = req.payload as {
-        audio: Uint8Array;
-        format?: 'wav' | 'mp3';
-        timestamps?: unknown;
-        vad?: unknown;
-      };
+      const { audio, format, timestamps, vad, language, detectLanguage } =
+        req.payload as {
+          audio: Uint8Array;
+          format?: 'wav' | 'mp3';
+          timestamps?: unknown;
+          vad?: unknown;
+          language?: unknown;
+          detectLanguage?: unknown;
+        };
       // ALLOWLIST, never sanitize. The `'wav' | 'mp3'` annotation is erased at
       // runtime: InferenceProvider.handle takes `payload: unknown` and the
       // extension RPC forwards caller arguments verbatim, so a third-party
@@ -270,6 +280,15 @@ export function createLocalAsrProvider(deps: {
       // Same allowlist discipline as `format`/`timestamps` above: any other
       // value (including a junk string) is treated as absent.
       const vadRequired = vad === 'required';
+      // Allowlist against whisper's own table — an unknown code makes
+      // whisper print an error and exit 0 with an EMPTY transcript, which a
+      // caller would commit as "silent audio". Anything not in the table is
+      // treated as absent (-l auto).
+      const lang: string | undefined =
+        typeof language === 'string' && WHISPER_LANGUAGES.has(language)
+          ? language
+          : undefined;
+      const detect: boolean = detectLanguage === true;
       // Resolve (and, if required, fail closed) BEFORE writing the temp
       // file — no point writing audio we already know we won't transcribe.
       const vadPath = vadRequired ? requireVadModel() : undefined;
@@ -292,7 +311,12 @@ export function createLocalAsrProvider(deps: {
         // path byte-for-byte.
         return await runTranscribe(
           tmp,
-          { format: fmt, timestamps: ts },
+          {
+            format: fmt,
+            timestamps: ts,
+            language: lang,
+            detectLanguage: detect,
+          },
           vadRequired ? vadPath : vadModelForHear(),
         );
       } finally {
