@@ -1,15 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Features
-
-* **asr:** opt-in fail-closed `vad: 'required'` hear option — rejects before transcribing when the VAD model is unavailable, for callers (the meetings extension) that cannot tolerate the warn-once soft fallback
-
-### Bug Fixes
-
-* **asr:** pin the five VAD tuning params (threshold 0.5, minSpeechMs 150, minSilenceMs 100, speechPadMs 120, samplesOverlapS 0.1 — version 1) instead of riding whisper.cpp's built-in defaults
-
 ## [0.79.0](https://github.com/edjafarov/kiagent-core/compare/v0.78.0...v0.79.0) (2026-08-24)
 
 ### Features
