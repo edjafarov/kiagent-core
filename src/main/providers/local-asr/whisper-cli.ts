@@ -139,8 +139,11 @@ const DETECTED_LANGUAGE_RE =
   /auto-detected language: ([a-z]+) \(p = ([0-9.]+)\)/;
 
 /** `-l <unknown>`: `error: unknown language '<code>'` on stderr, exit 0, no
- *  transcript. Defensive second line behind WHISPER_LANGUAGES. */
-export const UNKNOWN_LANGUAGE_DIAGNOSTIC = 'unknown language';
+ *  transcript. Defensive second line behind WHISPER_LANGUAGES. Includes the
+ *  trailing quote so the match can't fire on an input path that happens to
+ *  contain the words "unknown language" (whisper echoes input paths in
+ *  other diagnostics). ⚠️ Re-verify on every WHISPER_TAG bump. */
+export const UNKNOWN_LANGUAGE_DIAGNOSTIC = "error: unknown language '";
 
 /** Explicit VAD parameters (whisper.cpp v1.9.2 flags). Pinned so a whisper
  *  bump cannot silently change meeting segmentation. Bump `version` whenever
@@ -236,7 +239,10 @@ export function runWhisperCli(args: {
         '-f',
         args.inputPath,
         '-l',
-        args.language ?? 'auto',
+        // A detect run must never pass a pinned language: the contract is
+        // that `language` is ignored on a detect run, and if whisper ever
+        // echoed the pin back as a "detection" the app would lock it in.
+        args.detectLanguage === true ? 'auto' : (args.language ?? 'auto'),
         ...(args.timestamps === true ? [] : ['--no-timestamps']),
         ...(args.detectLanguage === true ? ['-dl'] : ['--no-prints']),
         // Whisper hallucinates on silence: given a mostly-silent track it
@@ -287,9 +293,14 @@ export function runWhisperCli(args: {
       const text = err.toString('utf8');
       if (text.includes(INPUT_REJECTED_DIAGNOSTIC)) sawDiagnostic = true;
       if (text.includes(UNKNOWN_LANGUAGE_DIAGNOSTIC)) sawUnknownLanguage = true;
-      if (detected === null) {
+      if (detected === null && text.includes(DETECTED_LANGUAGE_DIAGNOSTIC)) {
         const m = DETECTED_LANGUAGE_RE.exec(text);
-        if (m) detected = { language: m[1], probability: Number(m[2]) };
+        if (m) {
+          const probability = Number(m[2]);
+          detected = Number.isFinite(probability)
+            ? { language: m[1], probability }
+            : null;
+        }
       }
       if (err.length > STDERR_CAP_BYTES) err = err.subarray(-STDERR_CAP_BYTES);
     });
