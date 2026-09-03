@@ -118,6 +118,18 @@ export function createLocalAsrProvider(deps: {
     return undefined;
   };
 
+  /** Fail-closed counterpart to vadModelForHear(): callers that pass
+   *  `vad: 'required'` need to KNOW transcription happened without VAD
+   *  rather than silently getting hallucinated-repeat output, so this
+   *  throws instead of warning-and-continuing. */
+  const requireVadModel = (): string => {
+    const p = deps.vadModelPath;
+    if (p !== undefined && fileExists(p)) return p;
+    throw new Error(
+      `VAD model missing at ${p ?? '(no vadModelPath configured)'} — refusing to transcribe without it (vad: 'required')`,
+    );
+  };
+
   const runTranscribe = (
     p: string,
     opts: { format: 'wav' | 'mp3'; timestamps?: boolean },
@@ -239,10 +251,11 @@ export function createLocalAsrProvider(deps: {
       // The PUBLIC hear seam stays byte-based (extensions reach it through
       // CapSurfaces — a path API there would be an arbitrary-file-read hole).
       // Extension audio payloads are small; write to a temp file and delegate.
-      const { audio, format, timestamps } = req.payload as {
+      const { audio, format, timestamps, vad } = req.payload as {
         audio: Uint8Array;
         format?: 'wav' | 'mp3';
         timestamps?: unknown;
+        vad?: unknown;
       };
       // ALLOWLIST, never sanitize. The `'wav' | 'mp3'` annotation is erased at
       // runtime: InferenceProvider.handle takes `payload: unknown` and the
@@ -254,6 +267,12 @@ export function createLocalAsrProvider(deps: {
       // prevent.
       const fmt: 'wav' | 'mp3' = format === 'mp3' ? 'mp3' : 'wav';
       const ts: boolean = timestamps === true;
+      // Same allowlist discipline as `format`/`timestamps` above: any other
+      // value (including a junk string) is treated as absent.
+      const vadRequired = vad === 'required';
+      // Resolve (and, if required, fail closed) BEFORE writing the temp
+      // file — no point writing audio we already know we won't transcribe.
+      const vadPath = vadRequired ? requireVadModel() : undefined;
       // mkdtemp gives a fresh 0700 directory, so the file name is no longer
       // guessable and cannot be pre-planted as a symlink; `wx` + mode 0600
       // close the last of that race and keep private audio unreadable to
@@ -268,10 +287,13 @@ export function createLocalAsrProvider(deps: {
         // that are mostly silence), and an empty result is a normal answer
         // here — the meetings pipeline commits zero rows for a silent
         // segment rather than throwing (unlike the indexing worker above).
+        // `vad:'required'` callers already had requireVadModel() validate
+        // vadPath above; everyone else keeps the existing warn-once soft
+        // path byte-for-byte.
         return await runTranscribe(
           tmp,
           { format: fmt, timestamps: ts },
-          vadModelForHear(),
+          vadRequired ? vadPath : vadModelForHear(),
         );
       } finally {
         await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});

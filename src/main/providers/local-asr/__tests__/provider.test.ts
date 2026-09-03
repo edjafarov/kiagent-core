@@ -684,7 +684,10 @@ describe('LocalAsrProvider', () => {
 
   const VAD = '/assets/whisper/ggml-silero-v5.1.2.bin';
 
-  async function hearOnce(over: Record<string, any> = {}) {
+  async function hearOnce(
+    over: Record<string, any> = {},
+    payload: Record<string, any> = {},
+  ) {
     const { fn } = keyedFilesPresent([
       path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
     ]);
@@ -692,7 +695,11 @@ describe('LocalAsrProvider', () => {
     const provider = createLocalAsrProvider(deps);
     await provider.handle({
       kind: 'hear',
-      payload: { audio: new Uint8Array([1, 2, 3]), format: 'wav' },
+      payload: {
+        audio: new Uint8Array([1, 2, 3]),
+        format: 'wav',
+        ...payload,
+      },
     } as any);
     return deps;
   }
@@ -704,6 +711,110 @@ describe('LocalAsrProvider', () => {
 
   it('falls back to no-VAD (and warns) when the model file is missing', async () => {
     const deps = await hearOnce({ vadModelPath: VAD, fileExists: () => false });
+    expect(deps.runCli.mock.calls[0][0].vadModelPath).toBeUndefined();
+    expect(
+      deps.log.mock.calls.some(
+        (c: string[]) => c[0] === 'warn' && c[1].includes('VAD'),
+      ),
+    ).toBe(true);
+  });
+
+  // ── 8b. `vad: 'required'` fail-closed hear option ─────────────────────────
+  // The meetings extension needs to KNOW when a meeting was transcribed
+  // without VAD (silence hallucination is worse than a hard failure there),
+  // unlike the soft warn-once default above.
+
+  it("passes the VAD model to whisper when vad:'required' and the model is present", async () => {
+    const deps = await hearOnce(
+      { vadModelPath: VAD, fileExists: () => true },
+      { vad: 'required' },
+    );
+    expect(deps.runCli.mock.calls[0][0].vadModelPath).toBe(VAD);
+  });
+
+  it("rejects with a plain Error and never calls runCli when vad:'required' and the model is missing", async () => {
+    const { fn } = keyedFilesPresent([
+      path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
+    ]);
+    const deps = makeDeps({
+      asrModelsDir: tmpDir,
+      filesPresent: fn,
+      vadModelPath: VAD,
+      fileExists: () => false,
+    });
+    const provider = createLocalAsrProvider(deps);
+    await expect(
+      provider.handle({
+        kind: 'hear',
+        payload: {
+          audio: new Uint8Array([1, 2, 3]),
+          format: 'wav',
+          vad: 'required',
+        },
+      } as any),
+    ).rejects.toThrow(/refusing/);
+    await expect(
+      provider.handle({
+        kind: 'hear',
+        payload: {
+          audio: new Uint8Array([1, 2, 3]),
+          format: 'wav',
+          vad: 'required',
+        },
+      } as any),
+    ).rejects.toThrow(new RegExp(VAD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    expect(deps.runCli).not.toHaveBeenCalled();
+    // Not the input-rejection or no-provider classes — a plain refusal Error.
+    await provider
+      .handle({
+        kind: 'hear',
+        payload: {
+          audio: new Uint8Array([1, 2, 3]),
+          format: 'wav',
+          vad: 'required',
+        },
+      } as any)
+      .catch((e: Error) => {
+        expect(e).toBeInstanceOf(Error);
+        expect(e).not.toBeInstanceOf(AsrInputRejectedError);
+        expect(e.name).not.toBe('NoProviderError');
+      });
+  });
+
+  it("does not leave a temp dir behind when vad:'required' refuses", async () => {
+    // Scoped by the wrapper's own mkdtemp prefix so this stays robust under
+    // parallel jest workers sharing the same OS tmpdir.
+    const ours = () =>
+      fs.readdirSync(tmpdir()).filter((n) => n.startsWith('kiagent-asr-hear-'));
+    const before = ours();
+    const { fn } = keyedFilesPresent([
+      path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
+    ]);
+    const deps = makeDeps({
+      asrModelsDir: tmpDir,
+      filesPresent: fn,
+      vadModelPath: VAD,
+      fileExists: () => false,
+    });
+    const provider = createLocalAsrProvider(deps);
+    await provider
+      .handle({
+        kind: 'hear',
+        payload: {
+          audio: new Uint8Array([1, 2, 3]),
+          format: 'wav',
+          vad: 'required',
+        },
+      } as any)
+      .catch(() => {});
+    expect(ours()).toEqual(before);
+  });
+
+  it('treats a junk vad value as absent — falls back to the soft warn-once path', async () => {
+    const deps = await hearOnce(
+      { vadModelPath: VAD, fileExists: () => false },
+      { vad: 'yes' },
+    );
     expect(deps.runCli.mock.calls[0][0].vadModelPath).toBeUndefined();
     expect(
       deps.log.mock.calls.some(

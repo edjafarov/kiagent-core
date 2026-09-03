@@ -170,6 +170,29 @@ describe('buildSurfaces', () => {
     close();
   });
 
+  it("inference.hear forwards vad:'required' through the opts spread alongside the forced lane", async () => {
+    // The provider-level tests prove `vad:'required'` fail-closed behaviour;
+    // this proves the field actually SURVIVES the extension-boundary spread
+    // (`{ ...(opts as object), lane: 'interactive' }`) rather than being
+    // dropped or renamed on the way from an extension call to the dep.
+    const { deps } = makeDeps();
+    const { surfaces, close } = buildSurfaces(deps);
+    await expect(
+      surfaces.inference.hear(new Uint8Array([1, 2]), {
+        format: 'wav',
+        timestamps: true,
+        vad: 'required',
+      } as never),
+    ).resolves.toBe('heard:wav:interactive');
+    expect(deps.inference.hear).toHaveBeenCalledWith(new Uint8Array([1, 2]), {
+      format: 'wav',
+      timestamps: true,
+      vad: 'required',
+      lane: 'interactive',
+    });
+    close();
+  });
+
   it('events: on delivers bus emissions, off stops them, emit reaches other subscribers', async () => {
     const bus = createEventBus();
     const a = makeDeps({ bus });
