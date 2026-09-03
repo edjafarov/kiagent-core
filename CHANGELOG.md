@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.81.0](https://github.com/edjafarov/kiagent-core/compare/v0.80.0...v0.81.0) (2026-09-03)
+
+### Features
+
+* **inference:** hear() language pin and detectLanguage options through the local-asr allowlist ([6ed1621](https://github.com/edjafarov/kiagent-core/commit/6ed162172514e0ee7b012ef79d0a126b59fdb038))
+* **local-asr:** whisper-cli language pin and -dl detect mode with stderr diagnostics ([d920131](https://github.com/edjafarov/kiagent-core/commit/d92013149a8bd4fa8961b13bcfbd33ac0972e0af))
+
+### Bug Fixes
+
+* **inference:** forward vad, language and detectLanguage through InferencePlane.hear() ([595cc90](https://github.com/edjafarov/kiagent-core/commit/595cc90df2a4850d24b5bd63b2c1274fd2c72075))
+* **local-asr:** detect runs always -l auto, tighter unknown-language match, finite probability guard ([3723720](https://github.com/edjafarov/kiagent-core/commit/3723720fa1a39277e5be4544ddc6f4780a74f6cf))
+
 ## [0.80.0](https://github.com/edjafarov/kiagent-core/compare/v0.79.0...v0.80.0) (2026-09-03)
 
 ### Features
