@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.80.0](https://github.com/edjafarov/kiagent-core/compare/v0.79.0...v0.80.0) (2026-09-03)
+
+### Features
+
+* **local-asr:** add opt-in fail-closed vad:'required' hear option ([5c3ac87](https://github.com/edjafarov/kiagent-core/commit/5c3ac87aeea7daff02bf7feb392935dc06cc46e6))
+
+### Bug Fixes
+
+* **contracts:** add vad:'required' to the canonical Inference.hear type ([9ebe57b](https://github.com/edjafarov/kiagent-core/commit/9ebe57bb1db1bb2c1d9e358a499dfd0a95d87d8e))
+* **local-asr:** pin VAD tuning params instead of riding whisper defaults ([250b32d](https://github.com/edjafarov/kiagent-core/commit/250b32d90fd700680de16d65c36820e61a8341fb))
+* **sources:** the kebab-menu Remove threw away the only progress signal it had ([3d7e6b8](https://github.com/edjafarov/kiagent-core/commit/3d7e6b826d4851f3b0bb348cbeb5b6f79eb1b5e8))
+* **workers:** page the deferred re-drive; clamp images before the VLM encodes them ([d933035](https://github.com/edjafarov/kiagent-core/commit/d93303518944a209c88891a920225234d48b7197))
+
 ## [0.79.0](https://github.com/edjafarov/kiagent-core/compare/v0.78.0...v0.79.0) (2026-08-24)
 
 ### Features
