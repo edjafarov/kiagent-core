@@ -1,5 +1,10 @@
 import path from 'node:path';
 
+import {
+  LOCAL_CONVERTER_MIMES,
+  LOCAL_TEXT_EXTENSIONS,
+} from '@shared/file-indexability';
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- mime@3's
 // runtime API (`Mime.getType`) doesn't match @types/mime's bundled v1/v2
 // declarations (`mime.lookup`). kiagent-ref hits the exact same mismatch and
@@ -50,24 +55,12 @@ const PLAIN_TEXT_MIMES = new Set(['text/plain', 'text/markdown']);
  * does the extraction (per contracts.ts's DocumentInput doc comment). This is
  * the exact mime set kiagent-ref's shared Converter supports, minus images
  * (kiagent-ref src/main/converter/index.ts:79-118, `SUPPORTED_MIME_TYPES`).
+ *
+ * Canonical definition moved to `@shared/file-indexability`'s
+ * `LOCAL_CONVERTER_MIMES` (also the SDK's copy of the policy); this is a
+ * re-export under the name every caller here already uses.
  */
-const BINARY_PARSEABLE_MIMES = new Set([
-  'text/html',
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  // Legacy Excel. The converter has always handled `ext === 'xls'`; only this
-  // set kept the bytes from ever reaching it.
-  'application/vnd.ms-excel',
-  'text/csv',
-  // Email. Deliberately NOT plain text: an .eml body is quoted-printable or
-  // base64 and its attachments are base64 blobs, so a raw decode indexes the
-  // encoding rather than the message. The converter runs it through
-  // mailparser instead.
-  'message/rfc822',
-  // A concatenation of RFC 5322 messages; same parser, split first.
-  'application/mbox',
-]);
+const BINARY_PARSEABLE_MIMES = LOCAL_CONVERTER_MIMES;
 
 /**
  * Extensions that ARE plain text but whose mime says otherwise, or which have
@@ -82,67 +75,12 @@ const BINARY_PARSEABLE_MIMES = new Set([
  * Notably ABSENT and deliberately so: csv/html (the converter renders them,
  * see BINARY_PARSEABLE_MIMES) and .env/.pem-style credential files (see
  * ingestible.ts's deny rule, which runs first).
+ *
+ * Canonical definition moved to `@shared/file-indexability`'s
+ * `LOCAL_TEXT_EXTENSIONS`; this is a re-export under the name every caller
+ * here already uses.
  */
-export const TEXT_EXTS = new Set([
-  // notes and markup
-  'text',
-  'rst',
-  'org',
-  'adoc',
-  'asciidoc',
-  'tex',
-  'bib',
-  // structured data and config
-  'json',
-  'jsonl',
-  'geojson',
-  'ndjson',
-  'yaml',
-  'yml',
-  'toml',
-  'ini',
-  'cfg',
-  'conf',
-  'xml',
-  'tsv',
-  'sql',
-  'log',
-  'properties',
-  // transcripts, calendars, contacts — plain text by spec
-  'srt',
-  'vtt',
-  'ics',
-  'vcf',
-  // scripts and source people keep alongside documents
-  'sh',
-  'bash',
-  'zsh',
-  'ps1',
-  'py',
-  'rb',
-  'pl',
-  'lua',
-  'r',
-  'js',
-  'mjs',
-  'cjs',
-  'jsx',
-  'ts',
-  'tsx',
-  'css',
-  'scss',
-  'go',
-  'rs',
-  'java',
-  'kt',
-  'swift',
-  'c',
-  'h',
-  'cpp',
-  'hpp',
-  'cs',
-  'php',
-]);
+export const TEXT_EXTS = LOCAL_TEXT_EXTENSIONS;
 
 /**
  * Mime to RECORD for a real path. Prefer this over `resolveMime` for anything

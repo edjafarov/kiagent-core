@@ -1,26 +1,23 @@
 import type { Document } from '@shared/contracts';
+import {
+  MAX_LOCAL_IMAGE_BYTES,
+  MAX_LOCAL_PDF_BYTES,
+  VISUAL_EXTENSIONS,
+} from '@shared/file-indexability';
 
 /** Canonical visual-candidate extensions. Also consumed by the store's
  *  `extractionStats` display query, which mirrors this classifier in SQL —
- *  keep the regexp derived from this list so the two can never drift. */
-export const VISUAL_EXTS = [
-  'pdf',
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'webp',
-  'heic',
-  'heif',
-  'tif',
-  'tiff',
-  'bmp',
-] as const;
+ *  keep the regexp derived from this list so the two can never drift.
+ *
+ *  Canonical definition moved to `@shared/file-indexability`'s
+ *  `VISUAL_EXTENSIONS` (a Set, whose insertion order matches this array's
+ *  order exactly); re-exported here under the name every caller uses. */
+export const VISUAL_EXTS: readonly string[] = [...VISUAL_EXTENSIONS];
 const VISUAL_EXT_RE = new RegExp(`\\.(${VISUAL_EXTS.join('|')})$`, 'i');
 const TINY_IMAGE_BYTES = 8 * 1024;
 export const OCR_SUFFICIENT_CHARS = 200;
-export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
-export const MAX_PDF_BYTES = 50 * 1024 * 1024;
+export const MAX_IMAGE_BYTES = MAX_LOCAL_IMAGE_BYTES;
+export const MAX_PDF_BYTES = MAX_LOCAL_PDF_BYTES;
 export const MAX_PAGES = 20;
 
 interface VisualMeta {

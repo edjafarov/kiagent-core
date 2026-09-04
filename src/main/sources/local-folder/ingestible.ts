@@ -2,6 +2,10 @@ import path from 'node:path';
 
 import { isTranscribableExt } from '@main/workers/audio/classify';
 import { VISUAL_EXTS } from '@main/workers/vision/classify';
+import {
+  NOINDEX_DIR_RE,
+  SENSITIVE_BASENAME_RE,
+} from '@shared/file-indexability';
 
 import { classifyPath } from './mime';
 
@@ -18,17 +22,16 @@ import { classifyPath } from './mime';
  *
  * `.noindex` is handled separately (see `isIngestible`) because it is a
  * DIRECTORY marker, not a filename.
+ *
+ * Canonical definition moved to `@shared/file-indexability`'s
+ * `SENSITIVE_BASENAME_RE`; re-exported here under the name `ingestible.test.ts`
+ * imports.
  */
-export const INGESTIBLE_DENY_RE =
-  /^(\.env(\..+)?|\.npmrc|\.netrc|\.git-credentials|\.htpasswd|id_[a-z0-9]+|.*\.(pem|key|p12|pfx|jks|keystore|asc|gpg|crt|cer|der)|.*\.min\.(js|css)|.*\.map|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|composer\.lock)$/i;
+export const INGESTIBLE_DENY_RE = SENSITIVE_BASENAME_RE;
 
-/**
- * macOS's own "do not index this subtree" marker. Spotlight honours a
- * `.noindex` directory suffix, and apps use it for exactly the content we
- * should skip — the corpus that prompted this held 752 DICOM images under
- * `Horos Data/DATABASE.noindex/`. Matches at any depth.
- */
-const NOINDEX_DIR_RE = /(^|\/)[^/]*\.noindex(\/|$)/i;
+// `NOINDEX_DIR_RE` — macOS's own "do not index this subtree" marker
+// (Spotlight honours a `.noindex` directory suffix; matches at any depth) —
+// moves as-is from `@shared/file-indexability`, imported above.
 
 /**
  * The local-folder ingestion allowlist: is this path something a pipeline can

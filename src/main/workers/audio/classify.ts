@@ -1,16 +1,34 @@
 import type { Document } from '@shared/contracts';
+import {
+  AUDIO_EXTENSIONS,
+  LOCAL_VIDEO_EXTENSIONS,
+  MAX_LOCAL_AUDIO_BYTES,
+  UNDEMUXABLE_EXTENSIONS,
+} from '@shared/file-indexability';
 
-// Unambiguous audio containers (unchanged list). `.webm`/`.mkv` are handled
-// by the ordered steps below, `weba` stays here (audio-only by convention).
-const AUDIO_EXT_RE =
-  /\.(mp3|m4a|m4b|aac|wav|wave|aiff?|caf|flac|ogg|oga|opus|weba|amr|wma|3gp)$/i;
+// Unambiguous audio containers. `.webm`/`.mkv` are handled by the ordered
+// steps below, `weba` stays here (audio-only by convention). Built from
+// `@shared/file-indexability`'s `AUDIO_EXTENSIONS` so this list and the
+// local-folder ingestion allowlist can never drift apart.
+const AUDIO_EXT_RE = new RegExp(
+  `\\.(${[...AUDIO_EXTENSIONS].join('|')})$`,
+  'i',
+);
 // Video containers afconvert can demux when they carry an audio track
 // (verified: afconvert -f WAVE -d LEI16@16000 -c 1 handles mp4/mov — spec §6).
-const VIDEO_EXT_RE = /\.(mp4|m4v|mov)$/i;
+// Built from `LOCAL_VIDEO_EXTENSIONS`.
+const VIDEO_EXT_RE = new RegExp(
+  `\\.(${[...LOCAL_VIDEO_EXTENSIONS].join('|')})$`,
+  'i',
+);
 // Containers we can't demux anywhere: CoreAudio has no Matroska demuxer
 // (afconvert fails with `typ?`), and non-macOS hosts have no transcoder at
 // all. Supporting these means bundling a demuxer — deliberate exclusion.
-const DENY_EXT_RE = /\.(mkv|webm)$/i;
+// Built from `UNDEMUXABLE_EXTENSIONS`.
+const DENY_EXT_RE = new RegExp(
+  `\\.(${[...UNDEMUXABLE_EXTENSIONS].join('|')})$`,
+  'i',
+);
 const DENY_MIMES = new Set(['video/webm', 'video/x-matroska']);
 
 /**
@@ -35,8 +53,12 @@ export function isTranscribableExt(ext: string): boolean {
  *  chunks long audio natively, so the cap exists to bound the transient
  *  fetch allocation, not the recording length. Raising it further needs the
  *  streaming fetch-to-temp-file follow-up (fetchBytes returns a Uint8Array
- *  by contract). Replaces the old 25 MiB AUDIO_MAX_BYTES. */
-export const MAX_SOURCE_BYTES = 200 * 1024 * 1024;
+ *  by contract). Replaces the old 25 MiB AUDIO_MAX_BYTES.
+ *
+ *  Canonical definition moved to `@shared/file-indexability`'s
+ *  `MAX_LOCAL_AUDIO_BYTES`; re-exported here under the name every caller
+ *  uses. */
+export const MAX_SOURCE_BYTES = MAX_LOCAL_AUDIO_BYTES;
 
 interface TranscribableMeta {
   mime?: string;
