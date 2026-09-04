@@ -61,6 +61,23 @@ export const WHISPER_BASE_Q5_1: ModelDescriptor = {
   ],
 };
 
+/** The opt-in ACCURACY tier (spec: selective accuracy retry): the non-turbo
+ *  large-v3 at the same quantisation as the default tier — ~3× slower per
+ *  second of audio, used only on flagged spans, never auto-installed. */
+export const WHISPER_LARGE_V3_Q5_0: ModelDescriptor = {
+  id: 'whisper-large-v3-q5_0',
+  label: 'Whisper large-v3 (5-bit, accuracy)',
+  files: [
+    {
+      name: 'ggml-large-v3-q5_0.bin',
+      url: url('ggml-large-v3-q5_0.bin'),
+      sha256:
+        'd75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1',
+      sizeBytes: 1081140203,
+    },
+  ],
+};
+
 export interface AsrTier {
   /** Tier requires this accel; null = any. */
   accel: AsrAccel | null;
@@ -102,4 +119,26 @@ export function selectAsrModel(i: {
  *  catalog never contains them.) */
 export function resolveAsrModel(id: string): ModelDescriptor | null {
   return ASR_TIERS.find((t) => t.model.id === id)?.model ?? null;
+}
+
+/** Metal-only like the turbo tier; on CPU the non-turbo model is unusable. */
+export const ASR_ACCURACY_TIERS: AsrTier[] = [
+  {
+    accel: 'metal',
+    minRamBytes: 16 * 1024 ** 3,
+    model: WHISPER_LARGE_V3_Q5_0,
+  },
+];
+
+/** Null = this host has no supported accuracy tier. */
+export function selectAccuracyModel(i: {
+  accel: AsrAccel;
+  totalMemBytes: number;
+}): ModelDescriptor | null {
+  const tier = ASR_ACCURACY_TIERS.find(
+    (t) =>
+      (t.accel === null || t.accel === i.accel) &&
+      i.totalMemBytes >= t.minRamBytes,
+  );
+  return tier?.model ?? null;
 }
