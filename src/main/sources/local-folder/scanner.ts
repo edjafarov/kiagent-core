@@ -5,30 +5,12 @@ import fg from 'fast-glob';
 import type { Entry } from 'fast-glob';
 
 import { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
-import { isIngestible } from './ingestible';
-import { classifyPath, resolvePathMime } from './mime';
+import { decideLocalFile } from './ingestible';
+import { resolvePathMime } from './mime';
 import type { LocalFolderItem } from './to-document';
 
 /** ~50 files per yielded Batch — matches the porting brief's chunk size. */
 export const BATCH_SIZE = 50;
-
-/**
- * Plain-text files (decoded inline as markdown by `buildItem`) larger than
- * this become metadata-only docs instead of being loaded into memory.
- *
- * DEVIATION: kiagent-ref had no read-time cap at the connector layer — it
- * always `readFile`d the whole file and let the shared Converter enforce
- * format-specific caps downstream (e.g. its PDF handler's own 8 MiB cap,
- * kiagent-ref src/main/converter/handlers/pdf.ts:8). Because this Source's
- * `toDocument` must stay pure/synchronous, bytes have to be read eagerly in
- * `pull()` — so a cap is needed here to bound memory per batch. Sized well
- * above ordinary text/config/source files.
- */
-export const MAX_INLINE_TEXT_BYTES = 2 * 1024 * 1024; // 2 MiB
-
-/** Same rationale as MAX_INLINE_TEXT_BYTES; sized generously above legacy's
- *  PDF-specific 8 MiB cap since it also has to cover docx/xlsx/csv/html. */
-export const MAX_BINARY_READ_BYTES = 20 * 1024 * 1024; // 20 MiB
 
 export function chunk<T>(items: readonly T[], size: number): T[][] {
   const out: T[][] = [];
@@ -44,28 +26,32 @@ export interface ScannedEntry {
 
 /**
  * A count-only chunk of `BATCH_SIZE` entries can still hold up to
- * `BATCH_SIZE * MAX_BINARY_READ_BYTES` (~1 GiB) of file bytes at once if
- * every entry happens to be a near-cap binary — the whole batch is built
- * (bytes attached) and held before it's yielded, so bounding read
- * *concurrency* alone wouldn't help. This is the second, byte-budget cap
- * `chunkBySize` enforces alongside `BATCH_SIZE`. Sized well above what an
- * ordinary batch of ~50 everyday files would cost, while keeping the worst
- * case a small, predictable fraction of memory rather than unbounded.
+ * `BATCH_SIZE * MAX_LOCAL_BINARY_BYTES` (~1 GiB, `@shared/file-indexability`)
+ * of file bytes at once if every entry happens to be a near-cap
+ * `converter`-pipeline file — the whole batch is built (bytes attached) and
+ * held before it's yielded, so bounding read *concurrency* alone wouldn't
+ * help. This is the second, byte-budget cap `chunkBySize` enforces alongside
+ * `BATCH_SIZE`. Sized well above what an ordinary batch of ~50 everyday files
+ * would cost, while keeping the worst case a small, predictable fraction of
+ * memory rather than unbounded.
  */
 export const MAX_BATCH_READ_BYTES = 64 * 1024 * 1024; // 64 MiB
 
 /**
- * Bytes `buildItem` will actually read off disk for one entry — mirrors its
- * bucket/size-cap logic so the chunker's budget lines up exactly with real
- * read cost. Metadata-only outcomes (unsupported bucket, or over that
- * bucket's own cap) cost 0 since `buildItem` never reads their bytes.
+ * Bytes `buildItem` will actually read off disk for one entry — mirrors
+ * `decideLocalFile`'s pipeline routing so the chunker's byte budget lines up
+ * exactly with real read cost. Only the `inline-text` and `converter`
+ * pipelines read bytes eagerly (see `buildItem`); `vision`/`audio` commit
+ * metadata-only, and an `ignore`d entry costs 0 too (defensive — it should
+ * never reach here, since `listEntries` already filters those out).
  */
 export function entryReadCost(entry: ScannedEntry): number {
-  const bucket = classifyPath(entry.absPath);
-  const { size } = entry.stats;
-  if (bucket === 'text' && size <= MAX_INLINE_TEXT_BYTES) return size;
-  if (bucket === 'binary' && size <= MAX_BINARY_READ_BYTES) return size;
-  return 0;
+  const decision = decideLocalFile(entry.absPath, entry.stats.size);
+  if (decision.kind !== 'index') return 0;
+  return decision.pipeline === 'inline-text' ||
+    decision.pipeline === 'converter'
+    ? entry.stats.size
+    : 0;
 }
 
 /**
@@ -117,7 +103,10 @@ const ENUMERATION_OPTIONS = {
  * (`dot: true`, matching kiagent-ref scanner.ts:41 — DEFAULT_EXCLUDE_GLOBS is
  * what actually keeps junk out, not a dotfile blanket ban), symlinks not
  * followed. `stats: true` gets size/mtime/birthtime in the same walk instead
- * of a second per-file `fs.stat` round trip.
+ * of a second per-file `fs.stat` round trip — and, as of this filter, feeds
+ * the SIZE-aware `decideLocalFile` check, so a file whose extension/mime
+ * passes but whose real on-disk size is over its pipeline's cap (including
+ * the outer edge of the local PDF ladder) never enters the listing at all.
  */
 export async function listEntries(rootPath: string): Promise<ScannedEntry[]> {
   const entries = (await fg(['**/*'], {
@@ -127,7 +116,10 @@ export async function listEntries(rootPath: string): Promise<ScannedEntry[]> {
     stats: true,
   })) as Entry[];
   return entries
-    .filter((e) => isIngestible(e.path))
+    .filter(
+      (e) =>
+        decideLocalFile(e.path, (e.stats as fs.Stats).size).kind === 'index',
+    )
     .map((e) => ({ absPath: e.path, stats: e.stats as fs.Stats }));
 }
 
@@ -138,10 +130,11 @@ export interface FileCount {
 
 /**
  * Streamed recursive file count for the folder-picker preview. Uses the
- * same enumeration rules as sync, so the number shown is the number of
- * documents adding this folder would index. Caps at `cap` and aborts the
- * walk early (capped: true). Never throws — unreadable/nonexistent roots
- * count as 0 (ENUMERATION_OPTIONS.suppressErrors handles that).
+ * same enumeration rules as sync (including the size-aware gate — `stats:
+ * true` on the stream too), so the number shown is the number of documents
+ * adding this folder would index. Caps at `cap` and aborts the walk early
+ * (capped: true). Never throws — unreadable/nonexistent roots count as 0
+ * (ENUMERATION_OPTIONS.suppressErrors handles that).
  */
 export async function countFiles(
   rootPath: string,
@@ -152,11 +145,14 @@ export async function countFiles(
     ...ENUMERATION_OPTIONS,
     cwd: rootPath,
     absolute: true,
+    stats: true,
   });
-  for await (const entry of stream) {
+  for await (const raw of stream) {
+    const entry = raw as unknown as Entry;
     // Same gate as listEntries: the preview must promise the number of
     // documents this folder will actually produce, not the file count.
-    if (!isIngestible(String(entry))) continue;
+    if (decideLocalFile(entry.path, entry.stats?.size).kind !== 'index')
+      continue;
     count += 1;
     if (count >= cap) return { count, capped: true };
   }
@@ -172,18 +168,37 @@ export function toAbsPosix(absPath: string): string {
 }
 
 /**
- * Build a pull() Item for one file. Reads bytes HERE — the only place in this
- * Source allowed fs access for content — so `toDocument` stays pure/sync:
- *  - plain-text mimes (text/plain, text/markdown) → decoded inline as
- *    markdown, no engine conversion needed.
- *  - parseable binary mimes (html/pdf/docx/xlsx/csv) → raw bytes carried on
- *    the item for `toDocument` to attach as `DocumentInput.binary`; the
- *    ENGINE's converter does the extraction.
- *  - anything else, or anything over its size cap → metadata-only (no
- *    markdown, no binary) — still a real document, matching kiagent-ref's
- *    behavior of always creating a doc (extraction_status: 'unsupported' —
- *    kiagent-ref scanner.ts:170-208), just without wasting a read on bytes
- *    the engine couldn't use anyway.
+ * Build a pull() Item for one file, or `null` if it turns out this file
+ * produces no document at all. Reads bytes HERE — the only place in this
+ * Source allowed fs access for content — so `toDocument` stays pure/sync.
+ *
+ * Routes on `decideLocalFile`'s pipeline (size-aware — the same decision
+ * `listEntries` already applied at enumeration, recomputed here because a
+ * watcher event calls this directly without going through `listEntries`):
+ *  - `ignore` → `null`. `unsupported` and `too-large` are no longer document
+ *    outcomes — a file this policy rejects produces no row at all, not a
+ *    metadata-only one.
+ *  - `inline-text` → decoded inline as markdown, no engine conversion
+ *    needed.
+ *  - `converter` → raw bytes carried on the item for `toDocument` to attach
+ *    as `DocumentInput.binary`; the ENGINE's converter does the extraction.
+ *  - `vision` / `audio` → metadata-only (no eager markdown/binary): this is
+ *    deliberate, not a fallback — it's how a 20-50 MiB local PDF (over the
+ *    read-eagerly cap but under the outer PDF cap) and every image/audio/
+ *    video candidate commit today, with the vision/audio WORKER pulling
+ *    bytes back later through `fetchBytes`.
+ *  - unreadable (vanished between listing and read) or NUL-byte-containing
+ *    "text" (an extension that lied — see below) → `null`, same as `ignore`.
+ *    A file that passed the cheap metadata gate but failed this final
+ *    read/sniff must not leave a stale row behind; callers are responsible
+ *    for archiving any prior document at this path when they get `null`
+ *    back (see `local-folder-source.ts`'s backfill/incremental map sites and
+ *    `watch.ts`'s add/change handling).
+ *
+ * Bytes are read EAGERLY here (not deferred to the engine's converter, the
+ * way kiagent-ref's shared Converter did it) because this Source's
+ * `toDocument` must stay pure/synchronous — a cap-bounded read in `pull()`
+ * is the only place left to do it.
  *
  * `stats` is passed in (rather than re-stat'd here) so callers that already
  * have it from a directory walk or an fs-watch event don't pay for it twice.
@@ -191,11 +206,13 @@ export function toAbsPosix(absPath: string): string {
 export async function buildItem(
   absPath: string,
   stats: fs.Stats,
-): Promise<LocalFolderItem> {
+): Promise<LocalFolderItem | null> {
+  const decision = decideLocalFile(absPath, stats.size);
+  if (decision.kind === 'ignore') return null;
+
   const externalId = toAbsPosix(absPath);
   const ext = path.extname(absPath).slice(1).toLowerCase();
   const mt = resolvePathMime(absPath);
-  const bucket = classifyPath(absPath);
   const { size } = stats;
   const mtimeIso = stats.mtime.toISOString();
   const createdIso = (
@@ -208,15 +225,16 @@ export async function buildItem(
   let binary: LocalFolderItem['binary'] = null;
 
   try {
-    if (bucket === 'text' && size <= MAX_INLINE_TEXT_BYTES) {
+    if (decision.pipeline === 'inline-text') {
       const bytes = await fs.promises.readFile(absPath);
-      // TEXT_EXTS routes by extension, and an extension can lie: `.ts` is
-      // TypeScript almost always and an MPEG transport stream occasionally.
-      // A NUL byte means this is not text, whatever it is called — decoding
-      // it would push megabytes of mojibake into markdown and the search
-      // index. Metadata-only is the honest answer.
-      markdownText = bytes.includes(0) ? null : bytes.toString('utf-8');
-    } else if (bucket === 'binary' && size <= MAX_BINARY_READ_BYTES) {
+      // The text extension set routes by extension, and an extension can
+      // lie: `.ts` is TypeScript almost always and an MPEG transport stream
+      // occasionally. A NUL byte means this is not text, whatever it is
+      // called — decoding it would push megabytes of mojibake into markdown
+      // and the search index. No document is the honest answer.
+      if (bytes.includes(0)) return null;
+      markdownText = bytes.toString('utf-8');
+    } else if (decision.pipeline === 'converter') {
       const bytes = await fs.promises.readFile(absPath);
       binary = {
         bytes: new Uint8Array(bytes),
@@ -224,9 +242,11 @@ export async function buildItem(
         filename: path.basename(absPath),
       };
     }
+    // `vision` / `audio`: metadata-only pending candidate, no eager read.
   } catch {
-    // Vanished or unreadable between listing and read — fall back to a
-    // metadata-only doc rather than failing the whole batch.
+    // Vanished or unreadable between listing and read — no document rather
+    // than a metadata-only fallback (see the doc comment above).
+    return null;
   }
 
   return {

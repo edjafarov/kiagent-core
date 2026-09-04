@@ -1,18 +1,11 @@
-import { isIngestible } from '@main/sources/local-folder/ingestible';
-
 import {
   decideFileIndexing,
-  AUDIO_EXTENSIONS,
-  LOCAL_TEXT_EXTENSIONS,
-  LOCAL_VIDEO_EXTENSIONS,
   MAX_CLOUD_BINARY_BYTES,
   MAX_CLOUD_IMAGE_BYTES,
   MAX_LOCAL_AUDIO_BYTES,
   MAX_LOCAL_BINARY_BYTES,
   MAX_LOCAL_PDF_BYTES,
   MAX_LOCAL_TEXT_BYTES,
-  UNDEMUXABLE_EXTENSIONS,
-  VISUAL_EXTENSIONS,
 } from '../file-indexability';
 
 type Case = [
@@ -534,37 +527,14 @@ describe('mime parameters and malformed sizes', () => {
   );
 });
 
-// The real regression net for the whole task: for every extension any
-// pipeline currently accepts on the local-folder profile (plus a handful of
-// outsiders that must stay rejected), decideFileIndexing's `kind` must agree
-// with today's isIngestible. Any disagreement is either a bug in the move or
-// a decision that belongs in the spec — there should be none.
-describe('agrees with isIngestible for every local-folder extension', () => {
-  const extensions = new Set([
-    ...AUDIO_EXTENSIONS,
-    ...LOCAL_VIDEO_EXTENSIONS,
-    ...UNDEMUXABLE_EXTENSIONS,
-    ...VISUAL_EXTENSIONS,
-    ...LOCAL_TEXT_EXTENSIONS,
-    'avi',
-    'wmv',
-    'mpeg',
-    'svg',
-    'exe',
-    'bin',
-    'scache',
-  ]);
-
-  for (const ext of extensions) {
-    it(`.${ext}`, () => {
-      const path = `/d/x.${ext}`;
-      const decided =
-        decideFileIndexing({
-          profile: 'local-folder',
-          filename: `x.${ext}`,
-          path,
-        }).kind === 'index';
-      expect(decided).toBe(isIngestible(path));
-    });
-  }
-});
+// The `isIngestible`-equivalence describe block that lived here (added in
+// Task 1) has been DELETED, not kept as a smoke test. Its purpose was
+// guarding Task 1's verbatim move of the local-folder rules into this shared
+// module, by asserting decideFileIndexing's `kind` agreed with the OLD,
+// independently-implemented `isIngestible`. Task 2 (this change) makes
+// `isIngestible` itself delegate to `decideFileIndexing` (see
+// `local-folder/ingestible.ts`'s `decideLocalFile`), so the block would now
+// assert `f(x) === f(x)` for every extension — a tautology that can never
+// fail, which is worse than no test at all. The real regression coverage for
+// local-folder eligibility now lives in `local-folder/__tests__/*.test.ts`,
+// which exercises `decideLocalFile`/`isIngestible` against real files.

@@ -168,11 +168,19 @@ export async function* watchLoop(
         const root = rootOf(ev.absPath);
         if (root)
           cursor = advanceCursor(cursor, root, new Date().toISOString());
-        yield {
-          phase: 'live',
-          items: [item],
-          cursor,
-        };
+        // `buildItem` is null when the policy check it recomputes from the
+        // fresh stat — including size, which `onEvent`'s path-only pre-filter
+        // above could not see — now says `ignore` (or the read/sniff failed).
+        // A file that passed the coarse pre-filter but fails here must
+        // archive any older row at this path rather than leave it stale.
+        yield item
+          ? { phase: 'live', items: [item], cursor }
+          : {
+              phase: 'live',
+              items: [],
+              deletions: [{ externalId: toAbsPosix(ev.absPath), type: 'file' }],
+              cursor,
+            };
       } catch {
         // File vanished between the fs event and the stat — a matching
         // unlink event will follow if it was really removed; skip for now.

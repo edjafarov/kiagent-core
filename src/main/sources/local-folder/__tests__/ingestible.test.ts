@@ -1,9 +1,20 @@
 import { VISUAL_EXTS } from '@main/workers/vision/classify';
+import {
+  MAX_LOCAL_AUDIO_BYTES,
+  MAX_LOCAL_BINARY_BYTES,
+  MAX_LOCAL_IMAGE_BYTES,
+  MAX_LOCAL_PDF_BYTES,
+  MAX_LOCAL_TEXT_BYTES,
+} from '@shared/file-indexability';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { isIngestible, INGESTIBLE_DENY_RE } from '../ingestible';
+import {
+  isIngestible,
+  decideLocalFile,
+  INGESTIBLE_DENY_RE,
+} from '../ingestible';
 import { classifyPath, resolvePathMime } from '../mime';
 import { buildItem } from '../scanner';
 
@@ -149,6 +160,76 @@ describe('isIngestible', () => {
   });
 });
 
+describe('decideLocalFile — exact size-cap boundaries', () => {
+  it('text: size === cap indexes, cap + 1 is ignored as too-large', () => {
+    expect(decideLocalFile('/d/a.txt', MAX_LOCAL_TEXT_BYTES)).toEqual({
+      kind: 'index',
+      pipeline: 'inline-text',
+    });
+    expect(decideLocalFile('/d/a.txt', MAX_LOCAL_TEXT_BYTES + 1)).toEqual({
+      kind: 'ignore',
+      reason: 'too-large',
+    });
+  });
+
+  it('PDF: the two-budget ladder — read-eagerly cap converts, the metadata-only band routes to vision, and only the outer cap ignores', () => {
+    // At/under the read cap: converter, bytes read eagerly.
+    expect(decideLocalFile('/d/a.pdf', MAX_LOCAL_BINARY_BYTES)).toEqual({
+      kind: 'index',
+      pipeline: 'converter',
+    });
+    // Just over the read cap: still indexed, but metadata-only via vision —
+    // this is the 20-50 MiB band the vision worker OCRs through fetchBytes.
+    expect(decideLocalFile('/d/a.pdf', MAX_LOCAL_BINARY_BYTES + 1)).toEqual({
+      kind: 'index',
+      pipeline: 'vision',
+    });
+    // At the outer PDF cap: still indexed (vision).
+    expect(decideLocalFile('/d/a.pdf', MAX_LOCAL_PDF_BYTES)).toEqual({
+      kind: 'index',
+      pipeline: 'vision',
+    });
+    // One byte past the outer cap: ignored.
+    expect(decideLocalFile('/d/a.pdf', MAX_LOCAL_PDF_BYTES + 1)).toEqual({
+      kind: 'ignore',
+      reason: 'too-large',
+    });
+  });
+
+  it('image: size === cap indexes, cap + 1 is ignored as too-large', () => {
+    expect(decideLocalFile('/d/a.jpg', MAX_LOCAL_IMAGE_BYTES)).toEqual({
+      kind: 'index',
+      pipeline: 'vision',
+    });
+    expect(decideLocalFile('/d/a.jpg', MAX_LOCAL_IMAGE_BYTES + 1)).toEqual({
+      kind: 'ignore',
+      reason: 'too-large',
+    });
+  });
+
+  it('mp3: size === cap indexes, cap + 1 is ignored as too-large', () => {
+    expect(decideLocalFile('/d/a.mp3', MAX_LOCAL_AUDIO_BYTES)).toEqual({
+      kind: 'index',
+      pipeline: 'audio',
+    });
+    expect(decideLocalFile('/d/a.mp3', MAX_LOCAL_AUDIO_BYTES + 1)).toEqual({
+      kind: 'ignore',
+      reason: 'too-large',
+    });
+  });
+
+  it('unknown/absent size is admitted provisionally, re-checked after the read', () => {
+    expect(decideLocalFile('/d/a.txt')).toEqual({
+      kind: 'index',
+      pipeline: 'inline-text',
+    });
+    expect(decideLocalFile('/d/a.txt', undefined)).toEqual({
+      kind: 'index',
+      pipeline: 'inline-text',
+    });
+  });
+});
+
 describe('classifyPath', () => {
   it('routes text-ish data files to the text bucket despite their mime', () => {
     // `mime` maps .json to application/json and — the classic trap — .ts to
@@ -192,20 +273,21 @@ describe('text-extension files that are secretly binary', () => {
 
     const p = write('mod.ts', Buffer.from('export const x = 1;\n', 'utf8'));
     const item = await buildItem(p, fs.statSync(p));
-    expect(item.mime).toBe('text/plain');
-    expect(item.markdownText).toContain('export const x = 1;');
+    expect(item).not.toBeNull();
+    expect(item!.mime).toBe('text/plain');
+    expect(item!.markdownText).toContain('export const x = 1;');
   });
 
-  it('does not decode a real MPEG-TS video as if it were TypeScript', async () => {
+  it('does not decode a real MPEG-TS video as if it were TypeScript — buildItem returns null rather than a garbage doc', async () => {
     // A genuine .ts transport stream: NUL bytes throughout. Decoding it as
     // UTF-8 would push megabytes of mojibake into markdown and the search
-    // index. It stays a metadata-only document instead.
+    // index. Since it sniffs as not-really-text after the read, it produces
+    // no document at all (the caller archives any prior row for this path).
     const ts = Buffer.alloc(4096);
     ts.writeUInt8(0x47, 0); // MPEG-TS sync byte
     const p = write('stream.ts', ts);
     const item = await buildItem(p, fs.statSync(p));
-    expect(item.markdownText).toBeNull();
-    expect(item.binary).toBeNull();
+    expect(item).toBeNull();
   });
 
   it('still decodes text that merely looks unusual', async () => {
@@ -214,6 +296,7 @@ describe('text-extension files that are secretly binary', () => {
       Buffer.from('héllo — em dash, no NULs', 'utf8'),
     );
     const item = await buildItem(p, fs.statSync(p));
-    expect(item.markdownText).toContain('héllo');
+    expect(item).not.toBeNull();
+    expect(item!.markdownText).toContain('héllo');
   });
 });

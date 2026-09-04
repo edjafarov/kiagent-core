@@ -5,6 +5,10 @@
  * default jest testEnvironment) does not provide — same fix as
  * local-folder-source.test.ts / src/main/core/mcp/__tests__/server.test.ts.
  */
+import {
+  MAX_LOCAL_BINARY_BYTES,
+  MAX_LOCAL_PDF_BYTES,
+} from '@shared/file-indexability';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,9 +16,12 @@ import path from 'node:path';
 import {
   BATCH_SIZE,
   MAX_BATCH_READ_BYTES,
+  buildItem,
   chunkBySize,
   countFiles,
+  entryReadCost,
   listEntries,
+  type ScannedEntry,
 } from '../scanner';
 
 function mkTmpDir(): string {
@@ -39,6 +46,79 @@ function writeNestedTree(dir: string): void {
   writeFile(dir, 'node_modules/pkg/index.js', 'module.exports = {};');
   writeFile(dir, '.git/HEAD', 'ref: refs/heads/main');
 }
+
+/** A file of exactly `size` bytes with no real content written — instant,
+ *  no meaningful disk usage on a sparse-file-capable filesystem. Only the
+ *  size matters to `decideLocalFile`/`entryReadCost`/`buildItem`, never the
+ *  bytes, for anything past the cheap listing stage. */
+function sparseFile(dir: string, rel: string, size: number): string {
+  const abs = path.join(dir, rel);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const fd = fs.openSync(abs, 'w');
+  fs.ftruncateSync(fd, size);
+  fs.closeSync(fd);
+  return abs;
+}
+
+function toEntry(absPath: string): ScannedEntry {
+  return { absPath, stats: fs.statSync(absPath) };
+}
+
+describe('entryReadCost — decision-based, not bucket-based', () => {
+  it('costs real bytes for inline-text and converter pipelines, zero for vision and audio', () => {
+    const dir = mkTmpDir();
+    const txt = writeFile(dir, 'a.txt', 'hello world');
+    const csv = writeFile(dir, 'b.csv', 'a,b\n1,2');
+    const png = writeFile(dir, 'c.png', 'not-really-a-png');
+    const mp3 = writeFile(dir, 'd.mp3', 'not-really-audio');
+
+    expect(entryReadCost(toEntry(txt))).toBe(fs.statSync(txt).size);
+    expect(entryReadCost(toEntry(csv))).toBe(fs.statSync(csv).size);
+    expect(entryReadCost(toEntry(png))).toBe(0);
+    expect(entryReadCost(toEntry(mp3))).toBe(0);
+  });
+});
+
+describe('the local PDF ladder — two budgets, not one', () => {
+  it('at/under the read cap: listed, full read cost, buildItem reads bytes eagerly', async () => {
+    const dir = mkTmpDir();
+    const p = sparseFile(dir, 'small.pdf', MAX_LOCAL_BINARY_BYTES);
+    const entry = toEntry(p);
+
+    expect(entryReadCost(entry)).toBe(MAX_LOCAL_BINARY_BYTES);
+    const entries = await listEntries(dir);
+    expect(entries.map((e) => e.absPath)).toEqual([p]);
+
+    const item = await buildItem(p, entry.stats);
+    expect(item).not.toBeNull();
+    expect(item!.binary).not.toBeNull();
+  });
+
+  it('20-50 MiB band: still listed, zero read cost, buildItem commits metadata-only (no eager binary) for the vision worker to OCR via fetchBytes', async () => {
+    const dir = mkTmpDir();
+    const size = MAX_LOCAL_BINARY_BYTES + 5 * 1024 * 1024; // 25 MiB
+    const p = sparseFile(dir, 'mid.pdf', size);
+    const entry = toEntry(p);
+
+    expect(entryReadCost(entry)).toBe(0);
+    const entries = await listEntries(dir);
+    expect(entries.map((e) => e.absPath)).toEqual([p]);
+
+    const item = await buildItem(p, entry.stats);
+    expect(item).not.toBeNull();
+    expect(item!.markdownText).toBeNull();
+    expect(item!.binary).toBeNull();
+    expect(item!.mime).toBe('application/pdf');
+  });
+
+  it('over the outer PDF cap: absent from listEntries entirely — no row, no candidate', async () => {
+    const dir = mkTmpDir();
+    sparseFile(dir, 'huge.pdf', MAX_LOCAL_PDF_BYTES + 1);
+
+    const entries = await listEntries(dir);
+    expect(entries).toEqual([]);
+  });
+});
 
 describe('countFiles', () => {
   it('counts a nested tree, including dotfiles and excluding junk dirs', async () => {
