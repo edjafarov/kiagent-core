@@ -421,15 +421,19 @@ describe('schema v2: archive file-indexability rejects', () => {
  * from `seedMatrix` above: these two rows exist purely to make
  * `console.warn` fire, and folding them into the shared matrix meant every
  * run of the two tests above printed an unrelated warning + stack trace
- * (N2). The production warn itself stays unmocked in the first `it()` below
- * — it is load-bearing for diagnosing a skipped row in a real corpus — and
- * is only spied on in the second `it()`, which exists specifically to
- * assert on it.
+ * (N2). `console.warn` itself is only mocked here, at the test boundary —
+ * the production call in schema.ts is untouched, so it stays exactly as
+ * load-bearing for diagnosing a skipped row in a real corpus as before;
+ * mocking it in Jest just keeps this suite's own output clean. Both tests
+ * in this block share the one spy; the second reads its recorded calls to
+ * assert the offending document ids were actually logged.
  */
 describe('schema v2: unreadable metadata is skipped, not archived', () => {
   let db: Database.Database;
+  let warnSpy: jest.SpyInstance;
 
   beforeEach(() => {
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     db = new Database(':memory:');
     migrate(db);
     seedAccount(db, 'acc-local', 'local-folder');
@@ -478,6 +482,7 @@ describe('schema v2: unreadable metadata is skipped, not archived', () => {
 
   afterEach(() => {
     db.close();
+    warnSpy.mockRestore();
   });
 
   it('leaves both null- and array-metadata rows live, archives the control row around them, and still reaches schemaVersion 2', () => {
@@ -495,21 +500,17 @@ describe('schema v2: unreadable metadata is skipped, not archived', () => {
   });
 
   it('logs the offending document id for both null- and array-metadata rows', () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     migrate(db);
-    // Read `.mock.calls` BEFORE mockRestore(): mockRestore() also resets the
-    // mock (clears recorded calls), so asserting after restoring would
-    // always see an empty array regardless of what actually happened.
+    // Read `.mock.calls` off the shared spy while it is still live —
+    // `afterEach` calls `mockRestore()`, which also clears recorded calls,
+    // so this must happen before that runs, not after.
     const warnedFor = (id: string) =>
-      warnSpy.mock.calls.some((args) =>
-        args.some((a) => typeof a === 'string' && a.includes(id)),
+      warnSpy.mock.calls.some((args: unknown[]) =>
+        args.some((a: unknown) => typeof a === 'string' && a.includes(id)),
       );
-    const nullWarned = warnedFor('local-null-metadata');
-    const arrayWarned = warnedFor('local-array-metadata');
-    warnSpy.mockRestore();
 
-    expect(nullWarned).toBe(true);
-    expect(arrayWarned).toBe(true);
+    expect(warnedFor('local-null-metadata')).toBe(true);
+    expect(warnedFor('local-array-metadata')).toBe(true);
   });
 });
 
