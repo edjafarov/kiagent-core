@@ -86,6 +86,7 @@ import {
 } from './sources/local-folder/tree';
 import { createTray } from './tray';
 import type { TrayMenuController } from './tray-menu';
+import { installCloseToTray } from './close-to-tray';
 import { resolveHtmlPath } from './util';
 import { attachBundledWorkers } from './workers';
 import { makeNativeImageDownscaler } from './workers/vision/downscale';
@@ -103,6 +104,9 @@ let stopActivityWatch: (() => void) | null = null;
 // Must stay referenced for the app's lifetime or GC destroys the icon.
 let tray: Tray | null = null;
 let trayMenu: TrayMenuController | null = null;
+// Set the moment a quit starts (before-quit, below): close-to-tray reads it
+// so the teardown's own app.quit() closes the window instead of hiding it.
+let quitting = false;
 
 // Test/dev escape hatch: point ALL app storage somewhere disposable.
 if (process.env.KIAGENT_USER_DATA) {
@@ -178,6 +182,11 @@ function applyLoginItemSettings(launchAtLogin: boolean): void {
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
+} else {
+  // Launching the app again is how a user asks for the window back once it is
+  // hidden in the tray (close-to-tray, Windows/Linux) — without this the
+  // second launch would just exit and nothing would appear.
+  app.on('second-instance', () => showMainWindow());
 }
 
 function broadcast<C extends PushChannel>(
@@ -303,6 +312,11 @@ async function createWindow(): Promise<void> {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+  // Windows/Linux: X hides to the tray instead of quitting the app.
+  installCloseToTray(mainWindow, {
+    platform: process.platform,
+    isQuitting: () => quitting,
+  });
   // Guidance-step "Open ↗" buttons (and marketplace README links) call
   // window.open — route https to the system browser, never spawn a child
   // BrowserWindow. Deny everything else (extension-supplied URLs are
@@ -319,6 +333,21 @@ async function createWindow(): Promise<void> {
     }
   });
   await mainWindow.loadURL(resolveHtmlPath('index.html'));
+}
+
+/**
+ * Bring the window back. Shared by the tray's "Open KIAgent",
+ * MainProcessApi.ui.openWindow (extension escape hatches like remote-mcp's
+ * "Fix connection…") and a second launch of the app.
+ */
+function showMainWindow(): void {
+  if (!mainWindow) {
+    void createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 }
 
 /** Everything the renderer can ask for, over the typed contract. */
@@ -904,17 +933,6 @@ app
     for (const [sourceId, refresher] of bundledRefreshers)
       p.refreshers.set(sourceId, refresher);
 
-    // Shared by the tray's "Open KIAgent" and MainProcessApi.ui.openWindow
-    // (extension escape hatches like remote-mcp's "Fix connection…").
-    const openMainWindow = (): void => {
-      if (mainWindow) {
-        mainWindow.show();
-        mainWindow.focus();
-      } else {
-        void createWindow();
-      }
-    };
-
     // Built here (rather than at its historical spot right before
     // createWindow) so its TrayMenuController exists in time to hand to
     // buildMainApi below — bundled `unsafe.mainProcess` extensions can
@@ -923,7 +941,7 @@ app
     ({ tray, menu: trayMenu } = createTray(
       getAssetPath('icons', 'tray', 'trayTemplate.png'),
       {
-        openWindow: openMainWindow,
+        openWindow: showMainWindow,
         syncNow: () => {
           void (async () => {
             const jobs = await p.scheduler.jobs();
@@ -962,7 +980,7 @@ app
         app,
         dataDir,
         tray: trayMenu,
-        ui: { openWindow: openMainWindow },
+        ui: { openWindow: showMainWindow },
         outbound: { service: outbound, routes: outboundRoutes },
       }),
       store: p.store,
@@ -1112,6 +1130,9 @@ app
     reportBootFailure(crashDeps, err);
   });
 
+// Reached on Windows/Linux only when the window is really closing (a quit is
+// underway — close-to-tray hides it in every other case), and never on macOS,
+// where the app outlives its window by design.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
@@ -1124,7 +1145,6 @@ app.on('window-all-closed', () => {
 // quit can't hang: LlamaServer.stop escalates to SIGKILL after a grace window,
 // and localAsr.dispose() awaits the signalled whisper-cli child whose own
 // SIGTERM→SIGKILL escalation is capped at ~2s (whisper-cli.ts).
-let quitting = false;
 app.on('before-quit', (event) => {
   if (quitting) return;
   event.preventDefault();
