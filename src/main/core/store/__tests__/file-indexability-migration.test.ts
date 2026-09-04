@@ -51,6 +51,25 @@ function candidate(
   metadata: Record<string, unknown>,
   title: string | null = null,
 ): Row {
+  return candidateRawMetadata(
+    id,
+    accountId,
+    type,
+    JSON.stringify(metadata),
+    title,
+  );
+}
+
+/** Same as `candidate`, but takes the `metadata` column verbatim — for
+ *  seeding shapes `JSON.stringify` would never produce (a literal JSON
+ *  `null`, malformed JSON), which is exactly what F1 needs to reproduce. */
+function candidateRawMetadata(
+  id: string,
+  accountId: string,
+  type: string,
+  rawMetadata: string,
+  title: string | null = null,
+): Row {
   return {
     id,
     account_id: accountId,
@@ -58,7 +77,7 @@ function candidate(
     type,
     title,
     markdown: null,
-    metadata: JSON.stringify(metadata),
+    metadata: rawMetadata,
     content_hash: `hash-${id}`,
     seq: 0,
     archived_at: null,
@@ -110,6 +129,29 @@ function seedMatrix(db: Database.Database): void {
       absPath: '/Users/x/Downloads/archive.zip',
       sizeBytes: 999,
     }),
+  );
+  // 'size' only, no sizeBytes/size_bytes — and unlike local-mp3 (whose
+  // decision doesn't depend on size at all), THIS decision flips on whether
+  // the tier is actually read: over the 50 MiB local-PDF vision cap when
+  // read correctly (archived); an unread size is never treated as over any
+  // cap, which would instead index it. Discriminates the 3rd size tier.
+  seedDoc(
+    db,
+    candidate('local-huge-pdf-size-tier', 'acc-local', 'file', {
+      mime: 'application/pdf',
+      filename: 'huge3.pdf',
+      absPath: '/Users/x/Documents/huge3.pdf',
+      size: 60 * 1024 * 1024,
+    }),
+  );
+  // Metadata that parses to JSON `null` (F1): a shape `JSON.stringify`
+  // never produces, but `json_extract` accepts on insert, so it can and did
+  // reach this table. The migration must skip it (leave it live), never
+  // throw — a throw here rolls back the whole version step and pins
+  // schemaVersion at 1 forever.
+  seedDoc(
+    db,
+    candidateRawMetadata('local-null-metadata', 'acc-local', 'file', 'null'),
   );
 
   // google-docs `file` rows: mime AND mime_type, size_bytes AND sizeBytes.
@@ -223,7 +265,20 @@ function seedMatrix(db: Database.Database): void {
     candidate('onedrive-big-pdf', 'acc-onedrive', 'file', {
       mime: 'application/pdf',
       filename: 'huge.pdf',
-      sizeBytes: 30 * 1024 * 1024, // over the 25 MiB cloud cap.
+      sizeBytes: 30 * 1024 * 1024, // over the 25 MiB cloud cap — pins tier 1.
+    }),
+  );
+  // 'size_bytes' only, no sizeBytes/size — same over-cap PDF as
+  // onedrive-big-pdf above, but read through the 2nd size tier instead of
+  // the 1st. Discriminates that tier specifically: an unread size_bytes
+  // falls through to the absent 'size' tier, size becomes unknown, and an
+  // unknown size is never treated as over any cap — it would index instead.
+  seedDoc(
+    db,
+    candidate('onedrive-big-pdf-size-bytes-tier', 'acc-onedrive', 'file', {
+      mime: 'application/pdf',
+      filename: 'huge2.pdf',
+      size_bytes: 30 * 1024 * 1024,
     }),
   );
 
@@ -293,6 +348,8 @@ describe('schema v2: archive file-indexability rejects', () => {
     expect(live(db, 'local-pdf')).toBe(true);
     expect(live(db, 'local-mp3')).toBe(true);
     expect(live(db, 'local-zip')).toBe(false);
+    expect(live(db, 'local-huge-pdf-size-tier')).toBe(false); // size-tier-3 discriminator
+    expect(live(db, 'local-null-metadata')).toBe(true); // unreadable metadata — skipped, left live
     expect(live(db, 'google-pdf')).toBe(true);
     expect(live(db, 'google-mp3')).toBe(false);
     expect(live(db, 'google-mp4')).toBe(false);
@@ -305,6 +362,7 @@ describe('schema v2: archive file-indexability rejects', () => {
     expect(live(db, 'onedrive-pdf')).toBe(true);
     expect(live(db, 'onedrive-mp3')).toBe(false);
     expect(live(db, 'onedrive-big-pdf')).toBe(false);
+    expect(live(db, 'onedrive-big-pdf-size-bytes-tier')).toBe(false); // size-tier-2 discriminator
     expect(live(db, 'gmail-mp3')).toBe(true); // source outside scope
 
     expect(schemaVersion(db)).toBe(2);
@@ -315,6 +373,7 @@ describe('schema v2: archive file-indexability rejects', () => {
 
     const archivedIds = [
       'local-zip',
+      'local-huge-pdf-size-tier',
       'google-mp3',
       'google-mp4',
       'google-zip',
@@ -322,10 +381,12 @@ describe('schema v2: archive file-indexability rejects', () => {
       'google-presentation',
       'onedrive-mp3',
       'onedrive-big-pdf',
+      'onedrive-big-pdf-size-bytes-tier',
     ];
     const liveIds = [
       'local-pdf',
       'local-mp3',
+      'local-null-metadata',
       'google-pdf',
       'google-doc-mistyped-file',
       'google-native-doc',
@@ -348,10 +409,36 @@ describe('schema v2: archive file-indexability rejects', () => {
       expect(changesFor(db, id)).toHaveLength(0);
     }
 
+    // migrate() at the latest version is a no-op by construction (the ladder
+    // loop skips entirely) — that says nothing about the migration BODY's
+    // own `d.archived_at IS NULL` guard. Force the v2 entry to run AGAIN,
+    // this time against a corpus that already has archived rows from the
+    // run above: if the guard were dropped, every already-archived id would
+    // get a SECOND `changes` row here.
+    db.prepare(`UPDATE meta SET value='1' WHERE key='schemaVersion'`).run();
     const before = changeCount(db);
-    migrate(db); // already at the latest version — must be a true no-op.
+    migrate(db);
     expect(changeCount(db)).toBe(before);
+    for (const id of archivedIds) {
+      expect(changesFor(db, id)).toHaveLength(1); // still exactly one, not two
+    }
     expect(schemaVersion(db)).toBe(2);
+  });
+
+  it('logs the offending document id for unreadable metadata instead of failing silently', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    migrate(db);
+    // Read `.mock.calls` BEFORE mockRestore(): mockRestore() also resets the
+    // mock (clears recorded calls), so asserting after restoring would
+    // always see an empty array regardless of what actually happened.
+    const loggedOffendingId = warnSpy.mock.calls.some((args) =>
+      args.some(
+        (a) => typeof a === 'string' && a.includes('local-null-metadata'),
+      ),
+    );
+    warnSpy.mockRestore();
+
+    expect(loggedOffendingId).toBe(true);
   });
 });
 

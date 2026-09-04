@@ -337,7 +337,29 @@ const MIGRATIONS: Migration[] = [
       const rows = page.all(last) as CandidateRow[];
       if (rows.length === 0) break;
       for (const row of rows) {
-        const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+        // A row whose metadata cannot be read as an object is precisely a
+        // row this migration must NOT touch — fail open, never throw: a
+        // thrown error here rolls back the whole version-step transaction,
+        // which leaves `schemaVersion` at 1 forever (this loop is the only
+        // thing that can ever advance it past 1), so every subsequent boot
+        // repeats the same throw. `JSON.parse('null')` SUCCEEDS and yields
+        // `null` — a bare try/catch around parse alone does not catch that;
+        // the guard has to check the parsed VALUE's shape, not just that
+        // parsing didn't throw.
+        let metadata: Record<string, unknown>;
+        try {
+          const parsed: unknown = JSON.parse(row.metadata);
+          if (typeof parsed !== 'object' || parsed === null) {
+            throw new Error('metadata did not parse to an object');
+          }
+          metadata = parsed as Record<string, unknown>;
+        } catch (err) {
+          console.warn(
+            `schema v2 migration: unreadable metadata on document ${row.id} — left live`,
+            err,
+          );
+          continue;
+        }
         const candidate = candidateFromRow(row, metadata);
         // Real native Google Docs are always `type = 'gdocs.doc'` and
         // excluded by the WHERE clause above — but decideFileIndexing has no
