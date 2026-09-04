@@ -544,6 +544,10 @@ export interface Inference {
        *  `{"language":null}` when no speech was found. `timestamps` and
        *  `language` are ignored on a detect run. */
       detectLanguage?: true;
+      /** Use the opt-in accuracy tier (non-turbo large-v3) instead of the
+       *  default. Rejects with AsrModelNotInstalledError / AsrModelUnsupportedError
+       *  (never NoProviderError) when it cannot; never triggers a download. */
+      model?: 'accuracy';
       lane?: Lane;
     },
   ): Promise<string>;

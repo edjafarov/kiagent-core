@@ -115,6 +115,7 @@ export function createInference(logs: LogSink): InferencePlane {
           vad: opts?.vad,
           language: opts?.language,
           detectLanguage: opts?.detectLanguage,
+          model: opts?.model,
         },
         lane,
       });

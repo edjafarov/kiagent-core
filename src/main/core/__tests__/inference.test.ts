@@ -73,12 +73,14 @@ describe('inference plane', () => {
         vad: 'required',
         language: 'uk',
         detectLanguage: true,
+        model: 'accuracy',
       }),
     ).resolves.toBe('asr:hear');
     expect(seen).toMatchObject({
       vad: 'required',
       language: 'uk',
       detectLanguage: true,
+      model: 'accuracy',
     });
   });
 

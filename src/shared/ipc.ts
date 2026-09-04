@@ -330,11 +330,22 @@ export interface Invokes {
        *  this, NOT on status (apple-vision reports non-ready statuses but has
        *  nothing to install). */
       installable: boolean;
+      /** Selectable model variants beyond the provider's default — present
+       *  only for local-asr. */
+      variants?: Array<{
+        id: 'accuracy';
+        label: string;
+        sizeBytes: number;
+        status: ProviderStatus;
+      }>;
     }>;
   };
   /** Start (or retry) the named provider's model download; also re-enables
    *  the SHARED autoInstall consent. Unknown providerId is a no-op. */
-  'inference:install': { req: { providerId: string }; res: void };
+  'inference:install': {
+    req: { providerId: string; variant?: 'accuracy' };
+    res: void;
+  };
   /** Abort EVERY active installer and disable autoInstall until re-enabled
    *  (cancel is global — the consent is one shared pref). */
   'inference:cancel': { req: void; res: void };
