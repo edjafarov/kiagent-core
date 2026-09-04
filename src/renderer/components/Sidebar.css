@@ -14,21 +14,25 @@
   user-select: none;
 }
 
-/* Brand row, right-aligned against the sidebar edge. 18px right inset
-   mirrors the nav column's left inset (8px gutter + 10px item padding). */
+/* Brand row. Windows/Linux put their caption buttons at the window's top
+   RIGHT (over the main pane), so nothing crowds the sidebar's left edge:
+   the mark starts there, on the 18px inset the nav column below uses
+   (8px gutter + 10px item padding), and reads as the head of that column. */
 .kg-sb-head {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   padding: 14px 18px 10px;
   -webkit-app-region: drag;
 }
-/* macOS: the logo sits ON the traffic-lights line — lights span x 12–64,
-   centered at y 25, so a 50px head (same as .kg-topline.mac) centers the
-   mark on that line. 76px left padding keeps the brand clear of the
-   lights even on narrow fits. */
+/* macOS: the traffic lights own the left edge, so the mark is pushed to the
+   sidebar's right edge instead and sits ON the lights line — lights span
+   x 12–64, centered at y 25, so a 50px head (same as .kg-topline.mac)
+   centers the mark on that line. 76px left padding keeps the brand clear of
+   the lights even on narrow fits. */
 .kg-sidebar.mac .kg-sb-head {
   height: 50px;
+  justify-content: flex-end;
   padding: 0 18px 0 76px;
 }
 .kg-sb-brand {
