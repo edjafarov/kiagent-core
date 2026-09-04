@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.82.0](https://github.com/edjafarov/kiagent-core/compare/v0.81.0...v0.82.0) (2026-09-04)
+
+### Features
+
+* **inference:** forward hear model:'accuracy'; inference:install variant + providers variants ([ab2208e](https://github.com/edjafarov/kiagent-core/commit/ab2208e641019a222ea728fe5bcc363e9c3adf50))
+* **local-asr:** accuracy tier descriptor (large-v3 q5_0) and selectAccuracyModel ([6e8d125](https://github.com/edjafarov/kiagent-core/commit/6e8d125adfd60f215350078828d9fe9b0872d458))
+* **local-asr:** hear model:'accuracy' route, explicit accuracy install, variants() status ([ef1b296](https://github.com/edjafarov/kiagent-core/commit/ef1b296f424a753cf02cc56bd7fff4a9cb9cf9e6))
+
 ## [0.81.0](https://github.com/edjafarov/kiagent-core/compare/v0.80.0...v0.81.0) (2026-09-03)
 
 ### Features
