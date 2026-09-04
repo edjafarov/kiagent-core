@@ -574,12 +574,22 @@ function registerIpc(
         supports: prov.supports,
         status: prov.status(),
         installable: installable.installable(prov.id),
+        ...(prov.id === 'local-asr'
+          ? { variants: bundled.localAsr.variants() }
+          : {}),
       })),
-    'inference:install': async ({ providerId }) => {
+    'inference:install': async ({ providerId, variant }) => {
       if (!installable.installable(providerId)) return; // unknown id: no-op
       await p.prefs.patch({
         models: { ...p.prefs.get().models, autoInstall: true },
       });
+      if (variant === 'accuracy') {
+        // Explicit-only: never reached from ensureInstalled(); local-asr is
+        // the only provider with a variant today.
+        if (providerId === 'local-asr')
+          bundled.localAsr.ensureAccuracyInstalled();
+        return;
+      }
       installable.install(providerId);
     },
     'inference:cancel': async () => {

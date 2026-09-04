@@ -77,6 +77,7 @@ export interface SurfaceDeps {
         vad?: 'required';
         language?: string;
         detectLanguage?: true;
+        model?: 'accuracy';
         lane?: 'interactive' | 'background';
       },
     ): Promise<string>;
