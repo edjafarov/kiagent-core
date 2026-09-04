@@ -28,10 +28,11 @@ export function buildTrayMenuTemplate(
 /**
  * Static menu-bar icon with a live context menu. Deliberately minimal
  * compared to the legacy tray (no activity animation, no per-account
- * status): the app keeps running after the window closes (see
- * window-all-closed in main.ts), and this is the affordance that shows
- * that and offers a way out. The caller must hold the returned Tray in a
- * long-lived reference or GC destroys the icon.
+ * status): the app keeps running after the window closes on every desktop
+ * — macOS by way of window-all-closed, Windows and Linux by hiding the
+ * window instead of closing it (close-to-tray.ts) — and this is the
+ * affordance that shows that and offers a way out. The caller must hold the
+ * returned Tray in a long-lived reference or GC destroys the icon.
  *
  * The returned `menu` controller is what `MainProcessApi.ui
  * .addTrayMenuItems` (main-api.ts) delegates to — bundled extensions splice
