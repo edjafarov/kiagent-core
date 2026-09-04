@@ -337,19 +337,28 @@ const MIGRATIONS: Migration[] = [
       const rows = page.all(last) as CandidateRow[];
       if (rows.length === 0) break;
       for (const row of rows) {
-        // A row whose metadata cannot be read as an object is precisely a
-        // row this migration must NOT touch — fail open, never throw: a
-        // thrown error here rolls back the whole version-step transaction,
-        // which leaves `schemaVersion` at 1 forever (this loop is the only
-        // thing that can ever advance it past 1), so every subsequent boot
-        // repeats the same throw. `JSON.parse('null')` SUCCEEDS and yields
-        // `null` — a bare try/catch around parse alone does not catch that;
-        // the guard has to check the parsed VALUE's shape, not just that
-        // parsing didn't throw.
+        // A row whose metadata cannot be read as a (non-array) object is
+        // precisely a row this migration must NOT touch — fail open, never
+        // throw: a thrown error here rolls back the whole version-step
+        // transaction, which leaves `schemaVersion` at 1 forever (this loop
+        // is the only thing that can ever advance it past 1), so every
+        // subsequent boot repeats the same throw. `JSON.parse('null')`
+        // SUCCEEDS and yields `null` — a bare try/catch around parse alone
+        // does not catch that; the guard has to check the parsed VALUE's
+        // shape, not just that parsing didn't throw. An array also passes
+        // `typeof x === 'object' && x !== null` (`typeof [] === 'object'`),
+        // so it needs its own exclusion: every field would resolve to
+        // undefined and decideFileIndexing would archive it as
+        // 'no-extension'/'unsupported' — exactly the unreadable-metadata
+        // case this guard exists to skip, not archive.
         let metadata: Record<string, unknown>;
         try {
           const parsed: unknown = JSON.parse(row.metadata);
-          if (typeof parsed !== 'object' || parsed === null) {
+          if (
+            typeof parsed !== 'object' ||
+            parsed === null ||
+            Array.isArray(parsed)
+          ) {
             throw new Error('metadata did not parse to an object');
           }
           metadata = parsed as Record<string, unknown>;

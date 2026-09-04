@@ -144,16 +144,6 @@ function seedMatrix(db: Database.Database): void {
       size: 60 * 1024 * 1024,
     }),
   );
-  // Metadata that parses to JSON `null` (F1): a shape `JSON.stringify`
-  // never produces, but `json_extract` accepts on insert, so it can and did
-  // reach this table. The migration must skip it (leave it live), never
-  // throw — a throw here rolls back the whole version step and pins
-  // schemaVersion at 1 forever.
-  seedDoc(
-    db,
-    candidateRawMetadata('local-null-metadata', 'acc-local', 'file', 'null'),
-  );
-
   // google-docs `file` rows: mime AND mime_type, size_bytes AND sizeBytes.
   seedDoc(
     db,
@@ -349,7 +339,6 @@ describe('schema v2: archive file-indexability rejects', () => {
     expect(live(db, 'local-mp3')).toBe(true);
     expect(live(db, 'local-zip')).toBe(false);
     expect(live(db, 'local-huge-pdf-size-tier')).toBe(false); // size-tier-3 discriminator
-    expect(live(db, 'local-null-metadata')).toBe(true); // unreadable metadata — skipped, left live
     expect(live(db, 'google-pdf')).toBe(true);
     expect(live(db, 'google-mp3')).toBe(false);
     expect(live(db, 'google-mp4')).toBe(false);
@@ -386,7 +375,6 @@ describe('schema v2: archive file-indexability rejects', () => {
     const liveIds = [
       'local-pdf',
       'local-mp3',
-      'local-null-metadata',
       'google-pdf',
       'google-doc-mistyped-file',
       'google-native-doc',
@@ -424,21 +412,104 @@ describe('schema v2: archive file-indexability rejects', () => {
     }
     expect(schemaVersion(db)).toBe(2);
   });
+});
 
-  it('logs the offending document id for unreadable metadata instead of failing silently', () => {
+/**
+ * F1/N1: metadata the migration cannot read as a genuine object must be
+ * SKIPPED (left live, warned) — never archived, never thrown on. Kept in
+ * its own describe with its own tiny fixture set, deliberately separate
+ * from `seedMatrix` above: these two rows exist purely to make
+ * `console.warn` fire, and folding them into the shared matrix meant every
+ * run of the two tests above printed an unrelated warning + stack trace
+ * (N2). The production warn itself stays unmocked in the first `it()` below
+ * — it is load-bearing for diagnosing a skipped row in a real corpus — and
+ * is only spied on in the second `it()`, which exists specifically to
+ * assert on it.
+ */
+describe('schema v2: unreadable metadata is skipped, not archived', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    migrate(db);
+    seedAccount(db, 'acc-local', 'local-folder');
+    // Parses to JS `null`. `json_extract` accepts the literal string 'null'
+    // on INSERT (unlike genuinely malformed JSON, which the partial indexes
+    // reject at insert time), so this shape reaches the table for real.
+    seedDoc(
+      db,
+      candidateRawMetadata('local-null-metadata', 'acc-local', 'file', 'null'),
+    );
+    // Parses to a JS array. `typeof [] === 'object' && [] !== null`, so a
+    // shape check that only excludes `null` lets an array straight through
+    // — every field then resolves to undefined and decideFileIndexing
+    // archives it as 'no-extension', which is exactly backwards for
+    // metadata this migration cannot actually read.
+    seedDoc(
+      db,
+      candidateRawMetadata(
+        'local-array-metadata',
+        'acc-local',
+        'file',
+        '[1,2]',
+      ),
+    );
+    // Controls seeded AFTER the two hostile rows (by insertion order, so
+    // they page after them too): prove a `continue` on the hostile rows
+    // does not truncate or otherwise disturb the rest of the scan.
+    seedDoc(
+      db,
+      candidate('ctl-live-pdf', 'acc-local', 'file', {
+        mime: 'application/pdf',
+        filename: 'keep.pdf',
+        sizeBytes: 1_000,
+      }),
+    );
+    seedDoc(
+      db,
+      candidate('ctl-archived-zip', 'acc-local', 'file', {
+        mime: 'application/zip',
+        filename: 'drop.zip',
+        sizeBytes: 1_000,
+      }),
+    );
+    db.prepare(`UPDATE meta SET value='1' WHERE key='schemaVersion'`).run();
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('leaves both null- and array-metadata rows live, archives the control row around them, and still reaches schemaVersion 2', () => {
+    migrate(db);
+
+    expect(live(db, 'local-null-metadata')).toBe(true);
+    expect(changesFor(db, 'local-null-metadata')).toHaveLength(0);
+    expect(live(db, 'local-array-metadata')).toBe(true);
+    expect(changesFor(db, 'local-array-metadata')).toHaveLength(0);
+    expect(live(db, 'ctl-live-pdf')).toBe(true);
+    expect(live(db, 'ctl-archived-zip')).toBe(false);
+    expect(changesFor(db, 'ctl-archived-zip')).toHaveLength(1);
+
+    expect(schemaVersion(db)).toBe(2);
+  });
+
+  it('logs the offending document id for both null- and array-metadata rows', () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     migrate(db);
     // Read `.mock.calls` BEFORE mockRestore(): mockRestore() also resets the
     // mock (clears recorded calls), so asserting after restoring would
     // always see an empty array regardless of what actually happened.
-    const loggedOffendingId = warnSpy.mock.calls.some((args) =>
-      args.some(
-        (a) => typeof a === 'string' && a.includes('local-null-metadata'),
-      ),
-    );
+    const warnedFor = (id: string) =>
+      warnSpy.mock.calls.some((args) =>
+        args.some((a) => typeof a === 'string' && a.includes(id)),
+      );
+    const nullWarned = warnedFor('local-null-metadata');
+    const arrayWarned = warnedFor('local-array-metadata');
     warnSpy.mockRestore();
 
-    expect(loggedOffendingId).toBe(true);
+    expect(nullWarned).toBe(true);
+    expect(arrayWarned).toBe(true);
   });
 });
 
