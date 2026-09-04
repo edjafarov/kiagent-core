@@ -13,8 +13,37 @@ import { downloadModel, modelFilesPresent } from '../local-llm/downloader';
 import { modelDir } from '../local-llm/models';
 import type { ModelDescriptor } from '../local-llm/models';
 import { checkAsrCapability } from './capability';
-import { asrAccel, selectAsrModel } from './models';
+import {
+  asrAccel,
+  selectAccuracyModel,
+  selectAsrModel,
+  WHISPER_LARGE_V3_Q5_0,
+} from './models';
 import { runWhisperCli, WHISPER_LANGUAGES } from './whisper-cli';
+
+/** `hear({ model: 'accuracy' })` on a host whose accuracy model is not on
+ *  disk. Deliberately NOT `NoProviderError` — that name parks a meeting as
+ *  waiting-asr; a missing accuracy tier is a per-span "skipped", never a
+ *  parked meeting. */
+export class AsrModelNotInstalledError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AsrModelNotInstalledError';
+  }
+}
+/** `hear({ model: 'accuracy' })` on a host with no supported accuracy tier. */
+export class AsrModelUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AsrModelUnsupportedError';
+  }
+}
+export interface AsrVariant {
+  id: 'accuracy';
+  label: string;
+  sizeBytes: number;
+  status: ProviderStatus;
+}
 
 export interface LocalAsrProvider extends InferenceProvider {
   ensureInstalled(): void;
@@ -25,6 +54,9 @@ export interface LocalAsrProvider extends InferenceProvider {
     p: string,
     opts: { format: 'wav' | 'mp3'; timestamps?: boolean },
   ): Promise<string>;
+  /** Explicit, never auto-installed (spec: selective accuracy retry). */
+  ensureAccuracyInstalled(): void;
+  variants(): AsrVariant[];
 }
 
 interface QueuedJob {
@@ -58,7 +90,13 @@ export function createLocalAsrProvider(deps: {
   const capability = checkAsrCapability(deps.binaryPath, deps.binaryPresent);
   // Whisper tiering is fully sync (no async accel detect like llama's):
   // platform decides metal-vs-cpu, RAM decides the tier. Resolved once.
-  const model: ModelDescriptor = selectAsrModel({
+  const defaultModel: ModelDescriptor = selectAsrModel({
+    accel: asrAccel(probes.platform),
+    totalMemBytes: probes.totalMemBytes,
+  });
+  // Opt-in accuracy tier (spec: selective accuracy retry). Null on a host
+  // with no supported tier (non-metal, or <16 GiB RAM).
+  const accuracyModel: ModelDescriptor | null = selectAccuracyModel({
     accel: asrAccel(probes.platform),
     totalMemBytes: probes.totalMemBytes,
   });
@@ -67,9 +105,13 @@ export function createLocalAsrProvider(deps: {
   let lastError: string | null = null;
   let installing: AbortController | null = null;
   let closing = false;
+  let accuracyPct: number | null = null;
+  let accuracyError: string | null = null;
+  let installingAccuracy: AbortController | null = null;
 
-  const installed = (): boolean =>
-    filesPresent(model, modelDir(deps.asrModelsDir, model.id));
+  const installedModel = (m: ModelDescriptor): boolean =>
+    filesPresent(m, modelDir(deps.asrModelsDir, m.id));
+  const installed = (): boolean => installedModel(defaultModel);
 
   // ── single-flight ─────────────────────────────────────────────────────────
   // One whisper-cli at a time: a second concurrent request queues rather than
@@ -139,6 +181,7 @@ export function createLocalAsrProvider(deps: {
       detectLanguage?: boolean;
     },
     vadModelPath: string | undefined,
+    which: ModelDescriptor = defaultModel,
   ): Promise<string> =>
     new Promise<string>((resolve, reject) => {
       if (closing) {
@@ -152,7 +195,7 @@ export function createLocalAsrProvider(deps: {
             reject(new Error('local-asr disposed — app quitting'));
             return;
           }
-          if (!installed()) {
+          if (!installedModel(which)) {
             reject(new Error('local-asr model not installed'));
             return;
           }
@@ -162,8 +205,8 @@ export function createLocalAsrProvider(deps: {
             const text = await runCli({
               binaryPath: deps.binaryPath,
               modelPath: path.join(
-                modelDir(deps.asrModelsDir, model.id),
-                model.files[0].name,
+                modelDir(deps.asrModelsDir, which.id),
+                which.files[0].name,
               ),
               inputPath: p,
               timestamps: opts.timestamps === true,
@@ -210,12 +253,12 @@ export function createLocalAsrProvider(deps: {
     lastError = null;
     void (async () => {
       try {
-        const dest = modelDir(deps.asrModelsDir, model.id);
+        const dest = modelDir(deps.asrModelsDir, defaultModel.id);
         deps.log(
           'info',
-          `downloading ${model.id} (${model.files[0].sizeBytes} bytes)`,
+          `downloading ${defaultModel.id} (${defaultModel.files[0].sizeBytes} bytes)`,
         );
-        await download(model, dest, {
+        await download(defaultModel, dest, {
           signal: abort.signal,
           onProgress: (received, total) => {
             if (installing === abort) {
@@ -223,7 +266,7 @@ export function createLocalAsrProvider(deps: {
             }
           },
         });
-        deps.log('info', `${model.id} ready`);
+        deps.log('info', `${defaultModel.id} ready`);
       } catch (err) {
         if (!abort.signal.aborted && installing === abort) {
           lastError = String(err instanceof Error ? err.message : err);
@@ -239,6 +282,65 @@ export function createLocalAsrProvider(deps: {
         }
       }
     })();
+  };
+
+  // Explicit-only counterpart to ensureInstalled: no autoInstall gate — the
+  // accuracy tier is opt-in per spec, never pulled down automatically.
+  const ensureAccuracyInstalled = (): void => {
+    if (installingAccuracy) return;
+    if (closing) return;
+    if (!capability.ok) return;
+    if (accuracyModel === null) return;
+    if (installedModel(accuracyModel)) return;
+    const abort = new AbortController();
+    installingAccuracy = abort;
+    accuracyPct = 0;
+    accuracyError = null;
+    const target = accuracyModel;
+    void (async () => {
+      try {
+        const dest = modelDir(deps.asrModelsDir, target.id);
+        deps.log(
+          'info',
+          `downloading ${target.id} (${target.files[0].sizeBytes} bytes)`,
+        );
+        await download(target, dest, {
+          signal: abort.signal,
+          onProgress: (received, total) => {
+            if (installingAccuracy === abort) {
+              accuracyPct = total > 0 ? (received / total) * 100 : 0;
+            }
+          },
+        });
+        deps.log('info', `${target.id} ready`);
+      } catch (err) {
+        if (!abort.signal.aborted && installingAccuracy === abort) {
+          accuracyError = String(err instanceof Error ? err.message : err);
+          deps.log(
+            'warn',
+            `asr accuracy model install failed: ${accuracyError}`,
+          );
+        }
+      } finally {
+        if (installingAccuracy === abort) {
+          accuracyPct = null;
+          installingAccuracy = null;
+        }
+      }
+    })();
+  };
+
+  const variants = (): AsrVariant[] => {
+    const { label } = WHISPER_LARGE_V3_Q5_0;
+    const { sizeBytes } = WHISPER_LARGE_V3_Q5_0.files[0];
+    let status: ProviderStatus;
+    if (!capability.ok || accuracyModel === null) status = 'unsupported';
+    else if (accuracyPct !== null)
+      status = { downloading: { pct: accuracyPct } };
+    else if (accuracyError) status = { error: accuracyError };
+    else if (installedModel(accuracyModel)) status = 'ready';
+    else status = 'standby';
+    return [{ id: 'accuracy', label, sizeBytes, status }];
   };
 
   return {
@@ -258,15 +360,23 @@ export function createLocalAsrProvider(deps: {
       // The PUBLIC hear seam stays byte-based (extensions reach it through
       // CapSurfaces — a path API there would be an arbitrary-file-read hole).
       // Extension audio payloads are small; write to a temp file and delegate.
-      const { audio, format, timestamps, vad, language, detectLanguage } =
-        req.payload as {
-          audio: Uint8Array;
-          format?: 'wav' | 'mp3';
-          timestamps?: unknown;
-          vad?: unknown;
-          language?: unknown;
-          detectLanguage?: unknown;
-        };
+      const {
+        audio,
+        format,
+        timestamps,
+        vad,
+        language,
+        detectLanguage,
+        model,
+      } = req.payload as {
+        audio: Uint8Array;
+        format?: 'wav' | 'mp3';
+        timestamps?: unknown;
+        vad?: unknown;
+        language?: unknown;
+        detectLanguage?: unknown;
+        model?: unknown;
+      };
       // ALLOWLIST, never sanitize. The `'wav' | 'mp3'` annotation is erased at
       // runtime: InferenceProvider.handle takes `payload: unknown` and the
       // extension RPC forwards caller arguments verbatim, so a third-party
@@ -289,6 +399,23 @@ export function createLocalAsrProvider(deps: {
           ? language
           : undefined;
       const detect: boolean = detectLanguage === true;
+      // Same allowlist discipline: any value other than exactly 'accuracy'
+      // (including a junk string) is treated as absent (default tier).
+      const useAccuracy = model === 'accuracy';
+      let which: ModelDescriptor = defaultModel;
+      if (useAccuracy) {
+        if (accuracyModel === null) {
+          throw new AsrModelUnsupportedError(
+            'local-asr accuracy model unsupported on this host (needs a Mac with Metal and 16 GB of memory)',
+          );
+        }
+        if (!installedModel(accuracyModel)) {
+          throw new AsrModelNotInstalledError(
+            `local-asr accuracy model not installed (${accuracyModel.id})`,
+          );
+        }
+        which = accuracyModel;
+      }
       // Resolve (and, if required, fail closed) BEFORE writing the temp
       // file — no point writing audio we already know we won't transcribe.
       const vadPath = vadRequired ? requireVadModel() : undefined;
@@ -318,17 +445,24 @@ export function createLocalAsrProvider(deps: {
             detectLanguage: detect,
           },
           vadRequired ? vadPath : vadModelForHear(),
+          which,
         );
       } finally {
         await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
       }
     },
     ensureInstalled,
+    ensureAccuracyInstalled,
+    variants,
     async cancelInstall() {
       installing?.abort();
       installing = null;
       downloadPct = null;
       lastError = null;
+      installingAccuracy?.abort();
+      installingAccuracy = null;
+      accuracyPct = null;
+      accuracyError = null;
     },
     async dispose() {
       // (1) permanent closing flag, (2) reject every queued waiter and any
@@ -339,6 +473,9 @@ export function createLocalAsrProvider(deps: {
       installing?.abort();
       installing = null;
       downloadPct = null;
+      installingAccuracy?.abort();
+      installingAccuracy = null;
+      accuracyPct = null;
       while (queue.length > 0) {
         queue.shift()!.reject(new Error('local-asr disposed — app quitting'));
       }

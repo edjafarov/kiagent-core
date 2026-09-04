@@ -895,4 +895,229 @@ describe('LocalAsrProvider', () => {
     await provider.transcribeFile('/podcast.mp3', { format: 'mp3' });
     expect(deps.runCli.mock.calls[0][0].vadModelPath).toBeUndefined();
   });
+
+  describe('accuracy variant (spec: selective accuracy retry)', () => {
+    const ACC = 'whisper-large-v3-q5_0';
+
+    it('variants() reports standby when supported and not installed, ready when installed, unsupported on cpu / <16 GiB', () => {
+      const dir = path.join('/models', ACC);
+      const std = createLocalAsrProvider(makeDeps({ asrModelsDir: '/models' }));
+      expect(std.variants()).toEqual([
+        {
+          id: 'accuracy',
+          label: 'Whisper large-v3 (5-bit, accuracy)',
+          sizeBytes: 1081140203,
+          status: 'standby',
+        },
+      ]);
+      const { fn } = keyedFilesPresent([dir]);
+      const ready = createLocalAsrProvider(
+        makeDeps({ asrModelsDir: '/models', filesPresent: fn }),
+      );
+      expect(ready.variants()[0].status).toBe('ready');
+      const cpu = createLocalAsrProvider(
+        makeDeps({
+          probes: { platform: 'win32', totalMemBytes: 64 * 1024 ** 3 },
+        }),
+      );
+      expect(cpu.variants()[0].status).toBe('unsupported');
+      const small = createLocalAsrProvider(
+        makeDeps({
+          probes: { platform: 'darwin', totalMemBytes: 8 * 1024 ** 3 },
+        }),
+      );
+      expect(small.variants()[0].status).toBe('unsupported');
+    });
+
+    it('hear with model:"accuracy" uses the accuracy model path when installed', async () => {
+      const { fn } = keyedFilesPresent([
+        path.join('/models', 'whisper-large-v3-turbo-q5_0'),
+        path.join('/models', ACC),
+      ]);
+      const runCli = jest.fn(async (_args: any) => 'accurate');
+      const p = createLocalAsrProvider(
+        makeDeps({ asrModelsDir: '/models', filesPresent: fn, runCli }),
+      );
+      await expect(
+        p.handle({
+          kind: 'hear',
+          payload: {
+            audio: new Uint8Array([1]),
+            format: 'wav',
+            model: 'accuracy',
+          },
+          lane: 'interactive',
+        }),
+      ).resolves.toBe('accurate');
+      expect(runCli.mock.calls[0][0].modelPath).toBe(
+        path.join('/models', ACC, 'ggml-large-v3-q5_0.bin'),
+      );
+    });
+
+    it('a junk model value is treated as absent (default tier)', async () => {
+      const { fn } = keyedFilesPresent([
+        path.join('/models', 'whisper-large-v3-turbo-q5_0'),
+      ]);
+      const runCli = jest.fn(async (_args: any) => 'default');
+      const p = createLocalAsrProvider(
+        makeDeps({ asrModelsDir: '/models', filesPresent: fn, runCli }),
+      );
+      await expect(
+        p.handle({
+          kind: 'hear',
+          payload: {
+            audio: new Uint8Array([1]),
+            format: 'wav',
+            model: 'ACCURACY',
+          },
+          lane: 'interactive',
+        }),
+      ).resolves.toBe('default');
+      expect(runCli.mock.calls[0][0].modelPath).toContain(
+        'whisper-large-v3-turbo-q5_0',
+      );
+    });
+
+    it('rejects with AsrModelNotInstalledError BEFORE writing any temp file when the accuracy model is absent', async () => {
+      const { fn } = keyedFilesPresent([
+        path.join('/models', 'whisper-large-v3-turbo-q5_0'),
+      ]);
+      const runCli = jest.fn(async () => 'x');
+      const p = createLocalAsrProvider(
+        makeDeps({ asrModelsDir: '/models', filesPresent: fn, runCli }),
+      );
+      const before = fs
+        .readdirSync(tmpdir())
+        .filter((n) => n.startsWith('kiagent-asr-hear-')).length;
+      await expect(
+        p.handle({
+          kind: 'hear',
+          payload: {
+            audio: new Uint8Array([1]),
+            format: 'wav',
+            model: 'accuracy',
+          },
+          lane: 'interactive',
+        }),
+      ).rejects.toMatchObject({ name: 'AsrModelNotInstalledError' });
+      expect(runCli).not.toHaveBeenCalled();
+      expect(
+        fs
+          .readdirSync(tmpdir())
+          .filter((n) => n.startsWith('kiagent-asr-hear-')).length,
+      ).toBe(before);
+    });
+
+    it('rejects with AsrModelUnsupportedError on a host with no accuracy tier', async () => {
+      const p = createLocalAsrProvider(
+        makeDeps({
+          probes: { platform: 'win32', totalMemBytes: 64 * 1024 ** 3 },
+        }),
+      );
+      await expect(
+        p.handle({
+          kind: 'hear',
+          payload: {
+            audio: new Uint8Array([1]),
+            format: 'wav',
+            model: 'accuracy',
+          },
+          lane: 'interactive',
+        }),
+      ).rejects.toMatchObject({ name: 'AsrModelUnsupportedError' });
+    });
+
+    it('ensureAccuracyInstalled downloads into its own dir even when autoInstall is false, and never runs from ensureInstalled', async () => {
+      const download = jest.fn(async (_m: any, _d: string, _o: any) => {});
+      const p = createLocalAsrProvider(
+        makeDeps({
+          asrModelsDir: '/models',
+          download,
+          prefs: { models: { autoInstall: false } },
+        }),
+      );
+      p.ensureInstalled();
+      await tick();
+      expect(download).not.toHaveBeenCalled();
+      p.ensureAccuracyInstalled();
+      expect(p.variants()[0].status).toEqual({ downloading: { pct: 0 } });
+      await tick();
+      expect(download).toHaveBeenCalledTimes(1);
+      expect(download.mock.calls[0][0].id).toBe(ACC);
+      expect(download.mock.calls[0][1]).toBe(path.join('/models', ACC));
+    });
+
+    it('ensureAccuracyInstalled is a no-op when unsupported or already installed', async () => {
+      const download = jest.fn(async () => {});
+      const cpu = createLocalAsrProvider(
+        makeDeps({
+          download,
+          probes: { platform: 'linux', totalMemBytes: 64 * 1024 ** 3 },
+        }),
+      );
+      cpu.ensureAccuracyInstalled();
+      await tick();
+      expect(download).not.toHaveBeenCalled();
+      const { fn } = keyedFilesPresent([path.join('/models', ACC)]);
+      const ready = createLocalAsrProvider(
+        makeDeps({ asrModelsDir: '/models', download, filesPresent: fn }),
+      );
+      ready.ensureAccuracyInstalled();
+      await tick();
+      expect(download).not.toHaveBeenCalled();
+    });
+
+    it('cancelInstall aborts the accuracy download and variants() returns to standby', async () => {
+      let seen: AbortSignal | undefined;
+      const download = jest.fn(
+        (_m: unknown, _d: string, o: { signal: AbortSignal }) => {
+          seen = o.signal;
+          return new Promise<void>((_r, rej) =>
+            o.signal.addEventListener('abort', () => rej(new Error('aborted'))),
+          );
+        },
+      );
+      const p = createLocalAsrProvider(
+        makeDeps({ asrModelsDir: '/models', download }),
+      );
+      p.ensureAccuracyInstalled();
+      await tick();
+      await p.cancelInstall();
+      expect(seen?.aborted).toBe(true);
+      await tick();
+      expect(p.variants()[0].status).toBe('standby');
+    });
+
+    it('a failed accuracy download reports {error} on the variant only; the default status is untouched', async () => {
+      const download = jest.fn(async () => {
+        throw new Error('boom');
+      });
+      const p = createLocalAsrProvider(
+        makeDeps({ asrModelsDir: '/models', download }),
+      );
+      p.ensureAccuracyInstalled();
+      await tick();
+      expect(p.variants()[0].status).toEqual({ error: 'boom' });
+      expect(p.status()).toBe('standby');
+    });
+
+    it('dispose aborts an in-flight accuracy install', async () => {
+      let seen: AbortSignal | undefined;
+      const download = jest.fn(
+        (_m: unknown, _d: string, o: { signal: AbortSignal }) => {
+          seen = o.signal;
+          return new Promise<void>((_r, rej) =>
+            o.signal.addEventListener('abort', () => rej(new Error('aborted'))),
+          );
+        },
+      );
+      const p = createLocalAsrProvider(
+        makeDeps({ asrModelsDir: '/models', download }),
+      );
+      p.ensureAccuracyInstalled();
+      await tick();
+      await p.dispose();
+      expect(seen?.aborted).toBe(true);
+    });
+  });
 });
