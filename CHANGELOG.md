@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.82.1](https://github.com/edjafarov/kiagent-core/compare/v0.82.0...v0.82.1) (2026-09-04)
+
+### Bug Fixes
+
+* **main:** closing the window hides to the tray on Windows/Linux ([9c8c027](https://github.com/edjafarov/kiagent-core/commit/9c8c027e82dcbb388aa57074c7e1ffbff0f8cf1f))
+* **shell:** start the sidebar brand at the left edge off macOS ([180cedc](https://github.com/edjafarov/kiagent-core/commit/180cedc79c78e0f2800f7b946d9a2f948eec0355))
+
 ## [0.82.0](https://github.com/edjafarov/kiagent-core/compare/v0.81.0...v0.82.0) (2026-09-04)
 
 ### Features
