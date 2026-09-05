@@ -470,10 +470,15 @@ export interface FolderScopeUpdate<Cursor = unknown> {
    *  live row). Re-attribution costs one UPDATE, no network, and no
    *  searchability gap.
    *
-   *  `to` must be a root the new `config.folderRoots` still contains, and
-   *  `from` must NOT also appear in `archiveScopeRootIds` — core THROWS on
-   *  that contradiction rather than picking an order, because a source that
-   *  says both about one root has a bug. Optional; absent means "none", and
+   *  `to` is EXPECTED to be a root the new `config.folderRoots` still
+   *  contains — but core does not validate that, and cannot: it is the
+   *  source's containment claim, and core deriving containment for itself is
+   *  the one thing R8/A-1 forbids. The ONLY check is the one below: `from`
+   *  must not also appear in `archiveScopeRootIds`, and core THROWS on that
+   *  contradiction rather than picking an order, because a source that says
+   *  both about one root has a bug. (Stated this precisely on purpose — D1
+   *  and D2 both trace to a doc block asserting something the code did not
+   *  enforce.) Optional; absent means "none", and
    *  the store applies it inside the same transaction as the archive, before
    *  it. It writes NO `changes` row: `scope_root_id` is not user-visible
    *  content and must not churn the feed. */

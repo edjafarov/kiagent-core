@@ -69,8 +69,9 @@ export type ConnectEvent =
   | { flowId: string; kind: 'reconnected'; accountId: AccountId }
   /** Manage-folders terminal. The three counts are FOLDER counts, derived by
    *  the connect broker from the before/after `folderRoots` sets — NOT
-   *  document counts. `applyFolderScope` returns `{archived, remaining}`
-   *  document counts; those are logged (A-7) and never sent here. */
+   *  document counts. `applyFolderScope` returns `{archived, reattributed,
+   *  remaining, stale}`; the document counts in it are logged (A-7) and never
+   *  sent here. */
   | {
       flowId: string;
       kind: 'scope-saved';

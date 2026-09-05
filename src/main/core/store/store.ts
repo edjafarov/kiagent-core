@@ -156,7 +156,10 @@ export interface CoreStore extends Store {
    *  what OOM'd the main process on a 3.7M-document account.
    *  `input.archiveScopeRootIds` is the explicit IN-list computed by the
    *  SOURCE (R8) — core never set-differences over `folderRoots`, and an
-   *  empty array (archive nothing) is the common, correct input.
+   *  empty array (archive nothing) is legal. `input.reattributeScopeRoots`
+   *  is the same source's answer for the removed roots a RETAINED root still
+   *  covers (C-46/D5): those are re-stamped, not archived, and naming one
+   *  root in both arrays THROWS.
    *  `{stale: true}` and no write means the stored config moved since
    *  `expectedConfigJson` was read.
    *

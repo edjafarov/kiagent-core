@@ -99,6 +99,10 @@ export interface FolderScopeInput {
    *  being required: a source that has nothing to re-attribute says `[]` out
    *  loud, and a caller cannot drop the field by accident.
    *
+   *  `to` is NOT validated against the new `folderRoots`: core does not
+   *  derive containment (R8/A-1), so it has no standing to second-guess the
+   *  source's claim. The one check is the contradiction guard.
+   *
    *  `applyFolderScope` THROWS when any `from` also appears in
    *  `archiveScopeRootIds`. That is a contradictory instruction — the source
    *  has decided the same root both leaves scope and does not — and picking
