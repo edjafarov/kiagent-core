@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+
 import type { Cadence, CommitBatch } from '@shared/contracts';
 
 import {
@@ -70,5 +73,16 @@ describe('archive sweep', () => {
         'purging documents archived before 2026-03-02T00:00:00.000Z',
       ],
     ]);
+  });
+
+  it('is actually called from bootCore', () => {
+    // The one line that makes any of this run, and the only one no behavioural
+    // test can reach: bootCore needs a real DB worker. Delete the call and
+    // every other test here stays green while the sweep silently never fires.
+    // Pinned by source text, the same instrument `source-registry.test.ts`
+    // and `apply-overlay.test.mjs` use for wiring that tests cannot execute.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'boot.ts'), 'utf8');
+    const body = src.slice(src.indexOf('export async function bootCore'));
+    expect(body).toContain('registerArchiveSweep({');
   });
 });
