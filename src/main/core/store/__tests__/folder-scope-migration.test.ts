@@ -667,6 +667,55 @@ describe('schema v3: scope_root_id attribution, the catch-all rule and C-27', ()
     expect(live(db, 'posix-both-bs')).toBe(true);
   });
 
+  it.each([{ paths: ['/A\\B', '/A/B'] }, { paths: ['/A/B', '/A\\B'] }])(
+    'keeps distinct POSIX roots correctly attributed in order $paths',
+    ({ paths }) => {
+      seedAccount(db, 'posix-order', 'local-folder', { paths });
+      for (const [index, root] of paths.entries()) {
+        seedDoc(
+          db,
+          doc(
+            `posix-order-${index}`,
+            'posix-order',
+            'file',
+            meta({
+              absPath: `${root}/file.txt`,
+            }),
+          ),
+        );
+      }
+
+      migrate(db);
+
+      for (const [index, root] of paths.entries()) {
+        expect(scopeOf(db, `posix-order-${index}`)).toBe(root);
+        expect(live(db, `posix-order-${index}`)).toBe(true);
+        expect(changesFor(db, `posix-order-${index}`)).toHaveLength(0);
+      }
+    },
+  );
+
+  it.each([
+    '//server/share/Docs/file.txt',
+    '\\\\server\\share\\Docs\\file.txt',
+  ])(
+    'attributes UNC document %s without rewriting the stored root',
+    (absPath) => {
+      const root = '\\\\server\\share\\Docs';
+      seedAccount(db, 'unc-account', 'local-folder', { paths: [root] });
+      seedDoc(
+        db,
+        doc('unc-document', 'unc-account', 'file', meta({ absPath })),
+      );
+
+      migrate(db);
+
+      expect(scopeOf(db, 'unc-document')).toBe(root);
+      expect(live(db, 'unc-document')).toBe(true);
+      expect(changesFor(db, 'unc-document')).toHaveLength(0);
+    },
+  );
+
   it('leaves gmail and already-archived rows completely untouched', () => {
     migrate(db);
 

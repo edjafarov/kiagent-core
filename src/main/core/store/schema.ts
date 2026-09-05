@@ -399,15 +399,11 @@ function v3Attribute(
     // containment test — and `rootId` is returned UNnormalized (B-7).
     const absNorm = normalizePathSeparators(abs);
     for (const rootId of scope.rootIds) {
-      // C-46 addendum #3 — the normalization is GATED on the root actually
-      // being a Windows spelling. `\` is a legal character in a POSIX
-      // filename, so cross-normalizing unconditionally would make a directory
-      // literally named `A\B` match the unrelated root `/A/B` and stamp it
-      // with the wrong root — measured, and a later save removing `/A/B` would
-      // then archive a genuinely in-scope document. Gate on the backslash
-      // itself, NOT on a drive-letter regex: that would miss UNC roots
-      // (`\\server\share`).
-      const windowsish = rootId.includes('\\');
+      // Only Windows drive-absolute and backslash-prefixed UNC roots use
+      // interchangeable separators. A backslash inside a POSIX root is a
+      // literal filename character: /A\B and /A/B must remain distinct.
+      const windowsish =
+        /^[A-Za-z]:[\\/]/.test(rootId) || rootId.startsWith('\\\\');
       const p = windowsish ? absNorm : abs;
       const r = windowsish ? normalizePathSeparators(rootId) : rootId;
       if (isUnder(p, r)) return { kind: 'root', rootId };
