@@ -456,6 +456,13 @@ dl.kv dd {
   gap: 8px;
   padding: 6px 2px;
 }
+.tf-name {
+  font-size: 12px;
+  white-space: nowrap;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tf-path {
   flex: 1;
   min-width: 0;

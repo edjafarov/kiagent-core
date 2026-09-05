@@ -18,11 +18,18 @@ export function SourcesList(props: {
 }): React.ReactElement {
   const accountEntries = useAppState((s) => s.accounts);
   const ready = useAppState((s) => s.ready);
-  // null = not adding; initialSourceId set = the ErrorCard Reconnect path,
-  // which skips the tile grid and re-enters that source's connect flow.
-  const [adding, setAdding] = useState<{ initialSourceId?: string } | null>(
-    null,
-  );
+  // null = not adding; `reconnect` set = the ErrorCard Reconnect path, which
+  // skips the tile grid and names THAT EXACT ACCOUNT. The old
+  // `initialSourceId` carried only `a.source`, so reconnect was really
+  // accounts:add on a source id and relied on createAccount's
+  // (source, identifier) upsert to land back on the same account — the
+  // heuristic this feature deletes for every source that can reauthenticate,
+  // and keeps as the EXPLICIT fallback for the ones that cannot (C-9). Which
+  // of the two runs is decided in AddSourcePanel, off the descriptor; this
+  // component only carries the account's identity.
+  const [adding, setAdding] = useState<{
+    reconnect?: { accountId: AccountId; sourceId: string; identifier: string };
+  } | null>(null);
   // Drives the refresh-icon spin for a fixed beat so "Sync all" reads as a
   // real action even when every accounts:sync-now call resolves near-instantly.
   const [syncSpin, setSyncSpin] = useState(false);
@@ -64,7 +71,7 @@ export function SourcesList(props: {
       <GetStartedPanel onOpenConnection={props.onOpenConnection} />
       {adding ? (
         <AddSourcePanel
-          initialSourceId={adding.initialSourceId}
+          reconnect={adding.reconnect}
           onDone={(accountId) => {
             setAdding(null);
             if (accountId) props.onOpenDetail(accountId);
@@ -76,7 +83,15 @@ export function SourcesList(props: {
             <ErrorCard
               key={a.id}
               account={a}
-              onReconnect={() => setAdding({ initialSourceId: a.source })}
+              onReconnect={() =>
+                setAdding({
+                  reconnect: {
+                    accountId: a.id,
+                    sourceId: a.source,
+                    identifier: a.identifier,
+                  },
+                })
+              }
             />
           ))}
           {healthyEntries.length > 0 || erroring.length > 0 ? (

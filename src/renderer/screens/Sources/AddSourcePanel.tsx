@@ -1,102 +1,86 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ConnectEvent } from '@shared/ipc';
-import type { Account, AccountId } from '@shared/contracts';
-import { coveringRoots } from '@shared/folder-paths';
+import type { Account, AccountId, FolderNode } from '@shared/contracts';
 import { Icon } from '@shared/web-ui/icon-sprite';
 import { useAppState } from '@renderer/state/app-state';
 import { FolderPickerField } from '@renderer/components/FolderPickerField';
 import { FolderPickerModal } from '@renderer/components/folder-picker/FolderPickerModal';
 import { connectorMeta, sourceLabel } from './connector-meta';
-import { createConnectPickerAdapter } from './connect-picker-adapter';
+import {
+  createConnectPickerAdapter,
+  type PickerRequest,
+} from './connect-picker-adapter';
 import { schemaFields, schemaGuidance } from './prompt-guidance';
 import { GuidanceSteps } from './GuidanceSteps';
 import { SourceIcon } from './SourceIcon';
 import { useSourceDescriptors } from './sources-registry';
+import { openFlow } from './flow-client';
 
 /**
  * In-place "add a source" panel — swapped in over the Sources body, matching
  * the legacy AddSource screen's non-modal tile-grid + wizard (ui-inventory.md
  * §2.7, docs/screens/add-source.html). A tile per registered `SourceDescriptor`
- * (icon + label from connector-meta.ts), then `accounts:add` + a `push:connect`
- * listener rendering whatever the flow sends: a status line, a QR code, a
- * schema-driven prompt form, done, or error. A schema with exactly one
- * `folder-paths` (array) field (local-folder) skips the form for the in-app
- * multi-select folder picker instead, confirming the whole selection as ONE
- * prompt answer (see `submitFolderPaths` below) — connect()'s upsert then
- * folds it into the single machine account. Every other schema keeps the
- * classic form, which still renders `FolderPickerField` for a singular
- * `folder-path` field. Flow states render as a centered wizard card; guidance
- * steps come from the schema's x-steps (prompt-guidance.ts).
+ * (icon + label from connector-meta.ts) starts a CONNECT flow
+ * (`accounts:add`); the ErrorCard/SourceDetail Reconnect paths start a
+ * RECONNECT flow (`accounts:start-reconnect`) or, for a source with no
+ * `reauthenticate`, fall back to the same connect route (C-9); and A-4's
+ * machine-scoped carve-out routes an existing local-folder account's "Add" to
+ * a MANAGE flow (`accounts:start-manage-folders`) instead of upserting over
+ * it. All three funnel through one `push:connect` listener rendering whatever
+ * the flow sends: a status line, a QR code, a schema-driven prompt form, a
+ * folder picker, or one of the three terminals (done / reconnected /
+ * scope-saved) / error. Flow states render as a centered wizard card;
+ * guidance steps come from the schema's x-steps (prompt-guidance.ts).
  */
+
+/**
+ * Sources whose `connect()` returns a FIXED identifier, so `createAccount`'s
+ * `ON CONFLICT(source, identifier) DO UPDATE` (store.ts:1059-1064) can never make a
+ * second account: local-folder pins `identifier` to
+ * `MACHINE_IDENTIFIER = 'this-machine'` (local-folder-source.ts:47, :74-113).
+ * Adding a folder through `accounts:add` therefore REPLACES the existing
+ * account's config wholesale and re-drives reconciliation
+ * (engine.ts:546-556, `reconcileAllowances.add` at :555), archiving every root
+ * not in the new config — a silent corpus wipe on the ordinary two-click
+ * "add another folder" (A-4).
+ *
+ * For these sources a second "add" is really a MANAGE, so `pick` routes it to
+ * the account-scoped folder-scope flow. Deliberately NOT keyed on
+ * `descriptor.multiAccount`: local-folder declares `multiAccount: true`
+ * (local-folder-source.ts:33-43) while pinning a constant identifier, so that
+ * flag says nothing about this hazard.
+ */
+const MACHINE_SCOPED_SOURCE_IDS: ReadonlySet<string> = new Set([
+  'local-folder',
+]);
 
 interface FlowState {
   flowId: string;
   sourceId: string;
+  /** Which flow this is. Drives the wizard heading and names the terminal
+   *  event to expect: `connect` → `done`, `reconnect` → `reconnected`,
+   *  `manage` → `scope-saved`. */
+  mode: 'connect' | 'reconnect' | 'manage';
   status?: string;
   qr?: string;
   prompt?: { requestId: string; schema: unknown };
-  /** An AuthChannel.pickFolders in progress — renders FolderPickerModal over
-   *  a source-served tree (see connect-picker-adapter.ts). */
-  picker?: {
-    requestId: string;
+  /** A pickFolders in progress — renders FolderPickerModal over a
+   *  source-served tree (see connect-picker-adapter.ts). A-6's PickerRequest
+   *  with the wire's required fields narrowed; `selected` is the complete
+   *  current covering set, pre-checked and REMOVABLE, and `purpose` drives the
+   *  modal's copy. */
+  picker?: PickerRequest & {
     multiSelect: boolean;
-    modes: Array<{ key: string; label: string }>;
+    selected: FolderNode[];
+    purpose: 'connect' | 'manage';
   };
   error?: string;
   done?: Account;
-}
-
-/**
- * Starts a connect flow and forwards its events to `onEvent`. Subscribes to
- * push:connect BEFORE invoking accounts:add: a source that prompts
- * immediately (local-folder) emits its first event before the invoke's
- * response tells us the flowId — in fact the flow's connect() typically runs
- * synchronously far enough to call auth.prompt() before accounts:add's own
- * response reaches the renderer, so this is the COMMON case, not a rare race.
- * Events arriving before the flowId is known are buffered here and replayed
- * once it is. Two optional hooks let a caller that keeps its own state in
- * sync with the flow (`pick()` below, via `flow`/`applyEvent`) do so at
- * exactly the right moments rather than after the fact:
- *  - `onSubscribed` fires synchronously, before the accounts:add invoke, so
- *    the caller can record `unsubscribe` immediately (matching this
- *    function's own subscribe-before-invoke ordering).
- *  - `onFlowId` fires the instant the flowId is known, BEFORE the buffered
- *    replay — `pick()`'s `applyEvent` is a no-op until `flow` state exists,
- *    so replayed events (which for local-folder is almost always the
- *    prompt) would otherwise be silently dropped.
- */
-async function openFlow(
-  sourceId: string,
-  onEvent: (evt: ConnectEvent) => void,
-  hooks?: {
-    onSubscribed?: (unsubscribe: () => void) => void;
-    onFlowId?: (flowId: string) => void;
-  },
-): Promise<{ flowId: string; unsubscribe: () => void }> {
-  let flowId: string | null = null;
-  const buffered: ConnectEvent[] = [];
-  const unsubscribe = window.kiagent.on('push:connect', (evt) => {
-    if (flowId === null) {
-      buffered.push(evt);
-      return;
-    }
-    if (evt.flowId !== flowId) return; // another window/flow's event
-    onEvent(evt);
-  });
-  hooks?.onSubscribed?.(unsubscribe);
-  try {
-    const res = await window.kiagent.invoke('accounts:add', { sourceId });
-    flowId = res.flowId;
-    hooks?.onFlowId?.(flowId);
-    for (const evt of buffered) {
-      if (evt.flowId === flowId) onEvent(evt);
-    }
-    buffered.length = 0;
-    return { flowId, unsubscribe };
-  } catch (err) {
-    unsubscribe();
-    throw err;
-  }
+  /** Terminal event of a reconnect flow — the account already exists, so this
+   *  carries an id rather than `done`'s freshly created `Account`. */
+  reconnected?: AccountId;
+  /** Terminal event of a manage-folders flow. */
+  scopeSaved?: { accountId: AccountId; added: number; removed: number };
 }
 
 /** Renders `qr` as a scannable <img> (data URL from the `qrcode` package,
@@ -145,26 +129,27 @@ function QrCode(props: { data: string }): React.ReactElement {
 
 export function AddSourcePanel(props: {
   onDone: (accountId?: AccountId) => void;
-  /** Auto-start this source's connect flow on mount, exactly as if its tile
-   *  was clicked — the ErrorCard Reconnect path (re-auth upserts on
-   *  (source, identifier), so the account and its documents survive). */
-  initialSourceId?: string;
+  /** Reconnect THIS account instead of adding a new one — the ErrorCard and
+   *  SourceDetail Reconnect paths. On mount this starts
+   *  `accounts:start-reconnect` when the source's descriptor carries
+   *  `hasReauthenticate: true`, and today's `pick()` → `accounts:add
+   *  { sourceId }` otherwise (C-9); the tile grid is never shown either way.
+   *  `sourceId`/`identifier` are carried so the
+   *  panel can title itself and name the outcome without re-reading app-state
+   *  (and so alpha-cent's shadow can put its BYO-OAuth gate in front of a
+   *  gated source's reconnect — R2). */
+  reconnect?: { accountId: AccountId; sourceId: string; identifier: string };
 }): React.ReactElement {
   const descriptors = useSourceDescriptors();
   // Every account currently in the app-state projection — read unconditionally
   // (Rules of Hooks: this component has an early `if (flow)` return below) so
-  // `existingPaths`, computed further down from `flow.sourceId`, always
-  // reflects the CURRENT projection rather than a snapshot from whenever the
-  // fast-path picker first opened.
+  // `pick`'s A-4 machine-scoped lookup always sees the CURRENT projection
+  // rather than a snapshot from whenever the panel mounted.
   const accountEntries = useAppState((s) => s.accounts);
   const [flow, setFlow] = useState<FlowState | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [addError, setAddError] = useState<string | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
-  // Set once the folder picker's "Add N folders" has fired for the current
-  // flow — distinguishes a dismiss-with-nothing-confirmed (reuse the panel's
-  // Cancel semantics) from the modal's own onClose-right-after-onConfirm.
-  const confirmedRef = useRef(false);
 
   // Adapter for the CURRENT `folder-picker` event — rebuilt only when a new
   // event object (new requestId) lands, so its path→FolderNode map survives
@@ -201,7 +186,10 @@ export function AddSourcePanel(props: {
   // openPickerRef; null once the flow settled (done/error), so a stale
   // cancel is never sent for a finished flow.
   const liveFlowRef = useRef<string | null>(null);
-  liveFlowRef.current = flow && !flow.done && !flow.error ? flow.flowId : null;
+  liveFlowRef.current =
+    flow && !flow.done && !flow.error && !flow.reconnected && !flow.scopeSaved
+      ? flow.flowId
+      : null;
 
   const cancelFlowMainSide = (): void => {
     const flowId = liveFlowRef.current;
@@ -214,22 +202,6 @@ export function AddSourcePanel(props: {
         .catch(() => {});
     }
   };
-
-  // Roots the CURRENT flow's source already tracks under an existing account
-  // (the local-folder machine account's `config.paths`) — recomputed every
-  // render from `accountEntries`/`flow.sourceId`, so both the picker's
-  // `tracked` pills and `submitFolderPaths`'s union always see the latest
-  // app-state, never a value captured when the picker first opened.
-  const existingPaths: string[] = flow
-    ? accountEntries
-        .filter((e) => e.account.source === flow.sourceId)
-        .flatMap((e) => {
-          const raw = e.account.config?.paths;
-          return Array.isArray(raw)
-            ? raw.filter((p): p is string => typeof p === 'string')
-            : [];
-        })
-    : [];
 
   useEffect(
     () => () => {
@@ -250,17 +222,57 @@ export function AddSourcePanel(props: {
     [],
   );
 
-  // Mount-only: the Reconnect path skips the tile grid and goes straight
-  // into the flow. `pick` is a hoisted function declaration, so calling it
-  // from here is safe; the unmount cleanup above covers this flow too.
-  useEffect(() => {
-    if (props.initialSourceId) void pick(props.initialSourceId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Starts at most once, even though this effect re-runs when `descriptors`
+  // arrives.
+  const reconnectStartedRef = useRef(false);
 
-  async function pick(sourceId: string): Promise<void> {
+  // The Reconnect path skips the tile grid and goes straight into a flow.
+  // WHICH flow the descriptor decides (C-9): `engine.reconnect` throws
+  // `<source> cannot be reconnected — remove this source and add it again`
+  // for any source with no `reauthenticate` method, and only the three
+  // folder-scoped sources gain one in this train — imap (needsReauth on every
+  // expired password), microsoft and whatsapp do not. An unflagged source
+  // therefore keeps TODAY'S route: `pick()`, i.e. accounts:add { sourceId }.
+  // C-20 — THE DESCRIPTORS WAIT, and the reason this gate lives here rather
+  // than in SourcesList: both Reconnect entry points (the ErrorCard and
+  // SourceDetail's topbar) funnel through this one mount effect.
+  // `useSourceDescriptors()` is null until sources:list resolves and [] if it
+  // failed (sources-registry.tsx:15-31), so a null list is a WAIT (deps
+  // [descriptors]) — routing on null would push a reauth-capable source down
+  // the add path on every cold open, and the started-once latch would make
+  // that permanent. [] is not a wait: it routes to the safe fallback at once. `begin` and `pick` are hoisted function declarations, so
+  // calling them from here is safe; the unmount cleanup above covers either
+  // flow.
+  useEffect(() => {
+    const rc = props.reconnect;
+    if (!rc || reconnectStartedRef.current || descriptors === null) return;
+    reconnectStartedRef.current = true;
+    const canReauth =
+      descriptors.find((d) => d.id === rc.sourceId)?.hasReauthenticate === true;
+    if (canReauth) {
+      void begin(rc.sourceId, 'reconnect', () =>
+        window.kiagent.invoke('accounts:start-reconnect', {
+          accountId: rc.accountId,
+        }),
+      );
+      return;
+    }
+    // Today's route, unchanged, and THROUGH `pick` — never a second
+    // accounts:add thunk. `pick` stays the only caller of that channel
+    // (decision 1), and going through it means the fallback inherits A-4's
+    // gate: R4 offers Reconnect on an `error` account too, and a local-folder
+    // account there must route to manage-folders, never to the
+    // (source, identifier) upsert that would archive its other roots.
+    void pick(rc.sourceId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [descriptors]);
+
+  async function begin(
+    sourceId: string,
+    mode: FlowState['mode'],
+    start: () => Promise<{ flowId: string }>,
+  ): Promise<void> {
     setAddError(null);
-    confirmedRef.current = false;
 
     const applyEvent = (evt: ConnectEvent): void => {
       setFlow((prev) => {
@@ -301,6 +313,8 @@ export function AddSourcePanel(props: {
                 requestId: evt.requestId,
                 multiSelect: evt.multiSelect,
                 modes: evt.modes,
+                selected: evt.selected,
+                purpose: evt.purpose,
               },
             };
           case 'done':
@@ -308,6 +322,26 @@ export function AddSourcePanel(props: {
             return {
               ...prev,
               done: evt.account,
+              prompt: undefined,
+              picker: undefined,
+            };
+          case 'reconnected':
+            unsubscribeRef.current?.();
+            return {
+              ...prev,
+              reconnected: evt.accountId,
+              prompt: undefined,
+              picker: undefined,
+            };
+          case 'scope-saved':
+            unsubscribeRef.current?.();
+            return {
+              ...prev,
+              scopeSaved: {
+                accountId: evt.accountId,
+                added: evt.added,
+                removed: evt.removed,
+              },
               prompt: undefined,
               picker: undefined,
             };
@@ -326,11 +360,11 @@ export function AddSourcePanel(props: {
     };
 
     try {
-      await openFlow(sourceId, applyEvent, {
+      await openFlow(start, applyEvent, {
         onSubscribed: (unsubscribe) => {
           unsubscribeRef.current = unsubscribe;
         },
-        onFlowId: (flowId) => setFlow({ flowId, sourceId }),
+        onFlowId: (flowId) => setFlow({ flowId, sourceId, mode }),
       });
     } catch (err) {
       // openFlow already unsubscribed on its own throw path; drop our
@@ -341,33 +375,28 @@ export function AddSourcePanel(props: {
   }
 
   /**
-   * Confirms the folder picker's multi-select choice as ONE prompt answer:
-   * the union of the just-confirmed covering roots and whatever roots this
-   * machine already tracks (`existingPaths`, read from the CURRENT app-state
-   * projection via `accountEntries` above — never a stale closure), collapsed
-   * back down to a minimal covering set via the shared `coveringRoots` so the
-   * upserted local-folder account's config never loses an already-tracked
-   * folder. Answers the ALREADY-OPEN flow's prompt (the one `pick()` started
-   * and whose prompt triggered the fast-path picker) — built explicitly from
-   * the confirmed paths rather than through `answers` state, which the
-   * Submit button populates and which the picker bypasses entirely, so it may
-   * hold nothing for this field. The done/error views below react to this
-   * flow's own push:connect events exactly as they do for the classic form —
-   * no separate outcome-tracking is needed for a single flow.
+   * The tile grid's entry point, and the C-9 reconnect fallback's. A-4: for a
+   * machine-scoped source that ALREADY has an account, "add" means "manage
+   * that account's folders" — `accounts:add` there would upsert over the
+   * existing account and archive every root it currently tracks. Both callers
+   * pass through this gate; there is no other route into `accounts:add`.
    */
-  async function submitFolderPaths(paths: string[]): Promise<void> {
-    if (paths.length === 0 || !flow?.prompt) return;
-    const { requestId } = flow.prompt;
-    const key = schemaFields(flow.prompt.schema).find(
-      (f) => f.folderPaths,
-    )?.key;
-    if (!key) return; // fast-path guard already ensured exactly one folder-paths field
-
-    const union = coveringRoots([...paths, ...existingPaths]);
-    await window.kiagent.invoke('accounts:prompt-answer', {
-      requestId,
-      answers: { [key]: union },
-    });
+  async function pick(sourceId: string): Promise<void> {
+    const existing = MACHINE_SCOPED_SOURCE_IDS.has(sourceId)
+      ? (accountEntries.find((e) => e.account.source === sourceId)?.account ??
+        null)
+      : null;
+    if (existing) {
+      await begin(sourceId, 'manage', () =>
+        window.kiagent.invoke('accounts:start-manage-folders', {
+          accountId: existing.id,
+        }),
+      );
+      return;
+    }
+    await begin(sourceId, 'connect', () =>
+      window.kiagent.invoke('accounts:add', { sourceId }),
+    );
   }
 
   async function submitPrompt(): Promise<void> {
@@ -393,29 +422,30 @@ export function AddSourcePanel(props: {
     // the classic-form branch isn't a re-parse of the same schema.
     const promptFields = flow.prompt ? schemaFields(flow.prompt.schema) : null;
     const guidance = flow.prompt ? schemaGuidance(flow.prompt.schema) : null;
-    const folderPathsPrompt =
-      promptFields !== null &&
-      promptFields.length === 1 &&
-      promptFields[0].folderPaths;
 
-    // Modal branches render outside the wizard card (they overlay the app).
+    // Modal branch renders outside the wizard card (it overlays the app).
+    // `selected` comes from the ADAPTER, exactly as in `TrackedFolders`
+    // (C-2/C-7) — `picker.selected` is the adapter's input (contracts.
+    // FolderNode, no `path`) and must never reach the modal.
     if (picker && pickerAdapter) {
       return (
         // AuthChannel.pickFolders — the same modal, served by the SOURCE's
         // tree callbacks over the accounts:picker-* invokes. Confirm maps
-        // the synthetic paths back to FolderNodes and resolves the flow's
+        // the confirmed ids back to FolderNodes and resolves the flow's
         // pending pickFolders; an unconfirmed close cancels it (connect()
         // throws, the flow's own error event renders below).
         <FolderPickerModal
           key={picker.requestId}
           multiSelect={picker.multiSelect}
           dataSource={pickerAdapter.dataSource}
-          onConfirm={(paths) => {
+          selected={pickerAdapter.selected}
+          purpose={picker.purpose}
+          onConfirm={(ids) => {
             pickerConfirmedForRef.current = picker.requestId;
             // A confirm racing a flow that already settled (extension
             // crash) rejects with "unknown picker request"; the flow's own
             // error event is what the user sees — just log it.
-            void pickerAdapter.confirm(paths).catch((err) => {
+            void pickerAdapter.confirm(ids).catch((err) => {
               // eslint-disable-next-line no-console
               console.warn('folder picker: confirm failed', err);
             });
@@ -430,27 +460,6 @@ export function AddSourcePanel(props: {
         />
       );
     }
-    if (flow.prompt && folderPathsPrompt) {
-      return (
-        // Exactly one `folder-paths` (array) field — skip the classic form
-        // entirely and open the multi-select picker directly (no
-        // "Choose…" step); a multi-field schema (Gmail, IMAP, or a
-        // singular folder-path field alongside others) always falls
-        // through to the wizard card below, which renders
-        // FolderPickerField for any singular folder-path field it contains.
-        <FolderPickerModal
-          multiSelect
-          existingPaths={existingPaths}
-          onConfirm={(paths) => {
-            confirmedRef.current = true;
-            void submitFolderPaths(paths);
-          }}
-          onClose={() => {
-            if (!confirmedRef.current) props.onDone();
-          }}
-        />
-      );
-    }
 
     return (
       <div className="as-panel">
@@ -458,11 +467,58 @@ export function AddSourcePanel(props: {
           <div className="as-wizard-head">
             <SourceIcon sourceId={flow.sourceId} size={28} />
             <span className="h-section">
-              Connect {sourceLabel(flow.sourceId, descriptors)}
+              {flow.mode === 'reconnect'
+                ? 'Reconnect'
+                : flow.mode === 'manage'
+                  ? 'Add folders to'
+                  : 'Connect'}{' '}
+              {sourceLabel(flow.sourceId, descriptors)}
             </span>
           </div>
 
-          {flow.done ? (
+          {flow.reconnected ? (
+            <>
+              <div className="as-flow-msg">
+                <Icon
+                  name="check-circle"
+                  size={14}
+                  style={{ color: 'var(--live-solid)' }}
+                />
+                Reconnected:{' '}
+                <span className="mono">{props.reconnect?.identifier}</span>
+              </div>
+              <div className="as-wizard-foot">
+                <button
+                  type="button"
+                  className="btn primary sm"
+                  onClick={() => props.onDone(flow.reconnected)}
+                >
+                  Done
+                </button>
+              </div>
+            </>
+          ) : flow.scopeSaved ? (
+            <>
+              <div className="as-flow-msg">
+                <Icon
+                  name="check-circle"
+                  size={14}
+                  style={{ color: 'var(--live-solid)' }}
+                />
+                Folders updated — {flow.scopeSaved.added} added,{' '}
+                {flow.scopeSaved.removed} removed.
+              </div>
+              <div className="as-wizard-foot">
+                <button
+                  type="button"
+                  className="btn primary sm"
+                  onClick={() => props.onDone(flow.scopeSaved?.accountId)}
+                >
+                  Done
+                </button>
+              </div>
+            </>
+          ) : flow.done ? (
             <>
               <div className="as-flow-msg">
                 <Icon
