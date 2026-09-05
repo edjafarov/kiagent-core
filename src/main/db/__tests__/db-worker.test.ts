@@ -269,6 +269,181 @@ Module._resolveFilename = function (request, ...rest) {
     await client!.close();
   }, 20000);
 
+  // applyFolderScope is the only write the folder-scope flows make, and it is
+  // dispatched through `proc` exactly like `commit` (store.ts takes the
+  // `db.proc!(…)` branch whenever there is no raw `_conn` — i.e. always, in
+  // the production main process). Registration in worker-entry.ts is the part
+  // no in-process test can see, and so is the structured-clone round trip of
+  // `archiveScopeRootIds`.
+  it('runs applyFolderScope inside the worker (proc round-trip)', async () => {
+    await spawnAndReady();
+
+    await client!.proc!('commit', {
+      consumer: 'worker:test:folder-scope',
+      cursor: 0,
+      documents: [
+        {
+          externalId: 'keep',
+          scopeRootId: 'root',
+          type: 'file',
+          title: 'keep',
+          markdown: 'document keep',
+          metadata: {},
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          externalId: 'gone',
+          scopeRootId: 'X',
+          type: 'file',
+          title: 'gone',
+          markdown: 'document gone',
+          metadata: {},
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+
+    // The `consumer` commit variant self-creates a synthetic account whose
+    // source is 'worker' and whose config is the literal '{}' — which is
+    // exactly what the stale guard is handed here, so this also pins that the
+    // guard tolerates a caller passing the raw config column straight through.
+    // (A worker emission never warns under R5 for a structural reason, not a
+    // config one: the `consumer` branch of commitTx returns before the account
+    // branch that carries the warn.)
+    const [{ id: accountId, config }] = (await client!.all(
+      `SELECT id, config FROM accounts`,
+    )) as Array<{ id: string; config: string }>;
+    expect(config).toBe('{}');
+
+    const nextConfig = { folderRoots: [{ id: 'root', name: 'My Drive' }] };
+    expect(
+      await client!.proc!('applyFolderScope', {
+        accountId,
+        config: nextConfig,
+        cursor: {
+          page_token: 'p1',
+          backfill_done: false,
+          scope_roots: ['root'],
+        },
+        archiveScopeRootIds: ['X'],
+        expectedConfigJson: config,
+      }),
+    ).toEqual({ archived: 1, remaining: 1, stale: false });
+
+    const rows = (await client!.all(
+      `SELECT external_id, archived_at, scope_root_id FROM documents ORDER BY external_id`,
+    )) as Array<{
+      external_id: string;
+      archived_at: string | null;
+      scope_root_id: string | null;
+    }>;
+    expect(rows).toEqual([
+      {
+        external_id: 'gone',
+        archived_at: expect.any(String),
+        scope_root_id: 'X',
+      },
+      { external_id: 'keep', archived_at: null, scope_root_id: 'root' },
+    ]);
+
+    // source 'worker' is not folder-scoped, so no legacy mirror is derived —
+    // the config lands verbatim. Pins the A-2 source gating from the RPC side.
+    const [{ config: written }] = (await client!.all(
+      `SELECT config FROM accounts`,
+    )) as Array<{ config: string }>;
+    expect(written).toBe(JSON.stringify(nextConfig));
+
+    await client!.close();
+  }, 20000);
+
+  // C-29 — the commit-before-ack window. bridge.ts's host handler COMMITS the
+  // transaction and only THEN posts its reply (`value = await proc(req.args);`
+  // … `port.postMessage({ id, ok: true, value })`, bridge.ts:100-127), so a
+  // thread that dies in between leaves the write DURABLE while the caller's
+  // promise rejects (worker-client.ts:168-183 tags it DB_WORKER_CRASHED) —
+  // and `applyScope` can then exit without ever restarting the compensating
+  // backfill. Reproduced deterministically WITHOUT killing the thread: post
+  // the request RAW with an id nothing is waiting on. `createDbClient` drops
+  // replies for unknown ids on the floor (`const p = pending.get(res.id); if
+  // (!p) return;`), so from the caller's side this is byte-identical to the
+  // reply never arriving. The ordering is safe rather than lucky: the port
+  // delivers messages in arrival order, and `proc` runs the whole
+  // better-sqlite3 transaction SYNCHRONOUSLY before the handler's first
+  // `await` yields, so the follow-up read cannot observe a half-applied
+  // state.
+  it("a reply lost between applyFolderScope's commit and its postMessage still leaves the write DURABLE (C-29)", async () => {
+    await spawnAndReady();
+
+    await client!.proc!('commit', {
+      consumer: 'worker:test:folder-scope-lost-reply',
+      cursor: 0,
+      documents: [
+        {
+          externalId: 'keep',
+          scopeRootId: 'root',
+          type: 'file',
+          title: 'keep',
+          markdown: 'document keep',
+          metadata: {},
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          externalId: 'gone',
+          scopeRootId: 'X',
+          type: 'file',
+          title: 'gone',
+          markdown: 'document gone',
+          metadata: {},
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    const [{ id: accountId, config }] = (await client!.all(
+      `SELECT id, config FROM accounts`,
+    )) as Array<{ id: string; config: string }>;
+
+    const nextConfig = { folderRoots: [{ id: 'root', name: 'My Drive' }] };
+    worker!.postMessage({
+      // never issued by createDbClient's own counter, which starts at 1
+      id: 990_001,
+      op: 'proc',
+      name: 'applyFolderScope',
+      args: {
+        accountId,
+        config: nextConfig,
+        cursor: {
+          page_token: 'p1',
+          backfill_done: false,
+          scope_roots: ['root'],
+        },
+        archiveScopeRootIds: ['X'],
+        expectedConfigJson: config,
+      },
+    });
+
+    // The caller learned NOTHING, and the write happened anyway.
+    const rows = (await client!.all(
+      `SELECT external_id, archived_at FROM documents ORDER BY external_id`,
+    )) as Array<{ external_id: string; archived_at: string | null }>;
+    expect(rows).toEqual([
+      { external_id: 'gone', archived_at: expect.any(String) },
+      { external_id: 'keep', archived_at: null },
+    ]);
+
+    // Durable state is the only discriminator, and this is exactly the read
+    // the engine's recovery path must make before deciding which loop to
+    // restart — see CoreStore.applyFolderScope's CALLER CONTRACT (Step 8b).
+    // Compare the PARSED folderRoots, never the config text.
+    const [{ config: written }] = (await client!.all(
+      `SELECT config FROM accounts`,
+    )) as Array<{ config: string }>;
+    expect(
+      (JSON.parse(written) as { folderRoots: unknown }).folderRoots,
+    ).toEqual(nextConfig.folderRoots);
+
+    await client!.close();
+  }, 20000);
+
   // maintenance.compact() dispatches to this proc (worker-backed AppDb has no
   // raw connection to call repopulateSearchIndex directly on — see
   // store.ts#maintenance.compact). Drive it through the REAL bridge against a

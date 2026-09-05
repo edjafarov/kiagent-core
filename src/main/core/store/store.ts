@@ -36,7 +36,12 @@ import {
   PENDING_VISUAL_WHERE,
   repopulateSearchIndex,
 } from './schema';
-import { createWriteTx, type ReconcileCounts } from './write-tx';
+import {
+  createWriteTx,
+  type FolderScopeInput,
+  type FolderScopeResult,
+  type ReconcileCounts,
+} from './write-tx';
 
 // The two stats COUNTs are pinned to their covering partial indexes with
 // INDEXED BY: production corpora carry no sqlite_stat1 (nothing ever runs
@@ -129,6 +134,37 @@ export interface CoreStore extends Store {
   /** Archives every eligible-but-unlisted document; returns the count. */
   reconcileArchive(accountId: AccountId, startSeq: Seq): Promise<number>;
   reconcileEnd(accountId: AccountId): Promise<void>;
+  /** ONE transaction: config + cursor + archive-the-roots-the-source-named +
+   *  one `changes` row per archived document. Returns COUNTS ONLY — never row
+   *  sets; passing a per-account row array across the DB-worker boundary is
+   *  what OOM'd the main process on a 3.7M-document account.
+   *  `input.archiveScopeRootIds` is the explicit IN-list computed by the
+   *  SOURCE (R8) — core never set-differences over `folderRoots`, and an
+   *  empty array (archive nothing) is the common, correct input.
+   *  `{stale: true}` and no write means the stored config moved since
+   *  `expectedConfigJson` was read.
+   *
+   *  CALLER CONTRACT — recovery after a rejection or a lost reply (C-29).
+   *  In the production main process this call crosses the DB-worker bridge,
+   *  which COMMITS the transaction and only then posts its reply
+   *  (db/bridge.ts). A worker death in that window rejects the in-flight
+   *  promise (`DB_WORKER_CRASHED`) although the archive is already durable.
+   *  A rejection is therefore NOT proof that nothing ran. On any rejection —
+   *  and after any post-`stop()` failure in the flow around this call:
+   *   1. re-read the account and compare the PARSED `config.folderRoots`
+   *      against what you meant to write. Deep-equal => it committed: the
+   *      archive is durable, so restart the account's loop with the NEW
+   *      cursor and let the compensating backfill run. Not equal => nothing
+   *      was written: restart the loop on the OLD state.
+   *   2. compare `folderRoots`, never the config JSON TEXT — this procedure
+   *      appends R1's legacy `roots`/`paths` mirror inside the transaction,
+   *      so the stored text is deliberately not `JSON.stringify(config)`.
+   *   3. never retry this call as recovery: the stale-write guard makes the
+   *      retry a no-op (`stale: true`), which is safe but is not the
+   *      compensating action.
+   *  Leaving a previously running account stopped after such a failure is
+   *  the bug this contract exists to prevent. */
+  applyFolderScope(input: FolderScopeInput): Promise<FolderScopeResult>;
   consumerCursor(name: string): Promise<Seq>;
   ledgerRecord(
     consumer: string,
@@ -1213,6 +1249,17 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     async reconcileEnd(accountId) {
       if (writeTx) writeTx.reconcileEnd(accountId);
       else await db.proc!('reconcileEnd', { accountId });
+    },
+
+    async applyFolderScope(input) {
+      const result = writeTx
+        ? writeTx.applyFolderScope(input)
+        : ((await db.proc!('applyFolderScope', input)) as FolderScopeResult);
+      if (result.archived > 0) corpusLangsCache = null;
+      // Search index and renderer both refresh off this: the feed iterators
+      // in feed() block on 'commit', and the account row itself changed.
+      if (!result.stale) nudge.emit('commit');
+      return result;
     },
 
     async consumerCursor(name) {
