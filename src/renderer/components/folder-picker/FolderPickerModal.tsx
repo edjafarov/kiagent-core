@@ -1,7 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '@shared/web-ui/icon-sprite';
 import { formatCount } from './format-count';
-import { coveringRoots, isUnder, toggleSelection } from './selection';
+import {
+  coveringRoots,
+  isUnder,
+  learnPath,
+  toggleSelection,
+} from './selection';
+import type { SelectionMap } from './selection';
 import { mutateTree, useLazyTree } from './useLazyTree';
 
 /**
@@ -9,9 +15,9 @@ import { mutateTree, useLazyTree } from './useLazyTree';
  * (src/renderer/components/LocalFolderPicker.tsx). Two selection modes:
  *
  * - Single-select (`multiSelect` unset): row click replaces the selection;
- *   `onConfirm` fires with exactly one path. Used by `FolderPickerField`,
- *   the generic per-field renderer for folder inputs inside multi-field
- *   schemas.
+ *   `onConfirm` fires with exactly one folder id. Used by
+ *   `FolderPickerField`, the generic per-field renderer for folder inputs
+ *   inside multi-field schemas.
  * - Multi-select (`multiSelect`): row click toggles the folder in a
  *   selection set — and selecting a folder covers its WHOLE subtree:
  *   descendant rows render auto-checked (implied), previously-selected
@@ -20,21 +26,37 @@ import { mutateTree, useLazyTree } from './useLazyTree';
  *   always the MINIMAL covering set of top-most roots, so nested picks can
  *   never double-index the same files. Covering roots show as removable
  *   chips above the footer, with a running estimate of the total files
- *   covered (sum of the roots' recursive counts). Confirming fires
- *   `onConfirm` once with the covering root paths — `AddSourcePanel`
- *   submits that whole array as ONE connect-flow prompt answer, unioned
- *   with whatever this machine already tracks, since greenfield's
- *   local-folder source tracks every root under one shared machine account
- *   (see `existingPaths` below).
+ *   covered. Confirming fires `onConfirm` once with the covering roots'
+ *   IDS — never the tree paths.
  *
- * `existingPaths` (multi-select only in practice) marks rows already
- * covered by an existing account: they render a `tracked` pill instead of a
- * checkbox and are inert to selection clicks, so the picker can't offer to
- * re-add what's already tracked. An ancestor of a tracked row stays
- * selectable — see the prop doc for why that's safe.
+ * Selection is keyed by the SOURCE's durable folder id; ancestry is keyed by
+ * the tree path. That split is the whole point: a manage-folders picker opens
+ * pre-checked (`selected`) with roots whose rows may never be listed this
+ * session, and one cloud folder listed under two mode tabs must select once.
+ * The tree machinery itself (useLazyTree, counts, React keys) stays
+ * path-keyed — `mutateTree` mutates EVERY matching node, so id-keying it
+ * would make two rows sharing an id expand and count together.
+ *
+ * `selected` and `existingPaths` are independent and must not be confused:
+ * `selected` roots are checked and REMOVABLE (this account's own scope);
+ * `existingPaths` rows are covered by a DIFFERENT account, render a `tracked`
+ * pill instead of a checkbox, and are inert to selection clicks. When a row
+ * matches both, `selected` wins — see `isTracked`.
+ *
+ * A rejected listing renders an inline retry row, never an empty folder; and
+ * a Save the owner rejects (`error`) leaves the modal mounted with the
+ * selection intact (`keepOpenOnConfirm`) instead of tearing the flow down.
  */
 
 export interface Entry {
+  /** The source's DURABLE identity for this folder — what the selection is
+   *  keyed by and what `onConfirm` emits. For the built-in local-filesystem
+   *  tabs it IS `path`; for a dataSource picker it is the provider's opaque
+   *  folder id, while `path` is the adapter's synthetic tree location. */
+  id: string;
+  /** Where the row sits in the tree. Addresses the tree backend
+   *  (`listChildren`/`countFiles`) and carries ancestry for the covering-set
+   *  rules; NOT an identity. */
   path: string;
   name: string;
   hasChildren: boolean;
@@ -46,8 +68,10 @@ export interface Entry {
  * `sources:list-folders` / `sources:count-files` IPC); a connect flow's
  * `folder-picker` event supplies one backed by the flow's source instead
  * (see `connect-picker-adapter.ts`). A rejected listRoots/listChildren
- * renders as an empty listing (warned, never thrown); a rejected countFiles
- * as uncounted — one bad listing must not kill the connect flow.
+ * renders an inline retry row (warned, never thrown past the modal) — it must
+ * never masquerade as an empty folder, because an empty folder reads as "the
+ * user has nothing here". A rejected countFiles renders as uncounted; one bad
+ * count must not block selection.
  */
 export interface FolderPickerDataSource {
   /** Tabs shown in the mode switcher, in order; at least one. */
@@ -64,6 +88,7 @@ const LOCAL_FS_MODES: Array<{ key: RootMode; label: string }> = [
 ];
 
 interface FolderNode {
+  id: string;
   path: string;
   name: string;
   depth: number;
@@ -81,6 +106,7 @@ interface FolderNode {
 
 function toNode(e: Entry, depth: number): FolderNode {
   return {
+    id: e.id,
     path: e.path,
     name: e.name,
     depth,
@@ -120,16 +146,57 @@ export interface FolderPickerModalProps {
    *  safe, not anything here. Default `[]`, matching every caller that
    *  doesn't yet track anything for this source. */
   existingPaths?: string[];
+  /** Pre-checked and REMOVABLE roots — the account's complete current
+   *  covering set, for a manage-folders picker. Only `id` and `name` are
+   *  read: `path` is the caller's synthetic guess at a tree location for a
+   *  folder that may sit anywhere under any mode tab, and trusting it would
+   *  be a false ancestry claim, so an entry is seeded location-less and
+   *  learns its real path from the listing. Keying by id is what lets a root
+   *  whose row is never listed this session survive Save; path-keying dropped
+   *  exactly those (the archival-by-omission hazard). Seeded ONCE on mount:
+   *  every caller that needs a different set REMOUNTS the modal
+   *  (`AddSourcePanel` already keys it on the picker requestId), so there is
+   *  deliberately no prop-sync effect to fight the user's edits. Default
+   *  `[]`. */
+  selected?: Entry[];
+  /** Copy and the empty-selection line only — never behavior. `'manage'` is
+   *  the Tracked-folders edit; `'connect'`/omitted is the add flow. Ignored
+   *  in single-select mode, which has no folder-set semantics. */
+  purpose?: 'connect' | 'manage';
+  /** A message from the OWNER about a Save it rejected — a folder that no
+   *  longer exists, a stale scope, a failed commit. Rendered inline above the
+   *  footer with the selection left exactly as the user built it (DECISIONS
+   *  A-8: a validation failure must never tear the picker down). Null or
+   *  omitted renders nothing. */
+  error?: string | null;
+  /** A confirm is in flight: the primary action is disabled and reads
+   *  "Saving…". Purely presentational — the owner decides what Cancel or
+   *  Escape mean while it is true. */
+  saving?: boolean;
+  /** Leave the modal mounted after `onConfirm` instead of calling `onClose`.
+   *  The owner then owns the close: it unmounts on success, or keeps the
+   *  picker up with `error` set. Deliberately its OWN prop rather than
+   *  something derived from `purpose`, which the frozen contract fixes as
+   *  copy-only. Default false — every historical caller closes on confirm. */
+  keepOpenOnConfirm?: boolean;
   /** Serve the folder tree from these callbacks instead of the local
    *  filesystem IPC. Omitted = exactly the historical behavior. */
   dataSource?: FolderPickerDataSource;
-  onConfirm: (paths: string[]) => void;
+  /** Fires with the selected folders' IDS — for a dataSource picker the
+   *  source's opaque folder ids, for the local-filesystem tabs the absolute
+   *  paths (there, id IS path). Never the synthetic tree paths. */
+  onConfirm: (ids: string[]) => void;
   onClose: () => void;
 }
 
 export function FolderPickerModal({
   multiSelect = false,
   existingPaths = [],
+  selected = [],
+  purpose,
+  error,
+  saving = false,
+  keepOpenOnConfirm = false,
   dataSource,
   onConfirm,
   onClose,
@@ -142,13 +209,25 @@ export function FolderPickerModal({
   // would re-fire the initial-roots effect on every render).
   const dataSourceRef = useRef(dataSource);
   dataSourceRef.current = dataSource;
-  const [selected, setSelected] = useState<string | null>(null);
-  // Display name of the single-select row — a dataSource picker's paths are
-  // synthetic opaque-id strings, so the footer shows this instead.
-  const [selectedName, setSelectedName] = useState<string | null>(null);
-  // Multi-select mode only: path -> display name, so the chip tray doesn't
-  // need to re-derive a name from the path string.
-  const [checked, setChecked] = useState<Map<string, string>>(new Map());
+  // Single-select mode only. `id` is what onConfirm emits; `name`/`path`
+  // drive the footer (a dataSource picker's paths are synthetic opaque-id
+  // strings, so it shows the name instead).
+  const [single, setSingle] = useState<{
+    id: string;
+    name: string;
+    path: string;
+  } | null>(null);
+  // Multi-select: id -> { name, tree location }. Keyed by the SOURCE's id,
+  // never by the synthetic path — see selection.ts's module doc.
+  const [checked, setChecked] = useState<SelectionMap>(
+    () => new Map(selected.map((s) => [s.id, { name: s.name, path: null }])),
+  );
+  // Node paths whose child listing REJECTED — the row renders an inline
+  // retry instead of pretending the folder is empty. Keyed by path, like the
+  // rest of the tree machinery; cleared for the whole tree on a root reload.
+  const [failedNodes, setFailedNodes] = useState<Set<string>>(() => new Set());
+  // The current mode's root listing rejected and nothing is on screen.
+  const [rootsFailed, setRootsFailed] = useState(false);
   // Paths we've already kicked a file-count request for, so the count effect
   // fires exactly once per visible folder. Cleared when the root set is swapped.
   const counted = useRef<Set<string>>(new Set());
@@ -174,23 +253,26 @@ export function FolderPickerModal({
   const loadChildren = useCallback(
     async (node: FolderNode): Promise<FolderNode[]> => {
       const ds = dataSourceRef.current;
-      if (ds) {
-        try {
-          const entries = await ds.listChildren(node.path);
-          return entries.map((e) => toNode(e, node.depth + 1));
-        } catch (err) {
-          // A source-served listing may fail (network, revoked token…) —
-          // show the node as empty rather than killing the picker/connect
-          // flow.
-          // eslint-disable-next-line no-console
-          console.warn('folder picker: listing children failed', err);
-          return [];
-        }
+      try {
+        const entries = ds
+          ? await ds.listChildren(node.path)
+          : (
+              await window.kiagent.invoke('sources:list-folders', {
+                path: node.path,
+              })
+            ).entries.map((e) => ({ ...e, id: e.path }));
+        return entries.map((e) => toNode(e, node.depth + 1));
+      } catch (err) {
+        // A source-served listing may fail (network, revoked token…). It must
+        // NOT masquerade as an empty folder: an empty folder reads as "the
+        // user has nothing here". Record the failure so the row renders an
+        // inline retry, then rethrow so useLazyTree leaves the node unloaded
+        // and collapsed — a Retry re-runs exactly this call.
+        // eslint-disable-next-line no-console
+        console.warn('folder picker: listing children failed', err);
+        setFailedNodes((prev) => new Set(prev).add(node.path));
+        throw err;
       }
-      const res = await window.kiagent.invoke('sources:list-folders', {
-        path: node.path,
-      });
-      return res.entries.map((e) => toNode(e, node.depth + 1));
     },
     [],
   );
@@ -214,6 +296,8 @@ export function FolderPickerModal({
       // Clear the old roots up front so the loading row (rather than a stale
       // tree) is what shows while the new root list is in flight.
       counted.current.clear();
+      setFailedNodes(new Set());
+      setRootsFailed(false);
       setTree([]);
       markLoading(modeKey);
       try {
@@ -224,16 +308,19 @@ export function FolderPickerModal({
               await window.kiagent.invoke('sources:list-folders', {
                 special: modeKey as RootMode,
               })
-            ).entries;
+            ).entries.map((e) => ({ ...e, id: e.path }));
         // A newer load started while we were awaiting — let it win.
         if (gen !== loadGen.current) return;
         setTree(entries.map((e) => toNode(e, 0)));
       } catch (err) {
-        // ignore — the user can retry via the mode buttons
+        // A newer load started while we were failing — its result, or its own
+        // error, owns the tree area.
+        if (gen !== loadGen.current) return;
         if (dataSourceRef.current) {
           // eslint-disable-next-line no-console
           console.warn('folder picker: listing roots failed', err);
         }
+        setRootsFailed(true);
       } finally {
         unmarkLoading(modeKey);
       }
@@ -299,6 +386,21 @@ export function FolderPickerModal({
     walk(tree);
   }, [tree, fetchCount]);
 
+  // A preselected root arrives with no tree location — its row may never be
+  // listed. The first time one DOES appear in a listing, record where it sits
+  // so subsumption and implied-descendant rendering can see it. `learnPath`
+  // returns the same map reference when there is nothing to learn, so the
+  // vast majority of these calls are a setState bail-out.
+  useEffect(() => {
+    const walk = (nodes: FolderNode[]): void => {
+      for (const n of nodes) {
+        setChecked((prev) => learnPath(prev, n.id, n.name, n.path));
+        if (n.children.length > 0) walk(n.children);
+      }
+    };
+    walk(tree);
+  }, [tree]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') onClose();
@@ -309,57 +411,84 @@ export function FolderPickerModal({
 
   function switchMode(next: string): void {
     setMode(next);
-    setSelected(null);
-    setSelectedName(null);
+    setSingle(null);
     void loadRoots(next);
   }
 
   function toggleChecked(node: FolderNode): void {
-    setChecked((prev) => toggleSelection(prev, node.path, node.name));
+    setChecked((prev) => toggleSelection(prev, node.id, node.name, node.path));
   }
 
-  function removeChecked(path: string): void {
+  function removeChecked(id: string): void {
     setChecked((prev) => {
       const next = new Map(prev);
-      next.delete(path);
+      next.delete(id);
       return next;
     });
   }
 
-  /** True when `path` is covered by an already-tracked root — see the
-   *  `existingPaths` prop doc for what that means for the row. */
-  function isTracked(path: string): boolean {
-    return existingPaths.some((root) => isUnder(path, root));
+  /** True when this row is covered by an already-tracked root AND is not
+   *  itself part of this account's selection. DECISIONS A-6: `selected` and
+   *  `existingPaths` are independent, and when a row matches both, `selected`
+   *  wins — an account's own current root must stay checked and removable,
+   *  never render as somebody else's inert `tracked` pill. Keyed by id, so it
+   *  holds from the first render, before any listing has given the entry a
+   *  comparable path. */
+  function isTracked(node: FolderNode): boolean {
+    if (checked.has(node.id)) return false;
+    return existingPaths.some((root) => isUnder(node.path, root));
   }
 
   function handleRowSelect(node: FolderNode): void {
-    if (isTracked(node.path)) return; // tracked rows are inert to selection
+    if (isTracked(node)) return; // tracked rows are inert to selection
     if (multiSelect) toggleChecked(node);
-    else {
-      setSelected(node.path);
-      setSelectedName(node.name);
-    }
+    else setSingle({ id: node.id, name: node.name, path: node.path });
+  }
+
+  /** Clear a node's recorded listing failure and re-run its expansion. The
+   *  node is still `loaded:false` (useLazyTree's catch left it untouched), so
+   *  toggleExpand issues the child listing again rather than just flipping a
+   *  chevron. */
+  function retryChildren(node: FolderNode): void {
+    setFailedNodes((prev) => {
+      const next = new Set(prev);
+      next.delete(node.path);
+      return next;
+    });
+    void toggleExpand(node);
   }
 
   function confirmSelect(): void {
     if (multiSelect) {
       if (checked.size === 0) return;
-      // toggleChecked keeps the map an antichain (no path is an ancestor of
-      // another), but re-normalize defensively — an overlapping pair here
-      // would double-index the same files as two accounts.
-      onConfirm(coveringRoots([...checked.keys()]));
+      // toggleSelection/learnPath keep the LOCATED entries an antichain, but
+      // re-normalize defensively — an overlapping pair here would
+      // double-index the same files. Entries whose row was never listed pass
+      // through untouched: their ancestry is unknowable renderer-side, and
+      // they came from the source's own covering set.
+      const locatedPaths = [...checked.values()]
+        .map((e) => e.path)
+        .filter((p): p is string => p !== null);
+      const keep = new Set(coveringRoots(locatedPaths));
+      onConfirm(
+        [...checked]
+          .filter(([, e]) => e.path === null || keep.has(e.path))
+          .map(([id]) => id),
+      );
     } else {
-      if (!selected) return;
-      onConfirm([selected]);
+      if (!single) return;
+      onConfirm([single.id]);
     }
-    onClose();
+    // A-8: when the owner keeps the modal mounted it is because the save can
+    // still be REJECTED, and the selection must survive to be corrected.
+    if (!keepOpenOnConfirm) onClose();
   }
 
-  const checkState = (path: string): CheckState => {
-    if (!multiSelect) return path === selected ? 'explicit' : 'none';
-    if (checked.has(path)) return 'explicit';
-    for (const root of checked.keys()) {
-      if (isUnder(path, root)) return 'implied';
+  const checkState = (node: FolderNode): CheckState => {
+    if (!multiSelect) return node.id === single?.id ? 'explicit' : 'none';
+    if (checked.has(node.id)) return 'explicit';
+    for (const e of checked.values()) {
+      if (e.path !== null && isUnder(node.path, e.path)) return 'implied';
     }
     return 'none';
   };
@@ -382,13 +511,21 @@ export function FolderPickerModal({
   let pending = 0;
   let unavailable = 0;
   if (multiSelect) {
-    for (const p of checked.keys()) {
-      const c = countCache.current.get(p);
+    for (const e of checked.values()) {
+      if (e.path === null) {
+        // Never listed this session: there is no path to look a count up
+        // under, and the count effect only walks RENDERED rows — so this must
+        // settle as unavailable rather than sitting in `pending` forever and
+        // pinning the footer on "counting…".
+        unavailable += 1;
+        continue;
+      }
+      const c = countCache.current.get(e.path);
       if (c) {
         countedRoots += 1;
         knownTotal += c.count;
         if (c.capped) anyCapped = true;
-      } else if (uncountable.current.has(p)) unavailable += 1;
+      } else if (uncountable.current.has(e.path)) unavailable += 1;
       else pending += 1;
     }
   }
@@ -399,34 +536,52 @@ export function FolderPickerModal({
         ? null // every root settled countless — no estimate to show
         : formatCount(knownTotal, anyCapped || pending > 0 || unavailable > 0);
 
+  // `purpose` is copy only. Single-select has no folder-SET semantics, so it
+  // keeps its historical strings regardless.
+  const manage = multiSelect && purpose === 'manage';
+  const title = multiSelect
+    ? manage
+      ? 'Manage tracked folders'
+      : 'Choose folders'
+    : 'Choose a folder';
   const selectedCount = `${checked.size} ${checked.size === 1 ? 'folder' : 'folders'} selected`;
+  const emptyLine = manage
+    ? // DECISIONS R3: the modal never lets the user save an empty set; the
+      // way out is removing the source, not emptying its folder list.
+      'Keep at least one folder — remove this source to stop tracking it entirely.'
+    : 'No folders selected';
   const footerSummary = multiSelect
     ? checked.size === 0
-      ? 'No folders selected'
+      ? emptyLine
       : filesEstimate === null
         ? selectedCount
         : `${selectedCount} · ${filesEstimate}`
-    : selected === null
+    : single === null
       ? 'No folder selected'
       : dataSource
-        ? (selectedName ?? selected)
-        : selected;
-  const footerDisabled = multiSelect ? checked.size === 0 : !selected;
-  const footerLabel = multiSelect
-    ? `Add ${checked.size} ${checked.size === 1 ? 'folder' : 'folders'}`
-    : 'Select folder';
+        ? single.name
+        : single.path;
+  const footerDisabled =
+    saving || (multiSelect ? checked.size === 0 : single === null);
+  const footerLabel = saving
+    ? 'Saving…'
+    : multiSelect
+      ? manage
+        ? 'Save folders'
+        : `Add ${checked.size} ${checked.size === 1 ? 'folder' : 'folders'}`
+      : 'Select folder';
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Choose a folder"
+      aria-label={title}
       onClick={onClose}
       className="fp-backdrop"
     >
       <div onClick={(e) => e.stopPropagation()} className="tray-pop fp-modal">
         <header className="fp-head">
-          <h3 className="fp-title">Choose a folder</h3>
+          <h3 className="fp-title">{title}</h3>
           <button
             type="button"
             className="btn ghost sm icon-only"
@@ -459,6 +614,18 @@ export function FolderPickerModal({
               </span>
             </div>
           )}
+          {rootsFailed && tree.length === 0 && (
+            <div className="fp-row failed depth-0">
+              <span className="t-meta">Couldn’t list folders.</span>
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={() => void loadRoots(mode)}
+              >
+                Retry
+              </button>
+            </div>
+          )}
           {tree.map((root) => (
             <TreeRow
               key={root.path}
@@ -467,7 +634,9 @@ export function FolderPickerModal({
               checkState={checkState}
               isTracked={isTracked}
               loadingNodes={loadingNodes}
+              failedNodes={failedNodes}
               onSelect={handleRowSelect}
+              onRetry={retryChildren}
               onToggleExpand={toggleExpand}
             />
           ))}
@@ -475,19 +644,31 @@ export function FolderPickerModal({
 
         {multiSelect && checked.size > 0 && (
           <div className="fp-chip-tray">
-            {[...checked.entries()].map(([path, name]) => (
-              <span key={path} className="fp-chip" title={path}>
-                <span className="leaf">{name}</span>
+            {[...checked].map(([id, e]) => (
+              <span
+                key={id}
+                className="fp-chip"
+                // A dataSource picker's path is the adapter's synthetic
+                // '/'-joined encoding of provider ids — never show it.
+                title={dataSource ? e.name : (e.path ?? e.name)}
+              >
+                <span className="leaf">{e.name}</span>
                 <button
                   type="button"
                   className="x"
-                  aria-label={`remove ${name} from selection`}
-                  onClick={() => removeChecked(path)}
+                  aria-label={`remove ${e.name} from selection`}
+                  onClick={() => removeChecked(id)}
                 >
                   <Icon name="x" size={10} />
                 </button>
               </span>
             ))}
+          </div>
+        )}
+
+        {error != null && error !== '' && (
+          <div className="fp-notice si-error" role="alert">
+            {error}
           </div>
         )}
 
@@ -513,10 +694,12 @@ export function FolderPickerModal({
 function TreeRow(props: {
   node: FolderNode;
   multiSelect: boolean;
-  checkState: (path: string) => CheckState;
-  isTracked: (path: string) => boolean;
+  checkState: (node: FolderNode) => CheckState;
+  isTracked: (node: FolderNode) => boolean;
   loadingNodes: Set<string>;
+  failedNodes: Set<string>;
   onSelect: (node: FolderNode) => void;
+  onRetry: (node: FolderNode) => void;
   onToggleExpand: (n: FolderNode) => Promise<void>;
 }): React.ReactElement {
   const {
@@ -525,11 +708,13 @@ function TreeRow(props: {
     checkState,
     isTracked,
     loadingNodes,
+    failedNodes,
     onSelect,
+    onRetry,
     onToggleExpand,
   } = props;
-  const state = checkState(node.path);
-  const tracked = isTracked(node.path);
+  const state = checkState(node);
+  const tracked = isTracked(node);
   const checked = state !== 'none';
   const isLoading = loadingNodes.has(node.path);
   const label = countLabel(node);
@@ -584,6 +769,18 @@ function TreeRow(props: {
         <span className="fp-name">{node.name}</span>
         {label && <span className="fp-count">{label}</span>}
       </div>
+      {failedNodes.has(node.path) && (
+        <div className={`fp-row failed depth-${node.depth + 1}`}>
+          <span className="t-meta">Couldn’t list this folder.</span>
+          <button
+            type="button"
+            className="btn ghost sm"
+            onClick={() => onRetry(node)}
+          >
+            Retry
+          </button>
+        </div>
+      )}
       {node.expanded &&
         node.children.map((c) => (
           <TreeRow
@@ -593,7 +790,9 @@ function TreeRow(props: {
             checkState={checkState}
             isTracked={isTracked}
             loadingNodes={loadingNodes}
+            failedNodes={failedNodes}
             onSelect={onSelect}
+            onRetry={onRetry}
             onToggleExpand={onToggleExpand}
           />
         ))}
