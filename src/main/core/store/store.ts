@@ -110,6 +110,22 @@ export interface CoreStore extends Store {
     id: AccountId,
     config: Record<string, unknown>,
   ): Promise<void>;
+  /** Status-only account write: `status` and `last_error`, nothing else.
+   *
+   *  It exists because `store.commit` is otherwise the ONLY door to a status
+   *  change, and `write-tx.ts:423-431` stamps `last_sync_at = ?` on every
+   *  commit unconditionally — so an empty `commit({documents: [], cursor, …})`
+   *  used purely to move a status makes the account render as having just
+   *  synced. `engine.reconnect` is the caller that must not lie about that:
+   *  it fetches no page and commits no document.
+   *
+   *  Omitted keys are left alone (`COALESCE` / the same `CASE WHEN` idiom the
+   *  commit path uses for `last_error`), so `{ error: null }` CLEARS the error
+   *  while `{}` would clear nothing. Never touches `cursor` or `config`. */
+  setAccountStatus(
+    id: AccountId,
+    patch: { status?: SyncStatus; error?: string | null },
+  ): Promise<void>;
   /** (externalId, type, seq) for every non-archived document under an
    *  account — the diff surface `reconcile()` archiving needs, without
    *  paying for full Document rows (title/markdown/metadata) just to compare
@@ -1173,6 +1189,27 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         {
           sql: `UPDATE accounts SET config = ? WHERE id = ?`,
           params: [JSON.stringify(config), id],
+        },
+        {
+          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
+          params: [id, now()],
+        },
+      ]);
+      nudge.emit('commit');
+    },
+
+    async setAccountStatus(id, patch) {
+      await db.batch([
+        {
+          sql: `UPDATE accounts SET status = COALESCE(?, status),
+                  last_error = CASE WHEN ? THEN ? ELSE last_error END
+                WHERE id = ?`,
+          params: [
+            patch.status ?? null,
+            patch.error !== undefined ? 1 : 0,
+            patch.error ?? null,
+            id,
+          ],
         },
         {
           sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,

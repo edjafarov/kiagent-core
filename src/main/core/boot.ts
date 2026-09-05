@@ -50,6 +50,52 @@ export interface SourceRegistry {
   unregister(id: string): void;
 }
 
+/** The one in-process source registry: bundled sources register here at boot,
+ *  extension sources through `extension-platform.ts:338`
+ *  (`deps.sources.register(makeSource(s))`). Lifted out of `bootCore` so
+ *  `list()`'s derivation below is unit-testable — `bootCore` cannot run
+ *  without a DB worker thread and nothing in the repo boots it in a test. The
+ *  body is byte-identical to the literal it replaces, apart from `list()`. */
+export function createSourceRegistry(): SourceRegistry {
+  const registry = new Map<string, Source>();
+  return {
+    register(source) {
+      registry.set(source.descriptor.id, source);
+    },
+    get: (id) => registry.get(id),
+    /** C-9. `hasReauthenticate` is CORE-DERIVED, here and nowhere else: this
+     *  is the one place that turns registered Sources into descriptors, and
+     *  `main.ts:403` (`'sources:list': () => p.sources.list()`) hands the
+     *  result straight to the renderer, where Task 9 routes ErrorCard's
+     *  Reconnect on it.
+     *
+     *  SPREAD FIRST, THEN SET — never `??`. A connector may author
+     *  `hasReauthenticate` on its own descriptor (the field is optional on
+     *  `SourceDescriptor`, so a wrong value type-checks) and core must
+     *  overwrite it in BOTH directions. `s.descriptor.hasReauthenticate ??
+     *  typeof s.reauthenticate === 'function'` would let a connector claiming
+     *  `true` route the user into `accounts:start-reconnect`, whose engine
+     *  side throws `<source> cannot be reconnected — remove this source and
+     *  add it again` and leaves Remove — which deletes both search indexes,
+     *  every document row, the vault credentials and the account row — as the
+     *  only in-app move.
+     *
+     *  `typeof` is also the right question for a PROXIED extension source:
+     *  `source-proxy.makeSource` attaches optional verbs conditionally behind
+     *  the wire flags (`if (entry.hasFetchBytes) { source.fetchBytes = … }`,
+     *  `source-proxy.ts:259-260`), so an extension without the verb has no
+     *  property at all — there is no always-present stub to see through. */
+    list: () =>
+      [...registry.values()].map((s) => ({
+        ...s.descriptor,
+        hasReauthenticate: typeof s.reauthenticate === 'function',
+      })),
+    unregister(id) {
+      registry.delete(id);
+    },
+  };
+}
+
 /** Outbound Senders contributed by EXTENSIONS, keyed by source id — the
  *  mirror of SourceRegistry for the send pipeline. Bundled transports do NOT
  *  live here (they are built directly in outbound/senders); the two sides are
@@ -109,17 +155,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const scheduler = createScheduler(store, deps.env, sink);
   const convert = createConverter(sink);
 
-  const registry = new Map<string, Source>();
-  const sources: SourceRegistry = {
-    register(source) {
-      registry.set(source.descriptor.id, source);
-    },
-    get: (id) => registry.get(id),
-    list: () => [...registry.values()].map((s) => s.descriptor),
-    unregister(id) {
-      registry.delete(id);
-    },
-  };
+  const sources = createSourceRegistry();
 
   const senderRegistry = new Map<string, Sender>();
   const senders: SenderRegistry = {

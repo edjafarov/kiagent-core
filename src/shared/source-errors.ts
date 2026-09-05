@@ -34,3 +34,39 @@ export function sourceErrorCode(err: unknown): SourceErrorCode | undefined {
   const code = (err as { code?: unknown } | null)?.code;
   return code === 'auth' || code === 'permanent' ? code : undefined;
 }
+
+/** A reconnect signed in as somebody else. Thrown by `Source.reauthenticate`
+ *  BEFORE it lets the platform capture anything, so the mismatch costs the
+ *  account nothing: `engine.reconnect` only reaches `vault.save` when
+ *  `reauthenticate` RESOLVES.
+ *
+ *  Deliberately carries no `code`: the taxonomy above drives the pull loop's
+ *  retry/needsReauth decisions, and this error never reaches it. That is also
+ *  why the wire cannot carry it — `extension-rpc.ts` ships only `{message,
+ *  code}` for a source error, so a mismatch raised inside a PROXIED connector
+ *  arrives in main as a plain Error and stages as 'reauth-provider' rather
+ *  than 'reauth-identity'. Accepted: giving it a taxonomy code to survive the
+ *  wire would make the pull loop treat every mismatch as auth/permanent. */
+export class IdentityMismatchError extends Error {
+  // Subclassing Error does not set `name`, and the stage classifier's
+  // instanceof check cannot survive a structured clone — set it explicitly so
+  // there is a stable string fallback.
+  readonly name = 'IdentityMismatchError';
+}
+
+/** The ONE comparison rule for "is this the same provider identity". Trimmed
+ *  and case-insensitive, because providers round-trip mailbox-local case and
+ *  the picker/OAuth callback both pad. Never a substring or domain match — a
+ *  loose rule here re-points an existing corpus at a different mailbox.
+ *
+ *  Takes exactly the two identities, never a credential, so a mismatch can be
+ *  logged and shown verbatim. */
+export function assertAccountIdentity(expected: string, actual: string): void {
+  const norm = (s: string): string => s.trim().toLowerCase();
+  if (norm(expected) === norm(actual)) return;
+  throw new IdentityMismatchError(
+    `this reconnect signed in as ${actual.trim()}, but this account is ` +
+      `${expected.trim()} — sign in with the original account, or add the ` +
+      `new one as a separate source`,
+  );
+}

@@ -400,19 +400,13 @@ function registerIpc(
    */
   const handlers: InvokeHandlers = {
     'app:get-state': () => getLastPush(),
-    /** B-3 / C-4 producer fill. `InvokeHandlers` (`shared/ipc.ts:448`) is a
-     *  mapped type over `InvokeChannel`, so declaring a channel in `Invokes`
-     *  without an entry here is TS2739 on this literal. These two throw until
-     *  **Task 7** replaces the bodies with `broker.startReconnect` /
-     *  `broker.startManageFolders`. A throw crosses `ipcMain.handle` as a
-     *  rejected invoke, which is what an unimplemented channel should do; a
-     *  silent `undefined` would not. */
-    'accounts:start-reconnect': () => {
-      throw new Error('accounts:start-reconnect: not wired yet (Task 7)');
-    },
-    'accounts:start-manage-folders': () => {
-      throw new Error('accounts:start-manage-folders: not wired yet (Task 7)');
-    },
+    // Account-scoped siblings of accounts:add. They take an accountId, so the
+    // broker claims the account's flow slot BEFORE doing any work — and their
+    // cancel path never calls engine.remove.
+    'accounts:start-reconnect': ({ accountId, oauthClient }) =>
+      broker.startReconnect(accountId, { oauthClient }),
+    'accounts:start-manage-folders': ({ accountId }) =>
+      broker.startManageFolders(accountId),
     'sources:list': () => p.sources.list(),
     'sources:count-files': async ({ path: rawPath }) => {
       const resolved = path.resolve(rawPath);
