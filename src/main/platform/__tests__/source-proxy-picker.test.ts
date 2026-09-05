@@ -47,6 +47,29 @@ const noCountSpec: FolderPickerSpec = {
   children: async () => [],
 };
 
+/** Opaque provider ids that break every naive path/key assumption: a
+ *  Drive-style id, one carrying '/' and '%' (the FolderNode.id contract no
+ *  longer bans separators), and a Windows-style backslash. They must arrive
+ *  byte-identical or the renderer pre-checks the wrong rows. */
+const SELECTED: FolderNode[] = [
+  {
+    id: '0B246AxIx6hdAeTBrQ0xLbVhuRTQ',
+    name: 'Shared drive',
+    hasChildren: true,
+  },
+  { id: 'drives/b!x%2Fy/items/01ABC', name: 'a/b 100%', hasChildren: true },
+  { id: 'C:\\Users\\ed\\Docs', name: 'Docs', hasChildren: false },
+];
+
+const preselectedSpec: FolderPickerSpec = {
+  modes: [{ key: 'drive', label: 'My Drive' }],
+  multiSelect: true,
+  selected: SELECTED,
+  purpose: 'manage',
+  roots: async () => SELECTED,
+  children: async () => [],
+};
+
 function descriptor(id: string) {
   return { id, name: id, documentTypes: ['t'], auth: 'none' as const };
 }
@@ -92,6 +115,16 @@ const fixtureModule = {
           async *pull() {},
           toDocument: () => null,
         },
+        {
+          descriptor: descriptor('picker-preselected'),
+          async connect(auth: AuthChannel) {
+            const picked = await auth.pickFolders(preselectedSpec);
+            return { identifier: picked.map((n) => n.id).join('|') };
+          },
+          // eslint-disable-next-line no-empty-function, @typescript-eslint/no-empty-function
+          async *pull() {},
+          toDocument: () => null,
+        },
       ],
     };
   },
@@ -101,7 +134,17 @@ async function setup() {
   const { main, child } = createInMemoryHostPair();
   const mainEp = createRpcEndpoint(main);
   const proxySet = createSourceProxySet(mainEp);
-  mainEp.onCall((ns, m, a) => proxySet.handleCall(ns, m, a));
+  const wireCalls: Array<{ ns: string; method: string; args: unknown[] }> = [];
+  // Record the raw child→main payload BEFORE main interprets it — that is
+  // A-10 hop 2, the literal WirePickerSpec — and structuredClone both legs,
+  // because the real utilityProcess transport clones every payload while the
+  // in-memory pair passes references: an id that cannot survive a clone must
+  // fail HERE, not in production.
+  mainEp.onCall(async (ns, m, a) => {
+    const args = structuredClone(a);
+    wireCalls.push({ ns, method: m, args: structuredClone(args) });
+    return structuredClone(await proxySet.handleCall(ns, m, args));
+  });
   const activated = new Promise<Contributions>((resolve) => {
     const off = mainEp.onNotify((msg) => {
       if (msg.kind === 'activated') {
@@ -120,7 +163,7 @@ async function setup() {
     proxySet.makeSource(
       contributions.sources.find((s) => s.descriptor.id === id)!,
     );
-  return { bySourceId, proxySet, mainEp };
+  return { bySourceId, proxySet, mainEp, wireCalls };
 }
 
 function baseAuth(overrides: Partial<AuthChannel>): AuthChannel {
@@ -136,12 +179,14 @@ function baseAuth(overrides: Partial<AuthChannel>): AuthChannel {
 
 describe('pickFolders over the extension RPC boundary', () => {
   it('suspends the child connect; main drives roots/children/count through the wire; confirm resolves it', async () => {
-    const { bySourceId } = await setup();
+    const { bySourceId, wireCalls } = await setup();
     const source = bySourceId('picker-basic');
 
     let seen: {
       modes: FolderPickerSpec['modes'];
       multiSelect: boolean | undefined;
+      selected: FolderNode[] | undefined;
+      purpose: string | undefined;
       roots: FolderNode[];
       kids: FolderNode[];
       count: unknown;
@@ -154,6 +199,8 @@ describe('pickFolders over the extension RPC boundary', () => {
         seen = {
           modes: spec.modes,
           multiSelect: spec.multiSelect,
+          selected: spec.selected,
+          purpose: spec.purpose,
           roots,
           kids,
           count: await spec.count?.(roots[0].id),
@@ -166,9 +213,28 @@ describe('pickFolders over the extension RPC boundary', () => {
     await expect(source.connect(auth)).resolves.toEqual({
       identifier: 'root-drive+root-drive.child',
     });
+
+    // A-10 hop 2 — the literal payload that crossed the wire. A spec that
+    // sets neither field arrives DEFAULTED, never undefined: the renderer's
+    // "nothing is selected" state must be a real [] it can trust, and the
+    // defaulting happens once, child-side, in toWirePickerSpec.
+    const wire = wireCalls.find(
+      (c) => c.ns === 'auth' && c.method === 'pickFolders',
+    )!;
+    expect(wire.args[1]).toEqual({
+      modes: [{ key: 'drive', label: 'My Drive' }],
+      multiSelect: true,
+      hasCount: true,
+      selected: [],
+      purpose: 'connect',
+    });
+
+    // A-10 hop 3 — what main re-synthesized and handed to the picker.
     expect(seen).toEqual({
       modes: [{ key: 'drive', label: 'My Drive' }],
       multiSelect: true,
+      selected: [],
+      purpose: 'connect',
       roots: [{ id: 'root-drive', name: 'Root', hasChildren: true }],
       kids: [{ id: 'root-drive.child', name: 'Child', hasChildren: false }],
       count: { count: 7, capped: true },
@@ -242,5 +308,40 @@ describe('pickFolders over the extension RPC boundary', () => {
     await expect(
       mainEp.call('source', 'picker-count', [99, 'x']),
     ).rejects.toThrow('no active folder picker');
+  });
+
+  it('A-10 hops 1-3: selected/purpose cross the wire unchanged, including ids with /, % and backslash', async () => {
+    const { bySourceId, wireCalls } = await setup();
+    const source = bySourceId('picker-preselected');
+
+    const got: { spec?: FolderPickerSpec } = {};
+    const auth = baseAuth({
+      async pickFolders(spec: FolderPickerSpec) {
+        got.spec = spec;
+        return spec.selected ?? [];
+      },
+    });
+
+    await expect(source.connect(auth)).resolves.toEqual({
+      identifier:
+        '0B246AxIx6hdAeTBrQ0xLbVhuRTQ|drives/b!x%2Fy/items/01ABC|C:\\Users\\ed\\Docs',
+    });
+
+    // Hop 2: the ids survived the structured clone byte-identical.
+    const wire = wireCalls.find(
+      (c) => c.ns === 'auth' && c.method === 'pickFolders',
+    )!;
+    expect(wire.args[1]).toEqual({
+      modes: [{ key: 'drive', label: 'My Drive' }],
+      multiSelect: true,
+      hasCount: false,
+      selected: SELECTED,
+      purpose: 'manage',
+    });
+
+    // Hop 3: main handed the picker the same set, not a re-synthesized one.
+    const spec = got.spec!;
+    expect(spec.purpose).toBe('manage');
+    expect(spec.selected).toEqual(SELECTED);
   });
 });
