@@ -55,6 +55,7 @@ function docChange(
       languages: [],
       ingestedAt: ts,
       updatedAt: ts,
+      scopeRootId: null,
       ...over,
     },
   };

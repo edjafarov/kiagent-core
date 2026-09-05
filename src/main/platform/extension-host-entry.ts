@@ -177,6 +177,8 @@ export function runExtensionHost(
           descriptor: s.descriptor,
           hasFetchBytes: typeof s.fetchBytes === 'function',
           hasReconcile: typeof s.reconcile === 'function',
+          hasManageFolders: typeof s.manageFolders === 'function',
+          hasReauthenticate: typeof s.reauthenticate === 'function',
         })),
         tools: [...tools.values()].map((t) => ({
           name: t.name,

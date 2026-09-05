@@ -34,6 +34,7 @@ const baseDoc = {
   languages: [],
   ingestedAt: '2026-01-01',
   updatedAt: '2026-01-01',
+  scopeRootId: null,
 } as Document;
 
 const change = (doc: Partial<Document> = {}): Change =>

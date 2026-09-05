@@ -188,6 +188,9 @@ export interface DocRow {
   languages: string;
   ingested_at: string;
   updated_at: string;
+  /** v3. `undefined` on a pre-v3 database — every read site is `SELECT *`,
+   *  so `toDocument`'s `?? null` absorbs the absence. */
+  scope_root_id: string | null;
 }
 
 export interface AccountRow {
@@ -222,6 +225,7 @@ function toDocument(r: DocRow): Document {
     languages: JSON.parse(r.languages),
     ingestedAt: r.ingested_at,
     updatedAt: r.updated_at,
+    scopeRootId: r.scope_root_id ?? null,
   };
 }
 

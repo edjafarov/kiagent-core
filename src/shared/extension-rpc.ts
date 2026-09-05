@@ -44,6 +44,17 @@ export interface Contributions {
     descriptor: SourceDescriptor;
     hasFetchBytes: boolean;
     hasReconcile: boolean;
+    /** A4: `source-proxy.makeSource` attaches optional methods ONLY behind
+     *  these flags (`source-proxy.ts:261` fetchBytes, `:282` reconcile), so a
+     *  capability absent here can never be true on a proxied source no matter
+     *  what the connector implements.
+     *
+     *  NOT the same field as `SourceDescriptor.hasReauthenticate` (C-9),
+     *  which is optional, renderer-facing, and stamped by Task 7 in
+     *  `src/main/core/boot.ts:118`. This one is required and rides the
+     *  extension-RPC wire only. */
+    hasManageFolders: boolean;
+    hasReauthenticate: boolean;
   }>;
   tools: ToolDescriptor[];
   /** Source ids this extension provides a Sender for (declared AND returned

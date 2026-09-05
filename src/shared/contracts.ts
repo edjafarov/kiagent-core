@@ -53,11 +53,21 @@ export interface DocumentInput {
   metadata: Record<string, unknown>;
   createdAt: string | null; // ISO-8601, origin time
   parent?: ExternalRef; // engine resolves in-transaction
+  /** The `FolderRootSelection.id` whose subtree contains this document.
+   *  Omit when it cannot be resolved — the store leaves it NULL on a new row,
+   *  untouched on an existing one (C-13's `COALESCE`), and warns; it
+   *  MUST NOT throw (see DECISIONS R5). */
+  scopeRootId?: string;
 }
 
 /** What the store holds: the input plus system fields. One shape — no
- *  Pending/stored twin, no SDK copy, no renderer mirror. */
-export interface Document extends Omit<DocumentInput, 'parent' | 'binary'> {
+ *  Pending/stored twin, no SDK copy, no renderer mirror.
+ *
+ *  NOTE the extended Omit — `Document` narrows `scopeRootId` to
+ *  `string | null`, which is illegal as a plain redeclaration (TS2430).
+ *  Do not "simplify" the omit list back to two members. */
+export interface Document
+  extends Omit<DocumentInput, 'parent' | 'binary' | 'scopeRootId'> {
   id: DocumentId;
   accountId: AccountId;
   parentId: DocumentId | null;
@@ -70,6 +80,9 @@ export interface Document extends Omit<DocumentInput, 'parent' | 'binary'> {
   languages: string[];
   ingestedAt: string;
   updatedAt: string;
+  /** NULL when the emitting source could not attribute the document to a
+   *  selected root, or when the source is not folder-scoped at all. */
+  scopeRootId: string | null;
 }
 
 /** When recurring work runs. Declared as DATA on contributions — never a
@@ -307,6 +320,14 @@ export interface SourceDescriptor {
   multiAccount?: boolean;
   /** Default re-pull cadence once backfill completes. */
   cadence?: Cadence;
+  /** This source scopes its corpus to a user-selected set of folder roots.
+   *  Enables the Tracked folders card and `accounts:start-manage-folders`.
+   *  A descriptor with this flag MUST implement `manageFolders`. */
+  folderScope?: boolean;
+  /** Populated by CORE at registry-list time, never authored by a connector —
+   *  a value set in a manifest or a connector's own descriptor is ignored.
+   *  Lets the renderer route Reconnect without guessing. */
+  hasReauthenticate?: boolean;
 }
 
 /** 'backfill' = catching up (drives the progress bar); 'live' = current. */
@@ -330,9 +351,27 @@ export interface Session {
   log(level: LogLevel, msg: string): void;
 }
 
-/** A folder node shown in the connect-time folder picker. `id` is opaque and
- *  source-defined (a Drive folder id, a filesystem path, …); it never
- *  contains `/`. */
+/** One selected folder whose complete subtree is in scope. `id` is the
+ *  source's own durable identity for that folder — an absolute normalized
+ *  path for local-folder, an opaque provider item id for Drive/OneDrive.
+ *  `name` is display-only and is NEVER used to identify a root. */
+export interface FolderRootSelection {
+  id: string;
+  name: string;
+}
+
+/** Canonical folder scope, written by every folder-scoped source. A `type`
+ *  alias, NOT an interface: `Account.config` is `Record<string, unknown>`,
+ *  and only a type alias gets the implicit index signature that makes the
+ *  assignment legal (an interface fails with TS2322). */
+export type FolderScopedConfig = {
+  folderRoots: FolderRootSelection[];
+};
+
+/** A folder node shown in the folder picker. `id` is opaque and
+ *  source-defined (a Drive folder id, an absolute filesystem path, …); ids
+ *  are fully opaque — the renderer adapter percent-encodes separators before
+ *  synthesizing tree paths. */
 export interface FolderNode {
   id: string;
   name: string;
@@ -355,6 +394,12 @@ export interface FolderPickerSpec {
   modes: Array<{ key: string; label: string }>;
   /** Allow selecting multiple folders (covering-root semantics). */
   multiSelect?: boolean;
+  /** The complete current covering set, pre-checked and REMOVABLE when the
+   *  picker opens. Distinct from the renderer's `existingPaths`, which makes
+   *  rows inert. Empty/omitted for a new connection. */
+  selected?: FolderNode[];
+  /** Drives copy and empty-selection rules only; never behaviour. */
+  purpose?: 'connect' | 'manage';
   /** Top-level nodes for a mode tab. */
   roots(modeKey: string): Promise<FolderNode[]>;
   /** Child FOLDERS of a node (files are not listed in the picker). */
@@ -375,6 +420,40 @@ export interface AuthChannel {
    *  Resolves with the selected folders (covering roots — never both a node
    *  and its own descendant). Rejects if the user cancels. */
   pickFolders(spec: FolderPickerSpec): Promise<FolderNode[]>;
+}
+
+/** The narrow channel a folder-scope edit gets. Deliberately NOT `AuthChannel`:
+ *  managing folders must never be able to start an OAuth flow. */
+export interface FolderSelectionChannel {
+  status(msg: string): void;
+  pickFolders(spec: FolderPickerSpec): Promise<FolderNode[]>;
+}
+
+/** What `manageFolders` returns. Core owns the durable write; the source only
+ *  computes. `cursor` is the source's own opaque cursor, transformed for the
+ *  new root set. */
+export interface FolderScopeUpdate<Cursor = unknown> {
+  config: Record<string, unknown> & FolderScopedConfig;
+  cursor: Cursor | null;
+  /** See DECISIONS R8 / A-1. The `scope_root_id` values whose live documents
+   *  leave scope with this save, computed BY THE SOURCE, which alone knows
+   *  containment. An EMPTY array means "archive nothing" and is the correct,
+   *  common answer whenever a retained root still covers every removed root —
+   *  de-selecting a subfolder of a still-selected My Drive, for one. Core
+   *  NEVER derives this by set-difference, and the store's predicate is an
+   *  `IN`-list, never a `NOT IN`. */
+  archiveScopeRootIds: string[];
+  /** See DECISIONS A-3 / C-1. Request the NULL-attribution repair: archive
+   *  this account's live rows whose `scope_root_id IS NULL` so a re-walk can
+   *  re-emit them attributed. Optional; absent means `false`.
+   *
+   *  MUST only be `true` when `cursor` ALSO forces a full re-establish —
+   *  Drive: `backfill_done:false` with `page_token` preserved; OneDrive:
+   *  `delta_tokens` emptied and the `backfill` key deleted. `contentHash`
+   *  excludes scope and both cloud connectors `hashSkip`, so without that
+   *  pairing nothing would ever re-emit an archived NULL row and the repair
+   *  is silent data loss. */
+  archiveNullScoped?: boolean;
 }
 
 /** The entire connector-authoring surface. */
@@ -408,6 +487,18 @@ export interface Source<Cursor = unknown, Item = unknown> {
    *  empty and >50% listing shrinkage unless the account's config just
    *  changed (see reconcilePass in engine.ts). */
   reconcile?(session: Session): AsyncIterable<ExternalRef[]>;
+  /** Edit this account's folder scope using its EXISTING credentials.
+   *  Must not authenticate. Returns the complete canonical config, a cursor
+   *  transformed for the new root set, and the archive set (R8); persists
+   *  nothing. */
+  manageFolders?(
+    session: Session,
+    channel: FolderSelectionChannel,
+  ): Promise<FolderScopeUpdate<Cursor>>;
+  /** Re-authenticate THIS account. Must verify the returned provider identity
+   *  belongs to `account` and throw otherwise. Returns no config: reconnect
+   *  never changes scope. */
+  reauthenticate?(account: Account, auth: AuthChannel): Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

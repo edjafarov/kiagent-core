@@ -37,22 +37,48 @@ export interface AppStatePush {
   rev: number;
 }
 
-/** Interactive connect-flow events (AuthChannel surfaced to the renderer). */
+/** Interactive connect-flow events (AuthChannel surfaced to the renderer).
+ *  Every variant carries `flowId`: the renderer routes on `evt.flowId !==
+ *  flowId` (`AddSourcePanel.tsx:83`), a union-wide property access that a
+ *  flowId-less variant would break with TS2339. `flowId` is a plain `string`
+ *  here and everywhere (A-6) — main's branded `Id<'flow'>` assigns into it. */
 export type ConnectEvent =
   | { flowId: string; kind: 'status'; msg: string }
   | { flowId: string; kind: 'qr'; qr: string }
   | { flowId: string; kind: 'prompt'; requestId: string; schema: unknown }
-  /** AuthChannel.pickFolders — open the shared folder picker; the tree is
-   *  served lazily over the accounts:picker-* invokes below (serializable
-   *  fields only; the spec's callbacks stay main-side, keyed by requestId). */
+  /** AuthChannel.pickFolders / FolderSelectionChannel.pickFolders — open the
+   *  shared folder picker; the tree is served lazily over the
+   *  accounts:picker-* invokes below (serializable fields only; the spec's
+   *  callbacks stay main-side, keyed by requestId). `selected` is the complete
+   *  current covering set, pre-checked AND removable — distinct from the
+   *  renderer's `existingPaths`, which renders rows inert. `purpose` drives
+   *  copy and empty-selection rules only, never behaviour. */
   | {
       flowId: string;
       kind: 'folder-picker';
       requestId: string;
       multiSelect: boolean;
       modes: Array<{ key: string; label: string }>;
+      selected: FolderNode[];
+      purpose: 'connect' | 'manage';
     }
   | { flowId: string; kind: 'done'; account: Account }
+  /** Reconnect terminal. NOT `done` — the account already exists, and `done`'s
+   *  `Account` payload would invite the renderer to treat a reconnect as a
+   *  fresh add. */
+  | { flowId: string; kind: 'reconnected'; accountId: AccountId }
+  /** Manage-folders terminal. The three counts are FOLDER counts, derived by
+   *  the connect broker from the before/after `folderRoots` sets — NOT
+   *  document counts. `applyFolderScope` returns `{archived, remaining}`
+   *  document counts; those are logged (A-7) and never sent here. */
+  | {
+      flowId: string;
+      kind: 'scope-saved';
+      accountId: AccountId;
+      added: number;
+      retained: number;
+      removed: number;
+    }
   | { flowId: string; kind: 'error'; msg: string };
 
 export interface SearchRequest {
@@ -224,6 +250,30 @@ export interface Invokes {
       sourceId: string;
       oauthClient?: { clientId: string; clientSecret: string };
     };
+    res: { flowId: string };
+  };
+  /** Re-authenticate an EXISTING account in place; progress arrives via
+   *  push:connect and terminates with `reconnected`. `oauthClient` (R2)
+   *  carries the gate's restricted/BYO Google client for the same reason
+   *  `accounts:add` does — core persists nothing. Spelled inline, and
+   *  structurally identical to main's `OAuthClientOverride`
+   *  (`auth/oauth-window.ts:33-36`): ipc.ts must stay main-free.
+   *
+   *  C-5: below this wire the client rides on the BROKER
+   *  (`connect-broker.startReconnect(accountId, { oauthClient })`), never on
+   *  the engine — `engine.reconnect(accountId, auth, signal?)` takes no
+   *  client. This req shape is unaffected by that ruling. */
+  'accounts:start-reconnect': {
+    req: {
+      accountId: AccountId;
+      oauthClient?: { clientId: string; clientSecret: string };
+    };
+    res: { flowId: string };
+  };
+  /** Edit an existing account's folder scope with its CURRENT credentials.
+   *  Never authenticates; terminates with `scope-saved`. */
+  'accounts:start-manage-folders': {
+    req: { accountId: AccountId };
     res: { flowId: string };
   };
   'accounts:prompt-answer': {
@@ -472,6 +522,8 @@ const INVOKE_CHANNEL_MAP = {
   'sources:count-files': 0,
   'sources:list-folders': 0,
   'accounts:add': 0,
+  'accounts:start-reconnect': 0,
+  'accounts:start-manage-folders': 0,
   'accounts:prompt-answer': 0,
   'accounts:cancel-flow': 0,
   'accounts:picker-roots': 0,
