@@ -1296,6 +1296,10 @@ describe('manageFolders', () => {
     // spelling `scope_root_id` was stamped with — no re-resolution, no
     // trailing-separator strip, no case fold at any layer.
     expect(update.archiveScopeRootIds).toEqual([dirB]);
+    // C-46/D5: nothing to re-attribute — no retained root covers dirB, which
+    // is precisely why it is archived instead. The two arrays are a PARTITION
+    // of the removed roots, so a removal shows up in exactly one of them.
+    expect(update.reattributeScopeRoots).toEqual([]);
     // DECISIONS C-1: the field exists and is optional; this source omits it.
     // C-34: core does not act on the flag in this train either way — the
     // store input no longer carries it and the engine does not forward it —
@@ -1314,7 +1318,7 @@ describe('manageFolders', () => {
     );
   });
 
-  it('archives NOTHING when a removed root is still covered by a retained parent', async () => {
+  it('RE-ATTRIBUTES rather than archiving when a removed root is still covered by a retained parent (C-46/D5)', async () => {
     // The case DECISIONS R8 exists for, end to end. The account tracks a
     // subfolder; the user widens the selection to its parent. The subfolder
     // "disappears" from folderRoots, but every one of its documents is still
@@ -1334,6 +1338,13 @@ describe('manageFolders', () => {
     );
 
     expect(update.archiveScopeRootIds).toEqual([]);
+    // C-46/D5 — and an empty archive set alone is NOT enough. Saying nothing
+    // leaves every one of those documents stamped with `sub` forever (nothing
+    // re-stamps a live row), so a later save that removes `parent` would not
+    // match them and they would stay searchable outside the selection. The
+    // source has real paths, so it can decide containment locally and say
+    // which retained root they now belong to.
+    expect(update.reattributeScopeRoots).toEqual([{ from: sub, to: parent }]);
     expect(
       (update.config.folderRoots as FolderRootSelection[]).map((r) => r.id),
     ).toEqual([parent]);

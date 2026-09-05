@@ -437,12 +437,47 @@ export interface FolderScopeUpdate<Cursor = unknown> {
   cursor: Cursor | null;
   /** See DECISIONS R8 / A-1. The `scope_root_id` values whose live documents
    *  leave scope with this save, computed BY THE SOURCE, which alone knows
-   *  containment. An EMPTY array means "archive nothing" and is the correct,
-   *  common answer whenever a retained root still covers every removed root —
-   *  de-selecting a subfolder of a still-selected My Drive, for one. Core
-   *  NEVER derives this by set-difference, and the store's predicate is an
-   *  `IN`-list, never a `NOT IN`. */
+   *  containment. An EMPTY array means "archive nothing" and is legal — a
+   *  pure widening (the user added a folder and removed none) is exactly that.
+   *  Core NEVER derives this by set-difference, and the store's predicate is
+   *  an `IN`-list, never a `NOT IN`.
+   *
+   *  **C-46/D2 — an empty array is NOT "the answer whenever a catch-all is
+   *  retained".** This doc block used to say so, and Google Drive's
+   *  `scopeRoots.includes('root') ? [] : removed` was written against it.
+   *  That is a defect: "My Drive is an ancestor of every removed root" is
+   *  false for shared-with-me and shared-drive roots, which the picker offers
+   *  as MODES of one multi-select, so a user can hold both in one selection.
+   *  Removing such a root then archived nothing and left its documents
+   *  searchable forever.
+   *
+   *  A removed root that a retained root really does cover belongs in
+   *  `reattributeScopeRoots`, not in silence: silence freezes the stale stamp
+   *  (both cloud connectors `hashSkip` an unchanged live row, so nothing ever
+   *  re-stamps it) and a later save that removes the COVERING root will not
+   *  match those rows either — C-46/D3's leak. Every removed root must land
+   *  in exactly one of the two arrays, or be genuinely still-selected. */
   archiveScopeRootIds: string[];
+  /** C-46/D5. The removed roots whose live documents STAY in scope because a
+   *  RETAINED root covers them: re-stamp `scope_root_id` from `from` to `to`
+   *  instead of archiving. Computed by the source, which alone knows folder
+   *  containment.
+   *
+   *  This is the third verb. Without it a source could only say "archive it"
+   *  (which forces a re-download of the whole subtree and opens a window in
+   *  which the user's documents are not searchable) or say nothing (which
+   *  leaks the stale stamp permanently, because `hashSkip` never refreshes a
+   *  live row). Re-attribution costs one UPDATE, no network, and no
+   *  searchability gap.
+   *
+   *  `to` must be a root the new `config.folderRoots` still contains, and
+   *  `from` must NOT also appear in `archiveScopeRootIds` — core THROWS on
+   *  that contradiction rather than picking an order, because a source that
+   *  says both about one root has a bug. Optional; absent means "none", and
+   *  the store applies it inside the same transaction as the archive, before
+   *  it. It writes NO `changes` row: `scope_root_id` is not user-visible
+   *  content and must not churn the feed. */
+  reattributeScopeRoots?: Array<{ from: string; to: string }>;
   /** See DECISIONS A-3 / C-1. Request the NULL-attribution repair: archive
    *  this account's live rows whose `scope_root_id IS NULL` so a re-walk can
    *  re-emit them attributed. Optional; absent means `false`.

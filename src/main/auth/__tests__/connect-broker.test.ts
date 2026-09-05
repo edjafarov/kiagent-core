@@ -719,6 +719,12 @@ describe('connect broker — startManageFolders', () => {
     // 'a' is RETAINED and nothing is removed, so the source names nothing to
     // archive. Core forwards this empty array; it must not invent one.
     archiveScopeRootIds: [],
+    // C-46/D5: 'b' was removed but 'a' still covers it, so its documents are
+    // re-stamped rather than archived. The broker is a courier for this field
+    // exactly as it is for the archive set — an array of OBJECTS, so a hop
+    // that rebuilt the update field by field would be caught by the verbatim
+    // assertion below.
+    reattributeScopeRoots: [{ from: 'b', to: 'a' }],
   };
 
   it('a cancel landing after manageFolders resolves NEVER removes the account and never applies the scope', async () => {
@@ -765,7 +771,8 @@ describe('connect broker — startManageFolders', () => {
     const { flowId } = h.broker.startManageFolders('acc1' as AccountId);
     await flush();
 
-    // Verbatim — including archiveScopeRootIds. The broker is a courier.
+    // Verbatim — including archiveScopeRootIds and reattributeScopeRoots.
+    // The broker is a courier.
     // Third argument (C-28.2): the config as it was when the picker OPENED,
     // never a fresher read. This is the value the store's CAS compares
     // against, so a config write that landed while the modal was open makes

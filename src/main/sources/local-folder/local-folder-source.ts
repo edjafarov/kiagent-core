@@ -19,7 +19,7 @@ import { advanceCursor, type LocalFolderCursor } from './cursor';
 import {
   folderScopedConfig,
   readFolderRoots,
-  removedRootIds,
+  partitionRemovedRoots,
   validateFolderRoots,
 } from './folder-roots';
 import { folderPickerSpec, selectionNodes } from './picker';
@@ -448,13 +448,22 @@ export async function* reconcile(
  * `manageFolders` lives here and not in `folder-roots.ts`: moving it there
  * is `TS2304: Cannot find name 'pruneToConfiguredRoots'`.
  *
- * `archiveScopeRootIds` is DECISIONS R8's local-folder rule, computed by
- * `removedRootIds`: a removed root contributes its id only when no retained
- * root satisfies `isUnder(removed, retained)`. Core must never derive this by
- * set-difference — de-selecting a subfolder of a still-selected parent
- * removes zero documents from scope and correctly yields `[]`. The ids it
- * returns are the CONFIG spellings (B-7) — the same strings `scope_root_id`
- * was stamped with — never the re-resolved picked ones.
+ * `archiveScopeRootIds` and `reattributeScopeRoots` are DECISIONS R8 and
+ * C-46/D5, computed together by `partitionRemovedRoots` so they cannot
+ * disagree: a removed root goes to `archive` only when NO retained root
+ * satisfies `isUnder(removed, retained)`, and to `reattribute` (aimed at that
+ * retained root) when one does. Core must never derive either by
+ * set-difference.
+ *
+ * De-selecting a subfolder of a still-selected parent removes zero documents
+ * from scope — but the right answer is NOT silence. Those rows stay stamped
+ * with the subfolder id, which is no longer in the config, so no later save
+ * can match them and they would outlive the selection (C-46/D3). This source
+ * holds real absolute paths, so containment is decidable locally and it can
+ * name the retained root they now belong to.
+ *
+ * The ids on both sides are the CONFIG spellings (B-7) — the same strings
+ * `scope_root_id` was stamped with — never the re-resolved picked ones.
  *
  * This return deliberately OMITS `archiveNullScoped`. The field exists on
  * `FolderScopeUpdate` (optional, default false — DECISIONS C-1), and omitting
@@ -486,10 +495,12 @@ export async function manageFolders(
     (session.account.cursor ?? null) as LocalFolderCursor,
     roots.map((r) => r.id),
   );
+  const removed = partitionRemovedRoots(current, roots);
   return {
     config: folderScopedConfig(session.account.config ?? {}, roots),
     cursor,
-    archiveScopeRootIds: removedRootIds(current, roots),
+    archiveScopeRootIds: removed.archive,
+    reattributeScopeRoots: removed.reattribute,
   };
 }
 

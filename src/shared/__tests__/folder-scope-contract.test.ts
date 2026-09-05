@@ -131,6 +131,47 @@ describe('FolderScopeUpdate carries R8 archive set', () => {
     ]);
   });
 
+  it('ACCEPTS the optional field reattributeScopeRoots and keeps it disjoint from the archive set (C-46/D5)', () => {
+    // The third verb: "this removed root's documents are STILL in scope,
+    // under a retained one". Neither "archive it" nor silence is correct
+    // there — the first forces a re-download and a searchability gap, the
+    // second freezes a stale stamp forever (C-46/D2, C-46/D3).
+    const update: FolderScopeUpdate<null> = {
+      config: { folderRoots: [ROOT] },
+      cursor: null,
+      archiveScopeRootIds: ['gone'],
+      reattributeScopeRoots: [{ from: 'moved', to: ROOT.id }],
+    };
+    expect(update.reattributeScopeRoots).toEqual([
+      { from: 'moved', to: ROOT.id },
+    ]);
+    expect(Object.keys(update).sort()).toEqual([
+      'archiveScopeRootIds',
+      'config',
+      'cursor',
+      'reattributeScopeRoots',
+    ]);
+
+    // Optional: omitted is `undefined`, and the engine's coercion is `?? []`.
+    const none: FolderScopeUpdate<null> = {
+      config: { folderRoots: [ROOT] },
+      cursor: null,
+      archiveScopeRootIds: [],
+    };
+    expect(none.reattributeScopeRoots).toBeUndefined();
+    expect(none.reattributeScopeRoots ?? []).toEqual([]);
+
+    // The two arrays must be DISJOINT — `applyFolderScope` throws otherwise.
+    // The type cannot express that, so the invariant is the store's and this
+    // is only its statement in the contract's own vocabulary.
+    const froms = new Set(
+      (update.reattributeScopeRoots ?? []).map((r) => r.from),
+    );
+    expect(
+      update.archiveScopeRootIds.filter((id) => froms.has(id)),
+    ).toHaveLength(0);
+  });
+
   it('ACCEPTS the optional fourth field archiveNullScoped (A-3 / C-1)', () => {
     // A-3: the flag is legal ONLY paired with a cursor that forces a full
     // re-establish. Drive's pairing is backfill_done:false with the page

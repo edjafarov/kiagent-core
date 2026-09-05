@@ -274,7 +274,8 @@ Module._resolveFilename = function (request, ...rest) {
   // `db.proc!(…)` branch whenever there is no raw `_conn` — i.e. always, in
   // the production main process). Registration in worker-entry.ts is the part
   // no in-process test can see, and so is the structured-clone round trip of
-  // `archiveScopeRootIds`.
+  // `archiveScopeRootIds` and of C-46/D5's `reattributeScopeRoots` — an ARRAY
+  // OF OBJECTS, the shape a hop that flattened the input would lose.
   it('runs applyFolderScope inside the worker (proc round-trip)', async () => {
     await spawnAndReady();
 
@@ -297,6 +298,15 @@ Module._resolveFilename = function (request, ...rest) {
           type: 'file',
           title: 'gone',
           markdown: 'document gone',
+          metadata: {},
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          externalId: 'moved',
+          scopeRootId: 'Y',
+          type: 'file',
+          title: 'moved',
+          markdown: 'document moved',
           metadata: {},
           createdAt: '2026-01-01T00:00:00Z',
         },
@@ -326,9 +336,12 @@ Module._resolveFilename = function (request, ...rest) {
           scope_roots: ['root'],
         },
         archiveScopeRootIds: ['X'],
+        // 'Y' was removed too, but the retained 'root' covers it — so its
+        // documents are re-stamped rather than archived (C-46/D5).
+        reattributeScopeRoots: [{ from: 'Y', to: 'root' }],
         expectedConfigJson: config,
       }),
-    ).toEqual({ archived: 1, remaining: 1, stale: false });
+    ).toEqual({ archived: 1, reattributed: 1, remaining: 2, stale: false });
 
     const rows = (await client!.all(
       `SELECT external_id, archived_at, scope_root_id FROM documents ORDER BY external_id`,
@@ -344,6 +357,9 @@ Module._resolveFilename = function (request, ...rest) {
         scope_root_id: 'X',
       },
       { external_id: 'keep', archived_at: null, scope_root_id: 'root' },
+      // The re-attribution crossed the worker boundary intact: live, and
+      // stamped with its new root.
+      { external_id: 'moved', archived_at: null, scope_root_id: 'root' },
     ]);
 
     // source 'worker' is not folder-scoped, so no legacy mirror is derived —
@@ -417,6 +433,9 @@ Module._resolveFilename = function (request, ...rest) {
           scope_roots: ['root'],
         },
         archiveScopeRootIds: ['X'],
+        // Hand-built wire payload, so the REQUIRED field must be spelled out
+        // here the way the typed client would send it (C-46/D5).
+        reattributeScopeRoots: [],
         expectedConfigJson: config,
       },
     });

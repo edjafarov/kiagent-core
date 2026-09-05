@@ -11,6 +11,7 @@ import {
   NO_ROOTS_ERROR,
   folderScopedConfig,
   readFolderRoots,
+  partitionRemovedRoots,
   removedRootIds,
   validateFolderRoots,
 } from '../folder-roots';
@@ -135,6 +136,67 @@ describe('removedRootIds (DECISIONS R8, local-folder rule)', () => {
     expect(
       removedRootIds([sel('/Users/ed')], [sel('/Users/edjafarov')]),
     ).toEqual(['/Users/ed']);
+  });
+});
+
+describe('partitionRemovedRoots (C-46/D5)', () => {
+  const sel = (id: string) => ({ id, name: path.basename(id) || id });
+
+  it('re-attributes a removed root to the retained root that covers it', () => {
+    // The case that used to produce an empty archive set and NOTHING else.
+    // Silence leaves those rows stamped '/a/sub' forever — no walk re-stamps
+    // a live row — so removing '/a' later would not match them and they would
+    // outlive the selection (C-46/D3).
+    expect(partitionRemovedRoots([sel('/a/sub')], [sel('/a')])).toEqual({
+      archive: [],
+      reattribute: [{ from: '/a/sub', to: '/a' }],
+    });
+  });
+
+  it('archives a removed root nothing retained covers', () => {
+    expect(
+      partitionRemovedRoots([sel('/a'), sel('/b')], [sel('/a'), sel('/c')]),
+    ).toEqual({ archive: ['/b'], reattribute: [] });
+  });
+
+  it('says nothing at all about a root that survived verbatim', () => {
+    // Never `{from: x, to: x}` — a no-op UPDATE that would still be a lie
+    // about what the save did.
+    expect(partitionRemovedRoots([sel('/a')], [sel('/a')])).toEqual({
+      archive: [],
+      reattribute: [],
+    });
+  });
+
+  it('is separator-aware on the re-attribution side too', () => {
+    // '/Users/edjafarov' must not "cover" '/Users/ed'. Getting this wrong
+    // re-attributes a sibling instead of archiving it — C-46/D4, the same
+    // defect OneDrive's local `startsWith` reimplementation has.
+    expect(
+      partitionRemovedRoots([sel('/Users/ed')], [sel('/Users/edjafarov')]),
+    ).toEqual({ archive: ['/Users/ed'], reattribute: [] });
+  });
+
+  it('is a PARTITION — no root can appear in both arrays', () => {
+    // `applyFolderScope` THROWS on a root named in both, so this is not a
+    // stylistic preference. A mixed edit exercises every branch at once.
+    const current = [sel('/a/sub'), sel('/b'), sel('/keep'), sel('/c/deep')];
+    const next = [sel('/a'), sel('/keep'), sel('/new'), sel('/c')];
+    const { archive, reattribute } = partitionRemovedRoots(current, next);
+
+    expect(archive).toEqual(['/b']);
+    expect(reattribute).toEqual([
+      { from: '/a/sub', to: '/a' },
+      { from: '/c/deep', to: '/c' },
+    ]);
+    const froms = new Set(reattribute.map((r) => r.from));
+    expect(archive.filter((id) => froms.has(id))).toHaveLength(0);
+    // Every `to` is a root the save actually keeps.
+    const kept = new Set(next.map((n) => n.id));
+    expect(reattribute.every((r) => kept.has(r.to))).toBe(true);
+    // …and `removedRootIds` is exactly this partition's archive half, so the
+    // two can never drift apart.
+    expect(removedRootIds(current, next)).toEqual(archive);
   });
 });
 

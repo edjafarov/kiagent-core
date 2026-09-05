@@ -432,7 +432,14 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  documents are still covered by a retained one, and a set-difference over
    *  `folderRoots` archives every row whose `scope_root_id` was frozen by
    *  `hashSkip` at some historical folder (314 of 316 on the real production
-   *  account). An empty array is legal and is the safe default.
+   *  account). An empty array is legal.
+   *
+   *  C-46/D5: `update.reattributeScopeRoots` is forwarded on exactly the same
+   *  terms, and is where a removed-but-still-covered root belongs. An empty
+   *  archive set is NOT the right way to say that — silence freezes a stale
+   *  stamp no later save can match (C-46/D2, C-46/D3). Absent means none, and
+   *  the coercion to `[]` for the store's required input happens at the call
+   *  site below and nowhere else.
    *
    *  **C-28.2 — `expectedConfigJson` is a REQUIRED parameter, not something
    *  this function may fetch for itself.** It is the caller's snapshot of the
@@ -1247,6 +1254,11 @@ export function createEngine(deps: EngineDeps): Engine & {
           cursor: update.cursor,
           // Forwarded, never derived (R8/A-1).
           archiveScopeRootIds: update.archiveScopeRootIds,
+          // C-46/D5, forwarded the same way. Optional on the wire (a
+          // pre-1.2.0 connector simply has none), required in the store's
+          // input, so the coercion happens exactly here — the store never
+          // guesses, and the engine never derives containment.
+          reattributeScopeRoots: update.reattributeScopeRoots ?? [],
           // NOTE the absence of `archiveNullScoped` — C-34, see the block
           // above. The store's input type has no such property in this train,
           // so adding it back here is a compile error, by design.

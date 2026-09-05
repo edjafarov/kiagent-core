@@ -134,34 +134,85 @@ export function readFolderRoots(account: Account): FolderRootSelection[] {
   throw new SourcePermanentError(NO_ROOTS_ERROR);
 }
 
+/** What becomes of the roots that left `current` — see
+ *  `partitionRemovedRoots`. The two arrays are DISJOINT by construction. */
+export interface RemovedRootPartition {
+  /** DECISIONS R8: no retained root covers these, so their live documents
+   *  genuinely leave scope. `FolderScopeUpdate.archiveScopeRootIds`. */
+  archive: string[];
+  /** C-46/D5: a retained root DOES cover these, so their live documents stay
+   *  in scope and are only re-stamped.
+   *  `FolderScopeUpdate.reattributeScopeRoots`. */
+  reattribute: Array<{ from: string; to: string }>;
+}
+
 /**
- * DECISIONS R8, local-folder's rule: the `scope_root_id` values whose live
- * documents genuinely leave scope when `current` becomes `next`.
+ * Split the roots that left `current` into "archive" and "re-attribute" —
+ * local-folder's answer to DECISIONS R8 and C-46/D5, computed HERE because
+ * only the source knows containment (core must never derive either array by
+ * set-difference over `folderRoots`).
  *
- * "A removed root contributes its id iff NO retained root satisfies
- * `isUnder(removedRoot, retainedRoot)`." A root that survives verbatim is
- * covered by itself (`isUnder(x, x) === true`), so the single filter below is
- * the whole rule — there is no separate set-difference step, and there must
- * not be one: core NEVER derives this by set-difference (R8).
+ * The rule, one root at a time:
+ *  - it survives VERBATIM in `next` -> neither array. Nothing moved.
+ *  - a retained root covers it (`isUnder(removed, retained)`) -> re-attribute
+ *    to that root. Its documents never left scope; archiving them would force
+ *    a re-walk of the whole subtree, and saying NOTHING would freeze their
+ *    `scope_root_id` at a root that no longer exists in the config, where no
+ *    later save can ever match it again (C-46/D3's leak).
+ *  - otherwise -> archive.
+ * Every removal lands in exactly one bucket, which is the property
+ * `applyFolderScope`'s guard THROWS on: naming one root in both arrays is a
+ * contradiction, so a partition — not two independent filters — is the shape
+ * that cannot produce one.
+ *
+ * `next` is an antichain (`validateFolderRoots` runs `coveringRoots`), so at
+ * most one retained root can cover a removal and `find` is unambiguous.
  *
  * `isUnder` comes from @shared/folder-paths and is NOT re-implemented here.
  * It is separator-aware — `/Users/edjafarov` must not "cover" `/Users/ed` —
  * and handles both `/` and `\` so Windows drive roots work. It does no path
- * normalization, which is safe on both sides here: every id in `next` came
- * from `validateFolderRoots`' `path.resolve`, and every id in `current` was
- * written by a previous `validateFolderRoots` (or by the legacy `connect()`,
- * which resolved too).
+ * normalization, and needs none here: BOTH sides are same-provenance
+ * `path.resolve` output — every id in `next` came from `validateFolderRoots`,
+ * and every id in `current` from a previous one (or the legacy `connect()`,
+ * which resolved too). That is exactly the condition C-46/D1's
+ * `normalizePathSeparators` exists for and this call site does NOT meet the
+ * failure case of; the migration, whose other side is a fast-glob-unixified
+ * `metadata.absPath`, does.
+ *
+ * Both arrays empty is legal and common: a pure widening save.
+ */
+export function partitionRemovedRoots(
+  current: readonly FolderRootSelection[],
+  next: readonly FolderRootSelection[],
+): RemovedRootPartition {
+  const archive: string[] = [];
+  const reattribute: Array<{ from: string; to: string }> = [];
+  for (const { id } of current) {
+    if (next.some((n) => n.id === id)) continue; // survived verbatim
+    const cover = next.find((n) => isUnder(id, n.id));
+    if (cover) reattribute.push({ from: id, to: cover.id });
+    else archive.push(id);
+  }
+  return { archive, reattribute };
+}
+
+/**
+ * DECISIONS R8, local-folder's rule: the `scope_root_id` values whose live
+ * documents genuinely leave scope when `current` becomes `next`.
+ *
+ * Derived FROM the partition rather than reimplementing the filter, so the
+ * archive set and the re-attribution set can never disagree about one root
+ * (which `applyFolderScope` throws on).
  *
  * Returning `[]` is legal, common and safe: it is exactly what a narrowing
- * edit under a still-selected parent must produce (A-1).
+ * edit under a still-selected parent must produce (A-1) — but under C-46/D5
+ * such an edit is no longer SILENT about that root, it re-attributes it.
  */
 export function removedRootIds(
   current: readonly FolderRootSelection[],
   next: readonly FolderRootSelection[],
 ): string[] {
-  return current
-    .map((c) => c.id)
-    .filter((id) => !next.some((n) => isUnder(id, n.id)));
+  return partitionRemovedRoots(current, next).archive;
 }
 
 /**

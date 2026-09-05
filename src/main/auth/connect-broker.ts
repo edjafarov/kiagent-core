@@ -508,8 +508,9 @@ export function createConnectBroker(
           // after it must NOT skip the restart, or the account sits at the new
           // scope with no loop. So no cancelled check below this line.
           stage('folder-commit');
-          // The update crosses UNCHANGED — config, cursor and
-          // archiveScopeRootIds are the SOURCE's answers (R8/A-1). The one
+          // The update crosses UNCHANGED — config, cursor,
+          // archiveScopeRootIds and (C-46/D5) reattributeScopeRoots are the
+          // SOURCE's answers (R8/A-1). The one
           // field the engine does NOT honour is `archiveNullScoped`, which it
           // does not even forward (C-27/C-34: the store's input type has no
           // such property in this train); that decision lives in `applyScope`,

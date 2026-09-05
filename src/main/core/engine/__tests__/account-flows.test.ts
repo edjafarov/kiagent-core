@@ -626,7 +626,7 @@ describe('engine account flows', () => {
         .spyOn(store, 'applyFolderScope')
         .mockImplementation(async () => {
           stillRunning.push(engine.isRunning(account.id));
-          return { archived: 0, remaining: 3, stale: false };
+          return { archived: 0, reattributed: 0, remaining: 3, stale: false };
         });
 
       const res = await engine.applyScope(account.id, UPDATE, CONFIG_AT_OPEN);
@@ -639,15 +639,17 @@ describe('engine account flows', () => {
       // R8/A-1: the engine passes the SOURCE's array through. It must never
       // appear as ['b','c'] (a set-difference over folderRoots), which on the
       // real production account archives 314 of 316 live rows.
-      // C-34: exactly five keys. `archiveNullScoped` is not among them — the
+      // C-34: exactly six keys. `archiveNullScoped` is not among them — the
       // store's input type does not declare it in this train, and
       // `toHaveBeenCalledWith` is an exact deep-equality match, so an extra
-      // key would fail here as well as at compile time.
+      // key would fail here as well as at compile time. The sixth is C-46/D5's
+      // `reattributeScopeRoots`, coerced from absent to [] by the engine.
       expect(spy).toHaveBeenCalledWith({
         accountId: account.id,
         config: UPDATE.config,
         cursor: UPDATE.cursor,
         archiveScopeRootIds: [],
+        reattributeScopeRoots: [],
         expectedConfigJson: CONFIG_AT_OPEN,
       });
       expect(spy.mock.calls[0][0].archiveScopeRootIds).toBe(
@@ -661,9 +663,12 @@ describe('engine account flows', () => {
 
     it('forwards a NON-empty archive set verbatim, but REFUSES archiveNullScoped:true (C-27)', async () => {
       const { engine, account } = await liveAccount(liveHangingSource());
-      const spy = jest
-        .spyOn(store, 'applyFolderScope')
-        .mockResolvedValue({ archived: 7, remaining: 1, stale: false });
+      const spy = jest.spyOn(store, 'applyFolderScope').mockResolvedValue({
+        archived: 7,
+        reattributed: 0,
+        remaining: 1,
+        stale: false,
+      });
 
       const res = await engine.applyScope(
         account.id,
@@ -671,6 +676,9 @@ describe('engine account flows', () => {
           config: { folderRoots: [{ id: 'b', name: 'Beta' }] },
           cursor: { page_token: 'p1', backfill_done: false },
           archiveScopeRootIds: ['a', 'zz'],
+          // C-46/D5: forwarded on the same terms — the SOURCE computed it,
+          // core neither derives nor validates containment.
+          reattributeScopeRoots: [{ from: 'q', to: 'b' }],
           // A source may still ASK for this — A-3 lets it — and core still
           // refuses. C-27 made the v3 migration attribution-only, so a row it
           // could not attribute is LIVE with scope_root_id NULL; and a
@@ -687,6 +695,9 @@ describe('engine account flows', () => {
       expect(res).toEqual({ archived: 7 });
       // The source's array crosses untouched…
       expect(spy.mock.calls[0][0].archiveScopeRootIds).toEqual(['a', 'zz']);
+      expect(spy.mock.calls[0][0].reattributeScopeRoots).toEqual([
+        { from: 'q', to: 'b' },
+      ]);
       // …and the flag does not cross at all. C-34: it is not forwarded as
       // `false` either — the store's input type has no such property, so the
       // key is ABSENT. `not.toHaveProperty` is the assertion that says that
@@ -735,9 +746,12 @@ describe('engine account flows', () => {
 
     it('a stale store result throws FolderScopeStaleError, leaves the config alone, and PUTS THE LOOP BACK (C-28.4)', async () => {
       const { engine, account } = await liveAccount(liveHangingSource());
-      jest
-        .spyOn(store, 'applyFolderScope')
-        .mockResolvedValue({ archived: 0, remaining: 3, stale: true });
+      jest.spyOn(store, 'applyFolderScope').mockResolvedValue({
+        archived: 0,
+        reattributed: 0,
+        remaining: 3,
+        stale: true,
+      });
 
       await expect(
         engine.applyScope(account.id, UPDATE, CONFIG_AT_OPEN),
@@ -795,9 +809,12 @@ describe('engine account flows', () => {
         folderRoots: [{ id: 'a', name: 'Alpha' }],
         outbound: { confirm: 'never' },
       });
-      const spy = jest
-        .spyOn(store, 'applyFolderScope')
-        .mockResolvedValue({ archived: 0, remaining: 3, stale: false });
+      const spy = jest.spyOn(store, 'applyFolderScope').mockResolvedValue({
+        archived: 0,
+        reattributed: 0,
+        remaining: 3,
+        stale: false,
+      });
 
       await engine.applyScope(account.id, UPDATE, CONFIG_AT_OPEN);
 
@@ -959,9 +976,12 @@ describe('engine account flows', () => {
       // Granting it here would let the very next reconcile archive the whole
       // corpus off a broken listing.
       const { engine, account } = await seededNoAllowance(emptyListingSource());
-      jest
-        .spyOn(store, 'applyFolderScope')
-        .mockResolvedValue({ archived: 0, remaining: 3, stale: false });
+      jest.spyOn(store, 'applyFolderScope').mockResolvedValue({
+        archived: 0,
+        reattributed: 0,
+        remaining: 3,
+        stale: false,
+      });
 
       await engine.applyScope(
         account.id,
@@ -996,9 +1016,12 @@ describe('engine account flows', () => {
       // root IS the case the allowance exists for (a re-scope legitimately
       // archives a big fraction of the corpus), so it must survive.
       const { engine, account } = await seededNoAllowance(emptyListingSource());
-      jest
-        .spyOn(store, 'applyFolderScope')
-        .mockResolvedValue({ archived: 2, remaining: 1, stale: false });
+      jest.spyOn(store, 'applyFolderScope').mockResolvedValue({
+        archived: 2,
+        reattributed: 0,
+        remaining: 1,
+        stale: false,
+      });
 
       await engine.applyScope(
         account.id,
@@ -1038,9 +1061,12 @@ describe('engine account flows', () => {
         cursor: 2,
         status: 'paused',
       });
-      jest
-        .spyOn(store, 'applyFolderScope')
-        .mockResolvedValue({ archived: 0, remaining: 3, stale: false });
+      jest.spyOn(store, 'applyFolderScope').mockResolvedValue({
+        archived: 0,
+        reattributed: 0,
+        remaining: 3,
+        stale: false,
+      });
 
       await engine.applyScope(account.id, UPDATE, CONFIG_AT_OPEN);
       await new Promise((r) => {
@@ -1062,9 +1088,12 @@ describe('engine account flows', () => {
         status: 'needsReauth',
         error: 'token revoked',
       });
-      jest
-        .spyOn(store, 'applyFolderScope')
-        .mockResolvedValue({ archived: 0, remaining: 3, stale: false });
+      jest.spyOn(store, 'applyFolderScope').mockResolvedValue({
+        archived: 0,
+        reattributed: 0,
+        remaining: 3,
+        stale: false,
+      });
 
       await engine.applyScope(account.id, UPDATE, CONFIG_AT_OPEN);
       await new Promise((r) => {

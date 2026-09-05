@@ -76,13 +76,35 @@ export interface FolderScopeInput {
   cursor: unknown;
   /** The `scope_root_id` values whose live documents LEAVE scope, computed BY
    *  THE SOURCE, which alone knows folder containment. An EMPTY ARRAY IS
-   *  LEGAL and is the common answer: it is what Drive returns whenever the
-   *  catch-all 'root' is retained, and what OneDrive returns whenever a
-   *  retained root covers every removed one. Core must NEVER derive this by
-   *  set-difference over `folderRoots` — on the real production Drive account
-   *  that archives 314 of 316 live rows, whose stamps `hashSkip` froze at
-   *  whatever folder they were last emitted under. */
+   *  LEGAL — a pure widening save archives nothing. Core must NEVER derive
+   *  this by set-difference over `folderRoots` — on the real production Drive
+   *  account that archives 314 of 316 live rows, whose stamps `hashSkip` froze
+   *  at whatever folder they were last emitted under.
+   *
+   *  **C-46/D2 — this doc block used to specify the empty array as "what
+   *  Drive returns whenever the catch-all is retained", and that
+   *  specification is the defect.** A retained My Drive is not an ancestor of
+   *  a shared-with-me or shared-drive root, so "catch-all retained" does not
+   *  imply "nothing left scope". A removed root that a retained one genuinely
+   *  covers goes in `reattributeScopeRoots`; staying silent about it freezes
+   *  a stale stamp that no later save can match (C-46/D3). */
   archiveScopeRootIds: string[];
+  /** C-46/D5. Removed roots whose live documents stay in scope under a
+   *  RETAINED root: `scope_root_id` is re-stamped `from` -> `to` inside this
+   *  same transaction, BEFORE the archive step, and no `changes` row is
+   *  written (scope attribution is not user-visible content and must not
+   *  churn the feed).
+   *
+   *  REQUIRED, may be empty — the same reasoning as `archiveScopeRootIds`
+   *  being required: a source that has nothing to re-attribute says `[]` out
+   *  loud, and a caller cannot drop the field by accident.
+   *
+   *  `applyFolderScope` THROWS when any `from` also appears in
+   *  `archiveScopeRootIds`. That is a contradictory instruction — the source
+   *  has decided the same root both leaves scope and does not — and picking
+   *  an order would silently apply one of two opposite outcomes. It is a
+   *  source bug and must be loud. */
+  reattributeScopeRoots: Array<{ from: string; to: string }>;
   /* DELIBERATELY NO `archiveNullScoped` (DECISIONS C-34). A source may still
    * ASK for the NULL-attribution repair — the flag is in the frozen
    * `FolderScopeUpdate` and both cloud connectors send it — but core does not
@@ -100,6 +122,8 @@ export interface FolderScopeInput {
 /** Counts only. See applyFolderScope. */
 export interface FolderScopeResult {
   archived: number;
+  /** Live rows whose `scope_root_id` this save re-stamped (C-46/D5). */
+  reattributed: number;
   remaining: number;
   stale: boolean;
 }
@@ -740,11 +764,44 @@ export function createWriteTx(
   const FOLDER_SCOPE_OUT = `account_id = ? AND archived_at IS NULL
        AND scope_root_id IN (SELECT value FROM json_each(?))`;
 
+  // C-46/D5. Re-attribution, the third verb — "this removed root's documents
+  // are STILL in scope, under a retained root". Same predicate shape as the
+  // archive above and it seeks on the same
+  // `idx_documents_account_scope_root` (account_id, scope_root_id).
+  //
+  // `archived_at IS NULL` for the same reason the archive has it: an archived
+  // row is out of the working set, and silently re-stamping one would destroy
+  // the record of which root it was archived under — the only thing that could
+  // ever explain the archive. It also makes the operation idempotent by
+  // construction, since a row that has already moved no longer matches `from`.
+  //
+  // No `appendChange`, and `seq`/`updated_at` are deliberately NOT touched:
+  // `scope_root_id` is core's own attribution bookkeeping, not user-visible
+  // content, and churning the feed would resurface every re-attributed
+  // document in the user's recent list for a change they cannot see.
+  const FOLDER_SCOPE_REATTRIBUTE = `UPDATE documents SET scope_root_id = ?
+      WHERE account_id = ? AND scope_root_id = ? AND archived_at IS NULL`;
+
   const applyFolderScopeTx = conn.transaction(
     (input: FolderScopeInput): FolderScopeResult => {
       const acc = getAccountRow(input.accountId);
       if (!acc)
         throw new Error(`applyFolderScope: unknown account ${input.accountId}`);
+
+      // C-46/D5's guard, ABOVE the stale-config return: a source that names
+      // one root in BOTH arrays has said it both leaves scope and does not.
+      // There is no order that is "the" right answer, so core refuses rather
+      // than silently applying one of two opposite outcomes — and it refuses
+      // even when the save turns out to be stale, because the contradiction is
+      // a bug in the connector's containment logic that would otherwise
+      // surface only on the retry that wins.
+      const contradiction = input.reattributeScopeRoots.find(({ from }) =>
+        input.archiveScopeRootIds.includes(from),
+      );
+      if (contradiction)
+        throw new Error(
+          `applyFolderScope: scope root '${contradiction.from}' is both archived and re-attributed — a source must say exactly one of the two`,
+        );
 
       // Stale-write guard, INSIDE the transaction: two Save clicks on one
       // account must not interleave. Both sides are JSON.stringify output of
@@ -759,7 +816,7 @@ export function createWriteTx(
         JSON.parse(input.expectedConfigJson) as Record<string, unknown>,
       );
       if (storedJson !== expectedJson)
-        return { archived: 0, remaining: 0, stale: true };
+        return { archived: 0, reattributed: 0, remaining: 0, stale: true };
 
       conn
         .prepare(`UPDATE accounts SET config = ?, cursor = ? WHERE id = ?`)
@@ -779,6 +836,15 @@ export function createWriteTx(
       const upd = conn.prepare(
         `UPDATE documents SET archived_at = ?, seq = ?, updated_at = ? WHERE id = ?`,
       );
+      // BEFORE the archive, so a root re-attributed onto a `to` that this
+      // same save then archives really does end up archived — one save, one
+      // coherent outcome, and the ordering is pinned by a test.
+      const restamp = conn.prepare(FOLDER_SCOPE_REATTRIBUTE);
+      let reattributed = 0;
+      for (const { from, to } of input.reattributeScopeRoots) {
+        reattributed += Number(restamp.run(to, acc.id, from).changes);
+      }
+
       const archiveJson = JSON.stringify(input.archiveScopeRootIds);
       let archived = 0;
       for (;;) {
@@ -805,7 +871,7 @@ export function createWriteTx(
             .get(acc.id) as { n: number }
         ).n,
       );
-      return { archived, remaining, stale: false };
+      return { archived, reattributed, remaining, stale: false };
     },
   );
 

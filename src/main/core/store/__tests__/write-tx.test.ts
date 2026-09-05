@@ -265,10 +265,16 @@ describe('folder scope write path', () => {
       // would archive b and c here — and, on the real production account, all
       // 314 rows whose historical stamp `hashSkip` froze.
       archiveScopeRootIds: [],
+      reattributeScopeRoots: [],
       expectedConfigJson: await configJson(accountId),
     });
 
-    expect(result).toEqual({ archived: 0, remaining: 4, stale: false });
+    expect(result).toEqual({
+      archived: 0,
+      reattributed: 0,
+      remaining: 4,
+      stale: false,
+    });
 
     const after = await store.account(accountId);
     expect(after!.config.folderRoots).toEqual(config.folderRoots);
@@ -285,9 +291,15 @@ describe('folder scope write path', () => {
       // is the other half of C-34's pin that nothing in this train archives an
       // unattributable row, and Step 16's mutation 2 is where it bites.
       archiveScopeRootIds: ['X'],
+      reattributeScopeRoots: [],
       expectedConfigJson: await configJson(accountId),
     });
-    expect(result).toEqual({ archived: 2, remaining: 2, stale: false });
+    expect(result).toEqual({
+      archived: 2,
+      reattributed: 0,
+      remaining: 2,
+      stale: false,
+    });
 
     // Archiving is feed-visible, never a raw delete: one `changes` row per
     // archived document, with documents.seq set to that same change's seq.
@@ -302,6 +314,236 @@ describe('folder scope write path', () => {
       { e: 'b', kind: 'document' },
       { e: 'c', kind: 'document' },
     ]);
+  });
+
+  // ── C-46/D5: re-attribution, the third verb ────────────────────────────
+  //
+  // The only two things a source could say about a removed root were
+  // "archive it" and nothing. Both are wrong when a RETAINED root still
+  // covers it: archiving forces a re-download of the whole subtree and opens
+  // a window in which the user's documents are not searchable, while silence
+  // freezes the stale stamp forever — `hashSkip` never refreshes a live row,
+  // so a later save that removes the COVERING root cannot match those rows
+  // either (C-46/D3). Re-attribution is one UPDATE inside the same
+  // transaction, no network, no gap.
+
+  it('C-46/D5: re-stamps live rows from → to, archives nothing, and counts them', async () => {
+    const result = await store.applyFolderScope({
+      accountId,
+      config: { folderRoots: [{ id: 'root', name: 'My Drive' }] },
+      cursor: { page_token: 'p1', backfill_done: true, scope_roots: ['root'] },
+      // 'X' was removed but the retained catch-all really does cover it, so
+      // its documents stay in scope under 'root'.
+      archiveScopeRootIds: [],
+      reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      expectedConfigJson: await configJson(accountId),
+    });
+
+    expect(result).toEqual({
+      archived: 0,
+      reattributed: 2, // b and c
+      remaining: 4,
+      stale: false,
+    });
+    expect(
+      (await store.read.byExternalId(accountId, 'b', 'file'))?.scopeRootId,
+    ).toBe('root');
+    expect(
+      (await store.read.byExternalId(accountId, 'c', 'file'))?.scopeRootId,
+    ).toBe('root');
+    // 'a' was already 'root' and 'd' is NULL — neither is touched, and NULL
+    // is never swept up by a re-attribution (A-3 still holds).
+    expect(
+      (await store.read.byExternalId(accountId, 'a', 'file'))?.scopeRootId,
+    ).toBe('root');
+    expect(
+      (await store.read.byExternalId(accountId, 'd', 'file'))?.scopeRootId,
+    ).toBeNull();
+    expect(await liveCount()).toBe(4);
+  });
+
+  it('C-46/D5: writes NO document `changes` row — scope attribution must not churn the feed', async () => {
+    const docChangeCount = async (): Promise<number> =>
+      Number(
+        (
+          (await db.all(
+            `SELECT COUNT(*) AS n FROM changes WHERE kind = 'document'`,
+          )) as Array<{ n: number }>
+        )[0].n,
+      );
+    const before = await changesCount();
+    const docsBefore = await docChangeCount(); // the seed commit's four
+
+    const seqBefore = (await db.all(
+      `SELECT external_id AS e, seq FROM documents
+        WHERE account_id = ? AND external_id IN ('b','c') ORDER BY external_id`,
+      [accountId],
+    )) as Array<{ e: string; seq: number }>;
+
+    await store.applyFolderScope({
+      accountId,
+      config: { folderRoots: [{ id: 'root', name: 'My Drive' }] },
+      cursor: CURSOR_V1,
+      archiveScopeRootIds: [],
+      reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      expectedConfigJson: await configJson(accountId),
+    });
+
+    // `scope_root_id` is not user-visible content: a re-attribution must not
+    // resurface two documents in the user's feed. The ONE new row is the
+    // account change every Save writes.
+    // The re-attribution DID happen — without this the two counts below are
+    // trivially satisfied by an implementation that does nothing at all.
+    expect(
+      (await store.read.byExternalId(accountId, 'b', 'file'))?.scopeRootId,
+    ).toBe('root');
+
+    expect(await changesCount()).toBe(before + 1);
+    expect(await docChangeCount()).toBe(docsBefore);
+    // …and `seq` is left alone too, so nothing shows up as recently updated.
+    const seqAfter = (await db.all(
+      `SELECT external_id AS e, seq FROM documents
+        WHERE account_id = ? AND external_id IN ('b','c') ORDER BY external_id`,
+      [accountId],
+    )) as Array<{ e: string; seq: number }>;
+    expect(seqAfter).toEqual(seqBefore);
+  });
+
+  it('C-46/D5: THROWS when a root is named in both arrays, and writes nothing at all', async () => {
+    const configBefore = await configJson(accountId);
+
+    // A source that says one root both leaves scope and does not has a bug.
+    // Core refuses to pick an order between two opposite outcomes.
+    await expect(
+      store.applyFolderScope({
+        accountId,
+        config: { folderRoots: [{ id: 'root', name: 'My Drive' }] },
+        cursor: CURSOR_V1,
+        archiveScopeRootIds: ['X'],
+        reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+        expectedConfigJson: configBefore,
+      }),
+    ).rejects.toThrow(/both archived and re-attributed/i);
+
+    // The whole transaction rolled back: config, cursor and every row.
+    expect(await configJson(accountId)).toBe(configBefore);
+    expect(await liveCount()).toBe(4);
+    expect(
+      (await store.read.byExternalId(accountId, 'b', 'file'))?.scopeRootId,
+    ).toBe('X');
+  });
+
+  it('C-46/D5: applies BEFORE the archive step, so a re-attributed row can then be archived under its new root', async () => {
+    // The only observable consequence of the ordering. `from` 'X' is not in
+    // the archive list, so the guard does not fire; 'root' is, and b/c have
+    // just become 'root'.
+    const result = await store.applyFolderScope({
+      accountId,
+      config: { folderRoots: [{ id: 'Y', name: 'Other' }] },
+      cursor: CURSOR_V1,
+      archiveScopeRootIds: ['root'],
+      reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      expectedConfigJson: await configJson(accountId),
+    });
+
+    expect(result.reattributed).toBe(2);
+    expect(result.archived).toBe(3); // a, plus the re-stamped b and c
+    expect(await liveCount()).toBe(1); // only NULL-scoped 'd'
+  });
+
+  it('C-46/D5: is idempotent, ignores ARCHIVED rows, and an empty array is a no-op', async () => {
+    // Step 1 — archive 'X'. b and c are now archived and still stamped 'X'.
+    await store.applyFolderScope({
+      accountId,
+      config: { folderRoots: [{ id: 'root', name: 'My Drive' }] },
+      cursor: CURSOR_V1,
+      archiveScopeRootIds: ['X'],
+      reattributeScopeRoots: [],
+      expectedConfigJson: await configJson(accountId),
+    });
+    // Step 2 — a fresh LIVE row under 'X', so the assertion below has
+    // something that CAN move and is not green by construction.
+    await store.commit({
+      account: accountId,
+      documents: [doc('e', 'X')],
+      cursor: CURSOR_V1,
+    });
+
+    const first = await store.applyFolderScope({
+      accountId,
+      config: { folderRoots: [{ id: 'root', name: 'My Drive' }] },
+      cursor: CURSOR_V1,
+      archiveScopeRootIds: [],
+      reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      expectedConfigJson: await configJson(accountId),
+    });
+    expect(first.reattributed).toBe(1); // 'e' only
+    expect(
+      (await store.read.byExternalId(accountId, 'e', 'file'))?.scopeRootId,
+    ).toBe('root');
+
+    // The archived rows keep their stamp AND stay archived. `archived_at IS
+    // NULL` is in the predicate for the same reason it is in the archive
+    // predicate: an archived row is out of the working set entirely, and
+    // silently re-stamping one would make the record of WHY it was archived
+    // unrecoverable.
+    for (const e of ['b', 'c']) {
+      const row = await store.read.byExternalId(accountId, e, 'file');
+      expect(row?.scopeRootId).toBe('X');
+      expect(row?.archivedAt).not.toBeNull();
+    }
+
+    // Idempotent: nothing is stamped 'X' and live any more.
+    const second = await store.applyFolderScope({
+      accountId,
+      config: { folderRoots: [{ id: 'root', name: 'My Drive' }] },
+      cursor: CURSOR_V1,
+      archiveScopeRootIds: [],
+      reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      expectedConfigJson: await configJson(accountId),
+    });
+    expect(second.reattributed).toBe(0);
+
+    // And the empty array does nothing at all.
+    const none = await store.applyFolderScope({
+      accountId,
+      config: { folderRoots: [{ id: 'root', name: 'My Drive' }] },
+      cursor: CURSOR_V1,
+      archiveScopeRootIds: [],
+      reattributeScopeRoots: [],
+      expectedConfigJson: await configJson(accountId),
+    });
+    expect(none.reattributed).toBe(0);
+    expect(none.archived).toBe(0);
+  });
+
+  it('C-46/D5: never crosses an account boundary', async () => {
+    const otherId = (
+      await store.createAccount({
+        source: 'google-docs',
+        identifier: 'other@example.com',
+        config: CONFIG_V1,
+      })
+    ).id;
+    await store.commit({
+      account: otherId,
+      documents: [doc('o1', 'X')],
+      cursor: CURSOR_V1,
+    });
+
+    const result = await store.applyFolderScope({
+      accountId,
+      config: { folderRoots: [{ id: 'root', name: 'My Drive' }] },
+      cursor: CURSOR_V1,
+      archiveScopeRootIds: [],
+      reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      expectedConfigJson: await configJson(accountId),
+    });
+
+    expect(result.reattributed).toBe(2);
+    expect(
+      (await store.read.byExternalId(otherId, 'o1', 'file'))?.scopeRootId,
+    ).toBe('X');
   });
 
   // ── NO test for archiving NULL-scoped rows, and no branch to test (C-34) ──
@@ -359,12 +601,14 @@ describe('folder scope write path', () => {
       config: CONFIG_V1,
       cursor: CURSOR_V1,
       archiveScopeRootIds: [],
+      reattributeScopeRoots: [],
       expectedConfigJson: await configJson(accountId),
     });
     // A per-account row array crossing the DB-worker boundary is what OOM'd
     // the main process on a 3.7M-document account. Pin the whole surface.
     expect(Object.keys(result).sort()).toEqual([
       'archived',
+      'reattributed',
       'remaining',
       'stale',
     ]);
@@ -392,6 +636,7 @@ describe('folder scope write path', () => {
       },
       cursor: { page_token: 'p1', backfill_done: false, scope_roots: ['X'] },
       archiveScopeRootIds: [],
+      reattributeScopeRoots: [],
       expectedConfigJson: await configJson(accountId),
     });
 
@@ -422,6 +667,7 @@ describe('folder scope write path', () => {
       },
       cursor: null,
       archiveScopeRootIds: [],
+      reattributeScopeRoots: [],
       expectedConfigJson: await configJson(localId),
     });
 
@@ -449,6 +695,7 @@ describe('folder scope write path', () => {
       config: { folderRoots: [{ id: 'INBOX', name: 'Inbox' }] },
       cursor: null,
       archiveScopeRootIds: [],
+      reattributeScopeRoots: [],
       expectedConfigJson: await configJson(imapId),
     });
 
@@ -469,10 +716,16 @@ describe('folder scope write path', () => {
       config: { folderRoots: [{ id: 'root', name: 'My Drive' }] },
       cursor: { page_token: 'p9', backfill_done: false, scope_roots: ['root'] },
       archiveScopeRootIds: ['X'],
+      reattributeScopeRoots: [],
       expectedConfigJson,
     });
 
-    expect(result).toEqual({ archived: 0, remaining: 0, stale: true });
+    expect(result).toEqual({
+      archived: 0,
+      reattributed: 0,
+      remaining: 0,
+      stale: true,
+    });
     const after = await store.account(accountId);
     expect(after!.config).toEqual(winner); // no mirror derived — nothing ran
     expect(after!.cursor).toEqual(CURSOR_V1); // untouched
@@ -515,6 +768,7 @@ describe('folder scope write path', () => {
           scope_roots: ['root'],
         },
         archiveScopeRootIds: ['X'],
+        reattributeScopeRoots: [],
         expectedConfigJson: beforeConfigJson,
       })
       .then(
@@ -561,6 +815,7 @@ describe('folder scope write path', () => {
       config: intended,
       cursor,
       archiveScopeRootIds: ['X'],
+      reattributeScopeRoots: [],
       expectedConfigJson,
     }); // result deliberately discarded — this is the lost reply
 
@@ -587,9 +842,15 @@ describe('folder scope write path', () => {
       config: intended,
       cursor,
       archiveScopeRootIds: ['X'],
+      reattributeScopeRoots: [],
       expectedConfigJson,
     });
-    expect(retry).toEqual({ archived: 0, remaining: 0, stale: true });
+    expect(retry).toEqual({
+      archived: 0,
+      reattributed: 0,
+      remaining: 0,
+      stale: true,
+    });
     expect(await liveCount()).toBe(2);
   });
 
@@ -622,6 +883,7 @@ describe('folder scope write path', () => {
         scope_roots: ['root'],
       },
       archiveScopeRootIds: ['X'],
+      reattributeScopeRoots: [],
       expectedConfigJson: await configJson(accountId),
     });
     expect(removed.archived).toBe(2); // 'b' and 'c'

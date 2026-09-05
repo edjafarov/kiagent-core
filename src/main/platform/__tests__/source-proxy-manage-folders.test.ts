@@ -118,6 +118,13 @@ const fixtureModule = {
               archiveScopeRootIds: SELECTED.filter(
                 (s) => !picked.some((p) => p.id === s.id),
               ).map((s) => s.id),
+              // C-46/D5, same rule: computed by the source, forwarded by core.
+              // An ARRAY OF OBJECTS on purpose — a shape a hop that
+              // reconstructed the update field by field, or serialized it
+              // shallowly, would lose.
+              reattributeScopeRoots: [
+                { from: 'C:\\Users\\ed\\Docs\\Old', to: SELECTED[0].id },
+              ],
             };
           },
           async reauthenticate(acct: Account, auth: AuthChannel) {
@@ -230,7 +237,7 @@ describe('manageFolders / reauthenticate over the extension RPC boundary', () =>
     expect(entry('liarsrc').hasManageFolders).toBe(false);
   });
 
-  it('manage-folders: the channel rides "auth", selected crosses unchanged, and R8s archiveScopeRootIds comes back verbatim', async () => {
+  it('manage-folders: the channel rides "auth", selected crosses unchanged, and R8s archiveScopeRootIds and C-46/D5s reattributeScopeRoots come back verbatim', async () => {
     const { bySourceId, mainEp, wireCalls } = await setup();
     const source = bySourceId('managesrc');
     expect(typeof source.manageFolders).toBe('function');
@@ -293,6 +300,12 @@ describe('manageFolders / reauthenticate over the extension RPC boundary', () =>
       },
       cursor: { page_token: 'tok', backfill_done: false },
       archiveScopeRootIds: ['C:\\Users\\ed\\Docs'],
+      reattributeScopeRoots: [
+        {
+          from: 'C:\\Users\\ed\\Docs\\Old',
+          to: '0B246AxIx6hdAeTBrQ0xLbVhuRTQ',
+        },
+      ],
     });
 
     // THIS flow's slot is freed on settle. Id 1 is the manage flow's own id
