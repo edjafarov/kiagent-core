@@ -150,14 +150,14 @@ export function createConnectBroker(
             requestId,
             multiSelect: !!spec.multiSelect,
             modes: spec.modes,
-            // C-10: B-3's MINIMAL literal fill — a placeholder so the tree
-            // compiles for Tasks 2 and 3. TASK 5 owns the real behaviour and
-            // replaces these two lines with `spec.selected ?? []` and
-            // `spec.purpose ?? 'connect'`. Do NOT write that form here:
-            // C-10 gives Task 1 the placeholder only, and Task 5's own
-            // run-once check exists to catch this fill reaching the tree.
-            selected: [],
-            purpose: 'connect',
+            // C-3: this task owns these two lines. The connect path always
+            // starts a NEW account, so `purpose` defaults to 'connect'.
+            // B-2: `FolderPickerSpec.selected` is optional and the wire field
+            // is required, so an omitted selection bridges to [] and becomes
+            // indistinguishable from an explicit empty one — which is why the
+            // modal's empty-selection rule keys off `purpose`, never length.
+            selected: spec.selected ?? [],
+            purpose: spec.purpose ?? 'connect',
           });
           return nodes;
         },
