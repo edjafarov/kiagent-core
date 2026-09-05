@@ -113,8 +113,8 @@ const key = dayKey(merged[0].tsMs); // 'YYYY-MM-DD', for the day doc's externalI
 ### `@kiagent/connector-sdk/testing` — the shared test kit
 
 `bundleLoadSmoke`, `jsonRes`, `scriptedFetch`, `fakeSession`,
-`fakeAuthChannel`, `instantClock`. Generalized from the ms365 connector's
-harness. **Test-only** — it pulls in `node:child_process` and `node:assert`,
+`fakeAuthChannel`, `fakeFolderSelectionChannel`, `instantClock`. Generalized
+from the ms365 connector's harness. **Test-only** — it pulls in `node:child_process` and `node:assert`,
 which is exactly why it is its own subpath instead of living in the root
 export: importing it from anywhere your entry bundles would drag those two
 modules into `dist/index.js`.
@@ -150,12 +150,34 @@ request URL in order, and `inits` is index-aligned with it (`inits[i]` is the
 GET) — the seam a send test uses to assert method/body on the one call it
 cares about.
 
+`fakeFolderSelectionChannel(...)` is the channel `Source.manageFolders`
+receives: `status` + `pickFolders` and nothing else — no `oauth`, no
+`prompt` — so a `manageFolders` that tries to authenticate fails with a
+TypeError rather than passing. It returns `{ statuses, specs }`: `specs` is
+every `FolderPickerSpec` the source handed the picker, in order, recorded
+even for an unscripted (rejecting) call, which is how a test asserts that a
+manage edit opened with the account's current roots in `spec.selected` and
+`spec.purpose === 'manage'`.
+
 ## Versioning
 
 - `package.json` `version` is this package's own semver.
 - `package.json` `kiagentCore` names the `kiagent-core` version the generated
   contracts were copied from — bump it whenever the contracts vintage
   changes, independently of `version`.
+- `package-lock.json` carries the version **twice** (top level and
+  `packages[""]`) and both must be bumped in the same edit — nothing is ever
+  installed in this package, so npm never syncs them for you (1.1.0 shipped
+  with a lockfile still claiming 1.0.0). `test/package.test.mjs` fails if they
+  drift.
+- The packed tarball is a **build artifact of core's `src/shared/`**, not a
+  source of truth. `npm` extracts a `file:` tarball rather than linking it, so
+  a connector pinned at `file:…/kiagent-connector-sdk-<v>.tgz` is frozen at the
+  contracts vintage of the pack. Edit any of `contracts.ts`,
+  `source-errors.ts` or `file-indexability.ts` and you must re-pack and re-run
+  `npm install` in every connector, or `npm ci` there fails on stale
+  `integrity` — and, because connectors run ts-jest with `diagnostics: false`,
+  their test suites will stay green while `npm run typecheck` is broken.
 
 ## Release
 

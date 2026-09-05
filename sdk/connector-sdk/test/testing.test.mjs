@@ -11,6 +11,7 @@ const sdkRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const {
   bundleLoadSmoke,
   fakeAuthChannel,
+  fakeFolderSelectionChannel,
   fakeSession,
   instantClock,
   jsonRes,
@@ -294,6 +295,74 @@ test('fakeAuthChannel: prompt/pickFolders overrides replace the rejecters', asyn
   ]);
 });
 
+// ------------------------------------------- fakeFolderSelectionChannel
+
+/** A minimal FolderPickerSpec — `modes`/`roots`/`children` are the required
+ *  members; the fake never invokes them, so they stay trivial. */
+const pickerSpec = (over = {}) => ({
+  modes: [{ key: 'drive', label: 'My Drive' }],
+  multiSelect: true,
+  roots: async () => [],
+  children: async () => [],
+  ...over,
+});
+
+test('fakeFolderSelectionChannel: unscripted pickFolders rejects by verb name', async () => {
+  const ch = fakeFolderSelectionChannel();
+  await assert.rejects(
+    () => ch.pickFolders(pickerSpec()),
+    /not scripted: pickFolders/,
+  );
+});
+
+test('fakeFolderSelectionChannel: the spec is recorded even when unscripted', async () => {
+  // Recording BEFORE the throw is deliberate: a test can assert what the
+  // connector asked for and still expect the reject.
+  const ch = fakeFolderSelectionChannel();
+  await assert.rejects(() => ch.pickFolders(pickerSpec({ purpose: 'manage' })));
+  assert.equal(ch.specs.length, 1);
+  assert.equal(ch.specs[0].purpose, 'manage');
+});
+
+test('fakeFolderSelectionChannel: .specs captures the preselection a manage edit opens with', async () => {
+  const current = [{ id: 'fid-1', name: 'Reports', hasChildren: true }];
+  const ch = fakeFolderSelectionChannel({
+    pickFolders: async () => [
+      { id: 'fid-2', name: 'Invoices', hasChildren: false },
+    ],
+  });
+  const picked = await ch.pickFolders(
+    pickerSpec({ selected: current, purpose: 'manage' }),
+  );
+  assert.deepEqual(picked, [
+    { id: 'fid-2', name: 'Invoices', hasChildren: false },
+  ]);
+  assert.equal(ch.specs.length, 1);
+  assert.deepEqual(ch.specs[0].selected, current);
+  assert.equal(ch.specs[0].purpose, 'manage');
+});
+
+test('fakeFolderSelectionChannel: status(msg) records into .statuses', () => {
+  const ch = fakeFolderSelectionChannel();
+  assert.deepEqual(ch.statuses, []);
+  ch.status('Loading folders…');
+  assert.deepEqual(ch.statuses, ['Loading folders…']);
+});
+
+test('fakeFolderSelectionChannel: carries no authentication verb', () => {
+  // The reason FolderSelectionChannel is not an AuthChannel: managing folders
+  // must never be able to start an OAuth flow. A manageFolders() that reaches
+  // for oauth/prompt gets a TypeError here, not a silent success.
+  const ch = fakeFolderSelectionChannel();
+  for (const verb of ['oauth', 'prompt', 'showQr']) {
+    assert.equal(
+      ch[verb],
+      undefined,
+      `FolderSelectionChannel must not expose ${verb}`,
+    );
+  }
+});
+
 // ---------------------------------------------------------- bundleLoadSmoke
 
 test('bundleLoadSmoke: exported as a function', () => {
@@ -315,6 +384,7 @@ test('the main entry does NOT re-export the testing kit', () => {
     'scriptedFetch',
     'fakeSession',
     'fakeAuthChannel',
+    'fakeFolderSelectionChannel',
     'bundleLoadSmoke',
   ]) {
     assert.equal(index[name], undefined, `index must not export ${name}`);
