@@ -132,6 +132,79 @@ export interface CorePlatform {
   shutdown(): Promise<void>;
 }
 
+/** How long an archived document stays recoverable before it is destroyed.
+ *
+ *  `contracts.ts` describes the document lifecycle as "live → archived →
+ *  gone", and `{ purgeArchived }` is the verb for the last hop — but until
+ *  `registerArchiveSweep` below, nothing in production ever called it. Every
+ *  row ever archived (an unselected folder, an upstream deletion, a reconcile
+ *  diff) stayed on disk forever, and so did its `documents_fts` /
+ *  `documents_tri` entries.
+ *
+ *  The window is what makes archiving-then-deleting safe rather than merely
+ *  destructive. Inside it a mistake is free to undo: re-selecting a folder
+ *  revives its documents through the upsert's `archived_at = NULL` with no
+ *  re-download, and a connector that mis-attributes a scope root (twice this
+ *  week) has 30 days to be corrected before anything is lost. Outside it the
+ *  data is gone for good, and re-selecting means a full re-ingest.
+ *
+ *  It also bounds change-feed replay: a `'purge'` tombstone is how a remote
+ *  consumer learns a document died, so the window must exceed the longest
+ *  plausible consumer lag. 30 days does. */
+export const ARCHIVE_RETENTION_DAYS = 30;
+
+export const ARCHIVE_SWEEP_JOB_ID = 'maintenance:purge-archived';
+
+/** Four times a day. The schedule is durable, so a window missed while the
+ *  app was closed catches up on the first tick after boot rather than
+ *  waiting out a whole period. */
+export const ARCHIVE_SWEEP_CADENCE: Cadence = { every: '6h' };
+
+/** The instant a sweep running at `now` purges before. */
+export function archiveCutoff(now: Date): string {
+  return new Date(
+    now.getTime() - ARCHIVE_RETENTION_DAYS * 86_400_000,
+  ).toISOString();
+}
+
+/** Register the ONE maintenance job that turns archived tombstones into gone.
+ *
+ *  Lifted out of `bootCore` (which needs a real DB worker) so the cadence,
+ *  the job id, and the cutoff this destructive job computes are unit-testable.
+ *  Registration is fire-and-forget by design — `CoreScheduler.register` is
+ *  async only because the durable schedule row goes through the AppDb, and
+ *  nothing at boot waits on it.
+ *
+ *  Deliberately unpaged: the purge cascade is one transaction, the same shape
+ *  and the same unbounded-delete tradeoff `removeAccount` has always shipped
+ *  with. It is also self-limiting in practice — a sweep only ever has one
+ *  retention period's worth of archived rows to collect. */
+export function registerArchiveSweep(deps: {
+  store: Pick<CoreStore, 'commit'>;
+  scheduler: Pick<CoreScheduler, 'register'>;
+  logs: LogSink;
+  now?: () => Date;
+}): void {
+  const now = deps.now ?? (() => new Date());
+  void deps.scheduler.register(
+    ARCHIVE_SWEEP_JOB_ID,
+    ARCHIVE_SWEEP_CADENCE,
+    async () => {
+      const before = archiveCutoff(now());
+      // No count is logged: the honest record of what died is the change
+      // feed itself, one `'purge'` tombstone per document. Deriving a number
+      // from corpus counts either side of the commit would be wrong whenever
+      // a backfill batch lands in between.
+      deps.logs.log(
+        'maintenance',
+        'info',
+        `purging documents archived before ${before}`,
+      );
+      await deps.store.commit({ purgeArchived: { before } });
+    },
+  );
+}
+
 /**
  * Construction happens once, here. Everything downstream reads the platform —
  * no DI styles, no lazy getters, no module globals.
@@ -181,6 +254,8 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     logs: sink,
     refreshers,
   });
+
+  registerArchiveSweep({ store, scheduler, logs: sink });
 
   return {
     store,

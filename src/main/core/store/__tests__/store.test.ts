@@ -263,6 +263,73 @@ describe('store', () => {
     expect(changes.some((c) => c.kind === 'purge')).toBe(true);
   });
 
+  it('purges only what was archived before the cutoff', async () => {
+    // Every other purge test uses a far-future `before`, so nothing pinned
+    // the one property the retention window exists for: an archived document
+    // is RECOVERABLE until its window runs out. A clock-injected store lets
+    // the two archives sit on either side of the cutoff deterministically —
+    // wall-clock timestamps a millisecond apart would flake.
+    const clock = { at: '2026-01-01T00:00:00.000Z' };
+    const dated = openStore(await openDb(path.join(dir, 'dated.db')), {
+      ...deps,
+      now: () => clock.at,
+    });
+    try {
+      const acc = await dated.createAccount({
+        source: 'test',
+        identifier: 'dated@example.com',
+      });
+      await dated.commit({
+        account: acc.id,
+        documents: [
+          doc('old', { markdown: 'zulu-old body' }),
+          doc('recent', { markdown: 'zulu-recent body' }),
+        ],
+        cursor: null,
+      });
+
+      clock.at = '2026-02-01T00:00:00.000Z'; // outside a 30-day window at sweep time
+      await dated.commit({
+        account: acc.id,
+        documents: [],
+        deletions: [{ externalId: 'old', type: 'note' }],
+        cursor: null,
+      });
+      clock.at = '2026-03-20T00:00:00.000Z'; // inside it
+      await dated.commit({
+        account: acc.id,
+        documents: [],
+        deletions: [{ externalId: 'recent', type: 'note' }],
+        cursor: null,
+      });
+
+      // Where a 30-day sweep run on 2026-04-01 puts its cutoff. Spelled out
+      // rather than imported from `boot`: this test pins that the STORE
+      // honours `before`, and dragging the whole platform module into a store
+      // unit test to compute one date would be a poor trade. The derivation
+      // itself is pinned in `archive-sweep.test.ts`.
+      await dated.commit({
+        purgeArchived: { before: '2026-03-02T00:00:00.000Z' },
+      });
+
+      const left = await dated.read.search({
+        account: acc.id,
+        includeArchived: true,
+      });
+      expect(left.map((d) => d.externalId)).toEqual(['recent']);
+      // The destroyed row took its search-index entries with it; the spared
+      // one kept them, so it is still revivable in place.
+      expect(
+        await dated.read.search({ text: 'zulu-old', includeArchived: true }),
+      ).toHaveLength(0);
+      expect(
+        await dated.read.search({ text: 'zulu-recent', includeArchived: true }),
+      ).toHaveLength(1);
+    } finally {
+      await dated.close();
+    }
+  });
+
   it('removeAccount cascades: documents, vault, account, FTS rows, one tombstone', async () => {
     await store.vault.save(accountId, { accessToken: 'tok' });
     await store.commit({

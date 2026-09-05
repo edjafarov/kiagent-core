@@ -861,6 +861,12 @@ export function createWriteTx(
           const seq = appendChange('document', id);
           upd.run(deps.now(), seq, deps.now(), id);
         }
+        // Archived, not deleted — and that is what makes unselecting a folder
+        // safe to get wrong. The rows keep their content and their search
+        // index entries, so re-selecting the root revives them in place
+        // through the upsert's `archived_at = NULL` with no re-download. The
+        // archive sweep (boot.ts) destroys them for good once they have sat
+        // here for `ARCHIVE_RETENTION_DAYS`.
         archived += rows.length;
         if (rows.length < FOLDER_SCOPE_ARCHIVE_PAGE) break;
       }

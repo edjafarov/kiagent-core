@@ -181,7 +181,10 @@ export type CommitBatch =
   /** ONE cascade: purge documents (tombstones into the feed), delete cursor,
    *  config, credentials. */
   | { removeAccount: AccountId }
-  /** Engine maintenance: archived-long-enough tombstones become gone. */
+  /** Engine maintenance: archived-long-enough tombstones become gone —
+   *  document rows AND their `documents_fts` / `documents_tri` entries, one
+   *  `'purge'` change each. Driven by `registerArchiveSweep` (boot.ts) on a
+   *  recurring schedule; `before` is now minus `ARCHIVE_RETENTION_DAYS`. */
   | { purgeArchived: { before: string } };
 
 /** Read-only query surface — shared verbatim by the renderer, MCP, and the
