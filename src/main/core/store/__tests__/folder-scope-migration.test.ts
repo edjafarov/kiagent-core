@@ -357,11 +357,23 @@ function seedMatrix(db: Database.Database): void {
     doc('local-nokey', 'acc-local', 'file', meta({ filename: 'q.txt' })),
   );
 
-  // F. local-folder on WINDOWS. `externalId` is posix-ized
-  //    (scanner.ts:166-168 toAbsPosix: absPath.split(path.sep).join('/'))
-  //    while `absPath` (to-document.ts:57) and `config.paths` are OS-native.
-  //    Matching on externalId mis-attributes here; matching on absPath is
-  //    correct.
+  // F. local-folder on WINDOWS — and a Windows corpus holds BOTH separator
+  //    forms at once (C-46/D1). `config.paths` is `path.resolve`d, so it is
+  //    OS-native (backslashed). `metadata.absPath` (to-document.ts:65) is
+  //    whatever produced the item:
+  //      - SCAN rows come from fast-glob with `absolute: true`
+  //        (scanner.ts:112-115), whose entry transformer runs `makeAbsolute`
+  //        then `unixify`
+  //        (fast-glob/out/providers/transformers/entry.js:12-16) and
+  //        `unixify = filepath.replace(/\\/g, '/')`
+  //        (fast-glob/out/utils/path.js:29-31) — UNCONDITIONAL, not
+  //        platform-gated. So a scan row's absPath is FORWARD-SLASHED.
+  //      - WATCH rows come from chokidar, which emits OS-native paths
+  //        (watch.ts:180-192), so a watch row's absPath is BACKSLASHED.
+  //    `externalId` is posix-ized on both (scanner.ts:166-168 toAbsPosix),
+  //    which is why it is not the attribution key. BOTH rows below must be
+  //    retained and attributed to the backslashed config root — the id is the
+  //    CONFIG spelling (B-7), never a normalized rewrite of it.
   seedAccount(db, 'acc-win', 'local-folder', { paths: ['C:\\Users\\x\\Docs'] });
   seedDoc(
     db,
@@ -369,9 +381,25 @@ function seedMatrix(db: Database.Database): void {
       'win-file',
       'acc-win',
       'file',
+      // chokidar/watch provenance: OS-native separators.
       meta({ absPath: 'C:\\Users\\x\\Docs\\f.txt' }),
       {
         externalId: 'C:/Users/x/Docs/f.txt',
+      },
+    ),
+  );
+  seedDoc(
+    db,
+    doc(
+      'win-file-scan',
+      'acc-win',
+      'file',
+      // fast-glob/scan provenance: unixified. This is the shape the scanner
+      // ACTUALLY produces on Windows, and the one that archived the whole
+      // account before C-46/D1.
+      meta({ absPath: 'C:/Users/x/Docs/scanned.txt' }),
+      {
+        externalId: 'C:/Users/x/Docs/scanned.txt',
       },
     ),
   );
@@ -554,12 +582,32 @@ describe('schema v3: scope_root_id attribution, the catch-all rule and C-27', ()
     ).toEqual(['catchall-archived', 'local-sibling']); // the first was seeded archived
   });
 
-  it('attributes local-folder by metadata.absPath (OS-native), never by the posix-ized externalId, and collapses overlapping roots first', () => {
+  it('attributes local-folder by metadata.absPath, never by the posix-ized externalId, and collapses overlapping roots first', () => {
     migrate(db);
 
     expect(scopeOf(db, 'local-in-a')).toBe('/A');
     expect(scopeOf(db, 'local-in-b')).toBe('/A'); // '/A/B' collapsed away
     expect(scopeOf(db, 'win-file')).toBe('C:\\Users\\x\\Docs');
+  });
+
+  /**
+   * C-46/D1. A Windows corpus carries BOTH separator forms in
+   * `metadata.absPath` — fast-glob unixifies every SCAN row while chokidar
+   * emits OS-native for every WATCH row — and `config.paths` is always
+   * backslashed. Comparing them raw is a `startsWith` that can never match a
+   * scan row, so before the fix every scan-produced row on Windows was
+   * `out-of-scope` and archived; the mass-archive breaker inverted the blast
+   * radius, sparing accounts over 100 documents and destroying the small ones.
+   *
+   * The stamp must be the CONFIG spelling (B-7) — normalization decides the
+   * comparison, never what is written.
+   */
+  it('C-46/D1: retains and attributes a Windows SCAN row whose absPath fast-glob unixified', () => {
+    migrate(db);
+
+    expect(live(db, 'win-file-scan')).toBe(true);
+    expect(scopeOf(db, 'win-file-scan')).toBe('C:\\Users\\x\\Docs');
+    expect(changesFor(db, 'win-file-scan')).toHaveLength(0);
   });
 
   it('leaves gmail and already-archived rows completely untouched', () => {

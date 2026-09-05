@@ -5,7 +5,11 @@ import {
   decideFileIndexing,
   type FileIndexCandidate,
 } from '@shared/file-indexability';
-import { coveringRoots, isUnder } from '@shared/folder-paths';
+import {
+  coveringRoots,
+  isUnder,
+  normalizePathSeparators,
+} from '@shared/folder-paths';
 
 import { buildStemView } from '../stemming';
 
@@ -323,11 +327,38 @@ function v3CloudRoots(
 /**
  * Which selected root's subtree contains this document.
  *
- * local-folder matches `metadata.absPath` — camelCase, capital P, OS-native
- * separators (to-document.ts:57). NOT `externalId`, which scanner.ts's
- * `toAbsPosix` (scanner.ts:166-168) has already rewritten to '/'-separated:
- * on Windows `config.paths` holds 'C:\Users\x\Docs' while externalId holds
- * 'C:/Users/x/Docs/f.txt', so matching on externalId mis-attributes every row.
+ * local-folder matches `metadata.absPath` — camelCase, capital P
+ * (to-document.ts:65). NOT `externalId`: scanner.ts's `toAbsPosix`
+ * (scanner.ts:166-168) rewrote that one to '/'-separated for EVERY row on
+ * every platform, so it can never line up with a backslashed Windows root.
+ *
+ * **`metadata.absPath` DOES NOT HAVE OS-NATIVE SEPARATORS. It has THREE
+ * provenances and two spellings** (C-46/D1 — this doc block used to claim
+ * "OS-native", and that false premise is what caused the defect):
+ *   - SCAN rows come from fast-glob with `absolute: true`
+ *     (scanner.ts:112-115). Its entry transformer runs `makeAbsolute` then
+ *     `unixify` (`fast-glob/out/providers/transformers/entry.js:12-16`), and
+ *     `unixify` is `filepath.replace(/\\/g, '/')`
+ *     (`fast-glob/out/utils/path.js:29-31`) — UNCONDITIONAL, not
+ *     platform-gated. On Windows these are FORWARD-slashed.
+ *   - WATCH rows come from chokidar, which emits OS-native paths
+ *     (watch.ts:180-192). On Windows these are BACKslashed.
+ *   - `config.paths` / `folderRoots[].id` are `path.resolve`d
+ *     (`folder-roots.ts` `validateFolderRoots`), so on Windows they are
+ *     BACKslashed too.
+ * A real Windows corpus therefore holds BOTH forms at once, and comparing
+ * either one raw against the root is a `startsWith` that silently fails.
+ * `normalizePathSeparators` is applied to BOTH sides below for exactly that
+ * reason — `isUnder` itself is deliberately left alone, because its other
+ * callers (`watch.ts:93`'s `rootOf`, `coveringRoots`, `removedRootIds`) all
+ * compare SAME-provenance pairs and widening it there buys nothing.
+ * `path.resolve` is NOT the answer: it is cwd- and platform-dependent, and a
+ * corpus can carry paths written on another OS.
+ *
+ * The stamp is the CONFIG spelling, verbatim (B-7). Normalization decides the
+ * comparison and never the value written — `scope_root_id` must stay
+ * byte-equal to `folderRoots[].id` or `removedRootIds` and the archive
+ * IN-list can never match it again.
  *
  * Drive/OneDrive match `metadata.root_folder_id` (gdocs source.ts:1040,
  * onedrive source.ts:869). When it names no selected root, R6 attributes the
@@ -364,8 +395,12 @@ function v3Attribute(
   if (scope.source === 'local-folder') {
     const abs = metadata.absPath;
     if (typeof abs !== 'string' || !abs) return { kind: 'unknown' };
+    // C-46/D1: mixed provenance, so BOTH sides are normalized before the
+    // containment test — and `rootId` is returned UNnormalized (B-7).
+    const absNorm = normalizePathSeparators(abs);
     for (const rootId of scope.rootIds) {
-      if (isUnder(abs, rootId)) return { kind: 'root', rootId };
+      if (isUnder(absNorm, normalizePathSeparators(rootId)))
+        return { kind: 'root', rootId };
     }
     // The ONLY `out-of-scope` in the file. Provable from the path alone.
     return { kind: 'out-of-scope' };

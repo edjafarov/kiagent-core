@@ -1,4 +1,8 @@
-import { coveringRoots, isUnder } from '../folder-paths';
+import {
+  coveringRoots,
+  isUnder,
+  normalizePathSeparators,
+} from '../folder-paths';
 
 describe('isUnder', () => {
   it('is true for an exact-equal path', () => {
@@ -39,5 +43,43 @@ describe('coveringRoots', () => {
   it('leaves already-minimal input unchanged', () => {
     const input = ['/a', '/b', '/c'];
     expect(coveringRoots(input).sort()).toEqual(input.sort());
+  });
+});
+
+/**
+ * C-46/D1. Written AFTER the migration fix as a regression pin on the helper
+ * itself; the RED that drove the fix is in
+ * `store/__tests__/folder-scope-migration.test.ts` ("retains and attributes a
+ * Windows SCAN row whose absPath fast-glob unixified").
+ */
+describe('normalizePathSeparators', () => {
+  it('rewrites every backslash to a forward slash', () => {
+    expect(normalizePathSeparators('C:\\Users\\x\\Docs')).toBe(
+      'C:/Users/x/Docs',
+    );
+  });
+
+  it('leaves an already-posix path byte-identical', () => {
+    expect(normalizePathSeparators('/Users/ed/docs')).toBe('/Users/ed/docs');
+  });
+
+  it('makes the mixed-provenance pair that isUnder alone cannot match', () => {
+    // The exact shape a Windows corpus produces: fast-glob unixified the
+    // document path, `path.resolve` backslashed the config root.
+    const absPath = 'C:/Users/x/Docs/f.txt';
+    const root = 'C:\\Users\\x\\Docs';
+    expect(isUnder(absPath, root)).toBe(false);
+    expect(
+      isUnder(normalizePathSeparators(absPath), normalizePathSeparators(root)),
+    ).toBe(true);
+  });
+
+  it('does not defeat the sibling-prefix trap once normalized', () => {
+    expect(
+      isUnder(
+        normalizePathSeparators('C:/Users/x/DocsBackup/f.txt'),
+        normalizePathSeparators('C:\\Users\\x\\Docs'),
+      ),
+    ).toBe(false);
   });
 });

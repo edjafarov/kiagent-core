@@ -50,18 +50,35 @@ export function toFolderRoots(absPaths: string[]): FolderRootSelection[] {
  * Two live consumers depend on that: the v3 migration's containment test
  * (Task 2) — the ONE branch in which the migration archives local-folder rows
  * — and `watch.ts:93-94`'s `rootOf`. The other side of the comparison,
- * `metadata.absPath` (written at `to-document.ts:57`), is produced by the
+ * `metadata.absPath` (written at `to-document.ts:65`), is produced by the
  * scanner's fast-glob walk (`scanner.ts:110-116` — a recursive glob with
  * `cwd: rootPath, absolute: true`) or by chokidar over those same root strings
  * (`watch.ts:88`) — i.e. off the stored root — so it lines up with a resolved
  * root and silently fails to match an unresolved one.
  *
- * Windows footnote for the same reason: fast-glob's `absolute: true` runs
- * `makeAbsolute` then `unixify` (`fast-glob/out/providers/transformers/
- * entry.js:14-15`), so on Windows `metadata.absPath` is forward-slashed while
- * a `path.resolve`d root is backslashed. Any consumer comparing the two must
- * `path.resolve` the absPath first, as core's own `fetchBytes` already does
- * (`local-folder-source.ts:409`) before calling `isUnder` at `:410`.
+ * WINDOWS FOOTNOTE — `metadata.absPath` IS NOT UNIFORMLY OS-NATIVE, and
+ * assuming it was is C-46/D1. fast-glob's `absolute: true` runs `makeAbsolute`
+ * then `unixify` (`fast-glob/out/providers/transformers/entry.js:12-16`), and
+ * `unixify` is an UNCONDITIONAL `filepath.replace(/\\/g, '/')`
+ * (`fast-glob/out/utils/path.js:29-31`) — not platform-gated. So on Windows
+ * every SCAN row's `absPath` is forward-slashed, every WATCH row's is
+ * backslashed (chokidar emits OS-native, `watch.ts:180-192`), and a
+ * `path.resolve`d root is backslashed. One corpus, both spellings.
+ *
+ * A consumer comparing MIXED provenance must therefore normalize separators
+ * on BOTH sides — `normalizePathSeparators` in `@shared/folder-paths`, a pure
+ * `\` → `/` rewrite — and stamp/return the CONFIG spelling unchanged (B-7).
+ * The v3 migration is exactly such a consumer and now does this
+ * (`schema.ts` `v3Attribute`, local-folder branch); before the fix it archived
+ * every scan-produced row on Windows. `watch.ts:93`'s `rootOf` is NOT affected
+ * — both of its sides are OS-native — and neither is scan-time stamping, which
+ * takes `scopeRootId` from the per-root loop and never tests containment
+ * (`local-folder-source.ts:188-197`).
+ *
+ * Do NOT "fix" a mixed pair with `path.resolve`: it is cwd- and
+ * platform-dependent, and a corpus may hold paths written on another OS.
+ * `fetchBytes`' `path.resolve` (`local-folder-source.ts:409-410`) stays as it
+ * is — it resolves a path on the machine that owns it, same-OS, same run.
  *
  * Getting this wrong is not recoverable. Per C-36 a local-folder mis-archive
  * is PERMANENT: there is no paired re-establish, the migration leaves
