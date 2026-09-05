@@ -388,6 +388,38 @@ function seedMatrix(db: Database.Database): void {
       },
     ),
   );
+  // H. POSIX account whose paths contain a LITERAL BACKSLASH. `\` is a legal
+  //    character in a POSIX filename, so cross-normalizing unconditionally
+  //    would make a directory named `A\B` match the unrelated root `/A/B`
+  //    (C-46 addendum #3). Root has no backslash -> no normalization -> the
+  //    two must NOT match.
+  seedAccount(db, 'acc-posix-bs', 'local-folder', { paths: ['/A/B'] });
+  seedDoc(
+    db,
+    doc(
+      'posix-bs-outside',
+      'acc-posix-bs',
+      'file',
+      meta({ absPath: '/A\\B/x.txt' }),
+      { externalId: '/A\\B/x.txt' },
+    ),
+  );
+  // I. Both spellings selected as SEPARATE roots — `coveringRoots` does not
+  //    collapse them, so first-match-wins must still stamp the right one.
+  seedAccount(db, 'acc-posix-both', 'local-folder', {
+    paths: ['/A/B', '/A\\B'],
+  });
+  seedDoc(
+    db,
+    doc(
+      'posix-both-bs',
+      'acc-posix-both',
+      'file',
+      meta({ absPath: '/A\\B/x.txt' }),
+      { externalId: '/A\\B/x.txt' },
+    ),
+  );
+
   seedDoc(
     db,
     doc(
@@ -579,7 +611,11 @@ describe('schema v3: scope_root_id attribution, the catch-all rule and C-27', ()
           )
           .all() as Array<{ id: string }>
       ).map((r) => r.id),
-    ).toEqual(['catchall-archived', 'local-sibling']); // the first was seeded archived
+    ).toEqual([
+      'catchall-archived', // seeded archived
+      'local-sibling', // '/AA' is not under '/A' — separator-aware
+      'posix-bs-outside', // '/A\B/x.txt' is not under '/A/B' (addendum #3)
+    ]);
   });
 
   it('attributes local-folder by metadata.absPath, never by the posix-ized externalId, and collapses overlapping roots first', () => {
@@ -608,6 +644,27 @@ describe('schema v3: scope_root_id attribution, the catch-all rule and C-27', ()
     expect(live(db, 'win-file-scan')).toBe(true);
     expect(scopeOf(db, 'win-file-scan')).toBe('C:\\Users\\x\\Docs');
     expect(changesFor(db, 'win-file-scan')).toHaveLength(0);
+  });
+
+  /**
+   * C-46 addendum #3. The separator normalization that fixes D1 must be GATED
+   * on the root actually being a Windows spelling, or it over-matches on
+   * POSIX. Ungated, both of these stamp `/A/B` — the first wrongly retains a
+   * document that is NOT in scope, and a LATER save that removes `/A/B` then
+   * archives it; the second picks whichever root iterates first.
+   */
+  it('C-46 addendum #3: a POSIX dir literally named `A\\B` is NOT under root /A/B', () => {
+    migrate(db);
+
+    expect(scopeOf(db, 'posix-bs-outside')).toBeNull();
+    expect(live(db, 'posix-bs-outside')).toBe(false);
+  });
+
+  it('C-46 addendum #3: with both spellings selected, the backslash root wins its own doc', () => {
+    migrate(db);
+
+    expect(scopeOf(db, 'posix-both-bs')).toBe('/A\\B');
+    expect(live(db, 'posix-both-bs')).toBe(true);
   });
 
   it('leaves gmail and already-archived rows completely untouched', () => {
@@ -680,9 +737,11 @@ describe('schema v3: scope_root_id attribution, the catch-all rule and C-27', ()
 
     // …and this is policy, not an inert archive path: the one account that
     // owns a spared NULL row AND is allowed to archive DID archive, in the
-    // same pass. Exactly one document change in the whole migration.
+    // same pass. Exactly TWO document changes in the whole migration — the
+    // two provably-out-of-scope local rows, and nothing else.
     expect(changesFor(db, 'local-sibling')).toHaveLength(1);
-    expect(docChangeCount(db)).toBe(1);
+    expect(changesFor(db, 'posix-bs-outside')).toHaveLength(1);
+    expect(docChangeCount(db)).toBe(2);
   });
 
   it('writes canonical folderRoots AND the A-2 legacy mirror, keeps other config keys, and never touches the cursor', () => {
