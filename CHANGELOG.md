@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.84.0](https://github.com/edjafarov/kiagent-core/compare/v0.83.0...v0.84.0) (2026-09-05)
+
+### Features
+
+* **contracts:** folder-scope contract surface, extension-RPC capability flags, and the read-side scopeRootId fills ([a44888f](https://github.com/edjafarov/kiagent-core/commit/a44888f3009c42ca685406bbcb68ebb8356c2680))
+* **contracts:** re-attribution, the third folder-scope verb (C-46/D5) ([b290b59](https://github.com/edjafarov/kiagent-core/commit/b290b59724d35ee45ffd58ebf9313d7d0e94046d))
+* **core:** account-scoped reconnect and manage-folders flows ([de5fb83](https://github.com/edjafarov/kiagent-core/commit/de5fb83ff97120f55444673d7ce9c92f8c77a1f4))
+* **local-folder:** folder-scoped source with a real picker, manageFolders and scopeRootId ([259a262](https://github.com/edjafarov/kiagent-core/commit/259a262038f81af8f380fae67cfc7bd6288d5d1c))
+* **picker:** key folder selection by source id, add editable preselection ([9e534eb](https://github.com/edjafarov/kiagent-core/commit/9e534eb0a4198b26a81aa53763747c04bdd0065b))
+* **picker:** open the folder picker revealed down to the tracked folders ([e60678f](https://github.com/edjafarov/kiagent-core/commit/e60678f57fd8e5144145865e51a495c844145893))
+* **platform:** route manageFolders and reauthenticate across the source RPC ([c4bb15e](https://github.com/edjafarov/kiagent-core/commit/c4bb15e230761a947eb41067be80f9ea00ec6d38))
+* **sdk:** connector-sdk 1.2.0 with the folder-selection test channel ([c66ac14](https://github.com/edjafarov/kiagent-core/commit/c66ac147ccf721f4944d96e063272e1b764dc47a))
+* **sources:** account-scoped manage-folders and reconnect surfaces ([ede1419](https://github.com/edjafarov/kiagent-core/commit/ede141959bf3bcc0b1864dde134122f90668b035))
+* **store:** applyFolderScope — config, cursor and source-scoped archival in one transaction ([a4d12f2](https://github.com/edjafarov/kiagent-core/commit/a4d12f2b525627b321ca86e4903920c770cc51cb))
+* **store:** schema v3 — documents.scope_root_id and folder-scope attribution ([3c66e25](https://github.com/edjafarov/kiagent-core/commit/3c66e25c5b166e5bbb26be9398304fe215803eca))
+
+### Bug Fixes
+
+* **picker:** carry selected/purpose on the connect event, resolve confirmed roots by id, encode '/' in synthetic paths ([2b016e9](https://github.com/edjafarov/kiagent-core/commit/2b016e97b40c8827b70e6dedd4cae46c9c954049))
+* **picker:** derive the listing-error row from node.loaded, document existingPaths precedence ([0796c61](https://github.com/edjafarov/kiagent-core/commit/0796c616e214827e1d5c585742919ccac9f4a2d9))
+* **picker:** stop the renderer dropping the picker spec's expand list ([672ea7a](https://github.com/edjafarov/kiagent-core/commit/672ea7a372f8ac64e6c149a6ac465e29bd64d3d0))
+* **store:** distinguish POSIX backslashes from Windows roots ([abe76ed](https://github.com/edjafarov/kiagent-core/commit/abe76edcb5578c05cd8b8d43f0e58703aa1d6650))
+* **store:** gate the v3 separator normalization on a Windows-spelled root ([9ddb1a3](https://github.com/edjafarov/kiagent-core/commit/9ddb1a3de42bc3e77e30187f4b14c06997785dce))
+* **store:** normalize path separators in the v3 local-folder attribution (C-46/D1) ([689000f](https://github.com/edjafarov/kiagent-core/commit/689000f0d185f24f5bc6a4d3d7c42777f10ec1a0))
+
 ## [0.83.0](https://github.com/edjafarov/kiagent-core/compare/v0.82.1...v0.83.0) (2026-09-05)
 
 ### Features
