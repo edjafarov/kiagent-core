@@ -249,6 +249,54 @@ describe('FolderPickerModal with a dataSource', () => {
     warn.mockRestore();
   });
 
+  it('a successful re-expand after a failed listing clears the error row', async () => {
+    // DECISIONS C-42: the chevron survives a failed listing (asserted above),
+    // so it is a live affordance — re-expanding, rather than pressing Retry,
+    // must not leave "Couldn't list this folder." pinned under the now-loaded
+    // node. The error row is DERIVED from useLazyTree's `loaded`, not from a
+    // second copy of load state that can drift.
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    let calls = 0;
+    const ds = makeDataSource({
+      listChildren: jest.fn(async (path: string) => {
+        calls += 1;
+        if (calls === 1) throw new Error('drive said no');
+        return [
+          {
+            id: 'c1',
+            path: `${path}/c1`,
+            name: 'Child One',
+            hasChildren: false,
+          },
+        ];
+      }),
+    });
+    render(
+      <FolderPickerModal
+        dataSource={ds}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+    await screen.findByText('Root One');
+
+    fireEvent.click(screen.getByRole('button', { name: 'expand Root One' }));
+    expect(
+      await screen.findByText('Couldn’t list this folder.'),
+    ).toBeInTheDocument();
+
+    // Re-expand via the chevron, NOT via Retry.
+    fireEvent.click(screen.getByRole('button', { name: 'expand Root One' }));
+    expect(await screen.findByText('Child One')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Couldn’t list this folder.'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'collapse Root One' }),
+    ).toBeInTheDocument();
+    warn.mockRestore();
+  });
+
   it('a rejected listRoots renders an inline retry, not a silently empty tree', async () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     let calls = 0;

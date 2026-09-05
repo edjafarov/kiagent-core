@@ -136,15 +136,18 @@ type RootMode = 'quick' | 'drives';
 export interface FolderPickerModalProps {
   /** Default false — current single-select behavior, `onConfirm` with one path. */
   multiSelect?: boolean;
-  /** Paths already tracked by an existing account (e.g. the local-folder
+  /** Paths already tracked by a DIFFERENT account (e.g. the local-folder
    *  machine account's current `config.paths`) — a row equal to or under any
    *  of these renders a `tracked` pill instead of a checkbox, is inert to
-   *  selection clicks, and is excluded from chips/confirm/the files estimate
-   *  (it can never enter `checked`). An ANCESTOR of a tracked path stays
-   *  selectable normally — the caller's union+re-normalize against the
-   *  existing paths is what makes re-covering an already-tracked descendant
-   *  safe, not anything here. Default `[]`, matching every caller that
-   *  doesn't yet track anything for this source. */
+   *  selection clicks, and is excluded from chips/confirm/the files estimate.
+   *  An ANCESTOR of a tracked path stays selectable normally.
+   *
+   *  This is the OPPOSITE of `selected`: tracked means "cannot be chosen",
+   *  selected means "already chosen, and removable". The two are independent
+   *  props, and when a row matches BOTH, `selected` wins — it is this
+   *  account's own current scope (see `isTracked`). Only the selected row
+   *  itself escapes; a descendant of it that is also tracked stays inert.
+   *  Default `[]`. */
   existingPaths?: string[];
   /** Pre-checked and REMOVABLE roots — the account's complete current
    *  covering set, for a manage-folders picker. Only `id` and `name` are
@@ -769,7 +772,7 @@ function TreeRow(props: {
         <span className="fp-name">{node.name}</span>
         {label && <span className="fp-count">{label}</span>}
       </div>
-      {failedNodes.has(node.path) && (
+      {failedNodes.has(node.path) && !node.loaded && (
         <div className={`fp-row failed depth-${node.depth + 1}`}>
           <span className="t-meta">Couldn’t list this folder.</span>
           <button
