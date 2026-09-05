@@ -6,7 +6,7 @@ import { connectorMeta, sourceLabel } from './connector-meta';
 import { SourceIcon } from './SourceIcon';
 import { useSourceDescriptors } from './sources-registry';
 import { formatRelativeCompact } from './format';
-import { trackedFolderPaths } from './sections/TrackedFolders';
+import { folderRoots } from './sections/TrackedFolders';
 
 export interface SourceTableEntry {
   account: Account;
@@ -28,7 +28,7 @@ function stopPropagation(e: React.MouseEvent): void {
  */
 function identifierLabel(a: Account): string {
   if (a.source !== 'local-folder') return a.identifier;
-  const n = trackedFolderPaths(a).length;
+  const n = folderRoots(a).length;
   return `${n} ${n === 1 ? 'folder' : 'folders'}`;
 }
 

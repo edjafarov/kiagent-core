@@ -53,11 +53,21 @@ export interface DocumentInput {
   metadata: Record<string, unknown>;
   createdAt: string | null; // ISO-8601, origin time
   parent?: ExternalRef; // engine resolves in-transaction
+  /** The `FolderRootSelection.id` whose subtree contains this document.
+   *  Omit when it cannot be resolved — the store leaves it NULL on a new row,
+   *  untouched on an existing one (C-13's `COALESCE`), and warns; it
+   *  MUST NOT throw (see DECISIONS R5). */
+  scopeRootId?: string;
 }
 
 /** What the store holds: the input plus system fields. One shape — no
- *  Pending/stored twin, no SDK copy, no renderer mirror. */
-export interface Document extends Omit<DocumentInput, 'parent' | 'binary'> {
+ *  Pending/stored twin, no SDK copy, no renderer mirror.
+ *
+ *  NOTE the extended Omit — `Document` narrows `scopeRootId` to
+ *  `string | null`, which is illegal as a plain redeclaration (TS2430).
+ *  Do not "simplify" the omit list back to two members. */
+export interface Document
+  extends Omit<DocumentInput, 'parent' | 'binary' | 'scopeRootId'> {
   id: DocumentId;
   accountId: AccountId;
   parentId: DocumentId | null;
@@ -70,6 +80,9 @@ export interface Document extends Omit<DocumentInput, 'parent' | 'binary'> {
   languages: string[];
   ingestedAt: string;
   updatedAt: string;
+  /** NULL when the emitting source could not attribute the document to a
+   *  selected root, or when the source is not folder-scoped at all. */
+  scopeRootId: string | null;
 }
 
 /** When recurring work runs. Declared as DATA on contributions — never a
@@ -307,6 +320,14 @@ export interface SourceDescriptor {
   multiAccount?: boolean;
   /** Default re-pull cadence once backfill completes. */
   cadence?: Cadence;
+  /** This source scopes its corpus to a user-selected set of folder roots.
+   *  Enables the Tracked folders card and `accounts:start-manage-folders`.
+   *  A descriptor with this flag MUST implement `manageFolders`. */
+  folderScope?: boolean;
+  /** Populated by CORE at registry-list time, never authored by a connector —
+   *  a value set in a manifest or a connector's own descriptor is ignored.
+   *  Lets the renderer route Reconnect without guessing. */
+  hasReauthenticate?: boolean;
 }
 
 /** 'backfill' = catching up (drives the progress bar); 'live' = current. */
@@ -330,9 +351,27 @@ export interface Session {
   log(level: LogLevel, msg: string): void;
 }
 
-/** A folder node shown in the connect-time folder picker. `id` is opaque and
- *  source-defined (a Drive folder id, a filesystem path, …); it never
- *  contains `/`. */
+/** One selected folder whose complete subtree is in scope. `id` is the
+ *  source's own durable identity for that folder — an absolute normalized
+ *  path for local-folder, an opaque provider item id for Drive/OneDrive.
+ *  `name` is display-only and is NEVER used to identify a root. */
+export interface FolderRootSelection {
+  id: string;
+  name: string;
+}
+
+/** Canonical folder scope, written by every folder-scoped source. A `type`
+ *  alias, NOT an interface: `Account.config` is `Record<string, unknown>`,
+ *  and only a type alias gets the implicit index signature that makes the
+ *  assignment legal (an interface fails with TS2322). */
+export type FolderScopedConfig = {
+  folderRoots: FolderRootSelection[];
+};
+
+/** A folder node shown in the folder picker. `id` is opaque and
+ *  source-defined (a Drive folder id, an absolute filesystem path, …); ids
+ *  are fully opaque — the renderer adapter percent-encodes separators before
+ *  synthesizing tree paths. */
 export interface FolderNode {
   id: string;
   name: string;
@@ -355,6 +394,25 @@ export interface FolderPickerSpec {
   modes: Array<{ key: string; label: string }>;
   /** Allow selecting multiple folders (covering-root semantics). */
   multiSelect?: boolean;
+  /** The complete current covering set, pre-checked and REMOVABLE when the
+   *  picker opens. Distinct from the renderer's `existingPaths`, which makes
+   *  rows inert. Empty/omitted for a new connection. */
+  selected?: FolderNode[];
+  /** Ids of folders the picker should open ALREADY EXPANDED, so the rows in
+   *  `selected` are visible without the user drilling down. Computed by the
+   *  SOURCE, which alone knows its own ancestry: ids are opaque to the
+   *  renderer (see `connect-picker-adapter.ts`), so the picker can never
+   *  derive this itself — it only ever tests ids for EQUALITY against this
+   *  list. A source whose ids carry no parent chain (Drive, OneDrive) omits
+   *  it and its picker opens collapsed, exactly as before.
+   *
+   *  Contains the ANCESTORS of the selected roots, never a selected root
+   *  itself: expanding the selected row would push its own children between
+   *  it and its chip for no gain. An id not present in any listing is simply
+   *  never matched. Empty and omitted mean the same thing. */
+  expand?: string[];
+  /** Drives copy and empty-selection rules only; never behaviour. */
+  purpose?: 'connect' | 'manage';
   /** Top-level nodes for a mode tab. */
   roots(modeKey: string): Promise<FolderNode[]>;
   /** Child FOLDERS of a node (files are not listed in the picker). */
@@ -375,6 +433,80 @@ export interface AuthChannel {
    *  Resolves with the selected folders (covering roots — never both a node
    *  and its own descendant). Rejects if the user cancels. */
   pickFolders(spec: FolderPickerSpec): Promise<FolderNode[]>;
+}
+
+/** The narrow channel a folder-scope edit gets. Deliberately NOT `AuthChannel`:
+ *  managing folders must never be able to start an OAuth flow. */
+export interface FolderSelectionChannel {
+  status(msg: string): void;
+  pickFolders(spec: FolderPickerSpec): Promise<FolderNode[]>;
+}
+
+/** What `manageFolders` returns. Core owns the durable write; the source only
+ *  computes. `cursor` is the source's own opaque cursor, transformed for the
+ *  new root set. */
+export interface FolderScopeUpdate<Cursor = unknown> {
+  config: Record<string, unknown> & FolderScopedConfig;
+  cursor: Cursor | null;
+  /** See DECISIONS R8 / A-1. The `scope_root_id` values whose live documents
+   *  leave scope with this save, computed BY THE SOURCE, which alone knows
+   *  containment. An EMPTY array means "archive nothing" and is legal — a
+   *  pure widening (the user added a folder and removed none) is exactly that.
+   *  Core NEVER derives this by set-difference, and the store's predicate is
+   *  an `IN`-list, never a `NOT IN`.
+   *
+   *  **C-46/D2 — an empty array is NOT "the answer whenever a catch-all is
+   *  retained".** This doc block used to say so, and Google Drive's
+   *  `scopeRoots.includes('root') ? [] : removed` was written against it.
+   *  That is a defect: "My Drive is an ancestor of every removed root" is
+   *  false for shared-with-me and shared-drive roots, which the picker offers
+   *  as MODES of one multi-select, so a user can hold both in one selection.
+   *  Removing such a root then archived nothing and left its documents
+   *  searchable forever.
+   *
+   *  A removed root that a retained root really does cover belongs in
+   *  `reattributeScopeRoots`, not in silence: silence freezes the stale stamp
+   *  (both cloud connectors `hashSkip` an unchanged live row, so nothing ever
+   *  re-stamps it) and a later save that removes the COVERING root will not
+   *  match those rows either — C-46/D3's leak. Every removed root must land
+   *  in exactly one of the two arrays, or be genuinely still-selected. */
+  archiveScopeRootIds: string[];
+  /** C-46/D5. The removed roots whose live documents STAY in scope because a
+   *  RETAINED root covers them: re-stamp `scope_root_id` from `from` to `to`
+   *  instead of archiving. Computed by the source, which alone knows folder
+   *  containment.
+   *
+   *  This is the third verb. Without it a source could only say "archive it"
+   *  (which forces a re-download of the whole subtree and opens a window in
+   *  which the user's documents are not searchable) or say nothing (which
+   *  leaks the stale stamp permanently, because `hashSkip` never refreshes a
+   *  live row). Re-attribution costs one UPDATE, no network, and no
+   *  searchability gap.
+   *
+   *  `to` is EXPECTED to be a root the new `config.folderRoots` still
+   *  contains — but core does not validate that, and cannot: it is the
+   *  source's containment claim, and core deriving containment for itself is
+   *  the one thing R8/A-1 forbids. The ONLY check is the one below: `from`
+   *  must not also appear in `archiveScopeRootIds`, and core THROWS on that
+   *  contradiction rather than picking an order, because a source that says
+   *  both about one root has a bug. (Stated this precisely on purpose — D1
+   *  and D2 both trace to a doc block asserting something the code did not
+   *  enforce.) Optional; absent means "none", and
+   *  the store applies it inside the same transaction as the archive, before
+   *  it. It writes NO `changes` row: `scope_root_id` is not user-visible
+   *  content and must not churn the feed. */
+  reattributeScopeRoots?: Array<{ from: string; to: string }>;
+  /** See DECISIONS A-3 / C-1. Request the NULL-attribution repair: archive
+   *  this account's live rows whose `scope_root_id IS NULL` so a re-walk can
+   *  re-emit them attributed. Optional; absent means `false`.
+   *
+   *  MUST only be `true` when `cursor` ALSO forces a full re-establish —
+   *  Drive: `backfill_done:false` with `page_token` preserved; OneDrive:
+   *  `delta_tokens` emptied and the `backfill` key deleted. `contentHash`
+   *  excludes scope and both cloud connectors `hashSkip`, so without that
+   *  pairing nothing would ever re-emit an archived NULL row and the repair
+   *  is silent data loss. */
+  archiveNullScoped?: boolean;
 }
 
 /** The entire connector-authoring surface. */
@@ -408,6 +540,18 @@ export interface Source<Cursor = unknown, Item = unknown> {
    *  empty and >50% listing shrinkage unless the account's config just
    *  changed (see reconcilePass in engine.ts). */
   reconcile?(session: Session): AsyncIterable<ExternalRef[]>;
+  /** Edit this account's folder scope using its EXISTING credentials.
+   *  Must not authenticate. Returns the complete canonical config, a cursor
+   *  transformed for the new root set, and the archive set (R8); persists
+   *  nothing. */
+  manageFolders?(
+    session: Session,
+    channel: FolderSelectionChannel,
+  ): Promise<FolderScopeUpdate<Cursor>>;
+  /** Re-authenticate THIS account. Must verify the returned provider identity
+   *  belongs to `account` and throw otherwise. Returns no config: reconnect
+   *  never changes scope. */
+  reauthenticate?(account: Account, auth: AuthChannel): Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@
  * stream/connect id allocated per operation.
  */
 import type {
+  Account,
   AuthChannel,
   Batch,
   Credentials,
@@ -15,6 +16,8 @@ import type {
   FolderCount,
   FolderNode,
   FolderPickerSpec,
+  FolderScopeUpdate,
+  FolderSelectionChannel,
   LogLevel,
   Session,
   Source,
@@ -52,12 +55,36 @@ const AUTH_VERBS: ReadonlySet<string> = new Set([
   'pickFolders',
 ]);
 
+/** The verbs a FolderSelectionChannel exposes. A manage-folders flow rides
+ *  the SAME 'auth' namespace — already router-bypassed at
+ *  host-process.ts:179-183 and already carrying 'status'/'pickFolders', so
+ *  no new permission surface — but with this narrower allowlist. "Manage
+ *  never authenticates" is enforced HERE, main-side, per flow entry; it is
+ *  not left to the connector to honour. */
+const FOLDER_VERBS: ReadonlySet<string> = new Set(['status', 'pickFolders']);
+
 /** What the child sends for pickFolders — the spec's callbacks stay in the
- *  child; main re-synthesizes them as picker-* calls back into it. */
+ *  child; main re-synthesizes them as picker-* calls back into it. This is a
+ *  HAND-WRITTEN subset: a FolderPickerSpec field not named here is dropped
+ *  with no error, so every new data field must be added on both ends. */
 interface WirePickerSpec {
   modes: Array<{ key: string; label: string }>;
   multiSelect: boolean;
   hasCount: boolean;
+  /** The complete current covering set, pre-checked when the picker opens.
+   *  Opaque ids — never parsed, never re-synthesized main-side. REQUIRED on
+   *  the wire even though FolderPickerSpec keeps it optional: the child
+   *  defaults it in toWirePickerSpec, so there is exactly ONE defaulting
+   *  site, and both ends of this wire ship in the SAME core build — there is
+   *  no old-child compatibility case to keep open. */
+  selected: FolderNode[];
+  /** Ancestor ids to open expanded, so `selected` is visible when the picker
+   *  opens. Same wire convention as `selected`: REQUIRED here, defaulted once
+   *  child-side. Opaque — main forwards them and the renderer only ever tests
+   *  them for equality. A source that cannot walk its own parent chain sends
+   *  `[]` and its picker opens collapsed. */
+  expand: string[];
+  purpose: 'connect' | 'manage';
 }
 
 export interface SourceProxySet {
@@ -69,7 +96,15 @@ export interface SourceProxySet {
 
 export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
   let nextId = 1;
-  const auths = new Map<number, AuthChannel>();
+  // One entry per live connect / reauthenticate / manage-folders flow. The
+  // per-entry `verbs` set is what keeps a manage flow off oauth and prompt.
+  const auths = new Map<
+    number,
+    {
+      channel: AuthChannel | FolderSelectionChannel;
+      verbs: ReadonlySet<string>;
+    }
+  >();
   const sessions = new Map<
     number,
     {
@@ -177,20 +212,29 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
     async handleCall(ns, method, args) {
       if (ns === 'auth') {
         const [id, ...rest] = args as [number, ...unknown[]];
-        const auth = auths.get(id);
-        if (!auth) throw new Error('no active connect flow for this call');
-        if (!AUTH_VERBS.has(method))
+        const entry = auths.get(id);
+        if (!entry) throw new Error('no active connect flow for this call');
+        if (!entry.verbs.has(method))
           throw new Error(`unknown auth verb ${method}`);
+        const { channel } = entry;
         if (method === 'pickFolders') {
           // Not a plain forward: rebuild a real FolderPickerSpec whose tree
           // callbacks call BACK into the child (symmetric transport — these
-          // main→child calls run while the child's connect() is suspended).
+          // main→child calls run while the child's connect()/manageFolders()
+          // is suspended).
           const [wire] = rest as [WirePickerSpec];
           const treeCall = <T>(verb: string, a: unknown[]) =>
             endpoint.call('source', verb, [id, ...a]) as Promise<T>;
           const spec: FolderPickerSpec = {
             modes: wire.modes,
             multiSelect: wire.multiSelect,
+            // Data, not callbacks: passed through verbatim, never parsed.
+            // No `??` default here — the child already defaulted them, and a
+            // second default would hide a wire regression instead of failing
+            // the picker test.
+            selected: wire.selected,
+            expand: wire.expand,
+            purpose: wire.purpose,
             roots: (modeKey) =>
               treeCall<FolderNode[]>('picker-roots', [modeKey]),
             children: (nodeId) =>
@@ -200,12 +244,12 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
             spec.count = (nodeId) =>
               treeCall<FolderCount | null>('picker-count', [nodeId]);
           }
-          return auth.pickFolders(spec);
+          return channel.pickFolders(spec);
         }
         const verb = (
-          auth as unknown as Record<string, (...a: unknown[]) => unknown>
+          channel as unknown as Record<string, (...a: unknown[]) => unknown>
         )[method];
-        return verb.call(auth, ...rest);
+        return verb.call(channel, ...rest);
       }
       if (ns === 'session') {
         const [id, ...rest] = args as [number, ...unknown[]];
@@ -228,7 +272,7 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
         async connect(auth) {
           const id = nextId;
           nextId += 1;
-          auths.set(id, auth);
+          auths.set(id, { channel: auth, verbs: AUTH_VERBS });
           try {
             return (await endpoint.call('source', 'connect', [
               id,
@@ -290,6 +334,55 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
             pullId,
           )) {
             if (msg.kind === 'refs') yield msg.refs;
+          }
+        };
+      }
+      if (entry.hasManageFolders) {
+        source.manageFolders = async (
+          session: Session,
+          channel: FolderSelectionChannel,
+        ): Promise<FolderScopeUpdate> => {
+          const id = nextId;
+          nextId += 1;
+          // Modeled on fetchBytes, NOT on connect: the account the child
+          // sees is the one main registered under a main-allocated id, so
+          // the child can never redirect the scope write to another account
+          // the way connect()'s child-chosen `identifier` can.
+          auths.set(id, { channel, verbs: FOLDER_VERBS });
+          sessions.set(id, {
+            credentials: () => session.credentials(),
+            log: (l, m) => session.log(l, m),
+          });
+          try {
+            // Forwarded whole and uninspected — including R8's
+            // archiveScopeRootIds, which only the source can compute.
+            return (await endpoint.call('source', 'manage-folders', [
+              id,
+              descriptor.id,
+              session.account,
+            ])) as FolderScopeUpdate;
+          } finally {
+            auths.delete(id);
+            sessions.delete(id);
+          }
+        };
+      }
+      if (entry.hasReauthenticate) {
+        source.reauthenticate = async (account: Account, auth: AuthChannel) => {
+          const id = nextId;
+          nextId += 1;
+          // Full AuthChannel: reconnect is exactly the flow that DOES
+          // authenticate. It returns no config — reconnect never changes
+          // scope — so nothing crosses back but the settle.
+          auths.set(id, { channel: auth, verbs: AUTH_VERBS });
+          try {
+            await endpoint.call('source', 'reauthenticate', [
+              id,
+              descriptor.id,
+              account,
+            ]);
+          } finally {
+            auths.delete(id);
           }
         };
       }

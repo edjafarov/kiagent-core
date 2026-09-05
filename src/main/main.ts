@@ -400,6 +400,13 @@ function registerIpc(
    */
   const handlers: InvokeHandlers = {
     'app:get-state': () => getLastPush(),
+    // Account-scoped siblings of accounts:add. They take an accountId, so the
+    // broker claims the account's flow slot BEFORE doing any work — and their
+    // cancel path never calls engine.remove.
+    'accounts:start-reconnect': ({ accountId, oauthClient }) =>
+      broker.startReconnect(accountId, { oauthClient }),
+    'accounts:start-manage-folders': ({ accountId }) =>
+      broker.startManageFolders(accountId),
     'sources:list': () => p.sources.list(),
     'sources:count-files': async ({ path: rawPath }) => {
       const resolved = path.resolve(rawPath);

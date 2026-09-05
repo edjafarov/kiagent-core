@@ -23,11 +23,11 @@ function makeDataSource(
     ],
     listRoots: jest.fn(async (modeKey: string) =>
       modeKey === 'm1'
-        ? [{ path: '/r1', name: 'Root One', hasChildren: true }]
-        : [{ path: '/s1', name: 'Shared One', hasChildren: false }],
+        ? [{ id: 'r1', path: '/r1', name: 'Root One', hasChildren: true }]
+        : [{ id: 's1', path: '/s1', name: 'Shared One', hasChildren: false }],
     ),
     listChildren: jest.fn(async (path: string) => [
-      { path: `${path}/c1`, name: 'Child One', hasChildren: false },
+      { id: 'c1', path: `${path}/c1`, name: 'Child One', hasChildren: false },
     ]),
     countFiles: jest.fn(async (path: string) =>
       path === '/r1' ? { count: 5, capped: false } : null,
@@ -110,8 +110,56 @@ describe('FolderPickerModal with a dataSource', () => {
 
     fireEvent.click(await screen.findByText('Root One'));
     fireEvent.click(screen.getByRole('button', { name: 'Add 1 folder' }));
-    expect(onConfirm).toHaveBeenCalledWith(['/r1']);
+    expect(onConfirm).toHaveBeenCalledWith(['r1']);
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('multi-select: one folder listed under two modes selects once, not twice', async () => {
+    const ds = makeDataSource({
+      listRoots: jest.fn(async (modeKey: string) =>
+        modeKey === 'm1'
+          ? [
+              {
+                id: 'dup',
+                path: '/my-dup',
+                name: 'Dup (My Drive)',
+                hasChildren: false,
+              },
+            ]
+          : [
+              {
+                id: 'dup',
+                path: '/shared-dup',
+                name: 'Dup (Shared)',
+                hasChildren: false,
+              },
+            ],
+      ),
+    });
+    render(
+      <FolderPickerModal
+        multiSelect
+        dataSource={ds}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText('Dup (My Drive)'));
+    // waitFor because countFiles('/my-dup') resolves null asynchronously and
+    // the footer reads "1 folder selected · counting…" until it settles —
+    // the same reason the "source without counts" test (`:133-135`) waits.
+    await waitFor(() =>
+      expect(screen.getByText('1 folder selected')).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Shared' }));
+    fireEvent.click(await screen.findByText('Dup (Shared)'));
+    // Before id-keying this read "2 folders selected": two synthetic paths,
+    // neither a prefix of the other, so coveringRoots could not collapse
+    // them, and switchMode (`:310-315`) never cleared `checked`. Same id ⇒
+    // the second click toggles the SAME folder off.
+    expect(screen.getByText('No folders selected')).toBeInTheDocument();
   });
 
   it('a source without counts never leaves the footer stuck on "counting…"', async () => {
@@ -152,11 +200,21 @@ describe('FolderPickerModal with a dataSource', () => {
     expect(screen.queryByText('/r1')).not.toBeInTheDocument();
   });
 
-  it('a rejected listChildren renders the node as an empty expansion (warned, not thrown)', async () => {
+  it('a rejected listChildren renders an inline retry, not an empty expansion', async () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    let calls = 0;
     const ds = makeDataSource({
-      listChildren: jest.fn(async () => {
-        throw new Error('drive said no');
+      listChildren: jest.fn(async (path: string) => {
+        calls += 1;
+        if (calls === 1) throw new Error('drive said no');
+        return [
+          {
+            id: 'c1',
+            path: `${path}/c1`,
+            name: 'Child One',
+            hasChildren: false,
+          },
+        ];
       }),
     });
     render(
@@ -169,12 +227,102 @@ describe('FolderPickerModal with a dataSource', () => {
     await screen.findByText('Root One');
 
     fireEvent.click(screen.getByRole('button', { name: 'expand Root One' }));
-    // Expansion settles as loaded-with-no-children — collapse control flips.
     expect(
-      await screen.findByRole('button', { name: 'collapse Root One' }),
+      await screen.findByText('Couldn’t list this folder.'),
     ).toBeInTheDocument();
-    expect(screen.queryByText('Child One')).not.toBeInTheDocument();
+    // The failure did NOT masquerade as a loaded-but-empty expansion: the
+    // chevron still offers to expand. THIS IS THE FLIPPED ASSERTION — the
+    // replaced test required the `collapse Root One` control at `:173-175`.
+    expect(
+      screen.getByRole('button', { name: 'expand Root One' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'collapse Root One' }),
+    ).not.toBeInTheDocument();
     expect(warn).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Child One')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Couldn’t list this folder.'),
+    ).not.toBeInTheDocument();
+    warn.mockRestore();
+  });
+
+  it('a successful re-expand after a failed listing clears the error row', async () => {
+    // DECISIONS C-42: the chevron survives a failed listing (asserted above),
+    // so it is a live affordance — re-expanding, rather than pressing Retry,
+    // must not leave "Couldn't list this folder." pinned under the now-loaded
+    // node. The error row is DERIVED from useLazyTree's `loaded`, not from a
+    // second copy of load state that can drift.
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    let calls = 0;
+    const ds = makeDataSource({
+      listChildren: jest.fn(async (path: string) => {
+        calls += 1;
+        if (calls === 1) throw new Error('drive said no');
+        return [
+          {
+            id: 'c1',
+            path: `${path}/c1`,
+            name: 'Child One',
+            hasChildren: false,
+          },
+        ];
+      }),
+    });
+    render(
+      <FolderPickerModal
+        dataSource={ds}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+    await screen.findByText('Root One');
+
+    fireEvent.click(screen.getByRole('button', { name: 'expand Root One' }));
+    expect(
+      await screen.findByText('Couldn’t list this folder.'),
+    ).toBeInTheDocument();
+
+    // Re-expand via the chevron, NOT via Retry.
+    fireEvent.click(screen.getByRole('button', { name: 'expand Root One' }));
+    expect(await screen.findByText('Child One')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Couldn’t list this folder.'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'collapse Root One' }),
+    ).toBeInTheDocument();
+    warn.mockRestore();
+  });
+
+  it('a rejected listRoots renders an inline retry, not a silently empty tree', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    let calls = 0;
+    const ds = makeDataSource({
+      listRoots: jest.fn(async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('drive said no');
+        return [{ id: 'r1', path: '/r1', name: 'Root One', hasChildren: true }];
+      }),
+    });
+    render(
+      <FolderPickerModal
+        dataSource={ds}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByText('Couldn’t list folders.'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Root One')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Couldn’t list folders.'),
+    ).not.toBeInTheDocument();
     warn.mockRestore();
   });
 
@@ -198,6 +346,277 @@ describe('FolderPickerModal with a dataSource', () => {
     );
     expect(screen.getByText('Root One')).toBeInTheDocument();
     expect(screen.queryByText(/files/)).not.toBeInTheDocument();
+  });
+
+  it('`selected` renders checked, REMOVABLE chips, and a never-listed root still saves', async () => {
+    const onConfirm = jest.fn();
+    const ds = makeDataSource();
+    render(
+      <FolderPickerModal
+        multiSelect
+        selected={[
+          { id: 'keep', path: '', name: 'Kept Folder', hasChildren: false },
+          { id: 'drop', path: '', name: 'Dropped Folder', hasChildren: false },
+        ]}
+        dataSource={ds}
+        onConfirm={onConfirm}
+        onClose={jest.fn()}
+      />,
+    );
+
+    // Chips are present before any listing resolves — unlike `existingPaths`,
+    // which renders an inert `tracked` pill and no chip at all.
+    expect(screen.getByText('Kept Folder')).toBeInTheDocument();
+    expect(screen.queryByText('tracked')).not.toBeInTheDocument();
+    await screen.findByText('Root One');
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'remove Dropped Folder from selection',
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add 1 folder' }));
+    // Neither root's row was ever listed. Path-keying dropped both here —
+    // the A8 data-loss path.
+    expect(onConfirm).toHaveBeenCalledWith(['keep']);
+  });
+
+  it('`selected` wins over an overlapping `existingPaths` root, which still governs other rows', async () => {
+    const onConfirm = jest.fn();
+    const ds = makeDataSource();
+    render(
+      <FolderPickerModal
+        multiSelect
+        existingPaths={['/r1']}
+        selected={[
+          { id: 'r1', path: '', name: 'Root One', hasChildren: true },
+          { id: 'keep', path: '', name: 'Kept Folder', hasChildren: false },
+        ]}
+        dataSource={ds}
+        onConfirm={onConfirm}
+        onClose={jest.fn()}
+      />,
+    );
+    // Wait on the ROW's own control, not on its text: 'Root One' is already
+    // on screen as a chip, so findByText would match twice and throw.
+    await screen.findByRole('button', { name: 'expand Root One' });
+
+    // DECISIONS A-6: the row matches BOTH props and `selected` wins — it is
+    // this account's own current scope. The id escape holds from the first
+    // render, before any listing gives the entry a comparable path.
+    expect(screen.queryByText('tracked')).not.toBeInTheDocument();
+    // …and `existingPaths` is untouched for every OTHER row: Child One sits
+    // under /r1 and is not itself selected, so it stays inert.
+    fireEvent.click(screen.getByRole('button', { name: 'expand Root One' }));
+    expect(await screen.findByText('tracked')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add 2 folders' }));
+    expect(onConfirm).toHaveBeenCalledWith(['r1', 'keep']);
+  });
+
+  it('a `selected` entry’s `path` is never trusted as a tree location', async () => {
+    const onConfirm = jest.fn();
+    const ds = makeDataSource();
+    render(
+      <FolderPickerModal
+        multiSelect
+        // A hostile path: it collides with the path the listing gives a
+        // DIFFERENT folder. Seeding it would make Root One look already
+        // covered by an ancestor, and its click a silent no-op.
+        selected={[
+          { id: 'keep', path: '/r1', name: 'Kept Folder', hasChildren: false },
+        ]}
+        dataSource={ds}
+        onConfirm={onConfirm}
+        onClose={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText('Root One'));
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Add 2 folders' }),
+      ).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add 2 folders' }));
+    expect(onConfirm).toHaveBeenCalledWith(['keep', 'r1']);
+  });
+
+  it('the `selected` seed is mount-once: a re-render keeps the user’s edits, a remount reseeds', async () => {
+    const ds = makeDataSource();
+    const kept = {
+      id: 'keep',
+      path: '',
+      name: 'Kept Folder',
+      hasChildren: false,
+    };
+    const other = {
+      id: 'other',
+      path: '',
+      name: 'Other Folder',
+      hasChildren: false,
+    };
+    const { rerender } = render(
+      <FolderPickerModal
+        key="req-1"
+        multiSelect
+        selected={[kept]}
+        dataSource={ds}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+    await screen.findByText('Root One');
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'remove Kept Folder from selection' }),
+    );
+    expect(screen.getByText('No folders selected')).toBeInTheDocument();
+
+    // Same key ⇒ same mount: a parent re-render must not resurrect what the
+    // user just removed (there is deliberately no prop-sync effect).
+    rerender(
+      <FolderPickerModal
+        key="req-1"
+        multiSelect
+        selected={[kept]}
+        dataSource={ds}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+    expect(screen.getByText('No folders selected')).toBeInTheDocument();
+
+    // A new key REMOUNTS and reseeds. This is the ONLY re-seed path, and it
+    // is exactly how a validation retry reopens the picker: the source
+    // re-issues pickFolders, the event carries a new requestId, and
+    // `key={picker.requestId}` (AddSourcePanel.tsx:410) remounts.
+    rerender(
+      <FolderPickerModal
+        key="req-2"
+        multiSelect
+        selected={[other]}
+        dataSource={ds}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+    expect(await screen.findByText('Other Folder')).toBeInTheDocument();
+  });
+
+  it('purpose "manage" uses the manage title, Save folders, and the last-root line', async () => {
+    const ds = makeDataSource();
+    render(
+      <FolderPickerModal
+        multiSelect
+        purpose="manage"
+        dataSource={ds}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+    await screen.findByText('Root One');
+
+    expect(
+      screen.getByRole('heading', { name: 'Manage tracked folders' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('dialog', { name: 'Manage tracked folders' }),
+    ).toBeInTheDocument();
+    // DECISIONS R3, verbatim.
+    expect(
+      screen.getByText(
+        'Keep at least one folder — remove this source to stop tracking it entirely.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save folders' })).toBeDisabled();
+
+    fireEvent.click(screen.getByText('Root One'));
+    expect(screen.getByRole('button', { name: 'Save folders' })).toBeEnabled();
+  });
+
+  it('purpose "connect" keeps the add-flow copy', async () => {
+    const ds = makeDataSource();
+    render(
+      <FolderPickerModal
+        multiSelect
+        purpose="connect"
+        dataSource={ds}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+    await screen.findByText('Root One');
+
+    expect(
+      screen.getByRole('heading', { name: 'Choose folders' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('No folders selected')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Root One'));
+    expect(
+      screen.getByRole('button', { name: 'Add 1 folder' }),
+    ).toBeInTheDocument();
+  });
+
+  it('a rejected Save keeps the picker open with the selection intact and the message inline', async () => {
+    const onConfirm = jest.fn();
+    const onClose = jest.fn();
+    const ds = makeDataSource();
+    // No `key` anywhere in this test: it is ONE mount from start to finish,
+    // which is the whole point — the widget must survive a rejected Save.
+    const { rerender } = render(
+      <FolderPickerModal
+        multiSelect
+        keepOpenOnConfirm
+        dataSource={ds}
+        onConfirm={onConfirm}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText('Root One'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add 1 folder' }));
+    expect(onConfirm).toHaveBeenCalledWith(['r1']);
+    // A-8: the modal must NOT tear itself down — that is what lets Task 9's
+    // owner keep the flow alive instead of setFlow(null).
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // …while the owner commits.
+    rerender(
+      <FolderPickerModal
+        multiSelect
+        keepOpenOnConfirm
+        saving
+        dataSource={ds}
+        onConfirm={onConfirm}
+        onClose={onClose}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+
+    // …and when the owner rejects it: message inline, selection untouched,
+    // the widget left retryable. The LIVE retry is a REMOUNT with a new
+    // requestId — pickFolders is one-shot (connect-broker.ts:228-232) — which
+    // the mount-once seed test above pins.
+    rerender(
+      <FolderPickerModal
+        multiSelect
+        keepOpenOnConfirm
+        error="That folder no longer exists."
+        dataSource={ds}
+        onConfirm={onConfirm}
+        onClose={onClose}
+      />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'That folder no longer exists.',
+    );
+    expect(
+      screen.getByRole('button', { name: 'remove Root One from selection' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add 1 folder' })).toBeEnabled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 
@@ -229,5 +648,155 @@ describe('FolderPickerModal without a dataSource (historical local-FS behavior)'
     expect(invokeMock).toHaveBeenCalledWith('sources:count-files', {
       path: '/Users/t',
     });
+  });
+});
+
+/**
+ * D6 — a manage-folders picker must OPEN revealed down to the folders it is
+ * already tracking. The source computes the ancestor ids (it alone can walk
+ * its own parent chain) and the modal matches them by equality; nothing here
+ * decodes an id.
+ */
+describe('FolderPickerModal expandIds', () => {
+  /** Ids are the local source's absolute paths; the `path`s mirror
+   *  `connect-picker-adapter`'s synthetic ones ('/' + seg(id) at the roots,
+   *  parentPath + '/' + seg(id) below) so the fixture exercises the real
+   *  id/path split rather than a tree where the two coincide. */
+  function revealDataSource(): FolderPickerDataSource {
+    const seg = (id: string): string => id.replace(/\//g, '%2F');
+    const kids: Record<string, string[]> = {
+      '/home': ['/home/a', '/home/z'],
+      '/home/a': ['/home/a/b'],
+    };
+    const name = (id: string): string => id.slice(id.lastIndexOf('/') + 1);
+    return {
+      modes: [{ key: 'quick', label: 'Quick links' }],
+      listRoots: jest.fn(async () => [
+        {
+          id: '/home',
+          path: `/${seg('/home')}`,
+          name: 'home',
+          hasChildren: true,
+        },
+      ]),
+      listChildren: jest.fn(async (p: string) => {
+        const id = decodeURIComponent(p.slice(p.lastIndexOf('/') + 1));
+        return (kids[id] ?? []).map((k) => ({
+          id: k,
+          path: `${p}/${seg(k)}`,
+          name: name(k),
+          hasChildren: (kids[k] ?? []).length > 0,
+        }));
+      }),
+      countFiles: jest.fn(async () => null),
+    };
+  }
+
+  const SELECTED = [
+    {
+      id: '/home/a/b',
+      path: '/%2Fhome%2Fa%2Fb',
+      name: 'b',
+      hasChildren: false,
+    },
+  ];
+
+  it('opens expanded down to a selected folder, listing only its ancestors', async () => {
+    const ds = revealDataSource();
+    render(
+      <FolderPickerModal
+        multiSelect
+        purpose="manage"
+        dataSource={ds}
+        selected={SELECTED}
+        expandIds={['/home', '/home/a']}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+
+    // The ancestors rendered EXPANDED — the chevron offers to collapse them.
+    // Awaited on a TREE row, never on the text 'b': `selected` also renders a
+    // chip named 'b', which is on screen before the walk has run at all.
+    expect(
+      await screen.findByRole('button', { name: 'collapse home' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'collapse a' }),
+    ).toBeInTheDocument();
+    // ...and the selected row itself did NOT expand — it is not an ancestor.
+    expect(
+      screen.getByRole('button', { name: 'expand z' }),
+    ).toBeInTheDocument();
+    // The buried selected row itself is on screen, without a single click.
+    expect(screen.getByRole('button', { name: 'expand b' })).toBeDisabled();
+
+    // Exactly the two ancestors were listed: the sibling `z` and the selected
+    // `b` are never fetched, so the walk is O(depth), not a subtree sweep.
+    expect(ds.listChildren).toHaveBeenCalledTimes(2);
+    expect(ds.listChildren).toHaveBeenCalledWith('/%2Fhome');
+    expect(ds.listChildren).toHaveBeenCalledWith('/%2Fhome/%2Fhome%2Fa');
+  });
+
+  it('opens collapsed when the source supplies no expand list', async () => {
+    const ds = revealDataSource();
+    render(
+      <FolderPickerModal
+        multiSelect
+        purpose="manage"
+        dataSource={ds}
+        selected={SELECTED}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByRole('button', { name: 'expand home' }),
+    ).toBeInTheDocument();
+    // No descendant row exists ('b' itself is excluded from this assertion —
+    // the selection chip carries that name whether or not the tree opened).
+    expect(screen.queryByText('a')).not.toBeInTheDocument();
+    expect(ds.listChildren).not.toHaveBeenCalled();
+  });
+
+  it('reveals on a later mode tab too, not just the one that opens', async () => {
+    const base = revealDataSource();
+    const ds: FolderPickerDataSource = {
+      ...base,
+      modes: [
+        { key: 'drives', label: 'Browse from drive root…' },
+        { key: 'quick', label: 'Quick links' },
+      ],
+      listRoots: jest.fn(async (modeKey: string) =>
+        modeKey === 'quick'
+          ? [
+              {
+                id: '/home',
+                path: '/%2Fhome',
+                name: 'home',
+                hasChildren: true,
+              },
+            ]
+          : [{ id: '/', path: '/%2F', name: '/', hasChildren: false }],
+      ),
+    };
+    render(
+      <FolderPickerModal
+        multiSelect
+        purpose="manage"
+        dataSource={ds}
+        selected={SELECTED}
+        expandIds={['/home', '/home/a']}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+    await screen.findByText('/');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quick links' }));
+    expect(
+      await screen.findByRole('button', { name: 'collapse a' }),
+    ).toBeInTheDocument();
   });
 });

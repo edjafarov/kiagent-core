@@ -7,14 +7,22 @@ import type {
   Batch,
   Document,
   ExternalRef,
+  FolderScopeUpdate,
+  FolderSelectionChannel,
   Session,
   Source,
   SourceDescriptor,
 } from '@shared/contracts';
-import { coveringRoots, isUnder } from '@shared/folder-paths';
-import { SourcePermanentError } from '@shared/source-errors';
+import { isUnder } from '@shared/folder-paths';
 
 import { advanceCursor, type LocalFolderCursor } from './cursor';
+import {
+  folderScopedConfig,
+  readFolderRoots,
+  partitionRemovedRoots,
+  validateFolderRoots,
+} from './folder-roots';
+import { folderPickerSpec, selectionNodes } from './picker';
 import { decideLocalFile } from './ingestible';
 import {
   BATCH_SIZE,
@@ -40,27 +48,23 @@ export const descriptor: SourceDescriptor = {
   auth: 'none',
   multiAccount: true,
   cadence: { every: '30m' },
+  /** Tracked folders card + `accounts:start-manage-folders`. There is
+   *  deliberately NO `reauthenticate`: `auth: 'none'` means this source can
+   *  never reach `needsReauth`, so the reconnect flow (and its identity
+   *  check) never applies to it — which is also why the fixed
+   *  MACHINE_IDENTIFIER upsert on connect stays untouched. */
+  folderScope: true,
 };
 
 /** One local-folder account = this machine. All roots this machine tracks
  *  live in `config.paths`, not in the identifier — see `connect()`. */
 const MACHINE_IDENTIFIER = 'this-machine';
 
-/** `config.paths` when it's a non-empty array of strings; a permanent error
- *  otherwise — retrying can never fix a malformed config, so the engine
- *  should surface it immediately instead of backing off 5x. */
+/** The account's tracked roots, as absolute paths. Canonical
+ *  `config.folderRoots` with the one-train legacy `config.paths` fallback —
+ *  see folder-roots.ts, which also owns the permanent-error rule. */
 function getRootPaths(account: Account): string[] {
-  const paths = account.config?.paths;
-  if (
-    Array.isArray(paths) &&
-    paths.length > 0 &&
-    paths.every((p) => typeof p === 'string' && p.length > 0)
-  ) {
-    return paths as string[];
-  }
-  throw new SourcePermanentError(
-    'Local-folder account has no tracked folders — remove this source and re-add its folder.',
-  );
+  return readFolderRoots(account).map((r) => r.id);
 }
 
 /** `config.watch === false` stops `pull()` right after backfill/rescan
@@ -71,48 +75,31 @@ function isWatchEnabled(account: Account): boolean {
   return account.config?.watch !== false;
 }
 
+/**
+ * First-ever local-folder connection for this machine.
+ *
+ * DECISIONS A-4: this runs ONLY when no `local-folder` account exists.
+ * `MACHINE_IDENTIFIER` is fixed, and `createAccount` upserts on
+ * `(source, identifier)` with `config = excluded.config`
+ * (`store.ts:1059-1064`), so a second `connect()` would REPLACE the whole
+ * scope with just the newly picked roots and the following reconcile pass
+ * would mass-archive every previously tracked root. Task 9 (core) and Task 13
+ * (the alpha-cent shadow) route the Add tile to
+ * `accounts:start-manage-folders` whenever a local-folder account is already
+ * present; `manageFolders` below is that path, and it merges instead of
+ * replacing because the picker opens preselected with the current roots.
+ */
 export async function connect(
   auth: AuthChannel,
 ): Promise<{ identifier: string; config: Record<string, unknown> }> {
-  const answers = await auth.prompt({
-    type: 'object',
-    required: ['paths'],
-    properties: {
-      paths: {
-        type: 'array',
-        items: { type: 'string' },
-        title: 'Folders',
-        format: 'folder-paths',
-      },
-    },
-  });
-  const rawPaths = answers.paths;
-  if (!Array.isArray(rawPaths) || rawPaths.length === 0) {
-    throw new Error('Local Folder: at least one folder path is required.');
-  }
-
-  const resolved: string[] = [];
-  for (const raw of rawPaths) {
-    if (typeof raw !== 'string' || raw.trim().length === 0) {
-      throw new Error('Local Folder: a folder path is required.');
-    }
-    const abs = path.resolve(raw);
-    let stat: fs.Stats;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      stat = await fs.promises.stat(abs);
-    } catch {
-      throw new Error(`Local Folder: path does not exist: "${abs}"`);
-    }
-    if (!stat.isDirectory()) {
-      throw new Error(`Local Folder: path is not a directory: "${abs}"`);
-    }
-    resolved.push(abs);
-  }
-
+  const picked = await auth.pickFolders(
+    folderPickerSpec({ selected: [], purpose: 'connect' }),
+  );
+  const roots = await validateFolderRoots(picked.map((n) => n.id));
   return {
     identifier: MACHINE_IDENTIFIER,
-    config: { paths: coveringRoots(resolved) },
+    // Canonical only (A-2) — core derives `config.paths` for the legacy train.
+    config: folderScopedConfig({}, roots),
   };
 }
 
@@ -199,6 +186,7 @@ function prunedSomething(
  */
 async function buildBatch(
   entries: readonly ScannedEntry[],
+  scopeRootId: string,
 ): Promise<{ items: LocalFolderItem[]; deletions: ExternalRef[] }> {
   const built = await Promise.all(
     entries.map((e) => buildItem(e.absPath, e.stats)),
@@ -206,7 +194,7 @@ async function buildBatch(
   const items: LocalFolderItem[] = [];
   const deletions: ExternalRef[] = [];
   built.forEach((item, index) => {
-    if (item) items.push(item);
+    if (item) items.push({ ...item, scopeRootId });
     else
       deletions.push({
         externalId: toAbsPosix(entries[index].absPath),
@@ -255,7 +243,7 @@ async function* backfillRoot(
   let cursor = working;
   for (let i = 0; i < batches.length; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const { items, deletions } = await buildBatch(batches[i]);
+    const { items, deletions } = await buildBatch(batches[i], root);
     const isLast = i === batches.length - 1;
     if (isLast) cursor = advanceCursor(cursor, root, scanStartIso);
     yield { phase: 'backfill', items, deletions, cursor, estimateTotal };
@@ -298,7 +286,7 @@ async function* incrementalRescanRoot(
     entryReadCost,
   )) {
     // eslint-disable-next-line no-await-in-loop
-    const { items, deletions } = await buildBatch(b);
+    const { items, deletions } = await buildBatch(b, root);
     yield { phase: 'live', items, deletions, cursor: next };
   }
   return next;
@@ -445,6 +433,77 @@ export async function* reconcile(
   }
 }
 
+/**
+ * Edit this account's folder scope with its existing (nonexistent — `auth:
+ * 'none'`) credentials. Persists NOTHING: core owns the one transaction
+ * (`applyFolderScope`).
+ *
+ * The cursor transformation is exactly `pruneToConfiguredRoots`: retained
+ * roots keep their `{completedAt}` watermark (spec invariant 10), removed
+ * roots are dropped, and an added root is left ABSENT so the next `pull()`
+ * takes the backfill path and walks its whole tree. That helper is
+ * module-private in THIS file (`local-folder-source.ts:166-177`, alongside
+ * `prunedSomething`) — it is NOT exported from `cursor.ts`, which only
+ * declares `LocalFolderCursor` and `advanceCursor`. That is precisely why
+ * `manageFolders` lives here and not in `folder-roots.ts`: moving it there
+ * is `TS2304: Cannot find name 'pruneToConfiguredRoots'`.
+ *
+ * `archiveScopeRootIds` and `reattributeScopeRoots` are DECISIONS R8 and
+ * C-46/D5, computed together by `partitionRemovedRoots` so they cannot
+ * disagree: a removed root goes to `archive` only when NO retained root
+ * satisfies `isUnder(removed, retained)`, and to `reattribute` (aimed at that
+ * retained root) when one does. Core must never derive either by
+ * set-difference.
+ *
+ * De-selecting a subfolder of a still-selected parent removes zero documents
+ * from scope — but the right answer is NOT silence. Those rows stay stamped
+ * with the subfolder id, which is no longer in the config, so no later save
+ * can match them and they would outlive the selection (C-46/D3). This source
+ * holds real absolute paths, so containment is decidable locally and it can
+ * name the retained root they now belong to.
+ *
+ * The ids on both sides are the CONFIG spellings (B-7) — the same strings
+ * `scope_root_id` was stamped with — never the re-resolved picked ones.
+ *
+ * This return deliberately OMITS `archiveNullScoped`. The field exists on
+ * `FolderScopeUpdate` (optional, default false — DECISIONS C-1), and omitting
+ * it IS how this source says `false`. (Under C-34 core declines to act on the
+ * flag in this train at all: it is absent from `applyFolderScope`'s input type
+ * and the engine does not forward it. That changes nothing here — this source
+ * has always meant `false` — but do not "restore" a forwarding path on the
+ * strength of this comment.) A-3
+ * permits the flag only alongside a cursor that forces a FULL re-establish,
+ * and this function deliberately preserves retained watermarks; and unlike
+ * the cloud connectors this source never hashSkips, so an archived row is
+ * always rewritten on re-emit and no repair path is needed. local-folder's
+ * NULL-scoped rows come from `watch.ts`'s tolerated `rootOf() === undefined`
+ * branch (R5) and are cleaned up by `reconcile()`, which never lists them.
+ */
+export async function manageFolders(
+  session: Session,
+  channel: FolderSelectionChannel,
+): Promise<FolderScopeUpdate<LocalFolderCursor>> {
+  const current = readFolderRoots(session.account);
+  const picked = await channel.pickFolders(
+    folderPickerSpec({
+      selected: await selectionNodes(current),
+      purpose: 'manage',
+    }),
+  );
+  const roots = await validateFolderRoots(picked.map((n) => n.id));
+  const cursor = pruneToConfiguredRoots(
+    (session.account.cursor ?? null) as LocalFolderCursor,
+    roots.map((r) => r.id),
+  );
+  const removed = partitionRemovedRoots(current, roots);
+  return {
+    config: folderScopedConfig(session.account.config ?? {}, roots),
+    cursor,
+    archiveScopeRootIds: removed.archive,
+    reattributeScopeRoots: removed.reattribute,
+  };
+}
+
 export const localFolderSource: Source<LocalFolderCursor, LocalFolderItem> = {
   descriptor,
   connect,
@@ -452,4 +511,5 @@ export const localFolderSource: Source<LocalFolderCursor, LocalFolderItem> = {
   toDocument,
   fetchBytes,
   reconcile,
+  manageFolders,
 };

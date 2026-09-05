@@ -14,6 +14,9 @@ import type {
   Account,
   AuthChannel,
   DocumentInput,
+  FolderPickerSpec,
+  FolderRootSelection,
+  FolderSelectionChannel,
   Session,
 } from '@shared/contracts';
 import { MAX_LOCAL_AUDIO_BYTES } from '@shared/file-indexability';
@@ -62,7 +65,17 @@ function makeAccount(
     id: 'acct-local-folder-1',
     source: 'local-folder',
     identifier: 'this-machine',
-    config: { paths, ...config },
+    // Canonical scope, exactly the shape connect()/manageFolders() write.
+    // The legacy `paths` mirror is CORE's (A-2) and deliberately absent here;
+    // the pre-migration read path is covered by the makeSessionWithConfig
+    // ({ paths: [dir] }) test in `canonical folderRoots config` above.
+    config: {
+      folderRoots: paths.map((p) => ({
+        id: p,
+        name: path.basename(p) || p,
+      })),
+      ...config,
+    },
     status: 'connecting',
     cursor: null,
     createdAt: new Date().toISOString(),
@@ -108,22 +121,55 @@ async function collect<T>(iter: AsyncIterable<T>): Promise<T[]> {
   return out;
 }
 
+/** An AuthChannel whose picker returns `ids`, records every spec it was
+ *  handed, and FAILS if anyone still reaches for the deleted
+ *  `format:'folder-paths'` prompt fast path. */
+function pickerAuth(ids: string[]): {
+  auth: AuthChannel;
+  specs: FolderPickerSpec[];
+} {
+  const specs: FolderPickerSpec[] = [];
+  const auth: AuthChannel = {
+    oauth: async () => ({}),
+    showQr: () => {},
+    status: () => {},
+    prompt: async () => {
+      throw new Error('local-folder must not use auth.prompt any more');
+    },
+    pickFolders: async (spec) => {
+      specs.push(spec);
+      return ids.map((id) => ({
+        id,
+        name: path.basename(id) || id,
+        hasChildren: false,
+      }));
+    },
+  };
+  return { auth, specs };
+}
+
 describe('connect', () => {
-  it('resolves multiple valid folder paths, identifier is the fixed machine constant', async () => {
+  it('opens the shared picker with the local tabs and an empty connect selection', async () => {
     const dirA = mkTmpDir();
     const dirB = mkTmpDir();
-    const auth: AuthChannel = {
-      oauth: async () => ({}),
-      showQr: () => {},
-      status: () => {},
-      pickFolders: async () => [],
-      prompt: async () => ({ paths: [dirA, dirB] }),
-    };
+    const { auth, specs } = pickerAuth([dirA, dirB]);
     const result = await connect(auth);
+
+    expect(specs).toHaveLength(1);
+    expect(specs[0].purpose).toBe('connect');
+    expect(specs[0].selected).toEqual([]);
+    expect(specs[0].multiSelect).toBe(true);
+    expect(specs[0].modes).toEqual([
+      { key: 'quick', label: 'Quick links' },
+      { key: 'drives', label: 'Browse from drive root…' },
+    ]);
+
     expect(result.identifier).toBe('this-machine');
-    expect((result.config.paths as string[]).sort()).toEqual(
-      [path.resolve(dirA), path.resolve(dirB)].sort(),
-    );
+    expect(
+      (result.config.folderRoots as FolderRootSelection[])
+        .map((r) => r.id)
+        .sort(),
+    ).toEqual([path.resolve(dirA), path.resolve(dirB)].sort());
   });
 
   it('normalizes a nested path out via coveringRoots', async () => {
@@ -131,17 +177,13 @@ describe('connect', () => {
     const dirB = mkTmpDir();
     const nested = path.join(dirA, 'nested');
     fs.mkdirSync(nested);
-    const auth: AuthChannel = {
-      oauth: async () => ({}),
-      showQr: () => {},
-      status: () => {},
-      pickFolders: async () => [],
-      prompt: async () => ({ paths: [dirA, dirB, nested] }),
-    };
+    const { auth } = pickerAuth([dirA, dirB, nested]);
     const result = await connect(auth);
-    expect((result.config.paths as string[]).sort()).toEqual(
-      [path.resolve(dirA), path.resolve(dirB)].sort(),
-    );
+    expect(
+      (result.config.folderRoots as FolderRootSelection[])
+        .map((r) => r.id)
+        .sort(),
+    ).toEqual([path.resolve(dirA), path.resolve(dirB)].sort());
   });
 
   it('throws a clear error naming the offending nonexistent path', async () => {
@@ -150,38 +192,20 @@ describe('connect', () => {
       os.tmpdir(),
       'definitely-does-not-exist-kiagent-xyz',
     );
-    const auth: AuthChannel = {
-      oauth: async () => ({}),
-      showQr: () => {},
-      status: () => {},
-      pickFolders: async () => [],
-      prompt: async () => ({ paths: [dirA, missing] }),
-    };
+    const { auth } = pickerAuth([dirA, missing]);
     await expect(connect(auth)).rejects.toThrow(missing);
     await expect(connect(auth)).rejects.toThrow(/does not exist/);
   });
 
-  it('throws when a prompted path is a file, not a directory', async () => {
+  it('throws when a picked path is a file, not a directory', async () => {
     const dir = mkTmpDir();
     const filePath = writeFile(dir, 'not-a-dir.txt', 'x');
-    const auth: AuthChannel = {
-      oauth: async () => ({}),
-      showQr: () => {},
-      status: () => {},
-      pickFolders: async () => [],
-      prompt: async () => ({ paths: [filePath] }),
-    };
+    const { auth } = pickerAuth([filePath]);
     await expect(connect(auth)).rejects.toThrow(/not a directory/);
   });
 
-  it('throws when no paths are prompted', async () => {
-    const auth: AuthChannel = {
-      oauth: async () => ({}),
-      showQr: () => {},
-      status: () => {},
-      pickFolders: async () => [],
-      prompt: async () => ({ paths: [] }),
-    };
+  it('throws when nothing is picked', async () => {
+    const { auth } = pickerAuth([]);
     await expect(connect(auth)).rejects.toThrow(/folder path is required/);
   });
 });
@@ -840,7 +864,7 @@ describe('reconcile', () => {
 });
 
 describe('accounts with no tracked roots (malformed config)', () => {
-  it('pull() fails fast with a permanent error when config.paths is missing', async () => {
+  it('pull() fails fast with a permanent error when neither folderRoots nor paths is present', async () => {
     const controller = new AbortController();
     const session = makeSessionWithConfig({}, controller.signal);
     await expect(collect(pull(session, null))).rejects.toThrow(NO_ROOTS_ERROR);
@@ -861,6 +885,35 @@ describe('accounts with no tracked roots (malformed config)', () => {
       typeof fetchBytes
     >[1];
     await expect(fetchBytes(session, doc)).rejects.toThrow(NO_ROOTS_ERROR);
+  });
+});
+
+describe('canonical folderRoots config', () => {
+  it('pulls from an account whose config carries ONLY folderRoots', async () => {
+    const dir = mkTmpDir();
+    writeFile(dir, 'a.txt', 'a');
+    const controller = new AbortController();
+    const session = makeSessionWithConfig(
+      { folderRoots: [{ id: dir, name: path.basename(dir) }], watch: false },
+      controller.signal,
+    );
+    const items = (await collect(pull(session, null))).flatMap((b) => b.items);
+    expect(items.map((i) => i.externalId)).toEqual([
+      toExternalId(path.join(dir, 'a.txt')),
+    ]);
+  });
+
+  it('still pulls from a pre-migration account carrying only legacy paths', async () => {
+    // TODO(folder-scope-train-2): delete with the mirror.
+    const dir = mkTmpDir();
+    writeFile(dir, 'a.txt', 'a');
+    const controller = new AbortController();
+    const session = makeSessionWithConfig(
+      { paths: [dir], watch: false },
+      controller.signal,
+    );
+    const items = (await collect(pull(session, null))).flatMap((b) => b.items);
+    expect(items).toHaveLength(1);
   });
 });
 
@@ -904,6 +957,7 @@ describe('watchLoop', () => {
     expect(r1.value?.items).toHaveLength(1);
     expect(r1.value?.items[0].externalId).toBe(expectedExternalId);
     expect(r1.value?.items[0].markdownText).toBe('hello');
+    expect(r1.value?.items[0].scopeRootId).toBe(dir);
     const cursor1 = r1.value?.cursor as RootsCursor;
     expect(cursor1.roots[dir].completedAt).toEqual(
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
@@ -1151,4 +1205,369 @@ describe('ingestion allowlist parity (scanner vs watcher)', () => {
       .sort();
     expect([...new Set(seen)].sort()).toEqual(scanned);
   }, 30_000);
+});
+
+describe('manageFolders', () => {
+  function channelPicking(ids: string[]): {
+    channel: FolderSelectionChannel;
+    specs: FolderPickerSpec[];
+  } {
+    const specs: FolderPickerSpec[] = [];
+    return {
+      specs,
+      channel: {
+        status: () => {},
+        pickFolders: async (spec) => {
+          specs.push(spec);
+          return ids.map((id) => ({
+            id,
+            name: path.basename(id) || id,
+            hasChildren: false,
+          }));
+        },
+      },
+    };
+  }
+
+  function sessionFor(account: Account): Session {
+    return {
+      account,
+      signal: new AbortController().signal,
+      credentials: async () => null,
+      log: () => {},
+    };
+  }
+
+  it('opens preselected with the current roots and purpose manage', async () => {
+    const dirA = mkTmpDir();
+    const dirB = mkTmpDir();
+    fs.mkdirSync(path.join(dirA, 'child'));
+    const session = sessionFor(makeAccount([dirA, dirB]));
+    const { channel, specs } = channelPicking([dirA, dirB]);
+
+    // The descriptor flag is what makes the Tracked folders card and
+    // `accounts:start-manage-folders` reachable at all; assert it next to the
+    // method it gates rather than leaving a Produces claim untested.
+    expect(localFolderSource.descriptor.folderScope).toBe(true);
+    expect(localFolderSource.reauthenticate).toBeUndefined();
+
+    await localFolderSource.manageFolders!(session, channel);
+
+    expect(specs[0].purpose).toBe('manage');
+    expect(specs[0].selected).toEqual([
+      { id: dirA, name: path.basename(dirA), hasChildren: true },
+      { id: dirB, name: path.basename(dirB), hasChildren: false },
+    ]);
+  });
+
+  it('keeps retained watermarks, drops removed roots, leaves added roots absent, and archives only the uncovered removal', async () => {
+    const dirA = mkTmpDir();
+    const dirB = mkTmpDir();
+    const dirC = mkTmpDir();
+    const account = makeAccount([dirA, dirB], { watch: false });
+    account.cursor = {
+      roots: {
+        [dirA]: { completedAt: '2026-01-01T00:00:00.000Z' },
+        [dirB]: { completedAt: '2026-01-02T00:00:00.000Z' },
+      },
+    };
+    const before = JSON.stringify(account.config);
+    const { channel } = channelPicking([dirA, dirC]); // B removed, C added
+
+    const update = await localFolderSource.manageFolders!(
+      sessionFor(account),
+      channel,
+    );
+
+    expect(
+      (update.config.folderRoots as FolderRootSelection[]).map((r) => r.id),
+    ).toEqual([dirA, dirC]);
+    // Unrelated config survives a scope edit. (Whether `paths` is present is
+    // NOT asserted on the source's own output: A-2 makes this source silent
+    // about the mirror, not a stripper of it — the two folderScopedConfig
+    // unit tests in folder-roots.test.ts pin both halves of that rule.)
+    expect(update.config.watch).toBe(false);
+
+    // DECISIONS R8: dirB is removed and no retained root covers it, so its
+    // scope_root_id is the ONE value applyFolderScope may archive. dirA is
+    // retained and dirC is new — neither appears. B-7: dirA/dirB/dirC are the
+    // fixture's own strings, so the two toEqual assertions above and here
+    // pin that a root id survives the whole round trip BYTE-IDENTICAL to the
+    // spelling `scope_root_id` was stamped with — no re-resolution, no
+    // trailing-separator strip, no case fold at any layer.
+    expect(update.archiveScopeRootIds).toEqual([dirB]);
+    // C-46/D5: nothing to re-attribute — no retained root covers dirB, which
+    // is precisely why it is archived instead. The two arrays are a PARTITION
+    // of the removed roots, so a removal shows up in exactly one of them.
+    expect(update.reattributeScopeRoots).toEqual([]);
+    // DECISIONS C-1: the field exists and is optional; this source omits it.
+    // C-34: core does not act on the flag in this train either way — the
+    // store input no longer carries it and the engine does not forward it —
+    // so the omission is both this source's intent and the effective
+    // behaviour for every source.
+    expect(update.archiveNullScoped).toBeUndefined();
+
+    const cursor = update.cursor as RootsCursor;
+    expect(Object.keys(cursor.roots)).toEqual([dirA]);
+    expect(cursor.roots[dirA].completedAt).toBe('2026-01-01T00:00:00.000Z');
+
+    // Persists nothing — core owns the durable write (applyFolderScope).
+    expect(JSON.stringify(account.config)).toBe(before);
+    expect(Object.keys((account.cursor as RootsCursor).roots).sort()).toEqual(
+      [dirA, dirB].sort(),
+    );
+  });
+
+  it('RE-ATTRIBUTES rather than archiving when a removed root is still covered by a retained parent (C-46/D5)', async () => {
+    // The case DECISIONS R8 exists for, end to end. The account tracks a
+    // subfolder; the user widens the selection to its parent. The subfolder
+    // "disappears" from folderRoots, but every one of its documents is still
+    // in scope — a core-side set-difference would archive the whole subtree.
+    const parent = mkTmpDir();
+    const sub = path.join(parent, 'sub');
+    fs.mkdirSync(sub);
+    const account = makeAccount([sub], { watch: false });
+    account.cursor = {
+      roots: { [sub]: { completedAt: '2026-01-01T00:00:00.000Z' } },
+    };
+    const { channel } = channelPicking([parent]);
+
+    const update = await localFolderSource.manageFolders!(
+      sessionFor(account),
+      channel,
+    );
+
+    expect(update.archiveScopeRootIds).toEqual([]);
+    // C-46/D5 — and an empty archive set alone is NOT enough. Saying nothing
+    // leaves every one of those documents stamped with `sub` forever (nothing
+    // re-stamps a live row), so a later save that removes `parent` would not
+    // match them and they would stay searchable outside the selection. The
+    // source has real paths, so it can decide containment locally and say
+    // which retained root they now belong to.
+    expect(update.reattributeScopeRoots).toEqual([{ from: sub, to: parent }]);
+    expect(
+      (update.config.folderRoots as FolderRootSelection[]).map((r) => r.id),
+    ).toEqual([parent]);
+    // `parent` is a NEW key, so it is absent from the pruned cursor and the
+    // next pull() backfills the whole (now wider) tree.
+    expect((update.cursor as RootsCursor).roots).toEqual({});
+  });
+
+  it('the returned cursor makes the next pull backfill only the added root', async () => {
+    const dirA = mkTmpDir();
+    const dirC = mkTmpDir();
+    writeFile(dirA, 'a.txt', 'a');
+    writeFile(dirC, 'c.txt', 'c');
+    await sleep(20);
+
+    const account = makeAccount([dirA], { watch: false });
+    account.cursor = {
+      roots: { [dirA]: { completedAt: new Date().toISOString() } },
+    };
+    const { channel } = channelPicking([dirA, dirC]);
+    const update = await localFolderSource.manageFolders!(
+      sessionFor(account),
+      channel,
+    );
+
+    const controller = new AbortController();
+    const after = makeSessionWithConfig(update.config, controller.signal);
+    const batches = await collect(
+      pull(after, update.cursor as LocalFolderCursor),
+    );
+    const items = batches.flatMap((b) => b.items);
+
+    expect(items.map((i) => i.externalId)).toEqual([
+      toExternalId(path.join(dirC, 'c.txt')),
+    ]);
+    expect(batches.some((b) => b.phase === 'backfill')).toBe(true);
+  });
+
+  it('a newly added root does not override the strict file-indexability policy', async () => {
+    // Spec invariant 15 (DECISIONS A-10). Adding a folder widens SCOPE; it
+    // never widens what is ingestible. The junk types mirror the proven
+    // fixture in `pull — strict indexability policy`
+    // (local-folder-source.test.ts:645-677): .zip is ignored at every size,
+    // .scache has no pipeline at all.
+    const dirA = mkTmpDir();
+    const dirC = mkTmpDir();
+    writeFile(dirA, 'a.txt', 'a');
+    writeFile(dirC, 'notes.txt', 'indexable');
+    writeFile(dirC, 'backup.zip', '0123456789');
+    writeFile(dirC, 'unknown.scache', '0123456789');
+    await sleep(20);
+
+    const account = makeAccount([dirA], { watch: false });
+    account.cursor = {
+      roots: { [dirA]: { completedAt: new Date().toISOString() } },
+    };
+    const { channel } = channelPicking([dirA, dirC]);
+    const update = await localFolderSource.manageFolders!(
+      sessionFor(account),
+      channel,
+    );
+
+    const controller = new AbortController();
+    const after = makeSessionWithConfig(update.config, controller.signal);
+    const items = (
+      await collect(pull(after, update.cursor as LocalFolderCursor))
+    ).flatMap((b) => b.items);
+
+    expect(items.map((i) => i.externalId)).toEqual([
+      toExternalId(path.join(dirC, 'notes.txt')),
+    ]);
+  });
+
+  it('refuses an empty selection', async () => {
+    const dirA = mkTmpDir();
+    const { channel } = channelPicking([]);
+    await expect(
+      localFolderSource.manageFolders!(
+        sessionFor(makeAccount([dirA])),
+        channel,
+      ),
+    ).rejects.toThrow(/folder path is required/);
+  });
+
+  it('refuses a root that has vanished from disk', async () => {
+    const dirA = mkTmpDir();
+    const gone = path.join(dirA, 'gone');
+    const { channel } = channelPicking([dirA, gone]);
+    await expect(
+      localFolderSource.manageFolders!(
+        sessionFor(makeAccount([dirA])),
+        channel,
+      ),
+    ).rejects.toThrow(/does not exist/);
+  });
+});
+
+describe('scopeRootId attribution', () => {
+  it('stamps every backfilled item with its own configured root, and toDocument carries it', async () => {
+    const dirA = mkTmpDir();
+    const dirB = mkTmpDir();
+    writeFile(dirA, 'a.txt', 'a');
+    writeFile(dirB, 'b.txt', 'b');
+    const controller = new AbortController();
+    const session = makeSession([dirA, dirB], controller.signal, false);
+
+    const items = (await collect(pull(session, null))).flatMap((b) => b.items);
+    const byName = new Map(items.map((i) => [path.basename(i.absPath), i]));
+
+    expect(byName.get('a.txt')!.scopeRootId).toBe(dirA);
+    expect(byName.get('b.txt')!.scopeRootId).toBe(dirB);
+
+    const doc = localFolderSource.toDocument(
+      byName.get('a.txt')!,
+    ) as DocumentInput;
+    expect(doc.scopeRootId).toBe(dirA);
+    // Attribution is by the OS-NATIVE metadata.absPath prefix, never the
+    // posix-ized externalId — the latter mis-matches every root on Windows.
+    expect(doc.metadata.absPath).toBe(path.join(dirA, 'a.txt'));
+  });
+
+  it('stamps incrementally rescanned items too', async () => {
+    const dir = mkTmpDir();
+    const abs = writeFile(dir, 'a.txt', 'a');
+    const controller = new AbortController();
+    const session = makeSession([dir], controller.signal, false);
+    const cursor: LocalFolderCursor = {
+      roots: {
+        [dir]: { completedAt: new Date(Date.now() - 60_000).toISOString() },
+      },
+    };
+    fs.writeFileSync(abs, 'a updated');
+
+    const batches = await collect(pull(session, cursor));
+    const items = batches.flatMap((b) => b.items);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].scopeRootId).toBe(dir);
+    expect(batches.some((b) => b.phase === 'live')).toBe(true);
+  });
+
+  it('toDocument omits scopeRootId entirely when the item carries none', () => {
+    const doc = localFolderSource.toDocument({
+      absPath: '/tmp/x/a.txt',
+      externalId: '/tmp/x/a.txt',
+      size: 1,
+      mtimeIso: new Date().toISOString(),
+      createdIso: new Date().toISOString(),
+      ext: 'txt',
+      mime: 'text/plain',
+      markdownText: 'a',
+      binary: null,
+    }) as DocumentInput;
+    // Not `undefined` — ABSENT. The store writes NULL for a missing field
+    // (DECISIONS R5); an explicit `scopeRootId: undefined` key would travel
+    // through the worker boundary as a present-but-empty column value.
+    expect('scopeRootId' in doc).toBe(false);
+  });
+});
+
+describe('watchLoop — scope attribution', () => {
+  it('stamps the covering root, and tolerates an event under NO root by yielding a NULL-scoped item', async () => {
+    class FakeWatcher extends EventEmitter {
+      closed = false;
+
+      close = jest.fn(async () => {
+        this.closed = true;
+      });
+    }
+    const fakeWatcher = new FakeWatcher();
+
+    jest.resetModules();
+    jest.doMock('chokidar', () => ({ watch: jest.fn(() => fakeWatcher) }));
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { watchLoop } = require('../watch') as typeof import('../watch');
+
+    const dir = mkTmpDir();
+    const outside = mkTmpDir();
+    const controller = new AbortController();
+    const log = jest.fn();
+    const session: Session = {
+      ...makeSession([dir], controller.signal, true),
+      log,
+    };
+    const it = watchLoop([dir], session, null);
+
+    const inside = writeFile(dir, 'inside.txt', 'in');
+    const p1 = it.next();
+    fakeWatcher.emit('add', inside);
+    const r1 = await p1;
+    expect(r1.value?.items[0].scopeRootId).toBe(dir);
+    expect((r1.value?.cursor as RootsCursor).roots[dir]).toBeDefined();
+
+    // DECISIONS R5 / watch.ts's rootOf: an event resolving under NO
+    // configured root is DELIBERATELY still yielded. It must produce a
+    // NULL-scoped document — never a throw (a throw lands in engine.ts's
+    // per-batch loop, burns the 5-retry ladder and parks the account in
+    // status 'error'), and never a warn here: the single warn
+    // {accountId, source, externalId} is the engine's, at store time.
+    const stray = writeFile(outside, 'stray.txt', 'out');
+    const p2 = it.next();
+    fakeWatcher.emit('add', stray);
+    const r2 = await p2;
+
+    expect(r2.done).toBe(false);
+    expect(r2.value?.items).toHaveLength(1);
+    expect(r2.value?.items[0].externalId).toBe(toExternalId(stray));
+    expect(r2.value?.items[0].scopeRootId).toBeUndefined();
+    const doc = localFolderSource.toDocument(
+      r2.value!.items[0],
+    ) as DocumentInput;
+    expect('scopeRootId' in doc).toBe(false);
+    // No watermark advanced: the unattributable event leaves the cursor alone.
+    expect(Object.keys((r2.value?.cursor as RootsCursor).roots)).toEqual([dir]);
+    expect(log).not.toHaveBeenCalled();
+
+    const p3 = it.next();
+    controller.abort();
+    const r3 = await p3;
+    expect(r3.done).toBe(true);
+    expect(fakeWatcher.closed).toBe(true);
+
+    jest.dontMock('chokidar');
+    jest.resetModules();
+  });
 });

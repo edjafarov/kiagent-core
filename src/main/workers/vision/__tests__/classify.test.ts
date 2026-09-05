@@ -17,6 +17,7 @@ const base = {
   languages: [],
   ingestedAt: '2026-01-01',
   updatedAt: '2026-01-01',
+  scopeRootId: null,
 } as Document;
 
 it.each([

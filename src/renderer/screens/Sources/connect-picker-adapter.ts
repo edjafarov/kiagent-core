@@ -1,56 +1,130 @@
 import type { FolderNode } from '@shared/contracts';
-import type { RendererApi } from '@shared/ipc';
+import type { ConnectEvent, RendererApi } from '@shared/ipc';
 import type {
   Entry,
   FolderPickerDataSource,
 } from '@renderer/components/folder-picker/FolderPickerModal';
 
 /**
- * Bridges a connect flow's `folder-picker` event to `FolderPickerModal`'s
- * dataSource: tree reads go over the `accounts:picker-*` invokes, keyed by
- * the event's requestId.
+ * Bridges a connect / manage-folders flow's `folder-picker` event to
+ * `FolderPickerModal`'s dataSource: tree reads go over the
+ * `accounts:picker-*` invokes, keyed by the event's requestId.
  *
- * The modal's selection logic ('/'-separated prefix covering, chips) is pure
- * over Entry.path, so the adapter SYNTHESIZES paths from the source's opaque
- * node ids — `'/' + seg(id)` at the roots, `parentPath + '/' + seg(id)`
- * below — and keeps a path → FolderNode map to translate back. The contract
- * bans '/' in ids but NOT '\', and `isUnder` treats '\' as a separator too
- * (sibling ids `report` / `report\2024` would falsely cover each other), so
- * `seg()` percent-encodes ids into a '/'-and-'\'-free alphabet. The encoding
- * is injective; it is never decoded — confirmed paths map back to the
- * ORIGINAL FolderNode objects through `byPath`.
+ * SELECTION IDENTITY IS `FolderNode.id`. The synthetic path is ephemeral
+ * ancestry — it exists only so the modal's separator-based covering
+ * (`isUnder`) and implied-child rendering have something to work on, and it
+ * is never decoded. `byId` is seeded from the event's `selected` array at
+ * construction, so a root that opens PRE-CHECKED and is never expanded still
+ * resolves on confirm; resolving through the path map alone dropped it
+ * silently, and the transactional scope write then archived that root's
+ * documents.
+ *
+ * `byPath` is MANY-TO-ONE: a node seeded as a preselected root sits at
+ * `'/' + seg(id)`, and the same node listed later as somebody's child sits at
+ * `parentPath + '/' + seg(id)`. That is harmless — byPath only ever
+ * translates a path back to a node id for a tree read — but it is why the
+ * modal must key its selection state by `Entry.id` and call `confirm(ids)`,
+ * never by `Entry.path`.
+ *
+ * Paths are still synthesized for the modal — `'/' + seg(id)` at the roots,
+ * `parentPath + '/' + seg(id)` below. `isUnder` treats BOTH '/' and '\' as
+ * separators and ids are fully opaque (a local-folder id is an absolute
+ * path), so `seg()` percent-encodes '%', '\' and '/' away and every segment
+ * is separator-free.
  */
 export interface ConnectPickerAdapter {
   dataSource: FolderPickerDataSource;
-  /** Map confirmed picker paths back to their FolderNodes and resolve the
-   *  flow's pending pickFolders. */
-  confirm(paths: string[]): Promise<void>;
+  /** The event's pre-checked covering set as modal rows, in event order,
+   *  with the same synthesized root-level paths the tree would give them.
+   *  This is the `Entry[]` the modal's `selected` prop takes: the wire
+   *  carries `FolderNode[]`, and the conversion happens exactly here — this
+   *  is the only FolderNode → Entry conversion point there is. */
+  selected: Array<Entry & { id: string }>;
+  /** The event's `expand` list, passed through UNTOUCHED to the modal's
+   *  `expandIds`. Deliberately not mapped into synthetic paths: the modal
+   *  matches these against listing `Entry.id`s by equality, and `seg()`ing
+   *  them would break exactly that. `[]` when the source omitted it, which
+   *  is every source whose ids carry no parent chain. */
+  expandIds: string[];
+  /** Resolve confirmed `FolderNode.id`s back to their FolderNodes and
+   *  resolve the flow's pending pickFolders. */
+  confirm(ids: string[]): Promise<void>;
   /** Reject the flow's pending pickFolders (the user dismissed the modal). */
   cancel(): Promise<void>;
 }
 
-/** Injective path-segment encoding: '%' → '%25' first, then '\' → '%5C'.
- *  Two distinct ids can never yield the same segment (classic
+/** The renderer-side shape of a `folder-picker` ConnectEvent. `multiSelect`
+ *  and `purpose` are declared here although the adapter never reads them:
+ *  the caller keeps ONE object per open picker and passes it to both this
+ *  factory and the modal. `selected` is `contracts.FolderNode`, straight off
+ *  the wire — converting it is this module's job, not the caller's. */
+export interface PickerRequest {
+  requestId: string;
+  modes: Array<{ key: string; label: string }>;
+  multiSelect?: boolean;
+  purpose?: 'connect' | 'manage';
+  selected?: FolderNode[];
+  expand?: string[];
+}
+
+/**
+ * The `folder-picker` ConnectEvent, minus its envelope, as a PickerRequest.
+ *
+ * Written as a REST SPREAD on purpose. Every renderer that opens a picker
+ * used to rebuild this object field-by-field, which made each call site a
+ * hand-written allowlist that silently dropped any field it had not been
+ * taught about. `expand` was threaded through the contract, the IPC wire, the
+ * out-of-process proxy and this adapter and STILL never reached the modal,
+ * because two such literals sat at the end of the chain. Spreading means a
+ * new wire field arrives at the modal by default; forgetting to name it is no
+ * longer possible.
+ *
+ * The return type is `Omit<the event>`, not `PickerRequest`: the wire makes
+ * `multiSelect` / `selected` / `purpose` REQUIRED where PickerRequest leaves
+ * them optional, and callers keep that narrowing in their own state. Widening
+ * here would force every one of them to re-assert fields the wire already
+ * guarantees.
+ */
+export function pickerRequestFromEvent<
+  T extends Extract<ConnectEvent, { kind: 'folder-picker' }>,
+>(evt: T): Omit<T, 'flowId' | 'kind'> {
+  const { flowId: _flowId, kind: _kind, ...request } = evt;
+  return request;
+}
+
+/** Injective path-segment encoding: '%' → '%25' first, then '\' → '%5C' and
+ *  '/' → '%2F'. Two distinct ids can never yield the same segment (classic
  *  percent-escaping — the escape char is escaped first), and a segment can
- *  never contain '/' (contract) or '\' (encoded away), so the picker's
- *  separator-based covering logic cannot false-match across siblings. */
+ *  never contain '/' or '\', so the picker's separator-based covering logic
+ *  cannot false-match across siblings. Encoding '/' is what makes
+ *  absolute-path ids safe: local-folder roots '/Users/ed' and
+ *  '/Users/ed/docs' are two independent rows, not an ancestor pair —
+ *  unencoded, `isUnder` reads the second as a descendant of the first and
+ *  `coveringRoots` silently drops it. */
 function seg(id: string): string {
-  return id.replace(/%/g, '%25').replace(/\\/g, '%5C');
+  return id.replace(/%/g, '%25').replace(/\\/g, '%5C').replace(/\//g, '%2F');
 }
 
 export function createConnectPickerAdapter(
-  picker: { requestId: string; modes: Array<{ key: string; label: string }> },
+  picker: PickerRequest,
   invoke: RendererApi['invoke'] = (channel, payload) =>
     window.kiagent.invoke(channel, payload),
 ): ConnectPickerAdapter {
   const { requestId } = picker;
+  // Ancestry map: synthetic path → node. Used ONLY by the path-addressed
+  // dataSource reads (listChildren / countFiles), never by confirm.
   const byPath = new Map<string, FolderNode>();
+  // Identity map: FolderNode.id → node. Seeded below from `selected` so a
+  // never-listed preselected root still resolves; a listing OVERWRITES the
+  // seeded entry, because the freshly listed node carries the current
+  // name/hasChildren.
+  const byId = new Map<string, FolderNode>();
 
   const toEntries = (
     parentPath: string | null,
     nodes: FolderNode[],
-  ): Entry[] => {
-    const out: Entry[] = [];
+  ): Array<Entry & { id: string }> => {
+    const out: Array<Entry & { id: string }> = [];
     // Paths emitted by THIS listing — two siblings sharing an id would
     // collide to one path (duplicate React keys, last-wins in byPath).
     const emitted = new Set<string>();
@@ -73,10 +147,22 @@ export function createConnectPickerAdapter(
       }
       emitted.add(path);
       byPath.set(path, node);
-      out.push({ path, name: node.name, hasChildren: node.hasChildren });
+      byId.set(node.id, node);
+      out.push({
+        id: node.id,
+        path,
+        name: node.name,
+        hasChildren: node.hasChildren,
+      });
     }
     return out;
   };
+
+  // Seeding goes through toEntries, not a bare byId.set loop: the preselected
+  // rows need real root-level paths in byPath too, or expanding a pre-checked
+  // row that was never listed throws `unknown picker path`. It also inherits
+  // the empty-id and duplicate-id guards for free.
+  const selected = toEntries(null, picker.selected ?? []);
 
   return {
     dataSource: {
@@ -104,10 +190,24 @@ export function createConnectPickerAdapter(
       },
     },
 
-    async confirm(paths) {
-      const nodes = paths
-        .map((p) => byPath.get(p))
-        .filter((n): n is FolderNode => n !== undefined);
+    selected,
+
+    expandIds: picker.expand ?? [],
+
+    async confirm(ids) {
+      const nodes: FolderNode[] = [];
+      for (const id of ids) {
+        const node = byId.get(id);
+        if (!node) {
+          // NEVER drop silently: an unresolved id shrinks the covering set
+          // the source is about to persist, and core's scope write archives
+          // whatever the new set no longer covers.
+          // eslint-disable-next-line no-console
+          console.warn('folder picker: unknown confirmed node id', id);
+          continue;
+        }
+        nodes.push(node);
+      }
       await invoke('accounts:picker-confirm', { requestId, nodes });
     },
 

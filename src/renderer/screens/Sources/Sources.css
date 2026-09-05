@@ -456,6 +456,13 @@ dl.kv dd {
   gap: 8px;
   padding: 6px 2px;
 }
+.tf-name {
+  font-size: 12px;
+  white-space: nowrap;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tf-path {
   flex: 1;
   min-width: 0;
@@ -749,6 +756,20 @@ dl.kv dd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A listing that FAILED — an inline retry row, never a silently empty folder
+   (see FolderPickerModal's `failedNodes`/`rootsFailed`). Not selectable, so
+   drop the pointer affordance `.fp-row` gives every other row. */
+.fp-row.failed { cursor: default; }
+.fp-row.failed:hover { background: transparent; }
+
+/* A Save the owner rejected (validation, stale scope, commit failure),
+   rendered above the footer with the selection left intact. */
+.fp-notice {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
 }
 
 /* ── Get-started onboarding checklist (GetStartedPanel.tsx) ───────── */

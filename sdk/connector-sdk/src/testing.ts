@@ -28,6 +28,8 @@ import type {
   Account,
   AuthChannel,
   Credentials,
+  FolderPickerSpec,
+  FolderSelectionChannel,
   LogLevel,
   Session,
 } from './generated/contracts';
@@ -178,6 +180,44 @@ export function fakeAuthChannel(
       statuses.push(msg);
     },
     statuses,
+  };
+}
+
+/** The narrow channel `Source.manageFolders` gets — deliberately NOT an
+ *  AuthChannel: a folder-scope edit must never be able to start an OAuth
+ *  flow, and this fake carries no `oauth`/`prompt`/`showQr` at all, so a
+ *  connector that reaches for one fails with a TypeError instead of quietly
+ *  succeeding.
+ *
+ *  Every spec handed to `pickFolders` is recorded in `.specs` — including the
+ *  spec of an unscripted call, which is recorded before the rejection — so a
+ *  test can assert the preselection (`spec.selected`) and `spec.purpose`
+ *  without wrapping its own capturing override. Unscripted `pickFolders`
+ *  REJECTS, naming the verb, exactly like {@link fakeAuthChannel}. */
+export function fakeFolderSelectionChannel(
+  overrides: {
+    pickFolders?: FolderSelectionChannel['pickFolders'];
+  } = {},
+): FolderSelectionChannel & {
+  statuses: string[];
+  specs: FolderPickerSpec[];
+} {
+  const statuses: string[] = [];
+  const specs: FolderPickerSpec[] = [];
+  // Read once into a const: narrowing a parameter's optional property inside
+  // the returned closure is fragile under `strict`, a local is not.
+  const scripted = overrides.pickFolders;
+  return {
+    pickFolders: async (spec: FolderPickerSpec) => {
+      specs.push(spec);
+      if (!scripted) throw new Error('not scripted: pickFolders');
+      return scripted(spec);
+    },
+    status: (msg: string) => {
+      statuses.push(msg);
+    },
+    statuses,
+    specs,
   };
 }
 

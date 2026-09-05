@@ -8,7 +8,10 @@ import { parentPort, workerData } from 'node:worker_threads';
 import type { CommitBatch, ExternalRef, Seq } from '@shared/contracts';
 import { detectLanguages } from '@main/core/language';
 import { repopulateSearchIndex } from '@main/core/store/schema';
-import { createWriteTx } from '@main/core/store/write-tx';
+import {
+  createWriteTx,
+  type FolderScopeInput,
+} from '@main/core/store/write-tx';
 import { openDb } from './app-db';
 import { attachDbHost } from './bridge';
 
@@ -62,6 +65,10 @@ const { dbPath } = workerData as { dbPath: string };
           writeTx.reconcileEnd((args as { accountId: string }).accountId);
           return null;
         },
+        // ONE transaction: config + cursor + archival. Counts only come back —
+        // the whole point of hosting it here (see core/store/write-tx.ts).
+        applyFolderScope: (args) =>
+          writeTx.applyFolderScope(args as FolderScopeInput),
         rebuildSearchIndex: () => {
           repopulateSearchIndex(db._conn!);
           return null;

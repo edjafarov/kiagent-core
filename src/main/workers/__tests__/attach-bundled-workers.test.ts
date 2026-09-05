@@ -109,6 +109,7 @@ const doc = {
   languages: [],
   ingestedAt: '2026-01-01',
   updatedAt: '2026-01-01',
+  scopeRootId: null,
 } as Document;
 
 const change = { seq: 1, kind: 'document', document: doc } as Change;

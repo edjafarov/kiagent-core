@@ -1,6 +1,6 @@
 import type { FolderNode } from '@shared/contracts';
 import type { RendererApi } from '@shared/ipc';
-import { isUnder } from '@shared/folder-paths';
+import { coveringRoots, isUnder } from '@shared/folder-paths';
 
 import { createConnectPickerAdapter } from '../connect-picker-adapter';
 
@@ -38,13 +38,13 @@ describe('createConnectPickerAdapter', () => {
     expect(adapter.dataSource.modes).toEqual(PICKER.modes);
   });
 
-  it('listRoots synthesizes "/"-prefixed paths from opaque node ids', async () => {
+  it('listRoots synthesizes "/"-prefixed ancestry paths and carries the node id', async () => {
     const { calls, invoke } = makeInvoke();
     const adapter = createConnectPickerAdapter(PICKER, invoke);
 
     await expect(adapter.dataSource.listRoots('drive')).resolves.toEqual([
-      { path: '/idA', name: 'Alpha', hasChildren: true },
-      { path: '/idB', name: 'Beta', hasChildren: false },
+      { id: 'idA', path: '/idA', name: 'Alpha', hasChildren: true },
+      { id: 'idB', path: '/idB', name: 'Beta', hasChildren: false },
     ]);
     expect(calls).toEqual([
       {
@@ -60,7 +60,7 @@ describe('createConnectPickerAdapter', () => {
     await adapter.dataSource.listRoots('drive');
 
     await expect(adapter.dataSource.listChildren('/idA')).resolves.toEqual([
-      { path: '/idA/idC', name: 'Child', hasChildren: false },
+      { id: 'idC', path: '/idA/idC', name: 'Child', hasChildren: false },
     ]);
     expect(calls[1]).toEqual({
       channel: 'accounts:picker-children',
@@ -94,17 +94,23 @@ describe('createConnectPickerAdapter', () => {
     expect(calls).toHaveLength(2); // no extra invoke for the unknown path
   });
 
-  it('confirm maps the picked paths back to their FolderNodes', async () => {
+  it('confirm maps the picked ids back to their FolderNodes', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const { calls, invoke } = makeInvoke();
     const adapter = createConnectPickerAdapter(PICKER, invoke);
     await adapter.dataSource.listRoots('drive');
     await adapter.dataSource.listChildren('/idA');
 
-    await adapter.confirm(['/idA/idC', '/idB', '/never-listed']);
+    await adapter.confirm(['idC', 'idB', 'never-listed']);
     expect(calls[2]).toEqual({
       channel: 'accounts:picker-confirm',
       payload: { requestId: 'req-1', nodes: [CHILD, ROOT_B] },
     });
+    expect(warn).toHaveBeenCalledWith(
+      'folder picker: unknown confirmed node id',
+      'never-listed',
+    );
+    warn.mockRestore();
   });
 
   it('cancel sends picker-cancel for the requestId', async () => {
@@ -161,14 +167,14 @@ describe('createConnectPickerAdapter — exotic but contract-legal ids', () => {
     expect(isUnder(pathA, pathB)).toBe(false);
 
     // Each confirms independently…
-    await adapter.confirm([pathA]);
+    await adapter.confirm([report.id]);
     expect(calls[1]).toEqual({
       channel: 'accounts:picker-confirm',
       payload: { requestId: 'req-1', nodes: [report] },
     });
     // …and the round trip returns the EXACT original node objects,
-    // backslash id intact (byPath is the decoder — nothing re-parses paths).
-    await adapter.confirm([pathA, pathB]);
+    // backslash id intact (byId is the decoder — nothing re-parses paths).
+    await adapter.confirm([report.id, reportYear.id]);
     const { nodes } = (calls[2] as { payload: { nodes: FolderNode[] } })
       .payload;
     expect(nodes[0]).toBe(report);
@@ -218,7 +224,7 @@ describe('createConnectPickerAdapter — exotic but contract-legal ids', () => {
     expect(kids).toHaveLength(1);
     expect(kids[0].path.startsWith(`${root.path}/`)).toBe(true);
 
-    await adapter.confirm([kids[0].path]);
+    await adapter.confirm([child.id]);
     const { nodes } = (calls[2] as { payload: { nodes: FolderNode[] } })
       .payload;
     expect(nodes[0]).toBe(child);
@@ -233,7 +239,7 @@ describe('createConnectPickerAdapter — exotic but contract-legal ids', () => {
 
     const entries = await adapter.dataSource.listRoots('drive');
     expect(entries).toEqual([
-      { path: '/ok', name: 'Fine', hasChildren: false },
+      { id: 'ok', path: '/ok', name: 'Fine', hasChildren: false },
     ]);
     expect(warn).toHaveBeenCalledWith(
       'folder picker: skipping node with empty id',
@@ -255,17 +261,172 @@ describe('createConnectPickerAdapter — exotic but contract-legal ids', () => {
 
     const entries = await adapter.dataSource.listRoots('drive');
     expect(entries).toEqual([
-      { path: '/dup', name: 'First', hasChildren: false },
+      { id: 'dup', path: '/dup', name: 'First', hasChildren: false },
     ]);
     expect(warn).toHaveBeenCalledWith(
       'folder picker: skipping duplicate sibling id',
       'dup',
     );
 
-    await adapter.confirm(['/dup']);
+    await adapter.confirm(['dup']);
     const { nodes } = (calls[1] as { payload: { nodes: FolderNode[] } })
       .payload;
     expect(nodes[0]).toBe(first);
     warn.mockRestore();
+  });
+});
+
+describe('createConnectPickerAdapter — preselected roots (manage folders)', () => {
+  it('confirms preselected roots whose rows were never listed', async () => {
+    const { calls, invoke } = makeTreeInvoke({ roots: [] });
+    // Built as a variable rather than an inline literal on purpose: an inline
+    // `{ ...PICKER, selected: [...] }` argument trips TS2353 excess-property
+    // checking against today's parameter type, so the suite would fail to
+    // COMPILE on the argument instead of on the assertion below. (Verified
+    // with the repo's own tsc 5.8.2: the variable form is clean, the literal
+    // form errors.)
+    const picker = { ...PICKER, selected: [ROOT_A, ROOT_B] };
+    const adapter = createConnectPickerAdapter(picker, invoke);
+
+    // The Manage modal opened with both roots checked; the user changed
+    // nothing and saved without expanding either row.
+    await adapter.confirm([ROOT_A.id, ROOT_B.id]);
+
+    expect(calls[0]).toEqual({
+      channel: 'accounts:picker-confirm',
+      payload: { requestId: 'req-1', nodes: [ROOT_A, ROOT_B] },
+    });
+  });
+
+  it('exposes the preselected set as modal rows with root-level paths', async () => {
+    const { invoke } = makeTreeInvoke({ roots: [] });
+    const picker = { ...PICKER, selected: [ROOT_A, ROOT_B] };
+    const adapter = createConnectPickerAdapter(picker, invoke);
+
+    // C-7's conversion point: the wire carries FolderNode[], the modal's
+    // `selected` prop takes Entry[], and this is where that happens — the
+    // only place in the plan where it happens.
+    expect(adapter.selected).toEqual([
+      { id: 'idA', path: '/idA', name: 'Alpha', hasChildren: true },
+      { id: 'idB', path: '/idB', name: 'Beta', hasChildren: false },
+    ]);
+  });
+
+  it('a preselected row can be expanded before anything is listed', async () => {
+    const { calls, invoke } = makeTreeInvoke({
+      roots: [],
+      children: { idA: [CHILD] },
+    });
+    const picker = { ...PICKER, selected: [ROOT_A] };
+    const adapter = createConnectPickerAdapter(picker, invoke);
+
+    // The seeded rows must be real tree rows, not chips: byPath is seeded
+    // alongside byId or the first expand throws `unknown picker path`.
+    await expect(
+      adapter.dataSource.listChildren(adapter.selected[0].path),
+    ).resolves.toEqual([
+      { id: 'idC', path: '/idA/idC', name: 'Child', hasChildren: false },
+    ]);
+    expect(calls[0]).toEqual({
+      channel: 'accounts:picker-children',
+      payload: { requestId: 'req-1', id: 'idA' },
+    });
+  });
+
+  it('a later listing overwrites the seeded node for the same id', async () => {
+    const renamed: FolderNode = {
+      id: 'idA',
+      name: 'Alpha (renamed)',
+      hasChildren: true,
+    };
+    const { calls, invoke } = makeTreeInvoke({ roots: [renamed] });
+    const picker = { ...PICKER, selected: [ROOT_A] };
+    const adapter = createConnectPickerAdapter(picker, invoke);
+
+    await adapter.dataSource.listRoots('drive');
+    await adapter.confirm(['idA']);
+
+    // The freshly listed node carries the CURRENT name/hasChildren; the
+    // seeded copy is a stale snapshot of the saved config.
+    const { nodes } = (calls[1] as { payload: { nodes: FolderNode[] } })
+      .payload;
+    expect(nodes[0]).toBe(renamed);
+  });
+
+  it('warns instead of silently dropping an id never seeded or listed', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const { calls, invoke } = makeTreeInvoke({ roots: [] });
+    const picker = { ...PICKER, selected: [ROOT_A] };
+    const adapter = createConnectPickerAdapter(picker, invoke);
+
+    await adapter.confirm(['idA', 'ghost']);
+
+    expect(warn).toHaveBeenCalledWith(
+      'folder picker: unknown confirmed node id',
+      'ghost',
+    );
+    const { nodes } = (calls[0] as { payload: { nodes: FolderNode[] } })
+      .payload;
+    expect(nodes).toEqual([ROOT_A]);
+    warn.mockRestore();
+  });
+});
+
+describe('createConnectPickerAdapter — absolute-path ids (local folder)', () => {
+  const HOME: FolderNode = { id: '/Users/ed', name: 'ed', hasChildren: true };
+  const DOCS: FolderNode = {
+    id: '/Users/ed/docs',
+    name: 'docs',
+    hasChildren: false,
+  };
+
+  it('sibling absolute-path ids never falsely nest', async () => {
+    const { calls, invoke } = makeTreeInvoke({ roots: [HOME, DOCS] });
+    const adapter = createConnectPickerAdapter(PICKER, invoke);
+
+    const entries = await adapter.dataSource.listRoots('drive');
+    const [pathHome, pathDocs] = entries.map((e) => e.path);
+    expect(pathHome).toBe('/%2FUsers%2Fed');
+    expect(pathDocs).toBe('/%2FUsers%2Fed%2Fdocs');
+    // Two sibling ROWS, not an ancestor pair: only the tree's own expansion
+    // establishes ancestry, never the id text. Unencoded, '//Users/ed/docs'
+    // reads as a descendant of '//Users/ed'.
+    expect(isUnder(pathDocs, pathHome)).toBe(false);
+    expect(isUnder(pathHome, pathDocs)).toBe(false);
+
+    await adapter.confirm([DOCS.id]);
+    const { nodes } = (calls[1] as { payload: { nodes: FolderNode[] } })
+      .payload;
+    expect(nodes).toEqual([DOCS]);
+  });
+
+  it('preselected absolute-path roots stay an antichain', async () => {
+    const { invoke } = makeTreeInvoke({ roots: [] });
+    const picker = { ...PICKER, selected: [HOME, DOCS] };
+    const adapter = createConnectPickerAdapter(picker, invoke);
+
+    // This is the A9 defect in one line: `coveringRoots` is what the modal
+    // runs over the checked set, and unencoded ids make it silently drop a
+    // saved root the user never touched.
+    const paths = adapter.selected.map((e) => e.path);
+    expect(coveringRoots(paths)).toEqual(paths);
+  });
+
+  it('the segment encoding stays injective for ids `a%2Fb` and `a/b`', async () => {
+    const literal: FolderNode = {
+      id: 'a%2Fb',
+      name: 'Literal',
+      hasChildren: false,
+    };
+    const slash: FolderNode = { id: 'a/b', name: 'Slash', hasChildren: false };
+    const { invoke } = makeTreeInvoke({ roots: [literal, slash] });
+    const adapter = createConnectPickerAdapter(PICKER, invoke);
+
+    const entries = await adapter.dataSource.listRoots('drive');
+    expect(entries).toHaveLength(2);
+    // '%' is escaped first, so the literal cannot masquerade as the encoded '/'.
+    expect(entries[0].path).toBe('/a%252Fb');
+    expect(entries[1].path).toBe('/a%2Fb');
+    expect(entries.every((e) => !e.path.slice(1).includes('/'))).toBe(true);
   });
 });

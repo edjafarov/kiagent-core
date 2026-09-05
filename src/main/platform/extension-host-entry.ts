@@ -13,6 +13,7 @@ import type {
   DocumentInput,
   ExternalRef,
   ExtensionModule,
+  FolderNode,
   FolderPickerSpec,
   McpTool,
   PullPhase,
@@ -146,6 +147,12 @@ export function runExtensionHost(
   // The open pickFolders spec per connect flow — its callbacks stay in the
   // child; main reads the tree back through picker-roots/-children/-count.
   const connectPickers = new Map<number, FolderPickerSpec>();
+  // Same, for a manage-folders flow. A manage call has NO connectId: its
+  // slot is keyed by the session id main allocated for the manage-folders
+  // call. Kept as a second map rather than faking a connect flow so the
+  // "already open" guard stays per-flow-kind and neither map's lifetime
+  // depends on the other's.
+  const managePickers = new Map<number, FolderPickerSpec>();
 
   const fail = (e: unknown) =>
     endpoint.post({
@@ -177,6 +184,8 @@ export function runExtensionHost(
           descriptor: s.descriptor,
           hasFetchBytes: typeof s.fetchBytes === 'function',
           hasReconcile: typeof s.reconcile === 'function',
+          hasManageFolders: typeof s.manageFolders === 'function',
+          hasReauthenticate: typeof s.reauthenticate === 'function',
         })),
         tools: [...tools.values()].map((t) => ({
           name: t.name,
@@ -243,6 +252,62 @@ export function runExtensionHost(
     return out;
   }
 
+  /** The picker's DATA half, and the ONE place selected/purpose are
+   *  defaulted. Callbacks stay child-side; anything not named here never
+   *  reaches main (WirePickerSpec is a hand-written subset). */
+  function toWirePickerSpec(spec: FolderPickerSpec) {
+    return {
+      modes: spec.modes,
+      multiSelect: !!spec.multiSelect,
+      hasCount: typeof spec.count === 'function',
+      selected: spec.selected ?? [],
+      expand: spec.expand ?? [],
+      purpose: spec.purpose ?? ('connect' as const),
+    };
+  }
+
+  /** Parks the real spec in `slot` so main's picker-* tree reads find it,
+   *  and sends only display data across. Shared by the connect-time
+   *  AuthChannel and the manage-time FolderSelectionChannel. */
+  function pickFoldersOver(slot: Map<number, FolderPickerSpec>, id: number) {
+    return async (spec: FolderPickerSpec): Promise<FolderNode[]> => {
+      if (slot.has(id)) {
+        throw new Error(
+          'a folder picker is already open for this connect flow',
+        );
+      }
+      slot.set(id, spec);
+      try {
+        // Only display data crosses; the callbacks stay here and main
+        // calls back in through the picker-* source verbs below.
+        return (await endpoint.call('auth', 'pickFolders', [
+          id,
+          toWirePickerSpec(spec),
+        ])) as FolderNode[];
+      } finally {
+        slot.delete(id);
+      }
+    };
+  }
+
+  /** The full connect-time AuthChannel. Built here (not inline) because
+   *  `reauthenticate` needs exactly the same object. */
+  function makeAuthChannel(connectId: number) {
+    return {
+      oauth: (scopes: string[]) =>
+        endpoint.call('auth', 'oauth', [connectId, scopes]),
+      showQr: (qr: string) => {
+        void endpoint.call('auth', 'showQr', [connectId, qr]).catch(() => {});
+      },
+      prompt: (schema: unknown) =>
+        endpoint.call('auth', 'prompt', [connectId, schema]),
+      status: (msg: string) => {
+        void endpoint.call('auth', 'status', [connectId, msg]).catch(() => {});
+      },
+      pickFolders: pickFoldersOver(connectPickers, connectId),
+    };
+  }
+
   async function handleSourceCall(
     method: string,
     args: unknown[],
@@ -251,43 +316,7 @@ export function runExtensionHost(
       const [connectId, sourceId] = args as [number, string];
       const source = sources.get(sourceId);
       if (!source) throw new Error(`unknown source ${sourceId}`);
-      const auth = {
-        oauth: (scopes: string[]) =>
-          endpoint.call('auth', 'oauth', [connectId, scopes]),
-        showQr: (qr: string) => {
-          void endpoint.call('auth', 'showQr', [connectId, qr]).catch(() => {});
-        },
-        prompt: (schema: unknown) =>
-          endpoint.call('auth', 'prompt', [connectId, schema]),
-        status: (msg: string) => {
-          void endpoint
-            .call('auth', 'status', [connectId, msg])
-            .catch(() => {});
-        },
-        pickFolders: async (spec: FolderPickerSpec) => {
-          if (connectPickers.has(connectId)) {
-            throw new Error(
-              'a folder picker is already open for this connect flow',
-            );
-          }
-          connectPickers.set(connectId, spec);
-          try {
-            // Only display data crosses; the callbacks stay here and main
-            // calls back in through the picker-* source verbs below.
-            return await endpoint.call('auth', 'pickFolders', [
-              connectId,
-              {
-                modes: spec.modes,
-                multiSelect: !!spec.multiSelect,
-                hasCount: typeof spec.count === 'function',
-              },
-            ]);
-          } finally {
-            connectPickers.delete(connectId);
-          }
-        },
-      };
-      return source.connect(auth as never);
+      return source.connect(makeAuthChannel(connectId) as never);
     }
     if (method === 'picker-roots') {
       const [connectId, mode] = args as [number, string];
@@ -346,11 +375,44 @@ export function runExtensionHost(
       const session = makeSession(sessionId, account, abort);
       return (await source.fetchBytes(session as never, doc as never)) ?? null;
     }
+    if (method === 'manage-folders') {
+      const [sessionId, sourceId, account] = args as [number, string, unknown];
+      const source = sources.get(sourceId);
+      if (!source?.manageFolders)
+        throw new Error(`source ${sourceId} has no manageFolders`);
+      const abort = new AbortController();
+      const session = makeSession(sessionId, account, abort);
+      // Narrower than AuthChannel BY CONSTRUCTION: there is no oauth /
+      // prompt / showQr on this object to call, and main's FOLDER_VERBS
+      // refuses them for this id anyway. "Manage never authenticates."
+      const folderChannel = {
+        status: (msg: string) => {
+          void endpoint
+            .call('auth', 'status', [sessionId, msg])
+            .catch(() => {});
+        },
+        pickFolders: pickFoldersOver(managePickers, sessionId),
+      };
+      return source.manageFolders(session as never, folderChannel as never);
+    }
+    if (method === 'reauthenticate') {
+      const [connectId, sourceId, account] = args as [number, string, unknown];
+      const source = sources.get(sourceId);
+      if (!source?.reauthenticate)
+        throw new Error(`source ${sourceId} has no reauthenticate`);
+      await source.reauthenticate(
+        account as never,
+        makeAuthChannel(connectId) as never,
+      );
+      return null; // Promise<void> — nothing to clone back
+    }
     throw new Error(`unknown source method ${method}`);
   }
 
-  function pickerSpec(connectId: number): FolderPickerSpec {
-    const spec = connectPickers.get(connectId);
+  function pickerSpec(id: number): FolderPickerSpec {
+    // Ids come from ONE main-side counter (source-proxy's nextId), so a key
+    // is unique across connect and manage flows and one lookup is safe.
+    const spec = connectPickers.get(id) ?? managePickers.get(id);
     if (!spec) throw new Error('no active folder picker for this connect flow');
     return spec;
   }

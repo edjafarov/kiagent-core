@@ -11,6 +11,7 @@ import type {
   Engine,
   EnrichInput,
   ExternalRef,
+  FolderScopeUpdate,
   Handle,
   Inference,
   LogLevel,
@@ -24,6 +25,12 @@ import type {
 } from '@shared/contracts';
 
 import { sourceErrorCode } from '@shared/source-errors';
+
+import {
+  AccountFlowBusyError,
+  FolderScopeConfigError,
+  FolderScopeStaleError,
+} from './flow-errors';
 
 import { isDbWorkerTransientError } from '../../db/worker-client';
 
@@ -333,6 +340,23 @@ async function reconcilePass(
 export const workerConsumerName = (w: Worker): string =>
   `worker:${w.name}:v${w.version}`;
 
+/** The config keys the folder-scope path owns. `roots` and `paths` are R1's
+ *  one-train legacy mirrors of `folderRoots`, written by CORE (A-2) in the v3
+ *  migration and in `applyFolderScope`; an old Marketplace connector reads
+ *  them, so they must move together with the canonical key or the two shapes
+ *  desync. TODO(folder-scope-train-2): drop the legacy mirror keys. */
+const SCOPE_KEYS = ['folderRoots', 'roots', 'paths'] as const;
+
+function pickScopeKeys(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of SCOPE_KEYS)
+    if (Object.prototype.hasOwnProperty.call(config, key))
+      out[key] = config[key];
+  return out;
+}
+
 export function createEngine(deps: EngineDeps): Engine & {
   /** Re-drive a worker's deferred changes (scheduler calls this on cadence). */
   rerunDeferred(worker: Worker): Promise<void>;
@@ -362,6 +386,81 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  Returns the account carrying the new status (feed it to run()), or null
    *  if the account is gone. */
   resume(accountId: AccountId): Promise<Account | null>;
+  /** Build a Session for a flow that is NOT the pull loop — today only
+   *  `manageFolders`. `makeSession` is a closure inside createEngine, so
+   *  without this verb the broker would have to re-implement the vault load
+   *  and the expiring-token refresh, which is the one place a stale token
+   *  must PROPAGATE rather than be swallowed (engine.ts:406-414). */
+  session(account: Account, signal: AbortSignal, scope: string): Session;
+  /** Re-authenticate ONE existing account in place. Invariant 2: it may
+   *  replace credentials and status, and must preserve config, cursor,
+   *  folder roots and documents byte-for-byte — so it calls neither
+   *  `connect()` (which upserts config through createAccount) nor
+   *  `setAccountConfig`, and never grants a reconcile allowance.
+   *
+   *  `auth` is the caller's channel, not an `oauthClient` bag: the broker's
+   *  channel already bakes the BYO client into `authUrl` (connect-broker.ts
+   *  :109), exactly as `connect(source, auth)` relies on, and the engine has
+   *  no OAuth profile registry to bake it with (EngineDeps, :41-52). See this
+   *  task's contractConcerns — DECISIONS' frozen `reconnect(accountId,
+   *  opts?)` lives on `broker.startReconnect`, which can honour it.
+   *
+   *  `signal` is the flow's abort signal — a cancel that lands after
+   *  `reauthenticate()` resolves aborts BEFORE the first durable write, so
+   *  cancel has nothing to compensate.
+   *
+   *  Restarting is the CALLER's move, mirroring `accounts:resume`
+   *  (main.ts:457-464): a needsReauth account was skipped by boot's
+   *  resumeAccounts, so it has no cadence job and needs `runAccount`, which
+   *  lives in boot and would be a cycle from here. */
+  reconnect(
+    accountId: AccountId,
+    auth: AuthChannel,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  /** Apply a folder-scope edit the source computed: stop the loop, then ONE
+   *  store transaction (config + cursor + archival of the roots the SOURCE
+   *  named + a `changes` row per archived document) and a restart.
+   *
+   *  This is the ONLY door folder scope goes through. `updateConfig` refuses
+   *  it (below): that path persists config BEFORE stopping anything, so the
+   *  old loop keeps pulling under the new config and its next commit
+   *  overwrites the transformed cursor.
+   *
+   *  R8/A-1: `update.archiveScopeRootIds` is FORWARDED VERBATIM. Core must
+   *  never derive it — only the source knows whether a removed root's
+   *  documents are still covered by a retained one, and a set-difference over
+   *  `folderRoots` archives every row whose `scope_root_id` was frozen by
+   *  `hashSkip` at some historical folder (314 of 316 on the real production
+   *  account). An empty array is legal.
+   *
+   *  C-46/D5: `update.reattributeScopeRoots` is forwarded on exactly the same
+   *  terms, and is where a removed-but-still-covered root belongs. An empty
+   *  archive set is NOT the right way to say that — silence freezes a stale
+   *  stamp no later save can match (C-46/D2, C-46/D3). Absent means none, and
+   *  the coercion to `[]` for the store's required input happens at the call
+   *  site below and nowhere else.
+   *
+   *  **C-28.2 — `expectedConfigJson` is a REQUIRED parameter, not something
+   *  this function may fetch for itself.** It is the caller's snapshot of the
+   *  account config taken when the picker OPENED, and it is the whole value of
+   *  the store's compare-and-swap. Read here instead, it would be a baseline
+   *  fetched after the caller's own staleness check, so a config write landing
+   *  in between would be adopted as "expected" and then overwritten by
+   *  `applyFolderScope`'s `UPDATE accounts SET config = ?`, with nobody told.
+   *  Required rather than optional on purpose: an optional parameter with a
+   *  re-read fallback re-introduces the bug the first time a caller forgets. */
+  applyScope(
+    accountId: AccountId,
+    update: FolderScopeUpdate,
+    expectedConfigJson: string,
+  ): Promise<{ archived: number }>;
+  /** Claim the account's single flow slot. Idempotent for the holder; throws
+   *  AccountFlowBusyError for anyone else. Callers release in a `finally`. */
+  claimAccountFlow(accountId: AccountId, flowId: string): void;
+  /** Release the slot IF `flowId` still holds it — a late release from a
+   *  settled flow must never free a slot its successor already took. */
+  releaseAccountFlow(accountId: AccountId, flowId: string): void;
 } {
   const { store, logs } = deps;
   const running = new Map<
@@ -381,6 +480,87 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  local-folder root or re-scoping an account legitimately archives big
    *  fractions of the corpus. Consumed (deleted) when the pass starts. */
   const reconcileAllowances = new Set<AccountId>();
+
+  /** The ONE account-scoped flow allowed at a time: reconnect and
+   *  manage-folders cannot overlap on one account (spec invariant 13). Keyed
+   *  by account, valued by the flowId that holds it — process-local, like
+   *  `running` and `pauseIntents`, and released in the flow's own finally.
+   *
+   *  `connect-broker.start()` deliberately does NOT claim this: `start` is
+   *  handed a sourceId and has no account id until `connect()` has already
+   *  returned and `createAccount` has upserted, so a lock taken there would
+   *  be taken after the write it was supposed to order. See the ruling in the
+   *  task notes — the residual connect-vs-manage race is DETECTED by
+   *  applyScope's `expectedConfigJson` guard, not silently lost, and A-4
+   *  removes the only two-click UI path (local-folder "add another folder")
+   *  that reached it. */
+  const activeByAccount = new Map<AccountId, string>();
+
+  /** **C-28.1 — the account TRANSITION intent, and it is NOT `activeByAccount`.**
+   *  `activeByAccount` above is the UI-level lock: one flow per account, held
+   *  by the broker for as long as a picker modal is open — minutes. This one
+   *  is the engine-level mutex: held only across the few hundred milliseconds
+   *  in which an account is torn down, rewritten and restarted, and it is the
+   *  ONLY one `run()` consults.
+   *
+   *  Why `run()` must consult THIS and never `activeByAccount`: `applyScope`
+   *  restarts the account from inside the flow, while the broker still holds
+   *  `activeByAccount[accountId] = flowId`. A `run()` that refused on the flow
+   *  lock would refuse the restart the flow itself is making, and the account
+   *  would sit at its new scope with no loop and no scheduled wakeup.
+   *
+   *  Why it exists at all: without it ANY restart path — `updateConfig`, a
+   *  cadence tick's start-if-idle supervisor (`boot.ts:180-205`), sync-now —
+   *  can install a REPLACEMENT loop in the window between `applyScope`'s
+   *  `stop()` and its store transaction. `running.has(key)` is still true for
+   *  most of that window (a handle deletes its own map entry only at the END
+   *  of `stop()`), so `updateConfig`'s `if (!running.has(...)) return;` gate
+   *  waves it straight through. The replacement loop's first batch commit then
+   *  writes `cursor` — over the cursor `applyFolderScope` just transformed —
+   *  so the newly added roots never backfill and the removed roots' pages are
+   *  re-pulled. The config CAS cannot see any of it: an ordinary pull commit
+   *  does not touch `config`. Same shape as `pauseIntents` above, same reason:
+   *  a durable-state read is stale for exactly as long as a transition lasts. */
+  const transitionIntents = new Set<AccountId>();
+
+  /** Stop an account's loop for a transition, reporting whether there WAS one.
+   *  `restoreLoopAfterFailure` needs that answer — restarting an account that
+   *  had no loop would silently start syncing something the user had stopped. */
+  const stopForTransition = async (accountId: AccountId): Promise<boolean> => {
+    const handle = running.get(`account:${accountId}`);
+    const wasRunning = handle?.active() ?? false;
+    await handle?.stop();
+    return wasRunning;
+  };
+
+  /** **C-28.4, and the engine half of C-29.** Put back a loop this flow
+   *  stopped, after a failure that happened AFTER the stop. Without it a stale
+   *  CAS result, a `FolderScopeStaleError`, or a DB worker that commits and
+   *  then dies before its reply (`bridge.ts` commits, `worker-client.ts`
+   *  rejects the in-flight call) leaves the account quiesced with nothing
+   *  scheduled to wake it. For an account whose source declares no
+   *  `descriptor.cadence`, `runAccount` registers no scheduler job at all
+   *  (`boot.ts:180-183`), so "quiesced" means "until the app restarts".
+   *
+   *  Re-reads DURABLE state first, deliberately: after a partial failure the
+   *  in-memory picture is precisely what cannot be trusted, and the COMMITTED
+   *  status is what decides whether a restart is even legal (paused and
+   *  needsReauth stay parked, exactly as `updateConfig` and the cadence tick
+   *  do). Never lets its own failure mask the original error — the caller's
+   *  rejection is the one the user has to see. */
+  const restoreLoopAfterFailure = async (
+    accountId: AccountId,
+    wasRunning: boolean,
+  ): Promise<void> => {
+    if (!wasRunning) return;
+    try {
+      const now = await store.account(accountId);
+      if (now && now.status !== 'paused' && now.status !== 'needsReauth')
+        engine.run(now);
+    } catch {
+      // Swallowed on purpose — see above.
+    }
+  };
 
   const makeSession = (
     account: Account,
@@ -576,14 +756,26 @@ export function createEngine(deps: EngineDeps): Engine & {
       // committed-status recheck at loop entry below closes the mirror-image
       // window (tick read a stale status BEFORE the commit landed, calls
       // run() after the intent cleared).
-      if (pauseIntents.has(account.id)) {
+      // C-28.1. `pauseIntents` and `transitionIntents` refuse a start for the
+      // same underlying reason — a durable-state read is stale for exactly as
+      // long as the window lasts — but they mean different things to whoever
+      // asked, so the log line and the refused handle's status say which.
+      // Only these two: `activeByAccount` is deliberately NOT consulted here.
+      // The broker holds it across a whole open picker modal, and applyScope
+      // restarts the account from inside the flow that holds it, so refusing
+      // on the flow lock would refuse that restart and strand the account.
+      let refusal: string | null = null;
+      if (pauseIntents.has(account.id)) refusal = 'is being paused';
+      else if (transitionIntents.has(account.id))
+        refusal = 'is mid folder-scope / reconnect transition';
+      if (refusal) {
         logs.log(
           scope,
           'info',
-          `run refused: account ${account.id} is being paused`,
+          `run refused: account ${account.id} ${refusal}`,
         );
         const refused: Handle & { active(): boolean } = {
-          status: 'paused',
+          status: pauseIntents.has(account.id) ? 'paused' : 'connecting',
           active: () => false,
           async stats() {
             const account2 = await store.account(account.id);
@@ -877,6 +1069,280 @@ export function createEngine(deps: EngineDeps): Engine & {
       return handle;
     },
 
+    async reconnect(
+      accountId: AccountId,
+      auth: AuthChannel,
+      signal?: AbortSignal,
+    ): Promise<void> {
+      const account = await store.account(accountId);
+      if (!account) throw new Error(`unknown account: ${accountId}`);
+      const source = deps.sources.get(account.source);
+      if (!source) throw new Error(`unknown source: ${account.source}`);
+      if (!source.reauthenticate)
+        throw new Error(
+          `${account.source} cannot be reconnected — remove this source and add it again`,
+        );
+      // Same capture wrapper as connect(): the source never stores a blob.
+      // The ordering is the whole guarantee — a reauthenticate() that throws
+      // (identity mismatch, abandoned browser) leaves `captured` unused, so
+      // NOTHING below runs and the account keeps its old credentials, its
+      // status and its lastError.
+      let captured: Credentials | null = null;
+      const wrapped: AuthChannel = {
+        async oauth(scopes) {
+          captured = await auth.oauth(scopes);
+          return captured;
+        },
+        showQr: (qr) => auth.showQr(qr),
+        async prompt(schema) {
+          const answers = await auth.prompt(schema);
+          if (typeof answers.password === 'string')
+            captured = { ...(captured ?? {}), password: answers.password };
+          return answers;
+        },
+        status: (msg) => auth.status(msg),
+        pickFolders: () => {
+          throw new Error('reconnect must not change folder scope');
+        },
+      };
+
+      // ── PRE-COMMIT PHASE (C-28.3). Fully cancellable; writes nothing. ──
+      // Everything up to and including the check below can be abandoned for
+      // free: no vault write, no status write, no stopped loop. A cancel here
+      // throws and the account is exactly as it was.
+      await source.reauthenticate(account, wrapped);
+      if (signal?.aborted) throw new Error('reconnect cancelled');
+
+      // ── POINT OF NO RETURN (C-28.3) ──
+      // From the line below, `signal` is deliberately NOT consulted again, and
+      // that is the fix, not an oversight. The old code checked it exactly
+      // once, here, and then did three more awaited things — stop(),
+      // vault.save(), the status write. A cancel landing inside those left an
+      // account that was stopped, re-credentialled and half-committed while
+      // the UI said "cancelled", with nobody scheduled to restart it. There
+      // are only two coherent answers to a cancel in that window: undo
+      // everything (impossible — the sign-in cannot be un-signed and the old
+      // token may already be revoked at the provider), or finish. So this
+      // finishes, and the broker's rule is the mirror image: **if
+      // engine.reconnect RESOLVES, it committed, and the caller restarts the
+      // account regardless of `flow.cancelled`.** The worst case is a UI that
+      // says "cancelled" over an account that is healthy and syncing.
+      transitionIntents.add(accountId);
+      let wasRunning = false;
+      try {
+        // Quiesce only NOW. Stopping before the (minutes-long) sign-in would
+        // leave a healthy account with no loop for the whole window. abort
+        // alone is cooperative (one more batch commit can still land), so this
+        // awaits stop(), which awaits the loop AND its reconcile pass. Keyed
+        // by ACCOUNT, so a sibling account of the same provider keeps running.
+        // The transition intent above is what stops a cadence tick or a
+        // sync-now from installing a replacement loop in this window (C-28.1).
+        wasRunning = await stopForTransition(accountId);
+        // ORDER IS LOAD-BEARING (C-28.3). Credentials first: these two are
+        // separate durable writes with no transaction spanning them, so one of
+        // the two partial states is going to be reachable, and this picks the
+        // harmless one. Credentials-written-but-status-not leaves an account
+        // that still reads `needsReauth`/`error`, still offers Reconnect, and
+        // whose stored token is strictly newer than the one it replaced —
+        // pressing Reconnect again fixes it, and nothing was lost. The reverse
+        // order leaves an account that reads healthy while holding a revoked
+        // token, so it starts pulling and 401s its way back to needsReauth,
+        // having hammered the provider first.
+        if (captured) await store.vault.save(accountId, captured);
+        // C-28.6: setAccountStatus, NOT store.commit. Every commit stamps
+        // `last_sync_at = ?` unconditionally (write-tx.ts:423-431), so the
+        // empty status-only commit this used to be made a reconnect render in
+        // the UI as a completed sync that never fetched a page. This verb
+        // writes `status` + `last_error` and nothing else — and note there is
+        // no cursor write at all now: reconnect's invariant 2 is that the
+        // cursor does not change, and the safest way to not change a value is
+        // to not write it.
+        await store.setAccountStatus(accountId, {
+          status: 'connecting',
+          error: null,
+        });
+      } catch (err) {
+        // C-28.4. The account was quiesced by THIS flow and the caller only
+        // restarts on success, so without this it stays stopped — for a
+        // source with no `descriptor.cadence`, until the app restarts.
+        transitionIntents.delete(accountId);
+        await restoreLoopAfterFailure(accountId, wasRunning);
+        throw err;
+      } finally {
+        transitionIntents.delete(accountId);
+      }
+      logs.log(
+        `source:${account.source}`,
+        'info',
+        `reconnected ${account.identifier}`,
+      );
+    },
+
+    async applyScope(
+      accountId: AccountId,
+      update: FolderScopeUpdate,
+      expectedConfigJson: string,
+    ): Promise<{ archived: number }> {
+      const roots = update.config.folderRoots;
+      if (!Array.isArray(roots) || roots.length === 0)
+        throw new FolderScopeConfigError(
+          'a folder-scoped account must keep at least one root — remove the source to stop tracking it entirely',
+        );
+      // **C-27 / C-34 — archiveNullScoped is refused, always, in this train,
+      // and the refusal is STRUCTURAL. READ THIS BEFORE EDITING THE
+      // `store.applyFolderScope({…})` CALL BELOW.**
+      //
+      // C-27 made the v3 migration attribution-only: a cloud row it could not
+      // attribute stays LIVE with `scope_root_id` NULL rather than being
+      // archived, because a frozen `metadata.root_folder_id` is stale data,
+      // not evidence of being out of scope. That ruling only holds if nothing
+      // downstream archives those same rows — and this flag does exactly that.
+      // C-27 made it conditional on proving that a completed re-walk
+      // re-stamps in-scope rows. It does not: both cloud connectors'
+      // `hashSkip` is QUERY-first, not cursor-driven, and returns true (emit
+      // nothing) for any existing, non-archived, `extraction_status:'ok'` row
+      // whose hash is unchanged — google-docs `src/source.ts:463-488`,
+      // onedrive `src/source.ts:293-300` — so resetting the cursor to force a
+      // full re-walk does not defeat it and the row is never re-stamped.
+      // Honouring the flag would therefore archive precisely the documents
+      // the migration was forbidden to touch, with no in-app recovery, on
+      // BOTH cloud sources at once. For OneDrive it is permanent: it has no
+      // reconcile() at all (`source.ts:62`).
+      //
+      // So the call below does not pass the field — not even as `false`.
+      // C-34 removed `archiveNullScoped` from CoreStore.applyFolderScope's
+      // INPUT TYPE, which is what turns this from a convention into a
+      // guarantee: re-adding `archiveNullScoped: update.archiveNullScoped ===
+      // true` to that object literal does not compile. TS 5.8.2 reports
+      //   error TS2353: Object literal may only specify known properties, and
+      //   'archiveNullScoped' does not exist in type '…'
+      // so `npm run typecheck` and every ts-jest suite importing the engine
+      // refuse it. Do not "simplify" it back; if you believe the flag should
+      // be honoured, the change starts in the STORE (Task 3) with an
+      // archive-AFTER-proof predicate shaped like reconcile's (`seq <= ?` AND
+      // `NOT EXISTS (… reconcile_listing …)`, write-tx.ts:512-538) plus a
+      // listing pass for OneDrive, which has none — and it must be gated on
+      // evidence from a connector, not on the flag's existence.
+      //
+      // A source may still ASK (A-3 gives it the field, and both connectors
+      // set it). That is worth recording, so the ask is logged once per Save.
+      // Logged, not thrown: the rest of the update — the roots the source
+      // named in `archiveScopeRootIds` — is safe and is what the user actually
+      // clicked Save for. Throwing would cost them the folder edit as well.
+      if (update.archiveNullScoped === true)
+        logs.log('folder-scope', 'warn', 'archiveNullScoped refused (C-27)', {
+          accountId,
+        });
+      // From here to the `finally`, this account is IN TRANSITION: run() will
+      // refuse to start a loop for it and updateConfig will refuse to write
+      // its config (C-28.1). Declared BEFORE the stop, like pause()'s intent,
+      // because the window that needs covering opens the moment the loop goes
+      // away — `running.has(key)` stays true for most of stop(), so every
+      // stale-read supervisor in the app would happily start a replacement.
+      transitionIntents.add(accountId);
+      let wasRunning = false;
+      try {
+        // Quiesce. abort() alone is cooperative — store.commit is a DB-worker
+        // RPC that completes — so only awaiting stop() (which awaits the pull
+        // loop AND its concurrent reconcile pass) gives a point where nothing
+        // else can write this account. Refusing an empty scope ABOVE the
+        // intent keeps a rejected update from costing the account its loop.
+        wasRunning = await stopForTransition(accountId);
+        const res = await store.applyFolderScope({
+          accountId,
+          config: update.config,
+          cursor: update.cursor,
+          // Forwarded, never derived (R8/A-1).
+          archiveScopeRootIds: update.archiveScopeRootIds,
+          // C-46/D5, forwarded the same way. Optional on the wire (a
+          // pre-1.2.0 connector simply has none), required in the store's
+          // input, so the coercion happens exactly here — the store never
+          // guesses, and the engine never derives containment.
+          reattributeScopeRoots: update.reattributeScopeRoots ?? [],
+          // NOTE the absence of `archiveNullScoped` — C-34, see the block
+          // above. The store's input type has no such property in this train,
+          // so adding it back here is a compile error, by design.
+          //
+          // C-28.2: the CALLER's picker-open snapshot, straight through. No
+          // re-read here, ever. There is deliberately no `store.account()`
+          // call before the transaction at all — an unknown account is
+          // reported by `applyFolderScope` itself
+          // (`applyFolderScope: unknown account <id>`), and removing the read
+          // removes the temptation to feed it back in as the baseline.
+          expectedConfigJson,
+        });
+        if (res.stale) throw new FolderScopeStaleError();
+        // The scope just NARROWED: the next reconcile pass may legitimately
+        // exceed the mass-archive breaker (a removed root is exactly the case
+        // the allowance exists for).
+        //
+        // **C-35 — but ONLY if this Save actually archived something.** The
+        // allowance is not a relaxation of the ≥100/≥50% ratio; ONE
+        // `if (!allowMassArchive)` wraps BOTH refusals in `reconcilePass`
+        // (engine.ts:284-313), the zero-false-positive "the listing came back
+        // empty" arm included — the arm whose own comment says an empty
+        // listing over a non-empty corpus is "always a broken listing … never
+        // normal churn". A pure WIDENING Save (the user added a folder and
+        // removed none) archives nothing, so it has no mass-archive to
+        // authorise; granting one anyway would disarm the empty-listing guard
+        // for one pass, and the next reconcile could archive an entire corpus
+        // off a listing that failed. `res.archived` is the store's own count
+        // from the transaction that just committed, so this reads the outcome
+        // rather than guessing at it from `archiveScopeRootIds` (which is an
+        // intent, and is legitimately non-empty with nothing matching it).
+        if (res.archived > 0) reconcileAllowances.add(accountId);
+        const after = await store.account(accountId);
+        // Restart unconditionally EXCEPT the two resting states. Deliberately
+        // NOT gated on `running.has` the way updateConfig is: stop() above
+        // deleted this account's map entry, so that read is always false here
+        // — and a scope change is an explicit user action whose added roots
+        // must backfill now, not at the next cadence tick. run() re-checks
+        // pauseIntents itself, so a pause landing in this window still wins.
+        //
+        // The intent is released on the line BEFORE the restart and there is
+        // no `await` between them: run() consults `transitionIntents`, so
+        // holding it here would refuse our own restart, and releasing it an
+        // await earlier would reopen the window for somebody else's.
+        // JavaScript is single-threaded — two adjacent synchronous statements
+        // cannot be interleaved.
+        transitionIntents.delete(accountId);
+        if (
+          after &&
+          after.status !== 'paused' &&
+          after.status !== 'needsReauth'
+        )
+          engine.run(after);
+        return { archived: res.archived };
+      } catch (err) {
+        // C-28.4 / C-29. The account was quiesced by THIS call; if the write
+        // failed — stale CAS, or a DB worker that committed and then died
+        // before its reply — nobody else is going to start it again. Re-reads
+        // durable state, so a partially-applied transition restarts against
+        // what actually landed.
+        transitionIntents.delete(accountId);
+        await restoreLoopAfterFailure(accountId, wasRunning);
+        throw err;
+      } finally {
+        transitionIntents.delete(accountId);
+      }
+    },
+
+    session(account: Account, signal: AbortSignal, scope: string): Session {
+      return makeSession(account, signal, scope);
+    },
+
+    claimAccountFlow(accountId: AccountId, flowId: string): void {
+      const held = activeByAccount.get(accountId);
+      if (held !== undefined && held !== flowId)
+        throw new AccountFlowBusyError(held);
+      activeByAccount.set(accountId, flowId);
+    },
+
+    releaseAccountFlow(accountId: AccountId, flowId: string): void {
+      if (activeByAccount.get(accountId) === flowId)
+        activeByAccount.delete(accountId);
+    },
+
     isRunning(accountId: AccountId): boolean {
       return running.get(`account:${accountId}`)?.active() ?? false;
     },
@@ -946,12 +1412,62 @@ export function createEngine(deps: EngineDeps): Engine & {
       accountId: AccountId,
       config: Record<string, unknown>,
     ): Promise<void> {
-      await store.setAccountConfig(accountId, config);
+      // Folder scope NEVER moves through this door. applyScope is the only
+      // path that stops the loop, transforms the cursor and archives the
+      // source-named roots in one transaction; this one persists config
+      // BEFORE the restart's prev.stop(), so the old loop keeps pulling under
+      // the new config and its next commit rewrites the cursor.
+      //
+      // Two ways this channel could corrupt scope, and each gets its own
+      // answer: a payload that CARRIES folderRoots is refused loudly; a
+      // payload that OMITS it on a scoped account is silently completed,
+      // because setAccountConfig overwrites the whole column and the
+      // omission would otherwise delete the account's roots — while
+      // accounts:update-config stays a legitimate escape hatch for
+      // non-folder keys (cadence overrides, outbound settings).
+      //
+      // **C-28.1 — and this account must not be in the middle of a transition
+      // either.** Checked FIRST, before the payload is even looked at: the two
+      // sets below are the only places in the engine that know an account is
+      // contended, and neither is visible to the config CAS (an ordinary pull
+      // commit does not touch config, so nothing downstream expects config to
+      // be contended). `activeByAccount` covers a broker flow that owns the
+      // account — including the minutes a picker modal is open —
+      // `transitionIntents` the sub-second stop→write→restart window inside
+      // applyScope/reconnect. Refusing costs the user a retry; not refusing
+      // costs them either a bogus "this account changed while the folder
+      // picker was open" on a Save they did make, or (before C-28.2 threaded
+      // the snapshot) the silent loss of the config write itself.
+      const heldBy = activeByAccount.get(accountId);
+      if (heldBy !== undefined) throw new AccountFlowBusyError(heldBy);
+      if (transitionIntents.has(accountId))
+        throw new AccountFlowBusyError('account-transition');
+      if (Object.prototype.hasOwnProperty.call(config, 'folderRoots'))
+        throw new FolderScopeConfigError(
+          'folderRoots cannot be written through accounts:update-config — use accounts:start-manage-folders',
+        );
+      const existing = await store.account(accountId);
+      const next =
+        existing &&
+        Object.prototype.hasOwnProperty.call(existing.config, 'folderRoots')
+          ? { ...config, ...pickScopeKeys(existing.config) }
+          : config;
+      await store.setAccountConfig(accountId, next);
       // The config just changed — the next reconcile pass may legitimately
       // mass-archive (e.g. a root removed from a local-folder account), so
       // grant it a one-shot pass through the breaker. Also the user's
       // documented escape hatch: re-saving settings applies a refused
       // cleanup.
+      //
+      // PRE-EXISTING LINE, deliberately left unconditional — do not "fix" it
+      // to match applyScope's C-35 guard above. `updateConfig` never archives
+      // anything itself, so an `archived > 0` condition here would be
+      // permanently false and would delete the escape hatch that
+      // reconcilePass's own refusal message advertises ("If this shrinkage is
+      // real, re-save the account's settings to apply the cleanup",
+      // engine.ts:287-290). C-35 is about applyScope, where the outcome IS
+      // knowable: an explicit Save that archived nothing has no mass-archive
+      // to authorise.
       reconcileAllowances.add(accountId);
       // Only restart a loop that's actually running — a never-started account
       // just gets its config persisted for the next run(). And a running-map

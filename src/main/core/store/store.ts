@@ -36,7 +36,12 @@ import {
   PENDING_VISUAL_WHERE,
   repopulateSearchIndex,
 } from './schema';
-import { createWriteTx, type ReconcileCounts } from './write-tx';
+import {
+  createWriteTx,
+  type FolderScopeInput,
+  type FolderScopeResult,
+  type ReconcileCounts,
+} from './write-tx';
 
 // The two stats COUNTs are pinned to their covering partial indexes with
 // INDEXED BY: production corpora carry no sqlite_stat1 (nothing ever runs
@@ -105,6 +110,22 @@ export interface CoreStore extends Store {
     id: AccountId,
     config: Record<string, unknown>,
   ): Promise<void>;
+  /** Status-only account write: `status` and `last_error`, nothing else.
+   *
+   *  It exists because `store.commit` is otherwise the ONLY door to a status
+   *  change, and `write-tx.ts:423-431` stamps `last_sync_at = ?` on every
+   *  commit unconditionally — so an empty `commit({documents: [], cursor, …})`
+   *  used purely to move a status makes the account render as having just
+   *  synced. `engine.reconnect` is the caller that must not lie about that:
+   *  it fetches no page and commits no document.
+   *
+   *  Omitted keys are left alone (`COALESCE` / the same `CASE WHEN` idiom the
+   *  commit path uses for `last_error`), so `{ error: null }` CLEARS the error
+   *  while `{}` would clear nothing. Never touches `cursor` or `config`. */
+  setAccountStatus(
+    id: AccountId,
+    patch: { status?: SyncStatus; error?: string | null },
+  ): Promise<void>;
   /** (externalId, type, seq) for every non-archived document under an
    *  account — the diff surface `reconcile()` archiving needs, without
    *  paying for full Document rows (title/markdown/metadata) just to compare
@@ -129,6 +150,40 @@ export interface CoreStore extends Store {
   /** Archives every eligible-but-unlisted document; returns the count. */
   reconcileArchive(accountId: AccountId, startSeq: Seq): Promise<number>;
   reconcileEnd(accountId: AccountId): Promise<void>;
+  /** ONE transaction: config + cursor + archive-the-roots-the-source-named +
+   *  one `changes` row per archived document. Returns COUNTS ONLY — never row
+   *  sets; passing a per-account row array across the DB-worker boundary is
+   *  what OOM'd the main process on a 3.7M-document account.
+   *  `input.archiveScopeRootIds` is the explicit IN-list computed by the
+   *  SOURCE (R8) — core never set-differences over `folderRoots`, and an
+   *  empty array (archive nothing) is legal. `input.reattributeScopeRoots`
+   *  is the same source's answer for the removed roots a RETAINED root still
+   *  covers (C-46/D5): those are re-stamped, not archived, and naming one
+   *  root in both arrays THROWS.
+   *  `{stale: true}` and no write means the stored config moved since
+   *  `expectedConfigJson` was read.
+   *
+   *  CALLER CONTRACT — recovery after a rejection or a lost reply (C-29).
+   *  In the production main process this call crosses the DB-worker bridge,
+   *  which COMMITS the transaction and only then posts its reply
+   *  (db/bridge.ts). A worker death in that window rejects the in-flight
+   *  promise (`DB_WORKER_CRASHED`) although the archive is already durable.
+   *  A rejection is therefore NOT proof that nothing ran. On any rejection —
+   *  and after any post-`stop()` failure in the flow around this call:
+   *   1. re-read the account and compare the PARSED `config.folderRoots`
+   *      against what you meant to write. Deep-equal => it committed: the
+   *      archive is durable, so restart the account's loop with the NEW
+   *      cursor and let the compensating backfill run. Not equal => nothing
+   *      was written: restart the loop on the OLD state.
+   *   2. compare `folderRoots`, never the config JSON TEXT — this procedure
+   *      appends R1's legacy `roots`/`paths` mirror inside the transaction,
+   *      so the stored text is deliberately not `JSON.stringify(config)`.
+   *   3. never retry this call as recovery: the stale-write guard makes the
+   *      retry a no-op (`stale: true`), which is safe but is not the
+   *      compensating action.
+   *  Leaving a previously running account stopped after such a failure is
+   *  the bug this contract exists to prevent. */
+  applyFolderScope(input: FolderScopeInput): Promise<FolderScopeResult>;
   consumerCursor(name: string): Promise<Seq>;
   ledgerRecord(
     consumer: string,
@@ -188,6 +243,9 @@ export interface DocRow {
   languages: string;
   ingested_at: string;
   updated_at: string;
+  /** v3. `undefined` on a pre-v3 database — every read site is `SELECT *`,
+   *  so `toDocument`'s `?? null` absorbs the absence. */
+  scope_root_id: string | null;
 }
 
 export interface AccountRow {
@@ -222,6 +280,7 @@ function toDocument(r: DocRow): Document {
     languages: JSON.parse(r.languages),
     ingestedAt: r.ingested_at,
     updatedAt: r.updated_at,
+    scopeRootId: r.scope_root_id ?? null,
   };
 }
 
@@ -1142,6 +1201,27 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       nudge.emit('commit');
     },
 
+    async setAccountStatus(id, patch) {
+      await db.batch([
+        {
+          sql: `UPDATE accounts SET status = COALESCE(?, status),
+                  last_error = CASE WHEN ? THEN ? ELSE last_error END
+                WHERE id = ?`,
+          params: [
+            patch.status ?? null,
+            patch.error !== undefined ? 1 : 0,
+            patch.error ?? null,
+            id,
+          ],
+        },
+        {
+          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
+          params: [id, now()],
+        },
+      ]);
+      nudge.emit('commit');
+    },
+
     async liveRefs(accountId, after, limit) {
       // Ordered by (external_id, type) so the UNIQUE(account_id, external_id,
       // type) index serves both the range seek and the ordering — no sort, and
@@ -1209,6 +1289,17 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     async reconcileEnd(accountId) {
       if (writeTx) writeTx.reconcileEnd(accountId);
       else await db.proc!('reconcileEnd', { accountId });
+    },
+
+    async applyFolderScope(input) {
+      const result = writeTx
+        ? writeTx.applyFolderScope(input)
+        : ((await db.proc!('applyFolderScope', input)) as FolderScopeResult);
+      if (result.archived > 0) corpusLangsCache = null;
+      // Search index and renderer both refresh off this: the feed iterators
+      // in feed() block on 'commit', and the account row itself changed.
+      if (!result.stale) nudge.emit('commit');
+      return result;
     },
 
     async consumerCursor(name) {

@@ -33,6 +33,13 @@ export interface LocalFolderItem {
   /** Set for parseable binaries (pdf/docx/xlsx/csv/html) — `markdown` stays
    *  null on the resulting DocumentInput and the ENGINE converts. */
   binary: { bytes: Uint8Array; mime: string; filename: string } | null;
+  /** The configured root whose subtree contains this file — becomes the
+   *  document's `scopeRootId`. OPTIONAL because `watch.ts`'s `rootOf()`
+   *  legitimately returns `undefined` (a chokidar event arriving after a root
+   *  left the config, a resolution landing outside every root) and that item
+   *  is still yielded. Per DECISIONS R5 the resulting document is stored with
+   *  `scope_root_id = NULL`; it is NEVER a throw. */
+  scopeRootId?: string;
 }
 
 /**
@@ -47,6 +54,7 @@ export function toDocument(item: LocalFolderItem): DocumentInput | null {
     markdown: item.markdownText,
     ...(item.binary ? { binary: item.binary } : {}),
     url: `file://${encodeURI(item.absPath)}`,
+    ...(item.scopeRootId ? { scopeRootId: item.scopeRootId } : {}),
     metadata: {
       size: item.size,
       sizeBytes: item.size,
