@@ -7,10 +7,11 @@ This package is the vendoring target described in
 extracted so nine (and counting) connector repos stop hand-copying the same
 files.
 
-It is **generated, not hand-written**: `contracts.ts` and `source-errors.ts`
-are copied verbatim from `kiagent-core`'s `src/shared/` at build time, so a
-connector compiling against a given SDK version is compiling against exactly
-the platform types that version was cut from.
+It is **generated, not hand-written**: `contracts.ts`, `source-errors.ts` and
+`file-indexability.ts` are copied verbatim from `kiagent-core`'s
+`src/shared/` at build time, so a connector compiling against a given SDK
+version is compiling against exactly the platform types — and the exact file
+eligibility policy — that version was cut from.
 
 ## Install
 
@@ -20,7 +21,7 @@ same TOFU shape as a connector's own release:
 ```json
 {
   "devDependencies": {
-    "@kiagent/connector-sdk": "https://github.com/edjafarov/kiagent-core/releases/download/sdk-v1.0.0/kiagent-connector-sdk-1.0.0.tgz"
+    "@kiagent/connector-sdk": "https://github.com/edjafarov/kiagent-core/releases/download/sdk-v1.1.0/kiagent-connector-sdk-1.1.0.tgz"
   }
 }
 ```
@@ -41,13 +42,16 @@ subpath below resolves via a small stub file at the package root
 
 ## The four entrypoints
 
-### `@kiagent/connector-sdk` — contracts + source-error taxonomy
+### `@kiagent/connector-sdk` — contracts + source-error taxonomy + file eligibility
 
-Everything in `src/shared/contracts.ts` and `src/shared/source-errors.ts` at
-the pinned core vintage: `ExtensionModule`, `Source`, `Sender`, `Session`,
-`AuthChannel`, `Account`, `Credentials`, `HostFor`, `SourceAuthError`,
-`SourcePermanentError`, `sourceErrorCode`, and the rest of the surface
-(§7 of the authoring guide).
+Everything in `src/shared/contracts.ts`, `src/shared/source-errors.ts` and
+`src/shared/file-indexability.ts` at the pinned core vintage: `ExtensionModule`,
+`Source`, `Sender`, `Session`, `AuthChannel`, `Account`, `Credentials`,
+`HostFor`, `SourceAuthError`, `SourcePermanentError`, `sourceErrorCode`, and
+the rest of the surface (§7 of the authoring guide) — plus `decideFileIndexing`,
+the canonical "can this file be indexed?" policy kiagent-core's own workers
+run on, so a connector's `isConvertibleMime` check can call the same function
+instead of hand-rolling (and drifting from) an equivalent one.
 
 ```ts
 import type { ExtensionModule, Source, Session } from '@kiagent/connector-sdk';
@@ -59,6 +63,19 @@ async function requireToken(session: Session): Promise<string> {
     throw new SourceAuthError('no credentials — reconnect the account');
   return creds.password;
 }
+```
+
+```ts
+import { decideFileIndexing } from '@kiagent/connector-sdk';
+
+const decision = decideFileIndexing({
+  profile: 'cloud-drive',
+  filename: file.name,
+  mime: file.mimeType,
+  sizeBytes: file.size,
+});
+if (decision.kind === 'ignore') return; // decision.reason explains why
+// decision.pipeline is 'converter' | 'vision' — route the download accordingly
 ```
 
 ### `@kiagent/connector-sdk/http` — the retry ladder

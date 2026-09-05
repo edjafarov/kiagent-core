@@ -1,6 +1,10 @@
 import type BetterSqlite3 from 'better-sqlite3';
 
 import { VISUAL_EXTS } from '@main/workers/vision/classify';
+import {
+  decideFileIndexing,
+  type FileIndexCandidate,
+} from '@shared/file-indexability';
 
 import { buildStemView } from '../stemming';
 
@@ -86,6 +90,51 @@ export function ensureQueryIndexes(db: BetterSqlite3.Database): void {
  * `meta.schemaVersion` tracks the last applied index + 1.
  */
 type Migration = string | ((db: BetterSqlite3.Database) => void);
+
+/** Row shape the v2 cleanup migration's paging query reads. */
+interface CandidateRow {
+  rid: number;
+  id: string;
+  title: string | null;
+  metadata: string;
+  source: string;
+}
+
+const readString = (v: unknown): string | undefined =>
+  typeof v === 'string' ? v : undefined;
+const readFiniteNumber = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+
+/**
+ * Builds the `@shared/file-indexability` candidate shape for a v2-migration
+ * row, per the metadata alias precedence confirmed against a real 11 GB dev
+ * corpus (both spellings genuinely coexist — a Drive `file` row carries
+ * `mime` AND `mime_type`, `size_bytes` AND `sizeBytes`; a local-folder row
+ * carries `mime`, `filename`, `ext`, `absPath`, `size` and `sizeBytes`):
+ *   mime:     metadata.mime, then metadata.mime_type
+ *   filename: metadata.filename, then the document's title, then ''
+ *   size:     metadata.sizeBytes, metadata.size_bytes, then metadata.size
+ *   path:     metadata.absPath, then filename
+ * `local-folder` maps to profile 'local-folder'; the caller only ever passes
+ * rows already filtered to the three known `a.source` values, so anything
+ * else (i.e. `google-docs` / `onedrive`) maps to 'cloud-drive'.
+ */
+function candidateFromRow(
+  row: Pick<CandidateRow, 'title' | 'source'>,
+  metadata: Record<string, unknown>,
+): FileIndexCandidate {
+  const filename = readString(metadata.filename) ?? row.title ?? '';
+  return {
+    profile: row.source === 'local-folder' ? 'local-folder' : 'cloud-drive',
+    filename,
+    mime: readString(metadata.mime) ?? readString(metadata.mime_type),
+    sizeBytes:
+      readFiniteNumber(metadata.sizeBytes) ??
+      readFiniteNumber(metadata.size_bytes) ??
+      readFiniteNumber(metadata.size),
+    path: readString(metadata.absPath) ?? filename,
+  };
+}
 
 const MIGRATIONS: Migration[] = [
   // v1 — the full schema (2026-07-28 collapse of the original v1..v5 chain;
@@ -242,6 +291,108 @@ const MIGRATIONS: Migration[] = [
   );
   CREATE INDEX idx_outbox_account_status ON outbox(account_id, status);
   `,
+
+  // v2 — archive `documents` rows @shared/file-indexability's
+  // decideFileIndexing would now reject, left over from before that policy
+  // existed. Scoped to `type = 'file'` rows on the three sources it knows
+  // how to classify (`local-folder`, `google-docs`, `onedrive`); every other
+  // source (gmail, notion, ...) and every other type — Google's own native
+  // docs export as `type = 'gdocs.doc'`, never `'file'` — is left untouched.
+  // `d.type = 'file'` is load-bearing: in the dev corpus this ran against,
+  // 298 `gdocs.doc` rows outnumbered the 40 `file` rows 7-to-1, so dropping
+  // the filter would mostly archive the wrong table.
+  //
+  // Archiving is feed-visible, never a raw delete (write-tx.ts's
+  // archiveByRef): one `changes` row per archived document, with
+  // `documents.seq` set to that same change's seq. Consumers of the feed
+  // depend on that row existing. This does NOT reclaim disk — archived rows
+  // keep their `documents_fts` / `documents_tri` entries.
+  //
+  // Paged by rowid rather than one `.all()` — the biggest corpus this ran
+  // against is 11 GB with ~2,100 candidate rows, nothing to a single page,
+  // but a past reconcile bug once produced 3.7M phantom rows, so this stays
+  // a paged scan rather than assuming any corpus is small. The whole scan is
+  // still ONE transaction, because migrate() wraps every version that way
+  // and a half-applied cleanup is worse than a slow one — if this ever needs
+  // to be incremental, that's a separate resumable-cursor design, not a
+  // `db.transaction` quietly dropped from here.
+  (db) => {
+    const page = db.prepare(`
+      SELECT d.rowid AS rid, d.id, d.title, d.metadata, a.source
+        FROM documents d JOIN accounts a ON a.id = d.account_id
+       WHERE d.rowid > ? AND d.archived_at IS NULL
+         AND d.type = 'file'
+         AND a.source IN ('local-folder','google-docs','onedrive')
+       ORDER BY d.rowid LIMIT 1000
+    `);
+    const addChange = db.prepare(
+      `INSERT INTO changes(kind, ref_id, at) VALUES('document', ?, ?)`,
+    );
+    const archive = db.prepare(
+      `UPDATE documents SET archived_at=?, updated_at=?, seq=? WHERE id=?`,
+    );
+    const at = new Date().toISOString();
+    let last = 0;
+    for (;;) {
+      const rows = page.all(last) as CandidateRow[];
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        // A row whose metadata cannot be read as a (non-array) object is
+        // precisely a row this migration must NOT touch — fail open, never
+        // throw: a thrown error here rolls back the whole version-step
+        // transaction, which leaves `schemaVersion` at 1 forever (this loop
+        // is the only thing that can ever advance it past 1), so every
+        // subsequent boot repeats the same throw. `JSON.parse('null')`
+        // SUCCEEDS and yields `null` — a bare try/catch around parse alone
+        // does not catch that; the guard has to check the parsed VALUE's
+        // shape, not just that parsing didn't throw. An array also passes
+        // `typeof x === 'object' && x !== null` (`typeof [] === 'object'`),
+        // so it needs its own exclusion: every field would resolve to
+        // undefined and decideFileIndexing would archive it as
+        // 'no-extension'/'unsupported' — exactly the unreadable-metadata
+        // case this guard exists to skip, not archive.
+        let metadata: Record<string, unknown>;
+        try {
+          const parsed: unknown = JSON.parse(row.metadata);
+          if (
+            typeof parsed !== 'object' ||
+            parsed === null ||
+            Array.isArray(parsed)
+          ) {
+            throw new Error('metadata did not parse to an object');
+          }
+          metadata = parsed as Record<string, unknown>;
+        } catch (err) {
+          console.warn(
+            `schema v2 migration: unreadable metadata on document ${row.id} — left live`,
+            err,
+          );
+          continue;
+        }
+        const candidate = candidateFromRow(row, metadata);
+        // Real native Google Docs are always `type = 'gdocs.doc'` and
+        // excluded by the WHERE clause above — but decideFileIndexing has no
+        // concept of "native document" at all, so a `type = 'file'` row that
+        // still carries the native-doc export MIME would otherwise fall
+        // through its default branch to 'unsupported' and get archived.
+        // Guard against that explicitly: only the document MIME is
+        // preserved this way. Every OTHER application/vnd.google-apps.*
+        // MIME (Sheets, Slides, ...) needs no such guard — it already ends
+        // up 'unsupported' via decideFileIndexing's own fallthrough, which
+        // is real corpus noise this migration is meant to clean
+        // (`vnd.google-apps.presentation` among it).
+        if (candidate.mime === 'application/vnd.google-apps.document') {
+          continue;
+        }
+        const decision = decideFileIndexing(candidate);
+        if (decision.kind === 'ignore') {
+          const seq = Number(addChange.run(row.id, at).lastInsertRowid);
+          archive.run(at, at, seq, row.id);
+        }
+      }
+      last = rows[rows.length - 1].rid;
+    }
+  },
 ];
 
 /**

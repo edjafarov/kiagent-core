@@ -15,6 +15,7 @@ import { coveringRoots, isUnder } from '@shared/folder-paths';
 import { SourcePermanentError } from '@shared/source-errors';
 
 import { advanceCursor, type LocalFolderCursor } from './cursor';
+import { decideLocalFile } from './ingestible';
 import {
   BATCH_SIZE,
   MAX_BATCH_READ_BYTES,
@@ -188,6 +189,34 @@ function prunedSomething(
 }
 
 /**
+ * Build one batch's items, splitting out a deletion ref for every entry
+ * `buildItem` decided produces no document (policy `ignore`, unreadable
+ * between listing and read, or NUL-sniffed "text"). Shared by both
+ * `backfillRoot` and `incrementalRescanRoot`: a file that passed the cheap
+ * enumeration-time gate but failed this final read/sniff must archive any
+ * OLDER row at that path rather than leave a stale searchable document
+ * behind.
+ */
+async function buildBatch(
+  entries: readonly ScannedEntry[],
+): Promise<{ items: LocalFolderItem[]; deletions: ExternalRef[] }> {
+  const built = await Promise.all(
+    entries.map((e) => buildItem(e.absPath, e.stats)),
+  );
+  const items: LocalFolderItem[] = [];
+  const deletions: ExternalRef[] = [];
+  built.forEach((item, index) => {
+    if (item) items.push(item);
+    else
+      deletions.push({
+        externalId: toAbsPosix(entries[index].absPath),
+        type: 'file',
+      });
+  });
+  return { items, deletions };
+}
+
+/**
  * `cursor` has no entry for `root` → full backfill over `entries` (listed by
  * `pull()` at cycle start — see the pre-listing note there), yielding ~50-file
  * batches. Every INTERMEDIATE batch leaves `root`'s cursor entry absent
@@ -226,12 +255,10 @@ async function* backfillRoot(
   let cursor = working;
   for (let i = 0; i < batches.length; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const items = await Promise.all(
-      batches[i].map((e: ScannedEntry) => buildItem(e.absPath, e.stats)),
-    );
+    const { items, deletions } = await buildBatch(batches[i]);
     const isLast = i === batches.length - 1;
     if (isLast) cursor = advanceCursor(cursor, root, scanStartIso);
-    yield { phase: 'backfill', items, cursor, estimateTotal };
+    yield { phase: 'backfill', items, deletions, cursor, estimateTotal };
   }
   return cursor;
 }
@@ -271,10 +298,8 @@ async function* incrementalRescanRoot(
     entryReadCost,
   )) {
     // eslint-disable-next-line no-await-in-loop
-    const items = await Promise.all(
-      b.map((e) => buildItem(e.absPath, e.stats)),
-    );
-    yield { phase: 'live', items, cursor: next };
+    const { items, deletions } = await buildBatch(b);
+    yield { phase: 'live', items, deletions, cursor: next };
   }
   return next;
 }
@@ -364,7 +389,16 @@ export async function* pull(
  *  account's own configured roots — a doc whose stored `metadata.absPath`
  *  has been tampered with (or points at a since-removed/relocated root) must
  *  never leak bytes from elsewhere on disk. Throws the no-roots permanent
- *  error (via `getRootPaths`) for a malformed config, like pull()/reconcile(). */
+ *  error (via `getRootPaths`) for a malformed config, like pull()/reconcile().
+ *
+ *  Rechecks `decideLocalFile` against the file's CURRENT on-disk size before
+ *  reading — the doc's stored metadata can be stale (grown since it was
+ *  indexed), and this is the first bound this function has ever had. The
+ *  check applies the PIPELINE's own cap, not one flat ceiling: this is
+ *  deliberately how a 20-50 MiB local PDF (committed metadata-only, `vision`
+ *  pipeline, 50 MiB cap) still gets its bytes fetched here for OCR, while a
+ *  300 MiB audio file (`audio` pipeline, 200 MiB cap) does not. Any stat/read
+ *  race still returns `null`, as before. */
 export async function fetchBytes(
   session: Session,
   doc: Document,
@@ -375,6 +409,8 @@ export async function fetchBytes(
   const absPath = path.resolve(absPathRaw);
   if (!rootPaths.some((root) => isUnder(absPath, root))) return null;
   try {
+    const stat = await fs.promises.stat(absPath);
+    if (decideLocalFile(absPath, stat.size).kind === 'ignore') return null;
     return new Uint8Array(await fs.promises.readFile(absPath));
   } catch {
     return null;

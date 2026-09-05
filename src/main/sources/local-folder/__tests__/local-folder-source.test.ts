@@ -16,6 +16,7 @@ import type {
   DocumentInput,
   Session,
 } from '@shared/contracts';
+import { MAX_LOCAL_AUDIO_BYTES } from '@shared/file-indexability';
 
 import { buildItem, chunk } from '../scanner';
 import {
@@ -640,8 +641,44 @@ describe('pull — per-root incremental rescan', () => {
   });
 });
 
-describe('buildItem — size caps become metadata-only docs', () => {
-  it('drops markdown for an oversized plain-text file', async () => {
+describe('pull — strict indexability policy', () => {
+  it('emits only files with an indexing pipeline; archives and unknown extensions are absent, with zero reads for either', async () => {
+    const dir = mkTmpDir();
+    writeFile(dir, 'notes.txt', '0123456789');
+    writeFile(dir, 'report.pdf', '%PDF-1.4 fixture');
+    writeFile(dir, 'meeting.mp3', '0123456789');
+    writeFile(dir, 'movie.mp4', '0123456789');
+    writeFile(dir, 'backup.zip', '0123456789');
+    // 26 MiB sparse file — an archive is ignored at every size, so this must
+    // never be read regardless of the byte-budget chunker's caps.
+    const hugeZip = path.join(dir, 'huge.zip');
+    const fd = fs.openSync(hugeZip, 'w');
+    fs.ftruncateSync(fd, 26 * 1024 * 1024);
+    fs.closeSync(fd);
+    writeFile(dir, 'unknown.scache', '0123456789');
+
+    const readFileSpy = jest.spyOn(fs.promises, 'readFile');
+    const controller = new AbortController();
+    const session = makeSession([dir], controller.signal, false);
+    const batches = await collect(pull(session, null));
+    const items = batches.flatMap((b) => b.items);
+    const names = items.map((i) => path.basename(i.absPath)).sort();
+
+    expect(names).toEqual(
+      ['meeting.mp3', 'movie.mp4', 'notes.txt', 'report.pdf'].sort(),
+    );
+
+    const readPaths = readFileSpy.mock.calls.map((c) => String(c[0]));
+    expect(readPaths.some((p) => p.endsWith('backup.zip'))).toBe(false);
+    expect(readPaths.some((p) => p.endsWith('huge.zip'))).toBe(false);
+    expect(readPaths.some((p) => p.endsWith('unknown.scache'))).toBe(false);
+
+    readFileSpy.mockRestore();
+  });
+});
+
+describe('buildItem — over-cap files are excluded entirely (no metadata-only doc)', () => {
+  it('returns null for an oversized plain-text file rather than a doc with dropped markdown', async () => {
     const dir = mkTmpDir();
     const abs = writeFile(dir, 'big.txt', 'small content on disk');
     const oversizedStats = {
@@ -650,12 +687,10 @@ describe('buildItem — size caps become metadata-only docs', () => {
       birthtime: new Date(),
     } as fs.Stats;
     const item = await buildItem(abs, oversizedStats);
-    expect(item.markdownText).toBeNull();
-    expect(item.binary).toBeNull();
-    expect(item.size).toBe(999_999_999);
+    expect(item).toBeNull();
   });
 
-  it('drops binary bytes for an oversized parseable-binary file', async () => {
+  it('returns null for an oversized parseable-binary file rather than a doc with dropped bytes', async () => {
     const dir = mkTmpDir();
     const abs = writeFile(dir, 'big.csv', 'a,b');
     const oversizedStats = {
@@ -664,8 +699,7 @@ describe('buildItem — size caps become metadata-only docs', () => {
       birthtime: new Date(),
     } as fs.Stats;
     const item = await buildItem(abs, oversizedStats);
-    expect(item.markdownText).toBeNull();
-    expect(item.binary).toBeNull();
+    expect(item).toBeNull();
   });
 });
 
@@ -696,6 +730,55 @@ describe('fetchBytes', () => {
     } as unknown as Parameters<typeof fetchBytes>[1];
     expect(await fetchBytes(session, doc)).toBeNull();
   });
+
+  it('rechecks the pipeline cap at fetch time — an mp3 grown past MAX_LOCAL_AUDIO_BYTES is refused, never read', async () => {
+    const dir = mkTmpDir();
+    const abs = writeFile(dir, 'meeting.mp3', 'small audio-shaped content');
+    const controller = new AbortController();
+    const session = makeSession([dir], controller.signal, false);
+    const doc = {
+      metadata: { absPath: abs },
+    } as unknown as Parameters<typeof fetchBytes>[1];
+
+    // Under cap: bytes come back as usual.
+    expect(await fetchBytes(session, doc)).not.toBeNull();
+
+    // Grow past MAX_LOCAL_AUDIO_BYTES — sparse, no real disk write.
+    const fd = fs.openSync(abs, 'r+');
+    fs.ftruncateSync(fd, MAX_LOCAL_AUDIO_BYTES + 1);
+    fs.closeSync(fd);
+
+    const readFileSpy = jest.spyOn(fs.promises, 'readFile');
+    expect(await fetchBytes(session, doc)).toBeNull();
+    expect(readFileSpy).not.toHaveBeenCalled();
+    readFileSpy.mockRestore();
+  });
+
+  it('does NOT cap a 25 MiB PDF at the local read cap — the vision pipeline still reads it for OCR', async () => {
+    // This is the behavior fetchBytes must preserve: a 20-50 MiB local PDF
+    // is committed metadata-only (converter cap exceeded, vision pipeline
+    // applies instead), and the vision worker pulls its bytes back through
+    // exactly this function. A flat cap here would silently kill that path.
+    const dir = mkTmpDir();
+    const abs = path.join(dir, 'mid.pdf');
+    const fd = fs.openSync(abs, 'w');
+    fs.ftruncateSync(fd, 25 * 1024 * 1024);
+    fs.closeSync(fd);
+    const controller = new AbortController();
+    const session = makeSession([dir], controller.signal, false);
+    const doc = {
+      metadata: { absPath: abs },
+    } as unknown as Parameters<typeof fetchBytes>[1];
+
+    // Avoid materializing 25 MiB of real bytes in the test process.
+    const readFileSpy = jest
+      .spyOn(fs.promises, 'readFile')
+      .mockResolvedValue(Buffer.from('fake-pdf-bytes'));
+    const bytes = await fetchBytes(session, doc);
+    expect(bytes).not.toBeNull();
+    expect(readFileSpy).toHaveBeenCalled();
+    readFileSpy.mockRestore();
+  });
 });
 
 describe('reconcile', () => {
@@ -719,6 +802,22 @@ describe('reconcile', () => {
     ].sort();
     expect(refs.map((r) => r.externalId).sort()).toEqual(expected);
     expect(refs.every((r) => r.type === 'file')).toBe(true);
+  });
+
+  it('excludes archives and unknown extensions from the ref set — no second gate, `listEntries` alone decides this', async () => {
+    const dir = mkTmpDir();
+    writeFile(dir, 'notes.txt', 'kept');
+    writeFile(dir, 'backup.zip', 'excluded');
+    writeFile(dir, 'unknown.scache', 'excluded');
+
+    const controller = new AbortController();
+    const session = makeSession([dir], controller.signal, false);
+    const chunks = await collect(reconcile(session));
+    const refs = chunks.flat();
+
+    expect(refs.map((r) => r.externalId)).toEqual([
+      toExternalId(path.join(dir, 'notes.txt')),
+    ]);
   });
 
   it('throws instead of silently enumerating as empty when a configured root has been deleted', async () => {
@@ -830,6 +929,72 @@ describe('watchLoop', () => {
     const r4 = await p4;
     expect(r4.done).toBe(true);
     expect(fakeWatcher.closed).toBe(true);
+
+    jest.dontMock('chokidar');
+    jest.resetModules();
+  });
+});
+
+describe('watchLoop — a change event that fails the post-stat policy check', () => {
+  it('indexes notes.txt, then a change event on a file grown past the text cap archives it instead of leaving a stale row', async () => {
+    // NOTE ON THE BRIEF: it describes this scenario as "rename/change [the
+    // file] to an ignored archive candidate". That literal case is
+    // unreachable through watchLoop: onEvent's isIngestible(path) pre-filter
+    // (watch.ts) denies archive EXTENSIONS unconditionally, for every event
+    // kind including 'add'/'change', so a renamed-to-.zip path never even
+    // reaches buildItem — emitting it would just hang this test. The
+    // reachable equivalent — and the actual new code path this task adds —
+    // is a file whose EXTENSION still passes that coarse pre-filter but
+    // whose SIZE (only knowable after stat, which is exactly what changed)
+    // now fails decideLocalFile's cap check. An oversized text file exercises
+    // the identical buildItem-returns-null branch.
+    class FakeWatcher extends EventEmitter {
+      closed = false;
+
+      close = jest.fn(async () => {
+        this.closed = true;
+      });
+    }
+    const fakeWatcher = new FakeWatcher();
+
+    jest.resetModules();
+    jest.doMock('chokidar', () => ({ watch: jest.fn(() => fakeWatcher) }));
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { watchLoop } = require('../watch') as typeof import('../watch');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { MAX_LOCAL_TEXT_BYTES } =
+      require('@shared/file-indexability') as typeof import('@shared/file-indexability');
+
+    const dir = mkTmpDir();
+    const controller = new AbortController();
+    const session = makeSession([dir], controller.signal, true);
+    const it = watchLoop([dir], session, null);
+
+    const p = writeFile(dir, 'notes.txt', 'hello');
+    const expectedExternalId = toExternalId(p);
+
+    const p1 = it.next();
+    fakeWatcher.emit('add', p);
+    const r1 = await p1;
+    expect(r1.value?.items).toHaveLength(1);
+    expect(r1.value?.deletions).toBeUndefined();
+
+    // Grow the SAME path past the text cap — sparse, no real disk write —
+    // then re-fire the SAME path as a 'change' event.
+    const fd = fs.openSync(p, 'r+');
+    fs.ftruncateSync(fd, MAX_LOCAL_TEXT_BYTES + 1);
+    fs.closeSync(fd);
+    const p2 = it.next();
+    fakeWatcher.emit('change', p);
+    const r2 = await p2;
+    expect(r2.value?.items).toEqual([]);
+    expect(r2.value?.deletions).toEqual([
+      { externalId: expectedExternalId, type: 'file' },
+    ]);
+
+    const p3 = it.next();
+    controller.abort();
+    await p3;
 
     jest.dontMock('chokidar');
     jest.resetModules();
