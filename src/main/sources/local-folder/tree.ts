@@ -16,7 +16,7 @@ export interface LocalFolderEntry {
   hasChildren: boolean;
 }
 
-async function hasSubdir(absPath: string): Promise<boolean> {
+export async function hasSubdir(absPath: string): Promise<boolean> {
   try {
     const entries = await fs.readdir(absPath, { withFileTypes: true });
     return entries.some((e) => e.isDirectory() && !e.name.startsWith('.'));

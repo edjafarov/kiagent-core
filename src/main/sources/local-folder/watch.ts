@@ -173,8 +173,19 @@ export async function* watchLoop(
         // above could not see — now says `ignore` (or the read/sniff failed).
         // A file that passed the coarse pre-filter but fails here must
         // archive any older row at this path rather than leave it stale.
+        //
+        // `root` is `undefined` when the path falls under no configured root
+        // (an event arriving after a root left the config, a resolution
+        // landing outside every root). That item is STILL yielded — unchanged
+        // behaviour — now simply without `scopeRootId`, which the store
+        // records as `scope_root_id = NULL` (DECISIONS R5). Never a throw,
+        // and no warn here: the engine emits the single warn at store time.
         yield item
-          ? { phase: 'live', items: [item], cursor }
+          ? {
+              phase: 'live',
+              items: [root ? { ...item, scopeRootId: root } : item],
+              cursor,
+            }
           : {
               phase: 'live',
               items: [],
