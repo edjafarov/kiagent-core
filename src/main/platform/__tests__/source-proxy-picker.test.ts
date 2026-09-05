@@ -186,6 +186,7 @@ describe('pickFolders over the extension RPC boundary', () => {
       modes: FolderPickerSpec['modes'];
       multiSelect: boolean | undefined;
       selected: FolderNode[] | undefined;
+      expand: string[] | undefined;
       purpose: string | undefined;
       roots: FolderNode[];
       kids: FolderNode[];
@@ -200,6 +201,7 @@ describe('pickFolders over the extension RPC boundary', () => {
           modes: spec.modes,
           multiSelect: spec.multiSelect,
           selected: spec.selected,
+          expand: spec.expand,
           purpose: spec.purpose,
           roots,
           kids,
@@ -226,6 +228,7 @@ describe('pickFolders over the extension RPC boundary', () => {
       multiSelect: true,
       hasCount: true,
       selected: [],
+      expand: [],
       purpose: 'connect',
     });
 
@@ -234,6 +237,7 @@ describe('pickFolders over the extension RPC boundary', () => {
       modes: [{ key: 'drive', label: 'My Drive' }],
       multiSelect: true,
       selected: [],
+      expand: [],
       purpose: 'connect',
       roots: [{ id: 'root-drive', name: 'Root', hasChildren: true }],
       kids: [{ id: 'root-drive.child', name: 'Child', hasChildren: false }],
@@ -336,6 +340,7 @@ describe('pickFolders over the extension RPC boundary', () => {
       multiSelect: true,
       hasCount: false,
       selected: SELECTED,
+      expand: [],
       purpose: 'manage',
     });
 

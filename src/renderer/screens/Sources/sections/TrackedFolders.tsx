@@ -397,6 +397,7 @@ export function TrackedFolders(props: {
           multiSelect={picker.multiSelect}
           dataSource={pickerAdapter.dataSource}
           selected={pickerAdapter.selected}
+          expandIds={pickerAdapter.expandIds}
           purpose={picker.purpose}
           onConfirm={(ids) => {
             pickerConfirmedForRef.current = picker.requestId;

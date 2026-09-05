@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import {
   LOCAL_FOLDER_PICKER_MODES,
+  expandIds,
   folderPickerSpec,
   selectionNodes,
 } from '../picker';
@@ -90,5 +91,59 @@ describe('selectionNodes', () => {
       { id: dir, name: path.basename(dir), hasChildren: true },
       { id: gone, name: 'gone', hasChildren: false },
     ]);
+  });
+});
+
+/**
+ * D6 — the picker opens revealed down to the tracked folders. Ancestry is
+ * computed HERE, in the source that owns these ids, because the renderer
+ * treats every id as opaque.
+ */
+describe('expandIds', () => {
+  // Built with `path`, not string literals: `expandIds` resolves its input,
+  // so a hard-coded POSIX path asserts a win32 drive letter into existence.
+  const alpha = path.resolve(
+    path.join('home', 'ed', 'work', 'fixture', 'Alpha'),
+  );
+  const fsRoot = path.parse(alpha).root;
+
+  it('returns the ancestor chain of a root, nearest first, ending at the fs root', () => {
+    const ids = expandIds([{ id: alpha, name: 'Alpha', hasChildren: true }]);
+    expect(ids[0]).toBe(path.dirname(alpha));
+    expect(ids[1]).toBe(path.dirname(path.dirname(alpha)));
+    expect(ids[ids.length - 1]).toBe(fsRoot);
+    // Terminates at the dirname fixed point rather than the 64-iteration cap.
+    expect(ids).toHaveLength(alpha.slice(fsRoot.length).split(path.sep).length);
+  });
+
+  it('never expands a selected root itself', () => {
+    expect(
+      expandIds([{ id: alpha, name: 'Alpha', hasChildren: true }]),
+    ).not.toContain(alpha);
+  });
+
+  it('dedupes the shared prefix of sibling roots', () => {
+    const parent = path.dirname(alpha);
+    const ids = expandIds([
+      { id: path.join(parent, 'a'), name: 'a', hasChildren: false },
+      { id: path.join(parent, 'b'), name: 'b', hasChildren: false },
+    ]);
+    expect(ids[0]).toBe(parent);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('is empty for an empty selection', () => {
+    expect(expandIds([])).toEqual([]);
+  });
+
+  it('feeds folderPickerSpec.expand', () => {
+    const spec = folderPickerSpec({
+      selected: [{ id: alpha, name: 'Alpha', hasChildren: true }],
+      purpose: 'manage',
+    });
+    expect(spec.expand).toEqual(
+      expandIds([{ id: alpha, name: 'Alpha', hasChildren: true }]),
+    );
+    expect(spec.expand).toContain(path.dirname(alpha));
   });
 });

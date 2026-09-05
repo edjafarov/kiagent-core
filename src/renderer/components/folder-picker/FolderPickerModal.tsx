@@ -185,6 +185,16 @@ export interface FolderPickerModalProps {
   /** Serve the folder tree from these callbacks instead of the local
    *  filesystem IPC. Omitted = exactly the historical behavior. */
   dataSource?: FolderPickerDataSource;
+  /** Folder IDS to open already-expanded, so the rows in `selected` are
+   *  visible the moment the picker opens instead of collapsed behind a
+   *  quick-link root. Matched against listing ids by EQUALITY — never
+   *  decoded, never compared with `isUnder`. The ids are the SOURCE's
+   *  (`FolderPickerSpec.expand`), because ancestry is the source's to know:
+   *  a dataSource picker's ids are opaque here, so a source that cannot walk
+   *  its own parent chain omits the list and the tree opens collapsed, which
+   *  is the historical behavior. Applies to every mode tab, not just the
+   *  first. Default `[]`. */
+  expandIds?: string[];
   /** Fires with the selected folders' IDS — for a dataSource picker the
    *  source's opaque folder ids, for the local-filesystem tabs the absolute
    *  paths (there, id IS path). Never the synthetic tree paths. */
@@ -201,6 +211,7 @@ export function FolderPickerModal({
   saving = false,
   keepOpenOnConfirm = false,
   dataSource,
+  expandIds = [],
   onConfirm,
   onClose,
 }: FolderPickerModalProps): React.ReactElement {
@@ -212,6 +223,12 @@ export function FolderPickerModal({
   // would re-fire the initial-roots effect on every render).
   const dataSourceRef = useRef(dataSource);
   dataSourceRef.current = dataSource;
+  // Read through a ref for the same reason as `dataSource`: the default `[]`
+  // (and any caller that builds the array inline) has a fresh identity every
+  // render, and `loadRoots` must not be re-created — the initial-roots effect
+  // keys off it.
+  const expandRef = useRef(expandIds);
+  expandRef.current = expandIds;
   // Single-select mode only. `id` is what onConfirm emits; `name`/`path`
   // drive the footer (a dataSource picker's paths are synthetic opaque-id
   // strings, so it shows the name instead).
@@ -314,7 +331,38 @@ export function FolderPickerModal({
             ).entries.map((e) => ({ ...e, id: e.path }));
         // A newer load started while we were awaiting — let it win.
         if (gen !== loadGen.current) return;
-        setTree(entries.map((e) => toNode(e, 0)));
+        const roots = entries.map((e) => toNode(e, 0));
+        // Open down to the preselected roots before the tree is ever
+        // painted, so the picker never flashes collapsed and then jumps.
+        // `expand` holds the ANCESTOR ids the source computed; a node that
+        // is not one of them returns untouched WITHOUT a listing call, so
+        // this costs one `listChildren` per ancestor, never a sweep. The
+        // selected rows themselves are not in the list and stay collapsed.
+        const expand = new Set(expandRef.current);
+        const reveal = async (node: FolderNode): Promise<FolderNode> => {
+          if (!expand.has(node.id)) return node;
+          let kids: FolderNode[];
+          try {
+            kids = await loadChildren(node);
+          } catch {
+            // `loadChildren` already recorded the inline-retry row for this
+            // node. One unreadable ancestor must not fail the whole open:
+            // leave this branch collapsed and reveal the rest.
+            return node;
+          }
+          return {
+            ...node,
+            loaded: true,
+            expanded: true,
+            children: await Promise.all(kids.map(reveal)),
+          };
+        };
+        const revealed =
+          expand.size > 0 ? await Promise.all(roots.map(reveal)) : roots;
+        // The reveal walk awaited, so re-check: a mode switch may have
+        // started while it ran, and its tree must not be clobbered.
+        if (gen !== loadGen.current) return;
+        setTree(revealed);
       } catch (err) {
         // A newer load started while we were failing — its result, or its own
         // error, owns the tree area.
@@ -328,7 +376,7 @@ export function FolderPickerModal({
         unmarkLoading(modeKey);
       }
     },
-    [markLoading, unmarkLoading, setTree],
+    [loadChildren, markLoading, unmarkLoading, setTree],
   );
 
   // The first tab to populate — `mode`'s initial value; never re-fires on

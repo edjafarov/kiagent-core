@@ -78,6 +78,12 @@ interface WirePickerSpec {
    *  site, and both ends of this wire ship in the SAME core build — there is
    *  no old-child compatibility case to keep open. */
   selected: FolderNode[];
+  /** Ancestor ids to open expanded, so `selected` is visible when the picker
+   *  opens. Same wire convention as `selected`: REQUIRED here, defaulted once
+   *  child-side. Opaque — main forwards them and the renderer only ever tests
+   *  them for equality. A source that cannot walk its own parent chain sends
+   *  `[]` and its picker opens collapsed. */
+  expand: string[];
   purpose: 'connect' | 'manage';
 }
 
@@ -227,6 +233,7 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
             // second default would hide a wire regression instead of failing
             // the picker test.
             selected: wire.selected,
+            expand: wire.expand,
             purpose: wire.purpose,
             roots: (modeKey) =>
               treeCall<FolderNode[]>('picker-roots', [modeKey]),

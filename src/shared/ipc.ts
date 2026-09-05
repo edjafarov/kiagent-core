@@ -60,6 +60,12 @@ export type ConnectEvent =
       multiSelect: boolean;
       modes: Array<{ key: string; label: string }>;
       selected: FolderNode[];
+      /** Ancestor ids to open expanded so `selected` is visible on open —
+       *  see `FolderPickerSpec.expand`. OPTIONAL on the wire (unlike
+       *  `selected`, whose B-2 bridging is required): empty and absent both
+       *  mean "open collapsed", so there is nothing for a required field to
+       *  disambiguate, and sources that cannot compute ancestry omit it. */
+      expand?: string[];
       purpose: 'connect' | 'manage';
     }
   | { flowId: string; kind: 'done'; account: Account }

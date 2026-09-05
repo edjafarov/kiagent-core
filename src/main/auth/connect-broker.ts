@@ -118,6 +118,7 @@ export function createConnectBroker(
           multiSelect: !!spec.multiSelect,
           modes: spec.modes,
           selected: spec.selected ?? [],
+          expand: spec.expand,
           purpose: spec.purpose ?? 'manage',
         });
         return nodes;
@@ -340,6 +341,7 @@ export function createConnectBroker(
             // indistinguishable from an explicit empty one — which is why the
             // modal's empty-selection rule keys off `purpose`, never length.
             selected: spec.selected ?? [],
+            expand: spec.expand,
             purpose: spec.purpose ?? 'connect',
           });
           return nodes;

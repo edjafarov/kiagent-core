@@ -398,6 +398,19 @@ export interface FolderPickerSpec {
    *  picker opens. Distinct from the renderer's `existingPaths`, which makes
    *  rows inert. Empty/omitted for a new connection. */
   selected?: FolderNode[];
+  /** Ids of folders the picker should open ALREADY EXPANDED, so the rows in
+   *  `selected` are visible without the user drilling down. Computed by the
+   *  SOURCE, which alone knows its own ancestry: ids are opaque to the
+   *  renderer (see `connect-picker-adapter.ts`), so the picker can never
+   *  derive this itself — it only ever tests ids for EQUALITY against this
+   *  list. A source whose ids carry no parent chain (Drive, OneDrive) omits
+   *  it and its picker opens collapsed, exactly as before.
+   *
+   *  Contains the ANCESTORS of the selected roots, never a selected root
+   *  itself: expanding the selected row would push its own children between
+   *  it and its chip for no gain. An id not present in any listing is simply
+   *  never matched. Empty and omitted mean the same thing. */
+  expand?: string[];
   /** Drives copy and empty-selection rules only; never behaviour. */
   purpose?: 'connect' | 'manage';
   /** Top-level nodes for a mode tab. */

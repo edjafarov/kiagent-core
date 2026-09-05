@@ -272,6 +272,7 @@ describe('manageFolders / reauthenticate over the extension RPC boundary', () =>
       multiSelect: true,
       hasCount: false,
       selected: SELECTED,
+      expand: [],
       purpose: 'manage',
     });
     // …and what main handed the FolderSelectionChannel.

@@ -40,6 +40,12 @@ export interface ConnectPickerAdapter {
    *  carries `FolderNode[]`, and the conversion happens exactly here — this
    *  is the only FolderNode → Entry conversion point there is. */
   selected: Array<Entry & { id: string }>;
+  /** The event's `expand` list, passed through UNTOUCHED to the modal's
+   *  `expandIds`. Deliberately not mapped into synthetic paths: the modal
+   *  matches these against listing `Entry.id`s by equality, and `seg()`ing
+   *  them would break exactly that. `[]` when the source omitted it, which
+   *  is every source whose ids carry no parent chain. */
+  expandIds: string[];
   /** Resolve confirmed `FolderNode.id`s back to their FolderNodes and
    *  resolve the flow's pending pickFolders. */
   confirm(ids: string[]): Promise<void>;
@@ -58,6 +64,7 @@ export interface PickerRequest {
   multiSelect?: boolean;
   purpose?: 'connect' | 'manage';
   selected?: FolderNode[];
+  expand?: string[];
 }
 
 /** Injective path-segment encoding: '%' → '%25' first, then '\' → '%5C' and
@@ -159,6 +166,8 @@ export function createConnectPickerAdapter(
     },
 
     selected,
+
+    expandIds: picker.expand ?? [],
 
     async confirm(ids) {
       const nodes: FolderNode[] = [];

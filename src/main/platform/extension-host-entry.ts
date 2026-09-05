@@ -261,6 +261,7 @@ export function runExtensionHost(
       multiSelect: !!spec.multiSelect,
       hasCount: typeof spec.count === 'function',
       selected: spec.selected ?? [],
+      expand: spec.expand ?? [],
       purpose: spec.purpose ?? ('connect' as const),
     };
   }

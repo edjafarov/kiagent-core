@@ -650,3 +650,153 @@ describe('FolderPickerModal without a dataSource (historical local-FS behavior)'
     });
   });
 });
+
+/**
+ * D6 — a manage-folders picker must OPEN revealed down to the folders it is
+ * already tracking. The source computes the ancestor ids (it alone can walk
+ * its own parent chain) and the modal matches them by equality; nothing here
+ * decodes an id.
+ */
+describe('FolderPickerModal expandIds', () => {
+  /** Ids are the local source's absolute paths; the `path`s mirror
+   *  `connect-picker-adapter`'s synthetic ones ('/' + seg(id) at the roots,
+   *  parentPath + '/' + seg(id) below) so the fixture exercises the real
+   *  id/path split rather than a tree where the two coincide. */
+  function revealDataSource(): FolderPickerDataSource {
+    const seg = (id: string): string => id.replace(/\//g, '%2F');
+    const kids: Record<string, string[]> = {
+      '/home': ['/home/a', '/home/z'],
+      '/home/a': ['/home/a/b'],
+    };
+    const name = (id: string): string => id.slice(id.lastIndexOf('/') + 1);
+    return {
+      modes: [{ key: 'quick', label: 'Quick links' }],
+      listRoots: jest.fn(async () => [
+        {
+          id: '/home',
+          path: `/${seg('/home')}`,
+          name: 'home',
+          hasChildren: true,
+        },
+      ]),
+      listChildren: jest.fn(async (p: string) => {
+        const id = decodeURIComponent(p.slice(p.lastIndexOf('/') + 1));
+        return (kids[id] ?? []).map((k) => ({
+          id: k,
+          path: `${p}/${seg(k)}`,
+          name: name(k),
+          hasChildren: (kids[k] ?? []).length > 0,
+        }));
+      }),
+      countFiles: jest.fn(async () => null),
+    };
+  }
+
+  const SELECTED = [
+    {
+      id: '/home/a/b',
+      path: '/%2Fhome%2Fa%2Fb',
+      name: 'b',
+      hasChildren: false,
+    },
+  ];
+
+  it('opens expanded down to a selected folder, listing only its ancestors', async () => {
+    const ds = revealDataSource();
+    render(
+      <FolderPickerModal
+        multiSelect
+        purpose="manage"
+        dataSource={ds}
+        selected={SELECTED}
+        expandIds={['/home', '/home/a']}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+
+    // The ancestors rendered EXPANDED — the chevron offers to collapse them.
+    // Awaited on a TREE row, never on the text 'b': `selected` also renders a
+    // chip named 'b', which is on screen before the walk has run at all.
+    expect(
+      await screen.findByRole('button', { name: 'collapse home' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'collapse a' }),
+    ).toBeInTheDocument();
+    // ...and the selected row itself did NOT expand — it is not an ancestor.
+    expect(
+      screen.getByRole('button', { name: 'expand z' }),
+    ).toBeInTheDocument();
+    // The buried selected row itself is on screen, without a single click.
+    expect(screen.getByRole('button', { name: 'expand b' })).toBeDisabled();
+
+    // Exactly the two ancestors were listed: the sibling `z` and the selected
+    // `b` are never fetched, so the walk is O(depth), not a subtree sweep.
+    expect(ds.listChildren).toHaveBeenCalledTimes(2);
+    expect(ds.listChildren).toHaveBeenCalledWith('/%2Fhome');
+    expect(ds.listChildren).toHaveBeenCalledWith('/%2Fhome/%2Fhome%2Fa');
+  });
+
+  it('opens collapsed when the source supplies no expand list', async () => {
+    const ds = revealDataSource();
+    render(
+      <FolderPickerModal
+        multiSelect
+        purpose="manage"
+        dataSource={ds}
+        selected={SELECTED}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByRole('button', { name: 'expand home' }),
+    ).toBeInTheDocument();
+    // No descendant row exists ('b' itself is excluded from this assertion —
+    // the selection chip carries that name whether or not the tree opened).
+    expect(screen.queryByText('a')).not.toBeInTheDocument();
+    expect(ds.listChildren).not.toHaveBeenCalled();
+  });
+
+  it('reveals on a later mode tab too, not just the one that opens', async () => {
+    const base = revealDataSource();
+    const ds: FolderPickerDataSource = {
+      ...base,
+      modes: [
+        { key: 'drives', label: 'Browse from drive root…' },
+        { key: 'quick', label: 'Quick links' },
+      ],
+      listRoots: jest.fn(async (modeKey: string) =>
+        modeKey === 'quick'
+          ? [
+              {
+                id: '/home',
+                path: '/%2Fhome',
+                name: 'home',
+                hasChildren: true,
+              },
+            ]
+          : [{ id: '/', path: '/%2F', name: '/', hasChildren: false }],
+      ),
+    };
+    render(
+      <FolderPickerModal
+        multiSelect
+        purpose="manage"
+        dataSource={ds}
+        selected={SELECTED}
+        expandIds={['/home', '/home/a']}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+    await screen.findByText('/');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quick links' }));
+    expect(
+      await screen.findByRole('button', { name: 'collapse a' }),
+    ).toBeInTheDocument();
+  });
+});

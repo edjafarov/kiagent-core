@@ -52,6 +52,38 @@ export async function selectionNodes(
   );
 }
 
+/**
+ * The ANCESTOR directories of `selected`, for `FolderPickerSpec.expand` — the
+ * picker opens with each of these rows expanded, so a selected folder buried
+ * three levels down is visible immediately instead of collapsed behind its
+ * quick-link root.
+ *
+ * Walks `dirname` to its fixed point (`dirname('/') === '/'`, and
+ * `dirname('C:\\') === 'C:\\'`), which is what terminates the loop; the
+ * iteration cap is a backstop against a pathological id, never the normal
+ * exit. The selected roots themselves are EXCLUDED — expanding a chosen
+ * folder would push its own children between it and its chip for no gain.
+ *
+ * The renderer only ever tests these for EQUALITY against listing ids, so
+ * this deliberately does no separator or case normalization beyond
+ * `path.resolve`: both sides are produced by node's `path` on the same
+ * machine, and inventing a second normalization here is how the C-46/C-48
+ * separator bugs happened.
+ */
+export function expandIds(selected: readonly FolderNode[]): string[] {
+  const out = new Set<string>();
+  for (const node of selected) {
+    let cur = path.resolve(node.id);
+    for (let i = 0; i < 64; i += 1) {
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      out.add(parent);
+      cur = parent;
+    }
+  }
+  return [...out];
+}
+
 export function folderPickerSpec(opts: {
   selected: FolderNode[];
   purpose: 'connect' | 'manage';
@@ -60,6 +92,7 @@ export function folderPickerSpec(opts: {
     modes: LOCAL_FOLDER_PICKER_MODES,
     multiSelect: true,
     selected: opts.selected,
+    expand: expandIds(opts.selected),
     purpose: opts.purpose,
     roots: async (modeKey) =>
       (modeKey === 'drives' ? await listDrives() : await quickLinks()).map(
