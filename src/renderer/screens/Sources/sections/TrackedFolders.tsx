@@ -10,6 +10,7 @@ import { formatCount } from '@renderer/components/folder-picker/format-count';
 import { FolderPickerModal } from '@renderer/components/folder-picker/FolderPickerModal';
 import {
   createConnectPickerAdapter,
+  pickerRequestFromEvent,
   type PickerRequest,
 } from '../connect-picker-adapter';
 import { openFlow } from '../flow-client';
@@ -203,16 +204,7 @@ export function TrackedFolders(props: {
           case 'status':
             return { ...prev, status: evt.msg };
           case 'folder-picker':
-            return {
-              ...prev,
-              picker: {
-                requestId: evt.requestId,
-                multiSelect: evt.multiSelect,
-                modes: evt.modes,
-                selected: evt.selected,
-                purpose: evt.purpose,
-              },
-            };
+            return { ...prev, picker: pickerRequestFromEvent(evt) };
           default:
             return prev;
         }

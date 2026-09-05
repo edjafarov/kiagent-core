@@ -8,6 +8,7 @@ import { FolderPickerModal } from '@renderer/components/folder-picker/FolderPick
 import { connectorMeta, sourceLabel } from './connector-meta';
 import {
   createConnectPickerAdapter,
+  pickerRequestFromEvent,
   type PickerRequest,
 } from './connect-picker-adapter';
 import { schemaFields, schemaGuidance } from './prompt-guidance';
@@ -309,13 +310,7 @@ export function AddSourcePanel(props: {
               ...prev,
               prompt: undefined,
               qr: undefined,
-              picker: {
-                requestId: evt.requestId,
-                multiSelect: evt.multiSelect,
-                modes: evt.modes,
-                selected: evt.selected,
-                purpose: evt.purpose,
-              },
+              picker: pickerRequestFromEvent(evt),
             };
           case 'done':
             unsubscribeRef.current?.();

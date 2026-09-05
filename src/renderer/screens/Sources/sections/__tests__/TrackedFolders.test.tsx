@@ -12,6 +12,7 @@ jest.mock('@renderer/components/folder-picker/FolderPickerModal', () => ({
   FolderPickerModal: (p: {
     purpose?: string;
     selected?: Array<{ id: string; name: string }>;
+    expandIds?: string[];
     onConfirm: (ids: string[]) => void;
     onClose: () => void;
   }) => (
@@ -19,6 +20,7 @@ jest.mock('@renderer/components/folder-picker/FolderPickerModal', () => ({
       <span data-testid="picker-selected">
         {(p.selected ?? []).map((n) => n.id).join(',')}
       </span>
+      <span data-testid="picker-expand">{(p.expandIds ?? []).join(',')}</span>
       <button type="button" onClick={() => p.onConfirm(['r1'])}>
         picker-save
       </button>
@@ -34,6 +36,10 @@ const mockConfirm = jest.fn((_ids: string[]) => Promise.resolve());
 const mockCancel = jest.fn(() => Promise.resolve());
 
 jest.mock('../../connect-picker-adapter', () => ({
+  // `pickerRequestFromEvent` is a pure wire-event -> PickerRequest mapping
+  // with no I/O, and it is exactly what these tests exercise: keep the REAL
+  // one, and fake only the adapter factory below.
+  ...jest.requireActual('../../connect-picker-adapter'),
   // Task 5's adapter is the ONE FolderNode[] -> Entry[] conversion point
   // (C-7), so the fake converts too: the component renders
   // `pickerAdapter.selected`, never the wire value. `path` and `hasChildren`
@@ -42,8 +48,12 @@ jest.mock('../../connect-picker-adapter', () => ({
   // are on, and an implicit `any` here is an error, not a warning.
   createConnectPickerAdapter: (picker: {
     selected?: Array<{ id: string; name: string }>;
+    expand?: string[];
   }) => ({
     dataSource: {},
+    // Mirrors the real adapter (C-50): ids pass through untouched, and an
+    // absent `expand` means "reveal nothing", never `undefined`.
+    expandIds: picker.expand ?? [],
     selected: (picker.selected ?? []).map((n) => ({
       id: n.id,
       path: '',
@@ -242,6 +252,7 @@ const PICKER_EVENT = {
     { id: '0B246', name: 'Reports', hasChildren: true },
   ],
   purpose: 'manage' as const,
+  expand: ['root', '0B111'],
 };
 
 const TWO_ROOTS = [
@@ -277,6 +288,20 @@ describe('TrackedFolders manage flow', () => {
     expect(screen.getByTestId('picker-selected')).toHaveTextContent(
       'root,0B246',
     );
+  });
+
+  // C-50 regression: this component rebuilds `picker` field-by-field out of
+  // the wire event, so a new picker-spec field is dropped unless it is named
+  // here too. `expand` was added to the contract, the IPC wire, the
+  // out-of-process proxy and the adapter -- and still never reached the
+  // modal, because this object literal is a FOURTH hand-written allowlist.
+  it('forwards the wire expand ids to the modal so the tree opens revealed', async () => {
+    render(<TrackedFolders account={accountWith(TWO_ROOTS)} />);
+    fireEvent.click(screen.getByRole('button', { name: /Manage folders/ }));
+    await act(async () => {});
+    act(() => pushHandler!(PICKER_EVENT));
+
+    expect(screen.getByTestId('picker-expand')).toHaveTextContent('root,0B111');
   });
 
   it('Save in the modal confirms the ids through the picker adapter', async () => {

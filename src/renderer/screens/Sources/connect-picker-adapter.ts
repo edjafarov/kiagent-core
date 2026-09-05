@@ -1,5 +1,5 @@
 import type { FolderNode } from '@shared/contracts';
-import type { RendererApi } from '@shared/ipc';
+import type { ConnectEvent, RendererApi } from '@shared/ipc';
 import type {
   Entry,
   FolderPickerDataSource,
@@ -65,6 +65,31 @@ export interface PickerRequest {
   purpose?: 'connect' | 'manage';
   selected?: FolderNode[];
   expand?: string[];
+}
+
+/**
+ * The `folder-picker` ConnectEvent, minus its envelope, as a PickerRequest.
+ *
+ * Written as a REST SPREAD on purpose. Every renderer that opens a picker
+ * used to rebuild this object field-by-field, which made each call site a
+ * hand-written allowlist that silently dropped any field it had not been
+ * taught about. `expand` was threaded through the contract, the IPC wire, the
+ * out-of-process proxy and this adapter and STILL never reached the modal,
+ * because two such literals sat at the end of the chain. Spreading means a
+ * new wire field arrives at the modal by default; forgetting to name it is no
+ * longer possible.
+ *
+ * The return type is `Omit<the event>`, not `PickerRequest`: the wire makes
+ * `multiSelect` / `selected` / `purpose` REQUIRED where PickerRequest leaves
+ * them optional, and callers keep that narrowing in their own state. Widening
+ * here would force every one of them to re-assert fields the wire already
+ * guarantees.
+ */
+export function pickerRequestFromEvent<
+  T extends Extract<ConnectEvent, { kind: 'folder-picker' }>,
+>(evt: T): Omit<T, 'flowId' | 'kind'> {
+  const { flowId: _flowId, kind: _kind, ...request } = evt;
+  return request;
 }
 
 /** Injective path-segment encoding: '%' → '%25' first, then '\' → '%5C' and
