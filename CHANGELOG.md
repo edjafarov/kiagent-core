@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.85.0](https://github.com/edjafarov/kiagent-core/compare/v0.84.0...v0.85.0) (2026-09-05)
+
+### Features
+
+* **store:** collect archived documents after a 30-day retention window ([aacf0d7](https://github.com/edjafarov/kiagent-core/commit/aacf0d7234c9abed2aa8eba52816a0cb585e0ef8))
+
 ## [0.84.0](https://github.com/edjafarov/kiagent-core/compare/v0.83.0...v0.84.0) (2026-09-05)
 
 ### Features
