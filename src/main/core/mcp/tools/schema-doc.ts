@@ -120,6 +120,12 @@ TEXT.`,
           type: 'TEXT (ISO-8601)',
           notes: 'When this row was last refreshed.',
         },
+        {
+          name: 'scope_root_id',
+          type: 'TEXT',
+          notes:
+            'For folder-scoped sources (local-folder, google-docs, onedrive): the id of the user-selected folder root whose subtree contains this document — an absolute path for local-folder, a provider folder id for Drive/OneDrive. Matches an entry in accounts.config.folderRoots[].id. NULL for every other source, and for a folder-scoped row whose root could not be resolved.',
+        },
       ],
       relations: [
         'documents.account_id → accounts.id',

@@ -182,7 +182,13 @@ describe('documents_fts rowid pinning', () => {
     expect(() => migrate(raw)).toThrow(/newer than this build/i);
     // Restore a valid version so the reopen below (which re-runs migrate)
     // doesn't re-trip the guard — this test only pins the guard itself.
-    raw.prepare(`UPDATE meta SET value='1' WHERE key='schemaVersion'`).run();
+    // The marker is restored to the CURRENT top of the ladder, not to '1':
+    // this corpus was opened by `openDb` and therefore already carries every
+    // v3 artefact (`documents.scope_root_id` and its partial index), and v3's
+    // body opens with a bare `ALTER TABLE … ADD COLUMN`, so replaying the
+    // ladder over it would raise `duplicate column name`. Nothing here needs
+    // any migration body to run again.
+    raw.prepare(`UPDATE meta SET value='3' WHERE key='schemaVersion'`).run();
     raw.close();
 
     store = openStore(await openDb(dbPath), deps); // afterEach close is a no-op

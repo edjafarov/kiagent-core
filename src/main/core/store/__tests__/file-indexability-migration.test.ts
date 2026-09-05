@@ -292,6 +292,25 @@ function live(db: Database.Database, id: string): boolean {
   return row.archived_at === null;
 }
 
+/**
+ * Rewind to a genuine pre-v2 corpus so the v2 entry's BODY runs again.
+ *
+ * `UPDATE meta SET value='1'` alone is no longer enough: schema v3 adds
+ * `documents.scope_root_id` and a partial index over it, and its body starts
+ * with a bare `ALTER TABLE documents ADD COLUMN scope_root_id TEXT`, which
+ * raises `duplicate column name` the second time the ladder is replayed over
+ * the same connection. The ALTER is deliberately NOT made idempotent: v3's
+ * atomicity test asserts the column is GONE after a failed v3, and a
+ * `PRAGMA table_info` guard would mask a broken rollback. So the rewind undoes
+ * v3's DDL instead. The index must go first — SQLite refuses `DROP COLUMN` on
+ * a column an index references.
+ */
+function rewindToV1(db: Database.Database): void {
+  db.exec(`DROP INDEX IF EXISTS idx_documents_account_scope_root`);
+  db.exec(`ALTER TABLE documents DROP COLUMN scope_root_id`);
+  db.prepare(`UPDATE meta SET value='1' WHERE key='schemaVersion'`).run();
+}
+
 function schemaVersion(db: Database.Database): number {
   const row = db
     .prepare(`SELECT value FROM meta WHERE key='schemaVersion'`)
@@ -325,7 +344,7 @@ describe('schema v2: archive file-indexability rejects', () => {
     seedMatrix(db);
     // Simulate a real pre-v2 corpus: tables and data already exist, but the
     // version marker says v1, as it would before this migration existed.
-    db.prepare(`UPDATE meta SET value='1' WHERE key='schemaVersion'`).run();
+    rewindToV1(db);
   });
 
   afterEach(() => {
@@ -354,7 +373,8 @@ describe('schema v2: archive file-indexability rejects', () => {
     expect(live(db, 'onedrive-big-pdf-size-bytes-tier')).toBe(false); // size-tier-2 discriminator
     expect(live(db, 'gmail-mp3')).toBe(true); // source outside scope
 
-    expect(schemaVersion(db)).toBe(2);
+    // 3, not 2: `rewindToV1` replays the WHOLE ladder, whose top is now v3.
+    expect(schemaVersion(db)).toBe(3);
   });
 
   it('gives every archived row a changes row with documents.seq === changes.seq, and re-migrating is a no-op', () => {
@@ -403,14 +423,18 @@ describe('schema v2: archive file-indexability rejects', () => {
     // this time against a corpus that already has archived rows from the
     // run above: if the guard were dropped, every already-archived id would
     // get a SECOND `changes` row here.
-    db.prepare(`UPDATE meta SET value='1' WHERE key='schemaVersion'`).run();
+    rewindToV1(db);
     const before = changeCount(db);
     migrate(db);
     expect(changeCount(db)).toBe(before);
     for (const id of archivedIds) {
       expect(changesFor(db, id)).toHaveLength(1); // still exactly one, not two
     }
-    expect(schemaVersion(db)).toBe(2);
+    // The global count above is now also a v3 idempotence pin: `rewindToV1`
+    // replays the WHOLE ladder, whose top is v3, and v3's pass-1a config
+    // rewrite used to append a fresh `kind='account'` change row per replay.
+    // 3, not 2, for the same reason (see the sibling assertion above).
+    expect(schemaVersion(db)).toBe(3);
   });
 });
 
@@ -477,7 +501,7 @@ describe('schema v2: unreadable metadata is skipped, not archived', () => {
         sizeBytes: 1_000,
       }),
     );
-    db.prepare(`UPDATE meta SET value='1' WHERE key='schemaVersion'`).run();
+    rewindToV1(db);
   });
 
   afterEach(() => {
@@ -485,7 +509,7 @@ describe('schema v2: unreadable metadata is skipped, not archived', () => {
     warnSpy.mockRestore();
   });
 
-  it('leaves both null- and array-metadata rows live, archives the control row around them, and still reaches schemaVersion 2', () => {
+  it('leaves both null- and array-metadata rows live, archives the control row around them, and still reaches the top of the ladder', () => {
     migrate(db);
 
     expect(live(db, 'local-null-metadata')).toBe(true);
@@ -496,7 +520,8 @@ describe('schema v2: unreadable metadata is skipped, not archived', () => {
     expect(live(db, 'ctl-archived-zip')).toBe(false);
     expect(changesFor(db, 'ctl-archived-zip')).toHaveLength(1);
 
-    expect(schemaVersion(db)).toBe(2);
+    // 3, not 2: `rewindToV1` replays the WHOLE ladder, whose top is now v3.
+    expect(schemaVersion(db)).toBe(3);
   });
 
   it('logs the offending document id for both null- and array-metadata rows', () => {
@@ -527,7 +552,7 @@ describe('schema v2: atomicity on failure', () => {
         sizeBytes: 10,
       }),
     );
-    db.prepare(`UPDATE meta SET value='1' WHERE key='schemaVersion'`).run();
+    rewindToV1(db);
 
     db.exec(`
       CREATE TRIGGER forced_abort
