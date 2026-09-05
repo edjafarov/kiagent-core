@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.83.0](https://github.com/edjafarov/kiagent-core/compare/v0.82.1...v0.83.0) (2026-09-05)
+
+### Features
+
+* **indexing:** add canonical file eligibility policy ([1ee3d32](https://github.com/edjafarov/kiagent-core/commit/1ee3d325f7a53f637f58ba2a61747d83487273ba))
+* **local-folder:** enforce strict file indexability at the boundary ([6d98265](https://github.com/edjafarov/kiagent-core/commit/6d98265fc86a05e032b01cc2446a73eaf2c0eb30))
+
+### Bug Fixes
+
+* **store:** archive files rejected by indexing policy ([10e0be7](https://github.com/edjafarov/kiagent-core/commit/10e0be74178f2a1f6ed8a1ba56710ece3d3b4bb1))
+* **store:** exclude array-valued metadata from the v2 cleanup migration guard ([2ba6dcf](https://github.com/edjafarov/kiagent-core/commit/2ba6dcf202d935bbdc95070c9baa34db65f2c871))
+* **store:** fail open on unreadable metadata in the v2 cleanup migration ([585410e](https://github.com/edjafarov/kiagent-core/commit/585410e494b8b489fa19978d77ce93c5edbf0ae4))
+
 ## [0.82.1](https://github.com/edjafarov/kiagent-core/compare/v0.82.0...v0.82.1) (2026-09-04)
 
 ### Bug Fixes
