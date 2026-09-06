@@ -369,6 +369,16 @@ describe('outbox listing', () => {
     expect(rows.map((r) => r.id)).toContain(draft.id);
   });
 
+  it('an empty status array matches nothing, unlike an absent status', async () => {
+    await seedSent(5);
+    await seedDraft({});
+    expect(await store.outbox.list({ status: [], limit: 100 })).toEqual([]);
+    // Sanity: the same table, unfiltered, is non-empty — this is a real
+    // filter-to-nothing, not an accidentally empty fixture.
+    const unfiltered = await store.outbox.list({ limit: 100 });
+    expect(unfiltered.length).toBeGreaterThan(0);
+  });
+
   it('pages 120 drafts by keyset with no gap and no duplicate', async () => {
     // 6 accounts × 20 — OUTBOX_PENDING_CAP is 20 per account
     const seeded = await seedDrafts(120);

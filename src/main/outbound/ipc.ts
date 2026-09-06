@@ -126,6 +126,11 @@ export function outboundInvokeHandlers(deps: {
       // `draftId`; the store's `list()` (task 8) names the matching field
       // `id`, matching `OutboxRow.id` — mapped here at the IPC boundary, the
       // store's own name stays untouched.
+      // `status` is forwarded exactly as received — including the
+      // undefined-vs-empty-array distinction (store/outbox.ts's `list`):
+      // an absent `status` means every row, a present-but-empty `status: []`
+      // means none. This handler must never default a missing `status` to
+      // `[]` or coerce an empty one away.
       const rows = await store.outbox.list({
         limit: clamped,
         status: req?.status,

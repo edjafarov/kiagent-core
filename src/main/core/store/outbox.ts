@@ -45,7 +45,9 @@ export interface OutboxStore {
    *  previous page: pass its `{ createdAt, id }` to fetch the next one.
    *  Unlike `listRecent`, this can walk the WHOLE table a page at a time, so
    *  a pending draft behind any number of newer terminal-status rows is
-   *  reachable with `status: ['draft']`. */
+   *  reachable with `status: ['draft']`. `status` omitted (`undefined`) means
+   *  no filter, every status; `status: []` (present but empty) means match
+   *  NOTHING — the two are deliberately not the same. */
   list(opts: {
     limit: number;
     status?: OutboxStatus[];
@@ -262,8 +264,20 @@ export function createOutboxStore(
     async list({ limit, status, before }) {
       const where: string[] = [];
       const params: AppDbParam[] = [];
-      if (status?.length) {
-        where.push(`status IN (${status.map(() => '?').join(',')})`);
+      // `status` is optional-absent vs. present-empty, and they mean opposite
+      // things: `undefined` (the key omitted) is "no filter, every status" —
+      // `[]` (present, deliberately empty) must match NOTHING, not
+      // everything. A caller (e.g. a UI status-picker with nothing checked)
+      // that ends up with an empty array asked for zero rows; silently
+      // falling through to "no filter" would be the worst failure direction
+      // for an outbox view. `status?.length` alone cannot tell these apart —
+      // both are falsy — so the length-0 case is branched explicitly.
+      if (status !== undefined) {
+        where.push(
+          status.length === 0
+            ? '0 = 1'
+            : `status IN (${status.map(() => '?').join(',')})`,
+        );
         params.push(...status);
       }
       if (before) {

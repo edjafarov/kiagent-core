@@ -10,7 +10,7 @@ import type {
 } from '@shared/contracts';
 import type { Invokes } from '@shared/ipc';
 
-import { openDb } from '../../db/app-db';
+import { openDb, type AppDb } from '../../db/app-db';
 import { openStore, type CoreStore } from '../../core/store/store';
 import { outboundInvokeHandlers } from '../ipc';
 import { createOutboundService, type OutboundService } from '../service';
@@ -55,6 +55,7 @@ type Handler = (req: unknown) => Promise<unknown> | unknown;
 
 describe('outbound ipc delegate', () => {
   let dir: string;
+  let db: AppDb;
   let store: CoreStore;
   let service: OutboundService;
   let docId: string;
@@ -64,7 +65,8 @@ describe('outbound ipc delegate', () => {
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-outipc-'));
-    store = openStore(await openDb(path.join(dir, 'test.db')), deps);
+    db = await openDb(path.join(dir, 'test.db'));
+    store = openStore(db, deps);
     const account = await store.createAccount({
       source: 'imap',
       identifier: 'me@example.com@imap.example.com',
@@ -307,6 +309,11 @@ describe('outbound ipc delegate', () => {
     to?: string[];
     cc?: string[];
     status?: 'draft' | 'sent' | 'discarded';
+    /** Stamped directly onto the row after insert (mirrors task 8's
+     *  `seedDraft` in outbox.test.ts) — `OutboxDraftInput` has no such field,
+     *  since `create()` always stamps `deps.now()`. Lets a test force a
+     *  `created_at` TIE between rows to exercise the `id DESC` tie-break. */
+    createdAt?: string;
   }) {
     const row = await store.outbox.create({
       accountId: over.accountId,
@@ -320,9 +327,22 @@ describe('outbound ipc delegate', () => {
       createdVia: 'mcp-local',
       expiresAt: '2099-01-01T00:00:00Z',
     });
+    if (over.createdAt !== undefined) {
+      await db.run(`UPDATE outbox SET created_at = ? WHERE id = ?`, [
+        over.createdAt,
+        row.id,
+      ]);
+    }
     if (over.status && over.status !== 'draft') {
       await store.outbox.transition(row.id, ['draft'], over.status);
-      return { ...row, status: over.status };
+      const fresh = await store.outbox.get(row.id);
+      if (!fresh) throw new Error('seedRow: readback failed');
+      return fresh;
+    }
+    if (over.createdAt !== undefined) {
+      const fresh = await store.outbox.get(row.id);
+      if (!fresh) throw new Error('seedRow: readback failed');
+      return fresh;
     }
     return row;
   }
@@ -384,7 +404,22 @@ describe('outbound ipc delegate', () => {
     expect(rows.every((r) => r.status === 'draft')).toBe(true);
   });
 
-  it('pages with the before cursor', async () => {
+  it('an empty status array matches nothing (not "no filter")', async () => {
+    // `status` omitted/absent means every row (today's default, pinned
+    // above); `status: []` — present but deliberately empty — must mean the
+    // opposite: match nothing. A UI status-picker with nothing checked asks
+    // for zero rows, and silently falling back to "everything" is the worst
+    // possible failure direction for an outbox view.
+    const account = (await store.read.accounts())[0];
+    await seedRow({ accountId: account.id, status: 'draft' });
+    await seedRow({ accountId: account.id, status: 'sent' });
+    expect(await invoke('outbox:list', { status: [] })).toEqual([]);
+    // Sanity: the table is non-empty and the default call proves it, so the
+    // empty result above is a real filter-to-nothing, not an empty fixture.
+    expect((await invoke('outbox:list', {})).length).toBeGreaterThan(0);
+  });
+
+  it('pages with the before cursor, jointly covering every row with no gap', async () => {
     // Two accounts so 30 drafts clears the per-account cap of 20.
     const accountA = (await store.read.accounts())[0];
     const accountB = await store.createAccount({
@@ -392,11 +427,12 @@ describe('outbound ipc delegate', () => {
       identifier: 'second@example.com@imap.example.com',
       config: IMAP_CFG,
     });
+    const seeded = [];
     for (let i = 0; i < 15; i++) {
-      await seedRow({ accountId: accountA.id, status: 'draft' });
+      seeded.push(await seedRow({ accountId: accountA.id, status: 'draft' }));
     }
     for (let i = 0; i < 15; i++) {
-      await seedRow({ accountId: accountB.id, status: 'draft' });
+      seeded.push(await seedRow({ accountId: accountB.id, status: 'draft' }));
     }
 
     const first = await invoke('outbox:list', {
@@ -410,11 +446,56 @@ describe('outbound ipc delegate', () => {
       limit: 20,
       before: { createdAt: tail.createdAt, draftId: tail.draftId },
     });
-    expect(second.length).toBeGreaterThan(0);
+    expect(second).toHaveLength(10); // 30 seeded - the first page's 20
     const firstIds = new Set(first.map((r) => r.draftId));
     // No duplicate: nothing from the first page reappears on the second.
     expect(second.some((r) => firstIds.has(r.draftId))).toBe(false);
     expect(second.map((r) => r.draftId)).not.toContain(tail.draftId);
+    // No gap: the two pages TOGETHER are exactly the 30 seeded rows — the
+    // mapping between the IPC wire cursor (`before.draftId`) and the store's
+    // keyset cursor (`before.id`) is exactly where a page could silently
+    // drop or duplicate a row, and the store layer (task 8's suite) cannot
+    // catch a bug that only exists in this handler's mapping.
+    const joint = [...first, ...second].map((r) => r.draftId);
+    expect(new Set(joint).size).toBe(30);
+    expect(new Set(joint)).toEqual(new Set(seeded.map((r) => r.id)));
+  });
+
+  it('holds the id-DESC tie-break across a page boundary when created_at ties', async () => {
+    // Every row shares the exact same created_at: the ONLY thing that can
+    // keep paging correct is the secondary `id DESC` sort, and the ONLY thing
+    // that can keep it correct across a page boundary is passing both
+    // `createdAt` AND `draftId` through the `before` cursor — either one
+    // dropped at the IPC↔store mapping would reshuffle or duplicate rows.
+    const account = (await store.read.accounts())[0];
+    const tiedAt = '2026-01-01T00:00:00.000Z';
+    const seeded = [];
+    for (let i = 0; i < 10; i++) {
+      seeded.push(
+        await seedRow({
+          accountId: account.id,
+          status: 'draft',
+          createdAt: tiedAt,
+        }),
+      );
+    }
+    const byIdDesc = [...seeded].sort((a, b) => (a.id < b.id ? 1 : -1));
+
+    const first = await invoke('outbox:list', { status: ['draft'], limit: 4 });
+    expect(first.map((r) => r.draftId)).toEqual(
+      byIdDesc.slice(0, 4).map((r) => r.id),
+    );
+    const tail = first[first.length - 1];
+    const second = await invoke('outbox:list', {
+      status: ['draft'],
+      limit: 4,
+      before: { createdAt: tail.createdAt, draftId: tail.draftId },
+    });
+    expect(second.map((r) => r.draftId)).toEqual(
+      byIdDesc.slice(4, 8).map((r) => r.id),
+    );
+    const joint = [...first, ...second].map((r) => r.draftId);
+    expect(new Set(joint).size).toBe(8); // no duplicate across the tie
   });
 
   it('outbox:pending-count sweeps overdue drafts before counting', async () => {
@@ -437,17 +518,48 @@ describe('outbound ipc delegate', () => {
     expect(result.pending).toBe(0);
   });
 
-  it('carries recipient addresses verbatim', async () => {
+  it('carries recipient addresses verbatim across the three cc shapes issue #113 names', async () => {
     const account = (await store.read.accounts())[0];
+    // Shape 1: 'neither' — to only, no cc at all (today's already-covered
+    // shape: a plain draft with nobody cc'd).
     await seedRow({
       accountId: account.id,
       to: ['a@example.com'],
       cc: [],
       status: 'draft',
     });
-    const [row] = await invoke('outbox:list', { status: ['draft'], limit: 1 });
-    expect(row.to).toEqual(['a@example.com']);
-    expect(row.cc).toEqual([]);
+    // Shape 2: 'one' — a single cc address alongside to.
+    await seedRow({
+      accountId: account.id,
+      to: ['b@example.com'],
+      cc: ['cc1@example.com'],
+      status: 'draft',
+    });
+    // Shape 3: 'both' — multiple to AND multiple cc addresses.
+    await seedRow({
+      accountId: account.id,
+      to: ['c1@example.com', 'c2@example.com'],
+      cc: ['cc2@example.com', 'cc3@example.com'],
+      status: 'draft',
+    });
+
+    const rows = await invoke('outbox:list', { status: ['draft'], limit: 10 });
+    const byFirstTo = new Map(rows.map((r) => [r.to[0], r]));
+
+    expect(byFirstTo.get('a@example.com')?.to).toEqual(['a@example.com']);
+    expect(byFirstTo.get('a@example.com')?.cc).toEqual([]);
+
+    expect(byFirstTo.get('b@example.com')?.to).toEqual(['b@example.com']);
+    expect(byFirstTo.get('b@example.com')?.cc).toEqual(['cc1@example.com']);
+
+    expect(byFirstTo.get('c1@example.com')?.to).toEqual([
+      'c1@example.com',
+      'c2@example.com',
+    ]);
+    expect(byFirstTo.get('c1@example.com')?.cc).toEqual([
+      'cc2@example.com',
+      'cc3@example.com',
+    ]);
   });
 
   it('outbox:discard discards pending drafts and tolerates races', async () => {
