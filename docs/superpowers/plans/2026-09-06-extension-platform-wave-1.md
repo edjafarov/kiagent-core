@@ -15,7 +15,7 @@
 ## Global Constraints
 
 - Base: `dev` at `8bc2c670` (v0.85.0). Every line reference is against that commit.
-- Every wire change is **additive**. `outbox:list` called with today's payload returns exactly today's result; a one-argument `events.on` callback keeps compiling and running.
+- Every wire change is **additive**. `outbox:list` called with today's payload returns today's rows, in today's order, under today's default limit — with `to` and `cc` added to each row and no existing field changed. A one-argument `events.on` callback keeps compiling and running.
 - One PR at a time may touch: `src/shared/contracts.ts`, `src/main/platform/host-surfaces.ts`, `src/main/platform/extension-host-entry.ts`, `src/shared/extension-rpc.ts`, `docs/architecture/extension-platform.md`. Lane A merges to `dev` before lane B opens a PR.
 - No migration in this wave. Nothing touches `schema.ts`.
 - `deterministic` profile: `maxTokens` required and **≤ 512**; a larger value rejects before the request reaches the model. This ceiling is deliberate (spec D1) — do not raise it.
@@ -32,14 +32,17 @@
 **Files:**
 - Modify: `src/main/core/inference.ts` (`createInference`, `InferencePlane`)
 - Modify: `src/main/platform/host-surfaces.ts:151-173` (inference surface), `:52-88` (`SurfaceDeps`)
-- Modify: `src/main/platform/extension-platform.ts` (boot wiring of the platform's own emits)
+- Modify: `src/main/platform/extension-platform.ts` (boot wiring of the platform's own emits) and its deps interface at `:155-170`
+- Modify: `src/main/main.ts:975-998` (the `createExtensionPlatform({ … inference: p.inference … })` construction site)
 - Modify: `src/shared/contracts.ts` (`Inference`, `CapSurfaces` inference namespace)
 - Modify: `src/main/platform/extension-host-entry.ts:50-64` (`NS_METHODS.inference`)
 - Test: `src/main/platform/__tests__/host-surfaces.test.ts`, `src/main/core/__tests__/inference.test.ts`
 
 **Interfaces:**
 - Consumes: `backgroundLaneState(platform, now?)` (`src/main/core/boot.ts:386-405`), `LaneState` (`contracts.ts:1136`).
-- Produces: `InferencePlane.onLaneChange(cb: (state: boolean) => void): () => void`; `SurfaceDeps.inference.lane(): Promise<LaneState>`; host event `platform.lane` with payload `{ state: LaneState }`.
+- Produces: `InferencePlane.onLaneChange(cb: (state: LaneState) => void): () => void`; `SurfaceDeps.inference.lane(): Promise<LaneState>`; host event `platform.lane` with payload `{ state: LaneState }`.
+
+**The plane cannot resolve `LaneState` on its own.** `backgroundLaneState` reads `platform.prefs` and `platform.scheduler.env` (`boot.ts:390-405`), and `extension-platform.ts` receives only `scheduler` and `inference: SurfaceDeps['inference']` (`:155-170`) — no `CorePlatform`. So the resolver is injected: `createExtensionPlatform` gains `laneState(): LaneState`, and `main.ts:975-998` passes `() => backgroundLaneState(p)` beside the existing `inference: p.inference`. Both `host.inference.lane()` and the `platform.lane` payload call that one resolver, which is what makes them unable to disagree.
 
 - [ ] **Step 1: Write the failing surface test**
 
@@ -105,7 +108,9 @@ inference: {
 },
 ```
 
-Add `lane(): Promise<LaneState>` to `SurfaceDeps.inference` and `'lane'` to `NS_METHODS.inference`. The extension platform passes `async () => backgroundLaneState(platform)` when it builds the deps.
+Add `lane(): Promise<LaneState>` to `SurfaceDeps.inference` and `'lane'` to `NS_METHODS.inference` (`extension-host-entry.ts:62`, today `['complete','see','read','hear']`). The extension platform passes `async () => deps.laneState()` when it builds the deps.
+
+Tasks 2 and 4 add two more methods to the same three places — `describe` and `completeWithMeta`. A method that reaches `InferencePlane` but not `SurfaceDeps.inference`, `buildSurfaces` and `NS_METHODS.inference` is invisible to every extension: the child proxy is generated from `NS_METHODS` (`extension-host-entry.ts:109`), so nothing throws — the member simply does not exist. Add all three names as their tasks land, and let `cap-table-completeness.test.ts` be the check.
 
 - [ ] **Step 4: Run the surface tests**
 
@@ -154,13 +159,19 @@ onLaneChange(cb) {
 
 Declare `onLaneChange` on `InferencePlane`.
 
+**The boolean is not enough for the event.** `backgroundLaneState` distinguishes `disabled`, `battery`, `until-night`, `until-idle` and `open` (`boot.ts:390-405`); a move from `battery` to `disabled` leaves the boolean closed, so a listener that only hears boolean flips keeps a stale reason while `lane()` already reports the new one. The plane's callback stays boolean — it knows nothing about prefs — and the **extension platform** de-duplicates on the resolved `LaneState`: it calls the injected resolver on every notification and emits only when the resolved string changed. Since the platform also re-resolves on demand for `lane()`, the two cannot drift.
+
 - [ ] **Step 8: Wire `platform.lane`**
 
 In `extension-platform.ts`, next to the existing platform emits (`:424,:448`), subscribe once at boot:
 
 ```ts
-const offLane = platform.inference.onLaneChange(() => {
-  bus.emit('platform', 'platform.lane', { state: backgroundLaneState(platform) });
+let lastLane: LaneState | null = null;
+const offLane = deps.inference.onLaneChange(() => {
+  const state = deps.laneState();
+  if (state === lastLane) return;
+  lastLane = state;
+  bus.emit('platform', 'platform.lane', { state });
 });
 ```
 
@@ -274,7 +285,11 @@ export function createInference(
 }
 ```
 
-`register` bumps, the returned unregister bumps, and `register` subscribes to `provider.onChange?.(bump)`, disposing that subscription in the unregister closure. `describe(kind)` resolves the provider with the same `pick(kind)` the call path uses, returns `null` on `NoProviderError`, and otherwise `{ providerId: p.id, modelId: p.describe?.('complete')?.modelId ?? p.id, generation }`. Every `complete/see/read/hear` compares `opts.generation` — when present — against `generation` AFTER `pick()` and throws `ModelChangedError` before `p.handle(…)`.
+`register` bumps, the returned unregister bumps, and `register` subscribes to `provider.onChange?.(bump)`, disposing that subscription in the unregister closure. `describe(kind)` resolves the provider with the same `pick(kind)` the call path uses, returns `null` on `NoProviderError`, and otherwise `{ providerId: p.id, modelId: p.describe?.(kind)?.modelId ?? p.id, generation }`. Every `complete/see/read/hear` compares `opts.generation` — when present — against `generation` AFTER `pick()` and throws `ModelChangedError` before `p.handle(…)`.
+
+**The plane must widen the payload it builds.** Today it constructs `payload: { prompt, maxTokens: opts?.maxTokens }` (`inference.ts:76-80`) and nothing else — so `profile`, `system`, `generation` and `expectModelId` all reach the provider only if this object carries them. Teaching the provider to read `req.payload.profile` without widening this construction leaves every host call on the default profile with no system message, silently.
+
+**The plane's check is not sufficient on its own, and task 3 is the other half.** The plane compares a *counter* after it resolved a *provider*; the local provider resolves the *model* later still, inside `handle()` (`provider.ts:296`). So when the caller passed a `generation`, the plane also resolves the model id it believes is current — `p.describe?.(kind)?.modelId` — and threads it into the request as `payload.expectModelId`, alongside `payload.generation`. A provider that ignores the field behaves exactly as it does today; the local provider re-checks it against the model it actually resolved and throws before any HTTP request. Without this the window between `pick()` and `servableModel()` stays open, and #107's acceptance criterion — a mock `fetch` asserting zero calls — cannot pass.
 
 - [ ] **Step 4: Run the tests**
 
@@ -433,7 +448,7 @@ const profileBody = (profile: 'default' | 'deterministic', maxTokens?: number) =
 };
 ```
 
-`chatText` returns the record; its two existing callers take `.text`. `see`/`read`/`hear` accept `profile` in their options, ignore it, and log the fact once per process — they never throw on it.
+`chatText` returns the record, and the production caller — `provider.ts:308`, `return chatText(s.baseUrl(), prompt, { maxTokens })` — returns the **whole record** to the plane, not `.text`. Taking `.text` there would make task 2's string-normalisation path replace real usage numbers with `null` and a real truncation with `false`, which is exactly what `completeWithMeta` exists to report. The only other call site is `src/main/providers/local-llm/__tests__/api.test.ts:79`, which awaits without consuming the return value. `see`/`read`/`hear` accept `profile` in their options, ignore it, and log the fact once per process — they never throw on it.
 
 - [ ] **Step 4: Run the provider suite**
 
@@ -466,12 +481,15 @@ git commit -m "feat(local-llm): deterministic decoding profile, system message a
 
 ```ts
 it('delegates countBy to the query plane', async () => {
-  const countBy = jest.fn(async () => [{ key: 'pdf', count: 3 }]);
+  const countBy = jest.fn(async () => [{ key: 'a@example.com', count: 3 }]);
   const { surfaces } = buildSurfaces(makeDeps({ query: { ...stubQuery, countBy } }));
-  await expect(surfaces.query.countBy({ by: 'type' })).resolves.toEqual([{ key: 'pdf', count: 3 }]);
-  expect(countBy).toHaveBeenCalledWith({ by: 'type' });
+  await expect(surfaces.query.countBy({ field: 'from' }))
+    .resolves.toEqual([{ key: 'a@example.com', count: 3 }]);
+  expect(countBy).toHaveBeenCalledWith({ field: 'from' });
 });
 ```
+
+`countBy` groups by `field: 'from' | 'label'` only (`contracts.ts:245-253`); `type`, `account` and the date bounds are filters, not grouping keys. A permissive mock will happily accept `{ by: 'type' }` and prove nothing.
 
 - [ ] **Step 2: Run and watch it fail**
 
@@ -525,7 +543,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Preserve the error name across RPC**
 
-The child rethrows a plain `Error` unless the host serializes the name. Carry `name` in the RPC error envelope (`src/shared/extension-rpc.ts`) and reconstruct it in `extension-host-entry.ts` so `err.name` survives; the message and any extra fields ride along as data. `LaneClosedError` already crossed as a message-only error — this is the fix that makes the acceptance criterion true for both.
+The name is discarded in **`transport.ts`**, not in `extension-host-entry.ts`. The reply side serializes `e instanceof Error ? e.message : String(e)` plus `sourceErrorCode(e)` (`transport.ts:254-258`), and the receiving side rebuilds `new Error(r.error ?? 'remote error')` and attaches only `code` (`:268-274`). So both ends of `transport.ts` change, together with the `ReplyMsg` wire type in `src/shared/extension-rpc.ts`: carry `name` and a small allow-listed set of own enumerable fields (`expected`, `actual`, `modelId`), and reattach them on reconstruction. `LaneClosedError` crosses today as a message-only error — this is the fix that makes the acceptance criterion true for both errors.
 
 - [ ] **Step 4: Run the full platform suite**
 
@@ -714,7 +732,7 @@ Expected: FAIL — `store.outbox.list is not a function`.
 ```ts
 async list({ limit, status, before }) {
   const where: string[] = [];
-  const params: unknown[] = [];
+  const params: AppDbParam[] = [];   // AppDb.all requires AppDbParam[], not unknown[]
   if (status?.length) {
     where.push(`status IN (${status.map(() => '?').join(',')})`);
     params.push(...status);
@@ -734,6 +752,20 @@ async list({ limit, status, before }) {
 ```
 
 `countPending` is `SELECT COUNT(*) FROM outbox WHERE status = 'draft'`. `onChange` keeps a `Set` of callbacks fired from `create`, from `transition` **only when the compare-and-set reported one changed row**, and from `expireOverdue` **only when rows changed**.
+
+**One more writer exists and it is not in this file.** `outbox.account_id` is `REFERENCES accounts(id) ON DELETE CASCADE` (`schema.ts:561`), and `write-tx.ts:510` runs `DELETE FROM accounts WHERE id = ?` — so removing an account erases its outbox rows without any of the three hooks firing, and both the listing and the count go stale with nothing to announce it. Fire `onChange` from the account-removal path too, and pin it:
+
+```ts
+it('announces the rows a removed account took with it', async () => {
+  const cb = jest.fn();
+  store.outbox.onChange(cb);
+  await seedDraft({ accountId });
+  cb.mockClear();
+  await store.removeAccount(accountId);
+  expect(cb).toHaveBeenCalled();
+  expect(await store.outbox.countPending()).toBe(0);
+});
+```
 
 - [ ] **Step 4: Run and commit**
 
@@ -760,13 +792,21 @@ git commit -m "feat(outbox): status-filtered keyset listing, a pending count and
 Before adding anything, pin today's behaviour, because this is the one call a shipped renderer already makes:
 
 ```ts
-it('returns exactly what it returns today for a payload-less call', async () => {
-  const before = await handlers['outbox:list'](undefined);
-  const withLimit = await handlers['outbox:list']({ limit: 50 });
-  expect(before).toEqual(withLimit);
-  expect(before).toHaveLength(50);
+it('keeps every field and the listing semantics it has today', async () => {
+  const rows = await handlers['outbox:list'](undefined);
+  expect(rows).toHaveLength(50);                       // default limit unchanged
+  expect(rows).toEqual(await handlers['outbox:list']({ limit: 50 }));
+  // Pin the SHAPE against a literal, not against another call to the same code.
+  expect(Object.keys(rows[0]).sort()).toEqual([
+    'accountLabel', 'bodyPreview', 'canRetry', 'cc', 'createdAt', 'deliveryUncertain',
+    'draftId', 'error', 'errorDetail', 'kind', 'recipientDisplay', 'sentAt',
+    'status', 'subject', 'to',
+  ]);
+  expect(rows.map((r) => r.draftId)).toEqual(newestFirst(seeded).slice(0, 50).map((r) => r.id));
 });
 ```
+
+Compatibility here means **every existing field and the existing ordering and default survive, and `to`/`cc` are added** — not a byte-identical response. Comparing two calls to the same implementation pins nothing; the literal key list is the pin.
 
 - [ ] **Step 2: Write the failing new cases**
 

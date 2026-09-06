@@ -17,7 +17,7 @@
 ## Global Constraints
 
 - Base: `dev` after v0.86.0.
-- The migration is ladder step **v4**, appended. Existing steps v1/v2/v3 (`schema.ts:429,584,685`) are never renumbered, merged or collapsed. `ALTER TABLE … ADD COLUMN` is legal inside the per-version transaction `migrate()` already wraps each step in (`schema.ts:793-794`).
+- The migration is ladder step **v4**, appended. Existing steps v1/v2/v3 (`schema.ts:429,584,685`) are never renumbered, merged or collapsed. A migration entry is `type Migration = string | ((db: BetterSqlite3.Database) => void)` (`schema.ts:97`) — a SQL string or a bare function, **not** an object with an `up` member. `migrate()` wraps each step in its own transaction (`schema.ts:1143-1147`), and `ALTER TABLE … ADD COLUMN` is legal inside it.
 - Consumer names are host-namespaced: `consumers.name = 'ext:<extensionId>:<name>'`. An extension-supplied name containing a colon is rejected, so no extension can address a core worker's cursor.
 - Feed payloads are the wire `Document` **minus `markdown`**, plus `seq` and `updatedAt`. Markdown is fetched on demand through `host.query.document`. A batch that carried whole documents would let one slow consumer pin them in main.
 - At most one batch in flight per consumer. An un-acked batch is re-sent after 60 s and never skipped.
@@ -69,14 +69,12 @@ Append ONE entry to the end of `MIGRATIONS` — do not edit v1, v2 or v3:
 // v4 — snapshot handoff for feed consumers. Three nullable columns; a
 // consumer with all three NULL has never started a snapshot, which is
 // exactly what every pre-existing row means.
-{
-  up: (db) => {
-    db.exec(`ALTER TABLE consumers ADD COLUMN snapshot_cursor TEXT`);
-    db.exec(`ALTER TABLE consumers ADD COLUMN snapshot_high_water INTEGER`);
-    db.exec(`ALTER TABLE consumers ADD COLUMN snapshot_generation INTEGER`);
-  },
-},
+`ALTER TABLE consumers ADD COLUMN snapshot_cursor TEXT;
+ ALTER TABLE consumers ADD COLUMN snapshot_high_water INTEGER;
+ ALTER TABLE consumers ADD COLUMN snapshot_generation INTEGER;`,
 ```
+
+A plain string entry, appended to the array — `migrate()` runs `db.exec` on it inside the step's transaction (`schema.ts:1146`). An object with an `up` member is not a `Migration` and would fail at execution, not at typecheck, if it were cast.
 
 - [ ] **Step 4: Run, then commit**
 
@@ -91,8 +89,12 @@ git commit -m "feat(store): record snapshot handoff state per feed consumer"
 
 **Files:**
 - Modify: `src/main/core/store/store.ts` (beside the feed materialization block at `:488-540`)
+- Modify: `src/main/core/store/write-tx.ts` (the procedural transaction body)
+- Modify: `src/main/db/worker-entry.ts:42` (register the new procedure beside `commit`)
 - Modify: `src/shared/contracts.ts` (`Store`)
 - Create: `src/main/core/store/__tests__/feed-snapshot.test.ts`
+
+**How the page runs atomically.** A first page reads `MAX(changes.seq)`, reads a page of documents and writes the snapshot columns — one transaction with read-your-own-writes. `AppDb` gives callers exactly one multi-statement primitive, `batch()`, and it returns only the FIRST row per reader step (`app-db.ts:24-30,118-122`); `_conn.transaction()` is explicitly off-limits to callers because the worker-backed DB has no raw handle (`app-db.ts:35-43`). So this is a **named procedure**, exactly like the corpus `commit`: implement `feedSnapshotPage(args)` in `write-tx.ts`, register it in the worker's procedure table (`worker-entry.ts:42`), and call it the way `store.commit` does — `writeTx ? writeTx.feedSnapshotPage(args) : await db.proc!('feedSnapshotPage', args)` (`store.ts:892-896` is the pattern). `snapshotAck` and `reset` are single statements and stay on `run`/`batch`.
 
 **Interfaces:**
 - Consumes: `documents` (TEXT primary key — the keyset), `changes.seq`, `toDocument`.
@@ -228,7 +230,7 @@ git commit -m "feat(store): complete, report and reset a feed consumer's positio
 ### Task 4: The `feed` capability and its surface
 
 **Files:**
-- Modify: `src/main/platform/manifest.ts:28-39` (`Cap`, `CAPS`), `src/main/platform/host-router.ts:14-23` (`NS_CAP`), `src/main/platform/extension-host-entry.ts:50-64` (`NS_METHODS`), `src/renderer/components/cap-catalog.ts`
+- Modify: `src/shared/contracts.ts:797` (the `Cap` union — the authoritative one; `manifest.ts` only imports it) and `src/main/platform/manifest.ts:28-39` (`CAPS`, the advertised table), `src/main/platform/host-router.ts:14-23` (`NS_CAP`), `src/main/platform/extension-host-entry.ts:50-64` (`NS_METHODS`), `src/renderer/components/cap-catalog.ts`
 - Modify: `src/main/platform/host-surfaces.ts`, `src/shared/contracts.ts` (`CapSurfaces`)
 - Test: `src/main/platform/__tests__/host-surfaces.test.ts`, `.../cap-table-completeness.test.ts`, `src/main/platform/__tests__/manifest.test.ts`
 
@@ -315,6 +317,8 @@ it('honours the kinds filter and strips markdown', async () => { /* … */ });
 - [ ] **Step 2: Run and watch them fail**, then implement.
 
 The loop is modelled on `engine.attach` (`engine.ts:1485-1540`): read the durable cursor, iterate `store.feed(cursor)`, deliver one batch, wait for the ack, advance. Differences from the engine: no `work_ledger` (defer/re-drive stays core-only), and errors inside the extension's handler are the extension's problem — the host only re-sends un-acked batches.
+
+**Copying the engine loop does NOT give you the advertised memory bound.** `Store.feed` reads a fixed `FEED_BATCH = 500` (`store.ts:227`, `ORDER BY seq LIMIT ${FEED_BATCH}` at `:531`), materialises each row with `SELECT * FROM documents WHERE id = ?` (`:497`) and the mapper carries `markdown` (`:272`). A loop that holds that array while awaiting an ack pins up to 500 complete documents in main even when the extension asked for `{ batch: 2 }` — the exact failure this surface exists to prevent. So the subscription must strip `markdown` and slice to the requested `batch` **before** it awaits anything, and must not retain the source array across the await. Either read through a lighter store method that never materialises `markdown`, or map-and-release immediately; the memory test below is what decides whether you did.
 
 Subscriptions live per host incarnation: deactivate or crash stops the loop and leaves the cursors; re-activation resumes from `snapshot_cursor` mid-snapshot or from the acked seq afterwards. The consumer is expected to ack only after ITS private transaction committed, so a crash between commit and ack re-delivers one batch and never loses one.
 

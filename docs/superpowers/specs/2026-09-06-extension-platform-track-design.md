@@ -42,9 +42,13 @@ Three points about the order that are not obvious:
   release.
 - **#113 is in wave 1 although it is unrelated to the platform.** It touches
   `src/main/outbound/**`, `src/main/core/store/outbox.ts`, `src/shared/ipc.ts`
-  and `src/main/main.ts` — disjoint from every file waves 1–3 touch elsewhere.
-  It is therefore a parallel lane, and it unblocks downstream work earlier than
-  #106 does.
+  and `src/main/main.ts`: disjoint from the platform and cap-table set below,
+  which is what makes it a parallel lane, and it unblocks downstream work
+  earlier than #106 does. It is **not** disjoint from everything — #107's lane
+  wiring also edits `main.ts` (the `createExtensionPlatform` construction site,
+  `main.ts:975-998`), and wave 3 edits both `main.ts` and `shared/ipc.ts`. Those
+  two files are additive-only in every case (a new registration, a new channel),
+  so they cost a rebase, not a serialization.
 - **#104 and #105 are last and their line-level plan is written when wave 2
   lands.** Both are migrations of an existing capability rather than new
   capability, and #104's broker design should be settled against a live feed
@@ -65,7 +69,7 @@ pins them against each other:
 - `src/main/platform/host-surfaces.ts` — #107, #106, #105
 - `src/main/platform/host-router.ts` (`NS_CAP`) — #106, #104
 - `src/main/platform/extension-host-entry.ts` (`NS_METHODS`) — #107, #106, #104, #105
-- `src/main/platform/manifest.ts` (`Cap`, `CAPS`) — #106, #104
+- `src/main/platform/manifest.ts` (`CAPS`, the advertised table) — #106, #104; the authoritative `Cap` union lives in `src/shared/contracts.ts:797` and must be extended with it
 - `src/renderer/components/cap-catalog.ts` — #106, #104, #105
 - `src/shared/extension-rpc.ts` — #112, #104
 - `docs/architecture/extension-platform.md` — all of them
@@ -89,17 +93,25 @@ caller persisting the compiled artifact, which #107 already states is where
 repeatability lives. #107's acceptance criterion (`maxTokens > 512` under
 `deterministic` rejects before the request) stands unchanged.
 
-**D2 — `platform.lane` is emitted from a plane callback, not from the caller of
-`setBackgroundOpen`.** The plane holds no reference to the event bus, and today
-the only writer is `src/main/main.ts:1088`, which re-evaluates
-`backgroundLaneOpen(p)` on a schedule — so emitting there would fire on every
-evaluation rather than on a transition, and would put platform knowledge in
-`main.ts`. Instead `InferencePlane` gains `onLaneChange(cb: (state: LaneState) => void): () => void`,
-invoked from inside `setBackgroundOpen` only when the boolean actually changed;
-the extension platform subscribes once at boot and emits `platform.lane { state }`
-through `bus.emit('platform', …)`. `host.inference.lane()` resolves through the
-existing `backgroundLaneState(platform)` helper (`boot.ts:386-405`), so the
-event and the query cannot disagree.
+**D2 — `platform.lane` is emitted from a plane callback, and de-duplicated on the
+resolved state.** The plane holds no reference to the event bus, and today the
+only writer is `src/main/main.ts:1088`, which re-evaluates `backgroundLaneOpen(p)`
+on a schedule — so emitting there would fire on every evaluation rather than on a
+transition, and would put platform knowledge in `main.ts`. Instead `InferencePlane`
+gains `onLaneChange(cb: (open: boolean) => void): () => void`, invoked from inside
+`setBackgroundOpen` only when the boolean actually changed.
+
+The boolean alone is not the event. `backgroundLaneState` distinguishes
+`disabled`, `battery`, `until-night`, `until-idle` and `open` (`boot.ts:386-405`),
+so a move from `battery` to `disabled` leaves the boolean closed while the reason
+changed. The extension platform therefore resolves the `LaneState` on each
+notification and emits `platform.lane { state }` only when the resolved string
+changed. It cannot resolve that itself either — `backgroundLaneState` needs
+`platform.prefs` and `platform.scheduler.env`, and `createExtensionPlatform`
+receives neither (`extension-platform.ts:155-170`) — so it takes an injected
+`laneState(): LaneState`, passed from the construction site at `main.ts:975-998`.
+`host.inference.lane()` calls that same resolver, which is why the event and the
+query cannot disagree.
 
 **D3 — `generation` starts at a random positive integer, and the seed is
 injectable.** A restart must not be mistakable for continuity, which is why the
@@ -112,9 +124,11 @@ v1, v2, v3 (`schema.ts:429,584,685`). Wave 2 appends v4: three
 `ALTER TABLE consumers ADD COLUMN` statements (`snapshot_cursor TEXT`,
 `snapshot_high_water INTEGER`, `snapshot_generation INTEGER`). Existing steps are
 never renumbered, merged or collapsed — a collapsed ladder has already cost one
-shipped build a fail-closed boot with no window. `ALTER TABLE … ADD COLUMN` is
-legal inside the per-version transaction `migrate()` already wraps each step in
-(`schema.ts:793-794`), so this needs no separate step and no rebuild.
+shipped build a fail-closed boot with no window. An entry is a SQL string or a
+function (`type Migration = string | ((db) => void)`, `schema.ts:97`), never an
+object with an `up` member, and `migrate()` wraps each step in its own
+transaction (`schema.ts:1143-1147`) — where `ALTER TABLE … ADD COLUMN` is legal.
+So this needs no separate step and no rebuild.
 
 **D5 — extension consumer names are host-namespaced and never collide with
 core's.** `consumers.name` is a bare primary key shared with the engine's own
@@ -168,3 +182,32 @@ carries the issue's outcome in plain language.
 - `docs/superpowers/plans/2026-09-06-extension-platform-wave-1.md` — #107, #112, #113
 - `docs/superpowers/plans/2026-09-06-extension-platform-wave-2.md` — #106
 - `docs/superpowers/plans/2026-09-06-extension-platform-wave-3.md` — #104, #105
+
+## Review — 2026-09-06
+
+A Codex pass (gpt-6-astra) read the spec and all three plans against the v0.85.0
+tree and returned 18 findings; all of them were folded back into these documents
+before the first task was dispatched. The ones worth remembering, because each
+would have produced code that compiles and is wrong:
+
+- A migration entry is a SQL string or a function, never an object with an `up`
+  member — and the transaction wrapper is `migrate()` at `schema.ts:1143-1147`.
+- RPC error names are discarded in `transport.ts:254-274`, not in
+  `extension-host-entry.ts`; both ends of that file change, with the wire type.
+- The `Cap` union is in `src/shared/contracts.ts:797`; `manifest.ts` only imports
+  it, so adding a cap to `CAPS` alone establishes nothing.
+- `AppDb` gives callers one atomicity primitive, `batch()`, and it returns just
+  the first row per reader step — so #106's snapshot page is a named procedure
+  in `write-tx.ts`, registered beside `commit` in `worker-entry.ts:42`.
+- `Store.feed` reads 500 rows and materialises `markdown` — the "one batch in
+  flight" memory bound has to be built, not inherited from the engine loop.
+- Deleting an account cascades its outbox rows away (`schema.ts:561`,
+  `write-tx.ts:510`) without touching `create`/`transition`/`expireOverdue`, so
+  the outbox change signal needs that path too.
+- A new preload file with no webpack entry produces no artifact.
+- `countBy` groups by `field: 'from' | 'label'` only.
+
+One gap in that review: the sandbox had no network, so `gh issue view` failed for
+all six issues. Nothing above was checked against the authoritative issue bodies —
+the coverage claim in each plan's self-review section rests on the human read, not
+on that pass.

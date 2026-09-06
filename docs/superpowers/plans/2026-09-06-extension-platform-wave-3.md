@@ -58,7 +58,7 @@ Two reasons. First, #104's broker is the only new security boundary in the whole
 
 ### Task 3: Isolated execution
 
-**Files:** create `src/main/view-preload.ts`; modify `src/main/main.ts:303-310` and the window layout path; `src/shared/ipc.ts` (`views:mount`, `views:bounds`, `views:unmount`).
+**Files:** create `src/main/view-preload.ts`; modify `src/main/main.ts:303-310` and the window layout path; `src/shared/ipc.ts` (`views:mount`, `views:bounds`, `views:unmount`); **`.erb/configs/webpack.config.main.prod.ts:27-37` and its development counterpart** — both enumerate their entries explicitly (`preload: path.join(webpackPaths.srcMainPath, 'preload.ts')`, output `'[name].js'`), so a preload with no entry produces no artifact and the view loads with no bridge at all.
 
 **Produces:** one `WebContentsView` per mounted view — `sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`, session partition `persist:ext:<extensionId>`, preload exposing only `window.kiaView = { call, on, route, theme }`; content served from `kia-view://<extensionId>/<path>` through `protocol.handle`, reading only inside the extension directory; navigation and `window.open` outside that origin refused; bounds follow a placeholder element in the shell; tokens from `src/shared/web-ui/tokens.css` injected with `insertCSS` and re-pushed on a prefs change.
 
@@ -88,6 +88,14 @@ Two reasons. First, #104's broker is the only new security boundary in the whole
 
 **Acceptance:** the `files` cap alone grants nothing — with zero roots every call rejects `FILES_NO_ROOTS`. Granting reuses the existing folder picker and normalises the result with `coveringRoots` (`folder-paths.ts:56-58`). Granting a folder does **not** index it; indexing stays a separate explicit source action. `root_id` is the absolute normalised path, formed exactly as `toAbsPosix` forms one (`scanner.ts:162-168`).
 
+### Task 6b: Migrate the `ScopedFiles` contract
+
+**Files:** `src/shared/contracts.ts:896-901` (`ScopedFiles`) and `:907` (`CapSurfaces.files`); every declaration file an extension author compiles against.
+
+Today the interface is path-string based and has four members: `list(rel)`, `read(rel)`, `write(rel, data)`, `move(from, to)`. This wave replaces `rel` strings with `{ root, rel }` pairs and adds `roots`, `stat`, `mkdir` and the `{ ifAbsent: true }` write option. Changing `NS_METHODS` and the implementation alone leaves a typed extension unable to call any of it, and leaves the published contract lying about the surface. Do this migration in one commit, before Task 7's implementation, so no intermediate state ships a half-typed capability.
+
+**Acceptance:** the union of `NS_METHODS.files`, `ScopedFiles` and `buildSurfaces`'s `files` namespace is identical — which is what `cap-table-completeness.test.ts` checks — and a fixture extension compiles against the new shape.
+
 ### Task 7: Read-side surface
 
 **Files:** create `src/main/platform/scoped-files.ts`; modify `host-surfaces.ts:204-209` and `NS_METHODS.files`; test `src/main/platform/__tests__/scoped-files.test.ts` against real temp directories.
@@ -115,7 +123,7 @@ Two reasons. First, #104's broker is the only new security boundary in the whole
 
 **Acceptance:** every `write`/`move`/`mkdir` writes an intent row **before** the syscall and updates it with the outcome after — including on failure. Consent copy becomes "Access folders you approve" / "Can list, read, add and move files inside folders you pick for this extension — nothing outside them. It cannot delete files.", `risk: 'elevated'`; the "Not yet supported in this build" sentence is deleted.
 
-**Windows CI** (spec D6): a second `windows-latest` job running typecheck plus the scoped-files suite only — not the full suite. It covers reserved names, trailing dot and space, and case-insensitive collision, each surfacing as `FILES_EXISTS` or `FILES_INVALID_NAME`. If the job is flaky across its first ten runs, mark it non-blocking and record the criteria as a documented manual check **in this file** — do not delete them.
+**Windows CI** (spec D6): a second `windows-latest` job running typecheck plus the scoped-files suite only — not the full suite. Note the prerequisite: Jest's `setupFiles` runs `./.erb/scripts/check-build-exists.ts` (`package.json:96-97`), which throws unless the main and renderer bundles are already built — so the job either runs `npm run build` first or uses a dedicated Jest config that deliberately omits that setup file. Decide which in the task, and say why in the workflow file. It covers reserved names, trailing dot and space, and case-insensitive collision, each surfacing as `FILES_EXISTS` or `FILES_INVALID_NAME`. If the job is flaky across its first ten runs, mark it non-blocking and record the criteria as a documented manual check **in this file** — do not delete them.
 
 ### Task 10: End-to-end and the lane B PR
 
