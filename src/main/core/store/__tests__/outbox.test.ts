@@ -424,4 +424,18 @@ describe('outbox listing', () => {
     expect(cb).toHaveBeenCalled();
     expect(await store.outbox.countPending()).toBe(0);
   });
+
+  it('announces the rows a factory reset cascades away too', async () => {
+    // maintenance.resetAll() wipes `accounts` via a raw DELETE (store.ts),
+    // which cascades to `outbox` in SQL exactly like removeAccount does —
+    // outbox.ts never observes either wipe, so this proves store.ts fires
+    // the same signal for both cascade paths, not just the single-account one.
+    const cb = jest.fn();
+    store.outbox.onChange(cb);
+    await seedDraft({ accountId });
+    cb.mockClear();
+    await store.maintenance.resetAll();
+    expect(cb).toHaveBeenCalled();
+    expect(await store.outbox.countPending()).toBe(0);
+  });
 });

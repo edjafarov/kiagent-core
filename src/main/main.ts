@@ -58,6 +58,7 @@ import { parseGitHubRef, formatGitHubRef } from './marketplace/github-ref';
 import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
+import { wireOutboxPush } from './outbox-push';
 import { createUpdater } from './updater/updater';
 import { createUpdateNotifier } from './updater/native-notify';
 import { subscribeUpdaterState, updaterInvokeHandlers } from './updater/ipc';
@@ -811,6 +812,11 @@ app
         { error: err instanceof Error ? err.message : String(err) },
       );
     }
+
+    // Tells the renderer the outbox may have changed (create, a transition,
+    // an expired sweep, or an account removal cascade) without a per-row
+    // payload — coalesced internally to one push per 50 ms.
+    wireOutboxPush(p.store, broadcast);
 
     mcp = await startMcp({
       query: p.store.read,

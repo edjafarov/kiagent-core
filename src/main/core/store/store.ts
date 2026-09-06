@@ -1116,6 +1116,12 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         await db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
         corpusLangsCache = null;
         nudge.emit('commit');
+        // `DELETE FROM accounts` above cascades in SQL to `outbox` (ON
+        // DELETE CASCADE, schema.ts:561) the same way commit()'s
+        // removeAccount branch does — outbox.ts never observes either
+        // wipe, so this fires unconditionally rather than leave a factory
+        // reset silently stale for anything watching the outbox.
+        outboxChanged.emit('change');
       },
     },
 

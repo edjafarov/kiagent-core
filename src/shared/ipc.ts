@@ -508,6 +508,13 @@ export interface Pushes {
   'push:logs': LogRecord[];
   'push:mcp-activity': McpActivityRecord[];
   'push:update-state': UpdateState;
+  /** Fired after outbox rows may have changed (create, a transition that
+   *  actually moved a row, an expireOverdue sweep that expired ≥1 row, or an
+   *  account removal, which cascades in SQL and cannot report a precise
+   *  delta). Coalesced to at most one broadcast per 50 ms. Carries no
+   *  payload — this is a hint to re-read `outbox:list`/`outbox:pending-count`,
+   *  never a statement that a specific row changed. */
+  'push:outbox-changed': void;
 }
 
 export type InvokeChannel = keyof Invokes;
@@ -616,6 +623,7 @@ const PUSH_CHANNEL_MAP = {
   'push:logs': 0,
   'push:mcp-activity': 0,
   'push:update-state': 0,
+  'push:outbox-changed': 0,
 } as const satisfies Record<PushChannel, 0>;
 
 export const PUSH_CHANNELS = Object.keys(
