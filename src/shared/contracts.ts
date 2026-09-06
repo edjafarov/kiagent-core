@@ -700,6 +700,17 @@ export interface Inference {
   ): Promise<string>;
 }
 
+/** `host.inference.*` as an extension sees it: the plane's four calls plus
+ *  `lane()`, so an extension can read `LaneState` (why the background lane
+ *  is or isn't open) instead of hammering a closed lane. `lane()` is
+ *  deliberately NOT a member of `Inference` itself — the plane has no
+ *  access to prefs/scheduler and cannot resolve `LaneState` on its own
+ *  (`backgroundLaneState`, `src/main/core/boot.ts`); the extension platform
+ *  injects the resolver only at the point it builds this namespace. */
+export interface ExtensionInference extends Inference {
+  lane(): Promise<LaneState>;
+}
+
 export type ProviderStatus =
   | 'ready'
   | 'standby'
@@ -912,8 +923,13 @@ export interface CapSurfaces {
       register(id: string, handler: (args: unknown) => unknown): () => void;
     };
   };
-  /** Real-time model access ('interactive' lane) — for commands and tools. */
-  inference: { inference: Inference };
+  /** Real-time model access ('interactive' lane by default) — for commands
+   *  and tools. `lane()` is extension-facing ONLY: it is not a member of
+   *  `Inference` itself (the plane cannot resolve `LaneState` on its own —
+   *  see `InferencePlane.onLaneChange`), so it lives here, on the surface
+   *  the extension boundary hands out, not on the base contract that
+   *  `InferencePlane`/`EngineDeps` also implement. */
+  inference: { inference: ExtensionInference };
   /** Lifecycle + cross-extension signals ONLY. Data changes are the feed. */
   events: {
     events: {

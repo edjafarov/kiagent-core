@@ -126,6 +126,8 @@ describe('extension outbound + error taxonomy e2e (real forked child)', () => {
         return () => tools.delete(t.name);
       },
       inference: noInference,
+      laneState: () => 'open',
+      onLaneChange: () => () => {},
       logSink: {
         log: (...a) => process.stderr.write(`${JSON.stringify(a)}\n`),
       },

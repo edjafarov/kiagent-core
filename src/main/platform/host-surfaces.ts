@@ -9,7 +9,7 @@ import path from 'path';
 
 import Database from 'better-sqlite3';
 
-import type { LogLevel, Query } from '@shared/contracts';
+import type { LaneState, LogLevel, Query } from '@shared/contracts';
 
 import { assertAllowedSql } from './db-guard';
 import { createNetFetch } from './net-guard';
@@ -81,6 +81,12 @@ export interface SurfaceDeps {
         lane?: 'interactive' | 'background';
       },
     ): Promise<string>;
+    /** The resolved LaneState (why the background lane is or isn't open
+     *  right now), so an extension can wait for 'open' instead of hammering
+     *  a closed background lane. Injected by the extension platform at
+     *  surface-build time (`backgroundLaneState`) — the plane itself has no
+     *  access to prefs/scheduler and cannot resolve this alone. */
+    lane(): Promise<LaneState>;
   };
   notify(msg: string, level?: LogLevel): void;
   bus: EventBus;
@@ -150,26 +156,31 @@ export function buildSurfaces(deps: SurfaceDeps): {
         deps.notify(String(msg), level as LogLevel | undefined),
     },
     inference: {
+      // 'interactive' is only the DEFAULT — a caller-supplied `lane` in
+      // opts survives the spread and overrides it, so 'background' passes
+      // straight through to the plane (and fails fast with LaneClosedError
+      // while that lane is closed, exactly like a core worker).
       complete: (prompt, opts) =>
         deps.inference.complete(String(prompt), {
-          ...(opts as object),
           lane: 'interactive',
+          ...(opts as object),
         }),
       see: (image, prompt, opts) =>
         deps.inference.see(image as Uint8Array, String(prompt), {
-          ...(opts as object),
           lane: 'interactive',
+          ...(opts as object),
         }),
       read: (image, opts) =>
         deps.inference.read(image as Uint8Array, {
-          ...(opts as object),
           lane: 'interactive',
+          ...(opts as object),
         }),
       hear: (audio, opts) =>
         deps.inference.hear(audio as Uint8Array, {
-          ...(opts as object),
           lane: 'interactive',
+          ...(opts as object),
         }),
+      lane: () => deps.inference.lane(),
     },
     events: {
       on(event) {

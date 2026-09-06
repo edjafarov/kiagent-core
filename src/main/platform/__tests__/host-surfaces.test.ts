@@ -6,6 +6,8 @@ import path from 'path';
 
 import type { Query } from '@shared/contracts';
 
+import { LaneClosedError } from '@main/core/inference';
+
 import { buildSurfaces, CapError, createEventBus } from '../host-surfaces';
 
 const fakeQuery = {
@@ -38,6 +40,7 @@ function makeDeps(
           async (_a: Uint8Array, opts?: { format?: string; lane?: string }) =>
             `heard:${opts?.format}:${opts?.lane}`,
         ),
+        lane: jest.fn(async () => 'open' as const),
       },
       notify: jest.fn(),
       bus,
@@ -142,16 +145,58 @@ describe('buildSurfaces', () => {
     srv.close();
   });
 
-  it('inference forces the interactive lane', async () => {
-    const { deps } = makeDeps();
-    const { surfaces, close } = buildSurfaces(deps);
-    await expect(
-      surfaces.inference.complete('p', { lane: 'background' } as never),
-    ).resolves.toBe('lane:interactive');
-    close();
+  it('defaults to the interactive lane and passes background through', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const { deps } = makeDeps({
+      inference: {
+        complete: async (_p, opts) => {
+          calls.push({ ...opts });
+          return 'ok';
+        },
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'open' as const,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await surfaces.inference.complete('hi', { maxTokens: 8 } as never);
+    await surfaces.inference.complete('hi', {
+      maxTokens: 8,
+      lane: 'background',
+    } as never);
+    expect(calls[0].lane).toBe('interactive');
+    expect(calls[1].lane).toBe('background');
   });
 
-  it('inference.hear delegates to the plane, keeping format and forcing the lane', async () => {
+  it('propagates LaneClosedError unchanged', async () => {
+    const { deps } = makeDeps({
+      inference: {
+        complete: async () => {
+          throw new LaneClosedError();
+        },
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'until-idle' as const,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await expect(
+      surfaces.inference.complete('hi', {
+        maxTokens: 8,
+        lane: 'background',
+      } as never),
+    ).rejects.toMatchObject({ name: 'LaneClosedError' });
+  });
+
+  it('reports the plane lane state', async () => {
+    const { deps } = makeDeps({});
+    const { surfaces } = buildSurfaces(deps);
+    await expect(surfaces.inference.lane()).resolves.toBe('open');
+  });
+
+  it('inference.hear delegates to the plane, keeping format and passing the lane through', async () => {
     // CapSurfaces.inference promises the WHOLE Inference plane, so a child
     // granted 'inference' may call hear() — before it was wired here that
     // call reached an undefined surface method.
@@ -162,18 +207,18 @@ describe('buildSurfaces', () => {
         format: 'wav',
         lane: 'background',
       } as never),
-    ).resolves.toBe('heard:wav:interactive');
+    ).resolves.toBe('heard:wav:background');
     expect(deps.inference.hear).toHaveBeenCalledWith(new Uint8Array([1, 2]), {
       format: 'wav',
-      lane: 'interactive',
+      lane: 'background',
     });
     close();
   });
 
-  it("inference.hear forwards vad:'required' through the opts spread alongside the forced lane", async () => {
+  it("inference.hear forwards vad:'required' through the opts spread alongside the default lane", async () => {
     // The provider-level tests prove `vad:'required'` fail-closed behaviour;
     // this proves the field actually SURVIVES the extension-boundary spread
-    // (`{ ...(opts as object), lane: 'interactive' }`) rather than being
+    // (`{ lane: 'interactive', ...(opts as object) }`) rather than being
     // dropped or renamed on the way from an extension call to the dep.
     const { deps } = makeDeps();
     const { surfaces, close } = buildSurfaces(deps);

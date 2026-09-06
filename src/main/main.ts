@@ -996,6 +996,12 @@ app
       scheduler: p.scheduler,
       registerTool: (t) => (mcp ? mcp.registerTool(t) : () => {}),
       inference: p.inference,
+      // Both the extension-facing host.inference.lane() and the
+      // platform.lane event resolve through this SAME function, so they
+      // can never disagree about why the background lane is (or isn't)
+      // open right now.
+      laneState: () => backgroundLaneState(p),
+      onLaneChange: (cb) => p.inference.onLaneChange(cb),
       logSink: p.logSink,
       notify: (msg) => {
         new Notification({ title: product.productName, body: msg }).show();

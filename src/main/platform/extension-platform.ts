@@ -16,6 +16,7 @@ import type {
   ExtensionId,
   ExtensionSnapshot,
   ExtensionStatus,
+  LaneState,
   LogLevel,
   Manifest,
   McpTool,
@@ -159,7 +160,23 @@ export interface ExtensionPlatformDeps {
   senders: SenderRegistry;
   scheduler: CoreScheduler;
   registerTool(tool: McpTool): () => void;
-  inference: SurfaceDeps['inference'];
+  /** `lane` is deliberately excluded here: it is supplied at surface-build
+   *  time from `laneState()` below, not carried on this dep, so every
+   *  existing caller of this constructor keeps compiling unchanged. */
+  inference: Omit<SurfaceDeps['inference'], 'lane'>;
+  /** Resolves the CURRENT `LaneState` (open / disabled / battery /
+   *  until-idle / until-night) on demand — both `host.inference.lane()`
+   *  and the `platform.lane` event call this SAME resolver, which is what
+   *  makes them unable to disagree. The extension platform cannot compute
+   *  this itself (`backgroundLaneState` needs `platform.prefs` and
+   *  `platform.scheduler.env`, which this platform never receives), so the
+   *  construction site (main.ts) injects it. */
+  laneState(): LaneState;
+  /** Subscribes to the inference plane's own open/closed boolean
+   *  (`InferencePlane.onLaneChange`) so the platform can re-resolve
+   *  `laneState()` on every transition and emit `platform.lane` when the
+   *  resolved state actually changes. */
+  onLaneChange(cb: (open: boolean) => void): () => void;
   logSink: LogSink;
   notify(msg: string, level?: LogLevel): void;
   transportFactory(extensionId: string): HostTransport;
@@ -228,6 +245,27 @@ export function createExtensionPlatform(
 ): ExtensionPlatform {
   const entries = new Map<string, Entry>();
   const bus = createEventBus();
+
+  // The payload carries the RESOLVED LaneState, not the raw boolean the
+  // plane owns, so a listener learns WHY the lane is closed (battery vs.
+  // disabled vs. outside the window) — not only that it flipped. Dedup on
+  // the resolved string (not the boolean) so the two can never disagree:
+  // `lane()` and this event call the exact same `deps.laneState()`.
+  //
+  // Known gap: this only re-resolves when the plane's own boolean flips.
+  // A transition that leaves the boolean unchanged (e.g. 'battery' ->
+  // 'disabled', both closed) never triggers `onLaneChange`, so this event
+  // does not fire even though `laneState()` already reports the new
+  // reason — a listener polling `lane()` sees it, `platform.lane`
+  // subscribers do not. Fine for this task; a later task may want the
+  // platform to also watch prefs/env directly.
+  let lastLane: LaneState | null = null;
+  const offLane = deps.onLaneChange(() => {
+    const state = deps.laneState();
+    if (state === lastLane) return;
+    lastLane = state;
+    bus.emit('platform', 'platform.lane', { state });
+  });
 
   // Per-extension lifecycle serialization. Keyed on the extension id string
   // (NOT on an Entry object reference) so a composite op that replaces an
@@ -530,7 +568,7 @@ export function createExtensionPlatform(
           extensionId: e.manifest.id,
           dataDir: computeDataDir(e, deps),
           query: deps.store.read,
-          inference: deps.inference,
+          inference: { ...deps.inference, lane: async () => deps.laneState() },
           notify: deps.notify,
           bus,
           deliverEvent,
@@ -693,6 +731,7 @@ export function createExtensionPlatform(
     },
 
     async stop() {
+      offLane();
       installer.discardAll();
       for (const id of entries.keys()) {
         // eslint-disable-next-line no-await-in-loop

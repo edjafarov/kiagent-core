@@ -9,6 +9,13 @@ export interface InferencePlane extends Inference {
    *  active, outside the processing window) — background requests then fail
    *  fast with LaneClosedError. Interactive always flows. */
   setBackgroundOpen(open: boolean): void;
+  /** Fires on every REAL flip of the boolean the plane owns (never on a
+   *  no-op setBackgroundOpen call with the same value). The plane knows
+   *  nothing about prefs, so it reports only its own boolean — resolving
+   *  that into a `LaneState` (and telling 'battery' from 'disabled' from
+   *  'until-night' etc.) happens above it, in the extension platform, via
+   *  the injected `laneState()` resolver. */
+  onLaneChange(cb: (open: boolean) => void): () => void;
 }
 
 /** Thrown by the routing layer when NO ready provider supports a kind — as
@@ -51,6 +58,7 @@ export class LaneClosedError extends Error {
 export function createInference(logs: LogSink): InferencePlane {
   const providers: InferenceProvider[] = [];
   let backgroundOpen = true;
+  const laneSubs = new Set<(open: boolean) => void>();
 
   const gate = (lane: Lane): void => {
     if (lane !== 'interactive' && !backgroundOpen) throw new LaneClosedError();
@@ -131,7 +139,15 @@ export function createInference(logs: LogSink): InferencePlane {
     },
     providers: () => [...providers],
     setBackgroundOpen(open) {
+      if (open === backgroundOpen) return;
       backgroundOpen = open;
+      laneSubs.forEach((cb) => cb(open));
+    },
+    onLaneChange(cb) {
+      laneSubs.add(cb);
+      return () => {
+        laneSubs.delete(cb);
+      };
     },
   };
 }

@@ -59,7 +59,7 @@ export const NS_METHODS: Record<string, string[]> = {
   net: ['fetch'],
   db: ['exec', 'query'],
   ui: ['notify'],
-  inference: ['complete', 'see', 'read', 'hear'],
+  inference: ['complete', 'see', 'read', 'hear', 'lane'],
   files: ['list', 'read', 'write', 'move'],
   commands: ['register'],
 };

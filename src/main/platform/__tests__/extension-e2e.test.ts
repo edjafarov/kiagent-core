@@ -70,6 +70,8 @@ describe('extension runtime e2e (real forked child)', () => {
         read: async () => '',
         hear: async () => '',
       },
+      laneState: () => 'open',
+      onLaneChange: () => () => {},
       logSink: {
         log: (...a) => process.stderr.write(`${JSON.stringify(a)}\n`),
       },

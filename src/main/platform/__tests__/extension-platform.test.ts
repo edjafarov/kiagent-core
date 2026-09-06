@@ -101,6 +101,8 @@ describe('createExtensionPlatform', () => {
         read: async () => '',
         hear: async () => '',
       },
+      laneState: () => 'open',
+      onLaneChange: () => () => {},
       logSink: {
         log: (scope: string, level: string, msg: string) =>
           logs.push({ scope, level, msg }),
@@ -686,6 +688,8 @@ describe('createExtensionPlatform', () => {
         read: async () => '',
         hear: async () => '',
       },
+      laneState: () => 'open',
+      onLaneChange: () => () => {},
       logSink: { log: jest.fn() },
       notify: jest.fn(),
       transportFactory: () => {
@@ -818,6 +822,8 @@ describe('createExtensionPlatform', () => {
         read: async () => '',
         hear: async () => '',
       },
+      laneState: () => 'open',
+      onLaneChange: () => () => {},
       logSink: { log: jest.fn() },
       notify: jest.fn(),
       transportFactory: () => {

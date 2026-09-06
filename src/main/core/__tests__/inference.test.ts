@@ -127,4 +127,17 @@ describe('inference plane', () => {
     plane.setBackgroundOpen(false);
     await expect(plane.read(new Uint8Array([1]))).resolves.toBe('ocr:read');
   });
+
+  it('notifies lane subscribers only on a real transition', () => {
+    const plane = createInference(noopLogs);
+    const seen: boolean[] = [];
+    const off = plane.onLaneChange((open) => seen.push(open));
+    plane.setBackgroundOpen(true); // already true — no event
+    plane.setBackgroundOpen(false);
+    plane.setBackgroundOpen(false); // no change — no event
+    plane.setBackgroundOpen(true);
+    off();
+    plane.setBackgroundOpen(false); // unsubscribed
+    expect(seen).toEqual([false, true]);
+  });
 });
