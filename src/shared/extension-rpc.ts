@@ -12,6 +12,7 @@
 import type {
   Cap,
   DocumentInput,
+  EventMeta,
   ExternalRef,
   PullPhase,
   SourceDescriptor,
@@ -93,7 +94,7 @@ export type MainToChild =
        *  ONE endpoint implementation (transport.ts) serves both. */
       code?: SourceErrorCode;
     }
-  | { kind: 'event'; name: string; payload: unknown }
+  | { kind: 'event'; name: string; payload: unknown; meta: EventMeta }
   | { kind: 'src-next'; pullId: number }
   | { kind: 'src-abort'; pullId: number }
   | { kind: 'deactivate' };

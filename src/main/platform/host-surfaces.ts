@@ -9,7 +9,7 @@ import path from 'path';
 
 import Database from 'better-sqlite3';
 
-import type { LaneState, LogLevel, Query } from '@shared/contracts';
+import type { EventMeta, LaneState, LogLevel, Query } from '@shared/contracts';
 
 import type { LogSink } from '@main/core/engine/engine';
 
@@ -23,7 +23,7 @@ export interface EventBus {
   subscribe(
     extensionId: string,
     event: string,
-    deliver: (payload: unknown) => void,
+    deliver: (payload: unknown, meta: EventMeta) => void,
   ): () => void;
 }
 
@@ -32,9 +32,20 @@ export interface EventBus {
  *  (tests included) keeps compiling unchanged; production wires the real
  *  one so a dead subscriber's failure is reported, not silent. */
 export function createEventBus(logSink?: LogSink): EventBus {
-  const subs = new Map<string, Set<(payload: unknown) => void>>();
+  const subs = new Map<
+    string,
+    Set<(payload: unknown, meta: EventMeta) => void>
+  >();
   return {
-    emit(_from, event, payload) {
+    emit(from, event, payload) {
+      // Host-stamped, unforgeable provenance: `from` is exactly the first
+      // argument this function received — never read from `payload`, never
+      // defaulted, never something a subscriber can override. Every caller
+      // of `emit` is the host itself (the events surface passes
+      // `deps.extensionId`; the platform passes the literal 'platform') —
+      // an extension never gets to call this function directly, only
+      // through the surface, which is what makes `from` trustworthy.
+      const meta: EventMeta = { from, at: Date.now() };
       // Isolate each subscriber: one extension must not be able to starve
       // event delivery for every other extension. Without this, a single
       // throwing callback (a dead transport's `endpoint.post`, the
@@ -49,7 +60,7 @@ export function createEventBus(logSink?: LogSink): EventBus {
       // transition.
       subs.get(event)?.forEach((cb) => {
         try {
-          cb(payload);
+          cb(payload, meta);
         } catch (err) {
           logSink?.log(
             'platform',
@@ -119,7 +130,7 @@ export interface SurfaceDeps {
   notify(msg: string, level?: LogLevel): void;
   bus: EventBus;
   /** Ships a host event to the child (endpoint.post({kind:'event',…})). */
-  deliverEvent(name: string, payload: unknown): void;
+  deliverEvent(name: string, payload: unknown, meta: EventMeta): void;
 }
 
 const unsupported = (ns: string) => () => {
@@ -216,8 +227,8 @@ export function buildSurfaces(deps: SurfaceDeps): {
         if (eventSubs.has(name)) return;
         eventSubs.set(
           name,
-          deps.bus.subscribe(deps.extensionId, name, (p) =>
-            deps.deliverEvent(name, p),
+          deps.bus.subscribe(deps.extensionId, name, (p, meta) =>
+            deps.deliverEvent(name, p, meta),
           ),
         );
       },

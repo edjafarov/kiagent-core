@@ -4,7 +4,7 @@ import http from 'http';
 import os from 'os';
 import path from 'path';
 
-import type { Query } from '@shared/contracts';
+import type { EventMeta, Query } from '@shared/contracts';
 
 import { LaneClosedError } from '@main/core/inference';
 
@@ -23,7 +23,7 @@ function makeDeps(
   overrides: Partial<Parameters<typeof buildSurfaces>[0]> = {},
 ) {
   const bus = createEventBus();
-  const events: Array<{ name: string; payload: unknown }> = [];
+  const events: Array<{ name: string; payload: unknown; meta: EventMeta }> = [];
   return {
     events,
     deps: {
@@ -44,8 +44,8 @@ function makeDeps(
       },
       notify: jest.fn(),
       bus,
-      deliverEvent: (name: string, payload: unknown) =>
-        events.push({ name, payload }),
+      deliverEvent: (name: string, payload: unknown, meta: EventMeta) =>
+        events.push({ name, payload, meta }),
       ...overrides,
     },
   };
@@ -100,6 +100,16 @@ describe('createEventBus', () => {
 
     expect(() => bus.emit('platform', 'ping', { n: 1 })).not.toThrow();
     expect(seen).toEqual([{ n: 1 }]);
+  });
+
+  it('stamps the emitter on delivery', () => {
+    const bus = createEventBus();
+    const seen: Array<[unknown, EventMeta]> = [];
+    bus.subscribe('b', 'x.record', (p, meta) => seen.push([p, meta]));
+    // The payload claims a different producer — meta.from must ignore it.
+    bus.emit('a', 'x.record', { producer: 'b' });
+    expect(seen[0][1].from).toBe('a'); // NOT the payload's claim
+    expect(typeof seen[0][1].at).toBe('number');
   });
 });
 
@@ -301,7 +311,13 @@ describe('buildSurfaces', () => {
     await new Promise((r) => {
       setTimeout(r, 5);
     });
-    expect(a.events).toEqual([{ name: 'ping', payload: { n: 1 } }]);
+    expect(a.events).toEqual([
+      {
+        name: 'ping',
+        payload: { n: 1 },
+        meta: { from: 'other.ext', at: expect.any(Number) },
+      },
+    ]);
     sa.surfaces.events.off('ping');
     sb.surfaces.events.emit('ping', { n: 2 });
     await new Promise((r) => {
@@ -320,7 +336,34 @@ describe('buildSurfaces', () => {
     await new Promise((r) => {
       setTimeout(r, 5);
     });
-    expect(events).toEqual([{ name: 'ping', payload: { v: 1 } }]);
+    expect(events).toEqual([
+      {
+        name: 'ping',
+        payload: { v: 1 },
+        meta: { from: 'test.basic', at: expect.any(Number) },
+      },
+    ]);
+    close();
+  });
+
+  it('stamps the surface owner, not an argument', async () => {
+    const { events, deps } = makeDeps({ extensionId: 'kiagent.a' });
+    const { surfaces, close } = buildSurfaces(deps);
+    surfaces.events.on('x.record');
+    // A payload claiming a different producer must not influence meta.from —
+    // only deps.extensionId (the surface's own owner, self-delivered here)
+    // can, and the extension has no way to pass an argument that reaches it.
+    surfaces.events.emit('x.record', { producer: 'kiagent.b' });
+    await new Promise((r) => {
+      setTimeout(r, 5);
+    });
+    expect(events).toEqual([
+      {
+        name: 'x.record',
+        payload: { producer: 'kiagent.b' },
+        meta: { from: 'kiagent.a', at: expect.any(Number) },
+      },
+    ]);
     close();
   });
 

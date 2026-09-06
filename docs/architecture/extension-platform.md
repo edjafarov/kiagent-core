@@ -80,7 +80,7 @@ These eight caps each map 1:1 to a host namespace (`CapSurfaces` in contracts.ts
 | `ui`        | `host.ui.notify`         | User notifications                                                                                           |
 | `commands`  | `host.commands.register` | Register invokable commands — _declared in the contract, rejected at runtime today_                          |
 | `inference` | `host.inference`         | Local AI: `complete`, `see`, `read`, `hear`                                                                  |
-| `events`    | `host.events`            | Cross-extension pub/sub: `on`, `emit`                                                                        |
+| `events`    | `host.events`            | Cross-extension pub/sub: `on`, `emit` — a listener receives `(payload, meta)`; `meta.from` is host-stamped and cannot be forged by a payload field (or by any argument the emitter passes); there is no filtering, ACL, persistence or replay — a listener now has the information to accept or reject what it receives |
 
 Two further caps grant **no host namespace at all** — they gate what the main process will accept
 _back_ from the extension rather than what the extension may call:

@@ -23,6 +23,7 @@
  */
 import type {
   Cap,
+  EventMeta,
   ExtensionStatus,
   SendIntent,
   SendResult,
@@ -50,7 +51,9 @@ export interface HostDeps {
   dataDir: string;
   caps: Cap[];
   transportFactory(): HostTransport;
-  makeSurfaces(deliverEvent: (name: string, payload: unknown) => void): {
+  makeSurfaces(
+    deliverEvent: (name: string, payload: unknown, meta: EventMeta) => void,
+  ): {
     surfaces: Surfaces;
     close(): void;
   };
@@ -167,8 +170,13 @@ export function createExtensionHost(deps: HostDeps): {
       transport = deps.transportFactory();
       endpoint = createRpcEndpoint(transport);
       const proxySet = createSourceProxySet(endpoint);
-      const surfacesHandle = deps.makeSurfaces((name, payload) =>
-        endpoint!.post({ kind: 'event', name, payload } satisfies MainToChild),
+      const surfacesHandle = deps.makeSurfaces((name, payload, meta) =>
+        endpoint!.post({
+          kind: 'event',
+          name,
+          payload,
+          meta,
+        } satisfies MainToChild),
       );
       const router = createHostRouter({
         extensionId: deps.extensionId,
