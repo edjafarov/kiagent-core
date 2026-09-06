@@ -439,6 +439,12 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   const now = deps.now ?? (() => new Date().toISOString());
   const nudge = new EventEmitter();
   nudge.setMaxListeners(0);
+  // Shared with outbox.ts's onChange: create/transition/expireOverdue fire it
+  // from inside that module, and commit() fires it directly below for the
+  // removeAccount cascade, which deletes outbox rows in SQL (ON DELETE
+  // CASCADE, schema.ts:561) without ever calling into outbox.ts.
+  const outboxChanged = new EventEmitter();
+  outboxChanged.setMaxListeners(0);
   let closed = false;
 
   // The procedural, read-your-own-writes commit transaction runs on the RAW
@@ -895,6 +901,12 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         : ((await db.proc!('commit', batch)) as Seq);
       corpusLangsCache = null;
       nudge.emit('commit');
+      // The cascade runs entirely in SQL (schema.ts:561's ON DELETE CASCADE)
+      // and never calls outbox.ts, so it can't fire onChange itself — and
+      // whether it actually took outbox rows with it isn't observable from
+      // `seq` alone. Fire unconditionally: an extra "may have changed" signal
+      // is harmless (consumers re-read list/count), a missed one is not.
+      if ('removeAccount' in batch) outboxChanged.emit('change');
       return seq;
     },
 
@@ -953,6 +965,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       now,
       encrypt: deps.encrypt,
       decrypt: deps.decrypt,
+      changed: outboxChanged,
     }),
 
     vault: {
@@ -1103,6 +1116,12 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         await db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
         corpusLangsCache = null;
         nudge.emit('commit');
+        // `DELETE FROM accounts` above cascades in SQL to `outbox` (ON
+        // DELETE CASCADE, schema.ts:561) the same way commit()'s
+        // removeAccount branch does — outbox.ts never observes either
+        // wipe, so this fires unconditionally rather than leave a factory
+        // reset silently stale for anything watching the outbox.
+        outboxChanged.emit('change');
       },
     },
 

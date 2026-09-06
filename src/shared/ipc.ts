@@ -221,6 +221,9 @@ export interface OutboxPanelRow {
   deliveryUncertain: boolean;
   createdAt: string;
   sentAt: string | null;
+  /** Verbatim from the row (`store/outbox.ts` `OutboxRow.to`/`.cc`). */
+  to: string[];
+  cc: string[];
 }
 
 /** invoke(channel, payload) → response. */
@@ -354,8 +357,22 @@ export interface Invokes {
   'logs:export': { req: void; res: string };
   'mcp-activity:recent': { req: void; res: McpActivityRecord[] };
 
-  /** Outbox history panel: recent outbound rows, newest first. */
-  'outbox:list': { req: { limit?: number }; res: OutboxPanelRow[] };
+  /** Outbox history panel: recent outbound rows, newest first. `status`
+   *  filters to any subset of `OutboxStatus`; `before` is a keyset cursor —
+   *  the last row of the previous page — for paging past the default/max
+   *  page size. Payload-less and `{ limit }`-only calls keep today's
+   *  behaviour exactly (every status, no cursor). */
+  'outbox:list': {
+    req: {
+      limit?: number;
+      status?: OutboxStatus[];
+      before?: { createdAt: string; draftId: string };
+    };
+    res: OutboxPanelRow[];
+  };
+  /** Exact count of pending ('draft') rows across every account, after the
+   *  same overdue-draft sweep `outbox:list` runs. */
+  'outbox:pending-count': { req: void; res: { pending: number } };
   /** Discard a pending draft (no-op if it left 'draft' meanwhile). */
   'outbox:discard': { req: { draftId: string }; res: void };
   /** Duplicate a terminal row into a fresh draft and open its confirm page. */
@@ -491,6 +508,13 @@ export interface Pushes {
   'push:logs': LogRecord[];
   'push:mcp-activity': McpActivityRecord[];
   'push:update-state': UpdateState;
+  /** Fired after outbox rows may have changed (create, a transition that
+   *  actually moved a row, an expireOverdue sweep that expired ≥1 row, or an
+   *  account removal, which cascades in SQL and cannot report a precise
+   *  delta). Coalesced to at most one broadcast per 50 ms. Carries no
+   *  payload — this is a hint to re-read `outbox:list`/`outbox:pending-count`,
+   *  never a statement that a specific row changed. */
+  'push:outbox-changed': void;
 }
 
 export type InvokeChannel = keyof Invokes;
@@ -556,6 +580,7 @@ const INVOKE_CHANNEL_MAP = {
   'logs:export': 0,
   'mcp-activity:recent': 0,
   'outbox:list': 0,
+  'outbox:pending-count': 0,
   'outbox:discard': 0,
   'outbox:redraft': 0,
   'outbox:open-confirm': 0,
@@ -598,6 +623,7 @@ const PUSH_CHANNEL_MAP = {
   'push:logs': 0,
   'push:mcp-activity': 0,
   'push:update-state': 0,
+  'push:outbox-changed': 0,
 } as const satisfies Record<PushChannel, 0>;
 
 export const PUSH_CHANNELS = Object.keys(

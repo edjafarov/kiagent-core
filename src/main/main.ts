@@ -58,6 +58,7 @@ import { parseGitHubRef, formatGitHubRef } from './marketplace/github-ref';
 import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
+import { wireOutboxPush } from './outbox-push';
 import { createUpdater } from './updater/updater';
 import { createUpdateNotifier } from './updater/native-notify';
 import { subscribeUpdaterState, updaterInvokeHandlers } from './updater/ipc';
@@ -673,7 +674,7 @@ function registerIpc(
     'extension:grant-consent': ({ id }) => extensions.grantConsent(id),
 
     // The two seams: the updater's three channels and the Outbox history
-    // panel's four (spec §10). Both hand back a `Pick<InvokeHandlers, …>`
+    // panel's five (spec §10). Both hand back a `Pick<InvokeHandlers, …>`
     // instead of registering anything, which is what lets them live in their
     // own modules and still be counted here.
     ...updaterInvokeHandlers(updater),
@@ -811,6 +812,11 @@ app
         { error: err instanceof Error ? err.message : String(err) },
       );
     }
+
+    // Tells the renderer the outbox may have changed (create, a transition,
+    // an expired sweep, or an account removal cascade) without a per-row
+    // payload — coalesced internally to one push per 50 ms.
+    wireOutboxPush(p.store, broadcast);
 
     mcp = await startMcp({
       query: p.store.read,
