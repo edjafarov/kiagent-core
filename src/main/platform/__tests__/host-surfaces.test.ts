@@ -124,6 +124,19 @@ describe('buildSurfaces', () => {
     close();
   });
 
+  it('delegates countBy to the query plane', async () => {
+    const countBy = jest.fn(async () => [{ key: 'a@example.com', count: 3 }]);
+    const { deps } = makeDeps({
+      query: { ...fakeQuery, countBy } as unknown as Query,
+    });
+    const { surfaces, close } = buildSurfaces(deps);
+    await expect(
+      surfaces.query.countBy({ field: 'from' } as never),
+    ).resolves.toEqual([{ key: 'a@example.com', count: 3 }]);
+    expect(countBy).toHaveBeenCalledWith({ field: 'from' });
+    close();
+  });
+
   it('db is a private sqlite file under dataDir that round-trips rows', async () => {
     const { deps } = makeDeps();
     const { surfaces, close } = buildSurfaces(deps);

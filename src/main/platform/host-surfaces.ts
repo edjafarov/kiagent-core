@@ -155,6 +155,7 @@ export function buildSurfaces(deps: SurfaceDeps): {
           type as never,
         ),
       count: (q) => deps.query.count((q ?? {}) as never),
+      countBy: (q) => deps.query.countBy((q ?? {}) as never),
       accounts: () => deps.query.accounts(),
     },
     net: {

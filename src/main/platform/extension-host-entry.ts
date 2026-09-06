@@ -54,6 +54,7 @@ export const NS_METHODS: Record<string, string[]> = {
     'children',
     'byExternalId',
     'count',
+    'countBy',
     'accounts',
   ],
   net: ['fetch'],
