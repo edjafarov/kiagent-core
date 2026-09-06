@@ -299,7 +299,7 @@ export function createExtensionPlatform(
   deps: ExtensionPlatformDeps,
 ): ExtensionPlatform {
   const entries = new Map<string, Entry>();
-  const bus = createEventBus();
+  const bus = createEventBus(deps.logSink);
 
   // The payload carries the RESOLVED LaneState, not the raw boolean the
   // plane owns, so a listener learns WHY the lane is closed (battery vs.

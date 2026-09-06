@@ -51,6 +51,58 @@ function makeDeps(
   };
 }
 
+describe('createEventBus', () => {
+  it('isolates subscribers: one throwing does not stop the next from receiving the event', () => {
+    const logSink = { log: jest.fn() };
+    const bus = createEventBus(logSink as never);
+    const seenByFirst: unknown[] = [];
+    const seenBySecond: unknown[] = [];
+    bus.subscribe('ext.a', 'ping', () => {
+      throw new Error('dead transport');
+    });
+    bus.subscribe('ext.b', 'ping', (p) => seenByFirst.push(p));
+    bus.subscribe('ext.c', 'ping', (p) => seenBySecond.push(p));
+
+    expect(() => bus.emit('platform', 'ping', { n: 1 })).not.toThrow();
+
+    expect(seenByFirst).toEqual([{ n: 1 }]);
+    expect(seenBySecond).toEqual([{ n: 1 }]);
+    expect(logSink.log).toHaveBeenCalledWith(
+      'platform',
+      'warn',
+      "event subscriber for 'ping' threw",
+      { error: expect.stringContaining('dead transport') },
+    );
+  });
+
+  it('a subsequent distinct emit is still delivered to every subscriber after an earlier throw', () => {
+    const logSink = { log: jest.fn() };
+    const bus = createEventBus(logSink as never);
+    const seen: unknown[] = [];
+    bus.subscribe('ext.a', 'ping', () => {
+      throw new Error('still dead');
+    });
+    bus.subscribe('ext.b', 'ping', (p) => seen.push(p));
+
+    bus.emit('platform', 'ping', { n: 1 });
+    bus.emit('platform', 'ping', { n: 2 });
+
+    expect(seen).toEqual([{ n: 1 }, { n: 2 }]);
+  });
+
+  it('works with no logSink supplied (every existing caller keeps compiling unchanged)', () => {
+    const bus = createEventBus();
+    const seen: unknown[] = [];
+    bus.subscribe('ext.a', 'ping', () => {
+      throw new Error('dead transport');
+    });
+    bus.subscribe('ext.b', 'ping', (p) => seen.push(p));
+
+    expect(() => bus.emit('platform', 'ping', { n: 1 })).not.toThrow();
+    expect(seen).toEqual([{ n: 1 }]);
+  });
+});
+
 describe('buildSurfaces', () => {
   it('query delegates and count round-trips', async () => {
     const { deps } = makeDeps();

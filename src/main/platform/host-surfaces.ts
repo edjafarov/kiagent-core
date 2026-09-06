@@ -11,6 +11,8 @@ import Database from 'better-sqlite3';
 
 import type { LaneState, LogLevel, Query } from '@shared/contracts';
 
+import type { LogSink } from '@main/core/engine/engine';
+
 import { assertAllowedSql } from './db-guard';
 import { createNetFetch } from './net-guard';
 
@@ -25,12 +27,38 @@ export interface EventBus {
   ): () => void;
 }
 
-/** Delivery includes the emitter itself when subscribed — self-delivery is part of the contract. */
-export function createEventBus(): EventBus {
+/** Delivery includes the emitter itself when subscribed — self-delivery is
+ *  part of the contract. `logSink` is optional so every existing caller
+ *  (tests included) keeps compiling unchanged; production wires the real
+ *  one so a dead subscriber's failure is reported, not silent. */
+export function createEventBus(logSink?: LogSink): EventBus {
   const subs = new Map<string, Set<(payload: unknown) => void>>();
   return {
     emit(_from, event, payload) {
-      subs.get(event)?.forEach((cb) => cb(payload));
+      // Isolate each subscriber: one extension must not be able to starve
+      // event delivery for every other extension. Without this, a single
+      // throwing callback (a dead transport's `endpoint.post`, the
+      // realistic case — see host-process.ts's deliverEvent) would abort
+      // `forEach` mid-iteration, silently dropping the event for every
+      // subscriber registered AFTER the one that threw. That matters
+      // doubly for `platform.lane`: its dedup already recorded the
+      // transition as delivered (see createLaneGate in
+      // extension-platform.ts) the instant `emit` was called, so a
+      // fan-out abort here would drop it for the un-notified subscribers
+      // PERMANENTLY — not just for this tick, until the next real
+      // transition.
+      subs.get(event)?.forEach((cb) => {
+        try {
+          cb(payload);
+        } catch (err) {
+          logSink?.log(
+            'platform',
+            'warn',
+            `event subscriber for '${event}' threw`,
+            { error: String(err) },
+          );
+        }
+      });
     },
     subscribe(_extensionId, event, deliver) {
       let set = subs.get(event);
