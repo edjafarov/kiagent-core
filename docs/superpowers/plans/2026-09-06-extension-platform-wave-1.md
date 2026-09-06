@@ -40,9 +40,11 @@
 
 **Interfaces:**
 - Consumes: `backgroundLaneState(platform, now?)` (`src/main/core/boot.ts:386-405`), `LaneState` (`contracts.ts:1136`).
-- Produces: `InferencePlane.onLaneChange(cb: (state: LaneState) => void): () => void`; `SurfaceDeps.inference.lane(): Promise<LaneState>`; host event `platform.lane` with payload `{ state: LaneState }`.
+- Produces: `InferencePlane.onLaneChange(cb: (open: boolean) => void): () => void` — the plane knows nothing about prefs, so it reports the boolean it owns; `SurfaceDeps.inference.lane(): Promise<LaneState>`; host event `platform.lane` with payload `{ state: LaneState }`.
 
 **The plane cannot resolve `LaneState` on its own.** `backgroundLaneState` reads `platform.prefs` and `platform.scheduler.env` (`boot.ts:390-405`), and `extension-platform.ts` receives only `scheduler` and `inference: SurfaceDeps['inference']` (`:155-170`) — no `CorePlatform`. So the resolver is injected: `createExtensionPlatform` gains `laneState(): LaneState`, and `main.ts:975-998` passes `() => backgroundLaneState(p)` beside the existing `inference: p.inference`. Both `host.inference.lane()` and the `platform.lane` payload call that one resolver, which is what makes them unable to disagree.
+
+**The subscription needs a type as well as a resolver.** `createExtensionPlatform` types its `inference` dep as `SurfaceDeps['inference']` (`extension-platform.ts:162`) — `complete/see/read/hear` plus the `lane` this task adds, and no `onLaneChange`. `main.ts` happens to pass the whole plane, but nothing in the type says so, and step 8's subscription will not compile against the declared shape. Either retype that dep as `InferencePlane`, or add an explicit `onLaneChange(cb: (open: boolean) => void): () => void` to the deps interface beside `laneState()`. Pick one in this task; do not rely on the runtime value being wider than its type.
 
 - [ ] **Step 1: Write the failing surface test**
 
