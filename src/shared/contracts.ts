@@ -780,14 +780,23 @@ export interface InferenceProvider {
  *  generation was recorded against. Two throw sites share this ONE class:
  *  the plane's own `checkGeneration` (`src/main/core/inference.ts`,
  *  comparing the caller's recorded generation against the plane's CURRENT
- *  one — the ordinary case, `expected !== actual`) and a provider's own
- *  `handle()` re-check (e.g. `src/main/providers/local-llm/provider.ts`,
- *  used when a provider's internal model resolution could in principle
- *  drift out of step with the plane's generation counter — an
+ *  one — `source: 'generation'`, the ordinary case, `expected !== actual`)
+ *  and a provider's own `handle()` re-check (e.g.
+ *  `src/main/providers/local-llm/provider.ts`, used when a provider's
+ *  internal model resolution could in principle drift out of step with
+ *  the plane's generation counter — `source: 'model-drift'`, an
  *  `onChange`-coverage gap, not the ordinary case: there, `expected` and
  *  `actual` are the SAME generation number, because the counter never
  *  moved even though the model did; that equality is not a mistake to
  *  suppress, it IS the diagnostic).
+ *
+ *  `source` exists because that distinction must not live ONLY in this
+ *  comment: a caller on the far side of the extension RPC boundary sees
+ *  nothing but `name` plus fields, and `expected === actual` alone reads
+ *  as "no fields to compare" rather than "the counter didn't move but the
+ *  model did anyway" — an anomaly worth surfacing differently from an
+ *  ordinary stale-generation rejection. `source` makes that read possible
+ *  from the payload alone.
  *
  *  Lives here, not next to either throw site, so both `@main/core/inference`
  *  and a provider module can import the identical class without an
@@ -796,7 +805,7 @@ export interface InferenceProvider {
  *  Discriminate by `name === 'ModelChangedError'`, not `instanceof`: errors
  *  cross the extension RPC boundary (`src/shared/extension-rpc.ts`) via a
  *  process fork, and class identity does not survive that trip — `name`
- *  and the three fields below are what a caller on the other side actually
+ *  and the fields below are what a caller on the other side actually
  *  sees. Exactly one field-type contract for both throw sites so a caller
  *  need not branch on `typeof expected` to read it safely. */
 export class ModelChangedError extends Error {
@@ -806,14 +815,28 @@ export class ModelChangedError extends Error {
 
   readonly modelId: string;
 
-  constructor(expected: number, actual: number, modelId: string) {
+  /** `'generation'`: the ordinary case — the plane's generation counter
+   *  moved between `describe()` and this call. `'model-drift'`: the
+   *  anomalous case — a provider's own model resolution changed while the
+   *  generation counter did NOT move, i.e. an `onChange`-coverage bug. */
+  readonly source: 'generation' | 'model-drift';
+
+  constructor(
+    expected: number,
+    actual: number,
+    modelId: string,
+    source: 'generation' | 'model-drift',
+  ) {
     super(
-      `the model changed between lookup and call (expected generation ${expected}, now ${actual})`,
+      source === 'generation'
+        ? `the model changed between lookup and call (expected generation ${expected}, now ${actual})`
+        : `the model drifted to '${modelId}' without a generation bump (still generation ${expected}) — an onChange-coverage gap`,
     );
     this.name = 'ModelChangedError';
     this.expected = expected;
     this.actual = actual;
     this.modelId = modelId;
+    this.source = source;
   }
 }
 

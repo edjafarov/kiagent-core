@@ -953,10 +953,14 @@ describe('LocalLlmProvider', () => {
         // `expected` and `actual`: the counter didn't move, but the model did
         // anyway — exactly the onChange-coverage-gap signature this check
         // exists to catch. `modelId` is the model that actually resolved.
+        // `source: 'model-drift'` (fix round 2) is the explicit
+        // discriminant an RPC caller reads instead of inferring the
+        // anomaly from `expected === actual` alone.
         name: 'ModelChangedError',
         expected: 1,
         actual: 1,
         modelId: E4B_MODEL.id,
+        source: 'model-drift',
       });
       expect(mockApi.chatText).not.toHaveBeenCalled();
     });

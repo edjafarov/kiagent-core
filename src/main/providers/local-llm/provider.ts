@@ -394,6 +394,7 @@ export function createLocalLlmProvider(deps: {
           generation ?? -1,
           generation ?? -1,
           model.id,
+          'model-drift',
         );
       }
       const s = await ensureServer(model);

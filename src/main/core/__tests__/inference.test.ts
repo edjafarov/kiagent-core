@@ -198,6 +198,7 @@ describe('inference plane', () => {
     ).rejects.toMatchObject({
       name: 'ModelChangedError',
       expected: d!.generation,
+      source: 'generation',
     });
     expect(handle).toHaveBeenCalledTimes(0);
   });
@@ -277,6 +278,7 @@ describe('inference plane', () => {
     expect(caught).toBeInstanceOf(ModelChangedError);
     expect((caught as ModelChangedError).name).toBe('ModelChangedError');
     expect((caught as ModelChangedError).modelId).toBe('m1');
+    expect((caught as ModelChangedError).source).toBe('generation');
   });
 
   it('widens the provider payload with profile, system, generation and expectModelId', async () => {
@@ -367,6 +369,54 @@ describe('inference plane', () => {
     // NOW resolves) — the pre-fix behavior, which can never differ from
     // what handle() itself resolves. The fix threads forward what the
     // caller's earlier lookup actually told them: 'm1'.
+    expect((seenPayload as { expectModelId?: string }).expectModelId).toBe(
+      'm1',
+    );
+  });
+
+  // Fix round 2, post-review (finding 1): `describedAt` is a single slot
+  // per kind — a SECOND caller's describe() call must not overwrite what
+  // an earlier caller's describe() recorded for the same (still-current)
+  // generation. Without this, the exact interleaving the check exists to
+  // catch — a model drift between two describe() calls at one generation
+  // — erases its own evidence: the second call's fresher read would
+  // overwrite the first call's now-stale one, and the first caller's
+  // later `complete()` would compare against the fresh (already-drifted)
+  // value and pass clean.
+  it('a later describe() at the same generation does not erase an earlier describe()-time record', async () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 42 });
+    let currentModelId = 'm1';
+    let seenPayload: unknown;
+    plane.register({
+      id: 'x',
+      supports: ['complete'],
+      status: () => 'ready',
+      describe: () => ({ modelId: currentModelId }),
+      handle: async (req) => {
+        seenPayload = req.payload;
+        return 'ok';
+      },
+    });
+
+    // Caller A looks up the model first, recording 'm1'.
+    const a = await plane.describe('complete');
+    expect(a).toMatchObject({ modelId: 'm1' });
+
+    // The model drifts WITHOUT a generation bump — the onChange-coverage
+    // gap itself; the generation caller A holds is still current.
+    currentModelId = 'm2';
+
+    // Caller B looks up the model SECOND, at the SAME (still-current)
+    // generation. B truthfully sees the live 'm2' in its own return
+    // value — first-write-wins only pins the INTERNAL record, not what a
+    // later describe() call reports to its own caller.
+    const b = await plane.describe('complete');
+    expect(b).toMatchObject({ modelId: 'm2', generation: a!.generation });
+
+    // Caller A's later call, citing A's OWN generation, must still be
+    // checked against A's ORIGINAL recorded modelId ('m1') — not B's
+    // fresher 'm2' — or the drift A could have caught is invisible.
+    await plane.complete('p', { generation: a!.generation });
     expect((seenPayload as { expectModelId?: string }).expectModelId).toBe(
       'm1',
     );
