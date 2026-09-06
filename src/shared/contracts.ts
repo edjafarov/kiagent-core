@@ -700,6 +700,47 @@ export interface Inference {
   ): Promise<string>;
 }
 
+/** `host.inference.*` as an extension sees it: the plane's four calls plus
+ *  `lane()`, so an extension can read `LaneState` (why the background lane
+ *  is or isn't open) instead of hammering a closed lane. `lane()` is
+ *  deliberately NOT a member of `Inference` itself — the plane has no
+ *  access to prefs/scheduler and cannot resolve `LaneState` on its own
+ *  (`backgroundLaneState`, `src/main/core/boot.ts`); the extension platform
+ *  injects the resolver only at the point it builds this namespace. */
+export interface ExtensionInference extends Inference {
+  lane(): Promise<LaneState>;
+  /** Widened over `Inference.complete`: a deterministic decoding profile
+   *  for classification-style prompts, a separate system message, and a
+   *  generation token obtained from `describe()` — rejected with
+   *  ModelChangedError (discriminate by `name`, never `instanceof`: it
+   *  crosses the extension RPC boundary, `src/shared/extension-rpc.ts`,
+   *  where class identity does not survive) when the model changed
+   *  between `describe()` and this call. `see`/`read`/`hear` are
+   *  deliberately NOT widened — only `complete` gained these fields on
+   *  the plane (`InferencePlane`, `src/main/core/inference.ts`). */
+  complete(
+    prompt: string,
+    opts?: {
+      maxTokens?: number;
+      lane?: Lane;
+      profile?: 'default' | 'deterministic';
+      system?: string;
+      generation?: number;
+    },
+  ): Promise<string>;
+  /** Resolves the provider that WOULD answer `kind` right now, exactly as
+   *  the call path's internal `pick(kind)` does, and reports its model
+   *  identity plus the plane's current generation token — so an extension
+   *  can compute a cache key BEFORE calling and later pass the generation
+   *  back to `complete()` to be rejected if the model changed underneath
+   *  it. `null` when no ready provider supports the kind; never throws. */
+  describe(kind: 'complete' | 'see' | 'read' | 'hear'): Promise<{
+    providerId: string;
+    modelId: string;
+    generation: number;
+  } | null>;
+}
+
 export type ProviderStatus =
   | 'ready'
   | 'standby'
@@ -718,6 +759,85 @@ export interface InferenceProvider {
     payload: unknown;
     lane: Lane;
   }): Promise<unknown>;
+  /** Model identity for a kind this provider supports — asked BEFORE a
+   *  call, not derived from one. Optional so every existing provider (none
+   *  of which implement it yet) keeps compiling unchanged; a provider that
+   *  omits it is reported by the plane as `{ modelId: provider.id }`. Never
+   *  throws; `null` when the provider cannot resolve a model right now. */
+  describe?(kind: 'complete' | 'see' | 'read' | 'hear'): {
+    modelId: string;
+  } | null;
+  /** Subscribe to "the model this provider would serve just changed" —
+   *  e.g. the user switched the selected model, or the servable model was
+   *  re-resolved to a different one. The plane bumps its generation token
+   *  on each call. Optional for the same reason as `describe`; a provider
+   *  that never changes model mid-run need not implement it. */
+  onChange?(cb: () => void): () => void;
+}
+
+/** Thrown when a caller passes a `generation` it got from `describe()` and
+ *  the model that will actually answer is no longer the one that
+ *  generation was recorded against. Two throw sites share this ONE class:
+ *  the plane's own `checkGeneration` (`src/main/core/inference.ts`,
+ *  comparing the caller's recorded generation against the plane's CURRENT
+ *  one — `source: 'generation'`, the ordinary case, `expected !== actual`)
+ *  and a provider's own `handle()` re-check (e.g.
+ *  `src/main/providers/local-llm/provider.ts`, used when a provider's
+ *  internal model resolution could in principle drift out of step with
+ *  the plane's generation counter — `source: 'model-drift'`, an
+ *  `onChange`-coverage gap, not the ordinary case: there, `expected` and
+ *  `actual` are the SAME generation number, because the counter never
+ *  moved even though the model did; that equality is not a mistake to
+ *  suppress, it IS the diagnostic).
+ *
+ *  `source` exists because that distinction must not live ONLY in this
+ *  comment: a caller on the far side of the extension RPC boundary sees
+ *  nothing but `name` plus fields, and `expected === actual` alone reads
+ *  as "no fields to compare" rather than "the counter didn't move but the
+ *  model did anyway" — an anomaly worth surfacing differently from an
+ *  ordinary stale-generation rejection. `source` makes that read possible
+ *  from the payload alone.
+ *
+ *  Lives here, not next to either throw site, so both `@main/core/inference`
+ *  and a provider module can import the identical class without an
+ *  inverted dependency (a provider must not depend on the plane).
+ *
+ *  Discriminate by `name === 'ModelChangedError'`, not `instanceof`: errors
+ *  cross the extension RPC boundary (`src/shared/extension-rpc.ts`) via a
+ *  process fork, and class identity does not survive that trip — `name`
+ *  and the fields below are what a caller on the other side actually
+ *  sees. Exactly one field-type contract for both throw sites so a caller
+ *  need not branch on `typeof expected` to read it safely. */
+export class ModelChangedError extends Error {
+  readonly expected: number;
+
+  readonly actual: number;
+
+  readonly modelId: string;
+
+  /** `'generation'`: the ordinary case — the plane's generation counter
+   *  moved between `describe()` and this call. `'model-drift'`: the
+   *  anomalous case — a provider's own model resolution changed while the
+   *  generation counter did NOT move, i.e. an `onChange`-coverage bug. */
+  readonly source: 'generation' | 'model-drift';
+
+  constructor(
+    expected: number,
+    actual: number,
+    modelId: string,
+    source: 'generation' | 'model-drift',
+  ) {
+    super(
+      source === 'generation'
+        ? `the model changed between lookup and call (expected generation ${expected}, now ${actual})`
+        : `the model drifted to '${modelId}' without a generation bump (still generation ${expected}) — an onChange-coverage gap`,
+    );
+    this.name = 'ModelChangedError';
+    this.expected = expected;
+    this.actual = actual;
+    this.modelId = modelId;
+    this.source = source;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -900,6 +1020,19 @@ export interface ScopedFiles {
   move(from: string, to: string): Promise<void>;
 }
 
+/** Host-stamped provenance for a delivered event. `from` is the emitter's
+ *  extension id (or the literal 'platform' for platform-emitted events),
+ *  stamped by the host at emit time — never read from, defaulted from, or
+ *  overridable by the payload or by any argument the emitting extension
+ *  supplies. `at` is the host's `Date.now()` at the moment of emission.
+ *  Plain data: it must survive the fork boundary (structured clone /
+ *  `serialization: 'advanced'`) unchanged, so it carries no methods and no
+ *  class identity. */
+export interface EventMeta {
+  from: string;
+  at: number;
+}
+
 export interface CapSurfaces {
   query: { query: Query };
   /** The platform's fetch — shared retry/backoff applies by default. */
@@ -912,12 +1045,23 @@ export interface CapSurfaces {
       register(id: string, handler: (args: unknown) => unknown): () => void;
     };
   };
-  /** Real-time model access ('interactive' lane) — for commands and tools. */
-  inference: { inference: Inference };
+  /** Real-time model access ('interactive' lane by default) — for commands
+   *  and tools. `lane()` is extension-facing ONLY: it is not a member of
+   *  `Inference` itself (the plane cannot resolve `LaneState` on its own —
+   *  see `InferencePlane.onLaneChange`), so it lives here, on the surface
+   *  the extension boundary hands out, not on the base contract that
+   *  `InferencePlane`/`EngineDeps` also implement. */
+  inference: { inference: ExtensionInference };
   /** Lifecycle + cross-extension signals ONLY. Data changes are the feed. */
   events: {
     events: {
-      on(event: string, cb: (payload: unknown) => void): () => void;
+      /** `meta` is additive: a one-argument `(payload) => void` listener
+       *  keeps compiling and running unchanged — `meta.from` is there for
+       *  a listener that wants to know who sent it. */
+      on(
+        event: string,
+        cb: (payload: unknown, meta: EventMeta) => void,
+      ): () => void;
       emit(event: string, payload: unknown): void;
     };
   };

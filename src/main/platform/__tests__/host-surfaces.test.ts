@@ -4,7 +4,9 @@ import http from 'http';
 import os from 'os';
 import path from 'path';
 
-import type { Query } from '@shared/contracts';
+import type { EventMeta, Query } from '@shared/contracts';
+
+import { LaneClosedError } from '@main/core/inference';
 
 import { buildSurfaces, CapError, createEventBus } from '../host-surfaces';
 
@@ -21,7 +23,7 @@ function makeDeps(
   overrides: Partial<Parameters<typeof buildSurfaces>[0]> = {},
 ) {
   const bus = createEventBus();
-  const events: Array<{ name: string; payload: unknown }> = [];
+  const events: Array<{ name: string; payload: unknown; meta: EventMeta }> = [];
   return {
     events,
     deps: {
@@ -38,15 +40,79 @@ function makeDeps(
           async (_a: Uint8Array, opts?: { format?: string; lane?: string }) =>
             `heard:${opts?.format}:${opts?.lane}`,
         ),
+        lane: jest.fn(async () => 'open' as const),
+        describe: jest.fn(async () => null),
       },
       notify: jest.fn(),
       bus,
-      deliverEvent: (name: string, payload: unknown) =>
-        events.push({ name, payload }),
+      deliverEvent: (name: string, payload: unknown, meta: EventMeta) =>
+        events.push({ name, payload, meta }),
       ...overrides,
     },
   };
 }
+
+describe('createEventBus', () => {
+  it('isolates subscribers: one throwing does not stop the next from receiving the event', () => {
+    const logSink = { log: jest.fn() };
+    const bus = createEventBus(logSink as never);
+    const seenByFirst: unknown[] = [];
+    const seenBySecond: unknown[] = [];
+    bus.subscribe('ext.a', 'ping', () => {
+      throw new Error('dead transport');
+    });
+    bus.subscribe('ext.b', 'ping', (p) => seenByFirst.push(p));
+    bus.subscribe('ext.c', 'ping', (p) => seenBySecond.push(p));
+
+    expect(() => bus.emit('platform', 'ping', { n: 1 })).not.toThrow();
+
+    expect(seenByFirst).toEqual([{ n: 1 }]);
+    expect(seenBySecond).toEqual([{ n: 1 }]);
+    expect(logSink.log).toHaveBeenCalledWith(
+      'platform',
+      'warn',
+      "event subscriber for 'ping' threw",
+      { error: expect.stringContaining('dead transport') },
+    );
+  });
+
+  it('a subsequent distinct emit is still delivered to every subscriber after an earlier throw', () => {
+    const logSink = { log: jest.fn() };
+    const bus = createEventBus(logSink as never);
+    const seen: unknown[] = [];
+    bus.subscribe('ext.a', 'ping', () => {
+      throw new Error('still dead');
+    });
+    bus.subscribe('ext.b', 'ping', (p) => seen.push(p));
+
+    bus.emit('platform', 'ping', { n: 1 });
+    bus.emit('platform', 'ping', { n: 2 });
+
+    expect(seen).toEqual([{ n: 1 }, { n: 2 }]);
+  });
+
+  it('works with no logSink supplied (every existing caller keeps compiling unchanged)', () => {
+    const bus = createEventBus();
+    const seen: unknown[] = [];
+    bus.subscribe('ext.a', 'ping', () => {
+      throw new Error('dead transport');
+    });
+    bus.subscribe('ext.b', 'ping', (p) => seen.push(p));
+
+    expect(() => bus.emit('platform', 'ping', { n: 1 })).not.toThrow();
+    expect(seen).toEqual([{ n: 1 }]);
+  });
+
+  it('stamps the emitter on delivery', () => {
+    const bus = createEventBus();
+    const seen: Array<[unknown, EventMeta]> = [];
+    bus.subscribe('b', 'x.record', (p, meta) => seen.push([p, meta]));
+    // The payload claims a different producer — meta.from must ignore it.
+    bus.emit('a', 'x.record', { producer: 'b' });
+    expect(seen[0][1].from).toBe('a'); // NOT the payload's claim
+    expect(typeof seen[0][1].at).toBe('number');
+  });
+});
 
 describe('buildSurfaces', () => {
   it('query delegates and count round-trips', async () => {
@@ -66,6 +132,19 @@ describe('buildSurfaces', () => {
       'ext1',
       'email',
     );
+    close();
+  });
+
+  it('delegates countBy to the query plane', async () => {
+    const countBy = jest.fn(async () => [{ key: 'a@example.com', count: 3 }]);
+    const { deps } = makeDeps({
+      query: { ...fakeQuery, countBy } as unknown as Query,
+    });
+    const { surfaces, close } = buildSurfaces(deps);
+    await expect(
+      surfaces.query.countBy({ field: 'from' } as never),
+    ).resolves.toEqual([{ key: 'a@example.com', count: 3 }]);
+    expect(countBy).toHaveBeenCalledWith({ field: 'from' });
     close();
   });
 
@@ -142,16 +221,129 @@ describe('buildSurfaces', () => {
     srv.close();
   });
 
-  it('inference forces the interactive lane', async () => {
-    const { deps } = makeDeps();
-    const { surfaces, close } = buildSurfaces(deps);
-    await expect(
-      surfaces.inference.complete('p', { lane: 'background' } as never),
-    ).resolves.toBe('lane:interactive');
-    close();
+  it('defaults to the interactive lane and passes background through', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const { deps } = makeDeps({
+      inference: {
+        complete: async (_p, opts) => {
+          calls.push({ ...opts });
+          return 'ok';
+        },
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'open' as const,
+        describe: async () => null,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await surfaces.inference.complete('hi', { maxTokens: 8 } as never);
+    await surfaces.inference.complete('hi', {
+      maxTokens: 8,
+      lane: 'background',
+    } as never);
+    expect(calls[0].lane).toBe('interactive');
+    expect(calls[1].lane).toBe('background');
   });
 
-  it('inference.hear delegates to the plane, keeping format and forcing the lane', async () => {
+  it('propagates LaneClosedError unchanged', async () => {
+    const { deps } = makeDeps({
+      inference: {
+        complete: async () => {
+          throw new LaneClosedError();
+        },
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'until-idle' as const,
+        describe: async () => null,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await expect(
+      surfaces.inference.complete('hi', {
+        maxTokens: 8,
+        lane: 'background',
+      } as never),
+    ).rejects.toMatchObject({ name: 'LaneClosedError' });
+  });
+
+  it('reports the plane lane state', async () => {
+    const { deps } = makeDeps({});
+    const { surfaces } = buildSurfaces(deps);
+    await expect(surfaces.inference.lane()).resolves.toBe('open');
+  });
+
+  it('describe delegates to the plane and returns provider identity', async () => {
+    const describeFn = jest.fn(async () => ({
+      providerId: 'local',
+      modelId: 'gemma-3-4b',
+      generation: 7,
+    }));
+    const { deps } = makeDeps({
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'open' as const,
+        describe: describeFn,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await expect(surfaces.inference.describe('complete')).resolves.toEqual({
+      providerId: 'local',
+      modelId: 'gemma-3-4b',
+      generation: 7,
+    });
+    expect(describeFn).toHaveBeenCalledWith('complete');
+  });
+
+  it('describe resolves null when no provider is ready', async () => {
+    const { deps } = makeDeps({
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'open' as const,
+        describe: async () => null,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await expect(surfaces.inference.describe('complete')).resolves.toBeNull();
+  });
+
+  it('passes profile, system and generation through to the plane for complete', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const { deps } = makeDeps({
+      inference: {
+        complete: async (_p, opts) => {
+          calls.push({ ...opts });
+          return 'ok';
+        },
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'open' as const,
+        describe: async () => null,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await surfaces.inference.complete('hi', {
+      profile: 'deterministic',
+      system: 'be terse',
+      generation: 42,
+    } as never);
+    expect(calls[0]).toMatchObject({
+      lane: 'interactive',
+      profile: 'deterministic',
+      system: 'be terse',
+      generation: 42,
+    });
+  });
+
+  it('inference.hear delegates to the plane, keeping format and passing the lane through', async () => {
     // CapSurfaces.inference promises the WHOLE Inference plane, so a child
     // granted 'inference' may call hear() — before it was wired here that
     // call reached an undefined surface method.
@@ -162,18 +354,18 @@ describe('buildSurfaces', () => {
         format: 'wav',
         lane: 'background',
       } as never),
-    ).resolves.toBe('heard:wav:interactive');
+    ).resolves.toBe('heard:wav:background');
     expect(deps.inference.hear).toHaveBeenCalledWith(new Uint8Array([1, 2]), {
       format: 'wav',
-      lane: 'interactive',
+      lane: 'background',
     });
     close();
   });
 
-  it("inference.hear forwards vad:'required' through the opts spread alongside the forced lane", async () => {
+  it("inference.hear forwards vad:'required' through the opts spread alongside the default lane", async () => {
     // The provider-level tests prove `vad:'required'` fail-closed behaviour;
     // this proves the field actually SURVIVES the extension-boundary spread
-    // (`{ ...(opts as object), lane: 'interactive' }`) rather than being
+    // (`{ lane: 'interactive', ...(opts as object) }`) rather than being
     // dropped or renamed on the way from an extension call to the dep.
     const { deps } = makeDeps();
     const { surfaces, close } = buildSurfaces(deps);
@@ -204,7 +396,13 @@ describe('buildSurfaces', () => {
     await new Promise((r) => {
       setTimeout(r, 5);
     });
-    expect(a.events).toEqual([{ name: 'ping', payload: { n: 1 } }]);
+    expect(a.events).toEqual([
+      {
+        name: 'ping',
+        payload: { n: 1 },
+        meta: { from: 'other.ext', at: expect.any(Number) },
+      },
+    ]);
     sa.surfaces.events.off('ping');
     sb.surfaces.events.emit('ping', { n: 2 });
     await new Promise((r) => {
@@ -223,7 +421,34 @@ describe('buildSurfaces', () => {
     await new Promise((r) => {
       setTimeout(r, 5);
     });
-    expect(events).toEqual([{ name: 'ping', payload: { v: 1 } }]);
+    expect(events).toEqual([
+      {
+        name: 'ping',
+        payload: { v: 1 },
+        meta: { from: 'test.basic', at: expect.any(Number) },
+      },
+    ]);
+    close();
+  });
+
+  it('stamps the surface owner, not an argument', async () => {
+    const { events, deps } = makeDeps({ extensionId: 'kiagent.a' });
+    const { surfaces, close } = buildSurfaces(deps);
+    surfaces.events.on('x.record');
+    // A payload claiming a different producer must not influence meta.from —
+    // only deps.extensionId (the surface's own owner, self-delivered here)
+    // can, and the extension has no way to pass an argument that reaches it.
+    surfaces.events.emit('x.record', { producer: 'kiagent.b' });
+    await new Promise((r) => {
+      setTimeout(r, 5);
+    });
+    expect(events).toEqual([
+      {
+        name: 'x.record',
+        payload: { producer: 'kiagent.b' },
+        meta: { from: 'kiagent.a', at: expect.any(Number) },
+      },
+    ]);
     close();
   });
 

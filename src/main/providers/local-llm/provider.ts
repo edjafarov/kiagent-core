@@ -1,11 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 
-import type {
-  InferenceProvider,
-  LogLevel,
-  Prefs,
-  ProviderStatus,
+import {
+  ModelChangedError,
+  type InferenceProvider,
+  type LogLevel,
+  type Prefs,
+  type ProviderStatus,
 } from '@shared/contracts';
 
 import { chatText, describeImage } from './api';
@@ -75,10 +76,32 @@ export function createLocalLlmProvider(deps: {
   let startingModelId: string | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // `onChange` subscribers + the last model id they were told about. No
+  // "first observation doesn't count" special case is needed: the baseline
+  // `checkModelChange()` call below (right after construction seeds
+  // `installedModel`) always runs before this function RETURNS the object
+  // that exposes `onChange` — no subscriber can possibly exist yet at that
+  // point, so `changeSubs.forEach` is a no-op on the first call regardless
+  // of what `lastNotifiedModelId` starts as. (Fix round, post-review: an
+  // earlier version had an explicit `undefined`-sentinel guard here; a
+  // mutation check showed removing it changed no test's outcome — it was
+  // dead weight guarding against something structurally impossible, not a
+  // real behavior. Simpler now: `null` means "no model", plain and simple.)
+  const changeSubs = new Set<() => void>();
+  let lastNotifiedModelId: string | null = null;
+
+  // `profile` (issue #107) only means something to `complete` — this
+  // provider's `see` request has no decoding-profile concept to apply it
+  // to. A caller passing one anyway is not an error (the contract lets any
+  // verb accept it and ignore it); log it once per process rather than
+  // either silently swallowing it forever or spamming a log line per call.
+  let seeProfileIgnoredLogged = false;
+
   const selectedModel = async (): Promise<ModelDescriptor> => {
     const override = resolveModelOverride(deps.prefs.get().models.override);
     if (override) return override;
     if (!backend) backend = await detect();
+    checkModelChange();
     return selectCuratedModel(backend);
   };
 
@@ -126,6 +149,20 @@ export function createLocalLlmProvider(deps: {
     if (sel) return sel;
     if (installedModel && modelPresent(installedModel)) return installedModel;
     return scanInstalled();
+  };
+
+  /** Re-resolves `servableModel()` and notifies `onChange` subscribers iff
+   *  it now differs from the last id they were told about. Called from
+   *  every place that mutates an INPUT to `selectedModel`/`servableModel`
+   *  (a prefs override change, a completed install, a newly-detected
+   *  backend) — not only where a model string is directly assigned — so a
+   *  subscriber learns about a switch it could not otherwise observe
+   *  without polling `describe()`/`handle()` itself. */
+  const checkModelChange = (): void => {
+    const id = servableModel()?.id ?? null;
+    if (id === lastNotifiedModelId) return;
+    lastNotifiedModelId = id;
+    changeSubs.forEach((cb) => cb());
   };
 
   // Callable after a start has SETTLED: from touchIdle's timer (armed only
@@ -189,6 +226,7 @@ export function createLocalLlmProvider(deps: {
           });
         }
         installedModel = model;
+        checkModelChange();
         deps.log('info', `${model.id} ready`);
       } catch (err) {
         if (!abort.signal.aborted && installing === abort) {
@@ -240,7 +278,10 @@ export function createLocalLlmProvider(deps: {
       const dir = modelDir(deps.modelsDir, model.id);
       const gguf = model.files.find((f) => !f.name.startsWith('mmproj'))!;
       const mmproj = model.files.find((f) => f.name.startsWith('mmproj'))!;
-      if (!backend) backend = await detect();
+      if (!backend) {
+        backend = await detect();
+        checkModelChange();
+      }
       const s = makeServer({
         binaryPath: deps.llamaBinaryPath,
         modelPath: path.join(dir, gguf.name),
@@ -272,6 +313,17 @@ export function createLocalLlmProvider(deps: {
   };
 
   seedInstalled();
+  // Establish the onChange baseline synchronously, before returning the
+  // provider — so the earliest a subscriber could possibly call `onChange`
+  // is strictly after this, and the seeded install never itself reads as
+  // a "switch".
+  checkModelChange();
+  // Reactive path: a prefs write (e.g. the user flips models.override in
+  // Settings) is the one INPUT to selectedModel/servableModel that changes
+  // from entirely outside this provider's own async flows, so it needs its
+  // own subscription rather than a call site inside a function this module
+  // owns.
+  const offPrefsChange = deps.prefs.onChange(() => checkModelChange());
 
   return {
     id: 'local-llm',
@@ -292,27 +344,84 @@ export function createLocalLlmProvider(deps: {
       if (selectedInstalled()) return 'ready';
       return 'standby';
     },
+    describe() {
+      // Ignores `kind`: local-llm serves one model for every kind it
+      // supports, and by the time the PLANE calls this, `pick(kind)` has
+      // already confirmed this provider supports the kind asked for —
+      // there is nothing left here to branch on.
+      const model = servableModel();
+      return model ? { modelId: model.id } : null;
+    },
+    onChange(cb) {
+      changeSubs.add(cb);
+      return () => {
+        changeSubs.delete(cb);
+      };
+    },
     async handle(req) {
       const model = servableModel();
       if (!model)
         throw new Error(
           `local-llm not ready (status: ${JSON.stringify(this.status())})`,
         );
+      // Re-check the model identity a caller locked in via `describe()`
+      // AFTER this provider has resolved the model it is about to serve,
+      // and BEFORE any request reaches it — `payload.expectModelId` is
+      // only ever set (by the plane) when the caller passed a `generation`
+      // it got from `describe()`, and (post fix-round) carries what that
+      // earlier call recorded, not a value freshly recomputed at call
+      // time (see `inference.ts`'s `describedAt` map) — recomputing fresh
+      // would make this comparison always pass, since both reads happen in
+      // the same synchronous JS turn with nothing able to mutate state in
+      // between.
+      //
+      // The PLANE's own generation check (`checkGeneration`, run before
+      // this provider is even asked to resolve a model) is the primary
+      // guarantee: it already rejects any call whose generation moved,
+      // and every real model change in THIS provider bumps the generation
+      // via `onChange` (below). This check is the BACKSTOP for the one
+      // case that guarantee can't cover on its own — a bug where some
+      // future mutation to `selectedModel`/`servableModel`'s inputs is
+      // added without a matching `checkModelChange()` call, so the model
+      // drifts without the generation counter moving. It is not a second,
+      // independent closer of the describe()-to-handle() race.
+      const { expectModelId, generation } =
+        (req.payload as
+          | { expectModelId?: string; generation?: number }
+          | undefined) ?? {};
+      if (expectModelId !== undefined && expectModelId !== model.id) {
+        throw new ModelChangedError(
+          generation ?? -1,
+          generation ?? -1,
+          model.id,
+          'model-drift',
+        );
+      }
       const s = await ensureServer(model);
       touchIdle();
       if (req.kind === 'complete') {
-        const { prompt, maxTokens } = req.payload as {
+        const { prompt, maxTokens, profile, system } = req.payload as {
           prompt: string;
           maxTokens?: number;
+          profile?: 'default' | 'deterministic';
+          system?: string;
         };
-        return chatText(s.baseUrl(), prompt, { maxTokens });
+        return chatText(s.baseUrl(), prompt, { maxTokens, profile, system });
       }
       if (req.kind === 'see') {
-        const { image, prompt, mime } = req.payload as {
+        const { image, prompt, mime, profile } = req.payload as {
           image: Uint8Array;
           prompt: string;
           mime?: string;
+          profile?: 'default' | 'deterministic';
         };
+        // `see` has no decoding profile of its own — accept it, ignore it,
+        // never throw (issue #107: "every other provider ignores `profile`
+        // explicitly").
+        if (profile !== undefined && !seeProfileIgnoredLogged) {
+          seeProfileIgnoredLogged = true;
+          deps.log('info', "local-llm: 'see' ignores the 'profile' option");
+        }
         return describeImage(s.baseUrl(), image, prompt, { mime });
       }
       throw new Error(`local-llm does not support '${req.kind}'`);
@@ -334,6 +443,7 @@ export function createLocalLlmProvider(deps: {
       installing?.abort();
       installing = null;
       downloadPct = null;
+      offPrefsChange();
       // Let any in-flight server start settle first, so we stop the real child
       // rather than racing it into an orphan (the start's IIFE assigns
       // `server` only once s.start() resolves).

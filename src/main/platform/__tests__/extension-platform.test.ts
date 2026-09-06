@@ -5,6 +5,7 @@ import path from 'path';
 
 import type {
   ExtensionSnapshot,
+  LaneState,
   McpTool,
   Sender,
   Source,
@@ -17,6 +18,7 @@ import { googleOAuthProfile, googleRefresher } from '@main/sources/gmail/oauth';
 
 import {
   createExtensionPlatform,
+  createLaneGate,
   type ExtensionPlatform,
   type ExtensionPlatformDeps,
 } from '../extension-platform';
@@ -41,6 +43,82 @@ const FIXTURE_SENDER_UNDECLARED = path.join(
   'fixtures',
   'ext-sender-undeclared',
 );
+const FIXTURE_EVENTS_A = path.join(__dirname, 'fixtures', 'ext-events-a');
+const FIXTURE_EVENTS_B = path.join(__dirname, 'fixtures', 'ext-events-b');
+
+describe('createLaneGate', () => {
+  it('closed -> open emits once, with the resolved state in the payload', () => {
+    const emit = jest.fn();
+    let state: LaneState = 'disabled';
+    const gate = createLaneGate(
+      () => state,
+      emit,
+      () => {},
+    );
+    gate.check(); // baseline: null -> 'disabled', not the transition under test
+    emit.mockClear();
+
+    state = 'open';
+    gate.check();
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith('open');
+  });
+
+  it("'battery' -> 'disabled' — both closed, so the boolean never flips — still emits once", () => {
+    const emit = jest.fn();
+    let state: LaneState = 'battery';
+    const gate = createLaneGate(
+      () => state,
+      emit,
+      () => {},
+    );
+    gate.check(); // baseline
+    emit.mockClear();
+
+    state = 'disabled';
+    gate.check();
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith('disabled');
+  });
+
+  it('the same resolved state re-resolved on a later tick emits nothing', () => {
+    const emit = jest.fn();
+    const gate = createLaneGate(
+      () => 'open',
+      emit,
+      () => {},
+    );
+    gate.check();
+    emit.mockClear();
+
+    gate.check();
+    gate.check();
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('an emit that throws does not propagate out of the tick', () => {
+    const onError = jest.fn();
+    let state: LaneState = 'open';
+    const emit = jest.fn(() => {
+      throw new Error('boom');
+    });
+    const gate = createLaneGate(() => state, emit, onError);
+
+    expect(() => gate.check()).not.toThrow();
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // The gate is not wedged by the throw: a later real transition is
+    // still attempted (and, this time, succeeds) rather than being
+    // silently skipped because the failed attempt never updated `last`.
+    emit.mockReset();
+    state = 'disabled';
+    gate.check();
+    expect(emit).toHaveBeenCalledWith('disabled');
+  });
+});
 
 describe('createExtensionPlatform', () => {
   let tmp: string;
@@ -100,7 +178,10 @@ describe('createExtensionPlatform', () => {
         see: async () => '',
         read: async () => '',
         hear: async () => '',
+        describe: async () => null,
       },
+      laneState: () => 'open',
+      onLaneChange: () => () => {},
       logSink: {
         log: (scope: string, level: string, msg: string) =>
           logs.push({ scope, level, msg }),
@@ -685,7 +766,10 @@ describe('createExtensionPlatform', () => {
         see: async () => '',
         read: async () => '',
         hear: async () => '',
+        describe: async () => null,
       },
+      laneState: () => 'open',
+      onLaneChange: () => () => {},
       logSink: { log: jest.fn() },
       notify: jest.fn(),
       transportFactory: () => {
@@ -817,7 +901,10 @@ describe('createExtensionPlatform', () => {
         see: async () => '',
         read: async () => '',
         hear: async () => '',
+        describe: async () => null,
       },
+      laneState: () => 'open',
+      onLaneChange: () => () => {},
       logSink: { log: jest.fn() },
       notify: jest.fn(),
       transportFactory: () => {
@@ -880,6 +967,59 @@ describe('createExtensionPlatform', () => {
 
     await crashPlatform.stop();
   }, 10000);
+
+  it("host-stamped event identity: A's forged producer claim is overridden by the host, platform.activated names 'platform' (#112, bundled/in-memory transport tier)", async () => {
+    // Same two fixtures, same assertions as the real-forked-child e2e test
+    // (extension-e2e.test.ts) — proving the two transport tiers agree, per
+    // the issue's acceptance criteria.
+    await platform.start();
+
+    const previewB = await platform.installPreview(FIXTURE_EVENTS_B);
+    if (!('token' in previewB))
+      throw new Error(`preview failed: ${JSON.stringify(previewB)}`);
+    expect(previewB.id).toBe('test.eventsb');
+    await expect(platform.installCommit(previewB.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.eventsb',
+    });
+
+    const previewA = await platform.installPreview(FIXTURE_EVENTS_A);
+    if (!('token' in previewA))
+      throw new Error(`preview failed: ${JSON.stringify(previewA)}`);
+    expect(previewA.id).toBe('test.eventsa');
+    await expect(platform.installCommit(previewA.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.eventsa',
+    });
+
+    const activations = (
+      (await tools.get('eventsB.getActivations')!.call({})) as {
+        activations: Array<{ payload: { id: string }; meta: unknown }>;
+      }
+    ).activations.filter((a) => a.payload.id === 'test.eventsa');
+    expect(activations).toEqual([
+      {
+        payload: { id: 'test.eventsa' },
+        meta: { from: 'platform', at: expect.any(Number) },
+      },
+    ]);
+
+    // A emits 'x.record' with a payload FORGING producer: 'test.eventsb'.
+    await tools.get('eventsA.emitRecord')!.call({});
+    await new Promise((r) => {
+      setTimeout(r, 20);
+    });
+
+    const { records } = (await tools.get('eventsB.getRecords')!.call({})) as {
+      records: unknown[];
+    };
+    expect(records).toEqual([
+      {
+        payload: { producer: 'test.eventsb' },
+        meta: { from: 'test.eventsa', at: expect.any(Number) },
+      },
+    ]);
+  });
 
   describe('oauth-bound source contributions', () => {
     let registeredProfiles: Array<{ sourceId: string; profile: unknown }>;

@@ -1,0 +1,17 @@
+{
+  "id": "test.inference",
+  "name": "Inference Test Extension",
+  "version": "1.0.0",
+  "engine": "^2.0.0",
+  "entry": "index.js",
+  "caps": ["inference"],
+  "contributes": {
+    "sources": [],
+    "tools": [
+      "infTest.completeBackground",
+      "infTest.describeComplete",
+      "infTest.completeWithGeneration"
+    ],
+    "senders": []
+  }
+}

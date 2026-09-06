@@ -210,6 +210,60 @@ export interface RpcEndpoint {
 type CallMsg = Extract<ChildToMain, { kind: 'call' }>;
 type ReplyMsg = Extract<ChildToMain, { kind: 'reply' }>;
 
+// A rejected handler's class identity never survives the fork (structured
+// clone / advanced serialization carries plain data, not prototypes) — so a
+// caller on the other side of a `call` has to discriminate the rejection by
+// `Error.name` plus a few plain fields, never `instanceof`. This allow-list
+// covers the fields a caller on the far side is expected to READ, not every
+// own property an error might carry: `ModelChangedError`'s
+// `{ expected, actual, modelId, source }` (`src/shared/contracts.ts`).
+// `NoProviderError.kind` (`src/main/core/inference.ts`) is an own enumerable
+// field that also crosses this endpoint and is deliberately NOT here — a
+// caller already knows which kind it asked for, so echoing it back buys
+// nothing. `LaneClosedError` and every ordinary `Error` have none of these as
+// OWN properties, so they cross with `errorFields` simply absent. Extend this
+// list (never widen it to "every own key") the next time a new error type
+// needs a field preserved across the boundary.
+const ERROR_FIELD_ALLOWLIST = [
+  'expected',
+  'actual',
+  'modelId',
+  'source',
+] as const;
+
+function errorWireFields(e: unknown): Record<string, unknown> | undefined {
+  if (!(e instanceof Error)) return undefined;
+  let fields: Record<string, unknown> | undefined;
+  for (const key of ERROR_FIELD_ALLOWLIST) {
+    if (Object.prototype.hasOwnProperty.call(e, key)) {
+      fields ??= {};
+      fields[key] = (e as unknown as Record<string, unknown>)[key];
+    }
+  }
+  return fields;
+}
+
+// The receiving end applies the SAME allow-list, never a raw
+// `Object.assign(err, wireFields)` — `errorFields` on an incoming reply is
+// data from the OTHER side of this endpoint, which in the child→main
+// direction is the untrusted forked extension (see host-surfaces.ts's
+// "LOAD-BEARING ARITY" comment for the standing threat model). A bare
+// `Object.assign` uses `[[Set]]` per key, so a hostile child sending
+// `errorFields: { __proto__: {...} }` would repoint `err`'s own prototype.
+// Copying only the allow-listed keys, one at a time, never reaches a key
+// outside that fixed set.
+function applyErrorWireFields(
+  err: Error,
+  fields: Record<string, unknown> | undefined,
+): void {
+  if (!fields) return;
+  for (const key of ERROR_FIELD_ALLOWLIST) {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      (err as unknown as Record<string, unknown>)[key] = fields[key];
+    }
+  }
+}
+
 export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
   let nextId = 1;
   let disposed = false;
@@ -235,6 +289,8 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
         value?: unknown,
         error?: string,
         code?: SourceErrorCode,
+        errorName?: string,
+        errorFields?: Record<string, unknown>,
       ) =>
         channel.send({
           kind: 'reply',
@@ -243,6 +299,8 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
           value,
           error,
           code,
+          errorName,
+          errorFields,
         } satisfies ReplyMsg);
       if (!h) {
         reply(false, undefined, 'no call handler installed');
@@ -256,6 +314,8 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
             undefined,
             e instanceof Error ? e.message : String(e),
             sourceErrorCode(e),
+            e instanceof Error ? e.name : undefined,
+            errorWireFields(e),
           ),
       );
       return;
@@ -271,6 +331,8 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
           code?: SourceErrorCode;
         };
         if (r.code) err.code = r.code;
+        if (typeof r.errorName === 'string') err.name = r.errorName;
+        applyErrorWireFields(err, r.errorFields);
         p.reject(err);
       }
       return;

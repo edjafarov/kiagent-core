@@ -28,12 +28,17 @@ function fakePrefs(overrides?: {
   };
 
   let current = defaults as any;
+  const subs = new Set<(p: any) => void>();
   return {
     get: () => current,
     patch: async (p) => {
       current = { ...current, ...p };
+      subs.forEach((cb) => cb(current));
     },
-    onChange: () => () => {},
+    onChange: (cb) => {
+      subs.add(cb);
+      return () => subs.delete(cb);
+    },
   };
 }
 
@@ -290,6 +295,66 @@ describe('LocalLlmProvider', () => {
         lane: 'interactive',
       }),
     ).rejects.toThrow(/does not support 'read'/);
+  });
+
+  // Issue #107 task 4: `profile`/`system` reach `chatText` for `complete`;
+  // `see` accepts `profile` in its payload without throwing and never
+  // forwards it to `describeImage` (which has no decoding-profile concept).
+  it('threads profile and system through to chatText for complete', async () => {
+    const { deps } = makeDeps({ modelsDir: tmpDir });
+    const modelDir = path.join(tmpDir, CURATED_MODEL.id);
+    await fsp.mkdir(modelDir, { recursive: true });
+    for (const file of CURATED_MODEL.files) {
+      await fsp.writeFile(path.join(modelDir, file.name), 'mock-content');
+    }
+    const provider = createLocalLlmProvider(deps);
+    mockApi.chatText.mockResolvedValue('ok');
+
+    await provider.handle({
+      kind: 'complete',
+      payload: {
+        prompt: 'x',
+        maxTokens: 8,
+        profile: 'deterministic',
+        system: 'S',
+      },
+      lane: 'interactive',
+    });
+
+    expect(mockApi.chatText).toHaveBeenCalledWith(expect.any(String), 'x', {
+      maxTokens: 8,
+      profile: 'deterministic',
+      system: 'S',
+    });
+  });
+
+  it('accepts profile on a see request without throwing, and does not forward it to describeImage', async () => {
+    const { deps } = makeDeps({ modelsDir: tmpDir });
+    const modelDir = path.join(tmpDir, CURATED_MODEL.id);
+    await fsp.mkdir(modelDir, { recursive: true });
+    for (const file of CURATED_MODEL.files) {
+      await fsp.writeFile(path.join(modelDir, file.name), 'mock-content');
+    }
+    const provider = createLocalLlmProvider(deps);
+    mockApi.describeImage.mockResolvedValue('description');
+
+    const result = await provider.handle({
+      kind: 'see',
+      payload: {
+        image: new Uint8Array([1, 2, 3]),
+        prompt: 'describe',
+        profile: 'deterministic',
+      },
+      lane: 'interactive',
+    });
+
+    expect(result).toBe('description');
+    expect(mockApi.describeImage).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Uint8Array),
+      'describe',
+      { mime: undefined },
+    );
   });
 
   it('no longer advertises hear, and a hear request is rejected outright', async () => {
@@ -810,5 +875,150 @@ describe('LocalLlmProvider', () => {
     expect(made[1].modelPath).toContain(E4B_MODEL.id);
     expect(made[0].server.stop).toHaveBeenCalledTimes(1);
     await expect(first).resolves.toBe('ok'); // served by the old child before it stopped
+  });
+
+  // Issue #107 task 3: describe(), onChange(), and the model-identity check
+  // that runs inside handle() itself — the provider half of a guarantee
+  // whose plane half (generation, ModelChangedError, payload widening)
+  // landed in src/main/core/__tests__/inference.test.ts.
+  describe('describe(), onChange() and the model-identity check', () => {
+    async function providerWithServable(model: ModelDescriptor) {
+      await installModel(tmpDir, model);
+      const { deps } = makeDeps({
+        modelsDir: tmpDir,
+        prefs: { models: { override: model.id, autoInstall: false } },
+      });
+      return { provider: createLocalLlmProvider(deps), deps };
+    }
+
+    // Flips the override to a different (already-or-newly-installed) model
+    // via a prefs write — the same path a real Settings change takes, and
+    // the one that exercises the provider's `deps.prefs.onChange` hook.
+    async function setServable(
+      deps: ReturnType<typeof makeDeps>['deps'],
+      model: ModelDescriptor,
+    ) {
+      await installModel(tmpDir, model);
+      await deps.prefs.patch({
+        models: { override: model.id, autoInstall: false },
+      });
+    }
+
+    it('describes the servable model', async () => {
+      const { provider } = await providerWithServable(CURATED_MODEL);
+      expect(provider.describe!('complete')).toEqual({
+        modelId: CURATED_MODEL.id,
+      });
+    });
+
+    it('describes null when no model is servable yet', async () => {
+      const { deps } = makeDeps({ modelsDir: tmpDir });
+      const provider = createLocalLlmProvider(deps);
+      expect(provider.describe!('complete')).toBeNull();
+    });
+
+    it('rejects and issues no request when the model changed after describe', async () => {
+      const { provider, deps } = await providerWithServable(CURATED_MODEL);
+      mockApi.chatText.mockResolvedValue('ok');
+
+      const before = provider.describe!('complete');
+      expect(before).toEqual({ modelId: CURATED_MODEL.id });
+
+      // The model switches underneath the caller AFTER describe() but
+      // BEFORE handle() resolves servableModel() for this call.
+      await setServable(deps, E4B_MODEL);
+
+      // This file mocks the whole `../api` module (`jest.mock('../api')`
+      // at the top), so `chatText` never touches real `fetch` — it, not a
+      // `fetch` spy, is the "did a request almost go out" signal here
+      // (the brief's illustrative snippet spies on `global.fetch`, which
+      // is the right check in `api-profile.test.ts`, not in this file).
+      await expect(
+        provider.handle({
+          kind: 'complete',
+          lane: 'interactive',
+          payload: {
+            prompt: 'x',
+            maxTokens: 8,
+            generation: 1,
+            expectModelId: before!.modelId,
+          },
+        }),
+      ).rejects.toMatchObject({
+        // `ModelChangedError` is now the ONE shared class (`@shared/contracts`)
+        // used by both the plane's `checkGeneration` and this provider-level
+        // backstop — `expected`/`actual` are always generation numbers, never
+        // model ids. The provider only has ONE generation number in hand
+        // (the caller's `payload.generation`), so it reports it as both
+        // `expected` and `actual`: the counter didn't move, but the model did
+        // anyway — exactly the onChange-coverage-gap signature this check
+        // exists to catch. `modelId` is the model that actually resolved.
+        // `source: 'model-drift'` (fix round 2) is the explicit
+        // discriminant an RPC caller reads instead of inferring the
+        // anomaly from `expected === actual` alone.
+        name: 'ModelChangedError',
+        expected: 1,
+        actual: 1,
+        modelId: E4B_MODEL.id,
+        source: 'model-drift',
+      });
+      expect(mockApi.chatText).not.toHaveBeenCalled();
+    });
+
+    it('succeeds and issues the request when the model has not changed', async () => {
+      const { provider } = await providerWithServable(CURATED_MODEL);
+      mockApi.chatText.mockResolvedValue('ok');
+
+      const before = provider.describe!('complete');
+      const result = await provider.handle({
+        kind: 'complete',
+        lane: 'interactive',
+        payload: {
+          prompt: 'x',
+          maxTokens: 8,
+          generation: 1,
+          expectModelId: before!.modelId,
+        },
+      });
+      expect(result).toBe('ok');
+      expect(mockApi.chatText).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires onChange once per model switch', async () => {
+      const { provider, deps } = await providerWithServable(CURATED_MODEL);
+      const cb = jest.fn();
+      const off = provider.onChange!(cb);
+
+      await setServable(deps, E4B_MODEL);
+      expect(cb).toHaveBeenCalledTimes(1);
+
+      // A prefs write that resolves to the SAME servable model must not
+      // re-fire — onChange reports a model SWITCH, not every prefs write.
+      await deps.prefs.patch({
+        models: { override: E4B_MODEL.id, autoInstall: false },
+      });
+      expect(cb).toHaveBeenCalledTimes(1);
+
+      // Unsubscribing stops further notifications.
+      off();
+      await setServable(deps, CURATED_MODEL);
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    // Fix round, post-review: this describe block used to also have "does
+    // not fire onChange for the initial (seeded) model observation" —
+    // construct a provider, attach `onChange` immediately, assert it
+    // wasn't called. Deleted: it passed whether or not any "first
+    // observation" guard existed in `checkModelChange()`, because
+    // `createLocalLlmProvider()` is synchronous and its baseline
+    // `checkModelChange()` call always runs BEFORE the function returns
+    // the object `onChange` lives on — no test can attach a subscriber
+    // before that baseline call happens, so "cb not called yet" is true
+    // for a reason the test never actually exercised. Confirmed by
+    // mutation: removing the (now-deleted) guard from the implementation
+    // left this test green. Rather than keep a test that reports coverage
+    // that isn't there, the implementation was simplified to drop the
+    // guard too (see `checkModelChange`'s comment) — there was nothing
+    // real for either the guard or this test to protect.
   });
 });

@@ -16,6 +16,7 @@ import type {
   ExtensionId,
   ExtensionSnapshot,
   ExtensionStatus,
+  LaneState,
   LogLevel,
   Manifest,
   McpTool,
@@ -159,7 +160,23 @@ export interface ExtensionPlatformDeps {
   senders: SenderRegistry;
   scheduler: CoreScheduler;
   registerTool(tool: McpTool): () => void;
-  inference: SurfaceDeps['inference'];
+  /** `lane` is deliberately excluded here: it is supplied at surface-build
+   *  time from `laneState()` below, not carried on this dep, so every
+   *  existing caller of this constructor keeps compiling unchanged. */
+  inference: Omit<SurfaceDeps['inference'], 'lane'>;
+  /** Resolves the CURRENT `LaneState` (open / disabled / battery /
+   *  until-idle / until-night) on demand — both `host.inference.lane()`
+   *  and the `platform.lane` event call this SAME resolver, which is what
+   *  makes them unable to disagree. The extension platform cannot compute
+   *  this itself (`backgroundLaneState` needs `platform.prefs` and
+   *  `platform.scheduler.env`, which this platform never receives), so the
+   *  construction site (main.ts) injects it. */
+  laneState(): LaneState;
+  /** Subscribes to the inference plane's own open/closed boolean
+   *  (`InferencePlane.onLaneChange`) so the platform can re-resolve
+   *  `laneState()` on every transition and emit `platform.lane` when the
+   *  resolved state actually changes. */
+  onLaneChange(cb: (open: boolean) => void): () => void;
   logSink: LogSink;
   notify(msg: string, level?: LogLevel): void;
   transportFactory(extensionId: string): HostTransport;
@@ -221,13 +238,94 @@ export interface ExtensionPlatform {
    * whatever the manifest actually declares.
    */
   grantConsent(id: string): Promise<{ ok: boolean; error?: string }>;
+  /**
+   * Re-resolves `laneState()` and emits `platform.lane` when it changed
+   * since the last emission (from either this call or the plane's
+   * `onLaneChange`) — see `createLaneGate`. Called from main.ts's
+   * processing-counter interval, immediately after
+   * `inference.setBackgroundOpen(...)`: that interval is the only place
+   * lane policy is re-evaluated, so it is the correctness net for a
+   * reason-only transition (e.g. 'battery' -> 'disabled') that never
+   * flips the plane's boolean and would otherwise never trigger
+   * `onLaneChange`. Never throws.
+   */
+  refreshLane(): void;
+}
+
+/**
+ * Pure de-duplication gate behind the `platform.lane` event. `check()`
+ * resolves `laneState()`, compares it against the last value THIS gate
+ * emitted, and calls `emit(state)` only when it changed — so a
+ * `'battery' -> 'disabled'` transition (both CLOSED — the plane's own
+ * boolean never flips) still emits, exactly as much as `'disabled' ->
+ * 'open'` does. `laneState()`/`emit()` are the ONLY things that vary
+ * between the two triggers wired in `createExtensionPlatform` below
+ * (the plane's `onLaneChange`, fired synchronously and immediately on a
+ * boolean flip, and the interval-driven `refreshLane()`, which re-resolves
+ * on a fixed clock regardless of whether the boolean flipped) — both fold
+ * into this ONE `last` comparison, so neither path can emit a duplicate or
+ * skip a real transition.
+ *
+ * A throw from `laneState()` or `emit()` is caught and reported to
+ * `onError` rather than propagating: `onLaneChange`'s callback runs
+ * synchronously inside `InferencePlane.setBackgroundOpen`'s own subscriber
+ * loop (no try/catch of its own there), so a gate that could throw would
+ * risk breaking that loop's OTHER subscribers, not just this one.
+ *
+ * Exported for direct unit testing of the emission/dedup/error-guard
+ * behavior without spinning up a full extension host.
+ */
+export function createLaneGate(
+  laneState: () => LaneState,
+  emit: (state: LaneState) => void,
+  onError: (err: unknown) => void,
+): { check(): void } {
+  let last: LaneState | null = null;
+  return {
+    check() {
+      try {
+        const state = laneState();
+        if (state === last) return;
+        last = state;
+        emit(state);
+      } catch (err) {
+        onError(err);
+      }
+    },
+  };
 }
 
 export function createExtensionPlatform(
   deps: ExtensionPlatformDeps,
 ): ExtensionPlatform {
   const entries = new Map<string, Entry>();
-  const bus = createEventBus();
+  const bus = createEventBus(deps.logSink);
+
+  // The payload carries the RESOLVED LaneState, not the raw boolean the
+  // plane owns, so a listener learns WHY the lane is closed (battery vs.
+  // disabled vs. outside the window) — not only that it flipped. Both
+  // triggers below share this ONE gate instance (see createLaneGate), so
+  // `lane()`, this event, and `refreshLane()` can never disagree.
+  //
+  // `onLaneChange` is the low-latency trigger for the common case (an
+  // actual open/closed flip fires the instant the plane sees it, same
+  // tick as `setBackgroundOpen`). It is NOT sufficient on its own — a
+  // reason-only change with no boolean flip (e.g. 'battery' -> 'disabled',
+  // both closed) never calls it. `refreshLane()` below is the correctness
+  // net: main.ts's processing-counter interval (the only caller of
+  // `setBackgroundOpen`) calls it on every tick regardless of whether the
+  // boolean flipped, so that transition is still caught within one tick.
+  const laneGate = createLaneGate(
+    deps.laneState,
+    (state) => bus.emit('platform', 'platform.lane', { state }),
+    (err) =>
+      deps.logSink.log(
+        'platform',
+        'error',
+        `platform.lane emit failed: ${String(err)}`,
+      ),
+  );
+  const offLane = deps.onLaneChange(() => laneGate.check());
 
   // Per-extension lifecycle serialization. Keyed on the extension id string
   // (NOT on an Entry object reference) so a composite op that replaces an
@@ -530,7 +628,7 @@ export function createExtensionPlatform(
           extensionId: e.manifest.id,
           dataDir: computeDataDir(e, deps),
           query: deps.store.read,
-          inference: deps.inference,
+          inference: { ...deps.inference, lane: async () => deps.laneState() },
           notify: deps.notify,
           bus,
           deliverEvent,
@@ -693,6 +791,7 @@ export function createExtensionPlatform(
     },
 
     async stop() {
+      offLane();
       installer.discardAll();
       for (const id of entries.keys()) {
         // eslint-disable-next-line no-await-in-loop
@@ -843,6 +942,10 @@ export function createExtensionPlatform(
         changed();
         return { ok: true };
       });
+    },
+
+    refreshLane() {
+      laneGate.check();
     },
   };
 }

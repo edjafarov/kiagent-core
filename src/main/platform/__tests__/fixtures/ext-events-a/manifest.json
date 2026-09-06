@@ -1,0 +1,13 @@
+{
+  "id": "test.eventsa",
+  "name": "Events Test Extension A",
+  "version": "1.0.0",
+  "engine": "^2.0.0",
+  "entry": "index.js",
+  "caps": ["events"],
+  "contributes": {
+    "sources": [],
+    "tools": ["eventsA.emitRecord"],
+    "senders": []
+  }
+}
