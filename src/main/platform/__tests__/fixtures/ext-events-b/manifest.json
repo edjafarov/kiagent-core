@@ -1,0 +1,13 @@
+{
+  "id": "test.eventsb",
+  "name": "Events Test Extension B",
+  "version": "1.0.0",
+  "engine": "^2.0.0",
+  "entry": "index.js",
+  "caps": ["events"],
+  "contributes": {
+    "sources": [],
+    "tools": ["eventsB.getRecords", "eventsB.getActivations"],
+    "senders": []
+  }
+}

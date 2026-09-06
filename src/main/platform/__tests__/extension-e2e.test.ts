@@ -6,6 +6,7 @@ import path from 'path';
 import type {
   AuthChannel,
   ExtensionSnapshot,
+  McpTool,
   Sender,
   Source,
 } from '@shared/contracts';
@@ -188,5 +189,164 @@ describe('extension runtime e2e (real forked child)', () => {
       ok: true,
     });
     expect(registry.has('basicsrc')).toBe(false);
+  });
+});
+
+const FIXTURE_EVENTS_A = path.join(__dirname, 'fixtures', 'ext-events-a');
+const FIXTURE_EVENTS_B = path.join(__dirname, 'fixtures', 'ext-events-b');
+
+// Issue #112: two independent extensions, each in its own real forked
+// child, exercising the host-stamped event metadata across the actual RPC
+// wire (extension-rpc.ts -> host-process.ts -> extension-host-entry.ts) —
+// not just the in-memory bus tested in host-surfaces.test.ts.
+describe('extension runtime e2e — host-stamped event identity (real forked children, #112)', () => {
+  let tmp: string;
+  let store: CoreStore;
+  let platform: ExtensionPlatform;
+  const registry = new Map<string, Source>();
+  const senderRegistry = new Map<string, Sender>();
+  const tools = new Map<string, McpTool>();
+
+  beforeAll(async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-e2e-events-'));
+    store = openStore(await openDb(path.join(tmp, 'kiagent.db')), {
+      encrypt: (s) => Buffer.from(s, 'utf8'),
+      decrypt: (b) => b.toString('utf8'),
+      detectLanguages: () => [],
+    });
+    platform = createExtensionPlatform({
+      extDir: path.join(tmp, 'extensions'),
+      store,
+      sources: {
+        register: (s) => void registry.set(s.descriptor.id, s),
+        get: (id) => registry.get(id),
+        list: () => [...registry.values()].map((s) => s.descriptor),
+        unregister: (id) => void registry.delete(id),
+      },
+      senders: {
+        register: (id, s) => void senderRegistry.set(id, s),
+        get: (id) => senderRegistry.get(id),
+        ids: () => [...senderRegistry.keys()],
+        unregister: (id) => void senderRegistry.delete(id),
+      },
+      scheduler: {
+        register: jest.fn(),
+        unregister: jest.fn(),
+        jobs: jest.fn(async () => []),
+        trigger: jest.fn(),
+        env: {},
+      } as never,
+      registerTool: (t) => {
+        tools.set(t.name, t);
+        return () => tools.delete(t.name);
+      },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+      },
+      laneState: () => 'open',
+      onLaneChange: () => () => {},
+      logSink: {
+        log: (...a) => process.stderr.write(`${JSON.stringify(a)}\n`),
+      },
+      notify: () => {},
+      transportFactory: () =>
+        nodeForkTransport(CHILD_ENTRY, {
+          cwd: REPO_ROOT,
+          execArgv: [
+            '-r',
+            'ts-node/register/transpile-only',
+            '-r',
+            'tsconfig-paths/register',
+          ],
+          env: {
+            ...process.env,
+            KIA_EXT_HOST_CHILD: '1',
+            TS_NODE_TRANSPILE_ONLY: '1',
+            TS_NODE_PROJECT: path.join(REPO_ROOT, 'tsconfig.json'),
+          },
+        }),
+      onChange: () => {},
+      hostTimeouts: { readyTimeoutMs: 180_000, activateTimeoutMs: 180_000 },
+    });
+  });
+
+  afterAll(async () => {
+    await platform.stop();
+    await store.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("A's forged producer claim is overridden by the host-stamped from; platform.activated names 'platform' (#112)", async () => {
+    await platform.start();
+
+    // B installs first, so its `host.events.on('extension.activated', …)`
+    // subscription exists before A activates.
+    const previewB = await platform.installPreview(FIXTURE_EVENTS_B);
+    expect(previewB).toMatchObject({ ok: true, id: 'test.eventsb' });
+    await expect(
+      platform.installCommit((previewB as { token: string }).token),
+    ).resolves.toEqual({ ok: true, id: 'test.eventsb' });
+
+    const previewA = await platform.installPreview(FIXTURE_EVENTS_A);
+    expect(previewA).toMatchObject({ ok: true, id: 'test.eventsa' });
+    await expect(
+      platform.installCommit((previewA as { token: string }).token),
+    ).resolves.toEqual({ ok: true, id: 'test.eventsa' });
+
+    // Give B's 'extension.activated' subscription time to receive A's
+    // activation emit before asserting on it.
+    const deadlineActivated = Date.now() + 10_000;
+    let activationsSeen: unknown[] = [];
+    // eslint-disable-next-line no-await-in-loop
+    while (Date.now() < deadlineActivated) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = (await tools.get('eventsB.getActivations')!.call({})) as {
+        activations: Array<{ payload: { id: string }; meta: unknown }>;
+      };
+      activationsSeen = res.activations.filter(
+        (a) => a.payload.id === 'test.eventsa',
+      );
+      if (activationsSeen.length > 0) break;
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => {
+        setTimeout(r, 200);
+      });
+    }
+    expect(activationsSeen).toEqual([
+      {
+        payload: { id: 'test.eventsa' },
+        meta: { from: 'platform', at: expect.any(Number) },
+      },
+    ]);
+
+    // A emits 'x.record' with a payload FORGING producer: 'test.eventsb'.
+    await tools.get('eventsA.emitRecord')!.call({});
+
+    const deadlineRecord = Date.now() + 10_000;
+    let recordsSeen: unknown[] = [];
+    // eslint-disable-next-line no-await-in-loop
+    while (Date.now() < deadlineRecord) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = (await tools.get('eventsB.getRecords')!.call({})) as {
+        records: unknown[];
+      };
+      recordsSeen = res.records;
+      if (recordsSeen.length > 0) break;
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => {
+        setTimeout(r, 200);
+      });
+    }
+    // B observes meta.from === 'test.eventsa' — the host's own record of
+    // who really called emit() — NOT the payload's forged 'producer' claim.
+    expect(recordsSeen).toEqual([
+      {
+        payload: { producer: 'test.eventsb' },
+        meta: { from: 'test.eventsa', at: expect.any(Number) },
+      },
+    ]);
   });
 });

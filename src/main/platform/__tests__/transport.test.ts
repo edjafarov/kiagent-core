@@ -212,4 +212,27 @@ describe('nodeForkTransport (real child process)', () => {
     t.send({ kind: 'quit' });
     await expect(exited).resolves.toBe(0);
   }, 15000);
+
+  it("round-trips a { kind: 'event', name, payload, meta } message unchanged (advanced serialization, issue #112)", async () => {
+    const fixture = path.join(__dirname, 'fixtures', 'echo-child.js');
+    const t = nodeForkTransport(fixture);
+    const eventMessage = {
+      kind: 'event' as const,
+      name: 'x.record',
+      payload: { producer: 'kiagent.b' },
+      meta: { from: 'kiagent.a', at: 1700000000000 },
+    };
+    const sent = { kind: 'echo' as const, event: eventMessage };
+    const got = new Promise<unknown>((resolve) => {
+      const off = t.onMessage((m) => {
+        off();
+        resolve(m);
+      });
+    });
+    t.send(sent);
+    await expect(got).resolves.toEqual({ kind: 'echoed', received: sent });
+    const exited = new Promise<number | null>((resolve) => t.onExit(resolve));
+    t.send({ kind: 'quit' });
+    await expect(exited).resolves.toBe(0);
+  }, 15000);
 });

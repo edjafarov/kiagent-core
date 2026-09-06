@@ -9,7 +9,7 @@ import path from 'path';
 
 import Database from 'better-sqlite3';
 
-import type { LaneState, LogLevel, Query } from '@shared/contracts';
+import type { EventMeta, LaneState, LogLevel, Query } from '@shared/contracts';
 
 import type { LogSink } from '@main/core/engine/engine';
 
@@ -23,7 +23,7 @@ export interface EventBus {
   subscribe(
     extensionId: string,
     event: string,
-    deliver: (payload: unknown) => void,
+    deliver: (payload: unknown, meta: EventMeta) => void,
   ): () => void;
 }
 
@@ -32,9 +32,20 @@ export interface EventBus {
  *  (tests included) keeps compiling unchanged; production wires the real
  *  one so a dead subscriber's failure is reported, not silent. */
 export function createEventBus(logSink?: LogSink): EventBus {
-  const subs = new Map<string, Set<(payload: unknown) => void>>();
+  const subs = new Map<
+    string,
+    Set<(payload: unknown, meta: EventMeta) => void>
+  >();
   return {
-    emit(_from, event, payload) {
+    emit(from, event, payload) {
+      // Host-stamped, unforgeable provenance: `from` is exactly the first
+      // argument this function received — never read from `payload`, never
+      // defaulted, never something a subscriber can override. Every caller
+      // of `emit` is the host itself (the events surface passes
+      // `deps.extensionId`; the platform passes the literal 'platform') —
+      // an extension never gets to call this function directly, only
+      // through the surface, which is what makes `from` trustworthy.
+      const meta: EventMeta = { from, at: Date.now() };
       // Isolate each subscriber: one extension must not be able to starve
       // event delivery for every other extension. Without this, a single
       // throwing callback (a dead transport's `endpoint.post`, the
@@ -49,7 +60,7 @@ export function createEventBus(logSink?: LogSink): EventBus {
       // transition.
       subs.get(event)?.forEach((cb) => {
         try {
-          cb(payload);
+          cb(payload, meta);
         } catch (err) {
           logSink?.log(
             'platform',
@@ -157,7 +168,7 @@ export interface SurfaceDeps {
   notify(msg: string, level?: LogLevel): void;
   bus: EventBus;
   /** Ships a host event to the child (endpoint.post({kind:'event',…})). */
-  deliverEvent(name: string, payload: unknown): void;
+  deliverEvent(name: string, payload: unknown, meta: EventMeta): void;
 }
 
 const unsupported = (ns: string) => () => {
@@ -261,8 +272,8 @@ export function buildSurfaces(deps: SurfaceDeps): {
         if (eventSubs.has(name)) return;
         eventSubs.set(
           name,
-          deps.bus.subscribe(deps.extensionId, name, (p) =>
-            deps.deliverEvent(name, p),
+          deps.bus.subscribe(deps.extensionId, name, (p, meta) =>
+            deps.deliverEvent(name, p, meta),
           ),
         );
       },
@@ -271,6 +282,15 @@ export function buildSurfaces(deps: SurfaceDeps): {
         eventSubs.get(name)?.();
         eventSubs.delete(name);
       },
+      // LOAD-BEARING ARITY: exactly two declared parameters. host-router.ts
+      // dispatches a hostile child's RPC call as `fn(...args)` with NO
+      // arity check of its own, so a third array element a compromised
+      // child pushes onto `args` (e.g. a forged `from`) is silently
+      // dropped by JS call semantics rather than reaching this function —
+      // that is the only thing standing between "an extension cannot
+      // choose its own `from`" and a hole. Do not widen this signature
+      // (e.g. to accept an emitter override) without re-establishing the
+      // unforgeability guarantee some other way first.
       emit(event, payload) {
         const name = String(event);
         // The platform's own emits (extension.activated/deactivated) go

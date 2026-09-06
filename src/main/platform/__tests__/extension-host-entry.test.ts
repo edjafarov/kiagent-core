@@ -155,11 +155,76 @@ describe('runExtensionHost — bootstrap/activate', () => {
     const activated = waitFor('activated');
     mainEp.post({ ...BOOT, caps: [...BOOT.caps, 'events'] as Cap[] });
     await activated;
-    mainEp.post({ kind: 'event', name: 'ping', payload: { n: 1 } });
+    mainEp.post({
+      kind: 'event',
+      name: 'ping',
+      payload: { n: 1 },
+      meta: { from: 'z', at: 1 },
+    });
     await new Promise((r) => {
       setTimeout(r, 10);
     });
     expect(seen).toEqual([{ n: 1 }]);
+  });
+
+  it('a { kind: "event", name, payload, meta } message reaches the callback as two arguments', async () => {
+    const seen: Array<[unknown, unknown]> = [];
+    const mod = {
+      async activate(host: {
+        events: {
+          on(e: string, cb: (p: unknown, meta: unknown) => void): () => void;
+        };
+      }) {
+        host.events.on('x.record', (p, meta) => seen.push([p, meta]));
+        return {};
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async () => undefined);
+    const activated = waitFor('activated');
+    mainEp.post({ ...BOOT, caps: [...BOOT.caps, 'events'] as Cap[] });
+    await activated;
+    mainEp.post({
+      kind: 'event',
+      name: 'x.record',
+      payload: { a: 1 },
+      meta: { from: 'kiagent.a', at: 12345 },
+    });
+    await new Promise((r) => {
+      setTimeout(r, 10);
+    });
+    expect(seen).toEqual([[{ a: 1 }, { from: 'kiagent.a', at: 12345 }]]);
+  });
+
+  it('keeps one-argument listeners working', async () => {
+    // The additive requirement: an extension that registers a callback
+    // taking only `(payload)` — the pre-existing shape — must keep
+    // compiling and running unchanged even though the wire message now
+    // always carries `meta`.
+    const seen: unknown[] = [];
+    const mod = {
+      async activate(host: {
+        events: { on(e: string, cb: (p: unknown) => void): () => void };
+      }) {
+        host.events.on('x.record', (p) => seen.push(p)); // no meta parameter
+        return {};
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async () => undefined);
+    const activated = waitFor('activated');
+    mainEp.post({ ...BOOT, caps: [...BOOT.caps, 'events'] as Cap[] });
+    await activated;
+    mainEp.post({
+      kind: 'event',
+      name: 'x.record',
+      payload: { a: 1 },
+      meta: { from: 'z', at: 1 },
+    });
+    await new Promise((r) => {
+      setTimeout(r, 10);
+    });
+    expect(seen).toEqual([{ a: 1 }]);
   });
 
   it('a module contributing no senders reports [] and survives a send call it cannot serve', async () => {

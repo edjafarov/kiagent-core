@@ -997,6 +997,19 @@ export interface ScopedFiles {
   move(from: string, to: string): Promise<void>;
 }
 
+/** Host-stamped provenance for a delivered event. `from` is the emitter's
+ *  extension id (or the literal 'platform' for platform-emitted events),
+ *  stamped by the host at emit time — never read from, defaulted from, or
+ *  overridable by the payload or by any argument the emitting extension
+ *  supplies. `at` is the host's `Date.now()` at the moment of emission.
+ *  Plain data: it must survive the fork boundary (structured clone /
+ *  `serialization: 'advanced'`) unchanged, so it carries no methods and no
+ *  class identity. */
+export interface EventMeta {
+  from: string;
+  at: number;
+}
+
 export interface CapSurfaces {
   query: { query: Query };
   /** The platform's fetch — shared retry/backoff applies by default. */
@@ -1019,7 +1032,13 @@ export interface CapSurfaces {
   /** Lifecycle + cross-extension signals ONLY. Data changes are the feed. */
   events: {
     events: {
-      on(event: string, cb: (payload: unknown) => void): () => void;
+      /** `meta` is additive: a one-argument `(payload) => void` listener
+       *  keeps compiling and running unchanged — `meta.from` is there for
+       *  a listener that wants to know who sent it. */
+      on(
+        event: string,
+        cb: (payload: unknown, meta: EventMeta) => void,
+      ): () => void;
       emit(event: string, payload: unknown): void;
     };
   };

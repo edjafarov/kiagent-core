@@ -43,6 +43,8 @@ const FIXTURE_SENDER_UNDECLARED = path.join(
   'fixtures',
   'ext-sender-undeclared',
 );
+const FIXTURE_EVENTS_A = path.join(__dirname, 'fixtures', 'ext-events-a');
+const FIXTURE_EVENTS_B = path.join(__dirname, 'fixtures', 'ext-events-b');
 
 describe('createLaneGate', () => {
   it('closed -> open emits once, with the resolved state in the payload', () => {
@@ -965,6 +967,59 @@ describe('createExtensionPlatform', () => {
 
     await crashPlatform.stop();
   }, 10000);
+
+  it("host-stamped event identity: A's forged producer claim is overridden by the host, platform.activated names 'platform' (#112, bundled/in-memory transport tier)", async () => {
+    // Same two fixtures, same assertions as the real-forked-child e2e test
+    // (extension-e2e.test.ts) — proving the two transport tiers agree, per
+    // the issue's acceptance criteria.
+    await platform.start();
+
+    const previewB = await platform.installPreview(FIXTURE_EVENTS_B);
+    if (!('token' in previewB))
+      throw new Error(`preview failed: ${JSON.stringify(previewB)}`);
+    expect(previewB.id).toBe('test.eventsb');
+    await expect(platform.installCommit(previewB.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.eventsb',
+    });
+
+    const previewA = await platform.installPreview(FIXTURE_EVENTS_A);
+    if (!('token' in previewA))
+      throw new Error(`preview failed: ${JSON.stringify(previewA)}`);
+    expect(previewA.id).toBe('test.eventsa');
+    await expect(platform.installCommit(previewA.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.eventsa',
+    });
+
+    const activations = (
+      (await tools.get('eventsB.getActivations')!.call({})) as {
+        activations: Array<{ payload: { id: string }; meta: unknown }>;
+      }
+    ).activations.filter((a) => a.payload.id === 'test.eventsa');
+    expect(activations).toEqual([
+      {
+        payload: { id: 'test.eventsa' },
+        meta: { from: 'platform', at: expect.any(Number) },
+      },
+    ]);
+
+    // A emits 'x.record' with a payload FORGING producer: 'test.eventsb'.
+    await tools.get('eventsA.emitRecord')!.call({});
+    await new Promise((r) => {
+      setTimeout(r, 20);
+    });
+
+    const { records } = (await tools.get('eventsB.getRecords')!.call({})) as {
+      records: unknown[];
+    };
+    expect(records).toEqual([
+      {
+        payload: { producer: 'test.eventsb' },
+        meta: { from: 'test.eventsa', at: expect.any(Number) },
+      },
+    ]);
+  });
 
   describe('oauth-bound source contributions', () => {
     let registeredProfiles: Array<{ sourceId: string; profile: unknown }>;

@@ -11,6 +11,7 @@ import { createRequire } from 'module';
 
 import type {
   DocumentInput,
+  EventMeta,
   ExternalRef,
   ExtensionModule,
   FolderNode,
@@ -68,7 +69,7 @@ export const NS_METHODS: Record<string, string[]> = {
 function buildRemoteHost(
   endpoint: RpcEndpoint,
   boot: ExtensionBootstrap,
-  eventCbs: Map<string, Set<(p: unknown) => void>>,
+  eventCbs: Map<string, Set<(p: unknown, meta: EventMeta) => void>>,
 ): Record<string, unknown> {
   const host: Record<string, unknown> = {
     self: { id: boot.extensionId, dataDir: boot.dataDir },
@@ -79,7 +80,7 @@ function buildRemoteHost(
   for (const cap of boot.caps) {
     if (cap === 'events') {
       host.events = {
-        on(event: string, cb: (p: unknown) => void) {
+        on(event: string, cb: (p: unknown, meta: EventMeta) => void) {
           let set = eventCbs.get(event);
           if (!set) {
             set = new Set();
@@ -134,7 +135,10 @@ export function runExtensionHost(
   // transport. Lives here (not in onBootstrap) so the onCall dispatcher,
   // registered once below, can reach it.
   const senders = new Map<string, Sender>();
-  const eventCbs = new Map<string, Set<(p: unknown) => void>>();
+  const eventCbs = new Map<
+    string,
+    Set<(p: unknown, meta: EventMeta) => void>
+  >();
   // Task 8 fills these in: active pulls keyed by pullId.
   const pulls = new Map<
     number,
@@ -425,7 +429,7 @@ export function runExtensionHost(
       return;
     }
     if (msg.kind === 'event') {
-      eventCbs.get(msg.name)?.forEach((cb) => cb(msg.payload));
+      eventCbs.get(msg.name)?.forEach((cb) => cb(msg.payload, msg.meta));
       return;
     }
     if (msg.kind === 'src-next' || msg.kind === 'src-abort') {
