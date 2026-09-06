@@ -237,6 +237,15 @@ export function buildSurfaces(deps: SurfaceDeps): {
         eventSubs.get(name)?.();
         eventSubs.delete(name);
       },
+      // LOAD-BEARING ARITY: exactly two declared parameters. host-router.ts
+      // dispatches a hostile child's RPC call as `fn(...args)` with NO
+      // arity check of its own, so a third array element a compromised
+      // child pushes onto `args` (e.g. a forged `from`) is silently
+      // dropped by JS call semantics rather than reaching this function —
+      // that is the only thing standing between "an extension cannot
+      // choose its own `from`" and a hole. Do not widen this signature
+      // (e.g. to accept an emitter override) without re-establishing the
+      // unforgeability guarantee some other way first.
       emit(event, payload) {
         const name = String(event);
         // The platform's own emits (extension.activated/deactivated) go
