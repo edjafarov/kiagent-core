@@ -35,7 +35,10 @@ describe('chatText profiles', () => {
       system: 'S',
     });
     const body = requestBody(fetchMock);
-    expect(body).toMatchObject({
+    // toEqual, not toMatchObject: "exact body" has to mean exact. A stray
+    // `stop: [...]` is precisely what #107 forbids, and toMatchObject would
+    // let one through.
+    expect(body).toEqual({
       temperature: 0,
       top_k: 1,
       top_p: 1,

@@ -214,12 +214,16 @@ type ReplyMsg = Extract<ChildToMain, { kind: 'reply' }>;
 // clone / advanced serialization carries plain data, not prototypes) — so a
 // caller on the other side of a `call` has to discriminate the rejection by
 // `Error.name` plus a few plain fields, never `instanceof`. This allow-list
-// is the complete set of extra fields any error crossing this endpoint may
-// carry today: `ModelChangedError`'s `{ expected, actual, modelId, source }`
-// (`src/shared/contracts.ts`). `LaneClosedError` and every ordinary `Error`
-// have none of these as OWN properties, so they cross with `errorFields`
-// simply absent. Extend this list (never widen it to "every own key") the
-// next time a new error type needs a field preserved across the boundary.
+// covers the fields a caller on the far side is expected to READ, not every
+// own property an error might carry: `ModelChangedError`'s
+// `{ expected, actual, modelId, source }` (`src/shared/contracts.ts`).
+// `NoProviderError.kind` (`src/main/core/inference.ts`) is an own enumerable
+// field that also crosses this endpoint and is deliberately NOT here — a
+// caller already knows which kind it asked for, so echoing it back buys
+// nothing. `LaneClosedError` and every ordinary `Error` have none of these as
+// OWN properties, so they cross with `errorFields` simply absent. Extend this
+// list (never widen it to "every own key") the next time a new error type
+// needs a field preserved across the boundary.
 const ERROR_FIELD_ALLOWLIST = [
   'expected',
   'actual',

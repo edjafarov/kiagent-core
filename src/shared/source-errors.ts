@@ -41,12 +41,16 @@ export function sourceErrorCode(err: unknown): SourceErrorCode | undefined {
  *  `reauthenticate` RESOLVES.
  *
  *  Deliberately carries no `code`: the taxonomy above drives the pull loop's
- *  retry/needsReauth decisions, and this error never reaches it. That is also
- *  why the wire cannot carry it — `extension-rpc.ts` ships only `{message,
- *  code}` for a source error, so a mismatch raised inside a PROXIED connector
- *  arrives in main as a plain Error and stages as 'reauth-provider' rather
- *  than 'reauth-identity'. Accepted: giving it a taxonomy code to survive the
- *  wire would make the pull loop treat every mismatch as auth/permanent. */
+ *  retry/needsReauth decisions, and this error never reaches it. Giving it a
+ *  taxonomy code to survive the wire would make the pull loop treat every
+ *  mismatch as auth/permanent, which is why it has none.
+ *
+ *  It does still cross the extension RPC boundary intact by NAME: the reply
+ *  path carries `errorName` (`src/shared/extension-rpc.ts`), so a mismatch
+ *  raised inside a PROXIED connector now stages as 'reauth-identity', the
+ *  same as an in-process one. Before that field existed it arrived as a plain
+ *  Error and staged as 'reauth-provider' — the reason the stage classifier
+ *  has a name fallback at all. */
 export class IdentityMismatchError extends Error {
   // Subclassing Error does not set `name`, and the stage classifier's
   // instanceof check cannot survive a structured clone — set it explicitly so
