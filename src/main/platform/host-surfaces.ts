@@ -86,7 +86,21 @@ export interface SurfaceDeps {
   inference: {
     complete(
       prompt: string,
-      opts?: { maxTokens?: number; lane?: 'interactive' | 'background' },
+      opts?: {
+        maxTokens?: number;
+        lane?: 'interactive' | 'background';
+        /** Deterministic decoding for classification-style prompts;
+         *  'default' keeps today's behavior. Lifted from `InferencePlane`
+         *  (src/main/core/inference.ts) — see `describe`/`generation`
+         *  below for why a caller would pass these. */
+        profile?: 'default' | 'deterministic';
+        /** A separate system message, kept apart from the user prompt. */
+        system?: string;
+        /** A generation obtained from `describe()`. Rejected with
+         *  ModelChangedError (by `name`, not `instanceof` — it crosses the
+         *  extension RPC boundary) when the model changed since. */
+        generation?: number;
+      },
     ): Promise<string>;
     see(
       image: Uint8Array,
@@ -115,6 +129,30 @@ export interface SurfaceDeps {
      *  surface-build time (`backgroundLaneState`) — the plane itself has no
      *  access to prefs/scheduler and cannot resolve this alone. */
     lane(): Promise<LaneState>;
+    /** Resolves the provider that WOULD answer `kind` right now and reports
+     *  its model identity plus the plane's current generation token — so
+     *  an extension can compute a cache key BEFORE calling and later pass
+     *  the generation back to `complete()` to be rejected if the model
+     *  changed underneath it. `null` when no ready provider supports the
+     *  kind; never throws. Injected by the extension platform straight
+     *  from `InferencePlane.describe` — unlike `lane`, the plane can
+     *  resolve this on its own, so no extra wiring is needed at
+     *  surface-build time.
+     *
+     *  Optional, unlike `lane`: a defaulted `describe` cannot lie (`null`
+     *  is already the documented, non-misleading answer for "no ready
+     *  provider"), so a caller that omits it keeps compiling — the
+     *  default is supplied once, in `buildSurfaces` below, rather than at
+     *  every existing construction site. Contrast `laneState`
+     *  (`ExtensionPlatformDeps`, task 1): a silent default there would
+     *  report the background lane as OPEN, an affirmative false claim
+     *  that could mask a real wiring bug — that is why `laneState` stayed
+     *  required and this does not. */
+    describe?(kind: 'complete' | 'see' | 'read' | 'hear'): Promise<{
+      providerId: string;
+      modelId: string;
+      generation: number;
+    } | null>;
   };
   notify(msg: string, level?: LogLevel): void;
   bus: EventBus;
@@ -142,6 +180,10 @@ export function buildSurfaces(deps: SurfaceDeps): {
     return db;
   };
   const eventSubs = new Map<string, () => void>();
+  // The one place the optional dep is defaulted — every existing caller of
+  // buildSurfaces() that doesn't wire `describe` keeps compiling, and the
+  // default answers exactly what an absent provider would: `null`.
+  const describeInference = deps.inference.describe ?? (async () => null);
 
   const surfaces: Surfaces = {
     query: {
@@ -155,6 +197,7 @@ export function buildSurfaces(deps: SurfaceDeps): {
           type as never,
         ),
       count: (q) => deps.query.count((q ?? {}) as never),
+      countBy: (q) => deps.query.countBy((q ?? {}) as never),
       accounts: () => deps.query.accounts(),
     },
     net: {
@@ -209,6 +252,8 @@ export function buildSurfaces(deps: SurfaceDeps): {
           ...(opts as object),
         }),
       lane: () => deps.inference.lane(),
+      describe: (kind) =>
+        describeInference(kind as 'complete' | 'see' | 'read' | 'hear'),
     },
     events: {
       on(event) {

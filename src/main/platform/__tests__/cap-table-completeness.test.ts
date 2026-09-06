@@ -40,6 +40,7 @@ function realSurfaces() {
       read: noop,
       hear: noop,
       lane: async () => 'open' as const,
+      describe: async () => null,
     },
     notify: () => {},
     bus: createEventBus(),
