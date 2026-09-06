@@ -709,6 +709,36 @@ export interface Inference {
  *  injects the resolver only at the point it builds this namespace. */
 export interface ExtensionInference extends Inference {
   lane(): Promise<LaneState>;
+  /** Widened over `Inference.complete`: a deterministic decoding profile
+   *  for classification-style prompts, a separate system message, and a
+   *  generation token obtained from `describe()` — rejected with
+   *  ModelChangedError (discriminate by `name`, never `instanceof`: it
+   *  crosses the extension RPC boundary, `src/shared/extension-rpc.ts`,
+   *  where class identity does not survive) when the model changed
+   *  between `describe()` and this call. `see`/`read`/`hear` are
+   *  deliberately NOT widened — only `complete` gained these fields on
+   *  the plane (`InferencePlane`, `src/main/core/inference.ts`). */
+  complete(
+    prompt: string,
+    opts?: {
+      maxTokens?: number;
+      lane?: Lane;
+      profile?: 'default' | 'deterministic';
+      system?: string;
+      generation?: number;
+    },
+  ): Promise<string>;
+  /** Resolves the provider that WOULD answer `kind` right now, exactly as
+   *  the call path's internal `pick(kind)` does, and reports its model
+   *  identity plus the plane's current generation token — so an extension
+   *  can compute a cache key BEFORE calling and later pass the generation
+   *  back to `complete()` to be rejected if the model changed underneath
+   *  it. `null` when no ready provider supports the kind; never throws. */
+  describe(kind: 'complete' | 'see' | 'read' | 'hear'): Promise<{
+    providerId: string;
+    modelId: string;
+    generation: number;
+  } | null>;
 }
 
 export type ProviderStatus =

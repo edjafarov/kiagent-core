@@ -86,7 +86,21 @@ export interface SurfaceDeps {
   inference: {
     complete(
       prompt: string,
-      opts?: { maxTokens?: number; lane?: 'interactive' | 'background' },
+      opts?: {
+        maxTokens?: number;
+        lane?: 'interactive' | 'background';
+        /** Deterministic decoding for classification-style prompts;
+         *  'default' keeps today's behavior. Lifted from `InferencePlane`
+         *  (src/main/core/inference.ts) — see `describe`/`generation`
+         *  below for why a caller would pass these. */
+        profile?: 'default' | 'deterministic';
+        /** A separate system message, kept apart from the user prompt. */
+        system?: string;
+        /** A generation obtained from `describe()`. Rejected with
+         *  ModelChangedError (by `name`, not `instanceof` — it crosses the
+         *  extension RPC boundary) when the model changed since. */
+        generation?: number;
+      },
     ): Promise<string>;
     see(
       image: Uint8Array,
@@ -115,6 +129,20 @@ export interface SurfaceDeps {
      *  surface-build time (`backgroundLaneState`) — the plane itself has no
      *  access to prefs/scheduler and cannot resolve this alone. */
     lane(): Promise<LaneState>;
+    /** Resolves the provider that WOULD answer `kind` right now and reports
+     *  its model identity plus the plane's current generation token — so
+     *  an extension can compute a cache key BEFORE calling and later pass
+     *  the generation back to `complete()` to be rejected if the model
+     *  changed underneath it. `null` when no ready provider supports the
+     *  kind; never throws. Injected by the extension platform straight
+     *  from `InferencePlane.describe` — unlike `lane`, the plane can
+     *  resolve this on its own, so no extra wiring is needed at
+     *  surface-build time. */
+    describe(kind: 'complete' | 'see' | 'read' | 'hear'): Promise<{
+      providerId: string;
+      modelId: string;
+      generation: number;
+    } | null>;
   };
   notify(msg: string, level?: LogLevel): void;
   bus: EventBus;
@@ -210,6 +238,8 @@ export function buildSurfaces(deps: SurfaceDeps): {
           ...(opts as object),
         }),
       lane: () => deps.inference.lane(),
+      describe: (kind) =>
+        deps.inference.describe(kind as 'complete' | 'see' | 'read' | 'hear'),
     },
     events: {
       on(event) {

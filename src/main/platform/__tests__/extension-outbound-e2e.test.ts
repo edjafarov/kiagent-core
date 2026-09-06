@@ -58,6 +58,7 @@ const noInference = {
   see: async () => '',
   read: async () => '',
   hear: async () => '',
+  describe: async () => null,
 };
 
 const fakePrefs = (): Prefs => ({

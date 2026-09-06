@@ -41,6 +41,7 @@ function makeDeps(
             `heard:${opts?.format}:${opts?.lane}`,
         ),
         lane: jest.fn(async () => 'open' as const),
+        describe: jest.fn(async () => null),
       },
       notify: jest.fn(),
       bus,
@@ -222,6 +223,7 @@ describe('buildSurfaces', () => {
         read: async () => '',
         hear: async () => '',
         lane: async () => 'open' as const,
+        describe: async () => null,
       },
     });
     const { surfaces } = buildSurfaces(deps);
@@ -244,6 +246,7 @@ describe('buildSurfaces', () => {
         read: async () => '',
         hear: async () => '',
         lane: async () => 'until-idle' as const,
+        describe: async () => null,
       },
     });
     const { surfaces } = buildSurfaces(deps);
@@ -259,6 +262,75 @@ describe('buildSurfaces', () => {
     const { deps } = makeDeps({});
     const { surfaces } = buildSurfaces(deps);
     await expect(surfaces.inference.lane()).resolves.toBe('open');
+  });
+
+  it('describe delegates to the plane and returns provider identity', async () => {
+    const describeFn = jest.fn(async () => ({
+      providerId: 'local',
+      modelId: 'gemma-3-4b',
+      generation: 7,
+    }));
+    const { deps } = makeDeps({
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'open' as const,
+        describe: describeFn,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await expect(surfaces.inference.describe('complete')).resolves.toEqual({
+      providerId: 'local',
+      modelId: 'gemma-3-4b',
+      generation: 7,
+    });
+    expect(describeFn).toHaveBeenCalledWith('complete');
+  });
+
+  it('describe resolves null when no provider is ready', async () => {
+    const { deps } = makeDeps({
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'open' as const,
+        describe: async () => null,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await expect(surfaces.inference.describe('complete')).resolves.toBeNull();
+  });
+
+  it('passes profile, system and generation through to the plane for complete', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const { deps } = makeDeps({
+      inference: {
+        complete: async (_p, opts) => {
+          calls.push({ ...opts });
+          return 'ok';
+        },
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'open' as const,
+        describe: async () => null,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await surfaces.inference.complete('hi', {
+      profile: 'deterministic',
+      system: 'be terse',
+      generation: 42,
+    } as never);
+    expect(calls[0]).toMatchObject({
+      lane: 'interactive',
+      profile: 'deterministic',
+      system: 'be terse',
+      generation: 42,
+    });
   });
 
   it('inference.hear delegates to the plane, keeping format and passing the lane through', async () => {
