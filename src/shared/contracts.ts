@@ -745,6 +745,48 @@ export interface InferenceProvider {
   onChange?(cb: () => void): () => void;
 }
 
+/** Thrown when a caller passes a `generation` it got from `describe()` and
+ *  the model that will actually answer is no longer the one that
+ *  generation was recorded against. Two throw sites share this ONE class:
+ *  the plane's own `checkGeneration` (`src/main/core/inference.ts`,
+ *  comparing the caller's recorded generation against the plane's CURRENT
+ *  one — the ordinary case, `expected !== actual`) and a provider's own
+ *  `handle()` re-check (e.g. `src/main/providers/local-llm/provider.ts`,
+ *  used when a provider's internal model resolution could in principle
+ *  drift out of step with the plane's generation counter — an
+ *  `onChange`-coverage gap, not the ordinary case: there, `expected` and
+ *  `actual` are the SAME generation number, because the counter never
+ *  moved even though the model did; that equality is not a mistake to
+ *  suppress, it IS the diagnostic).
+ *
+ *  Lives here, not next to either throw site, so both `@main/core/inference`
+ *  and a provider module can import the identical class without an
+ *  inverted dependency (a provider must not depend on the plane).
+ *
+ *  Discriminate by `name === 'ModelChangedError'`, not `instanceof`: errors
+ *  cross the extension RPC boundary (`src/shared/extension-rpc.ts`) via a
+ *  process fork, and class identity does not survive that trip — `name`
+ *  and the three fields below are what a caller on the other side actually
+ *  sees. Exactly one field-type contract for both throw sites so a caller
+ *  need not branch on `typeof expected` to read it safely. */
+export class ModelChangedError extends Error {
+  readonly expected: number;
+
+  readonly actual: number;
+
+  readonly modelId: string;
+
+  constructor(expected: number, actual: number, modelId: string) {
+    super(
+      `the model changed between lookup and call (expected generation ${expected}, now ${actual})`,
+    );
+    this.name = 'ModelChangedError';
+    this.expected = expected;
+    this.actual = actual;
+    this.modelId = modelId;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. WORKER — the one feed-consumer role
 // ─────────────────────────────────────────────────────────────────────────────

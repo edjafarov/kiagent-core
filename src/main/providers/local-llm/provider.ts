@@ -1,11 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 
-import type {
-  InferenceProvider,
-  LogLevel,
-  Prefs,
-  ProviderStatus,
+import {
+  ModelChangedError,
+  type InferenceProvider,
+  type LogLevel,
+  type Prefs,
+  type ProviderStatus,
 } from '@shared/contracts';
 
 import { chatText, describeImage } from './api';
@@ -21,45 +22,6 @@ export interface ServerLike {
   start(): Promise<void>;
   stop(): Promise<void>;
   baseUrl(): string;
-}
-
-/** Thrown by `handle()` when a caller's `expectModelId` (threaded from the
- *  plane's `payload.expectModelId`, itself only present when the caller
- *  passed a `describe()`-derived `generation` — see `inference.ts`'s
- *  `completeWithMeta`) no longer matches the model this provider actually
- *  resolved via `servableModel()`. This closes the window the plane's own
- *  generation check cannot: the plane compares generations right after
- *  `pick()` selects a PROVIDER, but this provider only resolves a MODEL
- *  later, inside its own `handle()` — the model can still change in
- *  between (a completed download, a flipped override) even though the
- *  plane's generation hasn't moved.
- *
- *  Distinct from (not a subclass of) `src/main/core/inference.ts`'s
- *  `ModelChangedError`: that one reports a GENERATION mismatch (two
- *  numbers); this one reports a MODEL-ID mismatch (two strings) — the
- *  plane never had a second generation number to give it, only the model
- *  id it expected. Both are discriminated the same way — by
- *  `name === 'ModelChangedError'`, never `instanceof` — because both cross
- *  the extension RPC boundary (`src/shared/extension-rpc.ts`) via a
- *  process fork, where class identity does not survive. Same field names
- *  (`expected`, `actual`, `modelId`) so a caller-side handler need not care
- *  which side threw. */
-export class ModelChangedError extends Error {
-  readonly expected: string;
-
-  readonly actual: string;
-
-  readonly modelId: string;
-
-  constructor(expected: string, actual: string) {
-    super(
-      `the model changed before the request could be sent (expected '${expected}', now '${actual}')`,
-    );
-    this.name = 'ModelChangedError';
-    this.expected = expected;
-    this.actual = actual;
-    this.modelId = actual;
-  }
 }
 
 export interface LocalLlmProvider extends InferenceProvider {
@@ -114,15 +76,19 @@ export function createLocalLlmProvider(deps: {
   let startingModelId: string | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // `onChange` subscribers + the last model id they were told about.
-  // `undefined` means "never observed yet" — set once, synchronously, at
-  // construction (see `checkModelChange()`'s first call below) before any
-  // caller could possibly have subscribed, so that initial observation
-  // never itself counts as a "switch" (mirrors the plane's own "the first
-  // registration on an empty plane doesn't bump" rule in `inference.ts`:
-  // there is nothing yet to invalidate).
+  // `onChange` subscribers + the last model id they were told about. No
+  // "first observation doesn't count" special case is needed: the baseline
+  // `checkModelChange()` call below (right after construction seeds
+  // `installedModel`) always runs before this function RETURNS the object
+  // that exposes `onChange` — no subscriber can possibly exist yet at that
+  // point, so `changeSubs.forEach` is a no-op on the first call regardless
+  // of what `lastNotifiedModelId` starts as. (Fix round, post-review: an
+  // earlier version had an explicit `undefined`-sentinel guard here; a
+  // mutation check showed removing it changed no test's outcome — it was
+  // dead weight guarding against something structurally impossible, not a
+  // real behavior. Simpler now: `null` means "no model", plain and simple.)
   const changeSubs = new Set<() => void>();
-  let lastNotifiedModelId: string | null | undefined;
+  let lastNotifiedModelId: string | null = null;
 
   // `profile` (issue #107) only means something to `complete` — this
   // provider's `see` request has no decoding-profile concept to apply it
@@ -194,12 +160,6 @@ export function createLocalLlmProvider(deps: {
    *  without polling `describe()`/`handle()` itself. */
   const checkModelChange = (): void => {
     const id = servableModel()?.id ?? null;
-    if (lastNotifiedModelId === undefined) {
-      // First observation ever — nothing a subscriber could have held
-      // before this point, so it isn't a "switch".
-      lastNotifiedModelId = id;
-      return;
-    }
     if (id === lastNotifiedModelId) return;
     lastNotifiedModelId = id;
     changeSubs.forEach((cb) => cb());
@@ -408,16 +368,33 @@ export function createLocalLlmProvider(deps: {
       // AFTER this provider has resolved the model it is about to serve,
       // and BEFORE any request reaches it — `payload.expectModelId` is
       // only ever set (by the plane) when the caller passed a `generation`
-      // it got from `describe()`. This is the half of issue #107's
-      // guarantee the plane cannot provide on its own: the plane's own
-      // generation check runs right after it picks a PROVIDER, but this
-      // provider resolves its MODEL later, right here — a download
-      // completing or an override flipping between those two points would
-      // otherwise slip a stale-model request through.
-      const { expectModelId } =
-        (req.payload as { expectModelId?: string } | undefined) ?? {};
+      // it got from `describe()`, and (post fix-round) carries what that
+      // earlier call recorded, not a value freshly recomputed at call
+      // time (see `inference.ts`'s `describedAt` map) — recomputing fresh
+      // would make this comparison always pass, since both reads happen in
+      // the same synchronous JS turn with nothing able to mutate state in
+      // between.
+      //
+      // The PLANE's own generation check (`checkGeneration`, run before
+      // this provider is even asked to resolve a model) is the primary
+      // guarantee: it already rejects any call whose generation moved,
+      // and every real model change in THIS provider bumps the generation
+      // via `onChange` (below). This check is the BACKSTOP for the one
+      // case that guarantee can't cover on its own — a bug where some
+      // future mutation to `selectedModel`/`servableModel`'s inputs is
+      // added without a matching `checkModelChange()` call, so the model
+      // drifts without the generation counter moving. It is not a second,
+      // independent closer of the describe()-to-handle() race.
+      const { expectModelId, generation } =
+        (req.payload as
+          | { expectModelId?: string; generation?: number }
+          | undefined) ?? {};
       if (expectModelId !== undefined && expectModelId !== model.id) {
-        throw new ModelChangedError(expectModelId, model.id);
+        throw new ModelChangedError(
+          generation ?? -1,
+          generation ?? -1,
+          model.id,
+        );
       }
       const s = await ensureServer(model);
       touchIdle();

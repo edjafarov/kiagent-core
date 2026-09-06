@@ -327,4 +327,48 @@ describe('inference plane', () => {
     expect((seen as { generation?: number }).generation).toBeUndefined();
     expect((seen as { expectModelId?: string }).expectModelId).toBeUndefined();
   });
+
+  // Fix round, post-review (finding 1): `expectModelId` must carry what the
+  // caller's OWN `describe()` call recorded, not a value recomputed fresh
+  // at call time — recomputing fresh made the provider-level check in
+  // `handle()` structurally unreachable, since both reads happen
+  // synchronously in the same JS turn with nothing able to mutate state in
+  // between (see the review at tasks-2-3-review.md). This test simulates
+  // exactly the scenario the provider-side check exists to catch: an
+  // `onChange`-coverage gap, where a provider's model drifts WITHOUT ever
+  // calling `onChange`, so the generation never bumps and `checkGeneration`
+  // has nothing to reject.
+  it('threads the RECORDED describe()-time modelId forward, not a fresh recompute', async () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 42 });
+    let currentModelId = 'm1';
+    let seenPayload: unknown;
+    plane.register({
+      id: 'x',
+      supports: ['complete'],
+      status: () => 'ready',
+      describe: () => ({ modelId: currentModelId }),
+      handle: async (req) => {
+        seenPayload = req.payload;
+        return 'ok';
+      },
+    });
+
+    const described = await plane.describe('complete');
+    expect(described).toMatchObject({ modelId: 'm1' });
+
+    // The provider's model changes WITHOUT calling onChange — the bug
+    // class the provider-level check is a backstop for. The generation
+    // therefore does NOT bump, so `checkGeneration` will not reject.
+    currentModelId = 'm2';
+
+    await plane.complete('p', { generation: described!.generation });
+
+    // A fresh recompute at call time would report 'm2' (what the provider
+    // NOW resolves) — the pre-fix behavior, which can never differ from
+    // what handle() itself resolves. The fix threads forward what the
+    // caller's earlier lookup actually told them: 'm1'.
+    expect((seenPayload as { expectModelId?: string }).expectModelId).toBe(
+      'm1',
+    );
+  });
 });

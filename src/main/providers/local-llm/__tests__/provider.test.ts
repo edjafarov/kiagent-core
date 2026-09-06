@@ -945,9 +945,17 @@ describe('LocalLlmProvider', () => {
           },
         }),
       ).rejects.toMatchObject({
+        // `ModelChangedError` is now the ONE shared class (`@shared/contracts`)
+        // used by both the plane's `checkGeneration` and this provider-level
+        // backstop — `expected`/`actual` are always generation numbers, never
+        // model ids. The provider only has ONE generation number in hand
+        // (the caller's `payload.generation`), so it reports it as both
+        // `expected` and `actual`: the counter didn't move, but the model did
+        // anyway — exactly the onChange-coverage-gap signature this check
+        // exists to catch. `modelId` is the model that actually resolved.
         name: 'ModelChangedError',
-        expected: CURATED_MODEL.id,
-        actual: E4B_MODEL.id,
+        expected: 1,
+        actual: 1,
         modelId: E4B_MODEL.id,
       });
       expect(mockApi.chatText).not.toHaveBeenCalled();
@@ -993,11 +1001,20 @@ describe('LocalLlmProvider', () => {
       expect(cb).toHaveBeenCalledTimes(1);
     });
 
-    it('does not fire onChange for the initial (seeded) model observation', async () => {
-      const { provider } = await providerWithServable(CURATED_MODEL);
-      const cb = jest.fn();
-      provider.onChange!(cb);
-      expect(cb).not.toHaveBeenCalled();
-    });
+    // Fix round, post-review: this describe block used to also have "does
+    // not fire onChange for the initial (seeded) model observation" —
+    // construct a provider, attach `onChange` immediately, assert it
+    // wasn't called. Deleted: it passed whether or not any "first
+    // observation" guard existed in `checkModelChange()`, because
+    // `createLocalLlmProvider()` is synchronous and its baseline
+    // `checkModelChange()` call always runs BEFORE the function returns
+    // the object `onChange` lives on — no test can attach a subscriber
+    // before that baseline call happens, so "cb not called yet" is true
+    // for a reason the test never actually exercised. Confirmed by
+    // mutation: removing the (now-deleted) guard from the implementation
+    // left this test green. Rather than keep a test that reports coverage
+    // that isn't there, the implementation was simplified to drop the
+    // guard too (see `checkModelChange`'s comment) — there was nothing
+    // real for either the guard or this test to protect.
   });
 });

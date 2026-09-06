@@ -1,4 +1,9 @@
-import type { Inference, InferenceProvider, Lane } from '@shared/contracts';
+import {
+  ModelChangedError,
+  type Inference,
+  type InferenceProvider,
+  type Lane,
+} from '@shared/contracts';
 
 import type { LogSink } from './engine/engine';
 
@@ -112,33 +117,13 @@ export class LaneClosedError extends Error {
   }
 }
 
-/** Thrown when a caller passes a `generation` it got from `describe()` and
- *  the plane's generation has since moved on — i.e. the model that will
- *  answer is no longer the model the caller looked up. Thrown AFTER the
- *  plane resolves a provider but BEFORE any request reaches it.
- *
- *  Discriminate by `name === 'ModelChangedError'`, not `instanceof`: errors
- *  cross the extension RPC boundary (`src/shared/extension-rpc.ts`) via a
- *  process fork, and class identity does not survive that trip — `name`
- *  and the three fields below are what a caller on the other side actually
- *  sees. */
-export class ModelChangedError extends Error {
-  readonly expected: number;
-
-  readonly actual: number;
-
-  readonly modelId: string;
-
-  constructor(expected: number, actual: number, modelId: string) {
-    super(
-      `the model changed between lookup and call (expected generation ${expected}, now ${actual})`,
-    );
-    this.name = 'ModelChangedError';
-    this.expected = expected;
-    this.actual = actual;
-    this.modelId = modelId;
-  }
-}
+// `ModelChangedError` itself now lives in `@shared/contracts.ts` — a
+// provider (e.g. `src/main/providers/local-llm/provider.ts`) throws the
+// SAME class from its own `handle()`, and a provider must not depend on
+// this module (the plane), so the one shared shape lives at the layer
+// both already import from. Re-exported here so existing importers of
+// `'../inference'` keep compiling unchanged.
+export { ModelChangedError };
 
 /** Normalizes a provider's `complete` result: every provider today returns
  *  a plain string, so it maps to usage-less meta; a provider that opts into
@@ -217,10 +202,32 @@ export function createInference(
     kind: 'complete' | 'see' | 'read' | 'hear',
   ): string => p.describe?.(kind)?.modelId ?? p.id;
 
+  /** What `describe(kind)` last told a caller: the generation it reported,
+   *  and the modelId it resolved AT THAT MOMENT. `completeWithMeta` threads
+   *  the recorded value forward as `payload.expectModelId` (fix round,
+   *  post-review) instead of recomputing a fresh `modelIdOf(p, kind)` at
+   *  call time — recomputing fresh made the provider-side check in
+   *  `handle()` structurally unreachable, since both reads happened
+   *  synchronously in the same JS turn with nothing able to mutate state
+   *  in between. Threading the RECORDED value means the provider's own
+   *  check compares "what the caller saw at describe() time" against "what
+   *  handle() resolves now" — the actual guarantee issue #107 asks for. */
+  const describedAt = new Map<
+    'complete' | 'see' | 'read' | 'hear',
+    { generation: number; modelId: string }
+  >();
+
   /** Throws BEFORE `p.handle(...)` when the caller passed a `generation`
    *  from `describe()` and the plane has moved on since. Checked AFTER
    *  `pick()` — i.e. against the provider that would actually serve this
-   *  call — per issue #107's binding rule. */
+   *  call — per issue #107's binding rule. This is the PRIMARY guarantee:
+   *  it catches every real model switch, because register/unregister and
+   *  every provider `onChange` fire all bump the generation. The
+   *  provider-level `expectModelId` re-check inside `handle()` (task 3) is
+   *  a BACKSTOP for the one case this can't cover — a provider whose model
+   *  drifts without calling `onChange` (an onChange-coverage bug) — not a
+   *  second, independent closer of the same race; see `describedAt` above
+   *  for how that backstop is kept reachable. */
   const checkGeneration = (
     p: InferenceProvider,
     kind: 'complete' | 'see' | 'read' | 'hear',
@@ -240,14 +247,22 @@ export function createInference(
     checkGeneration(p, 'complete', opts?.generation);
     const modelId = modelIdOf(p, 'complete');
     const profile: CompletionProfile = opts?.profile ?? 'default';
-    // Widened on purpose: profile/system/generation/expectModelId all
-    // reach the provider only because this object carries them. Task 3's
-    // local provider reads req.payload.profile/system to pick decoding
-    // parameters, and re-checks payload.expectModelId against the model it
-    // resolves inside its own handle() — the plane's checkGeneration above
-    // closes the window between pick() and describe(); the provider's own
-    // re-check (task 3) closes the window between THIS point and the model
-    // it actually resolves at request time.
+    // `expectModelId`: when the caller passed a `generation`, prefer what
+    // THEIR OWN `describe()` call recorded (`describedAt`) over the fresh
+    // `modelId` just computed above — as long as that record's generation
+    // still matches the one they passed (defensive: it should always match
+    // once `checkGeneration` has passed, but a caller could pass a
+    // `generation` it never actually got from `describe()`). Recomputing
+    // fresh here would make this field always equal what `handle()` itself
+    // resolves moments later (see `describedAt`'s comment) — forwarding the
+    // RECORDED value is what keeps the provider's own re-check meaningful.
+    const recorded = describedAt.get('complete');
+    const expectModelId =
+      opts?.generation !== undefined
+        ? recorded?.generation === opts.generation
+          ? recorded.modelId
+          : modelId
+        : undefined;
     const raw = await p.handle({
       kind: 'complete',
       payload: {
@@ -256,7 +271,7 @@ export function createInference(
         profile,
         system: opts?.system,
         generation: opts?.generation,
-        expectModelId: opts?.generation !== undefined ? modelId : undefined,
+        expectModelId,
       },
       lane,
     });
@@ -287,7 +302,9 @@ export function createInference(
         if (err instanceof NoProviderError) return null;
         throw err;
       }
-      return { providerId: p.id, modelId: modelIdOf(p, kind), generation };
+      const modelId = modelIdOf(p, kind);
+      describedAt.set(kind, { generation, modelId });
+      return { providerId: p.id, modelId, generation };
     },
     generation: () => generation,
     async see(image, prompt, opts) {
