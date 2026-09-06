@@ -729,6 +729,20 @@ export interface InferenceProvider {
     payload: unknown;
     lane: Lane;
   }): Promise<unknown>;
+  /** Model identity for a kind this provider supports — asked BEFORE a
+   *  call, not derived from one. Optional so every existing provider (none
+   *  of which implement it yet) keeps compiling unchanged; a provider that
+   *  omits it is reported by the plane as `{ modelId: provider.id }`. Never
+   *  throws; `null` when the provider cannot resolve a model right now. */
+  describe?(kind: 'complete' | 'see' | 'read' | 'hear'): {
+    modelId: string;
+  } | null;
+  /** Subscribe to "the model this provider would serve just changed" —
+   *  e.g. the user switched the selected model, or the servable model was
+   *  re-resolved to a different one. The plane bumps its generation token
+   *  on each call. Optional for the same reason as `describe`; a provider
+   *  that never changes model mid-run need not implement it. */
+  onChange?(cb: () => void): () => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

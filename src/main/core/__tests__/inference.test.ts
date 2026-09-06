@@ -3,10 +3,15 @@ import type { InferenceProvider } from '@shared/contracts';
 import {
   createInference,
   LaneClosedError,
+  ModelChangedError,
   NoProviderError,
 } from '../inference';
 
 const noopLogs = { log: () => {} };
+
+// Alias kept for the generation tests below, which mirror the task-2 brief
+// verbatim (it calls this helper `fakeLogs()`) — same object as `noopLogs`.
+const fakeLogs = () => noopLogs;
 
 function provider(
   id: string,
@@ -18,6 +23,25 @@ function provider(
     supports,
     status: () => 'ready',
     handle: async (req) => `${result}:${req.kind}`,
+  };
+}
+
+/** A provider fixture for the generation/describe tests: unlike `provider()`
+ *  above it can report a `modelId` (via `describe`) and fire `onChange`. */
+function fakeProvider(opts: {
+  id: string;
+  supports: InferenceProvider['supports'];
+  modelId?: string;
+  handle?: InferenceProvider['handle'];
+  onChange?: InferenceProvider['onChange'];
+}): InferenceProvider {
+  return {
+    id: opts.id,
+    supports: opts.supports,
+    status: () => 'ready',
+    handle: opts.handle ?? (async (req) => `${opts.id}:${req.kind}`),
+    describe: opts.modelId ? () => ({ modelId: opts.modelId! }) : undefined,
+    onChange: opts.onChange,
   };
 }
 
@@ -139,5 +163,168 @@ describe('inference plane', () => {
     off();
     plane.setBackgroundOpen(false); // unsubscribed
     expect(seen).toEqual([false, true]);
+  });
+
+  it('bumps the generation on register, unregister and provider change', () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 100 });
+    let fire: () => void = () => {};
+    const p = fakeProvider({
+      id: 'x',
+      supports: ['complete'],
+      modelId: 'm1',
+      onChange: (cb) => {
+        fire = cb;
+        return () => {};
+      },
+    });
+    const off = plane.register(p);
+    const g1 = plane.generation();
+    fire();
+    expect(plane.generation()).toBe(g1 + 1);
+    off();
+    expect(plane.generation()).toBe(g1 + 2);
+  });
+
+  it('rejects a stale generation before the provider is called', async () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 100 });
+    const handle = jest.fn(async () => 'never');
+    plane.register(
+      fakeProvider({ id: 'x', supports: ['complete'], modelId: 'm1', handle }),
+    );
+    const d = await plane.describe('complete');
+    plane.register(fakeProvider({ id: 'y', supports: ['see'], modelId: 'm2' })); // bumps
+    await expect(
+      plane.complete('hi', { maxTokens: 8, generation: d!.generation }),
+    ).rejects.toMatchObject({
+      name: 'ModelChangedError',
+      expected: d!.generation,
+    });
+    expect(handle).toHaveBeenCalledTimes(0);
+  });
+
+  it('succeeds when the current generation is passed', async () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 100 });
+    const handle = jest.fn(async () => 'ok');
+    plane.register(
+      fakeProvider({ id: 'x', supports: ['complete'], modelId: 'm1', handle }),
+    );
+    const d = await plane.describe('complete');
+    await expect(
+      plane.complete('hi', { maxTokens: 8, generation: d!.generation }),
+    ).resolves.toBe('ok');
+    expect(handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the same identity to concurrent describers', async () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 7 });
+    plane.register(
+      fakeProvider({ id: 'x', supports: ['complete'], modelId: 'm1' }),
+    );
+    const [a, b] = await Promise.all([
+      plane.describe('complete'),
+      plane.describe('complete'),
+    ]);
+    expect(a).toEqual(b);
+  });
+
+  it('describes null when no provider is ready', async () => {
+    const plane = createInference(fakeLogs());
+    await expect(plane.describe('complete')).resolves.toBeNull();
+  });
+
+  it('returns identity and usage with the completion', async () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 5 });
+    plane.register(
+      fakeProvider({
+        id: 'x',
+        supports: ['complete'],
+        modelId: 'm1',
+        handle: async () => ({
+          text: 'hi',
+          promptTokens: 9,
+          completionTokens: 2,
+          truncated: true,
+        }),
+      }),
+    );
+    await expect(
+      plane.completeWithMeta('p', { maxTokens: 8 }),
+    ).resolves.toEqual({
+      text: 'hi',
+      providerId: 'x',
+      modelId: 'm1',
+      generation: 5,
+      profile: 'default',
+      promptTokens: 9,
+      completionTokens: 2,
+      truncated: true,
+    });
+  });
+
+  it('ModelChangedError is discriminable by name, not instanceof, alone', async () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 1 });
+    plane.register(
+      fakeProvider({ id: 'x', supports: ['complete'], modelId: 'm1' }),
+    );
+    const d = await plane.describe('complete');
+    plane.register(fakeProvider({ id: 'y', supports: ['see'], modelId: 'm2' }));
+    let caught: unknown;
+    try {
+      await plane.complete('hi', { generation: d!.generation });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ModelChangedError);
+    expect((caught as ModelChangedError).name).toBe('ModelChangedError');
+    expect((caught as ModelChangedError).modelId).toBe('m1');
+  });
+
+  it('widens the provider payload with profile, system, generation and expectModelId', async () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 42 });
+    let seen: unknown;
+    plane.register(
+      fakeProvider({
+        id: 'x',
+        supports: ['complete'],
+        modelId: 'm1',
+        handle: async (req) => {
+          seen = req.payload;
+          return 'ok';
+        },
+      }),
+    );
+    const current = plane.generation();
+    await plane.complete('p', {
+      maxTokens: 8,
+      profile: 'deterministic',
+      system: 's',
+      generation: current,
+    });
+    expect(seen).toMatchObject({
+      profile: 'deterministic',
+      system: 's',
+      generation: current,
+      expectModelId: 'm1',
+    });
+  });
+
+  it('defaults profile and omits generation/expectModelId when the caller passes neither', async () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 42 });
+    let seen: unknown;
+    plane.register(
+      fakeProvider({
+        id: 'x',
+        supports: ['complete'],
+        modelId: 'm1',
+        handle: async (req) => {
+          seen = req.payload;
+          return 'ok';
+        },
+      }),
+    );
+    await plane.complete('p');
+    expect(seen).toMatchObject({ profile: 'default' });
+    expect((seen as { generation?: number }).generation).toBeUndefined();
+    expect((seen as { expectModelId?: string }).expectModelId).toBeUndefined();
   });
 });
