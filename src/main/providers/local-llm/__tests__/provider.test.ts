@@ -297,6 +297,66 @@ describe('LocalLlmProvider', () => {
     ).rejects.toThrow(/does not support 'read'/);
   });
 
+  // Issue #107 task 4: `profile`/`system` reach `chatText` for `complete`;
+  // `see` accepts `profile` in its payload without throwing and never
+  // forwards it to `describeImage` (which has no decoding-profile concept).
+  it('threads profile and system through to chatText for complete', async () => {
+    const { deps } = makeDeps({ modelsDir: tmpDir });
+    const modelDir = path.join(tmpDir, CURATED_MODEL.id);
+    await fsp.mkdir(modelDir, { recursive: true });
+    for (const file of CURATED_MODEL.files) {
+      await fsp.writeFile(path.join(modelDir, file.name), 'mock-content');
+    }
+    const provider = createLocalLlmProvider(deps);
+    mockApi.chatText.mockResolvedValue('ok');
+
+    await provider.handle({
+      kind: 'complete',
+      payload: {
+        prompt: 'x',
+        maxTokens: 8,
+        profile: 'deterministic',
+        system: 'S',
+      },
+      lane: 'interactive',
+    });
+
+    expect(mockApi.chatText).toHaveBeenCalledWith(expect.any(String), 'x', {
+      maxTokens: 8,
+      profile: 'deterministic',
+      system: 'S',
+    });
+  });
+
+  it('accepts profile on a see request without throwing, and does not forward it to describeImage', async () => {
+    const { deps } = makeDeps({ modelsDir: tmpDir });
+    const modelDir = path.join(tmpDir, CURATED_MODEL.id);
+    await fsp.mkdir(modelDir, { recursive: true });
+    for (const file of CURATED_MODEL.files) {
+      await fsp.writeFile(path.join(modelDir, file.name), 'mock-content');
+    }
+    const provider = createLocalLlmProvider(deps);
+    mockApi.describeImage.mockResolvedValue('description');
+
+    const result = await provider.handle({
+      kind: 'see',
+      payload: {
+        image: new Uint8Array([1, 2, 3]),
+        prompt: 'describe',
+        profile: 'deterministic',
+      },
+      lane: 'interactive',
+    });
+
+    expect(result).toBe('description');
+    expect(mockApi.describeImage).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Uint8Array),
+      'describe',
+      { mime: undefined },
+    );
+  });
+
   it('no longer advertises hear, and a hear request is rejected outright', async () => {
     const dir = path.join(tmpDir, CURATED_MODEL.id);
     await fsp.mkdir(dir, { recursive: true });

@@ -79,7 +79,7 @@ These eight caps each map 1:1 to a host namespace (`CapSurfaces` in contracts.ts
 | `db`        | `host.db`                | A **private** SQLite db (`private.db` in the extension's data dir): `exec`, `query` — never the shared store |
 | `ui`        | `host.ui.notify`         | User notifications                                                                                           |
 | `commands`  | `host.commands.register` | Register invokable commands — _declared in the contract, rejected at runtime today_                          |
-| `inference` | `host.inference`         | Local AI: `complete`, `see`, `read`, `hear`                                                                  |
+| `inference` | `host.inference`         | Local AI: `complete`, `see`, `read`, `hear`. `complete`'s `profile: 'deterministic'` (temperature 0, seed 0, `maxTokens` required and capped at 512) gives classification-style callers repeatable output; checked by hand, not in CI: 20 runs of one prompt against one model produce identical text on one machine. Bitwise determinism across hardware is NOT promised — repeatability for a consumer comes from its own persisted result, not from the sampler. |
 | `events`    | `host.events`            | Cross-extension pub/sub: `on`, `emit`                                                                        |
 
 Two further caps grant **no host namespace at all** — they gate what the main process will accept

@@ -124,6 +124,13 @@ export function createLocalLlmProvider(deps: {
   const changeSubs = new Set<() => void>();
   let lastNotifiedModelId: string | null | undefined;
 
+  // `profile` (issue #107) only means something to `complete` — this
+  // provider's `see` request has no decoding-profile concept to apply it
+  // to. A caller passing one anyway is not an error (the contract lets any
+  // verb accept it and ignore it); log it once per process rather than
+  // either silently swallowing it forever or spamming a log line per call.
+  let seeProfileIgnoredLogged = false;
+
   const selectedModel = async (): Promise<ModelDescriptor> => {
     const override = resolveModelOverride(deps.prefs.get().models.override);
     if (override) return override;
@@ -415,18 +422,28 @@ export function createLocalLlmProvider(deps: {
       const s = await ensureServer(model);
       touchIdle();
       if (req.kind === 'complete') {
-        const { prompt, maxTokens } = req.payload as {
+        const { prompt, maxTokens, profile, system } = req.payload as {
           prompt: string;
           maxTokens?: number;
+          profile?: 'default' | 'deterministic';
+          system?: string;
         };
-        return chatText(s.baseUrl(), prompt, { maxTokens });
+        return chatText(s.baseUrl(), prompt, { maxTokens, profile, system });
       }
       if (req.kind === 'see') {
-        const { image, prompt, mime } = req.payload as {
+        const { image, prompt, mime, profile } = req.payload as {
           image: Uint8Array;
           prompt: string;
           mime?: string;
+          profile?: 'default' | 'deterministic';
         };
+        // `see` has no decoding profile of its own — accept it, ignore it,
+        // never throw (issue #107: "every other provider ignores `profile`
+        // explicitly").
+        if (profile !== undefined && !seeProfileIgnoredLogged) {
+          seeProfileIgnoredLogged = true;
+          deps.log('info', "local-llm: 'see' ignores the 'profile' option");
+        }
         return describeImage(s.baseUrl(), image, prompt, { mime });
       }
       throw new Error(`local-llm does not support '${req.kind}'`);
