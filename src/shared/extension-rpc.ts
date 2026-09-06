@@ -93,6 +93,19 @@ export type MainToChild =
        *  its classification across the boundary. Both directions declare it:
        *  ONE endpoint implementation (transport.ts) serves both. */
       code?: SourceErrorCode;
+      /** The rejecting error's `Error.name` (e.g. 'LaneClosedError',
+       *  'ModelChangedError') — class identity does not survive the fork,
+       *  so a caller on the other side discriminates by `name`, never
+       *  `instanceof` (see e.g. `ModelChangedError`'s own doc comment in
+       *  contracts.ts). Only set when the rejection was a real `Error`. */
+      errorName?: string;
+      /** A small allow-listed set of the rejecting error's own enumerable
+       *  fields (transport.ts's `ERROR_FIELD_ALLOWLIST`), reattached onto
+       *  the reconstructed `Error` on the receiving end — e.g.
+       *  `ModelChangedError`'s `{ expected, actual, modelId, source }`.
+       *  `LaneClosedError` carries no extra fields, so this stays absent
+       *  for it. Plain data only: no class instances, no functions. */
+      errorFields?: Record<string, unknown>;
     }
   | { kind: 'event'; name: string; payload: unknown; meta: EventMeta }
   | { kind: 'src-next'; pullId: number }
@@ -112,6 +125,10 @@ export type ChildToMain =
       error?: string;
       /** See MainToChild's reply variant — symmetric by construction. */
       code?: SourceErrorCode;
+      /** See MainToChild's reply variant — symmetric by construction. */
+      errorName?: string;
+      /** See MainToChild's reply variant — symmetric by construction. */
+      errorFields?: Record<string, unknown>;
     }
   | { kind: 'src-batch'; pullId: number; batch: WireBatch }
   | { kind: 'src-refs'; pullId: number; refs: ExternalRef[] }

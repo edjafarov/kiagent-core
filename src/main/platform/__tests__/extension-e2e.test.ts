@@ -10,8 +10,10 @@ import type {
   Sender,
   Source,
 } from '@shared/contracts';
+import { ModelChangedError } from '@shared/contracts';
 
 import { createEngine } from '@main/core/engine/engine';
+import { LaneClosedError } from '@main/core/inference';
 import { openDb } from '@main/db/app-db';
 import { openStore, type CoreStore } from '@main/core/store/store';
 
@@ -348,5 +350,181 @@ describe('extension runtime e2e — host-stamped event identity (real forked chi
         meta: { from: 'test.eventsa', at: expect.any(Number) },
       },
     ]);
+  });
+});
+
+const FIXTURE_INFERENCE = path.join(__dirname, 'fixtures', 'ext-inference');
+
+// Issue #107: a fixture extension in a REAL forked child calls
+// host.inference.complete/describe. Both LaneClosedError and
+// ModelChangedError have to survive `extension-rpc.ts`/`transport.ts` and
+// still be discriminable by NAME (never `instanceof` — class identity does
+// not survive the fork) once the rejection reaches this process.
+describe('extension runtime e2e — lane and model-identity errors across the RPC boundary (#107)', () => {
+  let tmp: string;
+  let store: CoreStore;
+  let platform: ExtensionPlatform;
+  const registry = new Map<string, Source>();
+  const senderRegistry = new Map<string, Sender>();
+  const tools = new Map<string, McpTool>();
+
+  // Fake plane state, mutated directly by the tests below — stands in for
+  // the real InferencePlane (covered elsewhere: src/main/core/__tests__/
+  // inference.test.ts). What this describe block proves is orthogonal:
+  // that whatever the plane throws still reads correctly on the far side
+  // of a real process fork.
+  let backgroundOpen = true;
+  let generation = 1;
+  const modelId = 'fake-model-a';
+
+  beforeAll(async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-e2e-inference-'));
+    store = openStore(await openDb(path.join(tmp, 'kiagent.db')), {
+      encrypt: (s) => Buffer.from(s, 'utf8'),
+      decrypt: (b) => b.toString('utf8'),
+      detectLanguages: () => [],
+    });
+    platform = createExtensionPlatform({
+      extDir: path.join(tmp, 'extensions'),
+      store,
+      sources: {
+        register: (s) => void registry.set(s.descriptor.id, s),
+        get: (id) => registry.get(id),
+        list: () => [...registry.values()].map((s) => s.descriptor),
+        unregister: (id) => void registry.delete(id),
+      },
+      senders: {
+        register: (id, s) => void senderRegistry.set(id, s),
+        get: (id) => senderRegistry.get(id),
+        ids: () => [...senderRegistry.keys()],
+        unregister: (id) => void senderRegistry.delete(id),
+      },
+      scheduler: {
+        register: jest.fn(),
+        unregister: jest.fn(),
+        jobs: jest.fn(async () => []),
+        trigger: jest.fn(),
+        env: {},
+      } as never,
+      registerTool: (t) => {
+        tools.set(t.name, t);
+        return () => tools.delete(t.name);
+      },
+      inference: {
+        complete: async (
+          prompt: string,
+          opts?: { lane?: string; generation?: number },
+        ) => {
+          if (opts?.lane === 'background' && !backgroundOpen) {
+            throw new LaneClosedError();
+          }
+          if (
+            opts?.generation !== undefined &&
+            opts.generation !== generation
+          ) {
+            throw new ModelChangedError(
+              opts.generation,
+              generation,
+              modelId,
+              'generation',
+            );
+          }
+          return 'ok';
+        },
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        describe: async () => ({ providerId: 'fake', modelId, generation }),
+      } as never,
+      laneState: () => 'open',
+      onLaneChange: () => () => {},
+      logSink: {
+        log: (...a) => process.stderr.write(`${JSON.stringify(a)}\n`),
+      },
+      notify: () => {},
+      transportFactory: () =>
+        nodeForkTransport(CHILD_ENTRY, {
+          cwd: REPO_ROOT,
+          execArgv: [
+            '-r',
+            'ts-node/register/transpile-only',
+            '-r',
+            'tsconfig-paths/register',
+          ],
+          env: {
+            ...process.env,
+            KIA_EXT_HOST_CHILD: '1',
+            TS_NODE_TRANSPILE_ONLY: '1',
+            TS_NODE_PROJECT: path.join(REPO_ROOT, 'tsconfig.json'),
+          },
+        }),
+      onChange: () => {},
+      hostTimeouts: { readyTimeoutMs: 180_000, activateTimeoutMs: 180_000 },
+    });
+    await platform.start();
+    // Plain imperative checks, not `expect` — this setup runs in beforeAll,
+    // shared by both `it`s below, and `jest/no-standalone-expect` rightly
+    // forbids assertions outside a test block. A malformed install here
+    // throws, which fails both tests loudly rather than silently.
+    const preview = (await platform.installPreview(FIXTURE_INFERENCE)) as {
+      ok: boolean;
+      id?: string;
+      token?: string;
+    };
+    if (!preview.ok || preview.id !== 'test.inference') {
+      throw new Error(
+        `fixture install preview failed: ${JSON.stringify(preview)}`,
+      );
+    }
+    const commit = await platform.installCommit(preview.token!);
+    if (!commit.ok || commit.id !== 'test.inference') {
+      throw new Error(
+        `fixture install commit failed: ${JSON.stringify(commit)}`,
+      );
+    }
+  });
+
+  afterAll(async () => {
+    await platform.stop();
+    await store.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('delivers LaneClosedError to a forked extension', async () => {
+    backgroundOpen = false;
+    await expect(
+      tools.get('infTest.completeBackground')!.call({}),
+    ).rejects.toMatchObject({
+      name: 'LaneClosedError',
+    });
+    backgroundOpen = true;
+  });
+
+  it('delivers ModelChangedError to a forked extension', async () => {
+    const described = (await tools
+      .get('infTest.describeComplete')!
+      .call({})) as { providerId: string; modelId: string; generation: number };
+    expect(described).toEqual({
+      providerId: 'fake',
+      modelId,
+      generation,
+    });
+
+    // The model moves on underneath the caller, between describe() and the
+    // eventual complete() — exactly the window ModelChangedError exists to
+    // catch.
+    generation += 1;
+
+    await expect(
+      tools
+        .get('infTest.completeWithGeneration')!
+        .call({ generation: described.generation }),
+    ).rejects.toMatchObject({
+      name: 'ModelChangedError',
+      expected: described.generation,
+      actual: generation,
+      modelId,
+      source: 'generation',
+    });
   });
 });

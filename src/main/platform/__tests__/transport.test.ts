@@ -91,6 +91,105 @@ describe('createRpcEndpoint over the in-memory pair', () => {
     expect(sourceErrorCode(err)).toBe('auth');
   });
 
+  it('preserves a custom error name and its allow-listed fields across the reply (#107 ModelChangedError)', async () => {
+    // Class identity never survives the fork — a caller on the far side of
+    // extension-rpc.ts discriminates a rejection by `name` plus a few
+    // plain fields, never `instanceof`. This proves transport.ts itself
+    // carries both, independent of any real extension host.
+    class FakeModelChangedError extends Error {
+      readonly expected = 1;
+
+      readonly actual = 2;
+
+      readonly modelId = 'fake-model';
+
+      readonly source = 'generation';
+
+      constructor() {
+        super('the model changed between lookup and call');
+        this.name = 'ModelChangedError';
+      }
+    }
+    const { main, child } = createInMemoryHostPair();
+    const mainEp = createRpcEndpoint(main);
+    createRpcEndpoint(child).onCall(async () => {
+      throw new FakeModelChangedError();
+    });
+    const err = await mainEp.call('inference', 'complete', []).then(
+      () => {
+        throw new Error('expected rejection');
+      },
+      (e: Error) => e,
+    );
+    expect(err.name).toBe('ModelChangedError');
+    expect(err).toMatchObject({
+      expected: 1,
+      actual: 2,
+      modelId: 'fake-model',
+      source: 'generation',
+    });
+  });
+
+  it('does not invent fields for an error that has none of the allow-listed properties (LaneClosedError)', async () => {
+    const { main, child } = createInMemoryHostPair();
+    const mainEp = createRpcEndpoint(main);
+    createRpcEndpoint(child).onCall(async () => {
+      const e = new Error('background inference lane is closed');
+      e.name = 'LaneClosedError';
+      throw e;
+    });
+    const err = await mainEp.call('inference', 'complete', []).then(
+      () => {
+        throw new Error('expected rejection');
+      },
+      (e: Error) => e,
+    );
+    expect(err.name).toBe('LaneClosedError');
+    expect(err).not.toHaveProperty('expected');
+    expect(err).not.toHaveProperty('actual');
+    expect(err).not.toHaveProperty('modelId');
+    expect(err).not.toHaveProperty('source');
+  });
+
+  it('reconstructs only allow-listed fields from a reply, even a hand-built hostile one (no prototype pollution)', async () => {
+    // errorFields on an incoming reply is data from the OTHER side of this
+    // endpoint — in the child->main direction, the untrusted forked
+    // extension. A raw `Object.assign(err, wireFields)` would let a
+    // hand-crafted `{ __proto__: {...} }` repoint the reconstructed error's
+    // own prototype; the allow-list must be applied on BOTH ends.
+    const { main, child } = createInMemoryHostPair();
+    const mainEp = createRpcEndpoint(main);
+    const pending = mainEp.call('inference', 'complete', []).then(
+      () => {
+        throw new Error('expected rejection');
+      },
+      (e: Error) => e,
+    );
+    // A genuine OWN property literally named "__proto__" — JSON.parse (what
+    // a real wire message goes through) never special-cases that key the
+    // way an object LITERAL does, so this is what a hostile payload's
+    // `errorFields` would actually look like once decoded.
+    const hostileFields = JSON.parse(
+      '{"expected":1,"evil":2,"__proto__":{"polluted":true}}',
+    ) as Record<string, unknown>;
+    // Hand-built reply, bypassing onCall entirely: id 1 is the first call
+    // createRpcEndpoint ever issues.
+    child.send({
+      kind: 'reply',
+      id: 1,
+      ok: false,
+      error: 'hostile reply',
+      errorName: 'ModelChangedError',
+      errorFields: hostileFields,
+    });
+    const err = (await pending) as Error & Record<string, unknown>;
+    expect(err.name).toBe('ModelChangedError');
+    expect(err.expected).toBe(1);
+    expect(err).not.toHaveProperty('evil');
+    expect((err as unknown as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(Object.getPrototypeOf(err)).toBe(Error.prototype);
+  });
+
   it('drops non-taxonomy error codes (a bare Node ENOENT never becomes a taxonomy code)', async () => {
     const { main, child } = createInMemoryHostPair();
     const mainEp = createRpcEndpoint(main);
