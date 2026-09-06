@@ -28,12 +28,17 @@ function fakePrefs(overrides?: {
   };
 
   let current = defaults as any;
+  const subs = new Set<(p: any) => void>();
   return {
     get: () => current,
     patch: async (p) => {
       current = { ...current, ...p };
+      subs.forEach((cb) => cb(current));
     },
-    onChange: () => () => {},
+    onChange: (cb) => {
+      subs.add(cb);
+      return () => subs.delete(cb);
+    },
   };
 }
 
@@ -810,5 +815,129 @@ describe('LocalLlmProvider', () => {
     expect(made[1].modelPath).toContain(E4B_MODEL.id);
     expect(made[0].server.stop).toHaveBeenCalledTimes(1);
     await expect(first).resolves.toBe('ok'); // served by the old child before it stopped
+  });
+
+  // Issue #107 task 3: describe(), onChange(), and the model-identity check
+  // that runs inside handle() itself — the provider half of a guarantee
+  // whose plane half (generation, ModelChangedError, payload widening)
+  // landed in src/main/core/__tests__/inference.test.ts.
+  describe('describe(), onChange() and the model-identity check', () => {
+    async function providerWithServable(model: ModelDescriptor) {
+      await installModel(tmpDir, model);
+      const { deps } = makeDeps({
+        modelsDir: tmpDir,
+        prefs: { models: { override: model.id, autoInstall: false } },
+      });
+      return { provider: createLocalLlmProvider(deps), deps };
+    }
+
+    // Flips the override to a different (already-or-newly-installed) model
+    // via a prefs write — the same path a real Settings change takes, and
+    // the one that exercises the provider's `deps.prefs.onChange` hook.
+    async function setServable(
+      deps: ReturnType<typeof makeDeps>['deps'],
+      model: ModelDescriptor,
+    ) {
+      await installModel(tmpDir, model);
+      await deps.prefs.patch({
+        models: { override: model.id, autoInstall: false },
+      });
+    }
+
+    it('describes the servable model', async () => {
+      const { provider } = await providerWithServable(CURATED_MODEL);
+      expect(provider.describe!('complete')).toEqual({
+        modelId: CURATED_MODEL.id,
+      });
+    });
+
+    it('describes null when no model is servable yet', async () => {
+      const { deps } = makeDeps({ modelsDir: tmpDir });
+      const provider = createLocalLlmProvider(deps);
+      expect(provider.describe!('complete')).toBeNull();
+    });
+
+    it('rejects and issues no request when the model changed after describe', async () => {
+      const { provider, deps } = await providerWithServable(CURATED_MODEL);
+      mockApi.chatText.mockResolvedValue('ok');
+
+      const before = provider.describe!('complete');
+      expect(before).toEqual({ modelId: CURATED_MODEL.id });
+
+      // The model switches underneath the caller AFTER describe() but
+      // BEFORE handle() resolves servableModel() for this call.
+      await setServable(deps, E4B_MODEL);
+
+      // This file mocks the whole `../api` module (`jest.mock('../api')`
+      // at the top), so `chatText` never touches real `fetch` — it, not a
+      // `fetch` spy, is the "did a request almost go out" signal here
+      // (the brief's illustrative snippet spies on `global.fetch`, which
+      // is the right check in `api-profile.test.ts`, not in this file).
+      await expect(
+        provider.handle({
+          kind: 'complete',
+          lane: 'interactive',
+          payload: {
+            prompt: 'x',
+            maxTokens: 8,
+            generation: 1,
+            expectModelId: before!.modelId,
+          },
+        }),
+      ).rejects.toMatchObject({
+        name: 'ModelChangedError',
+        expected: CURATED_MODEL.id,
+        actual: E4B_MODEL.id,
+        modelId: E4B_MODEL.id,
+      });
+      expect(mockApi.chatText).not.toHaveBeenCalled();
+    });
+
+    it('succeeds and issues the request when the model has not changed', async () => {
+      const { provider } = await providerWithServable(CURATED_MODEL);
+      mockApi.chatText.mockResolvedValue('ok');
+
+      const before = provider.describe!('complete');
+      const result = await provider.handle({
+        kind: 'complete',
+        lane: 'interactive',
+        payload: {
+          prompt: 'x',
+          maxTokens: 8,
+          generation: 1,
+          expectModelId: before!.modelId,
+        },
+      });
+      expect(result).toBe('ok');
+      expect(mockApi.chatText).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires onChange once per model switch', async () => {
+      const { provider, deps } = await providerWithServable(CURATED_MODEL);
+      const cb = jest.fn();
+      const off = provider.onChange!(cb);
+
+      await setServable(deps, E4B_MODEL);
+      expect(cb).toHaveBeenCalledTimes(1);
+
+      // A prefs write that resolves to the SAME servable model must not
+      // re-fire — onChange reports a model SWITCH, not every prefs write.
+      await deps.prefs.patch({
+        models: { override: E4B_MODEL.id, autoInstall: false },
+      });
+      expect(cb).toHaveBeenCalledTimes(1);
+
+      // Unsubscribing stops further notifications.
+      off();
+      await setServable(deps, CURATED_MODEL);
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not fire onChange for the initial (seeded) model observation', async () => {
+      const { provider } = await providerWithServable(CURATED_MODEL);
+      const cb = jest.fn();
+      provider.onChange!(cb);
+      expect(cb).not.toHaveBeenCalled();
+    });
   });
 });

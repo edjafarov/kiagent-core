@@ -23,6 +23,45 @@ export interface ServerLike {
   baseUrl(): string;
 }
 
+/** Thrown by `handle()` when a caller's `expectModelId` (threaded from the
+ *  plane's `payload.expectModelId`, itself only present when the caller
+ *  passed a `describe()`-derived `generation` — see `inference.ts`'s
+ *  `completeWithMeta`) no longer matches the model this provider actually
+ *  resolved via `servableModel()`. This closes the window the plane's own
+ *  generation check cannot: the plane compares generations right after
+ *  `pick()` selects a PROVIDER, but this provider only resolves a MODEL
+ *  later, inside its own `handle()` — the model can still change in
+ *  between (a completed download, a flipped override) even though the
+ *  plane's generation hasn't moved.
+ *
+ *  Distinct from (not a subclass of) `src/main/core/inference.ts`'s
+ *  `ModelChangedError`: that one reports a GENERATION mismatch (two
+ *  numbers); this one reports a MODEL-ID mismatch (two strings) — the
+ *  plane never had a second generation number to give it, only the model
+ *  id it expected. Both are discriminated the same way — by
+ *  `name === 'ModelChangedError'`, never `instanceof` — because both cross
+ *  the extension RPC boundary (`src/shared/extension-rpc.ts`) via a
+ *  process fork, where class identity does not survive. Same field names
+ *  (`expected`, `actual`, `modelId`) so a caller-side handler need not care
+ *  which side threw. */
+export class ModelChangedError extends Error {
+  readonly expected: string;
+
+  readonly actual: string;
+
+  readonly modelId: string;
+
+  constructor(expected: string, actual: string) {
+    super(
+      `the model changed before the request could be sent (expected '${expected}', now '${actual}')`,
+    );
+    this.name = 'ModelChangedError';
+    this.expected = expected;
+    this.actual = actual;
+    this.modelId = actual;
+  }
+}
+
 export interface LocalLlmProvider extends InferenceProvider {
   ensureInstalled(): void;
   cancelInstall(): Promise<void>;
@@ -75,10 +114,21 @@ export function createLocalLlmProvider(deps: {
   let startingModelId: string | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // `onChange` subscribers + the last model id they were told about.
+  // `undefined` means "never observed yet" — set once, synchronously, at
+  // construction (see `checkModelChange()`'s first call below) before any
+  // caller could possibly have subscribed, so that initial observation
+  // never itself counts as a "switch" (mirrors the plane's own "the first
+  // registration on an empty plane doesn't bump" rule in `inference.ts`:
+  // there is nothing yet to invalidate).
+  const changeSubs = new Set<() => void>();
+  let lastNotifiedModelId: string | null | undefined;
+
   const selectedModel = async (): Promise<ModelDescriptor> => {
     const override = resolveModelOverride(deps.prefs.get().models.override);
     if (override) return override;
     if (!backend) backend = await detect();
+    checkModelChange();
     return selectCuratedModel(backend);
   };
 
@@ -126,6 +176,26 @@ export function createLocalLlmProvider(deps: {
     if (sel) return sel;
     if (installedModel && modelPresent(installedModel)) return installedModel;
     return scanInstalled();
+  };
+
+  /** Re-resolves `servableModel()` and notifies `onChange` subscribers iff
+   *  it now differs from the last id they were told about. Called from
+   *  every place that mutates an INPUT to `selectedModel`/`servableModel`
+   *  (a prefs override change, a completed install, a newly-detected
+   *  backend) — not only where a model string is directly assigned — so a
+   *  subscriber learns about a switch it could not otherwise observe
+   *  without polling `describe()`/`handle()` itself. */
+  const checkModelChange = (): void => {
+    const id = servableModel()?.id ?? null;
+    if (lastNotifiedModelId === undefined) {
+      // First observation ever — nothing a subscriber could have held
+      // before this point, so it isn't a "switch".
+      lastNotifiedModelId = id;
+      return;
+    }
+    if (id === lastNotifiedModelId) return;
+    lastNotifiedModelId = id;
+    changeSubs.forEach((cb) => cb());
   };
 
   // Callable after a start has SETTLED: from touchIdle's timer (armed only
@@ -189,6 +259,7 @@ export function createLocalLlmProvider(deps: {
           });
         }
         installedModel = model;
+        checkModelChange();
         deps.log('info', `${model.id} ready`);
       } catch (err) {
         if (!abort.signal.aborted && installing === abort) {
@@ -240,7 +311,10 @@ export function createLocalLlmProvider(deps: {
       const dir = modelDir(deps.modelsDir, model.id);
       const gguf = model.files.find((f) => !f.name.startsWith('mmproj'))!;
       const mmproj = model.files.find((f) => f.name.startsWith('mmproj'))!;
-      if (!backend) backend = await detect();
+      if (!backend) {
+        backend = await detect();
+        checkModelChange();
+      }
       const s = makeServer({
         binaryPath: deps.llamaBinaryPath,
         modelPath: path.join(dir, gguf.name),
@@ -272,6 +346,17 @@ export function createLocalLlmProvider(deps: {
   };
 
   seedInstalled();
+  // Establish the onChange baseline synchronously, before returning the
+  // provider — so the earliest a subscriber could possibly call `onChange`
+  // is strictly after this, and the seeded install never itself reads as
+  // a "switch".
+  checkModelChange();
+  // Reactive path: a prefs write (e.g. the user flips models.override in
+  // Settings) is the one INPUT to selectedModel/servableModel that changes
+  // from entirely outside this provider's own async flows, so it needs its
+  // own subscription rather than a call site inside a function this module
+  // owns.
+  const offPrefsChange = deps.prefs.onChange(() => checkModelChange());
 
   return {
     id: 'local-llm',
@@ -292,12 +377,41 @@ export function createLocalLlmProvider(deps: {
       if (selectedInstalled()) return 'ready';
       return 'standby';
     },
+    describe() {
+      // Ignores `kind`: local-llm serves one model for every kind it
+      // supports, and by the time the PLANE calls this, `pick(kind)` has
+      // already confirmed this provider supports the kind asked for —
+      // there is nothing left here to branch on.
+      const model = servableModel();
+      return model ? { modelId: model.id } : null;
+    },
+    onChange(cb) {
+      changeSubs.add(cb);
+      return () => {
+        changeSubs.delete(cb);
+      };
+    },
     async handle(req) {
       const model = servableModel();
       if (!model)
         throw new Error(
           `local-llm not ready (status: ${JSON.stringify(this.status())})`,
         );
+      // Re-check the model identity a caller locked in via `describe()`
+      // AFTER this provider has resolved the model it is about to serve,
+      // and BEFORE any request reaches it — `payload.expectModelId` is
+      // only ever set (by the plane) when the caller passed a `generation`
+      // it got from `describe()`. This is the half of issue #107's
+      // guarantee the plane cannot provide on its own: the plane's own
+      // generation check runs right after it picks a PROVIDER, but this
+      // provider resolves its MODEL later, right here — a download
+      // completing or an override flipping between those two points would
+      // otherwise slip a stale-model request through.
+      const { expectModelId } =
+        (req.payload as { expectModelId?: string } | undefined) ?? {};
+      if (expectModelId !== undefined && expectModelId !== model.id) {
+        throw new ModelChangedError(expectModelId, model.id);
+      }
       const s = await ensureServer(model);
       touchIdle();
       if (req.kind === 'complete') {
@@ -334,6 +448,7 @@ export function createLocalLlmProvider(deps: {
       installing?.abort();
       installing = null;
       downloadPct = null;
+      offPrefsChange();
       // Let any in-flight server start settle first, so we stop the real child
       // rather than racing it into an orphan (the start's IIFE assigns
       // `server` only once s.start() resolves).
