@@ -5,6 +5,7 @@
  * are; kept in its own module so store.ts doesn't grow another 200 lines.
  */
 import { randomBytes } from 'crypto';
+import type { EventEmitter } from 'events';
 
 import type {
   AccountId,
@@ -14,7 +15,7 @@ import type {
   OutboxStatus,
 } from '@shared/contracts';
 
-import type { AppDb } from '../../db/app-db';
+import type { AppDb, AppDbParam } from '../../db/app-db';
 import { newId } from '../ids';
 
 export const OUTBOX_PENDING_CAP = 20;
@@ -39,6 +40,27 @@ export interface OutboxStore {
   create(d: OutboxDraftInput): Promise<OutboxRow>; // throws on pending cap
   get(id: string): Promise<OutboxRow | null>;
   listRecent(limit: number): Promise<OutboxRow[]>; // newest first
+  /** Status-filtered, keyset-paged listing — `ORDER BY created_at DESC, id
+   *  DESC` (same order as `listRecent`). `before` is the last row of the
+   *  previous page: pass its `{ createdAt, id }` to fetch the next one.
+   *  Unlike `listRecent`, this can walk the WHOLE table a page at a time, so
+   *  a pending draft behind any number of newer terminal-status rows is
+   *  reachable with `status: ['draft']`. */
+  list(opts: {
+    limit: number;
+    status?: OutboxStatus[];
+    before?: { createdAt: string; id: string };
+  }): Promise<OutboxRow[]>;
+  /** Exact count of draft rows across every account (`OUTBOX_PENDING_CAP` is
+   *  per-account; this is the whole outbox). */
+  countPending(): Promise<number>;
+  /** Subscribe to "the outbox may have changed" — fired once per effective
+   *  change: a create, a transition whose compare-and-set actually moved a
+   *  row, an expireOverdue sweep that expired at least one row, and a
+   *  removeAccount cascade (store.ts's commit(), since the cascade delete
+   *  runs in SQL and never calls into this module). Never fired on a no-op.
+   *  Returns an unsubscribe function. */
+  onChange(cb: () => void): () => void;
   /** Atomic compare-and-set; true iff exactly one row moved.
    *
    *  `patch` fields only ever SET a value — `null` and "field omitted" are
@@ -126,8 +148,15 @@ export function createOutboxStore(
     now: () => string;
     encrypt(plain: string): Buffer;
     decrypt(blob: Buffer): string;
+    /** Shared with store.ts: `onChange` subscribes here, and store.ts's own
+     *  `commit()` fires it directly for the removeAccount cascade (that
+     *  delete runs in SQL — schema.ts:561's ON DELETE CASCADE — and never
+     *  touches this module's create/transition/expireOverdue). */
+    changed: EventEmitter;
   },
 ): OutboxStore {
+  const fireChanged = () => deps.changed.emit('change');
+
   const get = async (id: string): Promise<OutboxRow | null> => {
     const r = (
       await db.all(`SELECT * FROM outbox WHERE id = ?`, [id])
@@ -147,11 +176,16 @@ export function createOutboxStore(
   };
 
   const expireOverdue = async (): Promise<void> => {
-    await db.run(
-      `UPDATE outbox SET status = 'expired'
-        WHERE status = 'draft' AND expires_at <= ?`,
-      [deps.now()],
-    );
+    // db.batch (not db.run) so the sweep can tell whether it actually moved
+    // a row — onChange must stay silent on a sweep that finds nothing.
+    const results = await db.batch([
+      {
+        sql: `UPDATE outbox SET status = 'expired'
+                WHERE status = 'draft' AND expires_at <= ?`,
+        params: [deps.now()],
+      },
+    ]);
+    if (results[0].changes > 0) fireChanged();
   };
 
   return {
@@ -213,6 +247,7 @@ export function createOutboxStore(
       );
       const row = await get(id);
       if (!row) throw new Error('outbox: insert readback failed');
+      fireChanged();
       return row;
     },
 
@@ -222,6 +257,40 @@ export function createOutboxStore(
         [limit],
       )) as unknown as OutboxRowSql[];
       return rows.map(toRow);
+    },
+
+    async list({ limit, status, before }) {
+      const where: string[] = [];
+      const params: AppDbParam[] = [];
+      if (status?.length) {
+        where.push(`status IN (${status.map(() => '?').join(',')})`);
+        params.push(...status);
+      }
+      if (before) {
+        // Matches ORDER BY created_at DESC, id DESC exactly.
+        where.push(`(created_at < ? OR (created_at = ? AND id < ?))`);
+        params.push(before.createdAt, before.createdAt, before.id);
+      }
+      const rows = (await db.all(
+        `SELECT * FROM outbox ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+           ORDER BY created_at DESC, id DESC LIMIT ?`,
+        [...params, limit],
+      )) as unknown as OutboxRowSql[];
+      return rows.map(toRow);
+    },
+
+    async countPending() {
+      const r = (
+        await db.all(`SELECT COUNT(*) AS n FROM outbox WHERE status = 'draft'`)
+      )[0] as { n: number };
+      return r.n;
+    },
+
+    onChange(cb) {
+      deps.changed.on('change', cb);
+      return () => {
+        deps.changed.off('change', cb);
+      };
     },
 
     async transition(id, from, to, patch = {}) {
@@ -245,7 +314,9 @@ export function createOutboxStore(
           ],
         },
       ]);
-      return results[0].changes === 1;
+      const moved = results[0].changes === 1;
+      if (moved) fireChanged();
+      return moved;
     },
 
     async recoverOrphanedSending() {

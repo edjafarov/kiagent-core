@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import type { AccountId } from '@shared/contracts';
+import type { AccountId, OutboxRow } from '@shared/contracts';
 
 import { openDb, type AppDb } from '../../../db/app-db';
 import { openStore, type CoreStore } from '../store';
@@ -261,5 +261,157 @@ describe('outbox store', () => {
     const b = await store.outbox.secret();
     expect(a.length).toBe(32);
     expect(a.equals(b)).toBe(true);
+  });
+});
+
+describe('outbox listing', () => {
+  let dir: string;
+  let db: AppDb;
+  let store: CoreStore;
+  let accountId: AccountId;
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-outbox-'));
+    db = await openDb(path.join(dir, 'test.db'));
+    store = openStore(db, deps);
+    const account = await store.createAccount({
+      source: 'imap',
+      identifier: 'me@example.com@imap.example.com',
+    });
+    accountId = account.id;
+  });
+
+  afterEach(async () => {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const draftFor = (
+    acct: AccountId,
+    over: Partial<OutboxDraftInput> = {},
+  ): OutboxDraftInput => ({
+    accountId: acct,
+    kind: 'new',
+    recipientDisplay: 'bob@example.com',
+    to: ['bob@example.com'],
+    cc: [],
+    subject: 'Hi',
+    bodyMarkdown: 'Hello Bob',
+    confirmMode: 'review',
+    createdVia: 'mcp-local',
+    expiresAt: '2099-01-01T00:00:00.000Z',
+    ...over,
+  });
+
+  /** Creates n rows on the default account and immediately transitions each
+   *  to 'sent' — sent rows never count against the per-account draft cap, so
+   *  n can exceed OUTBOX_PENDING_CAP on a single account. */
+  const seedSent = async (n: number): Promise<OutboxRow[]> => {
+    const rows: OutboxRow[] = [];
+    for (let i = 0; i < n; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const row = await store.outbox.create(draftFor(accountId));
+      // eslint-disable-next-line no-await-in-loop
+      await store.outbox.transition(row.id, ['draft'], 'sent');
+      rows.push(row);
+    }
+    return rows;
+  };
+
+  /** A single draft row. `createdAt` (when given) is stamped directly onto
+   *  the row after insert — OutboxDraftInput has no such field, since
+   *  create() always stamps `deps.now()`. `accountId` (when given) overrides
+   *  the default account. */
+  const seedDraft = async (
+    over: Partial<OutboxDraftInput> & { createdAt?: string } = {},
+  ): Promise<OutboxRow> => {
+    const { createdAt, accountId: acctOverride, ...draftOver } = over;
+    const row = await store.outbox.create(
+      draftFor(acctOverride ?? accountId, draftOver),
+    );
+    if (createdAt === undefined) return row;
+    await db.run(`UPDATE outbox SET created_at = ? WHERE id = ?`, [
+      createdAt,
+      row.id,
+    ]);
+    const back = await store.outbox.get(row.id);
+    if (!back) throw new Error('seedDraft: readback failed');
+    return back;
+  };
+
+  /** n draft rows spread across ceil(n / OUTBOX_PENDING_CAP) fresh accounts,
+   *  since OUTBOX_PENDING_CAP (20) is enforced per account. */
+  const seedDrafts = async (n: number): Promise<OutboxRow[]> => {
+    const rows: OutboxRow[] = [];
+    let remaining = n;
+    let accountIndex = 0;
+    while (remaining > 0) {
+      // eslint-disable-next-line no-await-in-loop
+      const acct = await store.createAccount({
+        source: 'imap',
+        identifier: `bulk-${accountIndex}@example.com`,
+      });
+      accountIndex += 1;
+      const count = Math.min(OUTBOX_PENDING_CAP, remaining);
+      for (let i = 0; i < count; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        rows.push(await store.outbox.create(draftFor(acct.id)));
+      }
+      remaining -= count;
+    }
+    return rows;
+  };
+
+  it('finds a pending draft behind 50 newer sent rows', async () => {
+    await seedSent(50);
+    const draft = await seedDraft({ createdAt: '2026-01-01T00:00:00.000Z' });
+    const rows = await store.outbox.list({ status: ['draft'], limit: 100 });
+    expect(rows.map((r) => r.id)).toContain(draft.id);
+  });
+
+  it('pages 120 drafts by keyset with no gap and no duplicate', async () => {
+    // 6 accounts × 20 — OUTBOX_PENDING_CAP is 20 per account
+    const seeded = await seedDrafts(120);
+    const first = await store.outbox.list({ status: ['draft'], limit: 100 });
+    const last = first[first.length - 1];
+    const second = await store.outbox.list({
+      status: ['draft'],
+      limit: 100,
+      before: { createdAt: last.createdAt, id: last.id },
+    });
+    expect(first).toHaveLength(100);
+    expect(second).toHaveLength(20);
+    const ids = [...first, ...second].map((r) => r.id);
+    expect(new Set(ids).size).toBe(120);
+    expect(new Set(ids)).toEqual(new Set(seeded.map((r) => r.id)));
+  });
+
+  it('counts pending across accounts and follows a transition', async () => {
+    await seedDrafts(120);
+    expect(await store.outbox.countPending()).toBe(120);
+    const [one] = await store.outbox.list({ status: ['draft'], limit: 1 });
+    await store.outbox.transition(one.id, ['draft'], 'sent');
+    expect(await store.outbox.countPending()).toBe(119);
+  });
+
+  it('fires onChange once per effective change and never on a no-op', async () => {
+    const cb = jest.fn();
+    store.outbox.onChange(cb);
+    const row = await seedDraft({});
+    expect(cb).toHaveBeenCalledTimes(1); // create
+    await store.outbox.transition(row.id, ['draft'], 'sent');
+    expect(cb).toHaveBeenCalledTimes(2); // moved
+    await store.outbox.transition(row.id, ['draft'], 'sent'); // no-op
+    expect(cb).toHaveBeenCalledTimes(2);
+  });
+
+  it('announces the rows a removed account took with it', async () => {
+    const cb = jest.fn();
+    store.outbox.onChange(cb);
+    await seedDraft({ accountId });
+    cb.mockClear();
+    await store.commit({ removeAccount: accountId });
+    expect(cb).toHaveBeenCalled();
+    expect(await store.outbox.countPending()).toBe(0);
   });
 });
