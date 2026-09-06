@@ -5,6 +5,7 @@ import path from 'path';
 
 import type {
   ExtensionSnapshot,
+  LaneState,
   McpTool,
   Sender,
   Source,
@@ -17,6 +18,7 @@ import { googleOAuthProfile, googleRefresher } from '@main/sources/gmail/oauth';
 
 import {
   createExtensionPlatform,
+  createLaneGate,
   type ExtensionPlatform,
   type ExtensionPlatformDeps,
 } from '../extension-platform';
@@ -41,6 +43,80 @@ const FIXTURE_SENDER_UNDECLARED = path.join(
   'fixtures',
   'ext-sender-undeclared',
 );
+
+describe('createLaneGate', () => {
+  it('closed -> open emits once, with the resolved state in the payload', () => {
+    const emit = jest.fn();
+    let state: LaneState = 'disabled';
+    const gate = createLaneGate(
+      () => state,
+      emit,
+      () => {},
+    );
+    gate.check(); // baseline: null -> 'disabled', not the transition under test
+    emit.mockClear();
+
+    state = 'open';
+    gate.check();
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith('open');
+  });
+
+  it("'battery' -> 'disabled' — both closed, so the boolean never flips — still emits once", () => {
+    const emit = jest.fn();
+    let state: LaneState = 'battery';
+    const gate = createLaneGate(
+      () => state,
+      emit,
+      () => {},
+    );
+    gate.check(); // baseline
+    emit.mockClear();
+
+    state = 'disabled';
+    gate.check();
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith('disabled');
+  });
+
+  it('the same resolved state re-resolved on a later tick emits nothing', () => {
+    const emit = jest.fn();
+    const gate = createLaneGate(
+      () => 'open',
+      emit,
+      () => {},
+    );
+    gate.check();
+    emit.mockClear();
+
+    gate.check();
+    gate.check();
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('an emit that throws does not propagate out of the tick', () => {
+    const onError = jest.fn();
+    let state: LaneState = 'open';
+    const emit = jest.fn(() => {
+      throw new Error('boom');
+    });
+    const gate = createLaneGate(() => state, emit, onError);
+
+    expect(() => gate.check()).not.toThrow();
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // The gate is not wedged by the throw: a later real transition is
+    // still attempted (and, this time, succeeds) rather than being
+    // silently skipped because the failed attempt never updated `last`.
+    emit.mockReset();
+    state = 'disabled';
+    gate.check();
+    expect(emit).toHaveBeenCalledWith('disabled');
+  });
+});
 
 describe('createExtensionPlatform', () => {
   let tmp: string;

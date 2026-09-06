@@ -1092,6 +1092,12 @@ app
       // rejection on the timer. Mirrors scheduler.ts's safeTick guard.
       try {
         p.inference.setBackgroundOpen(backgroundLaneOpen(p));
+        // The only place lane policy is re-evaluated — also the
+        // correctness net for platform.lane: it re-resolves LaneState on
+        // every tick regardless of whether the boolean above just flipped,
+        // so a 'battery' -> 'disabled' transition (both closed) still
+        // emits. refreshLane() itself never throws.
+        extensionsPlatform?.refreshLane();
         const all = await p.store.ledgerCountsAll();
         const processing = {
           pending: all.pending,
