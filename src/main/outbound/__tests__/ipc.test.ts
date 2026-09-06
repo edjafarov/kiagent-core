@@ -2,7 +2,12 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import type { DocumentInput, Prefs, Sender } from '@shared/contracts';
+import type {
+  AccountId,
+  DocumentInput,
+  Prefs,
+  Sender,
+} from '@shared/contracts';
 import type { Invokes } from '@shared/ipc';
 
 import { openDb } from '../../db/app-db';
@@ -110,11 +115,12 @@ describe('outbound ipc delegate', () => {
   const tokenOf = (r: { confirm_url?: string }) =>
     r.confirm_url!.split('/outbox/confirm/')[1];
 
-  it('registers the four outbox channels', () => {
+  it('registers the five outbox channels', () => {
     expect([...handlers.keys()].sort()).toEqual([
       'outbox:discard',
       'outbox:list',
       'outbox:open-confirm',
+      'outbox:pending-count',
       'outbox:redraft',
     ]);
   });
@@ -272,6 +278,176 @@ describe('outbound ipc delegate', () => {
     expect(row.canRetry).toBe(false);
     expect(row.deliveryUncertain).toBe(false);
     expect((await store.outbox.get(r.draft_id))?.error).not.toBeNull(); // audit trail intact
+  });
+
+  // ── Task 9: status filter, keyset cursor, pending-count, to/cc ──────────
+
+  /** Same ordering `list`/`listRecent` use: `created_at DESC, id DESC`. UUIDv7
+   *  ids and ISO timestamps are both plain ASCII, so JS's default string
+   *  comparison agrees with SQLite's BINARY collation — sorting the seeded
+   *  rows in JS independently pins the SAME order the SQL query produces,
+   *  rather than re-deriving it from another call to the code under test. */
+  function newestFirst<T extends { createdAt: string; id: string }>(
+    rows: T[],
+  ): T[] {
+    return [...rows].sort((a, b) => {
+      if (a.createdAt !== b.createdAt) {
+        return a.createdAt < b.createdAt ? 1 : -1;
+      }
+      return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+    });
+  }
+
+  /** Directly seeds one outbox row (bypassing the outbound service, which
+   *  only ever makes 'reply' rows against `docId`) so tests can build a
+   *  large, mixed-status, mixed-account fixture cheaply. Mirrors the
+   *  'sweeps overdue' test's own direct `store.outbox.create` call above. */
+  async function seedRow(over: {
+    accountId: AccountId;
+    to?: string[];
+    cc?: string[];
+    status?: 'draft' | 'sent' | 'discarded';
+  }) {
+    const row = await store.outbox.create({
+      accountId: over.accountId,
+      kind: 'new',
+      recipientDisplay: (over.to ?? ['bob@example.com'])[0],
+      to: over.to ?? ['bob@example.com'],
+      cc: over.cc ?? [],
+      subject: 'seed',
+      bodyMarkdown: 'body',
+      confirmMode: 'review',
+      createdVia: 'mcp-local',
+      expiresAt: '2099-01-01T00:00:00Z',
+    });
+    if (over.status && over.status !== 'draft') {
+      await store.outbox.transition(row.id, ['draft'], over.status);
+      return { ...row, status: over.status };
+    }
+    return row;
+  }
+
+  it('keeps every field and the listing semantics it has today', async () => {
+    const account = (await store.read.accounts())[0];
+    // 15 drafts (well under OUTBOX_PENDING_CAP=20) + 45 sent rows: > the
+    // default limit of 50, mixed statuses, one account — exactly what
+    // today's status-blind `outbox:list` would have to cope with.
+    const seeded = [];
+    for (let i = 0; i < 15; i++) {
+      seeded.push(await seedRow({ accountId: account.id, status: 'draft' }));
+    }
+    for (let i = 0; i < 45; i++) {
+      seeded.push(await seedRow({ accountId: account.id, status: 'sent' }));
+    }
+
+    const rowsArr = (await handlers.get('outbox:list')!(
+      undefined,
+    )) as Invokes['outbox:list']['res'];
+    expect(rowsArr).toHaveLength(50); // default limit unchanged
+    expect(rowsArr).toEqual(await invoke('outbox:list', { limit: 50 }));
+    // Pin the SHAPE against a literal, not against another call to the same
+    // implementation.
+    expect(Object.keys(rowsArr[0]).sort()).toEqual([
+      'accountLabel',
+      'bodyPreview',
+      'canRetry',
+      'cc',
+      'createdAt',
+      'deliveryUncertain',
+      'draftId',
+      'error',
+      'errorDetail',
+      'kind',
+      'recipientDisplay',
+      'sentAt',
+      'status',
+      'subject',
+      'to',
+    ]);
+    expect(rowsArr.map((r) => r.draftId)).toEqual(
+      newestFirst(seeded)
+        .slice(0, 50)
+        .map((r) => r.id),
+    );
+  });
+
+  it('filters by status', async () => {
+    const account = (await store.read.accounts())[0];
+    for (let i = 0; i < 5; i++) {
+      await seedRow({ accountId: account.id, status: 'draft' });
+    }
+    for (let i = 0; i < 5; i++) {
+      await seedRow({ accountId: account.id, status: 'sent' });
+    }
+    const rows = await invoke('outbox:list', { status: ['draft'] });
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.status === 'draft')).toBe(true);
+  });
+
+  it('pages with the before cursor', async () => {
+    // Two accounts so 30 drafts clears the per-account cap of 20.
+    const accountA = (await store.read.accounts())[0];
+    const accountB = await store.createAccount({
+      source: 'imap',
+      identifier: 'second@example.com@imap.example.com',
+      config: IMAP_CFG,
+    });
+    for (let i = 0; i < 15; i++) {
+      await seedRow({ accountId: accountA.id, status: 'draft' });
+    }
+    for (let i = 0; i < 15; i++) {
+      await seedRow({ accountId: accountB.id, status: 'draft' });
+    }
+
+    const first = await invoke('outbox:list', {
+      status: ['draft'],
+      limit: 20,
+    });
+    expect(first).toHaveLength(20);
+    const tail = first[first.length - 1];
+    const second = await invoke('outbox:list', {
+      status: ['draft'],
+      limit: 20,
+      before: { createdAt: tail.createdAt, draftId: tail.draftId },
+    });
+    expect(second.length).toBeGreaterThan(0);
+    const firstIds = new Set(first.map((r) => r.draftId));
+    // No duplicate: nothing from the first page reappears on the second.
+    expect(second.some((r) => firstIds.has(r.draftId))).toBe(false);
+    expect(second.map((r) => r.draftId)).not.toContain(tail.draftId);
+  });
+
+  it('outbox:pending-count sweeps overdue drafts before counting', async () => {
+    const account = (await store.read.accounts())[0];
+    await store.outbox.create({
+      accountId: account.id,
+      kind: 'new',
+      recipientDisplay: 'bob@example.com',
+      to: ['bob@example.com'],
+      cc: [],
+      subject: 'stale',
+      bodyMarkdown: 'body',
+      confirmMode: 'review',
+      createdVia: 'mcp-local',
+      expiresAt: '2020-01-01T00:00:00Z',
+    });
+    const result = await invoke('outbox:pending-count', undefined);
+    // Without the sweep this expired-on-arrival draft would still count.
+    expect(result).toEqual({ pending: await store.outbox.countPending() });
+    expect(result.pending).toBe(0);
+  });
+
+  it('carries recipient addresses verbatim', async () => {
+    const account = (await store.read.accounts())[0];
+    await seedRow({
+      accountId: account.id,
+      to: ['a@example.com'],
+      cc: [],
+      status: 'draft',
+    });
+    const [row] = await invoke('outbox:list', { status: ['draft'], limit: 1 });
+    expect(row.to).toEqual(['a@example.com']);
+    expect(row.cc).toEqual([]);
   });
 
   it('outbox:discard discards pending drafts and tolerates races', async () => {

@@ -221,6 +221,9 @@ export interface OutboxPanelRow {
   deliveryUncertain: boolean;
   createdAt: string;
   sentAt: string | null;
+  /** Verbatim from the row (`store/outbox.ts` `OutboxRow.to`/`.cc`). */
+  to: string[];
+  cc: string[];
 }
 
 /** invoke(channel, payload) → response. */
@@ -354,8 +357,22 @@ export interface Invokes {
   'logs:export': { req: void; res: string };
   'mcp-activity:recent': { req: void; res: McpActivityRecord[] };
 
-  /** Outbox history panel: recent outbound rows, newest first. */
-  'outbox:list': { req: { limit?: number }; res: OutboxPanelRow[] };
+  /** Outbox history panel: recent outbound rows, newest first. `status`
+   *  filters to any subset of `OutboxStatus`; `before` is a keyset cursor —
+   *  the last row of the previous page — for paging past the default/max
+   *  page size. Payload-less and `{ limit }`-only calls keep today's
+   *  behaviour exactly (every status, no cursor). */
+  'outbox:list': {
+    req: {
+      limit?: number;
+      status?: OutboxStatus[];
+      before?: { createdAt: string; draftId: string };
+    };
+    res: OutboxPanelRow[];
+  };
+  /** Exact count of pending ('draft') rows across every account, after the
+   *  same overdue-draft sweep `outbox:list` runs. */
+  'outbox:pending-count': { req: void; res: { pending: number } };
   /** Discard a pending draft (no-op if it left 'draft' meanwhile). */
   'outbox:discard': { req: { draftId: string }; res: void };
   /** Duplicate a terminal row into a fresh draft and open its confirm page. */
@@ -556,6 +573,7 @@ const INVOKE_CHANNEL_MAP = {
   'logs:export': 0,
   'mcp-activity:recent': 0,
   'outbox:list': 0,
+  'outbox:pending-count': 0,
   'outbox:discard': 0,
   'outbox:redraft': 0,
   'outbox:open-confirm': 0,

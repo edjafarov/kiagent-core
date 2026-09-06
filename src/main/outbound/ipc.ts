@@ -78,7 +78,7 @@ function errorFieldsOf(
   };
 }
 
-/** The four outbox channels, as a slice of main's exhaustive handler map.
+/** The five outbox channels, as a slice of main's exhaustive handler map.
  *
  *  Returned rather than registered, for the same reason as the updater's
  *  slice: a module that registers its own channels sits outside the one map
@@ -93,7 +93,11 @@ export function outboundInvokeHandlers(deps: {
   openExternal: (url: string) => Promise<void>;
 }): Pick<
   InvokeHandlers,
-  'outbox:list' | 'outbox:discard' | 'outbox:open-confirm' | 'outbox:redraft'
+  | 'outbox:list'
+  | 'outbox:pending-count'
+  | 'outbox:discard'
+  | 'outbox:open-confirm'
+  | 'outbox:redraft'
 > {
   const { service, store, openExternal } = deps;
 
@@ -118,7 +122,18 @@ export function outboundInvokeHandlers(deps: {
       const clamped = Number.isFinite(limit)
         ? Math.min(100, Math.max(1, Math.floor(limit as number)))
         : 50;
-      const rows = await store.outbox.listRecent(clamped);
+      // `before` is the wire-level keyset cursor. Issue #113 names its field
+      // `draftId`; the store's `list()` (task 8) names the matching field
+      // `id`, matching `OutboxRow.id` — mapped here at the IPC boundary, the
+      // store's own name stays untouched.
+      const rows = await store.outbox.list({
+        limit: clamped,
+        status: req?.status,
+        before: req?.before && {
+          createdAt: req.before.createdAt,
+          id: req.before.draftId,
+        },
+      });
 
       const labels = new Map<AccountId, string>();
       const out: OutboxPanelRow[] = [];
@@ -145,10 +160,17 @@ export function outboundInvokeHandlers(deps: {
             .slice(0, 140),
           createdAt: row.createdAt,
           sentAt: row.sentAt,
+          to: row.to,
+          cc: row.cc,
           ...errorFieldsOf(row),
         });
       }
       return out;
+    },
+
+    'outbox:pending-count': async () => {
+      await store.outbox.expireOverdue();
+      return { pending: await store.outbox.countPending() };
     },
 
     'outbox:discard': async ({ draftId }) => {

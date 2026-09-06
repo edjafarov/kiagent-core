@@ -673,7 +673,7 @@ function registerIpc(
     'extension:grant-consent': ({ id }) => extensions.grantConsent(id),
 
     // The two seams: the updater's three channels and the Outbox history
-    // panel's four (spec §10). Both hand back a `Pick<InvokeHandlers, …>`
+    // panel's five (spec §10). Both hand back a `Pick<InvokeHandlers, …>`
     // instead of registering anything, which is what lets them live in their
     // own modules and still be counted here.
     ...updaterInvokeHandlers(updater),
