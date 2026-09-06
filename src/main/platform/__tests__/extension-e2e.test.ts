@@ -69,7 +69,6 @@ describe('extension runtime e2e (real forked child)', () => {
         see: async () => '',
         read: async () => '',
         hear: async () => '',
-        describe: async () => null,
       },
       laneState: () => 'open',
       onLaneChange: () => () => {},
