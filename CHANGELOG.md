@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.86.0](https://github.com/edjafarov/kiagent-core/compare/v0.85.0...v0.86.0) (2026-09-07)
+
+### Features
+
+* **inference:** expose model identity before a call and reject a changed generation ([36ae8c8](https://github.com/edjafarov/kiagent-core/commit/36ae8c843f17dc3cd3b4af9526c32d79742a44c0))
+* **local-llm:** deterministic decoding profile, system message and usage metadata ([55af6d7](https://github.com/edjafarov/kiagent-core/commit/55af6d7e1af640dc9f501ed097c4a0223e8f088e))
+* **local-llm:** report the servable model and refuse a call whose model moved ([3ed56de](https://github.com/edjafarov/kiagent-core/commit/3ed56ded2f772dd7f955ad52f1ccaee2ae310953))
+* **outbox:** announce outbox changes to the renderer ([a8d205b](https://github.com/edjafarov/kiagent-core/commit/a8d205b4ce9db2c71d009290c614014aefc67811))
+* **outbox:** filter and page the listing, expose a pending count and recipient addresses ([348fe7f](https://github.com/edjafarov/kiagent-core/commit/348fe7f7f0544e3189e7d0f033f54a5781397c73))
+* **outbox:** status-filtered keyset listing, a pending count and a change signal ([9b1acbf](https://github.com/edjafarov/kiagent-core/commit/9b1acbfe8cd12427a96609c8848bfd53f6442f42))
+* **platform:** every delivered event names the extension that emitted it ([ef02189](https://github.com/edjafarov/kiagent-core/commit/ef02189966738807d9c85034fd37f5656a5b39e7))
+* **platform:** expose query.countBy to extensions ([f15fc61](https://github.com/edjafarov/kiagent-core/commit/f15fc619e1c80bccf36ebf374c226b051387843a))
+* **platform:** extensions choose the inference lane and can read its state ([6ee6ca1](https://github.com/edjafarov/kiagent-core/commit/6ee6ca164fec6a58a00167a9d10046790e13a5c7))
+* **platform:** lift describe(), the generation token and the widened complete() opts onto the extension inference surface ([c2a6266](https://github.com/edjafarov/kiagent-core/commit/c2a6266bbb1937b34f44e6b770c383d83bad530f))
+
+### Bug Fixes
+
+* **inference:** first-write-wins the describe() record and add a source discriminant to ModelChangedError ([6d8394c](https://github.com/edjafarov/kiagent-core/commit/6d8394c07ea3d90fde4aebb3b840be4165438caa))
+* **inference:** thread describe()'s recorded modelId forward and unify ModelChangedError ([675d157](https://github.com/edjafarov/kiagent-core/commit/675d157d6e8b0ff36440d8e958a3d327a4faf190))
+* **outbox:** an empty status filter matches nothing, and pin the cursor's tie-break and joint coverage ([19b8aba](https://github.com/edjafarov/kiagent-core/commit/19b8aba0adf3a5c586e826126ee2fd9a2eb5db08))
+* **platform:** isolate event bus fan-out so one dead subscriber can't starve the rest ([e411290](https://github.com/edjafarov/kiagent-core/commit/e411290b51225f4b0f0d3b57b0bb8924c075a1c5))
+* **platform:** make host-surfaces describe optional so unwired callers keep compiling ([0995bff](https://github.com/edjafarov/kiagent-core/commit/0995bff85121503997384a93ab319fdaa448c05d))
+* **platform:** platform.lane emits on every resolved LaneState transition ([00da20a](https://github.com/edjafarov/kiagent-core/commit/00da20a8dcda4d893d6a600eb2ffbd4bb4a7a307))
+* **platform:** preserve error name and fields across the extension RPC boundary ([232c6a9](https://github.com/edjafarov/kiagent-core/commit/232c6a93be5662efb2b5ef51d2814554e127618b))
+
 ## [0.85.0](https://github.com/edjafarov/kiagent-core/compare/v0.84.0...v0.85.0) (2026-09-05)
 
 ### Features
