@@ -330,6 +330,7 @@ export function createImapSource(
     },
 
     async readMessageEvidence(session, doc, options) {
+      if (doc.type !== 'email.message') return [];
       const wanted = new Set(
         options.authors
           .map(normalizeAuthor)

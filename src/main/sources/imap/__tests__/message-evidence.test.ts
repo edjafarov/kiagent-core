@@ -129,4 +129,25 @@ describe('imap readMessageEvidence', () => {
     expect(fake.state.fetches).toBe(0);
     expect(fake.state.closed).toBe(1);
   });
+
+  it('rejects non-message documents before creating an IMAP client', async () => {
+    let connects = 0;
+    const source = createImapSource({
+      connect: async () => {
+        connects += 1;
+        throw new Error('client must not be created');
+      },
+    });
+    await expect(
+      source.readMessageEvidence!(
+        session(),
+        { ...document(), type: 'attachment' },
+        {
+          authors: ['alex@example.com'],
+          limit: 3,
+        },
+      ),
+    ).resolves.toEqual([]);
+    expect(connects).toBe(0);
+  });
 });

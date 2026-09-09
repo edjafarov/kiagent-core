@@ -129,4 +129,23 @@ describe('gmail readMessageEvidence', () => {
       }),
     ).resolves.toEqual([]);
   });
+
+  it('rejects attachment documents before auth or network access', async () => {
+    let calls = 0;
+    global.fetch = (async () => {
+      calls += 1;
+      throw new Error('network must not be reached');
+    }) as typeof fetch;
+    await expect(
+      gmailSource.readMessageEvidence!(
+        session(),
+        { ...document(), type: 'attachment' },
+        {
+          authors: ['alex@example.com'],
+          limit: 3,
+        },
+      ),
+    ).resolves.toEqual([]);
+    expect(calls).toBe(0);
+  });
 });

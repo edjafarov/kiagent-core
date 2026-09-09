@@ -268,6 +268,7 @@ export const gmailSource: Source<GmailCursor, GmailThreadItem> = {
   pull,
   toDocument,
   async readMessageEvidence(session, doc, options) {
+    if (doc.type !== GMAIL_THREAD_DOCUMENT_TYPE) return [];
     const wanted = new Set(
       options.authors
         .map(normalizeAuthor)
