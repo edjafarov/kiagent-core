@@ -51,6 +51,7 @@ export async function readMessageEvidence(
       { authors: input.authors, limit: 3 },
     );
   } catch {
+    if (deps.signal.aborted) return { status: 'stale', messages: [] };
     return { status: 'unavailable', messages: [] };
   }
   const freshDoc = await deps.store.read.document(input.documentId);

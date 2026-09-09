@@ -301,4 +301,78 @@ describe('engine.readMessageEvidence', () => {
     expect(signal.aborted).toBe(true);
     expect(await pending).toEqual({ status: 'stale', messages: [] });
   });
+
+  it('returns stale when a source rejects because the read was aborted', async () => {
+    let signal!: AbortSignal;
+    const source: Source = {
+      descriptor: {
+        id: 'reject',
+        name: 'Reject',
+        documentTypes: ['email.thread'],
+        auth: 'none',
+      },
+      async connect() {
+        return { identifier: 'reject@example.com' };
+      },
+      async *pull() {},
+      toDocument(item) {
+        return item as DocumentInput;
+      },
+      readMessageEvidence: async (session) => {
+        signal = session.signal;
+        await new Promise<void>((_, reject) =>
+          session.signal.addEventListener(
+            'abort',
+            () => reject(new Error('aborted')),
+            { once: true },
+          ),
+        );
+        return [];
+      },
+    };
+    const account = await store.createAccount({
+      source: 'reject',
+      identifier: 'reject@example.com',
+    });
+    await store.commit({
+      account: account.id,
+      documents: [
+        {
+          externalId: 'reject-1',
+          type: 'email.thread',
+          title: 'Reject',
+          markdown: 'Body',
+          metadata: {},
+          createdAt: null,
+        },
+      ],
+      cursor: null,
+    });
+    const doc = await store.read.byExternalId(
+      account.id,
+      'reject-1',
+      'email.thread',
+    );
+    const engine = createEngine({
+      store,
+      sources: { get: (id) => (id === 'reject' ? source : undefined) },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+      },
+      convert: async (input) => input,
+      logs: { log: () => {} },
+    });
+    const pending = engine.readMessageEvidence({
+      documentId: doc!.id,
+      expectedContentHash: doc!.contentHash,
+      authors: ['alex@example.com'],
+    });
+    for (let i = 0; i < 20 && !signal; i++)
+      await new Promise((r) => setTimeout(r, 1));
+    await engine.stopAll();
+    expect(await pending).toEqual({ status: 'stale', messages: [] });
+  });
 });
