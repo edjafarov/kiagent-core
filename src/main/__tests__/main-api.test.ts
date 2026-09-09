@@ -130,6 +130,27 @@ function stubOutbound(handleRemoteResult: boolean): {
 }
 
 describe('buildMainApi', () => {
+  it('reads the live inference generation through the main-process API', () => {
+    let generation = 7;
+    const { store } = stubStore();
+    const { mcp } = stubMcp();
+    const { tray } = stubTray();
+    const mainApi = buildMainApi({
+      store,
+      mcp,
+      app: stubApp(),
+      dataDir: '/fake/data',
+      tray,
+      ui: { openWindow: () => {} },
+      outbound: stubOutbound(true).outbound,
+      inference: { generation: () => generation },
+    });
+
+    expect(mainApi.inference?.generation()).toBe(7);
+    generation = 8;
+    expect(mainApi.inference?.generation()).toBe(8);
+  });
+
   it('assembles the full MainProcessApi shape at apiVersion 1', async () => {
     const { store, identitySetArgs, vaultLoadArgs, vaultSaveArgs } =
       stubStore();

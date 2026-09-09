@@ -996,6 +996,7 @@ app
         ui: { openWindow: showMainWindow },
         outbound: { service: outbound, routes: outboundRoutes },
         readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
+        inference: p.inference,
       }),
       store: p.store,
       sources: p.sources,

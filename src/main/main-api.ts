@@ -74,6 +74,10 @@ export interface MainProcessApi {
   messageEvidence?: {
     read(input: MessageEvidenceReadInput): Promise<MessageEvidenceReadResult>;
   };
+  /** Read-only generation token for fencing work across model changes. */
+  inference?: {
+    generation(): number;
+  };
 }
 
 export interface BuildMainApiDeps {
@@ -99,6 +103,9 @@ export interface BuildMainApiDeps {
   readMessageEvidence?: (
     input: MessageEvidenceReadInput,
   ) => Promise<MessageEvidenceReadResult>;
+  inference?: {
+    generation(): number;
+  };
 }
 
 export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
@@ -135,6 +142,9 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
     },
     ...(deps.readMessageEvidence
       ? { messageEvidence: { read: deps.readMessageEvidence } }
+      : {}),
+    ...(deps.inference
+      ? { inference: { generation: () => deps.inference!.generation() } }
       : {}),
   };
 }
