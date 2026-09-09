@@ -1,5 +1,5 @@
 import { simpleParser, type AddressObject } from 'mailparser';
-import { extractMessageEvidence } from '@shared/message-evidence';
+import { extractMessageEvidence } from '../email-evidence';
 import type { ImapMessageItem, ImapRawMessage } from './types';
 import { cleanBody } from './body';
 import { stripAngle } from './ids';

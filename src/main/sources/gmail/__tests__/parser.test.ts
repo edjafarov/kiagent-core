@@ -23,6 +23,29 @@ function messageWithHeaders(
 }
 
 describe('parseGmailMessage address lists', () => {
+  it('captures author evidence before signature cleaning', () => {
+    const parsed = parseGmailMessage({
+      id: 'evidence-id',
+      threadId: 'thread1',
+      internalDate: '1704106800000',
+      payload: {
+        mimeType: 'text/plain',
+        headers: [
+          { name: 'From', value: 'Alex Example <alex@example.com>' },
+          { name: 'Message-ID', value: '<evidence@example.com>' },
+        ],
+        body: {
+          data: Buffer.from('Ready.\n\n--\nAlex Example\nProcurement').toString(
+            'base64url',
+          ),
+        },
+      },
+    });
+    expect(parsed.body).toBe('Ready.');
+    expect(parsed.evidence.author).toBe('alex@example.com');
+    expect(parsed.evidence.signature).toContain('Procurement');
+  });
+
   it('splits address lists on top-level commas only', () => {
     const parsed = parseGmailMessage(
       messageWithHeaders([

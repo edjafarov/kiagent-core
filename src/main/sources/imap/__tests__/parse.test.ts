@@ -57,6 +57,9 @@ describe('parseImapMessage', () => {
     expect(item.bodyText).toContain('This is the reply body.');
     expect(item.bodyText).not.toContain('original message text');
     expect(item.headers['content-type']).toContain('text/plain');
+    expect(item.evidence).toBeDefined();
+    expect(item.evidence!.author).toBe('alice@example.com');
+    expect(item.evidence!.signature).toBeNull();
   });
 
   it('falls back to a synthetic null messageId-less item when the header is absent', async () => {

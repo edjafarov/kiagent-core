@@ -1,4 +1,4 @@
-import { extractMessageEvidence } from '../../../shared/message-evidence';
+import { extractMessageEvidence } from '../email-evidence';
 
 describe('extractMessageEvidence', () => {
   it('retains the author signature while normal body remains cleaned', () => {
@@ -60,6 +60,35 @@ describe('extractMessageEvidence', () => {
     });
     expect(evidence.excerpt).toBe('Status folgt.');
     expect(evidence.signature).toBe('Alex Example\nProcurement');
+  });
+
+  it('removes German and Outlook forwarded sections before attribution', () => {
+    const evidence = extractMessageEvidence({
+      messageKey: 'm-forward',
+      author: 'alex@example.com',
+      at: null,
+      plain:
+        'Antwort folgt.\n\nAm 9. September schrieb Bob <bob@example.com>:\n> Bob\n> --\n> Bob\n\n-----Original Message-----\nFrom: Carol <carol@example.com>\nCarol title',
+      html: null,
+    });
+    expect(evidence.excerpt).toBe('Antwort folgt.');
+    expect(evidence.signature).toBeNull();
+  });
+
+  it('preserves an authored signature while removing mixed legal boilerplate', () => {
+    const evidence = extractMessageEvidence({
+      messageKey: 'm-legal',
+      author: 'alex@example.com',
+      at: null,
+      plain:
+        'Bitte prüfen.\n\n--\nAlex Example\nHead of Procurement\nExample Company\n\nThis email and any attachments are confidential.\nTo unsubscribe, click here.',
+      html: null,
+    });
+    expect(evidence.signature).toBe(
+      'Alex Example\nHead of Procurement\nExample Company',
+    );
+    expect(evidence.signature).not.toContain('confidential');
+    expect(evidence.signature).not.toContain('unsubscribe');
   });
 
   it('rejects malformed authors and boilerplate-only signatures', () => {

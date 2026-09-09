@@ -1,8 +1,6 @@
 import EmailReplyParser from 'email-reply-parser';
-import {
-  extractMessageEvidence,
-  type MessageEvidenceV1,
-} from '@shared/message-evidence';
+import { type MessageEvidenceV1 } from '@shared/message-evidence';
+import { extractMessageEvidence } from '../email-evidence';
 
 /**
  * Gmail message payload shapes and parsing, ported from legacy
