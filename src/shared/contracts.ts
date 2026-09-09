@@ -529,6 +529,14 @@ export interface Source<Cursor = unknown, Item = unknown> {
   toDocument(item: Item): DocumentInput | DocumentInput[] | null;
   /** Optional random-access bytes for deep extraction. */
   fetchBytes?(session: Session, doc: Document): Promise<Uint8Array | null>;
+  /** Optional bounded, read-only evidence lookup for an already indexed
+   * document. The source owns authentication and source-specific addressing;
+   * callers provide only exact author identities and a result limit. */
+  readMessageEvidence?(
+    session: Session,
+    doc: Document,
+    options: { authors: string[]; limit: number },
+  ): Promise<import('./message-evidence').MessageEvidenceV1[]>;
   /** Optional full listing of what EXISTS upstream; the engine diffs and
    *  archives what is no longer listed.
    *
