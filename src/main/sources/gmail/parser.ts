@@ -1,4 +1,8 @@
 import EmailReplyParser from 'email-reply-parser';
+import {
+  extractMessageEvidence,
+  type MessageEvidenceV1,
+} from '@shared/message-evidence';
 
 /**
  * Gmail message payload shapes and parsing, ported from legacy
@@ -45,6 +49,7 @@ export interface ParsedEmail {
   headers: Record<string, string>;
   labelIds: string[];
   attachments: ParsedAttachment[];
+  evidence: MessageEvidenceV1;
 }
 
 export function stripQuotedReplies(text: string): string {
@@ -59,19 +64,27 @@ export function parseGmailMessage(msg: GmailApiMessage): ParsedEmail {
   let plain = findBody(msg.payload, 'text/plain');
   if (!plain && htmlBody) plain = ''; // HTML→md left to the engine's converter
   const body = plain ? stripQuotedReplies(plain) : '';
+  const date = parseMessageDate(msg.internalDate, headers.date);
   return {
     messageId: headers['message-id'] ?? '',
     threadId: msg.threadId ?? '',
     from: headers.from ?? '',
     to: split(headers.to),
     cc: split(headers.cc),
-    date: parseMessageDate(msg.internalDate, headers.date),
+    date,
     subject: headers.subject ?? '',
     body,
     htmlBody,
     headers,
     labelIds: msg.labelIds ?? [],
     attachments: collectAttachments(msg.payload, msg.id ?? ''),
+    evidence: extractMessageEvidence({
+      messageKey: headers['message-id'] ?? msg.id ?? msg.threadId ?? 'message',
+      author: headers.from ?? '',
+      at: date.toISOString(),
+      plain: plain ?? '',
+      html: htmlBody,
+    }),
   };
 }
 

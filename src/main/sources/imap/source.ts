@@ -299,23 +299,30 @@ export function createImapSource(
       if (filt.matched) return null;
 
       const subject = item.subject?.trim() || '(no subject)';
+      const metadata: Record<string, unknown> = {
+        from: item.from,
+        to: item.to,
+        cc: item.cc,
+        replyTo: item.replyTo,
+        references: item.references,
+        date: item.date,
+        mailbox: item.mailbox,
+        uid: item.uid,
+        messageId: item.messageId,
+      };
+      if (item.evidence?.author) {
+        metadata.contactEvidence = {
+          version: 1 as const,
+          messages: [item.evidence],
+        };
+      }
 
       return {
         externalId: buildExternalId(item.mailbox, item.uidValidity, item.uid),
         type: 'email.message',
         title: subject,
         markdown: item.bodyText,
-        metadata: {
-          from: item.from,
-          to: item.to,
-          cc: item.cc,
-          replyTo: item.replyTo,
-          references: item.references,
-          date: item.date,
-          mailbox: item.mailbox,
-          uid: item.uid,
-          messageId: item.messageId,
-        },
+        metadata,
         createdAt: item.date,
         url: undefined,
       };

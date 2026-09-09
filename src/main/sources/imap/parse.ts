@@ -1,4 +1,5 @@
 import { simpleParser, type AddressObject } from 'mailparser';
+import { extractMessageEvidence } from '@shared/message-evidence';
 import type { ImapMessageItem, ImapRawMessage } from './types';
 import { cleanBody } from './body';
 import { stripAngle } from './ids';
@@ -59,6 +60,13 @@ export async function parseImapMessage(
     date: mail.date ? mail.date.toISOString() : null,
     bodyText,
     headers,
+    evidence: extractMessageEvidence({
+      messageKey: messageId ?? `imap:${uidValidity}:${raw.uid}`,
+      author: from,
+      at: mail.date ? mail.date.toISOString() : null,
+      plain: mail.text ?? '',
+      html: typeof mail.html === 'string' ? mail.html : null,
+    }),
   };
 }
 
