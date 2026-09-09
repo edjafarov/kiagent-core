@@ -558,6 +558,23 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       )[0] as unknown as DocRow | undefined;
       return r ? toDocument(r) : null;
     },
+    async documentPage(input) {
+      const limit = Math.max(0, Math.min(100, Math.floor(input.limit)));
+      if (limit === 0 || input.types.length === 0) return [];
+      const placeholders = input.types.map(() => '?').join(',');
+      const params: AppDbParam[] = [...input.types];
+      let after = '';
+      if (input.afterId) {
+        after = ' AND id > ?';
+        params.push(input.afterId);
+      }
+      params.push(limit);
+      const rows = (await db.all(
+        `SELECT * FROM documents WHERE archived_at IS NULL AND type IN (${placeholders})${after} ORDER BY id LIMIT ?`,
+        params,
+      )) as unknown as DocRow[];
+      return rows.map(toDocument);
+    },
     async children(id) {
       const rows = (await db.all(
         `SELECT * FROM documents WHERE parent_id = ? AND archived_at IS NULL

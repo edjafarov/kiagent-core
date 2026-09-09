@@ -995,6 +995,7 @@ app
         tray: trayMenu,
         ui: { openWindow: showMainWindow },
         outbound: { service: outbound, routes: outboundRoutes },
+        readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
       }),
       store: p.store,
       sources: p.sources,

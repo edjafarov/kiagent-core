@@ -200,6 +200,8 @@ export function buildSurfaces(deps: SurfaceDeps): {
     query: {
       search: (q) => deps.query.search((q ?? {}) as never),
       document: (id) => deps.query.document(id as never),
+      documentPage: (input) =>
+        deps.query.documentPage?.(input as never) ?? Promise.resolve([]),
       children: (id) => deps.query.children(id as never),
       byExternalId: (account, externalId, type) =>
         deps.query.byExternalId(

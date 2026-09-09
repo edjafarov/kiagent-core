@@ -22,6 +22,7 @@ import type {
   SyncStatus,
   Worker,
   WorkerSession,
+  MessageEvidenceReadInput,
 } from '@shared/contracts';
 
 import { sourceErrorCode } from '@shared/source-errors';
@@ -35,6 +36,7 @@ import {
 import { isDbWorkerTransientError } from '../../db/worker-client';
 
 import type { CoreStore } from '../store/store';
+import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
 
 export interface LogSink {
   log(
@@ -696,6 +698,17 @@ export function createEngine(deps: EngineDeps): Engine & {
   };
 
   const engine = {
+    readMessageEvidence: (input: MessageEvidenceReadInput) =>
+      readMessageEvidenceOperation(
+        {
+          store,
+          sources: deps.sources,
+          session: makeSession,
+          paused: (id) => pauseIntents.has(id),
+          transitioning: (id) => transitionIntents.has(id),
+        },
+        input,
+      ),
     async connect(source: Source, auth: AuthChannel): Promise<Account> {
       // Capture credentials the flow produces so the PLATFORM persists them —
       // the source never stores a blob.

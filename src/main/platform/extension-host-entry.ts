@@ -52,6 +52,7 @@ export const NS_METHODS: Record<string, string[]> = {
   query: [
     'search',
     'document',
+    'documentPage',
     'children',
     'byExternalId',
     'count',

@@ -1,6 +1,12 @@
 import type { App, MenuItemConstructorOptions } from 'electron';
 
-import type { AccountId, Credentials, Identity } from '@shared/contracts';
+import type {
+  AccountId,
+  Credentials,
+  Identity,
+  MessageEvidenceReadInput,
+  MessageEvidenceReadResult,
+} from '@shared/contracts';
 
 import type { McpServerHandle } from './core/mcp/server';
 import type { CoreStore } from './core/store/store';
@@ -65,6 +71,9 @@ export interface MainProcessApi {
       res: import('http').ServerResponse,
     ): Promise<boolean>;
   };
+  messageEvidence?: {
+    read(input: MessageEvidenceReadInput): Promise<MessageEvidenceReadResult>;
+  };
 }
 
 export interface BuildMainApiDeps {
@@ -87,6 +96,9 @@ export interface BuildMainApiDeps {
       ): Promise<boolean>;
     };
   };
+  readMessageEvidence?: (
+    input: MessageEvidenceReadInput,
+  ) => Promise<MessageEvidenceReadResult>;
 }
 
 export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
@@ -121,5 +133,8 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
       setRemoteBaseUrl: (url) => deps.outbound.service.setRemoteBaseUrl(url),
       handleRequest: (req, res) => deps.outbound.routes.handleRemote(req, res),
     },
+    ...(deps.readMessageEvidence
+      ? { messageEvidence: { read: deps.readMessageEvidence } }
+      : {}),
   };
 }

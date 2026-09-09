@@ -51,6 +51,57 @@ describe('store', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('pages live documents by stable id, clamps limits, filters types, and skips archives', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b'), doc('c', { type: 'email.thread' })],
+      cursor: 1,
+    });
+    const first = await store.read.documentPage!({
+      limit: 1000,
+      types: ['note', 'email.thread'],
+    });
+    expect(first).toHaveLength(3);
+    expect(first.map((d) => d.id)).toEqual([...first.map((d) => d.id)].sort());
+    await store.commit({
+      account: accountId,
+      documents: [],
+      deletions: [{ externalId: 'b', type: 'note' }],
+      cursor: 2,
+    });
+    const live = await store.read.documentPage!({
+      limit: 100,
+      types: ['note'],
+    });
+    expect(live.every((d) => d.externalId !== 'b')).toBe(true);
+    expect(
+      await store.read.documentPage!({ limit: 100, types: ['missing'] }),
+    ).toEqual([]);
+    expect(
+      await store.read.documentPage!({ limit: 0, types: ['note'] }),
+    ).toEqual([]);
+  });
+
+  it('supports keyset paging after insertion without repeating an id', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b')],
+      cursor: 1,
+    });
+    const first = await store.read.documentPage!({ limit: 1, types: ['note'] });
+    await store.commit({
+      account: accountId,
+      documents: [doc('c')],
+      cursor: 2,
+    });
+    const rest = await store.read.documentPage!({
+      afterId: first[0].id,
+      limit: 100,
+      types: ['note'],
+    });
+    expect(rest.some((d) => d.id === first[0].id)).toBe(false);
+  });
+
   it('commits documents with cursor atomically and feeds them in order', async () => {
     await store.commit({
       account: accountId,

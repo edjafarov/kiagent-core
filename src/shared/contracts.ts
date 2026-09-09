@@ -191,6 +191,11 @@ export type CommitBatch =
  *  `query` capability. */
 export interface Query {
   document(id: DocumentId): Promise<Document | null>;
+  documentPage?(input: {
+    afterId?: DocumentId;
+    limit: number;
+    types: string[];
+  }): Promise<Document[]>;
   children(id: DocumentId): Promise<Document[]>;
   byExternalId(
     account: AccountId,
@@ -1272,6 +1277,20 @@ export interface Engine {
     projection: Projection<S>,
     onDiff: (state: S, seq: Seq) => void,
   ): Handle;
+  readMessageEvidence(
+    input: MessageEvidenceReadInput,
+  ): Promise<MessageEvidenceReadResult>;
+}
+
+export interface MessageEvidenceReadInput {
+  documentId: DocumentId;
+  expectedContentHash: string;
+  authors: string[];
+}
+
+export interface MessageEvidenceReadResult {
+  status: 'ok' | 'unsupported' | 'unavailable' | 'stale';
+  messages: import('./message-evidence').MessageEvidenceV1[];
 }
 
 /** The live signals ALL throttling derives from — one place. */
