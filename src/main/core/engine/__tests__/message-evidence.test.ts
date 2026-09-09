@@ -62,7 +62,7 @@ describe('engine.readMessageEvidence', () => {
         expectedContentHash: 'x',
         authors: Array.from({ length: 9 }, (_, i) => `a${i}@example.com`),
       }),
-    ).rejects.toThrow(/8 authors/);
+    ).resolves.toEqual({ status: 'unavailable', messages: [] });
   });
 
   it('clips source results to three and returns stale after a document changes', async () => {
@@ -159,5 +159,146 @@ describe('engine.readMessageEvidence', () => {
     });
     release();
     expect(await request).toEqual({ status: 'stale', messages: [] });
+  });
+
+  it('maps malformed requests and source records to typed unavailable results', async () => {
+    const source: Source = {
+      descriptor: {
+        id: 'bad',
+        name: 'Bad',
+        documentTypes: ['email.thread'],
+        auth: 'none',
+      },
+      async connect() {
+        return { identifier: 'bad@example.com' };
+      },
+      async *pull() {},
+      toDocument(item) {
+        return item as DocumentInput;
+      },
+      readMessageEvidence: async () => 'not-an-array' as never,
+    };
+    const account = await store.createAccount({
+      source: 'bad',
+      identifier: 'bad@example.com',
+    });
+    await store.commit({
+      account: account.id,
+      documents: [
+        {
+          externalId: 'bad-1',
+          type: 'email.thread',
+          title: 'Bad',
+          markdown: 'Body',
+          metadata: {},
+          createdAt: null,
+        },
+      ],
+      cursor: null,
+    });
+    const doc = await store.read.byExternalId(
+      account.id,
+      'bad-1',
+      'email.thread',
+    );
+    const engine = createEngine({
+      store,
+      sources: { get: (id) => (id === 'bad' ? source : undefined) },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+      },
+      convert: async (input) => input,
+      logs: { log: () => {} },
+    });
+    await expect(
+      engine.readMessageEvidence({
+        documentId: doc!.id,
+        expectedContentHash: doc!.contentHash,
+        authors: undefined as never,
+      }),
+    ).resolves.toEqual({ status: 'unavailable', messages: [] });
+    await expect(
+      engine.readMessageEvidence({
+        documentId: doc!.id,
+        expectedContentHash: doc!.contentHash,
+        authors: ['alex@example.com'],
+      }),
+    ).resolves.toEqual({ status: 'unavailable', messages: [] });
+  });
+
+  it('aborts an in-flight read when stopAll is called', async () => {
+    let signal!: AbortSignal;
+    const source: Source = {
+      descriptor: {
+        id: 'slow',
+        name: 'Slow',
+        documentTypes: ['email.thread'],
+        auth: 'none',
+      },
+      async connect() {
+        return { identifier: 'slow@example.com' };
+      },
+      async *pull() {},
+      toDocument(item) {
+        return item as DocumentInput;
+      },
+      readMessageEvidence: async (session) => {
+        signal = session.signal;
+        await new Promise<void>((resolve) =>
+          session.signal.addEventListener('abort', () => resolve(), {
+            once: true,
+          }),
+        );
+        return [];
+      },
+    };
+    const account = await store.createAccount({
+      source: 'slow',
+      identifier: 'slow@example.com',
+    });
+    await store.commit({
+      account: account.id,
+      documents: [
+        {
+          externalId: 'slow-1',
+          type: 'email.thread',
+          title: 'Slow',
+          markdown: 'Body',
+          metadata: {},
+          createdAt: null,
+        },
+      ],
+      cursor: null,
+    });
+    const doc = await store.read.byExternalId(
+      account.id,
+      'slow-1',
+      'email.thread',
+    );
+    const engine = createEngine({
+      store,
+      sources: { get: (id) => (id === 'slow' ? source : undefined) },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+      },
+      convert: async (input) => input,
+      logs: { log: () => {} },
+    });
+    const pending = engine.readMessageEvidence({
+      documentId: doc!.id,
+      expectedContentHash: doc!.contentHash,
+      authors: ['alex@example.com'],
+    });
+    for (let i = 0; i < 20 && !signal; i++)
+      await new Promise((r) => setTimeout(r, 1));
+    await engine.stopAll();
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toEqual({ status: 'stale', messages: [] });
   });
 });

@@ -14,14 +14,23 @@ export interface MessageEvidenceDeps {
   session(account: Account, signal: AbortSignal, scope: string): Session;
   paused(accountId: AccountId): boolean;
   transitioning(accountId: AccountId): boolean;
+  signal: AbortSignal;
 }
 
 export async function readMessageEvidence(
   deps: MessageEvidenceDeps,
   input: MessageEvidenceReadInput,
 ): Promise<MessageEvidenceReadResult> {
-  if (input.authors.length > 8)
-    throw new RangeError('message evidence supports at most 8 authors');
+  if (
+    !input ||
+    !Array.isArray(input.authors) ||
+    typeof input.expectedContentHash !== 'string' ||
+    typeof input.documentId !== 'string' ||
+    input.authors.some((author) => typeof author !== 'string')
+  )
+    return { status: 'unavailable', messages: [] };
+  if (input.authors.length > 8 || deps.signal.aborted)
+    return { status: 'unavailable', messages: [] };
   const doc = await deps.store.read.document(input.documentId);
   if (!doc || doc.archivedAt) return { status: 'unavailable', messages: [] };
   if (doc.contentHash !== input.expectedContentHash)
@@ -37,7 +46,7 @@ export async function readMessageEvidence(
   let messages;
   try {
     messages = await source.readMessageEvidence(
-      deps.session(account, new AbortController().signal, 'message-evidence'),
+      deps.session(account, deps.signal, 'message-evidence'),
       doc,
       { authors: input.authors, limit: 3 },
     );
@@ -56,5 +65,29 @@ export async function readMessageEvidence(
     deps.transitioning(account.id)
   )
     return { status: 'stale', messages: [] };
+  if (
+    !Array.isArray(messages) ||
+    messages.some((message) => !validMessageEvidence(message))
+  )
+    return { status: 'unavailable', messages: [] };
+  if (deps.signal.aborted) return { status: 'stale', messages: [] };
   return { status: 'ok', messages: messages.slice(0, 3) };
+}
+
+function validMessageEvidence(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const message = value as Record<string, unknown>;
+  return (
+    message.version === 1 &&
+    typeof message.messageKey === 'string' &&
+    typeof message.author === 'string' &&
+    (message.at === null || typeof message.at === 'string') &&
+    (message.signature === null ||
+      (typeof message.signature === 'string' &&
+        message.signature.length <= 1200)) &&
+    typeof message.excerpt === 'string' &&
+    message.excerpt.length <= 800 &&
+    typeof message.fingerprint === 'string' &&
+    /^[a-f0-9]{64}$/.test(message.fingerprint)
+  );
 }
