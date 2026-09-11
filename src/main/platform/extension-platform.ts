@@ -1110,6 +1110,11 @@ export function createExtensionPlatform(
             error: "Remove this connector's sources before uninstalling it.",
           };
         }
+        const wasEnabled = e.enabled;
+        const restorePriorState = async () => {
+          e.enabled = wasEnabled;
+          if (wasEnabled) await activate(e);
+        };
         // Validation is complete. Only now may an in-flight activation be
         // cancelled; rejected uninstalls must leave the previous host and
         // registrations untouched.
@@ -1118,11 +1123,9 @@ export function createExtensionPlatform(
         try {
           await resetPluginStorage(e, false);
         } catch (error) {
-          // Storage reset is the last fallible operation after deactivation.
           // Restore the prior enabled/active state before reporting the
           // rejection so callers never observe a half-uninstalled plugin.
-          e.enabled = true;
-          await activate(e);
+          await restorePriorState();
           return {
             ok: false,
             error: error instanceof Error ? error.message : String(error),
@@ -1131,16 +1134,24 @@ export function createExtensionPlatform(
         // The validation above is intentionally complete before changing the
         // in-memory state. A rejected uninstall must leave the entry enabled
         // and its active host represented accurately in snapshots.
-        e.enabled = false;
-        retainLegacySource(e);
-        fs.rmSync(e.dir, { recursive: true, force: true });
-        writeInstalled(
-          deps.extDir,
-          readInstalled(deps.extDir).filter((r) => r.id !== id),
-        );
-        const state = readEnabledState(deps.extDir);
-        delete state[id];
-        writeEnabledState(deps.extDir, state);
+        try {
+          e.enabled = false;
+          retainLegacySource(e);
+          fs.rmSync(e.dir, { recursive: true, force: true });
+          writeInstalled(
+            deps.extDir,
+            readInstalled(deps.extDir).filter((r) => r.id !== id),
+          );
+          const state = readEnabledState(deps.extDir);
+          delete state[id];
+          writeEnabledState(deps.extDir, state);
+        } catch (error) {
+          await restorePriorState();
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
         entries.delete(id);
         changed();
         return { ok: true };

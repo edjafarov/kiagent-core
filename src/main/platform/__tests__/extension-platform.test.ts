@@ -506,6 +506,70 @@ describe('createExtensionPlatform', () => {
     expect(owners.size).toBe(1);
   });
 
+  it('a storage-reset rejection preserves a previously disabled extension', async () => {
+    const fixture = path.join(tmp, 'disabled-db-fixture');
+    fs.cpSync(FIXTURE, fixture, { recursive: true });
+    const manifestPath = path.join(fixture, 'manifest.json');
+    const manifest = JSON.parse(
+      fs.readFileSync(manifestPath, 'utf8'),
+    ) as Record<string, unknown>;
+    manifest.caps = ['net', 'db'];
+    manifest.database = { schema: 'database.json' };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    fs.writeFileSync(
+      path.join(fixture, 'database.json'),
+      JSON.stringify({
+        format: 1,
+        objects: [{ name: 'settings', kind: 'table' }],
+        modules: [],
+        legacy: { tables: [] },
+      }),
+    );
+
+    const owners = new Set<string>();
+    const db = {
+      registerPluginSource: jest.fn(async () => undefined),
+      plugin: jest.fn(
+        async (request: { op: string; owner?: { handle?: string } }) => {
+          if (request.op === 'open' && request.owner?.handle)
+            owners.add(request.owner.handle);
+          if (request.op === 'release' && request.owner?.handle)
+            owners.delete(request.owner.handle);
+          if (request.op === 'reset') throw new Error('storage reset failed');
+          return undefined;
+        },
+      ),
+    };
+    platform = makePlatform({ db: db as never });
+    await platform.start();
+    const preview = await platform.installPreview(fixture);
+    if (!('token' in preview))
+      throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+    await expect(platform.installCommit(preview.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.basic',
+    });
+    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({
+      ok: true,
+    });
+    expect(owners.size).toBe(0);
+    expect(registry.has('basicsrc')).toBe(false);
+
+    await expect(platform.uninstall('test.basic')).resolves.toEqual({
+      ok: false,
+      error: 'storage reset failed',
+    });
+    expect(platform.snapshot()).toEqual([
+      expect.objectContaining({
+        id: 'test.basic',
+        enabled: false,
+        status: 'disabled',
+      }),
+    ]);
+    expect(registry.has('basicsrc')).toBe(false);
+    expect(owners.size).toBe(0);
+  });
+
   it('double setEnabled(true) does not orphan a second host: redundant and concurrent re-enables are no-ops', async () => {
     await platform.start();
     await installFixture();
