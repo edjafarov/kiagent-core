@@ -12,7 +12,7 @@ export interface DbCoordinator {
   metrics(): CoordinatorMetrics;
 }
 
-type Job<T> = { owner: DbOwner; token?: TxToken; work: () => Promise<T> | T; signal?: AbortSignal; resolve: (v: T) => void; reject: (e: unknown) => void };
+type Job<T> = { owner: DbOwner; token?: TxToken; work: () => Promise<T> | T; signal?: AbortSignal; resolve: (v: T) => void; reject: (e: unknown) => void; cleanup?: () => void; settled?: boolean };
 type Active = { owner: DbOwner; token: TxToken; rollback?: () => Promise<unknown> | unknown; expires: number; timer?: ReturnType<typeof setTimeout> };
 
 const error = (message: string, code: string): Error & { code: string } => Object.assign(new Error(message), { code });
@@ -36,8 +36,29 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
     ? owner.handle ?? owner.extensionId
     : owner.handle ?? 'core';
 
+  const settleJob = (job: Job<unknown>, outcome: 'resolve' | 'reject', value: unknown): void => {
+    if (job.settled) return;
+    job.settled = true;
+    job.cleanup?.();
+    if (outcome === 'resolve') job.resolve(value);
+    else job.reject(value);
+  };
+
+  const rejectQueued = (predicate: (job: Job<unknown>) => boolean, reason: unknown): void => {
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const job = queue[i];
+      if (!predicate(job)) continue;
+      queue.splice(i, 1);
+      settleJob(job, 'reject', reason);
+    }
+  };
+
   const poisonOwner = async (owner: DbOwner): Promise<void> => {
     failedOwners.add(ownerKey(owner));
+    rejectQueued(
+      (job) => sameOwner(job.owner, owner),
+      error('database owner is unusable after rollback failure', 'DB_OWNER_POISONED'),
+    );
     try { await options.onOwnerFailure?.(owner); } catch { /* cleanup must not strand the queue */ }
   };
 
@@ -63,17 +84,22 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
         if (closed) break;
         if (active && Date.now() > active.expires) {
           const expired = active;
-          for (let i = queue.length - 1; i >= 0; i--) {
-            if (queue[i].token === expired.token) queue.splice(i, 1)[0].reject(error('transaction lease expired', 'DB_TX_EXPIRED'));
-          }
+          rejectQueued((job) => job.token === expired.token, error('transaction lease expired', 'DB_TX_EXPIRED'));
           await rollbackActive(expired);
           clearActive(expired);
         }
-        const index = queue.findIndex((job) => !active || (job.token === active.token && sameOwner(job.owner, active.owner)));
+        const index = queue.findIndex((job) => job.token ? true : !active);
         if (index < 0) break;
         const [job] = queue.splice(index, 1);
-        if (job.signal?.aborted) { job.reject(error('database operation cancelled', 'DB_OPERATION_CANCELLED')); continue; }
-        try { job.resolve(await job.work()); } catch (e) { job.reject(e); }
+        if (job.token && (!active || active.token !== job.token || !sameOwner(job.owner, active.owner))) {
+          settleJob(job, 'reject', error('invalid or foreign transaction token', 'DB_TX_TOKEN_INVALID'));
+          continue;
+        }
+        if (job.signal?.aborted) {
+          settleJob(job, 'reject', error('database operation cancelled', 'DB_OPERATION_CANCELLED'));
+          continue;
+        }
+        try { settleJob(job, 'resolve', await job.work()); } catch (e) { settleJob(job, 'reject', e); }
       }
     } finally { pumping = false; }
   };
@@ -87,9 +113,13 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
       if (signal) {
         const cancel = () => {
           const index = queue.indexOf(job as Job<unknown>);
-          if (index >= 0) { queue.splice(index, 1); reject(error('database operation cancelled', 'DB_OPERATION_CANCELLED')); }
+          if (index >= 0) {
+            queue.splice(index, 1);
+            settleJob(job as Job<unknown>, 'reject', error('database operation cancelled', 'DB_OPERATION_CANCELLED'));
+          }
         };
         if (signal.aborted) { reject(error('database operation cancelled', 'DB_OPERATION_CANCELLED')); return; }
+        job.cleanup = () => signal.removeEventListener('abort', cancel);
         signal.addEventListener('abort', cancel, { once: true });
       }
       queue.push(job as Job<unknown>);
@@ -121,7 +151,12 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
       if (!active || active.token !== token || !sameOwner(owner, active.owner)) return Promise.reject(error('invalid or foreign transaction token', 'DB_TX_TOKEN_INVALID'));
       const finished = active;
       try {
-        return await enqueue(owner, token, work);
+        return await enqueue(owner, token, async () => {
+          try { return await work(); }
+          finally {
+            rejectQueued((job) => job.token === finished.token, error('invalid or foreign transaction token', 'DB_TX_TOKEN_INVALID'));
+          }
+        });
       } catch (e) {
         // A deferred-FK COMMIT can fail while SQLite keeps the native
         // transaction open. Repair it before releasing admission, preserving
@@ -129,6 +164,7 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
         if (active === finished) await rollbackActive(finished);
         throw e;
       } finally {
+        rejectQueued((job) => job.token === finished.token, error('invalid or foreign transaction token', 'DB_TX_TOKEN_INVALID'));
         clearActive(finished);
         void pump();
       }
@@ -141,7 +177,7 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
         try { await released.rollback?.(); } catch (e) { rollbackError = e; await poisonOwner(owner); }
         clearActive(released);
       }
-      for (let i = queue.length - 1; i >= 0; i--) if (sameOwner(queue[i].owner, owner)) queue.splice(i, 1).forEach((job) => job.reject(error('database owner released', 'DB_OWNER_RELEASED')));
+      rejectQueued((job) => sameOwner(job.owner, owner), error('database owner released', 'DB_OWNER_RELEASED'));
       await pump();
       if (rollbackError) throw rollbackError;
     },
@@ -154,7 +190,7 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
         try { await closing.rollback?.(); } catch (e) { rollbackError = e; await poisonOwner(closing.owner); }
         clearActive(closing);
       }
-      while (queue.length) queue.shift()!.reject(error('database coordinator is closed', 'DB_COORDINATOR_CLOSED'));
+      while (queue.length) settleJob(queue.shift()!, 'reject', error('database coordinator is closed', 'DB_COORDINATOR_CLOSED'));
       if (rollbackError) throw rollbackError;
     },
     metrics: () => ({ queued: queue.length, active: !!active, owner: active?.owner }),

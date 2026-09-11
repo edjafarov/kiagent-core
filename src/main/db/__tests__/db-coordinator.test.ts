@@ -86,4 +86,57 @@ describe('shared database coordinator', () => {
     await expect(coordinator.run(good, undefined, async () => 2)).resolves.toBe(2);
     await coordinator.close();
   });
+
+  it('removes coordinator abort listeners whenever queued jobs settle', async () => {
+    const queueScenario = async (
+      work: () => unknown,
+      settle: (coordinator: ReturnType<typeof createDbCoordinator>, owner: { kind: 'plugin'; extensionId: string }, token: string, waiting: Promise<unknown>, controller: AbortController) => Promise<void>,
+    ) => {
+      const coordinator = createDbCoordinator();
+      const owner = { kind: 'plugin' as const, extensionId: 'one' };
+      const other = { kind: 'plugin' as const, extensionId: 'two' };
+      const token = await coordinator.begin(owner, async () => undefined);
+      const controller = new AbortController();
+      const listeners = new Set<EventListenerOrEventListenerObject>();
+      const signal = controller.signal;
+      const add = signal.addEventListener.bind(signal);
+      const remove = signal.removeEventListener.bind(signal);
+      signal.addEventListener = ((type: 'abort', listener: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions) => {
+        if (!listener) return;
+        listeners.add(listener);
+        return add(type, listener, options);
+      }) as typeof signal.addEventListener;
+      signal.removeEventListener = ((type: 'abort', listener: EventListenerOrEventListenerObject | null, options?: boolean | EventListenerOptions) => {
+        if (!listener) return;
+        listeners.delete(listener);
+        return remove(type, listener, options);
+      }) as typeof signal.removeEventListener;
+      const waiting = coordinator.run(other, undefined, work, signal);
+      await settle(coordinator, owner, token, waiting, controller);
+      expect(listeners.size).toBe(0);
+      await coordinator.close().catch(() => undefined);
+    };
+
+    await queueScenario(() => 1, async (coordinator, owner, token, waiting) => {
+      await coordinator.finish(owner, token, async () => undefined);
+      await expect(waiting).resolves.toBe(1);
+    });
+    await queueScenario(() => { throw new Error('queued failure'); }, async (coordinator, owner, token, waiting) => {
+      await coordinator.finish(owner, token, async () => undefined);
+      await expect(waiting).rejects.toThrow('queued failure');
+    });
+    await queueScenario(() => 1, async (coordinator, owner, _token, waiting, controller) => {
+      controller.abort();
+      await expect(waiting).rejects.toMatchObject({ code: 'DB_OPERATION_CANCELLED' });
+      await coordinator.release(owner);
+    });
+    await queueScenario(() => 1, async (coordinator, owner, _token, waiting) => {
+      await coordinator.release(owner);
+      await expect(waiting).resolves.toBe(1);
+    });
+    await queueScenario(() => 1, async (coordinator, _owner, _token, waiting) => {
+      await coordinator.close();
+      await expect(waiting).rejects.toMatchObject({ code: 'DB_COORDINATOR_CLOSED' });
+    });
+  });
 });

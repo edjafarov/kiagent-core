@@ -70,6 +70,98 @@ describe('plugin bridge requests', () => {
     for (const p of [file, `${file}-wal`, `${file}-shm`]) if (fs.existsSync(p)) fs.rmSync(p);
   });
 
+  it('rejects queued token continuations after both successful and failed finish cleanup', async () => {
+    const runCase = async (kind: 'success' | 'failure') => {
+      const file = path.join(os.tmpdir(), `plugin-stale-token-${kind}-${process.pid}-${Date.now()}.sqlite`);
+      const hostSeed = new Database(file);
+      if (kind === 'success') {
+        hostSeed.exec('CREATE TABLE "p_70__items" (v INTEGER)');
+      } else {
+        hostSeed.exec(`
+          PRAGMA foreign_keys = ON;
+          CREATE TABLE "p_70__parents" (id INTEGER PRIMARY KEY);
+          CREATE TABLE "p_70__children" (
+            id INTEGER PRIMARY KEY,
+            parent_id INTEGER NOT NULL REFERENCES "p_70__parents"(id) DEFERRABLE INITIALLY DEFERRED
+          );
+        `);
+      }
+      hostSeed.close();
+
+      const db = await openDb(file);
+      const coordinator = createDbCoordinator();
+      const owner = { kind: 'plugin' as const, extensionId: 'p', handle: `stale-${kind}` };
+      const connection = await openPluginConnection(file, {
+        pluginId: 'p',
+        tables: kind === 'success' ? ['items'] : ['parents', 'children'],
+      });
+      const connections = new Map<string, Awaited<ReturnType<typeof openPluginConnection>>>([[owner.handle!, connection]]);
+      const pluginHandler = createPluginOperationHandler(coordinator, connections);
+      const channel = new MessageChannel();
+      attachDbHost(channel.port1, db, undefined, undefined, {
+        coordinator,
+        plugin: pluginHandler,
+      });
+      const client = createDbClient(channel.port2);
+
+      const originalCommit = connection.commit.bind(connection);
+      let commitStarted!: () => void;
+      const commitEntered = new Promise<void>((resolve) => { commitStarted = resolve; });
+      let unblockCommit!: () => void;
+      const commitGate = new Promise<void>((resolve) => { unblockCommit = resolve; });
+      connection.commit = async () => {
+        commitStarted();
+        await commitGate;
+        return originalCommit();
+      };
+
+      const token = (await client.plugin?.({ op: 'begin', owner })) as string;
+      if (kind === 'success') {
+        await client.plugin?.({ op: 'exec', owner, token, sql: 'INSERT INTO {{items}} VALUES (?)', params: [1] });
+      } else {
+        await client.plugin?.({
+          op: 'exec', owner, token,
+          sql: 'INSERT INTO {{children}} (id, parent_id) VALUES (?, ?)', params: [1, 404],
+        });
+      }
+
+      const finishing = client.plugin?.({ op: 'commit', owner, token });
+      await commitEntered;
+      // Invoke the production handler directly so the continuation is
+      // definitely queued while COMMIT is held behind the test boundary.
+      const continuation = pluginHandler({
+        op: 'exec', owner, token,
+        sql: kind === 'success' ? 'INSERT INTO {{items}} VALUES (?)' : 'INSERT INTO {{children}} (id, parent_id) VALUES (?, ?)',
+        params: kind === 'success' ? [2] : [2, 404],
+      });
+      const continuationRejected = expect(continuation).rejects.toMatchObject({ code: 'DB_TX_TOKEN_INVALID' });
+      expect(coordinator.metrics().queued).toBe(1);
+      unblockCommit();
+
+      if (kind === 'success') {
+        await expect(finishing).resolves.toBeUndefined();
+      } else {
+        await expect(finishing).rejects.toThrow();
+      }
+      await continuationRejected;
+      if (kind === 'success') {
+        await expect(client.all('SELECT COUNT(*) AS c FROM "p_70__items"')).resolves.toEqual([{ c: 1 }]);
+      } else {
+        await expect(client.all('SELECT COUNT(*) AS c FROM "p_70__children"')).resolves.toEqual([{ c: 0 }]);
+      }
+
+      await client.plugin?.({ op: 'release', owner });
+      await client.close();
+      await coordinator.close();
+      channel.port1.close();
+      channel.port2.close();
+      for (const p of [file, `${file}-wal`, `${file}-shm`]) if (fs.existsSync(p)) fs.rmSync(p);
+    };
+
+    await runCase('success');
+    await runCase('failure');
+  });
+
   it('repairs a deferred foreign-key COMMIT before admitting a core writer', async () => {
     const file = path.join(os.tmpdir(), `plugin-deferred-fk-${process.pid}-${Date.now()}.sqlite`);
     const hostSeed = new Database(file);
@@ -141,6 +233,62 @@ describe('plugin bridge requests', () => {
     if (!freshSucceeded) expect(freshError).toMatchObject({
       code: expect.stringMatching(/^DB_(?:OWNER_POISONED|PLUGIN_DB_NOT_OPEN)$/),
     });
+  });
+
+  it('rejects queued un-tokened work for a poisoned owner before admitting a foreign write', async () => {
+    const file = path.join(os.tmpdir(), `plugin-poisoned-queue-${process.pid}-${Date.now()}.sqlite`);
+    const hostSeed = new Database(file);
+    hostSeed.exec('CREATE TABLE "p_70__items" (v INTEGER)');
+    hostSeed.close();
+
+    const db = await openDb(file);
+    const connections = new Map<string, Awaited<ReturnType<typeof openPluginConnection>>>();
+    const coordinator = createDbCoordinator({
+      leaseMs: 15,
+      onOwnerFailure: (owner) => closePluginConnectionForOwner(owner, connections),
+    });
+    const bad = { kind: 'plugin' as const, extensionId: 'p', handle: 'poisoned-owner' };
+    const good = { kind: 'plugin' as const, extensionId: 'p', handle: 'foreign-owner' };
+    const poisonedConnection = await openPluginConnection(file, { pluginId: 'p', tables: ['items'] });
+    const foreignConnection = await openPluginConnection(file, { pluginId: 'p', tables: ['items'] });
+    let poisonedWorkCalled = 0;
+    const originalExec = poisonedConnection.exec.bind(poisonedConnection);
+    poisonedConnection.exec = async (sql: string, params: unknown[] = []) => {
+      poisonedWorkCalled += 1;
+      return originalExec(sql, params);
+    };
+    connections.set(bad.handle!, poisonedConnection);
+    connections.set(good.handle!, foreignConnection);
+    const pluginHandler = createPluginOperationHandler(coordinator, connections);
+    const channel = new MessageChannel();
+    attachDbHost(channel.port1, db, undefined, undefined, {
+      coordinator,
+      plugin: pluginHandler,
+    });
+    const client = createDbClient(channel.port2);
+
+    const token = (await client.plugin?.({ op: 'begin', owner: bad })) as string;
+    await client.plugin?.({ op: 'exec', owner: bad, token, sql: 'INSERT INTO {{items}} VALUES (?)', params: [1] });
+    poisonedWorkCalled = 0;
+    poisonedConnection.rollback = async () => { throw new Error('injected rollback failure'); };
+
+    // Queue both real handler operations before the lease timer can release
+    // admission, preserving the poisoned-owner job for the dequeue check.
+    const poisoned = pluginHandler({ op: 'exec', owner: bad, sql: 'INSERT INTO {{items}} VALUES (?)', params: [9] });
+    const foreign = pluginHandler({ op: 'exec', owner: good, sql: 'INSERT INTO {{items}} VALUES (?)', params: [2] });
+    await expect(foreign).resolves.toBeUndefined();
+    await expect(poisoned).rejects.toThrow();
+    expect(poisonedWorkCalled).toBe(0);
+    expect(connections.has(bad.handle!)).toBe(false);
+    await expect(foreignConnection.query('SELECT COUNT(*) AS c FROM {{items}}')).resolves.toEqual([{ c: 1 }]);
+
+    await client.plugin?.({ op: 'release', owner: good });
+    await client.plugin?.({ op: 'release', owner: bad }).catch(() => undefined);
+    await client.close();
+    await coordinator.close();
+    channel.port1.close();
+    channel.port2.close();
+    for (const p of [file, `${file}-wal`, `${file}-shm`]) if (fs.existsSync(p)) fs.rmSync(p);
   });
 
   it('closes and removes the actual connection before foreign work after lease rollback failure', async () => {
