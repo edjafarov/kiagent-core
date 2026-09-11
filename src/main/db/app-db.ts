@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
 import { migrate } from '@main/core/store/schema';
+import type { PluginDbRequest } from './plugin-operations';
 
 export type AppDbParam =
   | string
@@ -49,6 +50,8 @@ export interface AppDb {
    *  `commit`) executes off the main thread without being flattened into a
    *  static `batch()`. */
   proc?(name: string, args: unknown): Promise<unknown>;
+  /** Host-internal authorized plugin request seam. Never exposed directly to plugin code. */
+  plugin?(request: PluginDbRequest, options?: { signal?: AbortSignal }): Promise<unknown>;
 }
 
 function coerceParam(v: AppDbParam): string | number | bigint | Buffer | null {

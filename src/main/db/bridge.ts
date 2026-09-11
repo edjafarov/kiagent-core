@@ -5,6 +5,8 @@ import type {
   BatchStep,
   BatchStepResult,
 } from './app-db';
+import type { PluginDbRequest } from './plugin-operations';
+import type { DbCoordinator, DbOwner } from './coordinator';
 
 /**
  * Request/response protocol between the main process (client) and the worker
@@ -25,7 +27,9 @@ type ReqBody =
     }
   | { op: 'proc'; name: string; args: unknown }
   | { op: 'close' };
-type Req = ReqBody & { id: number };
+type PluginReqBody = { op: 'plugin'; request: PluginDbRequest };
+type CancelReqBody = { op: 'plugin-cancel'; requestId: number };
+type Req = (ReqBody | PluginReqBody | CancelReqBody) & { id: number };
 
 /** A host-registered procedure: runs synchronously inside the worker (it owns
  *  its own `db.transaction()`), receives the structured-clone-transferred args,
@@ -96,33 +100,45 @@ export function attachDbHost(
   db: AppDb,
   onClosed?: () => void,
   procedures?: Record<string, HostProcedure>,
+  options?: { plugin?: (request: PluginDbRequest, signal?: AbortSignal) => Promise<unknown> | unknown; coordinator?: DbCoordinator; coreOwner?: DbOwner },
 ): void {
+  const pluginControllers = new Map<number, AbortController>();
+  const cancelledPluginRequests = new Set<number>();
   port.on('message', async (raw: unknown) => {
     const req = raw as Req;
+    if (req.op === 'plugin-cancel') { const controller = pluginControllers.get(req.requestId); if (controller) controller.abort(); else cancelledPluginRequests.add(req.requestId); return; }
     if (!req || typeof req.id !== 'number') return;
     try {
       let value: unknown;
+      const core = options?.coreOwner ?? { kind: 'core' as const, handle: 'core' };
+      const admit = <T>(work: () => Promise<T> | T) => options?.coordinator?.run(core, undefined, work) ?? Promise.resolve(work());
       if (req.op === 'exec') {
-        await db.exec(req.sql);
+        await admit(() => db.exec(req.sql));
       } else if (req.op === 'all') {
-        value = await db.all(req.sql, req.params.map(toBuffer) as AppDbParam[]);
+        value = await admit(() => db.all(req.sql, req.params.map(toBuffer) as AppDbParam[]));
       } else if (req.op === 'run') {
-        await db.run(req.sql, req.params.map(toBuffer) as AppDbParam[]);
+        await admit(() => db.run(req.sql, req.params.map(toBuffer) as AppDbParam[]));
       } else if (req.op === 'batch') {
-        value = await db.batch(
+        value = await admit(() => db.batch(
           req.steps.map((s) => ({
             sql: s.sql,
             params: s.params.map((p) =>
               isFromStepRef(p) ? p : (toBuffer(p) as AppDbParam),
             ) as BatchParam[],
           })),
-        );
+        ));
       } else if (req.op === 'proc') {
         const proc = procedures?.[req.name];
         if (!proc) throw new Error(`unknown db procedure: ${req.name}`);
-        value = await proc(req.args);
+        value = await admit(() => proc(req.args));
       } else if (req.op === 'close') {
         await db.close();
+      } else if (req.op === 'plugin') {
+        if (!options?.plugin) throw new Error('plugin database service unavailable');
+        const controller = new AbortController();
+        pluginControllers.set(req.id, controller);
+        if (cancelledPluginRequests.delete(req.id)) controller.abort();
+        try { value = await options.plugin((req as Req & PluginReqBody).request, controller.signal); } finally { pluginControllers.delete(req.id); }
       }
       port.postMessage({ id: req.id, ok: true, value } satisfies Res);
       if (req.op === 'close') onClosed?.();
@@ -149,7 +165,7 @@ export function createDbClient(port: PortLike): DbClient {
   let closed = false;
   const pending = new Map<
     number,
-    { resolve: (v: unknown) => void; reject: (e: Error) => void }
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; cleanup?: () => void }
   >();
 
   port.on('message', (raw: unknown) => {
@@ -158,6 +174,7 @@ export function createDbClient(port: PortLike): DbClient {
     const p = pending.get(res.id);
     if (!p) return;
     pending.delete(res.id);
+    p.cleanup?.();
     if (res.ok) {
       p.resolve(res.value);
     } else {
@@ -167,13 +184,28 @@ export function createDbClient(port: PortLike): DbClient {
     }
   });
 
-  function request(msg: ReqBody): Promise<unknown> {
+  function request(msg: ReqBody | PluginReqBody, signal?: AbortSignal): Promise<unknown> {
     if (dead) return Promise.reject(dead);
+    if (signal?.aborted) return Promise.reject(Object.assign(new Error('database operation cancelled'), { code: 'DB_OPERATION_CANCELLED' }));
     const id = nextId;
     nextId += 1;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      let cleanup: (() => void) | undefined;
+      pending.set(id, { resolve, reject, get cleanup() { return cleanup; }, set cleanup(value) { cleanup = value; } });
       port.postMessage({ ...msg, id });
+      if (signal) {
+        const cancel = () => {
+          port.postMessage({ op: 'plugin-cancel', requestId: id });
+          const current = pending.get(id);
+          if (current) {
+            pending.delete(id);
+            current.cleanup?.();
+            current.reject(Object.assign(new Error('database operation cancelled'), { code: 'DB_OPERATION_CANCELLED' }));
+          }
+        };
+        signal.addEventListener('abort', cancel, { once: true });
+        cleanup = () => signal.removeEventListener('abort', cancel);
+      }
     });
   }
 
@@ -205,6 +237,7 @@ export function createDbClient(port: PortLike): DbClient {
       return results.map((r) => (r.row ? { ...r, row: rewrapRow(r.row) } : r));
     },
     proc: async (name, args) => request({ op: 'proc', name, args }),
+    plugin: async (pluginRequest, options) => request({ op: 'plugin', request: pluginRequest } as PluginReqBody, options?.signal),
     isOpen: () => !closed && !dead,
     close: async () => {
       if (closed || dead) return;
@@ -214,7 +247,7 @@ export function createDbClient(port: PortLike): DbClient {
     _markDead: (err: Error) => {
       dead = err;
       closed = true;
-      for (const [, p] of pending) p.reject(err);
+      for (const [, p] of pending) { p.cleanup?.(); p.reject(err); }
       pending.clear();
     },
   };
