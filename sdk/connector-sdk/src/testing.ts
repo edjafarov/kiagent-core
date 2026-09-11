@@ -98,6 +98,12 @@ export function scriptedFetch(
   const counts = new Map<string, number>();
 
   const fetchFn: NetFetch = async (rawUrl, init) => {
+    const signal = (init as { signal?: AbortSignal } | undefined)?.signal;
+    if (signal?.aborted) {
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      throw error;
+    }
     const urlStr = String(rawUrl);
     calls.push(urlStr);
     // Index-aligned with `calls` — `undefined` is pushed for an init-less GET

@@ -38,6 +38,8 @@ export interface RetryPolicy {
   retryAfterMinSec?: number; // default 1
   retryAfterMaxSec?: number; // default 60
   sleep?: (ms: number) => Promise<void>; // default real setTimeout
+  /** Caller cancellation is never retried. */
+  signal?: AbortSignal;
 }
 
 /** A backfill makes tens of thousands of consecutive calls, so transient
@@ -54,6 +56,38 @@ const realSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+
+function sleepWithSignal(
+  sleep: (ms: number) => Promise<void>,
+  ms: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (!signal) return sleep(ms);
+  if (signal.aborted) {
+    const error = new Error('The operation was aborted');
+    error.name = 'AbortError';
+    return Promise.reject(error);
+  }
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener('abort', abort);
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    sleep(ms).then(
+      () => {
+        signal.removeEventListener('abort', abort);
+        resolve();
+      },
+      (error) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
+}
 
 /** Clamped Retry-After milliseconds for a 429 (missing/non-numeric → default).
  *
@@ -91,11 +125,23 @@ export async function requestWithRetry(
   let transient = 0;
   let rateLimited = 0;
   for (;;) {
+    if (policy.signal?.aborted) {
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      throw error;
+    }
     let res: HostResponse;
     try {
       // eslint-disable-next-line no-await-in-loop
       res = await attempt();
     } catch (e) {
+      if (
+        policy.signal?.aborted ||
+        (e instanceof Error &&
+          (e.name === 'AbortError' || e.name === 'TimeoutError'))
+      ) {
+        throw e;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       if (transient >= maxTransient)
         throw new Error(
@@ -103,7 +149,11 @@ export async function requestWithRetry(
         );
       transient += 1;
       // eslint-disable-next-line no-await-in-loop
-      await sleep(backoffMs * 2 ** (transient - 1));
+      await sleepWithSignal(
+        sleep,
+        backoffMs * 2 ** (transient - 1),
+        policy.signal,
+      );
       continue;
     }
     if (res.status === 429) {
@@ -113,7 +163,7 @@ export async function requestWithRetry(
         );
       rateLimited += 1;
       // eslint-disable-next-line no-await-in-loop
-      await sleep(retryAfterMs(res.headers, policy));
+      await sleepWithSignal(sleep, retryAfterMs(res.headers, policy), policy.signal);
       continue;
     }
     if (res.status >= 500) {
@@ -123,7 +173,11 @@ export async function requestWithRetry(
         );
       transient += 1;
       // eslint-disable-next-line no-await-in-loop
-      await sleep(backoffMs * 2 ** (transient - 1));
+      await sleepWithSignal(
+        sleep,
+        backoffMs * 2 ** (transient - 1),
+        policy.signal,
+      );
       continue;
     }
     return res;

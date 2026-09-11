@@ -228,14 +228,16 @@ export async function assertAllowedUrl(
 export async function readBoundedBody(
   res: Response,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
   const limit = `${Math.floor(maxBytes / (1024 * 1024))} MiB`;
   const declared = res.headers.get('content-length');
   if (declared && Number(declared) > maxBytes) {
+    void res.body?.cancel().catch(() => {});
     throw new Error(`net.fetch: response exceeds the ${limit} limit`);
   }
   if (!res.body) {
-    const buf = await res.arrayBuffer();
+    const buf = await raceAbort(res.arrayBuffer(), signal);
     if (buf.byteLength > maxBytes) {
       throw new Error(`net.fetch: response exceeds the ${limit} limit`);
     }
@@ -244,20 +246,29 @@ export async function readBoundedBody(
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    // eslint-disable-next-line no-await-in-loop
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      total += value.byteLength;
-      if (total > maxBytes) {
-        // Stop the transfer too — without cancel() the stream keeps
-        // pulling bytes until GC even though we've already given up.
-        await reader.cancel();
-        throw new Error(`net.fetch: response exceeds the ${limit} limit`);
+  try {
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      let read: Promise<ReadableStreamReadResult<Uint8Array>>;
+      try {
+        read = reader.read();
+        const { done, value } = await raceAbort(read, signal);
+        if (done) break;
+        if (value) {
+          total += value.byteLength;
+          if (total > maxBytes) {
+            void reader.cancel().catch(() => {});
+            throw new Error(`net.fetch: response exceeds the ${limit} limit`);
+          }
+          chunks.push(value);
+        }
+      } catch (error) {
+        if (signal?.aborted) void reader.cancel().catch(() => {});
+        throw error;
       }
-      chunks.push(value);
     }
+  } finally {
+    reader.releaseLock();
   }
   const out = new Uint8Array(total);
   let offset = 0;
@@ -268,10 +279,94 @@ export async function readBoundedBody(
   return out;
 }
 
+function abortError(): Error {
+  const error = new Error('The operation was aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+function raceAbortWork<T>(
+  work: () => Promise<T>,
+  signal: AbortSignal | undefined,
+  onLate: (value: T) => void,
+): Promise<T> {
+  if (!signal) return work();
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      reject(abortError());
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    let promise: Promise<T>;
+    try {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      promise = work();
+    } catch (error) {
+      signal.removeEventListener('abort', onAbort);
+      settled = true;
+      reject(error);
+      return;
+    }
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        if (settled) onLate(value);
+        else {
+          settled = true;
+          resolve(value);
+        }
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      },
+    );
+  });
+}
+
+function cancelOnAbort(res: Response, signal?: AbortSignal): () => void {
+  if (!signal || !res.body) return () => {};
+  const cancel = () => {
+    void res.body?.cancel().catch(() => {});
+  };
+  signal.addEventListener('abort', cancel, { once: true });
+  return () => signal.removeEventListener('abort', cancel);
+}
+
 export interface NetFetchInit {
   method?: string;
   headers?: Record<string, string>;
   body?: string | Uint8Array;
+  signal?: AbortSignal;
 }
 
 export interface NetFetchResult {
@@ -311,19 +406,30 @@ export function createNetFetch(options: NetFetchOptions = {}) {
     init?: unknown,
   ): Promise<NetFetchResult> {
     const i = (init ?? {}) as NetFetchInit;
+    const signal = i.signal;
+    if (signal?.aborted) throw abortError();
     let target = String(url);
     let { method, body } = i;
     let headers = { ...(i.headers ?? {}) };
-    const { origin } = await assertAllowedUrl(target, lookup);
+    const { origin } = await raceAbort(
+      assertAllowedUrl(target, lookup),
+      signal,
+    );
 
     for (let hop = 0; ; hop += 1) {
       // eslint-disable-next-line no-await-in-loop
-      const res = await fetchImpl(target, {
-        method,
-        headers,
-        body: body as BodyInit | undefined,
-        redirect: 'manual',
-      });
+      const res = await raceAbortWork(
+        () =>
+          fetchImpl(target, {
+            method,
+            headers,
+            body: body as BodyInit | undefined,
+            redirect: 'manual',
+            signal,
+          }),
+        signal,
+        (late) => void late.body?.cancel().catch(() => {}),
+      );
 
       const location = res.headers.get('location');
       if (!REDIRECT_STATUS.has(res.status) || !location) {
@@ -332,21 +438,30 @@ export function createNetFetch(options: NetFetchOptions = {}) {
           statusText: res.statusText,
           headers: Object.fromEntries(res.headers.entries()),
           // eslint-disable-next-line no-await-in-loop
-          body: await readBoundedBody(res, maxBytes),
+          body: await readBoundedBody(res, maxBytes, signal),
         };
       }
 
       if (hop >= maxRedirects) {
         // eslint-disable-next-line no-await-in-loop
-        await res.body?.cancel();
+        void res.body?.cancel().catch(() => {});
         throw new NetDestinationError(
           `net.fetch: too many redirects (over ${maxRedirects}) starting at ${origin}`,
         );
       }
 
-      const next = new URL(location, target);
-      // eslint-disable-next-line no-await-in-loop
-      const parsed = await assertAllowedUrl(next.toString(), lookup);
+      const removeCancel = cancelOnAbort(res, signal);
+      let parsed: URL;
+      try {
+        const next = new URL(location, target);
+        parsed = await raceAbort(
+          assertAllowedUrl(next.toString(), lookup),
+          signal,
+        );
+      } finally {
+        removeCancel();
+        void res.body?.cancel().catch(() => {});
+      }
       if (parsed.origin !== origin) {
         headers = Object.fromEntries(
           Object.entries(headers).filter(
@@ -364,7 +479,6 @@ export function createNetFetch(options: NetFetchOptions = {}) {
       }
       target = parsed.toString();
       // eslint-disable-next-line no-await-in-loop
-      await res.body?.cancel();
     }
   };
 }
