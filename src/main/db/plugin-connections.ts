@@ -38,6 +38,7 @@ export async function openPluginConnection(filename: string, options: PluginConn
   const db = openSqlite(filename);
   const authorizer = createPluginAuthorizer(options);
   let inTransaction = false;
+  let closed = false;
   db.setAuthorizer?.(authorizer);
   const prepare = (sql: string) => { (authorizer as typeof authorizer & { reset?: () => void }).reset?.(); rejectPrivateSchema(sql); return db.prepare(sqlFor(options, sql)); };
   const control = (sql: string): void => {
@@ -50,10 +51,16 @@ export async function openPluginConnection(filename: string, options: PluginConn
     query: async <Row>(sql: string, params = []) => prepare(sql).all(...params.map(value)).map(normalizeRow) as Row[],
     batch: async (steps) => { const nested = inTransaction; if (!nested) { control('BEGIN'); inTransaction = true; } try { const out: unknown[][] = []; for (const step of steps) { const stmt = prepare(step.sql); out.push(step.mode === 'query' ? stmt.all(...(step.params ?? []).map(value)).map(normalizeRow) : [stmt.run(...(step.params ?? []).map(value))]); } if (!nested) { control('COMMIT'); inTransaction = false; } return out; } catch (e) { if (!nested) { try { control('ROLLBACK'); inTransaction = false; } catch {} } throw e; } },
     identifier: (name) => pluginIdentifier(options.pluginId, name),
-    close: async () => db.close(),
+    close: async () => { if (closed) return; closed = true; db.close(); },
     begin: async () => { control('BEGIN'); inTransaction = true; },
     commit: async () => { control('COMMIT'); inTransaction = false; },
     rollback: async () => { control('ROLLBACK'); inTransaction = false; },
-    schemaExec: async (sql) => { if (/\b(?:sqlite_master|sqlite_schema)\b/i.test(sql)) throw Object.assign(new Error('schema metadata access is prohibited'), { code: 'PLUGIN_SQL_UNAUTHORIZED' }); const formatted = sqlFor(options, sql); (authorizer as typeof authorizer & { setSchemaMode: (v: boolean) => void }).setSchemaMode(true); try { db.exec(formatted); } finally { (authorizer as typeof authorizer & { setSchemaMode: (v: boolean) => void }).setSchemaMode(false); } },
+    schemaExec: async (sql) => {
+      if (inTransaction) throw Object.assign(new Error('schema changes require no active plugin transaction'), { code: 'PLUGIN_SQL_SCHEMA_IN_TRANSACTION' });
+      if (/\b(?:sqlite_master|sqlite_schema)\b/i.test(sql)) throw Object.assign(new Error('schema metadata access is prohibited'), { code: 'PLUGIN_SQL_UNAUTHORIZED' });
+      const formatted = sqlFor(options, sql);
+      (authorizer as typeof authorizer & { setSchemaMode: (v: boolean) => void }).setSchemaMode(true);
+      try { db.exec(formatted); } finally { (authorizer as typeof authorizer & { setSchemaMode: (v: boolean) => void }).setSchemaMode(false); }
+    },
   };
 }

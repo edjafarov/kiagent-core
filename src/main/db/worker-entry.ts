@@ -16,7 +16,7 @@ import { openDb } from './app-db';
 import { attachDbHost } from './bridge';
 import { createDbCoordinator } from './coordinator';
 import { openPluginConnection } from './plugin-connections';
-import { createPluginOperationHandler, type PluginDbRequest } from './plugin-operations';
+import { closePluginConnectionForOwner, createPluginOperationHandler, type PluginDbRequest } from './plugin-operations';
 
 if (!parentPort) {
   throw new Error('db worker-entry must run inside a worker thread');
@@ -35,13 +35,9 @@ const { dbPath } = workerData as { dbPath: string };
       now: () => new Date().toISOString(),
     });
     const pluginConnections = new Map<string, Awaited<ReturnType<typeof openPluginConnection>>>();
-    const coordinator = createDbCoordinator({ onOwnerFailure: async (owner) => {
-      if (owner.kind !== 'plugin') return;
-      const key = owner.handle ?? owner.extensionId;
-      const connection = pluginConnections.get(key);
-      pluginConnections.delete(key);
-      try { await connection?.close(); } catch { /* preserve the rollback failure */ }
-    } });
+    const coordinator = createDbCoordinator({
+      onOwnerFailure: (owner) => closePluginConnectionForOwner(owner, pluginConnections),
+    });
     const pluginHandler = createPluginOperationHandler(coordinator, pluginConnections);
     attachDbHost(
       parentPort!,

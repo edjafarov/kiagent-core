@@ -28,3 +28,13 @@ RED command:
 Result: **FAIL**, 1 expected regression and 3 passing tests. The lease-expiry close regression passes. The deferred-FK regression reaches the real COMMIT failure and then fails because a subsequent fresh transaction returns `ERR_SQLITE_ERROR`; the current native connection remains active after the coordinator has released ownership. This is the corrected source explanation from the round-4 brief: the existing `control(...); inTransaction = false` sequence does not clear the JS flag when `control` throws. The unresolved failure is coordinator/SQLite cleanup and admission ordering after COMMIT rejection, not merely a JS flag toggle.
 
 No production implementation changes were made in this round. Typecheck and GREEN runs are intentionally deferred to the implementation worker after the RED slot is released.
+
+## Round 4 implementation handoff
+
+Production changes prepared without running tests (the GREEN slot has not been granted):
+
+- Coordinator ownership remains active while failed COMMIT/BEGIN/release/expiry cleanup runs. A failed explicit finish invokes the transaction rollback callback before foreign work is pumped; rollback failure poisons the owner and invokes the owner close callback before admission resumes.
+- Added the shared `closePluginConnectionForOwner` cleanup helper and wired the worker to remove and close the actual mapped native connection. Plugin connection close is idempotent.
+- `schemaExec` now rejects while an explicit plugin transaction is active.
+
+The prior RED test assertion must accept the repaired successful fresh transaction outcome (or the terminal poisoned/removed outcome when rollback itself fails) during the next GREEN slot. No test, typecheck, install, rebuild, live-profile, stash, or registry work was run in this implementation handoff.

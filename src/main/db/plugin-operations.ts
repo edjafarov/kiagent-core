@@ -11,6 +11,20 @@ export type PluginDbRequest =
   | { op: 'release'; owner: DbOwner }
   | { op: 'diagnostics' };
 
+/** Remove and close a failed plugin handle before the coordinator admits work
+ * belonging to another owner. Closing the native handle is what releases any
+ * transaction that could not be rolled back. */
+export async function closePluginConnectionForOwner(
+  owner: DbOwner,
+  connections: Map<string, PluginConnection>,
+): Promise<void> {
+  if (owner.kind !== 'plugin') return;
+  const key = owner.handle ?? owner.extensionId;
+  const connection = connections.get(key);
+  connections.delete(key);
+  try { await connection?.close(); } catch { /* preserve the original failure */ }
+}
+
 export function createPluginOperationHandler(coordinator: DbCoordinator, connections: Map<string, PluginConnection>) {
   return async (request: PluginDbRequest, signal?: AbortSignal): Promise<unknown> => {
     if (request.op === 'diagnostics') return coordinator.metrics();

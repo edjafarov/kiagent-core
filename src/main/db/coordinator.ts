@@ -32,6 +32,29 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
   let closed = false;
   let pumping = false;
 
+  const ownerKey = (owner: DbOwner): string => owner.kind === 'plugin'
+    ? owner.handle ?? owner.extensionId
+    : owner.handle ?? 'core';
+
+  const poisonOwner = async (owner: DbOwner): Promise<void> => {
+    failedOwners.add(ownerKey(owner));
+    try { await options.onOwnerFailure?.(owner); } catch { /* cleanup must not strand the queue */ }
+  };
+
+  const clearActive = (target: Active): void => {
+    if (active !== target) return;
+    if (target.timer) clearTimeout(target.timer);
+    active = undefined;
+  };
+
+  const rollbackActive = async (target: Active): Promise<void> => {
+    try {
+      await target.rollback?.();
+    } catch {
+      await poisonOwner(target.owner);
+    }
+  };
+
   const pump = async (): Promise<void> => {
     if (pumping) return;
     pumping = true;
@@ -40,21 +63,11 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
         if (closed) break;
         if (active && Date.now() > active.expires) {
           const expired = active;
-          active = undefined;
           for (let i = queue.length - 1; i >= 0; i--) {
             if (queue[i].token === expired.token) queue.splice(i, 1)[0].reject(error('transaction lease expired', 'DB_TX_EXPIRED'));
           }
-        if (expired.rollback) {
-          try {
-            await expired.rollback();
-          } catch {
-            const key = expired.owner.kind === 'plugin'
-              ? expired.owner.handle ?? expired.owner.extensionId
-              : expired.owner.handle ?? 'core';
-            failedOwners.add(key);
-            await options.onOwnerFailure?.(expired.owner);
-          }
-        }
+          await rollbackActive(expired);
+          clearActive(expired);
         }
         const index = queue.findIndex((job) => !active || (job.token === active.token && sameOwner(job.owner, active.owner)));
         if (index < 0) break;
@@ -67,8 +80,7 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
 
   const enqueue = <T>(owner: DbOwner, token: TxToken | undefined, work: () => Promise<T> | T, signal?: AbortSignal): Promise<T> => {
     if (closed) return Promise.reject(error('database coordinator is closed', 'DB_COORDINATOR_CLOSED'));
-    const ownerKey = owner.kind === 'plugin' ? owner.handle ?? owner.extensionId : owner.handle ?? 'core';
-    if (failedOwners.has(ownerKey)) return Promise.reject(error('database owner is unusable after rollback failure', 'DB_OWNER_POISONED'));
+    if (failedOwners.has(ownerKey(owner))) return Promise.reject(error('database owner is unusable after rollback failure', 'DB_OWNER_POISONED'));
     if (token && (!active || active.token !== token || !sameOwner(owner, active.owner))) return Promise.reject(error('invalid or foreign transaction token', 'DB_TX_TOKEN_INVALID'));
     return new Promise<T>((resolve, reject) => {
       const job = { owner, token, work, signal, resolve: resolve as (v: unknown) => void, reject } as Job<T>;
@@ -92,23 +104,59 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
       pendingBegin = true;
       const token = randomUUID();
       try { await enqueue(owner, undefined, async () => {
-        active = { owner, token, rollback, expires: Date.now() + leaseMs };
-        active.timer = setTimeout(() => { void pump(); }, leaseMs + 1);
-        active.timer.unref?.();
-        await work();
+        const started = active = { owner, token, rollback, expires: Date.now() + leaseMs };
+        started.timer = setTimeout(() => { void pump(); }, leaseMs + 1);
+        started.timer.unref?.();
+        try {
+          await work();
+        } catch (e) {
+          await rollbackActive(started);
+          clearActive(started);
+          throw e;
+        }
         return undefined;
       }); return token; } finally { pendingBegin = false; }
     },
     finish: async (owner, token, work) => {
       if (!active || active.token !== token || !sameOwner(owner, active.owner)) return Promise.reject(error('invalid or foreign transaction token', 'DB_TX_TOKEN_INVALID'));
-      try { return await enqueue(owner, token, work); } finally { if (active?.timer) clearTimeout(active.timer); active = undefined; void pump(); }
+      const finished = active;
+      try {
+        return await enqueue(owner, token, work);
+      } catch (e) {
+        // A deferred-FK COMMIT can fail while SQLite keeps the native
+        // transaction open. Repair it before releasing admission, preserving
+        // the original COMMIT error for the caller.
+        if (active === finished) await rollbackActive(finished);
+        throw e;
+      } finally {
+        clearActive(finished);
+        void pump();
+      }
     },
     release: async (owner) => {
-      if (active && sameOwner(owner, active.owner)) { const rollback = active.rollback; const key = owner.kind === 'plugin' ? owner.handle ?? owner.extensionId : owner.handle ?? 'core'; if (active.timer) clearTimeout(active.timer); active = undefined; if (rollback) { try { await rollback(); } catch (e) { failedOwners.add(key); throw e; } } }
+      let rollbackError: unknown;
+      if (active && sameOwner(owner, active.owner)) {
+        const released = active;
+        if (released.timer) clearTimeout(released.timer);
+        try { await released.rollback?.(); } catch (e) { rollbackError = e; await poisonOwner(owner); }
+        clearActive(released);
+      }
       for (let i = queue.length - 1; i >= 0; i--) if (sameOwner(queue[i].owner, owner)) queue.splice(i, 1).forEach((job) => job.reject(error('database owner released', 'DB_OWNER_RELEASED')));
       await pump();
+      if (rollbackError) throw rollbackError;
     },
-    close: async () => { closed = true; const rollback = active?.rollback; if (active?.timer) clearTimeout(active.timer); active = undefined; if (rollback) await rollback(); while (queue.length) queue.shift()!.reject(error('database coordinator is closed', 'DB_COORDINATOR_CLOSED')); },
+    close: async () => {
+      closed = true;
+      const closing = active;
+      let rollbackError: unknown;
+      if (closing) {
+        if (closing.timer) clearTimeout(closing.timer);
+        try { await closing.rollback?.(); } catch (e) { rollbackError = e; await poisonOwner(closing.owner); }
+        clearActive(closing);
+      }
+      while (queue.length) queue.shift()!.reject(error('database coordinator is closed', 'DB_COORDINATOR_CLOSED'));
+      if (rollbackError) throw rollbackError;
+    },
     metrics: () => ({ queued: queue.length, active: !!active, owner: active?.owner }),
   };
 }
