@@ -34,6 +34,29 @@ function boot(mod: unknown, extraDeps: { mainApi?: unknown } = {}) {
 }
 
 describe('runExtensionHost — bootstrap/activate', () => {
+  it('forbids log from a transaction callback and rolls back its token', async () => {
+    const calls: string[] = [];
+    const mod = {
+      async activate(host: { db: { transaction<T>(work: (tx: unknown) => Promise<T>): Promise<T> }; log(level: string, msg: string): void }) {
+        await expect(
+          host.db.transaction(async () => host.log('info', 'forbidden')),
+        ).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
+        return {};
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (_ns, method) => {
+      calls.push(method);
+      if (method === 'begin') return 'tx-1';
+      if (method === 'rollback') return undefined;
+      throw new Error(`unexpected ${method}`);
+    });
+    const activated = waitFor('activated');
+    mainEp.post({ ...BOOT, caps: [...BOOT.caps, 'db'] as Cap[] });
+    await activated;
+    expect(calls).toEqual(['begin', 'rollback']);
+  });
+
   it('requires the entry, activates, and reports contribution descriptors', async () => {
     const activate = jest.fn(async () => ({
       sources: [],

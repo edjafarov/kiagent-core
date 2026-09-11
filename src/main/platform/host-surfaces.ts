@@ -274,11 +274,11 @@ export function buildSurfaces(deps: SurfaceDeps): {
         });
       },
       migrate: async (module, version, statements) => {
-        void module; void version;
-        for (const statement of statements as string[]) {
-          assertAllowedSql(statement);
-          openDb().exec(statement);
-        }
+        void module; void version; void statements;
+        throw Object.assign(
+          new Error('migration is not registered with the platform'),
+          { code: 'PLUGIN_MIGRATION_NOT_REGISTERED' },
+        );
       },
     },
     ui: {
@@ -364,7 +364,7 @@ export function buildSurfaces(deps: SurfaceDeps): {
 
   return {
     surfaces,
-    close() {
+    async close() {
       for (const [token, tx] of transactions) {
         try { tx.db.exec('ROLLBACK'); } catch { /* already closed */ }
         transactions.delete(token);

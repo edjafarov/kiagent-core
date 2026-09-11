@@ -55,7 +55,7 @@ export interface HostDeps {
     deliverEvent: (name: string, payload: unknown, meta: EventMeta) => void,
   ): {
     surfaces: Surfaces;
-    close(): void;
+    close(): void | Promise<void>;
   };
   logSink: LogSink;
   onStatus(status: ExtensionStatus, error?: string): void;
@@ -72,7 +72,8 @@ export interface HostDeps {
 interface Incarnation {
   endpoint: ReturnType<typeof createRpcEndpoint>;
   transport: HostTransport;
-  cleanup(): void;
+  cleanup(): Promise<void>;
+  cleanupDone?: Promise<void>;
 }
 
 export function createExtensionHost(deps: HostDeps): {
@@ -163,7 +164,7 @@ export function createExtensionHost(deps: HostDeps): {
     let unregister: (() => void) | null = null;
     let exited = false;
     let abortPending: ((e: Error) => void) | null = null;
-    let cleanup: (() => void) | null = null;
+    let cleanup: (() => Promise<void>) | null = null;
     let incarnation: Incarnation | null = null;
 
     try {
@@ -190,10 +191,10 @@ export function createExtensionHost(deps: HostDeps): {
           : router.dispatch(ns, method, args, context),
       );
 
-      cleanup = () => {
+      cleanup = async () => {
         proxySet.abortAll('extension process exited');
         proxySet.dispose();
-        surfacesHandle.close();
+        await surfacesHandle.close();
         endpoint!.dispose('extension process exited');
         unregister?.();
         unregister = null;
@@ -206,7 +207,7 @@ export function createExtensionHost(deps: HostDeps): {
         exited = true;
         abortPending?.(new Error('extension process exited'));
         abortPending = null;
-        cleanup?.();
+        if (incarnation) incarnation.cleanupDone = cleanup?.() ?? Promise.resolve();
         if (current === incarnation) current = null;
         if (stopping || stopped) return;
         // Crash path: this incarnation exited unexpectedly, on its own.
@@ -290,7 +291,7 @@ export function createExtensionHost(deps: HostDeps): {
       // the sole path that settles this incarnation's outcome.
       exited = true;
       abortPending = null;
-      cleanup?.();
+      await cleanup?.();
       transport?.kill();
       if (incarnation && current === incarnation) current = null;
       if (stopping) {
@@ -332,6 +333,7 @@ export function createExtensionHost(deps: HostDeps): {
         inc.endpoint.post({ kind: 'deactivate' } satisfies MainToChild);
         const timer = setTimeout(() => inc.transport.kill(), killAfterMs);
         await exited;
+        await inc.cleanupDone;
         clearTimeout(timer);
       }
       stopping = false;

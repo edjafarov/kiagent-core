@@ -100,6 +100,31 @@ const hangingModule = {
 };
 
 describe('createExtensionHost', () => {
+  it('awaits async surface close during stop before returning', async () => {
+    let release!: () => void;
+    let closed = false;
+    const closePromise = new Promise<void>((resolve) => {
+      release = () => {
+        closed = true;
+        resolve();
+      };
+    });
+    const { deps } = makeDeps(okModule, {
+      makeSurfaces: () => ({
+        surfaces: { net: { fetch: async () => ({ status: 200 }) } },
+        close: () => closePromise,
+      }),
+    });
+    const host = createExtensionHost(deps as never);
+    await host.start();
+    const stopping = host.stop();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(closed).toBe(false);
+    release();
+    await stopping;
+    expect(closed).toBe(true);
+  });
+
   it('start() activates, registers contributions, reports status transitions', async () => {
     const { deps, statuses, registered } = makeDeps(okModule);
     const host = createExtensionHost(deps as never);

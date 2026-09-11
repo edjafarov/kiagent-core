@@ -79,7 +79,7 @@ function buildRemoteHost(
       void callHost(endpoint, 'base', 'log', [level, msg]).catch(() => {});
     },
   };
-  if (boot.caps.includes('db')) host.db = createPluginDbProxy(endpoint);
+  if (boot.caps.includes('db')) host.db = createPluginDbProxy(endpoint, boot.extensionId);
   for (const cap of boot.caps) {
     if (cap === 'events') {
       host.events = {

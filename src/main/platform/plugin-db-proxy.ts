@@ -1,7 +1,8 @@
 import type { PluginDb, PluginDbParams, PluginDbSession, PluginDbStep } from '@shared/plugin-db';
 
 import type { RpcEndpoint } from './transport';
-import { hostCallContext, type HostCallContext } from './host-call-context';
+import { HostCallInTransactionError, hostCallContext, type HostCallContext } from './host-call-context';
+import { pluginIdentifier } from '@shared/plugin-sql';
 
 function callDb(
   endpoint: RpcEndpoint,
@@ -28,26 +29,27 @@ function txSession(endpoint: RpcEndpoint, token: string): PluginDbSession {
 
 export function createPluginDbProxy(
   endpoint: RpcEndpoint,
+  pluginId: string,
   context: HostCallContext = hostCallContext,
 ): PluginDb {
   const assertOutside = () => {
-    if (context.current()) context.assertAllowed('db');
+    if (context.current()) throw new HostCallInTransactionError('db');
   };
   return {
     identifier(name) {
       if (!/^[a-z][a-z0-9_]*$/.test(name))
         throw new Error('invalid logical identifier');
-      return name;
+      return pluginIdentifier(pluginId, name);
     },
-    exec(sql, params) {
+    async exec(sql, params) {
       assertOutside();
-      return callDb(endpoint, 'exec', [sql, params]) as Promise<void>;
+      await callDb(endpoint, 'exec', [sql, params]);
     },
-    query<Row = Record<string, unknown>>(sql: string, params?: PluginDbParams) {
+    async query<Row = Record<string, unknown>>(sql: string, params?: PluginDbParams) {
       assertOutside();
       return callDb(endpoint, 'query', [sql, params]) as Promise<Row[]>;
     },
-    batch(steps) {
+    async batch(steps) {
       assertOutside();
       return callDb(endpoint, 'batch', [steps]) as Promise<unknown[][]>;
     },
@@ -56,7 +58,7 @@ export function createPluginDbProxy(
       await callDb(endpoint, 'migrate', [module, version, statements]);
     },
     async transaction<T>(work: (tx: PluginDbSession) => Promise<T>) {
-      if (context.current()) context.assertAllowed('db');
+      if (context.current()) throw new HostCallInTransactionError('db');
       const token = (await callDb(endpoint, 'begin', [])) as string;
       const tx = txSession(endpoint, token);
       try {
