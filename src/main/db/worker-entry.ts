@@ -14,6 +14,9 @@ import {
 } from '@main/core/store/write-tx';
 import { openDb } from './app-db';
 import { attachDbHost } from './bridge';
+import { createDbCoordinator } from './coordinator';
+import { openPluginConnection } from './plugin-connections';
+import { createPluginOperationHandler, type PluginDbRequest } from './plugin-operations';
 
 if (!parentPort) {
   throw new Error('db worker-entry must run inside a worker thread');
@@ -31,6 +34,8 @@ const { dbPath } = workerData as { dbPath: string };
       detectLanguages,
       now: () => new Date().toISOString(),
     });
+    const pluginConnections = new Map<string, Awaited<ReturnType<typeof openPluginConnection>>>();
+    const pluginHandler = createPluginOperationHandler(createDbCoordinator(), pluginConnections);
     attachDbHost(
       parentPort!,
       db,
@@ -72,6 +77,22 @@ const { dbPath } = workerData as { dbPath: string };
         rebuildSearchIndex: () => {
           repopulateSearchIndex(db._conn!);
           return null;
+        },
+      },
+      {
+        plugin: async (request: PluginDbRequest) => {
+          if (request.op === 'open') {
+            if (request.owner.kind !== 'plugin') throw new Error('plugin owner required');
+            const connection = await openPluginConnection(dbPath, {
+              pluginId: request.pluginId,
+              tables: request.tables,
+              views: request.views,
+              triggers: request.triggers,
+            });
+            pluginConnections.set(request.owner.handle ?? request.owner.extensionId, connection);
+            return { opened: true };
+          }
+          return pluginHandler(request);
         },
       },
     );

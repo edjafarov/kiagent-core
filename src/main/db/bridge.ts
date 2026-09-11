@@ -5,6 +5,7 @@ import type {
   BatchStep,
   BatchStepResult,
 } from './app-db';
+import type { PluginDbRequest } from './plugin-operations';
 
 /**
  * Request/response protocol between the main process (client) and the worker
@@ -25,7 +26,8 @@ type ReqBody =
     }
   | { op: 'proc'; name: string; args: unknown }
   | { op: 'close' };
-type Req = ReqBody & { id: number };
+type PluginReqBody = { op: 'plugin'; request: PluginDbRequest };
+type Req = (ReqBody | PluginReqBody) & { id: number };
 
 /** A host-registered procedure: runs synchronously inside the worker (it owns
  *  its own `db.transaction()`), receives the structured-clone-transferred args,
@@ -96,6 +98,7 @@ export function attachDbHost(
   db: AppDb,
   onClosed?: () => void,
   procedures?: Record<string, HostProcedure>,
+  options?: { plugin?: (request: PluginDbRequest) => Promise<unknown> | unknown },
 ): void {
   port.on('message', async (raw: unknown) => {
     const req = raw as Req;
@@ -123,6 +126,9 @@ export function attachDbHost(
         value = await proc(req.args);
       } else if (req.op === 'close') {
         await db.close();
+      } else if (req.op === 'plugin') {
+        if (!options?.plugin) throw new Error('plugin database service unavailable');
+        value = await options.plugin((req as Req & PluginReqBody).request);
       }
       port.postMessage({ id: req.id, ok: true, value } satisfies Res);
       if (req.op === 'close') onClosed?.();
@@ -167,7 +173,7 @@ export function createDbClient(port: PortLike): DbClient {
     }
   });
 
-  function request(msg: ReqBody): Promise<unknown> {
+  function request(msg: ReqBody | PluginReqBody): Promise<unknown> {
     if (dead) return Promise.reject(dead);
     const id = nextId;
     nextId += 1;
@@ -205,6 +211,7 @@ export function createDbClient(port: PortLike): DbClient {
       return results.map((r) => (r.row ? { ...r, row: rewrapRow(r.row) } : r));
     },
     proc: async (name, args) => request({ op: 'proc', name, args }),
+    plugin: async (pluginRequest) => request({ op: 'plugin', request: pluginRequest } as PluginReqBody),
     isOpen: () => !closed && !dead,
     close: async () => {
       if (closed || dead) return;
