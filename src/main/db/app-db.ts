@@ -51,7 +51,7 @@ export interface AppDb {
    *  static `batch()`. */
   proc?(name: string, args: unknown): Promise<unknown>;
   /** Host-internal authorized plugin request seam. Never exposed directly to plugin code. */
-  plugin?(request: PluginDbRequest): Promise<unknown>;
+  plugin?(request: PluginDbRequest, options?: { signal?: AbortSignal }): Promise<unknown>;
 }
 
 function coerceParam(v: AppDbParam): string | number | bigint | Buffer | null {

@@ -12,6 +12,7 @@ export interface PluginConnection {
   begin(): Promise<void>;
   commit(): Promise<void>;
   rollback(): Promise<void>;
+  schemaExec?(sql: string): Promise<void>;
 }
 function value(v: unknown): unknown {
   if (v === undefined || (typeof v === 'number' && !Number.isFinite(v))) throw new TypeError('unsupported SQLite parameter');
@@ -29,21 +30,24 @@ function normalizeRow(row: Record<string, unknown>): Record<string, unknown> {
 function sqlFor(options: PluginConnectionOptions, sql: string): string { return formatPluginSql(options.pluginId, sql, [...options.tables, ...(options.views ?? []), ...(options.triggers ?? [])]); }
 function rejectPrivateSchema(sql: string): void {
   if (/^\s*(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql)) throw Object.assign(new Error('transaction control is coordinator-owned'), { code: 'PLUGIN_SQL_TRANSACTION_CONTROL' });
+  if (/^\s*(?:CREATE|ALTER|DROP|REINDEX|VACUUM)\b/i.test(sql)) throw Object.assign(new Error('schema changes require host registration'), { code: 'PLUGIN_SQL_DDL_FORBIDDEN' });
   if (/\b(?:sqlite_master|sqlite_schema|pragma\s+database_list|attach\b|detach\b)/i.test(sql)) throw Object.assign(new Error('SQLite schema and attachment access is prohibited'), { code: 'PLUGIN_SQL_UNAUTHORIZED' });
 }
 export async function openPluginConnection(filename: string, options: PluginConnectionOptions): Promise<PluginConnection> {
   const db = openSqlite(filename);
   const authorizer = createPluginAuthorizer(options);
+  let privateTx = false;
   db.setAuthorizer?.(authorizer);
   const prepare = (sql: string) => { (authorizer as typeof authorizer & { reset?: () => void }).reset?.(); rejectPrivateSchema(sql); return db.prepare(sqlFor(options, sql)); };
   return {
     exec: async (sql, params = []) => { const stmt = prepare(sql); stmt.run(...params.map(value)); },
     query: async <Row>(sql: string, params = []) => prepare(sql).all(...params.map(value)).map(normalizeRow) as Row[],
-    batch: async (steps) => { db.exec('BEGIN'); try { const out: unknown[][] = []; for (const step of steps) { const stmt = prepare(step.sql); out.push(step.mode === 'query' ? stmt.all(...(step.params ?? []).map(value)).map(normalizeRow) : [stmt.run(...(step.params ?? []).map(value))]); } db.exec('COMMIT'); return out; } catch (e) { try { db.exec('ROLLBACK'); } catch {} throw e; } },
+    batch: async (steps) => { const nested = privateTx; if (!nested) { privateTx = true; (authorizer as typeof authorizer & { setPrivateTransaction: (v: boolean) => void }).setPrivateTransaction(true); db.exec('BEGIN'); } try { const out: unknown[][] = []; for (const step of steps) { const stmt = prepare(step.sql); out.push(step.mode === 'query' ? stmt.all(...(step.params ?? []).map(value)).map(normalizeRow) : [stmt.run(...(step.params ?? []).map(value))]); } if (!nested) db.exec('COMMIT'); return out; } catch (e) { if (!nested) { try { db.exec('ROLLBACK'); } catch {} } throw e; } finally { if (!nested) { privateTx = false; (authorizer as typeof authorizer & { setPrivateTransaction: (v: boolean) => void }).setPrivateTransaction(false); } } },
     identifier: (name) => pluginIdentifier(options.pluginId, name),
     close: async () => db.close(),
-    begin: async () => db.exec('BEGIN'),
-    commit: async () => db.exec('COMMIT'),
-    rollback: async () => db.exec('ROLLBACK'),
+    begin: async () => { privateTx = true; (authorizer as typeof authorizer & { setPrivateTransaction: (v: boolean) => void }).setPrivateTransaction(true); try { db.exec('BEGIN'); } catch (e) { privateTx = false; (authorizer as typeof authorizer & { setPrivateTransaction: (v: boolean) => void }).setPrivateTransaction(false); throw e; } },
+    commit: async () => { try { db.exec('COMMIT'); } finally { privateTx = false; (authorizer as typeof authorizer & { setPrivateTransaction: (v: boolean) => void }).setPrivateTransaction(false); } },
+    rollback: async () => { try { db.exec('ROLLBACK'); } finally { privateTx = false; (authorizer as typeof authorizer & { setPrivateTransaction: (v: boolean) => void }).setPrivateTransaction(false); } },
+    schemaExec: async (sql) => { db.exec(sql); },
   };
 }

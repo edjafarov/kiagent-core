@@ -27,6 +27,8 @@ export function createDbCoordinator(options: { leaseMs?: number } = {}): DbCoord
   const leaseMs = options.leaseMs ?? 30_000;
   const queue: Job<unknown>[] = [];
   let active: Active | undefined;
+  let pendingBegin = false;
+  const failedOwners = new Set<string>();
   let closed = false;
   let pumping = false;
 
@@ -42,7 +44,16 @@ export function createDbCoordinator(options: { leaseMs?: number } = {}): DbCoord
           for (let i = queue.length - 1; i >= 0; i--) {
             if (queue[i].token === expired.token) queue.splice(i, 1)[0].reject(error('transaction lease expired', 'DB_TX_EXPIRED'));
           }
-          if (expired.rollback) { try { await expired.rollback(); } catch { /* failed owner remains unusable until process restart */ } }
+        if (expired.rollback) {
+          try {
+            await expired.rollback();
+          } catch {
+            const key = expired.owner.kind === 'plugin'
+              ? expired.owner.handle ?? expired.owner.extensionId
+              : expired.owner.handle ?? 'core';
+            failedOwners.add(key);
+          }
+        }
         }
         const index = queue.findIndex((job) => !active || (job.token === active.token && sameOwner(job.owner, active.owner)));
         if (index < 0) break;
@@ -55,9 +66,20 @@ export function createDbCoordinator(options: { leaseMs?: number } = {}): DbCoord
 
   const enqueue = <T>(owner: DbOwner, token: TxToken | undefined, work: () => Promise<T> | T, signal?: AbortSignal): Promise<T> => {
     if (closed) return Promise.reject(error('database coordinator is closed', 'DB_COORDINATOR_CLOSED'));
+    const ownerKey = owner.kind === 'plugin' ? owner.handle ?? owner.extensionId : owner.handle ?? 'core';
+    if (failedOwners.has(ownerKey)) return Promise.reject(error('database owner is unusable after rollback failure', 'DB_OWNER_POISONED'));
     if (token && (!active || active.token !== token || !sameOwner(owner, active.owner))) return Promise.reject(error('invalid or foreign transaction token', 'DB_TX_TOKEN_INVALID'));
     return new Promise<T>((resolve, reject) => {
-      queue.push({ owner, token, work, signal, resolve: resolve as (v: unknown) => void, reject });
+      const job = { owner, token, work, signal, resolve: resolve as (v: unknown) => void, reject } as Job<T>;
+      if (signal) {
+        const cancel = () => {
+          const index = queue.indexOf(job as Job<unknown>);
+          if (index >= 0) { queue.splice(index, 1); reject(error('database operation cancelled', 'DB_OPERATION_CANCELLED')); }
+        };
+        if (signal.aborted) { reject(error('database operation cancelled', 'DB_OPERATION_CANCELLED')); return; }
+        signal.addEventListener('abort', cancel, { once: true });
+      }
+      queue.push(job as Job<unknown>);
       void pump();
     });
   };
@@ -65,23 +87,23 @@ export function createDbCoordinator(options: { leaseMs?: number } = {}): DbCoord
   return {
     run: enqueue,
     begin: async (owner, work, rollback) => {
-      if (active) return Promise.reject(error('database transaction already active', 'DB_TX_BUSY'));
+      if (active || pendingBegin) return Promise.reject(error('database transaction already active', 'DB_TX_BUSY'));
+      pendingBegin = true;
       const token = randomUUID();
-      await enqueue(owner, undefined, async () => {
+      try { await enqueue(owner, undefined, async () => {
         active = { owner, token, rollback, expires: Date.now() + leaseMs };
         active.timer = setTimeout(() => { void pump(); }, leaseMs + 1);
         active.timer.unref?.();
         await work();
         return undefined;
-      });
-      return token;
+      }); return token; } finally { pendingBegin = false; }
     },
     finish: async (owner, token, work) => {
       if (!active || active.token !== token || !sameOwner(owner, active.owner)) return Promise.reject(error('invalid or foreign transaction token', 'DB_TX_TOKEN_INVALID'));
       try { return await enqueue(owner, token, work); } finally { if (active?.timer) clearTimeout(active.timer); active = undefined; void pump(); }
     },
     release: async (owner) => {
-      if (active && sameOwner(owner, active.owner)) { const rollback = active.rollback; if (active.timer) clearTimeout(active.timer); active = undefined; if (rollback) await rollback(); }
+      if (active && sameOwner(owner, active.owner)) { const rollback = active.rollback; const key = owner.kind === 'plugin' ? owner.handle ?? owner.extensionId : owner.handle ?? 'core'; if (active.timer) clearTimeout(active.timer); active = undefined; if (rollback) { try { await rollback(); } catch (e) { failedOwners.add(key); throw e; } } }
       for (let i = queue.length - 1; i >= 0; i--) if (sameOwner(queue[i].owner, owner)) queue.splice(i, 1).forEach((job) => job.reject(error('database owner released', 'DB_OWNER_RELEASED')));
       await pump();
     },

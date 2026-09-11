@@ -28,7 +28,8 @@ type ReqBody =
   | { op: 'proc'; name: string; args: unknown }
   | { op: 'close' };
 type PluginReqBody = { op: 'plugin'; request: PluginDbRequest };
-type Req = (ReqBody | PluginReqBody) & { id: number };
+type CancelReqBody = { op: 'plugin-cancel'; requestId: number };
+type Req = (ReqBody | PluginReqBody | CancelReqBody) & { id: number };
 
 /** A host-registered procedure: runs synchronously inside the worker (it owns
  *  its own `db.transaction()`), receives the structured-clone-transferred args,
@@ -99,10 +100,13 @@ export function attachDbHost(
   db: AppDb,
   onClosed?: () => void,
   procedures?: Record<string, HostProcedure>,
-  options?: { plugin?: (request: PluginDbRequest) => Promise<unknown> | unknown; coordinator?: DbCoordinator; coreOwner?: DbOwner },
+  options?: { plugin?: (request: PluginDbRequest, signal?: AbortSignal) => Promise<unknown> | unknown; coordinator?: DbCoordinator; coreOwner?: DbOwner },
 ): void {
+  const pluginControllers = new Map<number, AbortController>();
+  const cancelledPluginRequests = new Set<number>();
   port.on('message', async (raw: unknown) => {
     const req = raw as Req;
+    if (req.op === 'plugin-cancel') { const controller = pluginControllers.get(req.requestId); if (controller) controller.abort(); else cancelledPluginRequests.add(req.requestId); return; }
     if (!req || typeof req.id !== 'number') return;
     try {
       let value: unknown;
@@ -131,7 +135,10 @@ export function attachDbHost(
         await db.close();
       } else if (req.op === 'plugin') {
         if (!options?.plugin) throw new Error('plugin database service unavailable');
-        value = await options.plugin((req as Req & PluginReqBody).request);
+        const controller = new AbortController();
+        pluginControllers.set(req.id, controller);
+        if (cancelledPluginRequests.delete(req.id)) controller.abort();
+        try { value = await options.plugin((req as Req & PluginReqBody).request, controller.signal); } finally { pluginControllers.delete(req.id); }
       }
       port.postMessage({ id: req.id, ok: true, value } satisfies Res);
       if (req.op === 'close') onClosed?.();
@@ -176,13 +183,17 @@ export function createDbClient(port: PortLike): DbClient {
     }
   });
 
-  function request(msg: ReqBody | PluginReqBody): Promise<unknown> {
+  function request(msg: ReqBody | PluginReqBody, signal?: AbortSignal): Promise<unknown> {
     if (dead) return Promise.reject(dead);
     const id = nextId;
     nextId += 1;
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject });
       port.postMessage({ ...msg, id });
+      if (signal) {
+        const cancel = () => port.postMessage({ op: 'plugin-cancel', requestId: id });
+        if (signal.aborted) cancel(); else signal.addEventListener('abort', cancel, { once: true });
+      }
     });
   }
 
@@ -214,7 +225,7 @@ export function createDbClient(port: PortLike): DbClient {
       return results.map((r) => (r.row ? { ...r, row: rewrapRow(r.row) } : r));
     },
     proc: async (name, args) => request({ op: 'proc', name, args }),
-    plugin: async (pluginRequest) => request({ op: 'plugin', request: pluginRequest } as PluginReqBody),
+    plugin: async (pluginRequest, options) => request({ op: 'plugin', request: pluginRequest } as PluginReqBody, options?.signal),
     isOpen: () => !closed && !dead,
     close: async () => {
       if (closed || dead) return;

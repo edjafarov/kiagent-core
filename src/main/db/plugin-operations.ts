@@ -12,22 +12,21 @@ export type PluginDbRequest =
   | { op: 'diagnostics' };
 
 export function createPluginOperationHandler(coordinator: DbCoordinator, connections: Map<string, PluginConnection>) {
-  return async (request: PluginDbRequest): Promise<unknown> => {
+  return async (request: PluginDbRequest, signal?: AbortSignal): Promise<unknown> => {
     if (request.op === 'diagnostics') return coordinator.metrics();
     if (request.op === 'register') throw Object.assign(new Error('plugin registration is host-owned'), { code: 'PLUGIN_REGISTRATION_HOST_ONLY' });
     const scoped = request as Extract<PluginDbRequest, { owner: DbOwner }>;
     if (scoped.op === 'release') {
-      await coordinator.release(scoped.owner);
       const key = scoped.owner.kind === 'plugin' ? (scoped.owner.handle ?? scoped.owner.extensionId) : 'core';
       const connection = connections.get(key);
-      if (connection) { await connection.close(); connections.delete(key); }
+      try { await coordinator.release(scoped.owner); } finally { if (connection) { await connection.close(); connections.delete(key); } }
       return;
     }
     const connection = connections.get(scoped.owner.kind === 'plugin' ? (scoped.owner.handle ?? scoped.owner.extensionId) : 'core');
     if (!connection) throw Object.assign(new Error('plugin database is not open'), { code: 'PLUGIN_DB_NOT_OPEN' });
-    if (scoped.op === 'exec') return coordinator.run(scoped.owner, scoped.token, () => connection.exec(scoped.sql!, scoped.params));
-    if (scoped.op === 'query') return coordinator.run(scoped.owner, scoped.token, () => connection.query(scoped.sql!, scoped.params));
-    if (scoped.op === 'batch') return coordinator.run(scoped.owner, scoped.token, () => connection.batch(scoped.steps ?? []));
+    if (scoped.op === 'exec') return coordinator.run(scoped.owner, scoped.token, () => connection.exec(scoped.sql!, scoped.params), signal);
+    if (scoped.op === 'query') return coordinator.run(scoped.owner, scoped.token, () => connection.query(scoped.sql!, scoped.params), signal);
+    if (scoped.op === 'batch') return coordinator.run(scoped.owner, scoped.token, () => connection.batch(scoped.steps ?? []), signal);
     if (scoped.op === 'begin') return coordinator.begin(scoped.owner, () => connection.begin(), () => connection.rollback());
     if (scoped.op === 'commit') return coordinator.finish(scoped.owner, scoped.token, () => connection.commit());
     if (scoped.op === 'rollback') return coordinator.finish(scoped.owner, scoped.token, () => connection.rollback());

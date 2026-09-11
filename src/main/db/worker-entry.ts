@@ -83,7 +83,7 @@ const { dbPath } = workerData as { dbPath: string };
       {
         coordinator,
         coreOwner: { kind: 'core', handle: 'core' },
-        plugin: async (request: PluginDbRequest) => {
+        plugin: async (request: PluginDbRequest, signal?: AbortSignal) => {
           if (request.op === 'open') {
             if (request.owner.kind !== 'plugin') throw new Error('plugin owner required');
             const connection = await openPluginConnection(dbPath, {
@@ -96,7 +96,7 @@ const { dbPath } = workerData as { dbPath: string };
             pluginConnections.set(request.owner.handle ?? request.owner.extensionId, connection);
             return { opened: true };
           }
-          return pluginHandler(request);
+          return pluginHandler(request, signal);
         },
       },
     );
