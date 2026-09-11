@@ -4,12 +4,12 @@ export interface PluginAuthorizerOptions { pluginId: string; tables: readonly st
 const denied = /^sqlite_/i;
 export function ownedNamespace(pluginId: string): string { return `p_${Buffer.from(pluginId, 'utf8').toString('hex')}__`; }
 export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
-  const owned = new Set(options.tables.map((n) => pluginIdentifier(options.pluginId, n).replaceAll('"', '')));
+  const owned = new Set([...options.tables, ...(options.indexes ?? [])].map((n) => pluginIdentifier(options.pluginId, n).replaceAll('"', '')));
   for (const n of options.views ?? []) owned.add(pluginIdentifier(options.pluginId, n).replaceAll('"', ''));
   for (const n of options.triggers ?? []) owned.add(pluginIdentifier(options.pluginId, n).replaceAll('"', ''));
   let schemaWrite = false;
   const allowedFunctions = new Set(['abs', 'coalesce', 'date', 'datetime', 'ifnull', 'json', 'json_array', 'json_extract', 'json_object', 'length', 'lower', 'max', 'min', 'nullif', 'printf', 'round', 'substr', 'sum', 'total', 'upper']);
-  return (...args: unknown[]): number => {
+  const authorizer = (...args: unknown[]): number => {
     const action = typeof args[0] === 'number' ? args[0] : -1;
     const table = typeof args[1] === 'string' ? args[1] : '';
     const db = typeof args[3] === 'string' ? args[3] : '';
@@ -31,4 +31,6 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
     if (table.startsWith(ownedNamespace(options.pluginId))) return owned.has(table) ? 0 : 1;
     return 1;
   };
+  (authorizer as typeof authorizer & { reset: () => void }).reset = () => { schemaWrite = false; };
+  return authorizer;
 }

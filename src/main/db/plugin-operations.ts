@@ -3,7 +3,7 @@ import type { PluginConnection } from './plugin-connections';
 
 export type PluginDbRequest =
   | { op: 'register'; owner?: never; pluginId?: string; tables?: string[] }
-  | { op: 'open'; owner: DbOwner; pluginId: string; tables: string[]; views?: string[]; triggers?: string[] }
+  | { op: 'open'; owner: DbOwner; pluginId: string; tables: string[]; indexes?: string[]; views?: string[]; triggers?: string[] }
   | { op: 'exec' | 'query' | 'batch'; owner: DbOwner; token?: TxToken; sql?: string; params?: unknown[]; steps?: readonly { sql: string; params?: unknown[]; mode?: 'exec' | 'query' }[] }
   | { op: 'begin'; owner: DbOwner }
   | { op: 'commit' | 'rollback'; owner: DbOwner; token: TxToken }

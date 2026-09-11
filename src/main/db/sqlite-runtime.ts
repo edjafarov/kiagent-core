@@ -20,7 +20,11 @@ export function openSqlite(path: string): SqliteDatabase {
   }
   if (!sqlite.DatabaseSync) throw Object.assign(new Error('DatabaseSync is unavailable'), { code: 'PLUGIN_SQLITE_UNSUPPORTED' });
   const db = new sqlite.DatabaseSync(path, { readBigInts: true });
+  if (typeof db.setAuthorizer !== 'function' || typeof db.enableDefensive !== 'function') {
+    db.close();
+    throw Object.assign(new Error('node:sqlite authorizer and defensive mode are required'), { code: 'PLUGIN_SQLITE_UNSUPPORTED' });
+  }
   db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-  db.enableDefensive?.(true);
+  try { db.enableDefensive(true); } catch (cause) { db.close(); throw Object.assign(new Error('unable to enable SQLite defensive mode'), { code: 'PLUGIN_SQLITE_UNSUPPORTED', cause }); }
   return db;
 }

@@ -35,7 +35,8 @@ const { dbPath } = workerData as { dbPath: string };
       now: () => new Date().toISOString(),
     });
     const pluginConnections = new Map<string, Awaited<ReturnType<typeof openPluginConnection>>>();
-    const pluginHandler = createPluginOperationHandler(createDbCoordinator(), pluginConnections);
+    const coordinator = createDbCoordinator();
+    const pluginHandler = createPluginOperationHandler(coordinator, pluginConnections);
     attachDbHost(
       parentPort!,
       db,
@@ -80,12 +81,15 @@ const { dbPath } = workerData as { dbPath: string };
         },
       },
       {
+        coordinator,
+        coreOwner: { kind: 'core', handle: 'core' },
         plugin: async (request: PluginDbRequest) => {
           if (request.op === 'open') {
             if (request.owner.kind !== 'plugin') throw new Error('plugin owner required');
             const connection = await openPluginConnection(dbPath, {
               pluginId: request.pluginId,
               tables: request.tables,
+              indexes: request.indexes,
               views: request.views,
               triggers: request.triggers,
             });

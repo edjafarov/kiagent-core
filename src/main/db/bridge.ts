@@ -6,6 +6,7 @@ import type {
   BatchStepResult,
 } from './app-db';
 import type { PluginDbRequest } from './plugin-operations';
+import type { DbCoordinator, DbOwner } from './coordinator';
 
 /**
  * Request/response protocol between the main process (client) and the worker
@@ -98,32 +99,34 @@ export function attachDbHost(
   db: AppDb,
   onClosed?: () => void,
   procedures?: Record<string, HostProcedure>,
-  options?: { plugin?: (request: PluginDbRequest) => Promise<unknown> | unknown },
+  options?: { plugin?: (request: PluginDbRequest) => Promise<unknown> | unknown; coordinator?: DbCoordinator; coreOwner?: DbOwner },
 ): void {
   port.on('message', async (raw: unknown) => {
     const req = raw as Req;
     if (!req || typeof req.id !== 'number') return;
     try {
       let value: unknown;
+      const core = options?.coreOwner ?? { kind: 'core' as const, handle: 'core' };
+      const admit = <T>(work: () => Promise<T> | T) => options?.coordinator?.run(core, undefined, work) ?? Promise.resolve(work());
       if (req.op === 'exec') {
-        await db.exec(req.sql);
+        await admit(() => db.exec(req.sql));
       } else if (req.op === 'all') {
-        value = await db.all(req.sql, req.params.map(toBuffer) as AppDbParam[]);
+        value = await admit(() => db.all(req.sql, req.params.map(toBuffer) as AppDbParam[]));
       } else if (req.op === 'run') {
-        await db.run(req.sql, req.params.map(toBuffer) as AppDbParam[]);
+        await admit(() => db.run(req.sql, req.params.map(toBuffer) as AppDbParam[]));
       } else if (req.op === 'batch') {
-        value = await db.batch(
+        value = await admit(() => db.batch(
           req.steps.map((s) => ({
             sql: s.sql,
             params: s.params.map((p) =>
               isFromStepRef(p) ? p : (toBuffer(p) as AppDbParam),
             ) as BatchParam[],
           })),
-        );
+        ));
       } else if (req.op === 'proc') {
         const proc = procedures?.[req.name];
         if (!proc) throw new Error(`unknown db procedure: ${req.name}`);
-        value = await proc(req.args);
+        value = await admit(() => proc(req.args));
       } else if (req.op === 'close') {
         await db.close();
       } else if (req.op === 'plugin') {

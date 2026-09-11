@@ -33,8 +33,9 @@ function rejectPrivateSchema(sql: string): void {
 }
 export async function openPluginConnection(filename: string, options: PluginConnectionOptions): Promise<PluginConnection> {
   const db = openSqlite(filename);
-  db.setAuthorizer?.(createPluginAuthorizer(options));
-  const prepare = (sql: string) => { rejectPrivateSchema(sql); return db.prepare(sqlFor(options, sql)); };
+  const authorizer = createPluginAuthorizer(options);
+  db.setAuthorizer?.(authorizer);
+  const prepare = (sql: string) => { (authorizer as typeof authorizer & { reset?: () => void }).reset?.(); rejectPrivateSchema(sql); return db.prepare(sqlFor(options, sql)); };
   return {
     exec: async (sql, params = []) => { const stmt = prepare(sql); stmt.run(...params.map(value)); },
     query: async <Row>(sql: string, params = []) => prepare(sql).all(...params.map(value)).map(normalizeRow) as Row[],
