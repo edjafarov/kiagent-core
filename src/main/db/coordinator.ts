@@ -5,7 +5,7 @@ export type TxToken = string;
 export interface CoordinatorMetrics { queued: number; active: boolean; owner?: DbOwner; }
 export interface DbCoordinator {
   run<T>(owner: DbOwner, token: TxToken | undefined, work: () => Promise<T> | T, signal?: AbortSignal): Promise<T>;
-  begin(owner: DbOwner, work: () => Promise<unknown> | unknown, rollback?: () => Promise<unknown> | unknown): Promise<TxToken>;
+  begin(owner: DbOwner, work: () => Promise<unknown> | unknown, rollback?: () => Promise<unknown> | unknown, signal?: AbortSignal): Promise<TxToken>;
   finish<T>(owner: DbOwner, token: TxToken, work: () => Promise<T> | T): Promise<T>;
   release(owner: DbOwner): Promise<void>;
   close(): Promise<void>;
@@ -27,7 +27,6 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
   const leaseMs = options.leaseMs ?? 30_000;
   const queue: Job<unknown>[] = [];
   let active: Active | undefined;
-  let pendingBegin = false;
   const failedOwners = new Set<string>();
   let closed = false;
   let pumping = false;
@@ -129,11 +128,9 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
 
   return {
     run: enqueue,
-    begin: async (owner, work, rollback) => {
-      if (active || pendingBegin) return Promise.reject(error('database transaction already active', 'DB_TX_BUSY'));
-      pendingBegin = true;
-      const token = randomUUID();
-      try { await enqueue(owner, undefined, async () => {
+    begin: (owner, work, rollback, signal) => {
+      return enqueue(owner, undefined, async () => {
+        const token = randomUUID();
         const started: Active = active = { owner, token, rollback, expires: Date.now() + leaseMs };
         started.timer = setTimeout(() => { void pump(); }, leaseMs + 1);
         started.timer.unref?.();
@@ -144,8 +141,8 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
           clearActive(started);
           throw e;
         }
-        return undefined;
-      }); return token; } finally { pendingBegin = false; }
+        return token;
+      }, signal);
     },
     finish: async (owner, token, work) => {
       if (!active || active.token !== token || !sameOwner(owner, active.owner)) return Promise.reject(error('invalid or foreign transaction token', 'DB_TX_TOKEN_INVALID'));

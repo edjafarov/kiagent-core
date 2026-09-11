@@ -2,6 +2,211 @@
 import { createDbCoordinator } from '../coordinator';
 
 describe('shared database coordinator', () => {
+  it('admits a foreign begin after queued core work and the active owner commits', async () => {
+    const coordinator = createDbCoordinator({ leaseMs: 1000 });
+    const order: string[] = [];
+    const rows: number[] = [];
+    const ownerA = { kind: 'plugin' as const, extensionId: 'one', handle: 'one-1' };
+    const ownerB = { kind: 'plugin' as const, extensionId: 'two', handle: 'two-1' };
+    const core = { kind: 'core' as const, handle: 'core' };
+    const nativeBeginB = jest.fn(async () => { order.push('b-native-begin'); });
+
+    const tokenA = await coordinator.begin(ownerA, async () => {
+      order.push('a-native-begin');
+    });
+    await coordinator.run(ownerA, tokenA, async () => {
+      rows.push(1);
+      order.push('a-insert');
+    });
+
+    // The core write is deliberately enqueued before the foreign begin. It
+    // must retain FIFO order once the active token continuation releases the
+    // coordinator.
+    const coreWrite = coordinator.run(core, undefined, async () => {
+      rows.push(2);
+      order.push('core-write');
+    });
+    const tokenBPromise = coordinator.begin(ownerB, async () => {
+      nativeBeginB();
+      order.push('b-native-begin-work');
+    });
+    await Promise.resolve();
+    expect(nativeBeginB).not.toHaveBeenCalled();
+
+    await coordinator.finish(ownerA, tokenA, async () => {
+      order.push('a-commit');
+    });
+    await coreWrite;
+    const tokenB = await tokenBPromise;
+    await coordinator.run(ownerB, tokenB, async () => {
+      rows.push(3);
+      order.push('b-insert');
+    });
+    await coordinator.finish(ownerB, tokenB, async () => {
+      order.push('b-commit');
+    });
+
+    expect(rows).toEqual([1, 2, 3]);
+    expect(order).toEqual([
+      'a-native-begin',
+      'a-insert',
+      'a-commit',
+      'core-write',
+      'b-native-begin',
+      'b-native-begin-work',
+      'b-insert',
+      'b-commit',
+    ]);
+    expect(nativeBeginB).toHaveBeenCalledTimes(1);
+    await coordinator.close();
+  });
+
+  it('serializes independently constructed adapters that share one owner handle', async () => {
+    const coordinator = createDbCoordinator();
+    const order: string[] = [];
+    const ownerFromFirstAdapter = { kind: 'plugin' as const, extensionId: 'one', handle: 'shared' };
+    const ownerFromSecondAdapter = { kind: 'plugin' as const, extensionId: 'one', handle: 'shared' };
+    const makeAdapter = (owner: typeof ownerFromFirstAdapter, label: string) => ({
+      begin: () => coordinator.begin(owner, async () => { order.push(`${label}:begin`); }),
+      commit: (token: string) => coordinator.finish(owner, token, async () => { order.push(`${label}:commit`); }),
+    });
+    const first = makeAdapter(ownerFromFirstAdapter, 'first');
+    const second = makeAdapter(ownerFromSecondAdapter, 'second');
+
+    const firstToken = await first.begin();
+    const secondTokenPromise = second.begin();
+    await Promise.resolve();
+    expect(order).toEqual(['first:begin']);
+
+    await first.commit(firstToken);
+    const secondToken = await secondTokenPromise;
+    await second.commit(secondToken);
+    expect(order).toEqual(['first:begin', 'first:commit', 'second:begin', 'second:commit']);
+    await coordinator.close();
+  });
+
+  it('queues a second begin while the first native begin is still awaiting admission', async () => {
+    const coordinator = createDbCoordinator();
+    const order: string[] = [];
+    const ownerA = { kind: 'plugin' as const, extensionId: 'one' };
+    const ownerB = { kind: 'plugin' as const, extensionId: 'two' };
+    let releaseFirstBegin!: () => void;
+    const firstBeginGate = new Promise<void>((resolve) => { releaseFirstBegin = resolve; });
+    let firstBeginStarted!: () => void;
+    const firstBeginEntered = new Promise<void>((resolve) => { firstBeginStarted = resolve; });
+    const secondNativeBegin = jest.fn(async () => { order.push('second-begin'); });
+
+    const firstTokenPromise = coordinator.begin(ownerA, async () => {
+      firstBeginStarted();
+      await firstBeginGate;
+      order.push('first-begin-complete');
+    });
+    await firstBeginEntered;
+    const secondTokenPromise = coordinator.begin(ownerB, async () => {
+      secondNativeBegin();
+      order.push('second-begin-work');
+    });
+    await Promise.resolve();
+    expect(secondNativeBegin).not.toHaveBeenCalled();
+    releaseFirstBegin();
+
+    const firstToken = await firstTokenPromise;
+    expect(order).toEqual(['first-begin-complete']);
+    await coordinator.finish(ownerA, firstToken, async () => { order.push('first-commit'); });
+    const secondToken = await secondTokenPromise;
+    await coordinator.finish(ownerB, secondToken, async () => { order.push('second-commit'); });
+    expect(order).toEqual([
+      'first-begin-complete',
+      'first-commit',
+      'second-begin',
+      'second-begin-work',
+      'second-commit',
+    ]);
+    await coordinator.close();
+  });
+
+  it('cancels a queued begin before native work and removes its abort listener', async () => {
+    const coordinator = createDbCoordinator();
+    const ownerA = { kind: 'plugin' as const, extensionId: 'one' };
+    const ownerB = { kind: 'plugin' as const, extensionId: 'two' };
+    const tokenA = await coordinator.begin(ownerA, async () => undefined);
+    const controller = new AbortController();
+    const listeners = new Set<EventListenerOrEventListenerObject>();
+    const signal = controller.signal;
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    signal.addEventListener = ((type: 'abort', listener: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions) => {
+      if (!listener) return;
+      listeners.add(listener);
+      return add(type, listener, options);
+    }) as typeof signal.addEventListener;
+    signal.removeEventListener = ((type: 'abort', listener: EventListenerOrEventListenerObject | null, options?: boolean | EventListenerOptions) => {
+      if (!listener) return;
+      listeners.delete(listener);
+      return remove(type, listener, options);
+    }) as typeof signal.removeEventListener;
+    const nativeBegin = jest.fn(async () => undefined);
+    const beginWithSignal = coordinator.begin as unknown as (
+      owner: typeof ownerB,
+      work: () => Promise<unknown> | unknown,
+      rollback?: () => Promise<unknown> | unknown,
+      abortSignal?: AbortSignal,
+    ) => Promise<string>;
+    const waiting = beginWithSignal(ownerB, nativeBegin, undefined, signal);
+
+    controller.abort();
+    await expect(waiting).rejects.toMatchObject({ code: 'DB_OPERATION_CANCELLED' });
+    expect(nativeBegin).not.toHaveBeenCalled();
+    expect(listeners.size).toBe(0);
+    await coordinator.finish(ownerA, tokenA, async () => undefined);
+    await coordinator.close();
+  });
+
+  it('rejects a queued begin released by its owner without starting native work', async () => {
+    const coordinator = createDbCoordinator();
+    const ownerA = { kind: 'plugin' as const, extensionId: 'one' };
+    const ownerB = { kind: 'plugin' as const, extensionId: 'two' };
+    const tokenA = await coordinator.begin(ownerA, async () => undefined);
+    const nativeBegin = jest.fn(async () => undefined);
+    const waiting = coordinator.begin(ownerB, nativeBegin);
+
+    await coordinator.release(ownerB);
+    await expect(waiting).rejects.toMatchObject({ code: 'DB_OWNER_RELEASED' });
+    expect(nativeBegin).not.toHaveBeenCalled();
+    await coordinator.finish(ownerA, tokenA, async () => undefined);
+    await coordinator.close();
+  });
+
+  it('rejects queued begins on close without starting native work', async () => {
+    const coordinator = createDbCoordinator();
+    const ownerA = { kind: 'plugin' as const, extensionId: 'one' };
+    const ownerB = { kind: 'plugin' as const, extensionId: 'two' };
+    const tokenA = await coordinator.begin(ownerA, async () => undefined);
+    const nativeBegin = jest.fn(async () => undefined);
+    const waiting = coordinator.begin(ownerB, nativeBegin);
+
+    await coordinator.close();
+    await expect(waiting).rejects.toMatchObject({ code: 'DB_COORDINATOR_CLOSED' });
+    expect(nativeBegin).not.toHaveBeenCalled();
+    await expect(coordinator.finish(ownerA, tokenA, async () => undefined)).rejects.toMatchObject({ code: 'DB_TX_TOKEN_INVALID' });
+  });
+
+  it('poisons queued begins for an owner after rollback failure before foreign work', async () => {
+    const coordinator = createDbCoordinator();
+    const bad = { kind: 'plugin' as const, extensionId: 'bad', handle: 'bad-1' };
+    const good = { kind: 'plugin' as const, extensionId: 'good', handle: 'good-1' };
+    const token = await coordinator.begin(bad, async () => undefined, async () => { throw new Error('rollback failed'); });
+    const poisonedNativeBegin = jest.fn(async () => undefined);
+    const poisonedBegin = coordinator.begin(bad, poisonedNativeBegin);
+    const foreignWork = coordinator.run(good, undefined, async () => 'foreign-ok');
+
+    await expect(coordinator.release(bad)).rejects.toThrow('rollback failed');
+    await expect(poisonedBegin).rejects.toMatchObject({ code: 'DB_OWNER_POISONED' });
+    await expect(foreignWork).resolves.toBe('foreign-ok');
+    expect(poisonedNativeBegin).not.toHaveBeenCalled();
+    await coordinator.close();
+  });
+
   it('keeps a transaction owner admitted while foreign work waits', async () => {
     const coordinator = createDbCoordinator({ leaseMs: 1000 });
     const order: string[] = [];
