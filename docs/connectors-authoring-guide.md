@@ -21,10 +21,10 @@ here.
 ## 1. The contract is the SDK
 
 The extension-facing API is
-[`src/shared/contracts.ts`](../src/shared/contracts.ts) (§7 in particular) plus
-the runtime error classes in
-[`src/shared/source-errors.ts`](../src/shared/source-errors.ts) — republished,
-generated verbatim at build time, as
+[`src/shared/contracts.ts`](../src/shared/contracts.ts) (§7 in particular), the
+shared database/filesystem/network contracts and SQL helpers, plus the runtime
+error classes in [`src/shared/source-errors.ts`](../src/shared/source-errors.ts)
+— republished, generated verbatim at build time, as
 [`@kiagent/connector-sdk`](https://github.com/edjafarov/kiagent-core/tree/main/sdk/connector-sdk).
 Add it as a devDependency, pointed at the tagged release tarball (not the npm
 registry):
@@ -59,23 +59,31 @@ Two rules:
   README for the release flow).
 
 The platform's own API version is `PLATFORM_API_VERSION` in
-[`src/shared/extension-rpc.ts`](../src/shared/extension-rpc.ts) — **`2.0.0`** at
+[`src/shared/extension-rpc.ts`](../src/shared/extension-rpc.ts) — **`2.1.0`** at
 the time of writing. Your manifest's `engine` range is checked against it at
 install. 2.0.0 removed tolerance, not surface: manifests are parsed strictly
 (unknown keys reject instead of being silently stripped) and
 `contributes.senders` must be stated explicitly. An extension that works on
 both the 1.2.0 and 2.0.0 platforms can declare `"engine": ">=1.2.0 <3.0.0"`.
 
-### What is not plumbed yet
+Non-database connectors that already declare `"engine": "^2.0.0"` remain
+compatible with the 2.1.0 platform. A connector using the `db` capability must
+also publish a database descriptor and declare it in `manifest.json`; the
+actionable missing-descriptor error is:
+`PLUGIN_DB_DESCRIPTOR_REQUIRED: database.schema is required for db-capability plugins`.
+
+### What the host provides
 
 `ExtensionModule.activate()` returns any mix of `{ sources, tools, senders }`
 — exactly what the wire protocol (`Contributions` in `extension-rpc.ts`)
 carries.
 
-The `files` and `commands` capabilities validate and consent
-normally but **throw on every call** (`the 'files' capability is not supported
-in this build yet` — see `src/main/platform/host-surfaces.ts`). Declaring them
-buys you a scarier consent screen and nothing else.
+The `files`, `db`, and `net` capabilities are asynchronous, lifecycle-owned
+host services. Their public contracts are available from the SDK root:
+`ScopedFiles`, `FileRef`, `ScopedFileHandle`, `PluginDb`, `PluginDbSession`,
+`PluginDbStep`, `PluginDbParams`, `PluginNet`, `PluginNetInit`, and
+`PluginNetResult`. They do not provide synchronous filesystem or private
+SQLite fallbacks.
 
 ---
 
@@ -204,15 +212,38 @@ need to *do* about them:
   `authorization`/`cookie` headers are dropped when a redirect changes origin.
   If your service genuinely lives on a private address, open an issue rather
   than working around this.
-- `db` gives you `private.db` in your own `host.self.dataDir` — never the
-  shared corpus. There is no write path to the corpus except returning
-  documents. Statements are policed by leading keyword: ordinary DML, DDL and
-  transaction control are fine, but anything that can name a second database
-  file is refused — `ATTACH`, `DETACH`, `VACUUM INTO`. `PRAGMA` is refused
-  except for a self-scoped set (`user_version`, `application_id`, `table_info`,
-  `table_list`, `table_xinfo`, `index_info`, `index_list`, `foreign_keys`,
-  `foreign_key_list`, `page_count`, `freelist_count`, `integrity_check`,
-  `quick_check`) — `user_version` is there so the usual migration idiom works.
+- `host.net.fetch` keeps the same `fetch(url, init?)` method. `PluginNetInit`
+  accepts `signal` for caller cancellation and `timeoutMs` for a deadline;
+  cancellation is not retried. The result is a `PluginNetResult` with a
+  `Uint8Array` body and lowercase string headers.
+- `db` is a worker-backed plugin database in the extension's prepared data
+  namespace — never the shared corpus. There is no write path to the corpus
+  except returning documents. Statements are policed by leading keyword:
+  ordinary DML, DDL and transaction control are fine, but anything that can
+  name a second database file is refused — `ATTACH`, `DETACH`, `VACUUM INTO`.
+  `PRAGMA` is refused except for a self-scoped set (`user_version`,
+  `application_id`, `table_info`, `table_list`, `table_xinfo`, `index_info`,
+  `index_list`, `foreign_keys`, `foreign_key_list`, `page_count`,
+  `freelist_count`, `integrity_check`, `quick_check`).
+- `files` is rooted at folders the user approved for this extension. Use the
+  `{ root, rel }` `FileRef` shape; canonicalization returns another scoped
+  reference, and `ScopedFileHandle.id` is an opaque owner/incarnation-bound
+  handle, never an OS file descriptor or raw path. Trusted user grants are the
+  source of roots; ordinary plugin calls cannot name arbitrary filesystem
+  paths. `FileInfo.blocks` is part of stat/fstat metadata and `mtimeMs` uses
+  the exact `Number(mtimeNs / 1_000_000n) + Number(mtimeNs % 1_000_000n) / 1e6`
+  conversion.
+- `files.write()` accepts `ifAbsent`, `atomic`, and `mode`. With `atomic: true`,
+  the host writes and syncs a unique exclusive no-follow sibling, applies a
+  validated mode in `0..0o777`, and publishes it with an in-directory rename;
+  it never removes the destination first. The default mode preserves an
+  existing mode or uses a secure mode for a new file. `ifAbsent` preserves
+  no-overwrite behavior, including on publication collisions. A zero-progress
+  handle write is rejected and cleaned up.
+  These scoped capabilities are not a full-OS-sandbox claim; the platform
+  still keeps trusted user-grant and privileged integration boundaries
+  explicit. Reuse the asynchronous host I/O surface for ordinary connector
+  state, certificate and storage writes rather than opening paths directly.
 - `events` refuses to emit names starting `extension.` or `platform.` (those
   are platform-emitted).
 
@@ -229,12 +260,83 @@ need to *do* about them:
   **Required** (use `[]` for none). Each entry must also be a source *this
   same extension* contributes; the platform drops senders for ids you didn't
   declare or didn't return.
-- `tools`, `commands` — declared tool/command ids; see §1's "not plumbed
-  yet" for the `commands` capability caveat.
+- `tools`, `commands` — declared tool/command ids. Commands remain subject to
+  the command capability and the platform's current command registration
+  rules.
 
 A source id already registered by another extension makes the install fail
 (`source id 'slack' is already provided by kia.other`). Namespace yours if
 there's any chance of collision.
+
+### Database descriptors and migrations
+
+A connector with `caps: ["db"]` must declare a schema file in its manifest:
+
+```json
+{
+  "engine": ">=2.1.0 <3.0.0",
+  "caps": ["db"],
+  "database": { "schema": "dist/database.json" }
+}
+```
+
+`database.schema` must be a non-empty path that resolves inside the extension
+directory, and the file must exist. The descriptor is declarative JSON, not
+executable JavaScript. Generate `dist/database.json` from the connector's
+exported immutable historical migration arrays, and keep those arrays
+append-only. Its public shape is `PluginDatabaseDescriptor`:
+
+```json
+{
+  "format": 1,
+  "objects": [{ "name": "settings", "kind": "table" }],
+  "modules": [{
+    "name": "main",
+    "migrations": [{
+      "version": 0,
+      "statements": ["CREATE TABLE {{settings}} (id TEXT)"]
+    }]
+  }],
+  "legacy": {
+    "tables": [{ "name": "settings", "columns": ["id"] }]
+  }
+}
+```
+
+The `objects` list contains the registered tables, indexes, views and
+triggers. Every module migration has an ascending integer `version` and its
+exact statements. A version-zero store with idempotent `CREATE` schema needs
+an explicit version-zero/bootstrap migration. A direct legacy store is
+described by a non-empty `legacy.tables` list with neither `versionTable` nor
+`userVersionModule`; versioned legacy stores may name either of those fields.
+`private.db` is the only initial legacy basename. The host owns the directory
+and shared worker; retain the legacy database and its WAL sources intact.
+
+Use explicit `{{logical}}` markers only in SQL code. Markers inside SQL string
+literals, quoted identifiers and comments remain literal text. Logical names
+match `[a-z][a-z0-9_]*`; `pluginIdentifier(id, name)` produces a quoted name
+with the collision-resistant prefix `p_` + the full UTF-8 plugin id encoded as
+hex + `__`. Prefixing prevents collisions; it is not authorization. The
+native authorizer is the security boundary.
+
+The database bridge accepts SQL values `null`, `string`, finite `number`,
+`bigint`, `boolean`, `Date`, and `Uint8Array`. It rejects `undefined`,
+non-finite numbers and unsupported objects. Safe-range integers may be read as
+numbers; larger integers remain exact `bigint` values. Binary values are
+`Uint8Array`; booleans and dates are normalized by the bridge.
+
+`db.transaction()` provides the only transaction authority: use the supplied
+`tx` object for every operation in the callback. Ordinary SDK calls made
+inside that transaction reject; do not add product-side queues or retries.
+If the worker reports `DB_WORKER_CRASHED`, an ambiguous write is not
+automatically replayed. `batch()` and `migrate()` remain asynchronous and
+worker-backed.
+
+Migration uses one shared worker and one shared database file while preserving
+the `private.db`/WAL sources. It does not require LLM rerun or reingestion.
+The new marker does not protect pre-gate older binaries: an older binary
+cannot read the new marker. Downgrade is supported only with a matching
+pre-migration backup.
 
 ---
 
