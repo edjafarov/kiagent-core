@@ -38,6 +38,8 @@ export interface RetryPolicy {
   retryAfterMinSec?: number; // default 1
   retryAfterMaxSec?: number; // default 60
   sleep?: (ms: number) => Promise<void>; // default real setTimeout
+  /** Caller cancellation is never retried. */
+  signal?: AbortSignal;
 }
 
 /** A backfill makes tens of thousands of consecutive calls, so transient
@@ -91,11 +93,23 @@ export async function requestWithRetry(
   let transient = 0;
   let rateLimited = 0;
   for (;;) {
+    if (policy.signal?.aborted) {
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      throw error;
+    }
     let res: HostResponse;
     try {
       // eslint-disable-next-line no-await-in-loop
       res = await attempt();
     } catch (e) {
+      if (
+        policy.signal?.aborted ||
+        (e instanceof Error &&
+          (e.name === 'AbortError' || e.name === 'TimeoutError'))
+      ) {
+        throw e;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       if (transient >= maxTransient)
         throw new Error(
