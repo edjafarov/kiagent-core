@@ -42,7 +42,7 @@ function fail(message: string, code: string): never {
 }
 
 function quote(name: string): string {
-  if (!NAME.test(name))
+  if (!NAME.test(name) && name !== HIDDEN_ROWID)
     fail(
       `invalid legacy identifier ${name}`,
       'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
@@ -268,10 +268,14 @@ function encodeKey(values: unknown[]): string {
   );
 }
 
-function rowKey(row: Record<string, unknown>, columns: string[]): string {
+function rowKey(
+  row: Record<string, unknown>,
+  columns: string[],
+  rowidAlias = HIDDEN_ROWID,
+): string {
   return encodeKey(
     columns.map((column) =>
-      column === HIDDEN_ROWID ? row[HIDDEN_ROWID] : row[column],
+      column === HIDDEN_ROWID ? row[rowidAlias] : row[column],
     ),
   );
 }
@@ -288,6 +292,17 @@ function digestRow(
 }
 
 const HIDDEN_ROWID = '__kiagent_rowid';
+
+function rowidProjectionAlias(columns: string[]): string {
+  const names = new Set(columns.map((column) => column.toLowerCase()));
+  let suffix = 0;
+  let alias = `${HIDDEN_ROWID}_${suffix}`;
+  while (names.has(alias.toLowerCase())) {
+    suffix += 1;
+    alias = `${HIDDEN_ROWID}_${suffix}`;
+  }
+  return alias;
+}
 
 function decodeKey(value: string | null): unknown[] {
   if (!value) return [];
@@ -733,11 +748,15 @@ function copyTableChunk(
       : info.columns
     : [HIDDEN_ROWID];
   const usesHiddenRowid = order[0] === HIDDEN_ROWID;
+  const projectionAlias = rowidProjectionAlias([
+    ...info.columns,
+    ...targetInfo.columns,
+  ]);
   const selectColumns =
     info.withoutRowid || !usesHiddenRowid
       ? info.columns.map(quote)
       : [
-          `${quoteInternal(info.rowidAlias!)} AS "${HIDDEN_ROWID}"`,
+          `${quoteInternal(info.rowidAlias!)} AS "${projectionAlias}"`,
           ...info.columns.map(quote),
         ];
   const cursor =
@@ -787,7 +806,7 @@ function copyTableChunk(
       digestRow(
         row,
         columns,
-        order[0] === HIDDEN_ROWID ? row[HIDDEN_ROWID] : undefined,
+        order[0] === HIDDEN_ROWID ? row[projectionAlias] : undefined,
       ),
     ),
   );
@@ -796,7 +815,7 @@ function copyTableChunk(
     tableName: table.name,
     lastKey: encodeKey(
       order.map((column) =>
-        column === HIDDEN_ROWID ? last[HIDDEN_ROWID] : last[column],
+        column === HIDDEN_ROWID ? last[projectionAlias] : last[column],
       ),
     ),
     rowsCopied:
@@ -813,11 +832,14 @@ function copyTableChunk(
           insert.run(
             ...(!usesHiddenRowid
               ? columns.map((column) => row[column])
-              : [row[HIDDEN_ROWID], ...columns.map((column) => row[column])]),
+              : [
+                  row[projectionAlias],
+                  ...columns.map((column) => row[column]),
+                ]),
           );
         const keyValues = rows.map((row) =>
           order.map((column) =>
-            column === HIDDEN_ROWID ? row[HIDDEN_ROWID] : row[column],
+            column === HIDDEN_ROWID ? row[projectionAlias] : row[column],
           ),
         );
         const where =
@@ -839,10 +861,10 @@ function copyTableChunk(
               : keyValues.flat()),
           ) as Array<Record<string, unknown>>;
         const targetByKey = new Map(
-          targetRows.map((row) => [rowKey(row, order), row]),
+          targetRows.map((row) => [rowKey(row, order, projectionAlias), row]),
         );
         const targetDigestRows = rows.map((row) => {
-          const target = targetByKey.get(rowKey(row, order));
+          const target = targetByKey.get(rowKey(row, order, projectionAlias));
           if (!target)
             fail(
               `target plugin table ${table.name} lost an imported row`,
@@ -851,7 +873,7 @@ function copyTableChunk(
           return digestRow(
             target,
             columns,
-            order[0] === HIDDEN_ROWID ? target[HIDDEN_ROWID] : undefined,
+            order[0] === HIDDEN_ROWID ? target[projectionAlias] : undefined,
           );
         });
         next = {

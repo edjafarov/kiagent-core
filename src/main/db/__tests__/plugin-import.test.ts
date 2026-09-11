@@ -1006,6 +1006,85 @@ describe('registered legacy plugin import', () => {
     ]);
   });
 
+  it('preserves the physical rowid when user columns use both internal and rowid names', async () => {
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [{ name: 'shadowed', kind: 'table' }],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{shadowed}} (__kiagent_rowid TEXT, rowid TEXT, value TEXT)',
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: {
+        tables: [
+          {
+            name: 'shadowed',
+            columns: ['__kiagent_rowid', 'rowid', 'value'],
+          },
+        ],
+      },
+    });
+    source.close();
+    for (const candidate of [
+      sourceFile,
+      `${sourceFile}-wal`,
+      `${sourceFile}-shm`,
+    ])
+      if (fs.existsSync(candidate)) fs.rmSync(candidate);
+    source = new Database(sourceFile);
+    source.exec(
+      'CREATE TABLE shadowed (__kiagent_rowid TEXT, rowid TEXT, value TEXT)',
+    );
+    source
+      .prepare(
+        'INSERT INTO shadowed(__kiagent_rowid, rowid, value) VALUES (?, ?, ?)',
+      )
+      .run('deleted-internal', 'deleted-rowid', 'deleted');
+    source
+      .prepare(
+        'INSERT INTO shadowed(__kiagent_rowid, rowid, value) VALUES (?, ?, ?)',
+      )
+      .run('user-internal', 'user-rowid', 'preserved');
+    source.prepare('DELETE FROM shadowed WHERE value = ?').run('deleted');
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await registry.register({
+      pluginId: 'legacy.internal-rowid-collision',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    await importLegacyPluginStorage(registry, {
+      pluginId: 'legacy.internal-rowid-collision',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    expect(
+      registry.host(
+        (db) =>
+          db
+            .prepare(
+              'SELECT _rowid_ AS physical_rowid, "__kiagent_rowid", "rowid", value FROM "p_6c65676163792e696e7465726e616c2d726f7769642d636f6c6c6973696f6e__shadowed" ORDER BY _rowid_',
+            )
+            .all(),
+        { pluginId: 'legacy.internal-rowid-collision', descriptor },
+      ),
+    ).toEqual([
+      {
+        physical_rowid: 2n,
+        __kiagent_rowid: 'user-internal',
+        rowid: 'user-rowid',
+        value: 'preserved',
+      },
+    ]);
+  });
+
   it('preserves rowid order for a TEXT primary-key rowid table', async () => {
     const descriptor = rowidDescriptor();
     source.close();
