@@ -31,6 +31,7 @@ import type {
   Source,
 } from '@shared/contracts';
 import type { Contributions, MainToChild } from '@shared/extension-rpc';
+import type { FileChange } from '@shared/plugin-files';
 import type { LogSink } from '@main/core/engine/engine';
 import type { DbOwner } from '@main/db/coordinator';
 import { randomUUID } from 'node:crypto';
@@ -47,6 +48,13 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+function stopError(): Error & { code: string } {
+  return Object.assign(new Error('operation aborted'), {
+    name: 'AbortError',
+    code: 'RPC_ABORTED',
+  });
+}
+
 export interface HostDeps {
   extensionId: string;
   entryAbsPath: string;
@@ -56,6 +64,7 @@ export interface HostDeps {
   makeSurfaces(
     deliverEvent: (name: string, payload: unknown, meta: EventMeta) => void,
     context?: { owner: DbOwner; signal: AbortSignal },
+    deliverFileChange?: (watchId: number, event: FileChange) => void,
   ):
     | {
         surfaces: Surfaces;
@@ -173,6 +182,12 @@ export function createExtensionHost(deps: HostDeps): {
     let transport: HostTransport | undefined;
     let endpoint: ReturnType<typeof createRpcEndpoint> | undefined;
     let unregister: (() => void) | null = null;
+    let offExit: (() => void) | null = null;
+    let proxySet: ReturnType<typeof createSourceProxySet> | null = null;
+    let surfacesHandle: {
+      surfaces: Surfaces;
+      close(): void | Promise<void>;
+    } | null = null;
     let exited = false;
     let abortPending: ((e: Error) => void) | null = null;
     let cleanup: (() => Promise<void>) | null = null;
@@ -193,15 +208,35 @@ export function createExtensionHost(deps: HostDeps): {
     try {
       transport = deps.transportFactory();
       endpoint = createRpcEndpoint(transport);
-      const proxySet = createSourceProxySet(endpoint);
+      proxySet = createSourceProxySet(endpoint);
+      let cleanupPromise: Promise<void> | undefined;
+      cleanup = () => {
+        cleanupPromise ??= (async () => {
+          const teardownError = stopping
+            ? stopError()
+            : new Error('extension process exited');
+          lifecycle.abort();
+          proxySet?.abortAll(teardownError);
+          proxySet?.dispose();
+          await surfacesHandle?.close();
+          endpoint?.dispose(teardownError);
+          offExit?.();
+          offExit = null;
+          unregister?.();
+          unregister = null;
+        })();
+        return cleanupPromise;
+      };
       const onExit = (code: number | null) => {
         if (exited) return;
         exited = true;
         lifecycle.abort();
-        abortPending?.(new Error('extension process exited'));
+        abortPending?.(
+          stopping ? stopError() : new Error('extension process exited'),
+        );
         abortPending = null;
-        if (incarnation)
-          incarnation.cleanupDone = cleanup?.() ?? Promise.resolve();
+        const disposed = cleanup?.() ?? Promise.resolve();
+        if (incarnation) incarnation.cleanupDone = disposed;
         if (current === incarnation) current = null;
         if (stopping || stopped) return;
         crashes.push(now());
@@ -222,7 +257,7 @@ export function createExtensionHost(deps: HostDeps): {
         }
         launchSpawn();
       };
-      transport.onExit(onExit);
+      offExit = transport.onExit(onExit);
       const preparedSurfaces = deps.makeSurfaces(
         (name, payload, meta) =>
           endpoint!.post({
@@ -232,8 +267,10 @@ export function createExtensionHost(deps: HostDeps): {
             meta,
           } satisfies MainToChild),
         { owner, signal: lifecycle.signal },
+        (watchId, event) =>
+          endpoint!.post({ kind: 'file-change', watchId, event }),
       );
-      const surfacesHandle =
+      surfacesHandle =
         preparedSurfaces instanceof Promise
           ? await preparedSurfaces
           : preparedSurfaces;
@@ -244,24 +281,15 @@ export function createExtensionHost(deps: HostDeps): {
       const router = createHostRouter({
         extensionId: deps.extensionId,
         granted: new Set(deps.caps),
-        surfaces: surfacesHandle.surfaces,
+        surfaces: surfacesHandle!.surfaces,
         logSink: deps.logSink,
       });
       endpoint.onCall((ns, method, args, context) =>
         ns === 'auth' || ns === 'session'
-          ? proxySet.handleCall(ns, method, args)
+          ? proxySet!.handleCall(ns, method, args)
           : router.dispatch(ns, method, args, context),
       );
 
-      cleanup = async () => {
-        lifecycle.abort();
-        proxySet.abortAll('extension process exited');
-        proxySet.dispose();
-        await surfacesHandle.close();
-        endpoint!.dispose('extension process exited');
-        unregister?.();
-        unregister = null;
-      };
       incarnation = { endpoint, transport, cleanup, owner };
       current = incarnation;
 
@@ -307,7 +335,7 @@ export function createExtensionHost(deps: HostDeps): {
       const contributions = outcome.contributions as Contributions;
       unregister = deps.registerContributions(
         contributions,
-        proxySet.makeSource,
+        proxySet!.makeSource,
       );
       deps.onStatus('activated');
       resolveStart();

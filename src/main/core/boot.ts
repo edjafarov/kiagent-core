@@ -226,6 +226,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     encrypt: deps.encrypt,
     decrypt: deps.decrypt,
     detectLanguages,
+    profileDir: deps.dataDir,
   });
   const inference = createInference(sink);
   const scheduler = createScheduler(store, deps.env, sink);

@@ -345,6 +345,28 @@ describe('validateManifestDir', () => {
     );
     expect(() => validateManifestDir(dir)).toThrow(/200 KB or smaller/);
   });
+
+  it('rejects a database descriptor symlink that resolves outside the package', () => {
+    const outside = path.join(os.tmpdir(), `kia-descriptor-${Date.now()}.json`);
+    fs.writeFileSync(outside, '{}');
+    fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
+    fs.symlinkSync(outside, path.join(dir, 'dist', 'database.json'));
+    fs.writeFileSync(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify({
+        ...GOOD,
+        caps: ['db'],
+        database: { schema: 'dist/database.json' },
+      }),
+    );
+    try {
+      expect(() => validateManifestDir(dir)).toThrow(
+        /inside the extension directory|regular file/i,
+      );
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
+  });
 });
 
 describe('privileged caps by tier', () => {

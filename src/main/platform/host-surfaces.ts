@@ -6,7 +6,7 @@
  */
 import type { EventMeta, LaneState, LogLevel, Query } from '@shared/contracts';
 import type { PluginDb, PluginDbParams, PluginDbStep } from '@shared/plugin-db';
-import type { ScopedFiles } from '@shared/plugin-files';
+import type { FileChange, ScopedFiles } from '@shared/plugin-files';
 import type { AppDb } from '@main/db/app-db';
 import type { DbOwner, TxToken } from '@main/db/coordinator';
 import { pluginIdentifier } from '@shared/plugin-sql';
@@ -175,6 +175,7 @@ export interface SurfaceDeps {
   bus: EventBus;
   /** Ships a host event to the child (endpoint.post({kind:'event',…})). */
   deliverEvent(name: string, payload: unknown, meta: EventMeta): void;
+  deliverFileChange?(watchId: number, event: FileChange): void;
 }
 
 const unsupported = (ns: string) => () => {
@@ -188,6 +189,7 @@ export function buildSurfaces(deps: SurfaceDeps): {
   close(): void | Promise<void>;
 } {
   const eventSubs = new Map<string, () => void>();
+  const remoteWatchers = new Map<number, { close(): Promise<void> }>();
   const network =
     deps.network ??
     createNetworkService({
@@ -473,7 +475,35 @@ export function buildSurfaces(deps: SurfaceDeps): {
       write: (...args) => fileCall('write', args),
       move: (...args) => fileCall('move', args),
       remove: (...args) => fileCall('remove', args),
-      watch: (...args) => fileCall('watch', args),
+      watch: (...args) => {
+        const [ref, callback] = args as [unknown, unknown];
+        if (ref && typeof ref === 'object' && '__remoteWatchClose' in ref) {
+          const watchId = Number(
+            (ref as { __remoteWatchClose: unknown }).__remoteWatchClose,
+          );
+          const watcher = remoteWatchers.get(watchId);
+          remoteWatchers.delete(watchId);
+          return watcher?.close();
+        }
+        if (
+          callback &&
+          typeof callback === 'object' &&
+          '__remoteWatchId' in callback
+        ) {
+          const watchId = Number(
+            (callback as { __remoteWatchId: unknown }).__remoteWatchId,
+          );
+          const watcher = fileCall('watch', [
+            ref,
+            (event: FileChange) => deps.deliverFileChange?.(watchId, event),
+          ]) as Promise<{ close(): Promise<void> }>;
+          return watcher.then((handle) => {
+            remoteWatchers.set(watchId, handle);
+            return { watchId };
+          });
+        }
+        return fileCall('watch', args);
+      },
     },
     commands: { register: unsupported('commands') },
   };
@@ -483,6 +513,12 @@ export function buildSurfaces(deps: SurfaceDeps): {
     async close() {
       eventSubs.forEach((off) => off());
       eventSubs.clear();
+      await Promise.all(
+        [...remoteWatchers.values()].map((watcher) =>
+          watcher.close().catch(() => undefined),
+        ),
+      );
+      remoteWatchers.clear();
       network.dispose();
       await deps.files?.dispose?.();
       if (plugin && owner && owner.kind === 'plugin')

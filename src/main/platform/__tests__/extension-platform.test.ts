@@ -376,6 +376,13 @@ describe('createExtensionPlatform', () => {
       ok: false,
       error: "Remove this connector's sources before uninstalling it.",
     });
+    expect(platform.snapshot()).toEqual([
+      expect.objectContaining({
+        id: 'test.basic',
+        enabled: true,
+        status: 'activated',
+      }),
+    ]);
     const acct = (await store.read.accounts()).find(
       (a) => a.source === 'basicsrc',
     )!;
@@ -831,6 +838,15 @@ describe('createExtensionPlatform', () => {
     // Cleanup
     await failablePlatform.stop();
   }, 15000); // Longer timeout: simulating host.start() failure is slower than other scenarios
+
+  it('unsubscribes the worker respawn listener when a platform stops', async () => {
+    const offWorker = jest.fn();
+    const workerDb = { onWorkerRespawn: () => offWorker };
+    const workerPlatform = makePlatform({ db: workerDb as never });
+    await workerPlatform.start();
+    await workerPlatform.stop();
+    expect(offWorker).toHaveBeenCalledTimes(1);
+  });
 
   it('registerContributions skips a source id not declared in the manifest (F6): declared ones still register, undeclared ones warn+skip', async () => {
     await platform.start(); // empty dir — no-op

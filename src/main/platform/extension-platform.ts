@@ -43,6 +43,7 @@ import {
   oauthSourceBindings,
   senderContributions,
   sourceContributions,
+  MAX_DESCRIPTOR_BYTES,
 } from './manifest';
 import { oauthProviders } from './oauth-providers';
 import {
@@ -66,6 +67,7 @@ import {
 import type { FileRootRegistry } from './file-roots';
 import { createScopedFiles } from './scoped-files';
 import { createNetworkService } from './network-service';
+import type { NetworkService } from './network-service';
 import { createInMemoryHostPair, type HostTransport } from './transport';
 import { runExtensionHost } from './extension-host-entry';
 
@@ -165,6 +167,8 @@ export interface ExtensionPlatformDeps {
   db?: AppDb;
   /** Trusted root grants restored/created by product main-process flows. */
   fileRoots?: FileRootRegistry;
+  /** Optional test/integration seam; production uses the guarded default. */
+  networkFactory?: (owner: string, signal: AbortSignal) => NetworkService;
   store: CoreStore;
   sources: SourceRegistry;
   /** Where cap-gated extension Senders land. Same lifecycle as `sources`:
@@ -229,8 +233,6 @@ interface Entry {
   iconDataUrl?: string;
 }
 
-const MAX_DESCRIPTOR_BYTES = 4 * 1024 * 1024;
-
 function descriptorForEntry(e: Entry): PluginDatabaseDescriptor | undefined {
   if (!e.manifest.caps.includes('db')) return undefined;
   const relative = e.manifest.database?.schema;
@@ -240,19 +242,21 @@ function descriptorForEntry(e: Entry): PluginDatabaseDescriptor | undefined {
     );
   }
   const root = path.resolve(e.dir);
+  const packageRoot = fs.realpathSync(root);
   const descriptorPath = path.resolve(root, relative);
-  const rel = path.relative(root, descriptorPath);
-  if (rel.startsWith('..') || path.isAbsolute(rel))
+  const resolvedDescriptorPath = fs.realpathSync(descriptorPath);
+  const resolvedRel = path.relative(packageRoot, resolvedDescriptorPath);
+  if (resolvedRel.startsWith('..') || path.isAbsolute(resolvedRel))
     throw new Error(
       'database.schema must resolve inside the extension directory',
     );
-  const stat = fs.statSync(descriptorPath);
+  const stat = fs.statSync(resolvedDescriptorPath);
   if (!stat.isFile() || stat.size > MAX_DESCRIPTOR_BYTES)
     throw new Error(
       'database.schema must be a regular file no larger than 4 MiB',
     );
   return parseDatabaseDescriptor(
-    JSON.parse(fs.readFileSync(descriptorPath, 'utf8')),
+    JSON.parse(fs.readFileSync(resolvedDescriptorPath, 'utf8')),
   );
 }
 
@@ -370,7 +374,7 @@ export function createExtensionPlatform(
   );
   const offLane = deps.onLaneChange(() => laneGate.check());
   let running = false;
-  const offWorker = deps.db?.onWorkerRespawn?.(() => {
+  let offWorker = deps.db?.onWorkerRespawn?.(() => {
     if (!running) return;
     void Promise.all(
       [...entries.keys()].map((id) =>
@@ -682,7 +686,7 @@ export function createExtensionPlatform(
             return pair.main;
           }
         : () => deps.transportFactory(e.manifest.id),
-      makeSurfaces: async (deliverEvent, context) => {
+      makeSurfaces: async (deliverEvent, context, deliverFileChange) => {
         const owner =
           context?.owner ??
           ({
@@ -704,7 +708,11 @@ export function createExtensionPlatform(
           }
           const serviceOwner = `${e.manifest.id}:${owner.handle ?? 'host'}`;
           network = e.manifest.caps.includes('net')
-            ? createNetworkService({
+            ? (deps.networkFactory?.(
+                serviceOwner,
+                context?.signal ?? new AbortController().signal,
+              ) ??
+              createNetworkService({
                 owner: serviceOwner,
                 signal: context?.signal,
                 log: (event) =>
@@ -714,7 +722,7 @@ export function createExtensionPlatform(
                     'host.net.fetch',
                     event as unknown as Record<string, unknown>,
                   ),
-              })
+              }))
             : undefined;
           files =
             deps.fileRoots && e.manifest.caps.includes('files')
@@ -741,6 +749,7 @@ export function createExtensionPlatform(
             notify: deps.notify,
             bus,
             deliverEvent,
+            deliverFileChange,
           });
         } catch (error) {
           await files?.dispose?.();
@@ -974,6 +983,8 @@ export function createExtensionPlatform(
     async stop() {
       running = false;
       offLane();
+      offWorker?.();
+      offWorker = undefined;
       installer.discardAll();
       for (const id of entries.keys()) {
         // eslint-disable-next-line no-await-in-loop
@@ -1075,7 +1086,6 @@ export function createExtensionPlatform(
     async uninstall(id) {
       const pending = entries.get(id);
       pending?.activation?.abort();
-      if (pending) pending.enabled = false;
       return runExclusive(id, async () => {
         const e = entries.get(id);
         if (!e) return { ok: false, error: `no such extension: ${id}` };
@@ -1102,6 +1112,10 @@ export function createExtensionPlatform(
             error: error instanceof Error ? error.message : String(error),
           };
         }
+        // The validation above is intentionally complete before changing the
+        // in-memory state. A rejected uninstall must leave the entry enabled
+        // and its active host represented accurately in snapshots.
+        e.enabled = false;
         retainLegacySource(e);
         fs.rmSync(e.dir, { recursive: true, force: true });
         writeInstalled(

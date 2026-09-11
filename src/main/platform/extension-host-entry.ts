@@ -23,6 +23,8 @@ import type {
   SenderContext,
   Source,
 } from '@shared/contracts';
+import type { FileChange } from '@shared/plugin-files';
+import type { PluginNetInit } from '@shared/plugin-net';
 import type {
   ChildToMain,
   Contributions,
@@ -101,6 +103,7 @@ function buildRemoteHost(
   endpoint: RpcEndpoint,
   boot: ExtensionBootstrap,
   eventCbs: Map<string, Set<(p: unknown, meta: EventMeta) => void>>,
+  fileWatchCbs: Map<number, (event: FileChange) => void>,
 ): Record<string, unknown> {
   const host: Record<string, unknown> = {
     self: { id: boot.extensionId, dataDir: boot.dataDir },
@@ -110,6 +113,7 @@ function buildRemoteHost(
   };
   if (boot.caps.includes('db'))
     host.db = createPluginDbProxy(endpoint, boot.extensionId);
+  let nextWatchId = 1;
   for (const cap of boot.caps) {
     if (cap === 'events') {
       host.events = {
@@ -142,7 +146,40 @@ function buildRemoteHost(
     if (cap === 'db') continue;
     const nsObj: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
     for (const m of methods) {
-      nsObj[m] = (...args: unknown[]) => callHost(endpoint, cap, m, args);
+      if (cap === 'files' && m === 'watch') {
+        nsObj[m] = (ref: unknown, onChange: unknown) => {
+          const watchId = nextWatchId++;
+          if (onChange !== undefined)
+            fileWatchCbs.set(watchId, onChange as (event: FileChange) => void);
+          return callHost(endpoint, cap, m, [
+            ref,
+            { __remoteWatchId: watchId },
+          ]).then(() => ({
+            close: () => {
+              fileWatchCbs.delete(watchId);
+              return callHost(endpoint, cap, m, [
+                { __remoteWatchClose: watchId },
+              ]).then(() => undefined);
+            },
+          }));
+        };
+        continue;
+      }
+      if (cap === 'net' && m === 'fetch') {
+        nsObj[m] = (url: unknown, init?: unknown) => {
+          const input = (init ?? {}) as PluginNetInit;
+          const { signal, timeoutMs, ...wireInit } = input;
+          // AbortSignal is SDK-local state. It must never be placed in the
+          // structured-cloned argument list; RpcEndpoint carries it through
+          // the cancel message and reconstructs the main-side signal.
+          return callHost(endpoint, cap, m, [url, wireInit], undefined, {
+            signal,
+            timeoutMs,
+          });
+        };
+      } else {
+        nsObj[m] = (...args: unknown[]) => callHost(endpoint, cap, m, args);
+      }
     }
     host[cap] = nsObj;
   }
@@ -173,6 +210,7 @@ export function runExtensionHost(
     string,
     Set<(p: unknown, meta: EventMeta) => void>
   >();
+  const fileWatchCbs = new Map<number, (event: FileChange) => void>();
   // Task 8 fills these in: active pulls keyed by pullId.
   const pulls = new Map<
     number,
@@ -192,6 +230,7 @@ export function runExtensionHost(
   // "already open" guard stays per-flow-kind and neither map's lifetime
   // depends on the other's.
   const managePickers = new Map<number, FolderPickerSpec>();
+  const activeCalls = new Set<Promise<unknown>>();
 
   const fail = (e: unknown) =>
     endpoint.post({
@@ -208,7 +247,7 @@ export function runExtensionHost(
       if (typeof mod.activate !== 'function')
         throw new Error('extension has no activate()');
       endpoint.post({ kind: 'ready' } satisfies ChildToMain);
-      const host = buildRemoteHost(endpoint, boot, eventCbs);
+      const host = buildRemoteHost(endpoint, boot, eventCbs, fileWatchCbs);
       const extras =
         boot.caps.includes('unsafe.mainProcess') && deps.mainApi !== undefined
           ? { mainProcess: deps.mainApi }
@@ -240,27 +279,35 @@ export function runExtensionHost(
     }
   }
 
-  endpoint.onCall(async (ns, method, args) => {
-    if (ns === 'tool') {
-      const tool = tools.get(method);
-      if (!tool) throw new Error(`unknown tool ${method}`);
-      return tool.call(args[0] as Record<string, unknown>);
-    }
-    if (ns === 'source') {
-      return handleSourceCall(method, args); // Task 8
-    }
-    if (ns === 'send') {
-      // `method` is the SOURCE id. Credentials arrive in ctx because an
-      // out-of-process sender has no vault access of its own; main resolves
-      // them at send time, after the confirmation gate.
-      const sender = senders.get(method);
-      if (!sender) throw new Error(`unknown sender ${method}`);
-      return sender.send(
-        args[0] as SendIntent,
-        args[1] as SenderContext | undefined,
-      );
-    }
-    throw new Error(`unexpected main→child namespace ${ns}`);
+  endpoint.onCall((ns, method, args) => {
+    const call = (async () => {
+      if (ns === 'tool') {
+        const tool = tools.get(method);
+        if (!tool) throw new Error(`unknown tool ${method}`);
+        return tool.call(args[0] as Record<string, unknown>);
+      }
+      if (ns === 'source') {
+        return handleSourceCall(method, args); // Task 8
+      }
+      if (ns === 'send') {
+        // `method` is the SOURCE id. Credentials arrive in ctx because an
+        // out-of-process sender has no vault access of its own; main resolves
+        // them at send time, after the confirmation gate.
+        const sender = senders.get(method);
+        if (!sender) throw new Error(`unknown sender ${method}`);
+        return sender.send(
+          args[0] as SendIntent,
+          args[1] as SenderContext | undefined,
+        );
+      }
+      throw new Error(`unexpected main→child namespace ${ns}`);
+    })();
+    activeCalls.add(call);
+    void call.then(
+      () => activeCalls.delete(call),
+      () => activeCalls.delete(call),
+    );
+    return call;
   });
 
   function makeSession(
@@ -466,6 +513,10 @@ export function runExtensionHost(
       eventCbs.get(msg.name)?.forEach((cb) => cb(msg.payload, msg.meta));
       return;
     }
+    if (msg.kind === 'file-change') {
+      fileWatchCbs.get(msg.watchId)?.(msg.event);
+      return;
+    }
     if (msg.kind === 'src-next' || msg.kind === 'src-abort') {
       handleSourceNotify(msg); // Task 8
       return;
@@ -478,6 +529,14 @@ export function runExtensionHost(
           /* deactivate errors must not block exit */
         }
         pulls.forEach((p) => p.abort.abort());
+        // Let abort-aware in-flight calls publish their cancellation replies
+        // before the process exits. This is bounded so a non-cooperative
+        // extension cannot hold shutdown indefinitely.
+        await Promise.race([
+          Promise.allSettled([...activeCalls]),
+          new Promise<void>((resolve) => setTimeout(resolve, 1000)),
+        ]);
+        await new Promise<void>((resolve) => setImmediate(resolve));
         exit(0);
       })();
     }
