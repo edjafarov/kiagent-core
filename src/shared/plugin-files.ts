@@ -12,6 +12,7 @@ export interface FileRoot {
 export interface FileInfo {
   kind: 'file' | 'directory' | 'other';
   size: number;
+  blocks: number;
   mtimeMs: number;
   dev: string;
   ino: string;
@@ -60,7 +61,7 @@ export interface ScopedFiles {
   write(
     ref: FileRef,
     data: Uint8Array,
-    options?: { ifAbsent?: boolean },
+    options?: { ifAbsent?: boolean; atomic?: boolean; mode?: number },
   ): Promise<void>;
   move(from: FileRef, to: FileRef): Promise<void>;
   remove(ref: FileRef): Promise<void>;

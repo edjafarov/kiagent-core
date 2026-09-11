@@ -18,6 +18,7 @@ const DEFAULT_PAGE = 200;
 const MAX_PAGE = 1000;
 const MAX_CURSORS = 256;
 const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+const DEFAULT_NEW_FILE_MODE = 0o600;
 
 async function digestFile(filePath: string): Promise<string> {
   const file = await fsp.open(filePath, fs.constants.O_RDONLY | NOFOLLOW);
@@ -73,14 +74,40 @@ function info(stat: fs.Stats | fs.BigIntStats): FileInfo {
   return {
     kind,
     size: Number(stat.size),
+    blocks: Number('blocks' in stat ? stat.blocks : 0),
     mtimeMs:
-      'mtimeNs' in stat ? Number(stat.mtimeNs) / 1e6 : Number(stat.mtimeMs),
+      'mtimeNs' in stat
+        ? Number(stat.mtimeNs / 1_000_000n) +
+          Number(stat.mtimeNs % 1_000_000n) / 1e6
+        : Number(stat.mtimeMs),
     dev: String(stat.dev),
     ino: String(stat.ino),
     nlink: Number(stat.nlink),
     mode: Number(stat.mode),
     symbolicLink: stat.isSymbolicLink(),
   };
+}
+
+function validateMode(mode: number | undefined): number | undefined {
+  if (
+    mode !== undefined &&
+    (!Number.isSafeInteger(mode) || mode < 0 || mode > 0o777)
+  )
+    throw new Error('file mode must be an integer from 0 through 0o777');
+  return mode;
+}
+
+async function writeAll(
+  file: fs.promises.FileHandle,
+  data: Uint8Array,
+): Promise<void> {
+  let offset = 0;
+  while (offset < data.byteLength) {
+    const result = await file.write(data, offset, data.byteLength - offset);
+    if (result.bytesWritten <= 0)
+      throw new Error('file write made no progress');
+    offset += result.bytesWritten;
+  }
 }
 
 function under(root: string, candidate: string): boolean {
@@ -287,15 +314,7 @@ export function createScopedFiles(
       if (value.mode !== 'wx') throw new Error('read-only handle');
       const root = await options.roots.resolve(options.owner, value.rootId);
       writable(root);
-      let offset = 0;
-      while (offset < data.byteLength) {
-        const result = await value.file.write(
-          data,
-          offset,
-          data.byteLength - offset,
-        );
-        offset += result.bytesWritten;
-      }
+      await writeAll(value.file, data);
     },
     async syncHandle(handle) {
       await (await getHandle(handle)).file.sync();
@@ -417,17 +436,62 @@ export function createScopedFiles(
     async write(ref, data, writeOptions = {}) {
       if (data.byteLength > MAX_BYTES)
         throw new Error('write exceeds 16 MiB limit');
+      const requestedMode = validateMode(writeOptions.mode);
       const resolved = await resolve(ref);
       writable(resolved.root);
-      await ensureAncestors(resolved.root, path.dirname(resolved.path));
-      if (!writeOptions.ifAbsent) {
-        try {
-          if ((await lstat(resolved.path)).isSymbolicLink())
-            throw new Error('symlink targets are not allowed');
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        }
+      const parentPath = path.dirname(resolved.path);
+      await ensureAncestors(resolved.root, parentPath);
+
+      let existingMode: number | undefined;
+      try {
+        const destination = await lstat(resolved.path, { bigint: true });
+        if (destination.isSymbolicLink())
+          throw new Error('symlink targets are not allowed');
+        existingMode = Number(destination.mode) & 0o777;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
+
+      if (writeOptions.atomic) {
+        const targetMode =
+          requestedMode ?? existingMode ?? DEFAULT_NEW_FILE_MODE;
+        const temporaryPath = path.join(
+          parentPath,
+          `.${path.basename(resolved.path)}.${incarnation}.${randomUUID()}.tmp`,
+        );
+        let file: fs.promises.FileHandle | undefined;
+        let published = false;
+        try {
+          file = await fsp.open(
+            temporaryPath,
+            fs.constants.O_WRONLY |
+              fs.constants.O_CREAT |
+              fs.constants.O_EXCL |
+              NOFOLLOW,
+            targetMode,
+          );
+          await writeAll(file, data);
+          await file.sync();
+          await file.chmod(targetMode);
+          await file.close();
+          file = undefined;
+
+          await ensureAncestors(resolved.root, parentPath);
+          if (writeOptions.ifAbsent) {
+            await fsp.link(temporaryPath, resolved.path);
+            await fsp.unlink(temporaryPath);
+          } else {
+            await fsp.rename(temporaryPath, resolved.path);
+          }
+          published = true;
+        } finally {
+          await file?.close().catch(() => undefined);
+          if (!published)
+            await fsp.unlink(temporaryPath).catch(() => undefined);
+        }
+        return;
+      }
+
       const flags = writeOptions.ifAbsent
         ? fs.constants.O_WRONLY |
           fs.constants.O_CREAT |
@@ -437,17 +501,14 @@ export function createScopedFiles(
           fs.constants.O_CREAT |
           fs.constants.O_TRUNC |
           NOFOLLOW;
-      const file = await fsp.open(resolved.path, flags);
+      const file = await fsp.open(
+        resolved.path,
+        flags,
+        requestedMode ?? DEFAULT_NEW_FILE_MODE,
+      );
       try {
-        let offset = 0;
-        while (offset < data.byteLength) {
-          const result = await file.write(
-            data,
-            offset,
-            data.byteLength - offset,
-          );
-          offset += result.bytesWritten;
-        }
+        await writeAll(file, data);
+        if (requestedMode !== undefined) await file.chmod(requestedMode);
         await file.sync();
       } finally {
         await file.close();
@@ -491,15 +552,7 @@ export function createScopedFiles(
           const result = await input.read(buffer, 0, buffer.length, position);
           if (result.bytesRead === 0) break;
           sourceDigest.update(buffer.subarray(0, result.bytesRead));
-          let written = 0;
-          while (written < result.bytesRead) {
-            const out = await output.write(
-              buffer,
-              written,
-              result.bytesRead - written,
-            );
-            written += out.bytesWritten;
-          }
+          await writeAll(output, buffer.subarray(0, result.bytesRead));
           position += result.bytesRead;
         }
         await output.sync();

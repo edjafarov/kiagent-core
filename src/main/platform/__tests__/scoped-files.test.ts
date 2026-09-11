@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import {
+import fsPromises, {
   mkdtemp,
   mkdir,
   readFile,
@@ -8,15 +8,69 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
-import fsPromises from 'node:fs/promises';
 import * as nodeFs from 'node:fs';
 import type { PathLike, StatOptions } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import type { FileChange } from '@shared/plugin-files';
 import { createFileRootRegistry } from '../file-roots';
 import { createScopedFiles } from '../scoped-files';
-import type { FileChange } from '@shared/plugin-files';
+
+type ExtendedWriteOptions = {
+  ifAbsent?: boolean;
+  atomic?: boolean;
+  mode?: number;
+};
+
+async function writeWithOptions(
+  files: ReturnType<typeof createScopedFiles>,
+  ref: { root: string; rel: string },
+  data: Uint8Array,
+  options?: ExtendedWriteOptions,
+): Promise<void> {
+  await files.write(ref, data, options);
+}
+
+function injectFileHandleWrite(
+  marker: string,
+  outcome: 'partial-then-throw' | 'zero-then-throw',
+): { spy: jest.SpiedFunction<typeof fsPromises.open>; writes: () => number } {
+  const originalOpen = fsPromises.open.bind(fsPromises);
+  let writes = 0;
+  const spy = jest.spyOn(fsPromises, 'open');
+  spy.mockImplementation(
+    async (...args: Parameters<typeof fsPromises.open>) => {
+      const [filePath, flags, mode] = args;
+      const file =
+        mode === undefined
+          ? await originalOpen(filePath, flags)
+          : await originalOpen(filePath, flags, mode);
+      if (!String(args[0]).includes(marker)) return file;
+      const originalWrite = file.write.bind(file);
+      file.write = (async (...writeArgs: any[]) => {
+        writes += 1;
+        if (writes === 1 && outcome === 'partial-then-throw') {
+          const buffer = writeArgs[0] as Uint8Array;
+          const offset = Number(writeArgs[1]);
+          const length = Number(writeArgs[2]);
+          await originalWrite(
+            buffer,
+            offset,
+            Math.max(1, Math.floor(length / 2)),
+          );
+          throw new Error('injected partial write failure');
+        }
+        if (writes === 1 && outcome === 'zero-then-throw') {
+          return { bytesWritten: 0, buffer: writeArgs[0] };
+        }
+        throw new Error('injected retry after zero write');
+      }) as typeof file.write;
+      return file;
+    },
+  );
+  return { spy, writes: () => writes };
+}
 
 describe('scoped asynchronous filesystem', () => {
   let outside: string;
@@ -96,6 +150,97 @@ describe('scoped asynchronous filesystem', () => {
       files.write(ref, new Uint8Array([2]), { ifAbsent: true }),
     ).rejects.toThrow();
     expect(await files.read(ref)).toEqual(new Uint8Array([1]));
+  });
+
+  it('atomically replaces bytes, applies the requested mode, and preserves the old value on partial failure', async () => {
+    const ref = { root: grant.id, rel: 'atomic-failure.txt' };
+    await writeWithOptions(files, ref, new Uint8Array([1, 2, 3]), {
+      atomic: true,
+      mode: 0o600,
+    });
+
+    await writeWithOptions(files, ref, new Uint8Array([4, 5, 6]), {
+      atomic: true,
+      mode: 0o640,
+    });
+    await expect(files.read(ref)).resolves.toEqual(new Uint8Array([4, 5, 6]));
+    await expect(files.stat(ref)).resolves.toMatchObject({
+      mode: expect.any(Number),
+    });
+    expect((await files.stat(ref)).mode & 0o777).toBe(0o640);
+
+    const preserveRef = { root: grant.id, rel: 'atomic-preserve-mode.txt' };
+    await writeWithOptions(files, preserveRef, new Uint8Array([1]), {
+      atomic: true,
+      mode: 0o600,
+    });
+    await writeWithOptions(files, preserveRef, new Uint8Array([2]), {
+      atomic: true,
+    });
+    expect((await files.stat(preserveRef)).mode & 0o777).toBe(0o600);
+
+    const injected = injectFileHandleWrite(
+      'atomic-failure.txt',
+      'partial-then-throw',
+    );
+    try {
+      await expect(
+        writeWithOptions(files, ref, new Uint8Array([7, 8, 9, 10]), {
+          atomic: true,
+        }),
+      ).rejects.toThrow(/partial write/i);
+    } finally {
+      injected.spy.mockRestore();
+    }
+    await expect(files.read(ref)).resolves.toEqual(new Uint8Array([4, 5, 6]));
+    expect(injected.writes()).toBe(1);
+    const listed = await files.list({ root: grant.id, rel: '' });
+    expect(listed.entries.map((entry) => entry.name).sort()).toEqual([
+      'atomic-failure.txt',
+      'atomic-preserve-mode.txt',
+    ]);
+  });
+
+  it('keeps atomic ifAbsent collisions and rejects invalid modes without a symlink escape', async () => {
+    const ref = { root: grant.id, rel: 'atomic-collision.txt' };
+    await writeWithOptions(files, ref, new Uint8Array([1]), {
+      atomic: true,
+      ifAbsent: true,
+      mode: 0o600,
+    });
+    await expect(files.stat(ref)).resolves.toMatchObject({
+      mode: expect.any(Number),
+    });
+    expect((await files.stat(ref)).mode & 0o777).toBe(0o600);
+    await expect(
+      writeWithOptions(files, ref, new Uint8Array([2]), {
+        atomic: true,
+        ifAbsent: true,
+      }),
+    ).rejects.toThrow();
+    await expect(files.read(ref)).resolves.toEqual(new Uint8Array([1]));
+
+    await expect(
+      writeWithOptions(
+        files,
+        { root: grant.id, rel: 'invalid-mode.txt' },
+        new Uint8Array([3]),
+        { atomic: true, mode: 0o1000 },
+      ),
+    ).rejects.toThrow(/mode/i);
+
+    const outsideTarget = join(outside, 'atomic-outside.txt');
+    await writeFile(outsideTarget, 'committed');
+    await symlink(outsideTarget, join(root, 'atomic-link.txt'));
+    await expect(
+      writeWithOptions(
+        files,
+        { root: grant.id, rel: 'atomic-link.txt' },
+        new Uint8Array([9]),
+        { atomic: true },
+      ),
+    ).rejects.toThrow(/symlink|path|root/i);
+    await expect(readFile(outsideTarget, 'utf8')).resolves.toBe('committed');
   });
 
   it('stats ordinary files without treating the final file as an ancestor', async () => {
@@ -333,8 +478,12 @@ describe('scoped asynchronous filesystem', () => {
   it('does not create a native watcher after disposal during awaited setup', async () => {
     let entered!: () => void;
     let release!: () => void;
-    const reached = new Promise<void>((resolve) => (entered = resolve));
-    const blocked = new Promise<void>((resolve) => (release = resolve));
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const watchFactory = jest.fn(() => {
       throw new Error('native watcher must not start');
     });
@@ -361,8 +510,12 @@ describe('scoped asynchronous filesystem', () => {
   it('does not create a native watcher after owner abort during awaited setup', async () => {
     let entered!: () => void;
     let release!: () => void;
-    const reached = new Promise<void>((resolve) => (entered = resolve));
-    const blocked = new Promise<void>((resolve) => (release = resolve));
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const controller = new AbortController();
     const watchFactory = jest.fn(() => {
       throw new Error('native watcher must not start');
@@ -431,6 +584,43 @@ describe('scoped asynchronous filesystem', () => {
     );
     await files.closeHandle(handle);
     await expect(files.fstat(handle)).rejects.toThrow();
+  });
+
+  it('rejects zero-byte progress from the direct write loop', async () => {
+    const injected = injectFileHandleWrite(
+      'direct-zero.txt',
+      'zero-then-throw',
+    );
+    try {
+      await expect(
+        writeWithOptions(
+          files,
+          { root: grant.id, rel: 'direct-zero.txt' },
+          new Uint8Array([1, 2]),
+        ),
+      ).rejects.toThrow(/zero|progress/i);
+      expect(injected.writes()).toBe(1);
+    } finally {
+      injected.spy.mockRestore();
+    }
+  });
+
+  it('rejects zero-byte progress from the handle write loop', async () => {
+    const injected = injectFileHandleWrite(
+      'handle-zero.txt',
+      'zero-then-throw',
+    );
+    const ref = { root: grant.id, rel: 'handle-zero.txt' };
+    const handle = await files.open(ref, 'wx');
+    try {
+      await expect(
+        files.writeHandle(handle, new Uint8Array([1, 2])),
+      ).rejects.toThrow(/zero|progress/i);
+      expect(injected.writes()).toBe(1);
+    } finally {
+      await files.closeHandle(handle);
+      injected.spy.mockRestore();
+    }
   });
 
   it('keeps read handles read-only even when their root is writable', async () => {
@@ -508,6 +698,28 @@ describe('scoped asynchronous filesystem', () => {
     ).rejects.toThrow();
   });
 
+  it('rejects zero-byte progress from the move copy loop and removes the partial destination', async () => {
+    const source = { root: grant.id, rel: 'move-zero-source.txt' };
+    const destination = { root: grant.id, rel: 'move-zero-destination.txt' };
+    await files.write(source, new Uint8Array([7, 7, 7]));
+    const injected = injectFileHandleWrite(
+      'move-zero-destination.txt',
+      'zero-then-throw',
+    );
+    try {
+      await expect(files.move(source, destination)).rejects.toThrow(
+        /zero|progress/i,
+      );
+      expect(injected.writes()).toBe(1);
+    } finally {
+      injected.spy.mockRestore();
+    }
+    await expect(files.read(source)).resolves.toEqual(
+      new Uint8Array([7, 7, 7]),
+    );
+    await expect(files.read(destination)).rejects.toThrow();
+  });
+
   it('reports exact identity fields and preserves sub-millisecond mtime', async () => {
     await files.write(
       { root: grant.id, rel: 'identity.txt' },
@@ -518,6 +730,31 @@ describe('scoped asynchronous filesystem', () => {
     expect(info.ino).toEqual(expect.any(String));
     expect(info.nlink).toEqual(expect.any(Number));
     expect(info.mtimeMs % 1).not.toBeNaN();
+  });
+
+  it('forwards native blocks through stat and fstat and matches Number-stat mtime exactly', async () => {
+    const ref = { root: grant.id, rel: 'native-stat-fields.txt' };
+    const filePath = join(root, ref.rel);
+    await files.write(ref, new Uint8Array(4097).fill(7));
+    const native = await fsPromises.stat(filePath);
+    const scoped = await files.stat(ref);
+    const handle = await files.open(ref, 'r');
+    const scopedHandle = await files.fstat(handle);
+    await files.closeHandle(handle);
+
+    expect(scoped.blocks).toBe(native.blocks);
+    expect(scopedHandle.blocks).toBe(native.blocks);
+
+    const subMillisecondSeconds = 1_700_000_123.456789;
+    await fsPromises.utimes(
+      filePath,
+      subMillisecondSeconds,
+      subMillisecondSeconds,
+    );
+    const nativeAfter = await fsPromises.stat(filePath);
+    const scopedAfter = await files.stat(ref);
+    expect(nativeAfter.mtimeMs % 1).not.toBe(0);
+    expect(scopedAfter.mtimeMs).toBe(nativeAfter.mtimeMs);
   });
 
   it('does not expose raw root paths in file replies', async () => {
