@@ -191,6 +191,7 @@ export function buildSurfaces(deps: SurfaceDeps): {
     return db;
   };
   const eventSubs = new Map<string, () => void>();
+  const transactions = new Map<string, { owner: string; db: Database.Database }>();
   // The one place the optional dep is defaulted — every existing caller of
   // buildSurfaces() that doesn't wire `describe` keeps compiling, and the
   // default answers exactly what an absent provider would: `null`.
@@ -219,20 +220,65 @@ export function buildSurfaces(deps: SurfaceDeps): {
       fetch: (url, init) => netFetch(url, init),
     },
     db: {
+      begin: () => {
+        const d = openDb();
+        const token = `${deps.extensionId}:${Date.now()}:${Math.random()}`;
+        d.exec('BEGIN');
+        transactions.set(token, { owner: deps.extensionId, db: d });
+        return token;
+      },
+      commit: (token) => {
+        const tx = transactions.get(String(token));
+        if (!tx || tx.owner !== deps.extensionId) throw new Error('unknown transaction');
+        tx.db.exec('COMMIT');
+        transactions.delete(String(token));
+      },
+      rollback: (token) => {
+        const tx = transactions.get(String(token));
+        if (!tx || tx.owner !== deps.extensionId) throw new Error('unknown transaction');
+        tx.db.exec('ROLLBACK');
+        transactions.delete(String(token));
+      },
       // Every statement is policed first — see db-guard.ts for why "your own
       // database" was not, on its own, a boundary.
-      async exec(sql, params) {
-        assertAllowedSql(String(sql));
-        const d = openDb();
-        const p = (params ?? []) as unknown[];
-        if (p.length === 0) d.exec(String(sql));
-        else d.prepare(String(sql)).run(...p);
+      async exec(sqlOrToken, paramsOrSql, maybeParams) {
+        const token = typeof sqlOrToken === 'string' && transactions.has(sqlOrToken) ? sqlOrToken : undefined;
+        const actualSql = token ? String(paramsOrSql) : String(sqlOrToken);
+        const actualParams = token ? maybeParams : paramsOrSql;
+        assertAllowedSql(actualSql);
+        const d = token ? transactions.get(token)!.db : openDb();
+        const p = (actualParams ?? []) as unknown[];
+        if (p.length === 0) d.exec(actualSql);
+        else d.prepare(actualSql).run(...p);
       },
-      async query(sql, params) {
-        assertAllowedSql(String(sql));
-        return openDb()
-          .prepare(String(sql))
-          .all(...((params ?? []) as unknown[]));
+      async query(sqlOrToken, paramsOrSql, maybeParams) {
+        const token = typeof sqlOrToken === 'string' && transactions.has(sqlOrToken) ? sqlOrToken : undefined;
+        const actualSql = token ? String(paramsOrSql) : String(sqlOrToken);
+        const actualParams = token ? maybeParams : paramsOrSql;
+        assertAllowedSql(actualSql);
+        return (token ? transactions.get(token)!.db : openDb())
+          .prepare(actualSql)
+          .all(...((actualParams ?? []) as unknown[]));
+      },
+      batch: async (tokenOrSteps, maybeSteps) => {
+        const token = Array.isArray(tokenOrSteps) ? undefined : String(tokenOrSteps);
+        const steps = (token ? maybeSteps : tokenOrSteps) as Array<{ sql: string; params?: unknown[]; mode?: 'exec' | 'query' }>;
+        const d = token ? transactions.get(token)?.db : openDb();
+        if (!d) throw new Error('unknown transaction');
+        return steps.map((step) => {
+          assertAllowedSql(step.sql);
+          if (step.mode === 'query') return d.prepare(step.sql).all(...(step.params ?? []));
+          if ((step.params ?? []).length === 0) { d.exec(step.sql); return []; }
+          d.prepare(step.sql).run(...(step.params ?? []));
+          return [];
+        });
+      },
+      migrate: async (module, version, statements) => {
+        void module; void version;
+        for (const statement of statements as string[]) {
+          assertAllowedSql(statement);
+          openDb().exec(statement);
+        }
       },
     },
     ui: {
@@ -319,6 +365,10 @@ export function buildSurfaces(deps: SurfaceDeps): {
   return {
     surfaces,
     close() {
+      for (const [token, tx] of transactions) {
+        try { tx.db.exec('ROLLBACK'); } catch { /* already closed */ }
+        transactions.delete(token);
+      }
       eventSubs.forEach((off) => off());
       eventSubs.clear();
       db?.close();

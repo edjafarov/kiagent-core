@@ -17,7 +17,7 @@ import type {
   PullPhase,
   SourceDescriptor,
 } from './contracts';
-import type { SourceErrorCode } from './source-errors';
+import type { SourceErrorCode, WireErrorCode } from './source-errors';
 
 export const PLATFORM_API_VERSION = '2.1.0';
 
@@ -80,7 +80,10 @@ export type MainToChild =
       ns: 'source' | 'tool' | 'send';
       method: string;
       args: unknown[];
+      deadline?: number;
+      transactionId?: string;
     }
+  | { kind: 'cancel'; id: number }
   | {
       kind: 'reply';
       id: number;
@@ -92,7 +95,7 @@ export type MainToChild =
        *  session.credentials() whose refresher threw SourceAuthError) keeps
        *  its classification across the boundary. Both directions declare it:
        *  ONE endpoint implementation (transport.ts) serves both. */
-      code?: SourceErrorCode;
+      code?: WireErrorCode;
       /** The rejecting error's `Error.name` (e.g. 'LaneClosedError',
        *  'ModelChangedError') — class identity does not survive the fork,
        *  so a caller on the other side discriminates by `name`, never
@@ -116,7 +119,16 @@ export type ChildToMain =
   | { kind: 'ready' }
   | { kind: 'activated'; contributions: Contributions }
   | { kind: 'errored'; error: string }
-  | { kind: 'call'; id: number; ns: string; method: string; args: unknown[] }
+  | {
+      kind: 'call';
+      id: number;
+      ns: string;
+      method: string;
+      args: unknown[];
+      deadline?: number;
+      transactionId?: string;
+    }
+  | { kind: 'cancel'; id: number }
   | {
       kind: 'reply';
       id: number;
@@ -124,7 +136,7 @@ export type ChildToMain =
       value?: unknown;
       error?: string;
       /** See MainToChild's reply variant — symmetric by construction. */
-      code?: SourceErrorCode;
+      code?: WireErrorCode;
       /** See MainToChild's reply variant — symmetric by construction. */
       errorName?: string;
       /** See MainToChild's reply variant — symmetric by construction. */

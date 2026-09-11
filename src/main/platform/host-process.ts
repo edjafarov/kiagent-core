@@ -184,10 +184,10 @@ export function createExtensionHost(deps: HostDeps): {
         surfaces: surfacesHandle.surfaces,
         logSink: deps.logSink,
       });
-      endpoint.onCall((ns, method, args) =>
+      endpoint.onCall((ns, method, args, context) =>
         ns === 'auth' || ns === 'session'
           ? proxySet.handleCall(ns, method, args)
-          : router.dispatch(ns, method, args),
+          : router.dispatch(ns, method, args, context),
       );
 
       cleanup = () => {

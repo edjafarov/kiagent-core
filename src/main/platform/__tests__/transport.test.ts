@@ -41,6 +41,79 @@ jest.mock('electron', () => {
 });
 
 describe('createRpcEndpoint over the in-memory pair', () => {
+  it('rejects an aborted call before it is sent', async () => {
+    const { main, child } = createInMemoryHostPair();
+    const mainEp = createRpcEndpoint(main);
+    const childEp = createRpcEndpoint(child);
+    const controller = new AbortController();
+    controller.abort();
+    childEp.onCall(async () => 'unexpected');
+    await expect(
+      mainEp.call('query', 'count', [], { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('cancels a running handler and propagates metadata', async () => {
+    const { main, child } = createInMemoryHostPair();
+    const mainEp = createRpcEndpoint(main);
+    const childEp = createRpcEndpoint(child);
+    let seen: { transactionId?: string; aborted: boolean } | undefined;
+    childEp.onCall(async (_ns, _method, _args, context) => {
+      seen = { transactionId: context.transactionId, aborted: false };
+      await new Promise<void>((resolve) => {
+        context.signal.addEventListener('abort', () => {
+          seen!.aborted = true;
+          resolve();
+        });
+      });
+      throw Object.assign(new Error('cancelled by caller'), { code: 'auth' });
+    });
+    const controller = new AbortController();
+    const pending = mainEp.call('db', 'query', [], {
+      signal: controller.signal,
+      transactionId: 'tx-1',
+    });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(seen).toEqual({ transactionId: 'tx-1', aborted: true });
+  });
+
+  it('rejects on deadline and ignores a late reply', async () => {
+    const { main, child } = createInMemoryHostPair();
+    const mainEp = createRpcEndpoint(main);
+    const childEp = createRpcEndpoint(child);
+    childEp.onCall(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return 'late';
+    });
+    await expect(mainEp.call('query', 'count', [], { timeoutMs: 1 })).rejects.toMatchObject({
+      name: 'TimeoutError',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+
+  it('rejects pending calls and aborts handlers when the endpoint closes', async () => {
+    const { main, child } = createInMemoryHostPair();
+    const mainEp = createRpcEndpoint(main);
+    const childEp = createRpcEndpoint(child);
+    let aborted = false;
+    childEp.onCall(async (_ns, _method, _args, context) => {
+      await new Promise<void>((resolve) =>
+        context.signal.addEventListener('abort', () => {
+          aborted = true;
+          resolve();
+        }),
+      );
+      throw new Error('closed');
+    });
+    const pending = mainEp.call('query', 'count', []);
+    mainEp.dispose('endpoint closed');
+    await expect(pending).rejects.toThrow('endpoint closed');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(aborted).toBe(true);
+  });
+
   it('correlates call → reply in both directions', async () => {
     const { main, child } = createInMemoryHostPair();
     const mainEp = createRpcEndpoint(main);

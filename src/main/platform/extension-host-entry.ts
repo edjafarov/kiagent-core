@@ -36,6 +36,7 @@ import {
   type RpcEndpoint,
   type WireChannel,
 } from './transport';
+import { callHost, createPluginDbProxy } from './plugin-db-proxy';
 
 export interface ChildDeps {
   requireModule?(p: string): unknown;
@@ -60,7 +61,7 @@ export const NS_METHODS: Record<string, string[]> = {
     'accounts',
   ],
   net: ['fetch'],
-  db: ['exec', 'query'],
+  db: ['exec', 'query', 'batch', 'migrate', 'begin', 'commit', 'rollback'],
   ui: ['notify'],
   inference: ['complete', 'see', 'read', 'hear', 'lane', 'describe'],
   files: ['list', 'read', 'write', 'move'],
@@ -75,9 +76,10 @@ function buildRemoteHost(
   const host: Record<string, unknown> = {
     self: { id: boot.extensionId, dataDir: boot.dataDir },
     log: (level: unknown, msg: unknown) => {
-      void endpoint.call('base', 'log', [level, msg]).catch(() => {});
+      void callHost(endpoint, 'base', 'log', [level, msg]).catch(() => {});
     },
   };
+  if (boot.caps.includes('db')) host.db = createPluginDbProxy(endpoint);
   for (const cap of boot.caps) {
     if (cap === 'events') {
       host.events = {
@@ -86,20 +88,19 @@ function buildRemoteHost(
           if (!set) {
             set = new Set();
             eventCbs.set(event, set);
-            void endpoint.call('events', 'on', [event]).catch(() => {});
+            void callHost(endpoint, 'events', 'on', [event]).catch(() => {});
           }
           set.add(cb);
           return () => {
             set!.delete(cb);
             if (set!.size === 0) {
               eventCbs.delete(event);
-              void endpoint.call('events', 'off', [event]).catch(() => {});
+              void callHost(endpoint, 'events', 'off', [event]).catch(() => {});
             }
           };
         },
         emit(event: string, payload: unknown) {
-          void endpoint
-            .call('events', 'emit', [event, payload])
+          void callHost(endpoint, 'events', 'emit', [event, payload])
             .catch(() => {});
         },
       };
@@ -107,9 +108,10 @@ function buildRemoteHost(
     }
     const methods = NS_METHODS[cap];
     if (!methods) continue; // caps without an RPC namespace (unsafe.mainProcess)
+    if (cap === 'db') continue;
     const nsObj: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
     for (const m of methods) {
-      nsObj[m] = (...args: unknown[]) => endpoint.call(cap, m, args);
+      nsObj[m] = (...args: unknown[]) => callHost(endpoint, cap, m, args);
     }
     host[cap] = nsObj;
   }

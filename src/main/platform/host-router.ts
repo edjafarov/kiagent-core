@@ -8,6 +8,8 @@ import type { Cap, LogLevel } from '@shared/contracts';
 import type { LogSink } from '@main/core/engine/engine';
 
 import type { Surfaces } from './host-surfaces';
+import type { RpcCallContext } from './transport';
+import { HostCallInTransactionError } from './host-call-context';
 
 /** Exported for the drift guard (cap-table-completeness.test.ts), which
  *  derives the expected key set from manifest.ts's CAPS. */
@@ -28,11 +30,18 @@ export function createHostRouter(opts: {
   surfaces: Surfaces;
   logSink: LogSink;
 }): {
-  dispatch(ns: string, method: string, args: unknown[]): Promise<unknown>;
+    dispatch(
+      ns: string,
+      method: string,
+      args: unknown[],
+      context?: RpcCallContext,
+    ): Promise<unknown>;
 } {
   const scope = `extension:${opts.extensionId}`;
   return {
-    async dispatch(ns, method, args) {
+    async dispatch(ns, method, args, context) {
+      if (context?.transactionId && ns !== 'db')
+        throw new HostCallInTransactionError(ns);
       if (ns === 'base') {
         if (method === 'log') {
           opts.logSink.log(scope, args[0] as LogLevel, String(args[1]));

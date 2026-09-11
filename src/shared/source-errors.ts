@@ -10,7 +10,13 @@
  * classify identically to a locally-thrown SourceAuthError.
  */
 
+export type CapabilityErrorCode =
+  | 'HOST_CALL_IN_TRANSACTION'
+  | 'RPC_ABORTED'
+  | 'RPC_DEADLINE_EXCEEDED'
+  | 'DB_WORKER_CRASHED';
 export type SourceErrorCode = 'auth' | 'permanent';
+export type WireErrorCode = SourceErrorCode | CapabilityErrorCode;
 
 /** Authentication is gone (revoked/expired token, changed password): the
  *  engine commits `status: 'needsReauth'` and STOPS — no retries, no
@@ -33,6 +39,20 @@ export class SourcePermanentError extends Error {
 export function sourceErrorCode(err: unknown): SourceErrorCode | undefined {
   const code = (err as { code?: unknown } | null)?.code;
   return code === 'auth' || code === 'permanent' ? code : undefined;
+}
+
+export function wireErrorCode(err: unknown): WireErrorCode | undefined {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (
+    code === 'auth' ||
+    code === 'permanent' ||
+    code === 'HOST_CALL_IN_TRANSACTION' ||
+    code === 'RPC_ABORTED' ||
+    code === 'RPC_DEADLINE_EXCEEDED' ||
+    code === 'DB_WORKER_CRASHED'
+  )
+    return code;
+  return undefined;
 }
 
 /** A reconnect signed in as somebody else. Thrown by `Source.reauthenticate`
