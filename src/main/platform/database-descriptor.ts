@@ -54,9 +54,18 @@ export function parseDatabaseDescriptor(value: unknown): PluginDatabaseDescripto
     const tableRecord = table as Record<string, unknown>;
     return { name: tableRecord.name as string, columns: tableRecord.columns as string[] };
   });
+  if (new Set(tables.map((table) => table.name)).size !== tables.length) fail('duplicate legacy table name');
+  const tableNames = new Set(objects.filter((object) => object.kind === 'table').map((object) => object.name));
+  if (tables.some((table) => !tableNames.has(table.name))) fail('legacy table must reference a registered table object');
   const versionTable = legacy.versionTable;
   const userVersionModule = legacy.userVersionModule;
-  if (versionTable !== undefined && (typeof versionTable !== 'string' || !NAME.test(versionTable) || !registered.has(versionTable))) fail('invalid versionTable');
+  if (versionTable !== undefined && (typeof versionTable !== 'string' || !NAME.test(versionTable) || !tableNames.has(versionTable))) fail('invalid versionTable');
   if (userVersionModule !== undefined && (typeof userVersionModule !== 'string' || !NAME.test(userVersionModule) || !modules.some((m: { name: string }) => m.name === userVersionModule))) fail('invalid userVersionModule');
+  if (tables.length > 0 && versionTable === undefined && userVersionModule === undefined) {
+    const relevantModules = modules.filter((module) => tableNames.has(module.name));
+    if (relevantModules.some((module) => module.migrations.length === 0 || module.migrations[0].version !== 0)) {
+      fail('direct legacy storage requires a version-zero bootstrap migration for every module');
+    }
+  }
   return { format: 1, objects, modules, legacy: { tables, ...(typeof versionTable === 'string' ? { versionTable } : {}), ...(typeof userVersionModule === 'string' ? { userVersionModule } : {}) } };
 }

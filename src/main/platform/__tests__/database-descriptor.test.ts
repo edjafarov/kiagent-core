@@ -50,4 +50,42 @@ describe('parseDatabaseDescriptor', () => {
       }),
     ).toThrow();
   });
+
+  it('rejects duplicate legacy tables and non-table legacy references', () => {
+    expect(() =>
+      parseDatabaseDescriptor({
+        ...GOOD,
+        legacy: { ...GOOD.legacy, tables: [...GOOD.legacy.tables, { name: 'settings', columns: ['id'] }] },
+      }),
+    ).toThrow(/duplicate legacy table/);
+    expect(() =>
+      parseDatabaseDescriptor({
+        ...GOOD,
+        legacy: { ...GOOD.legacy, tables: [{ name: 'settings_idx', columns: ['id'] }] },
+      }),
+    ).toThrow(/registered table object/);
+    expect(() =>
+      parseDatabaseDescriptor({
+        ...GOOD,
+        legacy: { ...GOOD.legacy, versionTable: 'settings_idx' },
+      }),
+    ).toThrow(/versionTable/);
+  });
+
+  it('requires bootstrap zero only for direct unversioned legacy storage', () => {
+    expect(() =>
+      parseDatabaseDescriptor({
+        ...GOOD,
+        modules: [{ ...GOOD.modules[0], migrations: [{ version: 1, statements: ['CREATE TABLE {{settings}} (id TEXT)'] }] }],
+        legacy: { tables: [{ name: 'settings', columns: ['id'] }] },
+      }),
+    ).toThrow(/version-zero bootstrap/);
+    expect(
+      parseDatabaseDescriptor({
+        ...GOOD,
+        modules: [{ ...GOOD.modules[0], migrations: [{ version: 1, statements: ['CREATE TABLE {{settings}} (id TEXT)'] }] }],
+        legacy: { tables: [{ name: 'settings', columns: ['id'] }], versionTable: 'settings' },
+      }),
+    ).toEqual(expect.objectContaining({ modules: expect.any(Array) }));
+  });
 });
