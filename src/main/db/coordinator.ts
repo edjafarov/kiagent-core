@@ -23,7 +23,7 @@ const sameOwner = (a: DbOwner, b: DbOwner) => {
   return a.incarnation === undefined || b.incarnation === undefined || a.incarnation === b.incarnation;
 };
 
-export function createDbCoordinator(options: { leaseMs?: number } = {}): DbCoordinator {
+export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?: (owner: DbOwner) => Promise<void> | void } = {}): DbCoordinator {
   const leaseMs = options.leaseMs ?? 30_000;
   const queue: Job<unknown>[] = [];
   let active: Active | undefined;
@@ -52,6 +52,7 @@ export function createDbCoordinator(options: { leaseMs?: number } = {}): DbCoord
               ? expired.owner.handle ?? expired.owner.extensionId
               : expired.owner.handle ?? 'core';
             failedOwners.add(key);
+            await options.onOwnerFailure?.(expired.owner);
           }
         }
         }

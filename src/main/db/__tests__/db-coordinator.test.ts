@@ -75,4 +75,15 @@ describe('shared database coordinator', () => {
     await expect(coordinator.finish(oldOwner, token, async () => undefined)).resolves.toBeUndefined();
     await coordinator.close();
   });
+
+  it('poisons an owner after rollback failure while allowing another owner to proceed', async () => {
+    const coordinator = createDbCoordinator();
+    const bad = { kind: 'plugin' as const, extensionId: 'bad', handle: 'bad-1' };
+    const good = { kind: 'plugin' as const, extensionId: 'good', handle: 'good-1' };
+    const token = await coordinator.begin(bad, async () => undefined, async () => { throw new Error('rollback failed'); });
+    await expect(coordinator.release(bad)).rejects.toThrow('rollback failed');
+    await expect(coordinator.run(bad, token, async () => 1)).rejects.toMatchObject({ code: 'DB_OWNER_POISONED' });
+    await expect(coordinator.run(good, undefined, async () => 2)).resolves.toBe(2);
+    await coordinator.close();
+  });
 });

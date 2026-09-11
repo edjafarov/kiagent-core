@@ -35,7 +35,13 @@ const { dbPath } = workerData as { dbPath: string };
       now: () => new Date().toISOString(),
     });
     const pluginConnections = new Map<string, Awaited<ReturnType<typeof openPluginConnection>>>();
-    const coordinator = createDbCoordinator();
+    const coordinator = createDbCoordinator({ onOwnerFailure: async (owner) => {
+      if (owner.kind !== 'plugin') return;
+      const key = owner.handle ?? owner.extensionId;
+      const connection = pluginConnections.get(key);
+      pluginConnections.delete(key);
+      try { await connection?.close(); } catch { /* preserve the rollback failure */ }
+    } });
     const pluginHandler = createPluginOperationHandler(coordinator, pluginConnections);
     attachDbHost(
       parentPort!,

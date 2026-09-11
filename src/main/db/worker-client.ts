@@ -275,7 +275,7 @@ export async function openDbInWorker(
     run: (sql, params) => guard((c) => c.run(sql, params)),
     batch: (steps) => guard((c) => c.batch(steps)),
     proc: (name, args) => guard((c) => c.proc!(name, args)),
-    plugin: (request: PluginDbRequest) => guard((c) => c.plugin!(request)),
+    plugin: (request: PluginDbRequest, options?: { signal?: AbortSignal }) => guard((c) => c.plugin!(request, options)),
     isOpen: () => !permanentlyDead && !respawning && client.isOpen(),
     close: async () => {
       intentionalClose = true;

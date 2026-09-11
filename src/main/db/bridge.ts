@@ -165,7 +165,7 @@ export function createDbClient(port: PortLike): DbClient {
   let closed = false;
   const pending = new Map<
     number,
-    { resolve: (v: unknown) => void; reject: (e: Error) => void }
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; cleanup?: () => void }
   >();
 
   port.on('message', (raw: unknown) => {
@@ -174,6 +174,7 @@ export function createDbClient(port: PortLike): DbClient {
     const p = pending.get(res.id);
     if (!p) return;
     pending.delete(res.id);
+    p.cleanup?.();
     if (res.ok) {
       p.resolve(res.value);
     } else {
@@ -185,14 +186,25 @@ export function createDbClient(port: PortLike): DbClient {
 
   function request(msg: ReqBody | PluginReqBody, signal?: AbortSignal): Promise<unknown> {
     if (dead) return Promise.reject(dead);
+    if (signal?.aborted) return Promise.reject(Object.assign(new Error('database operation cancelled'), { code: 'DB_OPERATION_CANCELLED' }));
     const id = nextId;
     nextId += 1;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      let cleanup: (() => void) | undefined;
+      pending.set(id, { resolve, reject, get cleanup() { return cleanup; }, set cleanup(value) { cleanup = value; } });
       port.postMessage({ ...msg, id });
       if (signal) {
-        const cancel = () => port.postMessage({ op: 'plugin-cancel', requestId: id });
-        if (signal.aborted) cancel(); else signal.addEventListener('abort', cancel, { once: true });
+        const cancel = () => {
+          port.postMessage({ op: 'plugin-cancel', requestId: id });
+          const current = pending.get(id);
+          if (current) {
+            pending.delete(id);
+            current.cleanup?.();
+            current.reject(Object.assign(new Error('database operation cancelled'), { code: 'DB_OPERATION_CANCELLED' }));
+          }
+        };
+        signal.addEventListener('abort', cancel, { once: true });
+        cleanup = () => signal.removeEventListener('abort', cancel);
       }
     });
   }
@@ -235,7 +247,7 @@ export function createDbClient(port: PortLike): DbClient {
     _markDead: (err: Error) => {
       dead = err;
       closed = true;
-      for (const [, p] of pending) p.reject(err);
+      for (const [, p] of pending) { p.cleanup?.(); p.reject(err); }
       pending.clear();
     },
   };

@@ -47,6 +47,7 @@ describe('plugin bridge requests', () => {
     });
     const client = createDbClient(channel.port2);
     const token = (await client.plugin?.({ op: 'begin', owner })) as string;
+    await expect(client.plugin?.({ op: 'exec', owner, token, sql: '/*x*/ COMMIT' })).rejects.toMatchObject({ code: 'PLUGIN_SQL_TRANSACTION_CONTROL' });
     await client.plugin?.({ op: 'exec', owner, token, sql: 'INSERT INTO {{items}} VALUES (?)', params: [1] });
     const waiting = client.all('SELECT COUNT(*) AS c FROM "p_70__items"');
     const abort = new AbortController();
