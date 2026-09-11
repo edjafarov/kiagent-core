@@ -8,6 +8,7 @@ import { openDbInWorker } from './src/main/db/worker-client';
 import { openStore } from './src/main/core/store/store';
 import { createExtensionPlatform } from './src/main/platform/extension-platform';
 import { createNetworkService } from './src/main/platform/network-service';
+import { createNetFetch } from './src/main/platform/net-guard';
 import { createFileRootRegistry } from './src/main/platform/file-roots';
 import { nodeForkTransport } from './src/main/platform/transport';
 import { parseDatabaseDescriptor } from './src/main/platform/database-descriptor';
@@ -74,9 +75,10 @@ describe('shared plugin infrastructure real worker path', () => {
       { call(args: Record<string, unknown>): Promise<unknown> }
     >();
     const roots = createFileRootRegistry();
-    const fixtureServer = http.createServer((_req, res) => {
+    const fixtureServer = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'text/plain' });
-      res.write('fixture');
+      if (req.url === '/bounded') res.end('fixture');
+      else res.write('fixture');
     });
     let fixturePort = 0;
     let fixtureReady = true;
@@ -137,6 +139,8 @@ describe('shared plugin infrastructure real worker path', () => {
             { name: '${id}.proc', description: '', inputSchema: {}, call: async () => host.db.transaction(async tx => { await new Promise(resolve => setTimeout(resolve, 100)); await tx.exec('INSERT INTO {{settings}} VALUES (?, ?)', ['proc', '${value}']); }) },
             { name: '${id}.tx', description: '', inputSchema: {}, call: async () => host.db.transaction(async tx => { await tx.exec('INSERT INTO {{settings}} VALUES (?, ?)', ['rollback', 'x']); await new Promise((resolve, reject) => abort.signal.addEventListener('abort', () => reject(new Error('deactivated')), { once: true })); }) },
             { name: '${id}.net', description: '', inputSchema: {}, call: async () => host.net.fetch('http://127.0.0.1:${fixturePort}/wait', { signal: abort.signal, timeoutMs: 10000 }) },
+            { name: '${id}.netSuccess', description: '', inputSchema: {}, call: async () => host.net.fetch('http://fixture.public.test:${fixturePort}/bounded', { timeoutMs: 1000 }) },
+            { name: '${id}.rollbackRows', description: '', inputSchema: {}, call: async () => host.db.query("SELECT value FROM {{settings}} WHERE value = 'rollback'") },
             { name: '${id}.crash', description: '', inputSchema: {}, call: async () => { process.exit(1); } },
             { name: '${id}.watch', description: '', inputSchema: {}, call: async () => { const root = (await host.files.roots())[0]; await host.files.watch({ root: root.id, rel: '' }, undefined); return true; } },
           ] };
@@ -152,26 +156,92 @@ describe('shared plugin infrastructure real worker path', () => {
       detectLanguages: () => [],
       profileDir: tmp,
     });
+    const fixtureFetch = async (
+      url: string,
+      init?: RequestInit,
+    ): Promise<Response> =>
+      await new Promise<Response>((resolve, reject) => {
+        const parsed = new URL(url);
+        const request = http.request(
+          {
+            hostname: 'fixture.public.test',
+            port: fixturePort,
+            path: `${parsed.pathname}${parsed.search}`,
+            method: init?.method ?? 'GET',
+            headers: init?.headers
+              ? Object.fromEntries(new Headers(init.headers).entries())
+              : undefined,
+            lookup: (_hostname, options, callback) =>
+              options?.all
+                ? callback(null, [{ address: '127.0.0.1', family: 4 }])
+                : callback(null, '127.0.0.1', 4),
+          },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on('data', (chunk: Buffer) => chunks.push(chunk));
+            response.on('end', () =>
+              resolve(
+                new Response(Buffer.concat(chunks), {
+                  status: response.statusCode ?? 500,
+                  headers: {
+                    'content-type': String(
+                      response.headers['content-type'] ?? 'text/plain',
+                    ),
+                  },
+                }),
+              ),
+            );
+          },
+        );
+        const abort = () => {
+          request.destroy();
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        };
+        if (init?.signal?.aborted) abort();
+        else init?.signal?.addEventListener('abort', abort, { once: true });
+        request.on('error', (error) => reject(error));
+        request.end();
+      });
+    if (!fixtureReady) {
+      console.warn(
+        '[SKIP] shared-infrastructure-e2e fixtureFetch lookup assertion: loopback fixture listener could not bind',
+      );
+    } else {
+      const directFixtureResponse = await fixtureFetch(
+        `http://fixture.public.test:${fixturePort}/bounded`,
+      );
+      expect(directFixtureResponse.status).toBe(200);
+      await expect(directFixtureResponse.text()).resolves.toBe('fixture');
+    }
+    const boundedFetch = createNetFetch({
+      lookup: async (hostname) => {
+        if (hostname !== 'fixture.public.test') throw new Error(hostname);
+        return ['93.184.216.34'];
+      },
+      fetchImpl: fixtureFetch as typeof fetch,
+    });
     const networkFactory = (owner: string, signal: AbortSignal) => {
       serviceOwners.add(owner);
       return createNetworkService({
         owner,
         signal,
         log: () => undefined,
-        // This is deliberately abort-gated: it exercises the production
-        // NetworkService and forked RPC cancellation without opening a
-        // socket or depending on the loopback guard's rejection behavior.
-        fetch: async (_url, init) =>
-          await new Promise((_resolve, reject) => {
-            const abort = () =>
-              reject(
-                Object.assign(new Error('aborted'), {
-                  name: 'AbortError',
-                }),
-              );
-            if (init?.signal?.aborted) abort();
-            else init?.signal?.addEventListener('abort', abort, { once: true });
-          }),
+        fetch: async (url, init) =>
+          url.includes('fixture.public.test')
+            ? boundedFetch(url, init)
+            : await new Promise((_resolve, reject) => {
+                const abort = () =>
+                  reject(
+                    Object.assign(new Error('aborted'), {
+                      name: 'AbortError',
+                    }),
+                  );
+                if (init?.signal?.aborted) abort();
+                else
+                  init?.signal?.addEventListener('abort', abort, {
+                    once: true,
+                  });
+              }),
       });
     };
     const platform = createExtensionPlatform({
@@ -249,12 +319,29 @@ describe('shared plugin infrastructure real worker path', () => {
         throw new Error(
           `host activation failed: ${JSON.stringify(platform.snapshot())}`,
         );
+      expect(fs.existsSync(dbFile)).toBe(true);
+      for (const id of ['test.a', 'test.b'])
+        expect(
+          fs.existsSync(path.join(extensionDir, id, 'data', 'private.db')),
+        ).toBe(false);
       await expect(tools.get('test.a.read')!.call({})).resolves.toEqual([
         { value: 'A' },
       ]);
       await expect(tools.get('test.b.read')!.call({})).resolves.toEqual([
         { value: 'B' },
       ]);
+      if (!fixtureReady) {
+        console.warn(
+          '[SKIP] shared-infrastructure-e2e bounded network assertion: loopback fixture listener could not bind',
+        );
+      } else {
+        await expect(
+          tools.get('test.a.netSuccess')!.call({}),
+        ).resolves.toMatchObject({
+          status: 200,
+          body: expect.any(Uint8Array),
+        });
+      }
       await expect(tools.get('test.a.cross')!.call({})).rejects.toThrow();
       const crash = tools
         .get('test.b.crash')!
@@ -289,6 +376,9 @@ describe('shared plugin infrastructure real worker path', () => {
       await platform.setEnabled('test.a', true);
       await expect(tools.get('test.a.read')!.call({})).resolves.toEqual(
         expect.arrayContaining([{ value: 'A' }, { value: 'A' }]),
+      );
+      await expect(tools.get('test.a.rollbackRows')!.call({})).resolves.toEqual(
+        [],
       );
       expect(await platformStore.read.count({ includeArchived: true })).toBe(0);
     } finally {

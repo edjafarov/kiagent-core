@@ -201,8 +201,9 @@ need to *do* about them:
   register your `contributes.senders` — see §7.
 - `unsafe.mainProcess` is rejected outright for anything not shipped inside
   the app bundle. You cannot use it.
-- `inference` calls are **forced onto the `'interactive'` lane** by the host
-  surface, whatever `lane` you pass. Don't design around a background lane.
+- `inference` calls default to the `'interactive'` lane and honor a
+  caller-supplied `lane` option. A caller that selects `'background'` must
+  handle the lane being closed and failing fast with `LaneClosedError`.
 - `net.fetch` accepts `http(s)` URLs only, reaches **public internet
   destinations only**, and caps a response body at 50 MiB. Loopback, RFC1918
   LAN, link-local (including cloud metadata endpoints), CGNAT, IPv6

@@ -372,9 +372,10 @@ export function createExtensionPlatform(
         `platform.lane emit failed: ${String(err)}`,
       ),
   );
-  const offLane = deps.onLaneChange(() => laneGate.check());
   let running = false;
-  let offWorker = deps.db?.onWorkerRespawn?.(() => {
+  let offLane: (() => void) | undefined;
+  let offWorker: (() => void) | undefined;
+  const onWorkerRespawn = () => {
     if (!running) return;
     void Promise.all(
       [...entries.keys()].map((id) =>
@@ -392,7 +393,7 @@ export function createExtensionPlatform(
         `worker respawn host rebuild failed: ${String(error)}`,
       ),
     );
-  });
+  };
 
   // Per-extension lifecycle serialization. Keyed on the extension id string
   // (NOT on an Entry object reference) so a composite op that replaces an
@@ -419,6 +420,12 @@ export function createExtensionPlatform(
       ),
     );
     return run;
+  }
+
+  function registerLifecycleListeners(): void {
+    offLane ??= deps.onLaneChange(() => laneGate.check());
+    if (!offWorker && deps.db?.onWorkerRespawn)
+      offWorker = deps.db.onWorkerRespawn(onWorkerRespawn);
   }
 
   const installer = createInstaller({
@@ -898,6 +905,7 @@ export function createExtensionPlatform(
 
   return {
     async start() {
+      registerLifecycleListeners();
       running = true;
       fs.mkdirSync(deps.extDir, { recursive: true });
       const state = readEnabledState(deps.extDir);
@@ -982,7 +990,8 @@ export function createExtensionPlatform(
 
     async stop() {
       running = false;
-      offLane();
+      offLane?.();
+      offLane = undefined;
       offWorker?.();
       offWorker = undefined;
       installer.discardAll();
@@ -1084,8 +1093,6 @@ export function createExtensionPlatform(
     },
 
     async uninstall(id) {
-      const pending = entries.get(id);
-      pending?.activation?.abort();
       return runExclusive(id, async () => {
         const e = entries.get(id);
         if (!e) return { ok: false, error: `no such extension: ${id}` };
@@ -1103,10 +1110,19 @@ export function createExtensionPlatform(
             error: "Remove this connector's sources before uninstalling it.",
           };
         }
+        // Validation is complete. Only now may an in-flight activation be
+        // cancelled; rejected uninstalls must leave the previous host and
+        // registrations untouched.
+        e.activation?.abort();
         await deactivate(e);
         try {
           await resetPluginStorage(e, false);
         } catch (error) {
+          // Storage reset is the last fallible operation after deactivation.
+          // Restore the prior enabled/active state before reporting the
+          // rejection so callers never observe a half-uninstalled plugin.
+          e.enabled = true;
+          await activate(e);
           return {
             ok: false,
             error: error instanceof Error ? error.message : String(error),
