@@ -2,8 +2,14 @@
  * @jest-environment node
  */
 import { MessageChannel } from 'node:worker_threads';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { openDb, type AppDb } from '@main/db/app-db';
 import { createDbClient, attachDbHost } from '@main/db/bridge';
+import { createDbCoordinator } from '../coordinator';
+import { openPluginConnection } from '../plugin-connections';
+import { createPluginOperationHandler } from '../plugin-operations';
 
 // The bridge is exercised over a real worker_threads MessageChannel: messages
 // cross a structured-clone boundary exactly as they do between the main thread
@@ -182,5 +188,115 @@ describe('db bridge proc op (client.proc -> host-registered transaction)', () =>
       `SELECT COUNT(*) AS c FROM p WHERE v='doomed'`,
     );
     expect(Number(rows[0].c)).toBe(0);
+  });
+});
+
+describe('db bridge shared admission', () => {
+  it('serializes independent plugin begins with a queued core write on the production bridge', async () => {
+    const file = path.join(
+      os.tmpdir(),
+      `shared-admission-${process.pid}-${Date.now()}-${Math.random()}.sqlite`,
+    );
+    const seed = await openDb(file);
+    await seed.exec(
+      'CREATE TABLE "p_70__items" (v INTEGER); CREATE TABLE core_items (v INTEGER)',
+    );
+    await seed.close();
+
+    const db = await openDb(file);
+    const coordinator = createDbCoordinator();
+    const ownerA = {
+      kind: 'plugin' as const,
+      extensionId: 'p',
+      handle: 'admission-a',
+    };
+    const ownerB = {
+      kind: 'plugin' as const,
+      extensionId: 'p',
+      handle: 'admission-b',
+    };
+    const connA = await openPluginConnection(file, {
+      pluginId: 'p',
+      tables: ['items'],
+    });
+    const connB = await openPluginConnection(file, {
+      pluginId: 'p',
+      tables: ['items'],
+    });
+    const nativeBeginB = jest.fn(connB.begin.bind(connB));
+    connB.begin = nativeBeginB;
+    const connections = new Map([
+      [ownerA.handle, connA],
+      [ownerB.handle, connB],
+    ]);
+    const pluginHandler = createPluginOperationHandler(
+      coordinator,
+      connections,
+    );
+    const channel = new MessageChannel();
+    attachDbHost(channel.port1, db, undefined, undefined, {
+      coordinator,
+      coreOwner: { kind: 'core' as const, handle: 'core' },
+      plugin: pluginHandler,
+    });
+    const client = createDbClient(channel.port2);
+
+    try {
+      const tokenA = (await client.plugin?.({
+        op: 'begin',
+        owner: ownerA,
+      })) as string;
+      await client.plugin?.({
+        op: 'exec',
+        owner: ownerA,
+        token: tokenA,
+        sql: 'INSERT INTO {{items}} VALUES (?)',
+        params: [1],
+      });
+
+      const coreWrite = client.run('INSERT INTO core_items(v) VALUES (1)');
+      const tokenBPromise = client.plugin?.({
+        op: 'begin',
+        owner: ownerB,
+      }) as Promise<unknown>;
+      // Keep the intentionally failing pre-fix rejection handled until the
+      // assertion after owner A commits, avoiding an unhandled-rejection race.
+      tokenBPromise.catch(() => undefined);
+      for (let i = 0; i < 100 && coordinator.metrics().queued < 1; i += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(coordinator.metrics().queued).toBeGreaterThanOrEqual(1);
+      expect(nativeBeginB).not.toHaveBeenCalled();
+
+      await client.plugin?.({ op: 'commit', owner: ownerA, token: tokenA });
+      await coreWrite;
+      const tokenB = (await tokenBPromise) as string;
+      await client.plugin?.({
+        op: 'exec',
+        owner: ownerB,
+        token: tokenB,
+        sql: 'INSERT INTO {{items}} VALUES (?)',
+        params: [2],
+      });
+      await client.plugin?.({ op: 'commit', owner: ownerB, token: tokenB });
+
+      await expect(
+        client.all('SELECT v FROM "p_70__items" ORDER BY v'),
+      ).resolves.toEqual([{ v: 1 }, { v: 2 }]);
+      await expect(client.all('SELECT v FROM core_items')).resolves.toEqual([
+        { v: 1 },
+      ]);
+      expect(nativeBeginB).toHaveBeenCalledTimes(1);
+    } finally {
+      await coordinator.close().catch(() => undefined);
+      await connA.close().catch(() => undefined);
+      await connB.close().catch(() => undefined);
+      await db.close().catch(() => undefined);
+      channel.port1.close();
+      channel.port2.close();
+      for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
+        if (fs.existsSync(candidate)) fs.rmSync(candidate);
+      }
+    }
   });
 });
