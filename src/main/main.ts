@@ -1025,21 +1025,23 @@ app
       ),
       db: p.db,
       fileRoots,
-      mainApi: buildMainApi({
-        store: p.store,
-        fileRoots,
-        persistFileRoots,
-        // Non-null: startMcp() above is awaited before this point, so
-        // `mcp` always holds a live McpServerHandle here.
-        mcp: mcp!,
-        app,
-        dataDir,
-        tray: trayMenu,
-        ui: { openWindow: showMainWindow },
-        outbound: { service: outbound, routes: outboundRoutes },
-        readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
-        inference: p.inference,
-      }),
+      mainApiForPlugin: (callerPluginId) =>
+        buildMainApi({
+          callerPluginId,
+          store: p.store,
+          fileRoots,
+          persistFileRoots,
+          // Non-null: startMcp() above is awaited before this point, so
+          // `mcp` always holds a live McpServerHandle here.
+          mcp: mcp!,
+          app,
+          dataDir,
+          tray: trayMenu!,
+          ui: { openWindow: showMainWindow },
+          outbound: { service: outbound, routes: outboundRoutes },
+          readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
+          inference: p.inference,
+        }),
       store: p.store,
       sources: p.sources,
       senders: p.senders,

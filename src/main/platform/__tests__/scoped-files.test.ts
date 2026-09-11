@@ -89,6 +89,7 @@ describe('scoped asynchronous filesystem', () => {
       writable: true,
     });
     files = createScopedFiles({
+      pluginId: 'documents',
       owner: 'documents',
       roots: registry,
       emit: () => undefined,
@@ -101,6 +102,82 @@ describe('scoped asynchronous filesystem', () => {
     await rm(outside, { recursive: true, force: true });
     await rm(root, { recursive: true, force: true });
     if (movedRoot) await rm(movedRoot, { recursive: true, force: true });
+  });
+
+  it('resolves plugin-owned roots across activation owners and revokes every activation subscription', async () => {
+    const pluginId = 'kiagent.documents';
+    const activationOne = createScopedFiles({
+      pluginId,
+      owner: `${pluginId}:h1`,
+      roots: registry,
+      emit: () => undefined,
+      log: () => undefined,
+    } as never);
+    const activationTwo = createScopedFiles({
+      pluginId,
+      owner: `${pluginId}:h2`,
+      roots: registry,
+      emit: () => undefined,
+      log: () => undefined,
+    } as never);
+    const otherPlugin = createScopedFiles({
+      pluginId: 'kiagent.other',
+      owner: 'kiagent.other:h1',
+      roots: registry,
+      emit: () => undefined,
+      log: () => undefined,
+    } as never);
+    const granted = await registry.grant(pluginId, root, {
+      name: 'Documents',
+      writable: true,
+    });
+    const revoked: string[] = [];
+    const subscribe = (
+      registry as never as {
+        subscribe(
+          pluginId: string,
+          owner: string,
+          id: string,
+          onRevoke: () => void,
+        ): () => void;
+      }
+    ).subscribe.bind(registry);
+    const offOne = subscribe(pluginId, `${pluginId}:h1`, granted.id, () =>
+      revoked.push('h1'),
+    );
+    const offTwo = subscribe(pluginId, `${pluginId}:h2`, granted.id, () =>
+      revoked.push('h2'),
+    );
+
+    try {
+      await expect(
+        activationOne.stat({ root: granted.id, rel: '' }),
+      ).resolves.toMatchObject({ kind: 'directory' });
+      await expect(activationOne.roots()).resolves.toEqual([
+        expect.objectContaining({ id: granted.id }),
+      ]);
+      await expect(
+        activationOne.list({ root: granted.id, rel: '' }),
+      ).resolves.toMatchObject({ entries: expect.any(Array) });
+      await expect(
+        activationOne.watch({ root: granted.id, rel: '' }, () => undefined),
+      ).resolves.toBeDefined();
+      await expect(
+        activationTwo.stat({ root: granted.id, rel: '' }),
+      ).resolves.toMatchObject({ kind: 'directory' });
+      await expect(
+        otherPlugin.stat({ root: granted.id, rel: '' }),
+      ).rejects.toThrow(/unknown|revoked/i);
+
+      await registry.revoke(pluginId, granted.id);
+      expect(revoked.sort()).toEqual(['h1', 'h2']);
+    } finally {
+      offOne();
+      offTwo();
+      await activationOne.dispose();
+      await activationTwo.dispose();
+      await otherPlugin.dispose();
+    }
   });
 
   it.each([
@@ -370,6 +447,7 @@ describe('scoped asynchronous filesystem', () => {
         return directory;
       }) as typeof fsPromises.opendir);
     const failing = createScopedFiles({
+      pluginId: 'documents',
       owner: 'documents',
       roots: registry,
       lstat: (async (pathArg: PathLike, options?: StatOptions) => {
@@ -434,6 +512,7 @@ describe('scoped asynchronous filesystem', () => {
     fake.close = jest.fn();
     let callback: ((event: string, name: string) => void) | undefined;
     const controlled = createScopedFiles({
+      pluginId: 'documents',
       owner: 'documents',
       roots: registry,
       watch: ((_path, _options, onEvent) => {
@@ -463,6 +542,7 @@ describe('scoped asynchronous filesystem', () => {
     const fake = new EventEmitter() as unknown as nodeFs.FSWatcher;
     fake.close = jest.fn();
     const racing = createScopedFiles({
+      pluginId: 'documents',
       owner: 'documents',
       roots: registry,
       watch: (() => {
@@ -488,6 +568,7 @@ describe('scoped asynchronous filesystem', () => {
       throw new Error('native watcher must not start');
     });
     const late = createScopedFiles({
+      pluginId: 'documents',
       owner: 'documents',
       roots: registry,
       watch: watchFactory as typeof nodeFs.watch,
@@ -521,6 +602,7 @@ describe('scoped asynchronous filesystem', () => {
       throw new Error('native watcher must not start');
     });
     const late = createScopedFiles({
+      pluginId: 'documents',
       owner: 'documents',
       roots: registry,
       signal: controller.signal,
@@ -671,6 +753,7 @@ describe('scoped asynchronous filesystem', () => {
     let sourceChecks = 0;
     const originalLstat = fsPromises.lstat.bind(fsPromises);
     const raced = createScopedFiles({
+      pluginId: 'documents',
       owner: 'documents',
       roots: registry,
       lstat: (async (pathArg: PathLike, options?: StatOptions) => {

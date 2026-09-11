@@ -10,7 +10,7 @@ export interface FileRootGrant extends FileRoot {
 
 export interface FileRootRegistry {
   grant(
-    owner: string,
+    pluginId: string,
     rootPath: string,
     options: {
       name: string;
@@ -19,16 +19,23 @@ export interface FileRootRegistry {
       identity?: { dev: string; ino: string };
     },
   ): Promise<FileRoot>;
-  revoke(owner: string, id: string): Promise<void>;
-  resolve(owner: string, id: string): Promise<FileRootGrant>;
-  roots(owner: string): Promise<FileRoot[]>;
-  subscribe(owner: string, id: string, onRevoke: () => void): () => void;
+  revoke(pluginId: string, id: string): Promise<void>;
+  resolve(pluginId: string, id: string): Promise<FileRootGrant>;
+  roots(pluginId: string): Promise<FileRoot[]>;
+  subscribe(
+    pluginId: string,
+    activationOwner: string,
+    id: string,
+    onRevoke: () => void,
+  ): () => void;
   snapshot(): PersistedFileRoot[];
-  restore(records: readonly PersistedFileRoot[]): Promise<void>;
+  restore(
+    records: readonly (PersistedFileRoot | LegacyPersistedFileRoot)[],
+  ): Promise<void>;
 }
 
 export interface PersistedFileRoot {
-  owner: string;
+  pluginId: string;
   id: string;
   name: string;
   writable: boolean;
@@ -37,15 +44,19 @@ export interface PersistedFileRoot {
   ino: string;
 }
 
+interface LegacyPersistedFileRoot extends Omit<PersistedFileRoot, 'pluginId'> {
+  owner: string;
+}
+
 function opaqueId(): string {
   return `${process.pid.toString(36)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 export function createFileRootRegistry(): FileRootRegistry {
   const grants = new Map<string, Map<string, FileRootGrant>>();
-  const listeners = new Map<string, Set<() => void>>();
+  const listeners = new Map<string, Map<string, Set<() => void>>>();
   return {
-    async grant(owner, rootPath, options) {
+    async grant(pluginId, rootPath, options) {
       const absolute = path.resolve(rootPath);
       const stat = await fsp.lstat(absolute, { bigint: true });
       if (!stat.isDirectory() || stat.isSymbolicLink())
@@ -65,57 +76,66 @@ export function createFileRootRegistry(): FileRootRegistry {
         dev: String(stat.dev),
         ino: String(stat.ino),
       };
-      let ownerGrants = grants.get(owner);
-      if (!ownerGrants) {
-        ownerGrants = new Map();
-        grants.set(owner, ownerGrants);
+      let pluginGrants = grants.get(pluginId);
+      if (!pluginGrants) {
+        pluginGrants = new Map();
+        grants.set(pluginId, pluginGrants);
       }
-      ownerGrants.set(id, grant);
+      pluginGrants.set(id, grant);
       return { id: grant.id, name: grant.name, writable: grant.writable };
     },
-    async revoke(owner, id) {
-      grants.get(owner)?.delete(id);
-      const key = `${owner}\0${id}`;
+    async revoke(pluginId, id) {
+      grants.get(pluginId)?.delete(id);
+      const key = `${pluginId}\0${id}`;
       const callbacks = listeners.get(key);
       listeners.delete(key);
-      for (const callback of callbacks ?? []) callback();
+      for (const activationCallbacks of callbacks?.values() ?? [])
+        for (const callback of activationCallbacks) callback();
     },
-    async resolve(owner, id) {
-      const grant = grants.get(owner)?.get(id);
+    async resolve(pluginId, id) {
+      const grant = grants.get(pluginId)?.get(id);
       if (!grant) throw new Error(`file root ${id} is unknown or revoked`);
       return { ...grant };
     },
-    async roots(owner) {
-      return [...(grants.get(owner)?.values() ?? [])].map(
+    async roots(pluginId) {
+      return [...(grants.get(pluginId)?.values() ?? [])].map(
         ({ path: _path, dev: _dev, ino: _ino, ...root }) => root,
       );
     },
-    subscribe(owner, id, onRevoke) {
-      if (!grants.get(owner)?.has(id)) {
+    subscribe(pluginId, activationOwner, id, onRevoke) {
+      if (!grants.get(pluginId)?.has(id)) {
         onRevoke();
         return () => undefined;
       }
-      const key = `${owner}\0${id}`;
-      let callbacks = listeners.get(key);
+      const key = `${pluginId}\0${id}`;
+      let activationCallbacks = listeners.get(key);
+      if (!activationCallbacks) {
+        activationCallbacks = new Map();
+        listeners.set(key, activationCallbacks);
+      }
+      let callbacks = activationCallbacks.get(activationOwner);
       if (!callbacks) {
         callbacks = new Set();
-        listeners.set(key, callbacks);
+        activationCallbacks.set(activationOwner, callbacks);
       }
       callbacks.add(onRevoke);
       return () => {
         callbacks?.delete(onRevoke);
-        if (callbacks?.size === 0) listeners.delete(key);
+        if (callbacks?.size === 0) activationCallbacks?.delete(activationOwner);
+        if (activationCallbacks?.size === 0) listeners.delete(key);
       };
     },
     snapshot() {
-      return [...grants.entries()].flatMap(([owner, ownerGrants]) =>
-        [...ownerGrants.values()].map((grant) => ({ owner, ...grant })),
+      return [...grants.entries()].flatMap(([pluginId, pluginGrants]) =>
+        [...pluginGrants.values()].map((grant) => ({ pluginId, ...grant })),
       );
     },
     async restore(records) {
       for (const record of records) {
         try {
-          await this.grant(record.owner, record.path, {
+          const pluginId =
+            'pluginId' in record ? record.pluginId : record.owner;
+          await this.grant(pluginId, record.path, {
             id: record.id,
             name: record.name,
             writable: record.writable,

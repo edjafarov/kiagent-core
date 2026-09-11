@@ -82,7 +82,6 @@ describe('shared plugin infrastructure real worker path', () => {
     });
     let fixturePort = 0;
     let fixtureReady = true;
-    const serviceOwners = new Set<string>();
     try {
       await new Promise<void>((resolve, reject) => {
         fixtureServer.once('error', reject);
@@ -130,6 +129,7 @@ describe('shared plugin infrastructure real worker path', () => {
         path.join(dir, 'dist/index.js'),
         `
         let abort;
+        let fileRootId;
         module.exports = { async activate(host) {
           await host.db.exec('INSERT OR REPLACE INTO {{settings}} VALUES (?, ?)', ['value', '${value}']);
           abort = new AbortController();
@@ -143,6 +143,7 @@ describe('shared plugin infrastructure real worker path', () => {
             { name: '${id}.rollbackRows', description: '', inputSchema: {}, call: async () => host.db.query("SELECT value FROM {{settings}} WHERE value = 'rollback'") },
             { name: '${id}.crash', description: '', inputSchema: {}, call: async () => { process.exit(1); } },
             { name: '${id}.watch', description: '', inputSchema: {}, call: async () => { const root = (await host.files.roots())[0]; await host.files.watch({ root: root.id, rel: '' }, undefined); return true; } },
+            { name: '${id}.fileStat', description: '', inputSchema: {}, call: async () => { fileRootId ??= (await host.files.roots())[0]?.id; return host.files.stat({ root: fileRootId, rel: '' }); } },
           ] };
         }, deactivate() { abort?.abort(); } };
       `,
@@ -221,7 +222,6 @@ describe('shared plugin infrastructure real worker path', () => {
       fetchImpl: fixtureFetch as typeof fetch,
     });
     const networkFactory = (owner: string, signal: AbortSignal) => {
-      serviceOwners.add(owner);
       return createNetworkService({
         owner,
         signal,
@@ -302,7 +302,10 @@ describe('shared plugin infrastructure real worker path', () => {
     } as never);
     try {
       await roots.grant('test.a', tmp, { name: 'e2e', writable: true });
-      await roots.grant('test.b', tmp, { name: 'e2e', writable: true });
+      const testBRoot = await roots.grant('test.b', tmp, {
+        name: 'e2e',
+        writable: true,
+      });
       for (const extensionId of ['test.a', 'test.b'])
         await platformStore.consents.record({
           extensionId: extensionId as never,
@@ -313,8 +316,6 @@ describe('shared plugin infrastructure real worker path', () => {
       await platform.start();
       await platform.grantConsent('test.a');
       await platform.grantConsent('test.b');
-      for (const owner of serviceOwners)
-        await roots.grant(owner, tmp, { name: 'e2e', writable: true });
       if (!tools.has('test.a.read') || !tools.has('test.b.read'))
         throw new Error(
           `host activation failed: ${JSON.stringify(platform.snapshot())}`,
@@ -330,6 +331,9 @@ describe('shared plugin infrastructure real worker path', () => {
       await expect(tools.get('test.b.read')!.call({})).resolves.toEqual([
         { value: 'B' },
       ]);
+      await expect(
+        tools.get('test.a.fileStat')!.call({}),
+      ).resolves.toMatchObject({ kind: 'directory' });
       if (!fixtureReady) {
         console.warn(
           '[SKIP] shared-infrastructure-e2e bounded network assertion: loopback fixture listener could not bind',
@@ -351,6 +355,28 @@ describe('shared plugin infrastructure real worker path', () => {
         name: 'Error',
         message: 'extension process exited',
       });
+      await new Promise<void>((resolve, reject) => {
+        const start = Date.now();
+        const iv = setInterval(() => {
+          if (
+            platform.snapshot().find((entry) => entry.id === 'test.b')
+              ?.status === 'activated'
+          ) {
+            clearInterval(iv);
+            resolve();
+          } else if (Date.now() - start > 4000) {
+            clearInterval(iv);
+            reject(new Error('respawn did not re-activate in time'));
+          }
+        }, 5);
+      });
+      await expect(
+        tools.get('test.b.fileStat')!.call({}),
+      ).resolves.toMatchObject({ kind: 'directory' });
+      await roots.revoke('test.b', testBRoot.id);
+      await expect(tools.get('test.b.fileStat')!.call({})).rejects.toThrow(
+        /unknown|revoked|root/i,
+      );
       const proc = tools.get('test.a.proc')!.call({});
       await new Promise((resolve) => setTimeout(resolve, 10));
       const coreStarted = Date.now();

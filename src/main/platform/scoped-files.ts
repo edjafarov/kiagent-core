@@ -41,6 +41,9 @@ type Root = Awaited<ReturnType<FileRootRegistry['resolve']>>;
 type Cursor = { root: string; rel: string; index: number };
 
 export interface ScopedFilesOptions {
+  /** Stable grant namespace shared by all activations of this plugin. */
+  pluginId: string;
+  /** Activation/incarnation owner for handles, watchers and subscriptions. */
   owner: string;
   roots: FileRootRegistry;
   signal?: AbortSignal;
@@ -151,7 +154,7 @@ export function createScopedFiles(
     ref: FileRef,
   ): Promise<{ root: Root; path: string; rel: string }> => {
     check();
-    const root = await options.roots.resolve(options.owner, ref.root);
+    const root = await options.roots.resolve(options.pluginId, ref.root);
     const rel = validateRel(ref.rel);
     const target = path.resolve(root.path, ...(rel ? rel.split('/') : []));
     if (!under(root.path, target)) throw new Error('path escapes file root');
@@ -201,7 +204,7 @@ export function createScopedFiles(
     if (!value || !handle.id.startsWith(`${incarnation}:`))
       throw new Error('invalid or closed file handle');
     try {
-      await options.roots.resolve(options.owner, value.rootId);
+      await options.roots.resolve(options.pluginId, value.rootId);
     } catch {
       handles.delete(handle.id);
       await value.file.close().catch(() => undefined);
@@ -213,7 +216,7 @@ export function createScopedFiles(
   const service: ScopedFiles & { dispose(): Promise<void> } = {
     async roots(): Promise<FileRoot[]> {
       check();
-      return options.roots.roots(options.owner);
+      return options.roots.roots(options.pluginId);
     },
     async stat(ref) {
       const resolved = await resolve(ref);
@@ -271,7 +274,7 @@ export function createScopedFiles(
       );
       try {
         check();
-        await options.roots.resolve(options.owner, resolved.root.id);
+        await options.roots.resolve(options.pluginId, resolved.root.id);
         const id = `${incarnation}:${randomUUID()}`;
         handles.set(id, {
           file,
@@ -312,7 +315,7 @@ export function createScopedFiles(
         throw new Error('write exceeds 16 MiB limit');
       const value = await getHandle(handle);
       if (value.mode !== 'wx') throw new Error('read-only handle');
-      const root = await options.roots.resolve(options.owner, value.rootId);
+      const root = await options.roots.resolve(options.pluginId, value.rootId);
       writable(root);
       await writeAll(value.file, data);
     },
@@ -322,7 +325,7 @@ export function createScopedFiles(
     async setHandleMetadata(handle, metadata) {
       const value = await getHandle(handle);
       if (value.mode !== 'wx') throw new Error('read-only handle');
-      const root = await options.roots.resolve(options.owner, value.rootId);
+      const root = await options.roots.resolve(options.pluginId, value.rootId);
       writable(root);
       if (metadata.mode !== undefined) await value.file.chmod(metadata.mode);
       if (metadata.atimeMs !== undefined || metadata.mtimeMs !== undefined) {
@@ -621,7 +624,7 @@ export function createScopedFiles(
             pending = false;
             if (closed || disposed) return;
             void options.roots
-              .resolve(options.owner, resolved.root.id)
+              .resolve(options.pluginId, resolved.root.id)
               .then(async () => {
                 if (closed || disposed) return;
                 let kind: FileChange['kind'] = 'changed';
@@ -657,6 +660,7 @@ export function createScopedFiles(
       });
       watchers.add(watcher);
       unsubscribe = options.roots.subscribe(
+        options.pluginId,
         options.owner,
         resolved.root.id,
         closeWatcher,

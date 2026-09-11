@@ -46,8 +46,9 @@ export interface MainProcessApi {
   };
   paths: { userData: string; dataDir: string };
   /** Trusted root-grant channel for bundled extensions. Callers must supply
-   *  their immutable extension owner; ordinary connector RPC never receives
-   *  this object. */
+   *  their immutable plugin id; ordinary connector RPC never receives this
+   *  object. The main process binds this API to the bundled caller before it
+   *  is delivered. */
   files: {
     grantRoot(
       owner: string,
@@ -106,6 +107,8 @@ export interface BuildMainApiDeps {
   app: Pick<App, 'getPath' | 'getVersion' | 'getName'>;
   dataDir: string;
   fileRoots?: FileRootRegistry;
+  /** The bundled plugin this trusted API instance is entitled to act for. */
+  callerPluginId?: string;
   persistFileRoots?(): Promise<void>;
   tray: TrayMenuController;
   /** Window opener shared with the tray's "Open KIAgent" action —
@@ -129,6 +132,21 @@ export interface BuildMainApiDeps {
 }
 
 export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
+  const pluginIdPattern = /^[a-z0-9-]+\.[a-z0-9-]+$/;
+  const ownerForCaller = (owner: string): string => {
+    const normalizedOwner =
+      typeof owner === 'string' ? owner.trim() : String(owner);
+    if (
+      typeof owner !== 'string' ||
+      normalizedOwner !== owner ||
+      !pluginIdPattern.test(normalizedOwner) ||
+      normalizedOwner !== deps.callerPluginId
+    )
+      throw new Error(
+        'trusted file root owner must be the calling bundled plugin id',
+      );
+    return normalizedOwner;
+  };
   return {
     apiVersion: 1,
     identity: {
@@ -152,18 +170,22 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
       grantRoot: async (owner, rootPath, options) => {
         if (!deps.fileRoots)
           throw new Error('trusted file-root service is unavailable');
-        const result = await deps.fileRoots.grant(owner, rootPath, options);
+        const result = await deps.fileRoots.grant(
+          ownerForCaller(owner),
+          rootPath,
+          options,
+        );
         await deps.persistFileRoots?.();
         return result;
       },
       revokeRoot: async (owner, id) => {
         if (!deps.fileRoots)
           throw new Error('trusted file-root service is unavailable');
-        await deps.fileRoots.revoke(owner, id);
+        await deps.fileRoots.revoke(ownerForCaller(owner), id);
         await deps.persistFileRoots?.();
       },
       roots: (owner) =>
-        deps.fileRoots?.roots(owner) ??
+        deps.fileRoots?.roots(ownerForCaller(owner)) ??
         Promise.reject(new Error('trusted file-root service is unavailable')),
     },
     app: {
