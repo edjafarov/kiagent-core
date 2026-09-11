@@ -77,6 +77,11 @@ it('reopens the real worker, rejects the stale plugin handle, and re-registers t
       require.resolve('./fixtures/respawn-plugin-worker-entry.ts'),
       { execArgv },
     );
+    let workerRespawned!: () => void;
+    const workerRespawnedSignal = new Promise<void>((resolve) => {
+      workerRespawned = resolve;
+    });
+    db.onWorkerRespawn?.(workerRespawned);
     await db.registerPluginSource!('respawn.plugin', sourceFile, DESCRIPTOR);
     await db.plugin!({
       op: 'prepare',
@@ -96,21 +101,42 @@ it('reopens the real worker, rejects the stale plugin handle, and re-registers t
       }),
     ).resolves.toEqual([{ id: 'before-crash' }]);
 
+    // Hold admission with a real transaction so both the crash and the
+    // cancellable request are definitely queued before either can start.
+    const holdToken = (await db.plugin!({
+      op: 'begin',
+      owner: oldOwner,
+    })) as string;
+    const queuedSignal = new AbortController();
+    const queued = db.plugin!(
+      {
+        op: 'exec',
+        owner: oldOwner,
+        sql: 'INSERT INTO {{items}} VALUES (?)',
+        params: ['cancelled-before-start'],
+      },
+      { signal: queuedSignal.signal },
+    );
+    const queuedRejected = queued.catch((error: unknown) => {
+      expect(error).toMatchObject({ code: 'DB_OPERATION_CANCELLED' });
+    });
+    for (;;) {
+      const metrics = (await db.plugin!({ op: 'diagnostics' })) as {
+        queued: number;
+      };
+      if (metrics.queued >= 1) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    queuedSignal.abort();
+    await queuedRejected;
+    await db.plugin!({ op: 'rollback', owner: oldOwner, token: holdToken });
     const crash = db.proc!('crash', null).then(
       () => null,
       (error) => error,
     );
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    const queuedSignal = new AbortController();
-    const queued = db.plugin!(
-      { op: 'diagnostics' },
-      { signal: queuedSignal.signal },
-    );
-    setTimeout(() => queuedSignal.abort(), 5);
-    await expect(queued).rejects.toMatchObject({
-      code: 'DB_OPERATION_CANCELLED',
-    });
-    await expect(crash).resolves.toMatchObject({ code: DB_WORKER_CRASHED });
+    const crashOutcome = await crash;
+    expect(crashOutcome).toMatchObject({ code: DB_WORKER_CRASHED });
+    await workerRespawnedSignal;
     await expect(
       db.plugin!({
         op: 'query',
@@ -138,7 +164,7 @@ it('reopens the real worker, rejects the stale plugin handle, and re-registers t
       }),
     ).resolves.toEqual([{ id: 'before-crash' }]);
   } finally {
-    if (db?.isOpen()) await db.close();
+    if (db) await db.close().catch(() => undefined);
     for (const p of [
       file,
       `${file}-wal`,

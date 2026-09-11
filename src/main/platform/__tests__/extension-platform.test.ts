@@ -507,8 +507,183 @@ describe('createExtensionPlatform', () => {
         status: 'activated',
       }),
     ]);
+    expect(db.plugin).toHaveBeenCalledWith({
+      op: 'rearm',
+      pluginId: 'test.basic',
+    });
     expect(registry.has('basicsrc')).toBe(true);
     expect(owners.size).toBe(1);
+  });
+
+  it('surfaces rearm failure with the plugin id and leaves a durable recovery marker', async () => {
+    const fixture = path.join(tmp, 'db-rearm-failure-fixture');
+    fs.cpSync(FIXTURE, fixture, { recursive: true });
+    const manifestPath = path.join(fixture, 'manifest.json');
+    const manifest = JSON.parse(
+      fs.readFileSync(manifestPath, 'utf8'),
+    ) as Record<string, unknown>;
+    manifest.caps = ['net', 'db'];
+    manifest.database = { schema: 'database.json' };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    fs.writeFileSync(
+      path.join(fixture, 'database.json'),
+      JSON.stringify({
+        format: 1,
+        objects: [{ name: 'settings', kind: 'table' }],
+        modules: [],
+        legacy: { tables: [] },
+      }),
+    );
+
+    let resetFailed = false;
+    const db = {
+      registerPluginSource: jest.fn(async () => undefined),
+      plugin: jest.fn(async (request: { op: string }) => {
+        if (request.op === 'reset') {
+          resetFailed = true;
+          throw new Error('storage reset failed');
+        }
+        if (request.op === 'rearm' && resetFailed)
+          throw new Error('rearm could not be completed');
+        return undefined;
+      }),
+    };
+    platform = makePlatform({ db: db as never });
+    await platform.start();
+    const preview = await platform.installPreview(fixture);
+    if (!('token' in preview))
+      throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+    await expect(platform.installCommit(preview.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.basic',
+    });
+
+    await expect(platform.uninstall('test.basic')).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/test\.basic.*rearm/i),
+    });
+    const marker = path.join(tmp, 'extensions', '.recovery', 'test.basic.json');
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toEqual(
+      expect.objectContaining({ pluginId: 'test.basic' }),
+    );
+  });
+
+  it('restores earlier and later enabled extensions after the second reset fails', async () => {
+    const ids = ['test.reset-1', 'test.reset-2', 'test.reset-3'];
+    const resetCalls: string[] = [];
+    const db = {
+      registerPluginSource: jest.fn(async () => undefined),
+      plugin: jest.fn(async (request: { op: string; pluginId?: string }) => {
+        if (request.op === 'reset') {
+          resetCalls.push(request.pluginId!);
+          if (request.pluginId === ids[1])
+            throw new Error('second reset failed');
+        }
+        return undefined;
+      }),
+    };
+    platform = makePlatform({ db: db as never });
+    await platform.start();
+
+    for (const id of ids) {
+      const fixture = path.join(tmp, id);
+      fs.cpSync(FIXTURE, fixture, { recursive: true });
+      const manifestPath = path.join(fixture, 'manifest.json');
+      const manifest = JSON.parse(
+        fs.readFileSync(manifestPath, 'utf8'),
+      ) as Record<string, unknown>;
+      manifest.id = id;
+      manifest.caps = ['db'];
+      manifest.database = { schema: 'database.json' };
+      manifest.contributes = { sources: [], senders: [] };
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      fs.writeFileSync(
+        path.join(fixture, 'database.json'),
+        JSON.stringify({
+          format: 1,
+          objects: [{ name: 'settings', kind: 'table' }],
+          modules: [],
+          legacy: { tables: [] },
+        }),
+      );
+      const preview = await platform.installPreview(fixture);
+      if (!('token' in preview))
+        throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+      await expect(platform.installCommit(preview.token)).resolves.toEqual({
+        ok: true,
+        id,
+      });
+    }
+
+    const result = await platform.resetAll();
+
+    expect(result).toEqual({
+      ok: false,
+      failed: [
+        {
+          pluginId: ids[1],
+          code: 'PLUGIN_RECOVERY_REQUIRED',
+          error: expect.stringContaining('second reset failed'),
+        },
+      ],
+    });
+    expect(resetCalls).toEqual(ids.slice(0, 2));
+    expect(platform.snapshot()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: ids[0],
+          enabled: true,
+          status: 'activated',
+        }),
+        expect.objectContaining({
+          id: ids[1],
+          enabled: true,
+          status: 'errored',
+        }),
+        expect.objectContaining({
+          id: ids[2],
+          enabled: true,
+          status: 'activated',
+        }),
+      ]),
+    );
+    const marker = path.join(tmp, 'extensions', '.recovery', `${ids[1]}.json`);
+    expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toEqual(
+      expect.objectContaining({
+        pluginId: ids[1],
+        code: 'PLUGIN_RECOVERY_REQUIRED',
+      }),
+    );
+  });
+
+  it('keeps the extension directory until uninstall state persistence succeeds', async () => {
+    await platform.start();
+    await installFixture();
+    const extensionDir = path.join(tmp, 'extensions', 'test.basic');
+    const statePath = path.join(tmp, 'extensions', 'state.json');
+    const realWrite = fs.writeFileSync.bind(fs);
+    const stateWrite = jest
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation((...args) => {
+        if (String(args[0]) === statePath)
+          throw new Error('state write failed');
+        return realWrite(...args);
+      });
+
+    await expect(platform.uninstall('test.basic')).resolves.toEqual({
+      ok: false,
+      error: 'state write failed',
+    });
+    stateWrite.mockRestore();
+    expect(fs.existsSync(extensionDir)).toBe(true);
+    expect(platform.snapshot()).toEqual([
+      expect.objectContaining({
+        id: 'test.basic',
+        enabled: true,
+        status: 'activated',
+      }),
+    ]);
   });
 
   it('a storage-reset rejection preserves a previously disabled extension', async () => {

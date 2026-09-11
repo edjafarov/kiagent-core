@@ -1,8 +1,8 @@
 /**
  * The REAL capability implementations behind HostFor<G> namespaces — all
  * main-side; the child only holds proxies. One instance per extension per
- * host incarnation. files/commands are declared-but-rejected in this build
- * (spec §3.7): the cap validates and consents, but calls fail loudly.
+ * host incarnation. files and commands are implemented here; only commands
+ * outside the public capability surface are rejected by the router.
  */
 import type { EventMeta, LaneState, LogLevel, Query } from '@shared/contracts';
 import type { PluginDb, PluginDbParams, PluginDbStep } from '@shared/plugin-db';
@@ -12,6 +12,7 @@ import type { DbOwner, TxToken } from '@main/db/coordinator';
 import { pluginIdentifier } from '@shared/plugin-sql';
 import type { LogSink } from '@main/core/engine/engine';
 import { createNetworkService, type NetworkService } from './network-service';
+import { HostCallInTransactionError } from './host-call-context';
 
 export class CapError extends Error {}
 
@@ -366,19 +367,41 @@ export function buildSurfaces(deps: SurfaceDeps): {
     },
     db: {
       identifier: dbSurface.identifier as (...args: unknown[]) => unknown,
-      begin: () => dbCall({ op: 'begin', owner: requireDb().owner }),
-      commit: (token) =>
-        dbCall({
-          op: 'commit',
-          owner: requireDb().owner,
-          token: String(token),
-        }),
-      rollback: (token) =>
-        dbCall({
-          op: 'rollback',
-          owner: requireDb().owner,
-          token: String(token),
-        }),
+      begin: (...args: unknown[]) => {
+        const signal = args[0] as AbortSignal | undefined;
+        if (args[1] !== true) throw new HostCallInTransactionError('db');
+        return dbCall({ op: 'begin', owner: requireDb().owner }, signal);
+      },
+      commit: (...args: unknown[]) => {
+        const token = args[0];
+        const transactionId = args[1] as string | undefined;
+        const signal = args[2] as AbortSignal | undefined;
+        if (String(token) !== transactionId)
+          throw new HostCallInTransactionError('db');
+        return dbCall(
+          {
+            op: 'commit',
+            owner: requireDb().owner,
+            token: String(token),
+          },
+          signal,
+        );
+      },
+      rollback: (...args: unknown[]) => {
+        const token = args[0];
+        const transactionId = args[1] as string | undefined;
+        const signal = args[2] as AbortSignal | undefined;
+        if (String(token) !== transactionId)
+          throw new HostCallInTransactionError('db');
+        return dbCall(
+          {
+            op: 'rollback',
+            owner: requireDb().owner,
+            token: String(token),
+          },
+          signal,
+        );
+      },
       exec: dbSurface.exec as (...args: unknown[]) => unknown,
       query: dbSurface.query as (...args: unknown[]) => unknown,
       batch: dbSurface.batch as (...args: unknown[]) => unknown,

@@ -26,6 +26,7 @@
  */
 import dns from 'dns';
 import net from 'net';
+import { Agent } from 'undici';
 
 /**
  * `net.fetch` is reachable by semi-trusted third-party connector
@@ -166,6 +167,13 @@ export async function assertPublicHostname(
   hostname: string,
   lookup: LookupFn = defaultLookup,
 ): Promise<void> {
+  await validatedAddresses(hostname, lookup);
+}
+
+async function validatedAddresses(
+  hostname: string,
+  lookup: LookupFn,
+): Promise<string[]> {
   const bare = hostname.replace(/^\[|\]$/g, '');
   if (net.isIP(bare) !== 0) {
     const reason = classifyAddress(bare);
@@ -174,7 +182,7 @@ export async function assertPublicHostname(
         `net.fetch: refusing to connect to ${hostname} — that is ${reason}. Extensions may only reach public internet destinations.`,
       );
     }
-    return;
+    return [bare];
   }
 
   let addresses: string[];
@@ -198,6 +206,7 @@ export async function assertPublicHostname(
       `net.fetch: refusing to connect to ${hostname} — it resolves to ${blocked.a}, which is ${blocked.reason}. Extensions may only reach public internet destinations.`,
     );
   }
+  return addresses;
 }
 
 /** Validates scheme and destination, returning the parsed URL. */
@@ -381,6 +390,25 @@ export interface NetFetchOptions {
   fetchImpl?: typeof fetch;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Test seam; production uses an undici Agent pinned to validated answers. */
+  dispatcherFactory?: (hostname: string, addresses: string[]) => unknown;
+}
+
+function pinnedDispatcher(hostname: string, addresses: string[]): Agent {
+  return new Agent({
+    connect: {
+      servername: hostname,
+      lookup: (_hostname, options, callback) => {
+        const records = addresses.map((address) => ({
+          address,
+          family: net.isIP(address),
+        }));
+        if ((options as { all?: boolean }).all)
+          callback(null, records as never);
+        else callback(null, records[0].address, records[0].family as 4 | 6);
+      },
+    },
+  });
 }
 
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
@@ -399,6 +427,8 @@ export function createNetFetch(options: NetFetchOptions = {}) {
     fetchImpl = fetch,
     maxBytes = MAX_NET_FETCH_BYTES,
     maxRedirects = MAX_NET_FETCH_REDIRECTS,
+    dispatcherFactory = (hostname, addresses) =>
+      pinnedDispatcher(hostname, addresses),
   } = options;
 
   return async function netFetch(
@@ -406,78 +436,115 @@ export function createNetFetch(options: NetFetchOptions = {}) {
     init?: unknown,
   ): Promise<NetFetchResult> {
     const i = (init ?? {}) as NetFetchInit;
-    const signal = i.signal;
+    const { signal } = i;
     if (signal?.aborted) throw abortError();
     let target = String(url);
     let { method, body } = i;
     let headers = { ...(i.headers ?? {}) };
-    const { origin } = await raceAbort(
-      assertAllowedUrl(target, lookup),
+    const initial = await raceAbort(
+      (async () => {
+        let parsed: URL;
+        try {
+          parsed = new URL(target);
+        } catch {
+          throw new NetDestinationError(
+            `net.fetch: not a valid URL: ${target}`,
+          );
+        }
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+          throw new NetDestinationError('net.fetch only supports http(s) URLs');
+        return {
+          parsed,
+          addresses: await validatedAddresses(parsed.hostname, lookup),
+        };
+      })(),
       signal,
     );
+    const { parsed: initialUrl, addresses: initialAddresses } = initial;
+    const { origin } = initialUrl;
+    let addresses = initialAddresses;
 
     for (let hop = 0; ; hop += 1) {
       // eslint-disable-next-line no-await-in-loop
-      const res = await raceAbortWork(
-        () =>
-          fetchImpl(target, {
-            method,
-            headers,
-            body: body as BodyInit | undefined,
-            redirect: 'manual',
-            signal,
-          }),
-        signal,
-        (late) => void late.body?.cancel().catch(() => {}),
-      );
-
-      const location = res.headers.get('location');
-      if (!REDIRECT_STATUS.has(res.status) || !location) {
-        return {
-          status: res.status,
-          statusText: res.statusText,
-          headers: Object.fromEntries(res.headers.entries()),
-          // eslint-disable-next-line no-await-in-loop
-          body: await readBoundedBody(res, maxBytes, signal),
-        };
-      }
-
-      if (hop >= maxRedirects) {
-        // eslint-disable-next-line no-await-in-loop
-        void res.body?.cancel().catch(() => {});
-        throw new NetDestinationError(
-          `net.fetch: too many redirects (over ${maxRedirects}) starting at ${origin}`,
-        );
-      }
-
-      const removeCancel = cancelOnAbort(res, signal);
-      let parsed: URL;
+      const dispatcher = dispatcherFactory(
+        new URL(target).hostname,
+        addresses,
+      ) as {
+        close?: () => Promise<void>;
+      };
+      let res: Response | undefined;
+      let bodyConsumed = false;
       try {
-        const next = new URL(location, target);
-        parsed = await raceAbort(
-          assertAllowedUrl(next.toString(), lookup),
+        res = await raceAbortWork(
+          () =>
+            fetchImpl(target, {
+              method,
+              headers,
+              body: body as BodyInit | undefined,
+              redirect: 'manual',
+              signal,
+              dispatcher,
+            } as RequestInit),
           signal,
+          (late) => void late.body?.cancel().catch(() => {}),
         );
+
+        const location = res.headers.get('location');
+        if (!REDIRECT_STATUS.has(res.status) || !location) {
+          const responseBody = await readBoundedBody(res, maxBytes, signal);
+          bodyConsumed = true;
+          return {
+            status: res.status,
+            statusText: res.statusText,
+            headers: Object.fromEntries(res.headers.entries()),
+            body: responseBody,
+          };
+        }
+
+        if (hop >= maxRedirects)
+          throw new NetDestinationError(
+            `net.fetch: too many redirects (over ${maxRedirects}) starting at ${origin}`,
+          );
+
+        const removeCancel = cancelOnAbort(res, signal);
+        try {
+          const parsed = new URL(location, target);
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+            throw new NetDestinationError(
+              'net.fetch only supports http(s) URLs',
+            );
+          const nextAddresses = await raceAbort(
+            validatedAddresses(parsed.hostname, lookup),
+            signal,
+          );
+          if (parsed.origin !== origin) {
+            headers = Object.fromEntries(
+              Object.entries(headers).filter(
+                ([k]) => !CROSS_ORIGIN_STRIPPED.includes(k.toLowerCase()),
+              ),
+            );
+          }
+          if (
+            res.status === 303 ||
+            ((res.status === 301 || res.status === 302) &&
+              (method ?? 'GET').toUpperCase() === 'POST')
+          ) {
+            method = 'GET';
+            body = undefined;
+          }
+          addresses = nextAddresses;
+          target = parsed.toString();
+        } finally {
+          removeCancel();
+        }
       } finally {
-        removeCancel();
-        void res.body?.cancel().catch(() => {});
+        if (res && !bodyConsumed) void res.body?.cancel().catch(() => {});
+        try {
+          await dispatcher.close?.();
+        } catch {
+          // Dispatcher teardown must not replace the fetch/body error.
+        }
       }
-      if (parsed.origin !== origin) {
-        headers = Object.fromEntries(
-          Object.entries(headers).filter(
-            ([k]) => !CROSS_ORIGIN_STRIPPED.includes(k.toLowerCase()),
-          ),
-        );
-      }
-      if (
-        res.status === 303 ||
-        ((res.status === 301 || res.status === 302) &&
-          (method ?? 'GET').toUpperCase() === 'POST')
-      ) {
-        method = 'GET';
-        body = undefined;
-      }
-      target = parsed.toString();
       // eslint-disable-next-line no-await-in-loop
     }
   };

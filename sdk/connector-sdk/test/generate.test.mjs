@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -49,6 +49,26 @@ test('generated shared closure uses only local imports and no unchecked declarat
     const source = readFileSync(gen(f), 'utf8');
     assert.doesNotMatch(source, /from\s+['"](?:@shared\/|src\/shared\/)/);
     assert.doesNotMatch(source, /@ts-(?:ignore|nocheck|expect-error)/);
+  }
+});
+
+test('generated import and export specifiers stay inside generated source', () => {
+  const generatedRoot = resolve(sdkRoot, 'src', 'generated');
+  for (const f of GENERATED_SHARED) {
+    const source = readFileSync(gen(f), 'utf8');
+    const specifiers = [
+      ...source.matchAll(/\b(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]/g),
+      ...source.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g),
+    ].map((match) => match[1]);
+    for (const specifier of specifiers) {
+      assert.match(specifier, /^\.\.?\//, `${f}: ${specifier} must be relative`);
+      const base = resolve(generatedRoot, f);
+      const candidate = resolve(dirname(base), specifier);
+      const target = extname(candidate) ? candidate : `${candidate}.ts`;
+      const escaped = relative(generatedRoot, target);
+      assert.ok(!isAbsolute(escaped) && !escaped.startsWith('..'), `${f}: ${specifier} escapes generated source`);
+      assert.ok(existsSync(target), `${f}: ${specifier} does not resolve to a generated file`);
+    }
   }
 });
 

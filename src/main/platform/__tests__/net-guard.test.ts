@@ -4,6 +4,7 @@ import {
   classifyAddress,
   createNetFetch,
   normalizeAddress,
+  NetDestinationError,
   type LookupFn,
 } from '../net-guard';
 
@@ -113,6 +114,7 @@ describe('createNetFetch', () => {
     'api.example.com': ['93.184.216.34'],
     'other.example.com': ['198.41.0.4'],
     'evil.example.com': ['127.0.0.1'],
+    'ipv6.example.com': ['2606:4700:4700::1111'],
   });
 
   it('refuses a loopback URL before issuing any request', async () => {
@@ -132,6 +134,13 @@ describe('createNetFetch', () => {
     await expect(netFetch('file:///etc/passwd')).rejects.toThrow(/http\(s\)/);
   });
 
+  it('restores NetDestinationError for malformed URLs', async () => {
+    const netFetch = createNetFetch({ lookup: publicLookup });
+    await expect(netFetch('not a URL')).rejects.toBeInstanceOf(
+      NetDestinationError,
+    );
+  });
+
   it('returns status, headers and bounded bytes on a plain success', async () => {
     const netFetch = createNetFetch({
       lookup: publicLookup,
@@ -142,6 +151,96 @@ describe('createNetFetch', () => {
     expect(out.status).toBe(201);
     expect(out.headers['x-kia']).toBe('yes');
     expect(Buffer.from(out.body).toString()).toBe('body!');
+  });
+
+  it('passes the validated address pin to the connection dispatcher', async () => {
+    let pinned: string[] | undefined;
+    const netFetch = createNetFetch({
+      lookup: publicLookup,
+      dispatcherFactory: (_hostname, addresses) => {
+        pinned = [...addresses];
+        return { close: async () => undefined };
+      },
+      fetchImpl: (async (_url: string, init: RequestInit) => {
+        expect(
+          (init as RequestInit & { dispatcher?: unknown }).dispatcher,
+        ).toBeDefined();
+        return res(200, {}, 'pinned');
+      }) as unknown as typeof fetch,
+    });
+    await netFetch('https://api.example.com/pinned');
+    expect(pinned).toEqual(['93.184.216.34']);
+  });
+
+  it('passes the URL hostname as the actual TLS server name', async () => {
+    let dispatcher: unknown;
+    const netFetch = createNetFetch({
+      lookup: publicLookup,
+      fetchImpl: (async (_url: string, init: RequestInit) => {
+        dispatcher = (init as RequestInit & { dispatcher?: unknown })
+          .dispatcher;
+        return res(200, {}, 'ok');
+      }) as unknown as typeof fetch,
+    });
+
+    await netFetch('https://api.example.com/pinned');
+    const optionsSymbol = Object.getOwnPropertySymbols(dispatcher!).find(
+      (symbol) => String(symbol) === 'Symbol(options)',
+    );
+    const options = (dispatcher as Record<symbol, { connect?: unknown }>)[
+      optionsSymbol!
+    ];
+    expect((options.connect as { servername?: string }).servername).toBe(
+      'api.example.com',
+    );
+  });
+
+  it('re-pins every redirect hop, including a validated IPv6 destination', async () => {
+    const connections: Array<{ hostname: string; addresses: string[] }> = [];
+    const seen: string[] = [];
+    const netFetch = createNetFetch({
+      lookup: publicLookup,
+      dispatcherFactory: (hostname, addresses) => {
+        connections.push({ hostname, addresses });
+        return { close: async () => undefined };
+      },
+      fetchImpl: (async (url: string) => {
+        seen.push(url);
+        return seen.length === 1
+          ? res(302, { location: 'https://ipv6.example.com/next' })
+          : res(200, {}, 'landed');
+      }) as unknown as typeof fetch,
+    });
+
+    await expect(
+      netFetch('https://api.example.com/start'),
+    ).resolves.toMatchObject({
+      status: 200,
+    });
+    expect(connections).toEqual([
+      { hostname: 'api.example.com', addresses: ['93.184.216.34'] },
+      { hostname: 'ipv6.example.com', addresses: ['2606:4700:4700::1111'] },
+    ]);
+  });
+
+  it('destroys the dispatcher when the response body read fails', async () => {
+    const close = jest.fn(async () => undefined);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error('body failed'));
+      },
+    });
+    const netFetch = createNetFetch({
+      lookup: publicLookup,
+      dispatcherFactory: () => ({ close }),
+      fetchImpl: (async () =>
+        new Response(body, { status: 200 })) as unknown as typeof fetch,
+    });
+
+    await expect(netFetch('https://api.example.com/body')).rejects.toThrow(
+      'body failed',
+    );
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('follows a redirect to another public host', async () => {

@@ -650,6 +650,14 @@ export function createScopedFiles(
         watchers.delete(watcher);
         watcher.close();
         unsubscribe();
+        watcherCleanups.delete(unsubscribe);
+      };
+      const notifyRevocation = () => {
+        if (closed) return;
+        closeWatcher();
+        const event: FileChange = { ref: eventRef(), kind: 'rescan' };
+        options.emit?.(event);
+        onChange(event);
       };
       watcher.on('error', () => {
         if (closed) return;
@@ -659,13 +667,15 @@ export function createScopedFiles(
         onChange(event);
       });
       watchers.add(watcher);
-      unsubscribe = options.roots.subscribe(
+      const subscribed = options.roots.subscribe(
         options.pluginId,
         options.owner,
         resolved.root.id,
-        closeWatcher,
+        notifyRevocation,
       );
-      watcherCleanups.add(unsubscribe);
+      unsubscribe = subscribed;
+      if (closed || disposed) unsubscribe();
+      else watcherCleanups.add(unsubscribe);
       return {
         async close() {
           if (!closed) {

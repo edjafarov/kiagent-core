@@ -975,6 +975,49 @@ describe('store', () => {
     }
   });
 
+  it('holds admission across the database snapshot and sidecar export', async () => {
+    const file = path.join(dir, 'exclusive-export.db');
+    const base = await openDb(file);
+    await base.exec('CREATE TABLE export_probe (value INTEGER)');
+    let pluginWrite!: Promise<void>;
+    const heldDb: AppDb = {
+      ...(base as AppDb),
+      backup: async (destination) => {
+        pluginWrite = base.run('INSERT INTO export_probe(value) VALUES (1)');
+        await base.backup!(destination);
+      },
+      withExclusive: async (work) =>
+        base.withExclusive!(async (held) =>
+          work({
+            ...held,
+            backup: async (destination) => {
+              pluginWrite = base.run(
+                'INSERT INTO export_probe(value) VALUES (1)',
+              );
+              fs.writeFileSync(destination, base._conn!.serialize());
+            },
+          }),
+        ),
+    };
+    const isolated = openStore(heldDb, deps);
+    const destination = path.join(dir, 'exclusive-backup');
+    await isolated.maintenance.export(destination);
+    await pluginWrite;
+    const snapshot = new Database(path.join(destination, 'kiagent.db'));
+    try {
+      expect(
+        snapshot.prepare('SELECT COUNT(*) AS count FROM export_probe').get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      snapshot.close();
+    }
+    expect(
+      (await base.all('SELECT COUNT(*) AS count FROM export_probe'))[0].count,
+    ).toBe(1);
+    await isolated.close();
+    await base.close();
+  });
+
   it('multi-doc atomic rollback: a mid-transaction failure writes NONE of the batch', async () => {
     // Dedicated store whose detectLanguages throws on a poison marker, so the
     // failure originates INSIDE the commit transaction (in upsertDocument),

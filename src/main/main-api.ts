@@ -147,6 +147,18 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
       );
     return normalizedOwner;
   };
+  const rootMutations = new Map<string, Promise<unknown>>();
+  const serializeRootMutation = <T>(
+    caller: string,
+    work: () => Promise<T>,
+  ): Promise<T> => {
+    const prior = rootMutations.get(caller) ?? Promise.resolve();
+    const next = prior.catch(() => undefined).then(work);
+    rootMutations.set(caller, next);
+    return next.finally(() => {
+      if (rootMutations.get(caller) === next) rootMutations.delete(caller);
+    });
+  };
   return {
     apiVersion: 1,
     identity: {
@@ -170,19 +182,62 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
       grantRoot: async (owner, rootPath, options) => {
         if (!deps.fileRoots)
           throw new Error('trusted file-root service is unavailable');
-        const result = await deps.fileRoots.grant(
-          ownerForCaller(owner),
-          rootPath,
-          options,
-        );
-        await deps.persistFileRoots?.();
-        return result;
+        const caller = ownerForCaller(owner);
+        return serializeRootMutation(caller, async () => {
+          const prior = options.id
+            ? await deps
+                .fileRoots!.resolve(caller, options.id)
+                .catch(() => undefined)
+            : undefined;
+          const result = await deps.fileRoots!.grant(caller, rootPath, options);
+          try {
+            await deps.persistFileRoots?.();
+            return result;
+          } catch (error) {
+            // revoke() closes active watchers and their subscriptions. The
+            // compensating grant restores the root record, not those prior
+            // subscriptions; scoped-files emits a rescan/close notification
+            // so the plugin can re-subscribe after this rollback.
+            await deps
+              .fileRoots!.revoke(caller, result.id)
+              .catch(() => undefined);
+            if (prior)
+              await deps
+                .fileRoots!.grant(caller, prior.path, {
+                  id: prior.id,
+                  name: prior.name,
+                  writable: prior.writable,
+                  identity: { dev: prior.dev, ino: prior.ino },
+                })
+                .catch(() => undefined);
+            throw error;
+          }
+        });
       },
       revokeRoot: async (owner, id) => {
         if (!deps.fileRoots)
           throw new Error('trusted file-root service is unavailable');
-        await deps.fileRoots.revoke(ownerForCaller(owner), id);
-        await deps.persistFileRoots?.();
+        const caller = ownerForCaller(owner);
+        return serializeRootMutation(caller, async () => {
+          const prior = await deps.fileRoots!.resolve(caller, id);
+          await deps.fileRoots!.revoke(caller, id);
+          try {
+            await deps.persistFileRoots?.();
+          } catch (error) {
+            // The rollback grant restores the root only. Any watcher closed
+            // by revoke() must be recreated by the plugin after its rescan
+            // notification; prior subscriptions are not resurrected here.
+            await deps
+              .fileRoots!.grant(caller, prior.path, {
+                id: prior.id,
+                name: prior.name,
+                writable: prior.writable,
+                identity: { dev: prior.dev, ino: prior.ino },
+              })
+              .catch(() => undefined);
+            throw error;
+          }
+        });
       },
       roots: (owner) =>
         deps.fileRoots?.roots(ownerForCaller(owner)) ??

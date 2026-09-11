@@ -122,6 +122,119 @@ describe('db bridge (client <-> host over MessageChannel)', () => {
       Array.from({ length: 50 }, (_, i) => `v${i}`),
     );
   });
+
+  it('delivers the real outcome when cancellation arrives after plugin execution starts', async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const began = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const done = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    channel.port1.close();
+    channel.port2.close();
+    channel = new MessageChannel();
+    attachDbHost(channel.port1, host, undefined, undefined, {
+      plugin: async () => {
+        started();
+        await done;
+        return { outcome: 'started' };
+      },
+    });
+    client = createDbClient(channel.port2);
+    const controller = new AbortController();
+    const request = client.plugin!(
+      { op: 'exec', owner: { kind: 'plugin', extensionId: 'cancelled' } },
+      { signal: controller.signal },
+    );
+    await began;
+    controller.abort();
+    release();
+    await expect(request).resolves.toEqual({ outcome: 'started' });
+  });
+
+  it('waits for an in-flight backup and coalesces concurrent close calls', async () => {
+    const coordinator = createDbCoordinator();
+    channel.port1.close();
+    channel.port2.close();
+    channel = new MessageChannel();
+    attachDbHost(channel.port1, host, undefined, undefined, { coordinator });
+    client = createDbClient(channel.port2);
+    let release!: () => void;
+    let started!: () => void;
+    const backupStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const backupGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const nativeBackup = host._conn!.backup.bind(host._conn!);
+    jest
+      .spyOn(host._conn!, 'backup')
+      .mockImplementation(async (destination) => {
+        started();
+        await backupGate;
+        return nativeBackup(destination);
+      });
+    const close = jest.spyOn(host, 'close');
+    const destination = path.join(
+      os.tmpdir(),
+      `db-bridge-close-${process.pid}-${Date.now()}.sqlite`,
+    );
+
+    try {
+      const backup = client.backup!(destination);
+      await backupStarted;
+      const firstClose = client.close();
+      const secondClose = client.close();
+      expect(close).not.toHaveBeenCalled();
+      release();
+      await expect(backup).resolves.toBeUndefined();
+      await expect(Promise.all([firstClose, secondClose])).resolves.toEqual([
+        undefined,
+        undefined,
+      ]);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const file of [
+        destination,
+        `${destination}-wal`,
+        `${destination}-shm`,
+      ])
+        if (fs.existsSync(file)) fs.rmSync(file, { force: true });
+    }
+  });
+
+  it('rejects plugin work queued during close with the stable coordinator code', async () => {
+    const coordinator = createDbCoordinator();
+    const core = { kind: 'core' as const, handle: 'core' };
+    await coordinator.begin(core, () => undefined);
+    channel.port1.close();
+    channel.port2.close();
+    channel = new MessageChannel();
+    attachDbHost(channel.port1, host, undefined, undefined, {
+      coordinator,
+      plugin: (request, signal) =>
+        coordinator.run(
+          { kind: 'plugin', extensionId: 'queued' },
+          undefined,
+          () => ({ op: request.op }),
+          signal,
+          'plugin.test',
+        ),
+    });
+    client = createDbClient(channel.port2);
+    const queued = client.plugin!({
+      op: 'exec',
+      owner: { kind: 'plugin', extensionId: 'queued' },
+    });
+    const closing = client.close();
+    await expect(queued).rejects.toMatchObject({
+      code: 'DB_COORDINATOR_CLOSED',
+    });
+    await closing;
+  });
 });
 
 // The `proc` op runs a host-registered procedure inside the worker as ONE

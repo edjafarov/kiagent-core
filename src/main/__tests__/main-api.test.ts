@@ -1,8 +1,15 @@
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildMainApi } from '../main-api';
 import type { CoreStore } from '../core/store/store';
 import type { McpServerHandle } from '../core/mcp/server';
 import type { TrayMenuController } from '../tray-menu';
 import type { OutboundService } from '../outbound/service';
+import {
+  createFileRootRegistry,
+  createFileRootsPersistence,
+} from '../platform/file-roots';
 
 function stubStore(): {
   store: CoreStore;
@@ -130,6 +137,182 @@ function stubOutbound(handleRemoteResult: boolean): {
 }
 
 describe('buildMainApi', () => {
+  it('rolls back an in-memory grant when root persistence fails', async () => {
+    const { store } = stubStore();
+    const { mcp } = stubMcp();
+    const { tray } = stubTray();
+    const fileRoots = {
+      grant: jest.fn(async () => ({
+        id: 'new-root',
+        name: 'Root',
+        writable: true,
+      })),
+      revoke: jest.fn(async () => undefined),
+      roots: jest.fn(async () => []),
+    };
+    const mainApi = buildMainApi({
+      store,
+      mcp,
+      app: stubApp(),
+      dataDir: '/fake/data',
+      tray,
+      ui: { openWindow: () => {} },
+      outbound: stubOutbound(true).outbound,
+      fileRoots: fileRoots as never,
+      callerPluginId: 'kiagent.documents',
+      persistFileRoots: async () => {
+        throw new Error('disk full');
+      },
+    });
+    await expect(
+      mainApi.files.grantRoot('kiagent.documents', '/tmp/root', {
+        name: 'Root',
+        writable: true,
+      }),
+    ).rejects.toThrow('disk full');
+    expect(fileRoots.revoke).toHaveBeenCalledWith(
+      'kiagent.documents',
+      'new-root',
+    );
+  });
+
+  it('restores a revoked root when root persistence fails', async () => {
+    const { store } = stubStore();
+    const { mcp } = stubMcp();
+    const { tray } = stubTray();
+    const prior = {
+      id: 'root',
+      name: 'Root',
+      writable: true,
+      path: '/tmp/root',
+      dev: '1',
+      ino: '2',
+    };
+    const fileRoots = {
+      resolve: jest.fn(async () => prior),
+      revoke: jest.fn(async () => undefined),
+      grant: jest.fn(async () => ({
+        id: prior.id,
+        name: prior.name,
+        writable: prior.writable,
+      })),
+      roots: jest.fn(async () => []),
+    };
+    const mainApi = buildMainApi({
+      store,
+      mcp,
+      app: stubApp(),
+      dataDir: '/fake/data',
+      tray,
+      ui: { openWindow: () => {} },
+      outbound: stubOutbound(true).outbound,
+      fileRoots: fileRoots as never,
+      callerPluginId: 'kiagent.documents',
+      persistFileRoots: async () => {
+        throw new Error('disk full');
+      },
+    });
+    await expect(
+      mainApi.files.revokeRoot('kiagent.documents', prior.id),
+    ).rejects.toThrow('disk full');
+    expect(fileRoots.grant).toHaveBeenCalledWith(
+      'kiagent.documents',
+      '/tmp/root',
+      {
+        id: 'root',
+        name: 'Root',
+        writable: true,
+        identity: { dev: '1', ino: '2' },
+      },
+    );
+  });
+
+  it('serializes same-owner grants so a failed first persist cannot remove the second grant', async () => {
+    const rootOne = await mkdtemp(join(tmpdir(), 'main-api-root-one-'));
+    const rootTwo = await mkdtemp(join(tmpdir(), 'main-api-root-two-'));
+    const persistFile = join(
+      tmpdir(),
+      `main-api-roots-${process.pid}-${Date.now()}.json`,
+    );
+    const { store } = stubStore();
+    const { mcp } = stubMcp();
+    const { tray } = stubTray();
+    const fileRoots = createFileRootRegistry();
+    const persist = createFileRootsPersistence(persistFile, fileRoots);
+    let failFirstPersist = true;
+    let firstPersistEntered!: () => void;
+    const firstPersistReady = new Promise<void>((resolve) => {
+      firstPersistEntered = resolve;
+    });
+    let releaseFirstPersist!: () => void;
+    const firstPersistGate = new Promise<void>((resolve) => {
+      releaseFirstPersist = resolve;
+    });
+    const mainApi = buildMainApi({
+      store,
+      mcp,
+      app: stubApp(),
+      dataDir: '/fake/data',
+      tray,
+      ui: { openWindow: () => {} },
+      outbound: stubOutbound(true).outbound,
+      fileRoots,
+      callerPluginId: 'kiagent.documents',
+      persistFileRoots: async () => {
+        if (failFirstPersist) {
+          failFirstPersist = false;
+          firstPersistEntered();
+          await firstPersistGate;
+          throw new Error('disk full');
+        }
+        await persist();
+      },
+    });
+
+    try {
+      const first = mainApi.files.grantRoot('kiagent.documents', rootOne, {
+        id: 'shared-root',
+        name: 'First',
+        writable: true,
+      });
+      await firstPersistReady;
+      const second = mainApi.files.grantRoot('kiagent.documents', rootTwo, {
+        id: 'shared-root',
+        name: 'Second',
+        writable: false,
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      releaseFirstPersist();
+
+      await expect(first).rejects.toThrow('disk full');
+      await expect(second).resolves.toMatchObject({
+        id: 'shared-root',
+        name: 'Second',
+        writable: false,
+      });
+      const resolvedRootTwo = await realpath(rootTwo);
+      await expect(
+        fileRoots.resolve('kiagent.documents', 'shared-root'),
+      ).resolves.toMatchObject({
+        path: resolvedRootTwo,
+        name: 'Second',
+        writable: false,
+      });
+      expect(JSON.parse(await readFile(persistFile, 'utf8'))).toEqual([
+        expect.objectContaining({
+          pluginId: 'kiagent.documents',
+          id: 'shared-root',
+          path: resolvedRootTwo,
+          name: 'Second',
+          writable: false,
+        }),
+      ]);
+    } finally {
+      await rm(rootOne, { recursive: true, force: true });
+      await rm(rootTwo, { recursive: true, force: true });
+      await rm(persistFile, { force: true });
+    }
+  });
   it.each(['kiagent.other', 'kiagent.documents:h1'])(
     'rejects a root grant owner that is not the calling bundled plugin id (%s)',
     async (owner) => {

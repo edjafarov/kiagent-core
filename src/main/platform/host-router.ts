@@ -42,6 +42,26 @@ export function createHostRouter(opts: {
     async dispatch(ns, method, args, context) {
       if (context?.transactionId && ns !== 'db')
         throw new HostCallInTransactionError(ns);
+      if (ns === 'db') {
+        const hasContext = !!context?.transactionId;
+        const isSdkBoundary = !!context?.transactionBoundary;
+        const token = String(args[0]);
+        const tokenOverload =
+          (method === 'exec' || method === 'query') &&
+          typeof args[0] === 'string' &&
+          typeof args[1] === 'string';
+        const batchTokenOverload =
+          method === 'batch' && !Array.isArray(args[0]);
+        if (
+          (method === 'begin' && (!isSdkBoundary || hasContext)) ||
+          (method === 'begin' && hasContext) ||
+          ((method === 'commit' || method === 'rollback') &&
+            (!hasContext || token !== context?.transactionId)) ||
+          ((tokenOverload || batchTokenOverload) &&
+            (!hasContext || token !== context?.transactionId))
+        )
+          throw new HostCallInTransactionError(ns);
+      }
       if (ns === 'base') {
         if (method === 'log') {
           opts.logSink.log(scope, args[0] as LogLevel, String(args[1]));
@@ -77,8 +97,30 @@ export function createHostRouter(opts: {
       // argument. Append the host-owned signal only for cancellable service
       // calls; the surface functions keep their public arity for ordinary
       // callers and never let a child forge this signal.
-      if (context?.signal && (ns === 'db' || ns === 'net'))
+      if (
+        ns === 'db' &&
+        (method === 'begin' || method === 'commit' || method === 'rollback')
+      ) {
+        if (method === 'commit' || method === 'rollback')
+          return fn(...args, context?.transactionId, context?.signal);
+        return fn(...args, context?.signal, context?.transactionBoundary);
+      }
+      if (context?.signal && ns === 'db') {
+        if (method === 'exec' || method === 'query') {
+          const positional = [...args];
+          while (positional.length < 3) positional.push(undefined);
+          return fn(...positional, context.signal);
+        }
+        if (method === 'migrate')
+          return fn(...args.slice(0, 3), context.signal);
+        if (method === 'batch') {
+          const positional = [...args];
+          while (positional.length < 2) positional.push(undefined);
+          return fn(...positional, context.signal);
+        }
         return fn(...args, context.signal);
+      }
+      if (context?.signal && ns === 'net') return fn(...args, context.signal);
       return fn(...args);
     },
   };

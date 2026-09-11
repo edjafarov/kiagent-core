@@ -647,9 +647,11 @@ it('cancels a queued plugin transport request through the bridge fixture (transp
     { signal: abort.signal },
   );
   abort.abort();
-  await expect(queued).rejects.toMatchObject({
-    code: 'DB_OPERATION_CANCELLED',
-  });
+  // The transport-only fixture starts the handler immediately; cancellation
+  // after that point must deliver its real outcome rather than misreporting
+  // DB_OPERATION_CANCELLED. The coordinator-backed bridge test covers the
+  // true queued-before-start rejection.
+  await expect(queued).resolves.toEqual({ op: 'exec' });
   await db.plugin?.({ op: 'commit', owner, token });
   await expect(
     db.all('SELECT COUNT(*) AS c FROM "p_70__items"'),

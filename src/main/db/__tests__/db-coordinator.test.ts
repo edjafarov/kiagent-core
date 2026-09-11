@@ -537,4 +537,30 @@ describe('shared database coordinator', () => {
       },
     );
   });
+
+  it('never creates a 65th measurement bucket at the overflow boundary', async () => {
+    const coordinator = createDbCoordinator();
+    for (let index = 0; index < 64; index += 1)
+      await coordinator.run(
+        { kind: 'core', handle: `owner-${index}` },
+        undefined,
+        () => undefined,
+        undefined,
+        `operation-${index}`,
+      );
+    await coordinator.run(
+      { kind: 'core', handle: 'owner-overflow' },
+      undefined,
+      () => undefined,
+      undefined,
+      'operation-overflow',
+    );
+    expect(coordinator.metrics().operations).toHaveLength(64);
+    expect(
+      coordinator
+        .metrics()
+        .operations.find((entry) => entry.owner.handle === '__other__'),
+    ).toBeDefined();
+    await coordinator.close();
+  });
 });

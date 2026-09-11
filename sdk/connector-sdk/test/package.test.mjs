@@ -8,6 +8,7 @@ const sdkRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (f) => JSON.parse(readFileSync(join(sdkRoot, f), 'utf8'));
 const pkg = read('package.json');
 const lock = read('package-lock.json');
+const corePkg = JSON.parse(readFileSync(join(sdkRoot, '..', '..', 'package.json'), 'utf8'));
 
 // Nothing is ever installed in this package — it has no node_modules and
 // borrows core's toolchain off the ancestor `node_modules/.bin` on PATH — so
@@ -24,4 +25,5 @@ test('package-lock.json version matches package.json', () => {
 // shape, so a stray "0.84" or "next" cannot reach a published release note.
 test('kiagentCore names a concrete x.y.z core version', () => {
   assert.match(pkg.kiagentCore, /^\d+\.\d+\.\d+$/);
+  assert.equal(pkg.kiagentCore, corePkg.version);
 });

@@ -164,6 +164,40 @@ describe('runExtensionHost — bootstrap/activate', () => {
     expect(sawWireSignal).toBe(false);
   });
 
+  it('removes a remote file watcher callback when the watch RPC rejects', async () => {
+    const callback = jest.fn();
+    const mod = {
+      async activate(host: {
+        files: {
+          watch(
+            ref: unknown,
+            onChange: (event: unknown) => void,
+          ): Promise<unknown>;
+        };
+      }) {
+        await expect(host.files.watch({}, callback)).rejects.toThrow(
+          'watch failed',
+        );
+        return {};
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (_ns, method) => {
+      if (method === 'watch') throw new Error('watch failed');
+      return undefined;
+    });
+    const activated = waitFor('activated');
+    mainEp.post({ ...BOOT, caps: [...BOOT.caps, 'files'] as Cap[] });
+    await activated;
+    mainEp.post({
+      kind: 'file-change',
+      watchId: 1,
+      event: { ref: { root: 'r', rel: '' }, kind: 'changed' },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(callback).not.toHaveBeenCalled();
+  });
+
   it('tool calls dispatch to the kept tool object', async () => {
     const mod = {
       async activate() {

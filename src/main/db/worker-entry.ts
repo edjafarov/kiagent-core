@@ -76,14 +76,11 @@ function trustedLegacyPath(pluginId: string): string {
       { registry },
     );
     const preparations = new Map<string, Promise<unknown>>();
+    let shutdownPromise: Promise<void> | undefined;
     attachDbHost(
       parentPort!,
       db,
-      () => {
-        // close() handled and acknowledged — close the second native handle
-        // before releasing the worker, so no registry WAL handle survives.
-        void registry.close().finally(() => process.exit(0));
-      },
+      () => process.exit(0),
       {
         commit: (args) => writeTx.commit(args as CommitBatch),
         // The reconcile pass runs entirely on this connection: its staging
@@ -123,6 +120,20 @@ function trustedLegacyPath(pluginId: string): string {
       {
         coordinator,
         coreOwner: { kind: 'core', handle: 'core' },
+        onShutdown: async () => {
+          if (!shutdownPromise)
+            shutdownPromise = (async () => {
+              for (const key of [...pluginConnections.keys()]) {
+                const [extensionId] = key.split(':', 1);
+                await closePluginConnectionForOwner(
+                  { kind: 'plugin', extensionId, handle: key },
+                  pluginConnections,
+                );
+              }
+              await registry.close();
+            })();
+          await shutdownPromise;
+        },
         plugin: async (request: PluginDbRequest, signal?: AbortSignal) => {
           if (request.op === 'reset' || request.op === 'rearm') {
             if (request.op === 'reset') {

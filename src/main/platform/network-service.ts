@@ -33,6 +33,7 @@ export interface NetworkService {
 function abortError(): Error {
   const error = new Error('The operation was aborted');
   error.name = 'AbortError';
+  Object.assign(error, { code: 'RPC_ABORTED' });
   return error;
 }
 
