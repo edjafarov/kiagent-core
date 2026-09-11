@@ -73,6 +73,27 @@ function createLegacyFixture(file: string): {
   return { db, rows };
 }
 
+function rowidDescriptor() {
+  return parseDatabaseDescriptor({
+    format: 1,
+    objects: [{ name: 'items', kind: 'table' }],
+    modules: [
+      {
+        name: 'base',
+        migrations: [
+          {
+            version: 0,
+            statements: [
+              'CREATE TABLE {{items}} (id TEXT PRIMARY KEY, payload TEXT NOT NULL)',
+            ],
+          },
+        ],
+      },
+    ],
+    legacy: { tables: [{ name: 'items', columns: ['id', 'payload'] }] },
+  });
+}
+
 describe('registered legacy plugin import', () => {
   let sourceFile: string;
   let targetFile: string;
@@ -954,7 +975,11 @@ describe('registered legacy plugin import', () => {
     source.prepare('CREATE TABLE shadowed (rowid TEXT, value TEXT)').run();
     source
       .prepare('INSERT INTO shadowed(rowid, value) VALUES (?, ?)')
+      .run('deleted-user-rowid', 'deleted');
+    source
+      .prepare('INSERT INTO shadowed(rowid, value) VALUES (?, ?)')
       .run('user-rowid', 'preserved');
+    source.prepare('DELETE FROM shadowed WHERE value = ?').run('deleted');
     const registry = createPluginRegistry(target, { filename: targetFile });
     await registry.register({
       pluginId: 'legacy.shadowed-rowid',
@@ -971,11 +996,265 @@ describe('registered legacy plugin import', () => {
         (db) =>
           db
             .prepare(
-              'SELECT "rowid", value FROM "p_6c65676163792e736861646f7765642d726f776964__shadowed"',
+              'SELECT _rowid_ AS physical_rowid, "rowid", value FROM "p_6c65676163792e736861646f7765642d726f776964__shadowed" ORDER BY _rowid_',
             )
             .all(),
         { pluginId: 'legacy.shadowed-rowid', descriptor },
       ),
-    ).toEqual([{ rowid: 'user-rowid', value: 'preserved' }]);
+    ).toEqual([
+      { physical_rowid: 2n, rowid: 'user-rowid', value: 'preserved' },
+    ]);
+  });
+
+  it('preserves the physical rowid when user columns use both internal and rowid names', async () => {
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [{ name: 'shadowed', kind: 'table' }],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{shadowed}} (__kiagent_rowid TEXT, rowid TEXT, value TEXT)',
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: {
+        tables: [
+          {
+            name: 'shadowed',
+            columns: ['__kiagent_rowid', 'rowid', 'value'],
+          },
+        ],
+      },
+    });
+    source.close();
+    for (const candidate of [
+      sourceFile,
+      `${sourceFile}-wal`,
+      `${sourceFile}-shm`,
+    ])
+      if (fs.existsSync(candidate)) fs.rmSync(candidate);
+    source = new Database(sourceFile);
+    source.exec(
+      'CREATE TABLE shadowed (__kiagent_rowid TEXT, rowid TEXT, value TEXT)',
+    );
+    source
+      .prepare(
+        'INSERT INTO shadowed(__kiagent_rowid, rowid, value) VALUES (?, ?, ?)',
+      )
+      .run('deleted-internal', 'deleted-rowid', 'deleted');
+    source
+      .prepare(
+        'INSERT INTO shadowed(__kiagent_rowid, rowid, value) VALUES (?, ?, ?)',
+      )
+      .run('user-internal', 'user-rowid', 'preserved');
+    source.prepare('DELETE FROM shadowed WHERE value = ?').run('deleted');
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await registry.register({
+      pluginId: 'legacy.internal-rowid-collision',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    await importLegacyPluginStorage(registry, {
+      pluginId: 'legacy.internal-rowid-collision',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    expect(
+      registry.host(
+        (db) =>
+          db
+            .prepare(
+              'SELECT _rowid_ AS physical_rowid, "__kiagent_rowid", "rowid", value FROM "p_6c65676163792e696e7465726e616c2d726f7769642d636f6c6c6973696f6e__shadowed" ORDER BY _rowid_',
+            )
+            .all(),
+        { pluginId: 'legacy.internal-rowid-collision', descriptor },
+      ),
+    ).toEqual([
+      {
+        physical_rowid: 2n,
+        __kiagent_rowid: 'user-internal',
+        rowid: 'user-rowid',
+        value: 'preserved',
+      },
+    ]);
+  });
+
+  it('preserves rowid order for a TEXT primary-key rowid table', async () => {
+    const descriptor = rowidDescriptor();
+    source.close();
+    for (const candidate of [
+      sourceFile,
+      `${sourceFile}-wal`,
+      `${sourceFile}-shm`,
+    ])
+      if (fs.existsSync(candidate)) fs.rmSync(candidate);
+    source = new Database(sourceFile);
+    source
+      .prepare(
+        'CREATE TABLE items (id TEXT PRIMARY KEY, payload TEXT NOT NULL)',
+      )
+      .run();
+    source
+      .prepare('INSERT INTO items(id, payload) VALUES (?, ?)')
+      .run('b', 'first');
+    source
+      .prepare('INSERT INTO items(id, payload) VALUES (?, ?)')
+      .run('a', 'second');
+    source
+      .prepare('INSERT INTO items(id, payload) VALUES (?, ?)')
+      .run('c', 'third');
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await registry.register({
+      pluginId: 'rowid.order',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    await importLegacyPluginStorage(registry, {
+      pluginId: 'rowid.order',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    expect(
+      registry.host(
+        (db) =>
+          db
+            .prepare(
+              `SELECT _rowid_ AS rowid, id FROM "${registry.physicalName('rowid.order', 'items')}" ORDER BY rowid`,
+            )
+            .all(),
+        { pluginId: 'rowid.order', descriptor },
+      ),
+    ).toEqual([
+      { rowid: 1n, id: 'b' },
+      { rowid: 2n, id: 'a' },
+      { rowid: 3n, id: 'c' },
+    ]);
+  });
+
+  it('resumes a rowid-ordered import without renumbering across a chunk boundary', async () => {
+    const descriptor = rowidDescriptor();
+    source.close();
+    for (const candidate of [
+      sourceFile,
+      `${sourceFile}-wal`,
+      `${sourceFile}-shm`,
+    ])
+      if (fs.existsSync(candidate)) fs.rmSync(candidate);
+    source = new Database(sourceFile);
+    source
+      .prepare(
+        'CREATE TABLE items (id TEXT PRIMARY KEY, payload TEXT NOT NULL)',
+      )
+      .run();
+    for (const [id, payload] of [
+      ['b', 'first'],
+      ['a', 'second'],
+      ['d', 'third'],
+      ['c', 'fourth'],
+    ])
+      source
+        .prepare('INSERT INTO items(id, payload) VALUES (?, ?)')
+        .run(id, payload);
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await registry.register({
+      pluginId: 'rowid.resume',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    let chunks = 0;
+    await expect(
+      importLegacyPluginStorage(
+        registry,
+        { pluginId: 'rowid.resume', descriptor, legacyPath: sourceFile },
+        {
+          chunkSize: 2,
+          afterChunk: () => {
+            chunks++;
+            if (chunks === 1) throw new Error('rowid interruption');
+          },
+        },
+      ),
+    ).rejects.toThrow('rowid interruption');
+    await importLegacyPluginStorage(registry, {
+      pluginId: 'rowid.resume',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    expect(
+      registry.host(
+        (db) =>
+          db
+            .prepare(
+              `SELECT _rowid_ AS rowid, id FROM "${registry.physicalName('rowid.resume', 'items')}" ORDER BY rowid`,
+            )
+            .all(),
+        { pluginId: 'rowid.resume', descriptor },
+      ),
+    ).toEqual([
+      { rowid: 1n, id: 'b' },
+      { rowid: 2n, id: 'a' },
+      { rowid: 3n, id: 'd' },
+      { rowid: 4n, id: 'c' },
+    ]);
+  });
+
+  it('fails loudly when a target trigger changes an imported rowid', async () => {
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [
+        { name: 'items', kind: 'table' },
+        { name: 'move_rowid', kind: 'trigger' },
+      ],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{items}} (id TEXT PRIMARY KEY, payload TEXT NOT NULL)',
+                '/* keep this trigger active during row copy */ CREATE TRIGGER {{move_rowid}} AFTER INSERT ON {{items}} BEGIN UPDATE {{items}} SET rowid = rowid + 100 WHERE id = NEW.id; END',
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: { tables: [{ name: 'items', columns: ['id', 'payload'] }] },
+    });
+    source.close();
+    for (const candidate of [
+      sourceFile,
+      `${sourceFile}-wal`,
+      `${sourceFile}-shm`,
+    ])
+      if (fs.existsSync(candidate)) fs.rmSync(candidate);
+    source = new Database(sourceFile);
+    source
+      .prepare(
+        'CREATE TABLE items (id TEXT PRIMARY KEY, payload TEXT NOT NULL)',
+      )
+      .run();
+    source
+      .prepare('INSERT INTO items(id, payload) VALUES (?, ?)')
+      .run('one', 'payload');
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await registry.register({
+      pluginId: 'rowid.digest',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    await expect(
+      importLegacyPluginStorage(registry, {
+        pluginId: 'rowid.digest',
+        descriptor,
+        legacyPath: sourceFile,
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_DB_IMPORT_DIGEST_MISMATCH' });
   });
 });
