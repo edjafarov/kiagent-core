@@ -102,6 +102,9 @@ const schema = z.strictObject({
       .array(z.strictObject({ id: z.string(), title: z.string() }))
       .optional(),
   }),
+  database: z
+    .strictObject({ schema: z.string().min(1) })
+    .optional(),
 });
 
 export function parseManifest(
@@ -118,6 +121,11 @@ export function parseManifest(
     throw new ManifestError(`invalid manifest: ${where} — ${first.message}`);
   }
   const m = parsed.data;
+  if (m.caps.includes('db') && !m.database) {
+    throw new ManifestError(
+      'PLUGIN_DB_DESCRIPTOR_REQUIRED: database.schema is required for db-capability plugins',
+    );
+  }
   if (!semver.satisfies(PLATFORM_API_VERSION, m.engine)) {
     throw new ManifestError(
       `requires platform ${m.engine}; this build is ${PLATFORM_API_VERSION}`,
@@ -208,6 +216,16 @@ export function validateManifestDir(
     }
     if (fs.statSync(iconAbsPath).size > MAX_ICON_BYTES) {
       throw new ManifestError('icon must be 200 KB or smaller');
+    }
+  }
+  if (manifest.database) {
+    const schemaAbsPath = path.resolve(root, manifest.database.schema);
+    const schemaRel = path.relative(root, schemaAbsPath);
+    if (schemaRel.startsWith('..') || path.isAbsolute(schemaRel)) {
+      throw new ManifestError('database.schema must resolve inside the extension directory');
+    }
+    if (!fs.existsSync(schemaAbsPath)) {
+      throw new ManifestError(`database schema not found: ${manifest.database.schema}`);
     }
   }
   return { manifest, entryAbsPath };

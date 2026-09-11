@@ -19,7 +19,7 @@ import type {
 } from './contracts';
 import type { SourceErrorCode } from './source-errors';
 
-export const PLATFORM_API_VERSION = '2.0.0';
+export const PLATFORM_API_VERSION = '2.1.0';
 
 /** A Batch after the child mapped items through the source's toDocument —
  *  the generic Item type never crosses the wire. */

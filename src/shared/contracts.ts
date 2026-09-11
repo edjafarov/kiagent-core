@@ -997,6 +997,8 @@ export interface Manifest {
     commands?: Array<{ id: string; title: string }>;
   };
   caps: Cap[];
+  /** Declarative database descriptor path, required when caps includes db. */
+  database?: { schema: string };
 }
 
 /** A tool on the outward MCP surface. `call` captures the module's caps via
@@ -1016,14 +1018,9 @@ export interface McpTool {
   call(args: Record<string, unknown>): Promise<unknown>;
 }
 
-/** An extension's OWN database: its own tables in its own SQLite file. */
-export interface PrivateDb {
-  exec(sql: string, params?: unknown[]): Promise<void>;
-  query<Row = Record<string, unknown>>(
-    sql: string,
-    params?: unknown[],
-  ): Promise<Row[]>;
-}
+/** @deprecated Use PluginDb. Kept as a source-compatible name while the
+ * platform moves all plugins onto the shared worker-backed database. */
+export type PrivateDb = import('./plugin-db').PluginDb;
 
 /** Rooted at folders the USER approved for this extension — never the disk. */
 export interface ScopedFiles {

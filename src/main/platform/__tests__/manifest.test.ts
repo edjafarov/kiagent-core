@@ -110,6 +110,19 @@ describe('parseManifest', () => {
       ManifestError,
     );
   });
+
+  it('requires a database descriptor for db-capability manifests', () => {
+    expect(() => parseManifest({ ...GOOD, caps: ['db'] })).toThrow(
+      /PLUGIN_DB_DESCRIPTOR_REQUIRED/,
+    );
+    expect(
+      parseManifest({
+        ...GOOD,
+        caps: ['db'],
+        database: { schema: 'dist/database.json' },
+      }).database,
+    ).toEqual({ schema: 'dist/database.json' });
+  });
 });
 
 describe('source contributions (string | { id, oauth })', () => {
