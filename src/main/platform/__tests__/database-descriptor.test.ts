@@ -88,4 +88,26 @@ describe('parseDatabaseDescriptor', () => {
       }),
     ).toEqual(expect.objectContaining({ modules: expect.any(Array) }));
   });
+
+  it('checks every registered module without inferring table ownership', () => {
+    const direct = {
+      ...GOOD,
+      objects: [{ name: 'oidc_payload', kind: 'table' as const }],
+      modules: [
+        {
+          name: 'oauth',
+          migrations: [{ version: 1, statements: ['CREATE TABLE {{oidc_payload}} (id TEXT)'] }],
+        },
+      ],
+      legacy: { tables: [{ name: 'oidc_payload', columns: ['id'] }] },
+    };
+    expect(() => parseDatabaseDescriptor(direct)).toThrow(/version-zero bootstrap/);
+    expect(
+      parseDatabaseDescriptor({
+        ...direct,
+        modules: [{ ...direct.modules[0], migrations: [{ version: 0, statements: ['CREATE TABLE {{oidc_payload}} (id TEXT)'] }] }],
+      }),
+    ).toEqual(expect.objectContaining({ modules: expect.any(Array) }));
+    expect(() => parseDatabaseDescriptor({ ...direct, modules: [] })).toThrow(/at least one module/);
+  });
 });

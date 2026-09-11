@@ -62,8 +62,8 @@ export function parseDatabaseDescriptor(value: unknown): PluginDatabaseDescripto
   if (versionTable !== undefined && (typeof versionTable !== 'string' || !NAME.test(versionTable) || !tableNames.has(versionTable))) fail('invalid versionTable');
   if (userVersionModule !== undefined && (typeof userVersionModule !== 'string' || !NAME.test(userVersionModule) || !modules.some((m: { name: string }) => m.name === userVersionModule))) fail('invalid userVersionModule');
   if (tables.length > 0 && versionTable === undefined && userVersionModule === undefined) {
-    const relevantModules = modules.filter((module) => tableNames.has(module.name));
-    if (relevantModules.some((module) => module.migrations.length === 0 || module.migrations[0].version !== 0)) {
+    if (modules.length === 0) fail('direct legacy storage requires at least one module');
+    if (modules.some((module) => module.migrations.length === 0 || module.migrations[0].version !== 0)) {
       fail('direct legacy storage requires a version-zero bootstrap migration for every module');
     }
   }
