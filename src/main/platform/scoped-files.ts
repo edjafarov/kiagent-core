@@ -36,6 +36,7 @@ async function digestFile(filePath: string): Promise<string> {
   }
 }
 type Root = Awaited<ReturnType<FileRootRegistry['resolve']>>;
+type Cursor = { root: string; rel: string; index: number };
 
 export interface ScopedFilesOptions {
   owner: string;
@@ -43,17 +44,25 @@ export interface ScopedFilesOptions {
   signal?: AbortSignal;
   emit?: (event: FileChange) => void;
   log?: (message: string) => void;
+  lstat?: typeof fsp.lstat;
+  watch?: typeof fs.watch;
 }
 
 function validateRel(rel: string): string {
   if (rel.includes('\0')) throw new Error('path contains NUL');
-  if (path.posix.isAbsolute(rel) || path.win32.isAbsolute(rel) || /^\\\\/.test(rel))
+  if (
+    path.posix.isAbsolute(rel) ||
+    path.win32.isAbsolute(rel) ||
+    /^\\\\/.test(rel)
+  )
     throw new Error('absolute paths are not allowed');
   if (/^[A-Za-z]:/.test(rel)) throw new Error('drive paths are not allowed');
   const normalized = rel.replaceAll('\\', '/');
   const parts = normalized.split('/').filter(Boolean);
-  if (parts.some((part) => part === '..')) throw new Error('path traversal is not allowed');
-  return parts.join('/');
+  if (parts.some((part) => part === '..'))
+    throw new Error('path traversal is not allowed');
+  const normalizedParts = parts.filter((part) => part !== '.');
+  return normalizedParts.join('/');
 }
 
 function info(stat: fs.Stats | fs.BigIntStats): FileInfo {
@@ -63,7 +72,8 @@ function info(stat: fs.Stats | fs.BigIntStats): FileInfo {
   return {
     kind,
     size: Number(stat.size),
-    mtimeMs: 'mtimeNs' in stat ? Number(stat.mtimeNs) / 1e6 : Number(stat.mtimeMs),
+    mtimeMs:
+      'mtimeNs' in stat ? Number(stat.mtimeNs) / 1e6 : Number(stat.mtimeMs),
     dev: String(stat.dev),
     ino: String(stat.ino),
     nlink: Number(stat.nlink),
@@ -74,41 +84,68 @@ function info(stat: fs.Stats | fs.BigIntStats): FileInfo {
 
 function under(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  return (
+    relative === '' ||
+    (relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
 }
 
-export function createScopedFiles(options: ScopedFilesOptions): ScopedFiles & { dispose(): Promise<void> } {
+export function createScopedFiles(
+  options: ScopedFilesOptions,
+): ScopedFiles & { dispose(): Promise<void> } {
   const incarnation = randomUUID();
-  const handles = new Map<string, { file: fs.promises.FileHandle; rootId: string; path: string; mode: 'r' | 'wx' }>();
+  const handles = new Map<
+    string,
+    {
+      file: fs.promises.FileHandle;
+      rootId: string;
+      path: string;
+      mode: 'r' | 'wx';
+    }
+  >();
   const watchers = new Set<fs.FSWatcher>();
+  const watcherCleanups = new Set<() => void>();
+  const cursors = new Map<string, Cursor>();
   let disposed = false;
+  const lstat = options.lstat ?? fsp.lstat;
+  const watch = options.watch ?? fs.watch;
   let abortListener: (() => void) | undefined;
 
   const check = () => {
     if (disposed) throw new Error('scoped files service is disposed');
-    if (options.signal?.aborted) throw new Error('scoped files service is aborted');
+    if (options.signal?.aborted)
+      throw new Error('scoped files service is aborted');
   };
 
-  const resolve = async (ref: FileRef): Promise<{ root: Root; path: string; rel: string }> => {
+  const resolve = async (
+    ref: FileRef,
+  ): Promise<{ root: Root; path: string; rel: string }> => {
     check();
     const root = await options.roots.resolve(options.owner, ref.root);
     const rel = validateRel(ref.rel);
-    const target = path.resolve(root.path, ...rel ? rel.split('/') : []);
+    const target = path.resolve(root.path, ...(rel ? rel.split('/') : []));
     if (!under(root.path, target)) throw new Error('path escapes file root');
     return { root, path: target, rel };
   };
 
-  const ensureAncestors = async (rootPath: string, target: string) => {
+  const ensureAncestors = async (root: Root, target: string) => {
+    const rootPath = root.path;
     if (!under(rootPath, target)) throw new Error('path escapes file root');
-    const rootStat = await fsp.lstat(rootPath);
-    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error('approved root changed');
+    const rootStat = await lstat(rootPath, { bigint: true });
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory())
+      throw new Error('approved root changed');
+    if (String(rootStat.dev) !== root.dev || String(rootStat.ino) !== root.ino)
+      throw new Error('approved root identity changed');
     const rel = path.relative(rootPath, target);
     let current = rootPath;
     for (const segment of rel ? rel.split(path.sep) : []) {
       current = path.join(current, segment);
       try {
-        const st = await fsp.lstat(current);
-        if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('symlink or non-directory ancestor');
+        const st = await lstat(current);
+        if (st.isSymbolicLink() || !st.isDirectory())
+          throw new Error('symlink or non-directory ancestor');
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') break;
         throw error;
@@ -120,15 +157,21 @@ export function createScopedFiles(options: ScopedFilesOptions): ScopedFiles & { 
     if (!root.writable) throw new Error('file root is read-only');
   };
 
-  const checkedStat = async (target: string, follow: boolean): Promise<FileInfo> => {
-    const st = follow ? await fsp.stat(target, { bigint: true }) : await fsp.lstat(target, { bigint: true });
+  const checkedStat = async (
+    target: string,
+    follow: boolean,
+  ): Promise<FileInfo> => {
+    const st = follow
+      ? await fsp.stat(target, { bigint: true })
+      : await lstat(target, { bigint: true });
     return info(st);
   };
 
   const getHandle = async (handle: ScopedFileHandle) => {
     check();
     const value = handles.get(handle.id);
-    if (!value || !handle.id.startsWith(`${incarnation}:`)) throw new Error('invalid or closed file handle');
+    if (!value || !handle.id.startsWith(`${incarnation}:`))
+      throw new Error('invalid or closed file handle');
     try {
       await options.roots.resolve(options.owner, value.rootId);
     } catch {
@@ -146,61 +189,110 @@ export function createScopedFiles(options: ScopedFilesOptions): ScopedFiles & { 
     },
     async stat(ref) {
       const resolved = await resolve(ref);
-      await ensureAncestors(resolved.root.path, path.dirname(resolved.path));
-      const final = await fsp.lstat(resolved.path);
-      if (final.isSymbolicLink()) throw new Error('symlink targets are not allowed');
+      await ensureAncestors(
+        resolved.root,
+        resolved.rel ? path.dirname(resolved.path) : resolved.path,
+      );
+      const final = await lstat(resolved.path);
+      if (final.isSymbolicLink())
+        throw new Error('symlink targets are not allowed');
       return checkedStat(resolved.path, true);
     },
     async lstat(ref) {
       const resolved = await resolve(ref);
-      await ensureAncestors(resolved.root.path, path.dirname(resolved.path));
+      await ensureAncestors(
+        resolved.root,
+        resolved.rel ? path.dirname(resolved.path) : resolved.path,
+      );
       return checkedStat(resolved.path, false);
     },
     async canonical(ref) {
       const resolved = await resolve(ref);
-      await ensureAncestors(resolved.root.path, path.dirname(resolved.path));
+      await ensureAncestors(
+        resolved.root,
+        resolved.rel ? path.dirname(resolved.path) : resolved.path,
+      );
       const canonical = await fsp.realpath(resolved.path);
-      if (!under(resolved.root.path, canonical)) throw new Error('canonical path escapes file root');
-      return { root: resolved.root.id, rel: path.relative(resolved.root.path, canonical).split(path.sep).join('/') };
+      if (!under(resolved.root.path, canonical))
+        throw new Error('canonical path escapes file root');
+      return {
+        root: resolved.root.id,
+        rel: path
+          .relative(resolved.root.path, canonical)
+          .split(path.sep)
+          .join('/'),
+      };
     },
     async mkdir(ref) {
       const resolved = await resolve(ref);
       writable(resolved.root);
-      await ensureAncestors(resolved.root.path, path.dirname(resolved.path));
+      await ensureAncestors(resolved.root, path.dirname(resolved.path));
       await fsp.mkdir(resolved.path);
     },
     async open(ref, mode) {
-      if (mode !== 'r' && mode !== 'wx') throw new Error('invalid file open mode');
+      if (mode !== 'r' && mode !== 'wx')
+        throw new Error('invalid file open mode');
       const resolved = await resolve(ref);
       if (mode === 'wx') writable(resolved.root);
-      await ensureAncestors(resolved.root.path, path.dirname(resolved.path));
-      if (mode === 'r' && (await fsp.lstat(resolved.path)).isSymbolicLink()) throw new Error('symlink targets are not allowed');
-      const file = await fsp.open(resolved.path, mode === 'r' ? fs.constants.O_RDONLY | NOFOLLOW : 'wx');
-      check();
-      const id = `${incarnation}:${randomUUID()}`;
-      handles.set(id, { file, rootId: resolved.root.id, path: resolved.path, mode });
-      return { id };
+      await ensureAncestors(resolved.root, path.dirname(resolved.path));
+      if (mode === 'r' && (await lstat(resolved.path)).isSymbolicLink())
+        throw new Error('symlink targets are not allowed');
+      const file = await fsp.open(
+        resolved.path,
+        mode === 'r' ? fs.constants.O_RDONLY | NOFOLLOW : 'wx',
+      );
+      try {
+        check();
+        await options.roots.resolve(options.owner, resolved.root.id);
+        const id = `${incarnation}:${randomUUID()}`;
+        handles.set(id, {
+          file,
+          rootId: resolved.root.id,
+          path: resolved.path,
+          mode,
+        });
+        return { id };
+      } catch (error) {
+        await file.close().catch(() => undefined);
+        throw error;
+      }
     },
     async fstat(handle) {
       return info(await (await getHandle(handle)).file.stat({ bigint: true }));
     },
     async readHandle(handle, readOptions) {
-      if (!Number.isSafeInteger(readOptions.offset) || readOptions.offset < 0 || !Number.isSafeInteger(readOptions.maxBytes) || readOptions.maxBytes < 0 || readOptions.maxBytes > MAX_BYTES)
+      if (
+        !Number.isSafeInteger(readOptions.offset) ||
+        readOptions.offset < 0 ||
+        !Number.isSafeInteger(readOptions.maxBytes) ||
+        readOptions.maxBytes < 0 ||
+        readOptions.maxBytes > MAX_BYTES
+      )
         throw new Error('invalid or oversized read');
       const value = await getHandle(handle);
       const buffer = Buffer.allocUnsafe(readOptions.maxBytes);
-      const result = await value.file.read(buffer, 0, readOptions.maxBytes, readOptions.offset);
+      const result = await value.file.read(
+        buffer,
+        0,
+        readOptions.maxBytes,
+        readOptions.offset,
+      );
       return new Uint8Array(buffer.subarray(0, result.bytesRead));
     },
     async writeHandle(handle, data) {
-      if (data.byteLength > MAX_BYTES) throw new Error('write exceeds 16 MiB limit');
+      if (data.byteLength > MAX_BYTES)
+        throw new Error('write exceeds 16 MiB limit');
       const value = await getHandle(handle);
       if (value.mode !== 'wx') throw new Error('read-only handle');
       const root = await options.roots.resolve(options.owner, value.rootId);
       writable(root);
       let offset = 0;
       while (offset < data.byteLength) {
-        const result = await value.file.write(data, offset, data.byteLength - offset);
+        const result = await value.file.write(
+          data,
+          offset,
+          data.byteLength - offset,
+        );
         offset += result.bytesWritten;
       }
     },
@@ -215,7 +307,10 @@ export function createScopedFiles(options: ScopedFilesOptions): ScopedFiles & { 
       if (metadata.mode !== undefined) await value.file.chmod(metadata.mode);
       if (metadata.atimeMs !== undefined || metadata.mtimeMs !== undefined) {
         const st = await value.file.stat();
-        await value.file.utimes(metadata.atimeMs ?? st.atimeMs, metadata.mtimeMs ?? st.mtimeMs);
+        await value.file.utimes(
+          Number(metadata.atimeMs ?? st.atimeMs) / 1000,
+          Number(metadata.mtimeMs ?? st.mtimeMs) / 1000,
+        );
       }
     },
     async closeHandle(handle) {
@@ -227,35 +322,82 @@ export function createScopedFiles(options: ScopedFilesOptions): ScopedFiles & { 
       const source = await resolve(from);
       const destination = await resolve(to);
       writable(destination.root);
-      await ensureAncestors(source.root.path, path.dirname(source.path));
-      await ensureAncestors(destination.root.path, path.dirname(destination.path));
+      await ensureAncestors(source.root, path.dirname(source.path));
+      await ensureAncestors(destination.root, path.dirname(destination.path));
       await fsp.link(source.path, destination.path);
     },
     async list(ref, listOptions = {}) {
       const resolved = await resolve(ref);
-      await ensureAncestors(resolved.root.path, resolved.path);
-      const limit = Math.min(Math.max(listOptions.limit ?? DEFAULT_PAGE, 1), MAX_PAGE);
-      const entries = await fsp.readdir(resolved.path, { withFileTypes: true });
-      entries.sort((a, b) => a.name.localeCompare(b.name));
-      const cursor = listOptions.cursor ? Number.parseInt(Buffer.from(listOptions.cursor, 'base64url').toString(), 10) : 0;
-      if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > entries.length) throw new Error('invalid cursor');
-      const page = entries.slice(cursor, cursor + limit);
-      const result: { entries: FileEntry[]; nextCursor?: string } = { entries: [] };
-      for (const entry of page) {
-        const entryInfo = await checkedStat(path.join(resolved.path, entry.name), false);
-        result.entries.push({ name: entry.name, ...entryInfo });
+      await ensureAncestors(resolved.root, resolved.path);
+      const limit = Math.min(
+        Math.max(listOptions.limit ?? DEFAULT_PAGE, 1),
+        MAX_PAGE,
+      );
+      let cursor: Cursor = {
+        root: resolved.root.id,
+        rel: resolved.rel,
+        index: 0,
+      };
+      if (listOptions.cursor) {
+        const saved = cursors.get(listOptions.cursor);
+        if (
+          !saved ||
+          saved.root !== resolved.root.id ||
+          saved.rel !== resolved.rel
+        )
+          throw new Error('invalid cursor');
+        cursor = saved;
       }
-      if (cursor + page.length < entries.length) result.nextCursor = Buffer.from(String(cursor + page.length)).toString('base64url');
+      const result: { entries: FileEntry[]; nextCursor?: string } = {
+        entries: [],
+      };
+      const directory = await fsp.opendir(resolved.path);
+      let index = 0;
+      let entry: fs.Dirent | null;
+      let hasMore = false;
+      while ((entry = await directory.read()) !== null) {
+        if (index++ < cursor.index) continue;
+        const entryInfo = await checkedStat(
+          path.join(resolved.path, entry.name),
+          false,
+        );
+        result.entries.push({ name: entry.name, ...entryInfo });
+        if (result.entries.length >= limit) {
+          hasMore = (await directory.read()) !== null;
+          break;
+        }
+      }
+      await directory.close();
+      if (hasMore) {
+        const token = `${incarnation}:${randomUUID()}`;
+        cursors.set(token, {
+          root: resolved.root.id,
+          rel: resolved.rel,
+          index: cursor.index + result.entries.length,
+        });
+        result.nextCursor = token;
+      }
       return result;
     },
     async read(ref, readOptions = {}) {
       const offset = readOptions.offset ?? 0;
       const maxBytes = readOptions.maxBytes ?? MAX_BYTES;
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_BYTES) throw new Error('invalid or oversized read');
+      if (
+        !Number.isSafeInteger(offset) ||
+        offset < 0 ||
+        !Number.isSafeInteger(maxBytes) ||
+        maxBytes < 0 ||
+        maxBytes > MAX_BYTES
+      )
+        throw new Error('invalid or oversized read');
       const resolved = await resolve(ref);
-      await ensureAncestors(resolved.root.path, path.dirname(resolved.path));
-      if ((await fsp.lstat(resolved.path)).isSymbolicLink()) throw new Error('symlink targets are not allowed');
-      const file = await fsp.open(resolved.path, fs.constants.O_RDONLY | NOFOLLOW);
+      await ensureAncestors(resolved.root, path.dirname(resolved.path));
+      if ((await lstat(resolved.path)).isSymbolicLink())
+        throw new Error('symlink targets are not allowed');
+      const file = await fsp.open(
+        resolved.path,
+        fs.constants.O_RDONLY | NOFOLLOW,
+      );
       try {
         const buffer = Buffer.allocUnsafe(maxBytes);
         const result = await file.read(buffer, 0, maxBytes, offset);
@@ -265,22 +407,37 @@ export function createScopedFiles(options: ScopedFilesOptions): ScopedFiles & { 
       }
     },
     async write(ref, data, writeOptions = {}) {
-      if (data.byteLength > MAX_BYTES) throw new Error('write exceeds 16 MiB limit');
+      if (data.byteLength > MAX_BYTES)
+        throw new Error('write exceeds 16 MiB limit');
       const resolved = await resolve(ref);
       writable(resolved.root);
-      await ensureAncestors(resolved.root.path, path.dirname(resolved.path));
+      await ensureAncestors(resolved.root, path.dirname(resolved.path));
       if (!writeOptions.ifAbsent) {
         try {
-          if ((await fsp.lstat(resolved.path)).isSymbolicLink()) throw new Error('symlink targets are not allowed');
+          if ((await lstat(resolved.path)).isSymbolicLink())
+            throw new Error('symlink targets are not allowed');
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         }
       }
-      const file = await fsp.open(resolved.path, writeOptions.ifAbsent ? 'wx' : 'w');
+      const flags = writeOptions.ifAbsent
+        ? fs.constants.O_WRONLY |
+          fs.constants.O_CREAT |
+          fs.constants.O_EXCL |
+          NOFOLLOW
+        : fs.constants.O_WRONLY |
+          fs.constants.O_CREAT |
+          fs.constants.O_TRUNC |
+          NOFOLLOW;
+      const file = await fsp.open(resolved.path, flags);
       try {
         let offset = 0;
         while (offset < data.byteLength) {
-          const result = await file.write(data, offset, data.byteLength - offset);
+          const result = await file.write(
+            data,
+            offset,
+            data.byteLength - offset,
+          );
           offset += result.bytesWritten;
         }
         await file.sync();
@@ -294,20 +451,32 @@ export function createScopedFiles(options: ScopedFilesOptions): ScopedFiles & { 
       if (!from.rel || !to.rel) throw new Error('cannot move an approved root');
       writable(source.root);
       writable(destination.root);
-      await ensureAncestors(source.root.path, path.dirname(source.path));
-      await ensureAncestors(destination.root.path, path.dirname(destination.path));
-      const sourceInfo = await fsp.lstat(source.path);
-      if (sourceInfo.isSymbolicLink() || !sourceInfo.isFile()) throw new Error('move requires a regular file');
+      await ensureAncestors(source.root, path.dirname(source.path));
+      await ensureAncestors(destination.root, path.dirname(destination.path));
+      const sourceInfo = await lstat(source.path, { bigint: true });
+      if (sourceInfo.isSymbolicLink() || !sourceInfo.isFile())
+        throw new Error('move requires a regular file');
       const sourceDigest = createHash('sha256');
-      const input = await fsp.open(source.path, fs.constants.O_RDONLY | NOFOLLOW);
-      let output: fs.promises.FileHandle;
+      let input: fs.promises.FileHandle | undefined;
+      let output: fs.promises.FileHandle | undefined;
+      let destinationIdentity: fs.BigIntStats | undefined;
+      const cleanupDestination = async () => {
+        if (!destinationIdentity) return;
+        try {
+          const current = await lstat(destination.path, { bigint: true });
+          if (
+            String(current.dev) === String(destinationIdentity.dev) &&
+            String(current.ino) === String(destinationIdentity.ino)
+          )
+            await fsp.unlink(destination.path);
+        } catch {
+          // The destination is already gone or was replaced; leave it alone.
+        }
+      };
       try {
+        input = await fsp.open(source.path, fs.constants.O_RDONLY | NOFOLLOW);
         output = await fsp.open(destination.path, 'wx');
-      } catch (error) {
-        await input.close();
-        throw error;
-      }
-      try {
+        destinationIdentity = await output.stat({ bigint: true });
         const buffer = Buffer.allocUnsafe(1024 * 1024);
         let position = 0;
         for (;;) {
@@ -316,76 +485,126 @@ export function createScopedFiles(options: ScopedFilesOptions): ScopedFiles & { 
           sourceDigest.update(buffer.subarray(0, result.bytesRead));
           let written = 0;
           while (written < result.bytesRead) {
-            const out = await output.write(buffer, written, result.bytesRead - written);
+            const out = await output.write(
+              buffer,
+              written,
+              result.bytesRead - written,
+            );
             written += out.bytesWritten;
           }
           position += result.bytesRead;
         }
         await output.sync();
-        await output.chmod(sourceInfo.mode);
-        await output.utimes(sourceInfo.atimeMs, sourceInfo.mtimeMs);
+        await output.chmod(Number(sourceInfo.mode));
+        await output.utimes(
+          Number(sourceInfo.atimeNs) / 1e9,
+          Number(sourceInfo.mtimeNs) / 1e9,
+        );
+        const current = await lstat(source.path, { bigint: true });
+        const currentDigest = await digestFile(source.path);
+        const finalHandleStat = await input.stat({ bigint: true });
+        await ensureAncestors(source.root, path.dirname(source.path));
+        if (
+          String(current.dev) !== String(sourceInfo.dev) ||
+          String(current.ino) !== String(sourceInfo.ino) ||
+          String(finalHandleStat.dev) !== String(sourceInfo.dev) ||
+          String(finalHandleStat.ino) !== String(sourceInfo.ino) ||
+          current.size !== sourceInfo.size ||
+          current.mtimeNs !== sourceInfo.mtimeNs ||
+          finalHandleStat.size !== sourceInfo.size ||
+          finalHandleStat.mtimeNs !== sourceInfo.mtimeNs ||
+          sourceDigest.digest('hex') !== currentDigest
+        ) {
+          await cleanupDestination();
+          throw new Error('source changed during move');
+        }
+        await fsp.unlink(source.path);
       } catch (error) {
-        await fsp.unlink(destination.path).catch(() => undefined);
+        await cleanupDestination();
         throw error;
       } finally {
-        await input.close();
-        await output.close();
+        await output?.close().catch(() => undefined);
+        await input?.close().catch(() => undefined);
       }
-      let current: fs.Stats;
-      let currentDigest: string;
-      try {
-        current = await fsp.lstat(source.path);
-        currentDigest = await digestFile(source.path);
-      } catch (error) {
-        await fsp.unlink(destination.path).catch(() => undefined);
-        throw error;
-      }
-      if (String(current.dev) !== String(sourceInfo.dev) || String(current.ino) !== String(sourceInfo.ino) || current.size !== sourceInfo.size || current.mtimeMs !== sourceInfo.mtimeMs || sourceDigest.digest('hex') !== currentDigest) {
-        await fsp.unlink(destination.path).catch(() => undefined);
-        throw new Error('source changed during move');
-      }
-      await fsp.unlink(source.path);
     },
     async remove(ref) {
       const resolved = await resolve(ref);
       if (!resolved.rel) throw new Error('cannot remove an approved root');
       writable(resolved.root);
-      await ensureAncestors(resolved.root.path, path.dirname(resolved.path));
-      const st = await fsp.lstat(resolved.path);
+      await ensureAncestors(resolved.root, path.dirname(resolved.path));
+      const st = await lstat(resolved.path);
       if (st.isDirectory()) await fsp.rmdir(resolved.path);
       else if (st.isFile()) await fsp.unlink(resolved.path);
       else throw new Error('only files and empty directories may be removed');
     },
     async watch(ref, onChange) {
       const resolved = await resolve(ref);
-      await ensureAncestors(resolved.root.path, resolved.path);
+      await ensureAncestors(resolved.root, resolved.path);
       let closed = false;
       let timer: NodeJS.Timeout | undefined;
       let pending = false;
-      const eventRef = (name?: string): FileRef => ({ root: resolved.root.id, rel: name ? path.posix.join(resolved.rel, name) : resolved.rel });
-      const watcher = fs.watch(resolved.path, { persistent: false }, (_event, filename) => {
-        if (closed || disposed || pending) return;
-        pending = true;
-        const name = filename?.toString();
-        timer = setTimeout(() => {
-          pending = false;
-          if (closed || disposed) return;
-          void options.roots.resolve(options.owner, resolved.root.id).then(() => {
+      let unsubscribe: () => void = () => undefined;
+      const eventRef = (name?: string): FileRef => ({
+        root: resolved.root.id,
+        rel: name ? path.posix.join(resolved.rel, name) : resolved.rel,
+      });
+      const watcher = watch(
+        resolved.path,
+        { persistent: false },
+        (nativeEvent, filename) => {
+          if (closed || disposed || pending) return;
+          pending = true;
+          const name = filename?.toString();
+          timer = setTimeout(() => {
+            pending = false;
             if (closed || disposed) return;
-            const event: FileChange = { ref: eventRef(name), kind: 'changed' };
-            options.emit?.(event);
-            onChange(event);
-          }).catch(() => undefined);
-        }, 20);
+            void options.roots
+              .resolve(options.owner, resolved.root.id)
+              .then(async () => {
+                if (closed || disposed) return;
+                let kind: FileChange['kind'] = 'changed';
+                if (nativeEvent === 'rename' && name) {
+                  try {
+                    await lstat(path.join(resolved.path, name));
+                  } catch {
+                    kind = 'removed';
+                  }
+                }
+                const event: FileChange = { ref: eventRef(name), kind };
+                options.emit?.(event);
+                onChange(event);
+              })
+              .catch(() => undefined);
+          }, 20);
+        },
+      );
+      const closeWatcher = () => {
+        if (closed) return;
+        closed = true;
+        if (timer) clearTimeout(timer);
+        watchers.delete(watcher);
+        watcher.close();
+        unsubscribe();
+      };
+      watcher.on('error', () => {
+        if (closed) return;
+        closeWatcher();
+        const event: FileChange = { ref: eventRef(), kind: 'rescan' };
+        options.emit?.(event);
+        onChange(event);
       });
       watchers.add(watcher);
+      unsubscribe = options.roots.subscribe(
+        options.owner,
+        resolved.root.id,
+        closeWatcher,
+      );
+      watcherCleanups.add(unsubscribe);
       return {
         async close() {
           if (!closed) {
-            closed = true;
-            watchers.delete(watcher);
-            if (timer) clearTimeout(timer);
-            watcher.close();
+            closeWatcher();
+            watcherCleanups.delete(unsubscribe);
           }
         },
       };
@@ -393,17 +612,25 @@ export function createScopedFiles(options: ScopedFilesOptions): ScopedFiles & { 
     async dispose() {
       if (disposed) return;
       disposed = true;
-      if (abortListener && options.signal) options.signal.removeEventListener('abort', abortListener);
+      if (abortListener && options.signal)
+        options.signal.removeEventListener('abort', abortListener);
       for (const watcher of watchers) watcher.close();
       watchers.clear();
-      for (const value of handles.values()) await value.file.close().catch(() => undefined);
+      for (const cleanup of watcherCleanups) cleanup();
+      watcherCleanups.clear();
+      cursors.clear();
+      for (const value of handles.values())
+        await value.file.close().catch(() => undefined);
       handles.clear();
     },
   };
   if (options.signal) {
-    abortListener = () => { void service.dispose(); };
+    abortListener = () => {
+      void service.dispose();
+    };
     if (options.signal.aborted) void service.dispose();
-    else options.signal.addEventListener('abort', abortListener, { once: true });
+    else
+      options.signal.addEventListener('abort', abortListener, { once: true });
   }
   return service;
 }

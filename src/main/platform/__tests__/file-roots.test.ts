@@ -24,11 +24,15 @@ describe('file root registry', () => {
     });
 
     expect(granted.id).not.toContain(rootPath);
-    await expect(registry.resolve('documents', granted.id)).resolves.toEqual({
+    await expect(
+      registry.resolve('documents', granted.id),
+    ).resolves.toMatchObject({
       ...granted,
       path: await realpath(rootPath),
     });
-    await expect(registry.resolve('other-extension', granted.id)).rejects.toThrow();
+    await expect(
+      registry.resolve('other-extension', granted.id),
+    ).rejects.toThrow();
   });
 
   it('revokes a root and makes subsequent resolution fail', async () => {
@@ -37,7 +41,9 @@ describe('file root registry', () => {
       writable: false,
     });
     await registry.revoke('documents', granted.id);
-    await expect(registry.resolve('documents', granted.id)).rejects.toThrow(/revoked/i);
+    await expect(registry.resolve('documents', granted.id)).rejects.toThrow(
+      /revoked/i,
+    );
   });
 
   it('does not expose a root path through the public root listing', async () => {
@@ -45,27 +51,37 @@ describe('file root registry', () => {
       name: 'Documents',
       writable: true,
     });
-    await expect(registry.roots('documents')).resolves.toEqual([{ ...granted }]);
-    expect(JSON.stringify(await registry.roots('documents'))).not.toContain(rootPath);
+    await expect(registry.roots('documents')).resolves.toEqual([
+      { ...granted },
+    ]);
+    expect(JSON.stringify(await registry.roots('documents'))).not.toContain(
+      rootPath,
+    );
   });
 
   it('rejects a missing grant target', async () => {
-    await expect(registry.grant('documents', join(rootPath, 'missing'), {
+    await expect(
+      registry.grant('documents', join(rootPath, 'missing'), {
         name: 'Missing',
         writable: true,
-      })).rejects.toThrow();
+      }),
+    ).rejects.toThrow();
   });
 
   it('keeps the grant bound to the canonical directory', async () => {
     await mkdir(join(rootPath, 'nested'));
     await writeFile(join(rootPath, 'nested', 'keep.txt'), 'ok');
-    const granted = await registry.grant('documents', join(rootPath, 'nested'), {
-      name: 'Nested',
-      writable: true,
-    });
-    await expect(registry.resolve('documents', granted.id)).resolves.toHaveProperty(
-      'path', await realpath(join(rootPath, 'nested')),
+    const granted = await registry.grant(
+      'documents',
+      join(rootPath, 'nested'),
+      {
+        name: 'Nested',
+        writable: true,
+      },
     );
+    await expect(
+      registry.resolve('documents', granted.id),
+    ).resolves.toHaveProperty('path', await realpath(join(rootPath, 'nested')));
   });
 
   it('allows trusted restore to retain a persisted root id', async () => {
@@ -75,6 +91,19 @@ describe('file root registry', () => {
       writable: true,
     });
     expect(restored.id).toBe('persisted-root-id');
-    await expect(registry.resolve('documents', 'persisted-root-id')).resolves.toMatchObject(restored);
+    await expect(
+      registry.resolve('documents', 'persisted-root-id'),
+    ).resolves.toMatchObject(restored);
+  });
+
+  it('rejects trusted restore when the persisted filesystem identity differs', async () => {
+    await expect(
+      registry.grant('documents', rootPath, {
+        id: 'persisted-root-id',
+        identity: { dev: 'wrong-device', ino: 'wrong-inode' },
+        name: 'Restored',
+        writable: true,
+      }),
+    ).rejects.toThrow(/identity/i);
   });
 });
