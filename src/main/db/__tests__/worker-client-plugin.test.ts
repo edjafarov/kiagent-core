@@ -328,6 +328,143 @@ it('prepares and opens a trusted WAL legacy source through the production worker
   }
 });
 
+it('resets an imported namespace, preserves the tombstone across worker reopen, and backs up in the worker', async () => {
+  const file = path.join(
+    os.tmpdir(),
+    `plugin-worker-reset-${process.pid}-${Date.now()}.sqlite`,
+  );
+  const sourceFile = path.join(
+    os.tmpdir(),
+    `plugin-worker-reset-source-${process.pid}-${Date.now()}`,
+    'private.db',
+  );
+  const backupFile = path.join(
+    os.tmpdir(),
+    `plugin-worker-reset-backup-${process.pid}-${Date.now()}.sqlite`,
+  );
+  const preload = path.join(
+    os.tmpdir(),
+    `plugin-worker-reset-preload-${process.pid}-${Date.now()}.js`,
+  );
+  const rootBetter = path.join(
+    path.resolve(__dirname, '..', '..', '..', '..'),
+    'node_modules',
+    'better-sqlite3',
+  );
+  fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+  fs.writeFileSync(
+    preload,
+    `const M=require('module');const o=M._resolveFilename;M._resolveFilename=function(r,...a){return r==='better-sqlite3'?o.call(this,${JSON.stringify(rootBetter)},...a):o.apply(this,[r,...a])}`,
+  );
+  const source = new Database(sourceFile);
+  source.exec(
+    "CREATE TABLE items (id TEXT PRIMARY KEY); INSERT INTO items VALUES ('legacy')",
+  );
+  source.close();
+  const execArgv = [
+    '--no-experimental-strip-types',
+    '-r',
+    preload,
+    '-r',
+    'ts-node/register/transpile-only',
+    '-r',
+    'tsconfig-paths/register',
+  ];
+  const owner = {
+    kind: 'plugin' as const,
+    extensionId: 'reset.plugin',
+    handle: 'reset-owner',
+  };
+  let db: Awaited<ReturnType<typeof openDbInWorker>> | undefined;
+  try {
+    db = await openDbInWorker(file, require.resolve('../worker-entry.ts'), {
+      execArgv,
+    });
+    await db.registerPluginSource!(
+      'reset.plugin',
+      sourceFile,
+      WORKER_DESCRIPTOR,
+    );
+    await db.plugin!({
+      op: 'prepare',
+      pluginId: 'reset.plugin',
+      descriptor: WORKER_DESCRIPTOR,
+    });
+    await db.plugin!({ op: 'open', pluginId: 'reset.plugin', owner });
+    await expect(
+      db.plugin!({ op: 'query', owner, sql: 'SELECT * FROM {{items}}' }),
+    ).resolves.toEqual([{ id: 'legacy' }]);
+    await db.plugin!({ op: 'release', owner });
+    await db.plugin!({ op: 'reset', pluginId: 'reset.plugin' });
+    await expect(
+      db.plugin!({
+        op: 'prepare',
+        pluginId: 'reset.plugin',
+        descriptor: WORKER_DESCRIPTOR,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ state: 'tombstoned' }));
+    await db.plugin!({ op: 'rearm', pluginId: 'reset.plugin' });
+    await db.backup!(backupFile);
+    const backup = new Database(backupFile, { readonly: true });
+    expect(
+      (
+        backup
+          .prepare('SELECT state FROM plugin_storage WHERE plugin_id=?')
+          .get('reset.plugin') as { state: string }
+      ).state,
+    ).toBe('active');
+    backup.close();
+    await db.close();
+    db = undefined;
+
+    const reopened = await openDbInWorker(
+      file,
+      require.resolve('../worker-entry.ts'),
+      { execArgv },
+    );
+    try {
+      await reopened.registerPluginSource!(
+        'reset.plugin',
+        sourceFile,
+        WORKER_DESCRIPTOR,
+      );
+      await expect(
+        reopened.plugin!({
+          op: 'prepare',
+          pluginId: 'reset.plugin',
+          descriptor: WORKER_DESCRIPTOR,
+        }),
+      ).resolves.toEqual(expect.objectContaining({ state: 'active' }));
+      await reopened.plugin!({ op: 'open', pluginId: 'reset.plugin', owner });
+      await expect(
+        reopened.plugin!({
+          op: 'query',
+          owner,
+          sql: 'SELECT * FROM {{items}}',
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    if (db?.isOpen()) await db.close();
+    for (const p of [
+      file,
+      `${file}-wal`,
+      `${file}-shm`,
+      sourceFile,
+      `${sourceFile}-wal`,
+      `${sourceFile}-shm`,
+      backupFile,
+      `${backupFile}-wal`,
+      `${backupFile}-shm`,
+      preload,
+      path.dirname(sourceFile),
+    ])
+      if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true });
+  }
+});
+
 it('coalesces concurrent production-worker prepare requests behind a held transaction', async () => {
   const file = path.join(
     os.tmpdir(),

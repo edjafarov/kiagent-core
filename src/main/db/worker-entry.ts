@@ -124,6 +124,55 @@ function trustedLegacyPath(pluginId: string): string {
         coordinator,
         coreOwner: { kind: 'core', handle: 'core' },
         plugin: async (request: PluginDbRequest, signal?: AbortSignal) => {
+          if (request.op === 'reset' || request.op === 'rearm') {
+            if (request.op === 'reset') {
+              for (const key of [...pluginConnections.keys()]) {
+                if (
+                  key !== request.pluginId &&
+                  !key.startsWith(`${request.pluginId}:`)
+                )
+                  continue;
+                const owner = {
+                  kind: 'plugin' as const,
+                  extensionId: request.pluginId,
+                  handle: key,
+                };
+                await coordinator.release(owner);
+                await closePluginConnectionForOwner(owner, pluginConnections);
+              }
+            }
+            return coordinator.run(
+              { kind: 'core', handle: 'core' },
+              undefined,
+              () =>
+                request.op === 'reset'
+                  ? registry.reset(request.pluginId)
+                  : registry.rearm(request.pluginId),
+              signal,
+              `core.plugin.${request.op}`,
+            );
+          }
+          if (request.op === 'register-source') {
+            const source = path.resolve(request.legacyPath);
+            if (path.basename(source) !== 'private.db')
+              throw Object.assign(
+                new Error('trusted legacy source must end in private.db'),
+                { code: 'PLUGIN_DB_LEGACY_PATH_INVALID' },
+              );
+            trustedPluginSources.set(request.pluginId, source);
+            return coordinator.run(
+              { kind: 'core', handle: 'core' },
+              undefined,
+              () =>
+                registry.register({
+                  pluginId: request.pluginId,
+                  descriptor: request.descriptor,
+                  legacyPath: source,
+                }),
+              signal,
+              'core.plugin.register-source',
+            );
+          }
           if (request.op === 'register') {
             const legacyPath = trustedLegacyPath(request.pluginId);
             return coordinator.run(
@@ -136,6 +185,7 @@ function trustedLegacyPath(pluginId: string): string {
                   legacyPath,
                 }),
               signal,
+              'core.plugin.register',
             );
           }
           if (request.op === 'prepare') {
@@ -150,6 +200,7 @@ function trustedLegacyPath(pluginId: string): string {
                     descriptor: request.descriptor,
                   }),
                 signal,
+                'core.plugin.prepare',
               );
               return prior;
             }
@@ -163,13 +214,22 @@ function trustedLegacyPath(pluginId: string): string {
                     descriptor: request.descriptor,
                   }),
                 signal,
+                'core.plugin.prepare',
               );
-              if (metadata.state === 'active') return metadata;
+              // A reset tombstone is a deliberate import barrier. The host
+              // may rearm this empty namespace explicitly, but a worker
+              // restart must never copy a retained legacy private.db back in.
+              if (
+                metadata.state === 'active' ||
+                metadata.state === 'tombstoned'
+              )
+                return metadata;
               const descriptor = await coordinator.run(
                 { kind: 'core', handle: 'core' },
                 undefined,
                 () => registry.descriptor(request.pluginId),
                 signal,
+                'core.plugin.descriptor',
               );
               const legacyPath = trustedLegacyPath(request.pluginId);
               return importLegacyPluginStorage(
@@ -182,6 +242,7 @@ function trustedLegacyPath(pluginId: string): string {
                       undefined,
                       work,
                       signal,
+                      'core.plugin.import',
                     ),
                 },
               ).then(() =>
@@ -190,6 +251,7 @@ function trustedLegacyPath(pluginId: string): string {
                   undefined,
                   () => registry.diagnostics(request.pluginId),
                   signal,
+                  'core.plugin.diagnostics',
                 ),
               );
             })();
@@ -213,6 +275,7 @@ function trustedLegacyPath(pluginId: string): string {
                   owner: request.owner,
                 }),
               signal,
+              'core.plugin.open',
             );
             const connection = await openPluginConnection(dbPath, registration);
             pluginConnections.set(

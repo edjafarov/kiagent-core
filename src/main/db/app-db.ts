@@ -51,7 +51,22 @@ export interface AppDb {
    *  static `batch()`. */
   proc?(name: string, args: unknown): Promise<unknown>;
   /** Host-internal authorized plugin request seam. Never exposed directly to plugin code. */
-  plugin?(request: PluginDbRequest, options?: { signal?: AbortSignal }): Promise<unknown>;
+  plugin?(
+    request: PluginDbRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
+  /** Host-only registration seam. The path and descriptor are derived by the
+   *  trusted main process; extension RPC never receives this method. */
+  registerPluginSource?(
+    pluginId: string,
+    legacyPath: string,
+    descriptor: import('@main/platform/database-descriptor').PluginDatabaseDescriptor,
+  ): Promise<unknown>;
+  /** Worker-owned consistent SQLite backup used by maintenance export. */
+  backup?(destination: string): Promise<void>;
+  /** Host lifecycle seam: active plugin hosts must rebuild their owner and
+   *  surface bundle after a worker incarnation changes. */
+  onWorkerRespawn?(listener: () => void): () => void;
 }
 
 function coerceParam(v: AppDbParam): string | number | bigint | Buffer | null {
@@ -143,6 +158,9 @@ function wrapConn(conn: Database.Database): AppDb {
       prep(sql).run(...params.map(coerceParam));
     },
     batch: async (steps) => runBatch(steps),
+    backup: async (destination) => {
+      await conn.backup(destination);
+    },
     isOpen: () => conn.open,
     close: async () => {
       conn.close();

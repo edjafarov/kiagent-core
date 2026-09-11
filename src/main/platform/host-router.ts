@@ -30,12 +30,12 @@ export function createHostRouter(opts: {
   surfaces: Surfaces;
   logSink: LogSink;
 }): {
-    dispatch(
-      ns: string,
-      method: string,
-      args: unknown[],
-      context?: RpcCallContext,
-    ): Promise<unknown>;
+  dispatch(
+    ns: string,
+    method: string,
+    args: unknown[],
+    context?: RpcCallContext,
+  ): Promise<unknown>;
 } {
   const scope = `extension:${opts.extensionId}`;
   return {
@@ -73,6 +73,12 @@ export function createHostRouter(opts: {
           : undefined;
       if (typeof fn !== 'function')
         throw new Error(`unknown method ${ns}.${method}`);
+      // Cancellation is a transport concern, not an extension-controlled
+      // argument. Append the host-owned signal only for cancellable service
+      // calls; the surface functions keep their public arity for ordinary
+      // callers and never let a child forge this signal.
+      if (context?.signal && (ns === 'db' || ns === 'net'))
+        return fn(...args, context.signal);
       return fn(...args);
     },
   };

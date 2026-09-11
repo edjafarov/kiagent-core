@@ -1074,6 +1074,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       },
       async export(destDir) {
         fs.mkdirSync(destDir, { recursive: true });
+        if (db.backup) await db.backup(path.join(destDir, 'kiagent.db'));
         const accounts = await query.accounts();
         fs.writeFileSync(
           path.join(destDir, 'accounts.json'),

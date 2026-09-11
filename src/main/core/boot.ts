@@ -32,6 +32,7 @@ import { createScheduler } from './scheduler';
 import type { CoreScheduler } from './scheduler';
 import { openStore } from './store/store';
 import type { CoreStore } from './store/store';
+import type { AppDb } from '../db/app-db';
 
 export interface BootDeps {
   dataDir: string;
@@ -114,6 +115,8 @@ export interface SenderRegistry {
 }
 
 export interface CorePlatform {
+  /** The single worker-backed database service shared by core and plugins. */
+  db: AppDb;
   store: CoreStore;
   engine: ReturnType<typeof createEngine>;
   scheduler: CoreScheduler;
@@ -258,6 +261,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   registerArchiveSweep({ store, scheduler, logs: sink });
 
   return {
+    db,
     store,
     engine,
     scheduler,

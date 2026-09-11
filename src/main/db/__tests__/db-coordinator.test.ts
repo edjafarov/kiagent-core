@@ -2,6 +2,35 @@
 import { createDbCoordinator } from '../coordinator';
 
 describe('shared database coordinator', () => {
+  it('attributes bounded queue and execution timings by owner and operation', async () => {
+    const coordinator = createDbCoordinator();
+    const owner = {
+      kind: 'plugin' as const,
+      extensionId: 'metrics.plugin',
+      handle: 'metrics-1',
+    };
+    await coordinator.run(
+      owner,
+      undefined,
+      () => undefined,
+      undefined,
+      'plugin.db.query',
+    );
+    const metric = coordinator
+      .metrics()
+      .operations.find((entry) => entry.operation === 'plugin.db.query');
+    expect(metric).toEqual(
+      expect.objectContaining({
+        owner,
+        count: 1,
+        queueWaitMs: expect.any(Number),
+        executionMs: expect.any(Number),
+        slowestMs: expect.any(Number),
+      }),
+    );
+    await coordinator.close();
+  });
+
   it('admits a foreign begin after queued core work and the active owner commits', async () => {
     const coordinator = createDbCoordinator({ leaseMs: 1000 });
     const order: string[] = [];

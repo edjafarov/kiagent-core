@@ -173,7 +173,9 @@ describe('createHostRouter', () => {
   });
 
   it('fails closed when migration registration is not injected', async () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-router-migrate-'));
+    const dataDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'kia-router-migrate-'),
+    );
     const { surfaces, close } = buildSurfaces({
       extensionId: 'test.migrate',
       dataDir,
@@ -186,7 +188,11 @@ describe('createHostRouter', () => {
     await expect(
       surfaces.db.migrate('missing', 1, ['CREATE TABLE injected (id INTEGER)']),
     ).rejects.toMatchObject({ code: 'PLUGIN_MIGRATION_NOT_REGISTERED' });
-    await expect(surfaces.db.query('SELECT name FROM sqlite_master WHERE name = ?', ['injected'])).resolves.toEqual([]);
+    await expect(
+      surfaces.db.query('SELECT name FROM sqlite_master WHERE name = ?', [
+        'injected',
+      ]),
+    ).rejects.toThrow(/worker owner is wired/);
     await close();
   });
 });

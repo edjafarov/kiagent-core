@@ -83,6 +83,9 @@ export interface PluginRegistry {
   descriptor(pluginId: string): PluginDatabaseDescriptor;
   physicalName(pluginId: string, logicalName: string): string;
   reset(pluginId: string): Promise<void>;
+  /** Move a reset tombstone back to an empty active namespace. The durable
+   *  tombstone remains, so a retained legacy private.db is never imported. */
+  rearm(pluginId: string): Promise<void>;
   close(): Promise<void>;
   assertImportInput(
     pluginId: string,
@@ -134,6 +137,11 @@ CREATE TABLE IF NOT EXISTS plugin_deferred_migrations (
   statement_index INTEGER NOT NULL,
   statement_sql TEXT NOT NULL,
   PRIMARY KEY (plugin_id, module_name, version, statement_index)
+);
+CREATE TABLE IF NOT EXISTS plugin_reset_tombstones (
+  plugin_id TEXT PRIMARY KEY,
+  generation INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
 );
 `;
 
@@ -265,6 +273,7 @@ const REGISTRY_TABLES = [
   'plugin_schema_versions',
   'plugin_import_progress',
   'plugin_deferred_migrations',
+  'plugin_reset_tombstones',
 ] as const;
 
 export function createPluginRegistry(
@@ -1004,17 +1013,85 @@ export function createPluginRegistry(
     physicalName: (pluginId, logicalName) =>
       pluginIdentifier(pluginId, logicalName).replaceAll('"', ''),
     reset: async (pluginId) => {
+      const descriptor = descriptorFor(pluginId);
+      const physicalTables = descriptor.objects
+        .filter((object) => object.kind === 'table')
+        .map((object) =>
+          pluginIdentifier(pluginId, object.name).replaceAll('"', ''),
+        );
+      // The reset is host-owned maintenance. Temporarily disabling foreign-key
+      // enforcement on this private registry connection lets us clear cyclic
+      // plugin schemas in any descriptor order; the connection is never
+      // exposed to plugin SQL and enforcement is restored before returning.
+      rawSetMetadataMode(true);
+      try {
+        db.exec('PRAGMA foreign_keys=OFF');
+      } finally {
+        rawSetMetadataMode(false);
+      }
+      try {
+        withTransaction(
+          () => {
+            setSchemaMode(true);
+            try {
+              for (const table of physicalTables) {
+                resetAuthorizer();
+                db.exec(`DELETE FROM "${table.replaceAll('"', '""')}"`);
+              }
+              rawSetMetadataMode(true);
+              try {
+                const hasSequence = db
+                  .prepare(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'",
+                  )
+                  .get();
+                if (hasSequence)
+                  for (const table of physicalTables)
+                    db.prepare('DELETE FROM sqlite_sequence WHERE name=?').run(
+                      table,
+                    );
+              } finally {
+                rawSetMetadataMode(false);
+              }
+            } finally {
+              setSchemaMode(false);
+            }
+            metadata(() => {
+              db.prepare(
+                "UPDATE plugin_storage SET state = 'tombstoned', generation = generation + 1, updated_at = ? WHERE plugin_id = ?",
+              ).run(now(), pluginId);
+              db.prepare(
+                'DELETE FROM plugin_import_progress WHERE plugin_id = ?',
+              ).run(pluginId);
+              db.prepare(
+                `INSERT INTO plugin_reset_tombstones(plugin_id,generation,updated_at)
+               VALUES(?,?,?)
+               ON CONFLICT(plugin_id) DO UPDATE SET generation=excluded.generation,updated_at=excluded.updated_at`,
+              ).run(pluginId, metadataFor(pluginId).generation + 1, now());
+            });
+          },
+          { pluginId, descriptor },
+        );
+      } finally {
+        rawSetMetadataMode(true);
+        try {
+          db.exec('PRAGMA foreign_keys=ON');
+        } finally {
+          rawSetMetadataMode(false);
+        }
+      }
+    },
+    rearm: async (pluginId) => {
       withTransaction(() => {
         const current = metadataFor(pluginId);
-        metadata(() => {
-          db.prepare(
-            "UPDATE plugin_storage SET state = 'tombstoned', generation = generation + 1, updated_at = ? WHERE plugin_id = ?",
-          ).run(now(), pluginId);
-          db.prepare(
-            'DELETE FROM plugin_import_progress WHERE plugin_id = ?',
-          ).run(pluginId);
-        });
-        void current;
+        if (current.state !== 'tombstoned') return;
+        metadata(() =>
+          db
+            .prepare(
+              "UPDATE plugin_storage SET state='active', updated_at=? WHERE plugin_id=?",
+            )
+            .run(now(), pluginId),
+        );
       });
     },
     close: async () => {

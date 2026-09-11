@@ -61,10 +61,39 @@ export const NS_METHODS: Record<string, string[]> = {
     'accounts',
   ],
   net: ['fetch'],
-  db: ['exec', 'query', 'batch', 'migrate', 'begin', 'commit', 'rollback'],
+  db: [
+    'identifier',
+    'exec',
+    'query',
+    'batch',
+    'migrate',
+    'begin',
+    'commit',
+    'rollback',
+  ],
   ui: ['notify'],
   inference: ['complete', 'see', 'read', 'hear', 'lane', 'describe'],
-  files: ['list', 'read', 'write', 'move'],
+  files: [
+    'roots',
+    'stat',
+    'lstat',
+    'canonical',
+    'mkdir',
+    'open',
+    'fstat',
+    'readHandle',
+    'writeHandle',
+    'syncHandle',
+    'setHandleMetadata',
+    'closeHandle',
+    'link',
+    'list',
+    'read',
+    'write',
+    'move',
+    'remove',
+    'watch',
+  ],
   commands: ['register'],
 };
 
@@ -79,7 +108,8 @@ function buildRemoteHost(
       void callHost(endpoint, 'base', 'log', [level, msg]).catch(() => {});
     },
   };
-  if (boot.caps.includes('db')) host.db = createPluginDbProxy(endpoint, boot.extensionId);
+  if (boot.caps.includes('db'))
+    host.db = createPluginDbProxy(endpoint, boot.extensionId);
   for (const cap of boot.caps) {
     if (cap === 'events') {
       host.events = {
@@ -100,8 +130,9 @@ function buildRemoteHost(
           };
         },
         emit(event: string, payload: unknown) {
-          void callHost(endpoint, 'events', 'emit', [event, payload])
-            .catch(() => {});
+          void callHost(endpoint, 'events', 'emit', [event, payload]).catch(
+            () => {},
+          );
         },
       };
       continue;

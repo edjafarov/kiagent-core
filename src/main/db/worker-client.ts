@@ -138,6 +138,14 @@ export async function openDbInWorker(
 
   let { worker } = first;
   let client: DbClient = createDbClient(worker);
+  const sourceRegistrations = new Map<
+    string,
+    {
+      legacyPath: string;
+      descriptor: import('@main/platform/database-descriptor').PluginDatabaseDescriptor;
+    }
+  >();
+  const respawnListeners = new Set<() => void>();
   let intentionalClose = false;
   let permanentlyDead: (Error & { code: string }) | null = null;
   let respawning = false;
@@ -228,9 +236,22 @@ export async function openDbInWorker(
             await attempt.worker.terminate().catch(() => {});
             return;
           }
+          const nextClient = createDbClient(attempt.worker);
+          for (const [pluginId, registration] of sourceRegistrations) {
+            await nextClient.plugin?.({
+              op: 'register-source',
+              pluginId,
+              legacyPath: registration.legacyPath,
+              descriptor: registration.descriptor,
+            });
+          }
           worker = attempt.worker;
-          client = createDbClient(worker);
+          client = nextClient;
           attachDeathHandlers(worker);
+          queueMicrotask(() => {
+            if (!intentionalClose && !permanentlyDead)
+              for (const listener of respawnListeners) listener();
+          });
           return; // respawn succeeded — back in service
         } catch (e) {
           // eslint-disable-next-line no-console
@@ -255,7 +276,10 @@ export async function openDbInWorker(
    *  promise) and resolved in its finally, win or lose. */
   let respawnSettled: Promise<void> = Promise.resolve();
 
-  function guard<T>(fn: (c: DbClient) => Promise<T>): Promise<T> {
+  function guard<T>(
+    fn: (c: DbClient) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     if (permanentlyDead) return Promise.reject(permanentlyDead);
     // A close() that landed inside a crash-respawn window leaves the old
     // client marked dead with a transient DB_WORKER_CRASHED code (the respawn
@@ -266,10 +290,36 @@ export async function openDbInWorker(
     if (!respawning) return fn(client);
     // Park until the respawn settles: served by the fresh worker on success,
     // rejected DB_WORKER_DEAD if the crash-loop breaker gave up.
-    return respawnSettled.then(() => {
-      if (permanentlyDead) throw permanentlyDead;
-      if (intentionalClose) throw new Error('db worker closed');
-      return fn(client);
+    if (signal?.aborted)
+      return Promise.reject(
+        taggedError('database operation cancelled', 'DB_OPERATION_CANCELLED'),
+      );
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const cancel = () => {
+        if (settled) return;
+        settled = true;
+        reject(
+          taggedError('database operation cancelled', 'DB_OPERATION_CANCELLED'),
+        );
+      };
+      signal?.addEventListener('abort', cancel, { once: true });
+      respawnSettled.then(
+        () => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener('abort', cancel);
+          if (permanentlyDead) reject(permanentlyDead);
+          else if (intentionalClose) reject(new Error('db worker closed'));
+          else fn(client).then(resolve, reject);
+        },
+        (error) => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener('abort', cancel);
+          reject(error);
+        },
+      );
     });
   }
 
@@ -280,7 +330,25 @@ export async function openDbInWorker(
     batch: (steps) => guard((c) => c.batch(steps)),
     proc: (name, args) => guard((c) => c.proc!(name, args)),
     plugin: (request: PluginDbRequest, options?: { signal?: AbortSignal }) =>
-      guard((c) => c.plugin!(request, options)),
+      guard((c) => c.plugin!(request, options), options?.signal),
+    registerPluginSource: async (pluginId, legacyPath, descriptor) => {
+      sourceRegistrations.set(pluginId, { legacyPath, descriptor });
+      return guard((c) =>
+        c.plugin!({
+          op: 'register-source',
+          pluginId,
+          legacyPath,
+          descriptor,
+        }),
+      );
+    },
+    backup: async (destination) => {
+      await guard((c) => c.backup!(destination));
+    },
+    onWorkerRespawn(listener) {
+      respawnListeners.add(listener);
+      return () => respawnListeners.delete(listener);
+    },
     isOpen: () => !permanentlyDead && !respawning && client.isOpen(),
     close: async () => {
       intentionalClose = true;
