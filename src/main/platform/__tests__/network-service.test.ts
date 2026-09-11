@@ -34,8 +34,10 @@ describe('createNetworkService', () => {
     });
 
     await expect(
-      service.fetch('https://example.com/pre-aborted', { signal: controller.signal }),
-    ).rejects.toMatchObject({ name: 'AbortError' });
+      service.fetch('https://example.com/pre-aborted', {
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError', code: 'RPC_ABORTED' });
     expect(fetchImpl).not.toHaveBeenCalled();
     service.dispose();
   });
@@ -51,33 +53,34 @@ describe('createNetworkService', () => {
       fetch: createNetFetch({ lookup, fetchImpl: fetchImpl as typeof fetch }),
     });
 
-    await expect(service.fetch('https://example.com/owner-aborted')).rejects.toMatchObject({
+    await expect(
+      service.fetch('https://example.com/owner-aborted'),
+    ).rejects.toMatchObject({
       name: 'AbortError',
+      code: 'RPC_ABORTED',
     });
     expect(fetchImpl).not.toHaveBeenCalled();
     service.dispose();
   });
 
   it('settles on timeout when the injected dependency ignores abort forever', async () => {
-    const fetchImpl = jest.fn(
-      async () => await new Promise<never>(() => {}),
-    );
+    const fetchImpl = jest.fn(async () => await new Promise<never>(() => {}));
     const service = createNetworkService({
       owner: 'plugin.example',
       log: jest.fn(),
       fetch: fetchImpl,
     });
 
-    await expect(service.fetch('https://example.com/uncancellable', { timeoutMs: 10 })).rejects.toMatchObject({
+    await expect(
+      service.fetch('https://example.com/uncancellable', { timeoutMs: 10 }),
+    ).rejects.toMatchObject({
       name: 'TimeoutError',
     });
     service.dispose();
   });
 
   it('settles on dispose when an injected dependency ignores abort forever', async () => {
-    const fetchImpl = jest.fn(
-      async () => await new Promise<never>(() => {}),
-    );
+    const fetchImpl = jest.fn(async () => await new Promise<never>(() => {}));
     const service = createNetworkService({
       owner: 'plugin.example',
       log: jest.fn(),
@@ -96,20 +99,30 @@ describe('createNetworkService', () => {
       body: Uint8Array;
     }) => void;
     const fetchImpl = jest.fn(
-      async () => await new Promise<{
-        status: number;
-        statusText: string;
-        headers: Record<string, string>;
-        body: Uint8Array;
-      }>((resolve) => {
-        resolveFetch = resolve;
-      }),
+      async () =>
+        await new Promise<{
+          status: number;
+          statusText: string;
+          headers: Record<string, string>;
+          body: Uint8Array;
+        }>((resolve) => {
+          resolveFetch = resolve;
+        }),
     );
-    const service = createNetworkService({ owner: 'plugin.example', log: jest.fn(), fetch: fetchImpl });
+    const service = createNetworkService({
+      owner: 'plugin.example',
+      log: jest.fn(),
+      fetch: fetchImpl,
+    });
     const pending = service.fetch('https://example.com/late');
     service.dispose();
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    resolveFetch({ status: 200, statusText: 'OK', headers: {}, body: new Uint8Array() });
+    resolveFetch({
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      body: new Uint8Array(),
+    });
     await Promise.resolve();
     service.dispose();
   });
@@ -123,9 +136,9 @@ describe('createNetworkService', () => {
         log: jest.fn(),
         fetch: createNetFetch({ lookup, fetchImpl: fetchImpl as typeof fetch }),
       });
-      await expect(service.fetch('https://example.com/invalid', { timeoutMs })).rejects.toThrow(
-        /timeoutMs/,
-      );
+      await expect(
+        service.fetch('https://example.com/invalid', { timeoutMs }),
+      ).rejects.toThrow(/timeoutMs/);
       expect(fetchImpl).not.toHaveBeenCalled();
       service.dispose();
     },
@@ -245,11 +258,16 @@ describe('createNetworkService', () => {
       fetch: createNetFetch({
         lookup,
         fetchImpl: (async () =>
-          new Response(body, { status: 302, headers: { location: '::::' } })) as typeof fetch,
+          new Response(body, {
+            status: 302,
+            headers: { location: '::::' },
+          })) as typeof fetch,
       }),
     });
 
-    await expect(service.fetch('https://example.com/redirect')).rejects.toThrow();
+    await expect(
+      service.fetch('https://example.com/redirect'),
+    ).rejects.toThrow();
     expect(cancelCount).toBe(1);
     service.dispose();
   });
@@ -418,7 +436,9 @@ describe('createNetworkService', () => {
       signal: controller.signal,
     });
     expect(add).toHaveBeenCalled();
-    expect(remove.mock.calls.length).toBeGreaterThanOrEqual(add.mock.calls.length);
+    expect(remove.mock.calls.length).toBeGreaterThanOrEqual(
+      add.mock.calls.length,
+    );
     service.dispose();
   });
 

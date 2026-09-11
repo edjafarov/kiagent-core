@@ -17,25 +17,27 @@ function callDb(
   endpoint: RpcEndpoint,
   method: string,
   args: unknown[],
-  transactionId?: string,
+  options: Pick<RpcCallOptions, 'transactionId' | 'transactionBoundary'> = {},
 ): Promise<unknown> {
-  return endpoint.call('db', method, args, { transactionId });
+  return endpoint.call('db', method, args, options);
 }
 
 function txSession(endpoint: RpcEndpoint, token: string): PluginDbSession {
   return {
     async exec(sql: string, params?: PluginDbParams): Promise<void> {
-      await callDb(endpoint, 'exec', [token, sql, params], token);
+      await callDb(endpoint, 'exec', [token, sql, params], {
+        transactionId: token,
+      });
     },
     query<Row = Record<string, unknown>>(sql: string, params?: PluginDbParams) {
-      return callDb(endpoint, 'query', [token, sql, params], token) as Promise<
-        Row[]
-      >;
+      return callDb(endpoint, 'query', [token, sql, params], {
+        transactionId: token,
+      }) as Promise<Row[]>;
     },
     batch(steps: readonly PluginDbStep[]) {
-      return callDb(endpoint, 'batch', [token, steps], token) as Promise<
-        unknown[][]
-      >;
+      return callDb(endpoint, 'batch', [token, steps], {
+        transactionId: token,
+      }) as Promise<unknown[][]>;
     },
   };
 }
@@ -75,15 +77,19 @@ export function createPluginDbProxy(
     },
     async transaction<T>(work: (tx: PluginDbSession) => Promise<T>) {
       if (context.current()) throw new HostCallInTransactionError('db');
-      const token = (await callDb(endpoint, 'begin', [])) as string;
+      const token = (await callDb(endpoint, 'begin', [], {
+        transactionBoundary: true,
+      })) as string;
       const tx = txSession(endpoint, token);
       try {
         const value = await context.run(token, () => work(tx));
-        await callDb(endpoint, 'commit', [token], token);
+        await callDb(endpoint, 'commit', [token], { transactionId: token });
         return value;
       } catch (error) {
         try {
-          await callDb(endpoint, 'rollback', [token], token);
+          await callDb(endpoint, 'rollback', [token], {
+            transactionId: token,
+          });
         } catch (rollbackError) {
           if (error && typeof error === 'object')
             (error as Record<string, unknown>).rollbackError = rollbackError;

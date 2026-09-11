@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import { formatPluginSql, pluginIdentifier } from '@shared/plugin-sql';
 import {
   parseDatabaseDescriptor,
@@ -223,49 +225,114 @@ function validateRegisteredReferences(
       }
 }
 
+/**
+ * Legacy import copies tables in descriptor order and deletes them in reverse
+ * order. The descriptor contract therefore rejects child-before-parent input
+ * instead of silently relying on SQLite's foreign-key timing. Cycles are a
+ * separate stable descriptor error because no copy/delete order can satisfy
+ * them.
+ */
+function validateLegacyForeignKeyOrder(
+  descriptor: PluginDatabaseDescriptor,
+  _legacyPath: string,
+): void {
+  const names = descriptor.legacy.tables.map((table) => table.name);
+  const listed = new Set(names);
+  const dependencies = new Map(names.map((name) => [name, [] as string[]]));
+  if (fs.existsSync(_legacyPath)) {
+    const source = new Database(_legacyPath, {
+      readonly: true,
+      fileMustExist: true,
+    });
+    try {
+      for (const name of names) {
+        const rows = source
+          .prepare(`PRAGMA foreign_key_list("${name.replaceAll('"', '""')}")`)
+          .all() as Array<{ table?: unknown }>;
+        dependencies.set(
+          name,
+          rows
+            .map((row) => String(row.table ?? ''))
+            .filter((parent) => listed.has(parent)),
+        );
+      }
+    } finally {
+      source.close();
+    }
+  }
+  for (const module of descriptor.modules)
+    for (const migration of module.migrations)
+      for (const statement of migration.statements) {
+        const child =
+          /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:\{\{)?([a-z][a-z0-9_]*)/i.exec(
+            statement,
+          )?.[1];
+        if (!child || !dependencies.has(child)) continue;
+        for (const match of statement.matchAll(
+          /\bREFERENCES\s+(?:\{\{([a-z][a-z0-9_]*)\}\}|"?([a-z][a-z0-9_]*)"?)/gi,
+        )) {
+          const parent = match[1] ?? match[2];
+          if (listed.has(parent)) dependencies.get(child)!.push(parent);
+        }
+      }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (name: string): void => {
+    if (visiting.has(name))
+      throw error(
+        `legacy foreign-key cycle includes ${name}`,
+        'PLUGIN_DB_LEGACY_FK_CYCLE',
+      );
+    if (visited.has(name)) return;
+    visiting.add(name);
+    for (const parent of dependencies.get(name) ?? []) visit(parent);
+    visiting.delete(name);
+    visited.add(name);
+  };
+  for (const name of names) visit(name);
+  const position = new Map(names.map((name, index) => [name, index]));
+  for (const [child, parents] of dependencies) {
+    for (const parent of parents) {
+      if ((position.get(parent) ?? -1) > (position.get(child) ?? -1))
+        throw error(
+          `legacy table ${child} precedes its parent ${parent}`,
+          'PLUGIN_DB_LEGACY_FK_ORDER',
+        );
+    }
+  }
+}
+
 function isAppendOnlyDescriptor(
   oldDescriptor: PluginDatabaseDescriptor,
   next: PluginDatabaseDescriptor,
 ): boolean {
-  const nextObjects = new Map(
-    next.objects.map((object) => [object.name, object.kind]),
-  );
-  if (
-    oldDescriptor.objects.some(
-      (object) => nextObjects.get(object.name) !== object.kind,
+  const orderedPrefix = <T>(
+    oldValues: readonly T[],
+    nextValues: readonly T[],
+    equal: (oldValue: T, nextValue: T) => boolean,
+  ): boolean =>
+    oldValues.length <= nextValues.length &&
+    oldValues.every((value, index) => equal(value, nextValues[index]));
+  const same = (a: unknown, b: unknown) => canonical(a) === canonical(b);
+  return (
+    oldDescriptor.legacy.versionTable === next.legacy.versionTable &&
+    oldDescriptor.legacy.userVersionModule === next.legacy.userVersionModule &&
+    orderedPrefix(oldDescriptor.objects, next.objects, same) &&
+    orderedPrefix(
+      oldDescriptor.modules,
+      next.modules,
+      (oldModule, nextModule) =>
+        oldModule.name === nextModule.name &&
+        orderedPrefix(oldModule.migrations, nextModule.migrations, same),
+    ) &&
+    orderedPrefix(
+      oldDescriptor.legacy.tables,
+      next.legacy.tables,
+      (oldTable, nextTable) =>
+        oldTable.name === nextTable.name &&
+        orderedPrefix(oldTable.columns, nextTable.columns, same),
     )
-  )
-    return false;
-  const nextModules = new Map(
-    next.modules.map((module) => [module.name, module]),
   );
-  for (const oldModule of oldDescriptor.modules) {
-    const nextModule = nextModules.get(oldModule.name);
-    if (
-      !nextModule ||
-      nextModule.migrations.length < oldModule.migrations.length
-    )
-      return false;
-    for (let index = 0; index < oldModule.migrations.length; index++) {
-      if (
-        canonical(oldModule.migrations[index]) !==
-        canonical(nextModule.migrations[index])
-      )
-        return false;
-    }
-  }
-  const nextTables = new Map(
-    next.legacy.tables.map((table) => [table.name, table.columns]),
-  );
-  for (const oldTable of oldDescriptor.legacy.tables) {
-    const columns = nextTables.get(oldTable.name);
-    if (
-      !columns ||
-      oldTable.columns.some((column) => !columns.includes(column))
-    )
-      return false;
-  }
-  return true;
 }
 
 const REGISTRY_TABLES = [
@@ -671,6 +738,7 @@ export function createPluginRegistry(
       const descriptor = parseDatabaseDescriptor(input.descriptor);
       validateRegisteredReferences(descriptor);
       const legacyPath = ensureLegacyPath(input.legacyPath);
+      validateLegacyForeignKeyOrder(descriptor, legacyPath);
       const digest = descriptorDigest(descriptor);
       const current = storageById(input.pluginId);
       if (current) {

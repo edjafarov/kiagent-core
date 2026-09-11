@@ -146,6 +146,56 @@ function computeDataDir(e: Entry, deps: ExtensionPlatformDeps): string {
   return path.join(e.dir, 'data');
 }
 
+function recoveryMarkerPath(extDir: string, pluginId: string): string {
+  return path.join(extDir, '.recovery', `${pluginId}.json`);
+}
+
+function writeRecoveryMarker(
+  extDir: string,
+  pluginId: string,
+  error: unknown,
+): void {
+  const marker = recoveryMarkerPath(extDir, pluginId);
+  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  fs.writeFileSync(
+    marker,
+    JSON.stringify(
+      {
+        pluginId,
+        code: 'PLUGIN_RECOVERY_REQUIRED',
+        error: error instanceof Error ? error.message : String(error),
+        createdAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+function clearRecoveryMarker(extDir: string, pluginId: string): void {
+  try {
+    fs.unlinkSync(recoveryMarkerPath(extDir, pluginId));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+function recoveryRequiredError(
+  pluginId: string,
+  error: unknown,
+): Error & {
+  code: 'PLUGIN_RECOVERY_REQUIRED';
+} {
+  return Object.assign(
+    new Error(
+      `plugin ${pluginId} recovery required: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    ),
+    { code: 'PLUGIN_RECOVERY_REQUIRED' as const },
+  );
+}
+
 export interface ExtensionPlatformDeps {
   extDir: string;
   /** Second discovery root for extensions shipped inside the app package
@@ -286,7 +336,7 @@ export interface ExtensionPlatform {
    */
   grantConsent(id: string): Promise<{ ok: boolean; error?: string }>;
   /** Factory-reset extension-owned namespaces, then restart eligible hosts. */
-  resetAll(): Promise<void>;
+  resetAll(): Promise<ResetAllResult>;
   /**
    * Re-resolves `laneState()` and emits `platform.lane` when it changed
    * since the last emission (from either this call or the plane's
@@ -299,6 +349,17 @@ export interface ExtensionPlatform {
    * `onLaneChange`. Never throws.
    */
   refreshLane(): void;
+}
+
+export interface ResetAllFailure {
+  pluginId: string;
+  code: 'PLUGIN_RECOVERY_REQUIRED';
+  error: string;
+}
+
+export interface ResetAllResult {
+  ok: boolean;
+  failed: ResetAllFailure[];
 }
 
 /**
@@ -814,8 +875,8 @@ export function createExtensionPlatform(
         return;
       }
     } catch (err) {
-      // The consent check itself threw (e.g. the consent store read
-      // rejected) rather than resolving false. Without this catch, the
+      // Activation setup threw (for example descriptor registration or
+      // preparation rejected) rather than completing. Without this catch, the
       // exception would propagate out of activate() with `e.host` left
       // pointing at a reserved-but-never-started host forever — every
       // future activate() call would then see `e.host` truthy and no-op on
@@ -867,16 +928,35 @@ export function createExtensionPlatform(
     }
   }
 
-  function retainLegacySource(e: Entry): void {
+  function retainLegacySource(
+    e: Entry,
+  ): { legacy: string; retained: string; suffixes: string[] } | undefined {
     const legacy = path.join(computeDataDir(e, deps), 'private.db');
-    if (!fs.existsSync(legacy)) return;
+    if (!fs.existsSync(legacy)) return undefined;
     const retained = path.join(deps.extDir, '.retained-legacy', e.manifest.id);
     fs.mkdirSync(retained, { recursive: true });
-    for (const suffix of ['', '-wal', '-shm']) {
-      const source = `${legacy}${suffix}`;
-      if (fs.existsSync(source))
-        fs.renameSync(source, path.join(retained, `private.db${suffix}`));
+    const suffixes = ['', '-wal', '-shm'].filter((suffix) =>
+      fs.existsSync(`${legacy}${suffix}`),
+    );
+    const moved: string[] = [];
+    try {
+      for (const suffix of suffixes) {
+        fs.renameSync(
+          `${legacy}${suffix}`,
+          path.join(retained, `private.db${suffix}`),
+        );
+        moved.push(suffix);
+      }
+    } catch (error) {
+      for (const suffix of moved.reverse())
+        if (fs.existsSync(path.join(retained, `private.db${suffix}`)))
+          fs.renameSync(
+            path.join(retained, `private.db${suffix}`),
+            `${legacy}${suffix}`,
+          );
+      throw error;
     }
+    return { legacy, retained, suffixes };
   }
 
   async function loadEntry(dir: string): Promise<Entry | null> {
@@ -987,7 +1067,18 @@ export function createExtensionPlatform(
         [...entries.keys()].map((id) =>
           runExclusive(id, async () => {
             const e = entries.get(id);
-            if (e && e.enabled) await activate(e);
+            if (!e || !e.enabled) return;
+            if (fs.existsSync(recoveryMarkerPath(deps.extDir, id))) {
+              try {
+                await rearmPlugin(e);
+                clearRecoveryMarker(deps.extDir, id);
+              } catch (error) {
+                const recoveryError = recoveryRequiredError(id, error);
+                setStatus(e, 'errored', recoveryError.message);
+                return;
+              }
+            }
+            if (e.status !== 'errored') await activate(e);
           }),
         ),
       );
@@ -1012,19 +1103,66 @@ export function createExtensionPlatform(
     async resetAll() {
       const candidates = [...entries.values()].filter((e) => e.enabled);
       for (const e of candidates) await deactivate(e);
-      for (const e of entries.values()) {
-        if (e.manifest.caps.includes('db')) await resetPluginStorage(e, true);
+      const failed: ResetAllFailure[] = [];
+      const failedIds = new Set<string>();
+      try {
+        // Stop at the first failed plugin namespace. Later namespaces are
+        // intentionally untouched; the finally block below still restores
+        // every enabled host that was deactivated at the start.
+        for (const e of entries.values()) {
+          if (!e.manifest.caps.includes('db')) continue;
+          try {
+            await resetPluginStorage(e, true);
+            clearRecoveryMarker(deps.extDir, e.manifest.id);
+          } catch (error) {
+            const recoveryError = recoveryRequiredError(e.manifest.id, error);
+            writeRecoveryMarker(deps.extDir, e.manifest.id, recoveryError);
+            setStatus(e, 'errored', recoveryError.message);
+            failed.push({
+              pluginId: e.manifest.id,
+              code: recoveryError.code,
+              error: recoveryError.message,
+            });
+            failedIds.add(e.manifest.id);
+            break;
+          }
+        }
+        if (failed.length === 0) await deps.store.maintenance.resetAll();
+      } finally {
+        // A storage failure is reported for that plugin and its durable marker
+        // remains; all other previously-enabled extensions must not be left
+        // silently deactivated. The failed plugin is deliberately not started
+        // again because its namespace still requires recovery.
+        await Promise.all(
+          candidates.map((e) =>
+            runExclusive(e.manifest.id, async () => {
+              const current = entries.get(e.manifest.id);
+              if (!current?.enabled || failedIds.has(current.manifest.id))
+                return;
+              await activate(current);
+              if (!current.host) {
+                const recoveryError = recoveryRequiredError(
+                  current.manifest.id,
+                  current.error ?? 'extension did not reactivate',
+                );
+                writeRecoveryMarker(
+                  deps.extDir,
+                  current.manifest.id,
+                  recoveryError,
+                );
+                setStatus(current, 'errored', recoveryError.message);
+                failed.push({
+                  pluginId: current.manifest.id,
+                  code: recoveryError.code,
+                  error: recoveryError.message,
+                });
+              }
+            }),
+          ),
+        );
       }
-      await deps.store.maintenance.resetAll();
-      await Promise.all(
-        candidates.map((e) =>
-          runExclusive(e.manifest.id, async () => {
-            const current = entries.get(e.manifest.id);
-            if (current?.enabled) await activate(current);
-          }),
-        ),
-      );
       changed();
+      return { ok: failed.length === 0, failed };
     },
 
     snapshot,
@@ -1088,8 +1226,15 @@ export function createExtensionPlatform(
           const e = await loadEntry(dir);
           if (!e) throw new Error('committed extension failed re-discovery');
           changed();
-          await rearmPlugin(e);
-          await activate(e);
+          try {
+            await rearmPlugin(e);
+            await activate(e);
+            clearRecoveryMarker(deps.extDir, e.manifest.id);
+          } catch (error) {
+            const recoveryError = recoveryRequiredError(e.manifest.id, error);
+            writeRecoveryMarker(deps.extDir, e.manifest.id, recoveryError);
+            throw recoveryError;
+          }
           return { ok: true, id: manifest.id };
         });
       } catch (e) {
@@ -1120,6 +1265,29 @@ export function createExtensionPlatform(
           e.enabled = wasEnabled;
           if (wasEnabled) await activate(e);
         };
+        const restoreAfterFailure = async (
+          cause: unknown,
+        ): Promise<unknown> => {
+          let reported = cause;
+          try {
+            await rearmPlugin(e);
+            clearRecoveryMarker(deps.extDir, e.manifest.id);
+          } catch (error) {
+            reported = recoveryRequiredError(e.manifest.id, error);
+            writeRecoveryMarker(deps.extDir, e.manifest.id, reported);
+          }
+          try {
+            await restorePriorState();
+          } catch (error) {
+            if (
+              (reported as { code?: string }).code !==
+              'PLUGIN_RECOVERY_REQUIRED'
+            )
+              reported = error;
+            writeRecoveryMarker(deps.extDir, e.manifest.id, reported);
+          }
+          return reported;
+        };
         // Validation is complete. Only now may an in-flight activation be
         // cancelled; rejected uninstalls must leave the previous host and
         // registrations untouched.
@@ -1129,20 +1297,24 @@ export function createExtensionPlatform(
           await resetPluginStorage(e, false);
         } catch (error) {
           // Restore the prior enabled/active state before reporting the
-          // rejection so callers never observe a half-uninstalled plugin.
-          await restorePriorState();
+          // rejection. resetPluginStorage has already written a tombstone, so
+          // clear that tombstone before activation tries to reopen the plugin.
+          const reported = await restoreAfterFailure(error);
           return {
             ok: false,
-            error: error instanceof Error ? error.message : String(error),
+            error:
+              reported instanceof Error ? reported.message : String(reported),
           };
         }
         // The validation above is intentionally complete before changing the
         // in-memory state. A rejected uninstall must leave the entry enabled
         // and its active host represented accurately in snapshots.
+        let retained:
+          | { legacy: string; retained: string; suffixes: string[] }
+          | undefined;
         try {
           e.enabled = false;
-          retainLegacySource(e);
-          fs.rmSync(e.dir, { recursive: true, force: true });
+          retained = retainLegacySource(e);
           writeInstalled(
             deps.extDir,
             readInstalled(deps.extDir).filter((r) => r.id !== id),
@@ -1150,11 +1322,28 @@ export function createExtensionPlatform(
           const state = readEnabledState(deps.extDir);
           delete state[id];
           writeEnabledState(deps.extDir, state);
+          // Keep e.dir available until every recoverable state write above
+          // succeeds; restoreAfterFailure can then reactivate the old entry
+          // without recreating a deleted extension directory.
+          fs.rmSync(e.dir, { recursive: true, force: true });
         } catch (error) {
-          await restorePriorState();
+          if (retained) {
+            for (const suffix of retained.suffixes)
+              if (
+                fs.existsSync(
+                  path.join(retained.retained, `private.db${suffix}`),
+                )
+              )
+                fs.renameSync(
+                  path.join(retained.retained, `private.db${suffix}`),
+                  `${retained.legacy}${suffix}`,
+                );
+          }
+          const reported = await restoreAfterFailure(error);
           return {
             ok: false,
-            error: error instanceof Error ? error.message : String(error),
+            error:
+              reported instanceof Error ? reported.message : String(reported),
           };
         }
         entries.delete(id);

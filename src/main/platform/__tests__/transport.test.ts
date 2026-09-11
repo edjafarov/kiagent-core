@@ -87,7 +87,9 @@ describe('createRpcEndpoint over the in-memory pair', () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       return 'late';
     });
-    await expect(mainEp.call('query', 'count', [], { timeoutMs: 1 })).rejects.toMatchObject({
+    await expect(
+      mainEp.call('query', 'count', [], { timeoutMs: 1 }),
+    ).rejects.toMatchObject({
       name: 'TimeoutError',
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -163,6 +165,25 @@ describe('createRpcEndpoint over the in-memory pair', () => {
     expect(err.code).toBe('auth');
     expect(sourceErrorCode(err)).toBe('auth');
   });
+
+  it.each([
+    'PLUGIN_MIGRATION_NOT_REGISTERED',
+    'PLUGIN_DB_DESCRIPTOR_DRIFT',
+    'PLUGIN_SQL_DDL_FORBIDDEN',
+    'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
+  ])(
+    'carries the public DB contract code %s across the host RPC',
+    async (code) => {
+      const { main, child } = createInMemoryHostPair();
+      const mainEp = createRpcEndpoint(main);
+      createRpcEndpoint(child).onCall(async () => {
+        throw Object.assign(new Error('db contract failure'), { code });
+      });
+      await expect(mainEp.call('db', 'exec', [])).rejects.toMatchObject({
+        code,
+      });
+    },
+  );
 
   it('preserves a custom error name and its allow-listed fields across the reply (#107 ModelChangedError)', async () => {
     // Class identity never survives the fork — a caller on the far side of

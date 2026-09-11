@@ -212,11 +212,13 @@ export interface RpcCallOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   transactionId?: string;
+  transactionBoundary?: boolean;
 }
 
 export interface RpcCallContext {
   signal: AbortSignal;
   transactionId?: string;
+  transactionBoundary?: boolean;
   deadline?: number;
 }
 
@@ -325,6 +327,7 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
       const context: RpcCallContext = {
         signal: controller.signal,
         transactionId: c.transactionId,
+        transactionBoundary: c.transactionBoundary,
         deadline: c.deadline,
       };
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -365,7 +368,11 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
               false,
               undefined,
               e instanceof Error ? e.message : String(e),
-              wireErrorCode(e),
+              context.signal.aborted &&
+                e instanceof Error &&
+                e.name === 'AbortError'
+                ? 'RPC_ABORTED'
+                : wireErrorCode(e),
               e instanceof Error ? e.name : undefined,
               errorWireFields(e),
             ),
@@ -470,6 +477,7 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
           args,
           deadline,
           transactionId: options?.transactionId,
+          transactionBoundary: options?.transactionBoundary,
         } satisfies CallMsg);
       });
     },

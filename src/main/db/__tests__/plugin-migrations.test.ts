@@ -61,6 +61,162 @@ describe('registered plugin schema registry', () => {
     ).rejects.toMatchObject({ code: 'PLUGIN_DB_IMPORT_INCOMPLETE' });
   });
 
+  it('rejects reordering of every append-only descriptor array', async () => {
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [
+        { name: 'first', kind: 'table' },
+        { name: 'second', kind: 'table' },
+      ],
+      modules: [
+        {
+          name: 'first_module',
+          migrations: [
+            { version: 0, statements: ['CREATE TABLE {{first}} (id TEXT)'] },
+          ],
+        },
+        {
+          name: 'second_module',
+          migrations: [
+            { version: 0, statements: ['CREATE TABLE {{second}} (id TEXT)'] },
+          ],
+        },
+      ],
+      legacy: {
+        tables: [
+          { name: 'first', columns: ['id', 'value'] },
+          { name: 'second', columns: ['id'] },
+        ],
+      },
+    });
+    const registry = createPluginRegistry(db, { filename: file });
+    await registry.register({
+      pluginId: 'append.only',
+      descriptor,
+      legacyPath: path.join(path.dirname(file), 'private.db'),
+    });
+
+    const variants = [
+      parseDatabaseDescriptor({
+        ...descriptor,
+        objects: [...descriptor.objects].reverse(),
+      }),
+      parseDatabaseDescriptor({
+        ...descriptor,
+        modules: [...descriptor.modules].reverse(),
+      }),
+      parseDatabaseDescriptor({
+        ...descriptor,
+        legacy: { tables: [...descriptor.legacy.tables].reverse() },
+      }),
+      parseDatabaseDescriptor({
+        ...descriptor,
+        legacy: {
+          tables: [
+            { name: 'first', columns: ['value', 'id'] },
+            { name: 'second', columns: ['id'] },
+          ],
+        },
+      }),
+    ];
+
+    for (const next of variants)
+      await expect(
+        registry.register({
+          pluginId: 'append.only',
+          descriptor: next,
+          legacyPath: path.join(path.dirname(file), 'private.db'),
+        }),
+      ).rejects.toMatchObject({ code: 'PLUGIN_DB_DESCRIPTOR_DRIFT' });
+  });
+
+  it('rejects changing the legacy versionTable selector', async () => {
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [
+        { name: 'schema_meta', kind: 'table' },
+        { name: 'records', kind: 'table' },
+      ],
+      modules: [
+        {
+          name: 'records_module',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{schema_meta}} (version INTEGER)',
+                'CREATE TABLE {{records}} (id TEXT)',
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: {
+        tables: [{ name: 'records', columns: ['id'] }],
+        versionTable: 'schema_meta',
+      },
+    });
+    const registry = createPluginRegistry(db, { filename: file });
+    await registry.register({
+      pluginId: 'append.only.version-table',
+      descriptor,
+      legacyPath: path.join(path.dirname(file), 'private.db'),
+    });
+
+    const next = parseDatabaseDescriptor({
+      ...descriptor,
+      legacy: { ...descriptor.legacy, versionTable: 'records' },
+    });
+    await expect(
+      registry.register({
+        pluginId: 'append.only.version-table',
+        descriptor: next,
+        legacyPath: path.join(path.dirname(file), 'private.db'),
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_DB_DESCRIPTOR_DRIFT' });
+  });
+
+  it('rejects changing the legacy userVersionModule selector', async () => {
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [{ name: 'records', kind: 'table' }],
+      modules: [
+        {
+          name: 'first_module',
+          migrations: [
+            { version: 0, statements: ['CREATE TABLE {{records}} (id TEXT)'] },
+          ],
+        },
+        {
+          name: 'second_module',
+          migrations: [{ version: 0, statements: [] }],
+        },
+      ],
+      legacy: {
+        tables: [{ name: 'records', columns: ['id'] }],
+        userVersionModule: 'first_module',
+      },
+    });
+    const registry = createPluginRegistry(db, { filename: file });
+    await registry.register({
+      pluginId: 'append.only.user-version-module',
+      descriptor,
+      legacyPath: path.join(path.dirname(file), 'private.db'),
+    });
+
+    const next = parseDatabaseDescriptor({
+      ...descriptor,
+      legacy: { ...descriptor.legacy, userVersionModule: 'second_module' },
+    });
+    await expect(
+      registry.register({
+        pluginId: 'append.only.user-version-module',
+        descriptor: next,
+        legacyPath: path.join(path.dirname(file), 'private.db'),
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_DB_DESCRIPTOR_DRIFT' });
+  });
+
   it('rejects descriptor drift and unowned foreign-key targets at registration', async () => {
     const registry = createPluginRegistry(db, { filename: file });
     const unownedFk = parseDatabaseDescriptor({

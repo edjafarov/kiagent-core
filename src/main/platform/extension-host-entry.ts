@@ -65,13 +65,13 @@ export const NS_METHODS: Record<string, string[]> = {
   net: ['fetch'],
   db: [
     'identifier',
+    'begin',
+    'commit',
+    'rollback',
     'exec',
     'query',
     'batch',
     'migrate',
-    'begin',
-    'commit',
-    'rollback',
   ],
   ui: ['notify'],
   inference: ['complete', 'see', 'read', 'hear', 'lane', 'describe'],
@@ -154,14 +154,20 @@ function buildRemoteHost(
           return callHost(endpoint, cap, m, [
             ref,
             { __remoteWatchId: watchId },
-          ]).then(() => ({
-            close: () => {
+          ]).then(
+            () => ({
+              close: () => {
+                fileWatchCbs.delete(watchId);
+                return callHost(endpoint, cap, m, [
+                  { __remoteWatchClose: watchId },
+                ]).then(() => undefined);
+              },
+            }),
+            (error) => {
               fileWatchCbs.delete(watchId);
-              return callHost(endpoint, cap, m, [
-                { __remoteWatchClose: watchId },
-              ]).then(() => undefined);
+              throw error;
             },
-          }));
+          );
         };
         continue;
       }

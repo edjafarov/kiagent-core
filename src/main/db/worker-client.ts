@@ -147,6 +147,7 @@ export async function openDbInWorker(
   >();
   const respawnListeners = new Set<() => void>();
   let intentionalClose = false;
+  let closePromise: Promise<void> | undefined;
   let permanentlyDead: (Error & { code: string }) | null = null;
   let respawning = false;
   /** Timestamps (ms) of restart attempts still inside the rolling window. */
@@ -351,18 +352,22 @@ export async function openDbInWorker(
     },
     isOpen: () => !permanentlyDead && !respawning && client.isOpen(),
     close: async () => {
-      intentionalClose = true;
-      try {
-        await client.close();
-      } finally {
-        await worker.terminate();
-        // A crash-respawn racing this close may have spawned a fresh worker
-        // that opened the DB before it observed intentionalClose; that path
-        // terminates it, but await the respawn so no worker still holds the
-        // SQLite/WAL handles once close() resolves. Resolved (Promise.resolve)
-        // on the common no-crash path, so this is free there.
-        await respawnSettled;
-      }
+      if (closePromise) return closePromise;
+      closePromise = (async () => {
+        intentionalClose = true;
+        try {
+          await client.close();
+        } finally {
+          await worker.terminate();
+          // A crash-respawn racing this close may have spawned a fresh worker
+          // that opened the DB before it observed intentionalClose; that path
+          // terminates it, but await the respawn so no worker still holds the
+          // SQLite/WAL handles once close() resolves. Resolved (Promise.resolve)
+          // on the common no-crash path, so this is free there.
+          await respawnSettled;
+        }
+      })();
+      return closePromise;
     },
   };
 }

@@ -538,6 +538,27 @@ describe('scoped asynchronous filesystem', () => {
     }
   });
 
+  it('removes watcher cleanup after an error close so dispose cannot invoke it twice', async () => {
+    const fake = new EventEmitter() as unknown as nodeFs.FSWatcher;
+    fake.close = jest.fn();
+    const cleanup = jest.fn();
+    const subscribe = jest
+      .spyOn(registry, 'subscribe')
+      .mockReturnValue(cleanup);
+    const controlled = createScopedFiles({
+      pluginId: 'documents',
+      owner: 'documents',
+      roots: registry,
+      watch: (() => fake) as typeof nodeFs.watch,
+    });
+    await controlled.watch({ root: grant.id, rel: '' }, () => undefined);
+    fake.emit('error', new Error('EMFILE'));
+    await controlled.dispose();
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    subscribe.mockRestore();
+  });
+
   it('closes a watcher when revocation occurs during native setup', async () => {
     const fake = new EventEmitter() as unknown as nodeFs.FSWatcher;
     fake.close = jest.fn();
@@ -553,6 +574,62 @@ describe('scoped asynchronous filesystem', () => {
     await racing.watch({ root: grant.id, rel: '' }, () => undefined);
     expect(fake.close).toHaveBeenCalled();
     await racing.dispose();
+  });
+
+  it('emits a rescan notification when revocation closes a watcher', async () => {
+    const fake = new EventEmitter() as unknown as nodeFs.FSWatcher;
+    fake.close = jest.fn();
+    const changes: FileChange[] = [];
+    const onChange = jest.fn((event: FileChange) => changes.push(event));
+    const watched = createScopedFiles({
+      pluginId: 'documents',
+      owner: 'documents',
+      roots: registry,
+      watch: (() => fake) as typeof nodeFs.watch,
+      emit: onChange,
+    });
+
+    await watched.watch({ root: grant.id, rel: '' }, () => undefined);
+    await registry.revoke('documents', grant.id);
+
+    expect(changes).toEqual([
+      { ref: { root: grant.id, rel: '' }, kind: 'rescan' },
+    ]);
+    await watched.dispose();
+  });
+
+  it('does not register a subscription cleanup after synchronous revoke during setup', async () => {
+    const fake = new EventEmitter() as unknown as nodeFs.FSWatcher;
+    fake.close = jest.fn();
+    const unsubscribe = jest.fn();
+    let registered = false;
+    const subscribe = jest
+      .spyOn(registry, 'subscribe')
+      .mockImplementation((_pluginId, _owner, _id, onRevoke) => {
+        registered = true;
+        onRevoke();
+        return () => {
+          registered = false;
+          unsubscribe();
+        };
+      });
+    const racing = createScopedFiles({
+      pluginId: 'documents',
+      owner: 'documents',
+      roots: registry,
+      watch: (() => fake) as typeof nodeFs.watch,
+    });
+
+    try {
+      await racing.watch({ root: grant.id, rel: '' }, () => undefined);
+      expect(registered).toBe(false);
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+      await racing.dispose();
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    } finally {
+      subscribe.mockRestore();
+      await racing.dispose();
+    }
   });
 
   it('does not create a native watcher after disposal during awaited setup', async () => {

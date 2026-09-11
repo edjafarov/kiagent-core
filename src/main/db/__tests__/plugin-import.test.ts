@@ -116,6 +116,90 @@ describe('registered legacy plugin import', () => {
     }
   });
 
+  it('rejects a child-before-parent legacy table descriptor at registration', async () => {
+    source.exec(`
+      CREATE TABLE parent (id TEXT PRIMARY KEY);
+      CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES parent(id));
+    `);
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [
+        { name: 'parent', kind: 'table' },
+        { name: 'child', kind: 'table' },
+      ],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{parent}} (id TEXT PRIMARY KEY)',
+                'CREATE TABLE {{child}} (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES {{parent}}(id))',
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: {
+        tables: [
+          { name: 'child', columns: ['id', 'parent_id'] },
+          { name: 'parent', columns: ['id'] },
+        ],
+      },
+    });
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await expect(
+      registry.register({
+        pluginId: 'legacy.child-first',
+        descriptor,
+        legacyPath: sourceFile,
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_DB_LEGACY_FK_ORDER' });
+  });
+
+  it('rejects a cyclic legacy foreign-key descriptor with a stable code', async () => {
+    source.exec(`
+      CREATE TABLE cycle_a (id TEXT PRIMARY KEY, b_id TEXT REFERENCES cycle_b(id));
+      CREATE TABLE cycle_b (id TEXT PRIMARY KEY, a_id TEXT REFERENCES cycle_a(id));
+    `);
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [
+        { name: 'cycle_a', kind: 'table' },
+        { name: 'cycle_b', kind: 'table' },
+      ],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{cycle_a}} (id TEXT PRIMARY KEY, b_id TEXT REFERENCES {{cycle_b}}(id))',
+                'CREATE TABLE {{cycle_b}} (id TEXT PRIMARY KEY, a_id TEXT REFERENCES {{cycle_a}}(id))',
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: {
+        tables: [
+          { name: 'cycle_a', columns: ['id', 'b_id'] },
+          { name: 'cycle_b', columns: ['id', 'a_id'] },
+        ],
+      },
+    });
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await expect(
+      registry.register({
+        pluginId: 'legacy.cycle',
+        descriptor,
+        legacyPath: sourceFile,
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_DB_LEGACY_FK_CYCLE' });
+  });
+
   it('resumes after an interruption without opening a partial namespace', async () => {
     const registry = createPluginRegistry(target, { filename: targetFile });
     registry.register({

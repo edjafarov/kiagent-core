@@ -23,7 +23,7 @@ same TOFU shape as a connector's own release:
 ```json
 {
   "devDependencies": {
-    "@kiagent/connector-sdk": "https://github.com/edjafarov/kiagent-core/releases/download/sdk-v1.1.0/kiagent-connector-sdk-1.1.0.tgz"
+    "@kiagent/connector-sdk": "https://github.com/edjafarov/kiagent-core/releases/download/sdk-v1.2.0/kiagent-connector-sdk-1.2.0.tgz"
   }
 }
 ```

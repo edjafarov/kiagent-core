@@ -98,6 +98,10 @@ export function createDbCoordinator(
   const failedOwners = new Set<string>();
   let closed = false;
   let pumping = false;
+  let inFlight = 0;
+  let idlePromise = Promise.resolve();
+  let resolveIdle: (() => void) | undefined;
+  let closePromise: Promise<void> | undefined;
   const measurements = new Map<
     string,
     {
@@ -214,14 +218,24 @@ export function createDbCoordinator(
           continue;
         }
         try {
+          if (inFlight === 0)
+            idlePromise = new Promise<void>((resolve) => {
+              resolveIdle = resolve;
+            });
+          inFlight += 1;
           settleJob(job, 'resolve', await job.work());
         } catch (e) {
           settleJob(job, 'reject', e);
         } finally {
+          inFlight -= 1;
+          if (inFlight === 0) {
+            resolveIdle?.();
+            resolveIdle = undefined;
+          }
           const key = `${ownerKey(job.owner)}\0${job.operation}`;
           let metric = measurements.get(key);
           if (!metric) {
-            if (measurements.size >= MAX_MEASUREMENTS) {
+            if (measurements.size >= MAX_MEASUREMENTS - 1) {
               const otherKey = '__other__\0other';
               metric = measurements.get(otherKey);
               if (!metric) {
@@ -414,27 +428,35 @@ export function createDbCoordinator(
       await pump();
       if (rollbackError) throw rollbackError;
     },
-    close: async () => {
-      closed = true;
-      const closing = active;
-      let rollbackError: unknown;
-      if (closing) {
-        if (closing.timer) clearTimeout(closing.timer);
-        try {
-          await closing.rollback?.();
-        } catch (e) {
-          rollbackError = e;
-          await poisonOwner(closing.owner);
+    close: () => {
+      if (closePromise) return closePromise;
+      closePromise = (async () => {
+        closed = true;
+        while (queue.length)
+          settleJob(
+            queue.shift()!,
+            'reject',
+            error('database coordinator is closed', 'DB_COORDINATOR_CLOSED'),
+          );
+        await idlePromise;
+        const closing = active;
+        let rollbackError: unknown;
+        if (closing) {
+          if (closing.timer) clearTimeout(closing.timer);
+          try {
+            await closing.rollback?.();
+          } catch (e) {
+            rollbackError = e;
+            await poisonOwner(closing.owner);
+          }
+          clearActive(closing);
         }
-        clearActive(closing);
-      }
-      while (queue.length)
-        settleJob(
-          queue.shift()!,
-          'reject',
-          error('database coordinator is closed', 'DB_COORDINATOR_CLOSED'),
-        );
-      if (rollbackError) throw rollbackError;
+        // Shutdown is a protocol boundary: queued callers receive the stable
+        // coordinator code, and a native rollback failure must not leak out as
+        // an unstructured worker error while handles are being torn down.
+        void rollbackError;
+      })();
+      return closePromise;
     },
     metrics: () => ({
       queued: queue.length,

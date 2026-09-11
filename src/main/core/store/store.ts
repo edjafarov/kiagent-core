@@ -638,6 +638,13 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
   // ── the Query surface ─────────────────────────────────────────────────────
 
+  const accountsFrom = async (reader: AppDb) => {
+    const rows = (await reader.all(
+      `SELECT * FROM accounts ORDER BY created_at`,
+    )) as unknown as AccountRow[];
+    return rows.map(toAccount);
+  };
+
   const query: Query = {
     async document(id) {
       const r = (
@@ -923,10 +930,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       }>;
     },
     async accounts() {
-      const rows = (await db.all(
-        `SELECT * FROM accounts ORDER BY created_at`,
-      )) as unknown as AccountRow[];
-      return rows.map(toAccount);
+      return accountsFrom(db);
     },
   };
 
@@ -1160,35 +1164,49 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         else await db.proc!('rebuildSearchIndex', null);
       },
       async export(destDir) {
-        fs.mkdirSync(destDir, { recursive: true });
-        if (db.backup) await db.backup(path.join(destDir, 'kiagent.db'));
-        const accounts = await query.accounts();
-        fs.writeFileSync(
-          path.join(destDir, 'accounts.json'),
-          JSON.stringify(accounts, null, 2),
-        );
-        const out = fs.createWriteStream(path.join(destDir, 'documents.jsonl'));
-        // The async AppDb has no streaming `.iterate()`; read the set and
-        // serialize it (export is an on-demand maintenance op, not a hot path).
-        const rows = (await db.all(
-          `SELECT * FROM documents`,
-        )) as unknown as DocRow[];
-        for (const r of rows) out.write(`${JSON.stringify(toDocument(r))}\n`);
-        await new Promise<void>((resolve, reject) => {
-          out.end(() => resolve());
-          out.on('error', reject);
-        });
-        const assets = backupAssets(
-          deps.profileDir,
-          destDir,
-          accounts
-            .flatMap((account) => [account.config])
-            .concat(rows.map((row) => JSON.parse(row.metadata))),
-        );
-        fs.writeFileSync(
-          path.join(destDir, 'backup-manifest.json'),
-          JSON.stringify({ version: 1, assets }, null, 2),
-        );
+        const exportFiles = async (heldDb: AppDb) => {
+          fs.mkdirSync(destDir, { recursive: true });
+          if (heldDb.backup)
+            await heldDb.backup(path.join(destDir, 'kiagent.db'));
+          const accounts = await accountsFrom(heldDb);
+          fs.writeFileSync(
+            path.join(destDir, 'accounts.json'),
+            JSON.stringify(accounts, null, 2),
+          );
+          const out = fs.createWriteStream(
+            path.join(destDir, 'documents.jsonl'),
+          );
+          // The async AppDb has no streaming `.iterate()`; read the set and
+          // serialize it (export is an on-demand maintenance op, not a hot path).
+          const rows = (await heldDb.all(
+            `SELECT * FROM documents`,
+          )) as unknown as DocRow[];
+          for (const r of rows) out.write(`${JSON.stringify(toDocument(r))}\n`);
+          await new Promise<void>((resolve, reject) => {
+            out.end(() => resolve());
+            out.on('error', reject);
+          });
+          const assets = backupAssets(
+            deps.profileDir,
+            destDir,
+            accounts
+              .flatMap((account) => [account.config])
+              .concat(rows.map((row) => JSON.parse(row.metadata))),
+          );
+          fs.writeFileSync(
+            path.join(destDir, 'backup-manifest.json'),
+            JSON.stringify({ version: 1, assets }, null, 2),
+          );
+        };
+        if (db.withExclusive)
+          await db.withExclusive((heldDb) =>
+            exportFiles(
+              db.backup === undefined
+                ? { ...heldDb, backup: undefined }
+                : heldDb,
+            ),
+          );
+        else await exportFiles(db);
       },
       async resetAll() {
         // 'consents' deliberately survives: installed extensions live on

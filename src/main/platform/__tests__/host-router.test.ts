@@ -198,4 +198,175 @@ describe('createHostRouter', () => {
     ).rejects.toThrow(/worker owner is wired/);
     await close();
   });
+
+  it('routes cancellation to the method-specific overload positions', async () => {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const db = {
+      exec: jest.fn(async (...args: unknown[]) => {
+        calls.push({ method: 'exec', args });
+      }),
+      query: jest.fn(async (...args: unknown[]) => {
+        calls.push({ method: 'query', args });
+        return [];
+      }),
+      batch: jest.fn(async (...args: unknown[]) => {
+        calls.push({ method: 'batch', args });
+        return [];
+      }),
+    };
+    const routerWithDb = createHostRouter({
+      extensionId: 'test.db',
+      granted: new Set(['db']),
+      surfaces: { db } as never,
+      logSink,
+    });
+    const { signal } = new AbortController();
+    await routerWithDb.dispatch('db', 'exec', ['SELECT 1'], { signal });
+    await routerWithDb.dispatch('db', 'query', ['SELECT 1', []], { signal });
+    await routerWithDb.dispatch('db', 'batch', [[{ sql: 'SELECT 1' }]], {
+      signal,
+    });
+    expect(calls[0].args[3]).toBe(signal);
+    expect(calls[1].args[3]).toBe(signal);
+    expect(calls[2].args[2]).toBe(signal);
+  });
+
+  it('routes a tokenized query signal after omitted params', async () => {
+    const query = jest.fn(async (...args: unknown[]) => args);
+    const routerWithDb = createHostRouter({
+      extensionId: 'test.db',
+      granted: new Set(['db']),
+      surfaces: { db: { query } } as never,
+      logSink,
+    });
+    const { signal } = new AbortController();
+
+    await routerWithDb.dispatch('db', 'query', ['tx-1', 'SELECT 1'], {
+      transactionId: 'tx-1',
+      signal,
+    });
+
+    expect(query).toHaveBeenCalledWith('tx-1', 'SELECT 1', undefined, signal);
+  });
+
+  it('routes cancellation for token overloads and migrate without shifting user arguments', async () => {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const db = {
+      exec: jest.fn(async (...args: unknown[]) => {
+        calls.push({ method: 'exec', args });
+      }),
+      batch: jest.fn(async (...args: unknown[]) => {
+        calls.push({ method: 'batch', args });
+        return [];
+      }),
+      migrate: jest.fn(async (...args: unknown[]) => {
+        calls.push({ method: 'migrate', args });
+      }),
+    };
+    const routerWithDb = createHostRouter({
+      extensionId: 'test.db',
+      granted: new Set(['db']),
+      surfaces: { db } as never,
+      logSink,
+    });
+    const { signal } = new AbortController();
+
+    await routerWithDb.dispatch(
+      'db',
+      'exec',
+      ['tx-1', 'INSERT INTO t VALUES (?)', [1]],
+      { transactionId: 'tx-1', signal },
+    );
+    await routerWithDb.dispatch(
+      'db',
+      'batch',
+      ['tx-1', [{ sql: 'SELECT 1' }]],
+      { transactionId: 'tx-1', signal },
+    );
+    await routerWithDb.dispatch(
+      'db',
+      'migrate',
+      ['base', 1, ['CREATE TABLE t (id INTEGER)']],
+      { signal },
+    );
+
+    expect(calls[0].args).toEqual([
+      'tx-1',
+      'INSERT INTO t VALUES (?)',
+      [1],
+      signal,
+    ]);
+    expect(calls[1].args).toEqual(['tx-1', [{ sql: 'SELECT 1' }], signal]);
+    expect(calls[2].args).toEqual([
+      'base',
+      1,
+      ['CREATE TABLE t (id INTEGER)'],
+      signal,
+    ]);
+  });
+
+  it('enforces transaction context for raw transaction controls', async () => {
+    const { signal } = new AbortController();
+    const r = createHostRouter({
+      extensionId: 'test.db',
+      granted: new Set(['db']),
+      surfaces: {
+        db: {
+          begin: jest.fn(),
+          commit: jest.fn(),
+          rollback: jest.fn(),
+        },
+      } as never,
+      logSink,
+    });
+    await expect(
+      r.dispatch('db', 'begin', [], { transactionId: 'held-token', signal }),
+    ).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
+    await expect(
+      r.dispatch('db', 'commit', ['other-token'], {
+        transactionId: 'held-token',
+        signal,
+      }),
+    ).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
+    await expect(
+      r.dispatch('db', 'rollback', ['held-token'], {
+        transactionId: 'held-token',
+        signal,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects raw begin without an RPC transaction context', async () => {
+    const begin = jest.fn(async () => 'usable-token');
+    const r = createHostRouter({
+      extensionId: 'test.db',
+      granted: new Set(['db']),
+      surfaces: { db: { begin } } as never,
+      logSink,
+    });
+
+    await expect(r.dispatch('db', 'begin', [])).rejects.toMatchObject({
+      code: 'HOST_CALL_IN_TRANSACTION',
+    });
+    expect(begin).not.toHaveBeenCalled();
+  });
+
+  it('rejects a token overload from a different RPC transaction context', async () => {
+    const exec = jest.fn(async () => undefined);
+    const { signal } = new AbortController();
+    const r = createHostRouter({
+      extensionId: 'test.db',
+      granted: new Set(['db']),
+      surfaces: { db: { exec } } as never,
+      logSink,
+    });
+
+    await expect(
+      r.dispatch('db', 'exec', ['foreign-token', 'SELECT 1'], {
+        transactionId: 'caller-token',
+        signal,
+      }),
+    ).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
+    expect(exec).not.toHaveBeenCalled();
+  });
 });

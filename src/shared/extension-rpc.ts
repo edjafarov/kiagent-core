@@ -83,6 +83,7 @@ export type MainToChild =
       args: unknown[];
       deadline?: number;
       transactionId?: string;
+      transactionBoundary?: boolean;
     }
   | { kind: 'cancel'; id: number }
   | {
@@ -129,6 +130,7 @@ export type ChildToMain =
       args: unknown[];
       deadline?: number;
       transactionId?: string;
+      transactionBoundary?: boolean;
     }
   | { kind: 'cancel'; id: number }
   | {
