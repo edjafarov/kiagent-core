@@ -8,7 +8,7 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
-import * as fsPromises from 'node:fs/promises';
+import fsPromises from 'node:fs/promises';
 import * as nodeFs from 'node:fs';
 import type { PathLike, StatOptions } from 'node:fs';
 import { EventEmitter } from 'node:events';
@@ -167,6 +167,88 @@ describe('scoped asynchronous filesystem', () => {
     ).rejects.toThrow();
   });
 
+  it('rejects expired cursor state after bounded cursor retention', async () => {
+    await mkdir(join(root, 'cursor-bounded'));
+    await Promise.all(
+      Array.from({ length: 260 }, (_, index) =>
+        files.write(
+          { root: grant.id, rel: `cursor-bounded/${index}.txt` },
+          new Uint8Array([1]),
+        ),
+      ),
+    );
+    const first = await files.list(
+      { root: grant.id, rel: 'cursor-bounded' },
+      { limit: 1 },
+    );
+    let cursor = first.nextCursor;
+    let recentCursor = cursor;
+    for (let index = 0; index < 258 && cursor; index += 1) {
+      cursor = (
+        await files.list(
+          { root: grant.id, rel: 'cursor-bounded' },
+          { cursor, limit: 1 },
+        )
+      ).nextCursor;
+      recentCursor = cursor ?? recentCursor;
+    }
+    if (recentCursor) {
+      await expect(
+        files.list(
+          { root: grant.id, rel: 'cursor-bounded' },
+          { cursor: recentCursor, limit: 1 },
+        ),
+      ).resolves.toBeDefined();
+    }
+    await expect(
+      files.list(
+        { root: grant.id, rel: 'cursor-bounded' },
+        { cursor: first.nextCursor, limit: 1 },
+      ),
+    ).rejects.toThrow(/expired|invalid|cursor/i);
+  });
+
+  it('closes an opendir handle when entry stat fails', async () => {
+    let closed = false;
+    const originalOpendir = fsPromises.opendir.bind(fsPromises);
+    const opendirSpy = jest
+      .spyOn(fsPromises, 'opendir')
+      .mockImplementation((async (
+        ...args: Parameters<typeof fsPromises.opendir>
+      ) => {
+        const directory = await originalOpendir(...args);
+        const originalClose = directory.close.bind(directory);
+        directory.close = async () => {
+          closed = true;
+          return originalClose();
+        };
+        return directory;
+      }) as typeof fsPromises.opendir);
+    const failing = createScopedFiles({
+      owner: 'documents',
+      roots: registry,
+      lstat: (async (pathArg: PathLike, options?: StatOptions) => {
+        if (String(pathArg).endsWith('directory-entry.txt')) {
+          throw new Error('injected entry stat failure');
+        }
+        return fsPromises.lstat(pathArg, options as never);
+      }) as typeof fsPromises.lstat,
+    });
+    await files.write(
+      { root: grant.id, rel: 'directory-entry.txt' },
+      new Uint8Array([1]),
+    );
+    try {
+      await expect(
+        failing.list({ root: grant.id, rel: '' }, { limit: 1 }),
+      ).rejects.toThrow('injected entry stat failure');
+      expect(closed).toBe(true);
+    } finally {
+      opendirSpy.mockRestore();
+      await failing.dispose();
+    }
+  });
+
   it('rejects root-equivalent mutation references', async () => {
     await expect(files.remove({ root: grant.id, rel: '.' })).rejects.toThrow();
     await expect(
@@ -230,6 +312,22 @@ describe('scoped asynchronous filesystem', () => {
     } finally {
       await controlled.dispose();
     }
+  });
+
+  it('closes a watcher when revocation occurs during native setup', async () => {
+    const fake = new EventEmitter() as unknown as nodeFs.FSWatcher;
+    fake.close = jest.fn();
+    const racing = createScopedFiles({
+      owner: 'documents',
+      roots: registry,
+      watch: (() => {
+        void registry.revoke('documents', grant.id);
+        return fake;
+      }) as typeof nodeFs.watch,
+    });
+    await racing.watch({ root: grant.id, rel: '' }, () => undefined);
+    expect(fake.close).toHaveBeenCalled();
+    await racing.dispose();
   });
 
   it('moves without replacing an existing destination', async () => {

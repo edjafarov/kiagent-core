@@ -79,6 +79,10 @@ export function createFileRootRegistry(): FileRootRegistry {
       );
     },
     subscribe(owner, id, onRevoke) {
+      if (!grants.get(owner)?.has(id)) {
+        onRevoke();
+        return () => undefined;
+      }
       const key = `${owner}\0${id}`;
       let callbacks = listeners.get(key);
       if (!callbacks) {

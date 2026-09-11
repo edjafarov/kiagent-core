@@ -16,6 +16,7 @@ import type { FileRootRegistry } from './file-roots';
 const MAX_BYTES = 16 * 1024 * 1024;
 const DEFAULT_PAGE = 200;
 const MAX_PAGE = 1000;
+const MAX_CURSORS = 256;
 const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 
 async function digestFile(filePath: string): Promise<string> {
@@ -352,24 +353,31 @@ export function createScopedFiles(
         entries: [],
       };
       const directory = await fsp.opendir(resolved.path);
-      let index = 0;
-      let entry: fs.Dirent | null;
       let hasMore = false;
-      while ((entry = await directory.read()) !== null) {
-        if (index++ < cursor.index) continue;
-        const entryInfo = await checkedStat(
-          path.join(resolved.path, entry.name),
-          false,
-        );
-        result.entries.push({ name: entry.name, ...entryInfo });
-        if (result.entries.length >= limit) {
-          hasMore = (await directory.read()) !== null;
-          break;
+      try {
+        let index = 0;
+        let entry: fs.Dirent | null;
+        while ((entry = await directory.read()) !== null) {
+          if (index++ < cursor.index) continue;
+          const entryInfo = await checkedStat(
+            path.join(resolved.path, entry.name),
+            false,
+          );
+          result.entries.push({ name: entry.name, ...entryInfo });
+          if (result.entries.length >= limit) {
+            hasMore = (await directory.read()) !== null;
+            break;
+          }
         }
+      } finally {
+        await directory.close().catch(() => undefined);
       }
-      await directory.close();
       if (hasMore) {
         const token = `${incarnation}:${randomUUID()}`;
+        if (cursors.size >= MAX_CURSORS) {
+          const oldest = cursors.keys().next().value;
+          if (oldest) cursors.delete(oldest);
+        }
         cursors.set(token, {
           root: resolved.root.id,
           rel: resolved.rel,
