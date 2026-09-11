@@ -548,6 +548,7 @@ export function createScopedFiles(
     async watch(ref, onChange) {
       const resolved = await resolve(ref);
       await ensureAncestors(resolved.root, resolved.path);
+      check();
       let closed = false;
       let timer: NodeJS.Timeout | undefined;
       let pending = false;

@@ -13,7 +13,7 @@ import * as nodeFs from 'node:fs';
 import type { PathLike, StatOptions } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createFileRootRegistry } from '../file-roots';
 import { createScopedFiles } from '../scoped-files';
 import type { FileChange } from '@shared/plugin-files';
@@ -328,6 +328,65 @@ describe('scoped asynchronous filesystem', () => {
     await racing.watch({ root: grant.id, rel: '' }, () => undefined);
     expect(fake.close).toHaveBeenCalled();
     await racing.dispose();
+  });
+
+  it('does not create a native watcher after disposal during awaited setup', async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((resolve) => (entered = resolve));
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    const watchFactory = jest.fn(() => {
+      throw new Error('native watcher must not start');
+    });
+    const late = createScopedFiles({
+      owner: 'documents',
+      roots: registry,
+      watch: watchFactory as typeof nodeFs.watch,
+      lstat: (async (pathArg: PathLike, options?: StatOptions) => {
+        if (basename(String(pathArg)) === basename(root)) {
+          entered();
+          await blocked;
+        }
+        return fsPromises.lstat(pathArg, options as never);
+      }) as typeof fsPromises.lstat,
+    });
+    const setup = late.watch({ root: grant.id, rel: '' }, () => undefined);
+    await reached;
+    await late.dispose();
+    release();
+    await expect(setup).rejects.toThrow(/disposed|aborted|lifetime/i);
+    expect(watchFactory).not.toHaveBeenCalled();
+  });
+
+  it('does not create a native watcher after owner abort during awaited setup', async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((resolve) => (entered = resolve));
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    const controller = new AbortController();
+    const watchFactory = jest.fn(() => {
+      throw new Error('native watcher must not start');
+    });
+    const late = createScopedFiles({
+      owner: 'documents',
+      roots: registry,
+      signal: controller.signal,
+      watch: watchFactory as typeof nodeFs.watch,
+      lstat: (async (pathArg: PathLike, options?: StatOptions) => {
+        if (basename(String(pathArg)) === basename(root)) {
+          entered();
+          await blocked;
+        }
+        return fsPromises.lstat(pathArg, options as never);
+      }) as typeof fsPromises.lstat,
+    });
+    const setup = late.watch({ root: grant.id, rel: '' }, () => undefined);
+    await reached;
+    controller.abort();
+    release();
+    await expect(setup).rejects.toThrow(/disposed|aborted|lifetime/i);
+    expect(watchFactory).not.toHaveBeenCalled();
+    await late.dispose();
   });
 
   it('moves without replacing an existing destination', async () => {
