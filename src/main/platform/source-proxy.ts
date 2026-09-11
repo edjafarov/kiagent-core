@@ -27,7 +27,7 @@ import type {
   MainToChild,
   WireBatch,
 } from '@shared/extension-rpc';
-import { sourceErrorCode, type SourceErrorCode } from '@shared/source-errors';
+import { sourceErrorCode } from '@shared/source-errors';
 
 import type { RpcEndpoint } from './transport';
 
@@ -35,7 +35,7 @@ type Inbox =
   | { kind: 'batch'; batch: WireBatch }
   | { kind: 'refs'; refs: ExternalRef[] }
   | { kind: 'done' }
-  | { kind: 'error'; error: string; code?: SourceErrorCode };
+  | { kind: 'error'; error: string; code?: string; name?: string };
 
 interface StreamState {
   inbox: Inbox[];
@@ -90,7 +90,7 @@ interface WirePickerSpec {
 export interface SourceProxySet {
   handleCall(ns: string, method: string, args: unknown[]): Promise<unknown>;
   makeSource(entry: Contributions['sources'][number]): Source;
-  abortAll(reason: string): void;
+  abortAll(reason: string | Error): void;
   dispose(): void;
 }
 
@@ -165,7 +165,7 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
       state.wake = null;
       // If abort lands exactly when the consumer's for-await body checks
       // the signal in-body and stops pulling without ever calling
-      // it.return() (a manual [Symbol.asyncIterator]() consumer, not a
+      // explicitly closing its iterator (a manual async-iterator consumer, not a
       // `for await` loop), the generator stays suspended at `yield`
       // forever and `finally` below never runs. Do the same cleanup here
       // too — a double-delete/double-removeEventListener in `finally` (when
@@ -194,9 +194,10 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
           // off the `code` property, so a proxied source's auth failure
           // classifies exactly like a bundled one's SourceAuthError.
           const err = new Error(msg.error) as Error & {
-            code?: SourceErrorCode;
+            code?: string;
           };
           if (msg.code) err.code = msg.code;
+          if (msg.name) err.name = msg.name;
           throw err;
         }
         yield msg;
@@ -390,8 +391,14 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
     },
 
     abortAll(reason) {
+      const error = reason instanceof Error ? reason : new Error(reason);
       streams.forEach((_s, pullId) =>
-        push(pullId, { kind: 'error', error: reason }),
+        push(pullId, {
+          kind: 'error',
+          error: error.message,
+          code: (error as Error & { code?: string }).code,
+          name: error.name,
+        }),
       );
       auths.clear();
     },

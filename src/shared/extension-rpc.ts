@@ -17,6 +17,7 @@ import type {
   PullPhase,
   SourceDescriptor,
 } from './contracts';
+import type { FileChange } from './plugin-files';
 import type { SourceErrorCode, WireErrorCode } from './source-errors';
 
 export const PLATFORM_API_VERSION = '2.1.0';
@@ -111,6 +112,7 @@ export type MainToChild =
       errorFields?: Record<string, unknown>;
     }
   | { kind: 'event'; name: string; payload: unknown; meta: EventMeta }
+  | { kind: 'file-change'; watchId: number; event: FileChange }
   | { kind: 'src-next'; pullId: number }
   | { kind: 'src-abort'; pullId: number }
   | { kind: 'deactivate' };

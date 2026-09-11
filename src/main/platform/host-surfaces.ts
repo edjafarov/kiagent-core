@@ -4,17 +4,14 @@
  * host incarnation. files/commands are declared-but-rejected in this build
  * (spec §3.7): the cap validates and consents, but calls fail loudly.
  */
-import fs from 'fs';
-import path from 'path';
-
-import Database from 'better-sqlite3';
-
 import type { EventMeta, LaneState, LogLevel, Query } from '@shared/contracts';
-
+import type { PluginDb, PluginDbParams, PluginDbStep } from '@shared/plugin-db';
+import type { FileChange, ScopedFiles } from '@shared/plugin-files';
+import type { AppDb } from '@main/db/app-db';
+import type { DbOwner, TxToken } from '@main/db/coordinator';
+import { pluginIdentifier } from '@shared/plugin-sql';
 import type { LogSink } from '@main/core/engine/engine';
-
-import { assertAllowedSql } from './db-guard';
-import { createNetFetch } from './net-guard';
+import { createNetworkService, type NetworkService } from './network-service';
 
 export class CapError extends Error {}
 
@@ -92,7 +89,16 @@ export type Surfaces = Record<
 
 export interface SurfaceDeps {
   extensionId: string;
-  dataDir: string;
+  /** Retained only as host metadata; never used to open SQLite. */
+  dataDir?: string;
+  /** The one boot-owned worker service. There is deliberately no fallback
+   *  database here: a host without an injected service is a wiring error. */
+  appDb?: AppDb;
+  owner?: DbOwner;
+  /** Fresh per-incarnation services. Their owner signal is disposed with the
+   *  surface bundle, so requests/watchers cannot outlive a host. */
+  network?: NetworkService;
+  files?: ScopedFiles & { dispose?: () => Promise<void> };
   query: Query;
   inference: {
     complete(
@@ -169,6 +175,7 @@ export interface SurfaceDeps {
   bus: EventBus;
   /** Ships a host event to the child (endpoint.post({kind:'event',…})). */
   deliverEvent(name: string, payload: unknown, meta: EventMeta): void;
+  deliverFileChange?(watchId: number, event: FileChange): void;
 }
 
 const unsupported = (ns: string) => () => {
@@ -179,19 +186,151 @@ const unsupported = (ns: string) => () => {
 
 export function buildSurfaces(deps: SurfaceDeps): {
   surfaces: Surfaces;
-  close(): void;
+  close(): void | Promise<void>;
 } {
-  const netFetch = createNetFetch();
-  let db: Database.Database | null = null;
-  const openDb = () => {
-    if (!db) {
-      fs.mkdirSync(deps.dataDir, { recursive: true });
-      db = new Database(path.join(deps.dataDir, 'private.db'));
-    }
-    return db;
-  };
   const eventSubs = new Map<string, () => void>();
-  const transactions = new Map<string, { owner: string; db: Database.Database }>();
+  const remoteWatchers = new Map<number, { close(): Promise<void> }>();
+  const network =
+    deps.network ??
+    createNetworkService({
+      owner: `extension:${deps.extensionId}`,
+      log: () => undefined,
+    });
+  const { appDb } = deps;
+  const { owner } = deps;
+  const plugin = appDb?.plugin;
+  const requireDb = () => {
+    if (!plugin || !owner || owner.kind !== 'plugin')
+      throw new CapError(
+        'the db capability is unavailable: no worker owner is wired',
+      );
+    return { plugin, owner };
+  };
+  const dbCall = (
+    request: Parameters<NonNullable<AppDb['plugin']>>[0],
+    signal?: AbortSignal,
+  ) => requireDb().plugin(request, { signal });
+
+  function splitTransactionArgs(
+    first: unknown,
+    second: unknown,
+    third: unknown,
+  ): { token?: TxToken; sql: string; params?: PluginDbParams } {
+    if (typeof first === 'string' && typeof second === 'string')
+      return {
+        token: first,
+        sql: second,
+        params: third as PluginDbParams | undefined,
+      };
+    return { sql: String(first), params: second as PluginDbParams | undefined };
+  }
+
+  const dbSurface = {
+    identifier(name: string) {
+      requireDb();
+      return pluginIdentifier(deps.extensionId, String(name));
+    },
+    async exec(
+      first: unknown,
+      second?: unknown,
+      third?: unknown,
+      signal?: AbortSignal,
+    ) {
+      const call = splitTransactionArgs(first, second, third);
+      await dbCall(
+        {
+          op: 'exec',
+          owner: requireDb().owner,
+          token: call.token,
+          sql: call.sql,
+          params: call.params,
+        },
+        signal,
+      );
+    },
+    async query<Row = Record<string, unknown>>(
+      first: unknown,
+      second?: unknown,
+      third?: unknown,
+      signal?: AbortSignal,
+    ): Promise<Row[]> {
+      const call = splitTransactionArgs(first, second, third);
+      return dbCall(
+        {
+          op: 'query',
+          owner: requireDb().owner,
+          token: call.token,
+          sql: call.sql,
+          params: call.params,
+        },
+        signal,
+      ) as Promise<Row[]>;
+    },
+    async batch(first: unknown, second?: unknown, signal?: AbortSignal) {
+      const token = Array.isArray(first) ? undefined : String(first);
+      const steps = (token ? second : first) as readonly PluginDbStep[];
+      return dbCall(
+        { op: 'batch', owner: requireDb().owner, token, steps },
+        signal,
+      );
+    },
+    async migrate(
+      module: string,
+      version: number,
+      statements: readonly string[],
+      signal?: AbortSignal,
+    ) {
+      if (!appDb?.plugin)
+        throw Object.assign(
+          new Error('migration is not registered with the platform'),
+          { code: 'PLUGIN_MIGRATION_NOT_REGISTERED' },
+        );
+      await dbCall(
+        {
+          op: 'migrate',
+          owner: requireDb().owner,
+          module,
+          version,
+          statements,
+        },
+        signal,
+      );
+    },
+    async transaction<T>(work: (tx: PluginDb) => Promise<T>) {
+      const { owner: dbOwner } = requireDb();
+      const token = (await dbCall({ op: 'begin', owner: dbOwner })) as string;
+      const tx = {
+        exec: (sql: string, params?: PluginDbParams) =>
+          dbSurface.exec(token, sql, params),
+        query: <Row = Record<string, unknown>>(
+          sql: string,
+          params?: PluginDbParams,
+        ) => dbSurface.query<Row>(token, sql, params),
+        batch: (steps: readonly PluginDbStep[]) =>
+          dbSurface.batch(token, steps),
+      } as unknown as PluginDb;
+      try {
+        const value = await work(tx);
+        await dbCall({ op: 'commit', owner: dbOwner, token });
+        return value;
+      } catch (error) {
+        await dbCall({ op: 'rollback', owner: dbOwner, token }).catch(
+          () => undefined,
+        );
+        throw error;
+      }
+    },
+  };
+  const fileCall = (method: string, args: unknown[]) => {
+    if (!deps.files)
+      throw new CapError(
+        'the files capability is unavailable: no owner service is wired',
+      );
+    const fn = deps.files[method as keyof ScopedFiles] as unknown as (
+      ...values: unknown[]
+    ) => unknown;
+    return fn(...args);
+  };
   // The one place the optional dep is defaulted — every existing caller of
   // buildSurfaces() that doesn't wire `describe` keeps compiling, and the
   // default answers exactly what an absent provider would: `null`.
@@ -217,69 +356,33 @@ export function buildSurfaces(deps: SurfaceDeps): {
     net: {
       // Public internet destinations only — see net-guard.ts for why the
       // scheme check alone was not a boundary.
-      fetch: (url, init) => netFetch(url, init),
+      fetch: (async (url: unknown, init: unknown, signal?: AbortSignal) => {
+        return network.fetch(String(url), {
+          ...(init as object),
+          signal:
+            signal ?? (init as { signal?: AbortSignal } | undefined)?.signal,
+        });
+      }) as unknown as (...args: unknown[]) => unknown,
     },
     db: {
-      begin: () => {
-        const d = openDb();
-        const token = `${deps.extensionId}:${Date.now()}:${Math.random()}`;
-        d.exec('BEGIN');
-        transactions.set(token, { owner: deps.extensionId, db: d });
-        return token;
-      },
-      commit: (token) => {
-        const tx = transactions.get(String(token));
-        if (!tx || tx.owner !== deps.extensionId) throw new Error('unknown transaction');
-        tx.db.exec('COMMIT');
-        transactions.delete(String(token));
-      },
-      rollback: (token) => {
-        const tx = transactions.get(String(token));
-        if (!tx || tx.owner !== deps.extensionId) throw new Error('unknown transaction');
-        tx.db.exec('ROLLBACK');
-        transactions.delete(String(token));
-      },
-      // Every statement is policed first — see db-guard.ts for why "your own
-      // database" was not, on its own, a boundary.
-      async exec(sqlOrToken, paramsOrSql, maybeParams) {
-        const token = typeof sqlOrToken === 'string' && transactions.has(sqlOrToken) ? sqlOrToken : undefined;
-        const actualSql = token ? String(paramsOrSql) : String(sqlOrToken);
-        const actualParams = token ? maybeParams : paramsOrSql;
-        assertAllowedSql(actualSql);
-        const d = token ? transactions.get(token)!.db : openDb();
-        const p = (actualParams ?? []) as unknown[];
-        if (p.length === 0) d.exec(actualSql);
-        else d.prepare(actualSql).run(...p);
-      },
-      async query(sqlOrToken, paramsOrSql, maybeParams) {
-        const token = typeof sqlOrToken === 'string' && transactions.has(sqlOrToken) ? sqlOrToken : undefined;
-        const actualSql = token ? String(paramsOrSql) : String(sqlOrToken);
-        const actualParams = token ? maybeParams : paramsOrSql;
-        assertAllowedSql(actualSql);
-        return (token ? transactions.get(token)!.db : openDb())
-          .prepare(actualSql)
-          .all(...((actualParams ?? []) as unknown[]));
-      },
-      batch: async (tokenOrSteps, maybeSteps) => {
-        const token = Array.isArray(tokenOrSteps) ? undefined : String(tokenOrSteps);
-        const steps = (token ? maybeSteps : tokenOrSteps) as Array<{ sql: string; params?: unknown[]; mode?: 'exec' | 'query' }>;
-        const d = token ? transactions.get(token)?.db : openDb();
-        if (!d) throw new Error('unknown transaction');
-        return steps.map((step) => {
-          assertAllowedSql(step.sql);
-          if (step.mode === 'query') return d.prepare(step.sql).all(...(step.params ?? []));
-          if ((step.params ?? []).length === 0) { d.exec(step.sql); return []; }
-          d.prepare(step.sql).run(...(step.params ?? []));
-          return [];
-        });
-      },
-      migrate: async (module, version, statements) => {
-        void module; void version; void statements;
-        throw Object.assign(
-          new Error('migration is not registered with the platform'),
-          { code: 'PLUGIN_MIGRATION_NOT_REGISTERED' },
-        );
-      },
+      identifier: dbSurface.identifier as (...args: unknown[]) => unknown,
+      begin: () => dbCall({ op: 'begin', owner: requireDb().owner }),
+      commit: (token) =>
+        dbCall({
+          op: 'commit',
+          owner: requireDb().owner,
+          token: String(token),
+        }),
+      rollback: (token) =>
+        dbCall({
+          op: 'rollback',
+          owner: requireDb().owner,
+          token: String(token),
+        }),
+      exec: dbSurface.exec as (...args: unknown[]) => unknown,
+      query: dbSurface.query as (...args: unknown[]) => unknown,
+      batch: dbSurface.batch as (...args: unknown[]) => unknown,
+      migrate: dbSurface.migrate as (...args: unknown[]) => unknown,
     },
     ui: {
       notify: (msg, level) =>
@@ -354,10 +457,53 @@ export function buildSurfaces(deps: SurfaceDeps): {
       },
     },
     files: {
-      list: unsupported('files'),
-      read: unsupported('files'),
-      write: unsupported('files'),
-      move: unsupported('files'),
+      roots: (...args) => fileCall('roots', args),
+      stat: (...args) => fileCall('stat', args),
+      lstat: (...args) => fileCall('lstat', args),
+      canonical: (...args) => fileCall('canonical', args),
+      mkdir: (...args) => fileCall('mkdir', args),
+      open: (...args) => fileCall('open', args),
+      fstat: (...args) => fileCall('fstat', args),
+      readHandle: (...args) => fileCall('readHandle', args),
+      writeHandle: (...args) => fileCall('writeHandle', args),
+      syncHandle: (...args) => fileCall('syncHandle', args),
+      setHandleMetadata: (...args) => fileCall('setHandleMetadata', args),
+      closeHandle: (...args) => fileCall('closeHandle', args),
+      link: (...args) => fileCall('link', args),
+      list: (...args) => fileCall('list', args),
+      read: (...args) => fileCall('read', args),
+      write: (...args) => fileCall('write', args),
+      move: (...args) => fileCall('move', args),
+      remove: (...args) => fileCall('remove', args),
+      watch: (...args) => {
+        const [ref, callback] = args as [unknown, unknown];
+        if (ref && typeof ref === 'object' && '__remoteWatchClose' in ref) {
+          const watchId = Number(
+            (ref as { __remoteWatchClose: unknown }).__remoteWatchClose,
+          );
+          const watcher = remoteWatchers.get(watchId);
+          remoteWatchers.delete(watchId);
+          return watcher?.close();
+        }
+        if (
+          callback &&
+          typeof callback === 'object' &&
+          '__remoteWatchId' in callback
+        ) {
+          const watchId = Number(
+            (callback as { __remoteWatchId: unknown }).__remoteWatchId,
+          );
+          const watcher = fileCall('watch', [
+            ref,
+            (event: FileChange) => deps.deliverFileChange?.(watchId, event),
+          ]) as Promise<{ close(): Promise<void> }>;
+          return watcher.then((handle) => {
+            remoteWatchers.set(watchId, handle);
+            return { watchId };
+          });
+        }
+        return fileCall('watch', args);
+      },
     },
     commands: { register: unsupported('commands') },
   };
@@ -365,14 +511,18 @@ export function buildSurfaces(deps: SurfaceDeps): {
   return {
     surfaces,
     async close() {
-      for (const [token, tx] of transactions) {
-        try { tx.db.exec('ROLLBACK'); } catch { /* already closed */ }
-        transactions.delete(token);
-      }
       eventSubs.forEach((off) => off());
       eventSubs.clear();
-      db?.close();
-      db = null;
+      await Promise.all(
+        [...remoteWatchers.values()].map((watcher) =>
+          watcher.close().catch(() => undefined),
+        ),
+      );
+      remoteWatchers.clear();
+      network.dispose();
+      await deps.files?.dispose?.();
+      if (plugin && owner && owner.kind === 'plugin')
+        await plugin({ op: 'release', owner });
     },
   };
 }

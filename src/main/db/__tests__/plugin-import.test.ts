@@ -624,7 +624,7 @@ describe('registered legacy plugin import', () => {
       target
         .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'p_%'")
         .all(),
-    ).toHaveLength(8);
+    ).toHaveLength(9);
     expect(
       registry
         .host((db) => db.prepare('PRAGMA table_list').all(), {

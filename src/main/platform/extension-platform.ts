@@ -24,6 +24,8 @@ import type {
 } from '@shared/contracts';
 import type { ExtensionPreview } from '@shared/ipc';
 import type { Contributions } from '@shared/extension-rpc';
+import type { AppDb } from '@main/db/app-db';
+import type { DbOwner } from '@main/db/coordinator';
 
 import type { CoreStore } from '@main/core/store/store';
 import type { CoreScheduler } from '@main/core/scheduler';
@@ -41,6 +43,7 @@ import {
   oauthSourceBindings,
   senderContributions,
   sourceContributions,
+  MAX_DESCRIPTOR_BYTES,
 } from './manifest';
 import { oauthProviders } from './oauth-providers';
 import {
@@ -57,6 +60,14 @@ import {
   createEventBus,
   type SurfaceDeps,
 } from './host-surfaces';
+import {
+  parseDatabaseDescriptor,
+  type PluginDatabaseDescriptor,
+} from './database-descriptor';
+import type { FileRootRegistry } from './file-roots';
+import { createScopedFiles } from './scoped-files';
+import { createNetworkService } from './network-service';
+import type { NetworkService } from './network-service';
 import { createInMemoryHostPair, type HostTransport } from './transport';
 import { runExtensionHost } from './extension-host-entry';
 
@@ -152,6 +163,12 @@ export interface ExtensionPlatformDeps {
    *  ('unsafe.mainProcess') as activate()'s extras.mainProcess. Core never
    *  types it; the product build supplies it. */
   mainApi?: unknown;
+  /** The one boot-owned worker service. */
+  db?: AppDb;
+  /** Trusted root grants restored/created by product main-process flows. */
+  fileRoots?: FileRootRegistry;
+  /** Optional test/integration seam; production uses the guarded default. */
+  networkFactory?: (owner: string, signal: AbortSignal) => NetworkService;
   store: CoreStore;
   sources: SourceRegistry;
   /** Where cap-gated extension Senders land. Same lifecycle as `sources`:
@@ -209,10 +226,38 @@ interface Entry {
   status: ExtensionStatus;
   error?: string;
   host: ReturnType<typeof createExtensionHost> | null;
+  activation?: AbortController;
   sourceIds: string[];
   /** Loaded once per Entry (dir contents only change through reinstall,
    *  which rebuilds the Entry) — snapshot() must stay cheap. */
   iconDataUrl?: string;
+}
+
+function descriptorForEntry(e: Entry): PluginDatabaseDescriptor | undefined {
+  if (!e.manifest.caps.includes('db')) return undefined;
+  const relative = e.manifest.database?.schema;
+  if (!relative) {
+    throw new Error(
+      'PLUGIN_DB_DESCRIPTOR_REQUIRED: database.schema is required for db-capability plugins',
+    );
+  }
+  const root = path.resolve(e.dir);
+  const packageRoot = fs.realpathSync(root);
+  const descriptorPath = path.resolve(root, relative);
+  const resolvedDescriptorPath = fs.realpathSync(descriptorPath);
+  const resolvedRel = path.relative(packageRoot, resolvedDescriptorPath);
+  if (resolvedRel.startsWith('..') || path.isAbsolute(resolvedRel))
+    throw new Error(
+      'database.schema must resolve inside the extension directory',
+    );
+  const stat = fs.statSync(resolvedDescriptorPath);
+  if (!stat.isFile() || stat.size > MAX_DESCRIPTOR_BYTES)
+    throw new Error(
+      'database.schema must be a regular file no larger than 4 MiB',
+    );
+  return parseDatabaseDescriptor(
+    JSON.parse(fs.readFileSync(resolvedDescriptorPath, 'utf8')),
+  );
 }
 
 export interface ExtensionPlatform {
@@ -238,6 +283,8 @@ export interface ExtensionPlatform {
    * whatever the manifest actually declares.
    */
   grantConsent(id: string): Promise<{ ok: boolean; error?: string }>;
+  /** Factory-reset extension-owned namespaces, then restart eligible hosts. */
+  resetAll(): Promise<void>;
   /**
    * Re-resolves `laneState()` and emits `platform.lane` when it changed
    * since the last emission (from either this call or the plane's
@@ -325,7 +372,28 @@ export function createExtensionPlatform(
         `platform.lane emit failed: ${String(err)}`,
       ),
   );
-  const offLane = deps.onLaneChange(() => laneGate.check());
+  let running = false;
+  let offLane: (() => void) | undefined;
+  let offWorker: (() => void) | undefined;
+  const onWorkerRespawn = () => {
+    if (!running) return;
+    void Promise.all(
+      [...entries.keys()].map((id) =>
+        runExclusive(id, async () => {
+          const e = entries.get(id);
+          if (!e?.enabled) return;
+          await deactivate(e);
+          if (e.enabled) await activate(e);
+        }),
+      ),
+    ).catch((error) =>
+      deps.logSink.log(
+        'extensions',
+        'error',
+        `worker respawn host rebuild failed: ${String(error)}`,
+      ),
+    );
+  };
 
   // Per-extension lifecycle serialization. Keyed on the extension id string
   // (NOT on an Entry object reference) so a composite op that replaces an
@@ -352,6 +420,12 @@ export function createExtensionPlatform(
       ),
     );
     return run;
+  }
+
+  function registerLifecycleListeners(): void {
+    offLane ??= deps.onLaneChange(() => laneGate.check());
+    if (!offWorker && deps.db?.onWorkerRespawn)
+      offWorker = deps.db.onWorkerRespawn(onWorkerRespawn);
   }
 
   const installer = createInstaller({
@@ -551,16 +625,12 @@ export function createExtensionPlatform(
    *  registered accounts. Called ONLY from deactivate() (orchestrator-
    *  initiated deactivate/uninstall/disable, spec §3.8) — never from the
    *  registerContributions disposer, which also runs on crash cleanup. */
-  function unregisterCadence(e: Entry): void {
+  async function unregisterCadence(e: Entry): Promise<void> {
+    const accounts = await deps.store.read.accounts().catch(() => []);
     for (const sid of e.sourceIds) {
-      void deps.store.read
-        .accounts()
-        .then((accounts) => {
-          accounts
-            .filter((a) => a.source === sid)
-            .forEach((a) => deps.scheduler.unregister(`source:${sid}:${a.id}`));
-        })
-        .catch(() => {});
+      accounts
+        .filter((a) => a.source === sid)
+        .forEach((a) => deps.scheduler.unregister(`source:${sid}:${a.id}`));
     }
   }
 
@@ -623,16 +693,81 @@ export function createExtensionPlatform(
             return pair.main;
           }
         : () => deps.transportFactory(e.manifest.id),
-      makeSurfaces: (deliverEvent) =>
-        buildSurfaces({
-          extensionId: e.manifest.id,
-          dataDir: computeDataDir(e, deps),
-          query: deps.store.read,
-          inference: { ...deps.inference, lane: async () => deps.laneState() },
-          notify: deps.notify,
-          bus,
-          deliverEvent,
-        }),
+      makeSurfaces: async (deliverEvent, context, deliverFileChange) => {
+        const owner =
+          context?.owner ??
+          ({
+            kind: 'plugin' as const,
+            extensionId: e.manifest.id,
+            handle: `${e.manifest.id}:legacy-host`,
+          } satisfies DbOwner);
+        let opened = false;
+        let network: ReturnType<typeof createNetworkService> | undefined;
+        let files: ReturnType<typeof createScopedFiles> | undefined;
+        try {
+          if (deps.db?.plugin && e.manifest.caps.includes('db')) {
+            await deps.db.plugin({
+              op: 'open',
+              pluginId: e.manifest.id,
+              owner,
+            });
+            opened = true;
+          }
+          const serviceOwner = `${e.manifest.id}:${owner.handle ?? 'host'}`;
+          network = e.manifest.caps.includes('net')
+            ? (deps.networkFactory?.(
+                serviceOwner,
+                context?.signal ?? new AbortController().signal,
+              ) ??
+              createNetworkService({
+                owner: serviceOwner,
+                signal: context?.signal,
+                log: (event) =>
+                  deps.logSink.log(
+                    'extensions',
+                    'info',
+                    'host.net.fetch',
+                    event as unknown as Record<string, unknown>,
+                  ),
+              }))
+            : undefined;
+          files =
+            deps.fileRoots && e.manifest.caps.includes('files')
+              ? createScopedFiles({
+                  owner: serviceOwner,
+                  roots: deps.fileRoots,
+                  signal: context?.signal,
+                  log: (message) =>
+                    deps.logSink.log('extensions', 'info', message),
+                })
+              : undefined;
+          return buildSurfaces({
+            extensionId: e.manifest.id,
+            dataDir: computeDataDir(e, deps),
+            appDb: deps.db,
+            owner,
+            network,
+            files,
+            query: deps.store.read,
+            inference: {
+              ...deps.inference,
+              lane: async () => deps.laneState(),
+            },
+            notify: deps.notify,
+            bus,
+            deliverEvent,
+            deliverFileChange,
+          });
+        } catch (error) {
+          await files?.dispose?.();
+          network?.dispose();
+          if (opened && deps.db?.plugin)
+            await deps.db
+              .plugin({ op: 'release', owner })
+              .catch(() => undefined);
+          throw error;
+        }
+      },
       logSink: deps.logSink,
       onStatus: (status, error) => setStatus(e, status, error),
       registerContributions: (c, makeSource) =>
@@ -640,6 +775,8 @@ export function createExtensionPlatform(
       ...deps.hostTimeouts,
     });
     e.host = host;
+    const activation = new AbortController();
+    e.activation = activation;
     try {
       if (e.origin !== 'bundled' && !(await consentCovers(e.manifest))) {
         // Never started — createExtensionHost() itself has no side effects
@@ -647,6 +784,28 @@ export function createExtensionPlatform(
         // the reservation here orphans nothing.
         e.host = null;
         setStatus(e, 'needs-consent');
+        e.activation = undefined;
+        return;
+      }
+      const descriptor = descriptorForEntry(e);
+      if (descriptor) {
+        if (!deps.db?.plugin || !deps.db.registerPluginSource)
+          throw new Error('shared plugin database service is not wired');
+        const legacyPath = path.join(computeDataDir(e, deps), 'private.db');
+        await deps.db.registerPluginSource(
+          e.manifest.id,
+          legacyPath,
+          descriptor,
+        );
+        await deps.db.plugin(
+          { op: 'prepare', pluginId: e.manifest.id, descriptor },
+          { signal: activation.signal },
+        );
+      }
+      if (activation.signal.aborted || e.host !== host || !e.enabled) {
+        await host.stop();
+        e.host = null;
+        e.activation = undefined;
         return;
       }
     } catch (err) {
@@ -659,6 +818,7 @@ export function createExtensionPlatform(
       // reservation (nothing was started, so nothing to tear down) and
       // park the entry in 'errored' — recoverable by a later activate().
       e.host = null;
+      e.activation = undefined;
       setStatus(e, 'errored', err instanceof Error ? err.message : String(err));
       return;
     }
@@ -668,14 +828,50 @@ export function createExtensionPlatform(
       // instead of silently no-opping on the idempotency guard.
       e.host = null;
     });
+    e.activation = undefined;
   }
 
   async function deactivate(e: Entry): Promise<void> {
+    e.activation?.abort();
+    e.activation = undefined;
     await e.host?.stop();
     e.host = null;
     // Job-stopping is tied to deactivation (spec §3.8), not to the host
     // process merely exiting — see the note on registerContributions above.
-    unregisterCadence(e);
+    await unregisterCadence(e);
+  }
+
+  async function resetPluginStorage(e: Entry, rearm: boolean): Promise<void> {
+    if (!e.manifest.caps.includes('db') || !deps.db?.plugin) return;
+    try {
+      await deps.db.plugin({ op: 'reset', pluginId: e.manifest.id });
+      if (rearm) await deps.db.plugin({ op: 'rearm', pluginId: e.manifest.id });
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'PLUGIN_DB_NOT_REGISTERED')
+        throw error;
+    }
+  }
+
+  async function rearmPlugin(e: Entry): Promise<void> {
+    if (!e.manifest.caps.includes('db') || !deps.db?.plugin) return;
+    try {
+      await deps.db.plugin({ op: 'rearm', pluginId: e.manifest.id });
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'PLUGIN_DB_NOT_REGISTERED')
+        throw error;
+    }
+  }
+
+  function retainLegacySource(e: Entry): void {
+    const legacy = path.join(computeDataDir(e, deps), 'private.db');
+    if (!fs.existsSync(legacy)) return;
+    const retained = path.join(deps.extDir, '.retained-legacy', e.manifest.id);
+    fs.mkdirSync(retained, { recursive: true });
+    for (const suffix of ['', '-wal', '-shm']) {
+      const source = `${legacy}${suffix}`;
+      if (fs.existsSync(source))
+        fs.renameSync(source, path.join(retained, `private.db${suffix}`));
+    }
   }
 
   async function loadEntry(dir: string): Promise<Entry | null> {
@@ -709,6 +905,8 @@ export function createExtensionPlatform(
 
   return {
     async start() {
+      registerLifecycleListeners();
+      running = true;
       fs.mkdirSync(deps.extDir, { recursive: true });
       const state = readEnabledState(deps.extDir);
       const records = readInstalled(deps.extDir);
@@ -791,7 +989,11 @@ export function createExtensionPlatform(
     },
 
     async stop() {
-      offLane();
+      running = false;
+      offLane?.();
+      offLane = undefined;
+      offWorker?.();
+      offWorker = undefined;
       installer.discardAll();
       for (const id of entries.keys()) {
         // eslint-disable-next-line no-await-in-loop
@@ -800,6 +1002,24 @@ export function createExtensionPlatform(
           if (e) await deactivate(e);
         });
       }
+    },
+
+    async resetAll() {
+      const candidates = [...entries.values()].filter((e) => e.enabled);
+      for (const e of candidates) await deactivate(e);
+      for (const e of entries.values()) {
+        if (e.manifest.caps.includes('db')) await resetPluginStorage(e, true);
+      }
+      await deps.store.maintenance.resetAll();
+      await Promise.all(
+        candidates.map((e) =>
+          runExclusive(e.manifest.id, async () => {
+            const current = entries.get(e.manifest.id);
+            if (current?.enabled) await activate(current);
+          }),
+        ),
+      );
+      changed();
     },
 
     snapshot,
@@ -863,6 +1083,7 @@ export function createExtensionPlatform(
           const e = await loadEntry(dir);
           if (!e) throw new Error('committed extension failed re-discovery');
           changed();
+          await rearmPlugin(e);
           await activate(e);
           return { ok: true, id: manifest.id };
         });
@@ -889,15 +1110,48 @@ export function createExtensionPlatform(
             error: "Remove this connector's sources before uninstalling it.",
           };
         }
+        const wasEnabled = e.enabled;
+        const restorePriorState = async () => {
+          e.enabled = wasEnabled;
+          if (wasEnabled) await activate(e);
+        };
+        // Validation is complete. Only now may an in-flight activation be
+        // cancelled; rejected uninstalls must leave the previous host and
+        // registrations untouched.
+        e.activation?.abort();
         await deactivate(e);
-        fs.rmSync(e.dir, { recursive: true, force: true });
-        writeInstalled(
-          deps.extDir,
-          readInstalled(deps.extDir).filter((r) => r.id !== id),
-        );
-        const state = readEnabledState(deps.extDir);
-        delete state[id];
-        writeEnabledState(deps.extDir, state);
+        try {
+          await resetPluginStorage(e, false);
+        } catch (error) {
+          // Restore the prior enabled/active state before reporting the
+          // rejection so callers never observe a half-uninstalled plugin.
+          await restorePriorState();
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+        // The validation above is intentionally complete before changing the
+        // in-memory state. A rejected uninstall must leave the entry enabled
+        // and its active host represented accurately in snapshots.
+        try {
+          e.enabled = false;
+          retainLegacySource(e);
+          fs.rmSync(e.dir, { recursive: true, force: true });
+          writeInstalled(
+            deps.extDir,
+            readInstalled(deps.extDir).filter((r) => r.id !== id),
+          );
+          const state = readEnabledState(deps.extDir);
+          delete state[id];
+          writeEnabledState(deps.extDir, state);
+        } catch (error) {
+          await restorePriorState();
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
         entries.delete(id);
         changed();
         return { ok: true };
@@ -910,6 +1164,7 @@ export function createExtensionPlatform(
       // runs after the earlier one's activate()/deactivate() has fully
       // settled, acting on the entry's genuinely-current state instead of
       // clobbering a host reference the other call is still setting up.
+      if (!enabled) entries.get(id)?.activation?.abort();
       return runExclusive(id, async () => {
         const e = entries.get(id);
         if (!e) return { ok: false, error: `no such extension: ${id}` };

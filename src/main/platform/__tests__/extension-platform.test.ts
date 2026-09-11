@@ -376,6 +376,13 @@ describe('createExtensionPlatform', () => {
       ok: false,
       error: "Remove this connector's sources before uninstalling it.",
     });
+    expect(platform.snapshot()).toEqual([
+      expect.objectContaining({
+        id: 'test.basic',
+        enabled: true,
+        status: 'activated',
+      }),
+    ]);
     const acct = (await store.read.accounts()).find(
       (a) => a.source === 'basicsrc',
     )!;
@@ -388,6 +395,179 @@ describe('createExtensionPlatform', () => {
     );
     expect(registry.has('basicsrc')).toBe(false);
     expect(platform.snapshot()).toEqual([]);
+  });
+
+  it('a rejected uninstall does not abort an activation before account validation', async () => {
+    await platform.start();
+    await installFixture();
+    await platform.setEnabled('test.basic', false);
+    await store.createAccount({
+      source: 'basicsrc',
+      identifier: 'a',
+      config: {},
+      status: 'live',
+    });
+
+    let enterLatest!: () => void;
+    let releaseLatest!: () => void;
+    const latestEntered = new Promise<void>((resolve) => {
+      enterLatest = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseLatest = resolve;
+    });
+    const realLatest = store.consents.latest.bind(store.consents);
+    const latestSpy = jest
+      .spyOn(store.consents, 'latest')
+      .mockImplementation(async (id) => {
+        enterLatest();
+        await release;
+        return realLatest(id);
+      });
+
+    const enabling = platform.setEnabled('test.basic', true);
+    await latestEntered;
+    const uninstalling = platform.uninstall('test.basic');
+    releaseLatest();
+
+    await expect(enabling).resolves.toEqual({ ok: true });
+    await expect(uninstalling).resolves.toEqual({
+      ok: false,
+      error: "Remove this connector's sources before uninstalling it.",
+    });
+    expect(platform.snapshot()).toEqual([
+      expect.objectContaining({
+        id: 'test.basic',
+        enabled: true,
+        status: 'activated',
+      }),
+    ]);
+    expect(registry.has('basicsrc')).toBe(true);
+    latestSpy.mockRestore();
+  });
+
+  it('a storage-reset rejection restores the running host and worker registration', async () => {
+    const fixture = path.join(tmp, 'db-fixture');
+    fs.cpSync(FIXTURE, fixture, { recursive: true });
+    const manifestPath = path.join(fixture, 'manifest.json');
+    const manifest = JSON.parse(
+      fs.readFileSync(manifestPath, 'utf8'),
+    ) as Record<string, unknown>;
+    manifest.caps = ['net', 'db'];
+    manifest.database = { schema: 'database.json' };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    fs.writeFileSync(
+      path.join(fixture, 'database.json'),
+      JSON.stringify({
+        format: 1,
+        objects: [{ name: 'settings', kind: 'table' }],
+        modules: [],
+        legacy: { tables: [] },
+      }),
+    );
+
+    const owners = new Set<string>();
+    const db = {
+      registerPluginSource: jest.fn(async () => undefined),
+      plugin: jest.fn(
+        async (request: { op: string; owner?: { handle?: string } }) => {
+          if (request.op === 'open' && request.owner?.handle)
+            owners.add(request.owner.handle);
+          if (request.op === 'release' && request.owner?.handle)
+            owners.delete(request.owner.handle);
+          if (request.op === 'reset') throw new Error('storage reset failed');
+          return undefined;
+        },
+      ),
+    };
+    platform = makePlatform({ db: db as never });
+    await platform.start();
+    const preview = await platform.installPreview(fixture);
+    if (!('token' in preview))
+      throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+    await expect(platform.installCommit(preview.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.basic',
+    });
+    expect(owners.size).toBe(1);
+
+    await expect(platform.uninstall('test.basic')).resolves.toEqual({
+      ok: false,
+      error: 'storage reset failed',
+    });
+    expect(platform.snapshot()).toEqual([
+      expect.objectContaining({
+        id: 'test.basic',
+        enabled: true,
+        status: 'activated',
+      }),
+    ]);
+    expect(registry.has('basicsrc')).toBe(true);
+    expect(owners.size).toBe(1);
+  });
+
+  it('a storage-reset rejection preserves a previously disabled extension', async () => {
+    const fixture = path.join(tmp, 'disabled-db-fixture');
+    fs.cpSync(FIXTURE, fixture, { recursive: true });
+    const manifestPath = path.join(fixture, 'manifest.json');
+    const manifest = JSON.parse(
+      fs.readFileSync(manifestPath, 'utf8'),
+    ) as Record<string, unknown>;
+    manifest.caps = ['net', 'db'];
+    manifest.database = { schema: 'database.json' };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    fs.writeFileSync(
+      path.join(fixture, 'database.json'),
+      JSON.stringify({
+        format: 1,
+        objects: [{ name: 'settings', kind: 'table' }],
+        modules: [],
+        legacy: { tables: [] },
+      }),
+    );
+
+    const owners = new Set<string>();
+    const db = {
+      registerPluginSource: jest.fn(async () => undefined),
+      plugin: jest.fn(
+        async (request: { op: string; owner?: { handle?: string } }) => {
+          if (request.op === 'open' && request.owner?.handle)
+            owners.add(request.owner.handle);
+          if (request.op === 'release' && request.owner?.handle)
+            owners.delete(request.owner.handle);
+          if (request.op === 'reset') throw new Error('storage reset failed');
+          return undefined;
+        },
+      ),
+    };
+    platform = makePlatform({ db: db as never });
+    await platform.start();
+    const preview = await platform.installPreview(fixture);
+    if (!('token' in preview))
+      throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+    await expect(platform.installCommit(preview.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.basic',
+    });
+    await expect(platform.setEnabled('test.basic', false)).resolves.toEqual({
+      ok: true,
+    });
+    expect(owners.size).toBe(0);
+    expect(registry.has('basicsrc')).toBe(false);
+
+    await expect(platform.uninstall('test.basic')).resolves.toEqual({
+      ok: false,
+      error: 'storage reset failed',
+    });
+    expect(platform.snapshot()).toEqual([
+      expect.objectContaining({
+        id: 'test.basic',
+        enabled: false,
+        status: 'disabled',
+      }),
+    ]);
+    expect(registry.has('basicsrc')).toBe(false);
+    expect(owners.size).toBe(0);
   });
 
   it('double setEnabled(true) does not orphan a second host: redundant and concurrent re-enables are no-ops', async () => {
@@ -831,6 +1011,68 @@ describe('createExtensionPlatform', () => {
     // Cleanup
     await failablePlatform.stop();
   }, 15000); // Longer timeout: simulating host.start() failure is slower than other scenarios
+
+  it('unsubscribes the worker respawn listener when a platform stops', async () => {
+    const offWorker = jest.fn();
+    const workerDb = { onWorkerRespawn: () => offWorker };
+    const workerPlatform = makePlatform({ db: workerDb as never });
+    await workerPlatform.start();
+    await workerPlatform.stop();
+    expect(offWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-registers worker and lane lifecycle listeners after stop/start', async () => {
+    const workerListeners = new Set<() => void>();
+    const laneListeners = new Set<(open: boolean) => void>();
+    const onWorkerRespawn = jest.fn((listener: () => void) => {
+      workerListeners.add(listener);
+      return () => workerListeners.delete(listener);
+    });
+    const onLaneChange = jest.fn((listener: (open: boolean) => void) => {
+      laneListeners.add(listener);
+      return () => laneListeners.delete(listener);
+    });
+    const workerPlatform = makePlatform({
+      db: { onWorkerRespawn } as never,
+      onLaneChange,
+    });
+    await workerPlatform.start();
+    const preview = await workerPlatform.installPreview(FIXTURE);
+    if (!('token' in preview))
+      throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+    await expect(workerPlatform.installCommit(preview.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.basic',
+    });
+    expect(activationsCount).toBe(1);
+
+    await workerPlatform.stop();
+    expect(workerListeners.size).toBe(0);
+    expect(laneListeners.size).toBe(0);
+
+    await workerPlatform.start();
+    expect(onWorkerRespawn).toHaveBeenCalledTimes(2);
+    expect(onLaneChange).toHaveBeenCalledTimes(2);
+    expect(workerListeners.size).toBe(1);
+    expect(laneListeners.size).toBe(1);
+
+    for (const listener of workerListeners) listener();
+    await new Promise<void>((resolve, reject) => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (activationsCount === 3) {
+          clearInterval(timer);
+          resolve();
+        } else if (Date.now() - started > 4000) {
+          clearInterval(timer);
+          reject(new Error('worker respawn did not invalidate the host owner'));
+        }
+      }, 5);
+    });
+    expect(workerPlatform.snapshot()).toEqual([
+      expect.objectContaining({ id: 'test.basic', status: 'activated' }),
+    ]);
+  });
 
   it('registerContributions skips a source id not declared in the manifest (F6): declared ones still register, undeclared ones warn+skip', async () => {
     await platform.start(); // empty dir — no-op

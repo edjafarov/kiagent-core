@@ -1,8 +1,17 @@
-import type { PluginDb, PluginDbParams, PluginDbSession, PluginDbStep } from '@shared/plugin-db';
+import type {
+  PluginDb,
+  PluginDbParams,
+  PluginDbSession,
+  PluginDbStep,
+} from '@shared/plugin-db';
 
-import type { RpcEndpoint } from './transport';
-import { HostCallInTransactionError, hostCallContext, type HostCallContext } from './host-call-context';
 import { pluginIdentifier } from '@shared/plugin-sql';
+import type { RpcCallOptions, RpcEndpoint } from './transport';
+import {
+  HostCallInTransactionError,
+  hostCallContext,
+  type HostCallContext,
+} from './host-call-context';
 
 function callDb(
   endpoint: RpcEndpoint,
@@ -19,10 +28,14 @@ function txSession(endpoint: RpcEndpoint, token: string): PluginDbSession {
       await callDb(endpoint, 'exec', [token, sql, params], token);
     },
     query<Row = Record<string, unknown>>(sql: string, params?: PluginDbParams) {
-      return callDb(endpoint, 'query', [token, sql, params], token) as Promise<Row[]>;
+      return callDb(endpoint, 'query', [token, sql, params], token) as Promise<
+        Row[]
+      >;
     },
     batch(steps: readonly PluginDbStep[]) {
-      return callDb(endpoint, 'batch', [token, steps], token) as Promise<unknown[][]>;
+      return callDb(endpoint, 'batch', [token, steps], token) as Promise<
+        unknown[][]
+      >;
     },
   };
 }
@@ -45,7 +58,10 @@ export function createPluginDbProxy(
       assertOutside();
       await callDb(endpoint, 'exec', [sql, params]);
     },
-    async query<Row = Record<string, unknown>>(sql: string, params?: PluginDbParams) {
+    async query<Row = Record<string, unknown>>(
+      sql: string,
+      params?: PluginDbParams,
+    ) {
       assertOutside();
       return callDb(endpoint, 'query', [sql, params]) as Promise<Row[]>;
     },
@@ -83,10 +99,13 @@ export function callHost(
   namespace: string,
   method: string,
   args: unknown[],
-  context: HostCallContext = hostCallContext,
+  context?: HostCallContext,
+  options?: Pick<RpcCallOptions, 'signal' | 'timeoutMs'>,
 ): Promise<unknown> {
-  context.assertAllowed(namespace);
+  const effectiveContext = context ?? hostCallContext;
+  effectiveContext.assertAllowed(namespace);
   return endpoint.call(namespace, method, args, {
-    transactionId: context.current(),
+    transactionId: effectiveContext.current(),
+    ...options,
   });
 }

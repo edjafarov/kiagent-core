@@ -4,6 +4,12 @@ import type { PluginRegistry } from './plugin-registry';
 
 export type PluginDbRequest =
   | {
+      op: 'register-source';
+      pluginId: string;
+      legacyPath: string;
+      descriptor: import('@main/platform/database-descriptor').PluginDatabaseDescriptor;
+    }
+  | {
       op: 'register';
       owner?: never;
       pluginId: string;
@@ -47,6 +53,7 @@ export type PluginDbRequest =
       statements: readonly string[];
     }
   | { op: 'release'; owner: DbOwner }
+  | { op: 'reset' | 'rearm'; pluginId: string }
   | { op: 'diagnostics' };
 
 /** Remove and close a failed plugin handle before the coordinator admits work
@@ -113,6 +120,7 @@ export function createPluginOperationHandler(
         scoped.token,
         () => connection.exec(scoped.sql!, scoped.params),
         signal,
+        'plugin.db.exec',
       );
     if (scoped.op === 'query')
       return coordinator.run(
@@ -120,6 +128,7 @@ export function createPluginOperationHandler(
         scoped.token,
         () => connection.query(scoped.sql!, scoped.params),
         signal,
+        'plugin.db.query',
       );
     if (scoped.op === 'batch')
       return coordinator.run(
@@ -127,20 +136,29 @@ export function createPluginOperationHandler(
         scoped.token,
         () => connection.batch(scoped.steps ?? []),
         signal,
+        'plugin.db.batch',
       );
     if (scoped.op === 'begin')
       return coordinator.begin(
         scoped.owner,
         () => connection.begin(),
         () => connection.rollback(),
+        signal,
+        'plugin.db.begin',
       );
     if (scoped.op === 'commit')
-      return coordinator.finish(scoped.owner, scoped.token, () =>
-        connection.commit(),
+      return coordinator.finish(
+        scoped.owner,
+        scoped.token,
+        () => connection.commit(),
+        'plugin.db.commit',
       );
     if (scoped.op === 'rollback')
-      return coordinator.finish(scoped.owner, scoped.token, () =>
-        connection.rollback(),
+      return coordinator.finish(
+        scoped.owner,
+        scoped.token,
+        () => connection.rollback(),
+        'plugin.db.rollback',
       );
     if (scoped.op === 'migrate') {
       if (!options.registry || scoped.owner.kind !== 'plugin')
@@ -160,6 +178,7 @@ export function createPluginOperationHandler(
             statements: scoped.statements,
           }),
         signal,
+        'plugin.db.migrate',
       );
     }
     return undefined;

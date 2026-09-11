@@ -304,6 +304,92 @@ describe('createExtensionHost', () => {
     }
   });
 
+  it('disposes endpoint, source proxy, and transport listeners when surface preparation fails', async () => {
+    const active: Array<{ messages: number; exits: number }> = [];
+    const { deps, statuses } = makeDeps(okModule, {
+      transportFactory: () => {
+        const pair = createInMemoryHostPair();
+        const counts = { messages: 0, exits: 0 };
+        active.push(counts);
+        const onMessage = pair.main.onMessage.bind(pair.main);
+        const onExit = pair.main.onExit.bind(pair.main);
+        pair.main.onMessage = (cb) => {
+          counts.messages += 1;
+          const off = onMessage(cb);
+          return () => {
+            counts.messages -= 1;
+            off();
+          };
+        };
+        pair.main.onExit = (cb) => {
+          counts.exits += 1;
+          const off = onExit(cb);
+          return () => {
+            counts.exits -= 1;
+            off();
+          };
+        };
+        return pair.main;
+      },
+      makeSurfaces: async () => {
+        throw new Error('surface preparation failed');
+      },
+    });
+    const host = createExtensionHost(deps as never);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(host.start()).rejects.toThrow(/surface preparation failed/);
+    }
+    expect(active).toHaveLength(3);
+    expect(active).toEqual([
+      { messages: 0, exits: 0 },
+      { messages: 0, exits: 0 },
+      { messages: 0, exits: 0 },
+    ]);
+    expect(statuses.filter((s) => s.status === 'errored')).toHaveLength(3);
+  });
+
+  it('keeps AbortError identity when exit wins the stop race before a tool reply', async () => {
+    let pairRef: ReturnType<typeof createInMemoryHostPair> | undefined;
+    const raceModule = {
+      async activate() {
+        return {
+          sources: [],
+          tools: [
+            {
+              name: 'pending',
+              description: '',
+              inputSchema: {},
+              call: () => new Promise(() => {}),
+            },
+          ],
+        };
+      },
+      deactivate() {
+        // Deliberately report process exit before the pending tool can reply.
+        pairRef?.simulateExit(0);
+      },
+    };
+    const { deps } = makeDeps(raceModule, {
+      transportFactory: () => {
+        const pair = createInMemoryHostPair();
+        pairRef = pair;
+        runExtensionHost(pair.child, {
+          requireModule: () => raceModule,
+          exit: (code) => pair.simulateExit(code),
+        });
+        return pair.main;
+      },
+    });
+    const host = createExtensionHost(deps as never);
+    await host.start();
+    const pending = host.callTool('pending', {}).catch((error) => error);
+    await host.stop();
+    await expect(pending).resolves.toMatchObject({
+      name: 'AbortError',
+      code: 'RPC_ABORTED',
+    });
+  });
+
   it('stop() racing an activated notify that beats the exit: no activated status, no contributions registered, terminal disabled', async () => {
     const { deps, statuses, pairs, registered } = makeDeps(okModule);
     const host = createExtensionHost(deps as never);

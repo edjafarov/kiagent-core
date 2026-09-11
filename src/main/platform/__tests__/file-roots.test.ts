@@ -106,4 +106,20 @@ describe('file root registry', () => {
       }),
     ).rejects.toThrow(/identity/i);
   });
+
+  it('restores only the original bigint filesystem identity, not a replacement at the same path', async () => {
+    await registry.grant('documents', rootPath, {
+      id: 'stable-root',
+      name: 'Documents',
+      writable: true,
+    });
+    const persisted = registry.snapshot();
+    await rm(rootPath, { recursive: true, force: true });
+    await mkdir(rootPath);
+    const restored = createFileRootRegistry();
+    await restored.restore(persisted);
+    await expect(restored.resolve('documents', 'stable-root')).rejects.toThrow(
+      /unknown|revoked/i,
+    );
+  });
 });

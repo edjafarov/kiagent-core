@@ -102,9 +102,7 @@ const schema = z.strictObject({
       .array(z.strictObject({ id: z.string(), title: z.string() }))
       .optional(),
   }),
-  database: z
-    .strictObject({ schema: z.string().min(1) })
-    .optional(),
+  database: z.strictObject({ schema: z.string().min(1) }).optional(),
 });
 
 export function parseManifest(
@@ -173,6 +171,22 @@ export function oauthSourceBindings(
 /** Icons ride AppState pushes as base64 data URIs, so the package file is
  *  capped — official brand marks at UI sizes are a few KB. */
 export const MAX_ICON_BYTES = 200 * 1024;
+export const MAX_DESCRIPTOR_BYTES = 4 * 1024 * 1024;
+
+function containedRealPath(
+  root: string,
+  candidate: string,
+  label: string,
+): string {
+  const packageRoot = fs.realpathSync(root);
+  const resolved = fs.realpathSync(candidate);
+  const rel = path.relative(packageRoot, resolved);
+  if (rel.startsWith('..') || path.isAbsolute(rel))
+    throw new ManifestError(
+      `${label} must resolve inside the extension directory`,
+    );
+  return resolved;
+}
 
 export function validateManifestDir(
   dir: string,
@@ -222,11 +236,25 @@ export function validateManifestDir(
     const schemaAbsPath = path.resolve(root, manifest.database.schema);
     const schemaRel = path.relative(root, schemaAbsPath);
     if (schemaRel.startsWith('..') || path.isAbsolute(schemaRel)) {
-      throw new ManifestError('database.schema must resolve inside the extension directory');
+      throw new ManifestError(
+        'database.schema must resolve inside the extension directory',
+      );
     }
     if (!fs.existsSync(schemaAbsPath)) {
-      throw new ManifestError(`database schema not found: ${manifest.database.schema}`);
+      throw new ManifestError(
+        `database schema not found: ${manifest.database.schema}`,
+      );
     }
+    const resolvedSchema = containedRealPath(
+      root,
+      schemaAbsPath,
+      'database.schema',
+    );
+    const schemaStat = fs.statSync(resolvedSchema);
+    if (!schemaStat.isFile() || schemaStat.size > MAX_DESCRIPTOR_BYTES)
+      throw new ManifestError(
+        'database.schema must be a regular file no larger than 4 MiB',
+      );
   }
   return { manifest, entryAbsPath };
 }

@@ -910,6 +910,71 @@ describe('store', () => {
     expect(latest?.manifestVersion).toBe('1.0.0');
   });
 
+  it('exports referenced in-profile assets and lists external references without copying them', async () => {
+    const ownedAsset = path.join(dir, 'owned', 'recording.bin');
+    const externalAsset = path.join(
+      os.tmpdir(),
+      `kia-external-${Date.now()}.bin`,
+    );
+    fs.mkdirSync(path.dirname(ownedAsset), { recursive: true });
+    fs.writeFileSync(ownedAsset, Buffer.from('owned-by-app'));
+    fs.writeFileSync(externalAsset, Buffer.from('owned-by-user'));
+    const destination = path.join(dir, 'backup');
+    try {
+      const assetDb = await openDb(path.join(dir, 'asset.db'));
+      const assetStore = openStore({ ...assetDb, backup: undefined }, {
+        ...deps,
+        profileDir: dir,
+      } as never);
+      const account = await assetStore.createAccount({
+        source: 'assets',
+        identifier: 'assets',
+      });
+      await assetStore.commit({
+        account: account.id,
+        documents: [
+          doc('asset', {
+            metadata: {
+              recordingPath: ownedAsset,
+              userDocument: externalAsset,
+            },
+          }),
+        ],
+        cursor: 1,
+      });
+      await assetStore.maintenance.export(destination);
+      await assetStore.close();
+
+      expect(
+        fs.readFileSync(
+          path.join(destination, 'assets', 'owned', 'recording.bin'),
+          'utf8',
+        ),
+      ).toBe('owned-by-app');
+      expect(
+        fs.existsSync(
+          path.join(destination, 'assets', path.basename(externalAsset)),
+        ),
+      ).toBe(false);
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(destination, 'backup-manifest.json'),
+            'utf8',
+          ),
+        ),
+      ).toEqual({
+        version: 1,
+        assets: expect.arrayContaining([
+          { kind: 'copied', path: 'owned/recording.bin', size: 12 },
+          { kind: 'external', path: externalAsset, size: 13 },
+        ]),
+      });
+    } finally {
+      fs.rmSync(externalAsset, { force: true });
+    }
+  });
+
   it('multi-doc atomic rollback: a mid-transaction failure writes NONE of the batch', async () => {
     // Dedicated store whose detectLanguages throws on a poison marker, so the
     // failure originates INSIDE the commit transaction (in upsertDocument),

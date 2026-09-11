@@ -12,6 +12,7 @@ import type { McpServerHandle } from './core/mcp/server';
 import type { CoreStore } from './core/store/store';
 import type { TrayMenuController } from './tray-menu';
 import type { OutboundService } from './outbound/service';
+import type { FileRootRegistry } from './platform/file-roots';
 
 /**
  * The MainProcessApi contract handed to in-process bundled extensions
@@ -44,6 +45,23 @@ export interface MainProcessApi {
     createMcpHandler: McpServerHandle['createMcpHandler'];
   };
   paths: { userData: string; dataDir: string };
+  /** Trusted root-grant channel for bundled extensions. Callers must supply
+   *  their immutable extension owner; ordinary connector RPC never receives
+   *  this object. */
+  files: {
+    grantRoot(
+      owner: string,
+      rootPath: string,
+      options: {
+        name: string;
+        writable: boolean;
+        id?: string;
+        identity?: { dev: string; ino: string };
+      },
+    ): Promise<import('@shared/plugin-files').FileRoot>;
+    revokeRoot(owner: string, id: string): Promise<void>;
+    roots(owner: string): Promise<import('@shared/plugin-files').FileRoot[]>;
+  };
   app: { version: string; name: string };
   ui: {
     /** Splices items into the app tray's context menu — before the quit item
@@ -87,6 +105,8 @@ export interface BuildMainApiDeps {
    *  without an Electron runtime. */
   app: Pick<App, 'getPath' | 'getVersion' | 'getName'>;
   dataDir: string;
+  fileRoots?: FileRootRegistry;
+  persistFileRoots?(): Promise<void>;
   tray: TrayMenuController;
   /** Window opener shared with the tray's "Open KIAgent" action —
    *  show/focus if a window exists, create it otherwise. */
@@ -127,6 +147,24 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
     paths: {
       userData: deps.app.getPath('userData'),
       dataDir: deps.dataDir,
+    },
+    files: {
+      grantRoot: async (owner, rootPath, options) => {
+        if (!deps.fileRoots)
+          throw new Error('trusted file-root service is unavailable');
+        const result = await deps.fileRoots.grant(owner, rootPath, options);
+        await deps.persistFileRoots?.();
+        return result;
+      },
+      revokeRoot: async (owner, id) => {
+        if (!deps.fileRoots)
+          throw new Error('trusted file-root service is unavailable');
+        await deps.fileRoots.revoke(owner, id);
+        await deps.persistFileRoots?.();
+      },
+      roots: (owner) =>
+        deps.fileRoots?.roots(owner) ??
+        Promise.reject(new Error('trusted file-root service is unavailable')),
     },
     app: {
       version: deps.app.getVersion(),

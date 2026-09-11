@@ -14,7 +14,27 @@ export type CapabilityErrorCode =
   | 'HOST_CALL_IN_TRANSACTION'
   | 'RPC_ABORTED'
   | 'RPC_DEADLINE_EXCEEDED'
-  | 'DB_WORKER_CRASHED';
+  | 'DB_WORKER_CRASHED'
+  | 'DB_WORKER_RESTARTING'
+  | 'DB_WORKER_DEAD'
+  | 'DB_OPERATION_CANCELLED'
+  | 'DB_COORDINATOR_CLOSED'
+  | 'DB_OWNER_RELEASED'
+  | 'DB_OWNER_POISONED'
+  | 'DB_TX_TOKEN_INVALID'
+  | 'DB_TX_EXPIRED'
+  | 'PLUGIN_DB_IMPORT_INCOMPLETE'
+  | 'PLUGIN_DB_NOT_OPEN'
+  | 'PLUGIN_DB_OWNER_INVALID'
+  | 'PLUGIN_DB_RESET_TOMBSTONE'
+  | 'PLUGIN_SQL_DDL_FORBIDDEN'
+  | 'PLUGIN_SQL_TRANSACTION_CONTROL'
+  | 'PLUGIN_SQL_UNAUTHORIZED'
+  | 'FILE_ROOT_REVOKED'
+  | 'FILE_HANDLE_INVALID'
+  | 'FILE_OPERATION_CANCELLED'
+  | 'NETWORK_ABORTED'
+  | 'NETWORK_TIMEOUT';
 export type SourceErrorCode = 'auth' | 'permanent';
 export type WireErrorCode = SourceErrorCode | CapabilityErrorCode;
 
@@ -49,9 +69,31 @@ export function wireErrorCode(err: unknown): WireErrorCode | undefined {
     code === 'HOST_CALL_IN_TRANSACTION' ||
     code === 'RPC_ABORTED' ||
     code === 'RPC_DEADLINE_EXCEEDED' ||
-    code === 'DB_WORKER_CRASHED'
+    [
+      'DB_WORKER_CRASHED',
+      'DB_WORKER_RESTARTING',
+      'DB_WORKER_DEAD',
+      'DB_OPERATION_CANCELLED',
+      'DB_COORDINATOR_CLOSED',
+      'DB_OWNER_RELEASED',
+      'DB_OWNER_POISONED',
+      'DB_TX_TOKEN_INVALID',
+      'DB_TX_EXPIRED',
+      'PLUGIN_DB_IMPORT_INCOMPLETE',
+      'PLUGIN_DB_NOT_OPEN',
+      'PLUGIN_DB_OWNER_INVALID',
+      'PLUGIN_DB_RESET_TOMBSTONE',
+      'PLUGIN_SQL_DDL_FORBIDDEN',
+      'PLUGIN_SQL_TRANSACTION_CONTROL',
+      'PLUGIN_SQL_UNAUTHORIZED',
+      'FILE_ROOT_REVOKED',
+      'FILE_HANDLE_INVALID',
+      'FILE_OPERATION_CANCELLED',
+      'NETWORK_ABORTED',
+      'NETWORK_TIMEOUT',
+    ].includes(code as string)
   )
-    return code;
+    return code as WireErrorCode;
   return undefined;
 }
 

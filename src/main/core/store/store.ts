@@ -21,6 +21,7 @@ import type {
 } from '@shared/contracts';
 
 import type { AppDb, AppDbParam } from '../../db/app-db';
+import { resetCoreStoreTables } from '../../db/repositories/core-maintenance';
 import { newId } from '../ids';
 import { stemVariants } from '../stemming';
 import {
@@ -55,6 +56,90 @@ import {
 export const PENDING_VISUAL_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_pending_visual WHERE ${PENDING_VISUAL_WHERE}`;
 export const EXTRACTED_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_extracted WHERE ${EXTRACTED_DOCS_WHERE}`;
 
+interface BackupAsset {
+  kind: 'copied' | 'external';
+  path: string;
+  size: number;
+}
+
+function referencedPaths(
+  value: unknown,
+  hint = '',
+  out = new Set<string>(),
+): Set<string> {
+  if (typeof value === 'string') {
+    if (
+      path.isAbsolute(value) ||
+      /(?:path|file|asset|recording|attachment)/i.test(hint)
+    )
+      out.add(value);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => referencedPaths(item, hint, out));
+    return out;
+  }
+  if (value && typeof value === 'object') {
+    Object.entries(value).forEach(([key, item]) =>
+      referencedPaths(item, key, out),
+    );
+  }
+  return out;
+}
+
+function backupAssets(
+  profileDir: string | undefined,
+  destination: string,
+  values: unknown[],
+): BackupAsset[] {
+  if (!profileDir) return [];
+  const root = fs.realpathSync(profileDir);
+  const copiedDir = path.join(destination, 'assets');
+  const assets: BackupAsset[] = [];
+  const seen = new Set<string>();
+  const inside = (candidate: string) => {
+    const rel = path.relative(root, candidate);
+    return (
+      rel === '' ||
+      (rel !== '..' &&
+        !rel.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(rel))
+    );
+  };
+  for (const reference of referencedPaths(values)) {
+    const candidate = path.resolve(
+      path.isAbsolute(reference) ? reference : root,
+      reference,
+    );
+    let resolved: string;
+    let size = 0;
+    try {
+      resolved = fs.realpathSync(candidate);
+      const stat = fs.statSync(resolved);
+      if (!stat.isFile()) continue;
+      size = stat.size;
+    } catch {
+      // Preserve the reference in the manifest even if the asset disappeared
+      // between the DB read and export; there is no file to copy.
+      assets.push({ kind: 'external', path: reference, size: 0 });
+      continue;
+    }
+    if (!inside(resolved)) {
+      assets.push({ kind: 'external', path: reference, size });
+      continue;
+    }
+    const relative = path.relative(root, resolved).split(path.sep).join('/');
+    if (seen.has(relative)) continue;
+    seen.add(relative);
+    const target = path.join(copiedDir, relative);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(resolved, target);
+    assets.push({ kind: 'copied', path: relative, size });
+  }
+  assets.sort((a, b) => a.path.localeCompare(b.path));
+  return assets;
+}
+
 /** Metadata paths scanned by the `participant:` filter — extend as new
  *  connector metadata shapes appear (slack/whatsapp senders etc.). */
 const PARTICIPANT_METADATA_PATHS = [
@@ -74,6 +159,8 @@ export interface StoreDeps {
   /** Cheap language detection for search stemming (ISO-639-3). */
   detectLanguages(text: string): string[];
   now?(): string;
+  /** Profile root whose app-owned referenced assets are included in exports. */
+  profileDir?: string;
 }
 
 export interface LedgerCounts {
@@ -1074,6 +1161,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       },
       async export(destDir) {
         fs.mkdirSync(destDir, { recursive: true });
+        if (db.backup) await db.backup(path.join(destDir, 'kiagent.db'));
         const accounts = await query.accounts();
         fs.writeFileSync(
           path.join(destDir, 'accounts.json'),
@@ -1090,6 +1178,17 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           out.end(() => resolve());
           out.on('error', reject);
         });
+        const assets = backupAssets(
+          deps.profileDir,
+          destDir,
+          accounts
+            .flatMap((account) => [account.config])
+            .concat(rows.map((row) => JSON.parse(row.metadata))),
+        );
+        fs.writeFileSync(
+          path.join(destDir, 'backup-manifest.json'),
+          JSON.stringify({ version: 1, assets }, null, 2),
+        );
       },
       async resetAll() {
         // 'consents' deliberately survives: installed extensions live on
@@ -1100,31 +1199,10 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         // Read the pre-reset accounts BEFORE the wipe so the same batch can
         // announce each removal through the feed.
         const accounts = await query.accounts();
-        await db.batch([
-          ...[
-            'documents_fts',
-            'documents_tri',
-            'documents',
-            'changes',
-            'consumers',
-            'work_ledger',
-            'vault',
-            'schedule',
-            'accounts',
-          ].map((t) => ({ sql: `DELETE FROM ${t}` })),
-          { sql: `DELETE FROM meta WHERE key != 'schemaVersion'` },
-          // The app projection (and every other feed consumer) derives its
-          // account list incrementally from the change feed; a silent
-          // truncation of `changes` leaves it carrying ghost accounts until
-          // restart. Announce each removal AFTER the deletes — `changes.seq`
-          // is AUTOINCREMENT and `sqlite_sequence` survives DELETE (and the
-          // VACUUM below), so these rows land with fresh, higher seqs and
-          // the feed cursor (`seq > cursor`) stays monotonic.
-          ...accounts.map((a) => ({
-            sql: `INSERT INTO changes(kind, ref_id, at) VALUES('accountRemoved', ?, ?)`,
-            params: [a.id, now()],
-          })),
-        ]);
+        // The app projection (and every other feed consumer) derives its
+        // account list incrementally from the change feed; the repository
+        // performs the wipe and announces removals atomically.
+        await resetCoreStoreTables(db, accounts, now);
         // DELETE alone never returns pages to the OS — the file (and the
         // WAL) keep their pre-reset size, so the Storage screen would still
         // show gigabytes after "Reset all". VACUUM rebuilds the file;

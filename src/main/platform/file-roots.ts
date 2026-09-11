@@ -23,6 +23,18 @@ export interface FileRootRegistry {
   resolve(owner: string, id: string): Promise<FileRootGrant>;
   roots(owner: string): Promise<FileRoot[]>;
   subscribe(owner: string, id: string, onRevoke: () => void): () => void;
+  snapshot(): PersistedFileRoot[];
+  restore(records: readonly PersistedFileRoot[]): Promise<void>;
+}
+
+export interface PersistedFileRoot {
+  owner: string;
+  id: string;
+  name: string;
+  writable: boolean;
+  path: string;
+  dev: string;
+  ino: string;
 }
 
 function opaqueId(): string {
@@ -94,6 +106,26 @@ export function createFileRootRegistry(): FileRootRegistry {
         callbacks?.delete(onRevoke);
         if (callbacks?.size === 0) listeners.delete(key);
       };
+    },
+    snapshot() {
+      return [...grants.entries()].flatMap(([owner, ownerGrants]) =>
+        [...ownerGrants.values()].map((grant) => ({ owner, ...grant })),
+      );
+    },
+    async restore(records) {
+      for (const record of records) {
+        try {
+          await this.grant(record.owner, record.path, {
+            id: record.id,
+            name: record.name,
+            writable: record.writable,
+            identity: { dev: record.dev, ino: record.ino },
+          });
+        } catch {
+          // A missing/replaced path is not re-approved. The record remains
+          // absent until the trusted main-process channel grants it again.
+        }
+      }
     },
   };
 }
