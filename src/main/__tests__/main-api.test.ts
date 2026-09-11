@@ -130,6 +130,39 @@ function stubOutbound(handleRemoteResult: boolean): {
 }
 
 describe('buildMainApi', () => {
+  it.each(['kiagent.other', 'kiagent.documents:h1'])(
+    'rejects a root grant owner that is not the calling bundled plugin id (%s)',
+    async (owner) => {
+      const { store } = stubStore();
+      const { mcp } = stubMcp();
+      const { tray } = stubTray();
+      const fileRoots = {
+        grant: jest.fn(),
+        revoke: jest.fn(),
+        roots: jest.fn(),
+      };
+      const mainApi = buildMainApi({
+        store,
+        mcp,
+        app: stubApp(),
+        dataDir: '/fake/data',
+        tray,
+        ui: { openWindow: () => {} },
+        outbound: stubOutbound(true).outbound,
+        fileRoots: fileRoots as never,
+        callerPluginId: 'kiagent.documents',
+      } as never);
+
+      await expect(
+        mainApi.files.grantRoot(owner, '/tmp/root', {
+          name: 'Root',
+          writable: true,
+        }),
+      ).rejects.toThrow(/owner|plugin|entitled|calling/i);
+      expect(fileRoots.grant).not.toHaveBeenCalled();
+    },
+  );
+
   it('reads the live inference generation through the main-process API', () => {
     let generation = 7;
     const { store } = stubStore();

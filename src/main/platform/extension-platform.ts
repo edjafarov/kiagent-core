@@ -163,6 +163,8 @@ export interface ExtensionPlatformDeps {
    *  ('unsafe.mainProcess') as activate()'s extras.mainProcess. Core never
    *  types it; the product build supplies it. */
   mainApi?: unknown;
+  /** Builds a caller-bound main-process handle for each privileged plugin. */
+  mainApiForPlugin?: (pluginId: string) => unknown;
   /** The one boot-owned worker service. */
   db?: AppDb;
   /** Trusted root grants restored/created by product main-process flows. */
@@ -687,7 +689,9 @@ export function createExtensionPlatform(
             pair.main.onExit(() => bustRequireCacheUnder(realDir));
             runExtensionHost(pair.child, {
               exit: (code) => pair.simulateExit(code),
-              mainApi: deps.mainApi,
+              mainApi: deps.mainApiForPlugin
+                ? deps.mainApiForPlugin(e.manifest.id)
+                : deps.mainApi,
               requireModule: loadExtensionModule,
             });
             return pair.main;
@@ -734,6 +738,7 @@ export function createExtensionPlatform(
           files =
             deps.fileRoots && e.manifest.caps.includes('files')
               ? createScopedFiles({
+                  pluginId: e.manifest.id,
                   owner: serviceOwner,
                   roots: deps.fileRoots,
                   signal: context?.signal,

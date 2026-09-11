@@ -226,8 +226,13 @@ need to *do* about them:
   `application_id`, `table_info`, `table_list`, `table_xinfo`, `index_info`,
   `index_list`, `foreign_keys`, `foreign_key_list`, `page_count`,
   `freelist_count`, `integrity_check`, `quick_check`).
-- `files` is rooted at folders the user approved for this extension. Use the
-  `{ root, rel }` `FileRef` shape; canonicalization returns another scoped
+- `files` is rooted at folders the user approved for this extension. Trusted
+  bundled integrations call `mainProcess.files.grantRoot()` with their exact
+  plugin id (for example, `kiagent.documents`); activation-qualified owners
+  such as `kiagent.documents:h1` and another plugin's id are rejected. The
+  grant is shared by every activation of that plugin, while handles and
+  watchers remain bound to their individual activation. Use the `{ root, rel }`
+  `FileRef` shape; canonicalization returns another scoped
   reference, and `ScopedFileHandle.id` is an opaque owner/incarnation-bound
   handle, never an OS file descriptor or raw path. Trusted user grants are the
   source of roots; ordinary plugin calls cannot name arbitrary filesystem

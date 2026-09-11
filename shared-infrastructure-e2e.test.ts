@@ -6,10 +6,15 @@ import path from 'node:path';
 
 import { openDbInWorker } from './src/main/db/worker-client';
 import { openStore } from './src/main/core/store/store';
+import { buildMainApi } from './src/main/main-api';
 import { createExtensionPlatform } from './src/main/platform/extension-platform';
 import { createNetworkService } from './src/main/platform/network-service';
 import { createNetFetch } from './src/main/platform/net-guard';
-import { createFileRootRegistry } from './src/main/platform/file-roots';
+import {
+  createFileRootRegistry,
+  createFileRootsPersistence,
+  restoreFileRootsFromFile,
+} from './src/main/platform/file-roots';
 import { nodeForkTransport } from './src/main/platform/transport';
 import { parseDatabaseDescriptor } from './src/main/platform/database-descriptor';
 
@@ -68,6 +73,8 @@ describe('shared plugin infrastructure real worker path', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shared-infra-e2e-'));
     const dbFile = path.join(tmp, 'kiagent.db');
     const extensionDir = path.join(tmp, 'extensions');
+    const bundledDir = path.join(tmp, 'bundled');
+    const fileRootsPath = path.join(tmp, 'file-roots.json');
     const worker = workerOptions();
     const db = await openDbInWorker(dbFile, workerFile, worker.options);
     const tools = new Map<
@@ -82,7 +89,6 @@ describe('shared plugin infrastructure real worker path', () => {
     });
     let fixturePort = 0;
     let fixtureReady = true;
-    const serviceOwners = new Set<string>();
     try {
       await new Promise<void>((resolve, reject) => {
         fixtureServer.once('error', reject);
@@ -130,6 +136,7 @@ describe('shared plugin infrastructure real worker path', () => {
         path.join(dir, 'dist/index.js'),
         `
         let abort;
+        let fileRootId;
         module.exports = { async activate(host) {
           await host.db.exec('INSERT OR REPLACE INTO {{settings}} VALUES (?, ?)', ['value', '${value}']);
           abort = new AbortController();
@@ -143,11 +150,73 @@ describe('shared plugin infrastructure real worker path', () => {
             { name: '${id}.rollbackRows', description: '', inputSchema: {}, call: async () => host.db.query("SELECT value FROM {{settings}} WHERE value = 'rollback'") },
             { name: '${id}.crash', description: '', inputSchema: {}, call: async () => { process.exit(1); } },
             { name: '${id}.watch', description: '', inputSchema: {}, call: async () => { const root = (await host.files.roots())[0]; await host.files.watch({ root: root.id, rel: '' }, undefined); return true; } },
+            { name: '${id}.fileStat', description: '', inputSchema: {}, call: async () => { fileRootId ??= (await host.files.roots())[0]?.id; return host.files.stat({ root: fileRootId, rel: '' }); } },
           ] };
         }, deactivate() { abort?.abort(); } };
       `,
       );
     };
+    const rootOwnerId = 'test.root-owner';
+    const rootPeerId = 'test.root-peer';
+    const makePrivilegedFixture = (id: string, source: string) => {
+      const dir = path.join(bundledDir, id);
+      fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'manifest.json'),
+        JSON.stringify({
+          id,
+          name: id,
+          version: '1.0.0',
+          engine: '^2.0.0',
+          entry: 'dist/index.js',
+          caps: ['files', 'unsafe.mainProcess'],
+          contributes: { sources: [], senders: [] },
+        }),
+      );
+      fs.writeFileSync(path.join(dir, 'dist/index.js'), source);
+    };
+    makePrivilegedFixture(
+      rootOwnerId,
+      `
+      let rootId;
+      let grantCount = 0;
+      module.exports = { async activate(host, extras) {
+        const mainProcess = extras?.mainProcess;
+        if (!mainProcess) throw new Error('root-owner fixture did not receive mainProcess');
+        const roots = await mainProcess.files.roots('${rootOwnerId}');
+        rootId = roots[0]?.id;
+        if (!rootId) {
+          rootId = (await mainProcess.files.grantRoot('${rootOwnerId}', ${JSON.stringify(tmp)}, { id: 'root-owner-id', name: 'e2e', writable: true })).id;
+          grantCount += 1;
+        }
+        return { tools: [
+          { name: '${rootOwnerId}.pid', description: '', inputSchema: {}, call: async () => process.pid },
+          { name: '${rootOwnerId}.grantCount', description: '', inputSchema: {}, call: async () => grantCount },
+          { name: '${rootOwnerId}.stat', description: '', inputSchema: {}, call: async () => host.files.stat({ root: rootId, rel: '' }) },
+          { name: '${rootOwnerId}.watch', description: '', inputSchema: {}, call: async () => { await host.files.watch({ root: rootId, rel: '' }, undefined); return true; } },
+          { name: '${rootOwnerId}.handle', description: '', inputSchema: {}, call: async () => mainProcess.files.grantRoot('${rootOwnerId}:h1', ${JSON.stringify(tmp)}, { name: 'handle', writable: true }) },
+          { name: '${rootOwnerId}.foreign', description: '', inputSchema: {}, call: async () => mainProcess.files.grantRoot('${rootPeerId}', ${JSON.stringify(tmp)}, { name: 'foreign', writable: true }) },
+          { name: '${rootOwnerId}.revoke', description: '', inputSchema: {}, call: async () => mainProcess.files.revokeRoot('${rootOwnerId}', rootId) },
+        ] };
+      } };
+    `,
+    );
+    makePrivilegedFixture(
+      rootPeerId,
+      `
+      module.exports = { async activate(host, extras) {
+        const mainProcess = extras?.mainProcess;
+        if (!mainProcess) throw new Error('root-peer fixture did not receive mainProcess');
+        return { tools: [
+          { name: '${rootPeerId}.pid', description: '', inputSchema: {}, call: async () => process.pid },
+          { name: '${rootPeerId}.roots', description: '', inputSchema: {}, call: async () => mainProcess.files.roots('${rootPeerId}') },
+          { name: '${rootPeerId}.foreignRoots', description: '', inputSchema: {}, call: async () => mainProcess.files.roots('${rootOwnerId}') },
+          { name: '${rootPeerId}.statOwner', description: '', inputSchema: {}, call: async () => host.files.stat({ root: 'root-owner-id', rel: '' }) },
+          { name: '${rootPeerId}.foreign', description: '', inputSchema: {}, call: async () => mainProcess.files.grantRoot('${rootOwnerId}', ${JSON.stringify(tmp)}, { name: 'foreign', writable: true }) },
+        ] };
+      } };
+    `,
+    );
     makeFixture('test.a', 'A');
     makeFixture('test.b', 'B');
     const platformStore = openStore(db, {
@@ -221,7 +290,6 @@ describe('shared plugin infrastructure real worker path', () => {
       fetchImpl: fixtureFetch as typeof fetch,
     });
     const networkFactory = (owner: string, signal: AbortSignal) => {
-      serviceOwners.add(owner);
       return createNetworkService({
         owner,
         signal,
@@ -244,65 +312,107 @@ describe('shared plugin infrastructure real worker path', () => {
               }),
       });
     };
-    const platform = createExtensionPlatform({
-      extDir: extensionDir,
-      db,
-      fileRoots: roots,
-      store: platformStore,
-      sources: {
-        register: () => {},
-        unregister: () => {},
-        get: () => undefined,
-        list: () => [],
-      },
-      senders: {
-        register: () => {},
-        unregister: () => {},
-        get: () => undefined,
-        ids: () => [],
-      },
-      scheduler: {
-        register: jest.fn(),
-        unregister: jest.fn(),
-        jobs: jest.fn(async () => []),
-        trigger: jest.fn(),
-        env: {},
-      } as never,
-      registerTool: (tool: {
-        name: string;
-        call(args: Record<string, unknown>): Promise<unknown>;
-      }) => {
-        tools.set(tool.name, tool);
-        return () => tools.delete(tool.name);
-      },
-      inference: {
-        complete: async () => '',
-        see: async () => '',
-        read: async () => '',
-        hear: async () => '',
-        describe: async () => null,
-      },
-      laneState: () => 'open',
-      onLaneChange: () => () => {},
-      logSink: { log: () => {} } as never,
-      notify: () => {},
-      transportFactory: () =>
-        nodeForkTransport(hostEntry, {
-          cwd: __dirname,
-          execArgv: forkArgs,
-          env: {
-            ...process.env,
-            KIA_EXT_HOST_CHILD: '1',
-            TS_NODE_TRANSPILE_ONLY: '1',
-            TS_NODE_PROJECT: path.join(__dirname, 'tsconfig.json'),
-          },
-        }),
-      networkFactory,
-      onChange: () => {},
-    } as never);
+    const makePlatform = (
+      fileRoots: ReturnType<typeof createFileRootRegistry>,
+    ) => {
+      const persistFileRoots = createFileRootsPersistence(
+        fileRootsPath,
+        fileRoots,
+      );
+      return createExtensionPlatform({
+        extDir: extensionDir,
+        db,
+        fileRoots,
+        store: platformStore,
+        sources: {
+          register: () => {},
+          unregister: () => {},
+          get: () => undefined,
+          list: () => [],
+        },
+        senders: {
+          register: () => {},
+          unregister: () => {},
+          get: () => undefined,
+          ids: () => [],
+        },
+        scheduler: {
+          register: jest.fn(),
+          unregister: jest.fn(),
+          jobs: jest.fn(async () => []),
+          trigger: jest.fn(),
+          env: {},
+        } as never,
+        registerTool: (tool: {
+          name: string;
+          call(args: Record<string, unknown>): Promise<unknown>;
+        }) => {
+          tools.set(tool.name, tool);
+          return () => tools.delete(tool.name);
+        },
+        inference: {
+          complete: async () => '',
+          see: async () => '',
+          read: async () => '',
+          hear: async () => '',
+          describe: async () => null,
+        },
+        laneState: () => 'open',
+        onLaneChange: () => () => {},
+        logSink: { log: () => {} } as never,
+        notify: () => {},
+        transportFactory: () =>
+          nodeForkTransport(hostEntry, {
+            cwd: __dirname,
+            execArgv: forkArgs,
+            env: {
+              ...process.env,
+              KIA_EXT_HOST_CHILD: '1',
+              TS_NODE_TRANSPILE_ONLY: '1',
+              TS_NODE_PROJECT: path.join(__dirname, 'tsconfig.json'),
+            },
+          }),
+        networkFactory,
+        bundledDir,
+        mainApiForPlugin: (callerPluginId: string) =>
+          buildMainApi({
+            callerPluginId,
+            store: platformStore,
+            mcp: {
+              port: null,
+              registerTool: () => () => {},
+              createMcpHandler: () => async () => {},
+            } as never,
+            app: {
+              getPath: () => tmp,
+              getVersion: () => '1.0.0',
+              getName: () => 'e2e',
+            },
+            dataDir: tmp,
+            fileRoots,
+            persistFileRoots,
+            tray: { addItems: () => () => {} } as never,
+            ui: { openWindow: () => {} },
+            outbound: {
+              service: { setRemoteBaseUrl: () => {} } as never,
+              routes: { handleRemote: async () => false },
+            },
+          }),
+        onChange: () => {},
+      } as never);
+    };
+    let platform = makePlatform(roots);
     try {
-      await roots.grant('test.a', tmp, { name: 'e2e', writable: true });
-      await roots.grant('test.b', tmp, { name: 'e2e', writable: true });
+      await roots.grant('test.a', tmp, {
+        id: 'e2e-test-a-root',
+        name: 'e2e',
+        writable: true,
+      });
+      const testBRoot = await roots.grant('test.b', tmp, {
+        id: 'e2e-test-b-root',
+        name: 'e2e',
+        writable: true,
+      });
       for (const extensionId of ['test.a', 'test.b'])
         await platformStore.consents.record({
           extensionId: extensionId as never,
@@ -313,8 +423,6 @@ describe('shared plugin infrastructure real worker path', () => {
       await platform.start();
       await platform.grantConsent('test.a');
       await platform.grantConsent('test.b');
-      for (const owner of serviceOwners)
-        await roots.grant(owner, tmp, { name: 'e2e', writable: true });
       if (!tools.has('test.a.read') || !tools.has('test.b.read'))
         throw new Error(
           `host activation failed: ${JSON.stringify(platform.snapshot())}`,
@@ -330,6 +438,41 @@ describe('shared plugin infrastructure real worker path', () => {
       await expect(tools.get('test.b.read')!.call({})).resolves.toEqual([
         { value: 'B' },
       ]);
+      await expect(
+        tools.get('test.a.fileStat')!.call({}),
+      ).resolves.toMatchObject({ kind: 'directory' });
+      await expect(tools.get(`${rootOwnerId}.pid`)!.call({})).resolves.toBe(
+        process.pid,
+      );
+      await expect(tools.get(`${rootPeerId}.pid`)!.call({})).resolves.toBe(
+        process.pid,
+      );
+      await expect(
+        tools.get(`${rootOwnerId}.grantCount`)!.call({}),
+      ).resolves.toBe(1);
+      await expect(
+        tools.get(`${rootOwnerId}.stat`)!.call({}),
+      ).resolves.toMatchObject({ kind: 'directory' });
+      await expect(
+        tools.get(`${rootOwnerId}.handle`)!.call({}),
+      ).rejects.toThrow(/owner|plugin|calling|entitled/i);
+      await expect(
+        tools.get(`${rootPeerId}.foreign`)!.call({}),
+      ).rejects.toThrow(/owner|plugin|calling|entitled/i);
+      await expect(tools.get(`${rootPeerId}.roots`)!.call({})).resolves.toEqual(
+        [],
+      );
+      await expect(
+        tools.get(`${rootPeerId}.foreignRoots`)!.call({}),
+      ).rejects.toThrow(
+        'trusted file root owner must be the calling bundled plugin id',
+      );
+      await expect(
+        tools.get(`${rootPeerId}.statOwner`)!.call({}),
+      ).rejects.toThrow(/unknown|revoked|root/i);
+      await expect(tools.get(`${rootOwnerId}.watch`)!.call({})).resolves.toBe(
+        true,
+      );
       if (!fixtureReady) {
         console.warn(
           '[SKIP] shared-infrastructure-e2e bounded network assertion: loopback fixture listener could not bind',
@@ -343,6 +486,11 @@ describe('shared plugin infrastructure real worker path', () => {
         });
       }
       await expect(tools.get('test.a.cross')!.call({})).rejects.toThrow();
+      await expect(
+        tools.get('test.b.fileStat')!.call({}),
+      ).resolves.toMatchObject({
+        kind: 'directory',
+      });
       const crash = tools
         .get('test.b.crash')!
         .call({})
@@ -351,6 +499,30 @@ describe('shared plugin infrastructure real worker path', () => {
         name: 'Error',
         message: 'extension process exited',
       });
+      await new Promise<void>((resolve, reject) => {
+        const start = Date.now();
+        const iv = setInterval(() => {
+          if (
+            platform.snapshot().find((entry) => entry.id === 'test.b')
+              ?.status === 'activated'
+          ) {
+            clearInterval(iv);
+            resolve();
+          } else if (Date.now() - start > 4000) {
+            clearInterval(iv);
+            reject(new Error('respawn did not re-activate in time'));
+          }
+        }, 5);
+      });
+      await expect(
+        tools.get('test.b.fileStat')!.call({}),
+      ).resolves.toMatchObject({
+        kind: 'directory',
+      });
+      await roots.revoke('test.b', testBRoot.id);
+      await expect(tools.get('test.b.fileStat')!.call({})).rejects.toThrow(
+        /unknown|revoked|root/i,
+      );
       const proc = tools.get('test.a.proc')!.call({});
       await new Promise((resolve) => setTimeout(resolve, 10));
       const coreStarted = Date.now();
@@ -381,6 +553,43 @@ describe('shared plugin infrastructure real worker path', () => {
         [],
       );
       expect(await platformStore.read.count({ includeArchived: true })).toBe(0);
+
+      await platform.stop();
+      const restoredRoots = createFileRootRegistry();
+      await restoreFileRootsFromFile(fileRootsPath, restoredRoots);
+      expect(restoredRoots.snapshot()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pluginId: rootOwnerId,
+            id: 'root-owner-id',
+          }),
+        ]),
+      );
+      platform = makePlatform(restoredRoots);
+      await platform.start();
+      await expect(
+        tools.get(`${rootOwnerId}.stat`)!.call({}),
+      ).resolves.toMatchObject({
+        kind: 'directory',
+      });
+      await expect(tools.get(`${rootPeerId}.roots`)!.call({})).resolves.toEqual(
+        [],
+      );
+      await expect(
+        tools.get(`${rootPeerId}.statOwner`)!.call({}),
+      ).rejects.toThrow(/unknown|revoked|root/i);
+      await expect(
+        tools.get('test.b.fileStat')!.call({}),
+      ).resolves.toMatchObject({
+        kind: 'directory',
+      });
+      await expect(tools.get(`${rootOwnerId}.watch`)!.call({})).resolves.toBe(
+        true,
+      );
+      await tools.get(`${rootOwnerId}.revoke`)!.call({});
+      await expect(tools.get(`${rootOwnerId}.stat`)!.call({})).rejects.toThrow(
+        /unknown|revoked|root/i,
+      );
     } finally {
       await platform.stop().catch(() => undefined);
       await platformStore.close().catch(() => undefined);
@@ -389,5 +598,5 @@ describe('shared plugin infrastructure real worker path', () => {
       for (const p of [worker.preload, tmp])
         if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });
