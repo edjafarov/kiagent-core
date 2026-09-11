@@ -12,6 +12,27 @@
  * stay runtime-free: types and interfaces only.
  */
 
+import type { PluginDb } from './plugin-db';
+import type { ScopedFiles } from './plugin-files';
+import type { PluginNet } from './plugin-net';
+
+export type {
+  PluginDb,
+  PluginDbParams,
+  PluginDbSession,
+  PluginDbStep,
+} from './plugin-db';
+export type {
+  FileChange,
+  FileEntry,
+  FileInfo,
+  FileRef,
+  FileRoot,
+  ScopedFileHandle,
+  ScopedFiles,
+} from './plugin-files';
+export type { PluginNet, PluginNetInit, PluginNetResult } from './plugin-net';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. IDS — one string type, no wire codec
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1001,6 +1022,22 @@ export interface Manifest {
   database?: { schema: string };
 }
 
+/** Declarative database shape and immutable migration history published by a
+ * connector as `database.schema` (normally `dist/database.json`). */
+export interface PluginDatabaseDescriptor {
+  format: 1;
+  objects: { name: string; kind: 'table' | 'index' | 'view' | 'trigger' }[];
+  modules: {
+    name: string;
+    migrations: { version: number; statements: string[] }[];
+  }[];
+  legacy: {
+    tables: { name: string; columns: string[] }[];
+    versionTable?: string;
+    userVersionModule?: string;
+  };
+}
+
 /** A tool on the outward MCP surface. `call` captures the module's caps via
  *  closure — the tool reaches exactly as far as the user consented. */
 export interface McpTool {
@@ -1020,15 +1057,7 @@ export interface McpTool {
 
 /** @deprecated Use PluginDb. Kept as a source-compatible name while the
  * platform moves all plugins onto the shared worker-backed database. */
-export type PrivateDb = import('./plugin-db').PluginDb;
-
-/** Rooted at folders the USER approved for this extension — never the disk. */
-export interface ScopedFiles {
-  list(rel: string): Promise<string[]>;
-  read(rel: string): Promise<Uint8Array>;
-  write(rel: string, data: Uint8Array): Promise<void>;
-  move(from: string, to: string): Promise<void>;
-}
+export type PrivateDb = PluginDb;
 
 /** Host-stamped provenance for a delivered event. `from` is the emitter's
  *  extension id (or the literal 'platform' for platform-emitted events),
@@ -1046,7 +1075,7 @@ export interface EventMeta {
 export interface CapSurfaces {
   query: { query: Query };
   /** The platform's fetch — shared retry/backoff applies by default. */
-  net: { net: { fetch(url: string, init?: unknown): Promise<unknown> } };
+  net: { net: PluginNet };
   files: { files: ScopedFiles };
   db: { db: PrivateDb };
   ui: { ui: { notify(msg: string, level?: LogLevel): void } };

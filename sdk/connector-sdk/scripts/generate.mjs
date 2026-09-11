@@ -14,6 +14,9 @@ for (const f of [
   'file-indexability.ts',
   'message-evidence.ts',
   'plugin-db.ts',
+  'plugin-files.ts',
+  'plugin-net.ts',
+  'plugin-sql.ts',
 ]) {
   copyFileSync(join(coreShared, f), join(outDir, f));
 }
