@@ -727,11 +727,11 @@ function copyTableChunk(
       `legacy table ${table.name} has no importable columns`,
       'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
     );
-  const order = info.primaryKey.length
-    ? info.primaryKey
-    : info.withoutRowid
-      ? info.columns
-      : [HIDDEN_ROWID];
+  const order = info.withoutRowid
+    ? info.primaryKey.length
+      ? info.primaryKey
+      : info.columns
+    : [HIDDEN_ROWID];
   const usesHiddenRowid = order[0] === HIDDEN_ROWID;
   const selectColumns =
     info.withoutRowid || !usesHiddenRowid
