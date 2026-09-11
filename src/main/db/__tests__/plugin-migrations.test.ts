@@ -421,6 +421,218 @@ describe('registered plugin schema registry', () => {
     ).rejects.toMatchObject({ code: 'PLUGIN_DB_RESET_TOMBSTONE' });
   });
 
+  it('rejects an appended object with no creating migration and preserves the active descriptor', async () => {
+    const v1 = parseDatabaseDescriptor({
+      format: 1,
+      objects: [{ name: 'items', kind: 'table' }],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            { version: 0, statements: ['CREATE TABLE {{items}} (id INTEGER)'] },
+          ],
+        },
+      ],
+      legacy: { tables: [{ name: 'items', columns: ['id'] }] },
+    });
+    const v2 = parseDatabaseDescriptor({
+      ...v1,
+      objects: [...v1.objects, { name: 'items_idx', kind: 'index' }],
+    });
+    const registry = await registryFor(db, file, 'upgrade.missing-index', v1);
+    await registry.migrate({
+      pluginId: 'upgrade.missing-index',
+      module: 'base',
+      version: 0,
+      statements: v1.modules[0].migrations[0].statements,
+    });
+    await registry.completeImport('upgrade.missing-index');
+    const before = registry.diagnostics('upgrade.missing-index');
+    const oldOpen = await registry.open({
+      pluginId: 'upgrade.missing-index',
+      owner: {
+        kind: 'plugin',
+        extensionId: 'upgrade.missing-index',
+        handle: 'owner-1',
+      },
+    });
+
+    await expect(
+      registry.register({
+        pluginId: 'upgrade.missing-index',
+        descriptor: v2,
+        legacyPath: file,
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_DB_SCHEMA_OBJECT_MISSING' });
+
+    expect(registry.diagnostics('upgrade.missing-index')).toEqual(before);
+    await expect(
+      registry.open({
+        pluginId: 'upgrade.missing-index',
+        owner: {
+          kind: 'plugin',
+          extensionId: 'upgrade.missing-index',
+          handle: 'owner-1',
+        },
+      }),
+    ).resolves.toEqual(oldOpen);
+  });
+
+  it('rejects an appended object whose sqlite kind differs from the descriptor', async () => {
+    const v1 = parseDatabaseDescriptor({
+      format: 1,
+      objects: [{ name: 'items', kind: 'table' }],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            { version: 0, statements: ['CREATE TABLE {{items}} (id INTEGER)'] },
+          ],
+        },
+      ],
+      legacy: { tables: [{ name: 'items', columns: ['id'] }] },
+    });
+    const v2 = parseDatabaseDescriptor({
+      ...v1,
+      objects: [...v1.objects, { name: 'items_idx', kind: 'index' }],
+      modules: [
+        {
+          ...v1.modules[0],
+          migrations: [
+            ...v1.modules[0].migrations,
+            {
+              version: 1,
+              statements: ['CREATE TABLE {{items_idx}} (id INTEGER)'],
+            },
+          ],
+        },
+      ],
+    });
+    const registry = await registryFor(db, file, 'upgrade.wrong-kind', v1);
+    await registry.migrate({
+      pluginId: 'upgrade.wrong-kind',
+      module: 'base',
+      version: 0,
+      statements: v1.modules[0].migrations[0].statements,
+    });
+    await registry.completeImport('upgrade.wrong-kind');
+    const before = registry.diagnostics('upgrade.wrong-kind');
+    const oldOpen = await registry.open({
+      pluginId: 'upgrade.wrong-kind',
+      owner: {
+        kind: 'plugin',
+        extensionId: 'upgrade.wrong-kind',
+        handle: 'owner-1',
+      },
+    });
+
+    await expect(
+      registry.register({
+        pluginId: 'upgrade.wrong-kind',
+        descriptor: v2,
+        legacyPath: file,
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_DB_SCHEMA_OBJECT_KIND' });
+
+    expect(registry.diagnostics('upgrade.wrong-kind')).toEqual(before);
+    await expect(
+      registry.open({
+        pluginId: 'upgrade.wrong-kind',
+        owner: {
+          kind: 'plugin',
+          extensionId: 'upgrade.wrong-kind',
+          handle: 'owner-1',
+        },
+      }),
+    ).resolves.toEqual(oldOpen);
+    expect(
+      db
+        .prepare('SELECT type FROM sqlite_master WHERE name = ?')
+        .get(registry.physicalName('upgrade.wrong-kind', 'items_idx')),
+    ).toBeUndefined();
+  });
+
+  it('applies an appended table migration, exposes it, and preserves existing rows', async () => {
+    const v1 = parseDatabaseDescriptor({
+      format: 1,
+      objects: [{ name: 'items', kind: 'table' }],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            { version: 0, statements: ['CREATE TABLE {{items}} (id INTEGER)'] },
+          ],
+        },
+      ],
+      legacy: { tables: [{ name: 'items', columns: ['id'] }] },
+    });
+    const v2 = parseDatabaseDescriptor({
+      ...v1,
+      objects: [...v1.objects, { name: 'extras', kind: 'table' }],
+      modules: [
+        {
+          ...v1.modules[0],
+          migrations: [
+            ...v1.modules[0].migrations,
+            {
+              version: 1,
+              statements: ['CREATE TABLE {{extras}} (id INTEGER)'],
+            },
+          ],
+        },
+      ],
+    });
+    const registry = await registryFor(db, file, 'upgrade.new-table', v1);
+    await registry.migrate({
+      pluginId: 'upgrade.new-table',
+      module: 'base',
+      version: 0,
+      statements: v1.modules[0].migrations[0].statements,
+    });
+    registry.host(
+      (connection) => {
+        connection
+          .prepare(
+            `INSERT INTO "${registry.physicalName('upgrade.new-table', 'items')}" (id) VALUES (?)`,
+          )
+          .run(7);
+      },
+      { pluginId: 'upgrade.new-table', descriptor: v1 },
+    );
+    await registry.completeImport('upgrade.new-table');
+
+    await expect(
+      registry.register({
+        pluginId: 'upgrade.new-table',
+        descriptor: v2,
+        legacyPath: file,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ state: 'active' }));
+    await expect(
+      registry.open({
+        pluginId: 'upgrade.new-table',
+        owner: {
+          kind: 'plugin',
+          extensionId: 'upgrade.new-table',
+          handle: 'owner-1',
+        },
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({ tables: ['items', 'extras'] }),
+    );
+    expect(
+      registry.host(
+        (connection) =>
+          connection
+            .prepare(
+              `SELECT id FROM "${registry.physicalName('upgrade.new-table', 'items')}"`,
+            )
+            .all(),
+        { pluginId: 'upgrade.new-table', descriptor: v2 },
+      ),
+    ).toEqual([{ id: 7n }]);
+  });
+
   it('rejects fresh cross-core foreign-key, trigger, and view bodies through native validation', async () => {
     db.exec(
       "CREATE TABLE core_secret (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO core_secret(id, value) VALUES (1, 'untouched')",

@@ -408,6 +408,39 @@ export function createPluginRegistry(
         }
       : metadataRecord;
   };
+  const verifyRegisteredObjects = (
+    pluginId: string,
+    descriptor: PluginDatabaseDescriptor,
+  ): void => {
+    const actual = new Map(
+      metadata(
+        () =>
+          db
+            .prepare('SELECT name, type FROM sqlite_master WHERE name LIKE ?')
+            .all(`${ownedNamespace(pluginId)}%`) as Array<{
+            name: string;
+            type: string;
+          }>,
+      ).map((row) => [String(row.name), String(row.type)]),
+    );
+    for (const object of descriptor.objects) {
+      const physical = pluginIdentifier(pluginId, object.name).replaceAll(
+        '"',
+        '',
+      );
+      const actualKind = actual.get(physical);
+      if (!actualKind)
+        throw error(
+          `registered ${object.kind} ${object.name} does not exist in sqlite_master`,
+          'PLUGIN_DB_SCHEMA_OBJECT_MISSING',
+        );
+      if (actualKind !== object.kind)
+        throw error(
+          `registered ${object.name} has sqlite kind ${actualKind}, expected ${object.kind}`,
+          'PLUGIN_DB_SCHEMA_OBJECT_KIND',
+        );
+    }
+  };
   const withTransaction = <T>(
     work: () => T,
     scope?: { pluginId: string; descriptor: PluginDatabaseDescriptor },
@@ -605,6 +638,7 @@ export function createPluginRegistry(
                 ),
             );
           }
+          verifyRegisteredObjects(pluginId, next);
         } finally {
           setSchemaMode(false);
         }
