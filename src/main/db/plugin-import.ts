@@ -10,13 +10,19 @@ import {
   type PluginImportProgress,
   type PluginRegistry,
 } from './plugin-registry';
-import type { SqliteDatabase } from './sqlite-runtime';
+import { createPluginAuthorizer } from './plugin-authorizer';
+import { openSqlite, type SqliteDatabase } from './sqlite-runtime';
 
 export type { PluginImportProgress } from './plugin-registry';
 
 export interface LegacyImportOptions {
   chunkSize?: number;
   afterChunk?: (progress: PluginImportProgress) => void | Promise<void>;
+  /** Test-owned seam immediately before an unpublished snapshot is renamed. */
+  beforeSnapshotPublish?: (
+    temporaryPath: string,
+    snapshotPath: string,
+  ) => void | Promise<void>;
   /** Admit one bounded write at a time so core work can run between chunks. */
   admit?: <T>(work: () => T | Promise<T>) => Promise<T>;
 }
@@ -41,6 +47,10 @@ function quote(name: string): string {
       `invalid legacy identifier ${name}`,
       'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
     );
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
+function quoteInternal(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
 }
 
@@ -109,8 +119,15 @@ function sourceIdentity(filename: string): string {
       } finally {
         fs.closeSync(fd);
       }
-    } catch {
-      /* absent WAL is part of the identity too */
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
+        hash.update(`${file}|absent|`);
+        continue;
+      }
+      fail(
+        `unable to read legacy source identity ${file}`,
+        'PLUGIN_DB_IMPORT_SOURCE_UNAVAILABLE',
+      );
     }
   }
   return hash.digest('hex');
@@ -135,14 +152,60 @@ function snapshotPathFor(
 async function createFixedSnapshot(
   legacyPath: string,
   snapshotPath: string,
+  beforePublish?: LegacyImportOptions['beforeSnapshotPublish'],
 ): Promise<void> {
-  if (fs.existsSync(snapshotPath)) return;
+  const validate = (filename: string): void => {
+    let check: Database.Database | undefined;
+    try {
+      check = new Database(filename, { fileMustExist: true, readonly: true });
+      const result = check.pragma('quick_check', { simple: true });
+      if (String(result).toLowerCase() !== 'ok')
+        throw new Error('quick_check failed');
+    } catch (cause) {
+      fail(
+        `legacy snapshot is incomplete or corrupt: ${String(cause)}`,
+        'PLUGIN_DB_IMPORT_SNAPSHOT_INVALID',
+      );
+    } finally {
+      check?.close();
+    }
+  };
+  if (fs.existsSync(snapshotPath)) {
+    validate(snapshotPath);
+    return;
+  }
   const source = new Database(legacyPath, {
     fileMustExist: true,
     readonly: true,
   });
+  const temporary = `${snapshotPath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.partial`;
   try {
-    await source.backup(snapshotPath);
+    await source.backup(temporary);
+    validate(temporary);
+    const fd = fs.openSync(temporary, 'r');
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    await beforePublish?.(temporary, snapshotPath);
+    fs.renameSync(temporary, snapshotPath);
+    const dir = fs.openSync(path.dirname(snapshotPath), 'r');
+    try {
+      fs.fsyncSync(dir);
+    } finally {
+      fs.closeSync(dir);
+    }
+  } catch (cause) {
+    if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
+    if (
+      (cause as { code?: string }).code === 'PLUGIN_DB_IMPORT_SNAPSHOT_INVALID'
+    )
+      throw cause;
+    fail(
+      `unable to publish legacy snapshot: ${String(cause)}`,
+      'PLUGIN_DB_IMPORT_SNAPSHOT_INVALID',
+    );
   } finally {
     source.close();
   }
@@ -151,7 +214,12 @@ async function createFixedSnapshot(
 function tableInfo(
   db: Database.Database,
   table: string,
-): { columns: string[]; primaryKey: string[]; withoutRowid: boolean } {
+): {
+  columns: string[];
+  primaryKey: string[];
+  withoutRowid: boolean;
+  rowidAlias?: string;
+} {
   const rows = db.prepare(`PRAGMA table_info(${quote(table)})`).all() as Array<{
     name: string;
     pk: number;
@@ -170,14 +238,22 @@ function tableInfo(
   } catch {
     /* supported SQLite in production exposes table_list */
   }
-  return {
-    columns: rows.map((row) => row.name),
-    primaryKey: rows
-      .filter((row) => Number(row.pk) > 0)
-      .sort((a, b) => Number(a.pk) - Number(b.pk))
-      .map((row) => row.name),
-    withoutRowid,
-  };
+  const columns = rows.map((row) => row.name);
+  const primaryKey = rows
+    .filter((row) => Number(row.pk) > 0)
+    .sort((a, b) => Number(a.pk) - Number(b.pk))
+    .map((row) => row.name);
+  const rowidAlias = withoutRowid
+    ? undefined
+    : ['rowid', '_rowid_', 'oid'].find(
+        (alias) => !columns.some((column) => column.toLowerCase() === alias),
+      );
+  if (!withoutRowid && !primaryKey.length && !rowidAlias)
+    fail(
+      `legacy table ${table} shadows every SQLite rowid alias and has no primary key`,
+      'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
+    );
+  return { columns, primaryKey, withoutRowid, rowidAlias };
 }
 
 function encodeKey(values: unknown[]): string {
@@ -193,8 +269,25 @@ function encodeKey(values: unknown[]): string {
 }
 
 function rowKey(row: Record<string, unknown>, columns: string[]): string {
-  return encodeKey(columns.map((column) => row[column]));
+  return encodeKey(
+    columns.map((column) =>
+      column === HIDDEN_ROWID ? row[HIDDEN_ROWID] : row[column],
+    ),
+  );
 }
+
+function digestRow(
+  row: Record<string, unknown>,
+  columns: string[],
+  rowid: unknown,
+): Record<string, unknown> {
+  return {
+    ...Object.fromEntries(columns.map((column) => [column, row[column]])),
+    ...(rowid === undefined ? {} : { __kiagent_rowid: rowid }),
+  };
+}
+
+const HIDDEN_ROWID = '__kiagent_rowid';
 
 function decodeKey(value: string | null): unknown[] {
   if (!value) return [];
@@ -267,14 +360,15 @@ function validateLegacySchema(
         `legacy table ${table.name} has unknown columns`,
         'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
       );
-    for (const column of expected.get(table.name) ?? []) {
-      if (!actual.includes(column)) {
-        fail(
-          `legacy table ${table.name} is missing historical column ${column}`,
-          'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
-        );
-      }
-    }
+    const expectedColumns = expected.get(table.name) ?? [];
+    if (
+      actual.length !== expectedColumns.length ||
+      actual.some((column, index) => column !== expectedColumns[index])
+    )
+      fail(
+        `legacy table ${table.name} does not match its registered source version`,
+        'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
+      );
   }
 }
 
@@ -282,30 +376,97 @@ function reconstructHistoricalTables(
   descriptor: PluginDatabaseDescriptor,
   sourceVersions: ReadonlyMap<string, number>,
 ): Map<string, string[]> {
-  const probe = new Database(':memory:');
+  const probe = openSqlite(':memory:');
+  const authorizer = createPluginAuthorizer({
+    pluginId: '__legacy_probe__',
+    tables: descriptor.objects
+      .filter((object) => object.kind === 'table')
+      .map((object) => object.name),
+    indexes: descriptor.objects
+      .filter((object) => object.kind === 'index')
+      .map((object) => object.name),
+    views: descriptor.objects
+      .filter((object) => object.kind === 'view')
+      .map((object) => object.name),
+    triggers: descriptor.objects
+      .filter((object) => object.kind === 'trigger')
+      .map((object) => object.name),
+  });
+  probe.setAuthorizer?.(authorizer);
+  const setSchemaMode = (enabled: boolean) =>
+    (
+      authorizer as typeof authorizer & {
+        setSchemaMode: (value: boolean) => void;
+      }
+    ).setSchemaMode(enabled);
+  const setPrivateTransaction = (enabled: boolean) =>
+    (
+      authorizer as typeof authorizer & {
+        setPrivateTransaction: (value: boolean) => void;
+      }
+    ).setPrivateTransaction(enabled);
+  const resetAuthorizer = () =>
+    (authorizer as typeof authorizer & { reset: () => void }).reset();
+  const setMetadataMode = (enabled: boolean) =>
+    (
+      authorizer as typeof authorizer & {
+        setHostMetadataMode: (value: boolean) => void;
+      }
+    ).setHostMetadataMode(enabled);
+  const control = (sql: 'BEGIN' | 'COMMIT' | 'ROLLBACK') => {
+    resetAuthorizer();
+    setPrivateTransaction(true);
+    try {
+      probe.exec(sql);
+    } finally {
+      setPrivateTransaction(false);
+    }
+  };
   try {
+    control('BEGIN');
     const objects = descriptor.objects.map((object) => object.name);
     for (const module of descriptor.modules) {
       const version = sourceVersions.get(module.name) ?? 0;
       for (const migration of module.migrations) {
         if (migration.version > version) continue;
-        for (const statement of migration.statements)
-          probe.exec(formatPluginSql('__legacy_probe__', statement, objects));
+        for (const statement of migration.statements) {
+          resetAuthorizer();
+          setSchemaMode(true);
+          try {
+            probe.exec(formatPluginSql('__legacy_probe__', statement, objects));
+          } finally {
+            setSchemaMode(false);
+          }
+        }
       }
     }
+    control('COMMIT');
     const result = new Map<string, string[]>();
     const prefix = `p_${Buffer.from('__legacy_probe__', 'utf8').toString('hex')}__`;
-    for (const table of descriptor.legacy.tables) {
-      const rows = probe
-        .prepare(`PRAGMA table_info("${prefix}${table.name}")`)
-        .all() as Array<{ name: string }>;
-      if (rows.length)
-        result.set(
-          table.name,
-          rows.map((row) => row.name),
-        );
+    setMetadataMode(true);
+    try {
+      for (const table of descriptor.legacy.tables) {
+        resetAuthorizer();
+        const rows = probe
+          .prepare(`PRAGMA table_info("${prefix}${table.name}")`)
+          .all() as Array<{ name: string }>;
+        if (rows.length)
+          result.set(
+            table.name,
+            rows.map((row) => row.name),
+          );
+      }
+    } finally {
+      setMetadataMode(false);
     }
     return result;
+  } catch (cause) {
+    try {
+      control('ROLLBACK');
+    } catch {
+      // Preserve the original schema reconstruction failure.
+    }
+    throw cause;
   } finally {
     probe.close();
   }
@@ -365,10 +526,7 @@ function sourceVersion(
     const registered = new Map(
       descriptor.modules.map((module) => [
         module.name,
-        Math.max(
-          -1,
-          ...module.migrations.map((migration) => migration.version),
-        ),
+        new Set(module.migrations.map((migration) => migration.version)),
       ]),
     );
     const versionRows = db
@@ -376,19 +534,27 @@ function sourceVersion(
       .all() as Array<{ module?: string; version?: number | bigint }>;
     for (const versionRow of versionRows) {
       const rowModuleName = String(versionRow.module ?? '');
-      const max = registered.get(rowModuleName);
+      const versions = registered.get(rowModuleName);
       const version = Number(versionRow.version);
       if (
-        max === undefined ||
+        versions === undefined ||
         !Number.isSafeInteger(version) ||
         version < 0 ||
-        version > max
+        !versions.has(version)
       )
         fail(
           `legacy source requires unknown ${rowModuleName} version ${String(versionRow.version)}`,
           'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
         );
     }
+    const moduleRows = versionRows.filter(
+      (versionRow) => String(versionRow.module ?? '') === moduleName,
+    );
+    if (moduleRows.length > 1)
+      fail(
+        `legacy version table has duplicate rows for ${moduleName}`,
+        'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
+      );
     const row = db
       .prepare(`SELECT version FROM ${quote(table)} WHERE module = ?`)
       .get(moduleName) as { version?: number | bigint } | undefined;
@@ -399,8 +565,8 @@ function sourceVersion(
         `invalid legacy version for ${moduleName}`,
         'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
       );
-    const max = registered.get(moduleName) ?? -1;
-    if (version > max)
+    const versions = registered.get(moduleName);
+    if (!versions?.has(version))
       fail(
         `legacy source requires unknown ${moduleName} version ${version}`,
         'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
@@ -409,13 +575,12 @@ function sourceVersion(
   }
   if (descriptor.legacy.userVersionModule === moduleName) {
     const version = Number(db.pragma('user_version', { simple: true }));
-    const max = Math.max(
-      -1,
-      ...(descriptor.modules
+    const versions = new Set(
+      descriptor.modules
         .find((module) => module.name === moduleName)
-        ?.migrations.map((migration) => migration.version) ?? []),
+        ?.migrations.map((migration) => migration.version),
     );
-    if (!Number.isSafeInteger(version) || version < 0 || version > max)
+    if (!Number.isSafeInteger(version) || version < 0 || !versions.has(version))
       fail(
         `legacy source requires unknown ${moduleName} version ${version}`,
         'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
@@ -542,23 +707,22 @@ function copyTableChunk(
 ): Promise<{ progress: PluginImportProgress; count: number }> {
   const info = tableInfo(source, table.name);
   const scope = { pluginId, descriptor };
-  const targetColumns = new Set(
-    registry
-      .host(
-        (db) =>
-          db
-            .prepare(
-              `PRAGMA table_info(${physicalQuote(registry, pluginId, table.name)})`,
-            )
-            .all() as Array<{ name: string }>,
-        scope,
-      )
-      .map((column) => column.name),
-  );
-  const columns = info.columns.filter(
-    (column) => table.columns.includes(column) && targetColumns.has(column),
-  );
-  if (!columns.length)
+  const targetInfo = registry.host((db) => {
+    const targetTable = physicalQuote(registry, pluginId, table.name);
+    const targetColumns = db
+      .prepare(`PRAGMA table_info(${targetTable})`)
+      .all() as Array<{ name: string }>;
+    const targetTables = db
+      .prepare(`PRAGMA table_list(${targetTable})`)
+      .all() as Array<{ wr?: number }>;
+    return {
+      columns: targetColumns.map((column) => column.name),
+      withoutRowid: Number(targetTables[0]?.wr ?? 0) === 1,
+    };
+  }, scope);
+  const targetColumns = new Set(targetInfo.columns);
+  const columns = info.columns.filter((column) => targetColumns.has(column));
+  if (!columns.length || columns.length !== info.columns.length)
     fail(
       `legacy table ${table.name} has no importable columns`,
       'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
@@ -567,34 +731,64 @@ function copyTableChunk(
     ? info.primaryKey
     : info.withoutRowid
       ? info.columns
-      : ['rowid'];
-  const selectColumns = info.withoutRowid
-    ? info.columns.map(quote)
-    : ['rowid AS __kiagent_rowid', ...info.columns.map(quote)];
+      : [HIDDEN_ROWID];
+  const usesHiddenRowid = order[0] === HIDDEN_ROWID;
+  const selectColumns =
+    info.withoutRowid || !usesHiddenRowid
+      ? info.columns.map(quote)
+      : [
+          `${quoteInternal(info.rowidAlias!)} AS "${HIDDEN_ROWID}"`,
+          ...info.columns.map(quote),
+        ];
   const cursor =
     progress.tableName === table.name ? decodeKey(progress.lastKey) : [];
   const predicate =
-    order[0] === 'rowid'
+    order[0] === HIDDEN_ROWID
       ? !cursor.length
         ? { sql: '', params: [] }
-        : { sql: 'WHERE rowid > ?', params: cursor }
+        : {
+            sql: `WHERE ${quoteInternal(info.rowidAlias!)} > ?`,
+            params: cursor,
+          }
       : keyPredicate(order, cursor);
+  const orderSql = order.map((column) =>
+    column === HIDDEN_ROWID ? quoteInternal(info.rowidAlias!) : quote(column),
+  );
   const rows = source
     .prepare(
-      `SELECT ${selectColumns.join(', ')} FROM ${quote(table.name)} ${predicate.sql} ORDER BY ${order.map(quote).join(', ')} LIMIT ?`,
+      `SELECT ${selectColumns.join(', ')} FROM ${quote(table.name)} ${predicate.sql} ORDER BY ${orderSql.join(', ')} LIMIT ?`,
     )
     .all(...predicate.params, chunkSize) as Array<Record<string, unknown>>;
   if (!rows.length) return Promise.resolve({ progress, count: 0 });
   const physical = physicalQuote(registry, pluginId, table.name);
-  const insertColumns = info.withoutRowid
-    ? columns.map(quote)
-    : ['rowid', ...columns.map(quote)];
+  const targetRowidAlias =
+    targetInfo.withoutRowid || !usesHiddenRowid
+      ? undefined
+      : ['rowid', '_rowid_', 'oid'].find(
+          (alias) =>
+            !targetInfo.columns.some(
+              (column) => column.toLowerCase() === alias,
+            ),
+        );
+  if (usesHiddenRowid && (targetInfo.withoutRowid || !targetRowidAlias))
+    fail(
+      `target table ${table.name} shadows every SQLite rowid alias and has no primary key`,
+      'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
+    );
+  const insertColumns =
+    info.withoutRowid || !usesHiddenRowid
+      ? columns.map(quote)
+      : [quoteInternal(targetRowidAlias!), ...columns.map(quote)];
   const statement = `INSERT INTO ${physical} (${insertColumns.join(', ')}) VALUES (${insertColumns.map(() => '?').join(', ')})`;
   const last = rows[rows.length - 1];
   const sourceDigest = extendDigest(
     progress.tableName === table.name ? progress.sourceDigest : null,
     rows.map((row) =>
-      Object.fromEntries(columns.map((column) => [column, row[column]])),
+      digestRow(
+        row,
+        columns,
+        order[0] === HIDDEN_ROWID ? row[HIDDEN_ROWID] : undefined,
+      ),
     ),
   );
   let next: PluginImportProgress = {
@@ -602,7 +796,7 @@ function copyTableChunk(
     tableName: table.name,
     lastKey: encodeKey(
       order.map((column) =>
-        column === 'rowid' ? last.__kiagent_rowid : last[column],
+        column === HIDDEN_ROWID ? last[HIDDEN_ROWID] : last[column],
       ),
     ),
     rowsCopied:
@@ -617,18 +811,18 @@ function copyTableChunk(
         const insert = db.prepare(statement);
         for (const row of rows)
           insert.run(
-            ...(info.withoutRowid
+            ...(!usesHiddenRowid
               ? columns.map((column) => row[column])
-              : [row.__kiagent_rowid, ...columns.map((column) => row[column])]),
+              : [row[HIDDEN_ROWID], ...columns.map((column) => row[column])]),
           );
         const keyValues = rows.map((row) =>
           order.map((column) =>
-            column === 'rowid' ? row.__kiagent_rowid : row[column],
+            column === HIDDEN_ROWID ? row[HIDDEN_ROWID] : row[column],
           ),
         );
         const where =
-          order[0] === 'rowid'
-            ? `rowid IN (${keyValues.map(() => '?').join(', ')})`
+          order[0] === HIDDEN_ROWID
+            ? `${quoteInternal(targetRowidAlias!)} IN (${keyValues.map(() => '?').join(', ')})`
             : keyValues
                 .map(
                   (_values) =>
@@ -640,7 +834,7 @@ function copyTableChunk(
             `SELECT ${selectColumns.join(', ')} FROM ${physical} WHERE ${where}`,
           )
           .all(
-            ...(order[0] === 'rowid'
+            ...(order[0] === HIDDEN_ROWID
               ? keyValues.map((values) => values[0])
               : keyValues.flat()),
           ) as Array<Record<string, unknown>>;
@@ -654,8 +848,10 @@ function copyTableChunk(
               `target plugin table ${table.name} lost an imported row`,
               'PLUGIN_DB_IMPORT_DIGEST_MISMATCH',
             );
-          return Object.fromEntries(
-            columns.map((column) => [column, target[column]]),
+          return digestRow(
+            target,
+            columns,
+            order[0] === HIDDEN_ROWID ? target[HIDDEN_ROWID] : undefined,
           );
         });
         next = {
@@ -744,7 +940,11 @@ export async function importLegacyPluginStorage(
   const snapshotPath =
     existing?.snapshotPath ??
     snapshotPathFor(input.legacyPath, input.pluginId, identity);
-  await createFixedSnapshot(input.legacyPath, snapshotPath);
+  await createFixedSnapshot(
+    input.legacyPath,
+    snapshotPath,
+    options.beforeSnapshotPublish,
+  );
   let progress = existing;
   const source = new Database(snapshotPath, {
     fileMustExist: true,

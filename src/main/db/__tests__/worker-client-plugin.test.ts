@@ -23,7 +23,7 @@ const WORKER_DESCRIPTOR = {
   legacy: { tables: [{ name: 'items', columns: ['id'] }] },
 };
 
-it('forwards plugin requests through the production worker client wrapper', async () => {
+it('serializes a diagnostics request through the bridge fixture (transport only)', async () => {
   const file = path.join(
     os.tmpdir(),
     `plugin-worker-${process.pid}-${Date.now()}.sqlite`,
@@ -328,7 +328,112 @@ it('prepares and opens a trusted WAL legacy source through the production worker
   }
 });
 
-it('cancels a queued real plugin write through openDbInWorker', async () => {
+it('coalesces concurrent production-worker prepare requests behind a held transaction', async () => {
+  const file = path.join(
+    os.tmpdir(),
+    `plugin-worker-prepare-race-${process.pid}-${Date.now()}.sqlite`,
+  );
+  const preload = path.join(
+    os.tmpdir(),
+    `plugin-worker-prepare-race-preload-${process.pid}-${Date.now()}.js`,
+  );
+  const blockerSource = path.join(
+    os.tmpdir(),
+    `plugin-worker-prepare-race-blocker-${process.pid}-${Date.now()}`,
+    'private.db',
+  );
+  const targetSource = path.join(
+    os.tmpdir(),
+    `plugin-worker-prepare-race-target-${process.pid}-${Date.now()}`,
+    'private.db',
+  );
+  const rootBetter = path.join(
+    path.resolve(__dirname, '..', '..', '..', '..'),
+    'node_modules',
+    'better-sqlite3',
+  );
+  fs.writeFileSync(
+    preload,
+    `const M=require('module');const o=M._resolveFilename;M._resolveFilename=function(r,...a){return r==='better-sqlite3'?o.call(this,${JSON.stringify(rootBetter)},...a):o.apply(this,[r,...a])}`,
+  );
+  let db: Awaited<ReturnType<typeof openDbInWorker>> | undefined;
+  try {
+    db = await openDbInWorker(file, require.resolve('../worker-entry.ts'), {
+      execArgv: [
+        '--no-experimental-strip-types',
+        '-r',
+        preload,
+        '-r',
+        'ts-node/register/transpile-only',
+        '-r',
+        'tsconfig-paths/register',
+      ],
+      pluginSources: {
+        'worker.prepare-blocker': blockerSource,
+        'worker.prepare-target': targetSource,
+      },
+    });
+    await db.plugin?.({
+      op: 'register',
+      pluginId: 'worker.prepare-blocker',
+      descriptor: WORKER_DESCRIPTOR,
+    });
+    await db.plugin?.({
+      op: 'register',
+      pluginId: 'worker.prepare-target',
+      descriptor: WORKER_DESCRIPTOR,
+    });
+    await db.plugin?.({
+      op: 'prepare',
+      pluginId: 'worker.prepare-blocker',
+      descriptor: WORKER_DESCRIPTOR,
+    });
+    const blockerOwner = {
+      kind: 'plugin' as const,
+      extensionId: 'worker.prepare-blocker',
+      handle: 'prepare-blocker-owner',
+    };
+    await db.plugin?.({
+      op: 'open',
+      owner: blockerOwner,
+      pluginId: blockerOwner.extensionId,
+    });
+    const token = (await db.plugin?.({
+      op: 'begin',
+      owner: blockerOwner,
+    })) as string;
+
+    const first = db.plugin?.({
+      op: 'prepare',
+      pluginId: 'worker.prepare-target',
+      descriptor: WORKER_DESCRIPTOR,
+    });
+    const second = db.plugin?.({
+      op: 'prepare',
+      pluginId: 'worker.prepare-target',
+      descriptor: WORKER_DESCRIPTOR,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await db.plugin?.({ op: 'commit', owner: blockerOwner, token });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ state: 'active' }),
+      expect.objectContaining({ state: 'active' }),
+    ]);
+  } finally {
+    if (db?.isOpen()) await db.close();
+    for (const p of [
+      file,
+      `${file}-wal`,
+      `${file}-shm`,
+      preload,
+      path.dirname(blockerSource),
+      path.dirname(targetSource),
+    ])
+      if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true });
+  }
+});
+
+it('cancels a queued plugin transport request through the bridge fixture (transport only)', async () => {
   const file = path.join(
     os.tmpdir(),
     `plugin-worker-cancel-${process.pid}-${Date.now()}.sqlite`,

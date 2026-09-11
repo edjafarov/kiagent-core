@@ -26,6 +26,7 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
     owned.add(pluginIdentifier(options.pluginId, n).replaceAll('"', ''));
   let privateTransaction = false;
   let schemaMode = false;
+  let explicitSchemaSelect = false;
   const allowedFunctions = new Set([
     'abs',
     'coalesce',
@@ -48,10 +49,13 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
     'printf',
     'row_number',
     'round',
+    'replace',
+    'rtrim',
     'strftime',
     'substr',
     'sum',
     'total',
+    'trim',
     'upper',
   ]);
   const hostMetadata = new Set(options.hostMetadataTables ?? []);
@@ -69,7 +73,10 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
           allowedFunctions.has(args[2] as string)
           ? 0
           : 1;
-      if (action === 21) return 0;
+      if (action === 21) {
+        explicitSchemaSelect = schemaMode && !hostMetadataMode;
+        return 0;
+      }
       return 1;
     }
     // SQLite consults sqlite_master while compiling DDL. Permit those internal
@@ -79,7 +86,10 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
         if (!schemaMode) return 1;
         return 0;
       }
-      if (schemaMode && (action === 20 || action === 23)) return 0;
+      if (action === 20 || action === 23) {
+        if (hostMetadataMode) return 0;
+        if (schemaMode) return explicitSchemaSelect ? 1 : 0;
+      }
       return 1;
     }
     if ([1, 7].includes(action)) {
@@ -147,7 +157,9 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
       setPrivateTransaction: (enabled: boolean) => void;
       setSchemaMode: (enabled: boolean) => void;
     }
-  ).reset = () => {};
+  ).reset = () => {
+    explicitSchemaSelect = false;
+  };
   (
     authorizer as typeof authorizer & {
       setPrivateTransaction: (enabled: boolean) => void;
@@ -161,6 +173,7 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
     }
   ).setSchemaMode = (enabled) => {
     schemaMode = enabled;
+    explicitSchemaSelect = false;
   };
   (
     authorizer as typeof authorizer & {

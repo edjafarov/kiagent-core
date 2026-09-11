@@ -202,6 +202,225 @@ describe('registered plugin schema registry', () => {
     ).rejects.toThrow(/not authorized|prohibited|denied/i);
   });
 
+  it('keeps core schema metadata and transaction control outside descriptor authority', async () => {
+    const metadataDescriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [{ name: 'items', kind: 'table' }],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{items}} (name TEXT)',
+                'INSERT INTO {{items}} SELECT name FROM sqlite_master',
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: { tables: [{ name: 'items', columns: ['name'] }] },
+    });
+    const metadataRegistry = await registryFor(
+      db,
+      file,
+      'unsafe.sqlite-master',
+      metadataDescriptor,
+    );
+    await expect(
+      metadataRegistry.migrate({
+        pluginId: 'unsafe.sqlite-master',
+        module: 'base',
+        version: 0,
+        statements: metadataDescriptor.modules[0].migrations[0].statements,
+      }),
+    ).rejects.toThrow(/not authorized|prohibited|denied/i);
+
+    const transactionDescriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [
+        { name: 'items', kind: 'table' },
+        { name: 'later', kind: 'table' },
+      ],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{items}} (id INTEGER)',
+                'COMMIT',
+                'CREATE TABLE {{later}} (id INTEGER)',
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: { tables: [{ name: 'items', columns: ['id'] }] },
+    });
+    const transactionRegistry = await registryFor(
+      db,
+      file,
+      'unsafe.transaction',
+      transactionDescriptor,
+    );
+    await expect(
+      transactionRegistry.migrate({
+        pluginId: 'unsafe.transaction',
+        module: 'base',
+        version: 0,
+        statements: transactionDescriptor.modules[0].migrations[0].statements,
+      }),
+    ).rejects.toThrow(/transaction|not authorized|active/i);
+    const transactionPhysical = transactionRegistry.physicalName(
+      'unsafe.transaction',
+      'items',
+    );
+    expect(
+      db
+        .prepare('SELECT name FROM sqlite_master WHERE name = ?')
+        .all(transactionPhysical),
+    ).toEqual([]);
+  });
+
+  it('compiles all INSTEAD OF view trigger bodies before activation', async () => {
+    db.exec(
+      "CREATE TABLE core_secret (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO core_secret(id, value) VALUES (1, 'untouched')",
+    );
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [
+        { name: 'items', kind: 'table' },
+        { name: 'item_view', kind: 'view' },
+        { name: 'view_insert', kind: 'trigger' },
+        { name: 'view_update', kind: 'trigger' },
+        { name: 'view_delete', kind: 'trigger' },
+      ],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{items}} (id INTEGER PRIMARY KEY, value TEXT)',
+                'CREATE VIEW {{item_view}} AS SELECT id, value FROM {{items}}',
+                "CREATE TRIGGER {{view_insert}} INSTEAD OF INSERT ON {{item_view}} BEGIN UPDATE core_secret SET value = 'inserted'; END",
+                "CREATE TRIGGER {{view_update}} INSTEAD OF UPDATE ON {{item_view}} BEGIN UPDATE core_secret SET value = 'updated'; END",
+                "CREATE TRIGGER {{view_delete}} INSTEAD OF DELETE ON {{item_view}} BEGIN UPDATE core_secret SET value = 'deleted'; END",
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: { tables: [{ name: 'items', columns: ['id', 'value'] }] },
+    });
+    const registry = await registryFor(
+      db,
+      file,
+      'unsafe.view-trigger',
+      descriptor,
+    );
+    let migrationFailed = false;
+    try {
+      await registry.migrate({
+        pluginId: 'unsafe.view-trigger',
+        module: 'base',
+        version: 0,
+        statements: descriptor.modules[0].migrations[0].statements,
+      });
+    } catch {
+      migrationFailed = true;
+    }
+    if (!migrationFailed)
+      await expect(
+        registry.validateSchema('unsafe.view-trigger'),
+      ).rejects.toThrow(/not authorized|prohibited|reference|schema/i);
+    expect(db.prepare('SELECT value FROM core_secret').all()).toEqual([
+      { value: 'untouched' },
+    ]);
+  });
+
+  it('applies append-only schema upgrades before exposing new objects and honors tombstones', async () => {
+    const v1 = parseDatabaseDescriptor({
+      format: 1,
+      objects: [{ name: 'items', kind: 'table' }],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            { version: 0, statements: ['CREATE TABLE {{items}} (id INTEGER)'] },
+          ],
+        },
+      ],
+      legacy: { tables: [{ name: 'items', columns: ['id'] }] },
+    });
+    const v2 = parseDatabaseDescriptor({
+      ...v1,
+      objects: [...v1.objects, { name: 'extras', kind: 'table' }],
+      modules: [
+        {
+          ...v1.modules[0],
+          migrations: [
+            ...v1.modules[0].migrations,
+            {
+              version: 1,
+              statements: ['CREATE TABLE {{extras}} (id INTEGER)'],
+            },
+          ],
+        },
+      ],
+    });
+    const registry = await registryFor(db, file, 'upgrade.plugin', v1);
+    await registry.migrate({
+      pluginId: 'upgrade.plugin',
+      module: 'base',
+      version: 0,
+      statements: v1.modules[0].migrations[0].statements,
+    });
+    await registry.completeImport('upgrade.plugin');
+    await expect(
+      registry.register({
+        pluginId: 'upgrade.plugin',
+        descriptor: v2,
+        legacyPath: file,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ state: 'active' }));
+    await expect(
+      registry.preparePluginStorage({
+        pluginId: 'upgrade.plugin',
+        descriptor: v2,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ state: 'active' }));
+    await expect(
+      registry.validateSchema('upgrade.plugin'),
+    ).resolves.toBeUndefined();
+
+    const tombstoneRegistry = await registryFor(
+      db,
+      file,
+      'tombstone.plugin',
+      v1,
+    );
+    await tombstoneRegistry.migrate({
+      pluginId: 'tombstone.plugin',
+      module: 'base',
+      version: 0,
+      statements: v1.modules[0].migrations[0].statements,
+    });
+    await tombstoneRegistry.completeImport('tombstone.plugin');
+    await tombstoneRegistry.reset('tombstone.plugin');
+    await expect(
+      tombstoneRegistry.register({
+        pluginId: 'tombstone.plugin',
+        descriptor: v2,
+        legacyPath: file,
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_DB_RESET_TOMBSTONE' });
+  });
+
   it('rejects fresh cross-core foreign-key, trigger, and view bodies through native validation', async () => {
     db.exec(
       "CREATE TABLE core_secret (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO core_secret(id, value) VALUES (1, 'untouched')",
@@ -328,6 +547,48 @@ describe('registered plugin schema registry', () => {
     expect(db.prepare('SELECT value FROM core_secret').all()).toEqual([
       { value: 'untouched' },
     ]);
+  });
+
+  it('allows the registered text cleanup functions used by host migrations', async () => {
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [{ name: 'items', kind: 'table' }],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{items}} (value TEXT, cleaned TEXT)',
+                "INSERT INTO {{items}}(value, cleaned) VALUES ('  Alpha  ', rtrim(trim('  Beta  '), replace('x', 'x', ''))) ",
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: { tables: [{ name: 'items', columns: ['value', 'cleaned'] }] },
+    });
+    const registry = await registryFor(db, file, 'text-cleanup', descriptor);
+    await expect(
+      registry.migrate({
+        pluginId: 'text-cleanup',
+        module: 'base',
+        version: 0,
+        statements: descriptor.modules[0].migrations[0].statements,
+      }),
+    ).resolves.toBeUndefined();
+    expect(
+      registry.host(
+        (connection) =>
+          connection
+            .prepare(
+              'SELECT value, cleaned FROM "p_746578742d636c65616e7570__items"',
+            )
+            .all(),
+        { pluginId: 'text-cleanup', descriptor },
+      ),
+    ).toEqual([{ value: '  Alpha  ', cleaned: 'Beta' }]);
   });
 });
 

@@ -8,7 +8,7 @@ import {
 import type { DbOwner } from './coordinator';
 import type { PluginConnectionOptions } from './plugin-connections';
 import { openSqlite, type SqliteDatabase } from './sqlite-runtime';
-import { createPluginAuthorizer } from './plugin-authorizer';
+import { createPluginAuthorizer, ownedNamespace } from './plugin-authorizer';
 
 export type PluginStorageState =
   | 'registered'
@@ -22,7 +22,6 @@ export interface PluginStorageMetadata {
   state: PluginStorageState;
   descriptorDigest: string;
   legacyPath: string;
-  ownerHandle?: string;
   generation: number;
 }
 
@@ -84,7 +83,6 @@ export interface PluginRegistry {
   descriptor(pluginId: string): PluginDatabaseDescriptor;
   physicalName(pluginId: string, logicalName: string): string;
   reset(pluginId: string): Promise<void>;
-  release(owner: DbOwner): Promise<void>;
   close(): Promise<void>;
   assertImportInput(
     pluginId: string,
@@ -106,7 +104,6 @@ CREATE TABLE IF NOT EXISTS plugin_storage (
   descriptor_digest TEXT NOT NULL,
   descriptor_json TEXT NOT NULL,
   legacy_path TEXT NOT NULL,
-  owner_handle TEXT,
   generation INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
@@ -182,7 +179,6 @@ function rowMetadata(row: Record<string, unknown>): PluginStorageMetadata {
     state: String(row.state) as PluginStorageState,
     descriptorDigest: String(row.descriptor_digest),
     legacyPath: String(row.legacy_path),
-    ...(row.owner_handle ? { ownerHandle: String(row.owner_handle) } : {}),
     generation: Number(row.generation),
   };
 }
@@ -315,6 +311,17 @@ export function createPluginRegistry(
         setPrivateTransaction: (value: boolean) => void;
       }
     ).setPrivateTransaction(enabled);
+  const resetAuthorizer = () =>
+    (authorizer as typeof authorizer & { reset: () => void }).reset();
+  const transactionControl = (sql: 'BEGIN' | 'COMMIT' | 'ROLLBACK') => {
+    resetAuthorizer();
+    setPrivateTransaction(true);
+    try {
+      db.exec(sql);
+    } finally {
+      setPrivateTransaction(false);
+    }
+  };
   const setOwnedObjects = (names: readonly string[]) =>
     (
       authorizer as typeof authorizer & {
@@ -332,6 +339,7 @@ export function createPluginRegistry(
     }
   };
   const metadata = <T>(work: () => T): T => {
+    resetAuthorizer();
     setMetadataMode(true);
     try {
       return work();
@@ -410,23 +418,210 @@ export function createPluginRegistry(
           pluginIdentifier(scope.pluginId, object.name).replaceAll('"', ''),
         ),
       );
-    setPrivateTransaction(true);
     try {
-      db.exec('BEGIN');
+      transactionControl('BEGIN');
       const result = work();
-      db.exec('COMMIT');
+      transactionControl('COMMIT');
       return result;
     } catch (cause) {
       try {
-        db.exec('ROLLBACK');
+        transactionControl('ROLLBACK');
       } catch {
         // The original transaction error is authoritative.
       }
       throw cause;
     } finally {
-      setPrivateTransaction(false);
       setOwnedObjects([]);
     }
+  };
+  const validateSchemaInternal = async (
+    pluginId: string,
+    descriptor: PluginDatabaseDescriptor,
+  ): Promise<void> => {
+    const physical = (name: string) =>
+      pluginIdentifier(pluginId, name).replaceAll('"', '');
+    const names = new Set(
+      descriptor.objects.map((object) => physical(object.name)),
+    );
+    setOwnedObjects([...names]);
+    try {
+      for (const table of descriptor.objects.filter(
+        (object) => object.kind === 'table',
+      )) {
+        const tableName = physical(table.name);
+        const columns = metadata(() =>
+          (
+            db.prepare(`PRAGMA table_info("${tableName}")`).all() as Array<{
+              name: string;
+            }>
+          ).map((row) => row.name),
+        );
+        const escaped = columns.map(
+          (column) => `"${column.replaceAll('"', '""')}"`,
+        );
+        const values = columns.map(() => 'NULL').join(', ');
+        resetAuthorizer();
+        db.prepare(
+          `EXPLAIN INSERT INTO "${tableName}" (${escaped.join(', ')}) VALUES (${values})`,
+        );
+        for (const column of escaped) {
+          resetAuthorizer();
+          db.prepare(`EXPLAIN UPDATE "${tableName}" SET ${column}=${column}`);
+        }
+        resetAuthorizer();
+        db.prepare(`EXPLAIN DELETE FROM "${tableName}"`);
+        const foreignKeys = metadata(
+          () =>
+            db
+              .prepare(`PRAGMA foreign_key_list("${tableName}")`)
+              .all() as Array<{ table?: string }>,
+        );
+        for (const foreignKey of foreignKeys)
+          if (foreignKey.table && !names.has(String(foreignKey.table)))
+            throw error(
+              `owned table ${table.name} references non-owned table ${String(foreignKey.table)}`,
+              'PLUGIN_DB_SCHEMA_REFERENCE',
+            );
+      }
+      for (const view of descriptor.objects.filter(
+        (object) => object.kind === 'view',
+      )) {
+        resetAuthorizer();
+        db.prepare(`EXPLAIN SELECT * FROM "${physical(view.name)}"`);
+      }
+      const triggerRows = metadata(
+        () =>
+          db
+            .prepare(
+              "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name LIKE ?",
+            )
+            .all(`${ownedNamespace(pluginId)}%`) as Array<{
+            name: string;
+            sql: string;
+          }>,
+      );
+      for (const trigger of triggerRows) {
+        const match = trigger.sql.match(
+          /\bINSTEAD\s+OF\s+(INSERT|UPDATE|DELETE)\s+ON\s+["`]?([^\s"`(]+)["`]?/i,
+        );
+        if (!match) continue;
+        const target = match[2];
+        if (!names.has(target))
+          throw error(
+            `trigger ${trigger.name} references a non-owned view ${target}`,
+            'PLUGIN_DB_SCHEMA_REFERENCE',
+          );
+        const viewColumns = metadata(() =>
+          (
+            db.prepare(`PRAGMA table_info("${target}")`).all() as Array<{
+              name: string;
+            }>
+          ).map((row) => row.name),
+        );
+        const event = match[1].toUpperCase();
+        resetAuthorizer();
+        if (event === 'INSERT') {
+          if (viewColumns.length)
+            db.prepare(
+              `EXPLAIN INSERT INTO "${target}" (${viewColumns.map((column) => `"${column}"`).join(', ')}) VALUES (${viewColumns.map(() => 'NULL').join(', ')})`,
+            );
+          else db.prepare(`EXPLAIN INSERT INTO "${target}" DEFAULT VALUES`);
+        } else if (event === 'UPDATE') {
+          for (const column of viewColumns) {
+            resetAuthorizer();
+            db.prepare(
+              `EXPLAIN UPDATE "${target}" SET "${column}"="${column}"`,
+            );
+          }
+        } else db.prepare(`EXPLAIN DELETE FROM "${target}"`);
+      }
+    } finally {
+      setOwnedObjects([]);
+    }
+  };
+  const appendOnlyMigrations = (
+    previous: PluginDatabaseDescriptor,
+    next: PluginDatabaseDescriptor,
+  ): Array<{ module: string; version: number; statements: string[] }> => {
+    const priorModules = new Map(
+      previous.modules.map((module) => [module.name, module]),
+    );
+    const appended: Array<{
+      module: string;
+      version: number;
+      statements: string[];
+    }> = [];
+    for (const module of next.modules) {
+      const priorLength = priorModules.get(module.name)?.migrations.length ?? 0;
+      for (const migration of module.migrations.slice(priorLength))
+        appended.push({
+          module: module.name,
+          version: migration.version,
+          statements: migration.statements,
+        });
+    }
+    return appended;
+  };
+  const upgradeActiveDescriptor = async (
+    pluginId: string,
+    previous: PluginDatabaseDescriptor,
+    next: PluginDatabaseDescriptor,
+    digest: string,
+  ): Promise<PluginStorageMetadata> => {
+    const appended = appendOnlyMigrations(previous, next);
+    withTransaction(
+      () => {
+        metadata(() =>
+          db
+            .prepare(
+              "UPDATE plugin_storage SET state='registered', descriptor_digest=?, descriptor_json=?, updated_at=? WHERE plugin_id=?",
+            )
+            .run(digest, canonical(next), now(), pluginId),
+        );
+        setSchemaMode(true);
+        try {
+          for (const migration of appended) {
+            for (const statement of migration.statements) {
+              resetAuthorizer();
+              db.exec(
+                formatPluginSql(
+                  pluginId,
+                  statement,
+                  next.objects.map((object) => object.name),
+                ),
+              );
+            }
+            metadata(() =>
+              db
+                .prepare(
+                  `INSERT INTO plugin_schema_versions(plugin_id,module_name,version,statements_digest)
+                   VALUES (?, ?, ?, ?) ON CONFLICT(plugin_id,module_name) DO UPDATE SET version=excluded.version, statements_digest=excluded.statements_digest`,
+                )
+                .run(
+                  pluginId,
+                  migration.module,
+                  migration.version,
+                  statementsDigest(migration.statements),
+                ),
+            );
+          }
+        } finally {
+          setSchemaMode(false);
+        }
+      },
+      { pluginId, descriptor: next },
+    );
+    await validateSchemaInternal(pluginId, next);
+    withTransaction(() => {
+      metadata(() =>
+        db
+          .prepare(
+            "UPDATE plugin_storage SET state='active', generation=generation+1, updated_at=? WHERE plugin_id=?",
+          )
+          .run(now(), pluginId),
+      );
+    });
+    return metadataFor(pluginId);
   };
   return {
     register: async (input) => {
@@ -436,6 +631,15 @@ export function createPluginRegistry(
       const digest = descriptorDigest(descriptor);
       const current = storageById(input.pluginId);
       if (current) {
+        if (
+          String(current.state) === 'tombstoned' ||
+          String(current.state) === 'reset'
+        ) {
+          throw error(
+            'plugin storage has a reset tombstone and cannot be reimported automatically',
+            'PLUGIN_DB_RESET_TOMBSTONE',
+          );
+        }
         if (String(current.legacy_path) !== legacyPath)
           throw error(
             'registered plugin descriptor or legacy source changed',
@@ -453,6 +657,13 @@ export function createPluginRegistry(
               'registered plugin descriptor or legacy source changed',
               'PLUGIN_DB_DESCRIPTOR_DRIFT',
             );
+          if (String(current.state) === 'active')
+            return upgradeActiveDescriptor(
+              input.pluginId,
+              prior,
+              descriptor,
+              digest,
+            );
           metadata(() =>
             db
               .prepare(
@@ -461,15 +672,6 @@ export function createPluginRegistry(
               .run(digest, canonical(descriptor), now(), input.pluginId),
           );
           return metadataFor(input.pluginId);
-        }
-        if (
-          String(current.state) === 'tombstoned' ||
-          String(current.state) === 'reset'
-        ) {
-          throw error(
-            'plugin storage has a reset tombstone and cannot be reimported automatically',
-            'PLUGIN_DB_RESET_TOMBSTONE',
-          );
         }
         return rowMetadata(current);
       }
@@ -602,7 +804,10 @@ export function createPluginRegistry(
         try {
           withTransaction(
             () => {
-              for (const row of pending) db.exec(row.statement_sql);
+              for (const row of pending) {
+                resetAuthorizer();
+                db.exec(row.statement_sql);
+              }
               metadata(() =>
                 db
                   .prepare(
@@ -654,6 +859,7 @@ export function createPluginRegistry(
                 );
                 continue;
               }
+              resetAuthorizer();
               db.exec(statement);
             }
             metadata(() =>
@@ -777,7 +983,6 @@ export function createPluginRegistry(
         void current;
       });
     },
-    release: async () => undefined,
     close: async () => {
       db.close();
     },
@@ -791,6 +996,7 @@ export function createPluginRegistry(
             pluginIdentifier(scope.pluginId, object.name).replaceAll('"', ''),
           ),
         );
+      resetAuthorizer();
       setMetadataMode(true);
       try {
         return work(db);
@@ -823,57 +1029,8 @@ export function createPluginRegistry(
         );
       return storedMetadata;
     },
-    validateSchema: async (pluginId) => {
-      const descriptor = descriptorFor(pluginId);
-      const physical = (name: string) =>
-        pluginIdentifier(pluginId, name).replaceAll('"', '');
-      const names = new Set(
-        descriptor.objects.map((object) => physical(object.name)),
-      );
-      setOwnedObjects([...names]);
-      try {
-        for (const table of descriptor.objects.filter(
-          (object) => object.kind === 'table',
-        )) {
-          const tableName = physical(table.name);
-          const columns = metadata(() =>
-            (
-              db.prepare(`PRAGMA table_info("${tableName}")`).all() as Array<{
-                name: string;
-              }>
-            ).map((row) => row.name),
-          );
-          const escaped = columns.map(
-            (column) => `"${column.replaceAll('"', '""')}"`,
-          );
-          const values = columns.map(() => 'NULL').join(', ');
-          db.prepare(
-            `EXPLAIN INSERT INTO "${tableName}" (${escaped.join(', ')}) VALUES (${values})`,
-          );
-          for (const column of escaped)
-            db.prepare(`EXPLAIN UPDATE "${tableName}" SET ${column}=${column}`);
-          db.prepare(`EXPLAIN DELETE FROM "${tableName}"`);
-          const foreignKeys = metadata(
-            () =>
-              db
-                .prepare(`PRAGMA foreign_key_list("${tableName}")`)
-                .all() as Array<{ table?: string }>,
-          );
-          for (const foreignKey of foreignKeys)
-            if (foreignKey.table && !names.has(String(foreignKey.table)))
-              throw error(
-                `owned table ${table.name} references non-owned table ${String(foreignKey.table)}`,
-                'PLUGIN_DB_SCHEMA_REFERENCE',
-              );
-        }
-        for (const view of descriptor.objects.filter(
-          (object) => object.kind === 'view',
-        ))
-          db.prepare(`EXPLAIN SELECT * FROM "${physical(view.name)}"`);
-      } finally {
-        setOwnedObjects([]);
-      }
-    },
+    validateSchema: async (pluginId) =>
+      validateSchemaInternal(pluginId, descriptorFor(pluginId)),
   };
 }
 

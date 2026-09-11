@@ -139,49 +139,60 @@ function trustedLegacyPath(pluginId: string): string {
             );
           }
           if (request.op === 'prepare') {
-            // Verify every caller's immutable descriptor before sharing an
-            // existing preparation. A drifted concurrent request therefore
-            // rejects deterministically instead of joining the wrong import.
-            const metadata = await coordinator.run(
-              { kind: 'core', handle: 'core' },
-              undefined,
-              () =>
-                registry.preparePluginStorage({
-                  pluginId: request.pluginId,
-                  descriptor: request.descriptor,
-                }),
-              signal,
-            );
-            if (metadata.state === 'active') return metadata;
             const prior = preparations.get(request.pluginId);
-            if (prior) return prior;
-            const descriptor = await coordinator.run(
-              { kind: 'core', handle: 'core' },
-              undefined,
-              () => registry.descriptor(request.pluginId),
-              signal,
-            );
-            const legacyPath = trustedLegacyPath(request.pluginId);
-            const task = importLegacyPluginStorage(
-              registry,
-              { pluginId: request.pluginId, descriptor, legacyPath },
-              {
-                admit: (work) =>
-                  coordinator.run(
-                    { kind: 'core', handle: 'core' },
-                    undefined,
-                    work,
-                    signal,
-                  ),
-              },
-            ).then(() =>
-              coordinator.run(
+            if (prior) {
+              await coordinator.run(
                 { kind: 'core', handle: 'core' },
                 undefined,
-                () => registry.diagnostics(request.pluginId),
+                () =>
+                  registry.preparePluginStorage({
+                    pluginId: request.pluginId,
+                    descriptor: request.descriptor,
+                  }),
                 signal,
-              ),
-            );
+              );
+              return prior;
+            }
+            const task = (async () => {
+              const metadata = await coordinator.run(
+                { kind: 'core', handle: 'core' },
+                undefined,
+                () =>
+                  registry.preparePluginStorage({
+                    pluginId: request.pluginId,
+                    descriptor: request.descriptor,
+                  }),
+                signal,
+              );
+              if (metadata.state === 'active') return metadata;
+              const descriptor = await coordinator.run(
+                { kind: 'core', handle: 'core' },
+                undefined,
+                () => registry.descriptor(request.pluginId),
+                signal,
+              );
+              const legacyPath = trustedLegacyPath(request.pluginId);
+              return importLegacyPluginStorage(
+                registry,
+                { pluginId: request.pluginId, descriptor, legacyPath },
+                {
+                  admit: (work) =>
+                    coordinator.run(
+                      { kind: 'core', handle: 'core' },
+                      undefined,
+                      work,
+                      signal,
+                    ),
+                },
+              ).then(() =>
+                coordinator.run(
+                  { kind: 'core', handle: 'core' },
+                  undefined,
+                  () => registry.diagnostics(request.pluginId),
+                  signal,
+                ),
+              );
+            })();
             preparations.set(request.pluginId, task);
             try {
               return await task;

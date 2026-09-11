@@ -268,6 +268,207 @@ describe('registered legacy plugin import', () => {
     });
   });
 
+  it('does not trust a partially published snapshot artifact on resume', async () => {
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await registry.register({
+      pluginId: 'snapshot.integrity',
+      descriptor: DESCRIPTOR,
+      legacyPath: sourceFile,
+    });
+    await expect(
+      importLegacyPluginStorage(
+        registry,
+        {
+          pluginId: 'snapshot.integrity',
+          descriptor: DESCRIPTOR,
+          legacyPath: sourceFile,
+        },
+        {
+          chunkSize: 1,
+          afterChunk: () => {
+            throw new Error('snapshot interruption');
+          },
+        },
+      ),
+    ).rejects.toThrow('snapshot interruption');
+    const { progress } = registry.diagnostics('snapshot.integrity');
+    expect(progress?.snapshotPath).toBeTruthy();
+    fs.writeFileSync(progress!.snapshotPath, 'incomplete backup');
+    await expect(
+      importLegacyPluginStorage(registry, {
+        pluginId: 'snapshot.integrity',
+        descriptor: DESCRIPTOR,
+        legacyPath: sourceFile,
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_DB_IMPORT_SNAPSHOT_INVALID' });
+    if (fs.existsSync(progress!.snapshotPath))
+      fs.rmSync(progress!.snapshotPath);
+  });
+
+  it('cleans an interrupted native snapshot before progress publication', async () => {
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await registry.register({
+      pluginId: 'snapshot.before-publish',
+      descriptor: DESCRIPTOR,
+      legacyPath: sourceFile,
+    });
+    let temporaryPath = '';
+    let finalPath = '';
+    await expect(
+      importLegacyPluginStorage(
+        registry,
+        {
+          pluginId: 'snapshot.before-publish',
+          descriptor: DESCRIPTOR,
+          legacyPath: sourceFile,
+        },
+        {
+          beforeSnapshotPublish(temporary, snapshot) {
+            temporaryPath = temporary;
+            finalPath = snapshot;
+            throw new Error('snapshot publication interruption');
+          },
+        },
+      ),
+    ).rejects.toThrow('snapshot publication interruption');
+    expect(fs.existsSync(temporaryPath)).toBe(false);
+    expect(fs.existsSync(finalPath)).toBe(false);
+    expect(registry.diagnostics('snapshot.before-publish').state).toBe(
+      'registered',
+    );
+    expect(
+      registry.diagnostics('snapshot.before-publish').progress,
+    ).toBeUndefined();
+
+    await importLegacyPluginStorage(registry, {
+      pluginId: 'snapshot.before-publish',
+      descriptor: DESCRIPTOR,
+      legacyPath: sourceFile,
+    });
+    expect(registry.diagnostics('snapshot.before-publish').state).toBe(
+      'active',
+    );
+  });
+
+  it('rejects a source whose old version contains a later registered column', async () => {
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [
+        { name: 'items', kind: 'table' },
+        { name: 'schema_meta', kind: 'table' },
+      ],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{items}} (id INTEGER PRIMARY KEY, name TEXT)',
+                'CREATE TABLE {{schema_meta}} (module TEXT PRIMARY KEY, version INTEGER NOT NULL)',
+              ],
+            },
+            {
+              version: 1,
+              statements: ['ALTER TABLE {{items}} ADD COLUMN note TEXT'],
+            },
+          ],
+        },
+      ],
+      legacy: {
+        tables: [
+          { name: 'items', columns: ['id', 'name', 'note'] },
+          { name: 'schema_meta', columns: ['module', 'version'] },
+        ],
+        versionTable: 'schema_meta',
+      },
+    });
+    source.close();
+    for (const candidate of [
+      sourceFile,
+      `${sourceFile}-wal`,
+      `${sourceFile}-shm`,
+    ])
+      if (fs.existsSync(candidate)) fs.rmSync(candidate);
+    source = new Database(sourceFile);
+    source.exec(
+      "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, note TEXT); CREATE TABLE schema_meta (module TEXT PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO schema_meta(module, version) VALUES ('base', 0); INSERT INTO items VALUES (1, 'old', 'future')",
+    );
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await registry.register({
+      pluginId: 'legacy.future-column',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    await expect(
+      importLegacyPluginStorage(registry, {
+        pluginId: 'legacy.future-column',
+        descriptor,
+        legacyPath: sourceFile,
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH' });
+  });
+
+  it('rejects an unregistered source version gap before copying rows', async () => {
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [
+        { name: 'items', kind: 'table' },
+        { name: 'schema_meta', kind: 'table' },
+        { name: 'items_index', kind: 'index' },
+      ],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{items}} (id INTEGER PRIMARY KEY)',
+                'CREATE TABLE {{schema_meta}} (module TEXT PRIMARY KEY, version INTEGER NOT NULL)',
+              ],
+            },
+            {
+              version: 2,
+              statements: ['CREATE INDEX {{items_index}} ON {{items}} (id)'],
+            },
+          ],
+        },
+      ],
+      legacy: {
+        tables: [
+          { name: 'items', columns: ['id'] },
+          { name: 'schema_meta', columns: ['module', 'version'] },
+        ],
+        versionTable: 'schema_meta',
+      },
+    });
+    source.close();
+    for (const candidate of [
+      sourceFile,
+      `${sourceFile}-wal`,
+      `${sourceFile}-shm`,
+    ])
+      if (fs.existsSync(candidate)) fs.rmSync(candidate);
+    source = new Database(sourceFile);
+    source.exec(
+      "CREATE TABLE items (id INTEGER PRIMARY KEY); CREATE TABLE schema_meta (module TEXT PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO schema_meta(module, version) VALUES ('base', 1); INSERT INTO items VALUES (1)",
+    );
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await registry.register({
+      pluginId: 'legacy.version-gap',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    await expect(
+      importLegacyPluginStorage(registry, {
+        pluginId: 'legacy.version-gap',
+        descriptor,
+        legacyPath: sourceFile,
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH' });
+  });
+
   it('rejects unknown legacy columns instead of silently dropping data', async () => {
     source.prepare('ALTER TABLE profiles ADD COLUMN undocumented TEXT').run();
     source.exec('CREATE TABLE undocumented_legacy (id TEXT)');
@@ -291,6 +492,54 @@ describe('registered legacy plugin import', () => {
         legacyPath: sourceFile,
       }),
     ).rejects.toMatchObject({ code: 'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH' });
+  });
+
+  it('does not execute ATTACH side effects while reconstructing registered history', async () => {
+    source.close();
+    for (const candidate of [
+      sourceFile,
+      `${sourceFile}-wal`,
+      `${sourceFile}-shm`,
+    ])
+      if (fs.existsSync(candidate)) fs.rmSync(candidate);
+    source = new Database(sourceFile);
+    const outside = tempPath('kiagent-import-attach-outside');
+    const escapedOutside = outside.replaceAll("'", "''");
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                `ATTACH '${escapedOutside}' AS outside`,
+                'CREATE TABLE outside.leaked (value TEXT)',
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: { tables: [] },
+    });
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await registry.register({
+      pluginId: 'unsafe.attach',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    await expect(
+      importLegacyPluginStorage(registry, {
+        pluginId: 'unsafe.attach',
+        descriptor,
+        legacyPath: sourceFile,
+      }),
+    ).rejects.toThrow();
+    expect(fs.existsSync(outside)).toBe(false);
+    for (const candidate of [outside, `${outside}-wal`, `${outside}-shm`])
+      if (fs.existsSync(candidate)) fs.rmSync(candidate);
   });
 
   it('persists a mid-table 500-row boundary and resumes through a new registry while core work runs between chunks', async () => {
@@ -604,6 +853,9 @@ describe('registered legacy plugin import', () => {
     source
       .prepare('INSERT INTO hidden(value) VALUES (?)')
       .run('preserve-rowid');
+    source
+      .prepare('INSERT INTO hidden(value) VALUES (?)')
+      .run('preserve-rowid-2');
     source.prepare('DELETE FROM hidden WHERE value = ?').run('deleted');
     source
       .prepare('INSERT INTO composite(a, b, payload) VALUES (?, ?, ?)')
@@ -635,7 +887,10 @@ describe('registered legacy plugin import', () => {
             .all(),
         scope,
       ),
-    ).toEqual([{ rowid: 2n, value: 'preserve-rowid' }]);
+    ).toEqual([
+      { rowid: 2n, value: 'preserve-rowid' },
+      { rowid: 3n, value: 'preserve-rowid-2' },
+    ]);
     expect(
       registry.host(
         (db) =>
@@ -667,5 +922,60 @@ describe('registered legacy plugin import', () => {
         scope,
       ),
     ).toEqual([]);
+  });
+
+  it('imports a table with a user rowid column through its unshadowed alias', async () => {
+    const descriptor = parseDatabaseDescriptor({
+      format: 1,
+      objects: [{ name: 'shadowed', kind: 'table' }],
+      modules: [
+        {
+          name: 'base',
+          migrations: [
+            {
+              version: 0,
+              statements: [
+                'CREATE TABLE {{shadowed}} (rowid TEXT, value TEXT)',
+              ],
+            },
+          ],
+        },
+      ],
+      legacy: { tables: [{ name: 'shadowed', columns: ['rowid', 'value'] }] },
+    });
+    source.close();
+    for (const candidate of [
+      sourceFile,
+      `${sourceFile}-wal`,
+      `${sourceFile}-shm`,
+    ])
+      if (fs.existsSync(candidate)) fs.rmSync(candidate);
+    source = new Database(sourceFile);
+    source.prepare('CREATE TABLE shadowed (rowid TEXT, value TEXT)').run();
+    source
+      .prepare('INSERT INTO shadowed(rowid, value) VALUES (?, ?)')
+      .run('user-rowid', 'preserved');
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    await registry.register({
+      pluginId: 'legacy.shadowed-rowid',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    await importLegacyPluginStorage(registry, {
+      pluginId: 'legacy.shadowed-rowid',
+      descriptor,
+      legacyPath: sourceFile,
+    });
+    expect(
+      registry.host(
+        (db) =>
+          db
+            .prepare(
+              'SELECT "rowid", value FROM "p_6c65676163792e736861646f7765642d726f776964__shadowed"',
+            )
+            .all(),
+        { pluginId: 'legacy.shadowed-rowid', descriptor },
+      ),
+    ).toEqual([{ rowid: 'user-rowid', value: 'preserved' }]);
   });
 });
