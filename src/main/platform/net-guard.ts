@@ -233,7 +233,7 @@ export async function readBoundedBody(
   const limit = `${Math.floor(maxBytes / (1024 * 1024))} MiB`;
   const declared = res.headers.get('content-length');
   if (declared && Number(declared) > maxBytes) {
-    await res.body?.cancel().catch(() => {});
+    void res.body?.cancel().catch(() => {});
     throw new Error(`net.fetch: response exceeds the ${limit} limit`);
   }
   if (!res.body) {
@@ -305,6 +305,54 @@ function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   });
 }
 
+function raceAbortWork<T>(
+  work: () => Promise<T>,
+  signal: AbortSignal | undefined,
+  onLate: (value: T) => void,
+): Promise<T> {
+  if (!signal) return work();
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      reject(abortError());
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    let promise: Promise<T>;
+    try {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      promise = work();
+    } catch (error) {
+      signal.removeEventListener('abort', onAbort);
+      settled = true;
+      reject(error);
+      return;
+    }
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        if (settled) onLate(value);
+        else {
+          settled = true;
+          resolve(value);
+        }
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      },
+    );
+  });
+}
+
 function cancelOnAbort(res: Response, signal?: AbortSignal): () => void {
   if (!signal || !res.body) return () => {};
   const cancel = () => {
@@ -370,15 +418,17 @@ export function createNetFetch(options: NetFetchOptions = {}) {
 
     for (let hop = 0; ; hop += 1) {
       // eslint-disable-next-line no-await-in-loop
-      const res = await raceAbort(
-        fetchImpl(target, {
-          method,
-          headers,
-          body: body as BodyInit | undefined,
-          redirect: 'manual',
-          signal,
-        }),
+      const res = await raceAbortWork(
+        () =>
+          fetchImpl(target, {
+            method,
+            headers,
+            body: body as BodyInit | undefined,
+            redirect: 'manual',
+            signal,
+          }),
         signal,
+        (late) => void late.body?.cancel().catch(() => {}),
       );
 
       const location = res.headers.get('location');
@@ -394,7 +444,7 @@ export function createNetFetch(options: NetFetchOptions = {}) {
 
       if (hop >= maxRedirects) {
         // eslint-disable-next-line no-await-in-loop
-        await res.body?.cancel();
+        void res.body?.cancel().catch(() => {});
         throw new NetDestinationError(
           `net.fetch: too many redirects (over ${maxRedirects}) starting at ${origin}`,
         );

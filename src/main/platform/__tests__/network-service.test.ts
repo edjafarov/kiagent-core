@@ -4,6 +4,20 @@ import { createNetFetch, readBoundedBody, type LookupFn } from '../net-guard';
 
 const lookup: LookupFn = async () => ['93.184.216.34'];
 
+async function settleWithin<T>(promise: Promise<T>, ms = 100): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('settlement timeout')), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function response(status: number, body: ReadableStream<Uint8Array>): Response {
   return new Response(body, { status, statusText: 'OK' });
 }
@@ -237,6 +251,174 @@ describe('createNetworkService', () => {
 
     await expect(service.fetch('https://example.com/redirect')).rejects.toThrow();
     expect(cancelCount).toBe(1);
+    service.dispose();
+  });
+
+  it('cancels a body after a denied redirect', async () => {
+    let cancelCount = 0;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelCount += 1;
+      },
+    });
+    const service = createNetworkService({
+      owner: 'plugin.example',
+      log: jest.fn(),
+      fetch: createNetFetch({
+        lookup,
+        fetchImpl: (async () =>
+          new Response(body, {
+            status: 302,
+            headers: { location: 'http://127.0.0.1:7421/private' },
+          })) as typeof fetch,
+      }),
+    });
+
+    await expect(service.fetch('https://example.com/redirect')).rejects.toThrow(
+      /loopback/,
+    );
+    expect(cancelCount).toBe(1);
+    service.dispose();
+  });
+
+  it('settles declared overflow without waiting for a stalled cancel', async () => {
+    let cancelCount = 0;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelCount += 1;
+        return new Promise<void>(() => {});
+      },
+    });
+    const service = createNetworkService({
+      owner: 'plugin.example',
+      log: jest.fn(),
+      fetch: createNetFetch({
+        lookup,
+        fetchImpl: (async () =>
+          new Response(body, {
+            status: 200,
+            headers: { 'content-length': String(60 * 1024 * 1024) },
+          })) as typeof fetch,
+      }),
+    });
+
+    await expect(
+      settleWithin(service.fetch('https://example.com/declared-overflow')),
+    ).rejects.toThrow(/response exceeds/);
+    expect(cancelCount).toBe(1);
+    service.dispose();
+  });
+
+  it('settles streamed overflow without waiting for a stalled cancel', async () => {
+    let cancelCount = 0;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2]));
+      },
+      cancel() {
+        cancelCount += 1;
+        return new Promise<void>(() => {});
+      },
+    });
+    const service = createNetworkService({
+      owner: 'plugin.example',
+      log: jest.fn(),
+      fetch: createNetFetch({
+        lookup,
+        maxBytes: 1,
+        fetchImpl: (async () => new Response(body)) as typeof fetch,
+      }),
+    });
+
+    await expect(
+      settleWithin(service.fetch('https://example.com/stream-overflow')),
+    ).rejects.toThrow(/response exceeds/);
+    expect(cancelCount).toBe(1);
+    service.dispose();
+  });
+
+  it('settles redirect-cap errors without waiting for a stalled cancel', async () => {
+    let cancelCount = 0;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelCount += 1;
+        return new Promise<void>(() => {});
+      },
+    });
+    const service = createNetworkService({
+      owner: 'plugin.example',
+      log: jest.fn(),
+      fetch: createNetFetch({
+        lookup,
+        maxRedirects: 0,
+        fetchImpl: (async () =>
+          new Response(body, {
+            status: 302,
+            headers: { location: 'https://example.com/next' },
+          })) as typeof fetch,
+      }),
+    });
+
+    await expect(
+      settleWithin(service.fetch('https://example.com/redirect-cap')),
+    ).rejects.toThrow(/too many redirects/);
+    expect(cancelCount).toBe(1);
+    service.dispose();
+  });
+
+  it('cancels a late native response body after the request already aborts', async () => {
+    let resolveFetch!: (response: Response) => void;
+    let markStarted!: () => void;
+    let cancelCount = 0;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelCount += 1;
+      },
+    });
+    const controller = new AbortController();
+    const netFetch = createNetFetch({
+      lookup,
+      fetchImpl: (async () =>
+        await new Promise<Response>((resolve) => {
+          markStarted();
+          resolveFetch = resolve;
+        })) as typeof fetch,
+    });
+    const pending = netFetch('https://example.com/late-response', {
+      signal: controller.signal,
+    });
+    await started;
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    resolveFetch(new Response(body));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(cancelCount).toBe(1);
+  });
+
+  it('removes caller signal listeners after a completed request', async () => {
+    const controller = new AbortController();
+    const add = jest.spyOn(controller.signal, 'addEventListener');
+    const remove = jest.spyOn(controller.signal, 'removeEventListener');
+    const service = createNetworkService({
+      owner: 'plugin.example',
+      log: jest.fn(),
+      fetch: async () => ({
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        body: new Uint8Array(),
+      }),
+    });
+
+    await service.fetch('https://example.com/listeners', {
+      signal: controller.signal,
+    });
+    expect(add).toHaveBeenCalled();
+    expect(remove.mock.calls.length).toBeGreaterThanOrEqual(add.mock.calls.length);
     service.dispose();
   });
 
