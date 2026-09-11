@@ -4,22 +4,11 @@ import { attachDbHost, createDbClient } from '@main/db/bridge';
 import { MessageChannel } from 'node:worker_threads';
 import { createDbCoordinator } from '../coordinator';
 import { openPluginConnection } from '../plugin-connections';
-import { createPluginOperationHandler } from '../plugin-operations';
+import { closePluginConnectionForOwner, createPluginOperationHandler } from '../plugin-operations';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
-
-async function closeFailedPluginOwner(
-  owner: { kind: 'core' | 'plugin'; handle?: string; extensionId?: string },
-  connections: Map<string, Awaited<ReturnType<typeof openPluginConnection>>>,
-): Promise<void> {
-  if (owner.kind !== 'plugin') return;
-  const key = owner.handle ?? owner.extensionId!;
-  const connection = connections.get(key);
-  connections.delete(key);
-  try { await connection?.close(); } catch { /* preserve the rollback error */ }
-}
 
 describe('plugin bridge requests', () => {
   it('routes a host-authorized plugin request through AppDb.plugin', async () => {
@@ -133,9 +122,11 @@ describe('plugin bridge requests', () => {
     // A successful repair leaves the owner reusable. If cleanup had to poison
     // it, the only accepted outcome is an explicit terminal owner state.
     let freshError: unknown;
+    let freshSucceeded = false;
     try {
       const fresh = (await client.plugin?.({ op: 'begin', owner })) as string;
       await client.plugin?.({ op: 'rollback', owner, token: fresh });
+      freshSucceeded = true;
     } catch (error) {
       freshError = error;
     }
@@ -147,7 +138,7 @@ describe('plugin bridge requests', () => {
     channel.port1.close();
     channel.port2.close();
     for (const p of [file, `${file}-wal`, `${file}-shm`]) if (fs.existsSync(p)) fs.rmSync(p);
-    expect(freshError).toMatchObject({
+    if (!freshSucceeded) expect(freshError).toMatchObject({
       code: expect.stringMatching(/^DB_(?:OWNER_POISONED|PLUGIN_DB_NOT_OPEN)$/),
     });
   });
@@ -162,7 +153,7 @@ describe('plugin bridge requests', () => {
     const connections = new Map<string, Awaited<ReturnType<typeof openPluginConnection>>>();
     const coordinator = createDbCoordinator({
       leaseMs: 15,
-      onOwnerFailure: (owner) => closeFailedPluginOwner(owner, connections),
+      onOwnerFailure: (owner) => closePluginConnectionForOwner(owner, connections),
     });
     const bad = { kind: 'plugin' as const, extensionId: 'p', handle: 'expired-owner' };
     const good = { kind: 'plugin' as const, extensionId: 'p', handle: 'foreign-owner' };

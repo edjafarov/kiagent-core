@@ -104,7 +104,7 @@ export function createDbCoordinator(options: { leaseMs?: number; onOwnerFailure?
       pendingBegin = true;
       const token = randomUUID();
       try { await enqueue(owner, undefined, async () => {
-        const started = active = { owner, token, rollback, expires: Date.now() + leaseMs };
+        const started: Active = active = { owner, token, rollback, expires: Date.now() + leaseMs };
         started.timer = setTimeout(() => { void pump(); }, leaseMs + 1);
         started.timer.unref?.();
         try {
