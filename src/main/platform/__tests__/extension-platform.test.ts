@@ -24,6 +24,11 @@ import {
 } from '../extension-platform';
 import { runExtensionHost } from '../extension-host-entry';
 import { createInMemoryHostPair } from '../transport';
+import {
+  createFileRootRegistry,
+  createFileRootsPersistence,
+  restoreFileRootsFromFile,
+} from '../file-roots';
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'ext-basic');
 const FIXTURE_UNDECLARED = path.join(
@@ -1488,6 +1493,90 @@ describe('createExtensionPlatform', () => {
         ...overrides,
       });
     }
+
+    it('restores persisted roots before first host activation and scopes them by plugin id', async () => {
+      const ownerId = 'test.restored-root';
+      const otherId = 'test.other-root';
+      const rootPath = path.join(tmp, 'approved-root');
+      const bundledRoot = path.join(tmp, 'persisted-bundled');
+      fs.mkdirSync(rootPath, { recursive: true });
+      fs.mkdirSync(path.join(bundledRoot, ownerId), { recursive: true });
+      fs.mkdirSync(path.join(bundledRoot, otherId), { recursive: true });
+
+      const beforeRestart = createFileRootRegistry();
+      await beforeRestart.grant(ownerId, rootPath, {
+        id: 'persisted-root-id',
+        name: 'Restored',
+        writable: true,
+      });
+      await createFileRootsPersistence(
+        path.join(tmp, 'file-roots.json'),
+        beforeRestart,
+      )();
+      const afterRestart = createFileRootRegistry();
+      await restoreFileRootsFromFile(
+        path.join(tmp, 'file-roots.json'),
+        afterRestart,
+      );
+
+      for (const [id, contributions] of [
+        [
+          ownerId,
+          [
+            [
+              `${ownerId}.stat`,
+              `async () => host.files.stat({ root: 'persisted-root-id', rel: '' })`,
+            ],
+          ],
+        ],
+        [
+          otherId,
+          [
+            [`${otherId}.roots`, `async () => host.files.roots()`],
+            [
+              `${otherId}.stat`,
+              `async () => host.files.stat({ root: 'persisted-root-id', rel: '' })`,
+            ],
+          ],
+        ],
+      ] as const) {
+        fs.writeFileSync(
+          path.join(bundledRoot, id, 'manifest.json'),
+          JSON.stringify({
+            id,
+            name: id,
+            version: '1.0.0',
+            engine: '^2.0.0',
+            entry: 'index.js',
+            caps: ['files'],
+            contributes: {
+              tools: contributions.map(([toolName]) => toolName),
+              senders: [],
+            },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(bundledRoot, id, 'index.js'),
+          `module.exports = { async activate(host) { return { sources: [], tools: [${contributions.map(([toolName, body]) => `{ name: '${toolName}', description: '', inputSchema: {}, call: ${body} }`).join(',')}] }; } };`,
+        );
+      }
+
+      platform = makePlatform({
+        bundledDir: bundledRoot,
+        fileRoots: afterRestart,
+      });
+      await platform.start();
+
+      await expect(
+        tools.get(`${ownerId}.stat`)!.call({}),
+      ).resolves.toMatchObject({ kind: 'directory' });
+      await expect(tools.get(`${otherId}.roots`)!.call({})).resolves.toEqual(
+        [],
+      );
+      await expect(tools.get(`${otherId}.stat`)!.call({})).rejects.toThrow(
+        /unknown|revoked|root/i,
+      );
+    });
 
     it('discovers, auto-consents, and activates a bundled extension', async () => {
       platform = makeBundledPlatform({ marker: 7 });

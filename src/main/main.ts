@@ -1,5 +1,4 @@
 import fs from 'fs';
-import fsp from 'node:fs/promises';
 import path from 'path';
 import v8 from 'v8';
 
@@ -71,7 +70,11 @@ import {
   PROFILE_STORAGE_VERSION,
 } from './platform/profile-storage-version';
 import { utilityProcessTransport } from './platform/transport';
-import { createFileRootRegistry } from './platform/file-roots';
+import {
+  createFileRootRegistry,
+  createFileRootsPersistence,
+  restoreFileRootsFromFile,
+} from './platform/file-roots';
 import {
   createOutboundService,
   type OutboundService,
@@ -764,25 +767,13 @@ app
     const dataDir = path.join(app.getPath('userData'), 'data');
     fs.mkdirSync(dataDir, { recursive: true });
     const fileRootsPath = path.join(app.getPath('userData'), 'file-roots.json');
-    try {
-      const records = JSON.parse(await fsp.readFile(fileRootsPath, 'utf8'));
-      if (Array.isArray(records)) await fileRoots.restore(records);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-        log.warn('[file-roots] unable to restore persisted grants', error);
-    }
-    let fileRootsWrite = Promise.resolve();
-    const persistFileRoots = async () => {
-      fileRootsWrite = fileRootsWrite.then(async () => {
-        const temporary = `${fileRootsPath}.${process.pid}.tmp`;
-        await fsp.writeFile(
-          temporary,
-          JSON.stringify(fileRoots.snapshot(), null, 2),
-        );
-        await fsp.rename(temporary, fileRootsPath);
-      });
-      await fileRootsWrite;
-    };
+    await restoreFileRootsFromFile(fileRootsPath, fileRoots, (error) =>
+      log.warn('[file-roots] unable to restore persisted grants', error),
+    );
+    const persistFileRoots = createFileRootsPersistence(
+      fileRootsPath,
+      fileRoots,
+    );
     const act = createActivityLog(dataDir);
     activity = act;
     const enc = makeEncryption();

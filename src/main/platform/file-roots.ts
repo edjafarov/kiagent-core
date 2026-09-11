@@ -34,6 +34,37 @@ export interface FileRootRegistry {
   ): Promise<void>;
 }
 
+export async function restoreFileRootsFromFile(
+  filePath: string,
+  registry: FileRootRegistry,
+  onError: (error: unknown) => void = () => undefined,
+): Promise<void> {
+  try {
+    const records = JSON.parse(await fsp.readFile(filePath, 'utf8'));
+    if (Array.isArray(records)) await registry.restore(records);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') onError(error);
+  }
+}
+
+export function createFileRootsPersistence(
+  filePath: string,
+  registry: FileRootRegistry,
+): () => Promise<void> {
+  let write = Promise.resolve();
+  return async () => {
+    write = write.then(async () => {
+      const temporary = `${filePath}.${process.pid}.tmp`;
+      await fsp.writeFile(
+        temporary,
+        JSON.stringify(registry.snapshot(), null, 2),
+      );
+      await fsp.rename(temporary, filePath);
+    });
+    await write;
+  };
+}
+
 export interface PersistedFileRoot {
   pluginId: string;
   id: string;
