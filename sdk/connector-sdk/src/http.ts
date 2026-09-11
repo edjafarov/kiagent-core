@@ -57,6 +57,38 @@ const realSleep = (ms: number): Promise<void> =>
     setTimeout(resolve, ms);
   });
 
+function sleepWithSignal(
+  sleep: (ms: number) => Promise<void>,
+  ms: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (!signal) return sleep(ms);
+  if (signal.aborted) {
+    const error = new Error('The operation was aborted');
+    error.name = 'AbortError';
+    return Promise.reject(error);
+  }
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener('abort', abort);
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    sleep(ms).then(
+      () => {
+        signal.removeEventListener('abort', abort);
+        resolve();
+      },
+      (error) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /** Clamped Retry-After milliseconds for a 429 (missing/non-numeric → default).
  *
  *  Retry-After may be absent or a non-numeric HTTP-date; neither must collapse
@@ -117,7 +149,11 @@ export async function requestWithRetry(
         );
       transient += 1;
       // eslint-disable-next-line no-await-in-loop
-      await sleep(backoffMs * 2 ** (transient - 1));
+      await sleepWithSignal(
+        sleep,
+        backoffMs * 2 ** (transient - 1),
+        policy.signal,
+      );
       continue;
     }
     if (res.status === 429) {
@@ -127,7 +163,7 @@ export async function requestWithRetry(
         );
       rateLimited += 1;
       // eslint-disable-next-line no-await-in-loop
-      await sleep(retryAfterMs(res.headers, policy));
+      await sleepWithSignal(sleep, retryAfterMs(res.headers, policy), policy.signal);
       continue;
     }
     if (res.status >= 500) {
@@ -137,7 +173,11 @@ export async function requestWithRetry(
         );
       transient += 1;
       // eslint-disable-next-line no-await-in-loop
-      await sleep(backoffMs * 2 ** (transient - 1));
+      await sleepWithSignal(
+        sleep,
+        backoffMs * 2 ** (transient - 1),
+        policy.signal,
+      );
       continue;
     }
     return res;

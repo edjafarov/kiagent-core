@@ -246,27 +246,29 @@ export async function readBoundedBody(
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    // eslint-disable-next-line no-await-in-loop
-    let read: Promise<ReadableStreamReadResult<Uint8Array>>;
-    try {
-      read = reader.read();
-      const { done, value } = await raceAbort(read, signal);
-      if (done) break;
-      if (value) {
-        total += value.byteLength;
-        if (total > maxBytes) {
-          await reader.cancel();
-          throw new Error(`net.fetch: response exceeds the ${limit} limit`);
+  try {
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      let read: Promise<ReadableStreamReadResult<Uint8Array>>;
+      try {
+        read = reader.read();
+        const { done, value } = await raceAbort(read, signal);
+        if (done) break;
+        if (value) {
+          total += value.byteLength;
+          if (total > maxBytes) {
+            void reader.cancel().catch(() => {});
+            throw new Error(`net.fetch: response exceeds the ${limit} limit`);
+          }
+          chunks.push(value);
         }
-        chunks.push(value);
+      } catch (error) {
+        if (signal?.aborted) void reader.cancel().catch(() => {});
+        throw error;
       }
-    } catch (error) {
-      if (signal?.aborted) {
-        await reader.cancel().catch(() => {});
-      }
-      throw error;
     }
+  } finally {
+    reader.releaseLock();
   }
   const out = new Uint8Array(total);
   let offset = 0;
@@ -398,17 +400,17 @@ export function createNetFetch(options: NetFetchOptions = {}) {
         );
       }
 
-      const next = new URL(location, target);
       const removeCancel = cancelOnAbort(res, signal);
-      // eslint-disable-next-line no-await-in-loop
       let parsed: URL;
       try {
+        const next = new URL(location, target);
         parsed = await raceAbort(
           assertAllowedUrl(next.toString(), lookup),
           signal,
         );
       } finally {
         removeCancel();
+        void res.body?.cancel().catch(() => {});
       }
       if (parsed.origin !== origin) {
         headers = Object.fromEntries(
@@ -427,7 +429,6 @@ export function createNetFetch(options: NetFetchOptions = {}) {
       }
       target = parsed.toString();
       // eslint-disable-next-line no-await-in-loop
-      await raceAbort(res.body?.cancel() ?? Promise.resolve(), signal);
     }
   };
 }

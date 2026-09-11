@@ -46,14 +46,50 @@ function timeoutValue(value: number | undefined): number {
   const timeoutMs = value ?? DEFAULT_TIMEOUT_MS;
   if (
     !Number.isFinite(timeoutMs) ||
-    timeoutMs <= 0 ||
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 1 ||
     timeoutMs > MAX_TIMEOUT_MS
   ) {
     throw new RangeError(
       `timeoutMs must be finite and between 1 and ${MAX_TIMEOUT_MS}`,
     );
   }
-  return Math.floor(timeoutMs);
+  return timeoutMs;
+}
+
+function raceDependency<T>(
+  work: Promise<T>,
+  signal: AbortSignal,
+  onLate: (value: T) => void,
+): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const abort = () => {
+      if (!settled) {
+        settled = true;
+        reject(abortError());
+      }
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        if (settled) onLate(value);
+        else {
+          settled = true;
+          resolve(value);
+        }
+      },
+      (error) => {
+        signal.removeEventListener('abort', abort);
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      },
+    );
+  });
 }
 
 function combinedSignal(
@@ -97,6 +133,7 @@ export function createNetworkService(
         once: true,
       });
       const timer = setTimeout(() => deadline.abort(), timeoutMs);
+      if (combined.signal.aborted) deadline.abort();
       const requestInit: NetFetchInit = {
         method: init.method,
         headers: init.headers,
@@ -104,7 +141,12 @@ export function createNetworkService(
         signal: deadline.signal,
       };
       try {
-        const result = await fetchImpl(url, requestInit);
+        if (deadline.signal.aborted) throw abortError();
+        const result = await raceDependency(
+          fetchImpl(url, requestInit),
+          deadline.signal,
+          () => {},
+        );
         options.log({
           owner: options.owner,
           operation: 'fetch',
