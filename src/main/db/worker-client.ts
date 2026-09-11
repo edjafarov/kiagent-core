@@ -49,6 +49,10 @@ export interface OpenDbInWorkerOptions {
    *  worker entry (or a test fixture) under ts-node, mirroring the spawn in
    *  db-worker.test.ts. */
   execArgv?: string[];
+  /** Host-validated legacy sources keyed by immutable plugin id. This map is
+   * worker startup data; plugin requests select an id only and cannot provide
+   * filesystem paths. */
+  pluginSources?: Readonly<Record<string, string>>;
 }
 
 /** Spawn `workerFile` and wait for its ready/open-error handshake. Used both
@@ -61,7 +65,7 @@ function spawnWorker(
   opts: OpenDbInWorkerOptions,
 ): { worker: Worker; ready: Promise<void> } {
   const worker = new Worker(workerFile, {
-    workerData: { dbPath },
+    workerData: { dbPath, pluginSources: opts.pluginSources },
     execArgv: opts.execArgv,
   });
 
@@ -275,7 +279,8 @@ export async function openDbInWorker(
     run: (sql, params) => guard((c) => c.run(sql, params)),
     batch: (steps) => guard((c) => c.batch(steps)),
     proc: (name, args) => guard((c) => c.proc!(name, args)),
-    plugin: (request: PluginDbRequest, options?: { signal?: AbortSignal }) => guard((c) => c.plugin!(request, options)),
+    plugin: (request: PluginDbRequest, options?: { signal?: AbortSignal }) =>
+      guard((c) => c.plugin!(request, options)),
     isOpen: () => !permanentlyDead && !respawning && client.isOpen(),
     close: async () => {
       intentionalClose = true;
