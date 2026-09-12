@@ -64,7 +64,17 @@ import { createUpdateNotifier } from './updater/native-notify';
 import { subscribeUpdaterState, updaterInvokeHandlers } from './updater/ipc';
 import { createExtensionPlatform } from './platform/extension-platform';
 import type { ExtensionPlatform } from './platform/extension-platform';
+import {
+  assertProfileStorageVersion,
+  markProfileStorageVersion,
+  PROFILE_STORAGE_VERSION,
+} from './platform/profile-storage-version';
 import { utilityProcessTransport } from './platform/transport';
+import {
+  createFileRootRegistry,
+  createFileRootsPersistence,
+  restoreFileRootsFromFile,
+} from './platform/file-roots';
 import {
   createOutboundService,
   type OutboundService,
@@ -96,6 +106,7 @@ let mainWindow: BrowserWindow | null = null;
 let platform: CorePlatform | null = null;
 let mcp: McpServerHandle | null = null;
 let extensionsPlatform: ExtensionPlatform | null = null;
+const fileRoots = createFileRootRegistry();
 let bundledProviders: {
   localLlm: LocalLlmProvider;
   localAsr: LocalAsrProvider;
@@ -559,6 +570,7 @@ function registerIpc(
         docCount: await p.store.read.count({ includeArchived: true }),
         accountCount: accounts.filter((a) => a.source !== 'worker').length,
         dataDir,
+        dbDiagnostics: (await p.db.plugin?.({ op: 'diagnostics' })) ?? null,
       };
     },
     'maintenance:compact': () => p.store.maintenance.compact(),
@@ -586,7 +598,8 @@ function registerIpc(
         if (account.source === 'worker') continue;
         await p.engine.pause(account.id).catch(() => {});
       }
-      await p.store.maintenance.resetAll();
+      if (extensionsPlatform) await extensionsPlatform.resetAll();
+      else await p.store.maintenance.resetAll();
       // A factory reset is THE legitimate un-latch: the get-started checklist
       // must come back for the now-empty app. Configuration prefs (theme,
       // processing) survive — only the onboarding latches reset.
@@ -747,8 +760,20 @@ app
       log,
     });
     if (move === 'moving') return; // quitting; relaunches from /Applications
+    await assertProfileStorageVersion(
+      app.getPath('userData'),
+      PROFILE_STORAGE_VERSION,
+    );
     const dataDir = path.join(app.getPath('userData'), 'data');
     fs.mkdirSync(dataDir, { recursive: true });
+    const fileRootsPath = path.join(app.getPath('userData'), 'file-roots.json');
+    await restoreFileRootsFromFile(fileRootsPath, fileRoots, (error) =>
+      log.warn('[file-roots] unable to restore persisted grants', error),
+    );
+    const persistFileRoots = createFileRootsPersistence(
+      fileRootsPath,
+      fileRoots,
+    );
     const act = createActivityLog(dataDir);
     activity = act;
     const enc = makeEncryption();
@@ -767,6 +792,10 @@ app
       env: schedulerEnv,
       dbWorkerFile,
     });
+    await markProfileStorageVersion(
+      app.getPath('userData'),
+      PROFILE_STORAGE_VERSION,
+    );
     const p = platform;
 
     const bundled = registerBundledProviders(p, {
@@ -985,17 +1014,25 @@ app
         app.getPath('userData'),
         'bundled-extensions-data',
       ),
-      mainApi: buildMainApi({
-        store: p.store,
-        // Non-null: startMcp() above is awaited before this point, so
-        // `mcp` always holds a live McpServerHandle here.
-        mcp: mcp!,
-        app,
-        dataDir,
-        tray: trayMenu,
-        ui: { openWindow: showMainWindow },
-        outbound: { service: outbound, routes: outboundRoutes },
-      }),
+      db: p.db,
+      fileRoots,
+      mainApiForPlugin: (callerPluginId) =>
+        buildMainApi({
+          callerPluginId,
+          store: p.store,
+          fileRoots,
+          persistFileRoots,
+          // Non-null: startMcp() above is awaited before this point, so
+          // `mcp` always holds a live McpServerHandle here.
+          mcp: mcp!,
+          app,
+          dataDir,
+          tray: trayMenu!,
+          ui: { openWindow: showMainWindow },
+          outbound: { service: outbound, routes: outboundRoutes },
+          readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
+          inference: p.inference,
+        }),
       store: p.store,
       sources: p.sources,
       senders: p.senders,

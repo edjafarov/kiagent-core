@@ -10,7 +10,59 @@
  * classify identically to a locally-thrown SourceAuthError.
  */
 
+export type CapabilityErrorCode =
+  | 'HOST_CALL_IN_TRANSACTION'
+  | 'RPC_ABORTED'
+  | 'RPC_DEADLINE_EXCEEDED'
+  | 'DB_WORKER_CRASHED'
+  | 'DB_WORKER_RESTARTING'
+  | 'DB_WORKER_DEAD'
+  | 'DB_OPERATION_CANCELLED'
+  | 'DB_COORDINATOR_CLOSED'
+  | 'DB_OWNER_RELEASED'
+  | 'DB_OWNER_POISONED'
+  | 'DB_TX_TOKEN_INVALID'
+  | 'DB_TX_EXPIRED'
+  | 'PLUGIN_DB_IMPORT_INCOMPLETE'
+  | 'PLUGIN_DB_IMPORT_DIGEST_MISMATCH'
+  | 'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH'
+  | 'PLUGIN_DB_IMPORT_SNAPSHOT_INVALID'
+  | 'PLUGIN_DB_IMPORT_SOURCE_CHANGED'
+  | 'PLUGIN_DB_IMPORT_SOURCE_UNAVAILABLE'
+  | 'PLUGIN_DB_IMPORT_FOREIGN_KEY'
+  | 'PLUGIN_DB_IMPORT_DESCRIPTOR_CHANGED'
+  | 'PLUGIN_DB_IMPORT_STATE_INVALID'
+  | 'PLUGIN_DB_TARGET_NONEMPTY'
+  | 'PLUGIN_DB_DESCRIPTOR_DRIFT'
+  | 'PLUGIN_DB_DESCRIPTOR_FOREIGN_KEY'
+  | 'PLUGIN_DB_SCHEMA_OBJECT_KIND'
+  | 'PLUGIN_DB_SCHEMA_OBJECT_MISSING'
+  | 'PLUGIN_DB_SCHEMA_REFERENCE'
+  | 'PLUGIN_DB_LEGACY_FK_ORDER'
+  | 'PLUGIN_DB_LEGACY_FK_CYCLE'
+  | 'PLUGIN_DB_LEGACY_PATH_DRIFT'
+  | 'PLUGIN_DB_LEGACY_PATH_INVALID'
+  | 'PLUGIN_DB_LEGACY_SOURCE_UNAVAILABLE'
+  | 'PLUGIN_DB_REGISTRY_PATH_INVALID'
+  | 'PLUGIN_DB_NOT_REGISTERED'
+  | 'PLUGIN_DB_NOT_OPEN'
+  | 'PLUGIN_DB_OWNER_INVALID'
+  | 'PLUGIN_DB_RESET_TOMBSTONE'
+  | 'PLUGIN_SQL_DDL_FORBIDDEN'
+  | 'PLUGIN_SQL_SCHEMA_IN_TRANSACTION'
+  | 'PLUGIN_SQL_TRANSACTION_CONTROL'
+  | 'PLUGIN_SQL_UNAUTHORIZED'
+  | 'PLUGIN_SQLITE_UNSUPPORTED'
+  | 'PLUGIN_MIGRATION_NOT_REGISTERED'
+  | 'PLUGIN_MIGRATION_LEDGER_MISMATCH'
+  | 'PLUGIN_REGISTRATION_HOST_ONLY'
+  | 'FILE_ROOT_REVOKED'
+  | 'FILE_HANDLE_INVALID'
+  | 'FILE_OPERATION_CANCELLED'
+  | 'NETWORK_ABORTED'
+  | 'NETWORK_TIMEOUT';
 export type SourceErrorCode = 'auth' | 'permanent';
+export type WireErrorCode = SourceErrorCode | CapabilityErrorCode;
 
 /** Authentication is gone (revoked/expired token, changed password): the
  *  engine commits `status: 'needsReauth'` and STOPS — no retries, no
@@ -33,6 +85,68 @@ export class SourcePermanentError extends Error {
 export function sourceErrorCode(err: unknown): SourceErrorCode | undefined {
   const code = (err as { code?: unknown } | null)?.code;
   return code === 'auth' || code === 'permanent' ? code : undefined;
+}
+
+export function wireErrorCode(err: unknown): WireErrorCode | undefined {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (
+    code === 'auth' ||
+    code === 'permanent' ||
+    code === 'HOST_CALL_IN_TRANSACTION' ||
+    code === 'RPC_ABORTED' ||
+    code === 'RPC_DEADLINE_EXCEEDED' ||
+    [
+      'DB_WORKER_CRASHED',
+      'DB_WORKER_RESTARTING',
+      'DB_WORKER_DEAD',
+      'DB_OPERATION_CANCELLED',
+      'DB_COORDINATOR_CLOSED',
+      'DB_OWNER_RELEASED',
+      'DB_OWNER_POISONED',
+      'DB_TX_TOKEN_INVALID',
+      'DB_TX_EXPIRED',
+      'PLUGIN_DB_IMPORT_INCOMPLETE',
+      'PLUGIN_DB_IMPORT_DIGEST_MISMATCH',
+      'PLUGIN_DB_IMPORT_SCHEMA_MISMATCH',
+      'PLUGIN_DB_IMPORT_SNAPSHOT_INVALID',
+      'PLUGIN_DB_IMPORT_SOURCE_CHANGED',
+      'PLUGIN_DB_IMPORT_SOURCE_UNAVAILABLE',
+      'PLUGIN_DB_IMPORT_FOREIGN_KEY',
+      'PLUGIN_DB_IMPORT_DESCRIPTOR_CHANGED',
+      'PLUGIN_DB_IMPORT_STATE_INVALID',
+      'PLUGIN_DB_TARGET_NONEMPTY',
+      'PLUGIN_DB_DESCRIPTOR_DRIFT',
+      'PLUGIN_DB_DESCRIPTOR_FOREIGN_KEY',
+      'PLUGIN_DB_SCHEMA_OBJECT_KIND',
+      'PLUGIN_DB_SCHEMA_OBJECT_MISSING',
+      'PLUGIN_DB_SCHEMA_REFERENCE',
+      'PLUGIN_DB_LEGACY_FK_ORDER',
+      'PLUGIN_DB_LEGACY_FK_CYCLE',
+      'PLUGIN_DB_LEGACY_PATH_DRIFT',
+      'PLUGIN_DB_LEGACY_PATH_INVALID',
+      'PLUGIN_DB_LEGACY_SOURCE_UNAVAILABLE',
+      'PLUGIN_DB_REGISTRY_PATH_INVALID',
+      'PLUGIN_DB_NOT_REGISTERED',
+      'PLUGIN_DB_NOT_OPEN',
+      'PLUGIN_DB_OWNER_INVALID',
+      'PLUGIN_DB_RESET_TOMBSTONE',
+      'PLUGIN_SQL_DDL_FORBIDDEN',
+      'PLUGIN_SQL_SCHEMA_IN_TRANSACTION',
+      'PLUGIN_SQL_TRANSACTION_CONTROL',
+      'PLUGIN_SQL_UNAUTHORIZED',
+      'PLUGIN_SQLITE_UNSUPPORTED',
+      'PLUGIN_MIGRATION_NOT_REGISTERED',
+      'PLUGIN_MIGRATION_LEDGER_MISMATCH',
+      'PLUGIN_REGISTRATION_HOST_ONLY',
+      'FILE_ROOT_REVOKED',
+      'FILE_HANDLE_INVALID',
+      'FILE_OPERATION_CANCELLED',
+      'NETWORK_ABORTED',
+      'NETWORK_TIMEOUT',
+    ].includes(code as string)
+  )
+    return code as WireErrorCode;
+  return undefined;
 }
 
 /** A reconnect signed in as somebody else. Thrown by `Source.reauthenticate`

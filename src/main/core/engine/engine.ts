@@ -22,6 +22,7 @@ import type {
   SyncStatus,
   Worker,
   WorkerSession,
+  MessageEvidenceReadInput,
 } from '@shared/contracts';
 
 import { sourceErrorCode } from '@shared/source-errors';
@@ -35,6 +36,7 @@ import {
 import { isDbWorkerTransientError } from '../../db/worker-client';
 
 import type { CoreStore } from '../store/store';
+import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
 
 export interface LogSink {
   log(
@@ -522,6 +524,14 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  does not touch `config`. Same shape as `pauseIntents` above, same reason:
    *  a durable-state read is stale for exactly as long as a transition lasts. */
   const transitionIntents = new Set<AccountId>();
+  const evidenceReads = new Map<AccountId, Set<AbortController>>();
+  const abortEvidenceReads = (accountId?: AccountId): void => {
+    const sets = accountId
+      ? [evidenceReads.get(accountId)]
+      : [...evidenceReads.values()];
+    for (const set of sets)
+      for (const controller of set ?? []) controller.abort();
+  };
 
   /** Stop an account's loop for a transition, reporting whether there WAS one.
    *  `restoreLoopAfterFailure` needs that answer — restarting an account that
@@ -696,6 +706,41 @@ export function createEngine(deps: EngineDeps): Engine & {
   };
 
   const engine = {
+    readMessageEvidence: async (input: MessageEvidenceReadInput) => {
+      const doc =
+        typeof input?.documentId === 'string'
+          ? await store.read.document(input.documentId)
+          : null;
+      const accountId = doc?.accountId;
+      const controller = new AbortController();
+      if (accountId) {
+        let set = evidenceReads.get(accountId);
+        if (!set) {
+          set = new Set();
+          evidenceReads.set(accountId, set);
+        }
+        set.add(controller);
+      }
+      try {
+        return await readMessageEvidenceOperation(
+          {
+            store,
+            sources: deps.sources,
+            session: makeSession,
+            paused: (id) => pauseIntents.has(id),
+            transitioning: (id) => transitionIntents.has(id),
+            signal: controller.signal,
+          },
+          input,
+        );
+      } finally {
+        if (accountId) {
+          const set = evidenceReads.get(accountId);
+          set?.delete(controller);
+          if (set?.size === 0) evidenceReads.delete(accountId);
+        }
+      }
+    },
     async connect(source: Source, auth: AuthChannel): Promise<Account> {
       // Capture credentials the flow produces so the PLATFORM persists them —
       // the source never stores a blob.
@@ -1128,6 +1173,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       // account regardless of `flow.cancelled`.** The worst case is a UI that
       // says "cancelled" over an account that is healthy and syncing.
       transitionIntents.add(accountId);
+      abortEvidenceReads(accountId);
       let wasRunning = false;
       try {
         // Quiesce only NOW. Stopping before the (minutes-long) sign-in would
@@ -1240,6 +1286,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       // away — `running.has(key)` stays true for most of stop(), so every
       // stale-read supervisor in the app would happily start a replacement.
       transitionIntents.add(accountId);
+      abortEvidenceReads(accountId);
       let wasRunning = false;
       try {
         // Quiesce. abort() alone is cooperative — store.commit is a DB-worker
@@ -1348,6 +1395,7 @@ export function createEngine(deps: EngineDeps): Engine & {
     },
 
     async remove(accountId: AccountId): Promise<void> {
+      abortEvidenceReads(accountId);
       await running.get(`account:${accountId}`)?.stop();
       reconcileAllowances.delete(accountId);
       await store.commit({ removeAccount: accountId });
@@ -1360,6 +1408,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       // tick's supervisor (isRunning=false + still-stale status) and
       // sync-now can't resurrect the loop inside that window.
       pauseIntents.add(accountId);
+      abortEvidenceReads(accountId);
       try {
         // Stop the in-flight loop FIRST. A status-only 'paused' commit while
         // the pull loop is still producing batches gets steamrolled: the
@@ -1764,6 +1813,7 @@ export function createEngine(deps: EngineDeps): Engine & {
     },
 
     async stopAll(): Promise<void> {
+      abortEvidenceReads();
       await Promise.all(
         [...running.values()].map((h) => h.stop().catch(() => {})),
       );

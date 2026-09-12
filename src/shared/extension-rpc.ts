@@ -17,9 +17,10 @@ import type {
   PullPhase,
   SourceDescriptor,
 } from './contracts';
-import type { SourceErrorCode } from './source-errors';
+import type { FileChange } from './plugin-files';
+import type { SourceErrorCode, WireErrorCode } from './source-errors';
 
-export const PLATFORM_API_VERSION = '2.0.0';
+export const PLATFORM_API_VERSION = '2.1.0';
 
 /** A Batch after the child mapped items through the source's toDocument —
  *  the generic Item type never crosses the wire. */
@@ -80,7 +81,11 @@ export type MainToChild =
       ns: 'source' | 'tool' | 'send';
       method: string;
       args: unknown[];
+      deadline?: number;
+      transactionId?: string;
+      transactionBoundary?: boolean;
     }
+  | { kind: 'cancel'; id: number }
   | {
       kind: 'reply';
       id: number;
@@ -92,7 +97,7 @@ export type MainToChild =
        *  session.credentials() whose refresher threw SourceAuthError) keeps
        *  its classification across the boundary. Both directions declare it:
        *  ONE endpoint implementation (transport.ts) serves both. */
-      code?: SourceErrorCode;
+      code?: WireErrorCode;
       /** The rejecting error's `Error.name` (e.g. 'LaneClosedError',
        *  'ModelChangedError') — class identity does not survive the fork,
        *  so a caller on the other side discriminates by `name`, never
@@ -108,6 +113,7 @@ export type MainToChild =
       errorFields?: Record<string, unknown>;
     }
   | { kind: 'event'; name: string; payload: unknown; meta: EventMeta }
+  | { kind: 'file-change'; watchId: number; event: FileChange }
   | { kind: 'src-next'; pullId: number }
   | { kind: 'src-abort'; pullId: number }
   | { kind: 'deactivate' };
@@ -116,7 +122,17 @@ export type ChildToMain =
   | { kind: 'ready' }
   | { kind: 'activated'; contributions: Contributions }
   | { kind: 'errored'; error: string }
-  | { kind: 'call'; id: number; ns: string; method: string; args: unknown[] }
+  | {
+      kind: 'call';
+      id: number;
+      ns: string;
+      method: string;
+      args: unknown[];
+      deadline?: number;
+      transactionId?: string;
+      transactionBoundary?: boolean;
+    }
+  | { kind: 'cancel'; id: number }
   | {
       kind: 'reply';
       id: number;
@@ -124,7 +140,7 @@ export type ChildToMain =
       value?: unknown;
       error?: string;
       /** See MainToChild's reply variant — symmetric by construction. */
-      code?: SourceErrorCode;
+      code?: WireErrorCode;
       /** See MainToChild's reply variant — symmetric by construction. */
       errorName?: string;
       /** See MainToChild's reply variant — symmetric by construction. */

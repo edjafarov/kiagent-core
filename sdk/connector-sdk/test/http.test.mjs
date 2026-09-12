@@ -435,3 +435,46 @@ test('requestWithRetry sleeps the clamped retry-after from the policy', async ()
 
   assert.deepEqual(slept, [10000, 2000]);
 });
+
+test('pre-aborted retry policy does not invoke attempt', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let calls = 0;
+  await assert.rejects(
+    requestWithRetry(async () => {
+      calls += 1;
+      return res(200);
+    }, { label: 'x', signal: controller.signal }),
+    { name: 'AbortError' },
+  );
+  assert.equal(calls, 0);
+});
+
+test('abort during an uncooperative retry backoff settles promptly', { timeout: 1000 }, async () => {
+  const controller = new AbortController();
+  const sleep = () => new Promise((resolve) => {
+    void resolve;
+  });
+  const pending = requestWithRetry(async () => res(503), {
+    label: 'x',
+    signal: controller.signal,
+    sleep,
+    maxTransientRetries: 2,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  await assert.rejects(pending, { name: 'AbortError' });
+});
+
+test('TimeoutError from an attempt is not retried', async () => {
+  let calls = 0;
+  const error = Object.assign(new Error('deadline'), { name: 'TimeoutError' });
+  await assert.rejects(
+    requestWithRetry(async () => {
+      calls += 1;
+      throw error;
+    }, { label: 'x' }),
+    { name: 'TimeoutError' },
+  );
+  assert.equal(calls, 1);
+});

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
 import { migrate } from '@main/core/store/schema';
+import type { PluginDbRequest } from './plugin-operations';
 
 export type AppDbParam =
   | string
@@ -36,6 +37,8 @@ export interface AppDb {
    *  multi-statement atomicity primitive — `_conn.transaction()` must not be
    *  used by callers, so the same code works against the worker-hosted DB. */
   batch(steps: BatchStep[]): Promise<BatchStepResult[]>;
+  /** Hold the shared database admission slot while a multi-file export runs. */
+  withExclusive?<T>(work: (db: AppDb) => Promise<T>): Promise<T>;
   isOpen(): boolean;
   close(): Promise<void>;
   /** Raw better-sqlite3 handle — present only on the in-process implementation
@@ -49,6 +52,23 @@ export interface AppDb {
    *  `commit`) executes off the main thread without being flattened into a
    *  static `batch()`. */
   proc?(name: string, args: unknown): Promise<unknown>;
+  /** Host-internal authorized plugin request seam. Never exposed directly to plugin code. */
+  plugin?(
+    request: PluginDbRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
+  /** Host-only registration seam. The path and descriptor are derived by the
+   *  trusted main process; extension RPC never receives this method. */
+  registerPluginSource?(
+    pluginId: string,
+    legacyPath: string,
+    descriptor: import('@main/platform/database-descriptor').PluginDatabaseDescriptor,
+  ): Promise<unknown>;
+  /** Worker-owned consistent SQLite backup used by maintenance export. */
+  backup?(destination: string): Promise<void>;
+  /** Host lifecycle seam: active plugin hosts must rebuild their owner and
+   *  surface bundle after a worker incarnation changes. */
+  onWorkerRespawn?(listener: () => void): () => void;
 }
 
 function coerceParam(v: AppDbParam): string | number | bigint | Buffer | null {
@@ -129,7 +149,17 @@ function wrapConn(conn: Database.Database): AppDb {
     return results;
   });
 
-  return {
+  let tail = Promise.resolve();
+  let closePromise: Promise<void> | undefined;
+  const enqueue = <T>(work: () => T | Promise<T>): Promise<T> => {
+    const next = tail.then(work, work);
+    tail = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
+  const direct: AppDb = {
     _conn: conn,
     exec: async (sql) => {
       conn.exec(sql);
@@ -140,11 +170,50 @@ function wrapConn(conn: Database.Database): AppDb {
       prep(sql).run(...params.map(coerceParam));
     },
     batch: async (steps) => runBatch(steps),
+    backup: async (destination) => {
+      await conn.backup(destination);
+    },
     isOpen: () => conn.open,
     close: async () => {
       conn.close();
     },
   };
+  const api = {} as AppDb;
+
+  Object.assign(api, {
+    _conn: conn,
+    exec: (sql: string) => enqueue(() => direct.exec(sql)),
+    all: (sql: string, params: AppDbParam[] = []) =>
+      enqueue(() => direct.all(sql, params)),
+    run: (sql: string, params: AppDbParam[] = []) =>
+      enqueue(() => direct.run(sql, params)),
+    batch: (steps: BatchStep[]) => enqueue(() => runBatch(steps)),
+    backup: (destination: string) => enqueue(() => direct.backup!(destination)),
+    withExclusive: async <T>(work: (db: AppDb) => Promise<T>) => {
+      const next = tail.then(async () => {
+        return work(direct);
+      });
+      tail = next.then(
+        () => undefined,
+        () => undefined,
+      );
+      return next;
+    },
+    isOpen: () => conn.open,
+    close: async () => {
+      if (closePromise) return closePromise;
+      // Close is part of the same FIFO as backup/export and queued writes.
+      // The stable tail link also makes concurrent callers share one native
+      // close, mirroring the worker bridge/coordinator shutdown boundary.
+      closePromise = tail.then(() => direct.close());
+      tail = closePromise.then(
+        () => undefined,
+        () => undefined,
+      );
+      return closePromise;
+    },
+  });
+  return api;
 }
 
 export async function openDb(filePath: string): Promise<AppDb> {

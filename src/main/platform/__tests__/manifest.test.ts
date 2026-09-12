@@ -110,6 +110,19 @@ describe('parseManifest', () => {
       ManifestError,
     );
   });
+
+  it('requires a database descriptor for db-capability manifests', () => {
+    expect(() => parseManifest({ ...GOOD, caps: ['db'] })).toThrow(
+      /PLUGIN_DB_DESCRIPTOR_REQUIRED/,
+    );
+    expect(
+      parseManifest({
+        ...GOOD,
+        caps: ['db'],
+        database: { schema: 'dist/database.json' },
+      }).database,
+    ).toEqual({ schema: 'dist/database.json' });
+  });
 });
 
 describe('source contributions (string | { id, oauth })', () => {
@@ -331,6 +344,28 @@ describe('validateManifestDir', () => {
       Buffer.alloc(MAX_ICON_BYTES + 1),
     );
     expect(() => validateManifestDir(dir)).toThrow(/200 KB or smaller/);
+  });
+
+  it('rejects a database descriptor symlink that resolves outside the package', () => {
+    const outside = path.join(os.tmpdir(), `kia-descriptor-${Date.now()}.json`);
+    fs.writeFileSync(outside, '{}');
+    fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
+    fs.symlinkSync(outside, path.join(dir, 'dist', 'database.json'));
+    fs.writeFileSync(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify({
+        ...GOOD,
+        caps: ['db'],
+        database: { schema: 'dist/database.json' },
+      }),
+    );
+    try {
+      expect(() => validateManifestDir(dir)).toThrow(
+        /inside the extension directory|regular file/i,
+      );
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
   });
 });
 

@@ -51,6 +51,57 @@ describe('store', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('pages live documents by stable id, clamps limits, filters types, and skips archives', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b'), doc('c', { type: 'email.thread' })],
+      cursor: 1,
+    });
+    const first = await store.read.documentPage!({
+      limit: 1000,
+      types: ['note', 'email.thread'],
+    });
+    expect(first).toHaveLength(3);
+    expect(first.map((d) => d.id)).toEqual([...first.map((d) => d.id)].sort());
+    await store.commit({
+      account: accountId,
+      documents: [],
+      deletions: [{ externalId: 'b', type: 'note' }],
+      cursor: 2,
+    });
+    const live = await store.read.documentPage!({
+      limit: 100,
+      types: ['note'],
+    });
+    expect(live.every((d) => d.externalId !== 'b')).toBe(true);
+    expect(
+      await store.read.documentPage!({ limit: 100, types: ['missing'] }),
+    ).toEqual([]);
+    expect(
+      await store.read.documentPage!({ limit: 0, types: ['note'] }),
+    ).toEqual([]);
+  });
+
+  it('supports keyset paging after insertion without repeating an id', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b')],
+      cursor: 1,
+    });
+    const first = await store.read.documentPage!({ limit: 1, types: ['note'] });
+    await store.commit({
+      account: accountId,
+      documents: [doc('c')],
+      cursor: 2,
+    });
+    const rest = await store.read.documentPage!({
+      afterId: first[0].id,
+      limit: 100,
+      types: ['note'],
+    });
+    expect(rest.some((d) => d.id === first[0].id)).toBe(false);
+  });
+
   it('commits documents with cursor atomically and feeds them in order', async () => {
     await store.commit({
       account: accountId,
@@ -857,6 +908,114 @@ describe('store', () => {
     const latest = await store.consents.latest('ext-1');
     expect(latest?.caps).toEqual(['query']);
     expect(latest?.manifestVersion).toBe('1.0.0');
+  });
+
+  it('exports referenced in-profile assets and lists external references without copying them', async () => {
+    const ownedAsset = path.join(dir, 'owned', 'recording.bin');
+    const externalAsset = path.join(
+      os.tmpdir(),
+      `kia-external-${Date.now()}.bin`,
+    );
+    fs.mkdirSync(path.dirname(ownedAsset), { recursive: true });
+    fs.writeFileSync(ownedAsset, Buffer.from('owned-by-app'));
+    fs.writeFileSync(externalAsset, Buffer.from('owned-by-user'));
+    const destination = path.join(dir, 'backup');
+    try {
+      const assetDb = await openDb(path.join(dir, 'asset.db'));
+      const assetStore = openStore({ ...assetDb, backup: undefined }, {
+        ...deps,
+        profileDir: dir,
+      } as never);
+      const account = await assetStore.createAccount({
+        source: 'assets',
+        identifier: 'assets',
+      });
+      await assetStore.commit({
+        account: account.id,
+        documents: [
+          doc('asset', {
+            metadata: {
+              recordingPath: ownedAsset,
+              userDocument: externalAsset,
+            },
+          }),
+        ],
+        cursor: 1,
+      });
+      await assetStore.maintenance.export(destination);
+      await assetStore.close();
+
+      expect(
+        fs.readFileSync(
+          path.join(destination, 'assets', 'owned', 'recording.bin'),
+          'utf8',
+        ),
+      ).toBe('owned-by-app');
+      expect(
+        fs.existsSync(
+          path.join(destination, 'assets', path.basename(externalAsset)),
+        ),
+      ).toBe(false);
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(destination, 'backup-manifest.json'),
+            'utf8',
+          ),
+        ),
+      ).toEqual({
+        version: 1,
+        assets: expect.arrayContaining([
+          { kind: 'copied', path: 'owned/recording.bin', size: 12 },
+          { kind: 'external', path: externalAsset, size: 13 },
+        ]),
+      });
+    } finally {
+      fs.rmSync(externalAsset, { force: true });
+    }
+  });
+
+  it('holds admission across the database snapshot and sidecar export', async () => {
+    const file = path.join(dir, 'exclusive-export.db');
+    const base = await openDb(file);
+    await base.exec('CREATE TABLE export_probe (value INTEGER)');
+    let pluginWrite!: Promise<void>;
+    const heldDb: AppDb = {
+      ...(base as AppDb),
+      backup: async (destination) => {
+        pluginWrite = base.run('INSERT INTO export_probe(value) VALUES (1)');
+        await base.backup!(destination);
+      },
+      withExclusive: async (work) =>
+        base.withExclusive!(async (held) =>
+          work({
+            ...held,
+            backup: async (destination) => {
+              pluginWrite = base.run(
+                'INSERT INTO export_probe(value) VALUES (1)',
+              );
+              fs.writeFileSync(destination, base._conn!.serialize());
+            },
+          }),
+        ),
+    };
+    const isolated = openStore(heldDb, deps);
+    const destination = path.join(dir, 'exclusive-backup');
+    await isolated.maintenance.export(destination);
+    await pluginWrite;
+    const snapshot = new Database(path.join(destination, 'kiagent.db'));
+    try {
+      expect(
+        snapshot.prepare('SELECT COUNT(*) AS count FROM export_probe').get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      snapshot.close();
+    }
+    expect(
+      (await base.all('SELECT COUNT(*) AS count FROM export_probe'))[0].count,
+    ).toBe(1);
+    await isolated.close();
+    await base.close();
   });
 
   it('multi-doc atomic rollback: a mid-transaction failure writes NONE of the batch', async () => {

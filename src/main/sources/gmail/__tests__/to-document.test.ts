@@ -110,6 +110,10 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
       from: 'Bob <bob@example.com>',
     });
     expect(messages[1].snippet).toContain('Works for me.');
+    expect(d.metadata.contactEvidence).toMatchObject({ version: 1 });
+    expect(
+      (d.metadata.contactEvidence as { messages: unknown[] }).messages,
+    ).toHaveLength(2);
   });
 
   it('projects per-message to/cc/replyTo into metadata.messages[]', () => {

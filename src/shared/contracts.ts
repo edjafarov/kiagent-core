@@ -12,6 +12,27 @@
  * stay runtime-free: types and interfaces only.
  */
 
+import type { PluginDb } from './plugin-db';
+import type { ScopedFiles } from './plugin-files';
+import type { PluginNet } from './plugin-net';
+
+export type {
+  PluginDb,
+  PluginDbParams,
+  PluginDbSession,
+  PluginDbStep,
+} from './plugin-db';
+export type {
+  FileChange,
+  FileEntry,
+  FileInfo,
+  FileRef,
+  FileRoot,
+  ScopedFileHandle,
+  ScopedFiles,
+} from './plugin-files';
+export type { PluginNet, PluginNetInit, PluginNetResult } from './plugin-net';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. IDS — one string type, no wire codec
 // ─────────────────────────────────────────────────────────────────────────────
@@ -191,6 +212,11 @@ export type CommitBatch =
  *  `query` capability. */
 export interface Query {
   document(id: DocumentId): Promise<Document | null>;
+  documentPage?(input: {
+    afterId?: DocumentId;
+    limit: number;
+    types: string[];
+  }): Promise<Document[]>;
   children(id: DocumentId): Promise<Document[]>;
   byExternalId(
     account: AccountId,
@@ -529,6 +555,14 @@ export interface Source<Cursor = unknown, Item = unknown> {
   toDocument(item: Item): DocumentInput | DocumentInput[] | null;
   /** Optional random-access bytes for deep extraction. */
   fetchBytes?(session: Session, doc: Document): Promise<Uint8Array | null>;
+  /** Optional bounded, read-only evidence lookup for an already indexed
+   * document. The source owns authentication and source-specific addressing;
+   * callers provide only exact author identities and a result limit. */
+  readMessageEvidence?(
+    session: Session,
+    doc: Document,
+    options: { authors: string[]; limit: number },
+  ): Promise<import('./message-evidence').MessageEvidenceV1[]>;
   /** Optional full listing of what EXISTS upstream; the engine diffs and
    *  archives what is no longer listed.
    *
@@ -984,6 +1018,24 @@ export interface Manifest {
     commands?: Array<{ id: string; title: string }>;
   };
   caps: Cap[];
+  /** Declarative database descriptor path, required when caps includes db. */
+  database?: { schema: string };
+}
+
+/** Declarative database shape and immutable migration history published by a
+ * connector as `database.schema` (normally `dist/database.json`). */
+export interface PluginDatabaseDescriptor {
+  format: 1;
+  objects: { name: string; kind: 'table' | 'index' | 'view' | 'trigger' }[];
+  modules: {
+    name: string;
+    migrations: { version: number; statements: string[] }[];
+  }[];
+  legacy: {
+    tables: { name: string; columns: string[] }[];
+    versionTable?: string;
+    userVersionModule?: string;
+  };
 }
 
 /** A tool on the outward MCP surface. `call` captures the module's caps via
@@ -1003,22 +1055,9 @@ export interface McpTool {
   call(args: Record<string, unknown>): Promise<unknown>;
 }
 
-/** An extension's OWN database: its own tables in its own SQLite file. */
-export interface PrivateDb {
-  exec(sql: string, params?: unknown[]): Promise<void>;
-  query<Row = Record<string, unknown>>(
-    sql: string,
-    params?: unknown[],
-  ): Promise<Row[]>;
-}
-
-/** Rooted at folders the USER approved for this extension — never the disk. */
-export interface ScopedFiles {
-  list(rel: string): Promise<string[]>;
-  read(rel: string): Promise<Uint8Array>;
-  write(rel: string, data: Uint8Array): Promise<void>;
-  move(from: string, to: string): Promise<void>;
-}
+/** @deprecated Use PluginDb. Kept as a source-compatible name while the
+ * platform moves all plugins onto the shared worker-backed database. */
+export type PrivateDb = PluginDb;
 
 /** Host-stamped provenance for a delivered event. `from` is the emitter's
  *  extension id (or the literal 'platform' for platform-emitted events),
@@ -1036,7 +1075,7 @@ export interface EventMeta {
 export interface CapSurfaces {
   query: { query: Query };
   /** The platform's fetch — shared retry/backoff applies by default. */
-  net: { net: { fetch(url: string, init?: unknown): Promise<unknown> } };
+  net: { net: PluginNet };
   files: { files: ScopedFiles };
   db: { db: PrivateDb };
   ui: { ui: { notify(msg: string, level?: LogLevel): void } };
@@ -1264,6 +1303,20 @@ export interface Engine {
     projection: Projection<S>,
     onDiff: (state: S, seq: Seq) => void,
   ): Handle;
+  readMessageEvidence(
+    input: MessageEvidenceReadInput,
+  ): Promise<MessageEvidenceReadResult>;
+}
+
+export interface MessageEvidenceReadInput {
+  documentId: DocumentId;
+  expectedContentHash: string;
+  authors: string[];
+}
+
+export interface MessageEvidenceReadResult {
+  status: 'ok' | 'unsupported' | 'unavailable' | 'stale';
+  messages: import('./message-evidence').MessageEvidenceV1[];
 }
 
 /** The live signals ALL throttling derives from — one place. */

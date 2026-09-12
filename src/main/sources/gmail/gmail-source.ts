@@ -18,7 +18,8 @@ import {
   listThreadsPage,
   mapPool,
 } from './gmail-api';
-import { attachmentsOf } from './parser';
+import { attachmentsOf, parseGmailMessage } from './parser';
+import { normalizeAuthor } from '../email-evidence';
 import { GMAIL_SCOPES } from './oauth';
 import {
   GMAIL_THREAD_DOCUMENT_TYPE,
@@ -266,6 +267,34 @@ export const gmailSource: Source<GmailCursor, GmailThreadItem> = {
   connect,
   pull,
   toDocument,
+  async readMessageEvidence(session, doc, options) {
+    if (doc.type !== GMAIL_THREAD_DOCUMENT_TYPE) return [];
+    const wanted = new Set(
+      options.authors
+        .map(normalizeAuthor)
+        .filter((author) => author.length > 0),
+    );
+    const limit = Math.max(0, Math.min(3, Math.floor(options.limit)));
+    if (wanted.size === 0 || limit === 0) return [];
+
+    let thread;
+    try {
+      thread = await getThread(session, doc.externalId);
+    } catch (error) {
+      if (isGmailNotFoundError(error)) return [];
+      throw error;
+    }
+    return (
+      thread.messages
+        ?.map((message) => {
+          const parsed = parseGmailMessage(message);
+          return parsed.evidence;
+        })
+        .filter((evidence) => wanted.has(evidence.author))
+        .sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''))
+        .slice(0, limit) ?? []
+    );
+  },
   async fetchBytes(session, doc) {
     const meta = doc.metadata as {
       messageId?: string;

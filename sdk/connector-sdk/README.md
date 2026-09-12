@@ -7,11 +7,13 @@ This package is the vendoring target described in
 extracted so nine (and counting) connector repos stop hand-copying the same
 files.
 
-It is **generated, not hand-written**: `contracts.ts`, `source-errors.ts` and
-`file-indexability.ts` are copied verbatim from `kiagent-core`'s
-`src/shared/` at build time, so a connector compiling against a given SDK
-version is compiling against exactly the platform types — and the exact file
-eligibility policy — that version was cut from.
+It is **generated, not hand-written**: the shared contract dependency closure
+(`contracts.ts`, `source-errors.ts`, `file-indexability.ts`,
+`message-evidence.ts`, `plugin-db.ts`, `plugin-files.ts`, `plugin-net.ts`, and
+`plugin-sql.ts`) is copied verbatim from `kiagent-core`'s `src/shared/` at
+build time. A connector compiling against a given SDK version is therefore
+compiling against exactly the platform types, SQL helpers, and file eligibility
+policy that version was cut from.
 
 ## Install
 
@@ -42,13 +44,18 @@ subpath below resolves via a small stub file at the package root
 
 ## The four entrypoints
 
-### `@kiagent/connector-sdk` — contracts + source-error taxonomy + file eligibility
+### `@kiagent/connector-sdk` — contracts, host surfaces, and file eligibility
 
-Everything in `src/shared/contracts.ts`, `src/shared/source-errors.ts` and
-`src/shared/file-indexability.ts` at the pinned core vintage: `ExtensionModule`,
+Everything in `src/shared/contracts.ts`, `src/shared/source-errors.ts`,
+`src/shared/plugin-db.ts`, `src/shared/plugin-files.ts`,
+`src/shared/plugin-net.ts`, and `src/shared/file-indexability.ts` at the pinned
+core vintage: `ExtensionModule`,
 `Source`, `Sender`, `Session`, `AuthChannel`, `Account`, `Credentials`,
-`HostFor`, `SourceAuthError`, `SourcePermanentError`, `sourceErrorCode`, and
-the rest of the surface (§7 of the authoring guide) — plus `decideFileIndexing`,
+`HostFor`, `PluginDatabaseDescriptor`, `PluginDb`, `PluginDbSession`,
+`PluginDbStep`, `PluginDbParams`, `ScopedFiles`, `FileRef`,
+`ScopedFileHandle`, `PluginNet`, `PluginNetInit`, `PluginNetResult`,
+`SourceAuthError`, `SourcePermanentError`, `sourceErrorCode`, and the rest of
+the surface (§7 of the authoring guide) — plus `decideFileIndexing`,
 the canonical "can this file be indexed?" policy kiagent-core's own workers
 run on, so a connector's `isConvertibleMime` check can call the same function
 instead of hand-rolling (and drifting from) an equivalent one.
@@ -77,6 +84,11 @@ const decision = decideFileIndexing({
 if (decision.kind === 'ignore') return; // decision.reason explains why
 // decision.pipeline is 'converter' | 'vision' — route the download accordingly
 ```
+
+The root also exports `pluginIdentifier` and `formatPluginSql`. Use explicit
+`{{logical}}` SQL markers only in code; quoted strings and comments stay
+literal. The full UTF-8 plugin-id hex prefix prevents name collisions, while
+the native authorizer remains the authorization boundary.
 
 ### `@kiagent/connector-sdk/http` — the retry ladder
 

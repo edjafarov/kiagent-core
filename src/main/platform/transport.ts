@@ -7,7 +7,7 @@
 import { fork } from 'child_process';
 
 import type { ChildToMain } from '@shared/extension-rpc';
-import { sourceErrorCode, type SourceErrorCode } from '@shared/source-errors';
+import { wireErrorCode, type WireErrorCode } from '@shared/source-errors';
 
 export interface WireChannel {
   send(msg: unknown): void;
@@ -77,10 +77,15 @@ export function nodeForkTransport(
     env: opts?.env ?? process.env,
     cwd: opts?.cwd,
   });
+  cp.on('error', () => {
+    /* The exit listener owns recovery; do not surface a raced IPC error. */
+  });
   return {
     send: (m) => {
       try {
-        cp.send(m as object);
+        cp.send(m as object, () => {
+          /* A callback turns an asynchronous channel-close into a no-op. */
+        });
       } catch {
         /* raced an exit — the onExit path owns recovery */
       }
@@ -182,15 +187,39 @@ export function utilityProcessTransport(
 }
 
 export interface RpcEndpoint {
-  call(ns: string, method: string, args: unknown[]): Promise<unknown>;
+  call(
+    ns: string,
+    method: string,
+    args: unknown[],
+    options?: RpcCallOptions,
+  ): Promise<unknown>;
   onCall(
-    h: (ns: string, method: string, args: unknown[]) => Promise<unknown>,
+    h: (
+      ns: string,
+      method: string,
+      args: unknown[],
+      context: RpcCallContext,
+    ) => Promise<unknown>,
   ): void;
   post(msg: Record<string, unknown>): void;
   onNotify(
     cb: (msg: { kind: string } & Record<string, unknown>) => void,
   ): () => void;
-  dispose(reason: string): void;
+  dispose(reason: string | Error): void;
+}
+
+export interface RpcCallOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  transactionId?: string;
+  transactionBoundary?: boolean;
+}
+
+export interface RpcCallContext {
+  signal: AbortSignal;
+  transactionId?: string;
+  transactionBoundary?: boolean;
+  deadline?: number;
 }
 
 // The call/reply shapes come FROM the declared protocol rather than being
@@ -269,13 +298,23 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
   let disposed = false;
   const pending = new Map<
     number,
-    { resolve(v: unknown): void; reject(e: Error): void }
+    {
+      resolve(v: unknown): void;
+      reject(e: Error): void;
+      cleanup(): void;
+    }
   >();
+  const owned = new Map<number, AbortController>();
   const notifySubs = new Set<
     (msg: { kind: string } & Record<string, unknown>) => void
   >();
   let handler:
-    | ((ns: string, method: string, args: unknown[]) => Promise<unknown>)
+    | ((
+        ns: string,
+        method: string,
+        args: unknown[],
+        context: RpcCallContext,
+      ) => Promise<unknown>)
     | null = null;
 
   const offMessage = channel.onMessage((raw) => {
@@ -283,12 +322,25 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
     if (!msg || typeof msg.kind !== 'string') return;
     if (msg.kind === 'call') {
       const c = msg as CallMsg;
+      const controller = new AbortController();
+      owned.set(c.id, controller);
+      const context: RpcCallContext = {
+        signal: controller.signal,
+        transactionId: c.transactionId,
+        transactionBoundary: c.transactionBoundary,
+        deadline: c.deadline,
+      };
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      if (c.deadline !== undefined) {
+        const remaining = Math.max(0, c.deadline - Date.now());
+        deadlineTimer = setTimeout(() => controller.abort(), remaining);
+      }
       const h = handler;
       const reply = (
         ok: boolean,
         value?: unknown,
         error?: string,
-        code?: SourceErrorCode,
+        code?: WireErrorCode,
         errorName?: string,
         errorFields?: Record<string, unknown>,
       ) =>
@@ -303,21 +355,37 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
           errorFields,
         } satisfies ReplyMsg);
       if (!h) {
+        if (deadlineTimer) clearTimeout(deadlineTimer);
+        owned.delete(c.id);
         reply(false, undefined, 'no call handler installed');
         return;
       }
-      h(c.ns, c.method, c.args).then(
-        (value) => reply(true, value),
-        (e) =>
-          reply(
-            false,
-            undefined,
-            e instanceof Error ? e.message : String(e),
-            sourceErrorCode(e),
-            e instanceof Error ? e.name : undefined,
-            errorWireFields(e),
-          ),
-      );
+      h(c.ns, c.method, c.args, context)
+        .then(
+          (value) => reply(true, value),
+          (e) =>
+            reply(
+              false,
+              undefined,
+              e instanceof Error ? e.message : String(e),
+              context.signal.aborted &&
+                e instanceof Error &&
+                e.name === 'AbortError'
+                ? 'RPC_ABORTED'
+                : wireErrorCode(e),
+              e instanceof Error ? e.name : undefined,
+              errorWireFields(e),
+            ),
+        )
+        .finally(() => {
+          if (deadlineTimer) clearTimeout(deadlineTimer);
+          owned.delete(c.id);
+        });
+      return;
+    }
+    if (msg.kind === 'cancel') {
+      const cancel = msg as { kind: 'cancel'; id: number };
+      owned.get(cancel.id)?.abort();
       return;
     }
     if (msg.kind === 'reply') {
@@ -325,10 +393,11 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
       const p = pending.get(r.id);
       if (!p) return;
       pending.delete(r.id);
+      p.cleanup();
       if (r.ok) p.resolve(r.value);
       else {
         const err = new Error(r.error ?? 'remote error') as Error & {
-          code?: SourceErrorCode;
+          code?: WireErrorCode;
         };
         if (r.code) err.code = r.code;
         if (typeof r.errorName === 'string') err.name = r.errorName;
@@ -343,13 +412,73 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
   });
 
   return {
-    call(ns, method, args) {
+    call(ns, method, args, options) {
       if (disposed) return Promise.reject(new Error('endpoint disposed'));
+      if (options?.signal?.aborted) {
+        return Promise.reject(
+          Object.assign(new Error('operation aborted'), {
+            name: 'AbortError',
+            code: 'RPC_ABORTED',
+          }),
+        );
+      }
       const id = nextId;
       nextId += 1;
       return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
-        channel.send({ kind: 'call', id, ns, method, args } satisfies CallMsg);
+        const deadline =
+          options?.timeoutMs === undefined
+            ? undefined
+            : Date.now() + Math.max(0, options.timeoutMs);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let offAbort: (() => void) | undefined;
+        const abort = (error: Error) => {
+          if (!pending.has(id)) return;
+          pending.delete(id);
+          if (timer) clearTimeout(timer);
+          offAbort?.();
+          channel.send({ kind: 'cancel', id });
+          reject(error);
+        };
+        const cleanup = () => {
+          if (timer) clearTimeout(timer);
+          offAbort?.();
+        };
+        const record = { resolve, reject, cleanup };
+        pending.set(id, record);
+        if (options?.signal) {
+          const onAbort = () =>
+            abort(
+              Object.assign(new Error('operation aborted'), {
+                name: 'AbortError',
+                code: 'RPC_ABORTED',
+              }),
+            );
+          options.signal.addEventListener('abort', onAbort, { once: true });
+          offAbort = () =>
+            options.signal!.removeEventListener('abort', onAbort);
+        }
+        if (deadline !== undefined) {
+          timer = setTimeout(
+            () =>
+              abort(
+                Object.assign(new Error('RPC call timed out'), {
+                  name: 'TimeoutError',
+                  code: 'RPC_DEADLINE_EXCEEDED',
+                }),
+              ),
+            Math.max(0, options!.timeoutMs!),
+          );
+        }
+        channel.send({
+          kind: 'call',
+          id,
+          ns,
+          method,
+          args,
+          deadline,
+          transactionId: options?.transactionId,
+          transactionBoundary: options?.transactionBoundary,
+        } satisfies CallMsg);
       });
     },
     onCall(h) {
@@ -366,9 +495,15 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
       if (disposed) return;
       disposed = true;
       offMessage();
-      const err = new Error(reason);
-      pending.forEach((p) => p.reject(err));
+      const err = reason instanceof Error ? reason : new Error(reason);
+      pending.forEach((p) => {
+        p.cleanup();
+        p.reject(err);
+      });
+      pending.forEach((_p, id) => channel.send({ kind: 'cancel', id }));
+      owned.forEach((controller) => controller.abort());
       pending.clear();
+      owned.clear();
       notifySubs.clear();
     },
   };

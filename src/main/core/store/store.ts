@@ -21,6 +21,7 @@ import type {
 } from '@shared/contracts';
 
 import type { AppDb, AppDbParam } from '../../db/app-db';
+import { resetCoreStoreTables } from '../../db/repositories/core-maintenance';
 import { newId } from '../ids';
 import { stemVariants } from '../stemming';
 import {
@@ -55,6 +56,90 @@ import {
 export const PENDING_VISUAL_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_pending_visual WHERE ${PENDING_VISUAL_WHERE}`;
 export const EXTRACTED_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_extracted WHERE ${EXTRACTED_DOCS_WHERE}`;
 
+interface BackupAsset {
+  kind: 'copied' | 'external';
+  path: string;
+  size: number;
+}
+
+function referencedPaths(
+  value: unknown,
+  hint = '',
+  out = new Set<string>(),
+): Set<string> {
+  if (typeof value === 'string') {
+    if (
+      path.isAbsolute(value) ||
+      /(?:path|file|asset|recording|attachment)/i.test(hint)
+    )
+      out.add(value);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => referencedPaths(item, hint, out));
+    return out;
+  }
+  if (value && typeof value === 'object') {
+    Object.entries(value).forEach(([key, item]) =>
+      referencedPaths(item, key, out),
+    );
+  }
+  return out;
+}
+
+function backupAssets(
+  profileDir: string | undefined,
+  destination: string,
+  values: unknown[],
+): BackupAsset[] {
+  if (!profileDir) return [];
+  const root = fs.realpathSync(profileDir);
+  const copiedDir = path.join(destination, 'assets');
+  const assets: BackupAsset[] = [];
+  const seen = new Set<string>();
+  const inside = (candidate: string) => {
+    const rel = path.relative(root, candidate);
+    return (
+      rel === '' ||
+      (rel !== '..' &&
+        !rel.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(rel))
+    );
+  };
+  for (const reference of referencedPaths(values)) {
+    const candidate = path.resolve(
+      path.isAbsolute(reference) ? reference : root,
+      reference,
+    );
+    let resolved: string;
+    let size = 0;
+    try {
+      resolved = fs.realpathSync(candidate);
+      const stat = fs.statSync(resolved);
+      if (!stat.isFile()) continue;
+      size = stat.size;
+    } catch {
+      // Preserve the reference in the manifest even if the asset disappeared
+      // between the DB read and export; there is no file to copy.
+      assets.push({ kind: 'external', path: reference, size: 0 });
+      continue;
+    }
+    if (!inside(resolved)) {
+      assets.push({ kind: 'external', path: reference, size });
+      continue;
+    }
+    const relative = path.relative(root, resolved).split(path.sep).join('/');
+    if (seen.has(relative)) continue;
+    seen.add(relative);
+    const target = path.join(copiedDir, relative);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(resolved, target);
+    assets.push({ kind: 'copied', path: relative, size });
+  }
+  assets.sort((a, b) => a.path.localeCompare(b.path));
+  return assets;
+}
+
 /** Metadata paths scanned by the `participant:` filter — extend as new
  *  connector metadata shapes appear (slack/whatsapp senders etc.). */
 const PARTICIPANT_METADATA_PATHS = [
@@ -74,6 +159,8 @@ export interface StoreDeps {
   /** Cheap language detection for search stemming (ISO-639-3). */
   detectLanguages(text: string): string[];
   now?(): string;
+  /** Profile root whose app-owned referenced assets are included in exports. */
+  profileDir?: string;
 }
 
 export interface LedgerCounts {
@@ -551,12 +638,36 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
   // ── the Query surface ─────────────────────────────────────────────────────
 
+  const accountsFrom = async (reader: AppDb) => {
+    const rows = (await reader.all(
+      `SELECT * FROM accounts ORDER BY created_at`,
+    )) as unknown as AccountRow[];
+    return rows.map(toAccount);
+  };
+
   const query: Query = {
     async document(id) {
       const r = (
         await db.all(`SELECT * FROM documents WHERE id = ?`, [id])
       )[0] as unknown as DocRow | undefined;
       return r ? toDocument(r) : null;
+    },
+    async documentPage(input) {
+      const limit = Math.max(0, Math.min(100, Math.floor(input.limit)));
+      if (limit === 0 || input.types.length === 0) return [];
+      const placeholders = input.types.map(() => '?').join(',');
+      const params: AppDbParam[] = [...input.types];
+      let after = '';
+      if (input.afterId) {
+        after = ' AND id > ?';
+        params.push(input.afterId);
+      }
+      params.push(limit);
+      const rows = (await db.all(
+        `SELECT * FROM documents WHERE archived_at IS NULL AND type IN (${placeholders})${after} ORDER BY id LIMIT ?`,
+        params,
+      )) as unknown as DocRow[];
+      return rows.map(toDocument);
     },
     async children(id) {
       const rows = (await db.all(
@@ -819,10 +930,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       }>;
     },
     async accounts() {
-      const rows = (await db.all(
-        `SELECT * FROM accounts ORDER BY created_at`,
-      )) as unknown as AccountRow[];
-      return rows.map(toAccount);
+      return accountsFrom(db);
     },
   };
 
@@ -1056,23 +1164,49 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         else await db.proc!('rebuildSearchIndex', null);
       },
       async export(destDir) {
-        fs.mkdirSync(destDir, { recursive: true });
-        const accounts = await query.accounts();
-        fs.writeFileSync(
-          path.join(destDir, 'accounts.json'),
-          JSON.stringify(accounts, null, 2),
-        );
-        const out = fs.createWriteStream(path.join(destDir, 'documents.jsonl'));
-        // The async AppDb has no streaming `.iterate()`; read the set and
-        // serialize it (export is an on-demand maintenance op, not a hot path).
-        const rows = (await db.all(
-          `SELECT * FROM documents`,
-        )) as unknown as DocRow[];
-        for (const r of rows) out.write(`${JSON.stringify(toDocument(r))}\n`);
-        await new Promise<void>((resolve, reject) => {
-          out.end(() => resolve());
-          out.on('error', reject);
-        });
+        const exportFiles = async (heldDb: AppDb) => {
+          fs.mkdirSync(destDir, { recursive: true });
+          if (heldDb.backup)
+            await heldDb.backup(path.join(destDir, 'kiagent.db'));
+          const accounts = await accountsFrom(heldDb);
+          fs.writeFileSync(
+            path.join(destDir, 'accounts.json'),
+            JSON.stringify(accounts, null, 2),
+          );
+          const out = fs.createWriteStream(
+            path.join(destDir, 'documents.jsonl'),
+          );
+          // The async AppDb has no streaming `.iterate()`; read the set and
+          // serialize it (export is an on-demand maintenance op, not a hot path).
+          const rows = (await heldDb.all(
+            `SELECT * FROM documents`,
+          )) as unknown as DocRow[];
+          for (const r of rows) out.write(`${JSON.stringify(toDocument(r))}\n`);
+          await new Promise<void>((resolve, reject) => {
+            out.end(() => resolve());
+            out.on('error', reject);
+          });
+          const assets = backupAssets(
+            deps.profileDir,
+            destDir,
+            accounts
+              .flatMap((account) => [account.config])
+              .concat(rows.map((row) => JSON.parse(row.metadata))),
+          );
+          fs.writeFileSync(
+            path.join(destDir, 'backup-manifest.json'),
+            JSON.stringify({ version: 1, assets }, null, 2),
+          );
+        };
+        if (db.withExclusive)
+          await db.withExclusive((heldDb) =>
+            exportFiles(
+              db.backup === undefined
+                ? { ...heldDb, backup: undefined }
+                : heldDb,
+            ),
+          );
+        else await exportFiles(db);
       },
       async resetAll() {
         // 'consents' deliberately survives: installed extensions live on
@@ -1083,31 +1217,10 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         // Read the pre-reset accounts BEFORE the wipe so the same batch can
         // announce each removal through the feed.
         const accounts = await query.accounts();
-        await db.batch([
-          ...[
-            'documents_fts',
-            'documents_tri',
-            'documents',
-            'changes',
-            'consumers',
-            'work_ledger',
-            'vault',
-            'schedule',
-            'accounts',
-          ].map((t) => ({ sql: `DELETE FROM ${t}` })),
-          { sql: `DELETE FROM meta WHERE key != 'schemaVersion'` },
-          // The app projection (and every other feed consumer) derives its
-          // account list incrementally from the change feed; a silent
-          // truncation of `changes` leaves it carrying ghost accounts until
-          // restart. Announce each removal AFTER the deletes — `changes.seq`
-          // is AUTOINCREMENT and `sqlite_sequence` survives DELETE (and the
-          // VACUUM below), so these rows land with fresh, higher seqs and
-          // the feed cursor (`seq > cursor`) stays monotonic.
-          ...accounts.map((a) => ({
-            sql: `INSERT INTO changes(kind, ref_id, at) VALUES('accountRemoved', ?, ?)`,
-            params: [a.id, now()],
-          })),
-        ]);
+        // The app projection (and every other feed consumer) derives its
+        // account list incrementally from the change feed; the repository
+        // performs the wipe and announces removals atomically.
+        await resetCoreStoreTables(db, accounts, now);
         // DELETE alone never returns pages to the OS — the file (and the
         // WAL) keep their pre-reset size, so the Storage screen would still
         // show gigabytes after "Reset all". VACUUM rebuilds the file;

@@ -16,6 +16,7 @@ import { isAutomatedMessage } from './filter';
 import { resolveMailboxes } from './folders';
 import { buildExternalId } from './ids';
 import { parseImapMessage } from './parse';
+import { normalizeAuthor } from '../email-evidence';
 import type {
   ImapAccountConfig,
   ImapClient,
@@ -299,26 +300,72 @@ export function createImapSource(
       if (filt.matched) return null;
 
       const subject = item.subject?.trim() || '(no subject)';
+      const metadata: Record<string, unknown> = {
+        from: item.from,
+        to: item.to,
+        cc: item.cc,
+        replyTo: item.replyTo,
+        references: item.references,
+        date: item.date,
+        mailbox: item.mailbox,
+        uid: item.uid,
+        messageId: item.messageId,
+      };
+      if (item.evidence?.author) {
+        metadata.contactEvidence = {
+          version: 1 as const,
+          messages: [item.evidence],
+        };
+      }
 
       return {
         externalId: buildExternalId(item.mailbox, item.uidValidity, item.uid),
         type: 'email.message',
         title: subject,
         markdown: item.bodyText,
-        metadata: {
-          from: item.from,
-          to: item.to,
-          cc: item.cc,
-          replyTo: item.replyTo,
-          references: item.references,
-          date: item.date,
-          mailbox: item.mailbox,
-          uid: item.uid,
-          messageId: item.messageId,
-        },
+        metadata,
         createdAt: item.date,
         url: undefined,
       };
+    },
+
+    async readMessageEvidence(session, doc, options) {
+      if (doc.type !== 'email.message') return [];
+      const wanted = new Set(
+        options.authors
+          .map(normalizeAuthor)
+          .filter((author) => author.length > 0),
+      );
+      const limit = Math.max(0, Math.min(3, Math.floor(options.limit)));
+      if (wanted.size === 0 || limit === 0) return [];
+
+      const match = /^(.*):([^:]+):(\d+)$/u.exec(doc.externalId);
+      if (!match) return [];
+      const mailbox = match[1];
+      const uidValidity = match[2];
+      const uid = Number(match[3]);
+      if (!mailbox || !Number.isSafeInteger(uid) || uid <= 0) return [];
+
+      const config = session.account.config as unknown as ImapAccountConfig;
+      const creds = await session.credentials();
+      if (!creds?.password) {
+        throw new SourceAuthError(
+          'imap: account has no stored password credential',
+        );
+      }
+      const client = await connectFn(config, creds.password);
+      try {
+        const status = await client.status(mailbox);
+        if (String(status.uidValidity) !== uidValidity) return [];
+        const raws = await client.fetchMany(mailbox, [uid]);
+        const raw = raws.find((item) => item.uid === uid);
+        if (!raw) return [];
+        const parsed = await parseImapMessage(raw, mailbox, status.uidValidity);
+        if (!parsed.evidence || !wanted.has(parsed.evidence.author)) return [];
+        return [parsed.evidence].slice(0, limit);
+      } finally {
+        await client.close().catch(() => {});
+      }
     },
 
     async *reconcile(session: Session) {

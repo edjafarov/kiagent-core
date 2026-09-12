@@ -8,6 +8,8 @@ import type { Cap, LogLevel } from '@shared/contracts';
 import type { LogSink } from '@main/core/engine/engine';
 
 import type { Surfaces } from './host-surfaces';
+import type { RpcCallContext } from './transport';
+import { HostCallInTransactionError } from './host-call-context';
 
 /** Exported for the drift guard (cap-table-completeness.test.ts), which
  *  derives the expected key set from manifest.ts's CAPS. */
@@ -28,11 +30,38 @@ export function createHostRouter(opts: {
   surfaces: Surfaces;
   logSink: LogSink;
 }): {
-  dispatch(ns: string, method: string, args: unknown[]): Promise<unknown>;
+  dispatch(
+    ns: string,
+    method: string,
+    args: unknown[],
+    context?: RpcCallContext,
+  ): Promise<unknown>;
 } {
   const scope = `extension:${opts.extensionId}`;
   return {
-    async dispatch(ns, method, args) {
+    async dispatch(ns, method, args, context) {
+      if (context?.transactionId && ns !== 'db')
+        throw new HostCallInTransactionError(ns);
+      if (ns === 'db') {
+        const hasContext = !!context?.transactionId;
+        const isSdkBoundary = !!context?.transactionBoundary;
+        const token = String(args[0]);
+        const tokenOverload =
+          (method === 'exec' || method === 'query') &&
+          typeof args[0] === 'string' &&
+          typeof args[1] === 'string';
+        const batchTokenOverload =
+          method === 'batch' && !Array.isArray(args[0]);
+        if (
+          (method === 'begin' && (!isSdkBoundary || hasContext)) ||
+          (method === 'begin' && hasContext) ||
+          ((method === 'commit' || method === 'rollback') &&
+            (!hasContext || token !== context?.transactionId)) ||
+          ((tokenOverload || batchTokenOverload) &&
+            (!hasContext || token !== context?.transactionId))
+        )
+          throw new HostCallInTransactionError(ns);
+      }
       if (ns === 'base') {
         if (method === 'log') {
           opts.logSink.log(scope, args[0] as LogLevel, String(args[1]));
@@ -64,6 +93,34 @@ export function createHostRouter(opts: {
           : undefined;
       if (typeof fn !== 'function')
         throw new Error(`unknown method ${ns}.${method}`);
+      // Cancellation is a transport concern, not an extension-controlled
+      // argument. Append the host-owned signal only for cancellable service
+      // calls; the surface functions keep their public arity for ordinary
+      // callers and never let a child forge this signal.
+      if (
+        ns === 'db' &&
+        (method === 'begin' || method === 'commit' || method === 'rollback')
+      ) {
+        if (method === 'commit' || method === 'rollback')
+          return fn(...args, context?.transactionId, context?.signal);
+        return fn(...args, context?.signal, context?.transactionBoundary);
+      }
+      if (context?.signal && ns === 'db') {
+        if (method === 'exec' || method === 'query') {
+          const positional = [...args];
+          while (positional.length < 3) positional.push(undefined);
+          return fn(...positional, context.signal);
+        }
+        if (method === 'migrate')
+          return fn(...args.slice(0, 3), context.signal);
+        if (method === 'batch') {
+          const positional = [...args];
+          while (positional.length < 2) positional.push(undefined);
+          return fn(...positional, context.signal);
+        }
+        return fn(...args, context.signal);
+      }
+      if (context?.signal && ns === 'net') return fn(...args, context.signal);
       return fn(...args);
     },
   };

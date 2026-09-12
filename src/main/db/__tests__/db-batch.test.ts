@@ -2,6 +2,7 @@
  * @jest-environment node
  */
 import { openDb, type AppDb } from '@main/db/app-db';
+import * as fs from 'node:fs';
 
 describe('AppDb.batch', () => {
   let db: AppDb;
@@ -78,6 +79,47 @@ describe('AppDb.batch', () => {
         },
       ]),
     ).rejects.toThrow(/\$fromStep/);
+  });
+
+  it('drains an in-flight direct backup and coalesces concurrent closes', async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const backupStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const backupGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const nativeBackup = db._conn!.backup.bind(db._conn!);
+    jest.spyOn(db._conn!, 'backup').mockImplementation(async (destination) => {
+      started();
+      await backupGate;
+      return nativeBackup(destination);
+    });
+    const nativeClose = jest.spyOn(db._conn!, 'close');
+    const destination = `/tmp/app-db-direct-close-${process.pid}-${Date.now()}.sqlite`;
+
+    try {
+      const backup = db.backup!(destination);
+      await backupStarted;
+      const firstClose = db.close();
+      const secondClose = db.close();
+      expect(nativeClose).not.toHaveBeenCalled();
+      release();
+      await expect(backup).resolves.toBeUndefined();
+      await expect(Promise.all([firstClose, secondClose])).resolves.toEqual([
+        undefined,
+        undefined,
+      ]);
+      expect(nativeClose).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const file of [
+        destination,
+        `${destination}-wal`,
+        `${destination}-shm`,
+      ])
+        if (fs.existsSync(file)) fs.rmSync(file, { force: true });
+    }
   });
 
   it('coerces Date and boolean params like run()', async () => {

@@ -9,6 +9,7 @@
  * rebuild.ts); this port yields one flat `email.message` document per
  * message — see source.ts for the rationale.
  */
+import type { MessageEvidenceV1 } from '@shared/message-evidence';
 
 /** Non-secret IMAP connection config, persisted in Account.config. */
 export interface ImapAccountConfig {
@@ -98,4 +99,5 @@ export interface ImapMessageItem {
   bodyText: string;
   /** Lower-cased header map, used only for automated-sender filtering. */
   headers: Record<string, string>;
+  evidence?: MessageEvidenceV1;
 }

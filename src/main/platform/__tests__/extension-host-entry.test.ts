@@ -34,6 +34,32 @@ function boot(mod: unknown, extraDeps: { mainApi?: unknown } = {}) {
 }
 
 describe('runExtensionHost — bootstrap/activate', () => {
+  it('forbids log from a transaction callback and rolls back its token', async () => {
+    const calls: string[] = [];
+    const mod = {
+      async activate(host: {
+        db: { transaction<T>(work: (tx: unknown) => Promise<T>): Promise<T> };
+        log(level: string, msg: string): void;
+      }) {
+        await expect(
+          host.db.transaction(async () => host.log('info', 'forbidden')),
+        ).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
+        return {};
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (_ns, method) => {
+      calls.push(method);
+      if (method === 'begin') return 'tx-1';
+      if (method === 'rollback') return undefined;
+      throw new Error(`unexpected ${method}`);
+    });
+    const activated = waitFor('activated');
+    mainEp.post({ ...BOOT, caps: [...BOOT.caps, 'db'] as Cap[] });
+    await activated;
+    expect(calls).toEqual(['begin', 'rollback']);
+  });
+
   it('requires the entry, activates, and reports contribution descriptors', async () => {
     const activate = jest.fn(async () => ({
       sources: [],
@@ -93,6 +119,83 @@ describe('runExtensionHost — bootstrap/activate', () => {
     };
     expect(seenSelf).toEqual({ id: 'test.basic', dataDir: '/virtual/data' });
     expect(contributions.tools[0].description).toBe('42');
+  });
+
+  it('turns a fork-local net AbortSignal into RPC cancellation instead of cloning it', async () => {
+    let sawWireSignal = false;
+    const mod = {
+      async activate(host: {
+        net: {
+          fetch(
+            url: string,
+            init?: { signal?: AbortSignal; timeoutMs?: number },
+          ): Promise<unknown>;
+        };
+      }) {
+        const controller = new AbortController();
+        const pending = host.net.fetch('https://example.test/wait', {
+          signal: controller.signal,
+          timeoutMs: 1000,
+        });
+        setImmediate(() => controller.abort());
+        await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        return {};
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (_ns, _method, args, context) => {
+      sawWireSignal = Boolean(
+        (args[1] as { signal?: unknown } | undefined)?.signal,
+      );
+      await new Promise<never>((_resolve, reject) => {
+        context.signal.addEventListener(
+          'abort',
+          () =>
+            reject(
+              Object.assign(new Error('cancelled'), { name: 'AbortError' }),
+            ),
+          { once: true },
+        );
+      });
+    });
+    const activated = waitFor('activated');
+    mainEp.post(BOOT);
+    await activated;
+    expect(sawWireSignal).toBe(false);
+  });
+
+  it('removes a remote file watcher callback when the watch RPC rejects', async () => {
+    const callback = jest.fn();
+    const mod = {
+      async activate(host: {
+        files: {
+          watch(
+            ref: unknown,
+            onChange: (event: unknown) => void,
+          ): Promise<unknown>;
+        };
+      }) {
+        await expect(host.files.watch({}, callback)).rejects.toThrow(
+          'watch failed',
+        );
+        return {};
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (_ns, method) => {
+      if (method === 'watch') throw new Error('watch failed');
+      return undefined;
+    });
+    const activated = waitFor('activated');
+    mainEp.post({ ...BOOT, caps: [...BOOT.caps, 'files'] as Cap[] });
+    await activated;
+    mainEp.post({
+      kind: 'file-change',
+      watchId: 1,
+      event: { ref: { root: 'r', rel: '' }, kind: 'changed' },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it('tool calls dispatch to the kept tool object', async () => {

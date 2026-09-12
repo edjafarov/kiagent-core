@@ -1,6 +1,12 @@
 import { cleanBody } from '../body';
 
 describe('cleanBody', () => {
+  it('keeps the authored body path unchanged when evidence is extracted separately', () => {
+    expect(
+      cleanBody('Renewal ready.\n\n--\nAlex Example\nProcurement'),
+    ).toContain('Renewal ready.');
+  });
+
   it('strips a quoted "On ... wrote:" reply chain', () => {
     const text =
       'Hi Bob,\n\nThis is the reply body.\n\n' +

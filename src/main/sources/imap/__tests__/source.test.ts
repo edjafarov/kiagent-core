@@ -296,6 +296,27 @@ describe('createImapSource — toDocument', () => {
     });
   });
 
+  it('adds one author evidence record without changing source identity fields', () => {
+    const doc = source.toDocument(
+      item({
+        evidence: {
+          version: 1,
+          messageKey: 'abc@test',
+          author: 'alice@example.com',
+          at: '2025-01-01T12:00:00.000Z',
+          signature: 'Alice',
+          excerpt: 'Hi there',
+          fingerprint: 'a'.repeat(64),
+        },
+      }),
+    ) as DocumentInput;
+    expect(doc.externalId).toBe('INBOX:999:7');
+    expect(doc.metadata.contactEvidence).toMatchObject({ version: 1 });
+    expect(
+      (doc.metadata.contactEvidence as { messages: unknown[] }).messages,
+    ).toHaveLength(1);
+  });
+
   it('falls back to "(no subject)" for blank/missing subjects', () => {
     expect(
       (source.toDocument(item({ subject: null })) as DocumentInput | null)

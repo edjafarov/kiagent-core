@@ -67,6 +67,14 @@ export function toDocument(
   const participants = [
     ...new Set(parsed.flatMap((m) => [m.from, ...m.to, ...m.cc])),
   ];
+  const contactEvidence = {
+    version: 1 as const,
+    messages: parsed
+      .map((m) => m.evidence)
+      .filter((e) => e.author)
+      .sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''))
+      .slice(-32),
+  };
 
   const threadDoc: DocumentInput = {
     externalId: item.id,
@@ -98,6 +106,7 @@ export function toDocument(
         cc: m.cc,
         replyTo: m.headers['reply-to'] ?? null,
       })),
+      contactEvidence,
     },
     // Last message date, per the task brief's design — a deliberate
     // deviation from legacy, which stamped created_at from the FIRST
