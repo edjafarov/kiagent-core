@@ -1,4 +1,6 @@
 /** @jest-environment node */
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -313,6 +315,26 @@ describe('createRpcEndpoint over the in-memory pair', () => {
       expect(wireErrorCode(err)).toBeUndefined();
     },
   );
+
+  it('carries message, name and errno from a real native fs rejection (cross-realm Error)', async () => {
+    const { main, child } = createInMemoryHostPair();
+    const mainEp = createRpcEndpoint(main);
+    createRpcEndpoint(child).onCall(async () =>
+      // A native errno exception from Node's own realm — under jest it is
+      // NOT `instanceof Error` in the test realm, exactly like the errors a
+      // scoped host.files read raises for a plugin.
+      fs.promises.lstat(path.join(os.tmpdir(), `kia-no-such-${process.pid}`)),
+    );
+    const err = await mainEp.call('files', 'lstat', []).then(
+      () => {
+        throw new Error('expected rejection');
+      },
+      (e: Error & { code?: string }) => e,
+    );
+    expect(err.name).toBe('Error');
+    expect(err.message).toMatch(/^ENOENT: no such file or directory, lstat/);
+    expect(err.code).toBe('ENOENT');
+  });
 
   it('lets the taxonomy code win over a wire `code` field', async () => {
     const { main, child } = createInMemoryHostPair();

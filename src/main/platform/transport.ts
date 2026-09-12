@@ -270,8 +270,21 @@ const ERROR_FIELD_ALLOWLIST = [
   'code',
 ] as const;
 
+// Duck-typed on purpose: a rejection raised by a native fs call, or by code
+// loaded in another realm (a jest vm context, a worker), is an Error whose
+// prototype chain does not reach THIS realm's `Error`, and `instanceof` then
+// says no. What the wire needs is the shape — a string message, a name, the
+// allow-listed fields — never the constructor identity.
+function isErrorLike(e: unknown): e is Error {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    typeof (e as { message?: unknown }).message === 'string'
+  );
+}
+
 function errorWireFields(e: unknown): Record<string, unknown> | undefined {
-  if (!(e instanceof Error)) return undefined;
+  if (!isErrorLike(e)) return undefined;
   let fields: Record<string, unknown> | undefined;
   for (const key of ERROR_FIELD_ALLOWLIST) {
     if (Object.prototype.hasOwnProperty.call(e, key)) {
@@ -377,13 +390,13 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
             reply(
               false,
               undefined,
-              e instanceof Error ? e.message : String(e),
+              isErrorLike(e) ? e.message : String(e),
               context.signal.aborted &&
-                e instanceof Error &&
+                isErrorLike(e) &&
                 e.name === 'AbortError'
                 ? 'RPC_ABORTED'
                 : wireErrorCode(e),
-              e instanceof Error ? e.name : undefined,
+              isErrorLike(e) ? e.name : undefined,
               errorWireFields(e),
             ),
         )
