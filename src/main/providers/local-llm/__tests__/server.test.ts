@@ -229,4 +229,38 @@ describe('LlamaServer launch args', () => {
     (srv as any).launch();
     expect(nglValue(calls[0].args)).toBe('0');
   });
+
+  function flagValue(args: string[], flag: string): string | undefined {
+    const i = args.indexOf(flag);
+    return i >= 0 ? args[i + 1] : undefined;
+  }
+
+  it('passes a shared context large enough for four concurrent background prompts', () => {
+    const { calls, spawnFn } = capture();
+    const srv = new LlamaServer({
+      binaryPath: 'unused',
+      modelPath: 'm',
+      mmprojPath: 'mm',
+      gpuLayers: 999,
+      log: noopLog,
+      spawnFn,
+    });
+    (srv as any).launch();
+    expect(flagValue(calls[0].args, '-c')).toBe('16384');
+  });
+
+  it('lets an explicit contextSize override the default', () => {
+    const { calls, spawnFn } = capture();
+    const srv = new LlamaServer({
+      binaryPath: 'unused',
+      modelPath: 'm',
+      mmprojPath: 'mm',
+      gpuLayers: 999,
+      contextSize: 8192,
+      log: noopLog,
+      spawnFn,
+    });
+    (srv as any).launch();
+    expect(flagValue(calls[0].args, '-c')).toBe('8192');
+  });
 });

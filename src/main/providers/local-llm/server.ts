@@ -10,7 +10,11 @@ export interface ServerLike {
 
 const DEFAULTS = {
   host: '127.0.0.1',
-  contextSize: 4096,
+  /** Total KV-cache tokens shared by every slot (llama-server picks four
+   *  slots with a unified cache). Four in-flight background prompts of up to
+   *  ~3.5k input + 512 output tokens each need ~16k; 4096 exhausted the cache
+   *  under three concurrent contact-enrichment requests. */
+  contextSize: 16384,
   startupTimeoutMs: 60_000,
   healthPollMs: 500,
   respawnBaseMs: 250,
