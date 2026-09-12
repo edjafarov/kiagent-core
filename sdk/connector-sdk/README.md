@@ -21,7 +21,7 @@ same TOFU shape as a connector's own release:
 ```json
 {
   "devDependencies": {
-    "@kiagent/connector-sdk": "https://github.com/edjafarov/kiagent-core/releases/download/sdk-v1.1.0/kiagent-connector-sdk-1.1.0.tgz"
+    "@kiagent/connector-sdk": "https://github.com/edjafarov/kiagent-core/releases/download/sdk-v1.2.0/kiagent-connector-sdk-1.2.0.tgz"
   }
 }
 ```
@@ -160,6 +160,22 @@ manage edit opened with the account's current roots in `spec.selected` and
 `spec.purpose === 'manage'`.
 
 ## Versioning
+
+As reviewed on 2026-09-09, this package's source version is **1.2.0** with
+`kiagentCore: 0.84.0`; the app/core checkout is **0.86.0**, with platform API
+**2.0.0**. The SDK version, core version and manifest `engine` range are
+independent. Newer core contracts (for example inference lane/model
+introspection and event provenance) do not retroactively appear in a
+published SDK tarball. Verify the installed declarations before using them.
+Running `build` here regenerates from the *current checkout*, so a locally
+packed 1.2.0 can differ from the published 1.2.0. Maintainers must bump SDK
+version and provenance before releasing changed contracts; plugin authors
+should pin an immutable released asset and run a separate typecheck.
+
+The SDK runs in the desktop extension process; it does not expose an HTTP
+upload API to external applications. See the universal
+[plugin authoring guide](../../docs/connectors-authoring-guide.md) for
+supported contribution types and ingestion/transport boundaries.
 
 - `package.json` `version` is this package's own semver.
 - `package.json` `kiagentCore` names the `kiagent-core` version the generated

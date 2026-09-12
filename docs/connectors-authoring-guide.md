@@ -1,20 +1,66 @@
-# Connector authoring guide
+# Plugin authoring guide
 
-How to build, test and ship a third-party connector for KIAgent.
+How to build, test and ship a third-party plugin for KIAgent: data-source
+connectors, MCP tools, and optional outbound senders.
 
-A **connector is an extension** — there is no separate connector concept. You
-write one CJS bundle, declare a manifest, and return a `Source` (and
-optionally a `Sender`) from `activate()`. The app installs it from a GitHub
-release, runs it in its own process, and drives it.
+For agents: start here, then read the SDK README and the actual contracts
+linked below. Dated specs/plans describe historical or proposed work; they
+are not a replacement for the shipped runtime.
+
+Reviewed against core **v0.86.0** (`86386100`), also pinned by alpha-cent's
+`core.lock`, on **2026-09-09**. Platform API: **2.0.0**. SDK package source:
+**1.2.0**, with `kiagentCore: 0.84.0`. These are three independent versions;
+the SDK provenance does not imply it includes every newer host feature.
+
+A **plugin is an extension**. A connector is an extension contributing a
+`Source`; a tool-only extension need not contribute a source. Write one CJS
+bundle, declare a manifest, and return any mix of `sources`, `tools`, and
+`senders` from `activate()`. The app installs it from a GitHub release, runs
+it in its own process, and drives it.
 
 This guide is the build-and-ship walkthrough. For *how the platform works*
 — process model, the capability gate, the bundled/privileged tier — read
 [`docs/architecture/extension-platform.md`](architecture/extension-platform.md)
 first; it is the model, this is the recipe.
 
-The worked example throughout is the published Slack connector
-(`kia-plugins/slack-kia-connector`), which uses every mechanism described
-here.
+The worked connector example is the published Slack connector
+(`kia-plugins/slack-kia-connector`). Choose the sections relevant to your
+contributions; a read-only data source does not need a Sender or custom tool.
+
+### Choose the integration boundary first
+
+| Goal | Supported extension surface |
+| --- | --- |
+| Add searchable external data | Return a `Source`; the engine drives `pull()` and commits `toDocument()` results |
+| Expose a custom operation to MCP clients | Declare and return `McpTool` contributions; use only the host capabilities needed by the operation |
+| Reply through an external service | Return a `Sender` for a source you contribute, with the `send` cap and outbound document metadata |
+| Keep private plugin state | Use the `db` capability; its database is separate from the shared corpus |
+| Run local AI over data | Use `inference`, with declarations matching the tested host/SDK versions |
+
+An extension's CJS bundle runs in the desktop host, not inside a browser or
+an external application. Those applications need an explicit transport to
+the data source. The SDK is not an HTTP client for uploading to KiAgent.
+
+There is currently **no supported general-purpose HTTP document-upload
+endpoint**. Local `/mcp` and Remote MCP expose MCP operations, not a corpus
+ingestion API. The loopback server checks Host/Origin and does not provide a
+browser upload/CORS contract. `host.net.fetch` is outbound public HTTP(S)
+only; it cannot connect to a localhost or private-network helper.
+
+For externally pushed data, a plugin-owned authenticated public HTTPS
+service can persist events which a `Source` polls. That service, its upload
+API, account pairing and retention are additional software the author must
+provide. Make any storage outside the user's machine explicit during setup.
+For local-only ingestion, external software can instead export stable
+Markdown/text files into a user-selected folder indexed by the built-in
+local-folder source. Include original URLs in file content; the local
+source's structured URL points to the file. Automatic browser-to-file
+delivery may need a separately installed native-messaging helper. No such
+helper or direct local upload bridge is supplied by the connector SDK.
+
+Do not bypass unsupported host capabilities by writing KiAgent's database
+or adding an undocumented listener and describing it as a platform API.
+See §4 for the durable ingestion contract and §8 for end-to-end validation.
 
 ---
 
@@ -31,7 +77,7 @@ registry):
 
 ```json
 "devDependencies": {
-  "@kiagent/connector-sdk": "https://github.com/edjafarov/kiagent-core/releases/download/sdk-v1.0.0/kiagent-connector-sdk-1.0.0.tgz"
+  "@kiagent/connector-sdk": "https://github.com/edjafarov/kiagent-core/releases/download/sdk-v1.2.0/kiagent-connector-sdk-1.2.0.tgz"
 }
 ```
 
@@ -142,6 +188,53 @@ The `ExtensionModule<'net' | 'send'>` type parameter is your cap list.
 not exist at compile time either — if you type it honestly, TypeScript catches
 a `host.query.…` call you never asked permission for.
 
+### Tool-only plugins
+
+For example, a corpus lookup tool can use `ExtensionModule<'query'>`, a
+manifest with `caps: ["query"]` and
+`contributes: { tools: ["yourname_lookup"], senders: [] }`, and this entry:
+
+```ts
+import type { ExtensionModule, HostFor, McpTool } from '@kiagent/connector-sdk';
+
+const createLookup = (host: HostFor<'query'>): McpTool => ({
+  name: 'yourname_lookup',
+  description: 'Find indexed documents by text.',
+  inputSchema: {
+    type: 'object',
+    properties: { text: { type: 'string', minLength: 1 } },
+    required: ['text'],
+    additionalProperties: false,
+  },
+  async call(args) {
+    if (
+      typeof args.text !== 'string' || !args.text.trim()
+      || Object.keys(args).some(key => key !== 'text')
+    ) {
+      throw new Error('Expected only a non-empty text string');
+    }
+    return host.query.search({ text: args.text, limit: 10 });
+  },
+});
+
+const mod = {
+  async activate(host) {
+    return { tools: [createLookup(host)] };
+  },
+} satisfies ExtensionModule<'query'>;
+
+export default mod;
+module.exports = mod;
+```
+
+Keep declared tool IDs and returned names aligned and choose names that do
+not collide with core or other plugins. Validate arguments in `call`; a
+JSON Schema declaration is not a substitute for runtime validation.
+`McpTool.tier: 'powerful'` is advisory metadata, not a confirmation gate.
+For outbound messaging, use the Sender flow in §7 so the platform owns user
+confirmation. Dispose timers, subscriptions and other resources you create
+in `deactivate()`. Returning a tool does not grant shared-corpus write access.
+
 ---
 
 ## 3. The manifest
@@ -193,8 +286,14 @@ need to *do* about them:
   register your `contributes.senders` — see §7.
 - `unsafe.mainProcess` is rejected outright for anything not shipped inside
   the app bundle. You cannot use it.
-- `inference` calls are **forced onto the `'interactive'` lane** by the host
-  surface, whatever `lane` you pass. Don't design around a background lane.
+- `inference` defaults to the `'interactive'` lane; an explicit
+  `lane: 'background'` is honored and fails with `LaneClosedError` while the
+  processing window is closed. Current core also exposes `lane()` and
+  `describe(kind)` and accepts a generation guard on `complete()`. These
+  newer APIs require matching SDK declarations; do not assume the 1.2.0
+  release contains them. Across RPC, inspect error `name` (and structured
+  fields for `ModelChangedError`), not `instanceof`. See the
+  [inference contract details](architecture/extension-platform.md#capabilities).
 - `net.fetch` accepts `http(s)` URLs only, reaches **public internet
   destinations only**, and caps a response body at 50 MiB. Loopback, RFC1918
   LAN, link-local (including cloud metadata endpoints), CGNAT, IPv6
@@ -214,7 +313,10 @@ need to *do* about them:
   `foreign_key_list`, `page_count`, `freelist_count`, `integrity_check`,
   `quick_check`) — `user_version` is there so the usual migration idiom works.
 - `events` refuses to emit names starting `extension.` or `platform.` (those
-  are platform-emitted).
+  are platform-emitted). Current core delivers `(payload, meta)`, with
+  host-stamped `meta.from` and `meta.at`; check provenance when accepting
+  peer events. Events have no persistence or replay and are not a durable
+  browser-ingestion queue.
 
 ### contributes
 
@@ -248,6 +350,8 @@ interface Source<Cursor, Item> {
   toDocument(item: Item): DocumentInput | DocumentInput[] | null;
   fetchBytes?(session: Session, doc: Document): Promise<Uint8Array | null>;
   reconcile?(session: Session): AsyncIterable<ExternalRef[]>;
+  manageFolders?(session: Session, channel: FolderSelectionChannel): Promise<FolderScopeUpdate<Cursor>>;
+  reauthenticate?(account: Account, auth: AuthChannel): Promise<void>;
 }
 ```
 
@@ -256,6 +360,36 @@ or a cursor store. The engine
 ([`src/main/core/engine/engine.ts`](../src/main/core/engine/engine.ts)) owns all
 of it and commits your batch and your cursor in **one transaction**, so
 "cursor advanced but rows lost" is not a state the store can reach.
+
+### pull() — durable pagination and external transports
+
+A batch has `{ phase, items, cursor, deletions?, estimateTotal? }`. `phase`
+is `'backfill'` while catching up and `'live'` when current. Fetch bounded
+pages, yield each with its next cursor, and finish a finite iterator once
+caught up; the descriptor/account cadence schedules the next run. A live
+iterator can instead keep yielding. Check `session.signal` during long work
+and between requests so pause/disconnect can stop it.
+
+The upstream page must be replayable from the previously committed cursor
+after a crash. Do not consume-and-delete upstream events merely by fetching
+them. There is no Source post-commit acknowledgement callback; design a
+plugin-owned queue around replay/retention and cursor-based reads. Preserve
+the next cursor even for empty pages by yielding a batch. Define a full
+resync path for expired cursors instead of silently skipping history.
+
+`host.net.fetch` returns a serializable `HostResponse` with `status`,
+`statusText`, lowercase `headers`, and `body: Uint8Array`; it is not a browser
+`Response` and has no `.json()` method. Import `HostResponse` and
+`requestWithRetry` from `@kiagent/connector-sdk/http`, check status, decode
+the body with `TextDecoder`, and validate the parsed data. The retry helper
+handles bounded request retries; source-level failure/restart remains
+engine-owned. Distinguish revoked credentials (§6) from transient failures.
+
+For a plugin-owned relay, authenticate upload and read access, isolate
+accounts, validate payload schemas/limits, deduplicate retries, retain data
+for offline clients, and document deletion/retention. Provider login cookies
+are not a plugin pairing credential. Capture/export software and the relay
+must be implemented and tested separately from the CJS connector.
 
 ### descriptor
 
@@ -332,6 +466,32 @@ any missing scopes by name.
 
 `connect()` upserts on `(source, identifier)`: returning the same identifier
 for a re-authenticated account keeps its existing id and its documents.
+
+### Folder management and reconnect
+
+For a folder-scoped source, set `descriptor.folderScope: true` and implement
+`manageFolders`. It receives existing credentials via `Session` and a
+`FolderSelectionChannel` (`status` and `pickFolders` only). It must not
+authenticate or persist state. Return the complete canonical config,
+transformed cursor, and archive/scope changes in `FolderScopeUpdate`; core
+owns the durable write. `config.folderRoots` is canonical and root IDs are
+opaque. Supply `archiveScopeRootIds` (an empty array is legal); a removed
+root still covered by a retained root belongs in `reattributeScopeRoots`,
+not the archive list. A root cannot be in both. Keep at least one root, or
+remove the account instead. The folder picker supports `selected` and
+`purpose: 'manage'` with source-provided `modes`, `roots` and `children`
+callbacks, optional counts, and `expand` for ancestors of selected nodes.
+See the comments on `FolderScopeUpdate` in contracts.ts before implementing
+root removal or attribution repair. **Runtime exception to those comments:**
+`archiveNullScoped` is currently logged as refused and never forwarded to
+the store (`engine.applyScope`); do not rely on it to archive or repair rows.
+
+Implement `reauthenticate(account, auth)` to reconnect an existing account:
+verify the provider identity matches that account, throw on a mismatch,
+and return no config (reconnect preserves scope). Do not author
+`descriptor.hasReauthenticate`; core derives it from the implemented method.
+Use SDK 1.2.0's `fakeFolderSelectionChannel` to test management without
+accidentally granting OAuth or prompt access in the test harness.
 
 ### pull()
 
@@ -414,9 +574,25 @@ interface DocumentInput {
 }
 ```
 
-`externalId` + `type` is your document's natural key, and the only way you
+Within an account, `externalId` + `type` is your document's natural key, and the only way you
 ever refer to a document (parentage, deletions, reconcile). You never hold a
 DB id.
+
+Reuse that key when upstream content changes: emit the complete updated
+document, not a delta to append to its Markdown. A random ID or capture time
+in the key creates a new document on every import. Namespace IDs when a
+source aggregates providers or identities that may otherwise collide.
+`createdAt` is the origin time, or `null` when unknown; keep capture/sync time
+in separate metadata. Preserve the canonical origin link in `url`, and
+include it in Markdown when users should be able to find it by text search.
+
+Partial snapshots are not proof of deletion. Merge them with retained state
+or clearly model them as partial documents; do not replace a complete
+document with an incomplete tail by accident. For an observed deletion,
+emit the original `{ externalId, type }` in `Batch.deletions`. Implement
+`reconcile()` only when your listing is authoritative for the whole account.
+Validate external input and render it as content, preserving role/order/code
+where relevant; imported instructions are data, not instructions to execute.
 
 ### type literals are load-bearing
 
@@ -594,6 +770,11 @@ path.)
 
 ## 8. Testing
 
+Run `tsc --noEmit` via a `typecheck` script independently of your test suite:
+the sample ts-jest configuration below disables TypeScript diagnostics.
+Build/test against the pinned released SDK, not a freshly regenerated local
+copy that silently contains newer contracts.
+
 Your test suite is yours, but three things earn their keep:
 
 **Pin the timezone.** If you bucket anything by day — a per-day document, a
@@ -627,7 +808,7 @@ declared, you aren't reaching for anything you didn't ask for.
 
 The SDK ships a test-only subpath with the pieces every connector's suite
 re-invents: `bundleLoadSmoke`, `jsonRes`, `scriptedFetch`, `fakeSession`,
-`fakeAuthChannel`, `instantClock`. It is a **separate subpath, never
+`fakeAuthChannel`, `fakeFolderSelectionChannel`, `instantClock`. It is a **separate subpath, never
 re-exported from the root** — it pulls in `node:child_process` and
 `node:assert`, so importing it from anything your entry bundles would drag
 both into `dist/index.js`. Import it only from test files.
@@ -669,6 +850,28 @@ Three gotchas worth knowing before you script around them:
   the `init` argument passed to the request recorded at `calls[i]`
   (`undefined` for an init-less GET, recorded even for a call that throws) —
   the seam a send test uses to assert method/body on one specific call.
+
+### End-to-end acceptance
+
+For sources, verify first import, unchanged replay, changed content under
+the same key, explicit deletion, multiple-account isolation, pagination,
+restart before commit, expired cursors, revoked credentials, 429/5xx and
+cancellation. Include incomplete upstream snapshots if the service can
+return them. Binary sources need a deferred `fetchBytes` extraction check.
+Tools need invalid-argument and missing-capability checks; senders need the
+real confirmation path as well as transport unit tests.
+
+Install in the real app (§9), grant permissions, connect an account, and
+wait for a committed source batch. Use an MCP-connected client to `search`
+for distinctive imported text and then `get` the returned document ID.
+Confirm full content, updates and origin URLs. Standard ingestion already
+provides search/get; a custom tool is only needed for additional behavior.
+Test contributed tools via the client's tool list and an actual call too.
+
+Hosted-client access depends on the product's Remote MCP configuration,
+the client's support and an app that is running/reachable. A pasted origin
+URL alone does not give the client access to the local corpus. Do not claim
+end-to-end readiness from unit tests or a bundle-load smoke alone.
 
 ---
 
@@ -736,7 +939,8 @@ different jobs and it's worth knowing which is which:
 ### The release itself
 
 ```
-npm test && npm run build
+npm run typecheck && npm test && npm run build
+npm pack --dry-run   # inspect the shipped file list first
 npm pack            # → slack-kia-connector-2.2.1.tgz
 gh release create v2.2.1 slack-kia-connector-2.2.1.tgz
 ```
