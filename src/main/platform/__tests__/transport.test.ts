@@ -1,7 +1,11 @@
 /** @jest-environment node */
 import path from 'path';
 
-import { SourceAuthError, sourceErrorCode } from '@shared/source-errors';
+import {
+  SourceAuthError,
+  sourceErrorCode,
+  wireErrorCode,
+} from '@shared/source-errors';
 
 import {
   createInMemoryHostPair,
@@ -284,22 +288,46 @@ describe('createRpcEndpoint over the in-memory pair', () => {
     expect(Object.getPrototypeOf(err)).toBe(Error.prototype);
   });
 
-  it('drops non-taxonomy error codes (a bare Node ENOENT never becomes a taxonomy code)', async () => {
+  it.each(['ENOENT', 'EEXIST', 'EACCES'])(
+    'carries a bare Node errno %s across as `code` without it becoming a taxonomy code',
+    async (errno) => {
+      const { main, child } = createInMemoryHostPair();
+      const mainEp = createRpcEndpoint(main);
+      createRpcEndpoint(child).onCall(async () => {
+        const e = new Error('no such file') as Error & { code?: string };
+        e.code = errno;
+        throw e;
+      });
+      const err = await mainEp.call('fs', 'read', []).then(
+        () => {
+          throw new Error('expected rejection');
+        },
+        (e: Error & { code?: string }) => e,
+      );
+      expect(err.message).toBe('no such file');
+      // A scoped host.files caller (remote-mcp's cert storage, Documents'
+      // classifyFsError) discriminates "missing" from "broken" by this code.
+      expect(err.code).toBe(errno);
+      // …but the engine's taxonomy never sees it as auth/permanent.
+      expect(sourceErrorCode(err)).toBeUndefined();
+      expect(wireErrorCode(err)).toBeUndefined();
+    },
+  );
+
+  it('lets the taxonomy code win over a wire `code` field', async () => {
     const { main, child } = createInMemoryHostPair();
     const mainEp = createRpcEndpoint(main);
     createRpcEndpoint(child).onCall(async () => {
-      const e = new Error('no such file') as Error & { code?: string };
-      e.code = 'ENOENT';
-      throw e;
+      throw new SourceAuthError('token revoked');
     });
-    const err = await mainEp.call('fs', 'read', []).then(
+    const err = await mainEp.call('source', 'pull', []).then(
       () => {
         throw new Error('expected rejection');
       },
       (e: Error & { code?: string }) => e,
     );
-    expect(err.message).toBe('no such file');
-    expect(err.code).toBeUndefined();
+    expect(err.code).toBe('auth');
+    expect(sourceErrorCode(err)).toBe('auth');
   });
 
   it('delivers non-call messages to onNotify and dispose rejects in-flight calls', async () => {

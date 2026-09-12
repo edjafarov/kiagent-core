@@ -253,11 +253,21 @@ type ReplyMsg = Extract<ChildToMain, { kind: 'reply' }>;
 // OWN properties, so they cross with `errorFields` simply absent. Extend this
 // list (never widen it to "every own key") the next time a new error type
 // needs a field preserved across the boundary.
+//
+// `code` is here for the errno a scoped `host.files` call raises (`ENOENT`,
+// `EEXIST`, `EACCES`, …): an in-process bundled plugin crosses this same
+// endpoint, and a store that must tell "no manifest yet" from a real failure
+// can only do so by that code (remote-mcp's cert storage, Documents'
+// `classifyFsError`). It never becomes a TAXONOMY code: the reply leg sets the
+// taxonomy `code` AFTER the allow-listed fields, so `'auth'`/`'permanent'`
+// always win, and every main-side consumer narrows through
+// `sourceErrorCode`/`wireErrorCode`, which map a bare errno to `undefined`.
 const ERROR_FIELD_ALLOWLIST = [
   'expected',
   'actual',
   'modelId',
   'source',
+  'code',
 ] as const;
 
 function errorWireFields(e: unknown): Record<string, unknown> | undefined {
@@ -397,11 +407,13 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
       if (r.ok) p.resolve(r.value);
       else {
         const err = new Error(r.error ?? 'remote error') as Error & {
-          code?: WireErrorCode;
+          code?: string;
         };
-        if (r.code) err.code = r.code;
         if (typeof r.errorName === 'string') err.name = r.errorName;
+        // Allow-listed fields first (a bare errno `code` among them), the
+        // taxonomy `code` last so it can never be shadowed by a wire field.
         applyErrorWireFields(err, r.errorFields);
+        if (r.code) err.code = r.code;
         p.reject(err);
       }
       return;
