@@ -290,6 +290,11 @@ function getAssetPath(...paths: string[]): string {
   return path.join(base, ...paths);
 }
 
+/** Grace period for compositing before we show the window regardless. Long
+ *  enough that a healthy-but-slow machine still shows a painted frame first,
+ *  short enough that a broken GL stack does not look like a hung app. */
+const WINDOW_SHOW_FALLBACK_MS = 5000;
+
 async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     show: false,
@@ -320,8 +325,31 @@ async function createWindow(): Promise<void> {
       ].find((f) => fs.existsSync(f)),
     },
   });
-  mainWindow.on('ready-to-show', () => mainWindow?.show());
+  // Normal path: Chromium fires ready-to-show once the first frame has been
+  // composited, so the window never appears as an empty white rectangle.
+  //
+  // Fallback: that event depends on the GPU/compositor actually delivering a
+  // frame. Where the GL stack is broken but the app is otherwise healthy —
+  // a VM with a non-functional virtio-gpu/Mesa, a remote session, a headless
+  // compositor — no frame ever arrives, ready-to-show never fires, and the
+  // window stays hidden forever with no error anywhere. did-finish-load means
+  // the renderer has loaded the page, so showing is safe from then on; we give
+  // compositing a grace period first and only then force it visible.
+  // showOnce() is idempotent, so on a healthy machine (every normal macOS and
+  // Windows run) ready-to-show wins the race and the timer is a no-op.
+  let shown = false;
+  const showOnce = (): void => {
+    if (shown || !mainWindow || mainWindow.isDestroyed()) return;
+    shown = true;
+    mainWindow.show();
+  };
+  let showFallback: NodeJS.Timeout | undefined;
+  mainWindow.on('ready-to-show', showOnce);
+  mainWindow.webContents.once('did-finish-load', () => {
+    showFallback = setTimeout(showOnce, WINDOW_SHOW_FALLBACK_MS);
+  });
   mainWindow.on('closed', () => {
+    if (showFallback) clearTimeout(showFallback);
     mainWindow = null;
   });
   // Windows/Linux: X hides to the tray instead of quitting the app.

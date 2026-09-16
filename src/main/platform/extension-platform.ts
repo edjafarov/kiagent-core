@@ -146,6 +146,20 @@ function computeDataDir(e: Entry, deps: ExtensionPlatformDeps): string {
   return path.join(e.dir, 'data');
 }
 
+// The data dir is a promise the platform makes to every extension: activate()
+// may assume it already exists. Nothing else creates it — a bundled extension's
+// data dir deliberately lives under userData, away from the signed (possibly
+// read-only, wiped-on-update) install dir, so on a fresh profile the path is
+// simply absent. An extension whose first act is to stat or grant a root over
+// it then dies with ENOENT before registering anything, and that activation
+// error surfaces only as status, so the app looks healthy while the extension
+// is silently gone. Idempotent: a no-op on profiles that already have it.
+function ensureDataDir(e: Entry, deps: ExtensionPlatformDeps): string {
+  const dir = computeDataDir(e, deps);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 function recoveryMarkerPath(extDir: string, pluginId: string): string {
   return path.join(extDir, '.recovery', `${pluginId}.json`);
 }
@@ -711,7 +725,7 @@ export function createExtensionPlatform(
     const host = createExtensionHost({
       extensionId: e.manifest.id,
       entryAbsPath: e.entryAbsPath,
-      dataDir: computeDataDir(e, deps),
+      dataDir: ensureDataDir(e, deps),
       caps: e.manifest.caps as Cap[],
       transportFactory: inProcess
         ? () => {
@@ -809,7 +823,7 @@ export function createExtensionPlatform(
               : undefined;
           return buildSurfaces({
             extensionId: e.manifest.id,
-            dataDir: computeDataDir(e, deps),
+            dataDir: ensureDataDir(e, deps),
             appDb: deps.db,
             owner,
             network,
