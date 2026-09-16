@@ -238,11 +238,20 @@ export function runExtensionHost(
   const managePickers = new Map<number, FolderPickerSpec>();
   const activeCalls = new Set<Promise<unknown>>();
 
-  const fail = (e: unknown) =>
-    endpoint.post({
+  // Also log locally: the 'errored' post only reaches the supervisor as a
+  // status, so an activation that dies before registering anything leaves a
+  // healthy-looking app with silently missing IPC channels and no trace of
+  // why. The stack is the only thing that points at the failing await.
+  const fail = (e: unknown) => {
+    void callHost(endpoint, 'base', 'log', [
+      'error',
+      `activation failed: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`,
+    ]).catch(() => {});
+    return endpoint.post({
       kind: 'errored',
       error: e instanceof Error ? e.message : String(e),
     } satisfies ChildToMain);
+  };
 
   async function onBootstrap(boot: ExtensionBootstrap): Promise<void> {
     try {
