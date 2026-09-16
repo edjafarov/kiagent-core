@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.87.0](https://github.com/edjafarov/kiagent-core/compare/v0.86.0...v0.87.0) (2026-09-16)
+
+### Features
+
+* add cancellable shared network requests ([1dc13d5](https://github.com/edjafarov/kiagent-core/commit/1dc13d5a8fd1d9583de5bb1b0c4a45189b42d3c7))
+* define shared plugin infrastructure contracts ([906a758](https://github.com/edjafarov/kiagent-core/commit/906a758aa164f830be03f728f520ddd99c4279ce))
+* expose authenticated message evidence reads ([accd524](https://github.com/edjafarov/kiagent-core/commit/accd524ccb0032e17d6f965b7a8e7e528d6fc3be))
+* expose live inference generation to extensions ([b1c5649](https://github.com/edjafarov/kiagent-core/commit/b1c5649410f46af1093e772221635db75d13e3dd))
+* harden scoped filesystem writes and metadata ([aefb53c](https://github.com/edjafarov/kiagent-core/commit/aefb53cc2a0000184becefb0926d19c4a09f0526))
+* migrate plugin storage into the shared database ([a281dff](https://github.com/edjafarov/kiagent-core/commit/a281dff24d0abe82e050b7e7bdfc43b82c6f15e7))
+* preserve author-attributed mail evidence ([1ead791](https://github.com/edjafarov/kiagent-core/commit/1ead791d5d937f11f5ea311b7c5128381323e41e))
+* propagate host call cancellation and database transactions ([5187de4](https://github.com/edjafarov/kiagent-core/commit/5187de49a11f0050bd7ed01745ef0784daf3d76e))
+* provide scoped asynchronous filesystem services ([640de25](https://github.com/edjafarov/kiagent-core/commit/640de256b973bcf43589220de1d0404d4ca3879a))
+* publish shared plugin SDK contracts ([dbe3d11](https://github.com/edjafarov/kiagent-core/commit/dbe3d1122a52fa85a123946c8f062749243bb645))
+* run plugin databases through the shared worker ([ca689ea](https://github.com/edjafarov/kiagent-core/commit/ca689ea2c7d16a41de5a53e64daf5a5152ebdd27))
+* support bounded historical mail evidence reads ([9b6d031](https://github.com/edjafarov/kiagent-core/commit/9b6d03151d3c7c61dc0ebb1b25f4ba4b1172d3ef))
+* wire shared plugin infrastructure into the platform ([06f8dad](https://github.com/edjafarov/kiagent-core/commit/06f8dad6bcafc72b04535acb164e6dd9b4fb0c73))
+
+### Bug Fixes
+
+* address Task 7 platform wiring review findings ([bcd860d](https://github.com/edjafarov/kiagent-core/commit/bcd860d5400e8697c971e6d57dcd57e9b1609541))
+* bound scoped directory and watcher lifecycles ([aa6124f](https://github.com/edjafarov/kiagent-core/commit/aa6124fb0c94cc8fc43e3412aeacfade00ce4613))
+* clean up late network responses ([c7fcf07](https://github.com/edjafarov/kiagent-core/commit/c7fcf07236581b45441fab6e8c9fe96a36308ece))
+* close network cancellation gaps ([5442934](https://github.com/edjafarov/kiagent-core/commit/5442934efc542d26e8ec1a09197e04d51beeb3b7))
+* coordinate core and plugin database work ([cb8a550](https://github.com/edjafarov/kiagent-core/commit/cb8a550de700d9c26661a903854a059ac4f87fb3))
+* enforce plugin transaction authority and lifecycle ([66b9d02](https://github.com/edjafarov/kiagent-core/commit/66b9d02c60cba6265d684e5247cf6ccc1629e708))
+* finalize scoped plugin authorization ([1a3007f](https://github.com/edjafarov/kiagent-core/commit/1a3007f7addd5156ccfa6c2fbb8a45f0e5b5a4ec))
+* guard historical evidence source types ([b88332c](https://github.com/edjafarov/kiagent-core/commit/b88332c5cb3740dcf384f9b76c6fd64caafcab86))
+* guard watcher setup after lifecycle changes ([93b3572](https://github.com/edjafarov/kiagent-core/commit/93b35723b6be3e52975ba3b57a709e44086a0a0c))
+* harden plugin transaction boundaries ([5aaea67](https://github.com/edjafarov/kiagent-core/commit/5aaea6738033fdbfe7fdfec3f0ab332557614db8))
+* harden scoped filesystem lifecycle and identity ([297f3aa](https://github.com/edjafarov/kiagent-core/commit/297f3aaf7a212d07a8d7a333c9f18fd2c1113094))
+* harden the shared plugin infrastructure after whole-branch review ([da068ae](https://github.com/edjafarov/kiagent-core/commit/da068aee3494c632fa233155bebac4de49724ed7))
+* key trusted file-root grants by plugin id and validate the grant owner ([d30386a](https://github.com/edjafarov/kiagent-core/commit/d30386a645c9365d0bfd20f78accc8d358259efd))
+* **local-llm:** give llama-server a 16k shared context ([fbfeb4e](https://github.com/edjafarov/kiagent-core/commit/fbfeb4e6aa15a6730fe41a34a96fced1a4782c80))
+* **platform:** carry Node errno codes across the host RPC endpoint ([0279640](https://github.com/edjafarov/kiagent-core/commit/02796406fb7f51fc05480af6f3f9c6cd411bca8b))
+* **platform:** duck-type rejections on the RPC reply leg ([8a660d6](https://github.com/edjafarov/kiagent-core/commit/8a660d65ace6261e8fd6ddd4bf5aee0543e95cc7))
+* preserve hidden rowids exactly when importing legacy plugin tables ([7942d6e](https://github.com/edjafarov/kiagent-core/commit/7942d6e627939e44000796e8ccbdbf06d418f930))
+* preserve stale status on aborted evidence reads ([77b1d67](https://github.com/edjafarov/kiagent-core/commit/77b1d676de013bbbdfcd708de3820c5b2cb80f5d))
+* queue shared database transaction begins ([158e5a4](https://github.com/edjafarov/kiagent-core/commit/158e5a4ffd10bcc47775f7019d60dbbf8efa03c9))
+* reject stale coordinator work safely ([36a7c9b](https://github.com/edjafarov/kiagent-core/commit/36a7c9b74a1bf574964c2b1bfb7a3d7904839282))
+* repair plugin transaction failures before admission ([3c7bb37](https://github.com/edjafarov/kiagent-core/commit/3c7bb37d20be949926d39ea09eba2c17d6e185bd))
+* restore the prior enabled state when uninstall reset or tombstone fails ([fb1bed2](https://github.com/edjafarov/kiagent-core/commit/fb1bed2743ff88f1c9f3d6d7aa31879f6ee4e434))
+* tighten database descriptor legacy validation ([fa5a164](https://github.com/edjafarov/kiagent-core/commit/fa5a164fd2098b80fb005598441d92044d9f0ba3))
+* tighten mail evidence attribution ([7fbb594](https://github.com/edjafarov/kiagent-core/commit/7fbb594cea2b4ff69baf35c8bb7d45796a3b1d54))
+* use a collision-free projection alias for imported hidden rowids ([4a6ffe3](https://github.com/edjafarov/kiagent-core/commit/4a6ffe3383eccda3f4590a9a0841c2ebe8a9d97b))
+* validate all direct legacy migration modules ([7e8cab6](https://github.com/edjafarov/kiagent-core/commit/7e8cab60a60bd16cdb233bdbcda1d142980d947f))
+* validate and cancel message evidence reads ([3cd0a2f](https://github.com/edjafarov/kiagent-core/commit/3cd0a2f14e0768b9d8c9975dede9521ef060d205))
+* validate uninstall before mutating state and re-register lifecycle listeners on restart ([c696a84](https://github.com/edjafarov/kiagent-core/commit/c696a84dcbd37e563a407ab8c247cb298f6ae8ed))
+* verify appended descriptor objects exist before activating an upgrade ([7e5929f](https://github.com/edjafarov/kiagent-core/commit/7e5929f07120da0405bec1198600a6b6e2cb395c))
+
 ## [0.86.0](https://github.com/edjafarov/kiagent-core/compare/v0.85.0...v0.86.0) (2026-09-07)
 
 ### Features
