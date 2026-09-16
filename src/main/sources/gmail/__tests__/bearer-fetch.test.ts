@@ -1,4 +1,4 @@
-import { bearerFetch } from '../bearer-fetch';
+import { bearerFetch, computeRetryDelayMs } from '../bearer-fetch';
 
 interface FakeResponse {
   ok: boolean;
@@ -259,5 +259,72 @@ describe('bearerFetch retry/backoff', () => {
       }),
     ).rejects.toThrow(/fetch failed/);
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('computeRetryDelayMs — quota backoff', () => {
+  // The real body Gmail returns for a per-user rate quota. The classifier
+  // matches on errors[].reason — the prose "Quota exceeded" in `message`
+  // deliberately does not match, so a fixture without `reason` would be
+  // classified as a plain non-retryable 403 and prove nothing.
+  const QUOTA_MESSAGE =
+    "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user' of service 'gmail.googleapis.com'.";
+  const QUOTA_BODY = JSON.stringify({
+    error: {
+      code: 403,
+      message: QUOTA_MESSAGE,
+      errors: [
+        {
+          message: QUOTA_MESSAGE,
+          domain: 'usageLimits',
+          reason: 'rateLimitExceeded',
+        },
+      ],
+      status: 'RESOURCE_EXHAUSTED',
+    },
+  });
+
+  it('waits out a full quota window, which the exponential ramp never reaches', () => {
+    // attempt 0-3 is the whole budget under MAX_ATTEMPTS. Every one of them
+    // must clear a minute; before the fix the ramp topped out at 8s, so the
+    // entire budget burned inside the window that rejected it.
+    for (const attempt of [0, 1, 2, 3]) {
+      const delay = computeRetryDelayMs(attempt, 403, QUOTA_BODY, null);
+      expect(delay).toBeGreaterThanOrEqual(60_000);
+    }
+  });
+
+  it('leaves non-quota failures on the short exponential ramp', () => {
+    // A 500 is not a quota problem — making it wait a minute would turn a
+    // blip into a stall.
+    expect(computeRetryDelayMs(0, 500, 'boom', null)).toBeLessThan(2_000);
+    expect(computeRetryDelayMs(3, 500, 'boom', null)).toBeLessThan(10_000);
+  });
+
+  it('does not treat a non-quota 403 as a quota failure', () => {
+    // Body has no quota marker, so this 403 is not retryable at all; if it
+    // still reaches the delay path it must not get the long floor.
+    expect(computeRetryDelayMs(0, 403, 'forbidden', null)).toBeLessThan(2_000);
+  });
+
+  it('lets Retry-After win over the quota floor — the server said when', () => {
+    // 5s Retry-After on a quota body: obey the server rather than imposing a
+    // longer wait of our own.
+    expect(computeRetryDelayMs(0, 403, QUOTA_BODY, '5')).toBe(5_000);
+  });
+
+  it('still honours maxRetryDelayMs, so user-facing waits stay bounded', () => {
+    expect(computeRetryDelayMs(0, 403, QUOTA_BODY, null, 50)).toBe(50);
+  });
+
+  it('jitters the quota wait so parallel fetches do not return in lockstep', () => {
+    // A chunk's worth of rejections resuming at the same instant would
+    // re-exhaust the window immediately.
+    const delays = new Set(
+      Array.from({ length: 20 }, () =>
+        computeRetryDelayMs(0, 403, QUOTA_BODY, null),
+      ),
+    );
+    expect(delays.size).toBeGreaterThan(1);
   });
 });

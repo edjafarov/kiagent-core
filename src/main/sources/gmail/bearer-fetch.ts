@@ -8,7 +8,9 @@
  *  - 429 / 5xx / Google-quota-403 are retried with exponential backoff
  *    (honoring `Retry-After` when present); network errors and timeouts are
  *    always retryable (defaults — see retryOn/retryNetErrors for
- *    non-idempotent callers).
+ *    non-idempotent callers). A quota-403 additionally waits out a full
+ *    quota window, which the exponential ramp alone never reaches
+ *    (computeRetryDelayMs).
  *  - The abort signal stays armed across BOTH header and body read — fetch()
  *    resolves as soon as headers arrive, so clearing the timeout early can
  *    leave a slow body read unprotected (legacy hit multi-hour hangs this way).
@@ -23,6 +25,9 @@
 import { SourceAuthError } from '@shared/source-errors';
 
 const MAX_ATTEMPTS = 4;
+/** Google's per-user Gmail quotas are enforced over a rolling one-minute
+ *  window; a quota rejection has to outlast it. See computeRetryDelayMs. */
+const QUOTA_WINDOW_MS = 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
 
 export interface BearerFetchOpts {
@@ -54,13 +59,60 @@ export interface BearerFetchOpts {
   maxRetryDelayMs?: number;
 }
 
+/** Google reports a per-user rate quota as a 403 whose body names the metric,
+ *  e.g. "Quota exceeded for quota metric 'Total Query Cost' and limit
+ *  'Units per minute per user'". */
+const QUOTA_BODY_RE = /rateLimitExceeded|userRateLimitExceeded|quotaExceeded/i;
+
+function isQuotaFailure(status: number, body: string): boolean {
+  return status === 403 && QUOTA_BODY_RE.test(body);
+}
+
 function isRetryableGoogleFailure(status: number, body: string): boolean {
   if (status === 429 || status >= 500) return true;
   if (status === 401) return false;
-  if (status === 403) {
-    return /rateLimitExceeded|userRateLimitExceeded|quotaExceeded/i.test(body);
-  }
+  if (status === 403) return QUOTA_BODY_RE.test(body);
   return false;
+}
+
+/**
+ * Delay before the next attempt.
+ *
+ * Retry-After is the server stating exactly when to return, so it wins
+ * outright. Otherwise the usual exponential ramp applies — except for a quota
+ * rejection, which gets a floor of a full quota window.
+ *
+ * That floor is the point of this function. Those per-user limits are enforced
+ * over a rolling minute, while the exponential branch only reaches 2^3 = 8s
+ * within MAX_ATTEMPTS, so without a floor every attempt lands inside the same
+ * window as the rejection that triggered it and the entire retry budget burns
+ * against a limit that was never going to reset. Worse, rejected requests
+ * still cost quota, so retrying inside the window sustains the exhaustion
+ * rather than waiting it out — which is how a backfill ends up looping on 403s
+ * until it is restarted.
+ *
+ * Exported for tests: the floor is a minute, so asserting on it through real
+ * timers is not practical.
+ */
+export function computeRetryDelayMs(
+  attempt: number,
+  status: number,
+  body: string,
+  retryAfter: string | null,
+  maxRetryDelayMs?: number,
+): number {
+  const retryAfterMs = Number(retryAfter);
+  const serverDirected = Number.isFinite(retryAfterMs) && retryAfterMs > 0;
+  let delay = serverDirected
+    ? retryAfterMs * 1000
+    : Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 250;
+  if (!serverDirected && isQuotaFailure(status, body)) {
+    // Jittered so a chunk's worth of parallel fetches, all rejected at once,
+    // do not return in lockstep and re-exhaust the window immediately.
+    delay = Math.max(delay, QUOTA_WINDOW_MS + Math.random() * 5_000);
+  }
+  if (maxRetryDelayMs !== undefined) delay = Math.min(delay, maxRetryDelayMs);
+  return delay;
 }
 
 /**
@@ -173,17 +225,22 @@ export async function bearerFetch<T>(
     const { status, body, retryAfter } = httpFail!;
     const retryable = (opts.retryOn ?? isRetryableGoogleFailure)(status, body);
     if (attempt < attemptCap && retryable) {
-      const retryAfterMs = Number(retryAfter);
-      let delay =
-        Number.isFinite(retryAfterMs) && retryAfterMs > 0
-          ? retryAfterMs * 1000
-          : Math.min(60_000, 1000 * 2 ** attempt) + Math.random() * 250;
-      if (opts.maxRetryDelayMs !== undefined) {
-        delay = Math.min(delay, opts.maxRetryDelayMs);
-      }
+      const delay = computeRetryDelayMs(
+        attempt,
+        status,
+        body,
+        retryAfter,
+        opts.maxRetryDelayMs,
+      );
       if (opts.logTag) {
+        // Name the quota case: an unexplained minute-long pause reads as a
+        // hung sync, and the 403 body is the only thing that says which limit
+        // was hit.
+        const why = isQuotaFailure(status, body)
+          ? ' (quota — waiting out the window)'
+          : '';
         console.warn(
-          `${opts.logTag} ${status} ${url} — retry ${attempt + 1}/${attemptCap} after ${Math.round(delay)}ms`,
+          `${opts.logTag} ${status} ${url} — retry ${attempt + 1}/${attemptCap} after ${Math.round(delay)}ms${why}`,
         );
       }
       await sleep(delay, opts.signal);
