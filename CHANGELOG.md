@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.87.1](https://github.com/edjafarov/kiagent-core/compare/v0.87.0...v0.87.1) (2026-09-16)
+
+### Bug Fixes
+
+* **gmail:** wait out the quota window instead of looping inside it ([29a6c68](https://github.com/edjafarov/kiagent-core/commit/29a6c68ab2d45d598d24a99c489d6e9acf2c492c))
+* **main:** create extension data dirs, and show the window without a GPU frame ([6d340c7](https://github.com/edjafarov/kiagent-core/commit/6d340c70ddfa969e69ff18964eaceb2a48b5a13d))
+
 ## [0.87.0](https://github.com/edjafarov/kiagent-core/compare/v0.86.0...v0.87.0) (2026-09-16)
 
 ### Features
