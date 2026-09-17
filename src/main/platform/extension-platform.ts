@@ -210,6 +210,11 @@ function recoveryRequiredError(
   );
 }
 
+/** Deactivate budget for the in-process (bundled, `unsafe.mainProcess`) tier
+ *  before the inert kill backstop fires. Deliberately generous: see the
+ *  comment at the `killAfterMs` spread in createExtensionHost below. */
+const IN_PROCESS_KILL_AFTER_MS = 30_000;
+
 export interface ExtensionPlatformDeps {
   extDir: string;
   /** Second discovery root for extensions shipped inside the app package
@@ -264,7 +269,15 @@ export interface ExtensionPlatformDeps {
   notify(msg: string, level?: LogLevel): void;
   transportFactory(extensionId: string): HostTransport;
   onChange(snapshot: ExtensionSnapshot[]): void;
-  hostTimeouts?: { readyTimeoutMs?: number; activateTimeoutMs?: number };
+  hostTimeouts?: {
+    readyTimeoutMs?: number;
+    activateTimeoutMs?: number;
+    /** Budget for a child's own deactivate() before the kill backstop fires.
+     *  Defaults to 2000 ms for a forked child; the in-process tier gets
+     *  IN_PROCESS_KILL_AFTER_MS instead (see transportFactory). Overriding
+     *  here wins for BOTH tiers. */
+    killAfterMs?: number;
+  };
   download?: InstallerDeps['download'];
   /** OAuth plumbing for `contributes.sources: [{ id, oauth: 'google' }]`:
    *  register/unregister mirror the connect broker's profile map, and
@@ -852,6 +865,16 @@ export function createExtensionPlatform(
       onStatus: (status, error) => setStatus(e, status, error),
       registerContributions: (c, makeSource) =>
         registerContributions(e, c, makeSource),
+      // In-process: kill() is simulateExit() and reclaims NOTHING, so a short
+      // backstop cannot free a resource — it can only cut the wait short and
+      // let a successor activation start while this teardown is still
+      // running. That race is real: the successor is a fresh module instance
+      // which re-registers the extension's ipcMain channels, and
+      // ipcMain.handle throws on a duplicate. So give first-party in-process
+      // teardown room to finish. A forked child keeps the 2 s default, where
+      // the backstop genuinely reclaims a process.
+      ...(inProcess ? { killAfterMs: IN_PROCESS_KILL_AFTER_MS } : {}),
+      // Explicit product configuration still wins for either tier.
       ...deps.hostTimeouts,
     });
     e.host = host;
@@ -1116,7 +1139,14 @@ export function createExtensionPlatform(
 
     async resetAll() {
       const candidates = [...entries.values()].filter((e) => e.enabled);
-      for (const e of candidates) await deactivate(e);
+      // Under runExclusive, like the restore loop in the finally block below:
+      // a bare deactivate(e) here could interleave with a concurrent
+      // setEnabled/activate for the same id and tear down its fresh host.
+      for (const e of candidates)
+        await runExclusive(e.manifest.id, async () => {
+          const current = entries.get(e.manifest.id);
+          if (current) await deactivate(current);
+        });
       const failed: ResetAllFailure[] = [];
       const failedIds = new Set<string>();
       try {

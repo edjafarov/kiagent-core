@@ -406,7 +406,27 @@ export function createExtensionHost(deps: HostDeps): {
           inc.transport.onExit(() => resolve());
         });
         inc.endpoint.post({ kind: 'deactivate' } satisfies MainToChild);
-        const timer = setTimeout(() => inc.transport.kill(), killAfterMs);
+        // The BACKSTOP, not the stop path. `await exited` below is normally
+        // resolved by the child's own exit(0), posted after its deactivate()
+        // returns — so a well-behaved extension is fully awaited. This timer
+        // exists only for one that never gets there.
+        //
+        // It is not free: firing it resolves `exited` and lets stop() return,
+        // after which the platform may activate a successor while the
+        // predecessor's teardown is STILL RUNNING. For a forked child that is
+        // an acceptable trade (kill() really does reclaim the process). For
+        // the in-process tier kill() is simulateExit() and reclaims nothing,
+        // so firing early buys no resources and only creates that race —
+        // which is why the in-process tier is given a far more generous
+        // budget (see extension-platform.ts's transportFactory).
+        //
+        // Either way, an overrun is a real event and must not be silent.
+        const timer = setTimeout(() => {
+          deps.logSink.log(scope, 'warn', 'deactivate-overran-kill-backstop', {
+            killAfterMs,
+          });
+          inc.transport.kill();
+        }, killAfterMs);
         await exited;
         await inc.cleanupDone;
         clearTimeout(timer);

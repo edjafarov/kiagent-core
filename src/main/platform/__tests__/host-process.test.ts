@@ -278,6 +278,30 @@ describe('createExtensionHost', () => {
     expect(statuses.some((s) => s.status === 'errored')).toBe(false);
   });
 
+  it('logs a warning when deactivate() overruns the kill backstop', async () => {
+    // The backstop resolving `exited` lets stop() return while the child's
+    // deactivate() is still running, after which a successor may activate.
+    // In-process that race is invisible (kill() reclaims nothing), so the
+    // overrun must at least be observable.
+    const log = jest.fn();
+    const hangingDeactivate = {
+      async activate() {
+        return { sources: [], tools: [] };
+      },
+      deactivate: () => new Promise<void>(() => {}),
+    };
+    const { deps } = makeDeps(hangingDeactivate, {
+      killAfterMs: 20,
+      logSink: { log },
+    });
+    const host = createExtensionHost(deps as never);
+    await host.start();
+    await host.stop();
+    expect(
+      log.mock.calls.some((c) => c[2] === 'deactivate-overran-kill-backstop'),
+    ).toBe(true);
+  });
+
   it('a synchronous setup throw (e.g. transportFactory) rejects start() promptly with a single errored, no hang', async () => {
     const unhandled: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => unhandled.push(reason);
