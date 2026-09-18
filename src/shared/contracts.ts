@@ -15,6 +15,7 @@
 import type { PluginDb } from './plugin-db';
 import type { ScopedFiles } from './plugin-files';
 import type { PluginNet } from './plugin-net';
+import type { AttentionItemWire } from './attention';
 
 export type {
   PluginDb,
@@ -957,6 +958,7 @@ export type Cap =
   | 'commands'
   | 'inference'
   | 'events'
+  | 'attention'
   /** May deliver outbound messages through the host's send pipeline — the
    *  host calls the extension's Sender only AFTER a user confirmation gate;
    *  extensions never initiate sends. Not a host namespace: there is no
@@ -1102,6 +1104,17 @@ export interface CapSurfaces {
         cb: (payload: unknown, meta: EventMeta) => void,
       ): () => void;
       emit(event: string, payload: unknown): void;
+    };
+  };
+  attention: {
+    attention: {
+      publish(
+        items: readonly AttentionItemWire[],
+      ): Promise<{ rejected: { id: string; reason: string }[] }>;
+      resolve(
+        id: string,
+        revision?: number,
+      ): Promise<{ rejected: { id: string; reason: string }[] }>;
     };
   };
   /** Host-initiated only — no extension→host surface. */

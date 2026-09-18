@@ -34,6 +34,7 @@ export const CAPS = [
   'commands',
   'inference',
   'events',
+  'attention',
   'send',
   'unsafe.mainProcess',
 ] as const satisfies readonly Cap[];

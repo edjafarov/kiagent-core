@@ -97,6 +97,7 @@ export const NS_METHODS: Record<string, string[]> = {
     'watch',
   ],
   commands: ['register'],
+  attention: ['publish', 'resolve'],
 };
 
 function buildRemoteHost(

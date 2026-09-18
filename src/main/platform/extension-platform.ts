@@ -26,6 +26,7 @@ import type { ExtensionPreview } from '@shared/ipc';
 import type { Contributions } from '@shared/extension-rpc';
 import type { AppDb } from '@main/db/app-db';
 import type { DbOwner } from '@main/db/coordinator';
+import type { AttentionService } from '@main/attention/service';
 
 import type { CoreStore } from '@main/core/store/store';
 import type { CoreScheduler } from '@main/core/scheduler';
@@ -236,6 +237,7 @@ export interface ExtensionPlatformDeps {
   mainApiForPlugin?: (pluginId: string) => unknown;
   /** The one boot-owned worker service. */
   db?: AppDb;
+  attention: AttentionService;
   /** Trusted root grants restored/created by product main-process flows. */
   fileRoots?: FileRootRegistry;
   /** Optional test/integration seam; production uses the guarded default. */
@@ -846,6 +848,7 @@ export function createExtensionPlatform(
               ...deps.inference,
               lane: async () => deps.laneState(),
             },
+            attention: deps.attention,
             notify: deps.notify,
             bus,
             deliverEvent,

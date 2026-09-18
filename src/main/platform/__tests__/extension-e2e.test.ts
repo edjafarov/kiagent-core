@@ -28,6 +28,10 @@ jest.setTimeout(240_000);
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
 const CHILD_ENTRY = path.resolve(__dirname, '../extension-host-entry.ts');
 const FIXTURE = path.join(__dirname, 'fixtures', 'ext-basic');
+const attentionStub = {
+  publish: async () => ({ rejected: [] }),
+  resolve: async () => ({ rejected: [] }),
+} as never;
 
 describe('extension runtime e2e (real forked child)', () => {
   let tmp: string;
@@ -47,6 +51,7 @@ describe('extension runtime e2e (real forked child)', () => {
     platform = createExtensionPlatform({
       extDir: path.join(tmp, 'extensions'),
       store,
+      attention: attentionStub,
       sources: {
         register: (s) => void registry.set(s.descriptor.id, s),
         get: (id) => registry.get(id),
@@ -219,6 +224,7 @@ describe('extension runtime e2e — host-stamped event identity (real forked chi
     platform = createExtensionPlatform({
       extDir: path.join(tmp, 'extensions'),
       store,
+      attention: attentionStub,
       sources: {
         register: (s) => void registry.set(s.descriptor.id, s),
         get: (id) => registry.get(id),
@@ -387,6 +393,7 @@ describe('extension runtime e2e — lane and model-identity errors across the RP
     platform = createExtensionPlatform({
       extDir: path.join(tmp, 'extensions'),
       store,
+      attention: attentionStub,
       sources: {
         register: (s) => void registry.set(s.descriptor.id, s),
         get: (id) => registry.get(id),

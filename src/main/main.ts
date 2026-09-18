@@ -1080,6 +1080,7 @@ app
         'bundled-extensions-data',
       ),
       db: p.db,
+      attention,
       fileRoots,
       mainApiForPlugin: (callerPluginId) =>
         buildMainApi({
@@ -1287,6 +1288,9 @@ app.on('before-quit', (event) => {
     await bundledProviders?.localLlm.dispose().catch(() => {});
     await bundledProviders?.localAsr.dispose().catch(() => {});
     await mcp?.stop().catch(() => {});
+    // Extensions stop first, so no caller can start new attention work while
+    // the service drains admitted operations; only then do we dispose the
+    // attention service and finally shut down the shared DB platform.
     await extensionsPlatform?.stop().catch(() => {});
     attentionPush?.dispose();
     await attentionService?.dispose().catch(() => {});

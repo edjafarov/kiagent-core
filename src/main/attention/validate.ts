@@ -1,3 +1,5 @@
+import { types } from 'node:util';
+
 import type {
   AttentionActionWire,
   AttentionItemWire,
@@ -32,9 +34,12 @@ const TARGET_KEYS = new Set(['view', 'params']);
 const PERSON_KEYS = new Set(['kind', 'namespace', 'value']);
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null) return false;
+  if (types.isProxy(value)) return false;
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return false;
   const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+  if (prototype !== null && types.isProxy(prototype)) return false;
+  return prototype === null || Object.getPrototypeOf(prototype) === null;
 }
 
 function hasSafeOwnDataProperties(
@@ -68,6 +73,7 @@ function isArrayIndexKey(key: string): boolean {
 }
 
 function hasSafeArrayShape(value: unknown): value is unknown[] {
+  if (types.isProxy(value)) return false;
   if (!Array.isArray(value)) return false;
   let length: number | undefined;
   for (const key of Reflect.ownKeys(value)) {
@@ -367,7 +373,11 @@ export function validateBatch(
   const valid: AttentionItemWire[] = [];
   const rejected: { id: string; reason: string }[] = [];
   const seen = new Set<string>();
-  for (const raw of rawItems) {
+  // Own index reads only: hasSafeArrayShape vouched for `length` and every
+  // index as own data properties, but NOT for the prototype, so for...of
+  // (an inherited Symbol.iterator) could present a different snapshot.
+  for (let index = 0; index < rawItems.length; index += 1) {
+    const raw = rawItems[index];
     const id = safeItemId(raw);
     try {
       const item = validateAttentionItem(raw, policy);

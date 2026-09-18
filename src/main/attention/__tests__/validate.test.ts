@@ -1,3 +1,5 @@
+import vm from 'node:vm';
+
 import {
   ATTENTION_ACTION_POLICY,
   type AttentionActionPolicy,
@@ -30,6 +32,62 @@ const policy: AttentionActionPolicy = {
   views: ['outbox', 'home'],
   paramKeys: ['anchor', 'accountId'],
 };
+
+type TrapCounts = {
+  get: number;
+  getOwnPropertyDescriptor: number;
+  ownKeys: number;
+  getPrototypeOf: number;
+  has: number;
+};
+
+function proxyWithTrapCounts<T extends object>(
+  source: T,
+  get?: (target: T, property: PropertyKey, receiver: object) => unknown,
+): { proxy: T; traps: TrapCounts } {
+  const traps: TrapCounts = {
+    get: 0,
+    getOwnPropertyDescriptor: 0,
+    ownKeys: 0,
+    getPrototypeOf: 0,
+    has: 0,
+  };
+  const proxy = new Proxy(source, {
+    get(object, property, receiver) {
+      traps.get += 1;
+      return get
+        ? get(object, property, receiver)
+        : Reflect.get(object, property, receiver);
+    },
+    getOwnPropertyDescriptor(object, property) {
+      traps.getOwnPropertyDescriptor += 1;
+      return Reflect.getOwnPropertyDescriptor(object, property);
+    },
+    ownKeys(object) {
+      traps.ownKeys += 1;
+      return Reflect.ownKeys(object);
+    },
+    getPrototypeOf(object) {
+      traps.getPrototypeOf += 1;
+      return Reflect.getPrototypeOf(object);
+    },
+    has(object, property) {
+      traps.has += 1;
+      return Reflect.has(object, property);
+    },
+  });
+  return { proxy, traps };
+}
+
+function zeroTrapCounts(): TrapCounts {
+  return {
+    get: 0,
+    getOwnPropertyDescriptor: 0,
+    ownKeys: 0,
+    getPrototypeOf: 0,
+    has: 0,
+  };
+}
 
 describe('attention validation', () => {
   it('C11 default policy rejects every navigation target', () => {
@@ -231,6 +289,156 @@ describe('attention validation', () => {
       validateAttentionItem(item({ people: [person] }), policy),
     ).toThrow();
     expect(executions).toBe(0);
+  });
+
+  it('V2a rejects a Proxy item before the flip-flopping title trap can run', () => {
+    let titleReads = 0;
+    const { proxy, traps } = proxyWithTrapCounts(item(), (target, property) => {
+      if (property === 'title') {
+        titleReads += 1;
+        return titleReads <= 3 ? 'clean' : `evil\0${'x'.repeat(500)}`;
+      }
+      return Reflect.get(target, property);
+    });
+
+    expect(() => validateAttentionItem(proxy, policy)).toThrow();
+    expect(titleReads).toBe(0);
+    expect(traps).toEqual(zeroTrapCounts());
+  });
+
+  it('V2b rejects a Proxy over a null-prototype item without running traps', () => {
+    const target = Object.assign(Object.create(null), item());
+    const { proxy, traps } = proxyWithTrapCounts(target);
+
+    expect(() => validateAttentionItem(proxy, policy)).toThrow();
+    expect(traps).toEqual(zeroTrapCounts());
+  });
+
+  it('V2c rejects an item with a Proxy prototype without querying that prototype', () => {
+    const { proxy: prototype, traps } = proxyWithTrapCounts(
+      Object.create(null) as Record<string, unknown>,
+    );
+    const target = Object.assign(Object.create(prototype), item());
+
+    expect(() => validateAttentionItem(target, policy)).toThrow();
+    expect(traps).toEqual(zeroTrapCounts());
+  });
+
+  it('V3 reads batch items by own index and never through an inherited iterator', () => {
+    // An own-shape-valid array whose PROTOTYPE supplies the iterator: for...of
+    // would see an EMPTY snapshot (which resolves the producer's open rows).
+    let iteratorReads = 0;
+    const hostile: unknown[] = [item()];
+    Object.setPrototypeOf(
+      hostile,
+      Object.create(Array.prototype, {
+        [Symbol.iterator]: {
+          get() {
+            iteratorReads += 1;
+            return function* empty() {};
+          },
+        },
+      }),
+    );
+    const result = validateBatch('kiagent.expenses', hostile, policy);
+    expect(result.valid).toHaveLength(1);
+    expect(result.rejected).toEqual([]);
+    expect(iteratorReads).toBe(0);
+
+    let proxyTraps = 0;
+    const viaProxy: unknown[] = [item()];
+    Object.setPrototypeOf(
+      viaProxy,
+      new Proxy(Array.prototype, {
+        get(target, key, receiver) {
+          proxyTraps += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      }),
+    );
+    expect(
+      validateBatch('kiagent.expenses', viaProxy, policy).valid,
+    ).toHaveLength(1);
+    expect(proxyTraps).toBe(0);
+
+    const revocable = Proxy.revocable(Array.prototype, {});
+    const viaRevoked: unknown[] = [item()];
+    Object.setPrototypeOf(viaRevoked, revocable.proxy);
+    revocable.revoke();
+    expect(
+      validateBatch('kiagent.expenses', viaRevoked, policy).valid,
+    ).toHaveLength(1);
+  });
+
+  it('V2d rejects a Proxy batch before Array.isArray or key enumeration', () => {
+    const { proxy, traps } = proxyWithTrapCounts([item()]);
+
+    expect(validateBatch('kiagent.expenses', proxy, policy)).toEqual({
+      valid: [],
+      rejected: [{ id: '', reason: 'invalid attention batch' }],
+    });
+    expect(traps).toEqual(zeroTrapCounts());
+  });
+
+  it.each([
+    [
+      'actions[0]',
+      () => {
+        const nested = proxyWithTrapCounts({
+          id: 'open',
+          label: 'Open',
+          target: { view: 'outbox' },
+        });
+        return {
+          input: item({ actions: [nested.proxy] }),
+          traps: nested.traps,
+        };
+      },
+    ],
+    [
+      'actions[0].target',
+      () => {
+        const nested = proxyWithTrapCounts({ view: 'outbox' });
+        return {
+          input: item({
+            actions: [{ id: 'open', label: 'Open', target: nested.proxy }],
+          }),
+          traps: nested.traps,
+        };
+      },
+    ],
+    [
+      'target.params',
+      () => {
+        const nested = proxyWithTrapCounts({ anchor: 'draft-1' });
+        return {
+          input: item({
+            actions: [
+              {
+                id: 'open',
+                label: 'Open',
+                target: { view: 'outbox', params: nested.proxy },
+              },
+            ],
+          }),
+          traps: nested.traps,
+        };
+      },
+    ],
+    [
+      'people[0]',
+      () => {
+        const nested = proxyWithTrapCounts({
+          kind: 'email',
+          value: 'person@example.com',
+        });
+        return { input: item({ people: [nested.proxy] }), traps: nested.traps };
+      },
+    ],
+  ])('V2e rejects nested Proxy %s without running traps', (_name, makeCase) => {
+    const { input, traps } = makeCase();
+    expect(() => validateAttentionItem(input, policy)).toThrow();
+    expect(traps).toEqual(zeroTrapCounts());
   });
 
   it('C16 enforces action/person counts and safe text limits', () => {
@@ -541,5 +749,31 @@ describe('attention validation', () => {
       input.actions as Array<{ target: { params: { anchor: string } } }>
     )[0].target.params.anchor = 'after';
     expect(output.actions[0].target.params).toEqual({ anchor: 'before' });
+  });
+
+  it('V1 accepts cross-realm plain records and arrays but rejects non-root prototypes', () => {
+    const crossRealmItem = vm.runInNewContext(`(${JSON.stringify(item())})`);
+    expect(() => validateAttentionItem(crossRealmItem, policy)).not.toThrow();
+
+    const crossRealmItems = vm.runInNewContext(`([${JSON.stringify(item())}])`);
+    expect(
+      validateBatch('kiagent.expenses', crossRealmItems, policy).valid,
+    ).toHaveLength(1);
+
+    class AttentionItemFixture {}
+    const classInstance = Object.assign(new AttentionItemFixture(), item());
+    expect(() => validateAttentionItem(classInstance, policy)).toThrow();
+
+    const objectWithPrototype = Object.assign(Object.create({}), item());
+    expect(() => validateAttentionItem(objectWithPrototype, policy)).toThrow();
+
+    const foreignPrototype = vm.runInNewContext('({})');
+    const foreignPrototypeObject = Object.assign(
+      Object.create(foreignPrototype),
+      item(),
+    );
+    expect(() =>
+      validateAttentionItem(foreignPrototypeObject, policy),
+    ).toThrow();
   });
 });

@@ -11,6 +11,7 @@ import type { AppDb } from '@main/db/app-db';
 import type { DbOwner, TxToken } from '@main/db/coordinator';
 import { pluginIdentifier } from '@shared/plugin-sql';
 import type { LogSink } from '@main/core/engine/engine';
+import type { AttentionService } from '@main/attention/service';
 import { createNetworkService, type NetworkService } from './network-service';
 import { HostCallInTransactionError } from './host-call-context';
 
@@ -172,6 +173,7 @@ export interface SurfaceDeps {
       generation: number;
     } | null>;
   };
+  attention: AttentionService;
   notify(msg: string, level?: LogLevel): void;
   bus: EventBus;
   /** Ships a host event to the child (endpoint.post({kind:'event',…})). */
@@ -478,6 +480,16 @@ export function buildSurfaces(deps: SurfaceDeps): {
         }
         deps.bus.emit(deps.extensionId, name, payload);
       },
+    },
+    attention: {
+      publish: (items: unknown) =>
+        deps.attention.publish(deps.extensionId, items),
+      resolve: (id: unknown, revision?: unknown) =>
+        deps.attention.resolve(
+          deps.extensionId,
+          id as string,
+          revision as number | undefined,
+        ),
     },
     files: {
       roots: (...args) => fileCall('roots', args),

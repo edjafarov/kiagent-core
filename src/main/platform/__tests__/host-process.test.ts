@@ -84,6 +84,30 @@ const senderModule = {
   },
 };
 
+const attentionErrorModule = {
+  async activate(host: {
+    attention: { publish(items: unknown[]): Promise<unknown> };
+  }) {
+    return {
+      tools: [
+        {
+          name: 'attention.error',
+          description: 'returns the code caught from host.attention',
+          inputSchema: {},
+          async call() {
+            try {
+              await host.attention.publish([]);
+              return { code: null };
+            } catch (error) {
+              return { code: (error as { code?: string }).code };
+            }
+          },
+        },
+      ],
+    };
+  },
+};
+
 const intent: SendIntent = {
   accountId: 'acc1',
   kind: 'reply',
@@ -100,6 +124,32 @@ const hangingModule = {
 };
 
 describe('createExtensionHost', () => {
+  it.each(['ATTENTION_TX_FAILED', 'ATTENTION_DISPOSED'])(
+    'preserves %s from the in-process host router/proxy',
+    async (code) => {
+      const { deps } = makeDeps(attentionErrorModule, {
+        caps: ['attention'],
+        makeSurfaces: () => ({
+          surfaces: {
+            attention: {
+              publish: async () => {
+                throw Object.assign(new Error('attention failure'), { code });
+              },
+              resolve: async () => ({ rejected: [] }),
+            },
+          },
+          close: jest.fn(),
+        }),
+      });
+      const host = createExtensionHost(deps as never);
+      await host.start();
+      await expect(host.callTool('attention.error', {})).resolves.toEqual({
+        code,
+      });
+      await host.stop();
+    },
+  );
+
   it('awaits async surface close during stop before returning', async () => {
     let release!: () => void;
     let closed = false;

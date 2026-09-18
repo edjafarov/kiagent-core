@@ -113,6 +113,18 @@ describe('createAttentionService', () => {
     await expect(service.list()).resolves.toEqual([]);
   });
 
+  it('S4d makes setExtensions and notifyReset strict no-ops after dispose', async () => {
+    const onChanged = jest.fn();
+    const service = createAttentionService({ db, onChanged });
+    await service.dispose();
+
+    expect(() =>
+      service.setExtensions([{ ...extension(), id: 'kiagent.other' }]),
+    ).not.toThrow();
+    expect(() => service.notifyReset()).not.toThrow();
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
   it('S1c unclassified dispatched bridge rejection becomes one outcome-unknown hint', async () => {
     const proc = jest.fn().mockRejectedValue(new Error('bridge failed'));
     const fakeDb = { ...db, _conn: undefined, proc } as unknown as AppDb;

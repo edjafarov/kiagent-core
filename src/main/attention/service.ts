@@ -345,6 +345,7 @@ export function createAttentionService(
     dismiss,
 
     setExtensions(snapshot) {
+      if (disposed) return;
       const next = new Set(
         snapshot.filter(isAvailable).map((extension) => extension.id),
       );
@@ -358,6 +359,7 @@ export function createAttentionService(
     },
 
     notifyReset() {
+      if (disposed) return;
       notifyChanged();
     },
 

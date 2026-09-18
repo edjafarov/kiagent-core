@@ -52,6 +52,10 @@ const REPO_ROOT = path.resolve(__dirname, '../../../..');
 const CHILD_ENTRY = path.resolve(__dirname, '../extension-host-entry.ts');
 const SENDER_FIXTURE = path.join(__dirname, 'fixtures', 'ext-sender');
 const AUTHFAIL_FIXTURE = path.join(__dirname, 'fixtures', 'ext-auth-fail');
+const attentionStub = {
+  publish: async () => ({ rejected: [] }),
+  resolve: async () => ({ rejected: [] }),
+} as never;
 
 const noInference = {
   complete: async () => '',
@@ -102,6 +106,7 @@ describe('extension outbound + error taxonomy e2e (real forked child)', () => {
     platform = createExtensionPlatform({
       extDir: path.join(tmp, 'extensions'),
       store,
+      attention: attentionStub,
       sources: {
         register: (s) => void registry.set(s.descriptor.id, s),
         get: (id) => registry.get(id),

@@ -316,6 +316,22 @@ describe('createRpcEndpoint over the in-memory pair', () => {
     },
   );
 
+  it.each(['ATTENTION_TX_FAILED', 'ATTENTION_DISPOSED'])(
+    'preserves attention error code %s across the in-process RPC tier',
+    async (code) => {
+      const { main, child } = createInMemoryHostPair();
+      const mainEp = createRpcEndpoint(main);
+      createRpcEndpoint(child).onCall(async () => {
+        throw Object.assign(new Error('attention failure'), { code });
+      });
+      await expect(
+        mainEp.call('attention', 'publish', []),
+      ).rejects.toMatchObject({
+        code,
+      });
+    },
+  );
+
   it('carries message, name and errno from a real native fs rejection (cross-realm Error)', async () => {
     const { main, child } = createInMemoryHostPair();
     const mainEp = createRpcEndpoint(main);

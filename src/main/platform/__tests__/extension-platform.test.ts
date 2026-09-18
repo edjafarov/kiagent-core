@@ -126,6 +126,10 @@ describe('createLaneGate', () => {
 });
 
 describe('createExtensionPlatform', () => {
+  const attentionStub = {
+    publish: async () => ({ rejected: [] }),
+    resolve: async () => ({ rejected: [] }),
+  } as never;
   let tmp: string;
   let store: CoreStore;
   let platform: ExtensionPlatform;
@@ -154,6 +158,7 @@ describe('createExtensionPlatform', () => {
     return createExtensionPlatform({
       extDir: path.join(tmp, 'extensions'),
       store,
+      attention: attentionStub,
       sources: {
         register: (s: Source) => void registry.set(s.descriptor.id, s),
         get: (id: string) => registry.get(id),
@@ -1097,6 +1102,7 @@ describe('createExtensionPlatform', () => {
     const failablePlatform = createExtensionPlatform({
       extDir: path.join(tmp, 'extensions'),
       store,
+      attention: attentionStub,
       sources: {
         register: (s: Source) => void registry.set(s.descriptor.id, s),
         get: (id: string) => registry.get(id),
@@ -1295,6 +1301,7 @@ describe('createExtensionPlatform', () => {
     const crashPlatform = createExtensionPlatform({
       extDir: path.join(tmp, 'extensions'),
       store,
+      attention: attentionStub,
       sources: {
         register: (s: Source) => void registry.set(s.descriptor.id, s),
         get: (id: string) => registry.get(id),
