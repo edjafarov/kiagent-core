@@ -21,6 +21,7 @@ import type {
   Seq,
   SourceDescriptor,
 } from './contracts';
+import type { AttentionItemWire } from './attention';
 
 /**
  * The renderer ↔ main contract. One projection push carries ALL live app
@@ -344,6 +345,15 @@ export interface Invokes {
   'docs:get': { req: { id: DocumentId }; res: Document | null };
   'docs:children': { req: { id: DocumentId }; res: Document[] };
 
+  'attention:list': {
+    req: { kinds?: AttentionItemWire['kind'][] } | undefined;
+    res: AttentionItemWire[];
+  };
+  'attention:act': {
+    req: { id: string; action: 'dismiss' };
+    res: void;
+  };
+
   'prefs:get': { req: void; res: AppPrefs };
   'prefs:patch': { req: Partial<AppPrefs>; res: AppPrefs };
 
@@ -515,6 +525,7 @@ export interface Pushes {
    *  payload — this is a hint to re-read `outbox:list`/`outbox:pending-count`,
    *  never a statement that a specific row changed. */
   'push:outbox-changed': void;
+  'push:attention-changed': void;
 }
 
 export type InvokeChannel = keyof Invokes;
@@ -572,6 +583,8 @@ const INVOKE_CHANNEL_MAP = {
   'search:query': 0,
   'docs:get': 0,
   'docs:children': 0,
+  'attention:list': 0,
+  'attention:act': 0,
   'prefs:get': 0,
   'prefs:patch': 0,
   'identity:get': 0,
@@ -624,6 +637,7 @@ const PUSH_CHANNEL_MAP = {
   'push:mcp-activity': 0,
   'push:update-state': 0,
   'push:outbox-changed': 0,
+  'push:attention-changed': 0,
 } as const satisfies Record<PushChannel, 0>;
 
 export const PUSH_CHANNELS = Object.keys(

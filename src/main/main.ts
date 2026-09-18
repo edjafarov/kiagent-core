@@ -59,6 +59,16 @@ import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
 import { wireOutboxPush } from './outbox-push';
+import { wireAttentionPush } from './attention/push';
+import {
+  createAttentionService,
+  type AttentionService,
+} from './attention/service';
+import {
+  validateAttentionActRequest,
+  validateAttentionListRequest,
+} from './attention/ipc-request';
+import { createTrustedRendererPredicate, guardIpcHandler } from './ipc-sender';
 import { createUpdater } from './updater/updater';
 import { createUpdateNotifier } from './updater/native-notify';
 import { subscribeUpdaterState, updaterInvokeHandlers } from './updater/ipc';
@@ -106,6 +116,8 @@ let mainWindow: BrowserWindow | null = null;
 let platform: CorePlatform | null = null;
 let mcp: McpServerHandle | null = null;
 let extensionsPlatform: ExtensionPlatform | null = null;
+let attentionService: AttentionService | null = null;
+let attentionPush: ReturnType<typeof wireAttentionPush> | null = null;
 const fileRoots = createFileRootRegistry();
 let bundledProviders: {
   localLlm: LocalLlmProvider;
@@ -400,6 +412,7 @@ function registerIpc(
   catalog: MarketplaceCatalog,
   broker: ConnectBroker,
   outbound: OutboundService,
+  attention: AttentionService,
 ): void {
   // Hoisted above the handler map only because the map needs `updater`;
   // extracting the rest of the updater bootstrap out of registerIpc is #20.
@@ -543,6 +556,10 @@ function registerIpc(
     'search:query': (req) => p.store.read.search(req ?? {}),
     'docs:get': ({ id }) => p.store.read.document(id),
     'docs:children': ({ id }) => p.store.read.children(id),
+
+    'attention:list': (req) =>
+      attention.list(validateAttentionListRequest(req)),
+    'attention:act': (req) => attention.act(validateAttentionActRequest(req)),
 
     'prefs:get': () => p.prefs.get(),
     'prefs:patch': async (patch) => {
@@ -734,8 +751,19 @@ function registerIpc(
     channel: C,
     req: Invokes[C]['req'],
   ) => handlers[channel](req);
+  const isTrustedSender = createTrustedRendererPredicate({
+    app,
+    BrowserWindow,
+  });
   for (const channel of INVOKE_CHANNELS) {
-    ipcMain.handle(channel, (_e, req) => dispatch(channel, req));
+    ipcMain.handle(
+      channel,
+      guardIpcHandler(
+        channel,
+        (req) => dispatch(channel, req),
+        isTrustedSender,
+      ),
+    );
   }
 
   // --- Auto-updater (ported from the alpha-cent overlay) ---------------------
@@ -825,6 +853,15 @@ app
       PROFILE_STORAGE_VERSION,
     );
     const p = platform;
+
+    attentionPush = wireAttentionPush(broadcast);
+    const attention = createAttentionService({
+      db: p.db,
+      log: (message) => p.logSink.log('attention', 'warn', message),
+      onChanged: attentionPush.hint,
+    });
+    attentionService = attention;
+    p.store.onReset(() => attention.notifyReset());
 
     const bundled = registerBundledProviders(p, {
       assetsDir: getAssetPath(),
@@ -1090,7 +1127,10 @@ app
               line,
             ),
         ),
-      onChange: (extensions) => patchState({ extensions }),
+      onChange: (extensions) => {
+        patchState({ extensions });
+        attention.setExtensions(extensions);
+      },
       download: async (ref) => {
         if (ref.startsWith('github:')) {
           const parsed = parseGitHubRef(ref);
@@ -1125,6 +1165,7 @@ app
       catalog,
       broker,
       outbound,
+      attention,
     );
     p.engine.project(projection, (state: AppState, seq: Seq) => {
       rev += 1;
@@ -1247,6 +1288,8 @@ app.on('before-quit', (event) => {
     await bundledProviders?.localAsr.dispose().catch(() => {});
     await mcp?.stop().catch(() => {});
     await extensionsPlatform?.stop().catch(() => {});
+    attentionPush?.dispose();
+    await attentionService?.dispose().catch(() => {});
     await platform?.shutdown().catch(() => {});
     app.quit();
   })();

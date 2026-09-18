@@ -21,6 +21,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { INVOKE_CHANNELS, PUSH_CHANNELS } from '@shared/ipc';
+import { SENDER_VALIDATED_CHANNELS } from '../ipc-sender';
 
 const SRC = path.resolve(__dirname, '..');
 
@@ -96,5 +97,25 @@ describe('the derived allowlists', () => {
   it('keep the two namespaces disjoint', () => {
     const pushes = new Set<string>(PUSH_CHANNELS);
     expect(INVOKE_CHANNELS.filter((c) => pushes.has(c))).toEqual([]);
+  });
+});
+
+describe('attention IPC composition', () => {
+  const mainSource = fs.readFileSync(path.join(SRC, 'main.ts'), 'utf8');
+
+  it('S10c registers attention handlers through the sender guard', () => {
+    expect(mainSource).toContain('guardIpcHandler(');
+    expect(SENDER_VALIDATED_CHANNELS).toEqual(
+      new Set(['attention:list', 'attention:act']),
+    );
+  });
+
+  it('S10c validates both attention handler request shapes in main.ts', () => {
+    expect(mainSource).toContain(
+      'attention.list(validateAttentionListRequest(req))',
+    );
+    expect(mainSource).toContain(
+      'attention.act(validateAttentionActRequest(req))',
+    );
   });
 });
