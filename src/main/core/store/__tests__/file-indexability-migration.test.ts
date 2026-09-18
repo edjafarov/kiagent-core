@@ -311,6 +311,13 @@ function rewindToV1(db: Database.Database): void {
   db.prepare(`UPDATE meta SET value='1' WHERE key='schemaVersion'`).run();
 }
 
+/** `migrate()` always runs to the HEAD of `MIGRATIONS`, so "this migration
+ *  completed" is observed as "the corpus reached head", not as this
+ *  migration's own number. Bump when a migration is appended (v4 added the
+ *  attention tables); the assertions that pin THIS migration's effects are
+ *  the column/index/row checks beside each use, not this number. */
+const HEAD_SCHEMA_VERSION = 4;
+
 function schemaVersion(db: Database.Database): number {
   const row = db
     .prepare(`SELECT value FROM meta WHERE key='schemaVersion'`)
@@ -374,7 +381,7 @@ describe('schema v2: archive file-indexability rejects', () => {
     expect(live(db, 'gmail-mp3')).toBe(true); // source outside scope
 
     // 3, not 2: `rewindToV1` replays the WHOLE ladder, whose top is now v3.
-    expect(schemaVersion(db)).toBe(3);
+    expect(schemaVersion(db)).toBe(HEAD_SCHEMA_VERSION);
   });
 
   it('gives every archived row a changes row with documents.seq === changes.seq, and re-migrating is a no-op', () => {
@@ -434,7 +441,7 @@ describe('schema v2: archive file-indexability rejects', () => {
     // replays the WHOLE ladder, whose top is v3, and v3's pass-1a config
     // rewrite used to append a fresh `kind='account'` change row per replay.
     // 3, not 2, for the same reason (see the sibling assertion above).
-    expect(schemaVersion(db)).toBe(3);
+    expect(schemaVersion(db)).toBe(HEAD_SCHEMA_VERSION);
   });
 });
 
@@ -521,7 +528,7 @@ describe('schema v2: unreadable metadata is skipped, not archived', () => {
     expect(changesFor(db, 'ctl-archived-zip')).toHaveLength(1);
 
     // 3, not 2: `rewindToV1` replays the WHOLE ladder, whose top is now v3.
-    expect(schemaVersion(db)).toBe(3);
+    expect(schemaVersion(db)).toBe(HEAD_SCHEMA_VERSION);
   });
 
   it('logs the offending document id for both null- and array-metadata rows', () => {
