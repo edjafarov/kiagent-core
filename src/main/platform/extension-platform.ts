@@ -45,6 +45,7 @@ import {
   oauthSourceBindings,
   senderContributions,
   sourceContributions,
+  uiContributions,
   MAX_DESCRIPTOR_BYTES,
 } from './manifest';
 import { oauthProviders } from './oauth-providers';
@@ -573,6 +574,9 @@ export function createExtensionPlatform(
       oauthSources: oauthSourceBindings(e.manifest),
       iconDataUrl: e.iconDataUrl,
       ref: e.record?.ref,
+      // B3: always an array — an extension with no contributes.ui yields
+      // [], never undefined (uiContributions' own contract).
+      ui: uiContributions(e.manifest),
     }));
 
   const changed = () => deps.onChange(snapshot());

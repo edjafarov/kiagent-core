@@ -997,6 +997,36 @@ export interface OAuthSourceBinding {
   provider: OAuthProviderId;
 }
 
+/** B3: `contributes.ui[].slot` — the only slot a contribution may declare in
+ *  this revision. `'settings-section'` and `'sidebar-item'` are reserved by
+ *  the design spec but not implemented; a manifest naming either is an
+ *  unknown-slot rejection, same as any other unrecognized value. */
+export type UiContributionSlot = 'screen';
+
+/** A contribution's sidebar placement is a SUGGESTION only — the product
+ *  decides final group/order/icon/gating and may override any field or
+ *  ignore the suggestion entirely (design spec, decision 2). Core never
+ *  treats this as authoritative. */
+export interface UiNavSuggestion {
+  group?: string;
+  order?: number;
+  icon?: string;
+}
+
+/** One `contributes.ui` entry: a bespoke renderer screen, delivered at
+ *  build time (bundled tier only — `PLUGIN_UI_TIER_DENIED` for `external`).
+ *  `id` is namespaced into the routed view id as
+ *  `ext:<extension id>/<id>` (`src/renderer/state/view.ts`'s `ExtView`).
+ *  `params` declares the FLAT param keys this view's deep links accept —
+ *  there is no nested params bag. */
+export interface UiContribution {
+  id: string;
+  slot: UiContributionSlot;
+  title: string;
+  nav?: UiNavSuggestion;
+  params?: string[];
+}
+
 export interface Manifest {
   id: ExtensionId;
   name: string;
@@ -1018,6 +1048,10 @@ export interface Manifest {
      *  for none. Required since platform 2.0.0. */
     senders: string[];
     commands?: Array<{ id: string; title: string }>;
+    /** B3: renderer screens this extension contributes. Bundled tier only;
+     *  requires the `ui` cap. See `manifest.ts`'s `parseManifest` for the
+     *  enforced rules and `UiContribution` above for the shape. */
+    ui?: UiContribution[];
   };
   caps: Cap[];
   /** Declarative database descriptor path, required when caps includes db. */
@@ -1210,6 +1244,14 @@ export interface ExtensionSnapshot {
    *  installed dir — absent when the manifest declares none. */
   iconDataUrl?: string;
   ref?: string;
+  /** B3: this extension's validated `contributes.ui` entries — the ONLY way
+   *  routing metadata reaches the renderer (no separate IPC channel, no
+   *  extension-main catalog bootstrap). The real projection
+   *  (`extension-platform.ts`'s `snapshot()`) always populates this as an
+   *  array, `[]` for none, never omitting it — optional here only so the
+   *  many pre-existing test fixtures that build an `ExtensionSnapshot`
+   *  literal without this field keep compiling unchanged. */
+  ui?: UiContribution[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
