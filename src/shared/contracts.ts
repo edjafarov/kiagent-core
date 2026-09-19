@@ -1125,7 +1125,11 @@ export interface CapSurfaces {
        * already registered (by this extension or another live incarnation
        * of it), or if this extension's tier denies `ui.handle` (external
        * tier; declaring the `ui` cap still permits `notify`). The
-       * resolved disposer is equivalent to calling `unhandle(name)`.
+       * resolved disposer removes only this registration; calling an old
+       * disposer after the name has been registered again is a no-op. Removal
+       * suppresses local dispatch immediately and rolls it back if the host
+       * acknowledgement rejects. A same-key handle also rejects while the
+       * registration or its removal is pending.
        */
       handle(
         name: string,
@@ -1133,8 +1137,8 @@ export interface CapSurfaces {
       ): Promise<() => Promise<void>>;
       /** Removes a previously registered handler. Local-first: this
        *  extension stops serving `name` immediately, even while the host
-       *  notification that follows is still in flight or ends up
-       *  failing. */
+       *  notification that follows is still in flight. A rejected host
+       *  notification is propagated and restores the local handler. */
       unhandle(name: string): Promise<void>;
       /** Pushes an unsolicited event to every renderer window over the
        *  host's `ext:push` channel. Does not require a prior `handle()`

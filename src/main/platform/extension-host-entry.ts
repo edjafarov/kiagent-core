@@ -49,6 +49,15 @@ export interface ChildDeps {
   mainApi?: unknown;
 }
 
+type UiHandler = (payload: unknown) => unknown;
+
+type UiRegistration = {
+  fn: UiHandler;
+  acknowledged: boolean;
+  registration: Promise<void>;
+  removal?: Promise<void>;
+};
+
 /** Exported for the drift guard (cap-table-completeness.test.ts), which
  *  compares each list against the real surface buildSurfaces() constructs. */
 export const NS_METHODS: Record<string, string[]> = {
@@ -105,7 +114,8 @@ function buildRemoteHost(
   boot: ExtensionBootstrap,
   eventCbs: Map<string, Set<(p: unknown, meta: EventMeta) => void>>,
   fileWatchCbs: Map<number, (event: FileChange) => void>,
-  uiHandlers: Map<string, (payload: unknown) => unknown>,
+  uiHandlers: Map<string, UiHandler>,
+  uiRegistrations: Map<string, UiRegistration>,
 ): Record<string, unknown> {
   const host: Record<string, unknown> = {
     self: { id: boot.extensionId, dataDir: boot.dataDir },
@@ -116,15 +126,47 @@ function buildRemoteHost(
   if (boot.caps.includes('db'))
     host.db = createPluginDbProxy(endpoint, boot.extensionId);
   let nextWatchId = 1;
-  // Shared by the 'handle' registration and the 'unhandle' method below
-  // (and by handle()'s own returned disposer) — LOCAL removal always
-  // happens before the host is notified, even when the notification
-  // itself fails: this extension must stop serving `key` the instant
-  // unhandle() is called, never leave it wired while an RPC round trip is
-  // still in flight.
-  const unhandleUi = async (key: string): Promise<void> => {
-    uiHandlers.delete(key);
-    await callHost(endpoint, 'ui', 'unhandle', [key]).catch(() => {});
+  // One record reserves a name from the first handle call through the final
+  // unhandle acknowledgement. This keeps a pending handle from being
+  // overtaken by a second registration and gives each disposer a stable
+  // identity even when the same callback function is reused.
+  const unhandleUi = async (
+    key: string,
+    expected?: UiRegistration,
+  ): Promise<void> => {
+    let current = uiRegistrations.get(key);
+    if (expected && current !== expected) return;
+    if (!current) {
+      // Reserve an unknown name too, so a concurrent handle cannot overtake
+      // this explicit host removal.
+      current = {
+        fn: () => undefined,
+        acknowledged: false,
+        registration: Promise.resolve(),
+      };
+      uiRegistrations.set(key, current);
+    }
+    if (current.removal) return current.removal;
+
+    const removal = (async (): Promise<void> => {
+      // Local-first: dispatch stops immediately, while the host call waits
+      // for a pending registration to settle below.
+      uiHandlers.delete(key);
+      await current.registration.catch(() => undefined);
+      try {
+        await callHost(endpoint, 'ui', 'unhandle', [key]);
+        if (uiRegistrations.get(key) === current) uiRegistrations.delete(key);
+      } catch (error: unknown) {
+        if (uiRegistrations.get(key) === current) {
+          if (current.acknowledged) uiHandlers.set(key, current.fn);
+          else uiRegistrations.delete(key);
+          current.removal = undefined;
+        }
+        throw error;
+      }
+    })();
+    current.removal = removal;
+    return removal;
   };
   for (const cap of boot.caps) {
     if (cap === 'events') {
@@ -193,15 +235,38 @@ function buildRemoteHost(
           // duplicate check: it also catches two DIFFERENT incarnations of
           // this same extension racing to register the same name, which
           // this child-local map cannot see.
-          if (uiHandlers.has(key))
+          if (uiRegistrations.has(key))
             throw new Error(`ui handler '${key}' is already registered`);
-          // NOT optimistic: the local map is written only once the host
-          // has ACKNOWLEDGED (resolved) the registration. A call that
-          // rejects — duplicate, denied tier, a stale/closing incarnation
-          // — never touches local dispatch state.
-          await callHost(endpoint, cap, m, [key]);
-          uiHandlers.set(key, fn as (payload: unknown) => unknown);
-          return () => unhandleUi(key);
+          const handler = fn as UiHandler;
+          const record: UiRegistration = {
+            fn: handler,
+            acknowledged: false,
+            registration: Promise.resolve(),
+          };
+          uiRegistrations.set(key, record);
+          record.registration = (async (): Promise<void> => {
+            // NOT optimistic: the local dispatch map is written only once
+            // the host has ACKNOWLEDGED the registration. A removal that
+            // started first suppresses installation after that ACK.
+            await callHost(endpoint, cap, m, [key]);
+            record.acknowledged = true;
+            if (
+              uiRegistrations.get(key) === record &&
+              record.removal === undefined
+            ) {
+              uiHandlers.set(key, handler);
+            }
+          })();
+          void record.registration.catch(() => {
+            if (
+              uiRegistrations.get(key) === record &&
+              record.removal === undefined
+            ) {
+              uiRegistrations.delete(key);
+            }
+          });
+          await record.registration;
+          return () => unhandleUi(key, record);
         };
         continue;
       }
@@ -258,7 +323,8 @@ export function runExtensionHost(
   // B1: names this extension registered via host.ui.handle(). Main→child
   // 'ui' calls (see the onCall dispatcher below) look a name up here
   // exactly like 'tool' looks a name up in `tools`.
-  const uiHandlers = new Map<string, (payload: unknown) => unknown>();
+  const uiHandlers = new Map<string, UiHandler>();
+  const uiRegistrations = new Map<string, UiRegistration>();
   // Task 8 fills these in: active pulls keyed by pullId.
   const pulls = new Map<
     number,
@@ -310,6 +376,7 @@ export function runExtensionHost(
         eventCbs,
         fileWatchCbs,
         uiHandlers,
+        uiRegistrations,
       );
       const extras =
         boot.caps.includes('unsafe.mainProcess') && deps.mainApi !== undefined
