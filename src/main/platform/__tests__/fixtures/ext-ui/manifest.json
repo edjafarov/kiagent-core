@@ -1,0 +1,13 @@
+{
+  "id": "test.ui",
+  "name": "UI Test Extension",
+  "version": "1.0.0",
+  "engine": "^2.0.0",
+  "entry": "index.js",
+  "caps": ["ui"],
+  "contributes": {
+    "sources": [],
+    "tools": ["ui.unhandleEcho", "ui.handleDuplicate", "ui.broadcast"],
+    "senders": []
+  }
+}

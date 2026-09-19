@@ -1080,7 +1080,34 @@ export interface CapSurfaces {
   net: { net: PluginNet };
   files: { files: ScopedFiles };
   db: { db: PrivateDb };
-  ui: { ui: { notify(msg: string, level?: LogLevel): void } };
+  ui: {
+    ui: {
+      notify(msg: string, level?: LogLevel): void;
+      /**
+       * B1 (host-owned renderer eventing): registers a renderer-callable
+       * handler for `name`, reachable through the host's `ext:invoke` IPC
+       * channel. Resolves ONLY once the host has acknowledged the
+       * registration — never optimistically — and rejects if `name` is
+       * already registered (by this extension or another live incarnation
+       * of it), or if this extension's tier denies `ui.handle` (external
+       * tier; declaring the `ui` cap still permits `notify`). The
+       * resolved disposer is equivalent to calling `unhandle(name)`.
+       */
+      handle(
+        name: string,
+        fn: (payload: unknown) => unknown | Promise<unknown>,
+      ): Promise<() => Promise<void>>;
+      /** Removes a previously registered handler. Local-first: this
+       *  extension stops serving `name` immediately, even while the host
+       *  notification that follows is still in flight or ends up
+       *  failing. */
+      unhandle(name: string): Promise<void>;
+      /** Pushes an unsolicited event to every renderer window over the
+       *  host's `ext:push` channel. Does not require a prior `handle()`
+       *  for `name`. External tier: denied, like handle/unhandle. */
+      broadcast(name: string, payload: unknown): Promise<void>;
+    };
+  };
   commands: {
     commands: {
       register(id: string, handler: (args: unknown) => unknown): () => void;

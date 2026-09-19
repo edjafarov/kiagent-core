@@ -74,6 +74,7 @@ import { createUpdateNotifier } from './updater/native-notify';
 import { subscribeUpdaterState, updaterInvokeHandlers } from './updater/ipc';
 import { createExtensionPlatform } from './platform/extension-platform';
 import type { ExtensionPlatform } from './platform/extension-platform';
+import { createExtInvokeHandler } from './platform/ext-invoke';
 import {
   assertProfileStorageVersion,
   markProfileStorageVersion,
@@ -561,6 +562,30 @@ function registerIpc(
       attention.list(validateAttentionListRequest(req)),
     'attention:act': (req) => attention.act(validateAttentionActRequest(req)),
 
+    // B1: NOT actually reached through `dispatch` in production — this
+    // channel is registered directly below, past its own never-reject
+    // handler (`createExtInvokeHandler`), because `guardIpcHandler`'s
+    // generic sender gate THROWS on an untrusted sender and `ext:invoke`
+    // must always resolve an envelope instead. This entry exists only so
+    // `handlers` stays a complete, tsc-checked `InvokeHandlers` map — see
+    // the `INVOKE_CHANNELS` loop below, which skips this one channel.
+    //
+    // Deliberately INERT rather than a working fallback: if the loop's
+    // `channel === 'ext:invoke' ? extInvokeHandler : …` ternary is ever
+    // removed, `ext:invoke` would fall through to `guardIpcHandler`, which
+    // calls straight into THIS function on a trusted sender — and if this
+    // called `extensions.callUi` directly, that would bypass
+    // `createExtInvokeHandler`'s own request validation and its
+    // structured-clone guard on the result (see ext-invoke.ts), reintroducing
+    // exactly the hang that guard exists to prevent. A fixed, harmless
+    // envelope here means that mutant fails loudly (every ext:invoke calls
+    // through this message) instead of silently reopening the hole.
+    'ext:invoke': () => ({
+      ok: false,
+      code: 'EXT_MALFORMED_REQUEST',
+      message: 'ext:invoke is served by its dedicated handler',
+    }),
+
     'prefs:get': () => p.prefs.get(),
     'prefs:patch': async (patch) => {
       await p.prefs.patch(patch ?? {});
@@ -755,16 +780,34 @@ function registerIpc(
     app,
     BrowserWindow,
   });
+  // B1: `ext:invoke` is registered through this SAME loop (never a second,
+  // hand-written registration call for that one channel — see
+  // ipc-handler-coverage.test.ts's "registered in exactly one place" gate),
+  // just with a different per-channel handler: `guardIpcHandler`'s sender
+  // gate THROWS on an untrusted sender, and `ext:invoke` must always
+  // resolve an envelope instead, so this one channel calls
+  // `createExtInvokeHandler` directly rather than going through that
+  // shared gate.
+  const extInvokeHandler = createExtInvokeHandler({
+    isTrustedSender,
+    platform: extensions,
+  });
   for (const channel of INVOKE_CHANNELS) {
     ipcMain.handle(
       channel,
-      guardIpcHandler(
-        channel,
-        (req) => dispatch(channel, req),
-        isTrustedSender,
-      ),
+      channel === 'ext:invoke'
+        ? extInvokeHandler
+        : guardIpcHandler(
+            channel,
+            (req) => dispatch(channel, req),
+            isTrustedSender,
+          ),
     );
   }
+  // B1's other fixed channel: an extension's host.ui.broadcast(name,
+  // payload) fans out to every renderer window verbatim, same precedent as
+  // every other push:* broadcast in this file.
+  extensions.onUiBroadcast((evt) => broadcast('ext:push', evt));
 
   // --- Auto-updater (ported from the alpha-cent overlay) ---------------------
   // Restart-and-reinstall is a whole-app, main-process concern, so it lives in

@@ -14,6 +14,8 @@ import type { LogSink } from '@main/core/engine/engine';
 import type { AttentionService } from '@main/attention/service';
 import { createNetworkService, type NetworkService } from './network-service';
 import { HostCallInTransactionError } from './host-call-context';
+import type { ManifestTier } from './manifest';
+import { createUiRegistry, type UiRegistry } from './ui-registry';
 
 export class CapError extends Error {}
 
@@ -179,6 +181,28 @@ export interface SurfaceDeps {
   /** Ships a host event to the child (endpoint.post({kind:'event',…})). */
   deliverEvent(name: string, payload: unknown, meta: EventMeta): void;
   deliverFileChange?(watchId: number, event: FileChange): void;
+  /** B1: the shared registry behind `host.ui.handle/unhandle/broadcast`.
+   *  Defaulted to a throwaway per-call instance when absent (the
+   *  cap-table-completeness drift guard builds surfaces with no registry
+   *  at all) — production always injects the ONE instance
+   *  createExtensionPlatform owns, shared across every extension. */
+  uiRegistry?: UiRegistry;
+  /** Which manifest tier this extension was loaded under — decides whether
+   *  `ui.handle`/`unhandle`/`broadcast` are denied (external tier). Comes
+   *  from the host's OWN record of how the extension was loaded
+   *  (`Entry.origin`), never from anything the extension itself sends.
+   *  Defaults to the more restrictive 'external' when omitted, matching
+   *  `parseManifest`'s own `opts.tier ?? 'external'` convention. */
+  tier?: ManifestTier;
+  /** This incarnation's lifecycle signal (host-process.ts's `lifecycle`
+   *  AbortController). B1 listens for its abort to close ui registration
+   *  SYNCHRONOUSLY at the start of teardown — `lifecycle.abort()` is the
+   *  first statement of every teardown path (the exit handler's cleanup(),
+   *  its catch-block twin, and stop()'s own abortSpawn()), so an abort
+   *  listener registered here fires before anything else in that path
+   *  runs, closing registration before a respawn's fresh makeSurfaces()
+   *  call can even begin. */
+  signal?: AbortSignal;
 }
 
 const unsupported = (ns: string) => () => {
@@ -193,6 +217,34 @@ export function buildSurfaces(deps: SurfaceDeps): {
 } {
   const eventSubs = new Map<string, () => void>();
   const remoteWatchers = new Map<number, { close(): Promise<void> }>();
+  const uiRegistry = deps.uiRegistry ?? createUiRegistry();
+  // ONE resolution of the default, reused by both the registry bind (which
+  // records tier per-registration) and the handle/unhandle/broadcast gate
+  // below — two separate `?? 'external'` expressions could drift.
+  const uiTier: ManifestTier = deps.tier ?? 'external';
+  const uiIncarnation = uiRegistry.bind(
+    deps.extensionId,
+    // Only a drift-guard/unit test ever omits `owner` — production always
+    // supplies one (host-process.ts mints a fresh DbOwner per spawn()).
+    deps.owner?.handle ?? `${deps.extensionId}:no-owner`,
+    uiTier,
+  );
+  // Synchronous, load-bearing: see SurfaceDeps.signal's doc comment. `once`
+  // because `uiIncarnation.close()` is itself idempotent but there is no
+  // reason to keep the listener alive past the first (and only) abort.
+  //
+  // `makeSurfaces` awaits a db open before calling this function, so
+  // `deps.signal` can already be aborted by the time execution gets here —
+  // an 'abort' listener attached to an ALREADY-fired AbortSignal never
+  // fires (that is standard EventTarget behavior, not a bug in the
+  // signal), so a listener-only registration would leave this incarnation's
+  // ui registration open forever. Check the already-aborted case directly
+  // instead of relying on the event.
+  if (deps.signal?.aborted) uiIncarnation.close();
+  else
+    deps.signal?.addEventListener('abort', () => uiIncarnation.close(), {
+      once: true,
+    });
   const network =
     deps.network ??
     createNetworkService({
@@ -410,8 +462,60 @@ export function buildSurfaces(deps: SurfaceDeps): {
       migrate: dbSurface.migrate as (...args: unknown[]) => unknown,
     },
     ui: {
+      // Stays all-tier — see the manifest doc's PRIVILEGED_CAPS note: `ui`
+      // is NOT privileged, and an external manifest may already declare it
+      // for notify alone. Only handle/unhandle/broadcast are gated below.
       notify: (msg, level) =>
         deps.notify(String(msg), level as LogLevel | undefined),
+      // Synchronous throws here cross correctly: host-router's `dispatch`
+      // is an async function, so a synchronous throw from `fn(...args)`
+      // becomes a rejected promise exactly like an async one would — the
+      // child's `host.ui.handle()` await sees it either way. Tier is
+      // checked BEFORE the registry call so a denied external-tier
+      // extension never even reaches the duplicate-name check (its own
+      // information leak, however small, is not worth avoiding here since
+      // the denial message says nothing about what else is registered).
+      handle: (name: unknown) => {
+        if (uiTier === 'external')
+          throw new CapError(
+            'ui.handle is not available for external-tier extensions',
+          );
+        uiIncarnation.handle(String(name));
+      },
+      unhandle: (name: unknown) => {
+        if (uiTier === 'external')
+          throw new CapError(
+            'ui.unhandle is not available for external-tier extensions',
+          );
+        uiIncarnation.unhandle(String(name));
+      },
+      broadcast: (name: unknown, payload: unknown) => {
+        if (uiTier === 'external')
+          throw new CapError(
+            'ui.broadcast is not available for external-tier extensions',
+          );
+        // Same structured-clone hazard as `ext:invoke`'s result (see
+        // ext-invoke.ts): for an IN-PROCESS extension this payload has
+        // crossed no serialization boundary yet, and `onUiBroadcast`'s ONE
+        // relay (main.ts: `broadcast('ext:push', evt)`) hands it straight
+        // to Electron's `webContents.send`, which clones it internally.
+        // Reject HERE, synchronously, before it ever reaches the registry
+        // or a subscriber — an unclonable broadcast must never throw deep
+        // inside that relay (which is not this extension's call stack) or
+        // silently ship a value every renderer receives as `{}`.
+        try {
+          structuredClone(payload);
+        } catch (cloneError) {
+          throw new CapError(
+            `ui.broadcast payload is not structured-clone-safe: ${
+              cloneError instanceof Error
+                ? cloneError.message
+                : String(cloneError)
+            }`,
+          );
+        }
+        uiIncarnation.broadcast(String(name), payload);
+      },
     },
     inference: {
       // 'interactive' is only the DEFAULT — a caller-supplied `lane` in
@@ -546,6 +650,10 @@ export function buildSurfaces(deps: SurfaceDeps): {
   return {
     surfaces,
     async close() {
+      // Idempotent backstop — the abort listener above is the load-bearing
+      // synchronous path; this covers a caller that built surfaces with no
+      // `signal` at all (tests) or that calls close() directly.
+      uiIncarnation.close();
       eventSubs.forEach((off) => off());
       eventSubs.clear();
       await Promise.all(

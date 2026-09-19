@@ -4,6 +4,15 @@ import { pathToFileURL } from 'node:url';
 export const SENDER_VALIDATED_CHANNELS = new Set([
   'attention:list',
   'attention:act',
+  // B1 backstop only: `ext:invoke` is registered in main.ts through
+  // `createExtInvokeHandler` directly, NOT through `guardIpcHandler`, so
+  // this entry is normally inert in production (see main.ts's registration
+  // loop). It exists so that if a future refactor ever drops that ternary
+  // and lets `ext:invoke` fall through to `guardIpcHandler` like every
+  // other channel, an untrusted sender is still rejected here instead of
+  // silently reaching `handlers['ext:invoke']` (itself hardened to be
+  // inert — see main.ts).
+  'ext:invoke',
 ]);
 
 export function guardIpcHandler<Req, Res>(

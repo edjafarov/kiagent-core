@@ -22,8 +22,9 @@ import type {
   McpTool,
   Source,
 } from '@shared/contracts';
-import type { ExtensionPreview } from '@shared/ipc';
+import type { ExtensionPreview, ExtInvokeEnvelope } from '@shared/ipc';
 import type { Contributions } from '@shared/extension-rpc';
+import { wireErrorCode } from '@shared/source-errors';
 import type { AppDb } from '@main/db/app-db';
 import type { DbOwner } from '@main/db/coordinator';
 import type { AttentionService } from '@main/attention/service';
@@ -71,6 +72,7 @@ import { createNetworkService } from './network-service';
 import type { NetworkService } from './network-service';
 import { createInMemoryHostPair, type HostTransport } from './transport';
 import { runExtensionHost } from './extension-host-entry';
+import { createUiRegistry, type UiBroadcastEvent } from './ui-registry';
 
 // Loads a privileged (in-process) extension entry via Node's real internal
 // module loader, Module._load — the primitive require() itself delegates to.
@@ -100,6 +102,13 @@ function bustRequireCacheUnder(dir: string): void {
     if (key.startsWith(dir + path.sep)) delete cache[key];
   }
 }
+
+/** B1: `callUi`'s bound on a single ui.handle round trip, passed straight to
+ *  `RpcEndpoint.call`'s own deadline machinery (unlike the sender RPC below,
+ *  which has none and needs `withTimeout`). Same order of magnitude as the
+ *  outbound sender's 60s — a renderer call is interactive, so this stays
+ *  well under it. */
+const EXT_INVOKE_TIMEOUT_MS = 20_000;
 
 /** Promise.race against a rejecting timer — the timer is always cleared (and
  *  unref'd, so a pending one never holds the process open). Used for the
@@ -378,6 +387,18 @@ export interface ExtensionPlatform {
    * `onLaneChange`. Never throws.
    */
   refreshLane(): void;
+  /** B1: dispatches an `ext:invoke` request to whichever extension
+   *  incarnation currently owns (extensionId, name) in the ui registry.
+   *  ALWAYS resolves an envelope — never rejects, so `ext:invoke`'s own
+   *  ipcMain.handle can pass this straight through unchanged. */
+  callUi(
+    extensionId: string,
+    name: string,
+    payload: unknown,
+  ): Promise<ExtInvokeEnvelope>;
+  /** Subscribes to every extension's `ui.broadcast` — the product's
+   *  `ext:push` relay is the one caller. */
+  onUiBroadcast(cb: (evt: UiBroadcastEvent) => void): () => void;
 }
 
 export interface ResetAllFailure {
@@ -439,6 +460,10 @@ export function createExtensionPlatform(
 ): ExtensionPlatform {
   const entries = new Map<string, Entry>();
   const bus = createEventBus(deps.logSink);
+  // B1: ONE registry shared across every extension's incarnations, same
+  // lifetime as `bus` — see ui-registry.ts's header for why identity is
+  // keyed on DbOwner.handle rather than the coarser incarnation timestamp.
+  const uiRegistry = createUiRegistry();
 
   // The payload carries the RESOLVED LaneState, not the raw boolean the
   // plane owns, so a listener learns WHY the lane is closed (battery vs.
@@ -853,6 +878,14 @@ export function createExtensionPlatform(
             bus,
             deliverEvent,
             deliverFileChange,
+            uiRegistry,
+            // The host's OWN record of how this extension was loaded — see
+            // manifest.ts's ManifestTier: 'bundled' is the app-shipped tier
+            // (may declare privileged caps); everything else ('marketplace'
+            // | 'dev') is 'external'. Never derived from anything the
+            // extension itself sends.
+            tier: e.origin === 'bundled' ? 'bundled' : 'external',
+            signal: context?.signal,
           });
         } catch (error) {
           await files?.dispose?.();
@@ -1442,6 +1475,55 @@ export function createExtensionPlatform(
 
     refreshLane() {
       laneGate.check();
+    },
+
+    async callUi(extensionId, name, payload) {
+      const e = entries.get(extensionId);
+      if (!e || !e.host)
+        return {
+          ok: false,
+          code: 'EXT_UNKNOWN_DESTINATION',
+          message: `extension '${extensionId}' is not running`,
+        };
+      const reg = uiRegistry.resolve(extensionId, name);
+      if (!reg)
+        return {
+          ok: false,
+          code: 'EXT_UNKNOWN_DESTINATION',
+          message: `extension '${extensionId}' has no ui handler '${name}'`,
+        };
+      // Defense in depth: host-surfaces.ts already denies registration for
+      // an external-tier extension, so this should be unreachable through
+      // the front door — but `callUi` is the actual dispatch boundary, and
+      // a second, independent check here means a registration-time gate
+      // that somehow slipped (a future refactor, a test double) still
+      // can't reach a denied capability at call time.
+      if (reg.tier === 'external')
+        return {
+          ok: false,
+          code: 'EXT_TIER_DENIED',
+          message: `extension '${extensionId}' is external-tier and cannot serve ui.handle calls`,
+        };
+      try {
+        // Bounded: a hung handler must still resolve an envelope rather
+        // than leave `ext:invoke` (and the renderer awaiting it) hanging
+        // forever. `endpoint.call`'s own deadline machinery raises
+        // RPC_DEADLINE_EXCEEDED, a real WireErrorCode, which flows through
+        // the `wireErrorCode(error)` branch below unchanged.
+        const value = await e.host.callUi(name, payload, {
+          timeoutMs: EXT_INVOKE_TIMEOUT_MS,
+        });
+        return { ok: true, value };
+      } catch (error) {
+        return {
+          ok: false,
+          code: wireErrorCode(error) ?? 'EXT_HANDLER_FAILED',
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+    onUiBroadcast(cb) {
+      return uiRegistry.onBroadcast(cb);
     },
   };
 }

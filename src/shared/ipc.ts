@@ -22,6 +22,7 @@ import type {
   SourceDescriptor,
 } from './contracts';
 import type { AttentionItemWire } from './attention';
+import type { ExtErrorCode } from './source-errors';
 
 /**
  * The renderer ↔ main contract. One projection push carries ALL live app
@@ -88,6 +89,38 @@ export type ConnectEvent =
       removed: number;
     }
   | { flowId: string; kind: 'error'; msg: string };
+
+/**
+ * B1 (host-owned renderer eventing): the TWO fixed channels an extension's
+ * renderer UI reaches the host's extension-RPC bridge through. There is
+ * deliberately no per-extension or per-name channel — `ipcMain.handle`
+ * matches exact channel strings and Electron has no catch-all, so routing
+ * happens on `extensionId`/`name` INSIDE the envelope, not on the channel.
+ */
+export interface ExtInvokeRequest {
+  extensionId: string;
+  name: string;
+  payload: unknown;
+}
+
+/** `ext:invoke` NEVER rejects the IPC call — Electron serializes only
+ *  `Error.message` on a rejection (see `electron.d.ts` around the
+ *  `ipcMain.handle` doc comment), which would lose `code` entirely. Every
+ *  outcome — success, an unknown destination, a denied tier, a malformed
+ *  request, an untrusted sender, or a failed/timed-out handler — resolves
+ *  this discriminated envelope instead. */
+export type ExtInvokeEnvelope =
+  | { ok: true; value: unknown }
+  | { ok: false; code: ExtErrorCode; message: string };
+
+/** `ext:push`: an extension's `host.ui.broadcast(name, payload)` fanned out
+ *  to every renderer window, same shape as the request minus the
+ *  round-trip. */
+export interface ExtPushEvent {
+  extensionId: string;
+  name: string;
+  payload: unknown;
+}
 
 export interface SearchRequest {
   text?: string;
@@ -501,6 +534,10 @@ export interface Invokes {
     req: { id: string; enabled: boolean };
     res: { ok: boolean; error?: string };
   };
+
+  /** The renderer's half of B1's host-owned extension RPC — see
+   *  `ExtInvokeRequest`/`ExtInvokeEnvelope`. Never rejects. */
+  'ext:invoke': { req: ExtInvokeRequest; res: ExtInvokeEnvelope };
   /**
    * Records fresh consent for an installed extension's on-disk manifest
    * (the Marketplace "Review permissions" action), then activates it.
@@ -526,6 +563,9 @@ export interface Pushes {
    *  never a statement that a specific row changed. */
   'push:outbox-changed': void;
   'push:attention-changed': void;
+  /** B1: an extension's `host.ui.broadcast(name, payload)`, fanned out to
+   *  every renderer window verbatim. */
+  'ext:push': ExtPushEvent;
 }
 
 export type InvokeChannel = keyof Invokes;
@@ -624,6 +664,7 @@ const INVOKE_CHANNEL_MAP = {
   'extension:uninstall': 0,
   'extension:set-enabled': 0,
   'extension:grant-consent': 0,
+  'ext:invoke': 0,
 } as const satisfies Record<InvokeChannel, 0>;
 
 export const INVOKE_CHANNELS = Object.keys(
@@ -638,6 +679,7 @@ const PUSH_CHANNEL_MAP = {
   'push:update-state': 0,
   'push:outbox-changed': 0,
   'push:attention-changed': 0,
+  'ext:push': 0,
 } as const satisfies Record<PushChannel, 0>;
 
 export const PUSH_CHANNELS = Object.keys(

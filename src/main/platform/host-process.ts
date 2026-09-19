@@ -39,7 +39,11 @@ import { randomUUID } from 'node:crypto';
 import { createHostRouter } from './host-router';
 import type { Surfaces } from './host-surfaces';
 import { createSourceProxySet } from './source-proxy';
-import { createRpcEndpoint, type HostTransport } from './transport';
+import {
+  createRpcEndpoint,
+  type HostTransport,
+  type RpcCallOptions,
+} from './transport';
 
 const CRASH_LOOP_MAX = 3;
 const CRASH_LOOP_WINDOW_MS = 60_000;
@@ -98,6 +102,18 @@ export function createExtensionHost(deps: HostDeps): {
   start(): Promise<void>;
   stop(): Promise<void>;
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
+  /** B1: invokes a name the extension registered via `host.ui.handle()`.
+   *  Mirrors `callTool` exactly — same `current`-not-null guard, same
+   *  single-argument call shape — just over the 'ui' namespace instead of
+   *  'tool'. The caller (extension-platform.ts's `callUi`) is responsible
+   *  for checking the ui-registry BEFORE calling this, so a name this
+   *  incarnation never registered surfaces as the child's own "unknown ui
+   *  handler" rejection, not a platform-level unknown-destination case. */
+  callUi(
+    name: string,
+    payload: unknown,
+    options?: Pick<RpcCallOptions, 'timeoutMs'>,
+  ): Promise<unknown>;
   callSender(
     sourceId: string,
     intent: SendIntent,
@@ -440,6 +456,11 @@ export function createExtensionHost(deps: HostDeps): {
       if (!current)
         return Promise.reject(new Error('extension is not running'));
       return current.endpoint.call('tool', name, [args]);
+    },
+    callUi(name, payload, options) {
+      if (!current)
+        return Promise.reject(new Error('extension is not running'));
+      return current.endpoint.call('ui', name, [payload], options);
     },
     // Reachable only from the send pipeline, i.e. only past a confirmation
     // gate. A child that has no sender for `sourceId` — including a pre-1.2
