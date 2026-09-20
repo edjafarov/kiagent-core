@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.88.1](https://github.com/edjafarov/kiagent-core/compare/v0.88.0...v0.88.1) (2026-09-20)
+
+### Bug Fixes
+
+* **build:** bump terser to 5.51.2 so the main bundle minifies ([b92ed6c](https://github.com/edjafarov/kiagent-core/commit/b92ed6ccf8d79411f6887884e4b2dd64dbd7dcf2))
+
 ## [0.88.0](https://github.com/edjafarov/kiagent-core/compare/v0.87.1...v0.88.0) (2026-09-20)
 
 ### Features
