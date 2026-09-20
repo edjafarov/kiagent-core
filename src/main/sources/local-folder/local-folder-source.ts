@@ -58,7 +58,7 @@ export const descriptor: SourceDescriptor = {
 
 /** One local-folder account = this machine. All roots this machine tracks
  *  live in `config.paths`, not in the identifier — see `connect()`. */
-const MACHINE_IDENTIFIER = 'this-machine';
+export const MACHINE_IDENTIFIER = 'this-machine';
 
 /** The account's tracked roots, as absolute paths. Canonical
  *  `config.folderRoots` with the one-train legacy `config.paths` fallback —

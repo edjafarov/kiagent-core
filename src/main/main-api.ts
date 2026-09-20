@@ -1,18 +1,32 @@
 import type { App, MenuItemConstructorOptions } from 'electron';
 
 import type {
+  Account,
   AccountId,
   Credentials,
+  FolderScopeUpdate,
   Identity,
   MessageEvidenceReadInput,
   MessageEvidenceReadResult,
 } from '@shared/contracts';
+import { coveringRoots, isUnder } from '@shared/folder-paths';
 
 import type { McpServerHandle } from './core/mcp/server';
 import type { CoreStore } from './core/store/store';
 import type { TrayMenuController } from './tray-menu';
 import type { OutboundService } from './outbound/service';
 import type { FileRootRegistry } from './platform/file-roots';
+import {
+  folderScopedConfig,
+  partitionRemovedRoots,
+  readFolderRoots,
+  toFolderRoots,
+  validateFolderRoots,
+} from './sources/local-folder/folder-roots';
+import {
+  descriptor as localFolderDescriptor,
+  MACHINE_IDENTIFIER,
+} from './sources/local-folder/local-folder-source';
 
 /**
  * The MainProcessApi contract handed to in-process bundled extensions
@@ -31,6 +45,12 @@ export interface MainProcessApi {
   vault: {
     load(accountId: AccountId): Promise<Credentials | null>;
     save(accountId: AccountId, creds: Credentials): Promise<void>;
+  };
+  localFolders: {
+    roots(): Promise<Array<{ accountId: string; roots: string[] }>>;
+    ensureRoot(
+      path: string,
+    ): Promise<{ status: 'covered' | 'added' | 'created'; accountId: string }>;
   };
   mcp: {
     /** The loopback port actually bound (null if the server never bound —
@@ -129,6 +149,14 @@ export interface BuildMainApiDeps {
   inference?: {
     generation(): number;
   };
+  /** Starts the loop for an account created by localFolders.ensureRoot. */
+  runAccount?(account: Account): void;
+  /** Narrow bridge to the engine's folder-scope transaction. */
+  applyFolderScope?(
+    accountId: AccountId,
+    update: FolderScopeUpdate,
+    configAtOpen: string,
+  ): Promise<void>;
 }
 
 export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
@@ -159,6 +187,10 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
       if (rootMutations.get(caller) === next) rootMutations.delete(caller);
     });
   };
+  const localFolderAccounts = async (): Promise<Account[]> =>
+    (await deps.store.read.accounts()).filter(
+      (account) => account.source === 'local-folder',
+    );
   return {
     apiVersion: 1,
     identity: {
@@ -168,6 +200,79 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
     vault: {
       load: (accountId) => deps.store.vault.load(accountId),
       save: (accountId, creds) => deps.store.vault.save(accountId, creds),
+    },
+    localFolders: {
+      roots: async () => {
+        const result: Array<{ accountId: string; roots: string[] }> = [];
+        for (const account of await localFolderAccounts()) {
+          try {
+            result.push({
+              accountId: account.id,
+              roots: readFolderRoots(account).map((root) => root.id),
+            });
+          } catch {
+            // A malformed local-folder config must not hide other accounts.
+          }
+        }
+        return result;
+      },
+      ensureRoot: (path) =>
+        serializeRootMutation('local-folders', async () => {
+          const [newRoot] = await validateFolderRoots([path]);
+          const accounts = await localFolderAccounts();
+          const withRoots = accounts.map((account) => ({
+            account,
+            roots: readFolderRoots(account),
+          }));
+          const covered = withRoots.find(({ roots }) =>
+            roots.some((root) => isUnder(newRoot.id, root.id)),
+          );
+          if (covered)
+            return {
+              status: 'covered' as const,
+              accountId: covered.account.id,
+            };
+
+          if (withRoots.length === 0) {
+            const account = await deps.store.createAccount({
+              source: 'local-folder',
+              identifier: MACHINE_IDENTIFIER,
+              config: folderScopedConfig({}, [newRoot]),
+              status: 'connecting',
+              cadence: localFolderDescriptor.cadence,
+            });
+            if (!deps.runAccount)
+              throw new Error('local-folder account startup is unavailable');
+            deps.runAccount(account);
+            return { status: 'created' as const, accountId: account.id };
+          }
+
+          if (!deps.applyFolderScope)
+            throw new Error(
+              'local-folder scope updates are unavailable in this main-process API',
+            );
+          const { account, roots } = withRoots[0];
+          const mergedRoots = toFolderRoots([
+            ...coveringRoots([...roots.map((root) => root.id), newRoot.id]),
+          ]);
+          // A root the new one absorbs leaves the config, so its rows must be
+          // re-attributed to the new root (C-46/D5) — never archived here.
+          const removed = partitionRemovedRoots(roots, mergedRoots);
+          if (removed.archive.length > 0)
+            throw new Error('ensureRoot must never drop a root from scope');
+          const update: FolderScopeUpdate = {
+            config: folderScopedConfig(account.config ?? {}, mergedRoots),
+            cursor: account.cursor,
+            archiveScopeRootIds: [],
+            reattributeScopeRoots: removed.reattribute,
+          };
+          await deps.applyFolderScope(
+            account.id,
+            update,
+            JSON.stringify(account.config),
+          );
+          return { status: 'added' as const, accountId: account.id };
+        }),
     },
     mcp: {
       port: deps.mcp.port,
