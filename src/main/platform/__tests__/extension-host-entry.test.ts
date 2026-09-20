@@ -631,3 +631,184 @@ describe('runExtensionHost — source runner', () => {
     expect((await err).error).toMatch(/pull broke/);
   });
 });
+
+describe('runExtensionHost — host.ui (B1 host-owned renderer eventing, RPC mechanics)', () => {
+  const UI_BOOT = { ...BOOT, caps: [...BOOT.caps, 'ui'] as Cap[] };
+
+  it('handle() resolves ONLY on host acknowledgement — the local dispatch map is not populated before that (not optimistic)', async () => {
+    let ackHandle: () => void = () => {};
+    const acked = new Promise<void>((resolve) => {
+      ackHandle = resolve;
+    });
+    const mod = {
+      async activate(host: {
+        ui: {
+          handle(n: string, fn: (p: unknown) => unknown): Promise<unknown>;
+        };
+      }) {
+        await host.ui.handle('echo', async (payload: unknown) => ({
+          echoed: payload,
+        }));
+        return {};
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    let sawHandleCall = false;
+    mainEp.onCall(async (ns, method) => {
+      if (ns === 'ui' && method === 'handle') {
+        sawHandleCall = true;
+        await acked; // the host deliberately delays acknowledgement
+        return undefined;
+      }
+      throw new Error(`unexpected ${ns}.${method}`);
+    });
+    const activated = waitFor('activated');
+    mainEp.post(UI_BOOT);
+    // Give the child a beat to reach handle() and block on the host's reply.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sawHandleCall).toBe(true);
+    // BEFORE the host acknowledges, a main→child 'ui' call must find
+    // NOTHING registered — proves the local map isn't written optimistically.
+    await expect(mainEp.call('ui', 'echo', ['x'])).rejects.toThrow(
+      /unknown ui handler/,
+    );
+    ackHandle(); // host acknowledges
+    await activated;
+    // AFTER acknowledgement, the same call succeeds against the now-local entry.
+    await expect(mainEp.call('ui', 'echo', ['x'])).resolves.toEqual({
+      echoed: 'x',
+    });
+  });
+
+  it('duplicate handle() names REJECT locally — no second RPC round trip for the rejected call', async () => {
+    const calls: string[] = [];
+    let dupMessage: unknown;
+    const mod = {
+      async activate(host: {
+        ui: {
+          handle(n: string, fn: (p: unknown) => unknown): Promise<unknown>;
+        };
+      }) {
+        await host.ui.handle('echo', async () => 'first');
+        try {
+          await host.ui.handle('echo', async () => 'second');
+        } catch (e) {
+          dupMessage = e instanceof Error ? e.message : String(e);
+        }
+        return {};
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (ns, method) => {
+      calls.push(`${ns}.${method}`);
+      if (ns === 'ui' && method === 'handle') return undefined;
+      throw new Error(`unexpected ${ns}.${method}`);
+    });
+    const activated = waitFor('activated');
+    mainEp.post(UI_BOOT);
+    await activated;
+    expect(calls).toEqual(['ui.handle']); // only ONE round trip reached main
+    expect(dupMessage).toMatch(/already registered/);
+    // The FIRST registration is still live and dispatchable.
+    await expect(mainEp.call('ui', 'echo', [1])).resolves.toBe('first');
+  });
+
+  it('unhandle() disposal is local-first: the extension stops serving the name before the host even acknowledges disposal', async () => {
+    const calls: string[] = [];
+    let releaseUnhandleAck: () => void = () => {};
+    const unhandleAcked = new Promise<void>((resolve) => {
+      releaseUnhandleAck = resolve;
+    });
+    const mod = {
+      async activate(host: {
+        ui: {
+          handle(n: string, fn: (p: unknown) => unknown): Promise<unknown>;
+          unhandle(n: string): Promise<void>;
+        };
+      }) {
+        await host.ui.handle('echo', async (p: unknown) => p);
+        return {
+          tools: [
+            {
+              name: 'kickUnhandle',
+              description: 'fires unhandle() without awaiting it',
+              inputSchema: {},
+              call() {
+                void host.ui.unhandle('echo');
+                return 'kicked-off';
+              },
+            },
+          ],
+        };
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (ns, method) => {
+      calls.push(`${ns}.${method}`);
+      if (ns === 'ui' && method === 'handle') return undefined;
+      if (ns === 'ui' && method === 'unhandle') {
+        await unhandleAcked; // host deliberately slow to acknowledge disposal
+        return undefined;
+      }
+      throw new Error(`unexpected ${ns}.${method}`);
+    });
+    const activated = waitFor('activated');
+    mainEp.post(UI_BOOT);
+    await activated;
+
+    const kicked = await mainEp.call('tool', 'kickUnhandle', [{}]);
+    expect(kicked).toBe('kicked-off');
+
+    // Local-first: even though the host's unhandle acknowledgement is still
+    // pending, the extension must already refuse to serve 'echo'.
+    await expect(mainEp.call('ui', 'echo', ['x'])).rejects.toThrow(
+      /unknown ui handler/,
+    );
+    expect(calls).toContain('ui.unhandle'); // the host WAS notified…
+    releaseUnhandleAck(); // …it just hadn't acknowledged yet
+    await new Promise((r) => setTimeout(r, 10));
+  });
+
+  it('main→child ui dispatch: an unregistered name rejects with "unknown ui handler"', async () => {
+    const mod = {
+      async activate() {
+        return {};
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async () => undefined);
+    const activated = waitFor('activated');
+    mainEp.post(UI_BOOT);
+    await activated;
+    await expect(mainEp.call('ui', 'nope', [1])).rejects.toThrow(
+      /unknown ui handler nope/,
+    );
+  });
+
+  it('a handler that throws crosses the bridge with its message and name intact (full-bridge error fidelity, in-process pair)', async () => {
+    const mod = {
+      async activate(host: {
+        ui: {
+          handle(n: string, fn: (p: unknown) => unknown): Promise<unknown>;
+        };
+      }) {
+        await host.ui.handle('boom', async () => {
+          throw new RangeError('boom from ext');
+        });
+        return {};
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (ns) => {
+      if (ns === 'ui') return undefined;
+      throw new Error('unexpected');
+    });
+    const activated = waitFor('activated');
+    mainEp.post(UI_BOOT);
+    await activated;
+    await expect(mainEp.call('ui', 'boom', [null])).rejects.toMatchObject({
+      message: 'boom from ext',
+      name: 'RangeError',
+    });
+  });
+});

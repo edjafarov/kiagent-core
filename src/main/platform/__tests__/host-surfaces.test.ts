@@ -7,6 +7,9 @@ import path from 'path';
 import type { EventMeta, Query } from '@shared/contracts';
 
 import { LaneClosedError } from '@main/core/inference';
+import type { AttentionItemWire } from '@shared/attention';
+import { openDb } from '@main/db/app-db';
+import { createAttentionService } from '@main/attention/service';
 
 import { buildSurfaces, CapError, createEventBus } from '../host-surfaces';
 
@@ -44,6 +47,11 @@ function makeDeps(
         describe: jest.fn(async () => null),
       },
       notify: jest.fn(),
+      attention: {
+        publish: jest.fn(async () => ({ rejected: [] })),
+        resolve: jest.fn(async () => ({ rejected: [] })),
+        list: jest.fn(async () => []),
+      } as never,
       bus,
       deliverEvent: (name: string, payload: unknown, meta: EventMeta) =>
         events.push({ name, payload, meta }),
@@ -115,6 +123,358 @@ describe('createEventBus', () => {
 });
 
 describe('buildSurfaces', () => {
+  it('publishes through the bound extension id and exposes only publish/resolve', async () => {
+    const item: AttentionItemWire = {
+      id: 'kiagent.a:item',
+      producer: 'kiagent.b',
+      kind: 'upcoming',
+      title: 'item',
+      detail: null,
+      priority: 1,
+      dueAt: null,
+      expiresAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+      revision: 1,
+      state: 'open',
+      resolvedBy: null,
+      actions: [],
+    };
+    const attention = {
+      publish: jest.fn(async () => ({ rejected: [] })),
+      resolve: jest.fn(async () => ({ rejected: [] })),
+    };
+    const { deps } = makeDeps({
+      extensionId: 'kiagent.a',
+      attention: attention as never,
+    });
+    const { surfaces, close } = buildSurfaces(deps);
+    await surfaces.attention.publish([item]);
+    await surfaces.attention.resolve('kiagent.b:item', 4);
+    expect(attention.publish).toHaveBeenCalledWith('kiagent.a', [item]);
+    expect(attention.resolve).toHaveBeenCalledWith(
+      'kiagent.a',
+      'kiagent.b:item',
+      4,
+    );
+    expect(Object.keys(surfaces.attention).sort()).toEqual([
+      'publish',
+      'resolve',
+    ]);
+    await close();
+  });
+
+  it('K2b rejects hostile attention payloads without executing user code or changing stored rows', async () => {
+    const dbPath = path.join(
+      os.tmpdir(),
+      `kia-attention-surface-${Date.now()}-${Math.random()}.db`,
+    );
+    const db = await openDb(dbPath);
+    const onChanged = jest.fn();
+    const service = createAttentionService({ db, onChanged });
+    service.setExtensions([
+      {
+        id: 'test.basic',
+        name: 'Test',
+        version: '1.0.0',
+        origin: 'dev',
+        enabled: true,
+        status: 'activated',
+        caps: ['attention'],
+        sourceIds: [],
+        oauthSources: [],
+      },
+    ]);
+    const base: AttentionItemWire = {
+      id: 'test.basic:existing',
+      producer: 'test.basic',
+      kind: 'upcoming',
+      title: 'existing',
+      detail: null,
+      priority: 1,
+      dueAt: null,
+      expiresAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+      revision: 1,
+      state: 'open',
+      resolvedBy: null,
+      actions: [],
+    };
+    await expect(service.publish('test.basic', [base])).resolves.toEqual({
+      rejected: [],
+    });
+    const before = await db.all(
+      "SELECT id, producer, payload_json, state, revision FROM attention_items UNION ALL SELECT id, producer, '' AS payload_json, state, revision FROM attention_revisions ORDER BY id",
+    );
+
+    const { deps } = makeDeps({
+      extensionId: 'test.basic',
+      attention: service,
+    });
+    const { surfaces, close } = buildSurfaces(deps);
+    let executions = 0;
+
+    const getterItem = { ...base, id: 'test.basic:getter' };
+    Object.defineProperty(getterItem, 'title', {
+      enumerable: true,
+      get: () => {
+        executions += 1;
+        return 'executed';
+      },
+    });
+    class ItemFixture {}
+    const classItem = Object.assign(new ItemFixture(), {
+      ...base,
+      id: 'test.basic:class',
+    });
+    const nanItem = { ...base, id: 'test.basic:nan', dueAt: Number.NaN };
+    const hostileBatch = [base];
+    Object.defineProperty(hostileBatch, 'toJSON', {
+      enumerable: false,
+      value: () => {
+        executions += 1;
+        return [];
+      },
+    });
+
+    for (const payload of [
+      [getterItem],
+      [classItem],
+      [nanItem],
+      hostileBatch,
+    ]) {
+      await expect(surfaces.attention.publish(payload)).resolves.toMatchObject({
+        rejected: expect.arrayContaining([expect.any(Object)]),
+      });
+    }
+    expect(executions).toBe(0);
+    await expect(
+      db.all(
+        "SELECT id, producer, payload_json, state, revision FROM attention_items UNION ALL SELECT id, producer, '' AS payload_json, state, revision FROM attention_revisions ORDER BY id",
+      ),
+    ).resolves.toEqual(before);
+
+    await close();
+    await service.dispose();
+    await db.close();
+    for (const suffix of ['', '-wal', '-shm']) {
+      if (fs.existsSync(`${dbPath}${suffix}`)) fs.rmSync(`${dbPath}${suffix}`);
+    }
+  });
+
+  it('K2d rejects a Proxy publication over an existing row without traps or DB changes', async () => {
+    const dbPath = path.join(
+      os.tmpdir(),
+      `kia-attention-proxy-${Date.now()}-${Math.random()}.db`,
+    );
+    const db = await openDb(dbPath);
+    const service = createAttentionService({ db, onChanged: jest.fn() });
+    service.setExtensions([
+      {
+        id: 'test.basic',
+        name: 'Test',
+        version: '1.0.0',
+        origin: 'dev',
+        enabled: true,
+        status: 'activated',
+        caps: ['attention'],
+        sourceIds: [],
+        oauthSources: [],
+      },
+    ]);
+    const existing: AttentionItemWire = {
+      id: 'test.basic:existing',
+      producer: 'test.basic',
+      kind: 'upcoming',
+      title: 'existing',
+      detail: null,
+      priority: 1,
+      dueAt: null,
+      expiresAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+      revision: 1,
+      state: 'open',
+      resolvedBy: null,
+      actions: [],
+    };
+    await service.publish('test.basic', [existing]);
+    const before = await db.all(
+      "SELECT id, producer, payload_json, state, revision FROM attention_items UNION ALL SELECT id, producer, '' AS payload_json, state, revision FROM attention_revisions ORDER BY id",
+    );
+    const traps = {
+      get: 0,
+      getOwnPropertyDescriptor: 0,
+      ownKeys: 0,
+      getPrototypeOf: 0,
+      has: 0,
+    };
+    let titleReads = 0;
+    const payload = new Proxy(existing, {
+      get(target, property, receiver) {
+        traps.get += 1;
+        if (property === 'title') {
+          titleReads += 1;
+          return titleReads <= 3 ? 'clean' : `evil\0${'x'.repeat(500)}`;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+      getOwnPropertyDescriptor(target, property) {
+        traps.getOwnPropertyDescriptor += 1;
+        return Reflect.getOwnPropertyDescriptor(target, property);
+      },
+      ownKeys(target) {
+        traps.ownKeys += 1;
+        return Reflect.ownKeys(target);
+      },
+      getPrototypeOf(target) {
+        traps.getPrototypeOf += 1;
+        return Reflect.getPrototypeOf(target);
+      },
+      has(target, property) {
+        traps.has += 1;
+        return Reflect.has(target, property);
+      },
+    });
+    const { deps } = makeDeps({
+      extensionId: 'test.basic',
+      attention: service,
+    });
+    const { surfaces, close } = buildSurfaces(deps);
+
+    try {
+      await expect(
+        surfaces.attention.publish([payload]),
+      ).resolves.toMatchObject({
+        rejected: expect.arrayContaining([expect.any(Object)]),
+      });
+      expect(titleReads).toBe(0);
+      expect(traps).toEqual({
+        get: 0,
+        getOwnPropertyDescriptor: 0,
+        ownKeys: 0,
+        getPrototypeOf: 0,
+        has: 0,
+      });
+      await expect(
+        db.all(
+          "SELECT id, producer, payload_json, state, revision FROM attention_items UNION ALL SELECT id, producer, '' AS payload_json, state, revision FROM attention_revisions ORDER BY id",
+        ),
+      ).resolves.toEqual(before);
+    } finally {
+      await close();
+      await service.dispose();
+      await db.close();
+      for (const suffix of ['', '-wal', '-shm']) {
+        if (fs.existsSync(`${dbPath}${suffix}`))
+          fs.rmSync(`${dbPath}${suffix}`);
+      }
+    }
+  });
+
+  it('K10 maps closed-db attention publish and resolve to ATTENTION_DB_UNAVAILABLE without hints', async () => {
+    const dbPath = path.join(
+      os.tmpdir(),
+      `kia-attention-closed-${Date.now()}-${Math.random()}.db`,
+    );
+    const db = await openDb(dbPath);
+    const onChanged = jest.fn();
+    const service = createAttentionService({ db, onChanged });
+    const { deps } = makeDeps({
+      extensionId: 'test.basic',
+      attention: service,
+    });
+    const { surfaces, close } = buildSurfaces(deps);
+
+    await db.close();
+    await expect(surfaces.attention.publish([])).rejects.toMatchObject({
+      code: 'ATTENTION_DB_UNAVAILABLE',
+    });
+    await expect(
+      surfaces.attention.resolve('test.basic:closed'),
+    ).rejects.toMatchObject({ code: 'ATTENTION_DB_UNAVAILABLE' });
+    expect(onChanged).not.toHaveBeenCalled();
+
+    await close();
+    await service.dispose();
+    for (const suffix of ['', '-wal', '-shm']) {
+      if (fs.existsSync(`${dbPath}${suffix}`)) fs.rmSync(`${dbPath}${suffix}`);
+    }
+  });
+
+  it('K2c passes non-string resolve identifiers untouched and leaves the row open', async () => {
+    const dbPath = path.join(
+      os.tmpdir(),
+      `kia-attention-resolve-${Date.now()}-${Math.random()}.db`,
+    );
+    const db = await openDb(dbPath);
+    const service = createAttentionService({ db, onChanged: jest.fn() });
+    service.setExtensions([
+      {
+        id: 'test.basic',
+        name: 'Test',
+        version: '1.0.0',
+        origin: 'dev',
+        enabled: true,
+        status: 'activated',
+        caps: ['attention'],
+        sourceIds: [],
+        oauthSources: [],
+      },
+    ]);
+    const existing: AttentionItemWire = {
+      id: 'test.basic:existing',
+      producer: 'test.basic',
+      kind: 'upcoming',
+      title: 'existing',
+      detail: null,
+      priority: 1,
+      dueAt: null,
+      expiresAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+      revision: 1,
+      state: 'open',
+      resolvedBy: null,
+      actions: [],
+    };
+    await service.publish('test.basic', [existing]);
+    const { deps } = makeDeps({
+      extensionId: 'test.basic',
+      attention: service,
+    });
+    const { surfaces, close } = buildSurfaces(deps);
+    let executions = 0;
+    const hostile = {
+      toString() {
+        executions += 1;
+        return existing.id;
+      },
+    };
+    await expect(surfaces.attention.resolve(hostile)).resolves.toMatchObject({
+      rejected: expect.arrayContaining([expect.any(Object)]),
+    });
+    // eslint-disable-next-line no-new-wrappers
+    const boxedId = new String(existing.id);
+    await expect(surfaces.attention.resolve(boxedId)).resolves.toMatchObject({
+      rejected: expect.arrayContaining([expect.any(Object)]),
+    });
+    expect(executions).toBe(0);
+    await expect(
+      db.all('SELECT id, state FROM attention_items WHERE id = ?', [
+        existing.id,
+      ]),
+    ).resolves.toEqual([{ id: existing.id, state: 'open' }]);
+
+    await close();
+    await service.dispose();
+    await db.close();
+    for (const suffix of ['', '-wal', '-shm']) {
+      if (fs.existsSync(`${dbPath}${suffix}`)) fs.rmSync(`${dbPath}${suffix}`);
+    }
+  });
+
   it('query delegates and count round-trips', async () => {
     const { deps } = makeDeps();
     const { surfaces, close } = buildSurfaces(deps);

@@ -225,9 +225,11 @@ export interface RpcCallContext {
 // The call/reply shapes come FROM the declared protocol rather than being
 // restated here, so extension-rpc.ts can't drift from what this endpoint
 // actually puts on the wire. Both are taken from the ChildToMain side: it is
-// the wider of the two (MainToChild narrows `ns` to 'source'|'tool'|'send',
-// which only the dispatch end — extension-host-entry's onCall — needs), and
-// ONE endpoint implementation serves both directions.
+// the wider of the two (MainToChild narrows `ns` to
+// 'source'|'tool'|'send'|'ui', which only the dispatch end —
+// extension-host-entry's onCall — needs), and ONE endpoint implementation
+// serves both directions. ('ui', added by B1, is main invoking a name the
+// child registered via host.ui.handle() — dispatched exactly like 'tool'.)
 //
 // ReplyMsg's `code` is the source-error taxonomy carried symmetrically with
 // the src-error NOTIFY direction: a rejected handler (e.g. a main-side
@@ -385,7 +387,33 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
       }
       h(c.ns, c.method, c.args, context)
         .then(
-          (value) => reply(true, value),
+          (value) => {
+            try {
+              reply(true, value);
+            } catch (sendError) {
+              // `channel.send` can throw SYNCHRONOUSLY here (a forked
+              // child's `process.send`/`parentPort.postMessage`
+              // serializing a handler's unclonable result — e.g. a live
+              // function or Promise a `ui.handle` callback resolved). Left
+              // uncaught, that throw escapes this `.then()` callback as a
+              // rejection with no `.catch()` downstream, which becomes an
+              // unhandledRejection and, in the extension host child (see
+              // extension-host-entry.ts's `process.on('unhandledRejection'
+              // )`), kills the process — counting toward the crash loop
+              // over a value that was never a real crash. Fall back to an
+              // ordinary failure reply instead: `reply(false, …)` carries
+              // only plain strings, so it is always clone-safe.
+              reply(
+                false,
+                undefined,
+                `result could not be sent over the wire: ${
+                  sendError instanceof Error
+                    ? sendError.message
+                    : String(sendError)
+                }`,
+              );
+            }
+          },
           (e) =>
             reply(
               false,

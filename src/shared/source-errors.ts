@@ -64,6 +64,31 @@ export type CapabilityErrorCode =
 export type SourceErrorCode = 'auth' | 'permanent';
 export type WireErrorCode = SourceErrorCode | CapabilityErrorCode;
 
+/**
+ * B1 (host-owned renderer eventing): outcomes `ext:invoke` can resolve that
+ * never arise from an ordinary extension-RPC reply — the destination
+ * (extensionId/name) doesn't exist, the extension's tier is denied the `ui`
+ * write surface, the renderer's request itself is malformed, or the caller
+ * failed sender verification. `WireErrorCode` alone can't express these:
+ * it's the taxonomy for a REJECTED RPC call between main and a child, and
+ * these four arise either before any RPC call is made (malformed/tier/
+ * unknown) or from the IPC boundary itself (untrusted sender), never from a
+ * child's reply. `ExtErrorCode` is additive — every existing `WireErrorCode`
+ * still crosses through `ext:invoke`'s envelope unchanged (e.g. a handler
+ * that times out surfaces as `RPC_DEADLINE_EXCEEDED`) — so this widens
+ * rather than duplicates the taxonomy. */
+export type ExtDispatchErrorCode =
+  | 'EXT_UNKNOWN_DESTINATION'
+  | 'EXT_TIER_DENIED'
+  | 'EXT_MALFORMED_REQUEST'
+  | 'EXT_UNTRUSTED_SENDER'
+  /** A registered handler rejected with something that isn't a
+   *  `WireErrorCode` (e.g. a plain `throw new Error(...)` in extension
+   *  code) — the envelope still needs SOME code, and this is the
+   *  catch-all so `ext:invoke` never has to guess. */
+  | 'EXT_HANDLER_FAILED';
+export type ExtErrorCode = WireErrorCode | ExtDispatchErrorCode;
+
 /** Authentication is gone (revoked/expired token, changed password): the
  *  engine commits `status: 'needsReauth'` and STOPS — no retries, no
  *  automatic supervisor restarts. The user's explicit Retry (or a fresh

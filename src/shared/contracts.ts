@@ -15,6 +15,7 @@
 import type { PluginDb } from './plugin-db';
 import type { ScopedFiles } from './plugin-files';
 import type { PluginNet } from './plugin-net';
+import type { AttentionItemWire } from './attention';
 
 export type {
   PluginDb,
@@ -957,6 +958,7 @@ export type Cap =
   | 'commands'
   | 'inference'
   | 'events'
+  | 'attention'
   /** May deliver outbound messages through the host's send pipeline — the
    *  host calls the extension's Sender only AFTER a user confirmation gate;
    *  extensions never initiate sends. Not a host namespace: there is no
@@ -995,6 +997,36 @@ export interface OAuthSourceBinding {
   provider: OAuthProviderId;
 }
 
+/** B3: `contributes.ui[].slot` — the only slot a contribution may declare in
+ *  this revision. `'settings-section'` and `'sidebar-item'` are reserved by
+ *  the design spec but not implemented; a manifest naming either is an
+ *  unknown-slot rejection, same as any other unrecognized value. */
+export type UiContributionSlot = 'screen';
+
+/** A contribution's sidebar placement is a SUGGESTION only — the product
+ *  decides final group/order/icon/gating and may override any field or
+ *  ignore the suggestion entirely (design spec, decision 2). Core never
+ *  treats this as authoritative. */
+export interface UiNavSuggestion {
+  group?: string;
+  order?: number;
+  icon?: string;
+}
+
+/** One `contributes.ui` entry: a bespoke renderer screen, delivered at
+ *  build time (bundled tier only — `PLUGIN_UI_TIER_DENIED` for `external`).
+ *  `id` is namespaced into the routed view id as
+ *  `ext:<extension id>/<id>` (`src/renderer/state/view.ts`'s `ExtView`).
+ *  `params` declares the FLAT param keys this view's deep links accept —
+ *  there is no nested params bag. */
+export interface UiContribution {
+  id: string;
+  slot: UiContributionSlot;
+  title: string;
+  nav?: UiNavSuggestion;
+  params?: string[];
+}
+
 export interface Manifest {
   id: ExtensionId;
   name: string;
@@ -1016,6 +1048,10 @@ export interface Manifest {
      *  for none. Required since platform 2.0.0. */
     senders: string[];
     commands?: Array<{ id: string; title: string }>;
+    /** B3: renderer screens this extension contributes. Bundled tier only;
+     *  requires the `ui` cap. See `manifest.ts`'s `parseManifest` for the
+     *  enforced rules and `UiContribution` above for the shape. */
+    ui?: UiContribution[];
   };
   caps: Cap[];
   /** Declarative database descriptor path, required when caps includes db. */
@@ -1078,7 +1114,34 @@ export interface CapSurfaces {
   net: { net: PluginNet };
   files: { files: ScopedFiles };
   db: { db: PrivateDb };
-  ui: { ui: { notify(msg: string, level?: LogLevel): void } };
+  ui: {
+    ui: {
+      notify(msg: string, level?: LogLevel): void;
+      /**
+       * B1 (host-owned renderer eventing): registers a renderer-callable
+       * handler for `name`, reachable through the host's `ext:invoke` IPC
+       * channel. Resolves ONLY once the host has acknowledged the
+       * registration — never optimistically — and rejects if `name` is
+       * already registered (by this extension or another live incarnation
+       * of it), or if this extension's tier denies `ui.handle` (external
+       * tier; declaring the `ui` cap still permits `notify`). The
+       * resolved disposer is equivalent to calling `unhandle(name)`.
+       */
+      handle(
+        name: string,
+        fn: (payload: unknown) => unknown | Promise<unknown>,
+      ): Promise<() => Promise<void>>;
+      /** Removes a previously registered handler. Local-first: this
+       *  extension stops serving `name` immediately, even while the host
+       *  notification that follows is still in flight or ends up
+       *  failing. */
+      unhandle(name: string): Promise<void>;
+      /** Pushes an unsolicited event to every renderer window over the
+       *  host's `ext:push` channel. Does not require a prior `handle()`
+       *  for `name`. External tier: denied, like handle/unhandle. */
+      broadcast(name: string, payload: unknown): Promise<void>;
+    };
+  };
   commands: {
     commands: {
       register(id: string, handler: (args: unknown) => unknown): () => void;
@@ -1102,6 +1165,17 @@ export interface CapSurfaces {
         cb: (payload: unknown, meta: EventMeta) => void,
       ): () => void;
       emit(event: string, payload: unknown): void;
+    };
+  };
+  attention: {
+    attention: {
+      publish(
+        items: readonly AttentionItemWire[],
+      ): Promise<{ rejected: { id: string; reason: string }[] }>;
+      resolve(
+        id: string,
+        revision?: number,
+      ): Promise<{ rejected: { id: string; reason: string }[] }>;
     };
   };
   /** Host-initiated only — no extension→host surface. */
@@ -1170,6 +1244,14 @@ export interface ExtensionSnapshot {
    *  installed dir — absent when the manifest declares none. */
   iconDataUrl?: string;
   ref?: string;
+  /** B3: this extension's validated `contributes.ui` entries — the ONLY way
+   *  routing metadata reaches the renderer (no separate IPC channel, no
+   *  extension-main catalog bootstrap). The real projection
+   *  (`extension-platform.ts`'s `snapshot()`) always populates this as an
+   *  array, `[]` for none, never omitting it — optional here only so the
+   *  many pre-existing test fixtures that build an `ExtensionSnapshot`
+   *  literal without this field keep compiling unchanged. */
+  ui?: UiContribution[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

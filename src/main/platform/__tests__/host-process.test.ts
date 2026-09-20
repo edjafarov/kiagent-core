@@ -84,6 +84,30 @@ const senderModule = {
   },
 };
 
+const attentionErrorModule = {
+  async activate(host: {
+    attention: { publish(items: unknown[]): Promise<unknown> };
+  }) {
+    return {
+      tools: [
+        {
+          name: 'attention.error',
+          description: 'returns the code caught from host.attention',
+          inputSchema: {},
+          async call() {
+            try {
+              await host.attention.publish([]);
+              return { code: null };
+            } catch (error) {
+              return { code: (error as { code?: string }).code };
+            }
+          },
+        },
+      ],
+    };
+  },
+};
+
 const intent: SendIntent = {
   accountId: 'acc1',
   kind: 'reply',
@@ -100,6 +124,32 @@ const hangingModule = {
 };
 
 describe('createExtensionHost', () => {
+  it.each(['ATTENTION_TX_FAILED', 'ATTENTION_DISPOSED'])(
+    'preserves %s from the in-process host router/proxy',
+    async (code) => {
+      const { deps } = makeDeps(attentionErrorModule, {
+        caps: ['attention'],
+        makeSurfaces: () => ({
+          surfaces: {
+            attention: {
+              publish: async () => {
+                throw Object.assign(new Error('attention failure'), { code });
+              },
+              resolve: async () => ({ rejected: [] }),
+            },
+          },
+          close: jest.fn(),
+        }),
+      });
+      const host = createExtensionHost(deps as never);
+      await host.start();
+      await expect(host.callTool('attention.error', {})).resolves.toEqual({
+        code,
+      });
+      await host.stop();
+    },
+  );
+
   it('awaits async surface close during stop before returning', async () => {
     let release!: () => void;
     let closed = false;
@@ -276,6 +326,30 @@ describe('createExtensionHost', () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(statuses.at(-1)?.status).toBe('disabled');
     expect(statuses.some((s) => s.status === 'errored')).toBe(false);
+  });
+
+  it('logs a warning when deactivate() overruns the kill backstop', async () => {
+    // The backstop resolving `exited` lets stop() return while the child's
+    // deactivate() is still running, after which a successor may activate.
+    // In-process that race is invisible (kill() reclaims nothing), so the
+    // overrun must at least be observable.
+    const log = jest.fn();
+    const hangingDeactivate = {
+      async activate() {
+        return { sources: [], tools: [] };
+      },
+      deactivate: () => new Promise<void>(() => {}),
+    };
+    const { deps } = makeDeps(hangingDeactivate, {
+      killAfterMs: 20,
+      logSink: { log },
+    });
+    const host = createExtensionHost(deps as never);
+    await host.start();
+    await host.stop();
+    expect(
+      log.mock.calls.some((c) => c[2] === 'deactivate-overran-kill-backstop'),
+    ).toBe(true);
   });
 
   it('a synchronous setup throw (e.g. transportFactory) rejects start() promptly with a single errored, no hang', async () => {

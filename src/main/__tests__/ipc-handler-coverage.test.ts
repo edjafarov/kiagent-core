@@ -21,6 +21,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { INVOKE_CHANNELS, PUSH_CHANNELS } from '@shared/ipc';
+import { SENDER_VALIDATED_CHANNELS } from '../ipc-sender';
 
 const SRC = path.resolve(__dirname, '..');
 
@@ -96,5 +97,63 @@ describe('the derived allowlists', () => {
   it('keep the two namespaces disjoint', () => {
     const pushes = new Set<string>(PUSH_CHANNELS);
     expect(INVOKE_CHANNELS.filter((c) => pushes.has(c))).toEqual([]);
+  });
+});
+
+describe('attention IPC composition', () => {
+  const mainSource = fs.readFileSync(path.join(SRC, 'main.ts'), 'utf8');
+
+  it('S10c registers attention handlers through the sender guard', () => {
+    expect(mainSource).toContain('guardIpcHandler(');
+    expect(SENDER_VALIDATED_CHANNELS).toEqual(
+      new Set(['attention:list', 'attention:act', 'ext:invoke']),
+    );
+  });
+
+  it('S10c validates both attention handler request shapes in main.ts', () => {
+    expect(mainSource).toContain(
+      'attention.list(validateAttentionListRequest(req))',
+    );
+    expect(mainSource).toContain(
+      'attention.act(validateAttentionActRequest(req))',
+    );
+  });
+});
+
+describe('B1 ext:invoke / ext:push composition', () => {
+  const mainSource = fs.readFileSync(path.join(SRC, 'main.ts'), 'utf8');
+
+  it('the registration loop selects the dedicated never-reject handler for ext:invoke, never guardIpcHandler', () => {
+    // Pins the ternary as three separate substrings rather than one
+    // multi-line literal — a mutant that removes just the `? extInvokeHandler`
+    // branch (falling through to `guardIpcHandler` for every channel,
+    // including 'ext:invoke') still fails this, since the ternary condition
+    // and its true-branch would both disappear together.
+    expect(mainSource).toContain("channel === 'ext:invoke'");
+    expect(mainSource).toContain('? extInvokeHandler');
+    expect(mainSource).toContain(': guardIpcHandler(');
+  });
+
+  it('ext:invoke carries the sender-check backstop even though the loop never routes it through guardIpcHandler', () => {
+    expect(SENDER_VALIDATED_CHANNELS.has('ext:invoke')).toBe(true);
+  });
+
+  it('the inert ext:invoke map entry never calls into the platform directly', () => {
+    expect(mainSource).toContain(
+      "message: 'ext:invoke is served by its dedicated handler'",
+    );
+    // Would fail if a future edit reintroduced a direct `extensions.callUi`
+    // call from the `handlers['ext:invoke']` map entry — the ONLY caller
+    // of `extensions.callUi` in main.ts must be `createExtInvokeHandler`'s
+    // own `platform: extensions` wiring, never the dispatch map.
+    expect(mainSource).not.toContain(
+      "'ext:invoke': (req) => extensions.callUi(",
+    );
+  });
+
+  it('an extension ui.broadcast fans out over ext:push', () => {
+    expect(mainSource).toContain(
+      "extensions.onUiBroadcast((evt) => broadcast('ext:push', evt));",
+    );
   });
 });

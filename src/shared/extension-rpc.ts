@@ -5,9 +5,15 @@
  * lives here.
  *
  * Direction of `call`: host-surface calls originate child→main (ns = a Cap,
- * 'base', or the 'auth'/'session' callback namespaces); source/tool/send
- * invocations originate main→child (ns 'source' | 'tool' | 'send'). Replies
- * mirror the call's id. Everything else is a one-way notification.
+ * 'base', or the 'auth'/'session' callback namespaces); source/tool/send/ui
+ * invocations originate main→child (ns 'source' | 'tool' | 'send' | 'ui').
+ * Replies mirror the call's id. Everything else is a one-way notification.
+ *
+ * 'ui' (B1, host-owned renderer eventing) mirrors 'tool': `method` is the
+ * NAME a child previously registered via `host.ui.handle(name, fn)`, args[0]
+ * is the renderer's payload, and the reply is `fn`'s return value — exactly
+ * `callTool`'s shape, just dispatched against a dynamically-registered
+ * handler map instead of the static `Contributions.tools` list.
  */
 import type {
   Cap,
@@ -20,7 +26,7 @@ import type {
 import type { FileChange } from './plugin-files';
 import type { SourceErrorCode, WireErrorCode } from './source-errors';
 
-export const PLATFORM_API_VERSION = '2.1.0';
+export const PLATFORM_API_VERSION = '2.2.0';
 
 /** A Batch after the child mapped items through the source's toDocument —
  *  the generic Item type never crosses the wire. */
@@ -78,7 +84,7 @@ export type MainToChild =
   | {
       kind: 'call';
       id: number;
-      ns: 'source' | 'tool' | 'send';
+      ns: 'source' | 'tool' | 'send' | 'ui';
       method: string;
       args: unknown[];
       deadline?: number;

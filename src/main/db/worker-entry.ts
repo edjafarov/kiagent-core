@@ -9,6 +9,8 @@ import path from 'node:path';
 import type { CommitBatch, ExternalRef, Seq } from '@shared/contracts';
 import { detectLanguages } from '@main/core/language';
 import { repopulateSearchIndex } from '@main/core/store/schema';
+import { ATTENTION_ACTION_POLICY } from '@main/attention/action-policy';
+import { createAttentionTx } from '@main/attention/attention-tx';
 import {
   createWriteTx,
   type FolderScopeInput,
@@ -60,6 +62,12 @@ function trustedLegacyPath(pluginId: string): string {
     const writeTx = createWriteTx(db._conn!, {
       detectLanguages,
       now: () => new Date().toISOString(),
+    });
+    // Construct only after openDb has migrated the v4 schema. The worker and
+    // in-process service both use the same real policy module (design §6 R6).
+    const attentionTx = createAttentionTx(db._conn!, {
+      policy: ATTENTION_ACTION_POLICY,
+      now: Date.now,
     });
     const pluginConnections = new Map<
       string,
@@ -116,6 +124,22 @@ function trustedLegacyPath(pluginId: string): string {
           repopulateSearchIndex(db._conn!);
           return null;
         },
+        'attention.publish': (args) =>
+          attentionTx.publish(
+            args as Parameters<typeof attentionTx.publish>[0],
+          ),
+        'attention.resolve': (args) =>
+          attentionTx.resolve(
+            args as Parameters<typeof attentionTx.resolve>[0],
+          ),
+        'attention.dismiss': (args) =>
+          attentionTx.dismiss(
+            args as Parameters<typeof attentionTx.dismiss>[0],
+          ),
+        'attention.tick': (args) =>
+          attentionTx.tick(args as Parameters<typeof attentionTx.tick>[0]),
+        'attention.list': (args) =>
+          attentionTx.list(args as Parameters<typeof attentionTx.list>[0]),
       },
       {
         coordinator,

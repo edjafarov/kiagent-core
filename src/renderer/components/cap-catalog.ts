@@ -70,6 +70,13 @@ export const CAP_CATALOG: Record<Cap, CapInfo> = {
     risk: 'normal',
     icon: 'log',
   },
+  attention: {
+    label: 'Publish attention items',
+    description:
+      'Can publish and resolve this extension’s attention items shown in KIAgent.',
+    risk: 'normal',
+    icon: 'info',
+  },
   send: {
     label: 'Send messages',
     description:

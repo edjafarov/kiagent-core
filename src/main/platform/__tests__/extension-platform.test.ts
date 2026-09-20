@@ -126,6 +126,10 @@ describe('createLaneGate', () => {
 });
 
 describe('createExtensionPlatform', () => {
+  const attentionStub = {
+    publish: async () => ({ rejected: [] }),
+    resolve: async () => ({ rejected: [] }),
+  } as never;
   let tmp: string;
   let store: CoreStore;
   let platform: ExtensionPlatform;
@@ -154,6 +158,7 @@ describe('createExtensionPlatform', () => {
     return createExtensionPlatform({
       extDir: path.join(tmp, 'extensions'),
       store,
+      attention: attentionStub,
       sources: {
         register: (s: Source) => void registry.set(s.descriptor.id, s),
         get: (id: string) => registry.get(id),
@@ -1097,6 +1102,7 @@ describe('createExtensionPlatform', () => {
     const failablePlatform = createExtensionPlatform({
       extDir: path.join(tmp, 'extensions'),
       store,
+      attention: attentionStub,
       sources: {
         register: (s: Source) => void registry.set(s.descriptor.id, s),
         get: (id: string) => registry.get(id),
@@ -1295,6 +1301,7 @@ describe('createExtensionPlatform', () => {
     const crashPlatform = createExtensionPlatform({
       extDir: path.join(tmp, 'extensions'),
       store,
+      attention: attentionStub,
       sources: {
         register: (s: Source) => void registry.set(s.descriptor.id, s),
         get: (id: string) => registry.get(id),
@@ -2156,6 +2163,104 @@ describe('createExtensionPlatform', () => {
         ok: true,
       });
       expect(senderRegistry.get('fixsrc')).toBeDefined();
+    });
+  });
+
+  // B3: contributes.ui reaching the lifecycle snapshot (item 4). Bundled
+  // tier only — external/dev manifests declaring contributes.ui are
+  // rejected at parse time (covered in manifest-contributes-ui.test.ts),
+  // so they can never reach discovery here in the first place.
+  describe('contributes.ui on the lifecycle snapshot (B3)', () => {
+    function writeBundledExtension(
+      dir: string,
+      manifest: Record<string, unknown>,
+    ): void {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'manifest.json'),
+        JSON.stringify(manifest),
+      );
+      fs.writeFileSync(
+        path.join(dir, 'index.js'),
+        'module.exports = { async activate() { return {}; } };',
+      );
+    }
+
+    it("a loaded bundled extension's validated contributes.ui appears on its snapshot entry", async () => {
+      const bundledRoot = path.join(tmp, 'bundled-ui');
+      writeBundledExtension(path.join(bundledRoot, 'ext-ui-contrib'), {
+        id: 'test.ui-contrib',
+        name: 'UI Contrib',
+        version: '1.0.0',
+        engine: '^2.0.0',
+        entry: 'index.js',
+        caps: ['ui'],
+        contributes: {
+          senders: [],
+          ui: [
+            {
+              id: 'main',
+              slot: 'screen',
+              title: 'Main Screen',
+              nav: { group: 'everyday', order: 10 },
+              params: ['anchor'],
+            },
+          ],
+        },
+      });
+      platform = makePlatform({ bundledDir: bundledRoot });
+      await platform.start();
+      const snap = platform.snapshot().find((e) => e.id === 'test.ui-contrib');
+      expect(snap?.ui).toEqual([
+        {
+          id: 'main',
+          slot: 'screen',
+          title: 'Main Screen',
+          nav: { group: 'everyday', order: 10 },
+          params: ['anchor'],
+        },
+      ]);
+    });
+
+    it('an extension with no contributes.ui yields an empty list, not undefined', async () => {
+      const bundledRoot = path.join(tmp, 'bundled-no-ui');
+      writeBundledExtension(path.join(bundledRoot, 'ext-plain'), {
+        id: 'test.no-ui-contrib',
+        name: 'No UI Contrib',
+        version: '1.0.0',
+        engine: '^2.0.0',
+        entry: 'index.js',
+        caps: [],
+        contributes: { senders: [] },
+      });
+      platform = makePlatform({ bundledDir: bundledRoot });
+      await platform.start();
+      const snap = platform
+        .snapshot()
+        .find((e) => e.id === 'test.no-ui-contrib');
+      expect(snap?.ui).toEqual([]);
+      expect(snap?.ui).not.toBeUndefined();
+    });
+
+    it('an invalid manifest (contributes.ui without the ui cap) never reaches the snapshot at all', async () => {
+      const bundledRoot = path.join(tmp, 'bundled-invalid-ui');
+      writeBundledExtension(path.join(bundledRoot, 'ext-invalid'), {
+        id: 'test.invalid-ui-contrib',
+        name: 'Invalid UI Contrib',
+        version: '1.0.0',
+        engine: '^2.0.0',
+        entry: 'index.js',
+        caps: [], // missing 'ui' — PLUGIN_UI_CAP_REQUIRED at discovery
+        contributes: {
+          senders: [],
+          ui: [{ id: 'main', slot: 'screen', title: 'Main' }],
+        },
+      });
+      platform = makePlatform({ bundledDir: bundledRoot });
+      await platform.start();
+      expect(
+        platform.snapshot().find((e) => e.id === 'test.invalid-ui-contrib'),
+      ).toBeUndefined();
     });
   });
 });

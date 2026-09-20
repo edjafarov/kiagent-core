@@ -1048,6 +1048,29 @@ const MIGRATIONS: Migration[] = [
       }
     }
   },
+  // v4 — core-owned attention state. The revision table is deliberately
+  // separate from payload storage so seven-day pruning can retain tombstones.
+  // There is no producer mirror: live extension availability is supplied by
+  // the platform (design §2.2 and §7).
+  `
+    CREATE TABLE IF NOT EXISTS attention_items (
+      id TEXT PRIMARY KEY,
+      producer TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      state TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      transition_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS attention_revisions (
+      id TEXT PRIMARY KEY,
+      producer TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      state TEXT NOT NULL,
+      resolved_by TEXT,
+      transition_at INTEGER NOT NULL
+    );
+  `,
 ];
 
 /**

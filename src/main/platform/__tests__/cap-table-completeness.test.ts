@@ -18,6 +18,7 @@ import { NS_METHODS } from '../extension-host-entry';
 import { NS_CAP } from '../host-router';
 import { buildSurfaces, createEventBus } from '../host-surfaces';
 import { CAPS } from '../manifest';
+import { CAP_CATALOG } from '../../../renderer/components/cap-catalog';
 
 /** Caps that deliberately have NO host namespace: 'send' is host-initiated
  *  (main→child only) and 'unsafe.mainProcess' is delivered as activate()'s
@@ -45,6 +46,10 @@ function realSurfaces() {
     notify: () => {},
     bus: createEventBus(),
     deliverEvent: () => {},
+    attention: {
+      publish: async () => ({ rejected: [] }),
+      resolve: async () => ({ rejected: [] }),
+    } as never,
   });
   return {
     surfaces: built.surfaces,
@@ -63,6 +68,13 @@ describe('NS_CAP (host-router) covers every namespace-bearing cap', () => {
     // identity shows up here.
     expect(Object.keys(NS_CAP).sort()).toEqual([...expected].sort());
     for (const ns of Object.keys(NS_CAP)) expect(NS_CAP[ns]).toBe(ns);
+  });
+
+  it('keeps attention present in every capability registry', () => {
+    expect(CAPS).toContain('attention');
+    expect(NS_CAP).toHaveProperty('attention', 'attention');
+    expect(NS_METHODS).toHaveProperty('attention', ['publish', 'resolve']);
+    expect(CAP_CATALOG).toHaveProperty('attention');
   });
 
   it('routes every namespace the real surfaces expose', () => {

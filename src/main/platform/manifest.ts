@@ -15,6 +15,7 @@ import type {
   Manifest,
   OAuthProviderId,
   OAuthSourceBinding,
+  UiContribution,
 } from '@shared/contracts';
 import { OAUTH_PROVIDER_IDS } from '@shared/contracts';
 import { PLATFORM_API_VERSION } from '@shared/extension-rpc';
@@ -22,6 +23,18 @@ import { PLATFORM_API_VERSION } from '@shared/extension-rpc';
 export class ManifestError extends Error {}
 
 const ID_RE = /^[a-z0-9-]+\.[a-z0-9-]+$/;
+// B3: a contribution id is namespaced into the routed view id as
+// `ext:<extension id>/<contribution id>` (src/renderer/state/view.ts's
+// `ExtView`). Keep this in lockstep with that file's own copy — neither may
+// ever accept '/', or the view id encoding's collision-freedom proof there
+// breaks.
+const CONTRIBUTION_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+// Declared flat param keys become object keys on a `ViewParams`-shaped
+// record that crosses IPC and (eventually) attention-action validation —
+// restrict to a safe identifier charset, never dotted or namespaced here
+// (namespacing, if a product wants it, is the product's key CONTENT, not a
+// core-enforced shape).
+const PARAM_KEY_RE = /^[a-z][a-zA-Z0-9]{0,63}$/;
 // `satisfies readonly Cap[]` fails compile the moment this array drifts
 // from the real Cap union (a member added/renamed on one side but not the
 // other) instead of silently validating against a stale list.
@@ -34,6 +47,7 @@ export const CAPS = [
   'commands',
   'inference',
   'events',
+  'attention',
   'send',
   'unsafe.mainProcess',
 ] as const satisfies readonly Cap[];
@@ -66,6 +80,40 @@ const sourceEntrySchema = z.union(
     error: `each sources entry must be a source id string or { id, oauth } — oauth must be one of: ${OAUTH_PROVIDER_IDS.join(', ')}`,
   },
 );
+
+// B3: `nav` is a SUGGESTION (design spec, decision 2) — strict like every
+// other contributes.* shape, so an unrecognized suggestion field is
+// rejected rather than silently ignored (the product's override still wins
+// regardless of what's declared here).
+const uiNavSchema = z.strictObject({
+  group: z.string().min(1).optional(),
+  order: z.number().optional(),
+  icon: z.string().min(1).optional(),
+});
+
+const uiContributionSchema = z.strictObject({
+  id: z
+    .string()
+    .regex(
+      CONTRIBUTION_ID_RE,
+      'contributes.ui id must match ^[a-z0-9][a-z0-9-]{0,31}$',
+    ),
+  slot: z.enum(['screen'], {
+    error: "contributes.ui slot must be 'screen'",
+  }),
+  title: z.string().min(1),
+  nav: uiNavSchema.optional(),
+  params: z
+    .array(
+      z
+        .string()
+        .regex(
+          PARAM_KEY_RE,
+          'contributes.ui param keys must match ^[a-z][a-zA-Z0-9]{0,63}$',
+        ),
+    )
+    .optional(),
+});
 
 // Strict throughout (platform 2.0.0): unknown keys are rejected, never
 // silently stripped — a manifest field that does nothing is a lie to the
@@ -101,6 +149,11 @@ const schema = z.strictObject({
     commands: z
       .array(z.strictObject({ id: z.string(), title: z.string() }))
       .optional(),
+    // B3: renderer screens (design spec's `contributes.ui`) — the cap,
+    // tier and duplicate-id/duplicate-param rules below `schema` in
+    // parseManifest are enforced AFTER this shape check, same order as the
+    // db-descriptor and privileged-caps rules already are.
+    ui: z.array(uiContributionSchema).optional(),
   }),
   database: z.strictObject({ schema: z.string().min(1) }).optional(),
 });
@@ -137,6 +190,43 @@ export function parseManifest(
       `this extension requires ${privileged.join(', ')} — only extensions bundled with the app may use it`,
     );
   }
+  const uiContribs = m.contributes.ui ?? [];
+  if (uiContribs.length > 0) {
+    // B3: same shape as the db-descriptor rule above — a cap declares
+    // intent, a contribution exercises it.
+    if (!m.caps.includes('ui')) {
+      throw new ManifestError(
+        'PLUGIN_UI_CAP_REQUIRED: the ui capability is required for contributes.ui',
+      );
+    }
+    // Runtime delivery for the external tier is not implemented — the code
+    // must exist when the renderer is built, so a marketplace/dev manifest
+    // declaring contributes.ui is rejected outright rather than silently
+    // ignored.
+    if (tier !== 'bundled') {
+      throw new ManifestError(
+        'PLUGIN_UI_TIER_DENIED: contributes.ui is available to bundled extensions only — runtime UI delivery is not implemented',
+      );
+    }
+    const seenIds = new Set<string>();
+    for (const c of uiContribs) {
+      if (seenIds.has(c.id)) {
+        throw new ManifestError(
+          `invalid manifest: contributes.ui — duplicate contribution id '${c.id}'`,
+        );
+      }
+      seenIds.add(c.id);
+      const seenParams = new Set<string>();
+      for (const p of c.params ?? []) {
+        if (seenParams.has(p)) {
+          throw new ManifestError(
+            `invalid manifest: contributes.ui['${c.id}'] — duplicate param key '${p}'`,
+          );
+        }
+        seenParams.add(p);
+      }
+    }
+  }
   return { ...m, id: m.id as ExtensionId };
 }
 
@@ -156,6 +246,17 @@ export function senderContributions(
   manifest: Pick<Manifest, 'contributes'>,
 ): string[] {
   return manifest.contributes.senders;
+}
+
+/** This extension's validated `contributes.ui` entries — THE way to consume
+ *  them, defaulting to `[]` (never `undefined`) for a manifest that
+ *  declares none. Feeds the lifecycle snapshot directly
+ *  (`extension-platform.ts`'s `snapshot()`) — nothing else recomputes this
+ *  from the manifest. */
+export function uiContributions(
+  manifest: Pick<Manifest, 'contributes'>,
+): UiContribution[] {
+  return manifest.contributes.ui ?? [];
 }
 
 /** The oauth-bound subset of `contributes.sources`, in the shape the consent

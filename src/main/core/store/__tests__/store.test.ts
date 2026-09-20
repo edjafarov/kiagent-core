@@ -5,8 +5,10 @@ import path from 'path';
 import Database from 'better-sqlite3';
 
 import type { AccountId, Change, DocumentInput } from '@shared/contracts';
+import type { AttentionItemWire } from '@shared/attention';
 
 import { openDb, type AppDb } from '../../../db/app-db';
+import { createAttentionService } from '../../../attention/service';
 import { openStore } from '../store';
 import type { CoreStore } from '../store';
 
@@ -33,12 +35,14 @@ function doc(
 
 describe('store', () => {
   let dir: string;
+  let db: AppDb;
   let store: CoreStore;
   let accountId: AccountId;
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-store-'));
-    store = openStore(await openDb(path.join(dir, 'test.db')), deps);
+    db = await openDb(path.join(dir, 'test.db'));
+    store = openStore(db, deps);
     const account = await store.createAccount({
       source: 'test',
       identifier: 'me@example.com',
@@ -908,6 +912,71 @@ describe('store', () => {
     const latest = await store.consents.latest('ext-1');
     expect(latest?.caps).toEqual(['query']);
     expect(latest?.manifestVersion).toBe('1.0.0');
+  });
+
+  it('S9 reset clears attention tables and notifies at deletion even when VACUUM fails', async () => {
+    const item: AttentionItemWire = {
+      id: 'kiagent.test:reset',
+      producer: 'kiagent.test',
+      kind: 'upcoming',
+      title: 'Reset item',
+      detail: null,
+      priority: 1,
+      dueAt: null,
+      expiresAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+      revision: 1,
+      state: 'open',
+      resolvedBy: null,
+      actions: [],
+    };
+    const onChanged = jest.fn();
+    const attention = createAttentionService({ db, onChanged });
+    attention.setExtensions([
+      {
+        id: 'kiagent.test',
+        name: 'Test',
+        version: '1.0.0',
+        origin: 'bundled',
+        enabled: true,
+        status: 'activated',
+        caps: [],
+        sourceIds: [],
+        oauthSources: [],
+      },
+    ]);
+    await attention.publish(item.producer, [item]);
+    await attention.dismiss(item.id);
+    onChanged.mockClear();
+    store.onReset(() => attention.notifyReset());
+
+    const exec = jest.spyOn(db, 'exec').mockImplementation(async (sql) => {
+      if (sql === 'VACUUM') throw new Error('vacuum unavailable');
+    });
+    await expect(store.maintenance.resetAll()).rejects.toThrow(
+      'vacuum unavailable',
+    );
+    expect(
+      await db.all('SELECT COUNT(*) AS count FROM attention_items'),
+    ).toEqual([{ count: 0 }]);
+    expect(
+      await db.all('SELECT COUNT(*) AS count FROM attention_revisions'),
+    ).toEqual([{ count: 0 }]);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    exec.mockRestore();
+
+    await attention.publish(item.producer, [item]);
+    onChanged.mockClear();
+    const batch = jest
+      .spyOn(db, 'batch')
+      .mockRejectedValueOnce(new Error('reset batch failed'));
+    await expect(store.maintenance.resetAll()).rejects.toThrow(
+      'reset batch failed',
+    );
+    expect(onChanged).not.toHaveBeenCalled();
+    batch.mockRestore();
+    await attention.dispose();
   });
 
   it('exports referenced in-profile assets and lists external references without copying them', async () => {

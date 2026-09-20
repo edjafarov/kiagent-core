@@ -8,11 +8,15 @@ import React, {
 import { subscribeAppState, getAppState } from '@renderer/state/app-state';
 import {
   ViewContext,
+  isExtView,
   nextResolved,
+  parseExtView,
+  type KnownView,
   type ResolvedView,
   type View,
   type ViewParams,
 } from '@renderer/state/view';
+import type { AppState } from '@shared/contracts';
 import { TitleBar } from '@renderer/components/TitleBar';
 import { Sidebar } from '@renderer/components/Sidebar';
 import { SettingsModal } from '@renderer/components/SettingsModal';
@@ -32,13 +36,31 @@ const isMac =
 // Page titles shown in the top line (.kg-topline) — the band doubles as the
 // window drag region, ChatGPT/Claude-Desktop style. Detail panes keep their
 // own in-pane topbars; this is the routed view's name only.
-const VIEW_TITLES: Partial<Record<View, string>> = {
+const VIEW_TITLES: Partial<Record<KnownView, string>> = {
   sources: 'Sources',
   outbox: 'Outbox',
   connection: 'Connection',
   marketplace: 'Marketplace',
   logs: 'Logs',
 };
+
+/** B3: the title-lookup routing site (design spec's routing table) — a
+ *  direct `VIEW_TITLES[view]` index is only correct for a `KnownView`. A
+ *  contributed view's title comes from its OWN manifest entry, carried on
+ *  the lifecycle snapshot's `ExtensionSnapshot.ui` (no other source exists
+ *  — see screen-registry.tsx's B3 section). Never throws: an unparseable
+ *  or unrecognized `ExtView` simply has no title, same as any other
+ *  unknown view did before this change. */
+function viewTitle(
+  view: View,
+  extensions: AppState['extensions'],
+): string | undefined {
+  if (!isExtView(view)) return VIEW_TITLES[view];
+  const parsed = parseExtView(view);
+  if (!parsed) return undefined;
+  const ext = extensions.find((e) => e.id === parsed.extensionId);
+  return ext?.ui?.find((c) => c.id === parsed.contributionId)?.title;
+}
 
 const GATE_STYLE: React.CSSProperties = {
   flex: 1,
@@ -117,7 +139,8 @@ export default function App(): React.ReactElement {
 
   const view = resolved?.view ?? 'sources';
   const params = resolved?.params ?? {};
-  const screen = screenRegistry.get(view, params, navigate);
+  const screen = screenRegistry.get(view, params, navigate, state.extensions);
+  const title = viewTitle(view, state.extensions);
 
   return (
     <ViewContext.Provider value={viewContextValue}>
@@ -126,9 +149,7 @@ export default function App(): React.ReactElement {
         <Sidebar />
         <main className="kg-main">
           <div className={`kg-topline${isMac ? ' mac' : ''}`}>
-            {VIEW_TITLES[view] != null && (
-              <span className="kg-topline-title">{VIEW_TITLES[view]}</span>
-            )}
+            {title != null && <span className="kg-topline-title">{title}</span>}
           </div>
           <React.Fragment key={`${view}:${resolved?.epoch ?? 0}`}>
             {screen}

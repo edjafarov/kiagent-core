@@ -59,11 +59,22 @@ import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
 import { wireOutboxPush } from './outbox-push';
+import { wireAttentionPush } from './attention/push';
+import {
+  createAttentionService,
+  type AttentionService,
+} from './attention/service';
+import {
+  validateAttentionActRequest,
+  validateAttentionListRequest,
+} from './attention/ipc-request';
+import { createTrustedRendererPredicate, guardIpcHandler } from './ipc-sender';
 import { createUpdater } from './updater/updater';
 import { createUpdateNotifier } from './updater/native-notify';
 import { subscribeUpdaterState, updaterInvokeHandlers } from './updater/ipc';
 import { createExtensionPlatform } from './platform/extension-platform';
 import type { ExtensionPlatform } from './platform/extension-platform';
+import { createExtInvokeHandler } from './platform/ext-invoke';
 import {
   assertProfileStorageVersion,
   markProfileStorageVersion,
@@ -106,6 +117,8 @@ let mainWindow: BrowserWindow | null = null;
 let platform: CorePlatform | null = null;
 let mcp: McpServerHandle | null = null;
 let extensionsPlatform: ExtensionPlatform | null = null;
+let attentionService: AttentionService | null = null;
+let attentionPush: ReturnType<typeof wireAttentionPush> | null = null;
 const fileRoots = createFileRootRegistry();
 let bundledProviders: {
   localLlm: LocalLlmProvider;
@@ -400,6 +413,7 @@ function registerIpc(
   catalog: MarketplaceCatalog,
   broker: ConnectBroker,
   outbound: OutboundService,
+  attention: AttentionService,
 ): void {
   // Hoisted above the handler map only because the map needs `updater`;
   // extracting the rest of the updater bootstrap out of registerIpc is #20.
@@ -543,6 +557,34 @@ function registerIpc(
     'search:query': (req) => p.store.read.search(req ?? {}),
     'docs:get': ({ id }) => p.store.read.document(id),
     'docs:children': ({ id }) => p.store.read.children(id),
+
+    'attention:list': (req) =>
+      attention.list(validateAttentionListRequest(req)),
+    'attention:act': (req) => attention.act(validateAttentionActRequest(req)),
+
+    // B1: NOT actually reached through `dispatch` in production — this
+    // channel is registered directly below, past its own never-reject
+    // handler (`createExtInvokeHandler`), because `guardIpcHandler`'s
+    // generic sender gate THROWS on an untrusted sender and `ext:invoke`
+    // must always resolve an envelope instead. This entry exists only so
+    // `handlers` stays a complete, tsc-checked `InvokeHandlers` map — see
+    // the `INVOKE_CHANNELS` loop below, which skips this one channel.
+    //
+    // Deliberately INERT rather than a working fallback: if the loop's
+    // `channel === 'ext:invoke' ? extInvokeHandler : …` ternary is ever
+    // removed, `ext:invoke` would fall through to `guardIpcHandler`, which
+    // calls straight into THIS function on a trusted sender — and if this
+    // called `extensions.callUi` directly, that would bypass
+    // `createExtInvokeHandler`'s own request validation and its
+    // structured-clone guard on the result (see ext-invoke.ts), reintroducing
+    // exactly the hang that guard exists to prevent. A fixed, harmless
+    // envelope here means that mutant fails loudly (every ext:invoke calls
+    // through this message) instead of silently reopening the hole.
+    'ext:invoke': () => ({
+      ok: false,
+      code: 'EXT_MALFORMED_REQUEST',
+      message: 'ext:invoke is served by its dedicated handler',
+    }),
 
     'prefs:get': () => p.prefs.get(),
     'prefs:patch': async (patch) => {
@@ -734,9 +776,38 @@ function registerIpc(
     channel: C,
     req: Invokes[C]['req'],
   ) => handlers[channel](req);
+  const isTrustedSender = createTrustedRendererPredicate({
+    app,
+    BrowserWindow,
+  });
+  // B1: `ext:invoke` is registered through this SAME loop (never a second,
+  // hand-written registration call for that one channel — see
+  // ipc-handler-coverage.test.ts's "registered in exactly one place" gate),
+  // just with a different per-channel handler: `guardIpcHandler`'s sender
+  // gate THROWS on an untrusted sender, and `ext:invoke` must always
+  // resolve an envelope instead, so this one channel calls
+  // `createExtInvokeHandler` directly rather than going through that
+  // shared gate.
+  const extInvokeHandler = createExtInvokeHandler({
+    isTrustedSender,
+    platform: extensions,
+  });
   for (const channel of INVOKE_CHANNELS) {
-    ipcMain.handle(channel, (_e, req) => dispatch(channel, req));
+    ipcMain.handle(
+      channel,
+      channel === 'ext:invoke'
+        ? extInvokeHandler
+        : guardIpcHandler(
+            channel,
+            (req) => dispatch(channel, req),
+            isTrustedSender,
+          ),
+    );
   }
+  // B1's other fixed channel: an extension's host.ui.broadcast(name,
+  // payload) fans out to every renderer window verbatim, same precedent as
+  // every other push:* broadcast in this file.
+  extensions.onUiBroadcast((evt) => broadcast('ext:push', evt));
 
   // --- Auto-updater (ported from the alpha-cent overlay) ---------------------
   // Restart-and-reinstall is a whole-app, main-process concern, so it lives in
@@ -825,6 +896,15 @@ app
       PROFILE_STORAGE_VERSION,
     );
     const p = platform;
+
+    attentionPush = wireAttentionPush(broadcast);
+    const attention = createAttentionService({
+      db: p.db,
+      log: (message) => p.logSink.log('attention', 'warn', message),
+      onChanged: attentionPush.hint,
+    });
+    attentionService = attention;
+    p.store.onReset(() => attention.notifyReset());
 
     const bundled = registerBundledProviders(p, {
       assetsDir: getAssetPath(),
@@ -1043,6 +1123,7 @@ app
         'bundled-extensions-data',
       ),
       db: p.db,
+      attention,
       fileRoots,
       mainApiForPlugin: (callerPluginId) =>
         buildMainApi({
@@ -1090,7 +1171,10 @@ app
               line,
             ),
         ),
-      onChange: (extensions) => patchState({ extensions }),
+      onChange: (extensions) => {
+        patchState({ extensions });
+        attention.setExtensions(extensions);
+      },
       download: async (ref) => {
         if (ref.startsWith('github:')) {
           const parsed = parseGitHubRef(ref);
@@ -1125,6 +1209,7 @@ app
       catalog,
       broker,
       outbound,
+      attention,
     );
     p.engine.project(projection, (state: AppState, seq: Seq) => {
       rev += 1;
@@ -1246,7 +1331,12 @@ app.on('before-quit', (event) => {
     await bundledProviders?.localLlm.dispose().catch(() => {});
     await bundledProviders?.localAsr.dispose().catch(() => {});
     await mcp?.stop().catch(() => {});
+    // Extensions stop first, so no caller can start new attention work while
+    // the service drains admitted operations; only then do we dispose the
+    // attention service and finally shut down the shared DB platform.
     await extensionsPlatform?.stop().catch(() => {});
+    attentionPush?.dispose();
+    await attentionService?.dispose().catch(() => {});
     await platform?.shutdown().catch(() => {});
     app.quit();
   })();

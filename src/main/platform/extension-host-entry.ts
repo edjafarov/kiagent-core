@@ -73,7 +73,7 @@ export const NS_METHODS: Record<string, string[]> = {
     'batch',
     'migrate',
   ],
-  ui: ['notify'],
+  ui: ['notify', 'handle', 'unhandle', 'broadcast'],
   inference: ['complete', 'see', 'read', 'hear', 'lane', 'describe'],
   files: [
     'roots',
@@ -97,6 +97,7 @@ export const NS_METHODS: Record<string, string[]> = {
     'watch',
   ],
   commands: ['register'],
+  attention: ['publish', 'resolve'],
 };
 
 function buildRemoteHost(
@@ -104,6 +105,7 @@ function buildRemoteHost(
   boot: ExtensionBootstrap,
   eventCbs: Map<string, Set<(p: unknown, meta: EventMeta) => void>>,
   fileWatchCbs: Map<number, (event: FileChange) => void>,
+  uiHandlers: Map<string, (payload: unknown) => unknown>,
 ): Record<string, unknown> {
   const host: Record<string, unknown> = {
     self: { id: boot.extensionId, dataDir: boot.dataDir },
@@ -114,6 +116,16 @@ function buildRemoteHost(
   if (boot.caps.includes('db'))
     host.db = createPluginDbProxy(endpoint, boot.extensionId);
   let nextWatchId = 1;
+  // Shared by the 'handle' registration and the 'unhandle' method below
+  // (and by handle()'s own returned disposer) — LOCAL removal always
+  // happens before the host is notified, even when the notification
+  // itself fails: this extension must stop serving `key` the instant
+  // unhandle() is called, never leave it wired while an RPC round trip is
+  // still in flight.
+  const unhandleUi = async (key: string): Promise<void> => {
+    uiHandlers.delete(key);
+    await callHost(endpoint, 'ui', 'unhandle', [key]).catch(() => {});
+  };
   for (const cap of boot.caps) {
     if (cap === 'events') {
       host.events = {
@@ -171,6 +183,32 @@ function buildRemoteHost(
         };
         continue;
       }
+      if (cap === 'ui' && m === 'handle') {
+        nsObj[m] = async (name: unknown, fn: unknown) => {
+          const key = String(name);
+          if (typeof fn !== 'function')
+            throw new TypeError('host.ui.handle requires a function');
+          // Local pre-check only — a fast rejection without a round trip.
+          // The HOST's own registry (ui-registry.ts) is the authoritative
+          // duplicate check: it also catches two DIFFERENT incarnations of
+          // this same extension racing to register the same name, which
+          // this child-local map cannot see.
+          if (uiHandlers.has(key))
+            throw new Error(`ui handler '${key}' is already registered`);
+          // NOT optimistic: the local map is written only once the host
+          // has ACKNOWLEDGED (resolved) the registration. A call that
+          // rejects — duplicate, denied tier, a stale/closing incarnation
+          // — never touches local dispatch state.
+          await callHost(endpoint, cap, m, [key]);
+          uiHandlers.set(key, fn as (payload: unknown) => unknown);
+          return () => unhandleUi(key);
+        };
+        continue;
+      }
+      if (cap === 'ui' && m === 'unhandle') {
+        nsObj[m] = (name: unknown) => unhandleUi(String(name));
+        continue;
+      }
       if (cap === 'net' && m === 'fetch') {
         nsObj[m] = (url: unknown, init?: unknown) => {
           const input = (init ?? {}) as PluginNetInit;
@@ -217,6 +255,10 @@ export function runExtensionHost(
     Set<(p: unknown, meta: EventMeta) => void>
   >();
   const fileWatchCbs = new Map<number, (event: FileChange) => void>();
+  // B1: names this extension registered via host.ui.handle(). Main→child
+  // 'ui' calls (see the onCall dispatcher below) look a name up here
+  // exactly like 'tool' looks a name up in `tools`.
+  const uiHandlers = new Map<string, (payload: unknown) => unknown>();
   // Task 8 fills these in: active pulls keyed by pullId.
   const pulls = new Map<
     number,
@@ -262,7 +304,13 @@ export function runExtensionHost(
       if (typeof mod.activate !== 'function')
         throw new Error('extension has no activate()');
       endpoint.post({ kind: 'ready' } satisfies ChildToMain);
-      const host = buildRemoteHost(endpoint, boot, eventCbs, fileWatchCbs);
+      const host = buildRemoteHost(
+        endpoint,
+        boot,
+        eventCbs,
+        fileWatchCbs,
+        uiHandlers,
+      );
       const extras =
         boot.caps.includes('unsafe.mainProcess') && deps.mainApi !== undefined
           ? { mainProcess: deps.mainApi }
@@ -300,6 +348,14 @@ export function runExtensionHost(
         const tool = tools.get(method);
         if (!tool) throw new Error(`unknown tool ${method}`);
         return tool.call(args[0] as Record<string, unknown>);
+      }
+      if (ns === 'ui') {
+        // `method` is the NAME a prior host.ui.handle() registered —
+        // mirrors 'tool' exactly, just against the dynamic `uiHandlers`
+        // map instead of the static `tools` map built at activation.
+        const handler = uiHandlers.get(method);
+        if (!handler) throw new Error(`unknown ui handler ${method}`);
+        return handler(args[0]);
       }
       if (ns === 'source') {
         return handleSourceCall(method, args); // Task 8

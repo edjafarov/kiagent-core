@@ -18,6 +18,8 @@ export async function resetCoreStoreTables(
       'vault',
       'schedule',
       'accounts',
+      'attention_items',
+      'attention_revisions',
     ].map((table) => ({ sql: `DELETE FROM ${table}` })),
     { sql: `DELETE FROM meta WHERE key != 'schemaVersion'` },
     ...accounts.map((account) => ({

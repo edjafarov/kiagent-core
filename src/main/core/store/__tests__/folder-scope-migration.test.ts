@@ -159,6 +159,13 @@ function cursorOf(db: Database.Database, id: string): string | null {
   ).cursor;
 }
 
+/** `migrate()` always runs to the HEAD of `MIGRATIONS`, so "this migration
+ *  completed" is observed as "the corpus reached head", not as this
+ *  migration's own number. Bump when a migration is appended (v4 added the
+ *  attention tables); the assertions that pin THIS migration's effects are
+ *  the column/index/row checks beside each use, not this number. */
+const HEAD_SCHEMA_VERSION = 4;
+
 function schemaVersion(db: Database.Database): number {
   const row = db
     .prepare(`SELECT value FROM meta WHERE key='schemaVersion'`)
@@ -471,7 +478,7 @@ describe('schema v3: scope_root_id attribution, the catch-all rule and C-27', ()
     warnSpy.mockRestore();
   });
 
-  it('adds the column and the partial index, and reaches schemaVersion 3', () => {
+  it('adds the column and the partial index, and reaches the head schemaVersion', () => {
     migrate(db);
 
     const cols = (
@@ -493,7 +500,7 @@ describe('schema v3: scope_root_id attribution, the catch-all rule and C-27', ()
     ).toBe(
       `CREATE INDEX idx_documents_account_scope_root ON documents(account_id, scope_root_id) WHERE archived_at IS NULL`,
     );
-    expect(schemaVersion(db)).toBe(3);
+    expect(schemaVersion(db)).toBe(HEAD_SCHEMA_VERSION);
   });
 
   it('attributes every unmatched live row on a catch-all account to the catch-all and archives nothing (R6 — the 314-of-316 case; unchanged under C-27)', () => {
@@ -901,7 +908,7 @@ describe('schema v3: scope_root_id attribution, the catch-all rule and C-27', ()
     migrate(db);
     expect(docChangeCount(db)).toBe(docChangesBefore);
     expect(changesFor(db, 'local-sibling')).toHaveLength(1);
-    expect(schemaVersion(db)).toBe(3);
+    expect(schemaVersion(db)).toBe(HEAD_SCHEMA_VERSION);
   });
 });
 
@@ -970,7 +977,7 @@ describe('schema v3: the mass-archive breaker (local-folder — the only source 
         args.some((a) => typeof a === 'string' && a.includes('acc-mass')),
       ),
     ).toBe(true);
-    expect(schemaVersion(db)).toBe(3);
+    expect(schemaVersion(db)).toBe(HEAD_SCHEMA_VERSION);
   });
 });
 
@@ -1129,7 +1136,7 @@ describe('schema v3: unreadable metadata and unreadable config are skipped, not 
         args.some((a) => typeof a === 'string' && a.includes('ctl-gone')),
       ),
     ).toBe(false);
-    expect(schemaVersion(db)).toBe(3);
+    expect(schemaVersion(db)).toBe(HEAD_SCHEMA_VERSION);
   });
 
   it('leaves an account with unreadable or unusable config completely untouched — config, documents and scope (C-31: `paths` validity matches the runtime `.every`)', () => {
@@ -1175,7 +1182,7 @@ describe('schema v3: unreadable metadata and unreadable config are skipped, not 
         ).config,
       ),
     ).toEqual({ paths: ['/M', 42], watch: false });
-    expect(schemaVersion(db)).toBe(3);
+    expect(schemaVersion(db)).toBe(HEAD_SCHEMA_VERSION);
   });
 
   it('logs the offending document id and the offending account id', () => {

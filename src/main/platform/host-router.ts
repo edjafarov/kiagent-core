@@ -22,6 +22,7 @@ export const NS_CAP: Record<string, Cap> = {
   commands: 'commands',
   inference: 'inference',
   events: 'events',
+  attention: 'attention',
 };
 
 export function createHostRouter(opts: {

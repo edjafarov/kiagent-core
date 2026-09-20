@@ -307,6 +307,8 @@ export interface CoreStore extends Store {
   scheduleAll(): Promise<ScheduleRow[]>;
   scheduleUpsert(row: ScheduleRow): Promise<void>;
   scheduleDelete(jobId: string): Promise<void>;
+  /** Fires after the core tables are deleted, before VACUUM/checkpoint. */
+  onReset(listener: () => void): () => void;
   close(): Promise<void>;
   outbox: OutboxStore;
 }
@@ -532,6 +534,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   // CASCADE, schema.ts:561) without ever calling into outbox.ts.
   const outboxChanged = new EventEmitter();
   outboxChanged.setMaxListeners(0);
+  const resetListeners = new Set<() => void>();
   let closed = false;
 
   // The procedural, read-your-own-writes commit transaction runs on the RAW
@@ -1221,6 +1224,15 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         // account list incrementally from the change feed; the repository
         // performs the wipe and announces removals atomically.
         await resetCoreStoreTables(db, accounts, now);
+        // design §7: the deletion boundary is the durable reset event. VACUUM
+        // and checkpoint are follow-up maintenance and may fail independently.
+        for (const listener of resetListeners) {
+          try {
+            listener();
+          } catch {
+            // A reset observer must not make a completed wipe look failed.
+          }
+        }
         // DELETE alone never returns pages to the OS — the file (and the
         // WAL) keep their pre-reset size, so the Storage screen would still
         // show gigabytes after "Reset all". VACUUM rebuilds the file;
@@ -1586,6 +1598,11 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
     async scheduleDelete(jobId) {
       await db.run(`DELETE FROM schedule WHERE job_id = ?`, [jobId]);
+    },
+
+    onReset(listener) {
+      resetListeners.add(listener);
+      return () => resetListeners.delete(listener);
     },
 
     async close() {

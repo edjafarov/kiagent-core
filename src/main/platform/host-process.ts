@@ -39,7 +39,11 @@ import { randomUUID } from 'node:crypto';
 import { createHostRouter } from './host-router';
 import type { Surfaces } from './host-surfaces';
 import { createSourceProxySet } from './source-proxy';
-import { createRpcEndpoint, type HostTransport } from './transport';
+import {
+  createRpcEndpoint,
+  type HostTransport,
+  type RpcCallOptions,
+} from './transport';
 
 const CRASH_LOOP_MAX = 3;
 const CRASH_LOOP_WINDOW_MS = 60_000;
@@ -98,6 +102,18 @@ export function createExtensionHost(deps: HostDeps): {
   start(): Promise<void>;
   stop(): Promise<void>;
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
+  /** B1: invokes a name the extension registered via `host.ui.handle()`.
+   *  Mirrors `callTool` exactly — same `current`-not-null guard, same
+   *  single-argument call shape — just over the 'ui' namespace instead of
+   *  'tool'. The caller (extension-platform.ts's `callUi`) is responsible
+   *  for checking the ui-registry BEFORE calling this, so a name this
+   *  incarnation never registered surfaces as the child's own "unknown ui
+   *  handler" rejection, not a platform-level unknown-destination case. */
+  callUi(
+    name: string,
+    payload: unknown,
+    options?: Pick<RpcCallOptions, 'timeoutMs'>,
+  ): Promise<unknown>;
   callSender(
     sourceId: string,
     intent: SendIntent,
@@ -406,7 +422,27 @@ export function createExtensionHost(deps: HostDeps): {
           inc.transport.onExit(() => resolve());
         });
         inc.endpoint.post({ kind: 'deactivate' } satisfies MainToChild);
-        const timer = setTimeout(() => inc.transport.kill(), killAfterMs);
+        // The BACKSTOP, not the stop path. `await exited` below is normally
+        // resolved by the child's own exit(0), posted after its deactivate()
+        // returns — so a well-behaved extension is fully awaited. This timer
+        // exists only for one that never gets there.
+        //
+        // It is not free: firing it resolves `exited` and lets stop() return,
+        // after which the platform may activate a successor while the
+        // predecessor's teardown is STILL RUNNING. For a forked child that is
+        // an acceptable trade (kill() really does reclaim the process). For
+        // the in-process tier kill() is simulateExit() and reclaims nothing,
+        // so firing early buys no resources and only creates that race —
+        // which is why the in-process tier is given a far more generous
+        // budget (see extension-platform.ts's transportFactory).
+        //
+        // Either way, an overrun is a real event and must not be silent.
+        const timer = setTimeout(() => {
+          deps.logSink.log(scope, 'warn', 'deactivate-overran-kill-backstop', {
+            killAfterMs,
+          });
+          inc.transport.kill();
+        }, killAfterMs);
         await exited;
         await inc.cleanupDone;
         clearTimeout(timer);
@@ -420,6 +456,11 @@ export function createExtensionHost(deps: HostDeps): {
       if (!current)
         return Promise.reject(new Error('extension is not running'));
       return current.endpoint.call('tool', name, [args]);
+    },
+    callUi(name, payload, options) {
+      if (!current)
+        return Promise.reject(new Error('extension is not running'));
+      return current.endpoint.call('ui', name, [payload], options);
     },
     // Reachable only from the send pipeline, i.e. only past a confirmation
     // gate. A child that has no sender for `sourceId` — including a pre-1.2
