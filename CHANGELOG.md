@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.88.0](https://github.com/edjafarov/kiagent-core/compare/v0.87.1...v0.88.0) (2026-09-20)
+
+### Features
+
+* **attention:** `attention` capability - extensions publish via host.attention (CORE-3) ([f7ddd63](https://github.com/edjafarov/kiagent-core/commit/f7ddd63d4795c9aed17813b055849c017c9303de))
+* **attention:** platform attention service, worker procs and renderer IPC (CORE-2) ([9106d21](https://github.com/edjafarov/kiagent-core/commit/9106d214d6499213845dcd5082897501d7bc9ad5))
+* **attention:** transaction module, validator and v4 schema (CORE-1) ([75f2ff6](https://github.com/edjafarov/kiagent-core/commit/75f2ff6ff4db902a0adcad9076dcad5726645170))
+* **platform:** contributes.ui, an open view catalog and the contributed-screen seam (B3) ([b8468fd](https://github.com/edjafarov/kiagent-core/commit/b8468fda63cc51482afec642f7447196fb78ebfb))
+* **platform:** host-owned renderer eventing - ext:invoke, ext:push and host.ui.handle (B1) ([55944ad](https://github.com/edjafarov/kiagent-core/commit/55944ad1f1aae4bc05929a201c8115f0b97888f7))
+
+### Bug Fixes
+
+* **platform:** stop cutting in-process teardown short, and serialize resetAll ([06c1c6a](https://github.com/edjafarov/kiagent-core/commit/06c1c6a5655cb6260b6275fbc1e09c23e2f20657))
+
 ## [0.87.1](https://github.com/edjafarov/kiagent-core/compare/v0.87.0...v0.87.1) (2026-09-16)
 
 ### Bug Fixes
