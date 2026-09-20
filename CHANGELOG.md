@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.89.0](https://github.com/edjafarov/kiagent-core/compare/v0.88.1...v0.89.0) (2026-09-20)
+
+### Features
+
+* **main-api:** localFolders.roots and ensureRoot for in-process extensions ([bf64758](https://github.com/edjafarov/kiagent-core/commit/bf64758a277847397eb478083e7925df06eedf20))
+
 ## [0.88.1](https://github.com/edjafarov/kiagent-core/compare/v0.88.0...v0.88.1) (2026-09-20)
 
 ### Bug Fixes
