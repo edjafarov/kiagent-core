@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Account, FolderScopeUpdate } from '@shared/contracts';
 import { buildMainApi } from '../main-api';
 import type { CoreStore } from '../core/store/store';
 import type { McpServerHandle } from '../core/mcp/server';
@@ -135,6 +136,298 @@ function stubOutbound(handleRemoteResult: boolean): {
     handleRemoteArgs,
   };
 }
+
+function localAccount(
+  id: string,
+  config: Record<string, unknown>,
+  cursor: unknown = null,
+): Account {
+  return {
+    id: id as Account['id'],
+    source: 'local-folder',
+    identifier: 'this-machine',
+    config,
+    status: 'live',
+    cursor,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+function mainApiWithLocalFolders(options: {
+  accounts: () => Promise<Account[]>;
+  createAccount?: (input: unknown) => Promise<Account>;
+  runAccount?: (account: Account) => void;
+  applyFolderScope?: (
+    accountId: Account['id'],
+    update: FolderScopeUpdate,
+    configAtOpen: string,
+  ) => Promise<void>;
+}) {
+  const base = stubStore();
+  const store = {
+    ...(base.store as unknown as Record<string, unknown>),
+    read: { accounts: options.accounts },
+    createAccount: options.createAccount ?? jest.fn(),
+  } as unknown as CoreStore;
+  const { mcp } = stubMcp();
+  const { tray } = stubTray();
+  return buildMainApi({
+    store,
+    mcp,
+    app: stubApp(),
+    dataDir: '/fake/data',
+    tray,
+    ui: { openWindow: () => {} },
+    outbound: stubOutbound(true).outbound,
+    runAccount: options.runAccount,
+    applyFolderScope: options.applyFolderScope,
+  });
+}
+
+describe('buildMainApi localFolders', () => {
+  it('roots lists local-folder roots and skips accounts with invalid config', async () => {
+    const valid = localAccount('valid', {
+      folderRoots: [{ id: '/tmp/docs', name: 'docs' }],
+    });
+    const api = mainApiWithLocalFolders({
+      accounts: async () => [
+        localAccount('broken', {}),
+        valid,
+        { ...valid, id: 'other' as Account['id'], source: 'gmail' },
+      ],
+    });
+
+    await expect(api.localFolders.roots()).resolves.toEqual([
+      { accountId: 'valid', roots: ['/tmp/docs'] },
+    ]);
+  });
+
+  it('creates and starts a local-folder account when no account exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'main-api-local-root-'));
+    try {
+      const created = localAccount('created', {
+        folderRoots: [{ id: root, name: 'root' }],
+      });
+      const createAccount = jest.fn(async () => created);
+      const runAccount = jest.fn();
+      const api = mainApiWithLocalFolders({
+        accounts: async () => [],
+        createAccount,
+        runAccount,
+      });
+
+      await expect(api.localFolders.ensureRoot(root)).resolves.toEqual({
+        status: 'created',
+        accountId: 'created',
+      });
+      expect(createAccount).toHaveBeenCalledWith({
+        source: 'local-folder',
+        identifier: 'this-machine',
+        config: {
+          folderRoots: [expect.objectContaining({ id: root })],
+        },
+        status: 'connecting',
+        cadence: { every: '30m' },
+      });
+      expect(runAccount).toHaveBeenCalledTimes(1);
+      expect(runAccount).toHaveBeenCalledWith(created);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('applies a merged scope to an existing account without creating it', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'main-api-local-parent-'));
+    const current = join(parent, 'current');
+    const added = join(parent, 'incoming');
+    await mkdir(current);
+    await mkdir(added);
+    try {
+      const oldConfig = {
+        watch: false,
+        folderRoots: [{ id: current, name: 'current' }],
+      };
+      const account = localAccount('existing', oldConfig, {
+        parent: { completedAt: '2026-01-01T00:00:00.000Z' },
+      });
+      const createAccount = jest.fn(async () => account);
+      const applyFolderScope = jest.fn(async () => undefined);
+      const api = mainApiWithLocalFolders({
+        accounts: async () => [account],
+        createAccount,
+        applyFolderScope,
+      });
+
+      await expect(api.localFolders.ensureRoot(added)).resolves.toEqual({
+        status: 'added',
+        accountId: 'existing',
+      });
+      expect(applyFolderScope).toHaveBeenCalledWith(
+        'existing',
+        {
+          config: {
+            watch: false,
+            folderRoots: [
+              { id: current, name: 'current' },
+              { id: added, name: 'incoming' },
+            ],
+          },
+          cursor: account.cursor,
+          archiveScopeRootIds: [],
+          reattributeScopeRoots: [],
+        },
+        JSON.stringify(oldConfig),
+      );
+      expect(createAccount).not.toHaveBeenCalled();
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('drops redundant descendants when the ensured root is an ancestor', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'main-api-ancestor-'));
+    const child = join(parent, 'child');
+    await mkdir(child);
+    try {
+      const account = localAccount('ancestor', {
+        folderRoots: [{ id: child, name: 'child' }],
+      });
+      const applyFolderScope = jest.fn(async () => undefined);
+      const api = mainApiWithLocalFolders({
+        accounts: async () => [account],
+        applyFolderScope,
+      });
+
+      await expect(api.localFolders.ensureRoot(parent)).resolves.toEqual({
+        status: 'added',
+        accountId: 'ancestor',
+      });
+      expect(applyFolderScope).toHaveBeenCalledWith(
+        'ancestor',
+        expect.objectContaining({
+          config: {
+            folderRoots: [expect.objectContaining({ id: parent })],
+          },
+          archiveScopeRootIds: [],
+          reattributeScopeRoots: [{ from: child, to: parent }],
+        }),
+        JSON.stringify(account.config),
+      );
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['exact', 'descendant'])(
+    'returns covered with no writes for an %s covered path',
+    async (kind) => {
+      const root = await mkdtemp(join(tmpdir(), 'main-api-covered-'));
+      const target = kind === 'exact' ? root : join(root, 'child');
+      if (target !== root) await mkdir(target);
+      try {
+        const account = localAccount('covered', {
+          folderRoots: [{ id: root, name: 'root' }],
+        });
+        const createAccount = jest.fn(async () => account);
+        const applyFolderScope = jest.fn(async () => undefined);
+        const runAccount = jest.fn();
+        const api = mainApiWithLocalFolders({
+          accounts: async () => [account],
+          createAccount,
+          applyFolderScope,
+          runAccount,
+        });
+
+        await expect(api.localFolders.ensureRoot(target)).resolves.toEqual({
+          status: 'covered',
+          accountId: 'covered',
+        });
+        expect(createAccount).not.toHaveBeenCalled();
+        expect(applyFolderScope).not.toHaveBeenCalled();
+        expect(runAccount).not.toHaveBeenCalled();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('does not treat a sibling-prefix path as covered', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'main-api-prefix-'));
+    const root = join(parent, 'b');
+    const sibling = join(parent, 'bc');
+    await mkdir(root);
+    await mkdir(sibling);
+    try {
+      const account = localAccount('prefix', {
+        folderRoots: [{ id: root, name: 'b' }],
+      });
+      const applyFolderScope = jest.fn(async () => undefined);
+      const api = mainApiWithLocalFolders({
+        accounts: async () => [account],
+        applyFolderScope,
+      });
+
+      await expect(api.localFolders.ensureRoot(sibling)).resolves.toEqual({
+        status: 'added',
+        accountId: 'prefix',
+      });
+      expect(applyFolderScope).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a nonexistent path without writes', async () => {
+    const createAccount = jest.fn();
+    const applyFolderScope = jest.fn();
+    const api = mainApiWithLocalFolders({
+      accounts: async () => [],
+      createAccount,
+      applyFolderScope,
+    });
+
+    await expect(
+      api.localFolders.ensureRoot('/tmp/kiagent-main-api-does-not-exist'),
+    ).rejects.toThrow('path does not exist');
+    expect(createAccount).not.toHaveBeenCalled();
+    expect(applyFolderScope).not.toHaveBeenCalled();
+  });
+
+  it('serializes concurrent ensureRoot calls so the same path is written once', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'main-api-concurrent-'));
+    try {
+      const created = localAccount('created-once', {
+        folderRoots: [{ id: root, name: 'concurrent' }],
+      });
+      let accounts: Account[] = [];
+      const createAccount = jest.fn(async () => {
+        accounts = [created];
+        return created;
+      });
+      const applyFolderScope = jest.fn(async () => undefined);
+      const api = mainApiWithLocalFolders({
+        accounts: async () => accounts,
+        createAccount,
+        applyFolderScope,
+        runAccount: jest.fn(),
+      });
+
+      await expect(
+        Promise.all([
+          api.localFolders.ensureRoot(root),
+          api.localFolders.ensureRoot(root),
+        ]),
+      ).resolves.toEqual([
+        { status: 'created', accountId: 'created-once' },
+        { status: 'covered', accountId: 'created-once' },
+      ]);
+      expect(createAccount).toHaveBeenCalledTimes(1);
+      expect(applyFolderScope).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('buildMainApi', () => {
   it('rolls back an in-memory grant when root persistence fails', async () => {

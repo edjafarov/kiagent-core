@@ -1141,6 +1141,10 @@ app
           outbound: { service: outbound, routes: outboundRoutes },
           readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
           inference: p.inference,
+          runAccount: (account) => runAccount(p, account),
+          applyFolderScope: async (accountId, update, configAtOpen) => {
+            await p.engine.applyScope(accountId, update, configAtOpen);
+          },
         }),
       store: p.store,
       sources: p.sources,
