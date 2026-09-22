@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.89.1](https://github.com/edjafarov/kiagent-core/compare/v0.89.0...v0.89.1) (2026-09-22)
+
+### Bug Fixes
+
+* **local-folder:** rescan by ctime too so renamed-in files are re-indexed ([fdb5b74](https://github.com/edjafarov/kiagent-core/commit/fdb5b74bdd881173711060b7fd3b06c16e53bd5a))
+
 ## [0.89.0](https://github.com/edjafarov/kiagent-core/compare/v0.88.1...v0.89.0) (2026-09-20)
 
 ### Features
