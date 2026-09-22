@@ -27,10 +27,17 @@
  *     `source_id` (kiagent-ref scanner.ts:124) — a scheme the new
  *     `externalId` vocabulary has no room for (see concept/gaps.md #11); the
  *     redesign accepts "recompute on restart" instead of "resume exactly".
- *   - Entry PRESENT → that root is incrementally rescanned by mtime from its
- *     `completedAt` watermark, refreshed on every subsequent rescan / live
- *     watch event — kiagent-ref's analogous restart-catch-up step is
- *     `reconcileRoot()` (kiagent-ref instance.ts:68-85).
+ *   - Entry PRESENT → that root is incrementally rescanned by mtime OR ctime
+ *     from its `completedAt` watermark, refreshed on every subsequent rescan
+ *     / live watch event. A rename/move keeps mtime but bumps ctime, so files
+ *     reorganised while the app was closed must be re-emitted at their new
+ *     path; otherwise `reconcile()` has already archived the old one. A
+ *     ctime-only bump (chmod, xattr/Finder tag) re-reads the file once, but
+ *     the store's same-content-hash short-circuit (`store/write-tx.ts`
+ *     `upsertDocument`: existing row, same `content_hash`, not archived →
+ *     returns null, no feed churn) makes that a no-op write. This mirrors
+ *     kiagent-ref's analogous restart-catch-up step, `reconcileRoot()`
+ *     (kiagent-ref instance.ts:68-85).
  *   - A root removed from config is dropped from this map the next time a
  *     batch commits (see `pull()`'s pruning step in local-folder-source.ts).
  */

@@ -256,12 +256,18 @@ async function* backfillRoot(
  * kiagent-ref's `reconcileRoot()` runs `scanRoot()` again for the exact same
  * reason (its chokidar watcher starts with `ignoreInitial` and only observes
  * events going forward — kiagent-ref instance.ts:68-73). Only files whose
- * mtime is newer than the cursor's watermark are yielded; offline DELETIONS
- * are deliberately NOT handled here — that is `reconcile()`'s job (below),
- * matching the Source contract's two separate deletion channels. Nothing
- * changed → no batch yielded and `working` returned unchanged (this root's
- * watermark simply isn't advanced this cycle; the next cycle rescans from
- * the same point, which is safe/idempotent, just not maximally fresh).
+ * mtime OR ctime is newer than the cursor's watermark are yielded: a
+ * rename/move keeps mtime but bumps ctime, so files reorganised while the app
+ * was closed must be re-emitted at their new path because `reconcile()` has
+ * already archived the old one. A ctime-only bump (chmod, xattr/Finder tag)
+ * re-reads the file once, but the store's same-content-hash short-circuit
+ * (`store/write-tx.ts` `upsertDocument`: existing row, same `content_hash`,
+ * not archived → returns null, no feed churn) makes that a no-op write.
+ * Offline DELETIONS are deliberately NOT handled here — that is `reconcile()`'s
+ * job (below), matching the Source contract's two separate deletion channels.
+ * Nothing changed → no batch yielded and `working` returned unchanged (this
+ * root's watermark simply isn't advanced this cycle; the next cycle rescans
+ * from the same point, which is safe/idempotent, just not maximally fresh).
  */
 async function* incrementalRescanRoot(
   root: string,
@@ -274,7 +280,9 @@ async function* incrementalRescanRoot(
   LocalFolderCursor
 > {
   const sinceMs = Date.parse(since.completedAt);
-  const changed = entries.filter((e) => e.stats.mtime.getTime() > sinceMs);
+  const changed = entries.filter(
+    (e) => Math.max(e.stats.mtime.getTime(), e.stats.ctime.getTime()) > sinceMs,
+  );
 
   if (changed.length === 0) return working;
 

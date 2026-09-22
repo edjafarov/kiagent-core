@@ -663,6 +663,52 @@ describe('pull — per-root incremental rescan', () => {
         (since as RootsCursor).roots[dir].completedAt,
     ).toBe(true);
   });
+
+  it('a file moved into the root after the watermark is emitted even though its mtime predates the watermark', async () => {
+    const outside = mkTmpDir();
+    const dir = mkTmpDir();
+    const stalePath = writeFile(outside, 'stale.txt', 'stale content');
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    fs.utimesSync(stalePath, oneHourAgo, oneHourAgo);
+
+    const since: RootsCursor = {
+      roots: { [dir]: { completedAt: new Date().toISOString() } },
+    };
+    await sleep(20);
+    const movedPath = path.join(dir, 'stale.txt');
+    fs.renameSync(stalePath, movedPath);
+
+    expect(fs.statSync(movedPath).mtimeMs).toBeLessThan(
+      Date.parse(since.roots[dir].completedAt),
+    );
+
+    const controller = new AbortController();
+    const session = makeSession([dir], controller.signal, false);
+    const batches = await collect(pull(session, since));
+    const items = batches.flatMap((b) => b.items);
+
+    expect(items.map((i) => i.externalId)).toEqual([toExternalId(movedPath)]);
+    expect(batches.every((b) => b.phase === 'live')).toBe(true);
+  });
+
+  it('a file renamed within the root after the watermark is emitted under its new path only', async () => {
+    const dir = mkTmpDir();
+    const oldPath = writeFile(dir, 'old.txt', 'old content');
+    await sleep(20);
+    const since: RootsCursor = {
+      roots: { [dir]: { completedAt: new Date().toISOString() } },
+    };
+    await sleep(20);
+    const renamedPath = path.join(dir, 'renamed.txt');
+    fs.renameSync(oldPath, renamedPath);
+
+    const controller = new AbortController();
+    const session = makeSession([dir], controller.signal, false);
+    const batches = await collect(pull(session, since));
+    const items = batches.flatMap((b) => b.items);
+
+    expect(items.map((i) => i.externalId)).toEqual([toExternalId(renamedPath)]);
+  });
 });
 
 describe('pull — strict indexability policy', () => {
