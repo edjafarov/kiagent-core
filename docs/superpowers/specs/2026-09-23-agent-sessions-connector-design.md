@@ -1,6 +1,6 @@
 # Agent Sessions connector (Claude Code + Codex) — design
 
-Date: 2026-09-23 · Status: draft for review
+Date: 2026-09-23 · Status: draft r2 (after fable + astra round 1)
 
 ## 1. Goal
 
@@ -8,42 +8,55 @@ Index the user's local coding-agent history into KIA so it is searchable (and
 reachable over MCP) next to mail, docs and chats. v1 covers **Claude Code** and
 **Codex**:
 
-- sessions (the conversation transcript, condensed),
-- subagent transcripts, linked to their parent session,
+- sessions (the conversation transcript, condensed), including subagent
+  transcripts linked to their parent,
 - plans, task lists, memory files,
 - the typed-prompt history.
 
 Out of scope for v1: cost/token/quota metrics, near-real-time ingestion (hooks,
 OTel, file watching), resume/launch actions, other agents (Cursor, OpenCode, …),
 Claude Cowork's second root (`~/Library/Application Support/Claude/…`),
-repo-local `CLAUDE.md`/`AGENTS.md` files (they live outside the granted roots).
+repo-local `CLAUDE.md`/`AGENTS.md` files (outside the granted roots), and
+granting a folder that appears only after the extension was activated without a
+restart (§3.3).
 
 Success = after installing the extension from the Marketplace (one consent
 screen that names the folders it reads) and adding the two sources, every
-session/subagent/plan/tasklist/memory/prompt-day appears as a row in the ordinary
-`documents` table, searchable by the existing FTS/MCP tools, and stays current
-on the normal cadence.
+session/subagent/plan/tasklist/memory/prompt-day appears as a row in the
+ordinary `documents` table, searchable by the existing FTS/MCP tools, and stays
+current on the normal cadence.
 
 Non-goal: mirroring deletions. Claude Code deletes transcripts after
-`cleanupPeriodDays` (30 by default). KIA deliberately **keeps** what it indexed —
-that is a feature. The sources implement no `reconcile`.
+`cleanupPeriodDays` (30 by default). KIA deliberately **keeps** what it indexed.
+The sources implement no `reconcile`.
 
-## 2. Two deliverables
+## 2. Deliverables
 
 1. **kiagent-core: manifest-declared file roots** (branch
-   `feat/local-agent-sessions`, worktree `../kiagent-core-agent-sessions`). A
-   marketplace extension can declare the local folders it needs; the consent
-   modal shows them; granting consent grants the roots. Today no external
-   extension can obtain a root at all (only `mainApi.files.grantRoot`, reachable
-   only by `unsafe.mainProcess` bundled extensions).
-2. **`kia-plugins/agent-sessions-kia-connector`** (new repo, local dir
+   `feat/local-agent-sessions`, worktree `../kiagent-core-agent-sessions`),
+   `PLATFORM_API_VERSION` 2.2.0 → **2.3.0** (new optional manifest field).
+2. **`@kiagent/connector-sdk` 1.4.0** — regenerated contracts (`Manifest` and
+   `ConsentRecord` live in `src/shared/contracts.ts`, which
+   `sdk/connector-sdk/scripts/generate.mjs` copies verbatim).
+3. **`kia-plugins/agent-sessions-kia-connector`** (new repo, local dir
    `/Users/edjafarov/work/agent-sessions-kia-connector`): one extension
    `kia.agent-sessions` contributing two sources, `claude-code` and `codex`.
 
-alpha-cent receives only a `core.lock` bump after the core release; no overlay
-change.
+alpha-cent receives only a `core.lock` bump after the core release.
 
 ## 3. Core: manifest-declared file roots
+
+### 3.0 Threat model (explicit)
+
+Extension child processes are **not OS-sandboxed**: marketplace connectors
+already `import 'node:fs'` directly (whatsapp, telegram). `ScopedFiles` is
+therefore a least-privilege *API* and a *consent* mechanism, not a security
+boundary against a malicious extension. The design goal is: (a) the consent
+screen truthfully lists what an honest extension will read, (b) a grant never
+exceeds what the user consented to, and (c) an installed package cannot widen
+its grants without a new consent. Pre-existing path-race properties of
+`scoped-files.ts` (ancestor checks before open-by-path) are unchanged and out
+of scope.
 
 ### 3.1 Manifest
 
@@ -58,93 +71,121 @@ New optional top-level key (the schema is strict, so this is a schema change):
 
 Validation in `parseManifest` (`src/main/platform/manifest.ts`):
 
-- `fileRoots` requires `caps` to include `files` (`PLUGIN_FILES_CAP_REQUIRED`),
-  mirroring the `db`→`database` and `ui`→`contributes.ui` rules.
-- `id` matches `^[a-z][a-z0-9-]{0,31}$`, unique within the manifest.
-- `path` must start with `~/`, is resolved against `os.homedir()`, and after
-  `path.normalize` must still be strictly inside the home directory (rejects
-  `~/..`, `~/`, `~` alone, absolute paths, NUL). Max 8 entries.
-- `purpose`: non-empty string, ≤ 200 chars — shown verbatim on the consent modal.
-- Roots are **read-only**. There is no `access` field; a write-capable declared
-  root is out of scope.
+- `fileRoots` requires `caps` to include `files` (`PLUGIN_FILES_CAP_REQUIRED`).
+- `fileRoots` is **external-tier only** in v1: `tier: 'bundled'` with
+  `fileRoots` is rejected (`PLUGIN_FILE_ROOTS_TIER_DENIED`). Bundled extensions
+  keep `mainApi.grantRoot`. Consequence: an extension's roots are either all
+  trusted (bundled) or all declared (external) — no provenance field and no id
+  collisions between the two kinds.
+- `id` matches `^[a-z][a-z0-9-]{0,31}$`, unique within the manifest. Max 8
+  entries.
+- `path` (lexical check): starts with `~/`, no NUL, no `.`/`..` segments, not
+  `~/` itself.
+- `purpose`: non-empty, ≤ 200 chars — shown verbatim on the consent modal.
+- Roots are **read-only** (no `access` field).
 
-`Manifest` type, `ExtensionPreview` and `ExtensionSnapshot` gain
-`fileRoots: Array<{ id; path; purpose }>` (always an array; `[]` when absent),
-carrying the **unexpanded** `~/…` path for display.
+`Manifest` type, `ExtensionPreview`, `ExtensionSnapshot` and the renderer's
+`ConsentRequest` gain `fileRoots: Array<{ id; path; purpose }>` (always an
+array; `[]` when absent), carrying the unexpanded `~/…` path for display.
 
-### 3.2 Consent surface
+### 3.2 Consent binds the roots
 
-- `ConsentModal.tsx` renders a "Reads these folders on your computer" section
-  listing each root's `path` and `purpose`, for install, update and review modes.
+- `ConsentRecord` gains `fileRootsDigest: string` = sha256 of the canonical JSON
+  of `[{id, path}]` sorted by id (`purpose` is display copy and excluded).
+  Append-only store migration adds a `file_roots_digest TEXT` column to
+  `consents`; existing rows read as `null`.
+- Both `consents.record(...)` sites (`installCommit` ~`extension-platform.ts:1300`,
+  `grantConsent` ~`:1465`) write the digest of the manifest being consented.
+- `consentCovers(manifest)` additionally requires
+  `rec.fileRootsDigest === digest(manifest.fileRoots)`; a `null` digest matches
+  only a manifest with no `fileRoots`. So a same-version, same-caps manifest
+  whose roots changed (edited in place, or a republished tag) drops to
+  `needs-consent` and gets no grants.
+
+### 3.3 Granting — `reconcileDeclaredRoots`
+
+A platform-owned function in `extension-platform.ts` (never reachable by the
+extension). For an external extension `e` whose consent covers its manifest:
+
+1. Home: `home = realpath(os.homedir())`. For each declared root, `abs =
+   path.join(home, rel)`; if `abs` does not exist (`ENOENT`) or is not a
+   directory → the root is **ungranted** (and any existing grant with that id is
+   revoked); logged at `info`. Else `real = realpath(abs)` (a symlinked
+   `~/.claude` → `~/dotfiles/claude` is fine — the user consented to the
+   logical path).
+2. Refuse (root ungranted, logged at `warn`) when `real` is not strictly inside
+   `home`, equals `home`, is inside or contains the app's `userData` directory,
+   or is inside or equal to `~/Library` as a whole (`~/Library/<sub>/…` deeper
+   than two levels is allowed).
+3. If a grant with this id exists and its stored path equals `real` and a fresh
+   `lstat(real)` matches its stored `dev`/`ino`, keep it. Otherwise **revoke
+   first**, then `fileRoots.grant(e.id, real, { id, name: <~/ path>, writable:
+   false })`.
+4. Revoke every granted root of `e` whose id is not declared (stale after an
+   update).
+5. If anything changed, `persistFileRoots()` (new `ExtensionPlatformDeps`
+   member; `main.ts` passes the same persistence function it already gives
+   `buildMainApi`). A persistence failure is logged and the in-memory state kept
+   (it is re-derived on the next activation).
+
+Call sites — both already serialized per extension by the platform lifecycle,
+so no new locking:
+
+- right after each `consents.record(...)` (install, update, review), before the
+  extension is (re)started;
+- at activation, after the `consentCovers` check (~`extension-platform.ts:924`)
+  and before `host.start()`. This also heals a root whose directory appeared
+  later or was recreated — **on the next activation** (app restart or
+  disable/enable). No lazy granting from inside `roots()` in v1.
+
+Also: `consentCovers === false` at activation → revoke all of `e`'s roots.
+**Uninstall** → revoke all of `e`'s roots, then persist.
+
+### 3.4 Consent surface
+
+- `ConsentModal.tsx` renders "Reads these folders on your computer" with each
+  root's `path` and `purpose`, plus the sentence "The extension can read
+  everything inside these folders." — install, update and review modes. The
+  data flows through the preview builder (`installer.preview`), the platform
+  snapshot, and both consent-request builders in
+  `src/renderer/screens/Marketplace/Detail.tsx` (~l.99).
 - `cap-catalog.ts`: replace the stale `files` copy ("Not yet supported…") with
-  "Read files in the folders listed below" (risk: elevated — local personal data).
-- Consent storage is unchanged: `consentCovers` already requires
-  `rec.manifestVersion === manifest.version`, so any manifest change (including a
-  changed `fileRoots` list) re-prompts; the roots need no separate consent record.
+  "Read files in the folders listed below" (elevated).
 
-### 3.3 Granting — the declared-root reconciler
+### 3.5 What the extension sees
 
-One function, `reconcileDeclaredRoots(e: Entry)`, in
-`extension-platform.ts`, owned by the platform (never callable by the extension):
+`host.files.roots()` returns the granted roots (`{ id: 'claude', name:
+'~/.claude', writable: false }`); other calls take `{ root: 'claude', rel:
+'projects/…' }`. Existing limits: 16 MiB per `read`, ≤ 1000 entries per `list`
+page, `MAX_CURSORS = 256` (connector pages lists sequentially). No new SDK
+methods.
 
-- For each declared root: resolve the absolute path. If a grant with that `id`
-  exists for this extension and still resolves (same path, same `dev`/`ino`),
-  keep it. Otherwise call `fileRoots.grant(extensionId, absPath, { id, name: path,
-  writable: false })`. A missing directory (`ENOENT`) or non-directory is **not**
-  an error: the root simply stays ungranted and is logged at `info`.
-- For an **external-tier** extension, revoke every granted root whose id is not
-  declared (external extensions have no other grant path, so any undeclared
-  root is stale — e.g. dropped by an update). Bundled extensions are never
-  revoked here (they may hold `mainApi` grants).
-- Persist via the existing `persistFileRoots` after any change.
+### 3.6 Core tests (named; each must be shown red against a mutant)
 
-It runs:
-
-1. after consent is recorded (install, update, review — the
-   `consents.record(...)` sites in `extension-platform.ts`),
-2. at every activation of an extension whose consent covers its manifest,
-   before `activate()` is called (heals a root whose directory appeared later,
-   or whose identity changed because the user deleted and recreated it),
-3. lazily inside `ScopedFiles.roots()` for the calling extension (so a user who
-   installs Codex *after* KIA can add the Codex source without restarting).
-
-On **uninstall**, all of the extension's roots are revoked.
-
-Identity-change re-grant (step 2/3) is acceptable for declared roots because the
-user consented to the *path*, not the inode. Roots granted through
-`mainApi.grantRoot` keep today's strict identity semantics.
-
-### 3.4 What the extension sees
-
-Nothing new in the SDK surface: `host.files.roots()` returns the granted roots
-(`{ id: 'claude', name: '~/.claude', writable: false }`), and every other
-`ScopedFiles` call takes `{ root: 'claude', rel: 'projects/…' }`. Existing limits
-apply (16 MiB per read, 1000 entries per list page). No SDK release is required
-unless `Manifest` is part of the generated contracts; if it is, SDK 1.4.0 ships
-the regenerated types.
-
-### 3.5 Core tests (named)
-
-- `manifest.fileRoots.requires-files-cap`, `.rejects-escape` (`~/..`, `/abs`,
-  `~`, `~/a/../../b`), `.rejects-duplicate-id`, `.accepts-valid`.
-- `reconcile.grants-declared-on-consent`, `.missing-dir-is-not-error`,
-  `.grants-when-dir-appears-via-roots()`, `.regrants-on-identity-change`,
-  `.revokes-undeclared-for-external`, `.never-revokes-bundled`,
-  `.revokes-all-on-uninstall`, `.no-grant-without-consent` (an extension whose
-  consent does not cover its manifest gets no roots, even via `roots()`).
-- `ConsentModal` renders the folder list in install/update/review.
-Each gate must be shown red against a mutant (skip the grant, skip the revoke,
-drop the escape check).
+- `manifest.fileRoots.requires-files-cap`, `.rejects-bundled-tier`,
+  `.rejects-lexical-escape` (`~/..`, `/abs`, `~`, `~/`, `~/a/../b`, NUL),
+  `.rejects-duplicate-id`, `.accepts-valid`.
+- `consent.digest-recorded-on-install|update|review`,
+  `consent.same-version-root-change-needs-consent`,
+  `consent.legacy-null-digest-covers-only-rootless`.
+- `reconcile.grants-declared-after-consent`, `.missing-dir-ungranted-not-error`,
+  `.missing-replacement-revokes-old-grant`, `.non-directory-ungranted`,
+  `.symlinked-root-granted-at-realpath`, `.refuses-realpath-outside-home`,
+  `.refuses-userData-and-home-and-library`, `.regrants-on-identity-change`,
+  `.revokes-undeclared`, `.revokes-all-when-consent-lapses`,
+  `.revokes-all-on-uninstall`, `.persists-and-restores-across-restart`.
+- `consent-ui.install|update|review-shows-folders` (through the real
+  preview/snapshot builders, not a hand-built modal prop).
 
 ## 4. Connector: `kia.agent-sessions`
 
-### 4.1 Manifest
+### 4.1 Manifest and layout
 
 ```json
 {
   "id": "kia.agent-sessions",
   "name": "Agent Sessions",
-  "engine": "^2.1.0",
+  "engine": "^2.3.0",
   "entry": "dist/index.js",
   "caps": ["files"],
   "fileRoots": [ …as §3.1… ],
@@ -153,84 +194,102 @@ drop the escape check).
 }
 ```
 
-No `net`, no `query`. `engine` is bumped to whatever `PLATFORM_API_VERSION`
-the core change ships as (a minor bump — new optional manifest field).
-
-Repo layout mirrors the other connectors (esbuild bundle, jest, vendored SDK
-tgz devDependency, zero runtime deps):
+No `net`, no `query`. Repo mirrors the other connectors (esbuild bundle, jest,
+SDK tgz devDependency, zero runtime deps):
 
 ```
-src/index.ts            activate(host) → { sources: [claudeSource(host), codexSource(host)] }
-src/fs-walk.ts          ScopedFiles helpers: listAll(dir), statOrNull, readJsonl (bounded)
-src/scan.ts             shared (mtime,path) change scan + cursor type
-src/render.ts           Transcript → markdown with head/tail byte budget
-src/redact.ts           secret redaction
-src/claude/*.ts         discovery + parsers for Claude files
-src/codex/*.ts          discovery + parsers for Codex files
+src/index.ts        activate(host) → { sources: [claudeSource(host.files), codexSource(host.files)] }
+src/files.ts        listAll(ref) (sequential paging), statOrNull, streamLines(ref) (4 MiB reads)
+src/sync.ts         unit model, fingerprint diff, batching, cursor (shared by both sources)
+src/transcript.ts   Turn model + markdown renderer with budget
+src/redact.ts       secret redaction
+src/claude/*.ts     discovery + record → Turn parsing
+src/codex/*.ts      discovery + record → Turn parsing
 ```
 
 ### 4.2 Sources
 
-Both sources: `auth: 'none'`, `cadence: { every: '15m' }`,
-`documentTypes` as in §4.4. `connect()` calls `host.files.roots()`; if its root
-(`claude` / `codex`) is not granted it throws
-`"~/.claude was not found — run Claude Code once, then add this source again"`
-(resp. Codex). Otherwise it returns `{ identifier: '<root display path>', config: {} }`.
-One account per source; adding a second is a no-op replace (same identifier).
+Both: `auth: 'none'`, `cadence: { every: '15m' }`, `documentTypes` per §4.4.
+`connect()` calls `files.roots()`; if its root is absent it throws
+`"~/.claude was not found or not permitted — run Claude Code once, restart KIA, then add this source"`
+(resp. `~/.codex`/Codex). Otherwise returns `{ identifier: '~/.claude', config: {} }`.
 
-### 4.3 Change detection — one uniform scan
+### 4.3 Change detection — per-unit fingerprints, no watermark
 
-Every file the connector reads is a **unit**: a (root-relative) path mapped to
-one parser. Each `pull()`:
-
-1. Walks the discovery set (§4.5) with `ScopedFiles.list`, collecting
-   `{ rel, mtimeMs, size }` for every unit file.
-2. Keeps units with `(mtimeMs, rel) > cursor` (tuple order), sorted ascending.
-3. Parses them in that order, yielding a batch every 25 units (or 8 MiB of
-   rendered markdown) with `cursor = (mtimeMs, rel)` of the last unit in the
-   batch.
-4. The first full pass is `phase: 'backfill'`; once a pass reaches the end with
-   `cursor.initialPassDone = true` it becomes `'live'`.
+A **unit** is the smallest group of files that renders into a fixed set of
+documents. Each unit has a stable `key` and a **fingerprint** = a short hash of
+the `(rel, size, mtimeMs)` of every file in the unit plus any render
+dependency that lives outside it (§4.5/§4.6 name them).
 
 ```ts
-type Cursor = { mtimeMs: number; rel: string; initialPassDone: boolean };
+type Cursor = {
+  fps: Record<string, string>;   // unit key → fingerprint of the last committed render
+  pass: 'initial' | 'done';
+};
 ```
 
-A unit whose file is appended again gets a newer mtime and is re-parsed whole
-and re-upserted; `upsertDocument`'s content-hash dedup makes unchanged
-re-renders free. A crash between batches resumes after the last committed unit.
+Each `pull(session, cursor)`:
 
-Edge: a file modified *during* the pass with an mtime ≤ cursor is impossible
-(mtimes only grow for a live file); a file whose mtime goes backwards (restored
-from backup) is not re-read — accepted.
+1. **Discover**: walk the discovery set exhaustively (every relevant directory
+   is listed every tick — no watermark, no parent-gated shortcuts), building
+   `units: Map<key, {fp, files, order}>`.
+2. **Diff**: `changed = units where cursor.fps[key] !== fp`, sorted by the
+   unit's `order` (§4.5/§4.6 — guarantees parents before children).
+   Keys in `cursor.fps` no longer discovered are removed from the next cursor
+   (documents are kept — §1).
+3. **Render**: process `changed` in order; after every 25 units (or 8 MiB of
+   rendered markdown) yield `{ phase, items, cursor: {fps: fps ∪ processed,
+   pass}, estimateTotal: changed.length }` with `phase = cursor.pass ===
+   'initial' ? 'backfill' : 'live'`.
+4. **Terminal batch**: always yield one final batch (possibly `items: []`)
+   with `pass: 'done'` and the full fingerprint map — also when `changed` was
+   empty, ended on a batch boundary, or held only skipped units.
 
-A unit whose parse throws is logged and skipped (the cursor still advances past
-it, so one corrupt file cannot wedge the source); the next modification
-re-parses it.
+A unit whose parse throws is logged and **committed with its fingerprint** (so a
+corrupt file cannot wedge the source; its next modification changes the
+fingerprint and it is retried). Crash resume: the next pull re-diffs against
+the last committed map, so exactly the uncommitted units are redone.
+Ordering, ties, clock skew and future mtimes are irrelevant: the comparison is
+equality of fingerprints, not order.
+
+Cursor size: one entry per unit (~2k Claude families + ~1k Codex threads + a
+few hundred small files here) ≈ 200 KB of JSON, written once per batch.
+
+`upsertDocument` dedups by content hash, so a unit whose files changed but whose
+rendering did not produce a no-op write.
 
 ### 4.4 Documents
 
-All go through `toDocument` → the engine's `upsertDocument` → the shared
-`documents` table (keyed `(accountId, externalId, type)`), exactly like every
-other connector.
+Everything goes through `toDocument` → `upsertDocument` → the shared
+`documents` table (key `(accountId, externalId, type)`).
 
-| type | one per | externalId | title | createdAt |
-|---|---|---|---|---|
-| `agent.session` | top-level session | `session:<sessionId>` | agent title → first user prompt (≤ 80 chars) → `Session <id8>` | first record timestamp |
-| `agent.subagent` | subagent transcript | `subagent:<agentId or threadId>` | `<parent title> › <subagent description or agent type>` | first record timestamp |
-| `agent.plan` | Claude plan file | `plan:<file name>` | first `# ` heading → file name | file mtime |
-| `agent.tasks` | Claude task list (per session) | `tasks:<sessionId>` | `Tasks — <parent title if known, else id8>` | earliest task file mtime |
-| `agent.memory` | memory/instructions file | `memory:<rel path>` | `<project label> — <file name>` | file mtime |
-| `agent.prompts` | calendar day of prompt history | `prompts:<YYYY-MM-DD>` | `Prompts — <YYYY-MM-DD>` | first prompt that day |
+| type | one per | externalId | title |
+|---|---|---|---|
+| `agent.session` | session **or** subagent transcript | `session:<id>` (Claude subagent: `session:<sessionId>/<agentId>`) | see §4.5/§4.6; fallback: first user prompt (≤ 80 chars) → `Session <id8>` |
+| `agent.plan` | Claude plan file | `plan:<file name>` | first `# ` heading → file name |
+| `agent.tasks` | Claude task list of one session | `tasks:<sessionId>` | `Tasks — <session title if in the same unit, else id8>` |
+| `agent.memory` | memory/instructions file | `memory:<rel path>` | `<project label> — <file name>` |
+| `agent.prompts` | calendar day (local time) of prompt history | `prompts:<YYYY-MM-DD>` | `Prompts — <YYYY-MM-DD>` |
 
-`parent: ExternalRef` links `agent.subagent` and `agent.tasks` to their
-`agent.session` (`{ externalId: 'session:<id>', type: 'agent.session' }`).
+Subagents are ordinary `agent.session` documents with `metadata.role =
+'subagent'` and `parent: { externalId: 'session:<parentId>', type:
+'agent.session' }` — one type, so a Codex subagent whose parent is itself a
+subagent links the same way. `agent.tasks` has the same `parent` shape.
+Parent resolution relies on §4.3 ordering: a parent is committed in the same
+batch or an earlier one (the engine's `reconcileParents` covers the same batch,
+the parent row covers earlier ones). A parent whose file was already deleted by
+cleanup and was never indexed stays unresolved (`parentId = null`,
+`metadata.parentSessionId` still set).
 
-Common `metadata`: `{ agent: 'claude-code' | 'codex', cwd?, gitBranch?,
-project?, sessionId?, parentSessionId?, model?, cliVersion?, sourcePath }`
-(`sourcePath` = `~/.claude/…` display path). `url` is unset (no stable URL).
+`createdAt` = first record timestamp (sessions), file mtime (plans, memory),
+earliest task file mtime (tasks), first prompt of the day (prompts).
 
-Session/subagent markdown:
+Common `metadata`: `{ agent: 'claude-code' | 'codex', role?: 'main' |
+'subagent', cwd?, gitBranch?, sessionId?, parentSessionId?, model?,
+cliVersion?, sourcePath }` (`sourcePath` = `~/.claude/…` display path). `url`
+unset.
+
+Session markdown:
 
 ```
 # <title>
@@ -244,117 +303,187 @@ Started 2026-09-23 10:02 · Resume: `claude --resume <sessionId>`   (codex: `cod
 <assistant text>
 → Bash: git status -sb
 → Edit: src/main/foo.ts
-→ Subagent: "Map core plugin install+files+source APIs" (see linked subagent)
+→ Agent: Map core plugin install+files+source APIs
 ```
 
-Rendering rules (both agents):
+Turn model and rendering (both agents):
 
-- Kept: user-typed text, assistant visible text, one line per tool call
-  (`→ <tool>: <summary>`, summary = the most descriptive input field —
-  command / file_path / pattern / description / url — truncated to 160 chars).
-- Dropped: tool **results/outputs**, thinking/reasoning, hook output,
-  attachments, file-history snapshots, token/usage records, mode/permission
-  records, system/developer messages, and injected context (Claude:
-  `isMeta` user records, `<command-*>`/`<local-command-*>`/`<system-reminder>`
-  wrappers are unwrapped to their human part or dropped; Codex: user
-  `input_text` parts starting with `<environment_context>`,
-  `<user_instructions>`, `# AGENTS.md instructions`, `<INSTRUCTIONS>`).
-- Budget: markdown ≤ **512 KiB**. The renderer keeps whole turns from the head
-  until 256 KiB and a ring buffer of whole turns for the last 256 KiB; if
-  anything was dropped it inserts `… N turns omitted …`.
-- Large files: a unit file > 32 MiB is read as its first 16 MiB and last
-  16 MiB only (tail starts at the first newline after the seek). The budget
-  above means the middle could never be rendered anyway. A truncated/partial
-  trailing JSON line is ignored.
-
-Redaction (`redact.ts`) runs on every emitted string (titles, prompts,
-assistant text, tool summaries): private-key blocks, `sk-…`/`sk-ant-…`,
-`ghp_/gho_/github_pat_…`, `xox[abprs]-…`, `AKIA[0-9A-Z]{16}`, `AIza…`,
-JWT-shaped `eyJ….….…`, `Bearer <token>`, and `(password|secret|token|api[_-]?key)
-\s*[=:]\s*\S+` → `[redacted]`. Deliberately conservative; it is a safety net on
-top of dropping tool output, not a DLP system.
+- **Turns kept**: user-typed text, assistant visible text, one line per tool
+  call `→ <tool>: <summary>` (summary = first of `command`, `cmd`,
+  `file_path`, `path`, `pattern`, `description`, `url`, `prompt` if the input
+  is a JSON object; else the first line of the raw input/arguments string;
+  160 chars max).
+- **Dropped**: tool results/outputs, thinking/reasoning (incl. encrypted
+  content), hook output, attachments, file-history snapshots, token/usage
+  records, mode/permission records, system/developer messages, compaction
+  summaries, and injected context (rules in §4.5/§4.6).
+- **Streaming**: files are read with `streamLines` in 4 MiB chunks through the
+  whole file (no raw head/tail skipping); records are filtered into turns as
+  they stream, so memory stays O(budget). An unparsable line (including a
+  partial last line of a file being written) is skipped.
+- **Budget**: rendered markdown ≤ **512 KiB** per document: whole turns from
+  the head until 256 KiB, a ring buffer of whole turns for the last 256 KiB,
+  and `… N turns omitted …` between them if anything was dropped. A single turn
+  longer than 16 KiB is cut to 16 KiB with `… (truncated)`.
+- **Redaction** runs on each turn's text *before* the per-turn cut and before
+  the budget (§4.7).
 
 ### 4.5 Discovery — Claude Code (root `claude`)
 
-| unit | path | parser |
+| unit key | files | order |
 |---|---|---|
-| session | `projects/<proj>/<sessionId>.jsonl` | Claude transcript; title = last `ai-title` record; skips `isSidechain: true` lines |
-| subagent | `projects/<proj>/<sessionId>/subagents/agent-*.jsonl` (+ sibling `.meta.json` for description/agent type when present) | Claude transcript, `parentSessionId = <sessionId>` |
-| plan | `plans/*.md` | verbatim markdown (budget + redaction apply) |
-| tasks | `tasks/<sessionId>/*.json` (unit = the directory; its mtime key = max file mtime) | checklist `- [x] subject — description` ordered by numeric id; `.lock`/`.highwatermark` ignored |
-| memory | `projects/<proj>/memory/*.md`, `CLAUDE.md` | verbatim |
-| prompts | `history.jsonl` | grouped by local calendar day of `timestamp` → one `agent.prompts` doc per day: `- 10:02 · <project> · <display>` |
+| `c:<proj>/<sessionId>` (family) | `projects/<proj>/<sessionId>.jsonl` (optional), every `projects/<proj>/<sessionId>/subagents/agent-*.jsonl` + sibling `agent-*.meta.json`, `tasks/<sessionId>/*.json` | earliest file mtime in the family |
+| `plan:<name>` | `plans/*.md` | mtime |
+| `memory:<rel>` | `projects/<proj>/memory/**` text files (`.md`, `.txt`), `CLAUDE.md` if present | mtime |
+| `history` | `history.jsonl` | last |
 
-Subagent discovery cost: the walk lists `projects/*/` every tick (≈ one list
-call per project), but descends into `<sessionId>/subagents/` only for sessions
-whose own `.jsonl` changed since the cursor minus a 1-hour overlap (a running
-subagent always coincides with its parent session being written). This keeps a
-tick at O(projects + changed sessions) list calls instead of O(all sessions).
+A family renders parent-first in one batch: the session doc (if its `.jsonl`
+exists), then each subagent doc, then the tasks doc. A family with only a
+`subagents/` dir (parent `.jsonl` removed by cleanup — common) still renders its
+subagents. A `tasks/<id>/` dir holding only `.lock`/`.highwatermark` yields no
+doc.
 
-`<proj>` label for display = the decoded directory name (`-Users-x-work-a` →
-`~/work/a`) — best effort, cosmetic only; the authoritative `cwd` comes from the
-records.
+Walk per tick: `projects/` (1 list), each `projects/<proj>/` (~170), each
+`<sessionId>/` dir and its `subagents/` (~1.2k), `tasks/` + each `tasks/<id>/`
+(~170), `plans/`, each `memory/`. ≈ 1.5k list calls on this machine; the plan
+includes a benchmark of a full unchanged tick through the real host API
+(target < 10 s, measured before any optimisation is considered).
+
+Record → Turn (Claude):
+
+- Title: the **last** `ai-title` record's text seen while streaming; subagent
+  title: `.meta.json` description / agent type → first prompt.
+- `user` with string content → user turn, unless: `isMeta`, `isCompactSummary`,
+  or the trimmed text is **one XML-tagged block only** (`^<([a-z-]+)[^>]*>[\s\S]*</\1>$`
+  — covers `task-notification`, `local-command-*`, `system-reminder`, …) →
+  dropped; exception: a block set made of `<command-name>`/`<command-message>`
+  /`<command-args>` renders as `/name args`. Text starting with
+  `[Request interrupted` is dropped.
+- `user` with `tool_result` content → dropped. `user` with `text` parts →
+  user turn from the text parts.
+- `assistant` → `text` parts become the assistant turn; `tool_use` parts become
+  tool lines; `thinking`, `server_tool_use`, `*_tool_result` dropped.
+- Everything else (`attachment`, `system`, `queue-operation`, `mode`,
+  `permission-mode`, `file-history-snapshot`, `last-prompt`, …) → ignored.
+- `isSidechain` is **not** used as a filter (every subagent record has it).
+- metadata from records: `cwd`, `gitBranch`, `version` → `cliVersion`,
+  `message.model` of the first assistant record → `model`.
+
+Prompts (`history.jsonl`, rows `{display, pastedContents, timestamp, project,
+sessionId}`): streamed whole, grouped by local calendar day → one doc per day,
+lines `- 10:02 · <project label> · <display>` (+ ` · session <id8>`).
+`pastedContents` is **dropped** (likeliest home of pasted secrets). All days are
+re-rendered when the file changes; unchanged days are hash-deduped by the
+engine.
 
 ### 4.6 Discovery — Codex (root `codex`)
 
-| unit | path | parser |
+| unit key | files | order |
 |---|---|---|
-| session / subagent | `sessions/YYYY/MM/DD/rollout-*.jsonl`, `archived_sessions/**/rollout-*.jsonl` | Codex rollout. `session_meta.payload.source.subagent.thread_spawn.parent_thread_id` present → `agent.subagent` with that parent; else `agent.session`. Title from `session_index.jsonl` (`id → thread_name`, read once per pull) → first user prompt |
-| memory | `AGENTS.md`, `memories/**/*.md` | verbatim |
-| prompts | `history.jsonl` (`{session_id, ts, text}`) | per-day `agent.prompts` docs |
+| `x:<threadId>` | the rollout file for that thread under `sessions/YYYY/MM/DD/` or `archived_sessions/` (thread id = UUID at the end of the filename) | thread creation time from the filename (`rollout-<ISO>-<uuid>.jsonl`) |
+| `memory:<rel>` | `AGENTS.md`, `memories/**` text files | mtime |
+| `history` | `history.jsonl` | last |
 
-Codex rollouts can be resumed and appended long after their day directory was
-created, so the whole `sessions/` tree is listed every tick (≈ one list call per
-day directory — a few hundred per year of use).
+Render dependency: the thread's `session_index.jsonl` title (last row per id by
+`updated_at`) is folded into the unit fingerprint, so a rename re-renders the
+session. `session_index.jsonl` and each day directory are read/listed every
+tick.
 
-Codex record handling: `response_item` `message` (user/assistant; `developer`
-dropped), `function_call` / `custom_tool_call` → tool line (summary = `cmd`
-field if JSON-parsable, else first line of input, 160 chars), `*_output`
-dropped, `reasoning` dropped, `event_msg`/`token_count`/`world_state`/
-`turn_context` dropped except `turn_context.model` → metadata.
+Ordering by creation time puts every parent thread before its spawned children
+(a child cannot be created before its parent).
 
-### 4.7 Tests (named, fixture-driven)
+Record → Turn (Codex), two on-disk generations:
 
-Fixtures are **redacted real captures** from this machine (Claude 2.1.x, Codex
-0.155.x), checked in under `test/fixtures/`, each ≤ 50 KB.
+- **Current** (first line `{type:'session_meta', payload}`):
+  `payload.parent_thread_id` (or `source.subagent.thread_spawn.parent_thread_id`)
+  → `role: 'subagent'` with that parent; `source.subagent.thread_spawn.agent_nickname`
+  → subagent title. `response_item` payloads: `message` user/assistant → turn
+  (`developer` dropped); `agent_message` → assistant turn from `content[].text`;
+  `function_call` / `custom_tool_call` → tool line (`name` + summary per §4.4
+  from `arguments`/`input`); `*_output`, `reasoning` → dropped.
+  `turn_context.model` → metadata. All other top-level types (`event_msg`,
+  `token_count`, `token_usage_record`, `world_state`, …) ignored.
+- **Legacy** (Aug–Sep 2025; first line `{id, timestamp, instructions, git}`,
+  then bare `{type:'message', role, content}` / `{record_type}` lines): the
+  first line gives id/started/git; bare `message`/`function_call` records are
+  handled as their `response_item` equivalents.
+- Injected user context is dropped when a user `input_text` part, trimmed, is
+  one XML-tagged block only (same regex as Claude — covers
+  `<environment_context>`, `<user_instructions>`, `<recommended_plugins>`, …) or
+  starts with `# AGENTS.md instructions`.
 
-- `claude.session.renders-turns-and-tool-lines`, `.drops-tool-results`,
-  `.drops-thinking-and-attachments`, `.unwraps-command-wrappers`,
-  `.title-from-last-ai-title`, `.skips-sidechain-lines`.
-- `claude.subagent.links-parent`, `claude.tasks.checklist-order`,
-  `claude.prompts.groups-by-local-day`, `claude.memory.verbatim`.
-- `codex.session.filters-injected-context`, `.subagent-from-thread-spawn`,
-  `.title-from-session-index`, `.drops-outputs-and-reasoning`.
-- `render.budget.head-tail-with-omission-marker`,
-  `render.large-file-reads-head-and-tail-only`, `render.ignores-partial-last-line`.
-- `redact.*` one case per pattern + a no-false-positive case on ordinary prose.
-- `scan.cursor.resumes-after-last-unit`, `.reparses-appended-file`,
-  `.corrupt-unit-skipped-and-cursor-advances`, `.backfill-then-live-phase`,
-  `.subagent-descent-only-for-changed-sessions`.
-- `connect.missing-root-message`, `bundleLoadSmoke`.
-Mutation evidence required per gate (e.g. stop dropping tool results → the
-`drops-tool-results` gate goes red).
+Prompts (`history.jsonl`, rows `{session_id, ts, text}`): same per-day docs.
+
+### 4.7 Redaction (`redact.ts`)
+
+Applied to titles, turn texts, tool summaries and memory/plan bodies, on the
+full string before any truncation:
+
+- PEM blocks `-----BEGIN [A-Z ]*PRIVATE KEY-----` through the matching END, or
+  to the end of the string when unterminated.
+- Token shapes: `sk-ant-…`, `sk-[A-Za-z0-9_-]{20,}`, `ghp_|gho_|ghs_|github_pat_…`,
+  `xox[abprs]-…`, `AKIA[0-9A-Z]{16}`, `AIza[0-9A-Za-z_-]{35}`, JWT
+  `eyJ[\w-]+\.[\w-]+\.[\w-]+`, `Bearer <≥20 chars>`.
+- Assignments whose key contains `password|passwd|secret|token|api[_-]?key|
+  access[_-]?key|private[_-]?key` (bare, `"quoted"` or `'quoted'`, followed by
+  `=` or `:`) **and** whose value (bare run of non-space, or a complete quoted
+  string including spaces) is ≥ 12 chars and contains both a letter and a digit
+  → value becomes `[redacted]`. This leaves `token: string` and
+  `password: z.string()` alone.
+
+It is a safety net on top of dropping tool output — documented as such in the
+README (a pasted secret in a prompt that matches no pattern is indexed).
+
+### 4.8 Tests (named, fixture-driven)
+
+Fixtures are redacted real captures from this machine (Claude 2.1.x incl. a
+subagent pair and a compaction summary; Codex 0.155.x current + one legacy
+2025-08 rollout + a nested-subagent pair), each ≤ 50 KB, under
+`test/fixtures/`.
+
+- `claude.session.turns-and-tool-lines`, `.drops-tool-results`,
+  `.drops-thinking-and-attachments`, `.drops-compact-summary`,
+  `.drops-sole-xml-block-turns`, `.renders-slash-command`,
+  `.title-last-ai-title`, `.subagent-not-emptied-by-sidechain`.
+- `claude.family.parent-first-in-one-batch`, `.orphan-subagents-still-render`,
+  `.lock-only-tasks-dir-no-doc`, `claude.tasks.checklist-order`,
+  `claude.prompts.local-day-and-drops-pasted`, `claude.memory.txt-and-md`.
+- `codex.current.agent-message-is-assistant`, `.filters-injected-context`,
+  `.nested-subagent-links-parent`, `.title-from-session-index-last-wins`,
+  `.rename-changes-fingerprint`, `codex.legacy.renders-turns`.
+- `render.budget-head-tail-omission`, `.turn-cut-at-16k`,
+  `.streams-multi-chunk-file` (> 16 MiB synthetic), `.skips-partial-last-line`.
+- `redact.<each pattern>`, `.quoted-json-key`, `.quoted-value-with-spaces`,
+  `.unterminated-pem`, `.leaves-type-annotations`.
+- `sync.appended-unit-reprocessed` (the A-at-900/B-at-1200 case from review),
+  `.same-mtime-different-size`, `.future-mtime`, `.crash-resume-redoes-only-uncommitted`,
+  `.corrupt-unit-committed-and-retried-on-change`, `.terminal-batch-always`,
+  `.backfill-then-live-phase`, `.vanished-key-dropped-docs-kept`.
+- `connect.missing-root-message`, `bundleLoadSmoke`, plus the tick benchmark
+  (§4.5) recorded in the PR.
+
+Every gate lists its mutant (e.g. stop dropping tool results → red).
 
 ## 5. Rollout
 
-1. Core branch → PR → release (minor) → alpha-cent `core.lock` bump.
-2. Connector repo created under `kia-plugins` (topic `kia-plugin`), release
-   `1.0.0` with the standard tgz asset.
-3. Manual smoke on this machine (13k sessions, 5.3 GB Claude + 2.2 GB Codex):
-   install → consent shows both folders → add both sources → backfill completes
-   → spot-check search for a known prompt, a subagent linked to its parent, a
-   plan, a prompt-day; then continue a Claude session and confirm the next tick
-   updates that one document only.
+1. Core branch → PR → release v0.91.0 (platform 2.3.0) + SDK 1.4.0 →
+   alpha-cent `core.lock` bump.
+2. Connector repo under `kia-plugins` (topic `kia-plugin`), release `1.0.0`
+   with the standard tgz asset.
+3. Manual smoke on this machine: install → consent lists `~/.claude` and
+   `~/.codex` → add both sources → backfill completes with a progress bar →
+   spot-check search for a known prompt, a subagent linked to its parent, a
+   nested Codex subagent, a plan, a prompt-day; continue a Claude session and
+   confirm the next tick rewrites only that family.
 
 ## 6. Risks
 
-- **Format drift.** Both CLIs change their JSONL weekly-ish. Parsers ignore
-  unknown record types by design; a structural break shows up as empty/short
-  transcripts, not crashes. Mitigation: fixtures refreshed per release.
-- **Backfill volume.** ~13k units, ~7.5 GB on disk, but head/tail reading caps
-  bytes read per file at 32 MiB and rendered output at 512 KiB, so the corpus
-  grows by at most a few GB of FTS text in the worst case (typical sessions are
-  far below budget).
-- **Secrets.** Dropping tool output removes the main leak path; redaction is a
-  second layer. User prompts can still contain pasted secrets that the
-  patterns miss — documented in the connector README.
+- **Format drift.** Both CLIs change JSONL often. Unknown record types are
+  ignored by design; a structural break shows up as short transcripts, not
+  crashes. Fixtures are refreshed per connector release.
+- **Backfill cost.** ~3k units, ~7.5 GB streamed once (whole files, 4 MiB
+  reads). Rendered output ≤ 512 KiB per session doc. A long-running active
+  session > 100 MB is re-streamed on every tick it changes — accepted for v1,
+  revisit if the benchmark shows it matters.
+- **Secrets.** Tool output dropped + redaction; residual risk documented.
+- **Restart needed** for a folder created after activation (§3.3).
