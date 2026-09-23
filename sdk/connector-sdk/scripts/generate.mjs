@@ -17,6 +17,7 @@ for (const f of [
   'plugin-files.ts',
   'plugin-net.ts',
   'plugin-sql.ts',
+  'attention.ts',
 ]) {
   copyFileSync(join(coreShared, f), join(outDir, f));
 }

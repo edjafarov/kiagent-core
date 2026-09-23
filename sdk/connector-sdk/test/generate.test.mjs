@@ -27,6 +27,7 @@ const GENERATED_SHARED = [
   'plugin-files.ts',
   'plugin-net.ts',
   'plugin-sql.ts',
+  'attention.ts',
 ];
 
 for (const f of GENERATED_SHARED) {
@@ -107,6 +108,7 @@ import type {
   ScopedFileHandle,
   ScopedFiles,
 } from '@kiagent/connector-sdk';
+import type { HostResponse, NetFetch } from '@kiagent/connector-sdk/http';
 
 declare const db: PluginDb;
 declare const files: ScopedFiles;
@@ -155,6 +157,14 @@ async function exercise(): Promise<void> {
   await files.fstat(handle);
   const init: PluginNetInit = netInit;
   const result: PluginNetResult = await net.fetch('https://example.test', init);
+  // The /http NetFetch must stay the host's own net.fetch type, both ways:
+  // connectors hand host.net.fetch to NetFetch-typed clients, and tests hand
+  // NetFetch fakes to host-shaped surfaces.
+  const asNetFetch: NetFetch = net.fetch;
+  const asHostFetch: PluginNet['fetch'] = asNetFetch;
+  const asHostResponse: HostResponse = netResult;
+  const asNetResult: PluginNetResult = asHostResponse;
+  void [asHostFetch, asNetResult];
   void [pluginIdentifier('publisher.connector', 'settings'), formatPluginSql('publisher.connector', '{{settings}}', ['settings']), session, entry, host, result, netResult];
 }
 

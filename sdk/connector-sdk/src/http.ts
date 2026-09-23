@@ -14,16 +14,19 @@
  *   `${label}: HTTP ${status} (after ${n} attempts)`
  */
 
-export type NetFetch = (url: string, init?: unknown) => Promise<unknown>;
+import type { PluginNetInit, PluginNetResult } from './generated/plugin-net';
+
+/** The host `net.fetch` signature — the same type as `PluginNet['fetch']`
+ *  in the generated contracts, so `host.net.fetch` and a test fake typed as
+ *  `NetFetch` are assignable to each other in both directions. */
+export type NetFetch = (
+  url: string,
+  init?: PluginNetInit,
+) => Promise<PluginNetResult>;
 
 /** The host `net.fetch` surface resolves to this shape — header keys are
  *  lowercase (built via Object.fromEntries(res.headers.entries())). */
-export interface HostResponse {
-  status: number;
-  statusText: string;
-  headers: Record<string, string>;
-  body: Uint8Array;
-}
+export type HostResponse = PluginNetResult;
 
 export interface RetryPolicy {
   /** Error-message prefix, e.g. `slack ${method}` or `notion ${path}`. */

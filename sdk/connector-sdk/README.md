@@ -9,8 +9,8 @@ files.
 
 It is **generated, not hand-written**: the shared contract dependency closure
 (`contracts.ts`, `source-errors.ts`, `file-indexability.ts`,
-`message-evidence.ts`, `plugin-db.ts`, `plugin-files.ts`, `plugin-net.ts`, and
-`plugin-sql.ts`) is copied verbatim from `kiagent-core`'s `src/shared/` at
+`message-evidence.ts`, `plugin-db.ts`, `plugin-files.ts`, `plugin-net.ts`,
+`plugin-sql.ts`, and `attention.ts`) is copied verbatim from `kiagent-core`'s `src/shared/` at
 build time. A connector compiling against a given SDK version is therefore
 compiling against exactly the platform types, SQL helpers, and file eligibility
 policy that version was cut from.
@@ -23,7 +23,7 @@ same TOFU shape as a connector's own release:
 ```json
 {
   "devDependencies": {
-    "@kiagent/connector-sdk": "https://github.com/edjafarov/kiagent-core/releases/download/sdk-v1.2.0/kiagent-connector-sdk-1.2.0.tgz"
+    "@kiagent/connector-sdk": "https://github.com/edjafarov/kiagent-core/releases/download/sdk-v1.3.0/kiagent-connector-sdk-1.3.0.tgz"
   }
 }
 ```
@@ -173,16 +173,14 @@ manage edit opened with the account's current roots in `spec.selected` and
 
 ## Versioning
 
-As reviewed on 2026-09-09, this package's source version is **1.2.0** with
-`kiagentCore: 0.84.0`; the app/core checkout is **0.86.0**, with platform API
-**2.0.0**. The SDK version, core version and manifest `engine` range are
-independent. Newer core contracts (for example inference lane/model
-introspection and event provenance) do not retroactively appear in a
-published SDK tarball. Verify the installed declarations before using them.
+Current release: **1.3.0**, `kiagentCore: 0.89.1` (platform API **2.2.0**).
+The SDK version, core version and manifest `engine` range are independent.
+Newer core contracts do not retroactively appear in a published SDK tarball.
 Running `build` here regenerates from the *current checkout*, so a locally
-packed 1.2.0 can differ from the published 1.2.0. Maintainers must bump SDK
-version and provenance before releasing changed contracts; plugin authors
-should pin an immutable released asset and run a separate typecheck.
+packed tarball can differ from the published one of the same version.
+Maintainers must bump SDK version and provenance before releasing changed
+contracts; plugin authors should pin an immutable released asset and run a
+separate typecheck.
 
 The SDK runs in the desktop extension process; it does not expose an HTTP
 upload API to external applications. See the universal
