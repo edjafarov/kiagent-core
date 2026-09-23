@@ -173,6 +173,17 @@ Also: `consentCovers === false` at activation → revoke all of `e`'s roots.
 page, `MAX_CURSORS = 256` (connector pages lists sequentially). No new SDK
 methods.
 
+### 3.7 Do not project source cursors into `AppState`
+
+Every commit appends an `account` change whose `Account` includes the parsed
+cursor (`store.ts` `toAccount`); `app-projection.ts` copies it into `AppState`,
+which `main.ts` broadcasts to every window (throttled 100 ms). No renderer code
+reads `.cursor`, and the engine reads cursors via `store.account()`, not the
+feed. Change: `app-projection.ts` `init`/`apply` drop `cursor` from projected
+accounts (type: `Omit<Account, 'cursor'>` in `AppState`). Benefits every
+source; required here because this connector's cursor is hundreds of KB.
+Test: `app-projection.account-cursor-not-projected`.
+
 ### 3.6 Core tests (named; each must be shown red against a mutant)
 
 - `manifest.fileRoots.requires-files-cap`, `.rejects-bundled-tier`,
@@ -284,10 +295,11 @@ resume re-diffs against the last committed map, so exactly the uncommitted
 units are redone. Ties, clock skew and future mtimes are irrelevant: the
 comparison is equality, not order.
 
-Cursor size here: ~12k units (1.8k Claude sessions, ~10k Claude subagents,
-~1k Codex threads, a few hundred small files) × ~70 B ≈ 0.9 MB of JSON per
-committed batch. Accepted for v1; the benchmark (§4.5) records the backfill
-write volume.
+Cursor size: ~12k units here. `fps` keys are stored as 11-char base64url
+hashes of the unit key and values as 11-char fingerprint hashes (~30 B per
+entry ≈ 0.35 MB). The cursor is written to `accounts.cursor` once per batch
+and is **not** broadcast to windows: core deliverable §3.7 strips `cursor`
+from the projected `Account` in `AppState`.
 
 `upsertDocument` dedups by content hash, so re-emitted children and re-rendered
 unchanged documents are no-op writes.
@@ -406,7 +418,9 @@ Claude — `task-notification`, `system-reminder`, `local-command-caveat`,
 `local-command-stdout`, `local-command-stderr`, `bash-stdout`, `bash-stderr`,
 `user-prompt-submit-hook`; Codex — `environment_context`,
 `user_instructions`, `recommended_plugins`, `subagent_notification`,
-`turn_aborted`, `INSTRUCTIONS`. Special cases: a block set of
+`turn_aborted`, `INSTRUCTIONS`, `guardian_tool_descriptions`,
+`guardian_context_omission`, `realtime_delegation`,
+`external_codex_apps_writing_block_edits`, `skill`. Special cases: a block set of
 `command-name`/`command-message`/`command-args` renders as `/name args`;
 `bash-input` renders as `! <command>`. A Codex part starting with
 `# AGENTS.md instructions` is dropped. Unknown tags are **kept** (fail-open:
@@ -528,7 +542,7 @@ Every gate lists its mutant (e.g. stop dropping tool results → red).
 2. Connector repo under `kia-plugins` (topic `kia-plugin`), release `1.0.0`
    with the standard tgz asset.
 3. Manual smoke on this machine: install → consent lists `~/.claude` and
-   `~/.codex` → add both sources → backfill completes with a progress bar →
+   `~/.codex` → add both sources → backfill completes (no progress bar — no `estimateTotal`) →
    spot-check search for a known prompt, a subagent linked to its parent, a
    nested Codex subagent, a plan, a prompt-day; continue a Claude session and
    confirm the next tick rewrites only that family.
