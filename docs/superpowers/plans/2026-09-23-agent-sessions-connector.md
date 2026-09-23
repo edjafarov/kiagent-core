@@ -1352,6 +1352,18 @@ it('streams-multi-chunk-file: lines split across chunk boundaries come out whole
   expect(files.reads.every((r) => r.maxBytes <= 4096)).toBe(true);
 });
 
+it('streams-multi-chunk-file (> 16 MiB, real 4 MiB chunks)', async () => {
+  const line = JSON.stringify({ pad: 'q'.repeat(1000) });
+  const n = Math.ceil((17 * 1024 * 1024) / (line.length + 1));
+  await fs.writeFile(path.join(dir, 'big.jsonl'), (line + '\n').repeat(n));
+  const size = (await fs.stat(path.join(dir, 'big.jsonl'))).size;
+  const files = fsFiles({ r: dir });
+  let count = 0;
+  for await (const x of streamLines(files, 'r', 'big.jsonl', size)) if (x === line) count++;
+  expect(count).toBe(n);
+  expect(files.reads.length).toBe(Math.ceil(size / (4 * 1024 * 1024)));
+});
+
 it('oversized-record-skipped-without-buffering', async () => {
   const big = JSON.stringify({ type: 'x', out: 'y'.repeat(3 * 1024 * 1024) });
   await fs.writeFile(path.join(dir, 'b.jsonl'), `{"a":1}\n${big}\n{"b":2}\n`);
@@ -2073,6 +2085,9 @@ it('same-mtime-different-size, inode-change, future-mtime all reprocess', async 
   expect(renders.sort()).toEqual(['a', 'b', 'c']);
 });
 
+// render-version-bump-rerenders-all: RENDER_VERSION is a module constant hashed
+// into every fp exactly like deps, so a deps change on every unit stands in for it
+// (mutant: drop RENDER_VERSION from base() — covered by review, not by a test).
 it('render-version / deps change re-renders', async () => {
   const c = (await drain(C0(), [{ key: 'a', deps: ['t1'] }])).cursor;
   renders = [];
@@ -2410,6 +2425,11 @@ it('claude.session.renders-slash-command and renders-bash-input', async () => {
   expect(s.body).toBe('## User — 10:02\n/model opus\n\n## User — 10:02\n! ls');
 });
 
+it('array content: each text part filtered on its own', async () => {
+  const s = await parse([u([{ type: 'text', text: '<system-reminder>CLAUDE.md dump</system-reminder>' }, { type: 'text', text: 'fix it' }])]);
+  expect(s.body).toBe('## User — 10:02\nfix it');
+});
+
 it('claude.session.title-last-ai-title', async () => {
   const s = await parse([
     { type: 'ai-title', aiTitle: 'First guess', sessionId: 's' }, u('x'),
@@ -2634,13 +2654,12 @@ export interface ClaudeSessionInfo {
   body: string;
 }
 
-function userText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((p) => p?.type === 'text' && typeof p.text === 'string')
-    .map((p) => p.text as string)
-    .join('\n');
+/** Each text part is filtered on its own (like Codex), so an injected block
+ *  stored as a separate part never drags the typed prompt into "keep whole". */
+function userTexts(content: unknown): string[] {
+  if (typeof content === 'string') return [content];
+  if (!Array.isArray(content)) return [];
+  return content.filter((p) => p?.type === 'text' && typeof p.text === 'string').map((p) => p.text as string);
 }
 
 export async function parseClaudeSession(
@@ -2669,8 +2688,10 @@ export async function parseClaudeSession(
     const at = str(r.timestamp);
     const content = r.message?.content;
     if (r.type === 'user') {
-      const c = classifyUserText(userText(content));
-      if (c.kind === 'keep') b.user(c.text, at);
+      const kept = userTexts(content)
+        .map(classifyUserText)
+        .flatMap((c) => (c.kind === 'keep' ? [c.text] : []));
+      if (kept.length) b.user(kept.join('\n\n'), at);
       continue;
     }
     info.model ??= str(r.message?.model);
@@ -2740,7 +2761,7 @@ export function renderMemory(agent: Agent, rel: string, label: string | undefine
 
 - [ ] **Step 4: Run** — PASS. `npm run typecheck` — PASS.
 
-- [ ] **Step 5: Mutation evidence** — remove the `r.isMeta` check → `drops-array-form-isMeta` red; accept `tool_result` parts in `userText` → `drops-tool-results` red; `??=` instead of `=` for `ai-title` → `title-last-ai-title` red; `r.ts` without `* 1000` → `day-in-cursor-tz-seconds` red; filter on `!r.isSidechain` → `subagent-not-emptied-by-sidechain` red; sort tasks lexically → `checklist-order` red.
+- [ ] **Step 5: Mutation evidence** — remove the `r.isMeta` check → `drops-array-form-isMeta` red; accept `tool_result` parts in `userTexts` → `drops-tool-results` red; `??=` instead of `=` for `ai-title` → `title-last-ai-title` red; `r.ts` without `* 1000` → `day-in-cursor-tz-seconds` red; filter on `!r.isSidechain` → `subagent-not-emptied-by-sidechain` red; sort tasks lexically → `checklist-order` red.
 
 - [ ] **Step 6: Commit** `git add -A && git commit -m "feat: Claude record parser, artifact renderers, prompt days"`
 
