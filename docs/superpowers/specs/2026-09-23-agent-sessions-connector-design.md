@@ -60,7 +60,7 @@ of scope.
 
 ### 3.1 Manifest
 
-New optional top-level key (the schema is strict, so this is a schema change):
+New top-level key, defaulting to `[]` (the schema is strict, so this is a schema change):
 
 ```json
 "fileRoots": [
@@ -90,71 +90,61 @@ array; `[]` when absent), carrying the unexpanded `~/…` path for display.
 
 ### 3.2 Consent binds the roots
 
-- `ConsentRecord` gains `fileRootsDigest: string | null` = sha256 of the canonical JSON
-  of `[{id, path}]` sorted by id (`purpose` is display copy and excluded).
-  Append-only store migration adds a `file_roots_digest TEXT` column to
-  `consents`; existing rows read as `null`.
-- Both `consents.record(...)` sites (`installCommit` ~`extension-platform.ts:1300`,
-  `grantConsent` ~`:1465`) write the digest of the manifest being consented.
+- `ConsentRecord` gains `fileRoots: Array<{ id; path }>` — the consented
+  declarations, sorted by id (`purpose` is display copy and excluded). An
+  append-only, idempotent (`PRAGMA table_info`-guarded) store migration v5 adds a
+  `file_roots TEXT` column (JSON) to `consents`; existing rows read as `[]`.
+- Both `consents.record(...)` sites (`installCommit`, `grantConsent`) write
+  `consentedFileRoots(manifest.fileRoots)`.
 - `consentCovers(manifest)` additionally requires
-  `rec.fileRootsDigest === digest(manifest.fileRoots)`; a `null` digest matches
-  only a manifest with no or empty `fileRoots` (`digest([])` is defined as
-  `null`). Canonical form: `JSON.stringify` of `[{id, path}]` sorted by `id`,
-  keys in that order, no whitespace. The digest helper returns `string | null`;
-  `null` round-trips through the consent SQL mapping and the SDK contracts. So a same-version, same-caps manifest
-  whose roots changed (edited in place, or a republished tag) drops to
-  `needs-consent` and gets no grants.
+  `fileRootsCovered(manifest.fileRoots, rec.fileRoots)`: every declared root
+  appears in the record with the same `id` and `path` — the same subset rule
+  the record already applies to caps. So a same-version, same-caps manifest
+  that adds or re-points a root (edited in place, or a republished tag) drops
+  to `needs-consent` and gets no grants; removing a root needs no re-consent.
 
 ### 3.3 Granting — `reconcileDeclaredRoots`
 
-A platform-owned function in `extension-platform.ts` (never reachable by the
-extension). For an external extension `e` whose consent covers its manifest:
+A platform-owned function (`src/main/platform/declared-roots.ts`, never
+reachable by the extension). It runs only while the extension has no live
+host, so it **revokes all of the extension's roots first**, then grants each
+resolvable declaration read-only. Nothing about declared roots is persisted:
+they are re-derived on every activation, so no stale, undeclared or writable
+grant can survive a restart or an update.
 
-1. Home: `home = realpath(os.homedir())`. For each declared root, `abs =
-   path.join(home, rel)`; if `abs` does not exist (`ENOENT`) or is not a
-   directory → the root is **ungranted** (and any existing grant with that id is
-   revoked); logged at `info`. Else `real = realpath(abs)` (a symlinked
-   `~/.claude` → `~/dotfiles/claude` is fine — the user consented to the
-   logical path).
-2. Refuse (root ungranted, logged at `warn`) when `real` is not strictly inside
-   `home`, equals `home`, is inside or contains the app's `userData` directory (new
-   `ExtensionPlatformDeps.userDataDir`, passed from `main.ts`; compared by its
-   `realpath`, like `home` and `real`),
-   or, counted in path segments relative to home, is `Library` or
-   `Library/<x>` (refused) — `Library/<x>/<y>/…` is allowed. A symlink resolving
-   outside home (e.g. to `/Volumes/…`) is therefore refused; the connector's
-   error text says the folder "must resolve inside your home folder".
-3. If a grant with this id exists, its stored path equals `real`, it is
-   `writable === false`, and a fresh `lstat(real)` matches its stored
-   `dev`/`ino`, keep it (a restored writable grant — e.g. left by a bundled
-   copy that once shadowed this id — is never retained). Otherwise **revoke
-   first**, then `fileRoots.grant(e.id, real, { id, name: <~/ path>, writable:
-   false })`.
-4. Revoke every granted root of `e` whose id is not declared (stale after an
-   update).
-5. If anything changed — or a previous save is still marked dirty —
-   `persistFileRoots()` (new `ExtensionPlatformDeps` member; `main.ts` passes
-   the same function it gives `buildMainApi`). A failure is logged and the
-   in-memory state kept.
+For each declared root: `home = realpath(os.homedir())`, `abs =
+path.join(home, rel)`. Missing (`ENOENT`) or not a directory → **ungranted**,
+logged at `info`. Else `real = realpath(abs)` (a symlinked `~/.claude` →
+`~/dotfiles/claude` is fine — the user consented to the logical path). Refuse
+(ungranted, logged at `warn`) when `real` is not strictly inside `home`, is
+`Library` or `Library/<x>` relative to home (case-insensitive;
+`Library/<x>/<y>/…` is allowed), or is inside or contains the app's `userData`
+directory (`ExtensionPlatformDeps.userDataDir` from `main.ts`, compared by
+realpath). A symlink resolving outside home (e.g. to `/Volumes/…`) is
+therefore refused; the connector's error text says the folder "must resolve
+inside your home folder". The manifest parser already refuses the lexical
+forms (`~/Library`, `~/Library/<x>`, escapes); the realpath checks repeat them
+because a symlink can move a path.
 
-   Fix in `createFileRootsPersistence` (`file-roots.ts`), which today chains
-   writes on a promise that never recovers from a rejection (one failure
-   poisons every later save, bundled grants included): each write is chained
-   on `write.catch(() => {})`, a `dirty` flag is set before and cleared only
-   after a successful rename, and a call while dirty re-writes the current
-   snapshot even with no new changes.
+Call sites (`syncDeclaredRoots(e, roots)` in `extension-platform.ts`; a no-op
+for bundled extensions, whose `mainApi.grantRoot` grants must never be
+revoked by it):
 
-Single call site, already serialized per extension by the platform lifecycle
-(no new locking): **at activation**, after the `consentCovers` check
-(~`extension-platform.ts:924`) and before `host.start()`. `installCommit` and
-`grantConsent` both activate right after recording consent (when enabled), so
-install/update/review are covered; a disabled extension gets its grants at the
-next enable. This also heals a root whose directory appeared later or was
-recreated — **on the next activation** (app restart or disable/enable). No lazy
-granting from inside `roots()` in v1.
+- **activate** — consent does not cover the manifest → `syncDeclaredRoots(e,
+  [])` (revoke all) before reporting `needs-consent`; otherwise
+  `syncDeclaredRoots(e, manifest.fileRoots)` before `host.start()`.
+  `installCommit` and `grantConsent` both activate right after recording
+  consent, so install/update/review are covered.
+- **deactivate** — `syncDeclaredRoots(e, [])` after the host stops. This
+  covers disable, uninstall, replace and app stop.
 
-Also: `consentCovers === false` at activation → revoke all of `e`'s roots.
-**Uninstall** → revoke all of `e`'s roots, then persist.
+A root whose directory appears later is granted on the next activation (app
+restart or disable/enable). No lazy granting from inside `roots()` in v1.
+
+Also fixed in `createFileRootsPersistence` (`file-roots.ts`, used by bundled
+grants): writes were chained on a promise that never recovered from a
+rejection, so one failed save poisoned every later one. Each write now chains
+on `write.catch(() => undefined)`.
 
 ### 3.4 Consent surface
 
@@ -165,7 +155,8 @@ Also: `consentCovers === false` at activation → revoke all of `e`'s roots.
   snapshot, and both consent-request builders in
   `src/renderer/screens/Marketplace/Detail.tsx` (~l.99).
 - `cap-catalog.ts`: replace the stale `files` copy ("Not yet supported…") with
-  "Read files in the folders listed below" (elevated).
+  label "Read approved folders", description "Read files in the folders it
+  asks for." (elevated).
 
 ### 3.5 What the extension sees
 
@@ -188,25 +179,27 @@ Validation includes the full core + renderer typecheck. Benefits every
 source; required here because this connector's cursor is hundreds of KB.
 Test: `app-projection.account-cursor-not-projected`.
 
-### 3.7 Core tests (named; each must be shown red against a mutant)
+### 3.7 Core tests (each shown red against a mutant)
 
-- `manifest.fileRoots.requires-files-cap`, `.rejects-bundled-tier`,
-  `.rejects-lexical-escape` (`~/..`, `/abs`, `~`, `~/`, `~/a/../b`, NUL),
-  `.rejects-duplicate-id`, `.accepts-valid`.
-- `consent.digest-recorded-on-install|update|review`,
-  `consent.same-version-root-change-needs-consent`,
-  `consent.legacy-null-digest-covers-only-rootless`, `consent.null-digest-round-trips`.
-- `reconcile.grants-declared-after-consent`, `.missing-dir-ungranted-not-error`,
-  `.missing-replacement-revokes-old-grant`, `.non-directory-ungranted`,
-  `.symlinked-root-granted-at-realpath`, `.refuses-realpath-outside-home`,
-  `.refuses-userData-and-home-and-library`, `.refuses-symlinked-userData-realpath`, `.regrants-on-identity-change`,
-  `.revokes-undeclared`, `.revokes-all-when-consent-lapses`,
-  `.revokes-all-on-uninstall`, `.persists-and-restores-across-restart`,
-  `.restored-writable-grant-not-retained`.
-- `file-roots.persistence.recovers-after-failure` (fail once, then a bundled
-  `grantRoot` and a reconcile both persist), `.dirty-snapshot-retried-without-changes`.
-- `consent-ui.install|update|review-shows-folders` (through the real
-  preview/snapshot builders, not a hand-built modal prop).
+- manifest: requires the `files` cap, rejects the bundled tier, rejects
+  lexical escapes (`~/..`, `/abs`, `~`, `~/`, `~/a/../b`, NUL) and
+  `~/Library`/`~/Library/<x>` in any case, rejects a duplicate id, accepts a
+  valid list, defaults to `[]`.
+- consent store: `file_roots` round-trips; v5 migration is idempotent under
+  rewind-and-replay; legacy rows read `[]`.
+- consent coverage: install records the roots; a same-version root change
+  drops to `needs-consent`; `grantConsent` after a changed manifest records
+  the new roots.
+- reconcile: grants declared roots read-only at their realpath; missing dir /
+  non-directory ungranted without error; refuses a realpath outside home,
+  home itself, `Library` top, and userData overlap (including a symlinked
+  userData); revokes previously granted undeclared roots; `[]` revokes all.
+- platform: disable/enable and uninstall revoke; bundled `grantRoot` grants
+  are untouched by activation and disable.
+- `file-roots.persistence.recovers-after-failure`.
+- consent UI: install/update/review show the folders through the real
+  preview/snapshot builders.
+- `app-projection.account-cursor-not-projected`.
 
 ## 4. Connector: `kia.agent-sessions`
 
