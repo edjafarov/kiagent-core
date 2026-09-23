@@ -2,7 +2,6 @@
 /** @jest-environment node */
 import {
   parseManifest,
-  declaredFileRoots,
   isHomeRelativePath,
   consentedFileRoots,
   fileRootsCovered,
@@ -22,11 +21,11 @@ const ROOT = { id: 'claude', path: '~/.claude', purpose: 'Claude history' };
 describe('manifest.fileRoots', () => {
   it('accepts-valid', () => {
     const m = parseManifest({ ...BASE, fileRoots: [ROOT] });
-    expect(declaredFileRoots(m)).toEqual([ROOT]);
+    expect(m.fileRoots).toEqual([ROOT]);
   });
 
-  it('defaults to an empty list', () => {
-    expect(declaredFileRoots(parseManifest(BASE))).toEqual([]);
+  it('defaults to an empty list (always an array, spec §3.1)', () => {
+    expect(parseManifest(BASE).fileRoots).toEqual([]);
   });
 
   it('requires-files-cap', () => {
@@ -71,9 +70,8 @@ describe('manifest.fileRoots', () => {
   it('accepts a folder two levels under ~/Library', () => {
     const path = '~/Library/Application Support/Claude';
     expect(
-      declaredFileRoots(
-        parseManifest({ ...BASE, fileRoots: [{ ...ROOT, path }] }),
-      )[0].path,
+      parseManifest({ ...BASE, fileRoots: [{ ...ROOT, path }] }).fileRoots[0]
+        .path,
     ).toBe(path);
   });
 

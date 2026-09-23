@@ -198,7 +198,7 @@ const schema = z.strictObject({
     ui: z.array(uiContributionSchema).optional(),
   }),
   database: z.strictObject({ schema: z.string().min(1) }).optional(),
-  fileRoots: z.array(fileRootSchema).max(8).optional(),
+  fileRoots: z.array(fileRootSchema).max(8).default([]),
 });
 
 export function parseManifest(
@@ -233,8 +233,7 @@ export function parseManifest(
       `this extension requires ${privileged.join(', ')} — only extensions bundled with the app may use it`,
     );
   }
-  const fileRoots = m.fileRoots ?? [];
-  if (fileRoots.length > 0) {
+  if (m.fileRoots.length > 0) {
     if (!m.caps.includes('files'))
       throw new ManifestError(
         'PLUGIN_FILES_CAP_REQUIRED: the files capability is required for fileRoots',
@@ -244,7 +243,7 @@ export function parseManifest(
         'PLUGIN_FILE_ROOTS_TIER_DENIED: fileRoots is for marketplace extensions — bundled extensions use mainApi.grantRoot',
       );
     const seen = new Set<string>();
-    for (const r of fileRoots) {
+    for (const r of m.fileRoots) {
       if (seen.has(r.id))
         throw new ManifestError(
           `invalid manifest: fileRoots — duplicate fileRoots id '${r.id}'`,
@@ -329,14 +328,6 @@ export function oauthSourceBindings(
   return sourceContributions(manifest).flatMap((s) =>
     s.oauth ? [{ id: s.id, provider: s.oauth }] : [],
   );
-}
-
-/** This extension's declared local folders — THE way to consume
- *  `fileRoots`, defaulting to `[]`. */
-export function declaredFileRoots(
-  manifest: Pick<Manifest, 'fileRoots'>,
-): DeclaredFileRoot[] {
-  return manifest.fileRoots ?? [];
 }
 
 /** What a consent records of `fileRoots`: the id-sorted `{id, path}` list
