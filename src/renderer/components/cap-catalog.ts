@@ -32,10 +32,9 @@ export const CAP_CATALOG: Record<Cap, CapInfo> = {
     icon: 'external',
   },
   files: {
-    label: 'Access approved folders',
-    description:
-      'Not yet supported in this build — calls fail even if granted.',
-    risk: 'normal',
+    label: 'Read approved folders',
+    description: 'Read files in the folders it asks for.',
+    risk: 'elevated',
     icon: 'folder',
   },
   db: {

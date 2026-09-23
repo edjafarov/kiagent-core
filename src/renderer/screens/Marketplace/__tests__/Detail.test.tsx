@@ -548,4 +548,59 @@ describe('Detail', () => {
       await screen.findByRole('button', { name: 'Uninstall' }),
     ).toBeInTheDocument();
   });
+
+  const FOLDERS = [
+    { id: 'claude', path: '~/.claude', purpose: 'Claude Code sessions' },
+  ];
+
+  function expectFolders(dialog: HTMLElement): void {
+    expect(
+      within(dialog).getByText('Reads these folders on your computer'),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText('~/.claude')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText('Claude Code sessions'),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        'The extension can read everything inside these folders.',
+      ),
+    ).toBeInTheDocument();
+  }
+
+  test('consent-ui.install-shows-folders', async () => {
+    mockInvoke({
+      'marketplace:detail': () => pluginDetail(),
+      'extension:install-preview': () => ({
+        ok: true,
+        token: 'tok-f',
+        id: 'ext.gmail-tools',
+        name: 'Gmail Tools',
+        version: '1.1.0',
+        caps: ['files'],
+        oauthSources: [],
+        fileRoots: FOLDERS,
+        sizeBytes: 2048,
+        integrity: null,
+      }),
+    });
+    render(<Detail row={catalogRow()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }));
+    expectFolders(await screen.findByRole('dialog'));
+  });
+
+  test('consent-ui.review-shows-folders', async () => {
+    mockInvoke({ 'extension:grant-consent': () => ({ ok: true }) });
+    const snapshot = extSnapshot({
+      status: 'needs-consent',
+      caps: ['files'],
+      fileRoots: FOLDERS,
+    });
+    mockState.extensions = [snapshot];
+    render(<Detail row={installedOnlyRow({ installed: snapshot })} />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Review permissions' }),
+    );
+    expectFolders(await screen.findByRole('dialog'));
+  });
 });

@@ -104,6 +104,7 @@ export function Detail(props: { row: MarketplaceRow }): React.ReactElement {
         version: p.version,
         caps: p.caps,
         oauthSources: p.oauthSources,
+        fileRoots: p.fileRoots,
         sizeBytes: p.sizeBytes,
         integrity: p.integrity,
         iconDataUrl: p.iconDataUrl,
@@ -123,6 +124,7 @@ export function Detail(props: { row: MarketplaceRow }): React.ReactElement {
       version: installed.version,
       caps: installed.caps,
       oauthSources: installed.oauthSources,
+      fileRoots: installed.fileRoots,
       iconDataUrl: installed.iconDataUrl,
       ref: installed.ref,
     });
