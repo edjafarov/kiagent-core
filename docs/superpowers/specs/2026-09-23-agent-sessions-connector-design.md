@@ -1,6 +1,6 @@
 # Agent Sessions connector (Claude Code + Codex) — design
 
-Date: 2026-09-23 · Status: draft r6 (after fable + astra round 5)
+Date: 2026-09-23 · Status: reviewed — fable SATISFIED (r6), codex astra SATISFIED (r6.1); awaiting user approval
 
 ## 1. Goal
 
