@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.90.0](https://github.com/edjafarov/kiagent-core/compare/v0.89.1...v0.90.0) (2026-09-23)
+
+### Features
+
+* **marketplace:** human-readable extension names ([bafc6ab](https://github.com/edjafarov/kiagent-core/commit/bafc6ab8fd4c00c4b5dcc5c837f59e006bb843cc))
+* **sdk:** connector-sdk 1.3.0 — contracts from core 0.89.1 ([acabc34](https://github.com/edjafarov/kiagent-core/commit/acabc34484f8f69559f49e4f0f32a35cf16f00ff))
+
 ## [0.89.1](https://github.com/edjafarov/kiagent-core/compare/v0.89.0...v0.89.1) (2026-09-22)
 
 ### Bug Fixes
