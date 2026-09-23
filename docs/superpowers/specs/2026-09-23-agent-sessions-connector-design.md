@@ -547,7 +547,7 @@ same filename second), each ≤ 50 KB, under `test/fixtures/`.
 - `codex.current.agent-message-is-assistant`, `.filters-injected-context`,
   `.nested-subagent-links-parent`, `.title-from-session-index-last-wins`,
   `.rename-changes-fingerprint`, `codex.legacy.renders-turns`,
-  `codex.prompts.day-in-config-tz-seconds, `sync.system-tz-change-does-not-regroup``.
+  `codex.prompts.day-in-config-tz-seconds`, `sync.system-tz-change-does-not-regroup`.
 - `render.budget-head-tail-omission`, `.turn-cut-at-16k`,
   `.streams-multi-chunk-file` (> 16 MiB synthetic),
   `.oversized-record-skipped-without-buffering` (> 1 MiB line; assert peak
