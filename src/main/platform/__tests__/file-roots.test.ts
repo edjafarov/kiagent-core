@@ -1,8 +1,20 @@
 /** @jest-environment node */
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFileRootRegistry } from '../file-roots';
+import {
+  createFileRootRegistry,
+  createFileRootsPersistence,
+  restoreFileRootsFromFile,
+} from '../file-roots';
 
 describe('file root registry', () => {
   let rootPath: string;
@@ -121,5 +133,61 @@ describe('file root registry', () => {
     await expect(restored.resolve('documents', 'stable-root')).rejects.toThrow(
       /unknown|revoked/i,
     );
+  });
+});
+
+describe('file root persistence', () => {
+  let rootPath: string;
+  let dir: string;
+  beforeEach(async () => {
+    rootPath = await mkdtemp(join(tmpdir(), 'kiagent-file-root-'));
+    dir = await mkdtemp(join(tmpdir(), 'kiagent-persist-'));
+  });
+  afterEach(async () => {
+    await chmod(dir, 0o700);
+    await rm(dir, { recursive: true, force: true });
+    await rm(rootPath, { recursive: true, force: true });
+  });
+
+  it('recovers-after-failure: one failed write does not poison later saves', async () => {
+    const target = join(dir, 'file-roots.json');
+    const registry = createFileRootRegistry();
+    const persist = createFileRootsPersistence(target, registry);
+    await chmod(dir, 0o500); // writing into a read-only dir fails
+    await registry.grant('documents', rootPath, {
+      id: 'a',
+      name: 'A',
+      writable: true,
+    });
+    await expect(persist()).rejects.toThrow();
+    await chmod(dir, 0o700);
+    await registry.grant('kia.x', rootPath, {
+      id: 'b',
+      name: 'B',
+      writable: false,
+    });
+    await persist();
+    const saved = JSON.parse(await readFile(target, 'utf8'));
+    expect(saved.map((r: { id: string }) => r.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('dirty-snapshot-retried-without-changes', async () => {
+    const target = join(dir, 'file-roots.json');
+    const registry = createFileRootRegistry();
+    const persist = createFileRootsPersistence(target, registry);
+    await registry.grant('kia.x', rootPath, {
+      id: 'b',
+      name: 'B',
+      writable: false,
+    });
+    await chmod(dir, 0o500);
+    await expect(persist()).rejects.toThrow();
+    await chmod(dir, 0o700);
+    await persist(); // no registry change in between
+    const fresh = createFileRootRegistry();
+    await restoreFileRootsFromFile(target, fresh);
+    expect(await fresh.roots('kia.x')).toEqual([
+      { id: 'b', name: 'B', writable: false },
+    ]);
   });
 });
