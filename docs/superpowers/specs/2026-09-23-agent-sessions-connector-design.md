@@ -401,9 +401,8 @@ Turn model and rendering (both agents):
   summaries, injected context (§4.5/§4.6).
 - **Streaming with a record bound**: `streamLines` reads 4 MiB chunks through
   the whole file and yields lines of at most **1 MiB**. A longer line is not
-  buffered: the reader discards bytes until the next newline, counts it, and
-  the renderer emits `… (1 oversized record skipped)` at that position (these
-  are almost always tool outputs — e.g. an 8.9 MB Codex output record seen on
+  buffered: the reader discards bytes until the next newline and the parser
+  skips it silently (§4.8; these are almost always tool outputs — e.g. an 8.9 MB Codex output record seen on
   this machine). `JSON.parse` only ever sees ≤ 1 MiB. Unparsable lines
   (including a partial last line of a file being written) are skipped.
 - **Budget**: rendered markdown ≤ **512 KiB** per document: whole turns from
@@ -513,13 +512,14 @@ same per-day documents as Claude.
 
 ### 4.7 Redaction (`redact.ts`)
 
-Applied to **every emitted string**: each source string (turn text, tool
-summary, title candidate, prompt-history line, task subject/description,
-plan/memory body, metadata string values) before any truncation, and once more
-over the final `title`, `markdown` and metadata strings (idempotent). Rules:
+Applied by `finalize` to every document the source shell yields (`title`,
+`markdown`, metadata strings) — one seam, so no document can bypass it — and
+additionally before each cut that could split a secret (turn cut, tool-summary
+and title slices; idempotent). Keys are matched anchored at the start of an
+identifier with bounded affixes, so a pass stays linear over 512 KiB. Rules:
 
-- PEM blocks `-----BEGIN [A-Z ]*PRIVATE KEY-----` through the matching END, or
-  to the end of the string when unterminated.
+- PEM blocks `-----BEGIN [A-Z ]*PRIVATE KEY-----` through the matching END, or,
+  when unterminated, to the next blank line (or the end of the string).
 - Token shapes: `sk-ant-…`, `sk-[A-Za-z0-9_-]{20,}`, `ghp_|gho_|ghs_|github_pat_…`,
   `xox[abprs]-…`, `AKIA[0-9A-Z]{16}`, `AIza[0-9A-Za-z_-]{35}`, JWT
   `eyJ[\w-]+\.[\w-]+\.[\w-]+`, `Bearer <≥20 chars>`.
@@ -579,6 +579,37 @@ same filename second), each ≤ 50 KB, under `test/fixtures/`.
   (§4.5) recorded in the PR.
 
 Every gate lists its mutant (e.g. stop dropping tool results → red).
+
+## 4.8 Implementation rulings (Part B, from staged reviews)
+
+These supersede the text above where they differ.
+
+- **One `finalize`, in the source shell.** `makeSource.pull` maps every item
+  through `finalize` (redaction + hard cap `DOC_BUDGET + 4 KiB`); renderers are
+  pure layout.
+- **One agent description.** `AgentCtx` (`CLAUDE`, `CODEX`: root, agent id,
+  label, document types, resume command) drives `makeSource`, memory/history
+  units and one shared `sessionDocument()`; both parsers return `SessionInfo`.
+- **The transcript builder owns the content pipeline**: `user(parts)`
+  classifies each part through the wrapper allowlist, `assistant(parts)`,
+  `tool(name, input)`. Array-valued tool summaries (legacy Codex `command`)
+  are joined.
+- **Oversized records are skipped silently** (no inline marker: it split turns
+  and announced content dropped by design).
+- **Batches hold at most 15 documents** (docs ≤ ~516 KiB, so ≤ ~8 MiB); no
+  separate byte cap.
+- **Codex `agent_message` is an incoming turn** — the parent's task in a
+  subagent thread, a subagent's report in the main thread — rendered as a User
+  turn ending `_— from <author>_`. The thread's own replies are `message`
+  role=assistant.
+- **Codex parent cache**: a thread's parent enters `cursor.parents` only once
+  its `session_meta` head parsed; a file caught mid-write is read again.
+- **Discovery isolates folders**: a listing error on a sub-folder skips only
+  that folder this tick; only the root listing fails the pull.
+- **Benchmark is a script** (`scripts/bench.mjs`), not a test. Real corpus
+  2026-09-23: Claude backfill 18 s / 10,879 docs, unchanged tick 0.2 s; Codex
+  4 s / 1,053 docs, unchanged tick 14 ms. The host-RPC tick is measured in the
+  release smoke.
 
 ## 5. Rollout
 
