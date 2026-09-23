@@ -331,6 +331,17 @@ describe('createExtensionPlatform', () => {
       ]);
     });
 
+    it('disable revokes the declared roots; enable re-grants them', async () => {
+      await filesPlatform.start();
+      await install();
+      await filesPlatform.setEnabled('test.files', false);
+      expect(await fileRoots.roots('test.files')).toEqual([]);
+      await filesPlatform.setEnabled('test.files', true);
+      expect((await fileRoots.roots('test.files')).map((r) => r.id)).toEqual([
+        'data',
+      ]);
+    });
+
     it('reconcile.revokes-all-on-uninstall', async () => {
       await filesPlatform.start();
       await install();
@@ -373,6 +384,10 @@ describe('createExtensionPlatform', () => {
         filesPlatform.snapshot().find((e) => e.id === 'test.bundled-files')
           ?.status,
       ).toBe('activated');
+      expect(await fileRoots.roots('test.bundled-files')).toEqual([
+        { id: 'mine', name: 'Mine', writable: true },
+      ]);
+      await filesPlatform.setEnabled('test.bundled-files', false);
       expect(await fileRoots.roots('test.bundled-files')).toEqual([
         { id: 'mine', name: 'Mine', writable: true },
       ]);

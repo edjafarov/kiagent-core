@@ -1013,6 +1013,9 @@ export function createExtensionPlatform(
     e.activation = undefined;
     await e.host?.stop();
     e.host = null;
+    // Declared roots live exactly as long as an activation (disable,
+    // uninstall, replace, stop); activate() re-derives them.
+    await syncDeclaredRoots(e, []);
     // Job-stopping is tied to deactivation (spec §3.8), not to the host
     // process merely exiting — see the note on registerContributions above.
     await unregisterCadence(e);
@@ -1466,7 +1469,6 @@ export function createExtensionPlatform(
               reported instanceof Error ? reported.message : String(reported),
           };
         }
-        await syncDeclaredRoots(e, []);
         entries.delete(id);
         changed();
         return { ok: true };
