@@ -181,8 +181,10 @@ Every commit appends an `account` change whose `Account` includes the parsed
 cursor (`store.ts` `toAccount`); `app-projection.ts` copies it into `AppState`,
 which `main.ts` broadcasts to every window (throttled 100 ms). No renderer code
 reads `.cursor`, and the engine reads cursors via `store.account()`, not the
-feed. Change: `app-projection.ts` `init`/`apply` drop `cursor` from projected
-accounts (type: `Omit<Account, 'cursor'>` in `AppState`). Benefits every
+feed. Change: `app-projection.ts` `init`/`apply` set `cursor: null` on
+projected accounts. `Account.cursor` is typed `unknown`, so no type or
+renderer-prop change is needed; storage and engine APIs keep the real cursor.
+Validation includes the full core + renderer typecheck. Benefits every
 source; required here because this connector's cursor is hundreds of KB.
 Test: `app-projection.account-cursor-not-projected`.
 
@@ -241,7 +243,7 @@ src/codex/*.ts      discovery + record → Turn parsing
 Both: `auth: 'none'`, `cadence: { every: '15m' }`, `documentTypes` per §4.4.
 `connect()` calls `files.roots()`; if its root is absent it throws
 `"~/.claude was not found or not permitted (it must resolve inside your home folder) — run Claude Code once, restart KIA, then add this source"`
-(resp. `~/.codex`/Codex). Otherwise returns `{ identifier: '~/.claude', config: {} }`.
+(resp. `~/.codex`/Codex). Otherwise returns `{ identifier: '~/.claude', config: { tz: <system IANA zone at connect time> } }`.
 
 ### 4.3 Change detection — per-document units, fingerprints, parent order
 
@@ -250,7 +252,7 @@ exactly **one** document (except `history`, §4.5). Each unit has a stable `key`
 an optional `parentKey`, and a **fingerprint**:
 
 ```
-fp = hash( RENDER_VERSION, tz, for each file: rel, size, mtimeMs, dev, ino,
+fp = hash( RENDER_VERSION, for each file: rel, size, mtimeMs, dev, ino,
            + named render dependencies (§4.5/§4.6),
            + linked )            // child units only
 linked = parentKey has a non-failure fps entry, OR the parent unit is in the
@@ -266,8 +268,11 @@ removed the session file; the session document is kept, §1). The `linked` bit
 only decides *when a child must be re-emitted* so the store resolves the ref.
 
 `RENDER_VERSION` is a connector constant bumped whenever parsing, filtering,
-redaction or markdown layout changes, so a fix re-renders history once. `tz`
-is the local IANA timezone (times and prompt-day grouping depend on it). A
+redaction or markdown layout changes, so a fix re-renders history once.
+Times and prompt-day grouping use a **fixed** timezone: the IANA zone
+captured once in `account.config.tz` by `connect()`, never the live system
+zone — so travelling or changing the OS zone never regroups days into
+duplicate `prompts:<date>` documents. A
 content change that preserves path, size, mtime and inode is undetectable —
 accepted (neither CLI rewrites files that way).
 
@@ -343,7 +348,7 @@ Everything goes through `toDocument` → `upsertDocument` → the shared
 | `agent.plan` | Claude plan file | `plan:<file name>` | first `# ` heading → file name |
 | `agent.tasks` | Claude task list | `tasks:<listId>` | `Tasks — <listId8>` |
 | `agent.memory` | memory/instructions file | `memory:<rel path>` | `<project label> — <file name>` |
-| `agent.prompts` | calendar day (local tz) of prompt history | `prompts:<YYYY-MM-DD>` | `Prompts — <YYYY-MM-DD>` |
+| `agent.prompts` | calendar day (in `config.tz`) of prompt history | `prompts:<YYYY-MM-DD>` | `Prompts — <YYYY-MM-DD>` |
 
 Subagents are ordinary `agent.session` documents with `metadata.role =
 'subagent'` and `parent: { externalId: 'session:<parentId>', type:
@@ -463,7 +468,7 @@ Tasks: task JSON `{id, subject, description, status, blocks, blockedBy}` →
 checklist `- [x] subject — description` ordered by numeric `id`.
 
 Prompts (`history.jsonl`, rows `{display, pastedContents, timestamp (epoch
-**ms**), project, sessionId}`): streamed whole, grouped by local calendar day
+**ms**), project, sessionId}`): streamed whole, grouped by calendar day in `config.tz`
 into one `agent.prompts` document per day (the one multi-document unit; its
 docs have no parents), lines `- 10:02 · <project label> · <display> ·
 session <id8>`. `pastedContents` is dropped. All days are re-rendered when the
@@ -537,12 +542,12 @@ same filename second), each ≤ 50 KB, under `test/fixtures/`.
 - `wrappers.<each allowlist tag>-dropped`, `.unknown-tag-kept`,
   `.multi-block-user-xml-kept`, `.case-insensitive-INSTRUCTIONS`.
 - `claude.orphan-subagent-renders`, `.lock-only-tasks-dir-no-unit`,
-  `claude.tasks.checklist-order`, `claude.prompts.local-day-ms`,
+  `claude.tasks.checklist-order`, `claude.prompts.day-in-config-tz-ms`,
   `.drops-pasted`, `claude.memory.txt-and-md`.
 - `codex.current.agent-message-is-assistant`, `.filters-injected-context`,
   `.nested-subagent-links-parent`, `.title-from-session-index-last-wins`,
   `.rename-changes-fingerprint`, `codex.legacy.renders-turns`,
-  `codex.prompts.local-day-seconds`.
+  `codex.prompts.day-in-config-tz-seconds, `sync.system-tz-change-does-not-regroup``.
 - `render.budget-head-tail-omission`, `.turn-cut-at-16k`,
   `.streams-multi-chunk-file` (> 16 MiB synthetic),
   `.oversized-record-skipped-without-buffering` (> 1 MiB line; assert peak
