@@ -11,6 +11,7 @@ import { z } from 'zod';
 
 import type {
   Cap,
+  DeclaredFileRoot,
   ExtensionId,
   Manifest,
   OAuthProviderId,
@@ -115,6 +116,31 @@ const uiContributionSchema = z.strictObject({
     .optional(),
 });
 
+const FILE_ROOT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+/** `~/<seg>/<seg>…` with no empty, `.` or `..` segment and no NUL — the
+ *  lexical half of the containment rule; the reconciler re-checks the
+ *  realpath against the home directory at grant time. */
+export function isHomeRelativePath(p: string): boolean {
+  if (!p.startsWith('~/') || p.includes('\0')) return false;
+  const rest = p.slice(2);
+  if (rest === '') return false;
+  return rest.split('/').every((s) => s !== '' && s !== '.' && s !== '..');
+}
+
+const fileRootSchema = z.strictObject({
+  id: z
+    .string()
+    .regex(FILE_ROOT_ID_RE, 'fileRoots id must match ^[a-z][a-z0-9-]{0,31}$'),
+  path: z
+    .string()
+    .refine(
+      isHomeRelativePath,
+      "fileRoots path must be '~/<relative path>' without '.', '..' or empty segments",
+    ),
+  purpose: z.string().min(1).max(200),
+});
+
 // Strict throughout (platform 2.0.0): unknown keys are rejected, never
 // silently stripped — a manifest field that does nothing is a lie to the
 // author and to the consent surface.
@@ -156,6 +182,7 @@ const schema = z.strictObject({
     ui: z.array(uiContributionSchema).optional(),
   }),
   database: z.strictObject({ schema: z.string().min(1) }).optional(),
+  fileRoots: z.array(fileRootSchema).max(8).optional(),
 });
 
 export function parseManifest(
@@ -189,6 +216,25 @@ export function parseManifest(
     throw new ManifestError(
       `this extension requires ${privileged.join(', ')} — only extensions bundled with the app may use it`,
     );
+  }
+  const fileRoots = m.fileRoots ?? [];
+  if (fileRoots.length > 0) {
+    if (!m.caps.includes('files'))
+      throw new ManifestError(
+        'PLUGIN_FILES_CAP_REQUIRED: the files capability is required for fileRoots',
+      );
+    if (tier === 'bundled')
+      throw new ManifestError(
+        'PLUGIN_FILE_ROOTS_TIER_DENIED: fileRoots is for marketplace extensions — bundled extensions use mainApi.grantRoot',
+      );
+    const seen = new Set<string>();
+    for (const r of fileRoots) {
+      if (seen.has(r.id))
+        throw new ManifestError(
+          `invalid manifest: fileRoots — duplicate fileRoots id '${r.id}'`,
+        );
+      seen.add(r.id);
+    }
   }
   const uiContribs = m.contributes.ui ?? [];
   if (uiContribs.length > 0) {
@@ -267,6 +313,14 @@ export function oauthSourceBindings(
   return sourceContributions(manifest).flatMap((s) =>
     s.oauth ? [{ id: s.id, provider: s.oauth }] : [],
   );
+}
+
+/** This extension's declared local folders — THE way to consume
+ *  `fileRoots`, defaulting to `[]`. */
+export function declaredFileRoots(
+  manifest: Pick<Manifest, 'fileRoots'>,
+): DeclaredFileRoot[] {
+  return manifest.fileRoots ?? [];
 }
 
 /** Icons ride AppState pushes as base64 data URIs, so the package file is

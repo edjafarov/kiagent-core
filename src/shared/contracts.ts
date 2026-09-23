@@ -1056,6 +1056,18 @@ export interface Manifest {
   caps: Cap[];
   /** Declarative database descriptor path, required when caps includes db. */
   database?: { schema: string };
+  /** Platform 2.3.0: read-only local folders this extension asks to read.
+   *  External tier only; requires the `files` cap. Bound into consent via
+   *  `ConsentRecord.fileRootsDigest`. */
+  fileRoots?: DeclaredFileRoot[];
+}
+
+/** A local folder a marketplace extension declares it will read. `path` is
+ *  home-relative (`~/…`) and shown verbatim on the consent modal. */
+export interface DeclaredFileRoot {
+  id: string;
+  path: string;
+  purpose: string;
 }
 
 /** Declarative database shape and immutable migration history published by a
