@@ -112,6 +112,39 @@ function toReleaseInfo(r: GhRelease): ReleaseInfo {
   };
 }
 
+/** Repo-name suffixes that only say "this is a KIAgent plugin" — noise in
+ *  a Marketplace title (e.g. `whatsapp-kia-connector`). */
+const REPO_NOISE_SUFFIX = /-kia-(?:connector|plugin|extension)$/i;
+
+/**
+ * Fallback title when a repo's manifest can't supply one:
+ * `google-docs-kia-connector` → `Google Docs`. Never returns '' — a repo
+ * name that is nothing but noise is kept as-is.
+ */
+export function humanizeRepoName(repo: string): string {
+  const words = repo
+    .replace(REPO_NOISE_SUFFIX, '')
+    .split(/[-_\s]+/)
+    .filter(Boolean);
+  if (words.length === 0) return repo;
+  return words.map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+}
+
+const MAX_DISPLAY_NAME = 64;
+
+/** A manifest `name` usable as a title: a non-empty single-line string of
+ *  bounded length (the manifest is untrusted repo content). */
+function manifestName(manifest: unknown): string | undefined {
+  const name = (manifest as { name?: unknown } | null)?.name;
+  if (typeof name !== 'string') return undefined;
+  const trimmed = name.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_DISPLAY_NAME)
+    return undefined;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(trimmed)) return undefined;
+  return trimmed;
+}
+
 export function createGitHubSource(deps: {
   cache: Cache;
   org?: string;
@@ -138,19 +171,46 @@ export function createGitHubSource(deps: {
       .catch(() => undefined);
   }
 
+  /** Pre-install title: the `name` the extension declares in the
+   *  root-level manifest.json at HEAD (the same name an installed copy
+   *  shows), else the repo name made readable. Fetched through the cache
+   *  like the icon; raw.githubusercontent.com is not API-rate-limited. */
+  async function resolveDisplayName(
+    owner: string,
+    repo: string,
+  ): Promise<string> {
+    let name: string | undefined;
+    try {
+      name = manifestName(
+        await deps.cache.getJSON<unknown>(
+          `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/manifest.json`,
+        ),
+      );
+    } catch {
+      // No manifest at HEAD, not JSON, or offline — the repo name will do.
+    }
+    return name ?? humanizeRepoName(repo);
+  }
+
   async function listOrgPlugins(): Promise<MarketplaceListItem[]> {
     const data = await deps.cache.getJSON<{ items: GhRepo[] }>(
       `${API}/search/repositories?q=org:${org}+topic:${topic}&per_page=100`,
     );
     return Promise.all(
-      (data.items ?? []).map(async (r) => ({
-        owner: r.owner.login,
-        repo: r.name,
-        fullName: r.full_name,
-        displayName: r.name,
-        description: r.description ?? '',
-        iconDataUrl: await fetchIconDataUrl(r.owner.login, r.name),
-      })),
+      (data.items ?? []).map(async (r) => {
+        const [displayName, iconDataUrl] = await Promise.all([
+          resolveDisplayName(r.owner.login, r.name),
+          fetchIconDataUrl(r.owner.login, r.name),
+        ]);
+        return {
+          owner: r.owner.login,
+          repo: r.name,
+          fullName: r.full_name,
+          displayName,
+          description: r.description ?? '',
+          iconDataUrl,
+        };
+      }),
     );
   }
 
@@ -165,8 +225,8 @@ export function createGitHubSource(deps: {
   }
 
   async function getDetail(owner: string, repo: string): Promise<PluginDetail> {
-    const [repoMeta, releases, readmeMarkdown, iconDataUrl] = await Promise.all(
-      [
+    const [repoMeta, releases, readmeMarkdown, iconDataUrl, displayName] =
+      await Promise.all([
         deps.cache.getJSON<GhRepo>(`${API}/repos/${owner}/${repo}`),
         listReleases(owner, repo),
         deps.cache
@@ -175,14 +235,14 @@ export function createGitHubSource(deps: {
           )
           .catch(() => ''),
         fetchIconDataUrl(owner, repo),
-      ],
-    );
+        resolveDisplayName(owner, repo),
+      ]);
     return {
       listing: {
         owner,
         repo,
         fullName: repoMeta.full_name,
-        displayName: repoMeta.name,
+        displayName,
         description: repoMeta.description ?? '',
         iconDataUrl,
       },

@@ -41,6 +41,55 @@ function update(overrides: Partial<UpdateInfo> = {}): UpdateInfo {
   };
 }
 
+describe('buildRows titles', () => {
+  it('uses the catalog display name for a not-installed extension', () => {
+    const [row] = buildRows(
+      [item({ displayName: 'Catalog Name' })],
+      [],
+      [],
+      'all',
+      '',
+    );
+    expect(row.title).toBe('Catalog Name');
+  });
+
+  it("prefers the installed manifest's name so the title survives install", () => {
+    const [row] = buildRows(
+      [item({ displayName: 'Catalog Name' })],
+      [ext({ name: 'Installed Name' })],
+      [],
+      'all',
+      '',
+    );
+    expect(row.title).toBe('Installed Name');
+  });
+
+  it('keeps the catalog name when the installed name is empty', () => {
+    const [row] = buildRows(
+      [item({ displayName: 'Catalog Name' })],
+      [ext({ name: '' })],
+      [],
+      'all',
+      '',
+    );
+    expect(row.title).toBe('Catalog Name');
+  });
+
+  it('searches the human title', () => {
+    const rows = buildRows(
+      [
+        item({ repo: 'google-docs-kia-connector', displayName: 'Google Docs' }),
+        item({ repo: 'slack-kia-connector', displayName: 'Slack' }),
+      ],
+      [],
+      [],
+      'all',
+      'google docs',
+    );
+    expect(rows.map((r) => r.title)).toEqual(['Google Docs']);
+  });
+});
+
 describe('matchInstalled', () => {
   it('matches a bare github ref', () => {
     const e = ext({ ref: 'github:kia-plugins/gmail-tools' });

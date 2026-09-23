@@ -69,7 +69,9 @@ export function buildRows(
     if (installed) matchedIds.add(installed.id);
     return {
       key: `gh:${item.owner}/${item.repo}`,
-      title: item.displayName,
+      // The installed manifest's name is what every other surface shows for
+      // this extension, so a row keeps its title across install.
+      title: installed?.name || item.displayName,
       subtitle: item.description,
       iconDataUrl: item.iconDataUrl ?? installed?.iconDataUrl,
       catalog: item,

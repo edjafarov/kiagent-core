@@ -2,6 +2,7 @@
 
 import {
   createGitHubSource,
+  humanizeRepoName,
   MARKETPLACE_ORG,
   PLUGIN_TOPIC,
 } from '../github-source';
@@ -55,14 +56,14 @@ describe('github-source', () => {
           owner: 'alice',
           repo: 'plugin-one',
           fullName: 'alice/plugin-one',
-          displayName: 'plugin-one',
+          displayName: 'Plugin One',
           description: 'A plugin',
         },
         {
           owner: 'bob',
           repo: 'plugin-two',
           fullName: 'bob/plugin-two',
-          displayName: 'plugin-two',
+          displayName: 'Plugin Two',
           description: '',
         },
       ]);
@@ -184,7 +185,7 @@ describe('github-source', () => {
         owner: 'owner',
         repo: 'plugin-x',
         fullName: 'owner/plugin-x',
-        displayName: 'plugin-x',
+        displayName: 'Plugin X',
         description: 'A great plugin',
         iconDataUrl: 'data:image/png;base64,BBBB',
       });
@@ -317,6 +318,126 @@ describe('github-source', () => {
       const result = await source.getDetail('owner', 'plugin-noreadme');
 
       expect(result.readmeMarkdown).toBe('');
+    });
+  });
+
+  describe('display names', () => {
+    const manifestUrl = (repo: string) =>
+      `https://raw.githubusercontent.com/kia-plugins/${repo}/HEAD/manifest.json`;
+    const repoItem = (name: string) => ({
+      owner: { login: 'kia-plugins' },
+      name,
+      full_name: `kia-plugins/${name}`,
+      description: null,
+    });
+
+    /** getJSON routed by URL: the org search, then per-repo manifests. */
+    function routeJSON(
+      repos: string[],
+      manifests: Record<string, unknown | Error>,
+    ): void {
+      mockCache.getJSON.mockImplementation(async (url: string) => {
+        if (url.startsWith('https://api.github.com/search/')) {
+          return { items: repos.map(repoItem) };
+        }
+        const repo = repos.find((r) => url === manifestUrl(r));
+        if (repo !== undefined && repo in manifests) {
+          const m = manifests[repo];
+          if (m instanceof Error) throw m;
+          return m;
+        }
+        throw new Error(`GitHub 404 ${url}`);
+      });
+    }
+
+    it('titles each listing with the name its HEAD manifest.json declares', async () => {
+      routeJSON(['whatsapp-kia-connector', 'ms365-kia-connector'], {
+        'whatsapp-kia-connector': { id: 'kia.whatsapp', name: 'WhatsApp' },
+        'ms365-kia-connector': { id: 'kia.ms365', name: '  Microsoft 365 ' },
+      });
+      const source = createGitHubSource({ cache: mockCache as any });
+      const result = await source.listOrgPlugins();
+
+      expect(mockCache.getJSON).toHaveBeenCalledWith(
+        manifestUrl('whatsapp-kia-connector'),
+      );
+      expect(result.map((r) => [r.repo, r.displayName])).toEqual([
+        ['whatsapp-kia-connector', 'WhatsApp'],
+        ['ms365-kia-connector', 'Microsoft 365'],
+      ]);
+    });
+
+    it('falls back to the readable repo name for a missing or unusable manifest name', async () => {
+      const repos = [
+        'google-docs-kia-connector', // 404
+        'no-name-kia-connector', // manifest without name
+        'numeric-kia-connector', // name not a string
+        'blank-kia-connector', // whitespace only
+        'long-kia-connector', // over the length cap
+        'ctrl-kia-connector', // control character
+        'garbage-kia-connector', // non-object body
+        'offline-kia-connector', // fetch rejects
+      ];
+      routeJSON(repos, {
+        'no-name-kia-connector': { id: 'x.y' },
+        'numeric-kia-connector': { name: 42 },
+        'blank-kia-connector': { name: '   ' },
+        'long-kia-connector': { name: 'x'.repeat(65) },
+        'ctrl-kia-connector': { name: 'Bad\nName' },
+        'garbage-kia-connector': 'not json object',
+        'offline-kia-connector': new Error('ENOTFOUND'),
+      });
+      const source = createGitHubSource({ cache: mockCache as any });
+      const result = await source.listOrgPlugins();
+
+      expect(result.map((r) => r.displayName)).toEqual([
+        'Google Docs',
+        'No Name',
+        'Numeric',
+        'Blank',
+        'Long',
+        'Ctrl',
+        'Garbage',
+        'Offline',
+      ]);
+    });
+
+    it('titles the detail listing from the manifest too', async () => {
+      mockCache.getJSON.mockImplementation(async (url: string) => {
+        if (url === manifestUrl('hubspot-kia-connector')) {
+          return { name: 'HubSpot' };
+        }
+        if (url.endsWith('/releases?per_page=30')) return [];
+        return {
+          name: 'hubspot-kia-connector',
+          owner: { login: 'kia-plugins' },
+          full_name: 'kia-plugins/hubspot-kia-connector',
+          description: 'CRM',
+        };
+      });
+      mockCache.getText.mockResolvedValueOnce('');
+      const source = createGitHubSource({ cache: mockCache as any });
+      const detail = await source.getDetail(
+        'kia-plugins',
+        'hubspot-kia-connector',
+      );
+
+      expect(detail.listing.displayName).toBe('HubSpot');
+    });
+  });
+
+  describe('humanizeRepoName', () => {
+    it.each([
+      ['whatsapp-kia-connector', 'Whatsapp'],
+      ['google-docs-kia-connector', 'Google Docs'],
+      ['ms365-kia-connector', 'Ms365'],
+      ['cool-thing-kia-plugin', 'Cool Thing'],
+      ['my_ext-kia-extension', 'My Ext'],
+      ['plain', 'Plain'],
+      ['already-Cased', 'Already Cased'],
+      ['-kia-connector', '-kia-connector'],
+    ])('%s → %s', (repo, expected) => {
+      expect(humanizeRepoName(repo)).toBe(expected);
     });
   });
 
