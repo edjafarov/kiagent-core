@@ -173,7 +173,7 @@ Also: `consentCovers === false` at activation → revoke all of `e`'s roots.
 page, `MAX_CURSORS = 256` (connector pages lists sequentially). No new SDK
 methods.
 
-### 3.7 Do not project source cursors into `AppState`
+### 3.6 Do not project source cursors into `AppState`
 
 Every commit appends an `account` change whose `Account` includes the parsed
 cursor (`store.ts` `toAccount`); `app-projection.ts` copies it into `AppState`,
@@ -184,7 +184,7 @@ accounts (type: `Omit<Account, 'cursor'>` in `AppState`). Benefits every
 source; required here because this connector's cursor is hundreds of KB.
 Test: `app-projection.account-cursor-not-projected`.
 
-### 3.6 Core tests (named; each must be shown red against a mutant)
+### 3.7 Core tests (named; each must be shown red against a mutant)
 
 - `manifest.fileRoots.requires-files-cap`, `.rejects-bundled-tier`,
   `.rejects-lexical-escape` (`~/..`, `/abs`, `~`, `~/`, `~/a/../b`, NUL),
@@ -298,7 +298,7 @@ comparison is equality, not order.
 Cursor size: ~12k units here. `fps` keys are stored as 11-char base64url
 hashes of the unit key and values as 11-char fingerprint hashes (~30 B per
 entry ≈ 0.35 MB). The cursor is written to `accounts.cursor` once per batch
-and is **not** broadcast to windows: core deliverable §3.7 strips `cursor`
+and is **not** broadcast to windows: core deliverable §3.6 strips `cursor`
 from the projected `Account` in `AppState`.
 
 `upsertDocument` dedups by content hash, so re-emitted children and re-rendered
