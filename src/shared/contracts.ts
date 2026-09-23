@@ -285,6 +285,8 @@ export interface ConsentRecord {
   caps: readonly Cap[];
   manifestVersion: string;
   grantedAt: string;
+  /** sha256 of the consented manifest's fileRoots ({id,path}); null = none. */
+  fileRootsDigest: string | null;
 }
 
 /** One row of Settings → Local processing's "Recently processed" list. */

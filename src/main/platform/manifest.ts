@@ -3,6 +3,7 @@
  * before consent. Never loads extension code. Rejections are user-facing
  * strings (they surface in the install UI).
  */
+import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -321,6 +322,19 @@ export function declaredFileRoots(
   manifest: Pick<Manifest, 'fileRoots'>,
 ): DeclaredFileRoot[] {
   return manifest.fileRoots ?? [];
+}
+
+/** The consent binding for `fileRoots`: sha256 hex of the id-sorted
+ *  `[{id, path}]` JSON (purpose is display copy, excluded). `null` when the
+ *  manifest declares none — equal to a legacy consent row's NULL. */
+export function fileRootsDigest(
+  roots: readonly DeclaredFileRoot[] | undefined,
+): string | null {
+  if (!roots || roots.length === 0) return null;
+  const canon = [...roots]
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((r) => ({ id: r.id, path: r.path }));
+  return createHash('sha256').update(JSON.stringify(canon)).digest('hex');
 }
 
 /** Icons ride AppState pushes as base64 data URIs, so the package file is

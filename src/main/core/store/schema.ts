@@ -1071,6 +1071,18 @@ const MIGRATIONS: Migration[] = [
       transition_at INTEGER NOT NULL
     );
   `,
+
+  // v5 — consent binds manifest-declared file roots (platform 2.3.0).
+  // Legacy rows read NULL, which covers only manifests without fileRoots.
+  // Guarded because SQLite has no ADD COLUMN IF NOT EXISTS and the store's
+  // migration tests replay the ladder over a rewound version marker.
+  (db) => {
+    const cols = db.prepare(`PRAGMA table_info(consents)`).all() as {
+      name: string;
+    }[];
+    if (!cols.some((c) => c.name === 'file_roots_digest'))
+      db.exec(`ALTER TABLE consents ADD COLUMN file_roots_digest TEXT`);
+  },
 ];
 
 /**

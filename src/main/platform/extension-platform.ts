@@ -41,6 +41,7 @@ import {
 } from '@main/marketplace/installer';
 
 import {
+  fileRootsDigest,
   loadIconDataUrl,
   oauthSourceBindings,
   senderContributions,
@@ -592,7 +593,8 @@ export function createExtensionPlatform(
     return (
       rec !== null &&
       rec.manifestVersion === manifest.version &&
-      manifest.caps.every((c) => rec.caps.includes(c))
+      manifest.caps.every((c) => rec.caps.includes(c)) &&
+      (rec.fileRootsDigest ?? null) === fileRootsDigest(manifest.fileRoots)
     );
   }
 
@@ -1302,6 +1304,7 @@ export function createExtensionPlatform(
             caps: manifest.caps as Cap[],
             manifestVersion: manifest.version,
             grantedAt: new Date().toISOString(),
+            fileRootsDigest: fileRootsDigest(manifest.fileRoots),
           };
           await deps.store.consents.record(consent);
           const state = readEnabledState(deps.extDir);
@@ -1469,6 +1472,7 @@ export function createExtensionPlatform(
           caps: e.manifest.caps as Cap[],
           manifestVersion: e.manifest.version,
           grantedAt: new Date().toISOString(),
+          fileRootsDigest: fileRootsDigest(e.manifest.fileRoots),
         };
         await deps.store.consents.record(consent);
         if (e.enabled) await activate(e);

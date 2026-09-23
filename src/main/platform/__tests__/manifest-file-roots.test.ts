@@ -1,9 +1,11 @@
 // src/main/platform/__tests__/manifest-file-roots.test.ts
 /** @jest-environment node */
+import { createHash } from 'crypto';
 import {
   parseManifest,
   declaredFileRoots,
   isHomeRelativePath,
+  fileRootsDigest,
 } from '../manifest';
 
 const BASE = {
@@ -85,5 +87,26 @@ describe('manifest.fileRoots', () => {
       path: `~/r${i}`,
     }));
     expect(() => parseManifest({ ...BASE, fileRoots: nine })).toThrow();
+  });
+});
+
+describe('fileRootsDigest', () => {
+  it('is null for absent or empty roots', () => {
+    expect(fileRootsDigest(undefined)).toBeNull();
+    expect(fileRootsDigest([])).toBeNull();
+  });
+  it('hashes the canonical id-sorted {id,path} list, ignoring purpose', () => {
+    const a = { id: 'codex', path: '~/.codex', purpose: 'x' };
+    const b = { id: 'claude', path: '~/.claude', purpose: 'y' };
+    const expected = createHash('sha256')
+      .update(
+        '[{"id":"claude","path":"~/.claude"},{"id":"codex","path":"~/.codex"}]',
+      )
+      .digest('hex');
+    expect(fileRootsDigest([a, b])).toBe(expected);
+    expect(fileRootsDigest([b, { ...a, purpose: 'changed' }])).toBe(expected);
+    expect(fileRootsDigest([b, { ...a, path: '~/.codex2' }])).not.toBe(
+      expected,
+    );
   });
 });
