@@ -285,8 +285,9 @@ export interface ConsentRecord {
   caps: readonly Cap[];
   manifestVersion: string;
   grantedAt: string;
-  /** sha256 of the consented manifest's fileRoots ({id,path}); null = none. */
-  fileRootsDigest: string | null;
+  /** The declared folders the user consented to ({id, path}, id-sorted);
+   *  [] = none. A manifest is covered when its roots are a subset. */
+  fileRoots: ConsentedFileRoot[];
 }
 
 /** One row of Settings → Local processing's "Recently processed" list. */
@@ -1071,6 +1072,9 @@ export interface DeclaredFileRoot {
   path: string;
   purpose: string;
 }
+
+/** What consent records of a declared root: `purpose` is display copy. */
+export type ConsentedFileRoot = Pick<DeclaredFileRoot, 'id' | 'path'>;
 
 /** Declarative database shape and immutable migration history published by a
  * connector as `database.schema` (normally `dist/database.json`). */

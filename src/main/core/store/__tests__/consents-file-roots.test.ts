@@ -6,7 +6,7 @@ import { openDb } from '@main/db/app-db';
 import { openStore } from '@main/core/store/store';
 import type { Cap, ExtensionId } from '@shared/contracts';
 
-describe('consents.fileRootsDigest', () => {
+describe('consents.fileRoots', () => {
   let tmp: string;
   let store: ReturnType<typeof openStore>;
   beforeEach(async () => {
@@ -22,7 +22,7 @@ describe('consents.fileRootsDigest', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('null-digest-round-trips and a string digest round-trips', async () => {
+  it('empty roots round-trip and a root list round-trips', async () => {
     const id = 'x.y' as ExtensionId;
     const base = {
       extensionId: id,
@@ -30,9 +30,10 @@ describe('consents.fileRootsDigest', () => {
       manifestVersion: '1.0.0',
       grantedAt: 't',
     };
-    await store.consents.record({ ...base, fileRootsDigest: null });
-    expect((await store.consents.latest(id))?.fileRootsDigest).toBeNull();
-    await store.consents.record({ ...base, fileRootsDigest: 'abc' });
-    expect((await store.consents.latest(id))?.fileRootsDigest).toBe('abc');
+    await store.consents.record({ ...base, fileRoots: [] });
+    expect((await store.consents.latest(id))?.fileRoots).toEqual([]);
+    const roots = [{ id: 'claude', path: '~/.claude' }];
+    await store.consents.record({ ...base, fileRoots: roots });
+    expect((await store.consents.latest(id))?.fileRoots).toEqual(roots);
   });
 });

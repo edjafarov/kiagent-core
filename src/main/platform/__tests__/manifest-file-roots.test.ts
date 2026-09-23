@@ -1,11 +1,11 @@
 // src/main/platform/__tests__/manifest-file-roots.test.ts
 /** @jest-environment node */
-import { createHash } from 'crypto';
 import {
   parseManifest,
   declaredFileRoots,
   isHomeRelativePath,
-  fileRootsDigest,
+  consentedFileRoots,
+  fileRootsCovered,
 } from '../manifest';
 
 const BASE = {
@@ -90,23 +90,34 @@ describe('manifest.fileRoots', () => {
   });
 });
 
-describe('fileRootsDigest', () => {
-  it('is null for absent or empty roots', () => {
-    expect(fileRootsDigest(undefined)).toBeNull();
-    expect(fileRootsDigest([])).toBeNull();
+describe('consented file roots', () => {
+  it('canonicalises to the id-sorted {id,path} list, dropping purpose', () => {
+    expect(consentedFileRoots(undefined)).toEqual([]);
+    expect(
+      consentedFileRoots([
+        { id: 'codex', path: '~/.codex', purpose: 'x' },
+        { id: 'claude', path: '~/.claude', purpose: 'y' },
+      ]),
+    ).toEqual([
+      { id: 'claude', path: '~/.claude' },
+      { id: 'codex', path: '~/.codex' },
+    ]);
   });
-  it('hashes the canonical id-sorted {id,path} list, ignoring purpose', () => {
-    const a = { id: 'codex', path: '~/.codex', purpose: 'x' };
-    const b = { id: 'claude', path: '~/.claude', purpose: 'y' };
-    const expected = createHash('sha256')
-      .update(
-        '[{"id":"claude","path":"~/.claude"},{"id":"codex","path":"~/.codex"}]',
-      )
-      .digest('hex');
-    expect(fileRootsDigest([a, b])).toBe(expected);
-    expect(fileRootsDigest([b, { ...a, purpose: 'changed' }])).toBe(expected);
-    expect(fileRootsDigest([b, { ...a, path: '~/.codex2' }])).not.toBe(
-      expected,
-    );
+
+  it('covers when every declared root was consented (subset, like caps)', () => {
+    const consented = [
+      { id: 'claude', path: '~/.claude' },
+      { id: 'codex', path: '~/.codex' },
+    ];
+    const claude = { id: 'claude', path: '~/.claude', purpose: 'changed copy' };
+    expect(fileRootsCovered(undefined, [])).toBe(true);
+    expect(fileRootsCovered([claude], consented)).toBe(true); // narrowed
+    expect(fileRootsCovered([claude], [])).toBe(false); // legacy row
+    expect(
+      fileRootsCovered([{ ...claude, path: '~/.claude2' }], consented),
+    ).toBe(false); // same id, new path
+    expect(fileRootsCovered([{ ...claude, id: 'other' }], consented)).toBe(
+      false,
+    ); // same path, new id
   });
 });

@@ -419,7 +419,7 @@ describe('shared plugin infrastructure real worker path', () => {
           caps: ['db', 'files', 'net'],
           manifestVersion: '1.0.0',
           grantedAt: new Date().toISOString(),
-          fileRootsDigest: null,
+          fileRoots: [],
         });
       await platform.start();
       await platform.grantConsent('test.a');

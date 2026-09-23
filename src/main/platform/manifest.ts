@@ -3,7 +3,6 @@
  * before consent. Never loads extension code. Rejections are user-facing
  * strings (they surface in the install UI).
  */
-import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -12,6 +11,7 @@ import { z } from 'zod';
 
 import type {
   Cap,
+  ConsentedFileRoot,
   DeclaredFileRoot,
   ExtensionId,
   Manifest,
@@ -324,17 +324,26 @@ export function declaredFileRoots(
   return manifest.fileRoots ?? [];
 }
 
-/** The consent binding for `fileRoots`: sha256 hex of the id-sorted
- *  `[{id, path}]` JSON (purpose is display copy, excluded). `null` when the
- *  manifest declares none — equal to a legacy consent row's NULL. */
-export function fileRootsDigest(
+/** What a consent records of `fileRoots`: the id-sorted `{id, path}` list
+ *  (purpose is display copy, excluded). */
+export function consentedFileRoots(
   roots: readonly DeclaredFileRoot[] | undefined,
-): string | null {
-  if (!roots || roots.length === 0) return null;
-  const canon = [...roots]
+): ConsentedFileRoot[] {
+  return [...(roots ?? [])]
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((r) => ({ id: r.id, path: r.path }));
-  return createHash('sha256').update(JSON.stringify(canon)).digest('hex');
+}
+
+/** Consent covers a manifest's folders when every declared `{id, path}` was
+ *  consented — the same subset rule `consentCovers` applies to caps, so an
+ *  update that narrows its folders keeps its consent. */
+export function fileRootsCovered(
+  declared: readonly DeclaredFileRoot[] | undefined,
+  consented: readonly ConsentedFileRoot[],
+): boolean {
+  return (declared ?? []).every((r) =>
+    consented.some((c) => c.id === r.id && c.path === r.path),
+  );
 }
 
 /** Icons ride AppState pushes as base64 data URIs, so the package file is
