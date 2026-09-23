@@ -129,18 +129,33 @@ export function isHomeRelativePath(p: string): boolean {
   return rest.split('/').every((s) => s !== '' && s !== '.' && s !== '..');
 }
 
-const fileRootSchema = z.strictObject({
-  id: z
-    .string()
-    .regex(FILE_ROOT_ID_RE, 'fileRoots id must match ^[a-z][a-z0-9-]{0,31}$'),
-  path: z
-    .string()
-    .refine(
-      isHomeRelativePath,
-      "fileRoots path must be '~/<relative path>' without '.', '..' or empty segments",
-    ),
-  purpose: z.string().min(1).max(200),
-});
+/** `~/Library` and its direct children (Caches, Keychains, Mail, …) hold
+ *  every app's private state; a declared root must name the one app folder
+ *  it needs. Case-insensitive, like the macOS filesystem. The reconciler
+ *  repeats this on the realpath (a symlink could point there). */
+export function isLibraryTop(p: string): boolean {
+  const segs = p.toLowerCase().split('/');
+  return segs[0] === '~' && segs[1] === 'library' && segs.length <= 3;
+}
+
+const fileRootSchema = z
+  .strictObject({
+    id: z
+      .string()
+      .regex(FILE_ROOT_ID_RE, 'fileRoots id must match ^[a-z][a-z0-9-]{0,31}$'),
+    path: z
+      .string()
+      .refine(
+        isHomeRelativePath,
+        "fileRoots path must be '~/<relative path>' without '.', '..' or empty segments",
+      ),
+    purpose: z.string().min(1).max(200),
+  })
+  .refine((r) => !isLibraryTop(r.path), {
+    path: ['path'],
+    message:
+      'fileRoots path must not be ~/Library or a folder directly inside it — declare the app folder you need',
+  });
 
 // Strict throughout (platform 2.0.0): unknown keys are rejected, never
 // silently stripped — a manifest field that does nothing is a lie to the

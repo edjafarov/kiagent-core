@@ -59,6 +59,24 @@ describe('manifest.fileRoots', () => {
     ).toThrow(/invalid manifest: fileRoots/);
   });
 
+  it.each(['~/Library', '~/Library/Caches', '~/library/caches'])(
+    'rejects-library-top %p (macOS paths are case-insensitive)',
+    (p) => {
+      expect(() =>
+        parseManifest({ ...BASE, fileRoots: [{ ...ROOT, path: p }] }),
+      ).toThrow(/invalid manifest: fileRoots/);
+    },
+  );
+
+  it('accepts a folder two levels under ~/Library', () => {
+    const path = '~/Library/Application Support/Claude';
+    expect(
+      declaredFileRoots(
+        parseManifest({ ...BASE, fileRoots: [{ ...ROOT, path }] }),
+      )[0].path,
+    ).toBe(path);
+  });
+
   it('rejects-duplicate-id', () => {
     expect(() =>
       parseManifest({
