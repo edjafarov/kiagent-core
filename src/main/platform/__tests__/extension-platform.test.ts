@@ -231,6 +231,154 @@ describe('createExtensionPlatform', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
+  describe('declared file roots', () => {
+    const FIXTURE_FILES = path.join(__dirname, 'fixtures', 'ext-files');
+    const DATA = { id: 'data', path: '~/.kia-test-data', purpose: 'Test data' };
+    let home: string;
+    let fileRoots: ReturnType<typeof createFileRootRegistry>;
+    let filesPlatform: ExtensionPlatform;
+
+    beforeEach(() => {
+      home = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'kia-home-')),
+      );
+      fs.mkdirSync(path.join(home, '.kia-test-data'));
+      fileRoots = createFileRootRegistry();
+      filesPlatform = makePlatform({
+        fileRoots,
+        homeDir: home,
+        userDataDir: path.join(tmp, 'userData'),
+      });
+    });
+    afterEach(async () => {
+      await filesPlatform.stop();
+      fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    async function install(): Promise<void> {
+      const preview = await filesPlatform.installPreview(FIXTURE_FILES);
+      if (!('token' in preview)) throw new Error(JSON.stringify(preview));
+      expect(preview.fileRoots).toEqual([DATA]);
+      expect(await filesPlatform.installCommit(preview.token)).toEqual({
+        ok: true,
+        id: 'test.files',
+      });
+    }
+
+    it('consent records the roots on install; roots granted read-only at activation', async () => {
+      await filesPlatform.start();
+      await install();
+      const consent = await store.consents.latest('test.files' as never);
+      expect(consent?.fileRoots).toEqual([
+        { id: 'data', path: '~/.kia-test-data' },
+      ]);
+      expect(await fileRoots.roots('test.files')).toEqual([
+        { id: 'data', name: '~/.kia-test-data', writable: false },
+      ]);
+      expect(filesPlatform.snapshot()).toEqual([
+        expect.objectContaining({
+          id: 'test.files',
+          status: 'activated',
+          fileRoots: [DATA],
+        }),
+      ]);
+    });
+
+    it('consent.same-version-root-change-needs-consent (and revokes every grant)', async () => {
+      await filesPlatform.start();
+      await install();
+      const installed = path.join(
+        tmp,
+        'extensions',
+        'test.files',
+        'manifest.json',
+      );
+      const m = JSON.parse(fs.readFileSync(installed, 'utf8'));
+      m.fileRoots.push({ id: 'ssh', path: '~/.ssh', purpose: 'sneaky' });
+      fs.writeFileSync(installed, JSON.stringify(m));
+      await filesPlatform.stop();
+      filesPlatform = makePlatform({ fileRoots, homeDir: home });
+      await filesPlatform.start();
+      expect(filesPlatform.snapshot()).toEqual([
+        expect.objectContaining({ id: 'test.files', status: 'needs-consent' }),
+      ]);
+      expect(await fileRoots.roots('test.files')).toEqual([]);
+    });
+
+    it('grantConsent (review of a changed manifest) grants the new roots', async () => {
+      fs.mkdirSync(path.join(home, '.kia-more'));
+      await filesPlatform.start();
+      await install();
+      const installed = path.join(
+        tmp,
+        'extensions',
+        'test.files',
+        'manifest.json',
+      );
+      const m = JSON.parse(fs.readFileSync(installed, 'utf8'));
+      m.fileRoots.push({ id: 'more', path: '~/.kia-more', purpose: 'More' });
+      fs.writeFileSync(installed, JSON.stringify(m));
+      await filesPlatform.stop();
+      filesPlatform = makePlatform({ fileRoots, homeDir: home });
+      await filesPlatform.start();
+      expect(await fileRoots.roots('test.files')).toEqual([]);
+      expect(await filesPlatform.grantConsent('test.files')).toEqual({
+        ok: true,
+      });
+      expect((await fileRoots.roots('test.files')).map((r) => r.id)).toEqual([
+        'data',
+        'more',
+      ]);
+    });
+
+    it('reconcile.revokes-all-on-uninstall', async () => {
+      await filesPlatform.start();
+      await install();
+      expect(await filesPlatform.uninstall('test.files')).toEqual({ ok: true });
+      expect(await fileRoots.roots('test.files')).toEqual([]);
+    });
+
+    it("never touches a bundled extension's own grants", async () => {
+      const dir = path.join(tmp, 'bundled-files', 'ext');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'manifest.json'),
+        JSON.stringify({
+          id: 'test.bundled-files',
+          name: 'Bundled Files',
+          version: '1.0.0',
+          engine: '^2.0.0',
+          entry: 'index.js',
+          caps: ['files'],
+          contributes: { sources: [], senders: [] },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(dir, 'index.js'),
+        'module.exports = { async activate() { return {}; } };',
+      );
+      await fileRoots.grant('test.bundled-files', home, {
+        id: 'mine',
+        name: 'Mine',
+        writable: true,
+      });
+      await filesPlatform.stop();
+      filesPlatform = makePlatform({
+        fileRoots,
+        homeDir: home,
+        bundledDir: path.join(tmp, 'bundled-files'),
+      });
+      await filesPlatform.start();
+      expect(
+        filesPlatform.snapshot().find((e) => e.id === 'test.bundled-files')
+          ?.status,
+      ).toBe('activated');
+      expect(await fileRoots.roots('test.bundled-files')).toEqual([
+        { id: 'mine', name: 'Mine', writable: true },
+      ]);
+    });
+  });
+
   async function installFixture(): Promise<string> {
     const preview = await platform.installPreview(FIXTURE);
     if (!('token' in preview))

@@ -1,0 +1,12 @@
+{
+  "id": "test.files",
+  "name": "Files Test Extension",
+  "version": "1.0.0",
+  "engine": "^2.3.0",
+  "entry": "index.js",
+  "caps": ["files"],
+  "fileRoots": [
+    { "id": "data", "path": "~/.kia-test-data", "purpose": "Test data" }
+  ],
+  "contributes": { "sources": [], "senders": [] }
+}

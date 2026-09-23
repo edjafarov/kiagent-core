@@ -1271,6 +1271,10 @@ export interface ExtensionSnapshot {
    *  many pre-existing test fixtures that build an `ExtensionSnapshot`
    *  literal without this field keep compiling unchanged. */
   ui?: UiContribution[];
+  /** Local folders this extension declares (platform 2.3.0) — shown where
+   *  permissions are reviewed. Always an array from the real projection;
+   *  optional for the same fixture reason as `ui`. */
+  fileRoots?: DeclaredFileRoot[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
