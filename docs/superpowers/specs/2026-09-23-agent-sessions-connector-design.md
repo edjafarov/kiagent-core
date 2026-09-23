@@ -1,6 +1,6 @@
 # Agent Sessions connector (Claude Code + Codex) — design
 
-Date: 2026-09-23 · Status: draft r3 (after fable + astra round 2)
+Date: 2026-09-23 · Status: draft r4 (after fable + astra round 3)
 
 ## 1. Goal
 
@@ -90,7 +90,7 @@ array; `[]` when absent), carrying the unexpanded `~/…` path for display.
 
 ### 3.2 Consent binds the roots
 
-- `ConsentRecord` gains `fileRootsDigest: string` = sha256 of the canonical JSON
+- `ConsentRecord` gains `fileRootsDigest: string | null` = sha256 of the canonical JSON
   of `[{id, path}]` sorted by id (`purpose` is display copy and excluded).
   Append-only store migration adds a `file_roots_digest TEXT` column to
   `consents`; existing rows read as `null`.
@@ -100,7 +100,8 @@ array; `[]` when absent), carrying the unexpanded `~/…` path for display.
   `rec.fileRootsDigest === digest(manifest.fileRoots)`; a `null` digest matches
   only a manifest with no or empty `fileRoots` (`digest([])` is defined as
   `null`). Canonical form: `JSON.stringify` of `[{id, path}]` sorted by `id`,
-  keys in that order, no whitespace. So a same-version, same-caps manifest
+  keys in that order, no whitespace. The digest helper returns `string | null`;
+  `null` round-trips through the consent SQL mapping and the SDK contracts. So a same-version, same-caps manifest
   whose roots changed (edited in place, or a republished tag) drops to
   `needs-consent` and gets no grants.
 
@@ -117,7 +118,8 @@ extension). For an external extension `e` whose consent covers its manifest:
    logical path).
 2. Refuse (root ungranted, logged at `warn`) when `real` is not strictly inside
    `home`, equals `home`, is inside or contains the app's `userData` directory (new
-   `ExtensionPlatformDeps.userDataDir`, passed from `main.ts`),
+   `ExtensionPlatformDeps.userDataDir`, passed from `main.ts`; compared by its
+   `realpath`, like `home` and `real`),
    or, counted in path segments relative to home, is `Library` or
    `Library/<x>` (refused) — `Library/<x>/<y>/…` is allowed. A symlink resolving
    outside home (e.g. to `/Volumes/…`) is therefore refused; the connector's
@@ -191,11 +193,11 @@ Test: `app-projection.account-cursor-not-projected`.
   `.rejects-duplicate-id`, `.accepts-valid`.
 - `consent.digest-recorded-on-install|update|review`,
   `consent.same-version-root-change-needs-consent`,
-  `consent.legacy-null-digest-covers-only-rootless`.
+  `consent.legacy-null-digest-covers-only-rootless`, `consent.null-digest-round-trips`.
 - `reconcile.grants-declared-after-consent`, `.missing-dir-ungranted-not-error`,
   `.missing-replacement-revokes-old-grant`, `.non-directory-ungranted`,
   `.symlinked-root-granted-at-realpath`, `.refuses-realpath-outside-home`,
-  `.refuses-userData-and-home-and-library`, `.regrants-on-identity-change`,
+  `.refuses-userData-and-home-and-library`, `.refuses-symlinked-userData-realpath`, `.regrants-on-identity-change`,
   `.revokes-undeclared`, `.revokes-all-when-consent-lapses`,
   `.revokes-all-on-uninstall`, `.persists-and-restores-across-restart`,
   `.restored-writable-grant-not-retained`.
@@ -249,8 +251,17 @@ an optional `parentKey`, and a **fingerprint**:
 
 ```
 fp = hash( RENDER_VERSION, tz, for each file: rel, size, mtimeMs, dev, ino,
-           + named render dependencies (§4.5/§4.6) )
+           + named render dependencies (§4.5/§4.6),
+           + linked )            // child units only
+linked = fps[parentKey] exists and is not a failure entry   (evaluated against the fps map current at diff time)
 ```
+
+A child's document **always** carries its `parent` ref when a parent id is
+known (path-derived for Claude, first-record for Codex, list id for tasks),
+whether or not the parent unit exists now — so a later child edit never
+overwrites an established link with `null` (e.g. task edited after cleanup
+removed the session file; the session document is kept, §1). The `linked` bit
+only decides *when a child must be re-emitted* so the store resolves the ref.
 
 `RENDER_VERSION` is a connector constant bumped whenever parsing, filtering,
 redaction or markdown layout changes, so a fix re-renders history once. `tz`
@@ -270,11 +281,8 @@ Each `pull(session, cursor)`:
 
 1. **Discover** exhaustively (every relevant directory listed every tick; no
    watermark, no shortcuts): `units: Map<key, {fp, files, parentKey?}>`.
-2. **Diff**: `changed = { u | cursor.fps[u.key] !== u.fp }`. Additionally, for
-   every changed unit whose key had **no** previous fp (a newly appearing
-   parent), add all its known children (by `parentKey`) to `changed` — this is
-   how a child committed before its parent existed gets re-emitted once the
-   parent row exists.
+2. **Diff**: `changed = { u | fps[u.key] !== u.fp }` with each child's
+   `linked` evaluated against the current `fps`.
 3. **Order**: topological by `parentKey` (a parent before any of its children),
    ties broken by key. Parents therefore commit in the same or an earlier batch
    than their children; the engine's `reconcileParents` resolves same-batch
@@ -285,12 +293,26 @@ Each `pull(session, cursor)`:
    parents, pass }`, `phase = pass === 'initial' ? 'backfill' : 'live'`. No
    `estimateTotal` (the engine counts expanded documents and seeds from the
    stored count; a per-tick unit total would lie).
-5. **Terminal batch**: always yield one final batch (possibly `items: []`)
-   with `pass: 'done'`, the complete `fps` (units not discovered this tick are
-   dropped from it; their documents are kept — §1) and `parents`.
+5. **Second diff**: after the worklist drains, recompute child fps against the
+   updated `fps` and repeat steps 2–4 once. This emits exactly the children
+   whose parent became linked during this pull (parent new, or repaired after a
+   failed parse). The second diff cannot change any parent's fp, so two
+   iterations always suffice.
+6. **Terminal batch**: always yield one final batch (possibly `items: []`)
+   with `pass: 'done'`, `fps` and `parents`. Keys of units no longer
+   discovered are **kept** in `fps` (their documents are kept — §1 — and they
+   keep children `linked`), so the map grows with indexed history, ~30 B per
+   unit.
 
-A unit whose parse throws is logged and committed with its fingerprint (a
-corrupt file cannot wedge the source; its next change retries it). Crash
+Crash safety of links: if the process dies after a parent's batch committed
+but before its children's, the next pull's first diff sees the parent's
+committed fp, computes `linked = true` for the children (stored with `false`)
+and re-emits them. A failed parse is committed as `fps[key] = '!' + fp`, so a
+later successful parse flips its children's `linked` bit the same way.
+
+A unit whose parse throws is logged and committed as a failure entry
+`'!' + fp` (a corrupt file cannot wedge the source; its next change retries
+it). Crash
 resume re-diffs against the last committed map, so exactly the uncommitted
 units are redone. Ties, clock skew and future mtimes are irrelevant: the
 comparison is equality, not order.
@@ -321,7 +343,7 @@ Subagents are ordinary `agent.session` documents with `metadata.role =
 'subagent'` and `parent: { externalId: 'session:<parentId>', type:
 'agent.session' }` — one type, so a Codex subagent whose parent is itself a
 subagent links the same way. `agent.tasks` uses the same `parent` shape when
-its list id is a known session id. A parent that was deleted by cleanup
+its list id is UUID-shaped (a session id). A parent that was deleted by cleanup
 before it was ever indexed stays unresolved (`parentId = null`;
 `metadata.parentSessionId` still set).
 
@@ -380,7 +402,7 @@ Turn model and rendering (both agents):
 |---|---|---|---|
 | `c:<sessionId>` | `projects/<proj>/<sessionId>.jsonl` | — | — |
 | `c:<sessionId>/<agentId>` | `projects/<proj>/<sessionId>/subagents/agent-<agentId>.jsonl` + sibling `agent-<agentId>.meta.json` if present | `c:<sessionId>` (from the path) | — |
-| `t:<listId>` | `tasks/<listId>/*.json` (`.lock`/`.highwatermark` ignored; a dir with no task JSON yields no unit) | `c:<listId>` if that session unit exists | — |
+| `t:<listId>` | `tasks/<listId>/*.json` (`.lock`/`.highwatermark` ignored; a dir with no task JSON yields no unit) | `c:<listId>` when `listId` is UUID-shaped (a session id), else none | — |
 | `plan:<name>` | `plans/*.md` | — | — |
 | `memory:<rel>` | `projects/<proj>/memory/**` text files (`.md`, `.txt`), `CLAUDE.md` if present | — | — |
 | `history` | `history.jsonl` | — | — |
@@ -526,9 +548,11 @@ same filename second), each ≤ 50 KB, under `test/fixtures/`.
   `.same-mtime-different-size`, `.inode-change-reprocessed`, `.future-mtime`,
   `.render-version-bump-rerenders-all`, `.crash-resume-redoes-only-uncommitted`,
   `.corrupt-unit-committed-and-retried-on-change`, `.terminal-batch-always`,
-  `.backfill-then-live-phase`, `.vanished-key-dropped-docs-kept`,
+  `.backfill-then-live-phase`, `.vanished-key-kept-in-fps`,
   `.parent-before-child-across-batch-boundary` (same-second Codex pair, batch
   size forced to 1), `.late-parent-reemits-children`,
+  `.crash-after-parent-commit-reemits-children`, `.repaired-parent-reemits-children`,
+  `.task-edit-after-session-cleanup-keeps-parent-ref`,
   `.batch-never-exceeds-25-docs-or-8MiB` (a 479-subagent family).
 - `connect.missing-root-message`, `bundleLoadSmoke`, plus the benchmarks
   (§4.5) recorded in the PR.
