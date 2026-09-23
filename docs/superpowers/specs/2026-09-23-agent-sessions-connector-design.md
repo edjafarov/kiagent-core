@@ -314,8 +314,9 @@ Each `pull(session, cursor)`:
    links and an existing parent row resolves earlier ones.
 4. **Render + batch**: process in order; yield a batch whenever it reaches 25
    documents or 8 MiB of rendered markdown — never holding more than that —
-   with `cursor = { fps: previous fps ∪ fps of units fully emitted so far,
-   parents, pass }`, `phase = pass === 'initial' ? 'backfill' : 'live'`. No
+   with `cursor = checkpoint(...)` — the **single** builder for every cursor
+   this source yields (intermediate and terminal), always returning the full
+   `{ fps: previous fps ∪ fps of units fully emitted so far, parents, pass, tz }`, `phase = pass === 'initial' ? 'backfill' : 'live'`. No
    `estimateTotal` (the engine counts expanded documents and seeds from the
    stored count; a per-tick unit total would lie).
 5. **Terminal batch**: always yield one final batch (possibly `items: []`)
@@ -573,7 +574,8 @@ same filename second), each ≤ 50 KB, under `test/fixtures/`.
   does not re-read it), `.children-rendered-once-with-new-parent`,
   `.failed-parent-children-reemitted-after-repair`,
   `.parent-fail-child-commit-crash-repair-resume-links`,
-  `.readd-source-keeps-cursor-tz`, `.terminal-batch-always`,
+  `.readd-source-keeps-cursor-tz`,
+  `.intermediate-batch-crash-then-zone-change-keeps-tz`, `.terminal-batch-always`,
   `.backfill-then-live-phase`, `.vanished-key-kept-in-fps`,
   `.parent-before-child-across-batch-boundary` (same-second Codex pair, batch
   size forced to 1), `.late-parent-reemits-children`,
