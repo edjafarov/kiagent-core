@@ -253,7 +253,9 @@ an optional `parentKey`, and a **fingerprint**:
 fp = hash( RENDER_VERSION, tz, for each file: rel, size, mtimeMs, dev, ino,
            + named render dependencies (§4.5/§4.6),
            + linked )            // child units only
-linked = fps[parentKey] exists and is not a failure entry   (evaluated against the fps map current at diff time)
+linked = parentKey has a non-failure fps entry, OR the parent unit is in the
+         current worklist ahead of the child (optimistic: topological order
+         means the parent row will exist when the child commits)
 ```
 
 A child's document **always** carries its `parent` ref when a parent id is
@@ -272,7 +274,7 @@ accepted (neither CLI rewrites files that way).
 ```ts
 type Cursor = {
   fps: Record<string, string>;       // unit key → fp of the last committed render
-  parents: Record<string, string>;   // Codex subagent key → parent key (Claude parents derive from the path)
+  parents: Record<string, string>;   // h(Codex subagent key) → h(parent key) (Claude parents derive from the path)
   pass: 'initial' | 'done';
 };
 ```
@@ -281,8 +283,10 @@ Each `pull(session, cursor)`:
 
 1. **Discover** exhaustively (every relevant directory listed every tick; no
    watermark, no shortcuts): `units: Map<key, {fp, files, parentKey?}>`.
-2. **Diff**: `changed = { u | fps[u.key] !== u.fp }` with each child's
-   `linked` evaluated against the current `fps`.
+2. **Diff**: `changed = { u | stripFailure(fps[h(u.key)]) !== u.fp }`
+   (`stripFailure` removes a leading `'!'`), with each child's `linked`
+   evaluated as defined above. An unchanged failed unit is therefore **not**
+   re-read on later ticks.
 3. **Order**: topological by `parentKey` (a parent before any of its children),
    ties broken by key. Parents therefore commit in the same or an earlier batch
    than their children; the engine's `reconcileParents` resolves same-batch
@@ -294,10 +298,12 @@ Each `pull(session, cursor)`:
    `estimateTotal` (the engine counts expanded documents and seeds from the
    stored count; a per-tick unit total would lie).
 5. **Second diff**: after the worklist drains, recompute child fps against the
-   updated `fps` and repeat steps 2–4 once. This emits exactly the children
-   whose parent became linked during this pull (parent new, or repaired after a
-   failed parse). The second diff cannot change any parent's fp, so two
-   iterations always suffice.
+   updated `fps` (now without the optimistic worklist term) and repeat steps
+   2–4 once. It re-emits only children whose optimistic `linked = true` was
+   wrong — their parent's parse failed during this pull — so they are stored
+   with `linked = false` and re-emitted when the parent is later repaired. In
+   the normal case the second diff is empty; children are rendered once. It
+   cannot change any parent's fp, so two iterations always suffice.
 6. **Terminal batch**: always yield one final batch (possibly `items: []`)
    with `pass: 'done'`, `fps` and `parents`. Keys of units no longer
    discovered are **kept** in `fps` (their documents are kept — §1 — and they
@@ -305,9 +311,8 @@ Each `pull(session, cursor)`:
    unit.
 
 Crash safety of links: if the process dies after a parent's batch committed
-but before its children's, the next pull's first diff sees the parent's
-committed fp, computes `linked = true` for the children (stored with `false`)
-and re-emits them. A failed parse is committed as `fps[key] = '!' + fp`, so a
+but before its children's, the children have no committed fp (or an older
+one) and are emitted by the next pull, after the parent row exists. A failed parse is committed as `fps[key] = '!' + fp`, so a
 later successful parse flips its children's `linked` bit the same way.
 
 A unit whose parse throws is logged and committed as a failure entry
@@ -317,8 +322,9 @@ resume re-diffs against the last committed map, so exactly the uncommitted
 units are redone. Ties, clock skew and future mtimes are irrelevant: the
 comparison is equality, not order.
 
-Cursor size: ~12k units here. `fps` keys are stored as 11-char base64url
-hashes of the unit key and values as 11-char fingerprint hashes (~30 B per
+Cursor size: ~12k units here. `fps` and `parents` keys (and `parents` values)
+are 11-char base64url hashes `h(key)` of the unit key — the in-memory `units`
+map carries `h(key)` alongside `key`, so comparisons never re-hash — and values as 11-char fingerprint hashes (~30 B per
 entry ≈ 0.35 MB). The cursor is written to `accounts.cursor` once per batch
 and is **not** broadcast to windows: core deliverable §3.6 strips `cursor`
 from the projected `Account` in `AppState`.
@@ -547,7 +553,9 @@ same filename second), each ≤ 50 KB, under `test/fixtures/`.
 - `sync.appended-unit-reprocessed` (the A-at-900/B-at-1200 case),
   `.same-mtime-different-size`, `.inode-change-reprocessed`, `.future-mtime`,
   `.render-version-bump-rerenders-all`, `.crash-resume-redoes-only-uncommitted`,
-  `.corrupt-unit-committed-and-retried-on-change`, `.terminal-batch-always`,
+  `.corrupt-unit-committed-and-retried-on-change` (+ a second unchanged tick
+  does not re-read it), `.children-rendered-once-with-new-parent`,
+  `.failed-parent-children-reemitted-after-repair`, `.terminal-batch-always`,
   `.backfill-then-live-phase`, `.vanished-key-kept-in-fps`,
   `.parent-before-child-across-batch-boundary` (same-second Codex pair, batch
   size forced to 1), `.late-parent-reemits-children`,
