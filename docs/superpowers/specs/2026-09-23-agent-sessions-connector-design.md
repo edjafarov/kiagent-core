@@ -1,6 +1,6 @@
 # Agent Sessions connector (Claude Code + Codex) — design
 
-Date: 2026-09-23 · Status: draft r4 (after fable + astra round 3)
+Date: 2026-09-23 · Status: draft r6 (after fable + astra round 5)
 
 ## 1. Goal
 
@@ -243,7 +243,7 @@ src/codex/*.ts      discovery + record → Turn parsing
 Both: `auth: 'none'`, `cadence: { every: '15m' }`, `documentTypes` per §4.4.
 `connect()` calls `files.roots()`; if its root is absent it throws
 `"~/.claude was not found or not permitted (it must resolve inside your home folder) — run Claude Code once, restart KIA, then add this source"`
-(resp. `~/.codex`/Codex). Otherwise returns `{ identifier: '~/.claude', config: { tz: <system IANA zone at connect time> } }`.
+(resp. `~/.codex`/Codex). Otherwise returns `{ identifier: '~/.claude', config: {} }`.
 
 ### 4.3 Change detection — per-document units, fingerprints, parent order
 
@@ -255,10 +255,23 @@ an optional `parentKey`, and a **fingerprint**:
 fp = hash( RENDER_VERSION, for each file: rel, size, mtimeMs, dev, ino,
            + named render dependencies (§4.5/§4.6),
            + linked )            // child units only
-linked = parentKey has a non-failure fps entry, OR the parent unit is in the
-         current worklist ahead of the child (optimistic: topological order
-         means the parent row will exist when the child commits)
 ```
+
+`linked` is evaluated two ways, and only the second is ever persisted:
+
+- **selection** (diff, step 2): `linkedSel = parentKey has a non-failure fps
+  entry OR the parent unit is in this pull's worklist`. Used only to decide
+  whether the child must be (re)rendered.
+- **commit** (render, step 4): `linkedActual = parentKey has a non-failure
+  entry in the fps map as updated so far in this pull`. Topological order
+  (step 3) guarantees the parent's outcome — committed success, committed
+  failure, or absent — is already known when the child is rendered. The
+  child's committed fp uses `linkedActual`.
+
+So a child is never stored with a bit that needs later correction: if its
+parent failed, the child is stored `linked = false` and is re-selected
+(`linkedSel = true ≠ false`) whenever the parent re-enters the worklist —
+including after a crash and a repair of the parent's file.
 
 A child's document **always** carries its `parent` ref when a parent id is
 known (path-derived for Claude, first-record for Codex, list id for tasks),
@@ -269,12 +282,12 @@ only decides *when a child must be re-emitted* so the store resolves the ref.
 
 `RENDER_VERSION` is a connector constant bumped whenever parsing, filtering,
 redaction or markdown layout changes, so a fix re-renders history once.
-Times and prompt-day grouping use a **fixed** timezone: the IANA zone
-captured in `account.config.tz` by `connect()` (re-adding the source
-re-captures it; `config.tz` is a render dependency of the `history` unit, so
-the days are then regrouped consistently in the same pull), never the live
-system zone — so travelling or changing the OS zone never regroups days into
-duplicate `prompts:<date>` documents. A
+Times and prompt-day grouping use a **fixed** timezone: `cursor.tz`, the
+system IANA zone captured by the first pull (`cursor === null`) and carried
+unchanged in every later cursor. Re-adding the same source keeps the account
+and its cursor (store `createAccount` replaces only config), so neither an OS
+zone change nor a re-add ever regroups days into duplicate `prompts:<date>`
+documents. A
 content change that preserves path, size, mtime and inode is undetectable —
 accepted (neither CLI rewrites files that way).
 
@@ -283,6 +296,7 @@ type Cursor = {
   fps: Record<string, string>;       // unit key → fp of the last committed render
   parents: Record<string, string>;   // h(Codex subagent key) → h(parent key) (Claude parents derive from the path)
   pass: 'initial' | 'done';
+  tz: string;                         // fixed at the first pull
 };
 ```
 
@@ -304,23 +318,18 @@ Each `pull(session, cursor)`:
    parents, pass }`, `phase = pass === 'initial' ? 'backfill' : 'live'`. No
    `estimateTotal` (the engine counts expanded documents and seeds from the
    stored count; a per-tick unit total would lie).
-5. **Second diff**: after the worklist drains, recompute child fps against the
-   updated `fps` (now without the optimistic worklist term) and repeat steps
-   2–4 once. It re-emits only children whose optimistic `linked = true` was
-   wrong — their parent's parse failed during this pull — so they are stored
-   with `linked = false` and re-emitted when the parent is later repaired. In
-   the normal case the second diff is empty; children are rendered once. It
-   cannot change any parent's fp, so two iterations always suffice.
-6. **Terminal batch**: always yield one final batch (possibly `items: []`)
-   with `pass: 'done'`, `fps` and `parents`. Keys of units no longer
+5. **Terminal batch**: always yield one final batch (possibly `items: []`)
+   with `pass: 'done'`, `fps`, `parents` and `tz`. Keys of units no longer
    discovered are **kept** in `fps` (their documents are kept — §1 — and they
    keep children `linked`), so the map grows with indexed history, ~30 B per
    unit.
 
 Crash safety of links: if the process dies after a parent's batch committed
 but before its children's, the children have no committed fp (or an older
-one) and are emitted by the next pull, after the parent row exists. A failed parse is committed as `fps[key] = '!' + fp`, so a
-later successful parse flips its children's `linked` bit the same way.
+one) and are emitted by the next pull, after the parent row exists. If the
+parent failed (`'!' + fp`) and its children were committed with `linked =
+false`, a later repair puts the parent in the worklist, which selects the
+children again, and they commit with `linkedActual = true`.
 
 A unit whose parse throws is logged and committed as a failure entry
 `'!' + fp` (a corrupt file cannot wedge the source; its next change retries
@@ -350,7 +359,7 @@ Everything goes through `toDocument` → `upsertDocument` → the shared
 | `agent.plan` | Claude plan file | `plan:<file name>` | first `# ` heading → file name |
 | `agent.tasks` | Claude task list | `tasks:<listId>` | `Tasks — <listId8>` |
 | `agent.memory` | memory/instructions file | `memory:<rel path>` | `<project label> — <file name>` |
-| `agent.prompts` | calendar day (in `config.tz`) of prompt history | `prompts:<YYYY-MM-DD>` | `Prompts — <YYYY-MM-DD>` |
+| `agent.prompts` | calendar day (in `cursor.tz`) of prompt history | `prompts:<YYYY-MM-DD>` | `Prompts — <YYYY-MM-DD>` |
 
 Subagents are ordinary `agent.session` documents with `metadata.role =
 'subagent'` and `parent: { externalId: 'session:<parentId>', type:
@@ -418,7 +427,7 @@ Turn model and rendering (both agents):
 | `t:<listId>` | `tasks/<listId>/*.json` (`.lock`/`.highwatermark` ignored; a dir with no task JSON yields no unit) | `c:<listId>` when `listId` is UUID-shaped (a session id), else none | — |
 | `plan:<name>` | `plans/*.md` | — | — |
 | `memory:<rel>` | `projects/<proj>/memory/**` text files (`.md`, `.txt`), `CLAUDE.md` if present | — | — |
-| `history` | `history.jsonl` | — | `config.tz` |
+| `history` | `history.jsonl` | — | — |
 
 Subagent files whose parent `.jsonl` was removed by cleanup (common) are
 ordinary units; their parent link resolves only if the parent was indexed
@@ -470,7 +479,7 @@ Tasks: task JSON `{id, subject, description, status, blocks, blockedBy}` →
 checklist `- [x] subject — description` ordered by numeric `id`.
 
 Prompts (`history.jsonl`, rows `{display, pastedContents, timestamp (epoch
-**ms**), project, sessionId}`): streamed whole, grouped by calendar day in `config.tz`
+**ms**), project, sessionId}`): streamed whole, grouped by calendar day in `cursor.tz`
 into one `agent.prompts` document per day (the one multi-document unit; its
 docs have no parents), lines `- 10:02 · <project label> · <display> ·
 session <id8>`. `pastedContents` is dropped. All days are re-rendered when the
@@ -482,7 +491,7 @@ file changes; unchanged days are hash-deduped by the engine.
 |---|---|---|---|
 | `x:<threadId>` | the rollout under `sessions/YYYY/MM/DD/` or `archived_sessions/` (thread id = UUID at the end of the filename) | the parent thread's key, from the first record (`payload.parent_thread_id`, else `source.subagent.thread_spawn.parent_thread_id`) | the thread's `session_index.jsonl` title (last row per id by `updated_at`) |
 | `memory:<rel>` | `AGENTS.md`, `memories/**` text files | — | — |
-| `history` | `history.jsonl` | — | `config.tz` |
+| `history` | `history.jsonl` | — | — |
 
 `parentKey` of an unchanged Codex unit is taken from `cursor.parents`; of a
 changed unit, from its first line (read before ordering — one small read per
@@ -544,12 +553,12 @@ same filename second), each ≤ 50 KB, under `test/fixtures/`.
 - `wrappers.<each allowlist tag>-dropped`, `.unknown-tag-kept`,
   `.multi-block-user-xml-kept`, `.case-insensitive-INSTRUCTIONS`.
 - `claude.orphan-subagent-renders`, `.lock-only-tasks-dir-no-unit`,
-  `claude.tasks.checklist-order`, `claude.prompts.day-in-config-tz-ms`,
+  `claude.tasks.checklist-order`, `claude.prompts.day-in-cursor-tz-ms`,
   `.drops-pasted`, `claude.memory.txt-and-md`.
 - `codex.current.agent-message-is-assistant`, `.filters-injected-context`,
   `.nested-subagent-links-parent`, `.title-from-session-index-last-wins`,
   `.rename-changes-fingerprint`, `codex.legacy.renders-turns`,
-  `codex.prompts.day-in-config-tz-seconds`, `sync.system-tz-change-does-not-regroup`.
+  `codex.prompts.day-in-cursor-tz-seconds`, `sync.system-tz-change-does-not-regroup`.
 - `render.budget-head-tail-omission`, `.turn-cut-at-16k`,
   `.streams-multi-chunk-file` (> 16 MiB synthetic),
   `.oversized-record-skipped-without-buffering` (> 1 MiB line; assert peak
@@ -562,7 +571,9 @@ same filename second), each ≤ 50 KB, under `test/fixtures/`.
   `.render-version-bump-rerenders-all`, `.crash-resume-redoes-only-uncommitted`,
   `.corrupt-unit-committed-and-retried-on-change` (+ a second unchanged tick
   does not re-read it), `.children-rendered-once-with-new-parent`,
-  `.failed-parent-children-reemitted-after-repair`, `.terminal-batch-always`,
+  `.failed-parent-children-reemitted-after-repair`,
+  `.parent-fail-child-commit-crash-repair-resume-links`,
+  `.readd-source-keeps-cursor-tz`, `.terminal-batch-always`,
   `.backfill-then-live-phase`, `.vanished-key-kept-in-fps`,
   `.parent-before-child-across-batch-boundary` (same-second Codex pair, batch
   size forced to 1), `.late-parent-reemits-children`,
