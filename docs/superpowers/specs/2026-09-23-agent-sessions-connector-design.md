@@ -270,8 +270,10 @@ only decides *when a child must be re-emitted* so the store resolves the ref.
 `RENDER_VERSION` is a connector constant bumped whenever parsing, filtering,
 redaction or markdown layout changes, so a fix re-renders history once.
 Times and prompt-day grouping use a **fixed** timezone: the IANA zone
-captured once in `account.config.tz` by `connect()`, never the live system
-zone — so travelling or changing the OS zone never regroups days into
+captured in `account.config.tz` by `connect()` (re-adding the source
+re-captures it; `config.tz` is a render dependency of the `history` unit, so
+the days are then regrouped consistently in the same pull), never the live
+system zone — so travelling or changing the OS zone never regroups days into
 duplicate `prompts:<date>` documents. A
 content change that preserves path, size, mtime and inode is undetectable —
 accepted (neither CLI rewrites files that way).
@@ -416,7 +418,7 @@ Turn model and rendering (both agents):
 | `t:<listId>` | `tasks/<listId>/*.json` (`.lock`/`.highwatermark` ignored; a dir with no task JSON yields no unit) | `c:<listId>` when `listId` is UUID-shaped (a session id), else none | — |
 | `plan:<name>` | `plans/*.md` | — | — |
 | `memory:<rel>` | `projects/<proj>/memory/**` text files (`.md`, `.txt`), `CLAUDE.md` if present | — | — |
-| `history` | `history.jsonl` | — | — |
+| `history` | `history.jsonl` | — | `config.tz` |
 
 Subagent files whose parent `.jsonl` was removed by cleanup (common) are
 ordinary units; their parent link resolves only if the parent was indexed
@@ -480,7 +482,7 @@ file changes; unchanged days are hash-deduped by the engine.
 |---|---|---|---|
 | `x:<threadId>` | the rollout under `sessions/YYYY/MM/DD/` or `archived_sessions/` (thread id = UUID at the end of the filename) | the parent thread's key, from the first record (`payload.parent_thread_id`, else `source.subagent.thread_spawn.parent_thread_id`) | the thread's `session_index.jsonl` title (last row per id by `updated_at`) |
 | `memory:<rel>` | `AGENTS.md`, `memories/**` text files | — | — |
-| `history` | `history.jsonl` | — | — |
+| `history` | `history.jsonl` | — | `config.tz` |
 
 `parentKey` of an unchanged Codex unit is taken from `cursor.parents`; of a
 changed unit, from its first line (read before ordering — one small read per
