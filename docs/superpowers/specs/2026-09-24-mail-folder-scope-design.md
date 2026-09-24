@@ -1,6 +1,6 @@
 # Mail folder scope — Microsoft 365 folders and Gmail Trash/Spam
 
-Status: DRAFT r6 (r0–r5 reviewed by fable + codex astra; dispositions in §7–§12)
+Status: APPROVED BY REVIEW r6 — fable SATISFIED (r2), codex astra SATISFIED (r6). Awaiting user review.
 Date: 2026-09-24
 
 ## 1. What the user asked for
@@ -183,7 +183,7 @@ Non-goals:
    A pure widening (new ⊋ prior) still grants nothing.
 
    **Allowances (b) and (c) are ratio-only.** They bypass the >50% shrink check but **never** the empty-listing refusal (`listedCount === 0`). Only (a), whose archival already happened in the Save transaction, keeps today's full bypass.
-   - A lost staging table (DB-worker restart, `engine.test.ts` lost-listing case) diffs as `listedCount 0`, so it is still refused under (b) or (c).
+   - A lost staging table (DB-worker restart) never reaches the diff: `ReconcileStagingLost` is thrown (§5.8). A genuinely empty but intact listing is still refused under (b) or (c).
    - A discovery or listing failure throws before the diff.
    - So a routine unchanged Save can authorise a large *verified* shrink but can never archive a corpus off an empty or broken listing.
    - Cost: a tracked set that is genuinely empty upstream (the user selected only empty folders) cannot clean up via reconcile. That case is visible as the refusal on the card and is accepted.
