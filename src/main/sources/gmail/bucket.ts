@@ -38,7 +38,7 @@ export function selectedBuckets(
   const { folderRoots: roots } = config;
   if (Array.isArray(roots)) {
     for (const r of roots) {
-      const id = (r as { id?: unknown }).id;
+      const { id } = r as { id?: unknown };
       if (GMAIL_BUCKETS.includes(id as GmailBucket))
         selected.add(id as GmailBucket);
     }
