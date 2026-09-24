@@ -1,5 +1,6 @@
 import type { DocumentInput } from '@shared/contracts';
 
+import { threadBucket } from './bucket';
 import { parseGmailMessage, type GmailApiMessage } from './parser';
 
 /** Gmail's own document type id for this port — dotted per contracts.ts's
@@ -64,6 +65,10 @@ export function toDocument(
   }
 
   const labels = [...new Set(parsed.flatMap((m) => m.labelIds))];
+  // One bucket per thread (spec §4). In the HASHED metadata, not only the
+  // stamp: the label union cannot tell "one trashed reply" from "all
+  // trashed", and an unchanged hash would never re-stamp the row.
+  const scopeBucket = threadBucket(item.messages);
   const participants = [
     ...new Set(parsed.flatMap((m) => [m.from, ...m.to, ...m.cc])),
   ];
@@ -107,7 +112,9 @@ export function toDocument(
         replyTo: m.headers['reply-to'] ?? null,
       })),
       contactEvidence,
+      scopeBucket,
     },
+    scopeRootId: scopeBucket,
     // Last message date, per the task brief's design — a deliberate
     // deviation from legacy, which stamped created_at from the FIRST
     // message. See report for rationale.
@@ -135,7 +142,9 @@ export function toDocument(
           messageId: att.messageId,
           partId: att.partId,
           attachmentId: att.attachmentId, // rotates — fetchBytes re-resolves via partId
+          scopeBucket,
         },
+        scopeRootId: scopeBucket,
         createdAt: m.date.toISOString(),
         parent: { externalId: item.id, type: GMAIL_THREAD_DOCUMENT_TYPE },
       });

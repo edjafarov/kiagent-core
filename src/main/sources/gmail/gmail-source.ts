@@ -7,6 +7,7 @@ import type {
   SourceDescriptor,
 } from '@shared/contracts';
 
+import { type GmailBucket, selectedBuckets, threadBucket } from './bucket';
 import { type GmailCursor, isGmailNotFoundError } from './cursor';
 import {
   fetchProfile,
@@ -63,17 +64,28 @@ export async function connect(
   return { identifier: profile.emailAddress };
 }
 
+/** Spec §4: a thread whose bucket the account did not select is SKIPPED —
+ *  no item, no deletion. Its indexed row (if any) stays until Gmail purges
+ *  the thread (404 → deletion) or a Save narrows the scope. */
+const inScope = (
+  selected: Set<GmailBucket>,
+  messages: ReadonlyArray<{ labelIds?: string[] | null }>,
+): boolean => selected.has(threadBucket(messages));
+
 async function fetchThreadItems(
   session: Session,
   threadIds: string[],
   accountEmail: string,
+  selected: Set<GmailBucket>,
 ): Promise<GmailThreadItem[]> {
   const raw = await mapPool(threadIds, (id) => getThread(session, id));
-  return raw.map((t, i) => ({
-    id: t.id ?? threadIds[i],
-    messages: t.messages ?? [],
-    accountEmail,
-  }));
+  return raw
+    .map((t, i) => ({
+      id: t.id ?? threadIds[i],
+      messages: t.messages ?? [],
+      accountEmail,
+    }))
+    .filter((item) => inScope(selected, item.messages));
 }
 
 /** One history.list sweep: pages until exhausted, collects every thread id
@@ -95,6 +107,7 @@ async function* runDeltaSweep(
   session: Session,
   state: Extract<GmailCursor, { mode: 'delta' }>,
   accountEmail: string,
+  selected: Set<GmailBucket>,
 ): AsyncGenerator<Batch<GmailCursor, GmailThreadItem>> {
   const affected = new Set<string>();
   let pageToken: string | undefined;
@@ -133,6 +146,7 @@ async function* runDeltaSweep(
     await mapPool(chunk, async (threadId) => {
       try {
         const raw = await getThread(session, threadId);
+        if (!inScope(selected, raw.messages ?? [])) return;
         items.push({
           id: threadId,
           messages: raw.messages ?? [],
@@ -182,6 +196,7 @@ export async function* pull(
   cursor: GmailCursor | null,
 ): AsyncIterable<Batch<GmailCursor, GmailThreadItem>> {
   const accountEmail = session.account.identifier;
+  const selected = selectedBuckets(session.account.config ?? {});
   let state: GmailCursor;
   // threads.list's resultSizeEstimate is a per-PAGE guess (routinely ~200
   // for a 20k-thread mailbox) — useless as a backfill total. The profile's
@@ -213,7 +228,12 @@ export async function* pull(
         const chunk = ids.slice(i, i + THREAD_CHUNK_SIZE);
         const isLastChunkOfPage = i + THREAD_CHUNK_SIZE >= ids.length;
         // eslint-disable-next-line no-await-in-loop
-        const items = await fetchThreadItems(session, chunk, accountEmail);
+        const items = await fetchThreadItems(
+          session,
+          chunk,
+          accountEmail,
+          selected,
+        );
         state = {
           mode: 'backfill',
           // Only advance the persisted pageToken once the WHOLE page's
@@ -242,7 +262,7 @@ export async function* pull(
     // The only 404 that can escape the sweep is history.list's (per-thread
     // 404s become deletions inside it), so the catch below still means
     // exactly "history watermark expired".
-    yield* runDeltaSweep(session, state, accountEmail);
+    yield* runDeltaSweep(session, state, accountEmail, selected);
   } catch (err) {
     if (!isGmailNotFoundError(err)) throw err;
     // History watermark expired: fall back to a fresh backfill. Re-capture
