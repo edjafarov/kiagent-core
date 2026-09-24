@@ -1,6 +1,6 @@
 # Mail folder scope — Microsoft 365 folders and Gmail Trash/Spam
 
-Status: DRAFT r2 (r0, r1 reviewed by fable + codex astra; dispositions in §7, §8)
+Status: DRAFT r3 (r0–r2 reviewed by fable + codex astra; dispositions in §7–§9)
 Date: 2026-09-24
 
 ## 1. What the user asked for
@@ -77,7 +77,7 @@ Non-goals:
 - **New accounts:** `connect()` writes Inbox, Sent Items and Archive (ids resolved from well-known names). There is no picker at connect.
 - **Legacy accounts** (config without `folderRoots`) behave exactly as today until the user first saves a selection:
   - enumeration: Inbox + Sent Items. Covering semantics now include their subfolders; this is the one intentional widening.
-  - retention: **the whole mailbox**. The legacy connector never removed anything, so users who "process" mail by deleting or archiving keep what they have. Only mail that no longer exists anywhere is removed, which is the one intentional narrowing.
+  - retention: **everything already indexed**. `reconcile()` yields nothing and is not run for a legacy account: it throws `LegacyScopeNoReconcile`, which the connector maps to an info-level skip (§3.3). Like the legacy connector, nothing is ever removed except via the existing zero-message deletion path. Users who "process" mail by deleting or archiving keep what they have, and there is no new listing cost.
   - The card shows "Default folders — Manage to change" (§5.2). The picker pre-selects Inbox + Sent Items.
 
 ### 3.2 Pull
@@ -94,23 +94,25 @@ Non-goals:
   - The existing `enumerate` phase covers first backfill.
 - `accumulate` loses the junk/deleted exclusion and the `isDraft` skip; eligibility is folder membership only.
 - **Emission gate:** every fetched conversation, whether from pending, retry or delta, is emitted only if at least one message's `parentFolderId` is in the **retention set**. Otherwise it is a deletion. A stale queue entry therefore cannot resurrect excluded mail.
-  - Retention set = tracked set, or the whole mailbox for legacy accounts.
+  - Retention set = tracked set; for legacy accounts, the gate is today's rule (emit any non-empty conversation).
   - `CONV_SELECT` already includes `parentFolderId`.
 - The document gains `metadata.folders` = sorted unique `parentFolderId`s of its messages, so a move between folders changes the hash (§3.3 relies on this).
   - `scopeRootId` = the first root in config order that covers any member folder. It is informational: MS365 never archives by stamp.
 - **Retry:** a non-auth conversation fetch failure goes into `retry` with its count, committed with the batch.
-  - `retry` is attempted first on every pull and is never dropped; the list is capped at 10 000 with the oldest dropped and logged.
+  - `retry` is attempted first on every pull and is never dropped or evicted (no cap). Above 1 000 entries a `warn` is logged each pull; ids are ~100 bytes, so the cursor stays small in any realistic failure mode.
   - From 5 consecutive failures, the id is logged at `warn` each pull.
 - Expired delta (410) keeps today's 14-day re-prime. Reconcile covers removals during the gap; old mail moved *into* scope during the gap is not re-found (pre-existing, unchanged).
 
 ### 3.3 Reconcile
-- `reconcile()` = discovery, then page `messages?$select=conversationId&$top=1000` for every folder in the retention set. It yields `{externalId: conversationId, type:'email.thread'}`. This is the complete identity set: the connector emits no children.
+- `reconcile()` = discovery, then page `messages?$select=conversationId&$top=1000` for every folder in the tracked set. Not run for legacy accounts (see below). It yields `{externalId: conversationId, type:'email.thread'}`. This is the complete identity set: the connector emits no children.
 - It archives hard deletions, and moves out of the retention set (e.g. to untracked Deleted Items or custom folders, or a folder moved out of the subtree), with no Save involved.
 - **Race** (astra r1-2): a thread moves Inbox→Sent while the listing runs, so it may be listed in neither folder and gets archived.
   - The move is also a delta event in Sent, so pull re-fetches the thread.
   - Its `metadata.folders` changed, so the upsert is not skipped, and upserting an archived row revives it.
   - If pull processed the move *before* the reconcile diff, its emit has seq > `startSeq`, and the TOCTOU guard excludes it.
   - Either way the thread ends live.
+- **Guarantee, stated narrowly.** Graph listings are not snapshots. A user moving the same conversation *back and forth* between tracked folders during the seconds a listing runs (astra r2-2 round trip) can end up with a live, in-scope thread archived. It reappears when the conversation next changes (a new message or move, via the delta → re-fetch → revive path), or on the next Save that re-lists it (§3.4 emits nothing for it, but the widening/enumeration of any folder containing it re-ingests it). The design accepts this window rather than adding a revive-on-listing platform rule. A one-way move is fully covered by the argument above and pinned by tests.
+- **Legacy accounts** have no reconcile at all until their first Save. Engine contract: a `reconcile()` that throws is logged and changes nothing, so the connector instead yields the complete live identity it can compute cheaply. Simplest correct choice, and the one adopted: the connector does **not implement the skip by throwing**. The source object's `reconcile` is present, and for a legacy account it returns after yielding a sentinel-free listing of *every conversation id in the whole mailbox*? No — rejected (cost, and r2-1). **Adopted:** core gains nothing; the connector's `reconcile` for a legacy account yields the ids of `pending`/indexed work it cannot know… also rejected. **Final:** see §5.3, a one-line engine rule.
 - Safeguards are the platform's, unchanged: an empty listing or a >50% shrink is refused and surfaced on the account. Mass deletion upstream is rare, and the refusal message's "re-save settings" escape hatch applies.
 - Runs every pull, as for every reconcile connector. Cost is 1 request per 1 000 messages in the retention set; the request count is logged per pass.
 
