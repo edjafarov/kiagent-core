@@ -799,17 +799,20 @@ export function createEngine(deps: EngineDeps): Engine & {
       // Re-Adding a known folder-scoped account through a connect that shows
       // NO picker (Gmail, MS365 write fixed defaults) must not reset the
       // user's folder selection: the upsert below replaces config wholesale,
-      // and nothing would archive what the lost selection had covered. A
-      // connect that DID show the picker is the user choosing afresh.
+      // and nothing would archive what the lost selection had covered. That
+      // includes its ABSENCE: a legacy (undeclared) account must stay
+      // undeclared, or connect's defaults become a declared scope whose first
+      // reconcile archives everything outside them. A connect that DID show
+      // the picker is the user choosing afresh.
       if (source.descriptor.folderScope && !usedPicker) {
         const prior = (await store.read.accounts()).find(
           (a) =>
             a.source === source.descriptor.id && a.identifier === identifier,
         );
-        const priorRoots = (prior?.config as { folderRoots?: unknown })
-          ?.folderRoots;
-        if (Array.isArray(priorRoots)) {
-          config = { ...(config ?? {}), folderRoots: priorRoots };
+        if (prior) {
+          const fresh = { ...(config ?? {}) };
+          for (const key of SCOPE_KEYS) delete fresh[key];
+          config = { ...fresh, ...pickScopeKeys(prior.config ?? {}) };
         }
       }
       // createAccount upserts on (source, identifier): re-authenticating an

@@ -877,6 +877,49 @@ describe('engine', () => {
     });
   });
 
+  it('connect: re-Adding a LEGACY (undeclared) folder-scoped account without a picker keeps it undeclared', async () => {
+    // MS365 has no reauthenticate: an expired token says "remove and add it
+    // again". Adding without removing must not turn connect's defaults into
+    // a declared scope — the next reconcile would archive everything outside
+    // them under a full allowance.
+    const source: Source<number, DocumentInput> = {
+      descriptor: {
+        id: 'scoped',
+        name: 'Scoped',
+        documentTypes: ['note'],
+        auth: 'none',
+        folderScope: true,
+      },
+      async connect() {
+        return {
+          identifier: 'me@test',
+          config: {
+            tenantKind: 'work',
+            folderRoots: [{ id: 'inbox', name: 'Inbox' }],
+          },
+        };
+      },
+      async *pull() {},
+      toDocument: (item) => item,
+    };
+    const engine = makeEngine(source);
+    const legacy = await store.createAccount({
+      source: 'scoped',
+      identifier: 'me@test',
+      config: { tenantKind: 'work' },
+      status: 'connecting',
+    });
+    const again = await engine.connect(source, {
+      oauth: async () => ({}),
+      showQr: () => {},
+      prompt: async () => ({}),
+      status: () => {},
+      pickFolders: async () => [],
+    });
+    expect(again.id).toBe(legacy.id);
+    expect(again.config).toEqual({ tenantKind: 'work' });
+  });
+
   it('connect: reconnecting an existing (source, identifier) upserts the account, stops the old running loop, no duplicate', async () => {
     let attempt = 0;
     const source: Source<number, DocumentInput> = {
