@@ -253,22 +253,8 @@ export function parseManifest(
   }
   const uiContribs = m.contributes.ui ?? [];
   if (uiContribs.length > 0) {
-    // B3: same shape as the db-descriptor rule above — a cap declares
-    // intent, a contribution exercises it.
-    if (!m.caps.includes('ui')) {
-      throw new ManifestError(
-        'PLUGIN_UI_CAP_REQUIRED: the ui capability is required for contributes.ui',
-      );
-    }
-    // Runtime delivery for the external tier is not implemented — the code
-    // must exist when the renderer is built, so a marketplace/dev manifest
-    // declaring contributes.ui is rejected outright rather than silently
-    // ignored.
-    if (tier !== 'bundled') {
-      throw new ManifestError(
-        'PLUGIN_UI_TIER_DENIED: contributes.ui is available to bundled extensions only — runtime UI delivery is not implemented',
-      );
-    }
+    // Any tier may contribute a page: declaring contributes.ui is the
+    // request, the install consent (ConsentRecord.pages) is the gate.
     const seenIds = new Set<string>();
     for (const c of uiContribs) {
       if (seenIds.has(c.id)) {
@@ -357,6 +343,14 @@ export function fileRootsCovered(
 export const MAX_ICON_BYTES = 200 * 1024;
 export const MAX_DESCRIPTOR_BYTES = 4 * 1024 * 1024;
 
+/** Upper bound for one contributed page bundle (dist/ui/<id>.js). */
+export const MAX_PAGE_BYTES = 5 * 1024 * 1024;
+
+/** A contributed page's bundle, by convention: contribution id → dist/ui/<id>.js. */
+export function pageEntryPath(root: string, contributionId: string): string {
+  return path.join(root, 'dist', 'ui', `${contributionId}.js`);
+}
+
 function containedRealPath(
   root: string,
   candidate: string,
@@ -438,6 +432,17 @@ export function validateManifestDir(
     if (!schemaStat.isFile() || schemaStat.size > MAX_DESCRIPTOR_BYTES)
       throw new ManifestError(
         'database.schema must be a regular file no larger than 4 MiB',
+      );
+  }
+  for (const c of uiContributions(manifest)) {
+    const rel = `dist/ui/${c.id}.js`;
+    const abs = pageEntryPath(root, c.id);
+    if (!fs.existsSync(abs))
+      throw new ManifestError(`page bundle not found: ${rel}`);
+    const st = fs.statSync(containedRealPath(root, abs, rel));
+    if (!st.isFile() || st.size > MAX_PAGE_BYTES)
+      throw new ManifestError(
+        `${rel} must be a regular file no larger than 5 MiB`,
       );
   }
   return { manifest, entryAbsPath };

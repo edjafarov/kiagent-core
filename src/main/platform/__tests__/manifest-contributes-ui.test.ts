@@ -1,5 +1,14 @@
 /** @jest-environment node */
-import { ManifestError, parseManifest, uiContributions } from '../manifest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  MAX_PAGE_BYTES,
+  ManifestError,
+  parseManifest,
+  uiContributions,
+  validateManifestDir,
+} from '../manifest';
 
 // B3: `contributes.ui` — item 2 of the plan. A separate file from
 // manifest.test.ts so the pre-existing suite there needs zero edits.
@@ -75,21 +84,15 @@ describe('contributes.ui manifest validation', () => {
     ).not.toThrow();
   });
 
-  it('rejects contributes.ui without the ui capability', () => {
+  it('accepts contributes.ui without the ui capability (the consent row is the gate)', () => {
     expect(() =>
       parseManifest({ ...GOOD, caps: [] }, { tier: 'bundled' }),
-    ).toThrow(ManifestError);
-    expect(() =>
-      parseManifest({ ...GOOD, caps: [] }, { tier: 'bundled' }),
-    ).toThrow(/PLUGIN_UI_CAP_REQUIRED/);
+    ).not.toThrow();
   });
 
-  it('rejects contributes.ui for the external tier (default), naming the reason', () => {
-    expect(() => parseManifest(GOOD)).toThrow(ManifestError);
-    expect(() => parseManifest(GOOD)).toThrow(/PLUGIN_UI_TIER_DENIED/);
-    expect(() => parseManifest(GOOD, { tier: 'external' })).toThrow(
-      /PLUGIN_UI_TIER_DENIED/,
-    );
+  it('accepts contributes.ui for the external tier', () => {
+    expect(() => parseManifest(GOOD)).not.toThrow();
+    expect(() => parseManifest(GOOD, { tier: 'external' })).not.toThrow();
   });
 
   it('rejects an unknown slot', () => {
@@ -230,5 +233,51 @@ describe('contributes.ui manifest validation', () => {
         { tier: 'bundled' },
       ),
     ).toThrow(ManifestError);
+  });
+});
+
+function extDir(files: Record<string, string | Buffer>): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-page-'));
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(GOOD));
+  fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
+  fs.writeFileSync(path.join(dir, GOOD.entry), 'module.exports={}');
+  for (const [rel, body] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), body);
+  }
+  return dir;
+}
+
+describe('page file (dist/ui/<id>.js)', () => {
+  const pageId = GOOD.contributes.ui[0].id;
+
+  it('passes when the page bundle exists', () => {
+    expect(() =>
+      validateManifestDir(
+        extDir({ [`dist/ui/${pageId}.js`]: 'export default 1' }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('fails when the page bundle is missing', () => {
+    expect(() => validateManifestDir(extDir({}))).toThrow(
+      /dist\/ui\/main\.js/,
+    );
+  });
+
+  it('fails when the page bundle is larger than 5 MiB', () => {
+    const big = Buffer.alloc(MAX_PAGE_BYTES + 1, 32);
+    expect(() =>
+      validateManifestDir(extDir({ [`dist/ui/${pageId}.js`]: big })),
+    ).toThrow(/5 MiB/);
+  });
+
+  it('fails when the page bundle is a symlink escaping the package', () => {
+    const dir = extDir({});
+    fs.mkdirSync(path.join(dir, 'dist/ui'), { recursive: true });
+    const outside = path.join(os.tmpdir(), `kia-outside-${Date.now()}.js`);
+    fs.writeFileSync(outside, 'x');
+    fs.symlinkSync(outside, path.join(dir, `dist/ui/${pageId}.js`));
+    expect(() => validateManifestDir(dir)).toThrow(ManifestError);
   });
 });

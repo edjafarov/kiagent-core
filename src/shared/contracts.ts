@@ -1034,8 +1034,8 @@ export interface UiNavSuggestion {
   icon?: string;
 }
 
-/** One `contributes.ui` entry: a bespoke renderer screen, delivered at
- *  build time (bundled tier only — `PLUGIN_UI_TIER_DENIED` for `external`).
+/** One `contributes.ui` entry: a bespoke renderer screen, loaded at runtime
+ *  from the package's `dist/ui/<id>.js` (any tier; the install consent names it).
  *  `id` is namespaced into the routed view id as
  *  `ext:<extension id>/<id>` (`src/renderer/state/view.ts`'s `ExtView`).
  *  `params` declares the FLAT param keys this view's deep links accept —
