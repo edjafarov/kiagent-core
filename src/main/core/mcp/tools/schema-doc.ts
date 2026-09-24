@@ -77,7 +77,7 @@ TEXT.`,
           name: 'metadata',
           type: 'TEXT (JSON)',
           notes:
-            'Polymorphic per source/type. Default "{}". gmail email.thread: {from, to, cc, labels, participants, messageCount, firstMessageAt, lastMessageAt, messages[]}. local-folder file: {absPath (absolute filesystem path), filename, ext, mime, sizeBytes, mtime}. attachment / file docs generally: {filename, mime, sizeBytes}.',
+            'Polymorphic per source/type. Default "{}". gmail email.thread: {from, to, cc, labels, participants, messageCount, firstMessageAt, lastMessageAt, messages[]}. local-folder file: {absPath (absolute filesystem path), filename, ext, mime, sizeBytes, mtime}. attachment / file docs generally: {filename, mime, sizeBytes}. google-calendar calendar.event: {calendarId, calendarName, calendarColor, eventId, iCalUID, occurrenceKey, start, end (UTC ISO), allDay, startDate?, endDate? (all-day, YYYY-MM-DD, end exclusive), timeZone, status, organizer, selfResponse, attendees[{email, name, response}], participants, conferenceUrl, location, eventType, transparency}. meetings meeting.transcript: {app, meetingId, speakers, participants, speakerCount, hasMe, calendarEvent?{occurrenceKey, title, start}}.',
         },
         {
           name: 'created_at',
@@ -376,9 +376,16 @@ TEXT.`,
     {
       name: 'type',
       // Hand-maintained (NOT CI-enforced — see file header).
-      values: ['email.thread', 'email.message', 'attachment', 'file'],
+      values: [
+        'email.thread',
+        'email.message',
+        'attachment',
+        'file',
+        'calendar.event',
+        'meeting.transcript',
+      ],
       notes:
-        'email.thread + attachment (gmail); email.message (imap); file (local-folder).',
+        'email.thread + attachment (gmail); email.message (imap); file (local-folder); calendar.event (google-calendar extension); meeting.transcript (meetings extension).',
     },
   ],
 };

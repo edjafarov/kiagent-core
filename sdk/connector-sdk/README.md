@@ -171,6 +171,69 @@ even for an unscripted (rejecting) call, which is how a test asserts that a
 manage edit opened with the account's current roots in `spec.selected` and
 `spec.purpose === 'manage'`.
 
+## Contributing a page
+
+An extension can add a page to the app's sidebar (platform `^2.5.0`). A page
+is **trusted code**: it runs inside the app's renderer with full access to the
+app, and the install consent tells the user exactly that ("Adds pages to
+KIAgent — runs with full access to the app"). There is no sandbox.
+
+Manifest:
+
+```json
+{
+  "engine": "^2.5.0",
+  "contributes": {
+    "ui": [{ "id": "calendar", "slot": "screen", "title": "Calendar",
+             "nav": { "group": "Memory", "order": 40, "icon": "calendar" } }]
+  }
+}
+```
+
+The bundle is found by convention: contribution `id` → `dist/ui/<id>.js`
+(inside the package, at most 5 MiB; a missing file fails install). Its default
+export is a React component receiving `PageProps` (`ui.d.ts`): `params` and
+`navigate(view, params?)`.
+
+Build it with esbuild as ESM, aliasing React to the shims so the page uses
+the app's own React instance (hooks break with a second copy):
+
+```js
+import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+
+await build({
+  entryPoints: { calendar: 'ui/calendar.tsx' },
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  target: 'chrome120',
+  jsx: 'automatic',
+  outdir: 'dist/ui',
+  alias: {
+    react: require.resolve('@kiagent/connector-sdk/ui-shims/react.js'),
+    'react-dom': require.resolve('@kiagent/connector-sdk/ui-shims/react-dom.js'),
+    'react/jsx-runtime': require.resolve('@kiagent/connector-sdk/ui-shims/jsx-runtime.js'),
+  },
+});
+```
+
+Inside the page:
+
+- **Data:** `window.kiagent.invoke('search:query', …)`,
+  `window.kiagent.invoke('app:get-state')` and
+  `window.kiagent.on('push:app-state', cb)` — typed in `ui.d.ts`
+  (`import type { PageProps } from '@kiagent/connector-sdk/ui'`).
+- **Styling:** the app's CSS variables (`var(--fg)`, `var(--bg-app)`, …), so
+  the page follows the app's theme.
+- **External links:** plain `<a href="https://…" target="_blank">` — the app
+  opens `https:` links in the browser.
+
+A thrown error or a failed import shows a named error state for that page
+only; the rest of the app keeps running. Updating or re-enabling the extension
+reloads the page.
+
 ## Versioning
 
 Current release: **1.3.0**, `kiagentCore: 0.89.1` (platform API **2.2.0**).
