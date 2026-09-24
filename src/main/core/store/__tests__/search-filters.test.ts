@@ -210,6 +210,42 @@ describe('Query.search structured filters', () => {
     expect(newest.map((d) => d.externalId)).toEqual(['t1', 't2', 't3']);
   });
 
+  it('recency paging over equal dates has no gaps or repeats (id tie-breaker)', async () => {
+    const ids = Array.from({ length: 120 }, (_, i) => `same-${i}`);
+    // Shuffled insert order, so scan order cannot pass for a real ordering.
+    const shuffled = ids
+      .map((id, i) => ({ id, k: (i * 37) % 120 }))
+      .sort((a, b) => a.k - b.k)
+      .map((x) => x.id);
+    await store.commit({
+      account: accountId,
+      documents: shuffled.map((id) =>
+        doc(id, { type: 'same.day', createdAt: '2026-09-24T00:00:00.000Z' }),
+      ),
+      cursor: null,
+    });
+    const seen: string[] = [];
+    for (let offset = 0; offset < 120; offset += 50) {
+      const page = await store.read.search({
+        type: 'same.day',
+        limit: 50,
+        offset,
+      });
+      seen.push(...page.map((d) => d.id));
+    }
+    expect(seen).toHaveLength(120);
+    expect(new Set(seen).size).toBe(120);
+    expect(seen).toEqual([...seen].sort().reverse());
+    const newest = await store.read.search({
+      text: 'common-word',
+      type: 'same.day',
+      orderBy: 'newest',
+      limit: 120,
+    });
+    const newestIds = newest.map((d) => d.id);
+    expect(newestIds).toEqual([...newestIds].sort().reverse());
+  });
+
   it('LIKE metacharacters in values are literal, not wildcards', async () => {
     expect(await store.read.search({ people: { from: ['%'] } })).toHaveLength(
       0,

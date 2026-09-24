@@ -18,6 +18,7 @@ import type {
   OAuthSourceBinding,
   OutboxStatus,
   ProviderStatus,
+  Query,
   RecentExtraction,
   Seq,
   SourceDescriptor,
@@ -127,14 +128,8 @@ export interface ExtPushEvent {
   payload: unknown;
 }
 
-export interface SearchRequest {
-  text?: string;
-  type?: string;
-  account?: AccountId;
-  includeArchived?: boolean;
-  limit?: number;
-  offset?: number;
-}
+/** The renderer's search request is exactly Query.search's argument. */
+export type SearchRequest = Parameters<Query['search']>[0];
 
 export interface StorageStats {
   dbBytes: number;

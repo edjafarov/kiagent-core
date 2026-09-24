@@ -777,7 +777,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         const langs = await corpusLanguages();
         const orderSql =
           q.orderBy === 'newest'
-            ? `ORDER BY COALESCE(d.created_at, d.ingested_at) DESC`
+            ? `ORDER BY COALESCE(d.created_at, d.ingested_at) DESC, d.id DESC`
             : `ORDER BY bm25(documents_fts, 0, 4.0, 1.0, 2.0, 0.5)`;
         const rows = (await db.all(
           `SELECT d.*, snippet(documents_fts, 2, '<b>', '</b>', '…', 24) AS _snippet
@@ -863,7 +863,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       }
       const rows = (await db.all(
         `SELECT d.* FROM documents d WHERE 1=1 ${where}
-           ORDER BY COALESCE(d.created_at, d.ingested_at) DESC
+           ORDER BY COALESCE(d.created_at, d.ingested_at) DESC, d.id DESC
            LIMIT ? OFFSET ?`,
         [...params, limit, offset],
       )) as unknown as DocRow[];
