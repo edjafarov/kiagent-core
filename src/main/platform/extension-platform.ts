@@ -50,7 +50,10 @@ import {
   senderContributions,
   sourceContributions,
   uiContributions,
+  containedRealPath,
+  pageEntryPath,
   MAX_DESCRIPTOR_BYTES,
+  MAX_PAGE_BYTES,
 } from './manifest';
 import { oauthProviders } from './oauth-providers';
 import {
@@ -386,6 +389,13 @@ export interface ExtensionPlatform {
    * whatever the manifest actually declares.
    */
   grantConsent(id: string): Promise<{ ok: boolean; error?: string }>;
+  /** The source of a declared contributed page (`dist/ui/<id>.js`) of an
+   *  enabled extension. The path comes from the platform's own entry, never
+   *  from the request; throws naming the reason otherwise. */
+  uiSource(
+    extensionId: string,
+    contributionId: string,
+  ): Promise<{ source: string }>;
   /** Factory-reset extension-owned namespaces, then restart eligible hosts. */
   resetAll(): Promise<ResetAllResult>;
   /**
@@ -1505,6 +1515,26 @@ export function createExtensionPlatform(
         changed();
         return { ok: true };
       });
+    },
+
+    async uiSource(extensionId, contributionId) {
+      const e = entries.get(extensionId);
+      if (!e) throw new Error(`no such extension: ${extensionId}`);
+      if (!e.enabled) throw new Error(`extension ${extensionId} is disabled`);
+      if (!uiContributions(e.manifest).some((c) => c.id === contributionId))
+        throw new Error(
+          `extension ${extensionId} does not declare page ${contributionId}`,
+        );
+      const rel = `dist/ui/${contributionId}.js`;
+      const file = containedRealPath(
+        e.dir,
+        pageEntryPath(e.dir, contributionId),
+        rel,
+      );
+      const st = await fs.promises.stat(file);
+      if (!st.isFile() || st.size > MAX_PAGE_BYTES)
+        throw new Error(`page bundle unavailable: ${rel}`);
+      return { source: await fs.promises.readFile(file, 'utf8') };
     },
 
     async grantConsent(id) {

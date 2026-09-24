@@ -755,6 +755,8 @@ function registerIpc(
     'extension:set-enabled': ({ id, enabled }) =>
       extensions.setEnabled(id, enabled),
     'extension:grant-consent': ({ id }) => extensions.grantConsent(id),
+    'extensions:ui-source': ({ extensionId, contributionId }) =>
+      extensions.uiSource(extensionId, contributionId),
 
     // The two seams: the updater's three channels and the Outbox history
     // panel's five (spec §10). Both hand back a `Pick<InvokeHandlers, …>`

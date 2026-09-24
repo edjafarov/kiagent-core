@@ -351,7 +351,7 @@ export function pageEntryPath(root: string, contributionId: string): string {
   return path.join(root, 'dist', 'ui', `${contributionId}.js`);
 }
 
-function containedRealPath(
+export function containedRealPath(
   root: string,
   candidate: string,
   label: string,

@@ -527,6 +527,51 @@ describe('createExtensionPlatform', () => {
       );
     });
 
+    describe('uiSource', () => {
+      async function installWithPage(): Promise<void> {
+        await platform.start();
+        const preview = await platform.installPreview(pageFixture());
+        if (!('token' in preview)) throw new Error(JSON.stringify(preview));
+        await platform.installCommit(preview.token);
+      }
+
+      it('serves dist/ui/<id>.js of an enabled extension that declares it', async () => {
+        await installWithPage();
+        await expect(platform.uiSource('test.basic', 'main')).resolves.toEqual({
+          source: 'export default 1',
+        });
+      });
+
+      it('rejects an undeclared contribution', async () => {
+        await installWithPage();
+        await expect(platform.uiSource('test.basic', 'other')).rejects.toThrow(
+          /does not declare/,
+        );
+      });
+
+      it('rejects a path-shaped contribution id without reading it', async () => {
+        await installWithPage();
+        await expect(
+          platform.uiSource('test.basic', '../../manifest'),
+        ).rejects.toThrow(/does not declare/);
+      });
+
+      it('rejects a disabled extension', async () => {
+        await installWithPage();
+        await platform.setEnabled('test.basic', false);
+        await expect(platform.uiSource('test.basic', 'main')).rejects.toThrow(
+          /disabled/,
+        );
+      });
+
+      it('rejects an unknown extension', async () => {
+        await platform.start();
+        await expect(platform.uiSource('nope', 'main')).rejects.toThrow(
+          /no such extension/,
+        );
+      });
+    });
+
     it('installPreview of a manifest without pages has ui = []', async () => {
       const preview = await platform.installPreview(FIXTURE);
       if (!('token' in preview)) throw new Error(JSON.stringify(preview));

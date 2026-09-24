@@ -558,6 +558,11 @@ export interface Invokes {
     req: { id: string };
     res: { ok: boolean; error?: string };
   };
+  /** A contributed page's bundle source, for the renderer's page loader. */
+  'extensions:ui-source': {
+    req: { extensionId: string; contributionId: string };
+    res: { source: string };
+  };
 }
 
 /** main → renderer broadcasts. */
@@ -676,6 +681,7 @@ const INVOKE_CHANNEL_MAP = {
   'extension:uninstall': 0,
   'extension:set-enabled': 0,
   'extension:grant-consent': 0,
+  'extensions:ui-source': 0,
   'ext:invoke': 0,
 } as const satisfies Record<InvokeChannel, 0>;
 
