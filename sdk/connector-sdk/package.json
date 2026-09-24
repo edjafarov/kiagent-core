@@ -1,9 +1,9 @@
 {
   "name": "@kiagent/connector-sdk",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Contracts, source-error taxonomy, and shared utilities for KIAgent connector plugins",
   "license": "MIT",
-  "kiagentCore": "0.89.1",
+  "kiagentCore": "0.90.0",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": ["dist", "http.js", "http.d.ts", "chat-day.js", "chat-day.d.ts", "testing.js", "testing.d.ts", "README.md"],

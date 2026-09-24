@@ -285,6 +285,9 @@ export interface ConsentRecord {
   caps: readonly Cap[];
   manifestVersion: string;
   grantedAt: string;
+  /** The declared folders the user consented to ({id, path}, id-sorted);
+   *  [] = none. A manifest is covered when its roots are a subset. */
+  fileRoots: ConsentedFileRoot[];
 }
 
 /** One row of Settings → Local processing's "Recently processed" list. */
@@ -1056,7 +1059,23 @@ export interface Manifest {
   caps: Cap[];
   /** Declarative database descriptor path, required when caps includes db. */
   database?: { schema: string };
+  /** Platform 2.3.0: read-only local folders this extension asks to read —
+   *  always an array (`[]` when the manifest declares none). External tier
+   *  only; requires the `files` cap. Bound into consent via
+   *  `ConsentRecord.fileRoots`. */
+  fileRoots: DeclaredFileRoot[];
 }
+
+/** A local folder a marketplace extension declares it will read. `path` is
+ *  home-relative (`~/…`) and shown verbatim on the consent modal. */
+export interface DeclaredFileRoot {
+  id: string;
+  path: string;
+  purpose: string;
+}
+
+/** What consent records of a declared root: `purpose` is display copy. */
+export type ConsentedFileRoot = Pick<DeclaredFileRoot, 'id' | 'path'>;
 
 /** Declarative database shape and immutable migration history published by a
  * connector as `database.schema` (normally `dist/database.json`). */
@@ -1252,6 +1271,10 @@ export interface ExtensionSnapshot {
    *  many pre-existing test fixtures that build an `ExtensionSnapshot`
    *  literal without this field keep compiling unchanged. */
   ui?: UiContribution[];
+  /** Local folders this extension declares (platform 2.3.0) — shown where
+   *  permissions are reviewed. Always an array from the real projection;
+   *  optional for the same fixture reason as `ui`. */
+  fileRoots?: DeclaredFileRoot[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

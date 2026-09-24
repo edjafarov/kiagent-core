@@ -11,6 +11,8 @@ import { z } from 'zod';
 
 import type {
   Cap,
+  ConsentedFileRoot,
+  DeclaredFileRoot,
   ExtensionId,
   Manifest,
   OAuthProviderId,
@@ -115,6 +117,46 @@ const uiContributionSchema = z.strictObject({
     .optional(),
 });
 
+const FILE_ROOT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+/** `~/<seg>/<seg>…` with no empty, `.` or `..` segment and no NUL — the
+ *  lexical half of the containment rule; the reconciler re-checks the
+ *  realpath against the home directory at grant time. */
+export function isHomeRelativePath(p: string): boolean {
+  if (!p.startsWith('~/') || p.includes('\0')) return false;
+  const rest = p.slice(2);
+  if (rest === '') return false;
+  return rest.split('/').every((s) => s !== '' && s !== '.' && s !== '..');
+}
+
+/** `~/Library` and its direct children (Caches, Keychains, Mail, …) hold
+ *  every app's private state; a declared root must name the one app folder
+ *  it needs. Case-insensitive, like the macOS filesystem. The reconciler
+ *  repeats this on the realpath (a symlink could point there). */
+export function isLibraryTop(p: string): boolean {
+  const segs = p.toLowerCase().split('/');
+  return segs[0] === '~' && segs[1] === 'library' && segs.length <= 3;
+}
+
+const fileRootSchema = z
+  .strictObject({
+    id: z
+      .string()
+      .regex(FILE_ROOT_ID_RE, 'fileRoots id must match ^[a-z][a-z0-9-]{0,31}$'),
+    path: z
+      .string()
+      .refine(
+        isHomeRelativePath,
+        "fileRoots path must be '~/<relative path>' without '.', '..' or empty segments",
+      ),
+    purpose: z.string().min(1).max(200),
+  })
+  .refine((r) => !isLibraryTop(r.path), {
+    path: ['path'],
+    message:
+      'fileRoots path must not be ~/Library or a folder directly inside it — declare the app folder you need',
+  });
+
 // Strict throughout (platform 2.0.0): unknown keys are rejected, never
 // silently stripped — a manifest field that does nothing is a lie to the
 // author and to the consent surface.
@@ -156,6 +198,7 @@ const schema = z.strictObject({
     ui: z.array(uiContributionSchema).optional(),
   }),
   database: z.strictObject({ schema: z.string().min(1) }).optional(),
+  fileRoots: z.array(fileRootSchema).max(8).default([]),
 });
 
 export function parseManifest(
@@ -189,6 +232,24 @@ export function parseManifest(
     throw new ManifestError(
       `this extension requires ${privileged.join(', ')} — only extensions bundled with the app may use it`,
     );
+  }
+  if (m.fileRoots.length > 0) {
+    if (!m.caps.includes('files'))
+      throw new ManifestError(
+        'PLUGIN_FILES_CAP_REQUIRED: the files capability is required for fileRoots',
+      );
+    if (tier === 'bundled')
+      throw new ManifestError(
+        'PLUGIN_FILE_ROOTS_TIER_DENIED: fileRoots is for marketplace extensions — bundled extensions use mainApi.grantRoot',
+      );
+    const seen = new Set<string>();
+    for (const r of m.fileRoots) {
+      if (seen.has(r.id))
+        throw new ManifestError(
+          `invalid manifest: fileRoots — duplicate fileRoots id '${r.id}'`,
+        );
+      seen.add(r.id);
+    }
   }
   const uiContribs = m.contributes.ui ?? [];
   if (uiContribs.length > 0) {
@@ -266,6 +327,28 @@ export function oauthSourceBindings(
 ): OAuthSourceBinding[] {
   return sourceContributions(manifest).flatMap((s) =>
     s.oauth ? [{ id: s.id, provider: s.oauth }] : [],
+  );
+}
+
+/** What a consent records of `fileRoots`: the id-sorted `{id, path}` list
+ *  (purpose is display copy, excluded). */
+export function consentedFileRoots(
+  roots: readonly DeclaredFileRoot[] | undefined,
+): ConsentedFileRoot[] {
+  return [...(roots ?? [])]
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((r) => ({ id: r.id, path: r.path }));
+}
+
+/** Consent covers a manifest's folders when every declared `{id, path}` was
+ *  consented — the same subset rule `consentCovers` applies to caps, so an
+ *  update that narrows its folders keeps its consent. */
+export function fileRootsCovered(
+  declared: readonly DeclaredFileRoot[] | undefined,
+  consented: readonly ConsentedFileRoot[],
+): boolean {
+  return (declared ?? []).every((r) =>
+    consented.some((c) => c.id === r.id && c.path === r.path),
   );
 }
 

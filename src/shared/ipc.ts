@@ -5,6 +5,7 @@ import type {
   AppState,
   Cadence,
   Cap,
+  DeclaredFileRoot,
   Document,
   DocumentId,
   FolderCount,
@@ -160,6 +161,10 @@ export interface ExtensionPreview {
   /** Sources that will sign in through a platform OAuth provider — part of
    *  what the user consents to at install, alongside caps. */
   oauthSources: OAuthSourceBinding[];
+  /** Local folders the extension will read (platform 2.3.0) — consented
+   *  together with caps. Always populated by the platform; optional only so
+   *  existing preview literals keep compiling (same as `ui` on snapshots). */
+  fileRoots?: DeclaredFileRoot[];
   sizeBytes: number;
   integrity: string | null;
   /** data:image/png;base64 URI of the staged package's manifest icon — the

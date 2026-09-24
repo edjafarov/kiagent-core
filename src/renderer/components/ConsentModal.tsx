@@ -1,6 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Icon } from '@shared/web-ui/icon-sprite';
-import type { Cap, OAuthSourceBinding } from '@shared/contracts';
+import type {
+  Cap,
+  DeclaredFileRoot,
+  OAuthSourceBinding,
+} from '@shared/contracts';
 import {
   CAP_CATALOG,
   OAUTH_PROVIDER_INFO,
@@ -50,6 +54,8 @@ export interface ConsentRequest {
   /** Sources that sign in through a platform OAuth provider — shown as
    *  permission rows alongside caps. */
   oauthSources?: OAuthSourceBinding[];
+  /** Local folders the extension declares it will read — consented with caps. */
+  fileRoots?: DeclaredFileRoot[];
   sizeBytes?: number;
   integrity?: string | null;
   /** Manifest icon as a data URI (staged package or installed snapshot) —
@@ -70,6 +76,7 @@ export function ConsentModal(props: {
     version,
     caps,
     oauthSources,
+    fileRoots,
     sizeBytes,
     integrity,
     iconDataUrl,
@@ -202,6 +209,27 @@ export function ConsentModal(props: {
                     </div>
                   );
                 })}
+              </div>
+            )}
+            {fileRoots && fileRoots.length > 0 && (
+              <div className="cm-folders">
+                <div className="cm-perms-label">
+                  Reads these folders on your computer
+                </div>
+                <div className="cm-caps">
+                  {fileRoots.map((r) => (
+                    <div key={r.id} className="cm-cap-row elevated">
+                      <Icon name="folder" size={14} />
+                      <div className="cm-cap-text">
+                        <div className="cm-cap-label mono">{r.path}</div>
+                        <div className="t-meta">{r.purpose}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="t-meta">
+                  The extension can read everything inside these folders.
+                </div>
               </div>
             )}
           </div>

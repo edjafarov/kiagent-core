@@ -42,7 +42,10 @@ export function createAppProjection(
             limit: RECENT_MAX,
           });
           return {
-            account,
+            // Cursors never reach windows: the engine reads them via
+            // store.account(); a large source cursor would otherwise be
+            // cloned to every window on every batch.
+            account: { ...account, cursor: null },
             docCount,
             recent: docs.map((d) => ({
               id: d.id,
@@ -67,13 +70,14 @@ export function createAppProjection(
       let { accounts } = state;
       for (const c of changes) {
         if (c.kind === 'account') {
+          const projected = { ...c.account, cursor: null }; // see init()
           const i = accounts.findIndex((a) => a.account.id === c.account.id);
           accounts =
             i >= 0
               ? accounts.map((a, j) =>
-                  j === i ? { ...a, account: c.account } : a,
+                  j === i ? { ...a, account: projected } : a,
                 )
-              : [...accounts, { account: c.account, docCount: 0, recent: [] }];
+              : [...accounts, { account: projected, docCount: 0, recent: [] }];
         } else if (c.kind === 'accountRemoved') {
           accounts = accounts.filter((a) => a.account.id !== c.accountId);
         } else if (c.kind === 'document') {

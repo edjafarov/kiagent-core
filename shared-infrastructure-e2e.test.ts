@@ -121,9 +121,17 @@ describe('shared plugin infrastructure real worker path', () => {
           id,
           name: id,
           version: '1.0.0',
-          engine: '^2.0.0',
+          engine: '^2.3.0',
           entry: 'dist/index.js',
           caps: ['db', 'files', 'net'],
+          // External extensions get folders ONLY by declaring them (2.3.0).
+          fileRoots: [
+            {
+              id: `e2e-${id.replace('.', '-')}-root`,
+              path: '~/root',
+              purpose: 'e2e',
+            },
+          ],
           database: { schema: 'dist/database.json' },
           contributes: { sources: [], senders: [] },
         }),
@@ -323,6 +331,7 @@ describe('shared plugin infrastructure real worker path', () => {
         extDir: extensionDir,
         db,
         fileRoots,
+        homeDir: tmp,
         store: platformStore,
         sources: {
           register: () => {},
@@ -403,22 +412,17 @@ describe('shared plugin infrastructure real worker path', () => {
     };
     let platform = makePlatform(roots);
     try {
-      await roots.grant('test.a', tmp, {
-        id: 'e2e-test-a-root',
-        name: 'e2e',
-        writable: true,
-      });
-      const testBRoot = await roots.grant('test.b', tmp, {
-        id: 'e2e-test-b-root',
-        name: 'e2e',
-        writable: true,
-      });
+      fs.mkdirSync(path.join(tmp, 'root'));
+      const testBRoot = { id: 'e2e-test-b-root' };
       for (const extensionId of ['test.a', 'test.b'])
         await platformStore.consents.record({
           extensionId: extensionId as never,
           caps: ['db', 'files', 'net'],
           manifestVersion: '1.0.0',
           grantedAt: new Date().toISOString(),
+          fileRoots: [
+            { id: `e2e-${extensionId.replace('.', '-')}-root`, path: '~/root' },
+          ],
         });
       await platform.start();
       await platform.grantConsent('test.a');

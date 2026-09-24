@@ -1125,6 +1125,8 @@ app
       db: p.db,
       attention,
       fileRoots,
+      // Declared roots (platform 2.3.0) may never cover the app's own data.
+      userDataDir: app.getPath('userData'),
       mainApiForPlugin: (callerPluginId) =>
         buildMainApi({
           callerPluginId,

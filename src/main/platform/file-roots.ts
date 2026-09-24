@@ -53,14 +53,18 @@ export function createFileRootsPersistence(
 ): () => Promise<void> {
   let write = Promise.resolve();
   return async () => {
-    write = write.then(async () => {
-      const temporary = `${filePath}.${process.pid}.tmp`;
-      await fsp.writeFile(
-        temporary,
-        JSON.stringify(registry.snapshot(), null, 2),
-      );
-      await fsp.rename(temporary, filePath);
-    });
+    // Chain on a recovered promise: one failed write must never poison every
+    // later save (bundled grants and declared roots share this writer).
+    write = write
+      .catch(() => undefined)
+      .then(async () => {
+        const temporary = `${filePath}.${process.pid}.tmp`;
+        await fsp.writeFile(
+          temporary,
+          JSON.stringify(registry.snapshot(), null, 2),
+        );
+        await fsp.rename(temporary, filePath);
+      });
     await write;
   };
 }

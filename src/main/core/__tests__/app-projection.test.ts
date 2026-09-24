@@ -149,3 +149,52 @@ describe('appProjection.apply', () => {
     expect(s.accounts).toHaveLength(0);
   });
 });
+describe('account-cursor-not-projected', () => {
+  const projection = createAppProjection(extras);
+  const withCursor = (id: string, cursor: unknown): Account => ({
+    ...account(id),
+    cursor,
+  });
+
+  it('init strips the cursor', async () => {
+    const q = {
+      document: jest.fn(async () => null),
+      children: jest.fn(async () => []),
+      byExternalId: jest.fn(async () => null),
+      search: jest.fn(async () => []),
+      count: jest.fn(async () => 0),
+      accounts: jest.fn(async () => [
+        withCursor('a1', { big: 'x'.repeat(1000) }),
+      ]),
+    } as unknown as Query;
+    const s = await projection.init(q);
+    expect(s.accounts[0].account.cursor).toBeNull();
+    expect(s.accounts[0].account.identifier).toBe('a1@x');
+  });
+
+  it('apply strips the cursor on update and on insert', () => {
+    const base = {
+      accounts: [{ account: account('a1'), docCount: 3, recent: [] }],
+      processing: { pending: 0, done: 0, skipped: 0, failed: 0 },
+      mcp: { port: null, clients: 0 },
+      identity: null,
+      prefs: DEFAULT_PREFS,
+      extensions: [],
+      ready: true,
+    };
+    const s = projection.apply(base, [
+      {
+        seq: 1,
+        kind: 'account',
+        account: withCursor('a1', { n: 1 }),
+      } as Change,
+      {
+        seq: 2,
+        kind: 'account',
+        account: withCursor('a2', { n: 2 }),
+      } as Change,
+    ]);
+    expect(s.accounts.map((a) => a.account.cursor)).toEqual([null, null]);
+    expect(s.accounts[0].docCount).toBe(3);
+  });
+});

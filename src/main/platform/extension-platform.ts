@@ -7,12 +7,14 @@
  */
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import NodeModule from 'module';
 
 import type {
   Cap,
   ConsentRecord,
   Credentials,
+  DeclaredFileRoot,
   ExtensionId,
   ExtensionSnapshot,
   ExtensionStatus,
@@ -41,6 +43,8 @@ import {
 } from '@main/marketplace/installer';
 
 import {
+  consentedFileRoots,
+  fileRootsCovered,
   loadIconDataUrl,
   oauthSourceBindings,
   senderContributions,
@@ -67,6 +71,7 @@ import {
   parseDatabaseDescriptor,
   type PluginDatabaseDescriptor,
 } from './database-descriptor';
+import { reconcileDeclaredRoots } from './declared-roots';
 import type { FileRootRegistry } from './file-roots';
 import { createScopedFiles } from './scoped-files';
 import { createNetworkService } from './network-service';
@@ -250,6 +255,11 @@ export interface ExtensionPlatformDeps {
   attention: AttentionService;
   /** Trusted root grants restored/created by product main-process flows. */
   fileRoots?: FileRootRegistry;
+  /** The app's userData dir — a declared root may never cover or sit inside it. */
+  userDataDir?: string;
+  /** Home directory declared `~/` roots resolve against (test seam; default
+   *  `os.homedir()`). */
+  homeDir?: string;
   /** Optional test/integration seam; production uses the guarded default. */
   networkFactory?: (owner: string, signal: AbortSignal) => NetworkService;
   store: CoreStore;
@@ -572,6 +582,7 @@ export function createExtensionPlatform(
       caps: e.manifest.caps as Cap[],
       sourceIds: sourceContributions(e.manifest).map((s) => s.id),
       oauthSources: oauthSourceBindings(e.manifest),
+      fileRoots: e.manifest.fileRoots,
       iconDataUrl: e.iconDataUrl,
       ref: e.record?.ref,
       // B3: always an array — an extension with no contributes.ui yields
@@ -580,6 +591,26 @@ export function createExtensionPlatform(
     }));
 
   const changed = () => deps.onChange(snapshot());
+
+  /** THE one path that changes an external extension's declared-root grants:
+   *  its consented declarations while consent covers it, [] otherwise
+   *  (lapsed consent, uninstall). Bundled extensions own their grants via
+   *  mainApi.grantRoot and are never swept. Called only while the entry has
+   *  no live host, so revoking fires no watcher. */
+  async function syncDeclaredRoots(
+    e: Entry,
+    declared: readonly DeclaredFileRoot[],
+  ): Promise<void> {
+    if (e.origin === 'bundled' || !deps.fileRoots) return;
+    await reconcileDeclaredRoots({
+      registry: deps.fileRoots,
+      extensionId: e.manifest.id,
+      declared,
+      home: deps.homeDir ?? os.homedir(),
+      userDataDir: deps.userDataDir,
+      log: (level, msg) => deps.logSink.log('extensions', level, msg),
+    });
+  }
 
   const setStatus = (e: Entry, status: ExtensionStatus, error?: string) => {
     e.status = status;
@@ -592,7 +623,8 @@ export function createExtensionPlatform(
     return (
       rec !== null &&
       rec.manifestVersion === manifest.version &&
-      manifest.caps.every((c) => rec.caps.includes(c))
+      manifest.caps.every((c) => rec.caps.includes(c)) &&
+      fileRootsCovered(manifest.fileRoots, rec.fileRoots)
     );
   }
 
@@ -926,10 +958,12 @@ export function createExtensionPlatform(
         // (no process, no transport) until .start() is called, so releasing
         // the reservation here orphans nothing.
         e.host = null;
+        await syncDeclaredRoots(e, []);
         setStatus(e, 'needs-consent');
         e.activation = undefined;
         return;
       }
+      await syncDeclaredRoots(e, e.manifest.fileRoots);
       const descriptor = descriptorForEntry(e);
       if (descriptor) {
         if (!deps.db?.plugin || !deps.db.registerPluginSource)
@@ -979,6 +1013,9 @@ export function createExtensionPlatform(
     e.activation = undefined;
     await e.host?.stop();
     e.host = null;
+    // Declared roots live exactly as long as an activation (disable,
+    // uninstall, replace, stop); activate() re-derives them.
+    await syncDeclaredRoots(e, []);
     // Job-stopping is tied to deactivation (spec §3.8), not to the host
     // process merely exiting — see the note on registerContributions above.
     await unregisterCadence(e);
@@ -1262,6 +1299,7 @@ export function createExtensionPlatform(
           version: p.manifest.version,
           caps: p.manifest.caps as Cap[],
           oauthSources: oauthSourceBindings(p.manifest),
+          fileRoots: p.manifest.fileRoots,
           sizeBytes: p.sizeBytes,
           integrity: p.integrity,
           iconDataUrl: loadIconDataUrl(p.stagingDir, p.manifest),
@@ -1302,6 +1340,7 @@ export function createExtensionPlatform(
             caps: manifest.caps as Cap[],
             manifestVersion: manifest.version,
             grantedAt: new Date().toISOString(),
+            fileRoots: consentedFileRoots(manifest.fileRoots),
           };
           await deps.store.consents.record(consent);
           const state = readEnabledState(deps.extDir);
@@ -1469,6 +1508,7 @@ export function createExtensionPlatform(
           caps: e.manifest.caps as Cap[],
           manifestVersion: e.manifest.version,
           grantedAt: new Date().toISOString(),
+          fileRoots: consentedFileRoots(e.manifest.fileRoots),
         };
         await deps.store.consents.record(consent);
         if (e.enabled) await activate(e);
