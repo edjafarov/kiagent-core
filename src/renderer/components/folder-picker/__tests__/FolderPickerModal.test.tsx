@@ -348,6 +348,27 @@ describe('FolderPickerModal with a dataSource', () => {
     expect(screen.queryByText(/files/)).not.toBeInTheDocument();
   });
 
+  it('a source-supplied note renders as one line above the Save button (§5.4)', async () => {
+    render(
+      <FolderPickerModal
+        multiSelect
+        purpose="manage"
+        note="Mail outside the selected folders will be removed"
+        dataSource={makeDataSource()}
+        onConfirm={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+    await screen.findByText('Root One');
+    const note = screen.getByText(
+      'Mail outside the selected folders will be removed',
+    );
+    const save = screen.getByRole('button', { name: /save|select|add/i });
+    expect(
+      note.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('`selected` renders checked, REMOVABLE chips, and a never-listed root still saves', async () => {
     const onConfirm = jest.fn();
     const ds = makeDataSource();

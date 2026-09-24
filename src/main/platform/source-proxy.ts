@@ -85,6 +85,8 @@ interface WirePickerSpec {
    *  `[]` and its picker opens collapsed. */
   expand: string[];
   purpose: 'connect' | 'manage';
+  /** `FolderPickerSpec.note`, defaulted once child-side to `null`. */
+  note: string | null;
 }
 
 export interface SourceProxySet {
@@ -236,6 +238,7 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
             selected: wire.selected,
             expand: wire.expand,
             purpose: wire.purpose,
+            ...(wire.note !== null ? { note: wire.note } : {}),
             roots: (modeKey) =>
               treeCall<FolderNode[]>('picker-roots', [modeKey]),
             children: (nodeId) =>

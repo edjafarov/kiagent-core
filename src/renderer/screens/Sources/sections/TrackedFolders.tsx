@@ -390,6 +390,7 @@ export function TrackedFolders(props: {
           dataSource={pickerAdapter.dataSource}
           selected={pickerAdapter.selected}
           expandIds={pickerAdapter.expandIds}
+          note={picker.note}
           purpose={picker.purpose}
           onConfirm={(ids) => {
             pickerConfirmedForRef.current = picker.requestId;

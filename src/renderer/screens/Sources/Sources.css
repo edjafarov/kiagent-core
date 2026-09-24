@@ -743,6 +743,10 @@ dl.kv dd {
 }
 .fp-chip .x:hover { opacity: 1; }
 
+.fp-note {
+  margin: 0 16px 8px;
+}
+
 .fp-footer {
   display: flex;
   align-items: center;

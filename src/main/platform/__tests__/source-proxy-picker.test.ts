@@ -66,6 +66,7 @@ const preselectedSpec: FolderPickerSpec = {
   multiSelect: true,
   selected: SELECTED,
   purpose: 'manage',
+  note: 'Mail outside the selected folders will be removed from the index',
   roots: async () => SELECTED,
   children: async () => [],
 };
@@ -230,6 +231,7 @@ describe('pickFolders over the extension RPC boundary', () => {
       selected: [],
       expand: [],
       purpose: 'connect',
+      note: null,
     });
 
     // A-10 hop 3 — what main re-synthesized and handed to the picker.
@@ -342,11 +344,15 @@ describe('pickFolders over the extension RPC boundary', () => {
       selected: SELECTED,
       expand: [],
       purpose: 'manage',
+      note: 'Mail outside the selected folders will be removed from the index',
     });
 
     // Hop 3: main handed the picker the same set, not a re-synthesized one.
     const spec = got.spec!;
     expect(spec.purpose).toBe('manage');
+    expect(spec.note).toBe(
+      'Mail outside the selected folders will be removed from the index',
+    );
     expect(spec.selected).toEqual(SELECTED);
   });
 });

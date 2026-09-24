@@ -446,6 +446,10 @@ export interface FolderPickerSpec {
   expand?: string[];
   /** Drives copy and empty-selection rules only; never behaviour. */
   purpose?: 'connect' | 'manage';
+  /** One muted line the picker shows above its Save button — the source's
+   *  own word on what Save does (e.g. "Mail outside the selected folders
+   *  will be removed from the index"). Display only. */
+  note?: string;
   /** Top-level nodes for a mode tab. */
   roots(modeKey: string): Promise<FolderNode[]>;
   /** Child FOLDERS of a node (files are not listed in the picker). */

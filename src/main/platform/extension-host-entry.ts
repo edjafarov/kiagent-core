@@ -420,6 +420,7 @@ export function runExtensionHost(
       selected: spec.selected ?? [],
       expand: spec.expand ?? [],
       purpose: spec.purpose ?? ('connect' as const),
+      note: spec.note ?? null,
     };
   }
 

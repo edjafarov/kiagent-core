@@ -195,6 +195,9 @@ export interface FolderPickerModalProps {
    *  is the historical behavior. Applies to every mode tab, not just the
    *  first. Default `[]`. */
   expandIds?: string[];
+  /** The source's one-line word on what Save does
+   *  (`FolderPickerSpec.note`), shown muted above the footer. */
+  note?: string;
   /** Fires with the selected folders' IDS — for a dataSource picker the
    *  source's opaque folder ids, for the local-filesystem tabs the absolute
    *  paths (there, id IS path). Never the synthetic tree paths. */
@@ -212,6 +215,7 @@ export function FolderPickerModal({
   keepOpenOnConfirm = false,
   dataSource,
   expandIds = [],
+  note,
   onConfirm,
   onClose,
 }: FolderPickerModalProps): React.ReactElement {
@@ -722,6 +726,8 @@ export function FolderPickerModal({
             {error}
           </div>
         )}
+
+        {note && <p className="fp-note t-meta">{note}</p>}
 
         <footer className="fp-footer">
           <span className="fp-summary t-meta">{footerSummary}</span>
