@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.91.0](https://github.com/edjafarov/kiagent-core/compare/v0.90.0...v0.91.0) (2026-09-24)
+
+### Features
+
+* **marketplace:** consent modal lists declared folders ([819f6e8](https://github.com/edjafarov/kiagent-core/commit/819f6e81ae31848275eb9494259042b23a6fbf5c))
+* **platform:** bind declared file roots into consent (store v5) ([2383b32](https://github.com/edjafarov/kiagent-core/commit/2383b328bdf0852dec856ac7d4a9510064577ff7))
+* **platform:** grant declared roots at activation; revoke on lapse/uninstall ([b586a12](https://github.com/edjafarov/kiagent-core/commit/b586a124f57eb9976d047674df75709aa484625e))
+* **platform:** manifest fileRoots declaration (platform 2.3.0) ([d9fe461](https://github.com/edjafarov/kiagent-core/commit/d9fe46198456a4a253fa80cc3ba531595a5e12b0))
+* **platform:** reconcile manifest-declared file roots (revoke all, grant declared) ([5dad821](https://github.com/edjafarov/kiagent-core/commit/5dad821f6ff79e702e95066340458ec6d51f3c7f))
+* **platform:** refuse ~/Library and its direct children as declared roots at parse ([1c24b6e](https://github.com/edjafarov/kiagent-core/commit/1c24b6e8bc21c3627f14635fcccf446fd52b55cf))
+
+### Bug Fixes
+
+* **platform:** file-root persistence recovers after a failed write ([e5caf7a](https://github.com/edjafarov/kiagent-core/commit/e5caf7ad22f0a0c86214aeedba5b6b97dc7c7d67))
+
+### Performance Improvements
+
+* **core:** keep source cursors out of the AppState broadcast ([7b87f84](https://github.com/edjafarov/kiagent-core/commit/7b87f841d7965b2a1822bf87ec3fb7344ecc93b9))
+
 ## [0.90.0](https://github.com/edjafarov/kiagent-core/compare/v0.89.1...v0.90.0) (2026-09-23)
 
 ### Features
