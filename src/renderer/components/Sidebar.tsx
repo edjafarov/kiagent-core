@@ -1,7 +1,8 @@
 import React from 'react';
 import { useAppState } from '@renderer/state/app-state';
 import { useView } from '@renderer/state/view';
-import { Icon } from '@shared/web-ui/icon-sprite';
+import { Icon, ICON_NAMES } from '@shared/web-ui/icon-sprite';
+import { contributedNavRows } from '@renderer/components/contributed-nav';
 import { BracketMark } from '@shared/web-ui/components';
 import { AccountMenu } from '@renderer/components/AccountMenu';
 import type { AppState } from '@shared/contracts';
@@ -39,6 +40,7 @@ export function Sidebar(): React.ReactElement {
   const { erroringCount, liveCount, totalDocs, mcpPort } =
     useAppState(selectSidebarSlice);
   const identity = useAppState((s) => s.identity);
+  const extensions = useAppState((s) => s.extensions);
   const { view, navigate, openSettings } = useView();
 
   const mcpOnline = mcpPort != null;
@@ -83,6 +85,16 @@ export function Sidebar(): React.ReactElement {
           active={view === 'marketplace'}
           onClick={() => navigate('marketplace')}
         />
+        {/* Core's sidebar has no groups, so a row's group is ignored here. */}
+        {contributedNavRows(extensions ?? [], ICON_NAMES).map((row) => (
+          <SideNavItem
+            key={row.view}
+            label={row.label}
+            icon={row.icon}
+            active={view === row.view}
+            onClick={() => navigate(row.view)}
+          />
+        ))}
       </nav>
 
       <div className="kg-sb-foot">

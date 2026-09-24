@@ -55,6 +55,30 @@ beforeEach(() => {
 });
 
 describe('Sidebar nav', () => {
+  it('renders a row per contributed page after the static items and navigates to it', () => {
+    mockState = stateWith({
+      extensions: [
+        {
+          id: 'kia.google-calendar',
+          name: 'Google Calendar',
+          version: '1.0.0',
+          origin: 'marketplace',
+          enabled: true,
+          status: 'activated',
+          caps: [],
+          sourceIds: [],
+          oauthSources: [],
+          ui: [{ id: 'calendar', slot: 'screen', title: 'Calendar' }],
+        },
+      ],
+    });
+    const ctx = renderSidebar();
+    fireEvent.click(screen.getByRole('button', { name: 'Calendar' }));
+    expect(ctx.navigate).toHaveBeenCalledWith(
+      'ext:kia.google-calendar/calendar',
+    );
+  });
+
   it('renders the four nav items with Sources active and navigates on click', () => {
     const ctx = renderSidebar();
     expect(screen.getByRole('button', { name: 'Sources' })).toHaveClass(

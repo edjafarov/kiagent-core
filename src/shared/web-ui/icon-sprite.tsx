@@ -261,6 +261,11 @@ const SYMBOLS: { id: string; body: React.ReactNode }[] = [
   },
 ];
 
+/** Every name `<Icon name>` resolves against this sprite (ids without `i-`). */
+export const ICON_NAMES: ReadonlySet<string> = new Set(
+  SYMBOLS.map((s) => s.id.replace(/^i-/, '')),
+);
+
 export function IconSprite(): React.ReactElement {
   return (
     <svg
