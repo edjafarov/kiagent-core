@@ -1,9 +1,20 @@
+import * as React from 'react';
+import * as ReactDOM from 'react-dom';
+import * as jsxRuntime from 'react/jsx-runtime';
 import { createRoot } from 'react-dom/client';
 import '@shared/web-ui/tokens.css';
 import '@shared/web-ui/components.css';
 import '@shared/web-ui/Spark.css';
 import './App.css';
 import App from './App';
+
+// Contributed pages are separately bundled ESM that import React through
+// the connector-sdk shims; this is the one React instance they must share.
+(globalThis as { __kiaHost?: unknown }).__kiaHost = {
+  React,
+  ReactDOM,
+  jsxRuntime,
+};
 
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);

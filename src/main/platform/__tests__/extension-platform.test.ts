@@ -504,7 +504,10 @@ describe('createExtensionPlatform', () => {
       m.contributes.ui = [PAGE];
       fs.writeFileSync(mp, JSON.stringify(m));
       fs.mkdirSync(path.join(dir, 'dist', 'ui'), { recursive: true });
-      fs.writeFileSync(path.join(dir, 'dist', 'ui', 'main.js'), 'export default 1');
+      fs.writeFileSync(
+        path.join(dir, 'dist', 'ui', 'main.js'),
+        'export default 1',
+      );
     }
     function pageFixture(): string {
       const dir = path.join(tmp, 'fixture-with-page');

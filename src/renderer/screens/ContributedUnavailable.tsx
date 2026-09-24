@@ -17,14 +17,12 @@ export type ContributedUnavailableReason =
   | 'activating'
   /** The extension's own activation failed. */
   | 'failed'
-  /** Extension is activated and the manifest declares this contribution,
-   *  but no compiled factory is registered for it — the build-consistency
-   *  hazard (a manifest edited without a renderer rebuild, or a generator
-   *  gap). This is a product/build bug, not a user-facing extension
-   *  failure, so it gets its own reason and log line upstream. */
-  | 'no-factory'
-  /** The registered factory itself threw while rendering — caught by this
-   *  contribution's own error boundary. */
+  /** The page bundle is being fetched and imported. */
+  | 'loading'
+  /** Fetching or importing the page bundle failed (logged with the cause). */
+  | 'load-failed'
+  /** The page itself threw while rendering — caught by this contribution's
+   *  own error boundary. */
   | 'error';
 
 const REASON_COPY: Record<
@@ -47,9 +45,13 @@ const REASON_COPY: Record<
     headline: 'failed to start',
     detail: 'failed to activate. Check the extension for details.',
   },
-  'no-factory': {
-    headline: 'unavailable',
-    detail: 'declares this screen, but it was not included in this build.',
+  loading: {
+    headline: 'is loading',
+    detail: 'is loading this screen.',
+  },
+  'load-failed': {
+    headline: "couldn't load this screen",
+    detail: 'could not load its page. Check Logs for the error.',
   },
   error: {
     headline: 'hit an error',

@@ -435,14 +435,14 @@ export function validateManifestDir(
       );
   }
   for (const c of uiContributions(manifest)) {
-    const rel = `dist/ui/${c.id}.js`;
+    const pageRel = `dist/ui/${c.id}.js`;
     const abs = pageEntryPath(root, c.id);
     if (!fs.existsSync(abs))
-      throw new ManifestError(`page bundle not found: ${rel}`);
-    const st = fs.statSync(containedRealPath(root, abs, rel));
+      throw new ManifestError(`page bundle not found: ${pageRel}`);
+    const st = fs.statSync(containedRealPath(root, abs, pageRel));
     if (!st.isFile() || st.size > MAX_PAGE_BYTES)
       throw new ManifestError(
-        `${rel} must be a regular file no larger than 5 MiB`,
+        `${pageRel} must be a regular file no larger than 5 MiB`,
       );
   }
   return { manifest, entryAbsPath };

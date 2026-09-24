@@ -260,9 +260,7 @@ describe('page file (dist/ui/<id>.js)', () => {
   });
 
   it('fails when the page bundle is missing', () => {
-    expect(() => validateManifestDir(extDir({}))).toThrow(
-      /dist\/ui\/main\.js/,
-    );
+    expect(() => validateManifestDir(extDir({}))).toThrow(/dist\/ui\/main\.js/);
   });
 
   it('fails when the page bundle is larger than 5 MiB', () => {

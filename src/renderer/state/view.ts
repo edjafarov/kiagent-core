@@ -33,10 +33,9 @@ export function isKnownView(v: string): v is KnownView {
 
 /**
  * B3: an extension-contributed view id, `ext:<extension id>/<contribution
- * id>`. Core compiles and registers NO contributed screens itself — see
- * `screen-registry.tsx`'s `registerContributedScreens` seam, which a
- * product build fills in — this module only makes the type exist and gives
- * it one collision-free encoding for every routing site to share.
+ * id>`. The page itself is loaded at runtime (`contributed-page.tsx`);
+ * this module only makes the type exist and gives it one collision-free
+ * encoding for every routing site to share.
  *
  * Collision-free by construction:
  * - **Cannot collide with a `KnownView`.** Every `ExtView` starts with the

@@ -1092,7 +1092,9 @@ const MIGRATIONS: Migration[] = [
       name: string;
     }[];
     if (!cols.some((c) => c.name === 'pages'))
-      db.exec(`ALTER TABLE consents ADD COLUMN pages INTEGER NOT NULL DEFAULT 0`);
+      db.exec(
+        `ALTER TABLE consents ADD COLUMN pages INTEGER NOT NULL DEFAULT 0`,
+      );
   },
 ];
 

@@ -1295,8 +1295,8 @@ export interface ExtensionSnapshot {
   /** Local folders this extension declares (platform 2.3.0) — shown where
    *  permissions are reviewed. Always an array from the real projection;
    *  optional for the same fixture reason as `ui`. */
-  fileRoots?: DeclaredFileRoot[];  /** Main's stamp of the latest entry into 'activated' — the renderer's
-   *  reload key for contributed pages. */
+  fileRoots?: DeclaredFileRoot[] /** Main's stamp of the latest entry into 'activated' — the renderer's
+   *  reload key for contributed pages. */;
   activatedAt?: string;
 }
 
