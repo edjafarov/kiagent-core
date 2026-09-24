@@ -21,6 +21,7 @@ import type {
   RecentExtraction,
   Seq,
   SourceDescriptor,
+  UiContribution,
 } from './contracts';
 import type { AttentionItemWire } from './attention';
 import type { ExtErrorCode } from './source-errors';
@@ -168,6 +169,9 @@ export interface ExtensionPreview {
    *  together with caps. Always populated by the platform; optional only so
    *  existing preview literals keep compiling (same as `ui` on snapshots). */
   fileRoots?: DeclaredFileRoot[];
+  /** Contributed pages (platform 2.5.0) — a non-empty list adds the
+   *  full-app-access consent row. */
+  ui: UiContribution[];
   sizeBytes: number;
   integrity: string | null;
   /** data:image/png;base64 URI of the staged package's manifest icon — the

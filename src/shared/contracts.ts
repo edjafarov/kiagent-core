@@ -288,6 +288,9 @@ export interface ConsentRecord {
   /** The declared folders the user consented to ({id, path}, id-sorted);
    *  [] = none. A manifest is covered when its roots are a subset. */
   fileRoots: ConsentedFileRoot[];
+  /** The consent covered the manifest's contributed pages, which run with
+   *  full access to the app. */
+  pages: boolean;
 }
 
 /** One row of Settings → Local processing's "Recently processed" list. */

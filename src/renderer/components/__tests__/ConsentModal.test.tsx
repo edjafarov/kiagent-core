@@ -255,4 +255,30 @@ describe('ConsentModal', () => {
       screen.queryByText('This extension requests no capabilities.'),
     ).not.toBeInTheDocument();
   });
+
+  test('shows the elevated pages row when addsPages, even with no caps', () => {
+    render(
+      <ConsentModal
+        request={baseRequest({ caps: [], addsPages: true })}
+        onCancel={jest.fn()}
+        onConfirm={jest.fn()}
+      />,
+    );
+    expect(
+      screen.getByText(
+        'Adds pages to KIAgent — runs with full access to the app. Only install extensions from publishers you trust.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  test('no pages row without addsPages', () => {
+    render(
+      <ConsentModal
+        request={baseRequest()}
+        onCancel={jest.fn()}
+        onConfirm={jest.fn()}
+      />,
+    );
+    expect(screen.queryByText(/Adds pages to KIAgent/)).toBeNull();
+  });
 });

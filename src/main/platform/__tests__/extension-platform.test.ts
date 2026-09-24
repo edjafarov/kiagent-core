@@ -479,6 +479,67 @@ describe('createExtensionPlatform', () => {
     expect(registry.has('basicsrc')).toBe(false);
   });
 
+  describe('page consent', () => {
+    const PAGE = { id: 'main', slot: 'screen', title: 'Main' };
+    function addPage(dir: string): void {
+      const mp = path.join(dir, 'manifest.json');
+      const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
+      m.contributes.ui = [PAGE];
+      fs.writeFileSync(mp, JSON.stringify(m));
+      fs.mkdirSync(path.join(dir, 'dist', 'ui'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'dist', 'ui', 'main.js'), 'export default 1');
+    }
+    function pageFixture(): string {
+      const dir = path.join(tmp, 'fixture-with-page');
+      fs.cpSync(FIXTURE, dir, { recursive: true });
+      addPage(dir);
+      return dir;
+    }
+
+    it('installPreview exposes ui; install records pages = true', async () => {
+      await platform.start();
+      const preview = await platform.installPreview(pageFixture());
+      if (!('token' in preview)) throw new Error(JSON.stringify(preview));
+      expect(preview.ui).toEqual([PAGE]);
+      expect(await platform.installCommit(preview.token)).toEqual({
+        ok: true,
+        id: 'test.basic',
+      });
+      expect((await store.consents.latest('test.basic' as never))?.pages).toBe(
+        true,
+      );
+    });
+
+    it('installPreview of a manifest without pages has ui = []', async () => {
+      const preview = await platform.installPreview(FIXTURE);
+      if (!('token' in preview)) throw new Error(JSON.stringify(preview));
+      expect(preview.ui).toEqual([]);
+    });
+
+    it('a consented extension that adds its first page at the same version and caps lands in needs-consent', async () => {
+      await platform.start();
+      await installFixture();
+      expect((await store.consents.latest('test.basic' as never))?.pages).toBe(
+        false,
+      );
+      await platform.stop();
+      addPage(path.join(tmp, 'extensions', 'test.basic'));
+      registry.clear();
+      platform = makePlatform();
+      await platform.start();
+      expect(platform.snapshot()).toEqual([
+        expect.objectContaining({ id: 'test.basic', status: 'needs-consent' }),
+      ]);
+      expect(await platform.grantConsent('test.basic')).toEqual({ ok: true });
+      expect((await store.consents.latest('test.basic' as never))?.pages).toBe(
+        true,
+      );
+      expect(platform.snapshot()).toEqual([
+        expect.objectContaining({ id: 'test.basic', status: 'activated' }),
+      ]);
+    });
+  });
+
   it('an installed extension with no consent parks in needs-consent at boot', async () => {
     await platform.start();
     await installFixture();
@@ -2347,6 +2408,14 @@ describe('createExtensionPlatform', () => {
         path.join(dir, 'index.js'),
         'module.exports = { async activate() { return {}; } };',
       );
+      const ui = (manifest.contributes as { ui?: { id: string }[] }).ui ?? [];
+      for (const c of ui) {
+        fs.mkdirSync(path.join(dir, 'dist', 'ui'), { recursive: true });
+        fs.writeFileSync(
+          path.join(dir, 'dist', 'ui', `${c.id}.js`),
+          'export default 1',
+        );
+      }
     }
 
     it("a loaded bundled extension's validated contributes.ui appears on its snapshot entry", async () => {
@@ -2405,15 +2474,15 @@ describe('createExtensionPlatform', () => {
       expect(snap?.ui).not.toBeUndefined();
     });
 
-    it('an invalid manifest (contributes.ui without the ui cap) never reaches the snapshot at all', async () => {
-      const bundledRoot = path.join(tmp, 'bundled-invalid-ui');
-      writeBundledExtension(path.join(bundledRoot, 'ext-invalid'), {
-        id: 'test.invalid-ui-contrib',
-        name: 'Invalid UI Contrib',
+    it('contributes.ui without the ui cap reaches the snapshot with its ui', async () => {
+      const bundledRoot = path.join(tmp, 'bundled-ui-no-cap');
+      writeBundledExtension(path.join(bundledRoot, 'ext-ui-no-cap'), {
+        id: 'test.ui-no-cap',
+        name: 'UI No Cap',
         version: '1.0.0',
         engine: '^2.0.0',
         entry: 'index.js',
-        caps: [], // missing 'ui' — PLUGIN_UI_CAP_REQUIRED at discovery
+        caps: [], // the install consent is the gate, not the ui cap
         contributes: {
           senders: [],
           ui: [{ id: 'main', slot: 'screen', title: 'Main' }],
@@ -2422,7 +2491,30 @@ describe('createExtensionPlatform', () => {
       platform = makePlatform({ bundledDir: bundledRoot });
       await platform.start();
       expect(
-        platform.snapshot().find((e) => e.id === 'test.invalid-ui-contrib'),
+        platform.snapshot().find((e) => e.id === 'test.ui-no-cap')?.ui,
+      ).toEqual([{ id: 'main', slot: 'screen', title: 'Main' }]);
+    });
+
+    it('a manifest whose page bundle is missing never reaches the snapshot', async () => {
+      const bundledRoot = path.join(tmp, 'bundled-ui-missing');
+      const dir = path.join(bundledRoot, 'ext-ui-missing');
+      writeBundledExtension(dir, {
+        id: 'test.ui-missing',
+        name: 'UI Missing',
+        version: '1.0.0',
+        engine: '^2.0.0',
+        entry: 'index.js',
+        caps: [],
+        contributes: {
+          senders: [],
+          ui: [{ id: 'main', slot: 'screen', title: 'Main' }],
+        },
+      });
+      fs.rmSync(path.join(dir, 'dist'), { recursive: true });
+      platform = makePlatform({ bundledDir: bundledRoot });
+      await platform.start();
+      expect(
+        platform.snapshot().find((e) => e.id === 'test.ui-missing'),
       ).toBeUndefined();
     });
   });

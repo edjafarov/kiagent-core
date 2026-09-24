@@ -420,6 +420,7 @@ describe('shared plugin infrastructure real worker path', () => {
           caps: ['db', 'files', 'net'],
           manifestVersion: '1.0.0',
           grantedAt: new Date().toISOString(),
+          pages: false,
           fileRoots: [
             { id: `e2e-${extensionId.replace('.', '-')}-root`, path: '~/root' },
           ],

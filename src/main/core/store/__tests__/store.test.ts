@@ -551,6 +551,7 @@ describe('store', () => {
       caps: ['query'],
       manifestVersion: '1.0.0',
       grantedAt: '2026-01-01T00:00:00Z',
+      pages: false,
       fileRoots: [],
     });
     await store.consents.record({
@@ -558,6 +559,7 @@ describe('store', () => {
       caps: ['query', 'net'],
       manifestVersion: '1.1.0',
       grantedAt: '2026-02-01T00:00:00Z',
+      pages: false,
       fileRoots: [],
     });
     const latest = await store.consents.latest('ext-1');
@@ -907,6 +909,7 @@ describe('store', () => {
       caps: ['query'],
       manifestVersion: '1.0.0',
       grantedAt: '2026-01-01T00:00:00Z',
+      pages: false,
       fileRoots: [],
     });
 

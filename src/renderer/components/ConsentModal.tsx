@@ -61,8 +61,13 @@ export interface ConsentRequest {
   /** Manifest icon as a data URI (staged package or installed snapshot) —
    *  absent falls back to the letter glyph. */
   iconDataUrl?: string;
+  /** The extension contributes pages, which run with full access to the app. */
+  addsPages?: boolean;
   ref?: string;
 }
+
+export const PAGES_CONSENT_COPY =
+  'Adds pages to KIAgent — runs with full access to the app. Only install extensions from publishers you trust.';
 
 export function ConsentModal(props: {
   request: ConsentRequest;
@@ -151,6 +156,22 @@ export function ConsentModal(props: {
 
           <div className="cm-perms">
             <div className="cm-perms-label">Permissions</div>
+            {request.addsPages && (
+              <div className="cm-caps">
+                <div className="cm-cap-row elevated">
+                  <Icon name="shield" size={14} />
+                  <div className="cm-cap-text">
+                    <div className="cm-cap-label">
+                      {PAGES_CONSENT_COPY}
+                      <span className="cm-elevated-tag">
+                        <Icon name="shield" size={12} />
+                        Elevated
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             {caps.length === 0 && oauthRows.length === 0 ? (
               <div className="t-meta">
                 This extension requests no capabilities.

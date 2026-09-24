@@ -29,11 +29,20 @@ describe('consents.fileRoots', () => {
       caps: ['files'] as Cap[],
       manifestVersion: '1.0.0',
       grantedAt: 't',
+      pages: false,
     };
     await store.consents.record({ ...base, fileRoots: [] });
     expect((await store.consents.latest(id))?.fileRoots).toEqual([]);
     const roots = [{ id: 'claude', path: '~/.claude' }];
     await store.consents.record({ ...base, fileRoots: roots });
     expect((await store.consents.latest(id))?.fileRoots).toEqual(roots);
+  });
+
+  it('persists the pages bit; a record without it reads false', async () => {
+    const base = { caps: [] as Cap[], manifestVersion: '1', grantedAt: 't', fileRoots: [] };
+    await store.consents.record({ ...base, extensionId: 'x' as ExtensionId, pages: true });
+    expect((await store.consents.latest('x' as ExtensionId))?.pages).toBe(true);
+    await store.consents.record({ ...base, extensionId: 'y' as ExtensionId, pages: false });
+    expect((await store.consents.latest('y' as ExtensionId))?.pages).toBe(false);
   });
 });

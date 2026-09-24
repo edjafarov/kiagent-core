@@ -624,7 +624,8 @@ export function createExtensionPlatform(
       rec !== null &&
       rec.manifestVersion === manifest.version &&
       manifest.caps.every((c) => rec.caps.includes(c)) &&
-      fileRootsCovered(manifest.fileRoots, rec.fileRoots)
+      fileRootsCovered(manifest.fileRoots, rec.fileRoots) &&
+      (uiContributions(manifest).length === 0 || rec.pages)
     );
   }
 
@@ -1300,6 +1301,7 @@ export function createExtensionPlatform(
           caps: p.manifest.caps as Cap[],
           oauthSources: oauthSourceBindings(p.manifest),
           fileRoots: p.manifest.fileRoots,
+          ui: uiContributions(p.manifest),
           sizeBytes: p.sizeBytes,
           integrity: p.integrity,
           iconDataUrl: loadIconDataUrl(p.stagingDir, p.manifest),
@@ -1341,6 +1343,7 @@ export function createExtensionPlatform(
             manifestVersion: manifest.version,
             grantedAt: new Date().toISOString(),
             fileRoots: consentedFileRoots(manifest.fileRoots),
+            pages: uiContributions(manifest).length > 0,
           };
           await deps.store.consents.record(consent);
           const state = readEnabledState(deps.extDir);
@@ -1509,6 +1512,7 @@ export function createExtensionPlatform(
           manifestVersion: e.manifest.version,
           grantedAt: new Date().toISOString(),
           fileRoots: consentedFileRoots(e.manifest.fileRoots),
+          pages: uiContributions(e.manifest).length > 0,
         };
         await deps.store.consents.record(consent);
         if (e.enabled) await activate(e);

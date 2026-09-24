@@ -1131,6 +1131,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
               manifest_version: string;
               granted_at: string;
               file_roots: string | null;
+              pages: number;
             }
           | undefined;
         if (!r) return null;
@@ -1140,18 +1141,20 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           manifestVersion: r.manifest_version,
           grantedAt: r.granted_at,
           fileRoots: r.file_roots ? JSON.parse(r.file_roots) : [],
+          pages: r.pages === 1,
         } as ConsentRecord;
       },
       async record(c) {
         await db.run(
-          `INSERT INTO consents(extension_id, caps, manifest_version, granted_at, file_roots)
-           VALUES(?, ?, ?, ?, ?)`,
+          `INSERT INTO consents(extension_id, caps, manifest_version, granted_at, file_roots, pages)
+           VALUES(?, ?, ?, ?, ?, ?)`,
           [
             c.extensionId,
             JSON.stringify(c.caps),
             c.manifestVersion,
             c.grantedAt,
             JSON.stringify(c.fileRoots ?? []),
+            c.pages ? 1 : 0,
           ],
         );
       },

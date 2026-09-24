@@ -1084,6 +1084,16 @@ const MIGRATIONS: Migration[] = [
     if (!cols.some((c) => c.name === 'file_roots'))
       db.exec(`ALTER TABLE consents ADD COLUMN file_roots TEXT`);
   },
+
+  // v6 — consent binds contributed pages (platform 2.5.0). Legacy rows read
+  // 0: a manifest that declares contributes.ui needs a fresh grant.
+  (db) => {
+    const cols = db.prepare(`PRAGMA table_info(consents)`).all() as {
+      name: string;
+    }[];
+    if (!cols.some((c) => c.name === 'pages'))
+      db.exec(`ALTER TABLE consents ADD COLUMN pages INTEGER NOT NULL DEFAULT 0`);
+  },
 ];
 
 /**

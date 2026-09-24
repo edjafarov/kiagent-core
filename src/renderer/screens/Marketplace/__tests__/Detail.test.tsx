@@ -167,6 +167,7 @@ describe('Detail', () => {
           version: '1.1.0',
           caps: ['net', 'query'],
           oauthSources: [{ id: 'google-docs', provider: 'google' }],
+          ui: [],
           sizeBytes: 2048,
           integrity: null,
         };
@@ -232,6 +233,7 @@ describe('Detail', () => {
         name: 'Gmail Tools',
         version: '1.1.0',
         caps: ['net'],
+        ui: [],
         sizeBytes: 1024,
         integrity: null,
       }),
@@ -462,6 +464,7 @@ describe('Detail', () => {
           name: 'Gmail Tools',
           version: '1.1.0',
           caps: ['net'],
+          ui: [],
           sizeBytes: 4096,
           integrity: null,
         };
@@ -580,6 +583,7 @@ describe('Detail', () => {
         caps: ['files'],
         oauthSources: [],
         fileRoots: FOLDERS,
+        ui: [],
         sizeBytes: 2048,
         integrity: null,
       }),

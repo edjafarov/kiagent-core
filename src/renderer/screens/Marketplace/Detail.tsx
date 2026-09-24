@@ -3,6 +3,7 @@ import Markdown from 'react-markdown';
 import { useAppState } from '@renderer/state/app-state';
 import {
   ConsentModal,
+  PAGES_CONSENT_COPY,
   type ConsentRequest,
 } from '@renderer/components/ConsentModal';
 import {
@@ -105,6 +106,7 @@ export function Detail(props: { row: MarketplaceRow }): React.ReactElement {
         caps: p.caps,
         oauthSources: p.oauthSources,
         fileRoots: p.fileRoots,
+        addsPages: p.ui.length > 0,
         sizeBytes: p.sizeBytes,
         integrity: p.integrity,
         iconDataUrl: p.iconDataUrl,
@@ -125,6 +127,7 @@ export function Detail(props: { row: MarketplaceRow }): React.ReactElement {
       caps: installed.caps,
       oauthSources: installed.oauthSources,
       fileRoots: installed.fileRoots,
+      addsPages: (installed.ui ?? []).length > 0,
       iconDataUrl: installed.iconDataUrl,
       ref: installed.ref,
     });
@@ -290,6 +293,14 @@ export function Detail(props: { row: MarketplaceRow }): React.ReactElement {
 
         {installed && (
           <div className="mkt-caps">
+            {(installed.ui ?? []).length > 0 && (
+              <div className="cm-cap-row elevated">
+                <div className="cm-cap-label">
+                  {PAGES_CONSENT_COPY}
+                  <span className="cm-elevated-tag">Elevated</span>
+                </div>
+              </div>
+            )}
             {installed.caps.map((cap) => {
               const info = CAP_CATALOG[cap];
               const elevated = info.risk === 'elevated';
