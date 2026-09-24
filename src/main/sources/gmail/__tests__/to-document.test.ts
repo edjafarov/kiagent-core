@@ -15,6 +15,7 @@ function itemFromFixture(): GmailThreadItem {
     id: fixtureThread.id,
     messages: fixtureThread.messages as unknown as GmailApiMessage[],
     accountEmail: ACCOUNT_EMAIL,
+    selectedBuckets: ['mail'],
   };
 }
 
@@ -124,6 +125,7 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
     const item: GmailThreadItem = {
       id: 'thread-reply-all',
       accountEmail: 'me@gmail.com',
+      selectedBuckets: ['mail'],
       messages: [
         {
           id: 'rm1',
@@ -197,6 +199,7 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
       id: 'empty-thread',
       messages: [],
       accountEmail: ACCOUNT_EMAIL,
+      selectedBuckets: ['mail'],
     });
     expect(doc).toBeNull();
   });
@@ -205,6 +208,7 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
     const item: GmailThreadItem = {
       id: 'thread-with-atts',
       accountEmail: ACCOUNT_EMAIL,
+      selectedBuckets: ['mail'],
       messages: [
         {
           id: 'm1',
@@ -284,6 +288,7 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
       const m0 = base.messages[0];
       return {
         ...base,
+        selectedBuckets: ['mail', 'TRASH', 'SPAM'],
         messages: labelSets.map((labelIds, i) => ({
           ...m0,
           id: `${m0.id}-${i}`,
@@ -295,6 +300,24 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
       const out = toDocument(item)!;
       return Array.isArray(out) ? out[0] : out;
     };
+
+    it('an unselected bucket maps to null — skipped, never a deletion', () => {
+      const trashed = relabelled(['TRASH'], ['TRASH', 'Label_1']);
+      expect(toDocument({ ...trashed, selectedBuckets: ['mail'] })).toBeNull();
+      expect(
+        toDocument({ ...relabelled(['SPAM']), selectedBuckets: ['mail'] }),
+      ).toBeNull();
+      expect(
+        toDocument({ ...trashed, selectedBuckets: ['mail', 'TRASH'] }),
+      ).not.toBeNull();
+      // One trashed reply in a live conversation is still mail.
+      expect(
+        toDocument({
+          ...relabelled(['TRASH'], ['INBOX']),
+          selectedBuckets: ['mail'],
+        }),
+      ).not.toBeNull();
+    });
 
     it('stamps the bucket as scopeRootId and hashes it into metadata', () => {
       const d = threadDocOf(relabelled(['TRASH', 'Label_1'], ['TRASH']));

@@ -87,14 +87,8 @@ const deletionIds = (
   batches: Array<{ deletions?: Array<{ externalId: string }> }>,
 ) => batches.flatMap((b) => (b.deletions ?? []).map((d) => d.externalId));
 
-describe('gmail pull — unselected buckets are SKIPPED, never deleted (spec §4)', () => {
-  it('default selection: a fully trashed or spam thread yields no item and no deletion', async () => {
-    const batches = await drain(pull(makeSession({}), DELTA));
-    expect(itemIds(batches)).toEqual(['N']);
-    expect(deletionIds(batches)).toEqual(['GONE']); // a 404 is still a deletion
-  });
-
-  it('with Trash selected, the trashed thread is emitted', async () => {
+describe('gmail pull — scope plumbing (spec §4; the gate itself is toDocument)', () => {
+  it('stamps the account selection on every item; a 404 is a deletion', async () => {
     const batches = await drain(
       pull(
         makeSession({
@@ -106,15 +100,25 @@ describe('gmail pull — unselected buckets are SKIPPED, never deleted (spec §4
         DELTA,
       ),
     );
-    expect(itemIds(batches)).toEqual(['N', 'T']);
+    expect(itemIds(batches)).toEqual(['N', 'S', 'T']);
+    for (const b of batches)
+      for (const it of b.items)
+        expect(it.selectedBuckets).toEqual(['mail', 'TRASH']);
+    expect(deletionIds(batches)).toEqual(['GONE']);
   });
 
-  it('the backfill applies the same gate', async () => {
+  it('a legacy config selects mail only', async () => {
+    const batches = await drain(pull(makeSession({}), DELTA));
+    expect(batches[0].items[0].selectedBuckets).toEqual(['mail']);
+  });
+
+  it('a thread purged between list and get is a deletion in the backfill too', async () => {
     mocked.listThreadsPage.mockResolvedValue({
-      threads: [{ id: 'N' }, { id: 'S' }],
+      threads: [{ id: 'N' }, { id: 'GONE' }],
     } as never);
     mocked.listHistoryPage.mockResolvedValue({ historyId: '42' } as never);
     const batches = await drain(pull(makeSession({}), null));
     expect(itemIds(batches)).toEqual(['N']);
+    expect(deletionIds(batches)).toEqual(['GONE']);
   });
 });

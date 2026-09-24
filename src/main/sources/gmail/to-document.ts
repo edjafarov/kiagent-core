@@ -1,6 +1,6 @@
 import type { DocumentInput } from '@shared/contracts';
 
-import { threadBucket } from './bucket';
+import { type GmailBucket, threadBucket } from './bucket';
 import { parseGmailMessage, type GmailApiMessage } from './parser';
 
 /** Gmail's own document type id for this port — dotted per contracts.ts's
@@ -30,16 +30,27 @@ export interface GmailThreadItem {
   messages: GmailApiMessage[];
   /** Connected account's email address (for the authuser deep link). */
   accountEmail: string;
+  /** The account's selected buckets, stamped on by `pull()` like
+   *  `accountEmail`. A thread whose bucket is not selected maps to null. */
+  selectedBuckets: readonly GmailBucket[];
 }
 
 /** PURE thread → DocumentInput mapping. Returns null for a thread with zero
- *  messages (mirrors legacy's `emptyThreadReason` skip). Returns an array
+ *  messages (mirrors legacy's `emptyThreadReason` skip) and for a thread in
+ *  an unselected bucket — spec §4: skipped, never deleted; its indexed row
+ *  (if any) stays until Gmail purges the thread (404 → deletion) or a Save
+ *  narrows the scope. Returns an array
  *  with the thread doc followed by attachment child docs if attachments exist,
  *  otherwise returns just the thread doc. */
 export function toDocument(
   item: GmailThreadItem,
 ): DocumentInput | DocumentInput[] | null {
   if (item.messages.length === 0) return null;
+  // One bucket per thread (spec §4). In the HASHED metadata, not only the
+  // stamp: the label union cannot tell "one trashed reply" from "all
+  // trashed", and an unchanged hash would never re-stamp the row.
+  const scopeBucket = threadBucket(item.messages);
+  if (!item.selectedBuckets.includes(scopeBucket)) return null;
 
   const parsed = item.messages.map(parseGmailMessage);
   const first = parsed[0];
@@ -65,10 +76,6 @@ export function toDocument(
   }
 
   const labels = [...new Set(parsed.flatMap((m) => m.labelIds))];
-  // One bucket per thread (spec §4). In the HASHED metadata, not only the
-  // stamp: the label union cannot tell "one trashed reply" from "all
-  // trashed", and an unchanged hash would never re-stamp the row.
-  const scopeBucket = threadBucket(item.messages);
   const participants = [
     ...new Set(parsed.flatMap((m) => [m.from, ...m.to, ...m.cc])),
   ];
