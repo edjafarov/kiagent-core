@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.92.0](https://github.com/edjafarov/kiagent-core/compare/v0.91.0...v0.92.0) (2026-09-24)
+
+### Features
+
+* **engine:** allowance kinds — first scope declaration and unchanged re-save grant a ratio-only allowance ([7ec3b2c](https://github.com/edjafarov/kiagent-core/commit/7ec3b2c09a4c4037e6af5b6272410b950525c8c1))
+* **engine:** no reconcile for a folder-scoped account that declares no scope ([88af38b](https://github.com/edjafarov/kiagent-core/commit/88af38b1130d69abfc39a9b2e14bac2d09ba2bc7))
+* **gmail:** one scope bucket per thread, hashed and stamped; unselected buckets are skipped ([149d731](https://github.com/edjafarov/kiagent-core/commit/149d7310d1c9d183910b453dd18273f0cfb772f5))
+* **gmail:** task-queue cursor — per-bucket backfill tasks share one history watermark ([5ad4a74](https://github.com/edjafarov/kiagent-core/commit/5ad4a749202c0278e0d5ea0cbcf0d2a192d0e21e))
+* **gmail:** Trash and Spam checkboxes via the Tracked folders picker ([2164cb5](https://github.com/edjafarov/kiagent-core/commit/2164cb5fab871f711b7f0a468e5c8057fd8f68d6))
+* **picker:** FolderPickerSpec.note — a source-supplied line shown above Save ([06941a7](https://github.com/edjafarov/kiagent-core/commit/06941a7372ec6078479a2c67b722a25147f28e01))
+* **platform:** API 2.4.0 — archiveRefs + picker note; SDK 1.5.0 contracts ([5a7c7c8](https://github.com/edjafarov/kiagent-core/commit/5a7c7c8ba84697aac0a054232b7462d6fbf01cfd))
+* **scope:** FolderScopeUpdate.archiveRefs — exact per-document archival inside the scope transaction ([6035d72](https://github.com/edjafarov/kiagent-core/commit/6035d72e2cef65706f87e5c959481c9d4b09cede))
+* **sdk:** connector-sdk 1.4.0 — contracts from core 0.91.0 (manifest fileRoots) ([85518bd](https://github.com/edjafarov/kiagent-core/commit/85518bd5f27cac198656742cba2f76bc28929a48))
+* **sources:** Tracked folders card shows default folders for a scope-less account ([1a8c9bf](https://github.com/edjafarov/kiagent-core/commit/1a8c9bfa68329ad617d7f4c76912cfd585d2c437))
+
+### Bug Fixes
+
+* **engine:** a re-Add without a picker keeps a legacy account undeclared ([ef3a198](https://github.com/edjafarov/kiagent-core/commit/ef3a19880477c4cdb40d8e484a425ef7e3d039c7))
+* **engine:** a reconcile pass skipped for undeclared scope still consumes its allowance ([fd215da](https://github.com/edjafarov/kiagent-core/commit/fd215daba71787bbb963316f904a923c068654e6))
+* **engine:** re-Adding a folder-scoped account keeps its folder selection ([8bd1771](https://github.com/edjafarov/kiagent-core/commit/8bd1771336d6d76a4246cb3eea0394020eb2808e))
+* **store:** reconcile staging never recreates — a pass that lost its TEMP staging archives nothing ([e8bfa2c](https://github.com/edjafarov/kiagent-core/commit/e8bfa2c125412b94c95a1d00708682b81334ca9e))
+
 ## [0.91.0](https://github.com/edjafarov/kiagent-core/compare/v0.90.0...v0.91.0) (2026-09-24)
 
 ### Features
