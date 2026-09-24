@@ -263,23 +263,20 @@ async function reconcilePass(
   // back into its own root) they took ~3.2 GiB against V8's 4 GiB cap and
   // killed the main process with an OOM SIGTRAP. Only counts come back now.
   await store.reconcileBegin(account.id);
-  // One failure path for the drain, the diff and the archive (spec §5.8: a
-  // store that lost its staging throws "reconcile staging lost" from any of
-  // them). Ends the pass, and — unless cancellation caused it — records the
-  // error on the account without touching `status`. Never archives.
-  const failPass = async (err: unknown): Promise<void> => {
-    await store.reconcileEnd(account.id).catch(() => {});
-    if (signal.aborted) return; // cancellation-caused — not a real failure
-    const msg = String(err instanceof Error ? err.message : err);
-    logs.log(scope, 'error', `reconcile failed: ${msg}`);
+  // Records the pass's outcome on the account without touching `status`.
+  const finish = async (error: string | null): Promise<void> => {
     const fresh = (await store.account(account.id)) ?? account;
     await store.commit({
       account: account.id,
       documents: [],
       cursor: fresh.cursor,
-      error: `reconcile: ${msg}`,
+      error,
     });
   };
+  // ONE failure path for the whole pass — drain, diff, archive and the final
+  // commit (spec §5.8: a store that lost its staging throws from any of
+  // them). Ends the pass and, unless cancellation caused it, records the
+  // error. Never archives.
   try {
     let batch: ExternalRef[] = [];
     for await (const page of abortable(source.reconcile(session), signal)) {
@@ -295,86 +292,63 @@ async function reconcilePass(
     if (batch.length > 0) {
       await store.reconcileStage(account.id, batch);
     }
-  } catch (err) {
-    await failPass(err);
-    return;
-  }
-  if (signal.aborted) {
-    // partial listing — never diff off it
-    await store.reconcileEnd(account.id);
-    return;
-  }
+    if (signal.aborted) {
+      // partial listing — never diff off it
+      await store.reconcileEnd(account.id);
+      return;
+    }
 
-  // `startSeq` is the TOCTOU guard, applied inside the diff: only documents
-  // already live when this pass began are archiving candidates, so anything
-  // pull() commits mid-drain (newer than the listing could know about) is
-  // excluded rather than archived the instant it lands.
-  // `listedCount` comes from the DIFF, never from counting what we staged.
-  // Staging lives in a connection-scoped TEMP table, so a DB-worker restart
-  // between the drain and the diff silently empties it — and a local tally
-  // would still claim the listing was fine, walking straight past the
-  // empty-listing guard below into archiving the entire account.
-  let counts: Awaited<ReturnType<CoreStore['reconcileDiff']>>;
-  try {
-    counts = await store.reconcileDiff(account.id, startSeq);
-  } catch (err) {
-    await failPass(err);
-    return;
-  }
-  const { listedCount, liveCount, deletionCount } = counts;
-  if (deletionCount === 0) {
-    await store.reconcileEnd(account.id);
-    return;
-  }
+    // `startSeq` is the TOCTOU guard, applied inside the diff: only documents
+    // already live when this pass began are archiving candidates, so anything
+    // pull() commits mid-drain (newer than the listing could know about) is
+    // excluded rather than archived the instant it lands.
+    // `listedCount` comes from the DIFF, never from counting what we staged:
+    // a local tally would still claim the listing was fine after staging was
+    // lost, walking straight past the empty-listing guard below.
+    const { listedCount, liveCount, deletionCount } = await store.reconcileDiff(
+      account.id,
+      startSeq,
+    );
+    if (deletionCount === 0) {
+      await store.reconcileEnd(account.id);
+      return;
+    }
 
-  if (allowance !== 'full') {
-    const refuse = async (why: string): Promise<void> => {
+    // Zero-false-positive first: an empty listing over a non-empty corpus is
+    // always a broken listing or a deliberately emptied config — never normal
+    // churn. Only `full` waives it; `ratio` waives only the second arm.
+    const refusal =
+      allowance === 'full'
+        ? null
+        : listedCount === 0
+          ? 'the listing came back empty'
+          : allowance !== 'ratio' &&
+              deletionCount > MASS_ARCHIVE_MIN_DOCS &&
+              deletionCount > liveCount * MASS_ARCHIVE_RATIO
+            ? 'the listing shrank suspiciously'
+            : null;
+    if (refusal !== null) {
       await store.reconcileEnd(account.id);
       const msg =
         `reconcile: refusing to archive ${deletionCount} of ` +
-        `${liveCount} documents (${why}). If this shrinkage is real, ` +
+        `${liveCount} documents (${refusal}). If this shrinkage is real, ` +
         `re-save the account's settings to apply the cleanup.`;
       logs.log(scope, 'error', msg);
-      const fresh2 = (await store.account(account.id)) ?? account;
-      await store.commit({
-        account: account.id,
-        documents: [],
-        cursor: fresh2.cursor,
-        error: msg,
-      });
-    };
-    // Zero-false-positive first: an empty listing over a non-empty corpus is
-    // always a broken listing or a deliberately emptied config — never
-    // normal churn.
-    if (listedCount === 0) {
-      await refuse('the listing came back empty');
+      await finish(msg);
       return;
     }
-    if (
-      allowance !== 'ratio' &&
-      deletionCount > MASS_ARCHIVE_MIN_DOCS &&
-      deletionCount > liveCount * MASS_ARCHIVE_RATIO
-    ) {
-      await refuse('the listing shrank suspiciously');
-      return;
-    }
-  }
 
-  // Archives (and clears the staged listing) inside the store — the ids never
-  // come back here either.
-  try {
+    // Archives (and clears the staged listing) inside the store — the ids
+    // never come back here either.
     await store.reconcileArchive(account.id, startSeq);
+    await finish(null);
   } catch (err) {
-    await failPass(err);
-    return;
+    await store.reconcileEnd(account.id).catch(() => {});
+    if (signal.aborted) return; // cancellation-caused — not a real failure
+    const msg = String(err instanceof Error ? err.message : err);
+    logs.log(scope, 'error', `reconcile failed: ${msg}`);
+    await finish(`reconcile: ${msg}`);
   }
-  const fresh = (await store.account(account.id)) ?? account;
-  await store.commit({
-    account: account.id,
-    documents: [],
-    cursor: fresh.cursor,
-    error: null,
-  });
 }
 
 /** Derives a worker's ledger consumer key. MUST be derived (never a hard-coded
@@ -527,7 +501,8 @@ export function createEngine(deps: EngineDeps): Engine & {
   const reconcileAllowances = new Map<AccountId, AllowanceKind>();
   // A merge never downgrades: a pending `full` outlives a later `ratio`.
   const grantAllowance = (id: AccountId, kind: AllowanceKind): void => {
-    if (reconcileAllowances.get(id) !== 'full') reconcileAllowances.set(id, kind);
+    if (reconcileAllowances.get(id) !== 'full')
+      reconcileAllowances.set(id, kind);
   };
   const takeAllowance = (id: AccountId): AllowanceKind | undefined => {
     const kind = reconcileAllowances.get(id);
@@ -1418,7 +1393,8 @@ export function createEngine(deps: EngineDeps): Engine & {
           priorIds.length === nextIds.length &&
           priorIds.every((id) => nextIds.includes(id));
         if (res.archived > 0) grantAllowance(accountId, 'full');
-        else if (priorIds === null || sameSet) grantAllowance(accountId, 'ratio');
+        else if (priorIds === null || sameSet)
+          grantAllowance(accountId, 'ratio');
         const after = await store.account(accountId);
         // Restart unconditionally EXCEPT the two resting states. Deliberately
         // NOT gated on `running.has` the way updateConfig is: stop() above

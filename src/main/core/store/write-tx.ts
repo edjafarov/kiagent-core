@@ -70,8 +70,8 @@ export interface ReconcileCounts {
  *  mid-pass (a DB-worker restart is a fresh connection, and TEMP tables do not
  *  survive it). The staging procedures throw this instead of recreating the
  *  table, so a pass that lost its first pages can never diff as a small,
- *  non-empty listing. Crosses the worker RPC as its message only — callers
- *  match on the `reconcile staging lost` prefix. */
+ *  non-empty listing. Crosses the worker RPC as its message only; the engine
+ *  treats it like any other reconcile failure. */
 export class ReconcileStagingLost extends Error {
   constructor(accountId: string) {
     super(
@@ -659,28 +659,31 @@ export function createWriteTx(
   // archive another's corpus.
   const RECONCILE_ARCHIVE_BATCH = 5_000;
 
-  const ensureListingTable = (): void => {
+  // §5.8 staging continuity. `reconcile_pass` marks a pass as begun on THIS
+  // connection. beginPass is the ONLY place either TEMP table is created;
+  // every later step requires the marker (which implies the listing table,
+  // created alongside it) and never recreates anything, so a worker restart
+  // mid-pass surfaces as ReconcileStagingLost instead of a truncated listing.
+  const beginPass = (accountId: string): void => {
     conn.exec(
       `CREATE TEMP TABLE IF NOT EXISTS reconcile_listing (
          account_id TEXT NOT NULL,
          external_id TEXT NOT NULL,
          type TEXT NOT NULL,
          PRIMARY KEY (account_id, external_id, type)
+       ) WITHOUT ROWID;
+       CREATE TEMP TABLE IF NOT EXISTS reconcile_pass (
+         account_id TEXT PRIMARY KEY
        ) WITHOUT ROWID`,
     );
-  };
-
-  const clearListing = (accountId: string): void => {
-    ensureListingTable();
     conn
       .prepare(`DELETE FROM reconcile_listing WHERE account_id = ?`)
       .run(accountId);
+    conn
+      .prepare(`INSERT OR REPLACE INTO reconcile_pass(account_id) VALUES(?)`)
+      .run(accountId);
   };
 
-  // §5.8 staging continuity. `reconcile_pass` marks a pass as begun on THIS
-  // connection. Only reconcileBegin creates the TEMP tables; every later step
-  // requires the marker and never recreates anything, so a worker restart
-  // mid-pass surfaces as ReconcileStagingLost instead of a truncated listing.
   const hasTempTable = (name: string): boolean =>
     !!conn
       .prepare(
@@ -691,24 +694,11 @@ export function createWriteTx(
   const requirePass = (accountId: string): void => {
     if (
       !hasTempTable('reconcile_pass') ||
-      !hasTempTable('reconcile_listing') ||
       !conn
         .prepare(`SELECT 1 FROM reconcile_pass WHERE account_id = ?`)
         .get(accountId)
     )
       throw new ReconcileStagingLost(accountId);
-  };
-
-  const beginPass = (accountId: string): void => {
-    clearListing(accountId);
-    conn.exec(
-      `CREATE TEMP TABLE IF NOT EXISTS reconcile_pass (
-         account_id TEXT PRIMARY KEY
-       ) WITHOUT ROWID`,
-    );
-    conn
-      .prepare(`INSERT OR REPLACE INTO reconcile_pass(account_id) VALUES(?)`)
-      .run(accountId);
   };
 
   const endPass = (accountId: string): void => {

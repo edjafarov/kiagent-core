@@ -1135,7 +1135,10 @@ describe('reconcile staging continuity (§5.8)', () => {
     db = await openDb(path.join(dir, 'test.db'));
     store = openStore(db, deps);
     accountId = (
-      await store.createAccount({ source: 'fake', identifier: 'me@example.com' })
+      await store.createAccount({
+        source: 'fake',
+        identifier: 'me@example.com',
+      })
     ).id;
     await store.commit({
       account: accountId,

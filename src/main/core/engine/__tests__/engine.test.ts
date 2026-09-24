@@ -1837,7 +1837,10 @@ describe('engine', () => {
       });
       const source: Source<number, DocumentInput> = {
         ...base,
-        descriptor: { ...base.descriptor, ...(folderScope ? { folderScope: true } : {}) },
+        descriptor: {
+          ...base.descriptor,
+          ...(folderScope ? { folderScope: true } : {}),
+        },
         // eslint-disable-next-line require-yield
         async *pull() {
           pulled();

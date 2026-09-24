@@ -1110,11 +1110,9 @@ describe('engine account flows', () => {
     it('allowance: an unchanged re-save grants a RATIO allowance, so a complete >50% shrink archives', async () => {
       // The user's escape hatch from a ratio refusal (§5.6 c): re-saving the
       // same folders authorises the shrink the listing reports.
-      const { engine, account } = await seededN(
-        ratioListingSource(10),
-        150,
-        { folderRoots: [{ id: 'a', name: 'Alpha' }] },
-      );
+      const { engine, account } = await seededN(ratioListingSource(10), 150, {
+        folderRoots: [{ id: 'a', name: 'Alpha' }],
+      });
       noArchiveSave();
 
       await engine.applyScope(account.id, SAME_ROOTS, CONFIG_AT_OPEN);
@@ -1144,7 +1142,11 @@ describe('engine account flows', () => {
     it('allowance: a first scope declaration (prior config had no scope) grants a RATIO allowance', async () => {
       // A legacy account's first Save (§5.6 b): its prior enumeration may have
       // held far more than the declared folders, so the first pass may shrink.
-      const { engine, account } = await seededN(ratioListingSource(10), 150, {});
+      const { engine, account } = await seededN(
+        ratioListingSource(10),
+        150,
+        {},
+      );
       // The REAL Save, not a mock: the declared roots must land in the
       // stored config, or the §5.3 skip rule (no declared scope → no pass)
       // would suppress the very pass this test observes.
@@ -1212,11 +1214,9 @@ describe('engine account flows', () => {
     it('allowance: a CHANGED set that archived nothing still refuses the ratio', async () => {
       // Control for the two grants above: a widening is neither a first
       // declaration nor an unchanged re-save, so the ratio arm stays armed.
-      const { engine, account } = await seededN(
-        ratioListingSource(10),
-        150,
-        { folderRoots: [{ id: 'a', name: 'Alpha' }] },
-      );
+      const { engine, account } = await seededN(ratioListingSource(10), 150, {
+        folderRoots: [{ id: 'a', name: 'Alpha' }],
+      });
       noArchiveSave();
 
       await engine.applyScope(
