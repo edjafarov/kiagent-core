@@ -1036,3 +1036,77 @@ describe('core derives the legacy mirror twice, and the two agree (R1 / C-15)', 
     }
   });
 });
+
+/** Spec §5.8 — reconcile staging continuity. Staging lives in connection-
+ *  scoped TEMP tables; a DB-worker restart is a fresh connection, so they
+ *  vanish mid-pass. Recreating them silently would let a pass that lost its
+ *  first pages diff as a small, non-empty listing. */
+describe('reconcile staging continuity (§5.8)', () => {
+  let dir: string;
+  let db: AppDb;
+  let store: CoreStore;
+  let accountId: AccountId;
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-staging-'));
+    db = await openDb(path.join(dir, 'test.db'));
+    store = openStore(db, deps);
+    accountId = (
+      await store.createAccount({ source: 'fake', identifier: 'me@example.com' })
+    ).id;
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b'), doc('c')],
+      cursor: 1,
+    });
+  });
+
+  afterEach(async () => {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** What a DB-worker restart leaves behind: no TEMP objects at all. */
+  const loseTempTables = (): void => {
+    db._conn!.exec('DROP TABLE IF EXISTS temp.reconcile_listing');
+    db._conn!.exec('DROP TABLE IF EXISTS temp.reconcile_pass');
+  };
+
+  it('stage, diff and archive after the TEMP tables vanish throw instead of recreating', async () => {
+    const head = await store.headSeq();
+    await store.reconcileBegin(accountId);
+    await store.reconcileStage(accountId, [{ externalId: 'a', type: 'file' }]);
+    loseTempTables();
+    await expect(
+      store.reconcileStage(accountId, [{ externalId: 'b', type: 'file' }]),
+    ).rejects.toThrow(/reconcile staging lost/);
+    await expect(store.reconcileDiff(accountId, head)).rejects.toThrow(
+      /reconcile staging lost/,
+    );
+    await expect(store.reconcileArchive(accountId, head)).rejects.toThrow(
+      /reconcile staging lost/,
+    );
+    expect(await store.read.count({ account: accountId })).toBe(3);
+  });
+
+  it('a pass that was never begun cannot stage', async () => {
+    await expect(
+      store.reconcileStage(accountId, [{ externalId: 'x', type: 'file' }]),
+    ).rejects.toThrow(/reconcile staging lost/);
+  });
+
+  it('begin → stage → diff → archive works, and archive ends the pass', async () => {
+    const head = await store.headSeq();
+    await store.reconcileBegin(accountId);
+    await store.reconcileStage(accountId, [{ externalId: 'a', type: 'file' }]);
+    expect(await store.reconcileDiff(accountId, head)).toEqual({
+      listedCount: 1,
+      liveCount: 3,
+      deletionCount: 2,
+    });
+    expect(await store.reconcileArchive(accountId, head)).toBe(2);
+    await expect(store.reconcileDiff(accountId, head)).rejects.toThrow(
+      /reconcile staging lost/,
+    );
+  });
+});

@@ -237,6 +237,23 @@ async function reconcilePass(
   // back into its own root) they took ~3.2 GiB against V8's 4 GiB cap and
   // killed the main process with an OOM SIGTRAP. Only counts come back now.
   await store.reconcileBegin(account.id);
+  // One failure path for the drain, the diff and the archive (spec §5.8: a
+  // store that lost its staging throws "reconcile staging lost" from any of
+  // them). Ends the pass, and — unless cancellation caused it — records the
+  // error on the account without touching `status`. Never archives.
+  const failPass = async (err: unknown): Promise<void> => {
+    await store.reconcileEnd(account.id).catch(() => {});
+    if (signal.aborted) return; // cancellation-caused — not a real failure
+    const msg = String(err instanceof Error ? err.message : err);
+    logs.log(scope, 'error', `reconcile failed: ${msg}`);
+    const fresh = (await store.account(account.id)) ?? account;
+    await store.commit({
+      account: account.id,
+      documents: [],
+      cursor: fresh.cursor,
+      error: `reconcile: ${msg}`,
+    });
+  };
   try {
     let batch: ExternalRef[] = [];
     for await (const page of abortable(source.reconcile(session), signal)) {
@@ -253,17 +270,7 @@ async function reconcilePass(
       await store.reconcileStage(account.id, batch);
     }
   } catch (err) {
-    await store.reconcileEnd(account.id);
-    if (signal.aborted) return; // cancellation-caused — not a real failure
-    const msg = String(err instanceof Error ? err.message : err);
-    logs.log(scope, 'error', `reconcile failed: ${msg}`);
-    const fresh = (await store.account(account.id)) ?? account;
-    await store.commit({
-      account: account.id,
-      documents: [],
-      cursor: fresh.cursor,
-      error: `reconcile: ${msg}`,
-    });
+    await failPass(err);
     return;
   }
   if (signal.aborted) {
@@ -281,10 +288,14 @@ async function reconcilePass(
   // between the drain and the diff silently empties it — and a local tally
   // would still claim the listing was fine, walking straight past the
   // empty-listing guard below into archiving the entire account.
-  const { listedCount, liveCount, deletionCount } = await store.reconcileDiff(
-    account.id,
-    startSeq,
-  );
+  let counts: Awaited<ReturnType<CoreStore['reconcileDiff']>>;
+  try {
+    counts = await store.reconcileDiff(account.id, startSeq);
+  } catch (err) {
+    await failPass(err);
+    return;
+  }
+  const { listedCount, liveCount, deletionCount } = counts;
   if (deletionCount === 0) {
     await store.reconcileEnd(account.id);
     return;
@@ -324,7 +335,12 @@ async function reconcilePass(
 
   // Archives (and clears the staged listing) inside the store — the ids never
   // come back here either.
-  await store.reconcileArchive(account.id, startSeq);
+  try {
+    await store.reconcileArchive(account.id, startSeq);
+  } catch (err) {
+    await failPass(err);
+    return;
+  }
   const fresh = (await store.account(account.id)) ?? account;
   await store.commit({
     account: account.id,

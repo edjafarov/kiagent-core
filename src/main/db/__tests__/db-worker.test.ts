@@ -259,12 +259,12 @@ Module._resolveFilename = function (request, ...rest) {
       ['keep-2', false],
     ]);
 
-    // The archive ends the pass: a second diff sees an empty listing, so
-    // every live doc now reads as unlisted. Proves the staging was cleared
+    // The archive ends the pass: a second diff finds no pass and refuses
+    // (§5.8 — nothing ever recreates staging). Proves the staging was cleared
     // rather than left behind to poison the next account's pass.
-    expect(
-      await client!.proc!('reconcileDiff', { accountId, startSeq }),
-    ).toEqual({ listedCount: 0, liveCount: 2, deletionCount: 2 });
+    await expect(
+      client!.proc!('reconcileDiff', { accountId, startSeq }),
+    ).rejects.toThrow(/reconcile staging lost/);
 
     await client!.close();
   }, 20000);

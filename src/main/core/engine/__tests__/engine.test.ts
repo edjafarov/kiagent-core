@@ -1681,6 +1681,63 @@ describe('engine', () => {
       archive.mockRestore();
     });
 
+    // Spec §5.8: staging that vanishes mid-pass surfaces as a thrown
+    // "reconcile staging lost" from the store. Wherever it lands — a stage
+    // call during the drain, or the diff itself — the pass must end with an
+    // account error and nothing archived.
+    it('staging lost during the drain archives nothing and surfaces an error', async () => {
+      const source = hangingSource({
+        async *reconcile() {
+          yield [{ externalId: 'a', type: 'note' }];
+          yield [{ externalId: 'b', type: 'note' }];
+        },
+      });
+      const engine = makeEngine(source);
+      const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+      const stage = jest
+        .spyOn(store, 'reconcileStage')
+        .mockRejectedValue(
+          new Error(`reconcile staging lost for ${account.id} — restarted`),
+        );
+      const archive = jest.spyOn(store, 'reconcileArchive');
+      const handle = engine.run(account);
+      await waitFor(async () => !!(await store.account(account.id))?.lastError);
+      await handle.stop();
+      expect((await store.account(account.id))?.lastError).toMatch(
+        /reconcile staging lost/,
+      );
+      expect(archive).not.toHaveBeenCalled();
+      expect(await store.read.count({ account: account.id })).toBe(3);
+      stage.mockRestore();
+      archive.mockRestore();
+    });
+
+    it('staging lost at the diff archives nothing and surfaces an error', async () => {
+      const source = hangingSource({
+        async *reconcile() {
+          yield [{ externalId: 'a', type: 'note' }];
+        },
+      });
+      const engine = makeEngine(source);
+      const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+      const diff = jest
+        .spyOn(store, 'reconcileDiff')
+        .mockRejectedValue(
+          new Error(`reconcile staging lost for ${account.id} — restarted`),
+        );
+      const archive = jest.spyOn(store, 'reconcileArchive');
+      const handle = engine.run(account);
+      await waitFor(async () => !!(await store.account(account.id))?.lastError);
+      await handle.stop();
+      expect((await store.account(account.id))?.lastError).toMatch(
+        /reconcile staging lost/,
+      );
+      expect(archive).not.toHaveBeenCalled();
+      expect(await store.read.count({ account: account.id })).toBe(3);
+      diff.mockRestore();
+      archive.mockRestore();
+    });
+
     it('reconcile that throws surfaces an error like other sync failures, but archives nothing', async () => {
       const source = hangingSource({
         // Always throws before any yield — a fixed AsyncIterable<ExternalRef[]>

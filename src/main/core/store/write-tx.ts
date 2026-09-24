@@ -66,6 +66,21 @@ export interface ReconcileCounts {
   deletionCount: number;
 }
 
+/** Spec §5.8: a reconcile pass whose connection-scoped staging vanished
+ *  mid-pass (a DB-worker restart is a fresh connection, and TEMP tables do not
+ *  survive it). The staging procedures throw this instead of recreating the
+ *  table, so a pass that lost its first pages can never diff as a small,
+ *  non-empty listing. Crosses the worker RPC as its message only — callers
+ *  match on the `reconcile staging lost` prefix. */
+export class ReconcileStagingLost extends Error {
+  constructor(accountId: string) {
+    super(
+      `reconcile staging lost for ${accountId} — the DB connection restarted mid-pass; nothing archived`,
+    );
+    this.name = 'ReconcileStagingLost';
+  }
+}
+
 /** Input for one folder-scope edit (DECISIONS R8 / amendment A-1). */
 export interface FolderScopeInput {
   accountId: AccountId;
@@ -658,6 +673,51 @@ export function createWriteTx(
       .run(accountId);
   };
 
+  // §5.8 staging continuity. `reconcile_pass` marks a pass as begun on THIS
+  // connection. Only reconcileBegin creates the TEMP tables; every later step
+  // requires the marker and never recreates anything, so a worker restart
+  // mid-pass surfaces as ReconcileStagingLost instead of a truncated listing.
+  const hasTempTable = (name: string): boolean =>
+    !!conn
+      .prepare(
+        `SELECT 1 FROM sqlite_temp_master WHERE type = 'table' AND name = ?`,
+      )
+      .get(name);
+
+  const requirePass = (accountId: string): void => {
+    if (
+      !hasTempTable('reconcile_pass') ||
+      !hasTempTable('reconcile_listing') ||
+      !conn
+        .prepare(`SELECT 1 FROM reconcile_pass WHERE account_id = ?`)
+        .get(accountId)
+    )
+      throw new ReconcileStagingLost(accountId);
+  };
+
+  const beginPass = (accountId: string): void => {
+    clearListing(accountId);
+    conn.exec(
+      `CREATE TEMP TABLE IF NOT EXISTS reconcile_pass (
+         account_id TEXT PRIMARY KEY
+       ) WITHOUT ROWID`,
+    );
+    conn
+      .prepare(`INSERT OR REPLACE INTO reconcile_pass(account_id) VALUES(?)`)
+      .run(accountId);
+  };
+
+  const endPass = (accountId: string): void => {
+    if (hasTempTable('reconcile_listing'))
+      conn
+        .prepare(`DELETE FROM reconcile_listing WHERE account_id = ?`)
+        .run(accountId);
+    if (hasTempTable('reconcile_pass'))
+      conn
+        .prepare(`DELETE FROM reconcile_pass WHERE account_id = ?`)
+        .run(accountId);
+  };
+
   const stageTx = conn.transaction(
     (accountId: string, refs: ExternalRef[]): void => {
       const ins = conn.prepare(
@@ -888,16 +948,16 @@ export function createWriteTx(
   return {
     commit: (batch: CommitBatch): Seq => commitTx(batch),
 
-    reconcileBegin: (accountId) => clearListing(accountId),
+    reconcileBegin: (accountId) => beginPass(accountId),
 
     reconcileStage: (accountId, refs) => {
+      requirePass(accountId);
       if (refs.length === 0) return;
-      ensureListingTable();
       stageTx(accountId, refs);
     },
 
     reconcileDiff: (accountId, startSeq) => {
-      ensureListingTable();
+      requirePass(accountId);
       const listedCount = Number(
         (
           conn
@@ -922,7 +982,7 @@ export function createWriteTx(
     },
 
     reconcileArchive: (accountId, startSeq) => {
-      ensureListingTable();
+      requirePass(accountId);
       // Batched so one cleanup of a poisoned multi-million-document account
       // is a series of bounded transactions rather than a single one holding
       // a write lock (and its rollback journal) over the whole corpus.
@@ -932,11 +992,11 @@ export function createWriteTx(
         archived += n;
         if (n < RECONCILE_ARCHIVE_BATCH) break;
       }
-      clearListing(accountId);
+      endPass(accountId);
       return archived;
     },
 
-    reconcileEnd: (accountId) => clearListing(accountId),
+    reconcileEnd: (accountId) => endPass(accountId),
 
     applyFolderScope: (input) => applyFolderScopeTx(input),
   };
