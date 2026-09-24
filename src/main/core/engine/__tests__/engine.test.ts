@@ -809,6 +809,74 @@ describe('engine', () => {
     expect(summaries[0].markdown).toBe('attempt 2 output');
   }, 15_000);
 
+  it('connect: re-Adding a folder-scoped account WITHOUT a picker keeps its folder selection; a picker connect replaces it', async () => {
+    let usePicker = false;
+    const source: Source<number, DocumentInput> = {
+      descriptor: {
+        id: 'scoped',
+        name: 'Scoped',
+        documentTypes: ['note'],
+        auth: 'none',
+        folderScope: true,
+      },
+      async connect(auth) {
+        const picked = usePicker
+          ? await auth.pickFolders({
+              modes: [{ key: 'm', label: 'M' }],
+              roots: async () => [],
+              children: async () => [],
+            })
+          : [{ id: 'mail', name: 'All mail' }];
+        return {
+          identifier: 'me@test',
+          config: {
+            tenant: usePicker ? 'b' : 'a',
+            folderRoots: picked.map((n) => ({ id: n.id, name: n.name })),
+          },
+        };
+      },
+      async *pull() {},
+      toDocument: (item) => item,
+    };
+    const engine = makeEngine(source);
+    const auth = {
+      oauth: async () => ({}),
+      showQr: () => {},
+      prompt: async () => ({}),
+      status: () => {},
+      pickFolders: async () => [
+        { id: 'P', name: 'Picked', hasChildren: false },
+      ],
+    };
+    const first = await engine.connect(source, auth);
+    // The user widened the scope in Manage.
+    const widened = [
+      { id: 'mail', name: 'All mail' },
+      { id: 'TRASH', name: 'Trash' },
+    ];
+    await store.applyFolderScope({
+      accountId: first.id,
+      expectedConfigJson: JSON.stringify(first.config),
+      config: { ...first.config, folderRoots: widened },
+      cursor: null,
+      archiveScopeRootIds: [],
+      reattributeScopeRoots: [],
+      archiveRefs: [],
+    } as never);
+
+    const again = await engine.connect(source, auth);
+    expect(again.id).toBe(first.id);
+    // Scope survives; the rest of the fresh config still wins.
+    expect(again.config).toEqual({ tenant: 'a', folderRoots: widened });
+
+    usePicker = true;
+    const picked = await engine.connect(source, auth);
+    expect(picked.config).toEqual({
+      tenant: 'b',
+      folderRoots: [{ id: 'P', name: 'Picked' }],
+    });
+  });
+
   it('connect: reconnecting an existing (source, identifier) upserts the account, stops the old running loop, no duplicate', async () => {
     let attempt = 0;
     const source: Source<number, DocumentInput> = {

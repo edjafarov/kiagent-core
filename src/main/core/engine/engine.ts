@@ -772,6 +772,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       // Capture credentials the flow produces so the PLATFORM persists them —
       // the source never stores a blob.
       let captured: Credentials | null = null;
+      let usedPicker = false;
       const wrapped: AuthChannel = {
         async oauth(scopes) {
           captured = await auth.oauth(scopes);
@@ -787,9 +788,30 @@ export function createEngine(deps: EngineDeps): Engine & {
         },
         status: (msg) => auth.status(msg),
         // No credentials ride pickFolders — forward verbatim.
-        pickFolders: (spec) => auth.pickFolders(spec),
+        pickFolders: (spec) => {
+          usedPicker = true;
+          return auth.pickFolders(spec);
+        },
       };
-      const { identifier, config } = await source.connect(wrapped);
+      const connected = await source.connect(wrapped);
+      const { identifier } = connected;
+      let { config } = connected;
+      // Re-Adding a known folder-scoped account through a connect that shows
+      // NO picker (Gmail, MS365 write fixed defaults) must not reset the
+      // user's folder selection: the upsert below replaces config wholesale,
+      // and nothing would archive what the lost selection had covered. A
+      // connect that DID show the picker is the user choosing afresh.
+      if (source.descriptor.folderScope && !usedPicker) {
+        const prior = (await store.read.accounts()).find(
+          (a) =>
+            a.source === source.descriptor.id && a.identifier === identifier,
+        );
+        const priorRoots = (prior?.config as { folderRoots?: unknown })
+          ?.folderRoots;
+        if (Array.isArray(priorRoots)) {
+          config = { ...(config ?? {}), folderRoots: priorRoots };
+        }
+      }
       // createAccount upserts on (source, identifier): re-authenticating an
       // already-known account returns its EXISTING id (documents keep their
       // account) with the latest config/status. If that account still has a
