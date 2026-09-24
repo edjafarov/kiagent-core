@@ -92,7 +92,6 @@ Non-goals:
 - **No dropped work:** a non-auth conversation fetch failure moves the id into `retry`, committed with the batch.
   - `retry` is drained first on the next pull.
   - An id that fails 5 consecutive pulls is logged and dropped. Its thread stays at its last indexed version; if it is gone upstream, reconcile archives it.
-  - A retry counter lives in the cursor as `retry: Array<{id, n}>`.
 - Expired delta (410) keeps today's 14-day re-prime for adds. Reconcile covers removals, so the gap only affects old mail moved in during the outage.
 
 ### 3.3 Reconcile
