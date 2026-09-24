@@ -479,6 +479,23 @@ describe('createExtensionPlatform', () => {
     expect(registry.has('basicsrc')).toBe(false);
   });
 
+  it('stamps activatedAt on each activation and keeps it stable between', async () => {
+    await platform.start();
+    await installFixture();
+    const at = () =>
+      platform.snapshot().find((e) => e.id === 'test.basic')?.activatedAt;
+    const first = at();
+    expect(first).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(at()).toBe(first);
+    await new Promise((r) => setTimeout(r, 5));
+    await platform.setEnabled('test.basic', false);
+    expect(at()).toBe(first); // leaving 'activated' does not restamp
+    await platform.setEnabled('test.basic', true);
+    const second = at();
+    expect(second).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(second).not.toBe(first);
+  });
+
   describe('page consent', () => {
     const PAGE = { id: 'main', slot: 'screen', title: 'Main' };
     function addPage(dir: string): void {

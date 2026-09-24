@@ -332,6 +332,8 @@ interface Entry {
   /** Loaded once per Entry (dir contents only change through reinstall,
    *  which rebuilds the Entry) — snapshot() must stay cheap. */
   iconDataUrl?: string;
+  /** Stamp of the latest entry into 'activated' (see ExtensionSnapshot). */
+  activatedAt?: string;
 }
 
 function descriptorForEntry(e: Entry): PluginDatabaseDescriptor | undefined {
@@ -588,6 +590,7 @@ export function createExtensionPlatform(
       // B3: always an array — an extension with no contributes.ui yields
       // [], never undefined (uiContributions' own contract).
       ui: uiContributions(e.manifest),
+      activatedAt: e.activatedAt,
     }));
 
   const changed = () => deps.onChange(snapshot());
@@ -613,6 +616,8 @@ export function createExtensionPlatform(
   }
 
   const setStatus = (e: Entry, status: ExtensionStatus, error?: string) => {
+    if (status === 'activated' && e.status !== 'activated')
+      e.activatedAt = new Date().toISOString();
     e.status = status;
     e.error = error;
     changed();
