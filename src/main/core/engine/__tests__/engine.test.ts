@@ -1822,6 +1822,91 @@ describe('engine', () => {
       return account;
     }
 
+    /** §5.3: a folder-scoped account whose config declares no scope (a
+     *  legacy MS365/Gmail account before its first Save) has nothing to
+     *  reconcile against — its enumeration is the connector's default, not a
+     *  declared set — so the engine never runs a pass for it. */
+    function scopeSkipSource(folderScope: boolean) {
+      const pulled = jest.fn();
+      const reconciled = jest.fn();
+      const base = hangingSource({
+        async *reconcile() {
+          reconciled();
+          yield [];
+        },
+      });
+      const source: Source<number, DocumentInput> = {
+        ...base,
+        descriptor: { ...base.descriptor, ...(folderScope ? { folderScope: true } : {}) },
+        // eslint-disable-next-line require-yield
+        async *pull() {
+          pulled();
+          await new Promise<never>(() => {});
+        },
+      };
+      return { source, pulled, reconciled };
+    }
+
+    async function seedWithConfig(
+      source: Source<number, DocumentInput>,
+      config: Record<string, unknown>,
+    ): Promise<Account> {
+      const account = await store.createAccount({
+        source: source.descriptor.id,
+        identifier: 'skip@test',
+        config,
+      });
+      await store.commit({
+        account: account.id,
+        documents: [doc('a'), doc('b'), doc('c')],
+        cursor: 1,
+      });
+      return account;
+    }
+
+    it('skip rule: a folder-scoped account that declares no scope never reconciles', async () => {
+      const { source, pulled, reconciled } = scopeSkipSource(true);
+      const engine = makeEngine(source);
+      const account = await seedWithConfig(source, {});
+
+      const handle = engine.run(account);
+      await waitFor(async () => pulled.mock.calls.length > 0);
+      await new Promise((r) => setTimeout(r, 50));
+      await handle.stop();
+
+      expect(reconciled).not.toHaveBeenCalled();
+      expect((await store.account(account.id))?.lastError).toBeFalsy();
+    });
+
+    it('skip rule control: a folder-scoped account with Drive-style roots DOES reconcile', async () => {
+      const { source, reconciled } = scopeSkipSource(true);
+      const engine = makeEngine(source);
+      const account = await seedWithConfig(source, {
+        roots: [{ rootFolderId: 'r', rootName: 'R' }],
+      });
+
+      const handle = engine.run(account);
+      await waitFor(async () => !!(await store.account(account.id))?.lastError);
+      await handle.stop();
+
+      expect(reconciled).toHaveBeenCalled();
+      expect((await store.account(account.id))?.lastError).toMatch(
+        /listing came back empty/,
+      );
+    });
+
+    it('skip rule control: a source without folderScope reconciles with an empty config', async () => {
+      const { source, reconciled } = scopeSkipSource(false);
+      const engine = makeEngine(source);
+      const account = await seedWithConfig(source, {});
+
+      const handle = engine.run(account);
+      await waitFor(async () => !!(await store.account(account.id))?.lastError);
+      await handle.stop();
+
+      expect(reconciled).toHaveBeenCalled();
+    });
+
     it('refuses to archive off an EMPTY listing over a non-empty corpus', async () => {
       // The "silently empty listing" class: imap resolving zero mailboxes,
       // an unmounted drive slipping past a source guard. Never normal churn.

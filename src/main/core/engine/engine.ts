@@ -955,7 +955,14 @@ export function createEngine(deps: EngineDeps): Engine & {
                   await store.read.count({ account: account.id }),
                 );
               }
-              if (src.reconcile) {
+              // §5.3: a folder-scoped account that declares no scope (a
+              // legacy account before its first Save) enumerates the
+              // connector's defaults — there is no declared set to reconcile
+              // against, so no pass runs until the user saves one.
+              const undeclared =
+                src.descriptor.folderScope === true &&
+                declaredScopeIds(fresh.config ?? {}) === null;
+              if (src.reconcile && !undeclared) {
                 reconciling = reconcilePass(
                   src,
                   session,

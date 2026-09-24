@@ -1143,7 +1143,9 @@ describe('engine account flows', () => {
       // A legacy account's first Save (§5.6 b): its prior enumeration may have
       // held far more than the declared folders, so the first pass may shrink.
       const { engine, account } = await seededN(ratioListingSource(10), 150, {});
-      noArchiveSave();
+      // The REAL Save, not a mock: the declared roots must land in the
+      // stored config, or the §5.3 skip rule (no declared scope → no pass)
+      // would suppress the very pass this test observes.
 
       await engine.applyScope(account.id, SAME_ROOTS, JSON.stringify({}));
       await waitFor(settledAt(account.id, 10));
@@ -1155,7 +1157,9 @@ describe('engine account flows', () => {
 
     it('allowance: a first scope declaration still refuses an empty listing', async () => {
       const { engine, account } = await seededN(emptyListingSource(), 3, {});
-      noArchiveSave();
+      // The REAL Save, not a mock: the declared roots must land in the
+      // stored config, or the §5.3 skip rule (no declared scope → no pass)
+      // would suppress the very pass this test observes.
 
       await engine.applyScope(account.id, SAME_ROOTS, JSON.stringify({}));
       await waitFor(reconcileSettled(account.id));
