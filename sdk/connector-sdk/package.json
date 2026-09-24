@@ -1,6 +1,6 @@
 {
   "name": "@kiagent/connector-sdk",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Contracts, source-error taxonomy, and shared utilities for KIAgent connector plugins",
   "license": "MIT",
   "kiagentCore": "0.91.0",

@@ -276,6 +276,7 @@ describe('manageFolders / reauthenticate over the extension RPC boundary', () =>
       selected: SELECTED,
       expand: [],
       purpose: 'manage',
+      note: null, // no note set — the wire carries null, never undefined
     });
     // …and what main handed the FolderSelectionChannel.
     const spec = got.spec!;
