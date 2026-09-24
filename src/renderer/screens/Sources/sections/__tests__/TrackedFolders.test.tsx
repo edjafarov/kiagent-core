@@ -13,6 +13,7 @@ jest.mock('@renderer/components/folder-picker/FolderPickerModal', () => ({
     purpose?: string;
     selected?: Array<{ id: string; name: string }>;
     expandIds?: string[];
+    note?: string;
     onConfirm: (ids: string[]) => void;
     onClose: () => void;
   }) => (
@@ -21,6 +22,7 @@ jest.mock('@renderer/components/folder-picker/FolderPickerModal', () => ({
         {(p.selected ?? []).map((n) => n.id).join(',')}
       </span>
       <span data-testid="picker-expand">{(p.expandIds ?? []).join(',')}</span>
+      <span data-testid="picker-note">{p.note ?? ''}</span>
       <button type="button" onClick={() => p.onConfirm(['r1'])}>
         picker-save
       </button>
@@ -232,7 +234,15 @@ describe('TrackedFolders rows', () => {
 
   it('renders the empty state so Manage folders stays reachable', () => {
     render(<TrackedFolders account={accountWith([])} />);
-    expect(screen.getByText('No folders selected yet.')).toBeInTheDocument();
+    // §5.2: the card only mounts for folderScope sources, where an account
+    // with no declared roots is enumerating the connector's DEFAULTS (a
+    // legacy MS365/Gmail account) — not "nothing".
+    expect(
+      screen.getByText('Default folders — Manage to change'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('No folders selected yet.'),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Manage folders/ }),
     ).toBeEnabled();
@@ -302,6 +312,15 @@ describe('TrackedFolders manage flow', () => {
     act(() => pushHandler!(PICKER_EVENT));
 
     expect(screen.getByTestId('picker-expand')).toHaveTextContent('root,0B111');
+  });
+
+  it('forwards the wire note to the modal (§5.4)', async () => {
+    render(<TrackedFolders account={accountWith(TWO_ROOTS)} />);
+    fireEvent.click(screen.getByRole('button', { name: /Manage folders/ }));
+    await act(async () => {});
+    act(() => pushHandler!({ ...PICKER_EVENT, note: 'N' }));
+
+    expect(screen.getByTestId('picker-note')).toHaveTextContent('N');
   });
 
   it('Save in the modal confirms the ids through the picker adapter', async () => {

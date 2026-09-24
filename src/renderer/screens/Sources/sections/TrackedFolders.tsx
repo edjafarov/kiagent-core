@@ -317,7 +317,9 @@ export function TrackedFolders(props: {
     <section className="detail-card">
       <div className="lbl-section">Tracked folders</div>
       {roots.length === 0 ? (
-        <div className="t-meta">No folders selected yet.</div>
+        // Only folderScope sources mount this card (SourceDetail), so no
+        // declared roots means the connector's defaults (§5.2).
+        <div className="t-meta">Default folders — Manage to change</div>
       ) : (
         <ul className="tf-list">
           {roots.map((r) => (
@@ -390,6 +392,7 @@ export function TrackedFolders(props: {
           dataSource={pickerAdapter.dataSource}
           selected={pickerAdapter.selected}
           expandIds={pickerAdapter.expandIds}
+          note={picker.note}
           purpose={picker.purpose}
           onConfirm={(ids) => {
             pickerConfirmedForRef.current = picker.requestId;

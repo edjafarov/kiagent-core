@@ -259,12 +259,12 @@ Module._resolveFilename = function (request, ...rest) {
       ['keep-2', false],
     ]);
 
-    // The archive ends the pass: a second diff sees an empty listing, so
-    // every live doc now reads as unlisted. Proves the staging was cleared
+    // The archive ends the pass: a second diff finds no pass and refuses
+    // (§5.8 — nothing ever recreates staging). Proves the staging was cleared
     // rather than left behind to poison the next account's pass.
-    expect(
-      await client!.proc!('reconcileDiff', { accountId, startSeq }),
-    ).toEqual({ listedCount: 0, liveCount: 2, deletionCount: 2 });
+    await expect(
+      client!.proc!('reconcileDiff', { accountId, startSeq }),
+    ).rejects.toThrow(/reconcile staging lost/);
 
     await client!.close();
   }, 20000);
@@ -339,6 +339,7 @@ Module._resolveFilename = function (request, ...rest) {
         // 'Y' was removed too, but the retained 'root' covers it — so its
         // documents are re-stamped rather than archived (C-46/D5).
         reattributeScopeRoots: [{ from: 'Y', to: 'root' }],
+        archiveRefs: [],
         expectedConfigJson: config,
       }),
     ).toEqual({ archived: 1, reattributed: 1, remaining: 2, stale: false });
@@ -436,6 +437,7 @@ Module._resolveFilename = function (request, ...rest) {
         // Hand-built wire payload, so the REQUIRED field must be spelled out
         // here the way the typed client would send it (C-46/D5).
         reattributeScopeRoots: [],
+        archiveRefs: [],
         expectedConfigJson: config,
       },
     });

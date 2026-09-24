@@ -809,6 +809,117 @@ describe('engine', () => {
     expect(summaries[0].markdown).toBe('attempt 2 output');
   }, 15_000);
 
+  it('connect: re-Adding a folder-scoped account WITHOUT a picker keeps its folder selection; a picker connect replaces it', async () => {
+    let usePicker = false;
+    const source: Source<number, DocumentInput> = {
+      descriptor: {
+        id: 'scoped',
+        name: 'Scoped',
+        documentTypes: ['note'],
+        auth: 'none',
+        folderScope: true,
+      },
+      async connect(auth) {
+        const picked = usePicker
+          ? await auth.pickFolders({
+              modes: [{ key: 'm', label: 'M' }],
+              roots: async () => [],
+              children: async () => [],
+            })
+          : [{ id: 'mail', name: 'All mail' }];
+        return {
+          identifier: 'me@test',
+          config: {
+            tenant: usePicker ? 'b' : 'a',
+            folderRoots: picked.map((n) => ({ id: n.id, name: n.name })),
+          },
+        };
+      },
+      async *pull() {},
+      toDocument: (item) => item,
+    };
+    const engine = makeEngine(source);
+    const auth = {
+      oauth: async () => ({}),
+      showQr: () => {},
+      prompt: async () => ({}),
+      status: () => {},
+      pickFolders: async () => [
+        { id: 'P', name: 'Picked', hasChildren: false },
+      ],
+    };
+    const first = await engine.connect(source, auth);
+    // The user widened the scope in Manage.
+    const widened = [
+      { id: 'mail', name: 'All mail' },
+      { id: 'TRASH', name: 'Trash' },
+    ];
+    await store.applyFolderScope({
+      accountId: first.id,
+      expectedConfigJson: JSON.stringify(first.config),
+      config: { ...first.config, folderRoots: widened },
+      cursor: null,
+      archiveScopeRootIds: [],
+      reattributeScopeRoots: [],
+      archiveRefs: [],
+    } as never);
+
+    const again = await engine.connect(source, auth);
+    expect(again.id).toBe(first.id);
+    // Scope survives; the rest of the fresh config still wins.
+    expect(again.config).toEqual({ tenant: 'a', folderRoots: widened });
+
+    usePicker = true;
+    const picked = await engine.connect(source, auth);
+    expect(picked.config).toEqual({
+      tenant: 'b',
+      folderRoots: [{ id: 'P', name: 'Picked' }],
+    });
+  });
+
+  it('connect: re-Adding a LEGACY (undeclared) folder-scoped account without a picker keeps it undeclared', async () => {
+    // MS365 has no reauthenticate: an expired token says "remove and add it
+    // again". Adding without removing must not turn connect's defaults into
+    // a declared scope — the next reconcile would archive everything outside
+    // them under a full allowance.
+    const source: Source<number, DocumentInput> = {
+      descriptor: {
+        id: 'scoped',
+        name: 'Scoped',
+        documentTypes: ['note'],
+        auth: 'none',
+        folderScope: true,
+      },
+      async connect() {
+        return {
+          identifier: 'me@test',
+          config: {
+            tenantKind: 'work',
+            folderRoots: [{ id: 'inbox', name: 'Inbox' }],
+          },
+        };
+      },
+      async *pull() {},
+      toDocument: (item) => item,
+    };
+    const engine = makeEngine(source);
+    const legacy = await store.createAccount({
+      source: 'scoped',
+      identifier: 'me@test',
+      config: { tenantKind: 'work' },
+      status: 'connecting',
+    });
+    const again = await engine.connect(source, {
+      oauth: async () => ({}),
+      showQr: () => {},
+      prompt: async () => ({}),
+      status: () => {},
+      pickFolders: async () => [],
+    });
+    expect(again.id).toBe(legacy.id);
+    expect(again.config).toEqual({ tenantKind: 'work' });
+  });
+
   it('connect: reconnecting an existing (source, identifier) upserts the account, stops the old running loop, no duplicate', async () => {
     let attempt = 0;
     const source: Source<number, DocumentInput> = {
@@ -1681,6 +1792,63 @@ describe('engine', () => {
       archive.mockRestore();
     });
 
+    // Spec §5.8: staging that vanishes mid-pass surfaces as a thrown
+    // "reconcile staging lost" from the store. Wherever it lands — a stage
+    // call during the drain, or the diff itself — the pass must end with an
+    // account error and nothing archived.
+    it('staging lost during the drain archives nothing and surfaces an error', async () => {
+      const source = hangingSource({
+        async *reconcile() {
+          yield [{ externalId: 'a', type: 'note' }];
+          yield [{ externalId: 'b', type: 'note' }];
+        },
+      });
+      const engine = makeEngine(source);
+      const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+      const stage = jest
+        .spyOn(store, 'reconcileStage')
+        .mockRejectedValue(
+          new Error(`reconcile staging lost for ${account.id} — restarted`),
+        );
+      const archive = jest.spyOn(store, 'reconcileArchive');
+      const handle = engine.run(account);
+      await waitFor(async () => !!(await store.account(account.id))?.lastError);
+      await handle.stop();
+      expect((await store.account(account.id))?.lastError).toMatch(
+        /reconcile staging lost/,
+      );
+      expect(archive).not.toHaveBeenCalled();
+      expect(await store.read.count({ account: account.id })).toBe(3);
+      stage.mockRestore();
+      archive.mockRestore();
+    });
+
+    it('staging lost at the diff archives nothing and surfaces an error', async () => {
+      const source = hangingSource({
+        async *reconcile() {
+          yield [{ externalId: 'a', type: 'note' }];
+        },
+      });
+      const engine = makeEngine(source);
+      const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+      const diff = jest
+        .spyOn(store, 'reconcileDiff')
+        .mockRejectedValue(
+          new Error(`reconcile staging lost for ${account.id} — restarted`),
+        );
+      const archive = jest.spyOn(store, 'reconcileArchive');
+      const handle = engine.run(account);
+      await waitFor(async () => !!(await store.account(account.id))?.lastError);
+      await handle.stop();
+      expect((await store.account(account.id))?.lastError).toMatch(
+        /reconcile staging lost/,
+      );
+      expect(archive).not.toHaveBeenCalled();
+      expect(await store.read.count({ account: account.id })).toBe(3);
+      diff.mockRestore();
+      archive.mockRestore();
+    });
+
     it('reconcile that throws surfaces an error like other sync failures, but archives nothing', async () => {
       const source = hangingSource({
         // Always throws before any yield — a fixed AsyncIterable<ExternalRef[]>
@@ -1764,6 +1932,94 @@ describe('engine', () => {
       });
       return account;
     }
+
+    /** §5.3: a folder-scoped account whose config declares no scope (a
+     *  legacy MS365/Gmail account before its first Save) has nothing to
+     *  reconcile against — its enumeration is the connector's default, not a
+     *  declared set — so the engine never runs a pass for it. */
+    function scopeSkipSource(folderScope: boolean) {
+      const pulled = jest.fn();
+      const reconciled = jest.fn();
+      const base = hangingSource({
+        async *reconcile() {
+          reconciled();
+          yield [];
+        },
+      });
+      const source: Source<number, DocumentInput> = {
+        ...base,
+        descriptor: {
+          ...base.descriptor,
+          ...(folderScope ? { folderScope: true } : {}),
+        },
+        // eslint-disable-next-line require-yield
+        async *pull() {
+          pulled();
+          await new Promise<never>(() => {});
+        },
+      };
+      return { source, pulled, reconciled };
+    }
+
+    async function seedWithConfig(
+      source: Source<number, DocumentInput>,
+      config: Record<string, unknown>,
+    ): Promise<Account> {
+      const account = await store.createAccount({
+        source: source.descriptor.id,
+        identifier: 'skip@test',
+        config,
+      });
+      await store.commit({
+        account: account.id,
+        documents: [doc('a'), doc('b'), doc('c')],
+        cursor: 1,
+      });
+      return account;
+    }
+
+    it('skip rule: a folder-scoped account that declares no scope never reconciles', async () => {
+      const { source, pulled, reconciled } = scopeSkipSource(true);
+      const engine = makeEngine(source);
+      const account = await seedWithConfig(source, {});
+
+      const handle = engine.run(account);
+      await waitFor(async () => pulled.mock.calls.length > 0);
+      await new Promise((r) => setTimeout(r, 50));
+      await handle.stop();
+
+      expect(reconciled).not.toHaveBeenCalled();
+      expect((await store.account(account.id))?.lastError).toBeFalsy();
+    });
+
+    it('skip rule control: a folder-scoped account with Drive-style roots DOES reconcile', async () => {
+      const { source, reconciled } = scopeSkipSource(true);
+      const engine = makeEngine(source);
+      const account = await seedWithConfig(source, {
+        roots: [{ rootFolderId: 'r', rootName: 'R' }],
+      });
+
+      const handle = engine.run(account);
+      await waitFor(async () => !!(await store.account(account.id))?.lastError);
+      await handle.stop();
+
+      expect(reconciled).toHaveBeenCalled();
+      expect((await store.account(account.id))?.lastError).toMatch(
+        /listing came back empty/,
+      );
+    });
+
+    it('skip rule control: a source without folderScope reconciles with an empty config', async () => {
+      const { source, reconciled } = scopeSkipSource(false);
+      const engine = makeEngine(source);
+      const account = await seedWithConfig(source, {});
+
+      const handle = engine.run(account);
+      await waitFor(async () => !!(await store.account(account.id))?.lastError);
+      await handle.stop();
+
+      expect(reconciled).toHaveBeenCalled();
+    });
 
     it('refuses to archive off an EMPTY listing over a non-empty corpus', async () => {
       // The "silently empty listing" class: imap resolving zero mailboxes,

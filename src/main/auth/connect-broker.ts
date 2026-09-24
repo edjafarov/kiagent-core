@@ -120,6 +120,7 @@ export function createConnectBroker(
           selected: spec.selected ?? [],
           expand: spec.expand,
           purpose: spec.purpose ?? 'manage',
+          note: spec.note,
         });
         return nodes;
       },
@@ -343,6 +344,7 @@ export function createConnectBroker(
             selected: spec.selected ?? [],
             expand: spec.expand,
             purpose: spec.purpose ?? 'connect',
+            note: spec.note,
           });
           return nodes;
         },

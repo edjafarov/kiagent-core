@@ -65,6 +65,7 @@ export interface PickerRequest {
   purpose?: 'connect' | 'manage';
   selected?: FolderNode[];
   expand?: string[];
+  note?: string;
 }
 
 /**

@@ -125,6 +125,8 @@ const fixtureModule = {
               reattributeScopeRoots: [
                 { from: 'C:\\Users\\ed\\Docs\\Old', to: SELECTED[0].id },
               ],
+              // §5.1: per-document refs, forwarded the same way.
+              archiveRefs: [{ externalId: 'conv-1', type: 'email.thread' }],
             };
           },
           async reauthenticate(acct: Account, auth: AuthChannel) {
@@ -274,6 +276,7 @@ describe('manageFolders / reauthenticate over the extension RPC boundary', () =>
       selected: SELECTED,
       expand: [],
       purpose: 'manage',
+      note: null, // no note set — the wire carries null, never undefined
     });
     // …and what main handed the FolderSelectionChannel.
     const spec = got.spec!;
@@ -307,6 +310,7 @@ describe('manageFolders / reauthenticate over the extension RPC boundary', () =>
           to: '0B246AxIx6hdAeTBrQ0xLbVhuRTQ',
         },
       ],
+      archiveRefs: [{ externalId: 'conv-1', type: 'email.thread' }],
     });
 
     // THIS flow's slot is freed on settle. Id 1 is the manage flow's own id

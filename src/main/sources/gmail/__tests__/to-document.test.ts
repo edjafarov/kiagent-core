@@ -15,6 +15,7 @@ function itemFromFixture(): GmailThreadItem {
     id: fixtureThread.id,
     messages: fixtureThread.messages as unknown as GmailApiMessage[],
     accountEmail: ACCOUNT_EMAIL,
+    selectedBuckets: ['mail'],
   };
 }
 
@@ -124,6 +125,7 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
     const item: GmailThreadItem = {
       id: 'thread-reply-all',
       accountEmail: 'me@gmail.com',
+      selectedBuckets: ['mail'],
       messages: [
         {
           id: 'rm1',
@@ -197,6 +199,7 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
       id: 'empty-thread',
       messages: [],
       accountEmail: ACCOUNT_EMAIL,
+      selectedBuckets: ['mail'],
     });
     expect(doc).toBeNull();
   });
@@ -205,6 +208,7 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
     const item: GmailThreadItem = {
       id: 'thread-with-atts',
       accountEmail: ACCOUNT_EMAIL,
+      selectedBuckets: ['mail'],
       messages: [
         {
           id: 'm1',
@@ -273,6 +277,101 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
       messageId: 'm1',
       partId: '2',
       attachmentId: 'AAA',
+    });
+  });
+
+  describe('scope bucket (spec §4)', () => {
+    /** The fixture thread's first message, relabelled — same content, so
+     *  only the labels differ between the variants below. */
+    function relabelled(...labelSets: string[][]): GmailThreadItem {
+      const base = itemFromFixture();
+      const m0 = base.messages[0];
+      return {
+        ...base,
+        selectedBuckets: ['mail', 'TRASH', 'SPAM'],
+        messages: labelSets.map((labelIds, i) => ({
+          ...m0,
+          id: `${m0.id}-${i}`,
+          labelIds,
+        })),
+      };
+    }
+    const threadDocOf = (item: GmailThreadItem): DocumentInput => {
+      const out = toDocument(item)!;
+      return Array.isArray(out) ? out[0] : out;
+    };
+
+    it('an unselected bucket maps to null — skipped, never a deletion', () => {
+      const trashed = relabelled(['TRASH'], ['TRASH', 'Label_1']);
+      expect(toDocument({ ...trashed, selectedBuckets: ['mail'] })).toBeNull();
+      expect(
+        toDocument({ ...relabelled(['SPAM']), selectedBuckets: ['mail'] }),
+      ).toBeNull();
+      expect(
+        toDocument({ ...trashed, selectedBuckets: ['mail', 'TRASH'] }),
+      ).not.toBeNull();
+      // One trashed reply in a live conversation is still mail.
+      expect(
+        toDocument({
+          ...relabelled(['TRASH'], ['INBOX']),
+          selectedBuckets: ['mail'],
+        }),
+      ).not.toBeNull();
+    });
+
+    it('stamps the bucket as scopeRootId and hashes it into metadata', () => {
+      const d = threadDocOf(relabelled(['TRASH', 'Label_1'], ['TRASH']));
+      expect(d.scopeRootId).toBe('TRASH');
+      expect(d.metadata.scopeBucket).toBe('TRASH');
+    });
+
+    it('the same label UNION in two buckets yields different metadata', () => {
+      // A: one trashed message + one plain → mail. B: both trashed → TRASH.
+      // Both threads' label union is {TRASH, Label_1}; only the bucket tells
+      // them apart, so it must be in the hashed metadata.
+      const a = threadDocOf(relabelled(['TRASH', 'Label_1'], ['Label_1']));
+      const b = threadDocOf(
+        relabelled(['TRASH', 'Label_1'], ['TRASH', 'Label_1']),
+      );
+      expect(a.metadata.labels).toEqual(b.metadata.labels);
+      expect(a.metadata.scopeBucket).toBe('mail');
+      expect(b.metadata.scopeBucket).toBe('TRASH');
+      expect(a.scopeRootId).toBe('mail');
+    });
+
+    it('every attachment carries its thread bucket', () => {
+      const item = relabelled(['SPAM']);
+      const out = toDocument({
+        ...item,
+        messages: item.messages.map((m) => ({
+          ...m,
+          payload: {
+            ...m.payload,
+            mimeType: 'multipart/mixed',
+            parts: [
+              ...(m.payload?.parts ?? []),
+              {
+                partId: '9',
+                mimeType: 'application/pdf',
+                filename: 'x.pdf',
+                headers: [
+                  {
+                    name: 'Content-Disposition',
+                    value: 'attachment; filename="x.pdf"',
+                  },
+                ],
+                body: { attachmentId: 'ZZZ', size: 50_000 },
+              },
+            ],
+          },
+        })),
+      }) as DocumentInput[];
+      const atts = out.filter((d) => d.type === 'attachment');
+      expect(atts.length).toBeGreaterThan(0);
+      for (const att of atts) {
+        expect(att.scopeRootId).toBe('SPAM');
+        expect(att.metadata.scopeBucket).toBe('SPAM');
+      }
     });
   });
 });

@@ -141,6 +141,31 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
  *  test account archiving 2 is normal churn, not a listing bug. */
 const MASS_ARCHIVE_MIN_DOCS = 100;
 const MASS_ARCHIVE_RATIO = 0.5;
+
+/** A one-shot pass on the mass-archive breaker (spec §5.6). `full` waives
+ *  both refusals (the pass right after a Save that archived, a connect, a
+ *  config edit). `ratio` waives only the >50% arm — the empty-listing refusal
+ *  stays armed — and is what a first scope declaration or an unchanged
+ *  re-save earns: a legitimate shrink, never an excuse for a broken listing. */
+export type AllowanceKind = 'full' | 'ratio';
+
+/** The scope ids an account's config declares, or `null` when it declares
+ *  none. `folderRoots` (folder-scoped connectors), then the Drive-style
+ *  `roots`, then local-folder `paths` — whichever is an array first. */
+export function declaredScopeIds(
+  config: Record<string, unknown>,
+): string[] | null {
+  const { folderRoots, roots, paths } = config;
+  if (Array.isArray(folderRoots))
+    return folderRoots.map((r) => String((r as { id: unknown }).id));
+  if (Array.isArray(roots))
+    return roots.map((r) =>
+      String((r as { rootFolderId: unknown }).rootFolderId),
+    );
+  if (Array.isArray(paths) && paths.every((p) => typeof p === 'string'))
+    return paths as string[];
+  return null;
+}
 /** How many listing refs reconcile hands the store at a time. This is the ONLY
  *  reconcile structure that ever sits on this thread, so it — not the account —
  *  bounds the pass's memory. A connector may yield pages of any size; they get
@@ -199,11 +224,12 @@ export const REDRIVE_PAGE = 500;
  * refusals, both recorded on the account instead of archiving: (1) a listing
  * that came back EMPTY while live docs exist — no legitimate bundled flow
  * produces one except deliberately clearing the config; (2) a diff exceeding
- * MASS_ARCHIVE_RATIO + MASS_ARCHIVE_MIN_DOCS. `allowMassArchive` — granted
- * for the first pass after the account's config changed (root removed from a
- * local-folder account, a re-connect) — bypasses both, which is also the
- * user's escape hatch when the shrinkage is real: re-saving the account's
- * settings applies the pending cleanup on the next cycle.
+ * MASS_ARCHIVE_RATIO + MASS_ARCHIVE_MIN_DOCS. `allowance` (see
+ * AllowanceKind): `full` — granted for the first pass after the account's
+ * config changed (root removed, a re-connect) — bypasses both; `ratio`
+ * bypasses only the second, and is the user's escape hatch when a shrinkage
+ * is real: re-saving the account's settings applies the pending cleanup on
+ * the next cycle, but never off an empty listing.
  *
  * TOCTOU guard: `source.reconcile()` takes its listing snapshot once, up
  * front (e.g. local-folder's `listEntries` walks the whole tree before ever
@@ -226,7 +252,7 @@ async function reconcilePass(
   account: Account,
   logs: LogSink,
   scope: string,
-  allowMassArchive: boolean,
+  allowance: AllowanceKind | undefined,
 ): Promise<void> {
   if (!source.reconcile) return;
   const startSeq = await store.headSeq();
@@ -237,6 +263,20 @@ async function reconcilePass(
   // back into its own root) they took ~3.2 GiB against V8's 4 GiB cap and
   // killed the main process with an OOM SIGTRAP. Only counts come back now.
   await store.reconcileBegin(account.id);
+  // Records the pass's outcome on the account without touching `status`.
+  const finish = async (error: string | null): Promise<void> => {
+    const fresh = (await store.account(account.id)) ?? account;
+    await store.commit({
+      account: account.id,
+      documents: [],
+      cursor: fresh.cursor,
+      error,
+    });
+  };
+  // ONE failure path for the whole pass — drain, diff, archive and the final
+  // commit (spec §5.8: a store that lost its staging throws from any of
+  // them). Ends the pass and, unless cancellation caused it, records the
+  // error. Never archives.
   try {
     let batch: ExternalRef[] = [];
     for await (const page of abortable(source.reconcile(session), signal)) {
@@ -252,86 +292,63 @@ async function reconcilePass(
     if (batch.length > 0) {
       await store.reconcileStage(account.id, batch);
     }
-  } catch (err) {
-    await store.reconcileEnd(account.id);
-    if (signal.aborted) return; // cancellation-caused — not a real failure
-    const msg = String(err instanceof Error ? err.message : err);
-    logs.log(scope, 'error', `reconcile failed: ${msg}`);
-    const fresh = (await store.account(account.id)) ?? account;
-    await store.commit({
-      account: account.id,
-      documents: [],
-      cursor: fresh.cursor,
-      error: `reconcile: ${msg}`,
-    });
-    return;
-  }
-  if (signal.aborted) {
-    // partial listing — never diff off it
-    await store.reconcileEnd(account.id);
-    return;
-  }
+    if (signal.aborted) {
+      // partial listing — never diff off it
+      await store.reconcileEnd(account.id);
+      return;
+    }
 
-  // `startSeq` is the TOCTOU guard, applied inside the diff: only documents
-  // already live when this pass began are archiving candidates, so anything
-  // pull() commits mid-drain (newer than the listing could know about) is
-  // excluded rather than archived the instant it lands.
-  // `listedCount` comes from the DIFF, never from counting what we staged.
-  // Staging lives in a connection-scoped TEMP table, so a DB-worker restart
-  // between the drain and the diff silently empties it — and a local tally
-  // would still claim the listing was fine, walking straight past the
-  // empty-listing guard below into archiving the entire account.
-  const { listedCount, liveCount, deletionCount } = await store.reconcileDiff(
-    account.id,
-    startSeq,
-  );
-  if (deletionCount === 0) {
-    await store.reconcileEnd(account.id);
-    return;
-  }
+    // `startSeq` is the TOCTOU guard, applied inside the diff: only documents
+    // already live when this pass began are archiving candidates, so anything
+    // pull() commits mid-drain (newer than the listing could know about) is
+    // excluded rather than archived the instant it lands.
+    // `listedCount` comes from the DIFF, never from counting what we staged:
+    // a local tally would still claim the listing was fine after staging was
+    // lost, walking straight past the empty-listing guard below.
+    const { listedCount, liveCount, deletionCount } = await store.reconcileDiff(
+      account.id,
+      startSeq,
+    );
+    if (deletionCount === 0) {
+      await store.reconcileEnd(account.id);
+      return;
+    }
 
-  if (!allowMassArchive) {
-    const refuse = async (why: string): Promise<void> => {
+    // Zero-false-positive first: an empty listing over a non-empty corpus is
+    // always a broken listing or a deliberately emptied config — never normal
+    // churn. Only `full` waives it; `ratio` waives only the second arm.
+    const refusal =
+      allowance === 'full'
+        ? null
+        : listedCount === 0
+          ? 'the listing came back empty'
+          : allowance !== 'ratio' &&
+              deletionCount > MASS_ARCHIVE_MIN_DOCS &&
+              deletionCount > liveCount * MASS_ARCHIVE_RATIO
+            ? 'the listing shrank suspiciously'
+            : null;
+    if (refusal !== null) {
       await store.reconcileEnd(account.id);
       const msg =
         `reconcile: refusing to archive ${deletionCount} of ` +
-        `${liveCount} documents (${why}). If this shrinkage is real, ` +
+        `${liveCount} documents (${refusal}). If this shrinkage is real, ` +
         `re-save the account's settings to apply the cleanup.`;
       logs.log(scope, 'error', msg);
-      const fresh2 = (await store.account(account.id)) ?? account;
-      await store.commit({
-        account: account.id,
-        documents: [],
-        cursor: fresh2.cursor,
-        error: msg,
-      });
-    };
-    // Zero-false-positive first: an empty listing over a non-empty corpus is
-    // always a broken listing or a deliberately emptied config — never
-    // normal churn.
-    if (listedCount === 0) {
-      await refuse('the listing came back empty');
+      await finish(msg);
       return;
     }
-    if (
-      deletionCount > MASS_ARCHIVE_MIN_DOCS &&
-      deletionCount > liveCount * MASS_ARCHIVE_RATIO
-    ) {
-      await refuse('the listing shrank suspiciously');
-      return;
-    }
-  }
 
-  // Archives (and clears the staged listing) inside the store — the ids never
-  // come back here either.
-  await store.reconcileArchive(account.id, startSeq);
-  const fresh = (await store.account(account.id)) ?? account;
-  await store.commit({
-    account: account.id,
-    documents: [],
-    cursor: fresh.cursor,
-    error: null,
-  });
+    // Archives (and clears the staged listing) inside the store — the ids
+    // never come back here either.
+    await store.reconcileArchive(account.id, startSeq);
+    await finish(null);
+  } catch (err) {
+    await store.reconcileEnd(account.id).catch(() => {});
+    if (signal.aborted) return; // cancellation-caused — not a real failure
+    const msg = String(err instanceof Error ? err.message : err);
+    logs.log(scope, 'error', `reconcile failed: ${msg}`);
+    await finish(`reconcile: ${msg}`);
+  }
 }
 
 /** Derives a worker's ledger consumer key. MUST be derived (never a hard-coded
@@ -481,7 +498,17 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  reconcile pass may exceed the mass-archive breaker — removing a
    *  local-folder root or re-scoping an account legitimately archives big
    *  fractions of the corpus. Consumed (deleted) when the pass starts. */
-  const reconcileAllowances = new Set<AccountId>();
+  const reconcileAllowances = new Map<AccountId, AllowanceKind>();
+  // A merge never downgrades: a pending `full` outlives a later `ratio`.
+  const grantAllowance = (id: AccountId, kind: AllowanceKind): void => {
+    if (reconcileAllowances.get(id) !== 'full')
+      reconcileAllowances.set(id, kind);
+  };
+  const takeAllowance = (id: AccountId): AllowanceKind | undefined => {
+    const kind = reconcileAllowances.get(id);
+    reconcileAllowances.delete(id);
+    return kind;
+  };
 
   /** The ONE account-scoped flow allowed at a time: reconnect and
    *  manage-folders cannot overlap on one account (spec invariant 13). Keyed
@@ -745,6 +772,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       // Capture credentials the flow produces so the PLATFORM persists them —
       // the source never stores a blob.
       let captured: Credentials | null = null;
+      let usedPicker = false;
       const wrapped: AuthChannel = {
         async oauth(scopes) {
           captured = await auth.oauth(scopes);
@@ -760,9 +788,33 @@ export function createEngine(deps: EngineDeps): Engine & {
         },
         status: (msg) => auth.status(msg),
         // No credentials ride pickFolders — forward verbatim.
-        pickFolders: (spec) => auth.pickFolders(spec),
+        pickFolders: (spec) => {
+          usedPicker = true;
+          return auth.pickFolders(spec);
+        },
       };
-      const { identifier, config } = await source.connect(wrapped);
+      const connected = await source.connect(wrapped);
+      const { identifier } = connected;
+      let { config } = connected;
+      // Re-Adding a known folder-scoped account through a connect that shows
+      // NO picker (Gmail, MS365 write fixed defaults) must not reset the
+      // user's folder selection: the upsert below replaces config wholesale,
+      // and nothing would archive what the lost selection had covered. That
+      // includes its ABSENCE: a legacy (undeclared) account must stay
+      // undeclared, or connect's defaults become a declared scope whose first
+      // reconcile archives everything outside them. A connect that DID show
+      // the picker is the user choosing afresh.
+      if (source.descriptor.folderScope && !usedPicker) {
+        const prior = (await store.read.accounts()).find(
+          (a) =>
+            a.source === source.descriptor.id && a.identifier === identifier,
+        );
+        if (prior) {
+          const fresh = { ...(config ?? {}) };
+          for (const key of SCOPE_KEYS) delete fresh[key];
+          config = { ...fresh, ...pickScopeKeys(prior.config ?? {}) };
+        }
+      }
       // createAccount upserts on (source, identifier): re-authenticating an
       // already-known account returns its EXISTING id (documents keep their
       // account) with the latest config/status. If that account still has a
@@ -777,7 +829,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       });
       // A (re-)connect rewrites the account's config/scope: the next
       // reconcile pass may legitimately exceed the mass-archive breaker.
-      reconcileAllowances.add(account.id);
+      grantAllowance(account.id, 'full');
       await running.get(`account:${account.id}`)?.stop();
       if (captured) await store.vault.save(account.id, captured);
       logs.log(
@@ -903,7 +955,19 @@ export function createEngine(deps: EngineDeps): Engine & {
                   await store.read.count({ account: account.id }),
                 );
               }
-              if (src.reconcile) {
+              // §5.3: a folder-scoped account that declares no scope (a
+              // legacy account before its first Save) enumerates the
+              // connector's defaults — there is no declared set to reconcile
+              // against, so no pass runs until the user saves one.
+              const undeclared =
+                src.descriptor.folderScope === true &&
+                declaredScopeIds(fresh.config ?? {}) === null;
+              // One-shot, and consumed by EVERY cycle — a skipped pass too.
+              // Left pending, a `full` from a settings edit would merge over
+              // the first Save's `ratio` and disarm §5.7(b)'s empty-listing
+              // refusal on the first-declaration pass.
+              const allowance = takeAllowance(account.id);
+              if (src.reconcile && !undeclared) {
                 reconciling = reconcilePass(
                   src,
                   session,
@@ -912,9 +976,9 @@ export function createEngine(deps: EngineDeps): Engine & {
                   fresh,
                   logs,
                   scope,
-                  // One-shot: the pass right after a config change may
-                  // legitimately mass-archive (root removal, re-scope).
-                  reconcileAllowances.delete(account.id),
+                  // The pass right after a config change may legitimately
+                  // mass-archive (root removal, re-scope).
+                  allowance,
                 ).catch((err) => {
                   // reconcilePass handles its own errors internally and
                   // should never throw — this is a defensive backstop so a
@@ -1306,6 +1370,8 @@ export function createEngine(deps: EngineDeps): Engine & {
           // input, so the coercion happens exactly here — the store never
           // guesses, and the engine never derives containment.
           reattributeScopeRoots: update.reattributeScopeRoots ?? [],
+          // §5.1, coerced the same way.
+          archiveRefs: update.archiveRefs ?? [],
           // NOTE the absence of `archiveNullScoped` — C-34, see the block
           // above. The store's input type has no such property in this train,
           // so adding it back here is a compile error, by design.
@@ -1325,7 +1391,7 @@ export function createEngine(deps: EngineDeps): Engine & {
         //
         // **C-35 — but ONLY if this Save actually archived something.** The
         // allowance is not a relaxation of the ≥100/≥50% ratio; ONE
-        // `if (!allowMassArchive)` wraps BOTH refusals in `reconcilePass`
+        // `if (allowance !== 'full')` wraps BOTH refusals in `reconcilePass`
         // (engine.ts:284-313), the zero-false-positive "the listing came back
         // empty" arm included — the arm whose own comment says an empty
         // listing over a non-empty corpus is "always a broken listing … never
@@ -1337,7 +1403,23 @@ export function createEngine(deps: EngineDeps): Engine & {
         // from the transaction that just committed, so this reads the outcome
         // rather than guessing at it from `archiveScopeRootIds` (which is an
         // intent, and is legitimately non-empty with nothing matching it).
-        if (res.archived > 0) reconcileAllowances.add(accountId);
+        //
+        // §5.6: a Save that archived nothing may still earn a `ratio`
+        // allowance — a FIRST declaration (a legacy account's prior
+        // enumeration was wider than any declared set) or an UNCHANGED
+        // re-save (the user's escape hatch from a ratio refusal). A changed
+        // set that archived nothing earns none, as above.
+        const priorIds = declaredScopeIds(
+          JSON.parse(expectedConfigJson) as Record<string, unknown>,
+        );
+        const nextIds = update.config.folderRoots.map((r) => r.id);
+        const sameSet =
+          priorIds !== null &&
+          priorIds.length === nextIds.length &&
+          priorIds.every((id) => nextIds.includes(id));
+        if (res.archived > 0) grantAllowance(accountId, 'full');
+        else if (priorIds === null || sameSet)
+          grantAllowance(accountId, 'ratio');
         const after = await store.account(accountId);
         // Restart unconditionally EXCEPT the two resting states. Deliberately
         // NOT gated on `running.has` the way updateConfig is: stop() above
@@ -1517,7 +1599,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       // engine.ts:287-290). C-35 is about applyScope, where the outcome IS
       // knowable: an explicit Save that archived nothing has no mass-archive
       // to authorise.
-      reconcileAllowances.add(accountId);
+      grantAllowance(accountId, 'full');
       // Only restart a loop that's actually running — a never-started account
       // just gets its config persisted for the next run(). And a running-map
       // entry alone isn't enough: pause and needsReauth are status-only resting

@@ -1,6 +1,7 @@
 # Extension API reference
 
-This document currently documents `host.attention` and manifest `fileRoots`.
+This document currently documents `host.attention`, manifest `fileRoots` and
+the folder-scope additions of platform 2.4.0.
 
 ## `host.attention`
 
@@ -65,3 +66,25 @@ example, after restarting KIA).
 **Using it.** `host.files.roots()` returns
 `[{ id, name: '<declared ~/ path>', writable: false }]` for the granted roots;
 a declared root that is absent from the list was not granted (see the log).
+
+## Folder scope: `archiveRefs` and the picker note (platform 2.4.0)
+
+A connector with `folderScope: true` edits its scope through
+`manageFolders`, which returns a `FolderScopeUpdate`. Platform 2.4.0 adds two
+optional fields. Declare `"engine": "^2.4.0"` to use them.
+
+- `FolderScopeUpdate.archiveRefs?: ExternalRef[]` — exact per-document
+  archival, for documents that span folders (an Outlook conversation lives in
+  Inbox AND Sent) so no single `scope_root_id` says "this leaves scope". Core
+  archives each ref in the same transaction as the config write, after the
+  stamp archive (`archiveScopeRootIds`); a ref that is already archived or
+  unknown is a no-op. Build the refs with the same helper that builds the
+  emitted documents' `externalId` and `type`.
+- `FolderPickerSpec.note?: string` — one muted line the picker shows above
+  its Save button, the connector's own word on what Save does. Display only.
+
+A scope Save also grants the account's next reconcile pass an allowance:
+`full` when the Save archived rows (both mass-archive refusals are waived),
+`ratio` for a first declaration or an unchanged re-save (only the >50%
+shrink refusal is waived). An account whose config declares no
+`folderRoots`, `roots` or `paths` runs no reconcile until its first Save.

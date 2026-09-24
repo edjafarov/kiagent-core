@@ -66,6 +66,21 @@ export interface ReconcileCounts {
   deletionCount: number;
 }
 
+/** Spec §5.8: a reconcile pass whose connection-scoped staging vanished
+ *  mid-pass (a DB-worker restart is a fresh connection, and TEMP tables do not
+ *  survive it). The staging procedures throw this instead of recreating the
+ *  table, so a pass that lost its first pages can never diff as a small,
+ *  non-empty listing. Crosses the worker RPC as its message only; the engine
+ *  treats it like any other reconcile failure. */
+export class ReconcileStagingLost extends Error {
+  constructor(accountId: string) {
+    super(
+      `reconcile staging lost for ${accountId} — the DB connection restarted mid-pass; nothing archived`,
+    );
+    this.name = 'ReconcileStagingLost';
+  }
+}
+
 /** Input for one folder-scope edit (DECISIONS R8 / amendment A-1). */
 export interface FolderScopeInput {
   accountId: AccountId;
@@ -109,6 +124,10 @@ export interface FolderScopeInput {
    *  an order would silently apply one of two opposite outcomes. It is a
    *  source bug and must be loud. */
   reattributeScopeRoots: Array<{ from: string; to: string }>;
+  /** Per-document archival (spec §5.1), applied after the stamp archive in
+   *  the same transaction. REQUIRED, may be empty — the engine coerces the
+   *  wire's optional field, as with `reattributeScopeRoots`. */
+  archiveRefs: ExternalRef[];
   /* DELIBERATELY NO `archiveNullScoped` (DECISIONS C-34). A source may still
    * ASK for the NULL-attribution repair — the flag is in the frozen
    * `FolderScopeUpdate` and both cloud connectors send it — but core does not
@@ -640,22 +659,57 @@ export function createWriteTx(
   // archive another's corpus.
   const RECONCILE_ARCHIVE_BATCH = 5_000;
 
-  const ensureListingTable = (): void => {
+  // §5.8 staging continuity. `reconcile_pass` marks a pass as begun on THIS
+  // connection. beginPass is the ONLY place either TEMP table is created;
+  // every later step requires the marker (which implies the listing table,
+  // created alongside it) and never recreates anything, so a worker restart
+  // mid-pass surfaces as ReconcileStagingLost instead of a truncated listing.
+  const beginPass = (accountId: string): void => {
     conn.exec(
       `CREATE TEMP TABLE IF NOT EXISTS reconcile_listing (
          account_id TEXT NOT NULL,
          external_id TEXT NOT NULL,
          type TEXT NOT NULL,
          PRIMARY KEY (account_id, external_id, type)
+       ) WITHOUT ROWID;
+       CREATE TEMP TABLE IF NOT EXISTS reconcile_pass (
+         account_id TEXT PRIMARY KEY
        ) WITHOUT ROWID`,
     );
-  };
-
-  const clearListing = (accountId: string): void => {
-    ensureListingTable();
     conn
       .prepare(`DELETE FROM reconcile_listing WHERE account_id = ?`)
       .run(accountId);
+    conn
+      .prepare(`INSERT OR REPLACE INTO reconcile_pass(account_id) VALUES(?)`)
+      .run(accountId);
+  };
+
+  const hasTempTable = (name: string): boolean =>
+    !!conn
+      .prepare(
+        `SELECT 1 FROM sqlite_temp_master WHERE type = 'table' AND name = ?`,
+      )
+      .get(name);
+
+  const requirePass = (accountId: string): void => {
+    if (
+      !hasTempTable('reconcile_pass') ||
+      !conn
+        .prepare(`SELECT 1 FROM reconcile_pass WHERE account_id = ?`)
+        .get(accountId)
+    )
+      throw new ReconcileStagingLost(accountId);
+  };
+
+  const endPass = (accountId: string): void => {
+    if (hasTempTable('reconcile_listing'))
+      conn
+        .prepare(`DELETE FROM reconcile_listing WHERE account_id = ?`)
+        .run(accountId);
+    if (hasTempTable('reconcile_pass'))
+      conn
+        .prepare(`DELETE FROM reconcile_pass WHERE account_id = ?`)
+        .run(accountId);
   };
 
   const stageTx = conn.transaction(
@@ -870,6 +924,11 @@ export function createWriteTx(
         archived += rows.length;
         if (rows.length < FOLDER_SCOPE_ARCHIVE_PAGE) break;
       }
+      // After the stamp archive: `archiveByRef` returns null for a row it
+      // already archived (or never had), so every row counts once.
+      for (const ref of input.archiveRefs) {
+        if (archiveByRef(acc.id, ref) !== null) archived += 1;
+      }
 
       const remaining = Number(
         (
@@ -888,16 +947,16 @@ export function createWriteTx(
   return {
     commit: (batch: CommitBatch): Seq => commitTx(batch),
 
-    reconcileBegin: (accountId) => clearListing(accountId),
+    reconcileBegin: (accountId) => beginPass(accountId),
 
     reconcileStage: (accountId, refs) => {
+      requirePass(accountId);
       if (refs.length === 0) return;
-      ensureListingTable();
       stageTx(accountId, refs);
     },
 
     reconcileDiff: (accountId, startSeq) => {
-      ensureListingTable();
+      requirePass(accountId);
       const listedCount = Number(
         (
           conn
@@ -922,7 +981,7 @@ export function createWriteTx(
     },
 
     reconcileArchive: (accountId, startSeq) => {
-      ensureListingTable();
+      requirePass(accountId);
       // Batched so one cleanup of a poisoned multi-million-document account
       // is a series of bounded transactions rather than a single one holding
       // a write lock (and its rollback journal) over the whole corpus.
@@ -932,11 +991,11 @@ export function createWriteTx(
         archived += n;
         if (n < RECONCILE_ARCHIVE_BATCH) break;
       }
-      clearListing(accountId);
+      endPass(accountId);
       return archived;
     },
 
-    reconcileEnd: (accountId) => clearListing(accountId),
+    reconcileEnd: (accountId) => endPass(accountId),
 
     applyFolderScope: (input) => applyFolderScopeTx(input),
   };

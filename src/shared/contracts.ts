@@ -446,6 +446,10 @@ export interface FolderPickerSpec {
   expand?: string[];
   /** Drives copy and empty-selection rules only; never behaviour. */
   purpose?: 'connect' | 'manage';
+  /** One muted line the picker shows above its Save button — the source's
+   *  own word on what Save does (e.g. "Mail outside the selected folders
+   *  will be removed from the index"). Display only. */
+  note?: string;
   /** Top-level nodes for a mode tab. */
   roots(modeKey: string): Promise<FolderNode[]>;
   /** Child FOLDERS of a node (files are not listed in the picker). */
@@ -529,6 +533,20 @@ export interface FolderScopeUpdate<Cursor = unknown> {
    *  it. It writes NO `changes` row: `scope_root_id` is not user-visible
    *  content and must not churn the feed. */
   reattributeScopeRoots?: Array<{ from: string; to: string }>;
+  /** Exact per-document archival, for a source whose documents span folders
+   *  (an MS365 conversation lives in Inbox AND Sent) so no single
+   *  `scope_root_id` can say "this leaves scope". The source lists what
+   *  leaves — typically `leaving \ staying` over the removed folders — and
+   *  core archives each ref inside the same transaction, after
+   *  `reattributeScopeRoots`, alongside `archiveScopeRootIds`. Unknown or
+   *  already-archived refs are ignored; the result's `archived` counts
+   *  distinct rows actually archived, so a duplicate or an overlap with a
+   *  stamp-archived row counts once.
+   *
+   *  With this field the rule above reads: every removed root must be
+   *  covered by `archiveScopeRootIds`, by `reattributeScopeRoots`, OR by the
+   *  refs the source lists here. Optional; absent means none. */
+  archiveRefs?: ExternalRef[];
   /** See DECISIONS A-3 / C-1. Request the NULL-attribution repair: archive
    *  this account's live rows whose `scope_root_id IS NULL` so a re-walk can
    *  re-emit them attributed. Optional; absent means `false`.

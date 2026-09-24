@@ -227,6 +227,7 @@ describe('resolveGmailReply', () => {
     const item: GmailThreadItem = {
       id: 'thread-reply-all',
       accountEmail: 'me@gmail.com',
+      selectedBuckets: ['mail'],
       messages: [
         {
           id: 'rm1',

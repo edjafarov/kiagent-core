@@ -1,4 +1,10 @@
-import { isSendSafeRetry, sendGmailMessage } from '../gmail-api';
+import type { Session } from '@shared/contracts';
+
+import {
+  isSendSafeRetry,
+  listThreadsPage,
+  sendGmailMessage,
+} from '../gmail-api';
 
 // The verbatim body Google returns for the smoke-test quota 403 (see
 // SMOKE_403 in src/main/outbound/__tests__/error-copy.test.ts) — only the
@@ -194,5 +200,42 @@ describe('sendGmailMessage', () => {
       sendGmailMessage(auth, Buffer.from('From: a\r\n\r\nhi')),
     ).rejects.toThrow(/no credentials/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('listThreadsPage', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  async function urlFor(q?: string | null): Promise<URL> {
+    const fetchMock = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ threads: [] }),
+      text: async () => '{"threads":[]}',
+      headers: { get: () => null },
+    })) as unknown as jest.Mock;
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const session = {
+      signal: new AbortController().signal,
+      credentials: async () => ({ accessToken: 'tok' }),
+    } as unknown as Session;
+    await listThreadsPage(session, 'P', q);
+    return new URL(String(fetchMock.mock.calls[0][0]));
+  }
+
+  it('a bucket query also sets includeSpamTrash — in:trash is empty without it', async () => {
+    const url = await urlFor('in:trash');
+    expect(url.searchParams.get('q')).toBe('in:trash');
+    expect(url.searchParams.get('includeSpamTrash')).toBe('true');
+    expect(url.searchParams.get('pageToken')).toBe('P');
+  });
+
+  it('the full-scope listing sets neither', async () => {
+    for (const url of [await urlFor(null), await urlFor()]) {
+      expect(url.searchParams.has('q')).toBe(false);
+      expect(url.searchParams.has('includeSpamTrash')).toBe(false);
+    }
   });
 });

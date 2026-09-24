@@ -58,13 +58,21 @@ export interface ThreadsListPage {
 
 const THREADS_PAGE_SIZE = 100;
 
+/** `q` is a bucket query (`in:trash` / `in:spam`); Gmail returns nothing
+ *  for it unless `includeSpamTrash` is set too, so one implies the other.
+ *  No `q` lists the full scope — everything outside Trash and Spam. */
 export function listThreadsPage(
   session: Session,
   pageToken: string | null,
+  q?: string | null,
 ): Promise<ThreadsListPage> {
   const url = new URL(`${BASE}/threads`);
   url.searchParams.set('maxResults', String(THREADS_PAGE_SIZE));
   if (pageToken) url.searchParams.set('pageToken', pageToken);
+  if (q) {
+    url.searchParams.set('q', q);
+    url.searchParams.set('includeSpamTrash', 'true');
+  }
   return fetchGmail<ThreadsListPage>(session, url.toString());
 }
 

@@ -70,6 +70,9 @@ export type ConnectEvent =
        *  disambiguate, and sources that cannot compute ancestry omit it. */
       expand?: string[];
       purpose: 'connect' | 'manage';
+      /** `FolderPickerSpec.note`: one muted line above Save. Optional, like
+       *  `expand` — absent means no line. */
+      note?: string;
     }
   | { flowId: string; kind: 'done'; account: Account }
   /** Reconnect terminal. NOT `done` — the account already exists, and `done`'s

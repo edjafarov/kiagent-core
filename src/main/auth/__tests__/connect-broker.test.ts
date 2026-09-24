@@ -195,6 +195,19 @@ describe('connect broker — pickFolders', () => {
     expect(evt.modes).toEqual(spec.modes);
   });
 
+  it('carries the spec note on the folder-picker event (§5.4)', async () => {
+    const spec = makeSpec({ note: 'N' });
+    const { broker, events } = makeBroker(
+      makeSource(async (auth) => {
+        await auth.pickFolders(spec);
+        return { identifier: 'x' };
+      }),
+    );
+    broker.start('picky');
+    await flush();
+    expect(pickerEvent(events).note).toBe('N');
+  });
+
   it('defaults multiSelect to false when the spec omits it', async () => {
     const spec = makeSpec({ multiSelect: undefined });
     const { broker, events } = makeBroker(

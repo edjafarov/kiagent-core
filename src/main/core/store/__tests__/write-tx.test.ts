@@ -266,6 +266,7 @@ describe('folder scope write path', () => {
       // 314 rows whose historical stamp `hashSkip` froze.
       archiveScopeRootIds: [],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
 
@@ -292,6 +293,7 @@ describe('folder scope write path', () => {
       // unattributable row, and Step 16's mutation 2 is where it bites.
       archiveScopeRootIds: ['X'],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
     expect(result).toEqual({
@@ -336,6 +338,7 @@ describe('folder scope write path', () => {
       // its documents stay in scope under 'root'.
       archiveScopeRootIds: [],
       reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
 
@@ -386,6 +389,7 @@ describe('folder scope write path', () => {
       cursor: CURSOR_V1,
       archiveScopeRootIds: [],
       reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
 
@@ -421,6 +425,7 @@ describe('folder scope write path', () => {
         cursor: CURSOR_V1,
         archiveScopeRootIds: ['X'],
         reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+        archiveRefs: [],
         expectedConfigJson: configBefore,
       }),
     ).rejects.toThrow(/both archived and re-attributed/i);
@@ -443,6 +448,7 @@ describe('folder scope write path', () => {
       cursor: CURSOR_V1,
       archiveScopeRootIds: ['root'],
       reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
 
@@ -459,6 +465,7 @@ describe('folder scope write path', () => {
       cursor: CURSOR_V1,
       archiveScopeRootIds: ['X'],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
     // Step 2 — a fresh LIVE row under 'X', so the assertion below has
@@ -475,6 +482,7 @@ describe('folder scope write path', () => {
       cursor: CURSOR_V1,
       archiveScopeRootIds: [],
       reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
     expect(first.reattributed).toBe(1); // 'e' only
@@ -500,6 +508,7 @@ describe('folder scope write path', () => {
       cursor: CURSOR_V1,
       archiveScopeRootIds: [],
       reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
     expect(second.reattributed).toBe(0);
@@ -511,6 +520,7 @@ describe('folder scope write path', () => {
       cursor: CURSOR_V1,
       archiveScopeRootIds: [],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
     expect(none.reattributed).toBe(0);
@@ -537,6 +547,7 @@ describe('folder scope write path', () => {
       cursor: CURSOR_V1,
       archiveScopeRootIds: [],
       reattributeScopeRoots: [{ from: 'X', to: 'root' }],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
 
@@ -602,6 +613,7 @@ describe('folder scope write path', () => {
       cursor: CURSOR_V1,
       archiveScopeRootIds: [],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
     // A per-account row array crossing the DB-worker boundary is what OOM'd
@@ -637,6 +649,7 @@ describe('folder scope write path', () => {
       cursor: { page_token: 'p1', backfill_done: false, scope_roots: ['X'] },
       archiveScopeRootIds: [],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
 
@@ -668,6 +681,7 @@ describe('folder scope write path', () => {
       cursor: null,
       archiveScopeRootIds: [],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson: await configJson(localId),
     });
 
@@ -696,6 +710,7 @@ describe('folder scope write path', () => {
       cursor: null,
       archiveScopeRootIds: [],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson: await configJson(imapId),
     });
 
@@ -717,6 +732,7 @@ describe('folder scope write path', () => {
       cursor: { page_token: 'p9', backfill_done: false, scope_roots: ['root'] },
       archiveScopeRootIds: ['X'],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson,
     });
 
@@ -769,6 +785,7 @@ describe('folder scope write path', () => {
         },
         archiveScopeRootIds: ['X'],
         reattributeScopeRoots: [],
+        archiveRefs: [],
         expectedConfigJson: beforeConfigJson,
       })
       .then(
@@ -816,6 +833,7 @@ describe('folder scope write path', () => {
       cursor,
       archiveScopeRootIds: ['X'],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson,
     }); // result deliberately discarded — this is the lost reply
 
@@ -843,6 +861,7 @@ describe('folder scope write path', () => {
       cursor,
       archiveScopeRootIds: ['X'],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson,
     });
     expect(retry).toEqual({
@@ -884,6 +903,7 @@ describe('folder scope write path', () => {
       },
       archiveScopeRootIds: ['X'],
       reattributeScopeRoots: [],
+      archiveRefs: [],
       expectedConfigJson: await configJson(accountId),
     });
     expect(removed.archived).toBe(2); // 'b' and 'c'
@@ -901,6 +921,69 @@ describe('folder scope write path', () => {
     expect(b?.archivedAt).toBeNull();
     expect(b?.scopeRootId).toBe('root');
     expect(await liveCount()).toBe(3);
+  });
+
+  // ── archiveRefs (spec §5.1) ───────────────────────────────────────────────
+  // Exact per-document archival for a source whose documents span folders
+  // (an MS365 conversation): no stamp can say "leaves scope", so the source
+  // names the refs. Same transaction, same CAS, same feed-visible archive.
+
+  it('archiveRefs: archives exactly the named live rows, once each, feed-visibly', async () => {
+    const changesBefore = await changesCount();
+    const result = await store.applyFolderScope({
+      accountId,
+      config: CONFIG_V1,
+      cursor: CURSOR_V1,
+      archiveScopeRootIds: [],
+      reattributeScopeRoots: [],
+      archiveRefs: [
+        { externalId: 'a', type: 'file' },
+        { externalId: 'a', type: 'file' }, // duplicate — counts once
+        { externalId: 'nope', type: 'file' }, // unknown — ignored
+      ],
+      expectedConfigJson: await configJson(accountId),
+    });
+
+    expect(result).toEqual({
+      archived: 1,
+      reattributed: 0,
+      remaining: 3,
+      stale: false,
+    });
+    expect(
+      (await store.read.byExternalId(accountId, 'a', 'file'))?.archivedAt,
+    ).not.toBeNull();
+    expect(await liveCount()).toBe(3);
+    // The Save's own account row, plus exactly one document row for 'a'.
+    expect(await changesCount()).toBe(changesBefore + 2);
+  });
+
+  it('archiveRefs: a ref overlapping a stamp-archived row counts once', async () => {
+    const result = await store.applyFolderScope({
+      accountId,
+      config: { folderRoots: [{ id: 'root', name: 'My Drive' }] },
+      cursor: CURSOR_V1,
+      archiveScopeRootIds: ['X'], // b, c
+      reattributeScopeRoots: [],
+      archiveRefs: [{ externalId: 'b', type: 'file' }],
+      expectedConfigJson: await configJson(accountId),
+    });
+    expect(result.archived).toBe(2);
+    expect(await liveCount()).toBe(2);
+  });
+
+  it('archiveRefs: a stale CAS archives nothing', async () => {
+    const result = await store.applyFolderScope({
+      accountId,
+      config: CONFIG_V1,
+      cursor: CURSOR_V1,
+      archiveScopeRootIds: [],
+      reattributeScopeRoots: [],
+      archiveRefs: [{ externalId: 'a', type: 'file' }],
+      expectedConfigJson: JSON.stringify({ moved: true }),
+    });
+    expect(result.stale).toBe(true);
+    expect(await liveCount()).toBe(4);
   });
 });
 
@@ -1034,5 +1117,82 @@ describe('core derives the legacy mirror twice, and the two agree (R1 / C-15)', 
         config: pinned,
       });
     }
+  });
+});
+
+/** Spec §5.8 — reconcile staging continuity. Staging lives in connection-
+ *  scoped TEMP tables; a DB-worker restart is a fresh connection, so they
+ *  vanish mid-pass. Recreating them silently would let a pass that lost its
+ *  first pages diff as a small, non-empty listing. */
+describe('reconcile staging continuity (§5.8)', () => {
+  let dir: string;
+  let db: AppDb;
+  let store: CoreStore;
+  let accountId: AccountId;
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-staging-'));
+    db = await openDb(path.join(dir, 'test.db'));
+    store = openStore(db, deps);
+    accountId = (
+      await store.createAccount({
+        source: 'fake',
+        identifier: 'me@example.com',
+      })
+    ).id;
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b'), doc('c')],
+      cursor: 1,
+    });
+  });
+
+  afterEach(async () => {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** What a DB-worker restart leaves behind: no TEMP objects at all. */
+  const loseTempTables = (): void => {
+    db._conn!.exec('DROP TABLE IF EXISTS temp.reconcile_listing');
+    db._conn!.exec('DROP TABLE IF EXISTS temp.reconcile_pass');
+  };
+
+  it('stage, diff and archive after the TEMP tables vanish throw instead of recreating', async () => {
+    const head = await store.headSeq();
+    await store.reconcileBegin(accountId);
+    await store.reconcileStage(accountId, [{ externalId: 'a', type: 'file' }]);
+    loseTempTables();
+    await expect(
+      store.reconcileStage(accountId, [{ externalId: 'b', type: 'file' }]),
+    ).rejects.toThrow(/reconcile staging lost/);
+    await expect(store.reconcileDiff(accountId, head)).rejects.toThrow(
+      /reconcile staging lost/,
+    );
+    await expect(store.reconcileArchive(accountId, head)).rejects.toThrow(
+      /reconcile staging lost/,
+    );
+    expect(await store.read.count({ account: accountId })).toBe(3);
+  });
+
+  it('a pass that was never begun cannot stage', async () => {
+    await expect(
+      store.reconcileStage(accountId, [{ externalId: 'x', type: 'file' }]),
+    ).rejects.toThrow(/reconcile staging lost/);
+  });
+
+  it('begin → stage → diff → archive works, and archive ends the pass', async () => {
+    const head = await store.headSeq();
+    await store.reconcileBegin(accountId);
+    await store.reconcileStage(accountId, [{ externalId: 'a', type: 'file' }]);
+    expect(await store.reconcileDiff(accountId, head)).toEqual({
+      listedCount: 1,
+      liveCount: 3,
+      deletionCount: 2,
+    });
+    expect(await store.reconcileArchive(accountId, head)).toBe(2);
+    await expect(store.reconcileDiff(accountId, head)).rejects.toThrow(
+      /reconcile staging lost/,
+    );
   });
 });
