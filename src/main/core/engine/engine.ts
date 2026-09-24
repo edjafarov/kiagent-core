@@ -141,6 +141,31 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
  *  test account archiving 2 is normal churn, not a listing bug. */
 const MASS_ARCHIVE_MIN_DOCS = 100;
 const MASS_ARCHIVE_RATIO = 0.5;
+
+/** A one-shot pass on the mass-archive breaker (spec §5.6). `full` waives
+ *  both refusals (the pass right after a Save that archived, a connect, a
+ *  config edit). `ratio` waives only the >50% arm — the empty-listing refusal
+ *  stays armed — and is what a first scope declaration or an unchanged
+ *  re-save earns: a legitimate shrink, never an excuse for a broken listing. */
+export type AllowanceKind = 'full' | 'ratio';
+
+/** The scope ids an account's config declares, or `null` when it declares
+ *  none. `folderRoots` (folder-scoped connectors), then the Drive-style
+ *  `roots`, then local-folder `paths` — whichever is an array first. */
+export function declaredScopeIds(
+  config: Record<string, unknown>,
+): string[] | null {
+  const { folderRoots, roots, paths } = config;
+  if (Array.isArray(folderRoots))
+    return folderRoots.map((r) => String((r as { id: unknown }).id));
+  if (Array.isArray(roots))
+    return roots.map((r) =>
+      String((r as { rootFolderId: unknown }).rootFolderId),
+    );
+  if (Array.isArray(paths) && paths.every((p) => typeof p === 'string'))
+    return paths as string[];
+  return null;
+}
 /** How many listing refs reconcile hands the store at a time. This is the ONLY
  *  reconcile structure that ever sits on this thread, so it — not the account —
  *  bounds the pass's memory. A connector may yield pages of any size; they get
@@ -199,11 +224,12 @@ export const REDRIVE_PAGE = 500;
  * refusals, both recorded on the account instead of archiving: (1) a listing
  * that came back EMPTY while live docs exist — no legitimate bundled flow
  * produces one except deliberately clearing the config; (2) a diff exceeding
- * MASS_ARCHIVE_RATIO + MASS_ARCHIVE_MIN_DOCS. `allowMassArchive` — granted
- * for the first pass after the account's config changed (root removed from a
- * local-folder account, a re-connect) — bypasses both, which is also the
- * user's escape hatch when the shrinkage is real: re-saving the account's
- * settings applies the pending cleanup on the next cycle.
+ * MASS_ARCHIVE_RATIO + MASS_ARCHIVE_MIN_DOCS. `allowance` (see
+ * AllowanceKind): `full` — granted for the first pass after the account's
+ * config changed (root removed, a re-connect) — bypasses both; `ratio`
+ * bypasses only the second, and is the user's escape hatch when a shrinkage
+ * is real: re-saving the account's settings applies the pending cleanup on
+ * the next cycle, but never off an empty listing.
  *
  * TOCTOU guard: `source.reconcile()` takes its listing snapshot once, up
  * front (e.g. local-folder's `listEntries` walks the whole tree before ever
@@ -226,7 +252,7 @@ async function reconcilePass(
   account: Account,
   logs: LogSink,
   scope: string,
-  allowMassArchive: boolean,
+  allowance: AllowanceKind | undefined,
 ): Promise<void> {
   if (!source.reconcile) return;
   const startSeq = await store.headSeq();
@@ -301,7 +327,7 @@ async function reconcilePass(
     return;
   }
 
-  if (!allowMassArchive) {
+  if (allowance !== 'full') {
     const refuse = async (why: string): Promise<void> => {
       await store.reconcileEnd(account.id);
       const msg =
@@ -325,6 +351,7 @@ async function reconcilePass(
       return;
     }
     if (
+      allowance !== 'ratio' &&
       deletionCount > MASS_ARCHIVE_MIN_DOCS &&
       deletionCount > liveCount * MASS_ARCHIVE_RATIO
     ) {
@@ -497,7 +524,16 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  reconcile pass may exceed the mass-archive breaker — removing a
    *  local-folder root or re-scoping an account legitimately archives big
    *  fractions of the corpus. Consumed (deleted) when the pass starts. */
-  const reconcileAllowances = new Set<AccountId>();
+  const reconcileAllowances = new Map<AccountId, AllowanceKind>();
+  // A merge never downgrades: a pending `full` outlives a later `ratio`.
+  const grantAllowance = (id: AccountId, kind: AllowanceKind): void => {
+    if (reconcileAllowances.get(id) !== 'full') reconcileAllowances.set(id, kind);
+  };
+  const takeAllowance = (id: AccountId): AllowanceKind | undefined => {
+    const kind = reconcileAllowances.get(id);
+    reconcileAllowances.delete(id);
+    return kind;
+  };
 
   /** The ONE account-scoped flow allowed at a time: reconnect and
    *  manage-folders cannot overlap on one account (spec invariant 13). Keyed
@@ -793,7 +829,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       });
       // A (re-)connect rewrites the account's config/scope: the next
       // reconcile pass may legitimately exceed the mass-archive breaker.
-      reconcileAllowances.add(account.id);
+      grantAllowance(account.id, 'full');
       await running.get(`account:${account.id}`)?.stop();
       if (captured) await store.vault.save(account.id, captured);
       logs.log(
@@ -930,7 +966,7 @@ export function createEngine(deps: EngineDeps): Engine & {
                   scope,
                   // One-shot: the pass right after a config change may
                   // legitimately mass-archive (root removal, re-scope).
-                  reconcileAllowances.delete(account.id),
+                  takeAllowance(account.id),
                 ).catch((err) => {
                   // reconcilePass handles its own errors internally and
                   // should never throw — this is a defensive backstop so a
@@ -1341,7 +1377,7 @@ export function createEngine(deps: EngineDeps): Engine & {
         //
         // **C-35 — but ONLY if this Save actually archived something.** The
         // allowance is not a relaxation of the ≥100/≥50% ratio; ONE
-        // `if (!allowMassArchive)` wraps BOTH refusals in `reconcilePass`
+        // `if (allowance !== 'full')` wraps BOTH refusals in `reconcilePass`
         // (engine.ts:284-313), the zero-false-positive "the listing came back
         // empty" arm included — the arm whose own comment says an empty
         // listing over a non-empty corpus is "always a broken listing … never
@@ -1353,7 +1389,22 @@ export function createEngine(deps: EngineDeps): Engine & {
         // from the transaction that just committed, so this reads the outcome
         // rather than guessing at it from `archiveScopeRootIds` (which is an
         // intent, and is legitimately non-empty with nothing matching it).
-        if (res.archived > 0) reconcileAllowances.add(accountId);
+        //
+        // §5.6: a Save that archived nothing may still earn a `ratio`
+        // allowance — a FIRST declaration (a legacy account's prior
+        // enumeration was wider than any declared set) or an UNCHANGED
+        // re-save (the user's escape hatch from a ratio refusal). A changed
+        // set that archived nothing earns none, as above.
+        const priorIds = declaredScopeIds(
+          JSON.parse(expectedConfigJson) as Record<string, unknown>,
+        );
+        const nextIds = update.config.folderRoots.map((r) => r.id);
+        const sameSet =
+          priorIds !== null &&
+          priorIds.length === nextIds.length &&
+          priorIds.every((id) => nextIds.includes(id));
+        if (res.archived > 0) grantAllowance(accountId, 'full');
+        else if (priorIds === null || sameSet) grantAllowance(accountId, 'ratio');
         const after = await store.account(accountId);
         // Restart unconditionally EXCEPT the two resting states. Deliberately
         // NOT gated on `running.has` the way updateConfig is: stop() above
@@ -1533,7 +1584,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       // engine.ts:287-290). C-35 is about applyScope, where the outcome IS
       // knowable: an explicit Save that archived nothing has no mass-archive
       // to authorise.
-      reconcileAllowances.add(accountId);
+      grantAllowance(accountId, 'full');
       // Only restart a loop that's actually running — a never-started account
       // just gets its config persisted for the next run(). And a running-map
       // entry alone isn't enough: pause and needsReauth are status-only resting

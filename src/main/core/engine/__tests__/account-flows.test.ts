@@ -1046,6 +1046,159 @@ describe('engine account flows', () => {
       ).toBe(3);
     });
 
+    /** **Allowance kinds (spec §5.6).** A listing source that names only the
+     *  first `listed` of the seeded docs — a COMPLETE listing that shrank the
+     *  account past the ratio arm (>MASS_ARCHIVE_MIN_DOCS and >50%) without
+     *  being empty. Only a `full` or `ratio` allowance lets it through. */
+    function ratioListingSource(listed: number): Source<number, DocumentInput> {
+      return {
+        ...scopedSource(),
+        // eslint-disable-next-line require-yield
+        async *pull() {
+          await new Promise<never>(() => {});
+        },
+        async *reconcile() {
+          yield Array.from({ length: listed }, (_, i) => ({
+            externalId: `d${i}`,
+            type: 'note',
+          }));
+        },
+      };
+    }
+
+    async function seededN(
+      source: Source,
+      n: number,
+      config: Record<string, unknown>,
+    ) {
+      const engine = makeEngine(source);
+      const account = await store.createAccount({
+        source: source.descriptor.id,
+        identifier: 'kinds@example.com',
+        config,
+        status: 'connecting',
+      });
+      await store.commit({
+        account: account.id,
+        documents: Array.from({ length: n }, (_, i) => doc(`d${i}`, 'a')),
+        cursor: 1,
+      });
+      return { engine, account };
+    }
+
+    const noArchiveSave = () =>
+      jest.spyOn(store, 'applyFolderScope').mockResolvedValue({
+        archived: 0,
+        reattributed: 0,
+        remaining: 150,
+        stale: false,
+      });
+
+    /** Settles on a refusal, or on the live count dropping to `to`. */
+    const settledAt = (accountId: AccountId, to: number) => async () =>
+      !!(await store.account(accountId))?.lastError ||
+      (await store.read.count({ account: accountId })) === to;
+
+    const SAME_ROOTS: FolderScopeUpdate = {
+      config: { folderRoots: [{ id: 'a', name: 'Alpha' }] },
+      cursor: { page_token: 'p1', backfill_done: false },
+      archiveScopeRootIds: [],
+    };
+
+    it('allowance: an unchanged re-save grants a RATIO allowance, so a complete >50% shrink archives', async () => {
+      // The user's escape hatch from a ratio refusal (§5.6 c): re-saving the
+      // same folders authorises the shrink the listing reports.
+      const { engine, account } = await seededN(
+        ratioListingSource(10),
+        150,
+        { folderRoots: [{ id: 'a', name: 'Alpha' }] },
+      );
+      noArchiveSave();
+
+      await engine.applyScope(account.id, SAME_ROOTS, CONFIG_AT_OPEN);
+      await waitFor(settledAt(account.id, 10));
+      await engine.stopAll();
+
+      expect((await store.account(account.id))?.lastError).toBeFalsy();
+      expect(await store.read.count({ account: account.id })).toBe(10);
+    });
+
+    it('allowance: an unchanged re-save does NOT bypass the empty-listing refusal', async () => {
+      const { engine, account } = await seededN(emptyListingSource(), 3, {
+        folderRoots: [{ id: 'a', name: 'Alpha' }],
+      });
+      noArchiveSave();
+
+      await engine.applyScope(account.id, SAME_ROOTS, CONFIG_AT_OPEN);
+      await waitFor(reconcileSettled(account.id));
+      await engine.stopAll();
+
+      expect((await store.account(account.id))?.lastError).toMatch(
+        /listing came back empty/,
+      );
+      expect(await store.read.count({ account: account.id })).toBe(3);
+    });
+
+    it('allowance: a first scope declaration (prior config had no scope) grants a RATIO allowance', async () => {
+      // A legacy account's first Save (§5.6 b): its prior enumeration may have
+      // held far more than the declared folders, so the first pass may shrink.
+      const { engine, account } = await seededN(ratioListingSource(10), 150, {});
+      noArchiveSave();
+
+      await engine.applyScope(account.id, SAME_ROOTS, JSON.stringify({}));
+      await waitFor(settledAt(account.id, 10));
+      await engine.stopAll();
+
+      expect((await store.account(account.id))?.lastError).toBeFalsy();
+      expect(await store.read.count({ account: account.id })).toBe(10);
+    });
+
+    it('allowance: a first scope declaration still refuses an empty listing', async () => {
+      const { engine, account } = await seededN(emptyListingSource(), 3, {});
+      noArchiveSave();
+
+      await engine.applyScope(account.id, SAME_ROOTS, JSON.stringify({}));
+      await waitFor(reconcileSettled(account.id));
+      await engine.stopAll();
+
+      expect((await store.account(account.id))?.lastError).toMatch(
+        /listing came back empty/,
+      );
+      expect(await store.read.count({ account: account.id })).toBe(3);
+    });
+
+    it('allowance: a CHANGED set that archived nothing still refuses the ratio', async () => {
+      // Control for the two grants above: a widening is neither a first
+      // declaration nor an unchanged re-save, so the ratio arm stays armed.
+      const { engine, account } = await seededN(
+        ratioListingSource(10),
+        150,
+        { folderRoots: [{ id: 'a', name: 'Alpha' }] },
+      );
+      noArchiveSave();
+
+      await engine.applyScope(
+        account.id,
+        {
+          ...SAME_ROOTS,
+          config: {
+            folderRoots: [
+              { id: 'a', name: 'Alpha' },
+              { id: 'b', name: 'Beta' },
+            ],
+          },
+        },
+        CONFIG_AT_OPEN,
+      );
+      await waitFor(settledAt(account.id, 10));
+      await engine.stopAll();
+
+      expect((await store.account(account.id))?.lastError).toMatch(
+        /listing shrank suspiciously/,
+      );
+      expect(await store.read.count({ account: account.id })).toBe(150);
+    });
+
     // Belt-and-braces: `run()` re-reads the committed status and refuses a
     // paused account on its own (engine.ts:638-651), so this test passes even
     // with applyScope's gate deleted (see Step 20). It is kept because it
