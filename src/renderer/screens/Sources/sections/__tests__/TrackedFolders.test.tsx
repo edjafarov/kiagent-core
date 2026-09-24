@@ -234,7 +234,15 @@ describe('TrackedFolders rows', () => {
 
   it('renders the empty state so Manage folders stays reachable', () => {
     render(<TrackedFolders account={accountWith([])} />);
-    expect(screen.getByText('No folders selected yet.')).toBeInTheDocument();
+    // §5.2: the card only mounts for folderScope sources, where an account
+    // with no declared roots is enumerating the connector's DEFAULTS (a
+    // legacy MS365/Gmail account) — not "nothing".
+    expect(
+      screen.getByText('Default folders — Manage to change'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('No folders selected yet.'),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Manage folders/ }),
     ).toBeEnabled();
