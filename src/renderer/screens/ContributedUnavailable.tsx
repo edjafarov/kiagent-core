@@ -15,6 +15,9 @@ export type ContributedUnavailableReason =
   /** Installed but disabled, or activating/awaiting consent. */
   | 'disabled'
   | 'activating'
+  /** Installed, but the user has not granted consent for its current
+   *  manifest (e.g. it gained a page) — Marketplace → Review permissions. */
+  | 'needs-consent'
   /** The extension's own activation failed. */
   | 'failed'
   /** The page bundle is being fetched and imported. */
@@ -41,6 +44,10 @@ const REASON_COPY: Record<
     headline: 'is starting',
     detail: 'is still starting up. This screen will be ready shortly.',
   },
+  'needs-consent': {
+    headline: 'needs your permission',
+    detail: 'is waiting for you to review its permissions in Marketplace.',
+  },
   failed: {
     headline: 'failed to start',
     detail: 'failed to activate. Check the extension for details.',
@@ -51,7 +58,7 @@ const REASON_COPY: Record<
   },
   'load-failed': {
     headline: "couldn't load this screen",
-    detail: 'could not load its page. Check Logs for the error.',
+    detail: 'could not load its page. Try updating or reinstalling it.',
   },
   error: {
     headline: 'hit an error',

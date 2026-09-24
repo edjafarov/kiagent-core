@@ -64,6 +64,7 @@ function resolveUnavailableReason(
   if (!ext) return 'not-installed';
   if (!ext.enabled) return 'disabled';
   if (ext.status === 'errored') return 'failed';
+  if (ext.status === 'needs-consent') return 'needs-consent';
   // Positive gate: only 'activated' may mount a page. Listing the
   // bad statuses instead fails OPEN for the first boot snapshot (every
   // enabled entry starts as status 'disabled') and for any status added

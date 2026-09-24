@@ -96,6 +96,8 @@ it('import failure → load-failed naming the extension; the next visit retries'
   expect(
     await screen.findByText(/Cal couldn.t load this screen/i),
   ).toBeInTheDocument();
+  // No pointer to Logs: renderer console errors never reach the Logs screen.
+  expect(screen.queryByText(/Logs/)).toBeNull();
   unmount();
   render(<ContributedPage {...props} />);
   await screen.findByText(/Cal couldn.t load this screen/i);

@@ -100,6 +100,14 @@ describe('createScreenRegistry — contributed views (ExtView)', () => {
     ).toBeInTheDocument();
   });
 
+  it('an extension waiting for consent says so instead of promising it is starting', () => {
+    show('ext:test.contrib/main', [extSnapshot({ status: 'needs-consent' })]);
+    expect(
+      screen.getByText(/Contrib Extension needs your permission/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/is starting/)).toBeNull();
+  });
+
   it('an extension still activating shows the starting screen', () => {
     show('ext:test.contrib/main', [extSnapshot({ status: 'disabled' })]);
     expect(
