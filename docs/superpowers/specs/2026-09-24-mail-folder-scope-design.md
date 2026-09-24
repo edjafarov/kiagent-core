@@ -1,6 +1,6 @@
 # Mail folder scope — Microsoft 365 folders and Gmail Trash/Spam
 
-Status: DRAFT r4 (r0–r3 reviewed by fable + codex astra; dispositions in §7–§10)
+Status: DRAFT r5 (r0–r4 reviewed by fable + codex astra; dispositions in §7–§11)
 Date: 2026-09-24
 
 ## 1. What the user asked for
@@ -180,7 +180,15 @@ Non-goals:
    - (b) the prior config declared no scope, i.e. first declaration
    - (c) the new root id set equals the prior one, i.e. an explicit re-save, which is the action the breaker's refusal message asks for
 
-   A pure widening (new ⊋ prior) still grants nothing, so the empty-listing guard stays armed exactly where C-35 wants it.
+   A pure widening (new ⊋ prior) still grants nothing.
+
+   **Allowances (b) and (c) are ratio-only.** They bypass the >50% shrink check but **never** the empty-listing refusal (`listedCount === 0`). Only (a), whose archival already happened in the Save transaction, keeps today's full bypass.
+   - A lost staging table (DB-worker restart, `engine.test.ts` lost-listing case) diffs as `listedCount 0`, so it is still refused under (b) or (c).
+   - A discovery or listing failure throws before the diff.
+   - So a routine unchanged Save can authorise a large *verified* shrink but can never archive a corpus off an empty or broken listing.
+   - Cost: a tracked set that is genuinely empty upstream (the user selected only empty folders) cannot clean up via reconcile. That case is visible as the refusal on the card and is accepted.
+
+   Implementation: `reconcileAllowances` holds a kind (`'full' | 'ratio'`), and `reconcilePass` takes it instead of a boolean.
 
 Dropped from r1: the id-difference allowance heuristic (replaced by `archiveRefs` + the explicit rule in §5.7) and `reconcileEvery` (unmeasured cost; per-pull reconcile as for every other connector).
 
@@ -232,6 +240,8 @@ Dropped from r1: the id-difference allowance heuristic (replaced by `archiveRefs
 - The contract/SDK carries the field.
 - Card default text.
 - Allowance: granted on (a), (b) and (c), and not on a pure widening.
+- (b) and (c) under a lost staging table or an empty listing → refused, nothing archived (reuse the lost-listing regression test).
+- (b) and (c) with a complete >50% shrink → archived.
 - Skip rule: MS365 legacy account skipped; Drive account with only `roots` still reconciles.
 
 ## 7. Review dispositions (r0)
@@ -294,3 +304,10 @@ Dropped from r1: the id-difference allowance heuristic (replaced by `archiveRefs
 | astra r3-3 | "Re-save settings" unreachable | Unchanged re-save grants the allowance (§5.7c); the refusal message becomes true for folder-scoped accounts. |
 | astra r3-4 | Whole-mailbox `archiveRefs` unbounded | Gone: legacy cleanup goes through the staged reconcile. Ordinary narrowing lists only removed folders (bounded by what the user unticked). |
 | astra r3-5 | Note test | End-to-end over the real serializers. |
+
+## 11. Review dispositions (r4)
+
+| # | Finding | Disposition |
+|---|---|---|
+| astra r4-1 | (b)/(c) bypass the empty-listing guard → lost staging archives the corpus | (b)/(c) are ratio-only allowances; the empty-listing refusal stays armed; tests on the lost-listing path (§5.7). |
+| astra r4 (consumption timing) | Allowance spent at pass start | Not a blocker per reviewer; recovery = unchanged re-save, now valid. |
