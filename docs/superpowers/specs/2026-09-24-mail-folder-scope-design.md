@@ -1,6 +1,6 @@
 # Mail folder scope — Microsoft 365 folders and Gmail Trash/Spam
 
-Status: APPROVED BY REVIEW r6 — fable SATISFIED (r2), codex astra SATISFIED (r6). Awaiting user review.
+Status: APPROVED — reviewers SATISFIED (fable r2, astra r6); user approved 2026-09-24 with decision 1 changed: trashed Gmail threads stay until they disappear from Gmail (§4).
 Date: 2026-09-24
 
 ## 1. What the user asked for
@@ -146,8 +146,10 @@ Non-goals:
 - **Bucket is hashed:** thread metadata and every attachment child's metadata gain `scopeBucket`, and all carry `scopeRootId` = bucket.
   - A bucket change is therefore always a content change: it re-stamps thread and children, and archive-by-stamp is exact.
   - A legacy row (NULL stamp, no `scopeBucket`) is re-stamped the first time it is re-emitted. Every widening task re-emits every thread it lists, so legacy trash is stamped before a later narrowing can rely on it.
-- **Out of scope ⇒ deletion** of the thread ref plus the attachment refs built from the fetched thread (same builder as `toDocument`). The 404 path is unchanged (pre-existing: it cannot name children).
-- **Product decision (not the user's words):** with the default `[mail]`, a thread whose every message is in Trash is deleted from the index immediately. Today it lingers until Gmail's 30-day purge. Trashing one message of a multi-message thread keeps the thread.
+- **Out of scope ⇒ skip.** A fetched thread whose bucket is not selected is neither emitted nor deleted. Its indexed row, if any, stays exactly as it was.
+  - **User decision 2026-09-24:** a thread trashed after indexing stays until it disappears from Gmail. That is today's behaviour: Gmail's purge makes the thread 404, and the existing 404 path deletes it.
+  - Skipping instead of re-emitting is what keeps an explicit untick exact. After Trash is unticked, its TRASH-stamped rows are archived by stamp, and a later history touch of such a thread is skipped, so it cannot revive.
+  - Consequence: a thread's stamp only changes while its bucket is selected. A trashed-after-index thread keeps stamp `mail` under the default, so unticking Trash does not archive it; it disappears with Gmail's purge.
 - **Query rule:**
   - default `[mail]` → today's call
   - any optional bucket selected → `includeSpamTrash=true` with no `q`, classified locally
@@ -229,8 +231,10 @@ Dropped from r1: the id-difference allowance heuristic (replaced by `archiveRefs
 - Same label union, different bucket → hash differs.
 - Attachments carry `scopeBucket` and the stamp.
 - Default selection:
-  - fully trashed thread → deletion of thread + attachment refs
-  - one message trashed → kept
+  - fully trashed thread after index → skipped: row unchanged, still live, stamp `mail`
+  - later 404 → deleted (existing path)
+  - one message trashed → re-emitted as `mail`
+- `[mail]` after unticking Trash: a history touch of a TRASH-stamped archived thread → skipped, stays archived
 - `[mail, TRASH]`:
   - trashed thread live, thread + attachments stamped TRASH
   - narrowing archives exactly those
