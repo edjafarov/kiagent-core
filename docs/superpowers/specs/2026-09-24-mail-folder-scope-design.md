@@ -1,6 +1,6 @@
 # Mail folder scope — Microsoft 365 folders and Gmail Trash/Spam
 
-Status: DRAFT r3 (r0–r2 reviewed by fable + codex astra; dispositions in §7–§9)
+Status: DRAFT r4 (r0–r3 reviewed by fable + codex astra; dispositions in §7–§10)
 Date: 2026-09-24
 
 ## 1. What the user asked for
@@ -112,20 +112,22 @@ Non-goals:
   - If pull processed the move *before* the reconcile diff, its emit has seq > `startSeq`, and the TOCTOU guard excludes it.
   - Either way the thread ends live.
 - **Guarantee, stated narrowly.** Graph listings are not snapshots. A user moving the same conversation *back and forth* between tracked folders during the seconds a listing runs (astra r2-2 round trip) can end up with a live, in-scope thread archived. It reappears when the conversation next changes: a new message or move goes delta → re-fetch → revive. Until then it is unsearchable, but it is not lost (archived rows keep content for the 30-day purge window). The design accepts this window rather than adding a revive-on-listing platform rule. A one-way move is fully covered by the argument above and pinned by tests.
-- **Legacy accounts** have no reconcile until their first Save. Core skips `reconcile` for a `folderScope` source whose account config has no `folderRoots` (§5.3): an account with no declared scope has nothing to reconcile against. There is no connector-side signalling, and no error on the account.
+- **Legacy accounts** have no reconcile until their first Save. Core skips `reconcile` for a `folderScope` account whose config declares no scope at all, meaning neither `folderRoots` nor a legacy mirror key (`roots`, `paths`) (§5.3). An account with no declared scope has nothing to reconcile against. There is no connector-side signalling, and no error on the account.
 - Safeguards are the platform's, unchanged: an empty listing or a >50% shrink is refused and surfaced on the account. Mass deletion upstream is rare, and the refusal message's "re-save settings" escape hatch applies.
 - Runs every pull, as for every reconcile connector. Cost ≈ Σ over tracked folders of max(1, ⌈messages/1000⌉) requests plus one discovery walk; per pass the request count is logged. Example: a 100 000-message tracked set is ~100 requests per 15-min tick, ~9 600/day, well inside Graph's per-mailbox limits. A cadence knob is deferred until measured.
 
 ### 3.4 manageFolders
 - Discovery for the prior and new selections.
 - Then list conversationIds for (prior tracked set) \ (new tracked set) = `leaving`, and for the new tracked set = `staying`. This is the same paged `$select=conversationId` listing, and the card shows its normal "Saving…" meanwhile.
-- **Guarantee, stated narrowly:** exact relative to those two listings. A user bulk-moving mail between a removed and a kept folder during the seconds of the Save listing can leave some removed mail live. That is a leak, never a loss. Reconcile removes it on a later pass, subject to the platform breaker, whose "re-save settings" escape hatch applies.
+- **Guarantee, stated narrowly:** exact relative to those two listings. A user bulk-moving mail between a removed and a kept folder during the seconds of the Save listing can leave some removed mail live. That is a leak, never a loss. Reconcile removes it on a later pass. If the breaker refuses that pass, the refusal message's "re-save settings" now works: saving an unchanged selection grants the one-shot allowance (§5.7).
 - Returns `archiveRefs = leaving \ staying` (conversation refs), `archiveScopeRootIds: []` and the cursor with removed folders' states dropped.
   - Core applies `archiveRefs` in the scope transaction (§5.1). Mixed threads (Inbox + Sent, Inbox removed) are in `staying` and are never archived.
   - A thread that moves between listing and commit is repaired by the §3.3 race argument.
 - Pure widening skips the listing: `leaving` is empty.
 - Coverage uses the whole new selection. Root order: retained roots in prior order, then new ones.
-- **A legacy account's first Save** has prior retention = "everything indexed". So `leaving` = conversations in any folder outside the new tracked set, which means a whole-mailbox listing once at that Save, and `staying` = the new tracked set.
+- **A legacy account's first Save** does no `leaving` listing. It returns `archiveRefs: []`, and core grants the one-shot reconcile allowance because the save *declares scope for the first time* (§5.7).
+  - `applyScope` restarts the loop immediately. That first reconcile lists the new tracked set through the existing staged, memory-bounded reconcile machinery, and archives exactly *indexed − staying*, including conversations deleted upstream.
+  - If that pass is lost (crash, abort, failed discovery), a later pass may be refused by the breaker; re-saving the unchanged selection re-grants the allowance (§5.7).
   - The picker shows, **before submission**, the note "Mail outside the selected folders will be removed from the index" (a new optional `FolderPickerSpec.note`, §5.4). MS365 sets it on every manage picker.
   - No count is shown: an upstream count includes never-indexed mail.
 
@@ -168,14 +170,19 @@ Non-goals:
    - `res.archived` counts them, so a narrowing that archives grants the one-shot reconcile allowance exactly as C-35 intends.
    - Contract doc: a removed root must be covered by `archiveScopeRootIds`, `reattributeScopeRoots`, **or** by refs the source lists in `archiveRefs` (computed by listing what leaves).
    - `res.archived` counts rows actually archived (non-null `archiveByRef` returns, distinct rows), so duplicate refs and refs overlapping an archived stamp count once. Applied after `reattributeScopeRoots`. The existing reattribute/archive contradiction guard stays.
-   - This is the only new contract surface.
 2. **Default roots on the card.** `TrackedFolders` renders an empty `folderRoots` on a `folderScope` source as "Default folders — Manage to change".
-3. **No reconcile without declared scope.** The engine skips `reconcilePass` for an account whose source has `descriptor.folderScope` and whose config has no `folderRoots` array. It must be verified that every existing Drive/OneDrive/local-folder account has `folderRoots` (v3 migration). If any lacks it, it currently reconciles against an unscoped listing and would stop; the plan's first task checks the migration code and a real DB.
+3. **No reconcile without declared scope.** The engine skips `reconcilePass` for an account whose source has `descriptor.folderScope` and whose config has none of `folderRoots` (array), `roots`, `paths`. Drive accounts created by the packaged Drive 2.1.6 connector carry `roots` without `folderRoots` (seen in a real DB checkpoint), so they keep reconciling. Only a scope-less MS365 legacy account is skipped.
 4. **`FolderPickerSpec.note?: string`**, rendered as one muted line above the picker's Save button.
 5. **Gmail** per §4.
 6. SDK 1.5.0 carries `archiveRefs` and `note`. MS365 v2.1.0 ships on SDK 1.5.0 with engine `^2.4.0`, since `archiveRefs` must be honoured. Gmail ships with the same core release.
+7. **Allowance rule in `applyScope`** (extends C-35, never relaxes it for widening). The one-shot reconcile allowance is granted when any of these holds:
+   - (a) `res.archived > 0` (today's rule)
+   - (b) the prior config declared no scope, i.e. first declaration
+   - (c) the new root id set equals the prior one, i.e. an explicit re-save, which is the action the breaker's refusal message asks for
 
-Dropped from r1: the reconcile allowance on root removal (replaced by exact `archiveRefs`) and `reconcileEvery` (unmeasured cost; per-pull reconcile as for every other connector).
+   A pure widening (new ⊋ prior) still grants nothing, so the empty-listing guard stays armed exactly where C-35 wants it.
+
+Dropped from r1: the id-difference allowance heuristic (replaced by `archiveRefs` + the explicit rule in §5.7) and `reconcileEvery` (unmeasured cost; per-pull reconcile as for every other connector).
 
 ## 6. Tests that pin behaviour
 
@@ -195,7 +202,8 @@ Dropped from r1: the reconcile allowance on root removal (replaced by exact `arc
   - removing Inbox with an Inbox+Sent thread → not in `archiveRefs`
   - an Inbox-only thread → in `archiveRefs`
   - pure widening → no listing, `archiveRefs` empty
-  - legacy first Save → `leaving` from a whole-mailbox listing, and the note is set
+  - legacy first Save → `archiveRefs: []`, allowance granted (core), and the next reconcile archives indexed − staying, including upstream-deleted conversations
+  - the note is visible in the modal before Save, through the child → proxy → broker → renderer path (an end-to-end test over the real serializers, not just "set")
 - Retry:
   - failure → id in `retry` with the batch
   - success later → emitted
@@ -223,6 +231,8 @@ Dropped from r1: the reconcile allowance on root removal (replaced by exact `arc
 - `res.archived` counts them and the allowance follows.
 - The contract/SDK carries the field.
 - Card default text.
+- Allowance: granted on (a), (b) and (c), and not on a pure widening.
+- Skip rule: MS365 legacy account skipped; Drive account with only `roots` still reconciles.
 
 ## 7. Review dispositions (r0)
 
@@ -274,3 +284,13 @@ Dropped from r1: the reconcile allowance on root removal (replaced by exact `arc
 | astra r2-5 | Legacy cost | Gone (no legacy reconcile); tracked-set cost formula documented. |
 | astra r1-10 (re-check) | Retry eviction | No cap, no eviction; warn above 1 000. |
 | astra (archiveRefs notes) | Count semantics, ordering | Specified in §5.1. |
+
+## 10. Review dispositions (r3)
+
+| # | Finding | Disposition |
+|---|---|---|
+| astra r3-1 | Skip rule disables Drive reconcile (`roots` without `folderRoots`) | Rule narrowed to "no `folderRoots`, `roots` or `paths`" (§5.3), plus a Drive regression test. |
+| astra r3-2 | First Save computes U−S, not I−S | First Save lists nothing; the allowance plus the next reconcile archive exactly I−S (§3.4). |
+| astra r3-3 | "Re-save settings" unreachable | Unchanged re-save grants the allowance (§5.7c); the refusal message becomes true for folder-scoped accounts. |
+| astra r3-4 | Whole-mailbox `archiveRefs` unbounded | Gone: legacy cleanup goes through the staged reconcile. Ordinary narrowing lists only removed folders (bounded by what the user unticked). |
+| astra r3-5 | Note test | End-to-end over the real serializers. |
