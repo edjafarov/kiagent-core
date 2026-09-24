@@ -35,7 +35,7 @@ export function selectedBuckets(
   config: Record<string, unknown>,
 ): Set<GmailBucket> {
   const selected = new Set<GmailBucket>(['mail']);
-  const roots = config.folderRoots;
+  const { folderRoots: roots } = config;
   if (Array.isArray(roots)) {
     for (const r of roots) {
       const id = (r as { id?: unknown }).id;
