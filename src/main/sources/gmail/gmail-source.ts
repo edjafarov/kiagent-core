@@ -8,7 +8,12 @@ import type {
 } from '@shared/contracts';
 
 import { selectedBuckets } from './bucket';
-import { type GmailCursor, isGmailNotFoundError } from './cursor';
+import {
+  type GmailCursor,
+  initialTasks,
+  isGmailNotFoundError,
+  migrateGmailCursor,
+} from './cursor';
 import {
   fetchProfile,
   fetchProfileWithToken,
@@ -104,7 +109,7 @@ async function fetchThreads(
  *  (upserts key on externalId, archiveByRef no-ops on archived rows). */
 async function* runDeltaSweep(
   session: Session,
-  state: Extract<GmailCursor, { mode: 'delta' }>,
+  historyId: string,
   stamp: Pick<GmailThreadItem, 'accountEmail' | 'selectedBuckets'>,
 ): AsyncGenerator<Batch<GmailCursor, GmailThreadItem>> {
   const affected = new Set<string>();
@@ -113,7 +118,7 @@ async function* runDeltaSweep(
   do {
     if (session.signal.aborted) return;
     // eslint-disable-next-line no-await-in-loop
-    const page = await listHistoryPage(session, state.historyId, pageToken);
+    const page = await listHistoryPage(session, historyId, pageToken);
     for (const entry of page.history ?? []) {
       for (const arr of [
         entry.messagesAdded,
@@ -129,8 +134,9 @@ async function* runDeltaSweep(
   } while (pageToken);
 
   const finalCursor: GmailCursor = {
-    mode: 'delta',
-    historyId: latestHistoryId ?? state.historyId,
+    v: 2,
+    historyId: latestHistoryId ?? historyId,
+    tasks: [],
   };
   const ids = [...affected];
   const deletions: ExternalRef[] = [];
@@ -149,7 +155,7 @@ async function* runDeltaSweep(
           deletions: deletions.length ? deletions : undefined,
           cursor: finalCursor,
         }
-      : { phase: 'live', items, cursor: state };
+      : { phase: 'live', items, cursor: { v: 2, historyId, tasks: [] } };
   }
   // No affected threads: still advance the watermark so the next sweep
   // doesn't replay the same (empty) history window.
@@ -159,9 +165,10 @@ async function* runDeltaSweep(
 }
 
 /**
- * `null` cursor (or a resumed `backfill` cursor) drives threads.list
- * pagination; once exhausted the cursor flips to `delta` and this generator
- * runs exactly ONE history.list sweep before ending.
+ * Works the cursor's task queue (spec §4) — each task a threads.list
+ * pagination, in order — then runs exactly ONE history.list sweep from the
+ * shared watermark before ending. A `null` cursor captures the watermark
+ * and queues `initialTasks` for the selected buckets.
  *
  * Ending after one delta sweep (rather than polling on an internal timer
  * until `session.signal` aborts) is the deliberate choice here: legacy's
@@ -176,63 +183,66 @@ export async function* pull(
   session: Session,
   cursor: GmailCursor | null,
 ): AsyncIterable<Batch<GmailCursor, GmailThreadItem>> {
+  const selected = selectedBuckets(session.account.config ?? {});
   const stamp = {
     accountEmail: session.account.identifier,
-    selectedBuckets: [...selectedBuckets(session.account.config ?? {})],
+    selectedBuckets: [...selected],
   };
-  let state: GmailCursor;
+  let cur = migrateGmailCursor(cursor);
   // threads.list's resultSizeEstimate is a per-PAGE guess (routinely ~200
   // for a 20k-thread mailbox) — useless as a backfill total. The profile's
   // threadsTotal is the mailbox-wide figure, so that's what progress is
-  // measured against; fetched once per backfill run (a resumed backfill
-  // re-fetches it, since only the null-cursor path needs the historyId).
+  // measured against; fetched once per run that has listings to work.
   let estimateTotal: number | undefined;
-  if (cursor === null) {
+  if (cur === null) {
     const profile = await fetchProfile(session);
-    state = { mode: 'backfill', pageToken: null, historyId: profile.historyId };
+    cur = {
+      v: 2,
+      historyId: profile.historyId,
+      tasks: initialTasks(selected),
+    };
     estimateTotal = profile.threadsTotal;
-  } else {
-    state = cursor;
-    if (state.mode === 'backfill') {
-      estimateTotal = (await fetchProfile(session)).threadsTotal;
-    }
+  } else if (cur.tasks.length > 0) {
+    estimateTotal = (await fetchProfile(session)).threadsTotal;
   }
 
-  if (state.mode === 'backfill') {
-    const { historyId } = state;
-    let { pageToken } = state;
+  while (cur.tasks.length > 0) {
+    const [task, ...rest] = cur.tasks;
+    let { pageToken } = task;
     do {
       if (session.signal.aborted) return;
       // eslint-disable-next-line no-await-in-loop
-      const page = await listThreadsPage(session, pageToken);
+      const page = await listThreadsPage(session, pageToken, task.q);
       const ids = (page.threads ?? []).map((t) => t.id);
-      for (let i = 0; i < ids.length; i += THREAD_CHUNK_SIZE) {
+      const next = page.nextPageToken ?? null;
+      // Only advance the persisted pageToken once the WHOLE page's chunks
+      // are done — a restart mid-page re-fetches that page from its start
+      // (idempotent re-commits by externalId), never skips. The page that
+      // ends a task drops it from the queue. An empty page still yields
+      // once, so a finished task is persisted even when it listed nothing.
+      const pageDone: GmailCursor = {
+        ...cur,
+        tasks: next ? [{ ...task, pageToken: next }, ...rest] : rest,
+      };
+      const chunks: string[][] = [];
+      for (let i = 0; i < ids.length; i += THREAD_CHUNK_SIZE)
+        chunks.push(ids.slice(i, i + THREAD_CHUNK_SIZE));
+      if (chunks.length === 0) chunks.push([]);
+      for (const [i, chunk] of chunks.entries()) {
         if (session.signal.aborted) return;
-        const chunk = ids.slice(i, i + THREAD_CHUNK_SIZE);
-        const isLastChunkOfPage = i + THREAD_CHUNK_SIZE >= ids.length;
         // eslint-disable-next-line no-await-in-loop
         const { items, deletions } = await fetchThreads(session, chunk, stamp);
-        state = {
-          mode: 'backfill',
-          // Only advance the persisted pageToken once the WHOLE page's
-          // chunks are done — a restart mid-page re-fetches that page from
-          // its start (idempotent re-commits by externalId), never skips.
-          pageToken: isLastChunkOfPage
-            ? (page.nextPageToken ?? null)
-            : pageToken,
-          historyId,
-        };
+        if (i === chunks.length - 1) cur = pageDone;
         yield {
           phase: 'backfill',
           items,
           ...(deletions.length ? { deletions } : {}),
-          cursor: state,
+          cursor: cur,
           estimateTotal,
         };
       }
-      pageToken = page.nextPageToken ?? null;
+      pageToken = next;
     } while (pageToken);
-    state = { mode: 'delta', historyId };
   }
 
   if (session.signal.aborted) return;
@@ -241,13 +251,12 @@ export async function* pull(
     // The only 404 that can escape the sweep is history.list's (per-thread
     // 404s become deletions inside it), so the catch below still means
     // exactly "history watermark expired".
-    yield* runDeltaSweep(session, state, stamp);
+    yield* runDeltaSweep(session, cur.historyId, stamp);
   } catch (err) {
     if (!isGmailNotFoundError(err)) throw err;
     // History watermark expired: fall back to a fresh backfill. Re-capture
-    // the historyId now and persist the reset cursor; the actual
-    // re-pagination happens on the NEXT pull() call (cadence-driven),
-    // reusing the backfill branch above instead of duplicating it here.
+    // the historyId now and persist the reset cursor; the listings run on
+    // the NEXT pull() call (cadence-driven), through the queue above.
     session.log(
       'warn',
       'gmail delta history expired — resetting to a fresh backfill',
@@ -256,7 +265,7 @@ export async function* pull(
     yield {
       phase: 'backfill',
       items: [],
-      cursor: { mode: 'backfill', pageToken: null, historyId },
+      cursor: { v: 2, historyId, tasks: initialTasks(selected) },
     };
   }
 }
