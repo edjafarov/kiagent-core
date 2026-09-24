@@ -12,6 +12,28 @@ export type GmailBucket = 'mail' | 'TRASH' | 'SPAM';
 
 export const GMAIL_BUCKETS: readonly GmailBucket[] = ['mail', 'TRASH', 'SPAM'];
 
+/** `name` is stored in `folderRoots` (the Tracked folders card shows it);
+ *  `label` is the picker row. */
+export const BUCKET_COPY: Record<GmailBucket, { name: string; label: string }> =
+  {
+    mail: {
+      name: 'All mail',
+      label: 'All mail — Inbox, Sent, archived and labelled',
+    },
+    TRASH: { name: 'Trash', label: 'Trash' },
+    SPAM: { name: 'Spam', label: 'Spam (may contain phishing)' },
+  };
+
+/** `folderRoots` for a selection, always in GMAIL_BUCKETS order. */
+export function bucketRoots(
+  selected: ReadonlySet<GmailBucket>,
+): Array<{ id: GmailBucket; name: string }> {
+  return GMAIL_BUCKETS.filter((b) => selected.has(b)).map((id) => ({
+    id,
+    name: BUCKET_COPY[id].name,
+  }));
+}
+
 /** mail if any message is in neither Trash nor Spam; else TRASH if any
  *  message is in Trash; else SPAM. */
 export function threadBucket(

@@ -151,18 +151,21 @@ Non-goals:
   - Skipping instead of re-emitting is what keeps an explicit untick exact. After Trash is unticked, its TRASH-stamped rows are archived by stamp, and a later history touch of such a thread is skipped, so it cannot revive.
   - Consequence: a thread's stamp only changes while its bucket is selected. A trashed-after-index thread keeps stamp `mail` under the default, so unticking Trash does not archive it; it disappears with Gmail's purge.
 - **Query rule:**
-  - default `[mail]` → today's call
-  - any optional bucket selected → `includeSpamTrash=true` with no `q`, classified locally
+  - the full scope is today's call: no `q`, no `includeSpamTrash`
+  - each selected optional bucket is its own listing, `q:'in:trash'|'in:spam'` with `includeSpamTrash=true`; items are classified locally either way
+  - A task's query never changes, so a persisted `pageToken` always resumes the listing that issued it (a Save mid-backfill cannot flip a flag under it).
   - No negative filters: a message may carry both SPAM and TRASH.
 - **Cursor:**
   ```
-  { historyId, tasks: Array<{ q: string|null, includeSpamTrash: boolean, pageToken: string|null }> }
+  { v: 2, historyId, tasks: Array<{ q: string|null, pageToken: string|null }> }
   ```
-  - Legacy `{mode:'backfill', pageToken, historyId}` → `{historyId, tasks:[{q:null, includeSpamTrash:false, pageToken}]}`. Legacy `{mode:'delta', historyId}` → `{historyId, tasks:[]}`.
-  - Pull drains tasks in order. A page's items and the advanced `pageToken` commit together, and the final page's batch removes the task in the same commit. Then one history sweep runs from `historyId`.
+  - Legacy `{mode:'backfill', pageToken, historyId}` → `{v:2, historyId, tasks:[{q:null, pageToken}]}`. Legacy `{mode:'delta', historyId}` → `{v:2, historyId, tasks:[]}`.
+  - A `null` cursor captures `historyId` and queues the full scope, then one task per selected optional bucket.
+  - Pull drains tasks in order. A page's items and the advanced `pageToken` commit together, and the final page's batch removes the task in the same commit (an empty listing still commits once). Then one history sweep runs from `historyId`.
   - `historyId` is captured only when a cursor is created from `null`; widening never recaptures it.
-  - **Widening** appends `{q:'in:trash'|'in:spam', includeSpamTrash:true, pageToken:null}` and keeps unfinished tasks.
+  - **Widening** appends `{q:'in:trash'|'in:spam', pageToken:null}` and keeps unfinished tasks.
   - **Narrowing** drops queued tasks for the removed bucket, and `archiveScopeRootIds` = removed buckets.
+  - A `null` cursor stays `null` across a Save; the first pull queues the then-selected buckets.
 - **Config:** `connect()` writes `folderRoots:[{id:'mail', name:'All mail'}]`. No `folderRoots` reads as `[mail]`, and the card shows default text (§5.2).
 - `readMessageEvidence` is unchanged; whole-thread semantics make it consistent with the body.
 

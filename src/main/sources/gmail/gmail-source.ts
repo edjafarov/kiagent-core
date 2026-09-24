@@ -2,17 +2,28 @@ import type {
   AuthChannel,
   Batch,
   ExternalRef,
+  FolderNode,
+  FolderScopeUpdate,
+  FolderSelectionChannel,
   Session,
   Source,
   SourceDescriptor,
 } from '@shared/contracts';
 
-import { selectedBuckets } from './bucket';
+import {
+  BUCKET_COPY,
+  GMAIL_BUCKETS,
+  type GmailBucket,
+  bucketRoots,
+  selectedBuckets,
+} from './bucket';
 import {
   type GmailCursor,
   initialTasks,
   isGmailNotFoundError,
+  type LegacyGmailCursor,
   migrateGmailCursor,
+  rescopeCursor,
 } from './cursor';
 import {
   fetchProfile,
@@ -44,6 +55,10 @@ export const descriptor: SourceDescriptor = {
   auth: 'oauth',
   multiAccount: true,
   cadence: { every: '15m' },
+  /** Spec §4: the buckets are the picker's folders — `mail` always, Trash
+   *  and Spam as opt-ins. Gmail has no `reconcile`; a narrowed bucket is
+   *  archived by its `scope_root_id` stamp. */
+  folderScope: true,
 };
 
 /** Threads fetched per yielded Batch — matches the task brief's "~25
@@ -56,7 +71,7 @@ const THREAD_CHUNK_SIZE = 25;
 
 export async function connect(
   auth: AuthChannel,
-): Promise<{ identifier: string }> {
+): Promise<{ identifier: string; config: Record<string, unknown> }> {
   auth.status('Waiting for Google sign-in…');
   // The platform (connect broker + engine) runs the OAuth window, performs
   // the code exchange via googleOAuthProfile, and PERSISTS the resulting
@@ -66,7 +81,53 @@ export async function connect(
     throw new Error('gmail connect: oauth did not return an access token');
   auth.status('Fetching account profile…');
   const profile = await fetchProfileWithToken(creds.accessToken);
-  return { identifier: profile.emailAddress };
+  return {
+    identifier: profile.emailAddress,
+    config: { folderRoots: bucketRoots(new Set(['mail'])) },
+  };
+}
+
+type OptInBucket = Exclude<GmailBucket, 'mail'>;
+
+/** Spec §4: Trash and Spam checkboxes in the Tracked folders picker. */
+export async function manageFolders(
+  session: Session,
+  channel: FolderSelectionChannel,
+): Promise<FolderScopeUpdate<GmailCursor>> {
+  const config = session.account.config ?? {};
+  const current = selectedBuckets(config);
+  const nodes: FolderNode[] = GMAIL_BUCKETS.map((b) => ({
+    id: b,
+    name: BUCKET_COPY[b].label,
+    hasChildren: false,
+  }));
+  const picked = await channel.pickFolders({
+    modes: [{ key: 'mail', label: 'Mail' }],
+    multiSelect: true,
+    purpose: 'manage',
+    selected: nodes.filter((n) => current.has(n.id as GmailBucket)),
+    roots: async () => nodes,
+    children: async () => [],
+  });
+  const next = new Set(
+    picked
+      .map((n) => n.id as GmailBucket)
+      .filter((id) => GMAIL_BUCKETS.includes(id)),
+  );
+  if (!next.has('mail')) throw new Error('gmail: All mail must stay selected');
+  const optIns = GMAIL_BUCKETS.filter((b): b is OptInBucket => b !== 'mail');
+  const added = optIns.filter((b) => next.has(b) && !current.has(b));
+  const removed = optIns.filter((b) => current.has(b) && !next.has(b));
+  return {
+    config: { ...config, folderRoots: bucketRoots(next) },
+    cursor: rescopeCursor(
+      session.account.cursor as GmailCursor | LegacyGmailCursor | null,
+      added,
+      removed,
+    ),
+    archiveScopeRootIds: removed,
+    reattributeScopeRoots: [],
+  };
 }
 
 /** Re-fetches `threadIds` through the bounded pool. A 404 means the thread
@@ -275,6 +336,7 @@ export const gmailSource: Source<GmailCursor, GmailThreadItem> = {
   connect,
   pull,
   toDocument,
+  manageFolders,
   async readMessageEvidence(session, doc, options) {
     if (doc.type !== GMAIL_THREAD_DOCUMENT_TYPE) return [];
     const wanted = new Set(

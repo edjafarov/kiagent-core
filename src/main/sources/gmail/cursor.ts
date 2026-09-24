@@ -27,7 +27,7 @@ export interface GmailCursor {
 }
 
 /** v1 shapes persisted before task queues. */
-type LegacyGmailCursor =
+export type LegacyGmailCursor =
   | { mode: 'backfill'; pageToken: string | null; historyId: string }
   | { mode: 'delta'; historyId: string };
 
@@ -58,6 +58,28 @@ export function initialTasks(selected: ReadonlySet<GmailBucket>): GmailTask[] {
     if (b !== 'mail' && selected.has(b)) tasks.push(bucketTask(b));
   }
   return tasks;
+}
+
+/** The cursor after a scope Save: tasks for removed buckets are dropped (their
+ *  rows are archived by stamp), a task per added bucket is appended, and the
+ *  watermark stays — the history sweep after the new tasks still covers
+ *  everything since it. A null cursor stays null: the first pull queues
+ *  `initialTasks` for whatever is selected by then. */
+export function rescopeCursor(
+  cursor: GmailCursor | LegacyGmailCursor | null,
+  added: ReadonlyArray<Exclude<GmailBucket, 'mail'>>,
+  removed: ReadonlyArray<Exclude<GmailBucket, 'mail'>>,
+): GmailCursor | null {
+  const cur = migrateGmailCursor(cursor);
+  if (cur === null) return null;
+  const dropped = new Set(removed.map((b) => bucketTask(b).q));
+  return {
+    ...cur,
+    tasks: [
+      ...cur.tasks.filter((t) => !dropped.has(t.q)),
+      ...added.map(bucketTask),
+    ],
+  };
 }
 
 /**
