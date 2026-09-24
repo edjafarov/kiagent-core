@@ -962,6 +962,11 @@ export function createEngine(deps: EngineDeps): Engine & {
               const undeclared =
                 src.descriptor.folderScope === true &&
                 declaredScopeIds(fresh.config ?? {}) === null;
+              // One-shot, and consumed by EVERY cycle — a skipped pass too.
+              // Left pending, a `full` from a settings edit would merge over
+              // the first Save's `ratio` and disarm §5.7(b)'s empty-listing
+              // refusal on the first-declaration pass.
+              const allowance = takeAllowance(account.id);
               if (src.reconcile && !undeclared) {
                 reconciling = reconcilePass(
                   src,
@@ -971,9 +976,9 @@ export function createEngine(deps: EngineDeps): Engine & {
                   fresh,
                   logs,
                   scope,
-                  // One-shot: the pass right after a config change may
-                  // legitimately mass-archive (root removal, re-scope).
-                  takeAllowance(account.id),
+                  // The pass right after a config change may legitimately
+                  // mass-archive (root removal, re-scope).
+                  allowance,
                 ).catch((err) => {
                   // reconcilePass handles its own errors internally and
                   // should never throw — this is a defensive backstop so a

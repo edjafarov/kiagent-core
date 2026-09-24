@@ -1173,6 +1173,42 @@ describe('engine account flows', () => {
       expect(await store.read.count({ account: account.id })).toBe(3);
     });
 
+    it('allowance: a pass skipped for undeclared scope still CONSUMES its allowance (§5.3 × §5.7b)', async () => {
+      // A settings edit on a scope-less legacy account grants `full`; the
+      // restarted cycle skips reconcile (§5.3). If the skip left that grant
+      // pending, the first Save's `ratio` would merge into it (a merge never
+      // downgrades) and the first-declaration pass would run with the empty-
+      // listing refusal disarmed — exactly what §5.7(b) arms it for.
+      let pulls = 0;
+      const source: Source<number, DocumentInput> = {
+        ...emptyListingSource(),
+        // eslint-disable-next-line require-yield
+        async *pull() {
+          pulls += 1;
+          await new Promise<never>(() => {});
+        },
+      };
+      const { engine, account } = await seededN(source, 3, {});
+      engine.run((await store.account(account.id))!);
+      await waitFor(async () => pulls >= 1);
+
+      await engine.updateConfig(account.id, { cadence: 'hourly' });
+      await waitFor(async () => pulls >= 2); // the restarted cycle ran its gate
+
+      await engine.applyScope(
+        account.id,
+        SAME_ROOTS,
+        JSON.stringify({ cadence: 'hourly' }),
+      );
+      await waitFor(reconcileSettled(account.id));
+      await engine.stopAll();
+
+      expect((await store.account(account.id))?.lastError).toMatch(
+        /listing came back empty/,
+      );
+      expect(await store.read.count({ account: account.id })).toBe(3);
+    });
+
     it('allowance: a CHANGED set that archived nothing still refuses the ratio', async () => {
       // Control for the two grants above: a widening is neither a first
       // declaration nor an unchanged re-save, so the ratio arm stays armed.
