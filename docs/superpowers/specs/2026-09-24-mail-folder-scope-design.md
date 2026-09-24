@@ -1,6 +1,6 @@
 # Mail folder scope — Microsoft 365 folders and Gmail Trash/Spam
 
-Status: DRAFT r1 (r0 reviewed by fable + codex astra, both NOT SATISFIED; dispositions in §7)
+Status: DRAFT r2 (r0, r1 reviewed by fable + codex astra; dispositions in §7, §8)
 Date: 2026-09-24
 
 ## 1. What the user asked for
@@ -26,7 +26,7 @@ Non-goals:
 - `Source.reconcile()` is a full listing of upstream refs. The engine diffs it against live docs and archives the unlisted ones. It runs concurrently with every pull and has a `startSeq` TOCTOU guard.
   - A mass-archive breaker refuses an empty listing, or one that shrinks >50% (above a minimum), unless the one-shot `reconcileAllowances` is set.
   - `applyScope` sets the allowance only when `res.archived > 0` (C-35).
-- `manageFolders` and `reconcile` are both proxied to marketplace connectors (`source-proxy.ts:328,342`). google-docs and OneDrive already implement them.
+- `manageFolders` and `reconcile` are both proxied to marketplace connectors (`source-proxy.ts:328,342`). google-docs implements `reconcile`; OneDrive implements `manageFolders` and has no `reconcile`.
 - Upsert: a live row with an unchanged content hash is skipped, including its scope stamp. Otherwise `scope_root_id = COALESCE(new, old)` and `archived_at = NULL`, so re-emitting revives. `contentHash` covers title, markdown, url, metadata and createdAt (`write-tx.ts:26,300`).
 - Folder-scoped accounts committing a doc without `scopeRootId` only log a warn (`write-tx.ts:568`).
 
@@ -42,7 +42,7 @@ Non-goals:
 - `threads.list` backfill (spam/trash excluded), then `history.list` sweeps.
 - A thread that 404s becomes a deletion. A thread trashed after indexing stays live with a TRASH label.
 - It emits a thread doc plus attachment child docs.
-- Metadata includes the union of labels, so any label change alters the hash.
+- Thread metadata holds the union of labels, so a bucket change need NOT change the hash (A on message 1 + B unlabelled → B also trashed: same union). Attachment metadata holds no labels.
 
 **APIs** (learn.microsoft.com; developers.google.com):
 - Graph:
@@ -58,22 +58,27 @@ Non-goals:
 
 ## 3. Microsoft 365 design (connector repo, SDK 1.4.0)
 
-**Principle: selection scopes enumeration; `reconcile` is the authority on removal.** No watched folders, no message→conversation map, no per-message body filtering.
+**Principles.**
+- Selection scopes enumeration and retention.
+- The content hash sees scope: folder membership is document metadata, so a move always re-emits, re-stamps and revives.
+- Narrowing is archived **exactly at Save**, in core's transaction, from a list the connector computes.
+- `reconcile` removes mail that leaves scope *without* a Save (deletions and moves), under the platform's normal safeguards.
+- No watched folders, no message→conversation map, no per-message body filtering.
 
 ### 3.1 Selection
 - `descriptor.folderScope = true`. `config.folderRoots: FolderRootSelection[]` with `id` = Graph folder id and `name` = `displayName` (display only).
 - A selected folder covers its subtree. The **tracked set** = selected roots plus all descendants.
-- **Discovery** runs at the start of every pull and every reconcile: a fully paginated `childFolders` walk (no cap).
-  - If discovery fails, the pull and reconcile fail for this tick; nothing is archived off a partial set.
-  - The tracked set is recorded in the cursor (`folders` keys).
+- **Discovery** runs at the start of every pull, every reconcile and every `manageFolders`: a fully paginated `childFolders` walk with no cap. If it fails, that operation fails: no archiving, no cursor change.
 - **Picker:**
-  - One mode, "Mail folders". `roots` = `/me/mailFolders` (paginated, non-hidden, `searchfolders` excluded). `children` = `childFolders`. No `count`: Graph's `totalItemCount` is not a subtree count, and the picker contract expects one.
+  - One mode, "Mail folders". `roots` = `/me/mailFolders` (paginated, non-hidden, `searchfolders` excluded). `children` = `childFolders`.
+  - No `count`: Graph's `totalItemCount` is not the subtree count the picker contract expects.
   - `selected` = current roots. `expand` = ancestor ids from `parentFolderId`.
   - Junk Email is labelled "Junk Email (may contain phishing)".
-- **Defaults:**
-  - New accounts: `connect()` writes Inbox, Sent Items and Archive, with ids resolved from the well-known names. The picker does not open at connect, so sign-in stays one step.
-  - Legacy accounts (config without `folderRoots`) read as Inbox + Sent Items.
-- **Intentional change on upgrade:** Inbox and Sent subfolders become tracked, because covering semantics now apply.
+- **New accounts:** `connect()` writes Inbox, Sent Items and Archive (ids resolved from well-known names). There is no picker at connect.
+- **Legacy accounts** (config without `folderRoots`) behave exactly as today until the user first saves a selection:
+  - enumeration: Inbox + Sent Items. Covering semantics now include their subfolders; this is the one intentional widening.
+  - retention: **the whole mailbox**. The legacy connector never removed anything, so users who "process" mail by deleting or archiving keep what they have. Only mail that no longer exists anywhere is removed, which is the one intentional narrowing.
+  - The card shows "Default folders — Manage to change" (§5.2). The picker pre-selects Inbox + Sent Items.
 
 ### 3.2 Pull
 - **Cursor v2:**
@@ -81,142 +86,169 @@ Non-goals:
   { v:2, phase:'enumerate'|'ingest'|'live',
     folders: Record<folderId, FolderState>,
     pending: string[], total?: number,
-    retry: Array<{id: string, n: number}> }
+    retry: Array<{ id: string, n: number }> }
   ```
-  - A legacy cursor maps `inbox`/`sentitems` keys to their resolved ids, keeping the delta links. No re-download.
-- **Every pull:** discovery. Tracked folders with no state get `{next: initialDeltaUrl(id)}`. States of untracked folders are dropped.
-- **Enumeration** of new folders runs inside `live` before the delta sweep. Their conversationIds join `pending`. This is how widening, new subfolders and folders moved into the subtree get ingested. The existing `enumerate` phase covers first backfill.
-- `accumulate` loses the junk/deleted exclusion and the `isDraft` skip. A folder is in scope if selected, and drafts in a tracked folder count.
-  - Ingest keeps the whole-conversation fetch (today's body semantics).
-  - The doc gets `scopeRootId` = the first root in config order that covers the folder the conversation was enumerated from. The stamp is informational only (§3.4); it exists to satisfy R5.
-- **No dropped work:** a non-auth conversation fetch failure moves the id into `retry`, committed with the batch.
-  - `retry` is drained first on the next pull.
-  - An id that fails 5 consecutive pulls is logged and dropped. Its thread stays at its last indexed version; if it is gone upstream, reconcile archives it.
-- Expired delta (410) keeps today's 14-day re-prime for adds. Reconcile covers removals, so the gap only affects old mail moved in during the outage.
+  - A legacy cursor maps its `inbox`/`sentitems` keys to resolved ids in every phase, keeping `next`/`delta` links, `pending` and `total`. No re-download.
+- **Every pull:** discovery. Tracked folders with no state get `{next: initialDeltaUrl(id)}`, and states of untracked folders are dropped.
+  - New folders enumerate inside `live` before the delta sweep, and their conversationIds join `pending`. This covers widening, new subfolders and folders moved into the subtree.
+  - The existing `enumerate` phase covers first backfill.
+- `accumulate` loses the junk/deleted exclusion and the `isDraft` skip; eligibility is folder membership only.
+- **Emission gate:** every fetched conversation, whether from pending, retry or delta, is emitted only if at least one message's `parentFolderId` is in the **retention set**. Otherwise it is a deletion. A stale queue entry therefore cannot resurrect excluded mail.
+  - Retention set = tracked set, or the whole mailbox for legacy accounts.
+  - `CONV_SELECT` already includes `parentFolderId`.
+- The document gains `metadata.folders` = sorted unique `parentFolderId`s of its messages, so a move between folders changes the hash (§3.3 relies on this).
+  - `scopeRootId` = the first root in config order that covers any member folder. It is informational: MS365 never archives by stamp.
+- **Retry:** a non-auth conversation fetch failure goes into `retry` with its count, committed with the batch.
+  - `retry` is attempted first on every pull and is never dropped; the list is capped at 10 000 with the oldest dropped and logged.
+  - From 5 consecutive failures, the id is logged at `warn` each pull.
+- Expired delta (410) keeps today's 14-day re-prime. Reconcile covers removals during the gap; old mail moved *into* scope during the gap is not re-found (pre-existing, unchanged).
 
 ### 3.3 Reconcile
-- `reconcile()` = discovery, then for each tracked folder, page `messages?$select=conversationId&$top=1000`. It yields `{externalId: conversationId, type:'email.thread'}`, deduplicated per page run. This is the complete identity set, since the connector emits no children.
-- A thread with at least one message in a tracked folder stays. Everything else archives on the next reconcile:
-  - hard deletions
-  - moves to untracked folders (Deleted Items, Junk, custom)
-  - deselected folders
-  - folders moved out of the subtree
-  - legacy unstamped rows
-- Cost: one request per 1000 messages in tracked folders per reconcile. Throttled by §5.2 to once per 6 h, plus immediately after a scope save.
+- `reconcile()` = discovery, then page `messages?$select=conversationId&$top=1000` for every folder in the retention set. It yields `{externalId: conversationId, type:'email.thread'}`. This is the complete identity set: the connector emits no children.
+- It archives hard deletions, and moves out of the retention set (e.g. to untracked Deleted Items or custom folders, or a folder moved out of the subtree), with no Save involved.
+- **Race** (astra r1-2): a thread moves Inbox→Sent while the listing runs, so it may be listed in neither folder and gets archived.
+  - The move is also a delta event in Sent, so pull re-fetches the thread.
+  - Its `metadata.folders` changed, so the upsert is not skipped, and upserting an archived row revives it.
+  - If pull processed the move *before* the reconcile diff, its emit has seq > `startSeq`, and the TOCTOU guard excludes it.
+  - Either way the thread ends live.
+- Safeguards are the platform's, unchanged: an empty listing or a >50% shrink is refused and surfaced on the account. Mass deletion upstream is rare, and the refusal message's "re-save settings" escape hatch applies.
+- Runs every pull, as for every reconcile connector. Cost is 1 request per 1 000 messages in the retention set; the request count is logged per pass.
 
 ### 3.4 manageFolders
-- It returns `archiveScopeRootIds: []` always.
-  - Stamps cannot see mixed conversations (Inbox + Sent), so archive-by-stamp would archive in-scope threads that nothing revives.
-  - Reconcile is exact and runs right after the save (§5.1/5.2).
-  - Removed mail stays searchable for at most one reconcile pass: seconds after Save on a running account; on a paused account, until resume.
-- The cursor transform drops removed folders' states. Added roots get their states on the next pull's discovery.
-- Coverage uses the whole new selection (OneDrive C-46 addendum). Root order: retained roots in prior order, then new ones.
+- Discovery for the prior and new selections.
+- Then list conversationIds for (prior retention set) \ (new retention set) = `leaving`, and for the new retention set = `staying`. This is the same paged `$select=conversationId` listing. The picker status shows "Checking which mail leaves the index…".
+- Returns `archiveRefs = leaving \ staying` (conversation refs), `archiveScopeRootIds: []` and the cursor with removed folders' states dropped.
+  - Core applies `archiveRefs` in the scope transaction (§5.1). Mixed threads (Inbox + Sent, Inbox removed) are in `staying` and are never archived.
+  - A thread that moves between listing and commit is repaired by the §3.3 race argument.
+- Pure widening skips the listing: `leaving` is empty.
+- Coverage uses the whole new selection. Root order: retained roots in prior order, then new ones.
+- A legacy account's first Save narrows from "whole mailbox" to the chosen tracked set, so everything outside it archives exactly, once, on an explicit user action. The picker status names the count before committing: "N conversations will leave the index".
 
 ## 4. Gmail design (core)
 
-**Principle: a thread has exactly one bucket; the bucket is its stamp.** Because the bucket is a function of the thread and labels are in the hash, a bucket change always re-emits and re-stamps. That makes archive-by-stamp exact, and Gmail needs no reconcile.
+**Principle: a thread has exactly one bucket; the bucket is its stamp AND part of its hash.**
 
 - **Buckets**, as pseudo-folders in the same picker (one mode, no children):
   - `mail` "All mail — Inbox, Sent, archived and labelled"
   - `TRASH` "Trash"
   - `SPAM` "Spam (may contain phishing)"
-  - `mail` is always selected. `manageFolders` rejects a selection without it: removing it would archive the mailbox, and unticking All mail is not what the user asked for.
+  - `mail` is always selected; `manageFolders` rejects a selection without it.
 - **Thread bucket:** `mail` if any message has neither TRASH nor SPAM; else `TRASH` if any message has TRASH; else `SPAM`.
+  - Drafts and chats carry neither label, so they count as `mail`.
   - A thread is in scope if its bucket is selected. The document is the whole thread, as today.
-  - The thread and all its attachment children carry `scopeRootId` = bucket.
-- **Product decision (not the user's words):** with the default `[mail]`, a thread whose every message is in Trash becomes a **deletion** of the thread and its attachment refs. Today such a thread lingers until Gmail purges it after 30 days, then 404s into a deletion anyway, so this makes deletion immediate. Trashing one message of a multi-message thread keeps the thread (bucket stays `mail`).
-- **Query rule (compositional):**
-  - default `[mail]` → today's call, unchanged
-  - otherwise `includeSpamTrash=true`, plus `q=-in:spam` when SPAM is not selected, or `q=-in:trash` when TRASH is not selected
-  - Each thread is classified client-side by bucket regardless of query, so the query only saves fetches.
+- **Bucket is hashed:** thread metadata and every attachment child's metadata gain `scopeBucket`, and all carry `scopeRootId` = bucket.
+  - A bucket change is therefore always a content change: it re-stamps thread and children, and archive-by-stamp is exact.
+  - A legacy row (NULL stamp, no `scopeBucket`) is re-stamped the first time it is re-emitted. Every widening task re-emits every thread it lists, so legacy trash is stamped before a later narrowing can rely on it.
+- **Out of scope ⇒ deletion** of the thread ref plus the attachment refs built from the fetched thread (same builder as `toDocument`). The 404 path is unchanged (pre-existing: it cannot name children).
+- **Product decision (not the user's words):** with the default `[mail]`, a thread whose every message is in Trash is deleted from the index immediately. Today it lingers until Gmail's 30-day purge. Trashing one message of a multi-message thread keeps the thread.
+- **Query rule:**
+  - default `[mail]` → today's call
+  - any optional bucket selected → `includeSpamTrash=true` with no `q`, classified locally
+  - No negative filters: a message may carry both SPAM and TRASH.
 - **Cursor:**
   ```
   { historyId, tasks: Array<{ q: string|null, includeSpamTrash: boolean, pageToken: string|null }> }
   ```
-  - The legacy `{mode:'backfill',…}` maps to one task. `{mode:'delta'}` maps to `tasks: []`.
-  - Pull drains tasks in order (page tokens checkpointed per page as today), then runs one history sweep from `historyId`. `historyId` is captured when the first task is created and never moved forward past unfinished tasks.
-  - **Widening** (adding TRASH or SPAM) appends a task (`in:trash` or `in:spam`, `includeSpamTrash=true`) and keeps any unfinished tasks.
-  - **Narrowing** removes queued tasks for the removed bucket, and `archiveScopeRootIds` = the removed buckets, which archives threads and attachments exactly.
-- **Legacy rows** (NULL stamp) are all bucket `mail` or trashed-after-index.
-  - `mail` rows never need archiving by stamp, since `mail` can't be removed.
-  - Trashed-after-index rows are re-emitted or deleted the next time history touches them, and are otherwise purged via the 30-day 404 path.
-  - No migration of document rows.
-- **Config:** `connect()` writes `folderRoots:[{id:'mail',…}]`. Existing accounts with no `folderRoots` read as `[mail]` (see §5.3 for the card).
-- `readMessageEvidence` is unchanged; the whole-thread model makes it consistent with the indexed body.
+  - Legacy `{mode:'backfill', pageToken, historyId}` → `{historyId, tasks:[{q:null, includeSpamTrash:false, pageToken}]}`. Legacy `{mode:'delta', historyId}` → `{historyId, tasks:[]}`.
+  - Pull drains tasks in order. A page's items and the advanced `pageToken` commit together, and the final page's batch removes the task in the same commit. Then one history sweep runs from `historyId`.
+  - `historyId` is captured only when a cursor is created from `null`; widening never recaptures it.
+  - **Widening** appends `{q:'in:trash'|'in:spam', includeSpamTrash:true, pageToken:null}` and keeps unfinished tasks.
+  - **Narrowing** drops queued tasks for the removed bucket, and `archiveScopeRootIds` = removed buckets.
+- **Config:** `connect()` writes `folderRoots:[{id:'mail', name:'All mail'}]`. No `folderRoots` reads as `[mail]`, and the card shows default text (§5.2).
+- `readMessageEvidence` is unchanged; whole-thread semantics make it consistent with the body.
 
 ## 5. Core changes
 
-1. **Reconcile allowance on narrowing.** `applyScope` grants `reconcileAllowances` when the save removes ≥1 root (prior `folderRoots` ids minus new), not only when `res.archived > 0`.
-   - C-35's concern, pure widening disarming the empty-listing guard, still holds: a widening removes nothing.
-   - Without this, MS365's `archiveScopeRootIds: []` narrowing trips the >50% breaker.
-2. **Reconcile cadence.** Add optional `SourceDescriptor.reconcileEvery?: Cadence`.
-   - The engine runs a reconcile when none has completed within that cadence (in-memory, per account) or an allowance is pending.
-   - Absent means every pull, as today.
-   - MS365 sets `{every:'6h'}`.
-3. **Default roots on the card.** `TrackedFolders` renders an empty `folderRoots` on a `folderScope` source as "Default folders — Manage to change". `manageFolders` pre-selects the source's resolved defaults, and the first Save persists them.
-4. **Gmail** per §4.
-5. Contracts regenerate into SDK 1.5.0. MS365 needs `reconcileEvery`, so it ships on SDK 1.5.0 and engine `^2.4.0`.
+1. **`FolderScopeUpdate.archiveRefs?: ExternalRef[]`.** `store.applyFolderScope` archives each ref (existing `archiveByRef`) in the same transaction, after `reattributeScopeRoots` and alongside `archiveScopeRootIds`.
+   - `res.archived` counts them, so a narrowing that archives grants the one-shot reconcile allowance exactly as C-35 intends.
+   - Contract doc: a removed root must be covered by `archiveScopeRootIds`, `reattributeScopeRoots`, **or** by refs the source lists in `archiveRefs` (computed by listing what leaves).
+   - This is the only new contract surface.
+2. **Default roots on the card.** `TrackedFolders` renders an empty `folderRoots` on a `folderScope` source as "Default folders — Manage to change".
+3. **Gmail** per §4.
+4. SDK 1.5.0 carries `archiveRefs`. MS365 v2.1.0 ships on SDK 1.5.0 with engine `^2.4.0`, since `archiveRefs` must be honoured. Gmail ships with the same core release.
+
+Dropped from r1: the reconcile allowance on root removal (replaced by exact `archiveRefs`) and `reconcileEvery` (unmeasured cost; per-pull reconcile as for every other connector).
 
 ## 6. Tests that pin behaviour
 
 **MS365:**
 - Discovery:
-  - picks up a new subfolder, which gets initial delta and its threads ingest
-  - a folder moved out of the subtree drops its state, and reconcile no longer lists its conversations
-  - a failed discovery fails the pull and reconcile without archiving
-- Reconcile:
-  - lists a conversation with Inbox + Sent messages once
-  - conversation only in Deleted Items → unlisted when Deleted Items is untracked, listed when tracked
-- manageFolders:
-  - removing Inbox → `archiveScopeRootIds: []`
-  - dropped folder states
-  - allowance granted (core test)
+  - picks up a new subfolder
+  - a folder moved out of the subtree is dropped
+  - failure → pull, reconcile and `manageFolders` fail without side effects
+- Emission gate:
+  - a pending id whose messages all left the retention set → deletion, not emit
+  - a legacy account keeps a thread whose messages all moved to Deleted Items
+- `metadata.folders`: moving a message Inbox→Archive changes the hash
+- Race:
+  - thread archived by reconcile, then the Sent delta re-fetch → revived
+  - move emitted before the diff → excluded by `startSeq`
+- `manageFolders`:
+  - removing Inbox with an Inbox+Sent thread → not in `archiveRefs`
+  - an Inbox-only thread → in `archiveRefs`
+  - pure widening → no listing, `archiveRefs` empty
+  - legacy first Save → everything outside the new tracked set listed
 - Retry:
-  - fetch failure → id in `retry` committed with batch, succeeds next pull
-  - 5 failures → dropped with log
-- Legacy cursor → v2 with the same delta links and no enumeration.
-- New account connect writes Inbox, Sent Items, Archive.
+  - failure → id in `retry` with the batch
+  - success later → emitted
+  - never dropped below the cap
+- Legacy cursor, every phase → v2 with the same links, pending and total.
+- `connect()` writes Inbox, Sent Items, Archive.
 
 **Gmail:**
-- Bucket function: all-trash → TRASH; one live message → mail; spam+trash → TRASH.
+- Bucket: all-trash → TRASH; one live message → mail; SPAM+TRASH on one message → TRASH; drafts/chats → mail.
+- Same label union, different bucket → hash differs.
+- Attachments carry `scopeBucket` and the stamp.
 - Default selection:
-  - thread fully trashed after index → deletion of the thread and its attachment refs
-  - one message trashed → thread kept
-- Selections `[mail, TRASH]`:
-  - trashed thread live, stamped TRASH, attachments stamped TRASH
-  - narrowing to `[mail]` archives exactly those
-- Widening during an unfinished backfill keeps the old task and appends the new one; `historyId` unchanged.
-- The query rule for each selection.
-- `manageFolders` rejects a selection without `mail`.
+  - fully trashed thread → deletion of thread + attachment refs
+  - one message trashed → kept
+- `[mail, TRASH]`:
+  - trashed thread live, thread + attachments stamped TRASH
+  - narrowing archives exactly those
+- Legacy NULL-stamped trash thread → stamped by the widening task.
+- Widening mid-backfill keeps the old task; `historyId` unchanged.
+- Legacy cursor mappings.
+- A selection without `mail` is rejected.
 
 **Core:**
-- Allowance on root removal with `res.archived = 0`, no allowance on pure widening.
-- `reconcileEvery` skip and run.
+- `archiveRefs` archived in the scope transaction.
+- `res.archived` counts them and the allowance follows.
+- The contract/SDK carries the field.
 - Card default text.
 
 ## 7. Review dispositions (r0)
 
 | # | Finding | Disposition |
 |---|---|---|
-| fable 2 / astra 1 | Legacy NULL-stamped rows escape scope | MS365: reconcile is authoritative and stamp-independent. Gmail: legacy rows are bucket `mail` (never removable) or trashed-after-index (history/404 path). |
-| fable 3 | Per-message body filtering over-engineered | Adopted: whole-conversation documents, no watched folders. |
-| astra 2 | Archive-at-save can strand mixed threads | MS365 archives nothing at save; reconcile decides. Gmail buckets are per thread, so a mixed thread is impossible. |
-| astra 3 / Q4 | Moves and hard deletes leak | Reconcile listing of tracked folders. |
-| astra 4 | Gmail attachments survive | Attachments stamped with the thread bucket; deletions include attachment refs. |
-| astra 5 | Expired cursors miss exits | MS365: reconcile covers removals. Gmail 404-expiry gap is pre-existing and unchanged by this work → follow-up (not in scope). |
-| astra 6 | Failed fetches consumed | `retry` list in cursor, 5-strike drop. |
-| astra 7 / Q5 | Gmail widening overwrites work | Task queue + fixed `historyId`. |
-| astra 8 / Q1 | Unchanged rows never re-stamp | MS365 stamps are informational only. Gmail: the bucket is derived from labels, which are in the hash, so a bucket change is a content change. |
+| fable 2 / astra 1 | Legacy NULL-stamped rows escape scope | MS365: stamps never drive archiving (`archiveRefs` + reconcile). Gmail: `scopeBucket` hashed; legacy rows re-stamped on re-emit (§4). |
+| fable 3 | Per-message body filtering over-engineered | Adopted: whole-conversation documents. |
+| astra 2 | Archive-at-save strands mixed threads | MS365 `archiveRefs` = leaving \ staying; Gmail one bucket per thread. |
+| astra 3 / Q4 | Moves and hard deletes leak | Reconcile over the retention set; `metadata.folders` keeps moves safe. |
+| astra 4 | Gmail attachments survive | Attachments stamped + hashed with the bucket; deletions carry attachment refs. |
+| astra 5 | Expired cursors miss exits | MS365 reconcile. Gmail history-expiry gap is pre-existing, not touched by this work. |
+| astra 6 | Failed fetches consumed | Durable `retry`, never dropped. |
+| astra 7 / Q5 | Gmail widening overwrites work | Task queue; `historyId` never recaptured. |
+| astra 8 / Q1 | Unchanged rows never re-stamp | Membership (MS365) and bucket (Gmail) are in hashed metadata. |
 | astra 9 | Topology changes, 500 cap | Full pagination, fail closed, reconcile covers exits. |
-| astra 10 | Evidence endpoint bypasses filtering | Moot under whole-thread semantics. |
-| astra 11 | Drafts rule | Pure container scope. |
-| astra 12 | Compat claim false | Stated as an intentional change (§3.1). |
-| astra 13 | Ancestor replacement | Coverage against the whole new selection (MS365 archives nothing at save anyway). |
-| astra 14 | Folder count | `count` omitted. |
-| fable 4 | Trash-deletion attribution | Recorded as a product decision (§4). |
-| fable 5 | Gmail `mail` deselectable | Rejected by `manageFolders`. |
-| fable 6 | Archive in the default | New MS365 accounts default to Inbox, Sent Items, Archive. |
-| fable 8 | Gmail query table | Compositional rule. |
-| Q2 | Archive at save vs later | MS365: later, by reconcile (seconds, allowance-gated). Gmail: at save, exact. |
-| Q3 | Legacy config | Source default plus card text; first Save persists. |
-| Q6 | Picker at connect | No. |
+| astra 10–14 | Evidence, drafts, compat, ancestor replacement, count | Whole-thread semantics; container rule; intentional changes stated; whole-selection coverage; `count` omitted. |
+| fable 4, 5, 6, 8 | Trash attribution, `mail` deselect, Archive default, query table | Product decision stated; rejected; new-account default includes Archive; simplified further in r2. |
+
+## 8. Review dispositions (r1)
+
+| # | Finding | Disposition |
+|---|---|---|
+| fable 2 | Upgrade archives delete-to-process users' corpus | Legacy retention = whole mailbox until first Save (§3.1); the first Save shows the count. |
+| fable 3 | Drop `reconcileEvery` | Dropped. |
+| fable 4 | Allowance rule | Replaced by `archiveRefs`; allowance follows `res.archived` as today. |
+| astra r1-1 | Label union ≠ bucket; attachments unlabelled | `scopeBucket` in thread and attachment metadata. |
+| astra r1-2 | Concurrent reconcile archives a moved thread | `metadata.folders` makes the move a content change → revive or TOCTOU exclusion (§3.3). |
+| astra r1-3 | Allowance not durable or success-sensitive | No longer relied on: narrowing is archived in the Save transaction. |
+| astra r1-4 | Root-id subtraction heuristic | Removed. |
+| astra r1-5 | Reconcile breaker blocks legitimate bulk removal | Platform behaviour shared by every reconcile connector; scope edits no longer depend on it. Accepted. |
+| astra r1-6 | Queues resurrect excluded conversations | Emission gate on retention-set membership. |
+| astra r1-7 | Legacy Gmail NULL stamps | Hashed bucket → widening re-stamps every listed thread. |
+| astra r1-8 | Attachment refs on deletion | Built from the fetched thread; the 404 path is pre-existing and unchanged. |
+| astra r1-9 | Negative query filters drop overlapping labels | No `q` when an optional bucket is selected; classify locally. |
+| astra r1-10 | Five-strike drop loses work | Never dropped (cap 10 000, logged). |
+| astra r1-11 | Legacy drafts not re-enumerated | Accepted: drafts live in Drafts, which legacy never tracked; a draft in Inbox/Sent pre-upgrade is not back-filled. Its conversation body already includes it (whole-conversation fetch). |
+| astra r1-12 | Contract says every removed root must be listed | Contract gains the `archiveRefs` clause (§5.1). OneDrive reference corrected (§2). |
