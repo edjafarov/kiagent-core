@@ -193,7 +193,7 @@ Non-goals:
    Implementation: `reconcileAllowances` holds a kind (`'full' | 'ratio'`), and `reconcilePass` takes it instead of a boolean.
 8. **Reconcile staging continuity** (closes a pre-existing hole that any allowance widens).
    - Today `reconcileStage`/`reconcileDiff`/`reconcileArchive` call `ensureListingTable()` (`write-tx.ts:893-925`), which silently **recreates** the connection-scoped TEMP table after a DB-worker restart. A pass that loses its first N pages and stages the rest therefore diffs as a small, non-empty listing.
-   - Fix: `reconcileBegin` creates the table and a TEMP marker row `(account_id, pass_id)` and returns `pass_id`. `reconcileStage`, `reconcileDiff` and `reconcileArchive` take `pass_id` and **throw `ReconcileStagingLost`** when the marker is missing; they never recreate. `reconcilePass` treats that throw like a listing failure: no diff, no archive, error logged.
+   - Fix: `reconcileBegin` creates the TEMP tables and a marker row keyed by `account_id` (no separate pass id: one loop per account, and `applyScope` stops it before a Save). `reconcileStage`, `reconcileDiff` and `reconcileArchive` **throw `ReconcileStagingLost`** when the marker is missing; they never recreate. `reconcilePass` treats that throw like a listing failure: no diff, no archive, error logged.
    - With continuity guaranteed, a listing that reaches the diff is complete, so every allowance kind is safe against lost staging.
    - Regression tests: restart between two stage batches under each allowance kind (`full`, `ratio`, none) → nothing archived.
 
@@ -326,4 +326,4 @@ Dropped from r1: the id-difference allowance heuristic (replaced by `archiveRefs
 | # | Finding | Disposition |
 |---|---|---|
 | astra r5-1 | Partial staging loss, restaged tail → ratio allowance archives the corpus | Staging continuity (§5.8): the staging functions throw on a missing pass marker and never recreate. |
-| astra r5-2 | (a) full bypass + lost staging | Same fix: a lost staging table can no longer reach the diff under any allowance. (a) keeps its full bypass (today's C-35 semantics), which is now safe. |
+| astra r5-2 | (a) full bypass + lost staging | Same fix: a lost staging table can no longer reach the diff under any allowance. (a) keeps its full bypass (today's C-35 semantics), now safe against lost staging — not against a genuinely empty listing from a broken connector, which `connect`/`updateConfig`'s unconditional `full` still admits (pre-existing). |
