@@ -1,6 +1,6 @@
 # Mail folder scope — Microsoft 365 folders and Gmail Trash/Spam
 
-Status: DRAFT r5 (r0–r4 reviewed by fable + codex astra; dispositions in §7–§11)
+Status: DRAFT r6 (r0–r5 reviewed by fable + codex astra; dispositions in §7–§12)
 Date: 2026-09-24
 
 ## 1. What the user asked for
@@ -189,6 +189,11 @@ Non-goals:
    - Cost: a tracked set that is genuinely empty upstream (the user selected only empty folders) cannot clean up via reconcile. That case is visible as the refusal on the card and is accepted.
 
    Implementation: `reconcileAllowances` holds a kind (`'full' | 'ratio'`), and `reconcilePass` takes it instead of a boolean.
+8. **Reconcile staging continuity** (closes a pre-existing hole that any allowance widens).
+   - Today `reconcileStage`/`reconcileDiff`/`reconcileArchive` call `ensureListingTable()` (`write-tx.ts:893-925`), which silently **recreates** the connection-scoped TEMP table after a DB-worker restart. A pass that loses its first N pages and stages the rest therefore diffs as a small, non-empty listing.
+   - Fix: `reconcileBegin` creates the table and a TEMP marker row `(account_id, pass_id)` and returns `pass_id`. `reconcileStage`, `reconcileDiff` and `reconcileArchive` take `pass_id` and **throw `ReconcileStagingLost`** when the marker is missing; they never recreate. `reconcilePass` treats that throw like a listing failure: no diff, no archive, error logged.
+   - With continuity guaranteed, a listing that reaches the diff is complete, so every allowance kind is safe against lost staging.
+   - Regression tests: restart between two stage batches under each allowance kind (`full`, `ratio`, none) → nothing archived.
 
 Dropped from r1: the id-difference allowance heuristic (replaced by `archiveRefs` + the explicit rule in §5.7) and `reconcileEvery` (unmeasured cost; per-pull reconcile as for every other connector).
 
@@ -311,3 +316,10 @@ Dropped from r1: the id-difference allowance heuristic (replaced by `archiveRefs
 |---|---|---|
 | astra r4-1 | (b)/(c) bypass the empty-listing guard → lost staging archives the corpus | (b)/(c) are ratio-only allowances; the empty-listing refusal stays armed; tests on the lost-listing path (§5.7). |
 | astra r4 (consumption timing) | Allowance spent at pass start | Not a blocker per reviewer; recovery = unchanged re-save, now valid. |
+
+## 12. Review dispositions (r5)
+
+| # | Finding | Disposition |
+|---|---|---|
+| astra r5-1 | Partial staging loss, restaged tail → ratio allowance archives the corpus | Staging continuity (§5.8): the staging functions throw on a missing pass marker and never recreate. |
+| astra r5-2 | (a) full bypass + lost staging | Same fix: a lost staging table can no longer reach the diff under any allowance. (a) keeps its full bypass (today's C-35 semantics), which is now safe. |
