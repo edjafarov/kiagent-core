@@ -77,7 +77,7 @@ Non-goals:
 - **New accounts:** `connect()` writes Inbox, Sent Items and Archive (ids resolved from well-known names). There is no picker at connect.
 - **Legacy accounts** (config without `folderRoots`) behave exactly as today until the user first saves a selection:
   - enumeration: Inbox + Sent Items. Covering semantics now include their subfolders; this is the one intentional widening.
-  - retention: **everything already indexed**. `reconcile()` yields nothing and is not run for a legacy account: it throws `LegacyScopeNoReconcile`, which the connector maps to an info-level skip (§3.3). Like the legacy connector, nothing is ever removed except via the existing zero-message deletion path. Users who "process" mail by deleting or archiving keep what they have, and there is no new listing cost.
+  - retention: **everything already indexed**. Reconcile is not run for a legacy account (§3.3, §5.3). Like the legacy connector, nothing is ever removed except via the existing zero-message deletion path. Users who "process" mail by deleting or archiving keep what they have, and there is no new listing cost.
   - The card shows "Default folders — Manage to change" (§5.2). The picker pre-selects Inbox + Sent Items.
 
 ### 3.2 Pull
@@ -105,26 +105,29 @@ Non-goals:
 
 ### 3.3 Reconcile
 - `reconcile()` = discovery, then page `messages?$select=conversationId&$top=1000` for every folder in the tracked set. Not run for legacy accounts (see below). It yields `{externalId: conversationId, type:'email.thread'}`. This is the complete identity set: the connector emits no children.
-- It archives hard deletions, and moves out of the retention set (e.g. to untracked Deleted Items or custom folders, or a folder moved out of the subtree), with no Save involved.
+- It archives hard deletions, and moves out of the tracked set (e.g. to untracked Deleted Items or custom folders, or a folder moved out of the subtree), with no Save involved.
 - **Race** (astra r1-2): a thread moves Inbox→Sent while the listing runs, so it may be listed in neither folder and gets archived.
   - The move is also a delta event in Sent, so pull re-fetches the thread.
   - Its `metadata.folders` changed, so the upsert is not skipped, and upserting an archived row revives it.
   - If pull processed the move *before* the reconcile diff, its emit has seq > `startSeq`, and the TOCTOU guard excludes it.
   - Either way the thread ends live.
-- **Guarantee, stated narrowly.** Graph listings are not snapshots. A user moving the same conversation *back and forth* between tracked folders during the seconds a listing runs (astra r2-2 round trip) can end up with a live, in-scope thread archived. It reappears when the conversation next changes (a new message or move, via the delta → re-fetch → revive path), or on the next Save that re-lists it (§3.4 emits nothing for it, but the widening/enumeration of any folder containing it re-ingests it). The design accepts this window rather than adding a revive-on-listing platform rule. A one-way move is fully covered by the argument above and pinned by tests.
-- **Legacy accounts** have no reconcile at all until their first Save. Engine contract: a `reconcile()` that throws is logged and changes nothing, so the connector instead yields the complete live identity it can compute cheaply. Simplest correct choice, and the one adopted: the connector does **not implement the skip by throwing**. The source object's `reconcile` is present, and for a legacy account it returns after yielding a sentinel-free listing of *every conversation id in the whole mailbox*? No — rejected (cost, and r2-1). **Adopted:** core gains nothing; the connector's `reconcile` for a legacy account yields the ids of `pending`/indexed work it cannot know… also rejected. **Final:** see §5.3, a one-line engine rule.
+- **Guarantee, stated narrowly.** Graph listings are not snapshots. A user moving the same conversation *back and forth* between tracked folders during the seconds a listing runs (astra r2-2 round trip) can end up with a live, in-scope thread archived. It reappears when the conversation next changes: a new message or move goes delta → re-fetch → revive. Until then it is unsearchable, but it is not lost (archived rows keep content for the 30-day purge window). The design accepts this window rather than adding a revive-on-listing platform rule. A one-way move is fully covered by the argument above and pinned by tests.
+- **Legacy accounts** have no reconcile until their first Save. Core skips `reconcile` for a `folderScope` source whose account config has no `folderRoots` (§5.3): an account with no declared scope has nothing to reconcile against. There is no connector-side signalling, and no error on the account.
 - Safeguards are the platform's, unchanged: an empty listing or a >50% shrink is refused and surfaced on the account. Mass deletion upstream is rare, and the refusal message's "re-save settings" escape hatch applies.
-- Runs every pull, as for every reconcile connector. Cost is 1 request per 1 000 messages in the retention set; the request count is logged per pass.
+- Runs every pull, as for every reconcile connector. Cost ≈ Σ over tracked folders of max(1, ⌈messages/1000⌉) requests plus one discovery walk; per pass the request count is logged. Example: a 100 000-message tracked set is ~100 requests per 15-min tick, ~9 600/day, well inside Graph's per-mailbox limits. A cadence knob is deferred until measured.
 
 ### 3.4 manageFolders
 - Discovery for the prior and new selections.
-- Then list conversationIds for (prior retention set) \ (new retention set) = `leaving`, and for the new retention set = `staying`. This is the same paged `$select=conversationId` listing. The picker status shows "Checking which mail leaves the index…".
+- Then list conversationIds for (prior tracked set) \ (new tracked set) = `leaving`, and for the new tracked set = `staying`. This is the same paged `$select=conversationId` listing, and the card shows its normal "Saving…" meanwhile.
+- **Guarantee, stated narrowly:** exact relative to those two listings. A user bulk-moving mail between a removed and a kept folder during the seconds of the Save listing can leave some removed mail live. That is a leak, never a loss. Reconcile removes it on a later pass, subject to the platform breaker, whose "re-save settings" escape hatch applies.
 - Returns `archiveRefs = leaving \ staying` (conversation refs), `archiveScopeRootIds: []` and the cursor with removed folders' states dropped.
   - Core applies `archiveRefs` in the scope transaction (§5.1). Mixed threads (Inbox + Sent, Inbox removed) are in `staying` and are never archived.
   - A thread that moves between listing and commit is repaired by the §3.3 race argument.
 - Pure widening skips the listing: `leaving` is empty.
 - Coverage uses the whole new selection. Root order: retained roots in prior order, then new ones.
-- A legacy account's first Save narrows from "whole mailbox" to the chosen tracked set, so everything outside it archives exactly, once, on an explicit user action. The picker status names the count before committing: "N conversations will leave the index".
+- **A legacy account's first Save** has prior retention = "everything indexed". So `leaving` = conversations in any folder outside the new tracked set, which means a whole-mailbox listing once at that Save, and `staying` = the new tracked set.
+  - The picker shows, **before submission**, the note "Mail outside the selected folders will be removed from the index" (a new optional `FolderPickerSpec.note`, §5.4). MS365 sets it on every manage picker.
+  - No count is shown: an upstream count includes never-indexed mail.
 
 ## 4. Gmail design (core)
 
@@ -164,10 +167,13 @@ Non-goals:
 1. **`FolderScopeUpdate.archiveRefs?: ExternalRef[]`.** `store.applyFolderScope` archives each ref (existing `archiveByRef`) in the same transaction, after `reattributeScopeRoots` and alongside `archiveScopeRootIds`.
    - `res.archived` counts them, so a narrowing that archives grants the one-shot reconcile allowance exactly as C-35 intends.
    - Contract doc: a removed root must be covered by `archiveScopeRootIds`, `reattributeScopeRoots`, **or** by refs the source lists in `archiveRefs` (computed by listing what leaves).
+   - `res.archived` counts rows actually archived (non-null `archiveByRef` returns, distinct rows), so duplicate refs and refs overlapping an archived stamp count once. Applied after `reattributeScopeRoots`. The existing reattribute/archive contradiction guard stays.
    - This is the only new contract surface.
 2. **Default roots on the card.** `TrackedFolders` renders an empty `folderRoots` on a `folderScope` source as "Default folders — Manage to change".
-3. **Gmail** per §4.
-4. SDK 1.5.0 carries `archiveRefs`. MS365 v2.1.0 ships on SDK 1.5.0 with engine `^2.4.0`, since `archiveRefs` must be honoured. Gmail ships with the same core release.
+3. **No reconcile without declared scope.** The engine skips `reconcilePass` for an account whose source has `descriptor.folderScope` and whose config has no `folderRoots` array. It must be verified that every existing Drive/OneDrive/local-folder account has `folderRoots` (v3 migration). If any lacks it, it currently reconciles against an unscoped listing and would stop; the plan's first task checks the migration code and a real DB.
+4. **`FolderPickerSpec.note?: string`**, rendered as one muted line above the picker's Save button.
+5. **Gmail** per §4.
+6. SDK 1.5.0 carries `archiveRefs` and `note`. MS365 v2.1.0 ships on SDK 1.5.0 with engine `^2.4.0`, since `archiveRefs` must be honoured. Gmail ships with the same core release.
 
 Dropped from r1: the reconcile allowance on root removal (replaced by exact `archiveRefs`) and `reconcileEvery` (unmeasured cost; per-pull reconcile as for every other connector).
 
@@ -180,7 +186,7 @@ Dropped from r1: the reconcile allowance on root removal (replaced by exact `arc
   - failure → pull, reconcile and `manageFolders` fail without side effects
 - Emission gate:
   - a pending id whose messages all left the retention set → deletion, not emit
-  - a legacy account keeps a thread whose messages all moved to Deleted Items
+  - a legacy account keeps a thread whose messages all moved to Deleted Items (no reconcile runs)
 - `metadata.folders`: moving a message Inbox→Archive changes the hash
 - Race:
   - thread archived by reconcile, then the Sent delta re-fetch → revived
@@ -189,11 +195,11 @@ Dropped from r1: the reconcile allowance on root removal (replaced by exact `arc
   - removing Inbox with an Inbox+Sent thread → not in `archiveRefs`
   - an Inbox-only thread → in `archiveRefs`
   - pure widening → no listing, `archiveRefs` empty
-  - legacy first Save → everything outside the new tracked set listed
+  - legacy first Save → `leaving` from a whole-mailbox listing, and the note is set
 - Retry:
   - failure → id in `retry` with the batch
   - success later → emitted
-  - never dropped below the cap
+  - never dropped or evicted
 - Legacy cursor, every phase → v2 with the same links, pending and total.
 - `connect()` writes Inbox, Sent Items, Archive.
 
@@ -251,6 +257,20 @@ Dropped from r1: the reconcile allowance on root removal (replaced by exact `arc
 | astra r1-7 | Legacy Gmail NULL stamps | Hashed bucket → widening re-stamps every listed thread. |
 | astra r1-8 | Attachment refs on deletion | Built from the fetched thread; the 404 path is pre-existing and unchanged. |
 | astra r1-9 | Negative query filters drop overlapping labels | No `q` when an optional bucket is selected; classify locally. |
-| astra r1-10 | Five-strike drop loses work | Never dropped (cap 10 000, logged). |
+| astra r1-10 | Five-strike drop loses work | Never dropped, no eviction (r3). |
 | astra r1-11 | Legacy drafts not re-enumerated | Accepted: drafts live in Drafts, which legacy never tracked; a draft in Inbox/Sent pre-upgrade is not back-filled. Its conversation body already includes it (whole-conversation fetch). |
 | astra r1-12 | Contract says every removed root must be listed | Contract gains the `archiveRefs` clause (§5.1). OneDrive reference corrected (§2). |
+
+## 9. Review dispositions (r2)
+
+| # | Finding | Disposition |
+|---|---|---|
+| fable r2-3 | Drop `metadata.folders` from the hash | **Declined.** Revival is hash-independent only for rows already archived. The case that needs the hash is a move processed by pull *before* the reconcile diff: with an unchanged hash the upsert is skipped, the row keeps its old seq and the diff archives it with nothing left to revive it. Cost accepted: a move within tracked folders is a feed "updated" event. |
+| fable r2-2 | Legacy cost, count wording | Legacy has no reconcile at all; no count shown. |
+| astra r2-1 | Legacy whole-mailbox reconcile can archive with no revive path | Legacy accounts do not reconcile until their first Save (§3.3, §5.3). |
+| astra r2-2 | Round-trip move during a listing | Guarantee narrowed and documented, with its recovery path (§3.3). One-way move covered and tested. |
+| astra r2-3 | Save listings are not a snapshot | Guarantee narrowed: exact relative to the listings; a concurrent bulk move leaks (never loses) until reconcile (§3.4). |
+| astra r2-4 | Warning not visible before submit; count inaccurate | `FolderPickerSpec.note` before submission; no count. |
+| astra r2-5 | Legacy cost | Gone (no legacy reconcile); tracked-set cost formula documented. |
+| astra r1-10 (re-check) | Retry eviction | No cap, no eviction; warn above 1 000. |
+| astra (archiveRefs notes) | Count semantics, ordering | Specified in §5.1. |
