@@ -124,6 +124,10 @@ export interface FolderScopeInput {
    *  an order would silently apply one of two opposite outcomes. It is a
    *  source bug and must be loud. */
   reattributeScopeRoots: Array<{ from: string; to: string }>;
+  /** Per-document archival (spec §5.1), applied after the stamp archive in
+   *  the same transaction. REQUIRED, may be empty — the engine coerces the
+   *  wire's optional field, as with `reattributeScopeRoots`. */
+  archiveRefs: ExternalRef[];
   /* DELIBERATELY NO `archiveNullScoped` (DECISIONS C-34). A source may still
    * ASK for the NULL-attribution repair — the flag is in the frozen
    * `FolderScopeUpdate` and both cloud connectors send it — but core does not
@@ -929,6 +933,11 @@ export function createWriteTx(
         // here for `ARCHIVE_RETENTION_DAYS`.
         archived += rows.length;
         if (rows.length < FOLDER_SCOPE_ARCHIVE_PAGE) break;
+      }
+      // After the stamp archive: `archiveByRef` returns null for a row it
+      // already archived (or never had), so every row counts once.
+      for (const ref of input.archiveRefs) {
+        if (archiveByRef(acc.id, ref) !== null) archived += 1;
       }
 
       const remaining = Number(

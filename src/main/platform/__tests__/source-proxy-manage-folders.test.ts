@@ -125,6 +125,8 @@ const fixtureModule = {
               reattributeScopeRoots: [
                 { from: 'C:\\Users\\ed\\Docs\\Old', to: SELECTED[0].id },
               ],
+              // §5.1: per-document refs, forwarded the same way.
+              archiveRefs: [{ externalId: 'conv-1', type: 'email.thread' }],
             };
           },
           async reauthenticate(acct: Account, auth: AuthChannel) {
@@ -307,6 +309,7 @@ describe('manageFolders / reauthenticate over the extension RPC boundary', () =>
           to: '0B246AxIx6hdAeTBrQ0xLbVhuRTQ',
         },
       ],
+      archiveRefs: [{ externalId: 'conv-1', type: 'email.thread' }],
     });
 
     // THIS flow's slot is freed on settle. Id 1 is the manage flow's own id

@@ -1365,6 +1365,8 @@ export function createEngine(deps: EngineDeps): Engine & {
           // input, so the coercion happens exactly here — the store never
           // guesses, and the engine never derives containment.
           reattributeScopeRoots: update.reattributeScopeRoots ?? [],
+          // §5.1, coerced the same way.
+          archiveRefs: update.archiveRefs ?? [],
           // NOTE the absence of `archiveNullScoped` — C-34, see the block
           // above. The store's input type has no such property in this train,
           // so adding it back here is a compile error, by design.

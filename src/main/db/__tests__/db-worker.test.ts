@@ -339,6 +339,7 @@ Module._resolveFilename = function (request, ...rest) {
         // 'Y' was removed too, but the retained 'root' covers it — so its
         // documents are re-stamped rather than archived (C-46/D5).
         reattributeScopeRoots: [{ from: 'Y', to: 'root' }],
+        archiveRefs: [],
         expectedConfigJson: config,
       }),
     ).toEqual({ archived: 1, reattributed: 1, remaining: 2, stale: false });
@@ -436,6 +437,7 @@ Module._resolveFilename = function (request, ...rest) {
         // Hand-built wire payload, so the REQUIRED field must be spelled out
         // here the way the typed client would send it (C-46/D5).
         reattributeScopeRoots: [],
+        archiveRefs: [],
         expectedConfigJson: config,
       },
     });

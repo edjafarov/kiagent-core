@@ -643,13 +643,15 @@ describe('engine account flows', () => {
       // store's input type does not declare it in this train, and
       // `toHaveBeenCalledWith` is an exact deep-equality match, so an extra
       // key would fail here as well as at compile time. The sixth is C-46/D5's
-      // `reattributeScopeRoots`, coerced from absent to [] by the engine.
+      // `reattributeScopeRoots`, coerced from absent to [] by the engine; the
+      // seventh is §5.1's `archiveRefs`, coerced the same way.
       expect(spy).toHaveBeenCalledWith({
         accountId: account.id,
         config: UPDATE.config,
         cursor: UPDATE.cursor,
         archiveScopeRootIds: [],
         reattributeScopeRoots: [],
+        archiveRefs: [],
         expectedConfigJson: CONFIG_AT_OPEN,
       });
       expect(spy.mock.calls[0][0].archiveScopeRootIds).toBe(
