@@ -27,3 +27,5 @@ export type { StatusTone } from './status';
 export { Spinner, Busy } from '../components';
 export { Sheet, ConfirmSheet } from './Sheet';
 export { portalRoot } from './portal';
+export { Menu } from './Menu';
+export type { MenuItem, MenuEntry } from './Menu';
