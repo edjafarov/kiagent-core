@@ -1025,6 +1025,52 @@ describe('createExtensionPlatform', () => {
       );
     });
 
+    it('a finish at boot that fails keeps the failed extension’s marker for the next start', async () => {
+      await platform.start();
+      await installDbExtensions(platform);
+      await platform.stop();
+
+      const failing = ids[1];
+      const marker = path.join(
+        tmp,
+        'extensions',
+        '.recovery',
+        `${failing}.json`,
+      );
+      const rearms: string[] = [];
+      const db = {
+        registerPluginSource: jest.fn(async () => undefined),
+        plugin: jest.fn(async (request: { op: string; pluginId?: string }) => {
+          if (request.op === 'reset' && request.pluginId === failing)
+            throw new Error('SQLITE_BUSY');
+          if (request.op === 'rearm') rearms.push(request.pluginId!);
+          return undefined;
+        }),
+      };
+      // One process: load, the reset fails part-way, then start.
+      platform = makePlatform({ db: db as never });
+      await platform.load();
+      const result = await platform.resetAll();
+      expect(result.failed.map((f) => f.pluginId)).toEqual([failing]);
+      rearms.length = 0; // a namespace that did reset is rearmed as part of it
+      await platform.start();
+
+      const status = (id: string) =>
+        platform.snapshot().find((e) => e.id === id)?.status;
+      expect(status(failing)).toBe('errored');
+      expect(status(ids[0])).toBe('activated');
+      expect(fs.existsSync(marker)).toBe(true);
+      expect(rearms).toEqual([]);
+      await platform.stop();
+
+      // The next start rearms it and brings it back.
+      platform = makePlatform({ db: db as never });
+      await platform.start();
+      expect(rearms).toEqual([failing]);
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(status(failing)).toBe('activated');
+    });
+
     it('a load() that fails leaves discovery to start(), which finds everything', async () => {
       await platform.start();
       await installDbExtensions(platform);

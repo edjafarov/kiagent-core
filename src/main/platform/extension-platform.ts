@@ -1216,6 +1216,11 @@ export function createExtensionPlatform(
           runExclusive(id, async () => {
             const e = entries.get(id);
             if (!e || !e.enabled) return;
+            // Already failed in this process — a reset at boot that could
+            // not reset its data. Its marker is for the next start, which
+            // rearms it; consuming it here would activate nothing and
+            // lose the marker.
+            if (e.status === 'errored') return;
             if (fs.existsSync(recoveryMarkerPath(deps.extDir, id))) {
               try {
                 await rearmPlugin(e);
@@ -1226,7 +1231,7 @@ export function createExtensionPlatform(
                 return;
               }
             }
-            if (e.status !== 'errored') await activate(e);
+            await activate(e);
           }),
         ),
       );
