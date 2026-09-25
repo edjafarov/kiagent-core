@@ -15,6 +15,8 @@ export const NEUTRAL_BRAND_COLOR = '#64748b';
 
 type Entry = Omit<Brand, 'imageUrl'>;
 
+/** Keyed by the source id each connector declares in its manifest — one
+ *  entry per real id; an id missing here falls back to neutral silently. */
 const SOURCES: Record<string, Entry> = {
   gmail: { key: 'gmail', name: 'Gmail', color: '#d93025', icon: 'mail' },
   imap: { key: 'imap', name: 'Email', color: '#475569', icon: 'mail' },
