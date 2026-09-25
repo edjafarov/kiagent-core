@@ -804,6 +804,75 @@ describe('engine', () => {
     expect(scan?.markdown).toBe('OCR text');
   });
 
+  it('rerunDeferred: a workOne throw mid-page records nothing for that page; its entries stay deferred', async () => {
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'm',
+    });
+    const consumer = 'worker:vision:v1';
+    await store.commit({
+      account: account.id,
+      documents: [doc('m-0', ''), doc('m-1', '')],
+      cursor: 1,
+    });
+    const seqs: number[] = [];
+    for (const id of ['m-0', 'm-1']) {
+      // eslint-disable-next-line no-await-in-loop
+      const d = await store.read.byExternalId(account.id, id, 'note');
+      seqs.push(d!.seq);
+      // eslint-disable-next-line no-await-in-loop
+      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+    }
+
+    // rerunDeferred never aborts its own signal, so workOne's abort rethrow
+    // can't be reached from here. Its other escape is the failure-path warn:
+    // a log sink that throws there makes workOne itself throw on m-1, after
+    // m-0 has already been worked successfully.
+    const engine = createEngine({
+      store,
+      sources: { get: () => undefined },
+      inference: {
+        complete: async () => 'c',
+        see: async () => 's',
+        read: async () => 'r',
+        hear: async () => 'h',
+      },
+      convert: async (d: DocumentInput) => d,
+      logs: {
+        log: (_scope, level) => {
+          if (level === 'warn') throw new Error('log sink down');
+        },
+      },
+    });
+
+    await expect(
+      engine.rerunDeferred({
+        name: 'vision',
+        version: 1,
+        schedule: { every: '30m' },
+        maxAttempts: 1,
+        matches: (c: Change) =>
+          c.kind === 'document' &&
+          (c.document.markdown ?? '').trim().length < 16,
+        async work(c, session) {
+          if (c.kind !== 'document') return 'skip';
+          if (c.document.title === 'm-1') throw new Error('worker boom');
+          session.enrich({ documentId: c.document.id, markdown: 'OCR text' });
+          return 'done';
+        },
+      }),
+    ).rejects.toThrow('log sink down');
+
+    // Neither m-0's 'done' nor anything else from the page was recorded, and
+    // m-0's enrich was never committed.
+    expect(await store.ledgerDeferred(consumer, 0, 10)).toEqual(seqs);
+    const counts = await store.ledgerCounts(consumer);
+    expect(counts.done).toBe(0);
+    expect(counts.failed).toBe(0);
+    const m0 = await store.read.byExternalId(account.id, 'm-0', 'note');
+    expect(m0?.markdown).not.toBe('OCR text');
+  });
+
   it('workOne: a failed final attempt commits no partial emit/enrich', async () => {
     const source = fakeSource();
     const engine = makeEngine(source);
