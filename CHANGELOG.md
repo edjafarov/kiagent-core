@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.95.0](https://github.com/edjafarov/kiagent-core/compare/v0.94.0...v0.95.0) (2026-09-25)
+
+### Features
+
+* **reset:** finish an interrupted Reset all at the next start, on the user's word ([f6e4b3a](https://github.com/edjafarov/kiagent-core/commit/f6e4b3a045efa6a8a3e102bb13da872b96b901b4))
+
+### Bug Fixes
+
+* **extensions:** a finish that fails at boot keeps the marker for next start ([8de7372](https://github.com/edjafarov/kiagent-core/commit/8de73726000d13fc60e3e159e2f43a87f9dac28d)), closes [alpha-cent#192](https://github.com/edjafarov/alpha-cent/issues/192)
+* **projection:** count a new document off its insert row, not timestamps ([36cc523](https://github.com/edjafarov/kiagent-core/commit/36cc52398a283f3e6f6e71eefcd7a5d4cca722c2))
+* **reset:** a failed extension load stops the boot-time finish ([4fb091d](https://github.com/edjafarov/kiagent-core/commit/4fb091d865116ae8e81e109fc00d3408d0d0579b)), closes [alpha-cent#192](https://github.com/edjafarov/alpha-cent/issues/192)
+
+### Performance Improvements
+
+* **local-folder:** walk the tree as sync consumes it, not before ([3fb2d4a](https://github.com/edjafarov/kiagent-core/commit/3fb2d4afba0c2fe679bc144979845eace0760d6e))
+
 ## [0.94.0](https://github.com/edjafarov/kiagent-core/compare/v0.93.0...v0.94.0) (2026-09-25)
 
 ### Features
