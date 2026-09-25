@@ -2217,6 +2217,218 @@ describe('engine', () => {
 
       expect(handle.status).toBe('paused'); // must not flip back to 'live'
     });
+
+    // alpha-cent#181: reconcile and pull share the account's `error` field.
+    // Reconcile's failure must survive the successful pull batches that land
+    // after it in the same cycle — and perpetual sources (imap, local-folder)
+    // never reach the post-loop commit that would otherwise sort it out.
+    describe('error ownership (alpha-cent#181)', () => {
+      /** A live pull() that yields one batch per `release()`, forever. */
+      function gatedPullSource(
+        overrides: Pick<Source<number, DocumentInput>, 'reconcile'>,
+      ) {
+        let allowed = 0;
+        let wake: (() => void) | undefined;
+        const base = hangingSource(overrides);
+        const source: Source<number, DocumentInput> = {
+          ...base,
+          async *pull(_session, cursor) {
+            let n = cursor ?? 0;
+            let yielded = 0;
+            for (;;) {
+              while (yielded >= allowed) {
+                // eslint-disable-next-line no-await-in-loop
+                await new Promise<void>((resolve) => {
+                  wake = resolve;
+                });
+              }
+              yielded += 1;
+              n += 1;
+              yield { phase: 'live', items: [doc(`p${n}`)], cursor: n };
+            }
+          },
+        };
+        return {
+          source,
+          release(batches = 1) {
+            allowed += batches;
+            wake?.();
+          },
+        };
+      }
+
+      const emptyListing = {
+        // eslint-disable-next-line require-yield
+        async *reconcile() {},
+      };
+
+      it('a pull batch after a reconcile failure does not clear it', async () => {
+        const { source, release } = gatedPullSource(emptyListing);
+        const engine = makeEngine(source);
+        const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+
+        const handle = engine.run(account);
+        await waitFor(
+          async () => !!(await store.account(account.id))?.lastError,
+        );
+        release();
+        await waitFor(
+          async () =>
+            !!(await store.read.byExternalId(account.id, 'p2', 'note')),
+        );
+        const acc = await store.account(account.id);
+        await handle.stop();
+
+        expect(acc?.cursor).toBe(2);
+        expect(acc?.lastError).toMatch(/listing came back empty/);
+      });
+
+      it('a reconcile failure survives several later pull batches', async () => {
+        const { source, release } = gatedPullSource(emptyListing);
+        const engine = makeEngine(source);
+        const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+
+        const handle = engine.run(account);
+        await waitFor(
+          async () => !!(await store.account(account.id))?.lastError,
+        );
+        for (let i = 2; i <= 4; i += 1) {
+          release();
+          // eslint-disable-next-line no-await-in-loop
+          await waitFor(
+            async () =>
+              !!(await store.read.byExternalId(account.id, `p${i}`, 'note')),
+          );
+        }
+        const acc = await store.account(account.id);
+        await handle.stop();
+
+        expect(acc?.cursor).toBe(4);
+        expect(acc?.lastError).toMatch(/listing came back empty/);
+      });
+
+      it('a reconcile pass with nothing to archive clears its own earlier failure', async () => {
+        const source = hangingSource({
+          async *reconcile() {
+            yield ['a', 'b', 'c'].map((externalId) => ({
+              externalId,
+              type: 'note',
+            }));
+          },
+        });
+        const engine = makeEngine(source);
+        const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+        await store.setAccountStatus(account.id, {
+          error: 'reconcile: the listing came back empty',
+        });
+
+        const handle = engine.run(account);
+        await waitFor(
+          async () => !(await store.account(account.id))?.lastError,
+        );
+        await handle.stop();
+
+        expect((await store.account(account.id))?.lastError).toBeFalsy();
+      });
+
+      it('recording the reconcile outcome never rewrites the cursor', async () => {
+        // A pull batch advancing the cursor between reconcile's read of the
+        // account and its write used to be rolled back by that write — here
+        // the read is made stale on purpose.
+        const source = hangingSource(emptyListing);
+        const engine = makeEngine(source);
+        const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+        await store.commit({ account: account.id, documents: [], cursor: 5 });
+        const realAccount = store.account.bind(store);
+        const stale = jest
+          .spyOn(store, 'account')
+          .mockImplementation(async (id) => {
+            const acc = await realAccount(id);
+            return acc && { ...acc, cursor: 1 };
+          });
+
+        const handle = engine.run(account);
+        await waitFor(async () => !!(await realAccount(account.id))?.lastError);
+        await handle.stop();
+        stale.mockRestore();
+
+        expect((await store.account(account.id))?.cursor).toBe(5);
+      });
+
+      it('an aborted reconcile pass leaves an earlier failure in place', async () => {
+        let releaseGate: (() => void) | undefined;
+        const gate = new Promise<void>((resolve) => {
+          releaseGate = resolve;
+        });
+        let sawFirstPage = false;
+        const source = hangingSource({
+          async *reconcile() {
+            yield [{ externalId: 'a', type: 'note' }];
+            sawFirstPage = true;
+            await gate;
+          },
+        });
+        const engine = makeEngine(source);
+        const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+        await store.setAccountStatus(account.id, {
+          error: 'reconcile: earlier failure',
+        });
+
+        const handle = engine.run(account);
+        await waitFor(async () => sawFirstPage);
+        const stopped = handle.stop();
+        releaseGate?.();
+        await stopped;
+
+        expect((await store.account(account.id))?.lastError).toBe(
+          'reconcile: earlier failure',
+        );
+      });
+
+      it('a source without reconcile still clears a stale error on its next good batch', async () => {
+        const base = gatedPullSource(emptyListing);
+        const source: Source<number, DocumentInput> = {
+          ...base.source,
+          reconcile: undefined,
+        };
+        const engine = makeEngine(source);
+        const account = await seedDocsDirect(engine, source, ['a']);
+        await store.setAccountStatus(account.id, { error: 'old pull failure' });
+
+        const handle = engine.run(account);
+        base.release();
+        await waitFor(
+          async () =>
+            !!(await store.read.byExternalId(account.id, 'p2', 'note')),
+        );
+        const acc = await store.account(account.id);
+        await handle.stop();
+
+        expect(acc?.lastError).toBeFalsy();
+      });
+
+      it('a folder-scoped account that runs no pass (undeclared) still clears a stale error', async () => {
+        const base = gatedPullSource(emptyListing);
+        const source: Source<number, DocumentInput> = {
+          ...base.source,
+          descriptor: { ...base.source.descriptor, folderScope: true },
+        };
+        const engine = makeEngine(source);
+        const account = await seedWithConfig(source, {});
+        await store.setAccountStatus(account.id, { error: 'old pull failure' });
+
+        const handle = engine.run(account);
+        base.release();
+        await waitFor(
+          async () =>
+            !!(await store.read.byExternalId(account.id, 'p2', 'note')),
+        );
+        const acc = await store.account(account.id);
+        await handle.stop();
+
+        expect(acc?.lastError).toBeFalsy();
+      });
+    });
   });
 });
 

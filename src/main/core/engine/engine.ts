@@ -263,15 +263,13 @@ async function reconcilePass(
   // back into its own root) they took ~3.2 GiB against V8's 4 GiB cap and
   // killed the main process with an OOM SIGTRAP. Only counts come back now.
   await store.reconcileBegin(account.id);
-  // Records the pass's outcome on the account without touching `status`.
+  // Records the pass's outcome on the account: `last_error` only. Never the
+  // cursor — pull() commits concurrently, and a read-then-write of the cursor
+  // here could roll back one it just advanced (alpha-cent#181). While a pass
+  // runs in a cycle it owns `last_error`: pull batches leave it alone (see
+  // `reconcileOwnsError` in run()), so this is the write that clears it.
   const finish = async (error: string | null): Promise<void> => {
-    const fresh = (await store.account(account.id)) ?? account;
-    await store.commit({
-      account: account.id,
-      documents: [],
-      cursor: fresh.cursor,
-      error,
-    });
+    await store.setAccountStatus(account.id, { error });
   };
   // ONE failure path for the whole pass — drain, diff, archive and the final
   // commit (spec §5.8: a store that lost its staging throws from any of
@@ -311,6 +309,7 @@ async function reconcilePass(
     );
     if (deletionCount === 0) {
       await store.reconcileEnd(account.id);
+      await finish(null); // a healthy pass clears its own earlier failure
       return;
     }
 
@@ -967,6 +966,13 @@ export function createEngine(deps: EngineDeps): Engine & {
               // the first Save's `ratio` and disarm §5.7(b)'s empty-listing
               // refusal on the first-declaration pass.
               const allowance = takeAllowance(account.id);
+              // A cycle that runs a reconcile pass hands `last_error` to it:
+              // pull batches then leave the column alone (`undefined` keeps
+              // what COALESCE finds) instead of clearing a failure the pass
+              // recorded moments earlier (alpha-cent#181). The pass clears it
+              // itself when it next succeeds; pull's own failures still land
+              // after it — the catch below awaits `reconciling` first.
+              const reconcileOwnsError = Boolean(src.reconcile) && !undeclared;
               if (src.reconcile && !undeclared) {
                 reconciling = reconcilePass(
                   src,
@@ -1032,7 +1038,7 @@ export function createEngine(deps: EngineDeps): Engine & {
                           totalEstimate: batch.estimateTotal,
                         }
                       : undefined,
-                  error: null,
+                  error: reconcileOwnsError ? undefined : null,
                 });
                 retries = 0;
               }
@@ -1050,9 +1056,9 @@ export function createEngine(deps: EngineDeps): Engine & {
               // the scheduler re-runs them. Let this cycle's reconcile land
               // FIRST: it's concurrent with pull(), so without this await its
               // error commit could race the commit below and get clobbered.
-              // A source with reconcile() then owns the `error` field on that
-              // commit — passing `undefined` leaves the column as COALESCE
-              // finds it (whatever reconcile just recorded, or unchanged).
+              // A cycle that ran a pass then leaves the `error` field to it —
+              // passing `undefined` leaves the column as COALESCE finds it
+              // (whatever reconcile just recorded, or unchanged).
               await reconciling;
               // Re-check: `await reconciling` is a real suspension point —
               // stop() can land during it, same hazard the abort guard above
@@ -1066,7 +1072,7 @@ export function createEngine(deps: EngineDeps): Engine & {
                 documents: [],
                 cursor: ((await store.account(account.id)) ?? account).cursor,
                 status,
-                error: src.reconcile ? undefined : null,
+                error: reconcileOwnsError ? undefined : null,
               });
               return;
             } catch (err) {
