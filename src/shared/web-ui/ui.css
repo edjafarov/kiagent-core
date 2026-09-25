@@ -248,3 +248,34 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
   color: var(--text-secondary);
 }
 .ui-day:first-child { margin-top: 0; }
+
+/* ── Data table ───────────────────────────────────────────────────── */
+.ui-tbl {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+.ui-tbl th {
+  height: 30px;
+  padding: 0 12px 0 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+}
+.ui-tbl td { height: 36px; padding: 0 12px 0 0; color: var(--text-primary); }
+.ui-tbl th:first-child, .ui-tbl td:first-child { padding-left: 8px; }
+.ui-tbl .is-right { text-align: right; }
+.ui-tbl-cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-tbl tbody tr.is-click { cursor: pointer; }
+.ui-tbl tbody tr.is-click:hover td { background: var(--row-hover); }
+.ui-tbl tbody tr.is-sel td { background: var(--row-sel); }
+.ui-tbl tbody tr td:first-child { border-radius: var(--r-xs) 0 0 var(--r-xs); }
+.ui-tbl tbody tr td:last-child { border-radius: 0 var(--r-xs) var(--r-xs) 0; }
+.ui-tbl tbody tr.is-faint td { color: var(--text-tertiary); }
+.ui-tbl tbody tr:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }

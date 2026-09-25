@@ -13,3 +13,5 @@ export type { AttentionTone } from './attention';
 export { Disclosure } from './Disclosure';
 export { Rows, Row, DayGroup } from './rows';
 export type { RowSize } from './rows';
+export { DataTable } from './DataTable';
+export type { DataColumn } from './DataTable';
