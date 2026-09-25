@@ -40,7 +40,7 @@
   /* ── Foundation: text ──────────────────────────────────────────── */
   --text-primary:    #0f172a;
   --text-secondary:  #64748b;
-  --text-tertiary:   #9ca3af;
+  --text-tertiary:   #6b7686;
   --text-on-sidebar: #3f3f46;
   --text-on-rail:    #ffffff;
 
@@ -58,8 +58,8 @@
 
   /* ── Semantic: status (harmonized against violet) ──────────────── */
   --live-solid:    #0d9488; --live-subtle:    #ccfbf1;
-  --working-solid: #c2410c; --working-subtle: #ffedd5;
-  --error-solid:   #e11d48; --error-subtle:   #ffe4e6;
+  --working-solid: #b45309; --working-subtle: #ffedd5;
+  --error-solid:   #be123c; --error-subtle:   #ffe4e6;
   --paused-solid:  #64748b; --paused-subtle:  #f1f5f9;
   --info-solid:    #0891b2; --info-subtle:    #cffafe;
 
@@ -129,6 +129,47 @@
   --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in:     cubic-bezier(0.7, 0, 0.84, 0);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* ── Layout primitives (ui.css) ────────────────────────────────── */
+  --band-bg:      #ffffff;
+  --band-border:  #ececf1;
+  --card-bg:      #ffffff;
+  --card-edge:    #e8e9ee;
+  --field-border: #e2e4ea;
+  --band-quiet:   #f4f4f7;
+  --row-sel:      #f3f0fc;
+  --row-hover:    #f4f1fd;
+  --track:        #eeeef3;
+  --hair:         #eef0f3;
+
+  --accent-deep: var(--brand-violet-deep);
+  --label-color: var(--accent-text);
+  --nav-text:    #52525b;
+  --nav-active:  #5b21b6;
+
+  /* Radius: everything else stays square (the legacy --radius-* are 0). */
+  --r-card:  4px;
+  --r-alert: 3px;
+  --r-field: 3px;
+  --r-xs:    2px;
+
+  --sidebar-w:  224px;
+  --band-h:     48px;
+  --pane-pad:   24px 32px;
+  --gap-page:   20px;
+  --gap-stack:  16px;
+  --aside-sm:   336px;
+  --aside-md:   400px;
+  --card-pad:   16px 20px;
+  --row-h:      30px;
+  --row-h-l:    34px;
+  --row-h-mid:  38px;
+  --row-h-tall: 42px;
+  --row-h-xl:   48px;
+
+  /* Brand colours are always shown toned toward slate. */
+  --brand-tone: 84%;
+  --brand-mute: #64748b;
 }
 
 @media (prefers-reduced-motion: reduce) {
