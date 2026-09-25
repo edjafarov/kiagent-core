@@ -12,10 +12,12 @@
  * Two details:
  *
  *  - Records go to the log JSONL **synchronously** (`appendRecordSync`, shared
- *    with the crash handlers). A V8 OOM aborts the process from inside the
- *    allocator: no JS runs afterwards, so the sink's async append would lose
- *    exactly the samples leading up to the death. The sink is still notified so
- *    the live viewer sees them.
+ *    with the crash handlers) rather than through the sink, because `sink()`
+ *    can still be null (sampling can start before `bootCore` has produced
+ *    one) and a record that depended on it would be lost when a V8 OOM
+ *    aborts the process from inside the allocator, since no JS runs
+ *    afterwards. The sink is still notified when it exists, so the live
+ *    viewer sees the samples too.
  *  - `rss` is sampled alongside the V8 numbers. `getHeapStatistics()` describes
  *    only the JS heap; if RSS climbs while the heap is flat the leak is native
  *    or external (buffers, a worker, a native module) and no heap snapshot will

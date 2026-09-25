@@ -9,10 +9,10 @@
  *
  * Two details make this work where a naive `sink.log()` call would not:
  *
- *  - The record is appended **synchronously** to the same JSONL the sink writes.
- *    The sink's own append is `fs.appendFile` with a swallowed callback, which
- *    does not flush before `process.exit` — precisely the case that matters
- *    here. The sink is still notified afterwards so the live viewer and the
+ *  - The record is appended **synchronously** to the same JSONL the sink writes,
+ *    independently of the sink (the sink's own append is also
+ *    `fs.appendFileSync` now, but see below for why that isn't enough here).
+ *    The sink is still notified afterwards so the live viewer and the
  *    in-memory ring see it too, but the file write is the one that has to land.
  *  - The sink is resolved through a callback rather than captured, because at
  *    boot-failure time there isn't one yet.

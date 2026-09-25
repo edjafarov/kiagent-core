@@ -8,18 +8,55 @@ import type { LogSink } from './engine/engine';
 
 const RING_MAX = 5_000;
 const LEVEL_RANK: Record<LogLevel, number> = { info: 0, warn: 1, error: 2 };
+const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
+
+export interface CreateLogsOptions {
+  /** Rotate once the file exceeds this many bytes. Default 10 MB. */
+  maxBytes?: number;
+}
 
 /**
  * ONE log sink. Every log() in the system lands here — engine, sources,
  * workers, hosts, and the MCP call audit (scope 'mcp.call'). In-memory ring
  * for the live viewer, JSONL file for export/bug reports.
+ *
+ * The file rotates at `maxBytes`: the previous generation moves to `.1`
+ * (replacing any older `.1`) and the live file starts fresh. Real installs
+ * were seen with an 800 MB `kiagent.log.jsonl`, at which point `export()`
+ * hands over the whole thing — rotation keeps that bounded.
  */
-export function createLogs(dir: string): { store: LogStore; sink: LogSink } {
+export function createLogs(
+  dir: string,
+  createOpts: CreateLogsOptions = {},
+): { store: LogStore; sink: LogSink } {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'kiagent.log.jsonl');
+  const maxBytes = createOpts.maxBytes ?? DEFAULT_MAX_BYTES;
   const ring: LogRecord[] = [];
   const nudge = new EventEmitter();
   nudge.setMaxListeners(0);
+
+  // Tracked in memory; the file is never read to decide whether to rotate —
+  // it can be hundreds of MB.
+  let bytes = 0;
+  try {
+    bytes = fs.statSync(file).size;
+  } catch {
+    bytes = 0;
+  }
+
+  const rotate = (): void => {
+    try {
+      fs.renameSync(file, `${file}.1`);
+    } catch {
+      // Best-effort: a missing file (nothing written yet) or a locked
+      // rename must not take the process down.
+    }
+    bytes = 0;
+  };
+
+  // A pre-existing oversized file rotates immediately, before the first append.
+  if (bytes > maxBytes) rotate();
 
   const sink: LogSink = {
     log(scope, level, msg, fields) {
@@ -32,7 +69,15 @@ export function createLogs(dir: string): { store: LogStore; sink: LogSink } {
       };
       ring.push(rec);
       if (ring.length > RING_MAX) ring.splice(0, ring.length - RING_MAX);
-      fs.appendFile(file, `${JSON.stringify(rec)}\n`, () => {});
+      try {
+        const line = `${JSON.stringify(rec)}\n`;
+        fs.appendFileSync(file, line);
+        bytes += Buffer.byteLength(line);
+        if (bytes > maxBytes) rotate();
+      } catch {
+        // Disk full, permissions, a read-only volume — the ring buffer and
+        // live viewer must keep working even if the file write fails.
+      }
       nudge.emit('rec', rec);
     },
   };
