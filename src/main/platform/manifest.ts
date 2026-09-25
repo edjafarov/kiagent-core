@@ -206,6 +206,24 @@ export function parseManifest(
   opts: { tier?: ManifestTier } = {},
 ): Manifest {
   const tier = opts.tier ?? 'external';
+  // Check engine range before schema validation so a manifest using a newer
+  // cap gets "requires platform" instead of "invalid enum value".
+  if (
+    raw !== null &&
+    typeof raw === 'object' &&
+    'engine' in raw &&
+    typeof raw.engine === 'string'
+  ) {
+    const validRange = semver.validRange(raw.engine);
+    if (
+      validRange !== null &&
+      !semver.satisfies(PLATFORM_API_VERSION, raw.engine)
+    ) {
+      throw new ManifestError(
+        `requires platform ${raw.engine}; this build is ${PLATFORM_API_VERSION}`,
+      );
+    }
+  }
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     const first = parsed.error.issues[0];

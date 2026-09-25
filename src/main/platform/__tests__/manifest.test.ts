@@ -111,6 +111,18 @@ describe('parseManifest', () => {
     );
   });
 
+  it('checks engine range before schema validation so unknown caps with unsatisfiable engine throw "requires platform"', () => {
+    expect(() =>
+      parseManifest({ ...GOOD, caps: ['net', 'futurecap'], engine: '^99.0.0' }),
+    ).toThrow(/requires platform/);
+  });
+
+  it('checks engine range but still validates schema for unknown caps with satisfied engine', () => {
+    expect(() =>
+      parseManifest({ ...GOOD, caps: ['net', 'futurecap'] }),
+    ).toThrow(/invalid manifest/);
+  });
+
   it('requires a database descriptor for db-capability manifests', () => {
     expect(() => parseManifest({ ...GOOD, caps: ['db'] })).toThrow(
       /PLUGIN_DB_DESCRIPTOR_REQUIRED/,
