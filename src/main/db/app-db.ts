@@ -230,7 +230,14 @@ export async function openDb(filePath: string): Promise<AppDb> {
   // statements) so it cannot cleanly route through the async AppDb surface;
   // running it directly on `conn` is idempotent and keeps both the in-process
   // and (future) worker-hosted paths byte-identical.
-  migrate(conn);
+  try {
+    migrate(conn);
+  } catch (err) {
+    // Release the file: a refused corpus is moved aside by the boot recovery
+    // (alpha-cent#93), and Windows will not rename a file that is still open.
+    conn.close();
+    throw err;
+  }
 
   return wrapConn(conn);
 }

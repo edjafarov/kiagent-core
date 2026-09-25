@@ -12,6 +12,7 @@ import {
 } from '@shared/folder-paths';
 
 import { buildStemView } from '../stemming';
+import { corpusTooNewMessage } from './corpus-refusal';
 
 /** WHERE text shared VERBATIM by the stats queries in store.ts and the partial
  *  indexes below — SQLite only uses a partial index when the query's WHERE
@@ -1181,12 +1182,10 @@ export function migrate(db: BetterSqlite3.Database): void {
   // storage invariants — FTS rowid pinning above all — that writing with the
   // wrong assumptions would corrupt. Refuse to open instead. (The corpus is
   // a rebuildable cache: update the app, or erase and re-sync.)
+  // The message is matched at boot to offer a backup-and-rebuild
+  // (corpus-refusal.ts) — build it there, never inline.
   if (version > MIGRATIONS.length) {
-    throw new Error(
-      `corpus schema v${version} is newer than this build supports ` +
-        `(v${MIGRATIONS.length}). Update the app to the latest version to open ` +
-        `this database, or erase and re-sync it.`,
-    );
+    throw new Error(corpusTooNewMessage(version, MIGRATIONS.length));
   }
   for (let i = version; i < MIGRATIONS.length; i += 1) {
     db.transaction(() => {

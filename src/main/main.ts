@@ -31,11 +31,7 @@ import type {
 import { INVOKE_CHANNELS } from '@shared/ipc';
 
 import { createConnectBroker } from './auth/connect-broker';
-import {
-  installCrashHandlers,
-  reportBootFailure,
-  type CrashDeps,
-} from './crash-handlers';
+import { installCrashHandlers, type CrashDeps } from './crash-handlers';
 import type { ConnectBroker } from './auth/connect-broker';
 import { startHeapWatch } from './heap-watch';
 import {
@@ -74,6 +70,7 @@ import { createUpdateNotifier } from './updater/native-notify';
 import { subscribeUpdaterState, updaterInvokeHandlers } from './updater/ipc';
 import { createExtensionPlatform } from './platform/extension-platform';
 import { runFactoryReset } from './factory-reset';
+import { corpusRefusalDialog, handleBootFailure } from './corpus-recovery';
 import type { ExtensionPlatform } from './platform/extension-platform';
 import { createExtInvokeHandler } from './platform/ext-invoke';
 import {
@@ -1321,9 +1318,27 @@ app
       if (BrowserWindow.getAllWindows().length === 0) void createWindow();
     });
   })
-  .catch((err) => {
-    reportBootFailure(crashDeps, err);
-  });
+  .catch((err) =>
+    handleBootFailure(
+      {
+        crash: crashDeps,
+        dataDir: path.join(app.getPath('userData'), 'data'),
+        productName: product.productName,
+        now: () => new Date(),
+        confirmRebuild: async (backupDir) =>
+          (
+            await dialog.showMessageBox(
+              corpusRefusalDialog(product.productName, backupDir),
+            )
+          ).response === 1,
+        relaunch: () => {
+          app.relaunch();
+          app.exit(0);
+        },
+      },
+      err,
+    ),
+  );
 
 // Reached on Windows/Linux only when the window is really closing (a quit is
 // underway — close-to-tray hides it in every other case), and never on macOS,
