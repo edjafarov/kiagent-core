@@ -1,0 +1,12 @@
+{
+  "id": "test.activate-throws",
+  "name": "Activation Throws Fixture",
+  "version": "1.0.0",
+  "engine": "^2.0.0",
+  "entry": "index.js",
+  "caps": [],
+  "contributes": {
+    "sources": [],
+    "senders": []
+  }
+}

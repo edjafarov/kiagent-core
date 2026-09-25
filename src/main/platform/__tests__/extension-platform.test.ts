@@ -456,6 +456,37 @@ describe('createExtensionPlatform', () => {
     expect(tools.has('basic_echo')).toBe(true);
   });
 
+  it('installCommit reports ok:false when the newly-installed extension fails to activate', async () => {
+    const FIXTURE_ACTIVATE_THROWS = path.join(
+      __dirname,
+      'fixtures',
+      'ext-activate-throws',
+    );
+    await platform.start();
+    const preview = await platform.installPreview(FIXTURE_ACTIVATE_THROWS);
+    if (!('token' in preview))
+      throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+    const commit = await platform.installCommit(preview.token);
+    expect(commit.ok).toBe(false);
+    expect((commit as { error: string }).error).toContain(
+      'fixture activation exploded',
+    );
+    // The commit itself succeeded (files are on disk, consent recorded) —
+    // only activation failed — so the entry exists in the snapshot, errored,
+    // not stuck mid-install or wiped.
+    expect(
+      platform.snapshot().find((e) => e.id === 'test.activate-throws'),
+    ).toEqual(
+      expect.objectContaining({
+        id: 'test.activate-throws',
+        status: 'errored',
+      }),
+    );
+
+    // A normal install is unaffected — installFixture() asserts ok:true.
+    await installFixture();
+  });
+
   it('setEnabled(false) unregisters and persists; a restarted platform respects it', async () => {
     await platform.start();
     await installFixture();

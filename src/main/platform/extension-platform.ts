@@ -1400,6 +1400,17 @@ export function createExtensionPlatform(
             writeRecoveryMarker(deps.extDir, e.manifest.id, recoveryError);
             throw recoveryError;
           }
+          // activate() never throws on a failed activation — it records
+          // the failure on the entry via setStatus() instead (directly, or
+          // through onStatus when host.start() fails). Without this check
+          // the commit above already succeeded (files on disk, consent
+          // recorded), so the caller would be told the install worked while
+          // the extension never came up.
+          if (e.status === 'errored')
+            return {
+              ok: false,
+              error: `installed, but activation failed: ${e.error ?? 'unknown error'}`,
+            };
           return { ok: true, id: manifest.id };
         });
       } catch (e) {
