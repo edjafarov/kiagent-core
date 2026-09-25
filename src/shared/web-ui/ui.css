@@ -864,6 +864,7 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
   box-sizing: border-box;
   display: flex;
   align-items: center;
+  gap: 12px;
   height: 32px;
   padding: 0 8px;
   font-size: 13px;

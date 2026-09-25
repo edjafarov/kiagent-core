@@ -1,10 +1,13 @@
 import React from 'react';
 import { cx } from './cx';
+import { Icon } from '../icon-sprite';
 import { TopBar } from './layout';
 
 export interface SettingsPane {
   key: string;
   label: string;
+  /** A sprite icon name, drawn like the app nav's. */
+  icon?: string;
 }
 
 /** Settings as a page: the top bar, a pane list and a content column. */
@@ -31,6 +34,7 @@ export function SettingsLayout(props: {
                 aria-current={active ? 'page' : undefined}
                 onClick={() => props.onSelect(p.key)}
               >
+                {p.icon && <Icon name={p.icon} size={16} />}
                 {p.label}
               </button>
             );

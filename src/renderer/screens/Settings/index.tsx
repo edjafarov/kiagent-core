@@ -11,15 +11,26 @@ import { SettingsPage, type SettingsPaneDef } from './SettingsPage';
  * the settings rows.
  */
 const PANES: readonly SettingsPaneDef[] = [
-  { key: 'account', label: 'Account', render: () => <Account /> },
-  { key: 'storage', label: 'Storage', render: () => <Storage /> },
+  { key: 'account', label: 'Account', icon: 'user', render: () => <Account /> },
+  {
+    key: 'storage',
+    label: 'Storage',
+    icon: 'hard-drive',
+    render: () => <Storage />,
+  },
   {
     key: 'local',
     label: 'Local processing',
+    icon: 'cpu',
     render: () => <LocalProcessing />,
   },
-  { key: 'advanced', label: 'Advanced', render: () => <Advanced /> },
-  { key: 'about', label: 'About', render: () => <About /> },
+  {
+    key: 'advanced',
+    label: 'Advanced',
+    icon: 'sliders',
+    render: () => <Advanced />,
+  },
+  { key: 'about', label: 'About', icon: 'info', render: () => <About /> },
 ];
 
 export function Settings(props: { pane?: string }): React.ReactElement {

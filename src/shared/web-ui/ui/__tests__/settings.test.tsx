@@ -48,6 +48,26 @@ describe('SettingsLayout', () => {
   });
 });
 
+describe('SettingsLayout pane icons', () => {
+  it('draws a pane icon when given one', () => {
+    const { container } = render(
+      <SettingsLayout
+        panes={[
+          { key: 'about', label: 'About', icon: 'info' },
+          { key: 'plain', label: 'Plain' },
+        ]}
+        active="about"
+        onSelect={() => {}}
+      >
+        <p>pane</p>
+      </SettingsLayout>,
+    );
+    const items = container.querySelectorAll('.ui-set-item');
+    expect(items[0].querySelector('svg')).not.toBeNull();
+    expect(items[1].querySelector('svg')).toBeNull();
+  });
+});
+
 describe('SettingsGroup and SettingsRow', () => {
   it('renders the row title, description and control', () => {
     render(

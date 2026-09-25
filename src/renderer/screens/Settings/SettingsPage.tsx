@@ -7,6 +7,7 @@ import './Settings.css';
 export interface SettingsPaneDef {
   key: string;
   label: string;
+  icon?: string;
   render: () => React.ReactNode;
 }
 
