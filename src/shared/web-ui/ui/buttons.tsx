@@ -4,7 +4,12 @@ import { cx } from './cx';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
-type NativeButton = React.ButtonHTMLAttributes<HTMLButtonElement>;
+/** Native button props; `className` and `type` are restated so the
+ *  prop-types lint sees them. `reset` buttons are not offered. */
+interface NativeButton extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  className?: string;
+  type?: 'button' | 'submit';
+}
 
 export interface ButtonProps extends NativeButton {
   variant?: ButtonVariant;
@@ -15,7 +20,10 @@ export interface ButtonProps extends NativeButton {
 
 /** Square button. One primary per screen. */
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  function Button(props, ref) {
+  function Button(
+    props: ButtonProps,
+    ref: React.ForwardedRef<HTMLButtonElement>,
+  ) {
     const {
       variant = 'secondary',
       size = 'md',
@@ -28,8 +36,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <button
         ref={ref}
-        // eslint-disable-next-line react/button-has-type
-        type={type ?? 'button'}
+        type={type === 'submit' ? 'submit' : 'button'}
         className={cx(
           'ui-btn',
           `is-${variant}`,
@@ -54,7 +61,10 @@ export interface IconButtonProps extends Omit<NativeButton, 'children'> {
 }
 
 export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
-  function IconButton(props, ref) {
+  function IconButton(
+    props: IconButtonProps,
+    ref: React.ForwardedRef<HTMLButtonElement>,
+  ) {
     const {
       icon,
       label,
@@ -67,8 +77,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
     return (
       <button
         ref={ref}
-        // eslint-disable-next-line react/button-has-type
-        type={type ?? 'button'}
+        type={type === 'submit' ? 'submit' : 'button'}
         aria-label={label}
         title={label}
         className={cx(
@@ -86,13 +95,12 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
   },
 );
 
-/** Inline violet text action. */
-export function Link(props: NativeButton): React.ReactElement {
+/** Inline violet text action (a button, not a navigation link). */
+export function TextButton(props: NativeButton): React.ReactElement {
   const { className, type, ...rest } = props;
   return (
-    // eslint-disable-next-line react/button-has-type
     <button
-      type={type ?? 'button'}
+      type={type === 'submit' ? 'submit' : 'button'}
       className={cx('ui-link', className)}
       {...rest}
     />

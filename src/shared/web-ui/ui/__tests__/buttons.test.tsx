@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { Button, IconButton, Link } from '..';
+import { Button, IconButton, TextButton } from '..';
 
 describe('Button', () => {
   it('is a type=button with its variant and optional icon', () => {
@@ -41,10 +41,10 @@ describe('IconButton', () => {
   });
 });
 
-describe('Link', () => {
+describe('TextButton', () => {
   it('is an inline text button', () => {
     const onClick = jest.fn();
-    render(<Link onClick={onClick}>See all</Link>);
+    render(<TextButton onClick={onClick}>See all</TextButton>);
     fireEvent.click(screen.getByRole('button', { name: 'See all' }));
     expect(onClick).toHaveBeenCalled();
   });
