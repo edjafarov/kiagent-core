@@ -297,11 +297,13 @@ describe('appProjection archived → live transitions', () => {
   });
 
   it('keeps the archived index out of the state windows receive', () => {
-    let s = projection.apply(base, [docChange(1, 'a1', 'd1')]);
-    s = projection.apply(s, [archive(2, 'd1')]);
-    // v8's serializer is the structured clone Electron IPC uses.
-    const cloned = v8.deserialize(v8.serialize(s));
-    expect(JSON.stringify(cloned)).not.toContain('"d1"');
+    const id = 'doc-archived-only-here';
+    let s = projection.apply(base, [docChange(1, 'a1', id)]);
+    s = projection.apply(s, [archive(2, id)]);
+    // v8's serializer is the structured clone Electron IPC uses — and unlike
+    // JSON it carries a Map or a Set, the index's own shape, with its ids.
+    expect(v8.serialize(s).toString('latin1')).not.toContain(id);
+    expect(Object.keys(s).sort()).toEqual(Object.keys(base).sort());
     expect(Object.getOwnPropertySymbols(s)).toEqual([]);
   });
 });
