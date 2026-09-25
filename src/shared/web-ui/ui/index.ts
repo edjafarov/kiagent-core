@@ -40,3 +40,5 @@ export {
 } from './brands';
 export type { Brand } from './brands';
 export { BrandGlyph, BrandMark, DateTile, Avatar, Chip } from './identity';
+export { SettingsLayout, SettingsGroup, SettingsRow } from './settings';
+export type { SettingsPane } from './settings';
