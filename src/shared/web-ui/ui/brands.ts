@@ -59,12 +59,6 @@ const SOURCES: Record<string, Entry> = {
     icon: 'calendar',
   },
   ms365: { key: 'm365', name: 'Microsoft 365', color: '#0b4f9c', icon: 'mail' },
-  'microsoft-365': {
-    key: 'm365',
-    name: 'Microsoft 365',
-    color: '#0b4f9c',
-    icon: 'mail',
-  },
   onedrive: {
     key: 'm365',
     name: 'OneDrive',
