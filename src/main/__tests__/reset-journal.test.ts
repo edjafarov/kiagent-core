@@ -43,4 +43,18 @@ describe('reset journal (alpha-cent#192)', () => {
     fsync.mockRestore();
     rename.mockRestore();
   });
+
+  it('flushes the removal, so a finished reset is not asked about again', () => {
+    const journal = createResetJournal(dir);
+    journal.begin();
+    const fsync = jest.spyOn(fs, 'fsyncSync');
+    const rm = jest.spyOn(fs, 'rmSync');
+    journal.end();
+    expect(fsync).toHaveBeenCalled();
+    expect(fsync.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
+      rm.mock.invocationCallOrder[0],
+    );
+    fsync.mockRestore();
+    rm.mockRestore();
+  });
 });

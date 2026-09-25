@@ -488,6 +488,20 @@ describe('startAfterInterruptedReset', () => {
     expect(calls).toEqual(['ask', 'load', 'start']);
   });
 
+  it('extensions that cannot be found stop the finish: nothing is reset and the record stays', async () => {
+    const { d, calls } = boot(true, true);
+    d.loadExtensions.mockRejectedValueOnce(new Error('ENOTDIR: extensions'));
+    await expect(startAfterInterruptedReset(d)).resolves.toEqual({
+      ok: false,
+      coreWiped: false,
+      failed: [],
+      error: 'ENOTDIR: extensions',
+    });
+    expect(calls).toEqual(['ask', 'start']);
+    expect(d.reset).not.toHaveBeenCalled();
+    expect(d.journal.end).not.toHaveBeenCalled();
+  });
+
   it('a record that cannot be dropped does not stop the boot', async () => {
     const { d, calls } = boot(true, false);
     d.journal.end.mockImplementationOnce(() => {

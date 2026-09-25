@@ -117,7 +117,8 @@ export interface InterruptedResetDeps {
   journal: Pick<ResetJournal, 'pending' | 'end'>;
   /** Asks the user; true finishes the reset, false keeps what is left. */
   confirmFinish(): Promise<boolean>;
-  /** Finds the extensions without activating any. */
+  /** Finds the extensions without activating any. A rejection means the
+   *  reset is not run. */
   loadExtensions(): Promise<void>;
   /** Activates them (loading first if needed); already active ones stay. */
   startExtensions(): Promise<void>;
@@ -139,15 +140,20 @@ export async function startAfterInterruptedReset(
   let outcome: FactoryResetOutcome | null = null;
   if (deps.journal.pending()) {
     if (await deps.confirmFinish()) {
-      await deps.loadExtensions();
-      outcome = await deps.reset().catch(
-        (err): FactoryResetOutcome => ({
-          ok: false,
-          coreWiped: false,
-          failed: [],
-          error: message(err),
-        }),
-      );
+      // Not finding the extensions stops the finish before it starts: the
+      // reset would otherwise wipe core, skip every extension's data, and
+      // drop the record. The record stays, so the question comes back.
+      outcome = await deps
+        .loadExtensions()
+        .then(() => deps.reset())
+        .catch(
+          (err): FactoryResetOutcome => ({
+            ok: false,
+            coreWiped: false,
+            failed: [],
+            error: message(err),
+          }),
+        );
     } else {
       try {
         deps.journal.end();

@@ -1056,7 +1056,6 @@ export function createExtensionPlatform(
   /** Discovery for load()/start(): once per start, never activates. */
   function loadEntries(): void {
     if (loaded) return;
-    loaded = true;
     registerLifecycleListeners();
     running = true;
     fs.mkdirSync(deps.extDir, { recursive: true });
@@ -1120,6 +1119,9 @@ export function createExtensionPlatform(
         });
       }
     }
+    // Only once discovery got through: after a throw, start() discovers
+    // again rather than activating whatever was found before it.
+    loaded = true;
     changed();
   }
 

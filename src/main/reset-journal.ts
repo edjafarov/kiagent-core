@@ -43,19 +43,28 @@ export function createResetJournal(dir: string): ResetJournal {
         fs.closeSync(fd);
       }
       fs.renameSync(tmp, file);
-      // The rename itself must survive a power cut. Windows cannot open a
-      // directory to sync it; NTFS journals the rename on its own.
-      try {
-        const dirFd = fs.openSync(dir, 'r');
-        try {
-          fs.fsyncSync(dirFd);
-        } finally {
-          fs.closeSync(dirFd);
-        }
-      } catch {
-        // see above
-      }
+      syncDir(dir);
     },
-    end: () => fs.rmSync(file, { force: true }),
+    end() {
+      fs.rmSync(file, { force: true });
+      // A record that comes back after a power cut would ask to delete
+      // whatever was made since the reset finished.
+      syncDir(dir);
+    },
   };
+}
+
+/** Makes a rename or removal in `dir` survive a power cut. Windows cannot
+ *  open a directory to sync it; NTFS journals the change on its own. */
+function syncDir(dir: string): void {
+  try {
+    const dirFd = fs.openSync(dir, 'r');
+    try {
+      fs.fsyncSync(dirFd);
+    } finally {
+      fs.closeSync(dirFd);
+    }
+  } catch {
+    // see above
+  }
 }

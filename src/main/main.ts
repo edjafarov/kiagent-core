@@ -1350,7 +1350,7 @@ app
             cancelId: 1,
           })
         ).response === 0,
-      loadExtensions: inert(() => extensions.load()),
+      loadExtensions: () => extensions.load(),
       startExtensions: inert(() => extensions.start()),
       reset: () => runFactoryReset(factoryResetDeps(p, patchState)),
     });

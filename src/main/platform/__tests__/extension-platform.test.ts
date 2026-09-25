@@ -1025,6 +1025,27 @@ describe('createExtensionPlatform', () => {
       );
     });
 
+    it('a load() that fails leaves discovery to start(), which finds everything', async () => {
+      await platform.start();
+      await installDbExtensions(platform);
+      await platform.stop();
+
+      platform = makePlatform({ db: recordingDb().db as never });
+      jest.spyOn(fs, 'mkdirSync').mockImplementationOnce(() => {
+        throw new Error('ENOTDIR: not a directory');
+      });
+      await expect(platform.load()).rejects.toThrow('ENOTDIR');
+
+      await platform.start();
+      expect(
+        platform
+          .snapshot()
+          .filter((e) => e.status === 'activated')
+          .map((e) => e.id)
+          .sort(),
+      ).toEqual(ids);
+    });
+
     it.each([...ids.map((id) => [id]), ['the core wipe']])(
       'cut off at %s: after a restart the reset runs to the end, activating nothing before it',
       async (cutAt) => {
