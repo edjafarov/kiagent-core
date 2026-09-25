@@ -17,6 +17,7 @@ export const getRelatedDescription = `Return summaries of records related to a g
 Relations:
   children — child documents of a document (an email thread's individual messages, a document's attachments)
   parent   — the single parent document, if any (a 0-or-1 array)
+\`children\` is ordered oldest-first and returns at most \`limit\` rows — if you receive exactly \`limit\` rows, fetch the next page with \`offset\`.
 Returns one summary per row: id, source, type, title, source_url, parent_id, created_at, snippet (markdown truncated to 280 chars, or null) — no \`markdown\` body. Use \`get\` for full bodies.
 Use after \`get\` or \`search\` to drill into a parent/child relationship.`;
 

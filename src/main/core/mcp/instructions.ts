@@ -71,8 +71,8 @@ Common patterns:
                             → count group_by:'from'|'label'
   latest from a person     → search "from:x order:newest"
   full doc body            → search → get
-  expand an email thread   → get → get_related(children)
-  email attachments        → get → get_related(children)
+  expand an email thread   → get → get_related(children) → get(ids)
+  email attachments        → get → get_related(children) → get(ids)
 
 Batch / parallel queries:
   search and get both accept batched input so you can run N queries
