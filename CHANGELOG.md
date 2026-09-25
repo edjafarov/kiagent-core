@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.93.0](https://github.com/edjafarov/kiagent-core/compare/v0.92.0...v0.93.0) (2026-09-25)
+
+### Features
+
+* **consent:** pages consent bit and elevated full-access row ([71c65fc](https://github.com/edjafarov/kiagent-core/commit/71c65fc60a6ad778758130aebe8de2fb09736e3c))
+* **ipc:** extensions:ui-source serves a declared page bundle ([86787f3](https://github.com/edjafarov/kiagent-core/commit/86787f3faa96f13e6548d0cb89b641fbe869d67d))
+* **platform:** activatedAt on the extension snapshot ([de7dc4c](https://github.com/edjafarov/kiagent-core/commit/de7dc4c00ceac06f87f05e7eb8d8138b6571901b))
+* **platform:** any tier may contribute a page; validate dist/ui bundle; API 2.5.0 ([165a55b](https://github.com/edjafarov/kiagent-core/commit/165a55b53e35f57f80233673e09f18a347bd1509))
+* **renderer:** runtime page loader with keyed boundary ([bac5598](https://github.com/edjafarov/kiagent-core/commit/bac559817ebe71b1d606e6008f3b5a28f4884dba))
+* **sdk:** connector-sdk 1.5.0 — contracts from core 0.92.0 (folder picker note, archiveRefs) ([d2f0089](https://github.com/edjafarov/kiagent-core/commit/d2f0089d8212034b3893d387321b394e2f163f4a))
+* **sdk:** page shims and template; schema docs for calendar.event ([d80eaee](https://github.com/edjafarov/kiagent-core/commit/d80eaee7b67c95e53d28c5ff7235184dc93687f7))
+* **search:** typed SearchRequest; id tie-breaker for recency order ([0436479](https://github.com/edjafarov/kiagent-core/commit/043647917b5e8bca530917771a326021ca08926c))
+* **sidebar:** rows for contributed pages ([114f81c](https://github.com/edjafarov/kiagent-core/commit/114f81c39b5550aacbdf0a964c084e58fb0dbb7c))
+
+### Bug Fixes
+
+* **renderer:** needs-consent page state; load-failed copy no longer points at Logs ([50e189c](https://github.com/edjafarov/kiagent-core/commit/50e189c1f7559b6ddd71b0386b518d12cc615158))
+* **sdk:** page app-state type is the {state, seq, rev} envelope ([28d1714](https://github.com/edjafarov/kiagent-core/commit/28d17145b91a07a46deea380b50654b6ead31c8f))
+* **sdk:** sync package-lock version to 1.5.0 ([4ddab4b](https://github.com/edjafarov/kiagent-core/commit/4ddab4b315030e991f8e19da1f92a9365ae489dd))
+
 ## [0.92.0](https://github.com/edjafarov/kiagent-core/compare/v0.91.0...v0.92.0) (2026-09-24)
 
 ### Features
