@@ -39,3 +39,4 @@ export {
   NEUTRAL_BRAND_COLOR,
 } from './brands';
 export type { Brand } from './brands';
+export { BrandGlyph, BrandMark, DateTile, Avatar, Chip } from './identity';
