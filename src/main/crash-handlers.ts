@@ -76,10 +76,12 @@ export function describeError(err: unknown): Record<string, unknown> {
 }
 
 /**
- * Appends one record to the sink's own JSONL **synchronously**. Shared with
- * `heap-watch`, which needs the same guarantee for the opposite reason: the
- * sink's async append does not flush when the process is about to be killed
- * from outside JS (an OOM abort runs no further JS at all).
+ * Appends one record to the sink's own JSONL **synchronously**, independently
+ * of the sink. Shared with `heap-watch`, which needs the same independence
+ * for a different reason: `sink()` there can still be null (sampling can
+ * start before `bootCore` has produced one), and a record that depended on
+ * it would be lost if a V8 OOM aborts the process from inside the allocator
+ * before any further JS — including a null check — runs.
  *
  * Never throws — a failure to log must not become the thing that takes the
  * process down.
