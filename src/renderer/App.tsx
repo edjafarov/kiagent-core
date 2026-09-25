@@ -11,6 +11,7 @@ import {
   isExtView,
   nextResolved,
   parseExtView,
+  resolveInitialView,
   type KnownView,
   type ResolvedView,
   type View,
@@ -19,10 +20,10 @@ import {
 import type { AppState } from '@shared/contracts';
 import { TitleBar } from '@renderer/components/TitleBar';
 import { Sidebar } from '@renderer/components/Sidebar';
-import { SettingsModal } from '@renderer/components/SettingsModal';
 import { BootSplash } from '@renderer/components/BootSplash';
 import { SignIn } from '@renderer/screens/SignIn';
 import { IconSprite } from '@shared/web-ui/icon-sprite';
+import { AppShell, HostFrame } from '@shared/web-ui/ui';
 import {
   createScreenRegistry,
   getDefaultScreens,
@@ -30,18 +31,15 @@ import {
 
 const screenRegistry = createScreenRegistry(getDefaultScreens());
 
-const isMac =
-  typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
-
-// Page titles shown in the top line (.kg-topline) — the band doubles as the
-// window drag region, ChatGPT/Claude-Desktop style. Detail panes keep their
-// own in-pane topbars; this is the routed view's name only.
+// Page titles for host-framed views, shown in the app's top bar (the band
+// doubles as the window drag region). A 'page' view renders its own.
 const VIEW_TITLES: Partial<Record<KnownView, string>> = {
   sources: 'Sources',
   outbox: 'Outbox',
   connection: 'Connection',
   marketplace: 'Marketplace',
   logs: 'Logs',
+  settings: 'Settings',
 };
 
 /** B3: the title-lookup routing site (design spec's routing table) — a
@@ -77,11 +75,15 @@ export default function App(): React.ReactElement {
 
   // Navigation is local component state, not the URL — there is exactly one
   // BrowserWindow and no back/forward browser chrome to sync with.
-  const [resolved, setResolved] = useState<ResolvedView | null>(null);
+  const [resolved, setResolved] = useState<ResolvedView | null>(() =>
+    resolveInitialView(),
+  );
   const historyRef = useRef<ResolvedView[]>([]);
-  // Settings is a modal, not a view (spec §6): opening it never touches
-  // `resolved`, so closing restores the exact screen state underneath.
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // The pane last shown, for openSettings() with no pane.
+  const lastPaneRef = useRef<string | undefined>(undefined);
+  if (resolved?.view === 'settings' && resolved.params?.pane) {
+    lastPaneRef.current = resolved.params.pane;
+  }
 
   const navigate = useCallback((to: View, params?: ViewParams) => {
     setResolved((prev) => {
@@ -99,7 +101,19 @@ export default function App(): React.ReactElement {
     setResolved(prev);
   }, []);
 
-  const openSettings = useCallback(() => setSettingsOpen(true), []);
+  // Some buttons pass openSettings straight to onClick, so a click event can
+  // arrive here; anything but a string means "no pane".
+  const openSettings = useCallback(
+    (pane?: unknown) => {
+      const wanted = typeof pane === 'string' ? pane : lastPaneRef.current;
+      navigate('settings', wanted ? { pane: wanted } : undefined);
+    },
+    [navigate],
+  );
+
+  const replaceParams = useCallback((params: ViewParams) => {
+    setResolved((prev) => (prev ? { ...prev, params } : prev));
+  }, []);
 
   const viewContextValue = useMemo(
     () => ({
@@ -108,8 +122,9 @@ export default function App(): React.ReactElement {
       navigate,
       back,
       openSettings,
+      replaceParams,
     }),
-    [resolved, navigate, back, openSettings],
+    [resolved, navigate, back, openSettings, replaceParams],
   );
 
   // Gate 1: nothing loaded yet.
@@ -140,32 +155,21 @@ export default function App(): React.ReactElement {
   const view = resolved?.view ?? 'sources';
   const params = resolved?.params ?? {};
   const screen = screenRegistry.get(view, params, navigate, state.extensions);
+  const frame = screenRegistry.frame(view);
   const title = viewTitle(view, state.extensions);
 
   return (
     <ViewContext.Provider value={viewContextValue}>
       <IconSprite />
-      <div className="ac kg-shell">
-        <Sidebar />
-        <main className="kg-main">
-          <div className={`kg-topline${isMac ? ' mac' : ''}`}>
-            {title != null && <span className="kg-topline-title">{title}</span>}
-          </div>
-          <React.Fragment key={`${view}:${resolved?.epoch ?? 0}`}>
-            {screen}
-          </React.Fragment>
-        </main>
-        {/* Inside `.ac`, not a sibling of it: `box-sizing: border-box` is
-            scoped to `.ac *` (web-ui/components.css) with no global
-            fallback, so a modal mounted outside this div would render its
-            .input/.btn children as content-box. The backdrop is
-            `position: fixed` and no ancestor here creates a containing
-            block (no transform/filter/contain), so it still covers the
-            whole viewport, sidebar included. */}
-        {settingsOpen && (
-          <SettingsModal onClose={() => setSettingsOpen(false)} />
-        )}
-      </div>
+      <AppShell sidebar={<Sidebar />}>
+        <React.Fragment key={`${view}:${resolved?.epoch ?? 0}`}>
+          {frame === 'page' ? (
+            screen
+          ) : (
+            <HostFrame title={title}>{screen}</HostFrame>
+          )}
+        </React.Fragment>
+      </AppShell>
     </ViewContext.Provider>
   );
 }

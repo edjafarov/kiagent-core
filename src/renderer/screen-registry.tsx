@@ -11,13 +11,19 @@ import { Connection } from '@renderer/screens/Connection';
 import { Logs } from '@renderer/screens/Logs';
 import { Outbox } from '@renderer/screens/Outbox';
 import { Marketplace } from '@renderer/screens/Marketplace';
+import { Settings } from '@renderer/screens/Settings';
 import {
   ContributedUnavailable,
   type ContributedUnavailableReason,
 } from '@renderer/screens/ContributedUnavailable';
 import { ContributedPage } from '@renderer/contributed-page';
 
+/** 'page': the screen renders its own Page (top bar + pane).
+ *  'host': App renders the top bar and puts the screen in the legacy frame. */
+export type ScreenFrame = 'page' | 'host';
+
 export interface ScreenFactory {
+  frame?: ScreenFrame;
   factory: (
     params: ViewParams,
     navigate: (to: View, params?: ViewParams) => void,
@@ -36,6 +42,8 @@ export interface ScreenRegistry {
      *  no extension-main catalog). Ignored for a `KnownView`. */
     extensions: readonly ExtensionSnapshot[],
   ): React.ReactElement | null;
+  /** Who renders the view's top bar. Contributed views are always 'host'. */
+  frame(view: View): ScreenFrame;
 }
 
 export function getDefaultScreens(): ScreenDefinitions {
@@ -51,6 +59,10 @@ export function getDefaultScreens(): ScreenDefinitions {
     logs: { factory: () => <Logs /> },
     outbox: { factory: () => <Outbox /> },
     marketplace: { factory: () => <Marketplace /> },
+    settings: {
+      frame: 'page',
+      factory: (params) => <Settings pane={params.pane} />,
+    },
   };
 }
 
@@ -79,6 +91,9 @@ export function createScreenRegistry(
   screens: ScreenDefinitions,
 ): ScreenRegistry {
   return {
+    frame(view) {
+      return isKnownView(view) ? (screens[view]?.frame ?? 'host') : 'host';
+    },
     get(view, params, navigate, extensions) {
       if (isKnownView(view)) {
         const screen = screens[view];

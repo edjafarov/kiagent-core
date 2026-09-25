@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { SettingsLayout } from '@shared/web-ui/ui';
+import { useView } from '@renderer/state/view';
 import { Account } from './Account';
 import { Storage } from './Storage';
 import { LocalProcessing } from './LocalProcessing';
@@ -7,11 +9,9 @@ import { About } from './About';
 import './Settings.css';
 
 /**
- * 5-pane settings shell (ui-inventory.md §2.9), matching the legacy
- * `SettingsShell` layout: a violet `.set-sidebar` nav + scrollable
- * `.set-pane`. Settings is not routed at all — it is mounted by
- * SettingsModal (see state/view.ts) and pane selection is in-screen local
- * state.
+ * Settings page: a pane list and the selected pane. The pane is part of the
+ * route (`params.pane`), so leaving Settings and coming back returns to it.
+ * Panes print their own titles until each moves onto the settings rows.
  */
 
 const ITEMS = [
@@ -24,8 +24,21 @@ const ITEMS = [
 
 type SettingsKey = (typeof ITEMS)[number]['key'];
 
-export function Settings(): React.ReactElement {
-  const [selected, setSelected] = useState<SettingsKey>('account');
+function isKey(v: string | undefined): v is SettingsKey {
+  return ITEMS.some((i) => i.key === v);
+}
+
+export function Settings(props: { pane?: string }): React.ReactElement {
+  const { replaceParams } = useView();
+  const [selected, setSelected] = useState<SettingsKey>(
+    isKey(props.pane) ? props.pane : 'account',
+  );
+
+  const select = (key: string): void => {
+    if (!isKey(key)) return;
+    setSelected(key);
+    replaceParams({ pane: key });
+  };
 
   const pane =
     selected === 'account' ? (
@@ -41,21 +54,8 @@ export function Settings(): React.ReactElement {
     );
 
   return (
-    <div className="set-shell">
-      <div className="set-sidebar">
-        <div className="lbl-section">Settings</div>
-        {ITEMS.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            className={`side-item${selected === item.key ? ' active' : ''}`}
-            onClick={() => setSelected(item.key)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
-      <div className="set-pane">{pane}</div>
-    </div>
+    <SettingsLayout panes={ITEMS} active={selected} onSelect={select}>
+      {pane}
+    </SettingsLayout>
   );
 }

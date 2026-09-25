@@ -15,8 +15,12 @@ jest.mock('@renderer/state/app-state', () => ({
 // Screens are IPC-heavy; the shell contract is which one mounts, not what
 // it renders. Key-based remount is observed via a fresh mount counter.
 let sourcesMounts = 0;
+let settingsMounts = 0;
 jest.mock('@renderer/screen-registry', () => {
   const R = jest.requireActual<typeof import('react')>('react');
+  const { useView } = jest.requireActual<typeof import('@renderer/state/view')>(
+    '@renderer/state/view',
+  );
   const Sources = () => {
     R.useEffect(() => {
       sourcesMounts += 1;
@@ -25,30 +29,55 @@ jest.mock('@renderer/screen-registry', () => {
   };
   const Outbox = () =>
     R.createElement('div', { 'data-testid': 'screen-outbox' });
-  const screens: Record<string, { factory: () => React.ReactElement }> = {
+  const Logs = () => {
+    const { openSettings, back } = useView();
+    return R.createElement(
+      'div',
+      { 'data-testid': 'screen-logs' },
+      R.createElement('button', { onClick: openSettings }, 'logs-settings'),
+      R.createElement('button', { onClick: back }, 'logs-back'),
+    );
+  };
+  const Settings = (p: { pane?: string }) => {
+    const { replaceParams, navigate } = useView();
+    R.useEffect(() => {
+      settingsMounts += 1;
+    }, []);
+    return R.createElement(
+      'div',
+      { 'data-testid': 'screen-settings', 'data-pane': p.pane ?? 'account' },
+      R.createElement(
+        'button',
+        { onClick: () => replaceParams({ pane: 'advanced' }) },
+        'to-advanced',
+      ),
+      R.createElement('button', { onClick: () => navigate('logs') }, 'to-logs'),
+    );
+  };
+  const screens: Record<
+    string,
+    {
+      frame?: 'page' | 'host';
+      factory: (p: { pane?: string }) => React.ReactElement;
+    }
+  > = {
     sources: { factory: () => R.createElement(Sources) },
     outbox: { factory: () => R.createElement(Outbox) },
     connection: { factory: () => R.createElement('div') },
     marketplace: { factory: () => R.createElement('div') },
-    logs: { factory: () => R.createElement('div') },
+    logs: { factory: () => R.createElement(Logs) },
+    settings: {
+      frame: 'page',
+      factory: (p) => R.createElement(Settings, { pane: p.pane }),
+    },
   };
   return {
     createScreenRegistry: () => ({
-      get: (view: string) => screens[view]?.factory() ?? null,
+      get: (view: string, params: { pane?: string }) =>
+        screens[view]?.factory(params) ?? null,
+      frame: (view: string) => screens[view]?.frame ?? 'host',
     }),
     getDefaultScreens: () => screens,
-  };
-});
-
-jest.mock('@renderer/components/SettingsModal', () => {
-  const R = jest.requireActual<typeof import('react')>('react');
-  return {
-    SettingsModal: (p: { onClose: () => void }) =>
-      R.createElement(
-        'div',
-        { 'data-testid': 'settings-modal' },
-        R.createElement('button', { onClick: p.onClose }, 'close-modal'),
-      ),
   };
 });
 
@@ -63,8 +92,15 @@ function signedInState(): AppState {
 beforeEach(() => {
   localStorage.clear();
   sourcesMounts = 0;
+  settingsMounts = 0;
   mockState = signedInState();
 });
+
+/** Opens Settings the way a user does from the sidebar. */
+function openSettingsPage(): void {
+  fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+}
 
 describe('App shell', () => {
   it('renders the sidebar and the default Sources screen, with no TopBar', () => {
@@ -87,26 +123,64 @@ describe('App shell', () => {
     expect(sourcesMounts).toBe(2);
   });
 
-  it('opens and closes the settings modal from the account menu', () => {
+  it('opens Settings as a page from the account menu', () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'close-modal' }));
-    expect(screen.queryByTestId('settings-modal')).not.toBeInTheDocument();
+    openSettingsPage();
+    expect(screen.getByTestId('screen-settings')).toBeInTheDocument();
+    expect(screen.queryByTestId('screen-sources')).not.toBeInTheDocument();
   });
 
-  // The modal is mocked, but its DOM *position* is App.tsx's call, not the
-  // mock's — so this asserts the real contract: everything the modal mounts
-  // must sit inside `.ac`, whose `.ac *` rule is the only source of
-  // `box-sizing: border-box` (web-ui/components.css — no global fallback).
-  it('mounts the settings modal inside the .ac scope', () => {
+  it('gives host views the app top bar and page views none', () => {
+    render(<App />);
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Sources' }),
+    ).toBeInTheDocument();
+    openSettingsPage();
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+  });
+
+  it('does not close Settings on Esc', () => {
+    render(<App />);
+    openSettingsPage();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(screen.getByTestId('screen-settings'), { key: 'Escape' });
+    expect(screen.getByTestId('screen-settings')).toBeInTheDocument();
+  });
+
+  it('keeps the pane in the route without remounting, and Back returns to it', () => {
+    render(<App />);
+    openSettingsPage();
+    fireEvent.click(screen.getByRole('button', { name: 'to-advanced' }));
+    expect(screen.getByTestId('screen-settings')).toHaveAttribute(
+      'data-pane',
+      'advanced',
+    );
+    expect(settingsMounts).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'to-logs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'logs-back' }));
+    expect(screen.getByTestId('screen-settings')).toHaveAttribute(
+      'data-pane',
+      'advanced',
+    );
+  });
+
+  it('treats a click event passed to openSettings as "no pane"', () => {
+    render(<App />);
+    openSettingsPage();
+    fireEvent.click(screen.getByRole('button', { name: 'to-advanced' }));
+    fireEvent.click(screen.getByRole('button', { name: 'to-logs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'logs-settings' }));
+    expect(screen.getByTestId('screen-settings')).toHaveAttribute(
+      'data-pane',
+      'advanced',
+    );
+  });
+
+  it('keeps every screen inside the .ac scope', () => {
     const { container } = render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    const scope = container.querySelector('.ac');
+    const scope = container.querySelector('.ac.ui-shell');
     expect(scope).not.toBeNull();
-    expect(scope!.contains(screen.getByTestId('settings-modal'))).toBe(true);
+    expect(scope!.contains(screen.getByTestId('screen-sources'))).toBe(true);
   });
 
   it('shows no sidebar while signed out', () => {

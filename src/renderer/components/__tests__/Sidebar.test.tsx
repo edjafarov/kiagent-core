@@ -39,6 +39,7 @@ function renderSidebar(ctx: Partial<ViewContextValue> = {}) {
     navigate: jest.fn(),
     back: jest.fn(),
     openSettings: jest.fn(),
+    replaceParams: jest.fn(),
     ...ctx,
   };
   render(

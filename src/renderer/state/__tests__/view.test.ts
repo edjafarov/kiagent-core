@@ -39,13 +39,14 @@ describe('nextResolved', () => {
 
 // B3: the view catalog and the contributed-view encoding (item 1).
 describe('isKnownView / KNOWN_VIEWS', () => {
-  test('the five core routes are known, and nothing else is', () => {
+  test('the core routes (Settings included) are known, and nothing else is', () => {
     expect(KNOWN_VIEWS).toEqual([
       'sources',
       'connection',
       'logs',
       'outbox',
       'marketplace',
+      'settings',
     ]);
     for (const v of KNOWN_VIEWS) expect(isKnownView(v)).toBe(true);
     expect(isKnownView('expenses')).toBe(false);

@@ -1,13 +1,12 @@
 import { createContext, useContext } from 'react';
 
 /**
- * Routed screens. Deliberately small: Sources and Settings own their own
- * in-screen navigation. Settings is NOT routed at all — it is a modal
- * (ViewContextValue.openSettings), so closing it never disturbs the view.
+ * Routed screens. Deliberately small: Sources owns its own in-screen
+ * navigation. Settings is a routed page; its pane is the `pane` param.
  *
  * `ROUTE_META` is the catalog pattern (see the extension-UI design spec,
  * "the product has already generalised routing; core has not"), populated
- * here with CORE'S OWN five routes only — the product's own copy carries
+ * here with CORE'S OWN routes only — the product's own copy carries
  * more. A route added to `ROUTE_META` becomes a `KnownView` everywhere with
  * no second edit: the union and the runtime list cannot disagree,
  * structurally, the same way the product's ROUTE_META comment describes.
@@ -22,6 +21,7 @@ export const ROUTE_META = {
   logs: { title: 'Logs' },
   outbox: { title: 'Outbox' },
   marketplace: { title: 'Marketplace' },
+  settings: { title: 'Settings' },
 } as const satisfies Record<string, RouteMeta>;
 
 export type KnownView = keyof typeof ROUTE_META;
@@ -106,6 +106,8 @@ export type View = KnownView | ExtView;
 export interface ViewParams {
   accountId?: string;
   anchor?: string;
+  /** Settings pane id. */
+  pane?: string;
 }
 
 export interface ViewContextValue {
@@ -113,8 +115,11 @@ export interface ViewContextValue {
   params: ViewParams;
   navigate: (to: View, params?: ViewParams) => void;
   back: () => void;
-  /** Opens the Settings modal (spec §6). Settings is NOT a routed view. */
-  openSettings: () => void;
+  /** Opens the Settings page, on `pane` or the pane last shown. */
+  openSettings: (pane?: string) => void;
+  /** Replaces the current view's params without remounting it or adding
+   *  a history entry (e.g. switching Settings panes). */
+  replaceParams: (params: ViewParams) => void;
 }
 
 export const ViewContext = createContext<ViewContextValue>({
@@ -123,6 +128,7 @@ export const ViewContext = createContext<ViewContextValue>({
   navigate: () => {},
   back: () => {},
   openSettings: () => {},
+  replaceParams: () => {},
 });
 
 export function useView(): ViewContextValue {
@@ -151,4 +157,29 @@ export function nextResolved(
     next: { view: to, params, epoch: (prev?.epoch ?? 0) + 1 },
     push: prev !== null && prev.view !== to,
   };
+}
+
+/** The first view to show, from an optional `#view=<id>&params=<json>`
+ *  location hash. Production never sets a hash, so this is `null` there;
+ *  tools that render the app with fixture data use it to open a view. */
+export function resolveInitialView(
+  hash: string = typeof window !== 'undefined' ? window.location.hash : '',
+): ResolvedView | null {
+  if (!hash || hash.length < 2) return null;
+  const q = new URLSearchParams(hash.slice(1));
+  const view = q.get('view');
+  if (!view || !(isKnownView(view) || isExtView(view))) return null;
+  let params: ViewParams | undefined;
+  const raw = q.get('params');
+  if (raw) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        params = parsed as ViewParams;
+      }
+    } catch {
+      params = undefined;
+    }
+  }
+  return { view, params, epoch: 0 };
 }

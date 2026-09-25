@@ -192,7 +192,7 @@ export function Logs(): React.ReactElement {
           type="button"
           className="btn ghost sm"
           aria-label="Settings"
-          onClick={openSettings}
+          onClick={() => openSettings()}
         >
           <Icon name="settings" size={14} />
         </button>
