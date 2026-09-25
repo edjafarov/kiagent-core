@@ -1,7 +1,9 @@
 /* Design-system primitives for the app shell and its pages.
    Every class starts with `ui-`; state and variant modifiers are `is-*`.
-   Nothing here styles a legacy class, and no legacy stylesheet styles
-   `ui-*`. All values come from tokens.css. */
+   No legacy stylesheet styles `ui-*`. Colours, radii and layout sizes
+   come from tokens.css; type sizes are literal (the spec's type table).
+   Loaded after components.css and relies on its base: the `.ac` font and
+   border-box sizing, and the sprite's `.i` icon class. */
 
 /* ── Surfaces ─────────────────────────────────────────────────────── */
 .ui-card {
@@ -15,7 +17,7 @@
   display: flex;
   align-items: baseline;
   gap: 10px;
-  height: 20px;
+  min-height: 20px;
   margin-bottom: 10px;
   min-width: 0;
 }

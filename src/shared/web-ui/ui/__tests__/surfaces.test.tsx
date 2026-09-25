@@ -42,6 +42,17 @@ describe('Card', () => {
   });
 });
 
+describe('Card naming', () => {
+  it('is named by its header label without an aria-label', () => {
+    render(
+      <Card>
+        <CardHeader label="Sources" />
+      </Card>,
+    );
+    expect(screen.getByRole('region', { name: 'Sources' })).toBeInTheDocument();
+  });
+});
+
 describe('Panel and KeyValue', () => {
   it('renders the panel title and the pairs in order', () => {
     const { container } = render(

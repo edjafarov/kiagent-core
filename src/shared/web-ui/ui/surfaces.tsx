@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { createContext, useContext, useId } from 'react';
 import { cx } from './cx';
 
 /** Native section attributes (id, aria-label, aria-labelledby, …);
@@ -7,12 +7,25 @@ interface SectionProps extends React.HTMLAttributes<HTMLElement> {
   className?: string;
 }
 
+/** The id a Card gives its CardHeader label, so the header names the card. */
+const CardLabelId = createContext<string | undefined>(undefined);
+
+/** A named region. A CardHeader inside names it; `aria-label` or
+ *  `aria-labelledby` names a card without a header. */
 export function Card(props: SectionProps): React.ReactElement {
   const { className, children, ...rest } = props;
+  const labelId = useId();
+  const named = rest['aria-label'] != null || rest['aria-labelledby'] != null;
   return (
-    <section className={cx('ui-card', className)} {...rest}>
-      {children}
-    </section>
+    <CardLabelId.Provider value={named ? undefined : labelId}>
+      <section
+        className={cx('ui-card', className)}
+        aria-labelledby={named ? undefined : labelId}
+        {...rest}
+      >
+        {children}
+      </section>
+    </CardLabelId.Provider>
   );
 }
 
@@ -23,9 +36,12 @@ export function CardHeader(props: {
   action?: React.ReactNode;
 }): React.ReactElement {
   const { label, count, meta, action } = props;
+  const labelId = useContext(CardLabelId);
   return (
     <div className="ui-card-hd">
-      <h2 className="ui-card-lbl">{label}</h2>
+      <h2 id={labelId} className="ui-card-lbl">
+        {label}
+      </h2>
       {count != null && <span className="ui-card-count">{count}</span>}
       {meta != null && <span className="ui-card-meta">{meta}</span>}
       {action != null && <span className="ui-card-act">{action}</span>}
