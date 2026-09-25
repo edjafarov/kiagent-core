@@ -1,24 +1,14 @@
 import React from 'react';
+import { detectPlatform } from '@shared/web-ui/ui';
 
-const isMac =
-  typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
-
-/** Drag strip shown ONLY on the signed-out gates (BootSplash, SignIn) —
- *  the signed-in shell gets its top drag band from the sidebar header plus
- *  .kg-topline instead. Taller on macOS (.mac): the traffic lights sit
- *  at y 18–32 (main.ts trafficLightPosition) and must not poke below it. */
+/** Drag band shown only on the signed-out gates (BootSplash, SignIn). The
+ *  signed-in shell draws the same 48px white band from its sidebar head and
+ *  page top bar. Leaves room for the traffic lights (macOS) or the caption
+ *  buttons (Windows/Linux). */
 export function TitleBar(): React.ReactElement {
   return (
-    <div
-      className={`kg-titlebar${isMac ? ' mac' : ''}`}
-      style={
-        {
-          paddingLeft: isMac ? 76 : 12,
-          paddingRight: isMac ? 12 : 140,
-        } as React.CSSProperties
-      }
-    >
-      <span className="kg-titlebar-title">KIAgent</span>
+    <div className={`ui-titlebar is-${detectPlatform()}`}>
+      <span>KIAgent</span>
     </div>
   );
 }

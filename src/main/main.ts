@@ -12,6 +12,7 @@ import {
   nativeImage,
   powerMonitor,
   safeStorage,
+  screen,
   shell,
 } from 'electron';
 import type { Tray } from 'electron';
@@ -30,6 +31,7 @@ import type {
 } from '@shared/ipc';
 import { INVOKE_CHANNELS } from '@shared/ipc';
 import { describeResetOutcome } from '@shared/reset-outcome';
+import { windowChrome } from './window-chrome';
 
 import { createConnectBroker } from './auth/connect-broker';
 import { installCrashHandlers, type CrashDeps } from './crash-handlers';
@@ -315,24 +317,10 @@ const WINDOW_SHOW_FALLBACK_MS = 5000;
 async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     show: false,
-    width: 1024,
-    height: 728,
-    minWidth: 720,
-    minHeight: 480,
+    ...windowChrome(process.platform, screen.getPrimaryDisplay().workAreaSize),
     backgroundColor: '#fafafa',
     icon: getAssetPath('icon.png'),
     titleBarStyle: 'hidden',
-    trafficLightPosition: { x: 12, y: 18 },
-    // Windows/Linux caption buttons only. On macOS a titleBarOverlay
-    // OVERRIDES trafficLightPosition and drops the lights below the overlay
-    // height, right onto the sidebar brand row.
-    ...(process.platform !== 'darwin' && {
-      titleBarOverlay: {
-        color: '#fafafa',
-        symbolColor: '#0f172a',
-        height: 30,
-      },
-    }),
     webPreferences: {
       // Packaged and unpackaged-prod runs have preload.js beside main.js;
       // the dev server serves it from the dll dir.
