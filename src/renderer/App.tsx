@@ -2,11 +2,11 @@ import React, { useSyncExternalStore } from 'react';
 import { subscribeAppState, getAppState } from '@renderer/state/app-state';
 import { useNavigation } from '@renderer/state/navigation';
 import {
+  ROUTE_META,
   ViewContext,
   isExtView,
   parseExtView,
   resolveInitialView,
-  type KnownView,
   type View,
   type ViewParams,
 } from '@renderer/state/view';
@@ -24,18 +24,8 @@ import {
 
 const screenRegistry = createScreenRegistry(getDefaultScreens());
 
-// Page titles for host-framed views, shown in the app's top bar (the band
-// doubles as the window drag region). A 'page' view renders its own.
-const VIEW_TITLES: Partial<Record<KnownView, string>> = {
-  sources: 'Sources',
-  outbox: 'Outbox',
-  connection: 'Connection',
-  marketplace: 'Marketplace',
-  logs: 'Logs',
-};
-
 /** B3: the title-lookup routing site (design spec's routing table) — a
- *  direct `VIEW_TITLES[view]` index is only correct for a `KnownView`. A
+ *  direct `ROUTE_META[view]` index is only correct for a `KnownView`. A
  *  contributed view's title comes from its OWN manifest entry, carried on
  *  the lifecycle snapshot's `ExtensionSnapshot.ui` (no other source exists
  *  — see screen-registry.tsx's B3 section). Never throws: an unparseable
@@ -45,7 +35,7 @@ function viewTitle(
   view: View,
   extensions: AppState['extensions'],
 ): string | undefined {
-  if (!isExtView(view)) return VIEW_TITLES[view];
+  if (!isExtView(view)) return ROUTE_META[view].title;
   const parsed = parseExtView(view);
   if (!parsed) return undefined;
   const ext = extensions.find((e) => e.id === parsed.extensionId);

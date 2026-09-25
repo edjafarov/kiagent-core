@@ -52,6 +52,38 @@ export interface Navigation<V extends string, P extends NavParams> {
   replaceParams: (params: P) => void;
 }
 
+/** What screens read through each app's `useView()`. */
+export type NavContextValue<V extends string, P extends NavParams> = Omit<
+  Navigation<V, P>,
+  'resolved'
+>;
+
+/** The first view to show, from an optional `#view=<id>&params=<json>`
+ *  location hash. Production never sets a hash, so this is `null` there;
+ *  tools that render the app with fixture data use it to open a view. */
+export function resolveInitialFrom<V extends string, P extends NavParams>(
+  isView: (v: string) => v is V,
+  hash: string,
+): Resolved<V, P> | null {
+  if (!hash || hash.length < 2) return null;
+  const q = new URLSearchParams(hash.slice(1));
+  const view = q.get('view');
+  if (!view || !isView(view)) return null;
+  let params: P | undefined;
+  const raw = q.get('params');
+  if (raw) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        params = parsed as P;
+      }
+    } catch {
+      params = undefined;
+    }
+  }
+  return { view, params, epoch: 0 };
+}
+
 /** Both apps route Settings under this id. */
 const SETTINGS = 'settings';
 

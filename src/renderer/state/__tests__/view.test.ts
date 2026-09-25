@@ -3,10 +3,18 @@ import {
   isExtView,
   isKnownView,
   makeExtView,
-  nextResolved,
   parseExtView,
   type ResolvedView,
+  type View,
+  type ViewParams,
 } from '../view';
+import { nextResolved as nextOf } from '../navigation';
+
+const nextResolved = (
+  prev: ResolvedView | null,
+  to: View,
+  params?: ViewParams,
+) => nextOf<View, ViewParams>(prev, to, params);
 
 describe('nextResolved', () => {
   test('first navigation starts at epoch 1 and pushes nothing', () => {

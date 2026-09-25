@@ -40,6 +40,11 @@ describe('Settings page', () => {
     expect(screen.getByText('account pane')).toBeInTheDocument();
   });
 
+  it('shows the first pane for a pane it does not have', () => {
+    renderAt('nope');
+    expect(screen.getByText('account pane')).toBeInTheDocument();
+  });
+
   it('switches by rewriting the route and follows the route', () => {
     const { replaceParams, rerender } = renderAt('about');
     expect(screen.getByText('about pane')).toBeInTheDocument();

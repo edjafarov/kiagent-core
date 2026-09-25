@@ -1,5 +1,9 @@
 import { createContext, useContext } from 'react';
-import { nextResolved as nextResolvedOf, type Resolved } from './navigation';
+import {
+  resolveInitialFrom,
+  type NavContextValue,
+  type Resolved,
+} from './navigation';
 
 /**
  * Routed screens. Deliberately small: Sources owns its own in-screen
@@ -111,17 +115,7 @@ export interface ViewParams {
   pane?: string;
 }
 
-export interface ViewContextValue {
-  view: View;
-  params: ViewParams;
-  navigate: (to: View, params?: ViewParams) => void;
-  back: () => void;
-  /** Opens the Settings page, on `pane` or the pane last shown. */
-  openSettings: (pane?: string) => void;
-  /** Replaces the current view's params without remounting it or adding
-   *  a history entry (e.g. switching Settings panes). */
-  replaceParams: (params: ViewParams) => void;
-}
+export type ViewContextValue = NavContextValue<View, ViewParams>;
 
 export const ViewContext = createContext<ViewContextValue>({
   view: 'sources',
@@ -139,36 +133,14 @@ export function useView(): ViewContextValue {
 /** A concrete navigation target; see state/navigation.ts. */
 export type ResolvedView = Resolved<View, ViewParams>;
 
-/** The navigate transition, typed for this app's routes. */
-export function nextResolved(
-  prev: ResolvedView | null,
-  to: View,
-  params?: ViewParams,
-): { next: ResolvedView; push: boolean } {
-  return nextResolvedOf<View, ViewParams>(prev, to, params);
+function isView(v: string): v is View {
+  return isKnownView(v) || isExtView(v);
 }
 
 /** The first view to show, from an optional `#view=<id>&params=<json>`
- *  location hash. Production never sets a hash, so this is `null` there;
- *  tools that render the app with fixture data use it to open a view. */
+ *  location hash (see `resolveInitialFrom`). */
 export function resolveInitialView(
   hash: string = typeof window !== 'undefined' ? window.location.hash : '',
 ): ResolvedView | null {
-  if (!hash || hash.length < 2) return null;
-  const q = new URLSearchParams(hash.slice(1));
-  const view = q.get('view');
-  if (!view || !(isKnownView(view) || isExtView(view))) return null;
-  let params: ViewParams | undefined;
-  const raw = q.get('params');
-  if (raw) {
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        params = parsed as ViewParams;
-      }
-    } catch {
-      params = undefined;
-    }
-  }
-  return { view, params, epoch: 0 };
+  return resolveInitialFrom<View, ViewParams>(isView, hash);
 }
