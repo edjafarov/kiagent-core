@@ -550,3 +550,47 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-bar.is-brand {
   background: color-mix(in oklab, var(--brand) var(--brand-tone), var(--brand-mute));
 }
+
+/* ── Sheet (modal dialog) ─────────────────────────────────────────── */
+.ui-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.32);
+}
+.ui-sheet {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  max-height: calc(100vh - 48px);
+  background: var(--card-bg);
+  border: 1px solid var(--card-edge);
+  border-radius: var(--r-card);
+  box-shadow: 0 20px 44px -16px rgba(15, 23, 42, 0.24);
+  outline: none;
+}
+.ui-sheet-hd { display: flex; align-items: center; gap: 10px; padding: 16px 16px 0 24px; }
+.ui-sheet-title {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ui-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 24px 20px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+.ui-sheet-text { margin: 0; }
+.ui-sheet-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 0 24px 20px; }
+.ui-sheet-err { margin: 12px 0 0; font-size: 12px; color: var(--error-solid); }

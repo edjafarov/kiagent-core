@@ -25,3 +25,5 @@ export { Toggle, Checkbox } from './toggles';
 export { Status, ProgressBar } from './status';
 export type { StatusTone } from './status';
 export { Spinner, Busy } from '../components';
+export { Sheet, ConfirmSheet } from './Sheet';
+export { portalRoot } from './portal';
