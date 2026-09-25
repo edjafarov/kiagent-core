@@ -129,6 +129,10 @@ export function attachToolHandlers(
     const args = (req.params.arguments ?? {}) as Record<string, unknown>;
     const started = Date.now();
     const tool = registry.get(name);
+    // Redacted up front, before the call runs: a redaction throw after
+    // tool.call would report a call that already happened (e.g. send_draft)
+    // as failed.
+    const loggedArgs = redactArgsForLog(args);
 
     const emit = (ok: boolean, result: unknown, error?: string): void => {
       if (!onActivity) return;
@@ -153,7 +157,7 @@ export function attachToolHandlers(
 
     if (!tool) {
       logSink.log('mcp.call', 'info', name, {
-        args: redactArgsForLog(args),
+        args: loggedArgs,
         ok: false,
         ms: Date.now() - started,
         error: 'unknown tool',
@@ -168,7 +172,7 @@ export function attachToolHandlers(
     try {
       const result = await tool.call(args);
       logSink.log('mcp.call', 'info', name, {
-        args: redactArgsForLog(args),
+        args: loggedArgs,
         ok: true,
         ms: Date.now() - started,
       });
@@ -177,7 +181,7 @@ export function attachToolHandlers(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logSink.log('mcp.call', 'info', name, {
-        args: redactArgsForLog(args),
+        args: loggedArgs,
         ok: false,
         ms: Date.now() - started,
         error: message,

@@ -115,7 +115,7 @@ it('a throwing onActivity never breaks the call it records', async () => {
   expect(res.isError).toBeUndefined();
 });
 
-it('still audits every call to the LogSink (the raw audit is unchanged)', async () => {
+it('still audits every call to the LogSink when an activity callback is attached', async () => {
   logSink.log.mockClear();
   const registry = createToolRegistry([okTool]);
   const { mcp, handlers } = capture();
