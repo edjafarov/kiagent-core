@@ -148,7 +148,10 @@ export interface StorageStats {
 export interface FactoryResetOutcome {
   /** Everything wiped, and every extension running again. */
   ok: boolean;
-  coreWiped: boolean;
+  /** null: the reset failed where the deletion may have committed without
+   *  saying so (a DB worker that died before replying), and the store could
+   *  not be asked afterwards. */
+  coreWiped: boolean | null;
   /** Extensions whose data could not be reset (the reset stopped there) or
    *  that did not start again afterwards; each now needs recovery. */
   failed: Array<{ pluginId: string; error: string }>;

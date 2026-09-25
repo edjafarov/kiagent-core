@@ -13,6 +13,13 @@ export function describeResetOutcome(
 ): string {
   const names = list(outcome.failed.map((f) => nameOf(f.pluginId)));
   const plural = outcome.failed.length > 1;
+  if (outcome.coreWiped === null) {
+    return (
+      `The reset did not finish${outcome.error ? `: ${outcome.error}` : ''}. ` +
+      `It could not be confirmed whether your accounts and search index were ` +
+      `already deleted. Reset again to finish.`
+    );
+  }
   if (outcome.coreWiped) {
     if (outcome.ok) return 'All local data was wiped.';
     const problems: string[] = [];

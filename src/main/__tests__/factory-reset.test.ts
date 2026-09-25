@@ -13,11 +13,30 @@ import { openStore } from '../core/store/store';
 import { runFactoryReset } from '../factory-reset';
 import type { FactoryResetDeps } from '../factory-reset';
 
-/** A store whose resetAll announces the deletion boundary like the real one. */
-function fakeStore(opts: { wipe?: 'ok' | 'before' | 'after' } = {}) {
+/** A store whose resetAll announces the deletion boundary like the real one.
+ *  'lost-ack' commits the deletion and rejects without announcing it, as a
+ *  DB worker that dies before replying does. */
+function fakeStore(
+  opts: {
+    wipe?: 'ok' | 'before' | 'after' | 'lost-ack';
+    accounts?: number;
+    /** The store stops answering once the reset settles. */
+    goneAfter?: boolean;
+  } = {},
+) {
   const listeners = new Set<() => void>();
   const off = jest.fn();
+  let accounts = Array.from({ length: opts.accounts ?? 1 }, (_, i) => ({
+    id: `a${i}`,
+  }));
+  let settled = false;
   const store = {
+    read: {
+      accounts: jest.fn(async () => {
+        if (settled && opts.goneAfter) throw new Error('db worker exited');
+        return accounts;
+      }),
+    },
     onReset: jest.fn((l: () => void) => {
       listeners.add(l);
       return () => {
@@ -27,7 +46,10 @@ function fakeStore(opts: { wipe?: 'ok' | 'before' | 'after' } = {}) {
     }),
     maintenance: {
       resetAll: jest.fn(async () => {
+        settled = true;
         if (opts.wipe === 'before') throw new Error('reset batch failed');
+        accounts = [];
+        if (opts.wipe === 'lost-ack') throw new Error('db worker exited');
         for (const l of listeners) l();
         if (opts.wipe === 'after') throw new Error('vacuum unavailable');
       }),
@@ -197,6 +219,42 @@ describe('runFactoryReset', () => {
     });
   });
 
+  describe('a deletion that committed without saying so', () => {
+    it('is found by asking the store, and counts as wiped', async () => {
+      const { store } = fakeStore({ wipe: 'lost-ack' });
+      const { d } = deps({ store });
+      await expect(runFactoryReset(d)).resolves.toEqual({
+        ok: false,
+        coreWiped: true,
+        failed: [],
+        error: 'db worker exited',
+      });
+      expect(d.afterCoreWipe).toHaveBeenCalledTimes(1);
+    });
+
+    it('is unknown when the store no longer answers — nothing is cleared', async () => {
+      const { store } = fakeStore({ wipe: 'lost-ack', goneAfter: true });
+      const { d } = deps({ store });
+      await expect(runFactoryReset(d)).resolves.toEqual({
+        ok: false,
+        coreWiped: null,
+        failed: [],
+        error: 'db worker exited',
+      });
+      expect(d.afterCoreWipe).not.toHaveBeenCalled();
+    });
+
+    it('is unknown when there were no accounts to go by', async () => {
+      const { store } = fakeStore({ wipe: 'before', accounts: 0 });
+      const { d } = deps({ store });
+      await expect(runFactoryReset(d)).resolves.toMatchObject({
+        ok: false,
+        coreWiped: null,
+      });
+      expect(d.afterCoreWipe).not.toHaveBeenCalled();
+    });
+  });
+
   describe('against the real store', () => {
     let dir: string;
     beforeEach(() => {
@@ -231,6 +289,42 @@ describe('runFactoryReset', () => {
         expect(await store.read.accounts()).toEqual([]);
       } finally {
         exec.mockRestore();
+        await store.close();
+      }
+    });
+
+    it('a worker that dies after committing the wipe is reported as wiped', async () => {
+      const db = await openDb(path.join(dir, 'test.db'));
+      const store = openStore(db, {
+        encrypt: (s: string) => Buffer.from(s, 'utf8'),
+        decrypt: (b: Buffer) => b.toString('utf8'),
+        detectLanguages: () => [],
+      });
+      await store.createAccount({ source: 'test', identifier: 'me@x.com' });
+      const realBatch = db.batch.bind(db);
+      const batch = jest.spyOn(db, 'batch').mockImplementation(async (ops) => {
+        const committed = await realBatch(ops);
+        if (ops.some((op) => op.sql === 'DELETE FROM accounts'))
+          throw new Error('db worker exited');
+        return committed;
+      });
+      const afterCoreWipe = jest.fn(async () => {});
+      try {
+        const outcome = await runFactoryReset({
+          store,
+          platform: null,
+          pauseSources: async () => {},
+          afterCoreWipe,
+        });
+        expect(outcome).toEqual({
+          ok: false,
+          coreWiped: true,
+          failed: [],
+          error: 'db worker exited',
+        });
+        expect(afterCoreWipe).toHaveBeenCalledTimes(1);
+      } finally {
+        batch.mockRestore();
         await store.close();
       }
     });

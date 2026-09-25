@@ -44,6 +44,17 @@ describe('describeResetOutcome (alpha-cent#192)', () => {
     expect(text).toMatch(/not touched/);
   });
 
+  it('a reset that cannot tell whether the core wipe committed says so — it claims neither', () => {
+    const text = describeResetOutcome(
+      { ok: false, coreWiped: null, failed: [], error: 'db worker exited' },
+      nameOf,
+    );
+    expect(text).toMatch(/did not finish: db worker exited/);
+    expect(text).toMatch(/could not be confirmed/);
+    expect(text).toMatch(/Reset again/);
+    expect(text).not.toMatch(/not touched|was wiped/);
+  });
+
   it('core wiped but extensions did not start again: wiped, and names them', () => {
     const text = describeResetOutcome(
       {
