@@ -2,7 +2,8 @@ import React from 'react';
 
 /* Lucide-style icon sprite. All glyphs share a 24x24 viewBox, currentColor,
    stroke-width 1.5, round caps/joins. Render once per page via <IconSprite/>;
-   consume anywhere with <Icon name="folder" />. */
+   consume anywhere with <Icon name="folder" />. Stroke width sits on each
+   <svg> (inherited through <use>), so a stylesheet can change it per context. */
 
 const SYMBOLS: { id: string; body: React.ReactNode }[] = [
   {
@@ -259,6 +260,339 @@ const SYMBOLS: { id: string; body: React.ReactNode }[] = [
       </>
     ),
   },
+  {
+    id: 'i-bell',
+    body: (
+      <>
+        <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+        <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+      </>
+    ),
+  },
+  {
+    id: 'i-inbox',
+    body: (
+      <>
+        <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+        <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+      </>
+    ),
+  },
+  {
+    id: 'i-send',
+    body: (
+      <>
+        <path d="m22 2-7 20-4-9-9-4Z" />
+        <path d="M22 2 11 13" />
+      </>
+    ),
+  },
+  {
+    id: 'i-clock',
+    body: (
+      <>
+        <circle cx="12" cy="12" r="10" />
+        <polyline points="12 6 12 12 16 14" />
+      </>
+    ),
+  },
+  {
+    id: 'i-globe',
+    body: (
+      <>
+        <circle cx="12" cy="12" r="10" />
+        <path d="M2 12h20" />
+        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+      </>
+    ),
+  },
+  {
+    id: 'i-key',
+    body: (
+      <>
+        <circle cx="7.5" cy="15.5" r="5.5" />
+        <path d="m21 2-9.6 9.6" />
+        <path d="m15.5 7.5 3 3L22 7l-3-3" />
+      </>
+    ),
+  },
+  {
+    id: 'i-sliders',
+    body: (
+      <>
+        <line x1="4" y1="21" x2="4" y2="14" />
+        <line x1="4" y1="10" x2="4" y2="3" />
+        <line x1="12" y1="21" x2="12" y2="12" />
+        <line x1="12" y1="8" x2="12" y2="3" />
+        <line x1="20" y1="21" x2="20" y2="16" />
+        <line x1="20" y1="12" x2="20" y2="3" />
+        <line x1="2" y1="14" x2="6" y2="14" />
+        <line x1="10" y1="8" x2="14" y2="8" />
+        <line x1="18" y1="16" x2="22" y2="16" />
+      </>
+    ),
+  },
+  {
+    id: 'i-download',
+    body: (
+      <>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="7 10 12 15 17 10" />
+        <line x1="12" y1="15" x2="12" y2="3" />
+      </>
+    ),
+  },
+  {
+    id: 'i-undo',
+    body: (
+      <>
+        <path d="M3 7v6h6" />
+        <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+      </>
+    ),
+  },
+  {
+    id: 'i-arrow-left',
+    body: (
+      <>
+        <path d="m12 19-7-7 7-7" />
+        <path d="M19 12H5" />
+      </>
+    ),
+  },
+  {
+    id: 'i-monitor',
+    body: (
+      <>
+        <rect x="2" y="3" width="20" height="14" />
+        <line x1="8" y1="21" x2="16" y2="21" />
+        <line x1="12" y1="17" x2="12" y2="21" />
+      </>
+    ),
+  },
+  {
+    id: 'i-cpu',
+    body: (
+      <>
+        <rect x="4" y="4" width="16" height="16" />
+        <rect x="9" y="9" width="6" height="6" />
+        <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+      </>
+    ),
+  },
+  {
+    id: 'i-hard-drive',
+    body: (
+      <>
+        <line x1="22" y1="12" x2="2" y2="12" />
+        <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+        <line x1="6" y1="16" x2="6.01" y2="16" />
+        <line x1="10" y1="16" x2="10.01" y2="16" />
+      </>
+    ),
+  },
+  {
+    id: 'i-file-text',
+    body: (
+      <>
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+        <line x1="16" y1="13" x2="8" y2="13" />
+        <line x1="16" y1="17" x2="8" y2="17" />
+      </>
+    ),
+  },
+  {
+    id: 'i-filter',
+    body: <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />,
+  },
+  {
+    id: 'i-activity',
+    body: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />,
+  },
+  {
+    id: 'i-zap',
+    body: <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />,
+  },
+  {
+    id: 'i-message',
+    body: (
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    ),
+  },
+  {
+    id: 'i-folder-open',
+    body: (
+      <path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5c0-1.1.9-2 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2" />
+    ),
+  },
+  {
+    id: 'i-lock',
+    body: (
+      <>
+        <rect x="3" y="11" width="18" height="11" />
+        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+      </>
+    ),
+  },
+  {
+    id: 'i-arrow-up-right',
+    body: (
+      <>
+        <path d="M7 7h10v10" />
+        <path d="M7 17 17 7" />
+      </>
+    ),
+  },
+  {
+    id: 'i-list',
+    body: (
+      <>
+        <line x1="8" y1="6" x2="21" y2="6" />
+        <line x1="8" y1="12" x2="21" y2="12" />
+        <line x1="8" y1="18" x2="21" y2="18" />
+        <line x1="3" y1="6" x2="3.01" y2="6" />
+        <line x1="3" y1="12" x2="3.01" y2="12" />
+        <line x1="3" y1="18" x2="3.01" y2="18" />
+      </>
+    ),
+  },
+  {
+    id: 'i-grid',
+    body: (
+      <>
+        <rect x="3" y="3" width="7" height="7" />
+        <rect x="14" y="3" width="7" height="7" />
+        <rect x="14" y="14" width="7" height="7" />
+        <rect x="3" y="14" width="7" height="7" />
+      </>
+    ),
+  },
+  {
+    id: 'i-chev-up',
+    body: <polyline points="18 15 12 9 6 15" />,
+  },
+  {
+    id: 'i-chev-left',
+    body: <polyline points="15 18 9 12 15 6" />,
+  },
+  {
+    id: 'i-edit',
+    body: (
+      <>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      </>
+    ),
+  },
+  {
+    id: 'i-sparkles',
+    body: (
+      <>
+        <path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2Z" />
+        <path d="M19 3v4M21 5h-4" />
+      </>
+    ),
+  },
+  {
+    id: 'i-bot',
+    body: (
+      <>
+        <rect x="3" y="8" width="18" height="12" />
+        <path d="M12 8V4H8" />
+        <path d="M9 13v2M15 13v2" />
+      </>
+    ),
+  },
+  {
+    id: 'i-power',
+    body: (
+      <>
+        <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+        <line x1="12" y1="2" x2="12" y2="12" />
+      </>
+    ),
+  },
+  {
+    id: 'i-upload',
+    body: (
+      <>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="17 8 12 3 7 8" />
+        <line x1="12" y1="3" x2="12" y2="15" />
+      </>
+    ),
+  },
+  {
+    id: 'i-user-plus',
+    body: (
+      <>
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <line x1="19" y1="8" x2="19" y2="14" />
+        <line x1="22" y1="11" x2="16" y2="11" />
+      </>
+    ),
+  },
+  {
+    id: 'i-moon',
+    body: <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />,
+  },
+  {
+    id: 'i-wave',
+    body: <path d="M2 12h2M6 8v8M10 5v14M14 8v8M18 10v4M22 12h0" />,
+  },
+  {
+    id: 'i-home',
+    body: (
+      <>
+        <path d="m3 10 9-7 9 7" />
+        <path d="M5 9v11h14V9" />
+        <path d="M9 20v-6h6v6" />
+      </>
+    ),
+  },
+  {
+    id: 'i-calendar',
+    body: (
+      <>
+        <rect x="3" y="4" width="18" height="17" rx="2" />
+        <path d="M16 2v4M8 2v4M3 10h18" />
+      </>
+    ),
+  },
+  {
+    id: 'i-users',
+    body: (
+      <>
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+      </>
+    ),
+  },
+  {
+    id: 'i-layers',
+    body: (
+      <>
+        <path d="m12 2 9 5-9 5-9-5 9-5Z" />
+        <path d="m3 12 9 5 9-5M3 17l9 5 9-5" />
+      </>
+    ),
+  },
+  {
+    id: 'i-mic',
+    body: (
+      <>
+        <rect x="9" y="2" width="6" height="12" rx="3" />
+        <path d="M5 10a7 7 0 0 0 14 0M12 19v3M8 22h8" />
+      </>
+    ),
+  },
+  {
+    id: 'i-square',
+    body: <rect x="5" y="5" width="14" height="14" />,
+  },
 ];
 
 /** Every name `<Icon name>` resolves against this sprite (ids without `i-`). */
@@ -280,7 +614,6 @@ export function IconSprite(): React.ReactElement {
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
-          strokeWidth={1.5}
           strokeLinecap="round"
           strokeLinejoin="round"
         >
@@ -303,6 +636,7 @@ export function Icon(props: {
       className={className}
       width={size}
       height={size}
+      strokeWidth={1.5}
       style={style}
       aria-hidden="true"
     >
