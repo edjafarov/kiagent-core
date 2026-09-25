@@ -1,0 +1,83 @@
+/* Design-system primitives for the app shell and its pages.
+   Every class starts with `ui-`; state and variant modifiers are `is-*`.
+   Nothing here styles a legacy class, and no legacy stylesheet styles
+   `ui-*`. All values come from tokens.css. */
+
+/* ── Surfaces ─────────────────────────────────────────────────────── */
+.ui-card {
+  min-width: 0;
+  padding: var(--card-pad);
+  background: var(--card-bg);
+  border: 1px solid var(--card-edge);
+  border-radius: var(--r-card);
+}
+.ui-card-hd {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  height: 20px;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+.ui-card-lbl {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--label-color);
+  white-space: nowrap;
+}
+.ui-card-count {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ui-card-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.ui-card-act { margin-left: auto; white-space: nowrap; }
+.ui-card-foot { margin-top: 8px; font-size: 11.5px; color: var(--text-tertiary); }
+.ui-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+  padding: 20px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-edge);
+  border-radius: var(--r-card);
+}
+.ui-panel-title {
+  margin: 0;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ui-kv {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 9px;
+  margin: 0;
+  font-size: 12.5px;
+}
+.ui-kv dt { color: var(--text-secondary); }
+.ui-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--text-primary); }
+.ui-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.ui-empty p { margin: 0; }

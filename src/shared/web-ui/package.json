@@ -12,6 +12,8 @@
     ".": "./index.ts",
     "./tokens.css": "./tokens.css",
     "./components.css": "./components.css",
+    "./ui.css": "./ui.css",
+    "./ui": "./ui/index.ts",
     "./shell-app.css": "./shell-app.css",
     "./shell-hero.css": "./shell-hero.css",
     "./shell-minimal.css": "./shell-minimal.css",

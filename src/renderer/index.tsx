@@ -4,6 +4,7 @@ import * as jsxRuntime from 'react/jsx-runtime';
 import { createRoot } from 'react-dom/client';
 import '@shared/web-ui/tokens.css';
 import '@shared/web-ui/components.css';
+import '@shared/web-ui/ui.css';
 import '@shared/web-ui/Spark.css';
 import './App.css';
 import App from './App';
