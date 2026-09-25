@@ -20,6 +20,7 @@ function doc(over: Partial<Document> = {}): Document {
     parentId: null,
     contentHash: 'h',
     seq: 1,
+    ingestSeq: 1,
     archivedAt: null,
     languages: [],
     ingestedAt: '2026-01-01',

@@ -1097,6 +1097,19 @@ const MIGRATIONS: Migration[] = [
         `ALTER TABLE consents ADD COLUMN pages INTEGER NOT NULL DEFAULT 0`,
       );
   },
+
+  // v7 — `documents.ingest_seq`: the seq of the change that inserted the row,
+  // so a feed consumer can tell the insert from later updates (#265). Legacy
+  // rows read 0, which no change seq (AUTOINCREMENT from 1) ever equals.
+  (db) => {
+    const cols = db.prepare(`PRAGMA table_info(documents)`).all() as {
+      name: string;
+    }[];
+    if (!cols.some((c) => c.name === 'ingest_seq'))
+      db.exec(
+        `ALTER TABLE documents ADD COLUMN ingest_seq INTEGER NOT NULL DEFAULT 0`,
+      );
+  },
 ];
 
 /**

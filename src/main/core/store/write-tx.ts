@@ -368,9 +368,9 @@ export function createWriteTx(
     conn
       .prepare(
         `INSERT INTO documents(id, account_id, external_id, type, title, markdown, url,
-         metadata, created_at, parent_id, content_hash, seq, archived_at, languages,
-         ingested_at, updated_at, scope_root_id)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+         metadata, created_at, parent_id, content_hash, seq, ingest_seq, archived_at,
+         languages, ingested_at, updated_at, scope_root_id)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -384,6 +384,7 @@ export function createWriteTx(
         input.createdAt,
         parentId,
         hash,
+        seq,
         seq,
         JSON.stringify(languages),
         ts,

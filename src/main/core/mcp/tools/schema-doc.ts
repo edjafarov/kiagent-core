@@ -101,6 +101,12 @@ TEXT.`,
           notes: 'The changes.seq that last materialized this row.',
         },
         {
+          name: 'ingest_seq',
+          type: 'INTEGER',
+          notes:
+            'The changes.seq that inserted this row; 0 for rows ingested before it was recorded.',
+        },
+        {
           name: 'archived_at',
           type: 'TEXT (ISO-8601)',
           notes: 'Soft-delete marker; NULL for live docs.',

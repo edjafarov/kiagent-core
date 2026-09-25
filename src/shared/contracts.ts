@@ -95,6 +95,9 @@ export interface Document
   parentId: DocumentId | null;
   contentHash: string;
   seq: Seq;
+  /** The change that created this row: a 'document' change whose seq equals
+   *  it is the insert. 0 for rows ingested before core recorded it. */
+  ingestSeq: Seq;
   /** Soft-delete tombstone: live → archived → gone. Hidden from default
    *  queries; hard-purged later by engine maintenance. */
   archivedAt: string | null;

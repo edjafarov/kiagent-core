@@ -343,6 +343,8 @@ export interface DocRow {
   parent_id: string | null;
   content_hash: string;
   seq: number;
+  /** v7. `undefined` on a pre-v7 database, like scope_root_id below. */
+  ingest_seq: number;
   archived_at: string | null;
   languages: string;
   ingested_at: string;
@@ -380,6 +382,7 @@ function toDocument(r: DocRow): Document {
     parentId: (r.parent_id as DocumentId) ?? null,
     contentHash: r.content_hash,
     seq: r.seq,
+    ingestSeq: r.ingest_seq ?? 0,
     archivedAt: r.archived_at,
     languages: JSON.parse(r.languages),
     ingestedAt: r.ingested_at,

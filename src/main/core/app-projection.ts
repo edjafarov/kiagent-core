@@ -81,8 +81,13 @@ function draftIndex(base: ArchivedIndex) {
  *   revives its rows in place, keeping their original ingestedAt): +1. Both
  *   are read off an index of the archived documents, seeded by init() and
  *   kept per state, so a replayed change counts once.
- * - any other live change: +1 only when ingestedAt === updatedAt, the "new
- *   document" heuristic.
+ * - the change that inserted the document (its seq is the document's
+ *   ingestSeq): +1. Every change row materializes the document's CURRENT
+ *   state, so this reads the row, not timestamps: an update landing in the
+ *   same millisecond as the insert, or an insert only read after later
+ *   updates, still counts once (#265). An insert row read after the
+ *   document was archived nets 0: +1 for the insert, -1 for the archive
+ *   transition the same row shows.
  *
  * The index is held in a WeakMap keyed by the state object, not in AppState:
  * AppState is cloned to every window on every push, and a deselected folder
@@ -159,17 +164,15 @@ export function createAppProjection(
           const { accountId, id } = c.document;
           const wasArchived = archived.has(accountId, id);
           const isArchived = c.document.archivedAt !== null;
-          let delta = 0;
+          let delta = c.seq === c.document.ingestSeq ? 1 : 0; // new
           if (isArchived) {
             if (!wasArchived) {
-              delta = -1;
+              delta -= 1;
               archived.add(accountId, id);
             }
           } else if (wasArchived) {
-            delta = 1; // restored
+            delta += 1; // restored
             archived.remove(accountId, id);
-          } else if (c.document.ingestedAt === c.document.updatedAt) {
-            delta = 1; // new
           }
           const docCount = Math.max(0, entry.docCount + delta);
           const recent = isArchived

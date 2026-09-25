@@ -44,6 +44,7 @@ const EXISTING_DOC = {
   parentId: null,
   contentHash: 'hash',
   seq: 1,
+  ingestSeq: 1,
   archivedAt: null,
   languages: [],
   ingestedAt: '2026-01-01T00:00:00.000Z',

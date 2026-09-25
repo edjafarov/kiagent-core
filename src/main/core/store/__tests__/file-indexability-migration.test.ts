@@ -316,7 +316,7 @@ function rewindToV1(db: Database.Database): void {
  *  migration's own number. Bump when a migration is appended (v4 added the
  *  attention tables); the assertions that pin THIS migration's effects are
  *  the column/index/row checks beside each use, not this number. */
-const HEAD_SCHEMA_VERSION = 6;
+const HEAD_SCHEMA_VERSION = 7;
 
 function schemaVersion(db: Database.Database): number {
   const row = db

@@ -53,6 +53,7 @@ function docChange(
       parentId: null,
       contentHash: 'h',
       seq,
+      ingestSeq: seq, // an insert row unless `over` says otherwise
       archivedAt: null,
       languages: [],
       ingestedAt: ts,
@@ -113,6 +114,7 @@ describe('appProjection.apply', () => {
     let s = projection.apply(base, [docChange(1, 'a1', 'd1')]);
     s = projection.apply(s, [
       docChange(5, 'a1', 'd1', {
+        ingestSeq: 1,
         ingestedAt: '2026-01-01T00:00:01Z',
         updatedAt: '2026-01-01T00:00:05Z',
       }),
@@ -121,10 +123,52 @@ describe('appProjection.apply', () => {
     expect(s.accounts[0].recent).toHaveLength(1);
   });
 
+  // #265 (alpha-cent): "new" is the insert row itself, never timestamps.
+  it('an update in the same millisecond as the insert does not count again', () => {
+    let s = projection.apply(base, [docChange(1, 'a1', 'd1')]);
+    s = projection.apply(s, [docChange(2, 'a1', 'd1', { ingestSeq: 1 })]);
+    expect(s.accounts[0].docCount).toBe(1);
+  });
+
+  it('an insert row read after later updates still counts', () => {
+    // Rows materialize CURRENT state: a lagging reader sees the insert row
+    // with the update's updatedAt.
+    const current = {
+      ingestSeq: 1,
+      ingestedAt: '2026-01-01T00:00:01Z',
+      updatedAt: '2026-01-01T00:00:02Z',
+      seq: 2,
+    };
+    const s = projection.apply(base, [
+      docChange(1, 'a1', 'd1', current),
+      docChange(2, 'a1', 'd1', current),
+    ]);
+    expect(s.accounts[0].docCount).toBe(1);
+  });
+
+  it('an insert row read after its archive nets zero', () => {
+    const counted = {
+      ...base,
+      accounts: [{ ...base.accounts[0], docCount: 4 }],
+    };
+    const current = {
+      ingestSeq: 1,
+      seq: 2,
+      updatedAt: '2026-01-01T00:00:02Z',
+      archivedAt: '2026-01-01T00:00:02Z',
+    };
+    const s = projection.apply(counted, [
+      docChange(1, 'a1', 'd1', current),
+      docChange(2, 'a1', 'd1', current),
+    ]);
+    expect(s.accounts[0].docCount).toBe(4);
+  });
+
   it('archive removes from count and recents', () => {
     let s = projection.apply(base, [docChange(1, 'a1', 'd1')]);
     s = projection.apply(s, [
       docChange(6, 'a1', 'd1', {
+        ingestSeq: 1,
         ingestedAt: '2026-01-01T00:00:01Z',
         updatedAt: '2026-01-01T00:00:06Z',
         archivedAt: '2026-01-01T00:00:06Z',
@@ -202,7 +246,7 @@ describe('account-cursor-not-projected', () => {
 });
 
 // #180 (alpha-cent): restoring an archived document keeps its original
-// ingestedAt, so the "new document" heuristic alone never counted it back.
+// ingestSeq, so the insert rule alone never counts it back.
 describe('appProjection archived → live transitions', () => {
   const projection = createAppProjection(extras);
   const base = {
@@ -216,12 +260,14 @@ describe('appProjection archived → live transitions', () => {
   };
   const archive = (seq: number, id: string) =>
     docChange(seq, 'a1', id, {
+      ingestSeq: 1,
       ingestedAt: '2026-01-01T00:00:01Z',
       updatedAt: `2026-01-01T00:00:0${seq}Z`,
       archivedAt: `2026-01-01T00:00:0${seq}Z`,
     });
   const restore = (seq: number, id: string) =>
     docChange(seq, 'a1', id, {
+      ingestSeq: 1,
       ingestedAt: '2026-01-01T00:00:01Z',
       updatedAt: `2026-01-01T00:00:0${seq}Z`,
     });

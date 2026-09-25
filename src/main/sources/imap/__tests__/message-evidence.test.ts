@@ -41,6 +41,7 @@ function document(externalId = 'INBOX:7:42'): Document {
     createdAt: null,
     contentHash: 'hash-1',
     seq: 1,
+    ingestSeq: 1,
     archivedAt: null,
     languages: [],
     ingestedAt: new Date(0).toISOString(),

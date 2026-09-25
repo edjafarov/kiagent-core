@@ -34,6 +34,7 @@ function document(): Document {
     createdAt: new Date(0).toISOString(),
     contentHash: 'hash-1',
     seq: 1,
+    ingestSeq: 1,
     archivedAt: null,
     languages: [],
     ingestedAt: new Date(0).toISOString(),

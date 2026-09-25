@@ -21,15 +21,16 @@ import type { CoreStore } from '../store/store';
 import { createAppProjection } from '../app-projection';
 import { DEFAULT_PREFS } from '../prefs';
 
-// A strictly advancing clock: the projection's "new document" heuristic is
-// ingestedAt === updatedAt, so two real writes landing in the same
-// millisecond would read as two new documents (a known, separate limit).
+// A strictly advancing clock, unless a test freezes it: #265 is about
+// writes landing in the same millisecond.
 let tick = 0;
+let frozen: string | null = null;
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
   decrypt: (b: Buffer) => b.toString('utf8'),
   detectLanguages: () => ['eng'],
   now: () => {
+    if (frozen) return frozen;
     tick += 1;
     return new Date(Date.UTC(2026, 0, 1) + tick * 1000).toISOString();
   },
@@ -95,6 +96,7 @@ describe('app projection docCount vs the store (#180)', () => {
   });
 
   afterEach(async () => {
+    frozen = null;
     await store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -188,5 +190,54 @@ describe('app projection docCount vs the store (#180)', () => {
     });
     await expectExact();
     expect(state.accounts[0].docCount).toBe(1);
+  });
+
+  // #265: "new" is read off the insert row, never timestamps.
+  it('an update in the same millisecond as its ingest counts once', async () => {
+    frozen = '2026-02-01T00:00:00.000Z';
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 1,
+    });
+    await expectExact();
+    await store.commit({
+      account: accountId,
+      documents: [{ ...doc('a'), markdown: 'enriched' }],
+      cursor: 2,
+    });
+    await expectExact();
+    expect(state.accounts[0].docCount).toBe(1);
+  });
+
+  it('a reader that catches up after the update still counts the ingest', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 1,
+    });
+    await store.commit({
+      account: accountId,
+      documents: [{ ...doc('a'), markdown: 'edited' }],
+      cursor: 2,
+    });
+    await expectExact();
+    expect(state.accounts[0].docCount).toBe(1);
+  });
+
+  it('a child written before its parent in one batch counts once', async () => {
+    // The child's insert and its re-parenting are two change rows of one
+    // transaction.
+    const child = {
+      ...doc('child'),
+      parent: { externalId: 'p', type: 'note' },
+    };
+    await store.commit({
+      account: accountId,
+      documents: [child, doc('p')],
+      cursor: 1,
+    });
+    await expectExact();
+    expect(state.accounts[0].docCount).toBe(2);
   });
 });

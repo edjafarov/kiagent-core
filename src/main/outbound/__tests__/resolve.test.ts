@@ -15,6 +15,7 @@ function imapDoc(metadata: Record<string, unknown>): Document {
     parentId: null,
     contentHash: 'h',
     seq: 1,
+    ingestSeq: 1,
     archivedAt: null,
     languages: ['eng'],
     ingestedAt: '2026-07-01T00:00:00Z',
