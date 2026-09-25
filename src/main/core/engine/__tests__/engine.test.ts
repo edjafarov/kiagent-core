@@ -666,6 +666,144 @@ describe('engine', () => {
     expect(await store.ledgerDeferred(consumer, 0, total + 1)).toEqual([]);
   }, 30_000);
 
+  it('rerunDeferred: a page whose commit fails leaves its entries deferred, not done (#63)', async () => {
+    // REGRESSION: workOne recorded each entry's ledger outcome right after
+    // worker.work, but the re-drive commits the page's output only at the end
+    // of the page. The ledger row is the re-drive's only driver (no cursor),
+    // so a quit/crash in between left entries 'done' whose OCR/ASR output
+    // never landed — and nothing ever re-selected them.
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'c',
+    });
+    const consumer = 'worker:vision:v1';
+    await store.commit({
+      account: account.id,
+      documents: [doc('c-0', ''), doc('c-1', '')],
+      cursor: 1,
+    });
+    const seqs: number[] = [];
+    for (const id of ['c-0', 'c-1']) {
+      // eslint-disable-next-line no-await-in-loop
+      const d = await store.read.byExternalId(account.id, id, 'note');
+      seqs.push(d!.seq);
+      // eslint-disable-next-line no-await-in-loop
+      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+    }
+
+    const crashing: CoreStore = {
+      ...store,
+      commit: async () => {
+        throw new Error('commit boom');
+      },
+    };
+    const engine = createEngine({
+      store: crashing,
+      sources: { get: () => undefined },
+      inference: {
+        complete: async () => 'c',
+        see: async () => 's',
+        read: async () => 'r',
+        hear: async () => 'h',
+      },
+      convert: async (d: DocumentInput) => d,
+      logs: noopLogs,
+    });
+
+    await expect(
+      engine.rerunDeferred({
+        name: 'vision',
+        version: 1,
+        schedule: { every: '30m' },
+        matches: (c: Change) =>
+          c.kind === 'document' &&
+          (c.document.markdown ?? '').trim().length < 16,
+        async work(c, session) {
+          if (c.kind !== 'document') return 'skip';
+          session.enrich({ documentId: c.document.id, markdown: 'OCR text' });
+          return 'done'; // the worker now succeeds
+        },
+      }),
+    ).rejects.toThrow('commit boom');
+
+    expect(await store.ledgerDeferred(consumer, 0, 10)).toEqual(seqs);
+    expect((await store.ledgerCounts(consumer)).done).toBe(0);
+  });
+
+  it('rerunDeferred: records the page ledger in one write, after the page commit', async () => {
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'h',
+    });
+    const consumer = 'worker:vision:v1';
+    await store.commit({
+      account: account.id,
+      documents: [
+        doc('scan', ''),
+        doc('rich', 'real rich markdown that is plenty long'),
+      ],
+      cursor: 1,
+    });
+    for (const id of ['scan', 'rich']) {
+      // eslint-disable-next-line no-await-in-loop
+      const d = await store.read.byExternalId(account.id, id, 'note');
+      // eslint-disable-next-line no-await-in-loop
+      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+    }
+
+    const calls: string[] = [];
+    const spy: CoreStore = {
+      ...store,
+      commit: async (batch) => {
+        calls.push('commit');
+        return store.commit(batch);
+      },
+      ledgerRecord: async (...args) => {
+        calls.push('ledgerRecord');
+        return store.ledgerRecord(...args);
+      },
+      ledgerRecordMany: async (...args) => {
+        calls.push('ledgerRecordMany');
+        return store.ledgerRecordMany(...args);
+      },
+    };
+    const engine = createEngine({
+      store: spy,
+      sources: { get: () => undefined },
+      inference: {
+        complete: async () => 'c',
+        see: async () => 's',
+        read: async () => 'r',
+        hear: async () => 'h',
+      },
+      convert: async (d: DocumentInput) => d,
+      logs: noopLogs,
+    });
+
+    await engine.rerunDeferred({
+      name: 'vision',
+      version: 1,
+      schedule: { every: '30m' },
+      matches: (c: Change) =>
+        c.kind === 'document' && (c.document.markdown ?? '').trim().length < 16,
+      async work(c, session) {
+        if (c.kind !== 'document') return 'skip';
+        session.enrich({ documentId: c.document.id, markdown: 'OCR text' });
+        return 'done';
+      },
+    });
+
+    // The worked entry and the no-longer-matching skip share one write, and
+    // it lands only once the page's output is durable.
+    expect(calls).toEqual(['commit', 'ledgerRecordMany']);
+    expect(await store.ledgerDeferred(consumer, 0, 10)).toEqual([]);
+    const counts = await store.ledgerCounts(consumer);
+    expect(counts.done).toBe(1);
+    expect(counts.skip).toBe(1);
+    const scan = await store.read.byExternalId(account.id, 'scan', 'note');
+    expect(scan?.markdown).toBe('OCR text');
+  });
+
   it('workOne: a failed final attempt commits no partial emit/enrich', async () => {
     const source = fakeSource();
     const engine = makeEngine(source);

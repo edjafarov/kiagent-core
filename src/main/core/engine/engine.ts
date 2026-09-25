@@ -180,6 +180,11 @@ export const RECONCILE_STAGE_BATCH = 10_000;
  *  FEED_BATCH, the live tail's equivalent bound. */
 export const REDRIVE_PAGE = 500;
 
+/** What one worked change records in its work_ledger row — the store's own
+ *  outcome union, which `workOne` hands back for its caller to record. */
+type LedgerOutcome = NonNullable<Parameters<CoreStore['ledgerRecord']>[3]>;
+type LedgerEntry = Parameters<CoreStore['ledgerRecordMany']>[1][number];
+
 /**
  * Runs a source's optional `reconcile()` once per pull cycle: drains its full
  * listing, then archives whatever the account still has live that ISN'T in
@@ -639,13 +644,21 @@ export function createEngine(deps: EngineDeps): Engine & {
     },
   });
 
-  /** Run one change through a worker with bounded retries. Returns emitted docs and enrich batch. */
+  /** Run one change through a worker with bounded retries. Returns emitted
+   *  docs and enrich batch, plus the ledger outcome and attempt count — the
+   *  CALLER records them, so it can order that write against its commit of
+   *  the output (the re-drive has no cursor: its ledger row is its only
+   *  driver, and must not say 'done' before the output is durable). */
   const workOne = async (
     worker: Worker,
     change: Change,
     signal: AbortSignal,
-  ): Promise<{ docs: DocumentInput[]; enrich: EnrichInput[] }> => {
-    const consumer = workerConsumerName(worker);
+  ): Promise<{
+    docs: DocumentInput[];
+    enrich: EnrichInput[];
+    attempts: number;
+    outcome: LedgerOutcome;
+  }> => {
     const scope = `worker:${worker.name}`;
     const maxAttempts = worker.maxAttempts ?? 3;
 
@@ -700,13 +713,12 @@ export function createEngine(deps: EngineDeps): Engine & {
       };
       try {
         const outcome = (await worker.work(change, session)) ?? 'done';
-        await store.ledgerRecord(
-          consumer,
-          change.seq,
-          attempt,
-          outcome === 'defer' ? 'deferred' : outcome,
-        );
-        return { docs: emitted, enrich: enriched };
+        return {
+          docs: emitted,
+          enrich: enriched,
+          attempts: attempt,
+          outcome: outcome === 'defer' ? 'deferred' : outcome,
+        };
       } catch (err) {
         if (signal.aborted) throw err;
         logs.log(
@@ -715,13 +727,12 @@ export function createEngine(deps: EngineDeps): Engine & {
           `attempt ${attempt}/${maxAttempts} failed at seq ${change.seq}: ${String(err)}`,
         );
         if (attempt === maxAttempts) {
-          await store.ledgerRecord(consumer, change.seq, attempt, 'failed');
           // A failed final attempt must not commit its half-finished output.
           // Returning the accumulated emit/enrich would persist a partial
           // document (or clobber an existing one via enrich) under a 'failed'
-          // outcome. Drop it: the ledger records the failure, the cursor moves
+          // outcome. Drop it: the caller records the failure, the cursor moves
           // on, and nothing partial lands.
-          return { docs: [], enrich: [] };
+          return { docs: [], enrich: [], attempts: attempt, outcome: 'failed' };
         }
         await sleep(
           Math.min(BACKOFF_BASE_MS * 2 ** attempt, BACKOFF_CAP_MS),
@@ -730,8 +741,9 @@ export function createEngine(deps: EngineDeps): Engine & {
       }
     }
     // Unreachable unless maxAttempts < 1 (the loop always returns from
-    // within on a success, on the final failed attempt, or on abort).
-    return { docs: [], enrich: [] };
+    // within on a success, on the final failed attempt, or on abort). No
+    // attempt ran, so nothing was worked: record it as failed.
+    return { docs: [], enrich: [], attempts: 0, outcome: 'failed' };
   };
 
   const engine = {
@@ -1666,6 +1678,12 @@ export function createEngine(deps: EngineDeps): Engine & {
                 }
                 if (matched) {
                   const r = await workOne(worker, change, abort.signal);
+                  await store.ledgerRecord(
+                    consumer,
+                    change.seq,
+                    r.attempts,
+                    r.outcome,
+                  );
                   emitted = emitted.concat(r.docs);
                   enrich = enrich.concat(r.enrich);
                 }
@@ -1780,8 +1798,7 @@ export function createEngine(deps: EngineDeps): Engine & {
 
         const emitted: DocumentInput[] = [];
         const enrich: EnrichInput[] = [];
-        const skips: Array<{ seq: Seq; attempts: number; outcome: 'skip' }> =
-          [];
+        const ledger: LedgerEntry[] = [];
         for (const change of changes) {
           // changesAt materializes the CURRENT document, so a doc that gained
           // real markdown between defer and re-drive no longer matches, and an
@@ -1793,21 +1810,20 @@ export function createEngine(deps: EngineDeps): Engine & {
           // clears the 'deferred' row via the upsert) instead of re-selecting
           // it every cadence.
           if (!worker.matches(change)) {
-            skips.push({ seq: change.seq, attempts: 0, outcome: 'skip' });
+            ledger.push({ seq: change.seq, attempts: 0, outcome: 'skip' });
             continue;
           }
           // eslint-disable-next-line no-await-in-loop
           const r = await workOne(worker, change, abort.signal);
           emitted.push(...r.docs);
           enrich.push(...r.enrich);
+          ledger.push({
+            seq: change.seq,
+            attempts: r.attempts,
+            outcome: r.outcome,
+          });
         }
 
-        // One statement for the page's terminal skips. Previously one round
-        // trip per entry — 2.1M of them through the DB worker bridge.
-        if (skips.length) {
-          // eslint-disable-next-line no-await-in-loop
-          await store.ledgerRecordMany(consumer, skips);
-        }
         // Commit per page rather than accumulating across the whole backlog:
         // the old cross-loop `concat` accumulators grew without bound (and
         // reallocated on every iteration).
@@ -1820,6 +1836,18 @@ export function createEngine(deps: EngineDeps): Engine & {
             documents: emitted.length ? emitted : undefined,
             enrich: enrich.length ? enrich : undefined,
           });
+        }
+        // Only now resolve the page's ledger entries — its skips and worked
+        // outcomes in ONE statement (one round trip per entry was 2.1M of
+        // them through the DB worker bridge). The re-drive has no cursor: the
+        // ledger row is its only driver, so writing 'done' before the commit
+        // lost the output of any entry a quit or crash caught in between.
+        // A crash between the commit and this write leaves the entries
+        // 'deferred' and the next re-drive re-works them: at-least-once, by
+        // design. A workOne throw (abort) mid-page records nothing either.
+        if (ledger.length) {
+          // eslint-disable-next-line no-await-in-loop
+          await store.ledgerRecordMany(consumer, ledger);
         }
       }
     },
