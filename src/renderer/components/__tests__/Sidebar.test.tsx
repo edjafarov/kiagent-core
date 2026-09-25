@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import type { AppState } from '@shared/contracts';
 import { ViewContext, type ViewContextValue } from '@renderer/state/view';
 import { Sidebar } from '../Sidebar';
+import { AccountRow } from '../AccountRow';
 
 let mockState: Partial<AppState>;
 
@@ -185,5 +186,40 @@ describe('AccountMenu (core build)', () => {
     renderSidebar();
     expect(screen.getByText('A')).toBeInTheDocument();
     expect(screen.getByText('Alice Example')).toBeInTheDocument();
+  });
+});
+
+describe('AccountRow', () => {
+  it('adds build entries after Settings, shows a footer, and reports opening', () => {
+    const onOpen = jest.fn();
+    const logout = jest.fn();
+    render(
+      <AccountRow
+        identity={{
+          name: 'Alex Morgan',
+          emails: ['alex@northwind.test'],
+          phones: [],
+        }}
+        collapsed={false}
+        onOpenSettings={jest.fn()}
+        extraItems={[
+          'separator',
+          { key: 'logout', label: 'Log out', onSelect: logout },
+        ]}
+        footer={<p role="alert">network down</p>}
+        onOpen={onOpen}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole('menuitem').map((m) => m.textContent)).toEqual([
+      'Settings',
+      'Log out',
+    ]);
+    expect(screen.getByRole('menu')).toContainElement(
+      screen.getByRole('alert'),
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Log out' }));
+    expect(logout).toHaveBeenCalled();
   });
 });
