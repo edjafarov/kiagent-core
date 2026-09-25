@@ -15,6 +15,8 @@
 import fs from 'fs';
 import path from 'path';
 
+import Database from 'better-sqlite3';
+
 import { isCorpusRefusal } from './core/store/corpus-refusal';
 import { recordCrash, reportBootFailure } from './crash-handlers';
 import type { CrashDeps } from './crash-handlers';
@@ -55,27 +57,71 @@ async function moveFile(from: string, to: string): Promise<void> {
   }
 }
 
+/** Folds the WAL into the database file, so the database alone is a complete
+ *  copy: moved on its own, or split from its WAL by a failure or a crash
+ *  between renames, it still holds every committed transaction. A newer
+ *  schema does not matter here — a checkpoint copies pages, it reads no
+ *  table. Best effort: a reader holding the file (the stdio MCP server) can
+ *  leave it partial, and the moves below still keep the three files
+ *  together. */
+export function checkpointCorpus(dbPath: string): void {
+  // SQLite deletes the WAL of an empty database file on open — leave that
+  // set to the moves, untouched.
+  if (!fs.existsSync(dbPath) || fs.statSync(dbPath).size === 0) return;
+  let conn: Database.Database | undefined;
+  try {
+    conn = new Database(dbPath, { fileMustExist: true });
+    conn.pragma('wal_checkpoint(TRUNCATE)');
+  } catch {
+    // Unreadable or locked — the moves still keep the set together.
+  } finally {
+    conn?.close();
+  }
+}
+
 /** Moves the corpus and its WAL pair into `backupDir`, names intact so the
- *  backup opens as-is. Returns the new paths; [] when there was no corpus. */
+ *  backup opens as-is. All or nothing: a move that fails puts back what
+ *  already moved, so the database never ends up in one folder and its WAL in
+ *  another (a fresh database at the old path would discard that WAL).
+ *  Returns the new paths; [] when there was no corpus. */
 export async function backupCorpus(
   dataDir: string,
   backupDir: string,
+  checkpoint: (dbPath: string) => void = checkpointCorpus,
 ): Promise<string[]> {
+  checkpoint(path.join(dataDir, 'kiagent.db'));
+  // Listed after the checkpoint: closing its connection removes a WAL it
+  // fully folded in.
   const present = CORPUS_FILES.filter((f) =>
     fs.existsSync(path.join(dataDir, f)),
   );
   if (present.length === 0) return [];
   fs.mkdirSync(backupDir, { recursive: true });
-  const moved: string[] = [];
-  // The database first: once it is gone a stray -wal/-shm cannot be replayed
-  // into anything, and a fresh database never opens the old pair.
-  for (const f of present) {
-    const to = path.join(backupDir, f);
-    // eslint-disable-next-line no-await-in-loop
-    await moveFile(path.join(dataDir, f), to);
-    moved.push(to);
+  const moved: Array<{ from: string; to: string }> = [];
+  try {
+    for (const f of present) {
+      const from = path.join(dataDir, f);
+      const to = path.join(backupDir, f);
+      // eslint-disable-next-line no-await-in-loop
+      await moveFile(from, to);
+      moved.push({ from, to });
+    }
+  } catch (err) {
+    for (const { from, to } of moved.reverse()) {
+      try {
+        fs.renameSync(to, from);
+      } catch {
+        throw new Error(
+          `backing up the index failed (${String(
+            err instanceof Error ? err.message : err,
+          )}) and could not be undone: move ${to} back to ${from} before ` +
+            `starting the app again`,
+        );
+      }
+    }
+    throw err;
   }
-  return moved;
+  return moved.map((m) => m.to);
 }
 
 export function backupDirFor(dataDir: string, now: Date): string {
