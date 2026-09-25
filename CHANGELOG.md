@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.94.0](https://github.com/edjafarov/kiagent-core/compare/v0.93.0...v0.94.0) (2026-09-25)
+
+### Features
+
+* **boot:** offer to back up and rebuild a corpus the build refuses ([f01d890](https://github.com/edjafarov/kiagent-core/commit/f01d8901951f0ec9d9ae76f0358f2e1d19e3893d)), closes [edjafarov/alpha-cent#93](https://github.com/edjafarov/alpha-cent/issues/93)
+
+### Bug Fixes
+
+* **boot:** back up a refused corpus all or nothing, WAL folded in first ([d01aa34](https://github.com/edjafarov/kiagent-core/commit/d01aa3409ce990b95b884723221c81d1efaaed3f)), closes [alpha-cent#93](https://github.com/edjafarov/alpha-cent/issues/93)
+* **engine:** a successful pull batch no longer erases a reconcile failure ([06ee5f3](https://github.com/edjafarov/kiagent-core/commit/06ee5f349ff02a3c00248273c28a81470394cf83)), closes [edjafarov/alpha-cent#181](https://github.com/edjafarov/alpha-cent/issues/181)
+* **engine:** pull and reconcile each clear only their own error ([55c2c0e](https://github.com/edjafarov/kiagent-core/commit/55c2c0eb139ee7471e2656365663f01e17fe656f)), closes [alpha-cent#181](https://github.com/edjafarov/alpha-cent/issues/181)
+* **projection:** count a restored document back into the live count ([3f1f5aa](https://github.com/edjafarov/kiagent-core/commit/3f1f5aa4d927024096787259331ca0f75bf5215b)), closes [edjafarov/alpha-cent#180](https://github.com/edjafarov/alpha-cent/issues/180)
+* **projection:** seed the count and the archived index from one read ([b3b96a7](https://github.com/edjafarov/kiagent-core/commit/b3b96a70b7bdd438a28746997a3336ba0bcd8a49)), closes [alpha-cent#180](https://github.com/edjafarov/alpha-cent/issues/180)
+* **reset:** find a core wipe that committed without saying so ([7b82f58](https://github.com/edjafarov/kiagent-core/commit/7b82f58c55fd760d3a6a4ae3685663e81f1ec829)), closes [alpha-cent#192](https://github.com/edjafarov/alpha-cent/issues/192)
+* **reset:** report what a factory reset actually deleted ([da0deb3](https://github.com/edjafarov/kiagent-core/commit/da0deb36831d8e16ae0ff93d14b3b478a4c4505a)), closes [edjafarov/alpha-cent#192](https://github.com/edjafarov/alpha-cent/issues/192)
+
 ## [0.93.0](https://github.com/edjafarov/kiagent-core/compare/v0.92.0...v0.93.0) (2026-09-25)
 
 ### Features
