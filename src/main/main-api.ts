@@ -56,6 +56,10 @@ export interface MainProcessApi {
     /** The loopback port actually bound (null if the server never bound —
      *  should not happen once `startMcp` has resolved). */
     port: number | null;
+    /** Passthrough to McpServerHandle.registerTool, so first registration
+     *  wins: a name that is already registered is refused (the returned
+     *  disposer is a no-op and a warning is logged), and the caller must
+     *  dispose its own registrations. */
     registerTool: McpServerHandle['registerTool'];
     /** Returns a MULTIPLEXING request handler bound to the LIVE shared
      *  ToolRegistry/resources/activity, for serving MCP over a product-owned

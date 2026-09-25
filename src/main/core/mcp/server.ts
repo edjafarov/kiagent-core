@@ -73,6 +73,11 @@ export interface McpDeps {
 
 export interface McpServerHandle {
   readonly port: number | null;
+  /** Adds `tool` to the live registry and returns its disposer. First
+   *  registration wins: a name that is already registered (a builtin or an
+   *  earlier registration) is refused — the returned disposer is a no-op and
+   *  a warning is logged. The caller owns its registrations and must dispose
+   *  them itself; a disposer only ever removes the tool it registered. */
   registerTool(tool: McpTool): () => void;
   clients(): Promise<Array<{ id: string; name: string; connected: boolean }>>;
   connectClient(id: string): Promise<void>;

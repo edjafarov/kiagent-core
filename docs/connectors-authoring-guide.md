@@ -368,9 +368,11 @@ need to *do* about them:
   **Required** (use `[]` for none). Each entry must also be a source *this
   same extension* contributes; the platform drops senders for ids you didn't
   declare or didn't return.
-- `tools`, `commands` — declared tool/command ids. Commands remain subject to
-  the command capability and the platform's current command registration
-  rules.
+- `tools`, `commands` — declared tool/command ids. A tool returned from
+  `activate()` that is not declared in `contributes.tools` is skipped with a
+  warning, and a tool whose name is already registered (a builtin or another
+  extension's) is refused. Commands remain subject to the command capability
+  and the platform's current command registration rules.
 
 A source id already registered by another extension makes the install fail
 (`source id 'slack' is already provided by kia.other`). Namespace yours if
