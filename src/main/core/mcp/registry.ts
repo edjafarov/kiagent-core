@@ -26,6 +26,61 @@ import { summarizeCall } from './activity';
  *  synchronous, in-memory operations with no session bookkeeping. */
 export type ToolRegistry = Map<string, McpTool>;
 
+/** Top-level keys holding message bodies — redacted to a length, not logged. */
+const BODY_KEYS = new Set([
+  'body',
+  'body_markdown',
+  'markdown',
+  'text',
+  'content',
+]);
+/** Top-level keys holding recipients — redacted to a count, not logged. */
+const RECIPIENT_KEYS = new Set(['to', 'cc', 'bcc']);
+/** Any other string/array/object value is capped at this many chars. */
+const MAX_LOGGED_CHARS = 200;
+
+function redactValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    if (value.length <= MAX_LOGGED_CHARS) return value;
+    const over = value.length - MAX_LOGGED_CHARS;
+    return `${value.slice(0, MAX_LOGGED_CHARS)}…(+${over} chars)`;
+  }
+  if (Array.isArray(value)) {
+    const size = JSON.stringify(value).length;
+    return size > MAX_LOGGED_CHARS ? `[array: ${size} chars]` : value;
+  }
+  if (value !== null && typeof value === 'object') {
+    const size = JSON.stringify(value).length;
+    return size > MAX_LOGGED_CHARS ? `[object: ${size} chars]` : value;
+  }
+  return value; // numbers, booleans, null pass through
+}
+
+/**
+ * Pure redaction for `logSink.log('mcp.call', …)` — the audit trail
+ * `logs:export` hands out in bug reports, so draft bodies, recipients, and
+ * full SQL/queries must not ride it verbatim. Applied to top-level keys
+ * only; `emit`/`summarizeCall` (the in-app activity feed) sees raw args.
+ */
+export function redactArgsForLog(
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (BODY_KEYS.has(key) && typeof value === 'string') {
+      out[key] = `[redacted: ${value.length} chars]`;
+    } else if (
+      RECIPIENT_KEYS.has(key) &&
+      (Array.isArray(value) || typeof value === 'string')
+    ) {
+      out[key] = `[${Array.isArray(value) ? value.length : 1} recipients]`;
+    } else {
+      out[key] = redactValue(value);
+    }
+  }
+  return out;
+}
+
 export function createToolRegistry(initial: McpTool[]): ToolRegistry {
   const registry: ToolRegistry = new Map();
   for (const tool of initial) registry.set(tool.name, tool);
@@ -49,7 +104,9 @@ function toolToWire(tool: McpTool): Record<string, unknown> {
  * Every call is audited via `logSink.log('mcp.call', 'info', <tool name>,
  * {args, ok, ms})` — the ONE audit contract (LogSink doubles as the MCP call
  * log; see engine.ts's LogSink doc comment) — win or lose, so the audit trail
- * shows failed calls too (with an extra `error` field).
+ * shows failed calls too (with an extra `error` field). `args` is run through
+ * `redactArgsForLog` first: this log rides `logs:export` into bug reports,
+ * so bodies/recipients/oversized values never land on disk verbatim.
  *
  * onActivity receives one enriched activity record per served call (win or
  * lose) — everything except `transport`, which the caller stamps ('http' in
@@ -96,7 +153,7 @@ export function attachToolHandlers(
 
     if (!tool) {
       logSink.log('mcp.call', 'info', name, {
-        args,
+        args: redactArgsForLog(args),
         ok: false,
         ms: Date.now() - started,
         error: 'unknown tool',
@@ -111,7 +168,7 @@ export function attachToolHandlers(
     try {
       const result = await tool.call(args);
       logSink.log('mcp.call', 'info', name, {
-        args,
+        args: redactArgsForLog(args),
         ok: true,
         ms: Date.now() - started,
       });
@@ -120,7 +177,7 @@ export function attachToolHandlers(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logSink.log('mcp.call', 'info', name, {
-        args,
+        args: redactArgsForLog(args),
         ok: false,
         ms: Date.now() - started,
         error: message,
