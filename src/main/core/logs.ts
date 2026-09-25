@@ -52,6 +52,9 @@ export function createLogs(
       // Best-effort: a missing file (nothing written yet) or a locked
       // rename must not take the process down.
     }
+    // Reset even when the rename failed, deliberately: it is the backoff.
+    // Otherwise every append past maxBytes would retry the rename while
+    // (e.g. on Windows) something still holds the file open.
     bytes = 0;
   };
 
