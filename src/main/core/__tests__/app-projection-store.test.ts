@@ -88,7 +88,7 @@ describe('app projection docCount vs the store (#180)', () => {
     ).id;
     projection = createAppProjection({
       ...extras,
-      archivedIds: (account) => store.archivedIds(account),
+      archiveSnapshot: (account) => store.archiveSnapshot(account),
     });
     state = await projection.init(store.read);
     seq = await store.headSeq();
@@ -147,6 +147,31 @@ describe('app projection docCount vs the store (#180)', () => {
     });
     await expectExact();
     expect(state.accounts[0].docCount).toBe(2);
+  });
+
+  it('seeds the count and the archived index from one read of the store', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b'), doc('c')],
+      cursor: 1,
+    });
+    await store.commit({
+      account: accountId,
+      documents: [],
+      deletions: [del('b')],
+      cursor: 2,
+    });
+    const b = await store.read.byExternalId(accountId, 'b', 'note');
+    await expect(store.archiveSnapshot(accountId)).resolves.toEqual({
+      live: 2,
+      archived: [b?.id],
+    });
+    // init() takes its count from that same snapshot, not a second read.
+    const count = jest.spyOn(store.read, 'count');
+    state = await projection.init(store.read);
+    expect(count).not.toHaveBeenCalled();
+    expect(state.accounts[0].docCount).toBe(2);
+    count.mockRestore();
   });
 
   it('an update to a live document does not inflate the count', async () => {

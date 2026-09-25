@@ -281,10 +281,14 @@ export interface CoreStore extends Store {
   ledgerCounts(consumer: string): Promise<LedgerCounts>;
   /** Across every consumer — drives the app-wide processing panel. */
   ledgerCountsAll(): Promise<LedgerCounts & { pending: number }>;
-  /** Ids of the account's archived, not yet purged, documents — seeds the app
-   *  projection's archived index so a restore counts back in (alpha-cent
-   *  #180). Store-level on purpose: `Query` is the extension/MCP read surface. */
-  archivedIds(account: AccountId): Promise<DocumentId[]>;
+  /** The account's live-document count and its archived (not yet purged)
+   *  document ids, read by ONE statement so both come from the same
+   *  snapshot — seeds the app projection, whose archived index lets a
+   *  restore count back in (alpha-cent #180). Store-level on purpose: `Query`
+   *  is the extension/MCP read surface. */
+  archiveSnapshot(
+    account: AccountId,
+  ): Promise<{ live: number; archived: DocumentId[] }>;
   /** ONE bounded page of deferred seqs, keyset-paged: seqs strictly greater
    *  than `after`, ascending, at most `limit`. Deliberately has no unbounded
    *  form — a 2.1M-entry backlog returned in one reply both blew the
@@ -1488,12 +1492,24 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       return counts;
     },
 
-    async archivedIds(account) {
-      const rows = (await db.all(
-        `SELECT id FROM documents WHERE account_id = ? AND archived_at IS NOT NULL`,
-        [account],
-      )) as Array<{ id: string }>;
-      return rows.map((r) => r.id as DocumentId);
+    async archiveSnapshot(account) {
+      // One statement, one read snapshot: a count and a list read by two
+      // statements could straddle an archive and seed the projection with a
+      // document both counted live and indexed as archived.
+      const row = (
+        await db.all(
+          `SELECT
+             (SELECT COUNT(*) FROM documents
+                WHERE account_id = ? AND archived_at IS NULL) AS live,
+             (SELECT json_group_array(id) FROM documents
+                WHERE account_id = ? AND archived_at IS NOT NULL) AS archived`,
+          [account, account],
+        )
+      )[0] as { live: number; archived: string };
+      return {
+        live: row.live,
+        archived: JSON.parse(row.archived) as DocumentId[],
+      };
     },
 
     async ledgerCountsAll() {

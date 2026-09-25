@@ -1035,7 +1035,7 @@ app
         };
       },
       extensions: () => extensionsPlatform?.snapshot() ?? [],
-      archivedIds: (account) => p.store.archivedIds(account),
+      archiveSnapshot: (account) => p.store.archiveSnapshot(account),
     });
     // Coalesce push:app-state broadcasts (#5). Core broadcasts on every feed
     // diff (per DB write) with no throttle, so active backfill re-clones

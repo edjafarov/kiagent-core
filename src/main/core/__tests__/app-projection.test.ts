@@ -238,7 +238,10 @@ describe('appProjection archived → live transitions', () => {
   it('counts a restore of a document that was already archived at init', async () => {
     const withArchived = createAppProjection({
       ...extras,
-      archivedIds: async () => ['d1' as Document['id']],
+      archiveSnapshot: async () => ({
+        live: 0,
+        archived: ['d1' as Document['id']],
+      }),
     });
     const read = {
       document: jest.fn(async () => null),

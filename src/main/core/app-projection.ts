@@ -21,10 +21,13 @@ export interface AppStateExtras {
     failed: number;
   }>;
   extensions(): ExtensionSnapshot[];
-  /** The account's archived, not yet purged, document ids (store-level). When
-   *  absent the projection starts with an empty archived index, and a restore
-   *  of a document archived before init() is not counted back in. */
-  archivedIds?(account: AccountId): Promise<DocumentId[]>;
+  /** The account's live count and archived ids from one read snapshot
+   *  (store-level). When absent, init() counts through `read.count` and starts
+   *  with an empty archived index — a restore of a document archived before
+   *  init() is then not counted back in. */
+  archiveSnapshot?(
+    account: AccountId,
+  ): Promise<{ live: number; archived: DocumentId[] }>;
 }
 
 const RECENT_MAX = 5;
@@ -95,15 +98,15 @@ export function createAppProjection(
       const archived = new Map<AccountId, ReadonlySet<DocumentId>>();
       const entries = await Promise.all(
         accounts.map(async (account) => {
-          const docCount = await read.count({ account: account.id });
+          // The count and the archived index must agree: one snapshot.
+          const snapshot = await extras.archiveSnapshot?.(account.id);
+          const docCount =
+            snapshot?.live ?? (await read.count({ account: account.id }));
+          archived.set(account.id, new Set(snapshot?.archived ?? []));
           const docs = await read.search({
             account: account.id,
             limit: RECENT_MAX,
           });
-          archived.set(
-            account.id,
-            new Set((await extras.archivedIds?.(account.id)) ?? []),
-          );
           return {
             // Cursors never reach windows: the engine reads them via
             // store.account(); a large source cursor would otherwise be
