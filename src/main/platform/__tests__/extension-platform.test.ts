@@ -951,6 +951,115 @@ describe('createExtensionPlatform', () => {
     );
   });
 
+  // alpha-cent#192: the app quit or crashed during a reset — some
+  // namespaces are empty, the rest and the core are not. The next start
+  // loads the extensions without activating any, and the reset runs again.
+  describe('a reset cut off part-way', () => {
+    const ids = ['test.reset-1', 'test.reset-2', 'test.reset-3'];
+
+    async function installDbExtensions(target: ExtensionPlatform) {
+      for (const id of ids) {
+        const fixture = path.join(tmp, id);
+        fs.cpSync(FIXTURE, fixture, { recursive: true });
+        const manifestPath = path.join(fixture, 'manifest.json');
+        const manifest = JSON.parse(
+          fs.readFileSync(manifestPath, 'utf8'),
+        ) as Record<string, unknown>;
+        manifest.id = id;
+        manifest.caps = ['db'];
+        manifest.database = { schema: 'database.json' };
+        manifest.contributes = { sources: [], senders: [] };
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+        fs.writeFileSync(
+          path.join(fixture, 'database.json'),
+          JSON.stringify({
+            format: 1,
+            objects: [{ name: 'settings', kind: 'table' }],
+            modules: [],
+            legacy: { tables: [] },
+          }),
+        );
+        const preview = await target.installPreview(fixture);
+        if (!('token' in preview))
+          throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+        await target.installCommit(preview.token);
+      }
+    }
+
+    function recordingDb(hangAt?: string) {
+      const resets: string[] = [];
+      const db = {
+        registerPluginSource: jest.fn(async () => undefined),
+        plugin: jest.fn(async (request: { op: string; pluginId?: string }) => {
+          if (request.op !== 'reset') return undefined;
+          if (request.pluginId === hangAt) return new Promise(() => {});
+          resets.push(request.pluginId!);
+          return undefined;
+        }),
+      };
+      return { db, resets };
+    }
+
+    it('load() finds the extensions and activates none; start() then does', async () => {
+      await platform.start();
+      await installDbExtensions(platform);
+      await platform.stop();
+
+      const before = activationsCount;
+      platform = makePlatform({ db: recordingDb().db as never });
+      await platform.load();
+      expect(
+        platform
+          .snapshot()
+          .map((e) => e.id)
+          .sort(),
+      ).toEqual(ids);
+      expect(platform.snapshot().every((e) => e.status !== 'activated')).toBe(
+        true,
+      );
+      expect(activationsCount).toBe(before);
+
+      await platform.start();
+      expect(platform.snapshot().every((e) => e.status === 'activated')).toBe(
+        true,
+      );
+    });
+
+    it.each([...ids.map((id) => [id]), ['the core wipe']])(
+      'cut off at %s: after a restart the reset runs to the end, activating nothing before it',
+      async (cutAt) => {
+        const first = recordingDb(cutAt);
+        platform = makePlatform({ db: first.db as never });
+        await platform.start();
+        await installDbExtensions(platform);
+        const wipe = jest.spyOn(store.maintenance, 'resetAll');
+        if (cutAt === 'the core wipe')
+          wipe.mockReturnValueOnce(new Promise(() => {}));
+        void platform.resetAll(); // never settles: the process "dies" here
+        await new Promise((r) => setTimeout(r, 50));
+        const cut = ids.indexOf(cutAt);
+        expect(first.resets).toEqual(ids.slice(0, cut >= 0 ? cut : undefined));
+        const dead = platform;
+
+        const next = recordingDb();
+        platform = makePlatform({ db: next.db as never });
+        await platform.load();
+        expect(platform.snapshot().some((e) => e.status === 'activated')).toBe(
+          false,
+        );
+        const result = await platform.resetAll();
+
+        expect(result).toEqual({ ok: true, failed: [] });
+        expect(next.resets).toEqual(ids);
+        expect(wipe).toHaveBeenCalledTimes(cutAt === 'the core wipe' ? 2 : 1);
+        expect(platform.snapshot().every((e) => e.status === 'activated')).toBe(
+          true,
+        );
+        await dead.stop().catch(() => {});
+      },
+    );
+  });
+
   it('keeps the extension directory until uninstall state persistence succeeds', async () => {
     await platform.start();
     await installFixture();

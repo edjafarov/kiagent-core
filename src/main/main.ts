@@ -29,6 +29,7 @@ import type {
   Pushes,
 } from '@shared/ipc';
 import { INVOKE_CHANNELS } from '@shared/ipc';
+import { describeResetOutcome } from '@shared/reset-outcome';
 
 import { createConnectBroker } from './auth/connect-broker';
 import { installCrashHandlers, type CrashDeps } from './crash-handlers';
@@ -69,7 +70,12 @@ import { createUpdater } from './updater/updater';
 import { createUpdateNotifier } from './updater/native-notify';
 import { subscribeUpdaterState, updaterInvokeHandlers } from './updater/ipc';
 import { createExtensionPlatform } from './platform/extension-platform';
-import { runFactoryReset } from './factory-reset';
+import {
+  runFactoryReset,
+  startAfterInterruptedReset,
+  type FactoryResetDeps,
+} from './factory-reset';
+import { createResetJournal } from './reset-journal';
 import { corpusRefusalDialog, handleBootFailure } from './corpus-recovery';
 import type { ExtensionPlatform } from './platform/extension-platform';
 import { createExtInvokeHandler } from './platform/ext-invoke';
@@ -402,6 +408,58 @@ function showMainWindow(): void {
 }
 
 /** Everything the renderer can ask for, over the typed contract. */
+/**
+ * What a factory reset works with — shared by "Reset all" (Settings →
+ * Storage) and the boot-time finish of one that never finished.
+ */
+function factoryResetDeps(
+  p: CorePlatform,
+  patchState: (partial: Partial<AppState>) => void,
+): FactoryResetDeps {
+  return {
+    store: p.store,
+    platform: extensionsPlatform,
+    journal: createResetJournal(path.join(app.getPath('userData'), 'data')),
+    // Stop every real account's sync loop BEFORE the wipe. engine.pause
+    // is the one public API that both aborts a running loop and (via its
+    // pause intent) blocks the cadence tick from resurrecting it
+    // mid-wipe. Without this, still-running loops keep committing
+    // against deleted accounts (throwing 'commit: unknown account') while
+    // the wipe runs. Worker consumers are deliberately NOT stopped —
+    // nothing restarts them until relaunch, and the emptied work ledger
+    // idles them out on its own.
+    pauseSources: async () => {
+      const accounts = await p.store.read.accounts();
+      for (const account of accounts) {
+        if (account.source === 'worker') continue;
+        await p.engine.pause(account.id).catch(() => {});
+      }
+    },
+    // Only once the core wipe committed (factory-reset.ts): a reset that
+    // stopped at an extension leaves the accounts in place.
+    afterCoreWipe: async () => {
+      // A factory reset is THE legitimate un-latch: the get-started
+      // checklist must come back for the now-empty app. Configuration
+      // prefs (theme, processing) survive — only the onboarding latches
+      // reset.
+      await p.prefs.patch({
+        onboarding: {
+          sourceBackfilledAt: null,
+          mcpConnectedAt: null,
+          firstQueryAt: null,
+          dismissedAt: null,
+        },
+      });
+      // The feed names titles of documents the reset just deleted —
+      // truncate it with them. No push needed: the panel re-pulls
+      // mcp-activity:recent on next mount (reset lives on Settings;
+      // Connection isn't mounted).
+      activity?.reset();
+      patchState({ identity: null, accounts: [] });
+    },
+  };
+}
+
 function registerIpc(
   p: CorePlatform,
   getLastPush: () => AppStatePush,
@@ -654,47 +712,7 @@ function registerIpc(
       await p.store.maintenance.export(dir);
     },
     'maintenance:reset-all': () =>
-      runFactoryReset({
-        store: p.store,
-        platform: extensionsPlatform,
-        // Stop every real account's sync loop BEFORE the wipe. engine.pause
-        // is the one public API that both aborts a running loop and (via its
-        // pause intent) blocks the cadence tick from resurrecting it
-        // mid-wipe. Without this, still-running loops keep committing
-        // against deleted accounts (throwing 'commit: unknown account') while
-        // the wipe runs. Worker consumers are deliberately NOT stopped —
-        // nothing restarts them until relaunch, and the emptied work ledger
-        // idles them out on its own.
-        pauseSources: async () => {
-          const accounts = await p.store.read.accounts();
-          for (const account of accounts) {
-            if (account.source === 'worker') continue;
-            await p.engine.pause(account.id).catch(() => {});
-          }
-        },
-        // Only once the core wipe committed (factory-reset.ts): a reset that
-        // stopped at an extension leaves the accounts in place.
-        afterCoreWipe: async () => {
-          // A factory reset is THE legitimate un-latch: the get-started
-          // checklist must come back for the now-empty app. Configuration
-          // prefs (theme, processing) survive — only the onboarding latches
-          // reset.
-          await p.prefs.patch({
-            onboarding: {
-              sourceBackfilledAt: null,
-              mcpConnectedAt: null,
-              firstQueryAt: null,
-              dismissedAt: null,
-            },
-          });
-          // The feed names titles of documents the reset just deleted —
-          // truncate it with them. No push needed: the panel re-pulls
-          // mcp-activity:recent on next mount (reset lives on Settings;
-          // Connection isn't mounted).
-          activity?.reset();
-          patchState({ identity: null, accounts: [] });
-        },
-      }),
+      runFactoryReset(factoryResetDeps(p, patchState)),
 
     'inference:providers': () =>
       p.inference.providers().map((prov) => ({
@@ -1299,20 +1317,57 @@ app
       }
     })();
 
-    try {
-      // A broken extensions dir (e.g. `extensions` exists as a plain file,
-      // so mkdirSync throws) must be fully inert — never abort boot, or
-      // resumeAccounts/scheduler.start/createWindow all get skipped and no
-      // window ever opens.
-      await extensionsPlatform.start();
-    } catch (err) {
-      p.logSink.log('platform', 'error', 'extension platform failed to start', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    // A broken extensions dir (e.g. `extensions` exists as a plain file, so
+    // mkdirSync throws) must be fully inert — never abort boot, or
+    // resumeAccounts/scheduler.start/createWindow all get skipped and no
+    // window ever opens.
+    const inert = (step: () => Promise<void>) => async () => {
+      try {
+        await step();
+      } catch (err) {
+        p.logSink.log(
+          'platform',
+          'error',
+          'extension platform failed to start',
+          { error: err instanceof Error ? err.message : String(err) },
+        );
+      }
+    };
+    const extensions = extensionsPlatform;
+    const finishedReset = await startAfterInterruptedReset({
+      journal: createResetJournal(dataDir),
+      confirmFinish: async () =>
+        (
+          await dialog.showMessageBox({
+            type: 'warning',
+            message: 'Reset all did not finish',
+            detail:
+              'The last Reset all stopped before it was done, so some of ' +
+              'your data may be deleted already and some not. Finish it now ' +
+              'to delete the rest, or keep what is left.',
+            buttons: ['Finish reset', 'Keep what is left'],
+            defaultId: 0,
+            cancelId: 1,
+          })
+        ).response === 0,
+      loadExtensions: inert(() => extensions.load()),
+      startExtensions: inert(() => extensions.start()),
+      reset: () => runFactoryReset(factoryResetDeps(p, patchState)),
+    });
     await resumeAccounts(p);
     p.scheduler.start();
     await createWindow();
+    if (finishedReset) {
+      const nameOf = (id: string) =>
+        extensions.snapshot().find((e) => e.id === id)?.name ?? id;
+      void dialog.showMessageBox({
+        type: finishedReset.ok ? 'info' : 'warning',
+        message: finishedReset.ok
+          ? 'Reset all finished'
+          : 'Reset all did not finish',
+        detail: describeResetOutcome(finishedReset, nameOf),
+      });
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) void createWindow();

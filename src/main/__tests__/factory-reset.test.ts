@@ -8,9 +8,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import type { FactoryResetOutcome } from '@shared/ipc';
 import { openDb } from '../db/app-db';
 import { openStore } from '../core/store/store';
-import { runFactoryReset } from '../factory-reset';
+import { runFactoryReset, startAfterInterruptedReset } from '../factory-reset';
+
 import type { FactoryResetDeps } from '../factory-reset';
 
 /** A store whose resetAll announces the deletion boundary like the real one.
@@ -70,10 +72,20 @@ function deps(
     afterCoreWipe: jest.fn(async () => {
       calls.push('afterCoreWipe');
     }),
+    journal: {
+      begin: jest.fn(() => {
+        calls.push('journal.begin');
+      }),
+      end: jest.fn(() => {
+        calls.push('journal.end');
+      }),
+    },
     ...over,
   };
   return { d, calls };
 }
+
+const noJournal = { begin: () => {}, end: () => {} };
 
 const failure = (pluginId: string) => ({
   pluginId,
@@ -100,7 +112,13 @@ describe('runFactoryReset', () => {
       failed: [],
       error: null,
     });
-    expect(calls).toEqual(['pause', 'platform', 'afterCoreWipe']);
+    expect(calls).toEqual([
+      'journal.begin',
+      'pause',
+      'platform',
+      'afterCoreWipe',
+      'journal.end',
+    ]);
   });
 
   it('an extension that cannot be reset stops the reset before the core wipe — nothing else is cleared', async () => {
@@ -279,6 +297,7 @@ describe('runFactoryReset', () => {
           platform: null,
           pauseSources: async () => {},
           afterCoreWipe: async () => {},
+          journal: noJournal,
         });
         expect(outcome).toEqual({
           ok: false,
@@ -315,6 +334,7 @@ describe('runFactoryReset', () => {
           platform: null,
           pauseSources: async () => {},
           afterCoreWipe,
+          journal: noJournal,
         });
         expect(outcome).toEqual({
           ok: false,
@@ -328,5 +348,152 @@ describe('runFactoryReset', () => {
         await store.close();
       }
     });
+  });
+});
+
+// alpha-cent#192: a reset that did not finish is on record until it does.
+describe('the reset journal', () => {
+  it('a reset that cannot be recorded does not start', async () => {
+    const { store } = fakeStore();
+    const { d } = deps({
+      store,
+      journal: {
+        begin: () => {
+          throw new Error('EACCES: permission denied');
+        },
+        end: jest.fn(),
+      },
+    });
+    await expect(runFactoryReset(d)).rejects.toThrow('EACCES');
+    expect(d.pauseSources).not.toHaveBeenCalled();
+    expect(store.maintenance.resetAll).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'an extension could not be reset',
+      () => {
+        const { store } = fakeStore();
+        return {
+          store,
+          platform: {
+            resetAll: async () => ({
+              ok: false,
+              failed: [failure('kiagent.documents')],
+            }),
+          },
+        };
+      },
+    ],
+    [
+      'the wipe cannot be confirmed',
+      () => ({ store: fakeStore({ wipe: 'lost-ack', goneAfter: true }).store }),
+    ],
+    [
+      'the app state describing the old data was not cleared',
+      () => ({
+        store: fakeStore().store,
+        afterCoreWipe: async () => {
+          throw new Error('prefs write failed');
+        },
+      }),
+    ],
+  ])('stays pending when %s', async (_why, make) => {
+    const { d } = deps(make() as Parameters<typeof deps>[0]);
+    await runFactoryReset(d);
+    expect(d.journal.begin).toHaveBeenCalled();
+    expect(d.journal.end).not.toHaveBeenCalled();
+  });
+
+  it('ends once the wipe committed even if an extension did not start again', async () => {
+    const { store, wipe } = fakeStore();
+    const { d } = deps({
+      store,
+      platform: {
+        resetAll: async () => {
+          await wipe();
+          return { ok: false, failed: [failure('kiagent.people')] };
+        },
+      },
+    });
+    const outcome = await runFactoryReset(d);
+    expect(outcome.coreWiped).toBe(true);
+    expect(d.journal.end).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('startAfterInterruptedReset', () => {
+  const finished: FactoryResetOutcome = {
+    ok: true,
+    coreWiped: true,
+    failed: [],
+    error: null,
+  };
+
+  function boot(pending: boolean, answer: boolean) {
+    const calls: string[] = [];
+    const d = {
+      journal: {
+        pending: () => pending,
+        end: jest.fn(() => {
+          calls.push('journal.end');
+        }),
+      },
+      confirmFinish: jest.fn(async () => {
+        calls.push('ask');
+        return answer;
+      }),
+      loadExtensions: jest.fn(async () => {
+        calls.push('load');
+      }),
+      startExtensions: jest.fn(async () => {
+        calls.push('start');
+      }),
+      reset: jest.fn(async () => {
+        calls.push('reset');
+        return finished;
+      }),
+    };
+    return { d, calls };
+  }
+
+  it('starts extensions as usual when no reset was left unfinished', async () => {
+    const { d, calls } = boot(false, true);
+    await expect(startAfterInterruptedReset(d)).resolves.toBeNull();
+    expect(calls).toEqual(['start']);
+  });
+
+  it('finishes an unfinished reset on the user’s word, before any extension activates', async () => {
+    const { d, calls } = boot(true, true);
+    await expect(startAfterInterruptedReset(d)).resolves.toBe(finished);
+    expect(calls).toEqual(['ask', 'load', 'reset', 'start']);
+  });
+
+  it('keeps what is left when the user says so, and does not ask again', async () => {
+    const { d, calls } = boot(true, false);
+    await expect(startAfterInterruptedReset(d)).resolves.toBeNull();
+    expect(calls).toEqual(['ask', 'journal.end', 'start']);
+    expect(d.reset).not.toHaveBeenCalled();
+  });
+
+  it('a reset that throws is reported, and extensions still start', async () => {
+    const { d, calls } = boot(true, true);
+    d.reset.mockRejectedValueOnce(new Error('EACCES: permission denied'));
+    await expect(startAfterInterruptedReset(d)).resolves.toEqual({
+      ok: false,
+      coreWiped: false,
+      failed: [],
+      error: 'EACCES: permission denied',
+    });
+    expect(calls).toEqual(['ask', 'load', 'start']);
+  });
+
+  it('a record that cannot be dropped does not stop the boot', async () => {
+    const { d, calls } = boot(true, false);
+    d.journal.end.mockImplementationOnce(() => {
+      throw new Error('EPERM');
+    });
+    await expect(startAfterInterruptedReset(d)).resolves.toBeNull();
+    expect(calls).toEqual(['ask', 'start']);
   });
 });

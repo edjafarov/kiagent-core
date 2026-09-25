@@ -20,12 +20,16 @@
  *
  * A reset that stops before the core wipe leaves the extensions it already
  * reset empty; nothing is restored. Running it again finishes it: the failed
- * extension's namespace is retried from its recovery marker.
+ * extension's namespace is retried from its recovery marker. Until it is
+ * finished, a journal says so (reset-journal.ts): a reset that failed, or
+ * that the app quit or crashed in, is offered again at the next start,
+ * before any extension runs on the half-deleted data.
  */
 import type { FactoryResetOutcome } from '@shared/ipc';
 
 import type { CoreStore } from './core/store/store';
 import type { ResetAllResult } from './platform/extension-platform';
+import type { ResetJournal } from './reset-journal';
 
 export interface FactoryResetDeps {
   store: Pick<CoreStore, 'onReset'> & {
@@ -39,6 +43,7 @@ export interface FactoryResetDeps {
   pauseSources(): Promise<void>;
   /** Clears the app state that describes the wiped data. */
   afterCoreWipe(): Promise<void>;
+  journal: Pick<ResetJournal, 'begin' | 'end'>;
 }
 
 const message = (err: unknown): string =>
@@ -56,6 +61,9 @@ const accountCount = (
 export async function runFactoryReset(
   deps: FactoryResetDeps,
 ): Promise<FactoryResetOutcome> {
+  // Before anything is paused or deleted. Throws when it cannot be written,
+  // and then nothing has happened.
+  deps.journal.begin();
   await deps.pauseSources();
   const accountsBefore = await accountCount(deps.store);
   let coreWiped: boolean | null = false;
@@ -89,6 +97,10 @@ export async function runFactoryReset(
   if (coreWiped === true) {
     try {
       await deps.afterCoreWipe();
+      // Finished: every extension namespace was reset (the core wipe runs
+      // only after all of them) and nothing describes the old data. An
+      // extension that did not start again has its own recovery marker.
+      deps.journal.end();
     } catch (err) {
       error ??= message(err);
     }
@@ -99,4 +111,51 @@ export async function runFactoryReset(
     failed,
     error,
   };
+}
+
+export interface InterruptedResetDeps {
+  journal: Pick<ResetJournal, 'pending' | 'end'>;
+  /** Asks the user; true finishes the reset, false keeps what is left. */
+  confirmFinish(): Promise<boolean>;
+  /** Finds the extensions without activating any. */
+  loadExtensions(): Promise<void>;
+  /** Activates them (loading first if needed); already active ones stay. */
+  startExtensions(): Promise<void>;
+  /** The same reset "Reset all" runs. */
+  reset(): Promise<FactoryResetOutcome>;
+}
+
+/**
+ * Boot: start extensions — but first, when the last Reset all never
+ * finished, let the user decide, because some data is deleted and some is
+ * not. Finish: the reset runs with the extensions loaded and none active,
+ * so none runs on the half-deleted data. Keep: the record is dropped and
+ * boot goes on as usual. Nothing is deleted without that answer. Resolves
+ * with the finished reset's outcome, or null.
+ */
+export async function startAfterInterruptedReset(
+  deps: InterruptedResetDeps,
+): Promise<FactoryResetOutcome | null> {
+  let outcome: FactoryResetOutcome | null = null;
+  if (deps.journal.pending()) {
+    if (await deps.confirmFinish()) {
+      await deps.loadExtensions();
+      outcome = await deps.reset().catch(
+        (err): FactoryResetOutcome => ({
+          ok: false,
+          coreWiped: false,
+          failed: [],
+          error: message(err),
+        }),
+      );
+    } else {
+      try {
+        deps.journal.end();
+      } catch {
+        // Then the question comes back at the next start.
+      }
+    }
+  }
+  await deps.startExtensions();
+  return outcome;
 }

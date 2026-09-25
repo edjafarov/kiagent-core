@@ -367,6 +367,10 @@ function descriptorForEntry(e: Entry): PluginDatabaseDescriptor | undefined {
 }
 
 export interface ExtensionPlatform {
+  /** Finds the installed and bundled extensions without activating any, so
+   *  a factory reset can run before they do (alpha-cent#192). `start()`
+   *  loads them itself when this has not run. */
+  load(): Promise<void>;
   start(): Promise<void>;
   stop(): Promise<void>;
   snapshot(): ExtensionSnapshot[];
@@ -1048,6 +1052,77 @@ export function createExtensionPlatform(
     }
   }
 
+  let loaded = false;
+  /** Discovery for load()/start(): once per start, never activates. */
+  function loadEntries(): void {
+    if (loaded) return;
+    loaded = true;
+    registerLifecycleListeners();
+    running = true;
+    fs.mkdirSync(deps.extDir, { recursive: true });
+    const state = readEnabledState(deps.extDir);
+    const records = readInstalled(deps.extDir);
+    for (const found of discoverExtensions(deps.extDir)) {
+      if (!found.manifest || !found.entryAbsPath) {
+        deps.logSink.log(
+          'extensions',
+          'error',
+          `invalid extension in ${found.dirName}: ${found.error}`,
+        );
+        continue;
+      }
+      const record = records.find((r) => r.id === found.manifest!.id);
+      entries.set(found.manifest.id, {
+        manifest: found.manifest,
+        dir: found.dir,
+        entryAbsPath: found.entryAbsPath,
+        record,
+        origin: clampRecordOrigin(record),
+        enabled: state[found.manifest.id]?.enabled ?? true,
+        status: 'disabled',
+        error: undefined,
+        host: null,
+        sourceIds: [],
+        iconDataUrl: loadIconDataUrl(found.dir, found.manifest),
+      });
+    }
+    if (deps.bundledDir) {
+      for (const found of discoverExtensions(deps.bundledDir, {
+        tier: 'bundled',
+      })) {
+        if (!found.manifest || !found.entryAbsPath) {
+          deps.logSink.log(
+            'extensions',
+            'error',
+            `invalid bundled extension in ${found.dirName}: ${found.error}`,
+          );
+          continue;
+        }
+        if (entries.has(found.manifest.id)) {
+          deps.logSink.log(
+            'extensions',
+            'warn',
+            `bundled extension ${found.manifest.id} shadows an installed copy — bundled wins — the installed copy remains on disk and is ignored`,
+          );
+        }
+        entries.set(found.manifest.id, {
+          manifest: found.manifest,
+          dir: found.dir,
+          entryAbsPath: found.entryAbsPath,
+          record: undefined,
+          origin: 'bundled',
+          enabled: state[found.manifest.id]?.enabled ?? true,
+          status: 'disabled',
+          error: undefined,
+          host: null,
+          sourceIds: [],
+          iconDataUrl: loadIconDataUrl(found.dir, found.manifest),
+        });
+      }
+    }
+    changed();
+  }
+
   async function rearmPlugin(e: Entry): Promise<void> {
     if (!e.manifest.caps.includes('db') || !deps.db?.plugin) return;
     try {
@@ -1119,71 +1194,12 @@ export function createExtensionPlatform(
   }
 
   return {
+    async load() {
+      loadEntries();
+    },
+
     async start() {
-      registerLifecycleListeners();
-      running = true;
-      fs.mkdirSync(deps.extDir, { recursive: true });
-      const state = readEnabledState(deps.extDir);
-      const records = readInstalled(deps.extDir);
-      for (const found of discoverExtensions(deps.extDir)) {
-        if (!found.manifest || !found.entryAbsPath) {
-          deps.logSink.log(
-            'extensions',
-            'error',
-            `invalid extension in ${found.dirName}: ${found.error}`,
-          );
-          continue;
-        }
-        const record = records.find((r) => r.id === found.manifest!.id);
-        entries.set(found.manifest.id, {
-          manifest: found.manifest,
-          dir: found.dir,
-          entryAbsPath: found.entryAbsPath,
-          record,
-          origin: clampRecordOrigin(record),
-          enabled: state[found.manifest.id]?.enabled ?? true,
-          status: 'disabled',
-          error: undefined,
-          host: null,
-          sourceIds: [],
-          iconDataUrl: loadIconDataUrl(found.dir, found.manifest),
-        });
-      }
-      if (deps.bundledDir) {
-        for (const found of discoverExtensions(deps.bundledDir, {
-          tier: 'bundled',
-        })) {
-          if (!found.manifest || !found.entryAbsPath) {
-            deps.logSink.log(
-              'extensions',
-              'error',
-              `invalid bundled extension in ${found.dirName}: ${found.error}`,
-            );
-            continue;
-          }
-          if (entries.has(found.manifest.id)) {
-            deps.logSink.log(
-              'extensions',
-              'warn',
-              `bundled extension ${found.manifest.id} shadows an installed copy — bundled wins — the installed copy remains on disk and is ignored`,
-            );
-          }
-          entries.set(found.manifest.id, {
-            manifest: found.manifest,
-            dir: found.dir,
-            entryAbsPath: found.entryAbsPath,
-            record: undefined,
-            origin: 'bundled',
-            enabled: state[found.manifest.id]?.enabled ?? true,
-            status: 'disabled',
-            error: undefined,
-            host: null,
-            sourceIds: [],
-            iconDataUrl: loadIconDataUrl(found.dir, found.manifest),
-          });
-        }
-      }
-      changed();
+      loadEntries();
       // Activated in PARALLEL across extensions — a hung extension's
       // handshake timeout no longer stacks in front of every other
       // extension's boot activation (and, in turn, in front of
@@ -1216,6 +1232,7 @@ export function createExtensionPlatform(
 
     async stop() {
       running = false;
+      loaded = false;
       offLane?.();
       offLane = undefined;
       offWorker?.();
