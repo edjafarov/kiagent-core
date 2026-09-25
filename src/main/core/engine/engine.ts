@@ -232,12 +232,11 @@ export const REDRIVE_PAGE = 500;
  * is real: re-saving the account's settings applies the pending cleanup on
  * the next cycle, but never off an empty listing.
  *
- * TOCTOU guard: `source.reconcile()` takes its listing snapshot once, up
- * front (e.g. local-folder's `listEntries` walks the whole tree before ever
- * yielding), then this drains it, which can take a while for a large
- * tree/mailbox. Since this runs CONCURRENTLY with `pull()`, a document
- * pull() discovers and commits mid-drain — after reconcile's snapshot was
- * taken but before the `liveRefs()` read below — would look "live but
+ * TOCTOU guard: `source.reconcile()`'s listing is a walk over the source
+ * (local-folder streams its tree page by page as this drains it), which can
+ * take a while for a large tree/mailbox. Since this runs CONCURRENTLY with `pull()`, a document
+ * pull() discovers and commits mid-drain — after reconcile's walk went past
+ * it but before the `liveRefs()` read below — would look "live but
  * unlisted" and get archived the instant it lands. `startSeq`, captured
  * before the drain even begins, closes that window: only documents that
  * were ALREADY live before this pass started are eligible for archiving:

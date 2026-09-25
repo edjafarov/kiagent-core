@@ -112,7 +112,7 @@ export async function* watchLoop(
   // `unlink` is filtered on the same rule: emitting a deletion for a file that
   // was never ingested would ask the store to archive a document that does not
   // exist. Filtering all three keeps the watcher's view of the tree identical
-  // to `listEntries`', which is the invariant reconcile depends on.
+  // to the scanner's (`walkPaths`), which is the invariant reconcile depends on.
   const onEvent = (kind: FsEvent['kind']) => (p: string) => {
     if (!isIngestible(p)) return;
     enqueue({ kind, absPath: p } as FsEvent);

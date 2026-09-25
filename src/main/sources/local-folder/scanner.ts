@@ -1,11 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import fg from 'fast-glob';
-import type { Entry } from 'fast-glob';
-
 import { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
-import { decideLocalFile } from './ingestible';
+import { decideLocalFile, isIngestible } from './ingestible';
 import { resolvePathMime } from './mime';
 import type { LocalFolderItem } from './to-document';
 
@@ -43,7 +40,7 @@ export const MAX_BATCH_READ_BYTES = 64 * 1024 * 1024; // 64 MiB
  * exactly with real read cost. Only the `inline-text` and `converter`
  * pipelines read bytes eagerly (see `buildItem`); `vision`/`audio` commit
  * metadata-only, and an `ignore`d entry costs 0 too (defensive — it should
- * never reach here, since `listEntries` already filters those out).
+ * never reach here, since `walkRoot` already filters those out).
  */
 export function entryReadCost(entry: ScannedEntry): number {
   const decision = decideLocalFile(entry.absPath, entry.stats.size);
@@ -55,72 +52,179 @@ export function entryReadCost(entry: ScannedEntry): number {
 }
 
 /**
- * Greedy size-aware batching: closes the current batch before adding an
- * item that would push it past `maxCount` entries or `maxBytes` of total
- * cost. An item whose own cost already exceeds `maxBytes` still gets a
+ * Greedy size-aware batching over a stream: closes the current batch before
+ * adding an item that would push it past `maxCount` entries or `maxBytes` of
+ * total cost. An item whose own cost already exceeds `maxBytes` still gets a
  * batch of exactly one — never dropped, just isolated so it doesn't inflate
- * whatever batch it would otherwise have landed in.
+ * whatever batch it would otherwise have landed in. Pulls from `items` only
+ * as far as the batch it is filling.
  */
-export function chunkBySize<T>(
-  items: readonly T[],
+export async function* chunkBySize<T>(
+  items: AsyncIterable<T>,
   maxCount: number,
   maxBytes: number,
   costOf: (item: T) => number,
-): T[][] {
-  const out: T[][] = [];
+): AsyncGenerator<T[]> {
   let batch: T[] = [];
   let batchBytes = 0;
-  for (const item of items) {
+  for await (const item of items) {
     const cost = costOf(item);
     if (
       batch.length > 0 &&
       (batch.length >= maxCount || batchBytes + cost > maxBytes)
     ) {
-      out.push(batch);
+      yield batch;
       batch = [];
       batchBytes = 0;
     }
     batch.push(item);
     batchBytes += cost;
   }
-  if (batch.length > 0) out.push(batch);
-  return out;
+  if (batch.length > 0) yield batch;
 }
 
-/** One source of truth for what the local-folder source enumerates. Shared
- *  by `listEntries` (sync) and `countFiles` (the add-source preview) so the
- *  displayed count can never drift from what a folder would actually index. */
-const ENUMERATION_OPTIONS = {
-  ignore: DEFAULT_EXCLUDE_GLOBS,
-  dot: true,
-  onlyFiles: true,
-  suppressErrors: true,
-  followSymbolicLinks: false,
-} as const;
+/**
+ * DEFAULT_EXCLUDE_GLOBS as the walk applies them — the list itself stays the
+ * one source of truth (the watcher hands it to chokidar verbatim). The rules
+ * are fast-glob's, which this source used to walk with. Every glob is `**`
+ * followed by one of three tails: `/NAME/**` skips a directory and everything
+ * below it; `/NAME` skips a file or a directory of that name; `/*SUFFIX`
+ * skips a file only (fast-glob descends into a directory called `x.tmp`).
+ * Any other shape throws at load, so a new glob cannot silently stop
+ * applying.
+ */
+function excludeRules(globs: readonly string[]) {
+  const subtrees = new Set<string>();
+  const names = new Set<string>();
+  const suffixes: string[] = [];
+  for (const glob of globs) {
+    const m = /^\*\*\/(?:([^*/]+)\/\*\*|([^*/]+)|\*([^*/]+))$/.exec(glob);
+    if (!m) throw new Error(`local-folder: unsupported exclude glob "${glob}"`);
+    if (m[1]) subtrees.add(m[1]);
+    else if (m[2]) names.add(m[2]);
+    else suffixes.push(m[3]);
+  }
+  return {
+    dir: (name: string) => subtrees.has(name) || names.has(name),
+    file: (name: string) =>
+      names.has(name) || suffixes.some((suffix) => name.endsWith(suffix)),
+  };
+}
+
+const EXCLUDED = excludeRules(DEFAULT_EXCLUDE_GLOBS);
+
+/** A dirent whose type the filesystem did not report (DT_UNKNOWN, e.g. some
+ *  network and FUSE mounts): every predicate is false. */
+function typeUnknown(d: fs.Dirent): boolean {
+  return !(
+    d.isFile() ||
+    d.isDirectory() ||
+    d.isSymbolicLink() ||
+    d.isFIFO() ||
+    d.isSocket() ||
+    d.isCharacterDevice() ||
+    d.isBlockDevice()
+  );
+}
 
 /**
- * List every indexable file under `rootPath`: recursive, dotfiles included
- * (`dot: true`, matching kiagent-ref scanner.ts:41 — DEFAULT_EXCLUDE_GLOBS is
- * what actually keeps junk out, not a dotfile blanket ban), symlinks not
- * followed. `stats: true` gets size/mtime/birthtime in the same walk instead
- * of a second per-file `fs.stat` round trip — and, as of this filter, feeds
- * the SIZE-aware `decideLocalFile` check, so a file whose extension/mime
- * passes but whose real on-disk size is over its pipeline's cap (including
- * the outer edge of the local PDF ladder) never enters the listing at all.
+ * Every path under `rootPath` that could be a document, depth-first and
+ * pulled one at a time: the only state is the open directory handles along
+ * the current path (`opendir` reads a directory a few entries at a time), so
+ * memory grows with the tree's DEPTH, never its size, and nothing is read
+ * ahead of the consumer. This is why the walk is not fast-glob: its stream
+ * ignores backpressure and queues the whole remaining tree as soon as the
+ * consumer slows down (29,999 of 30,000 entries, measured).
+ *
+ * Kept from the fast-glob walk it replaces (`dot: true`, `onlyFiles`,
+ * `followSymbolicLinks: false`, `suppressErrors`): dotfiles are walked —
+ * DEFAULT_EXCLUDE_GLOBS keeps junk out, not a dotfile ban; every symlink is
+ * skipped, to a file or a directory (watch.ts's `isSymlink` says why that
+ * matters); anything that is not a regular file is skipped; an unreadable or
+ * vanished directory is skipped silently. Paths on Windows keep fast-glob's
+ * forward slashes: `metadata.absPath` and `url` feed the content hash, and a
+ * spelling change would rewrite every document once.
+ *
+ * Only the cheap PATH gate (`isIngestible`) applies here; `walkRoot` adds the
+ * size-aware one.
  */
-export async function listEntries(rootPath: string): Promise<ScannedEntry[]> {
-  const entries = (await fg(['**/*'], {
-    ...ENUMERATION_OPTIONS,
-    cwd: rootPath,
-    absolute: true,
-    stats: true,
-  })) as Entry[];
-  return entries
-    .filter(
-      (e) =>
-        decideLocalFile(e.path, (e.stats as fs.Stats).size).kind === 'index',
-    )
-    .map((e) => ({ absPath: e.path, stats: e.stats as fs.Stats }));
+export async function* walkPaths(rootPath: string): AsyncGenerator<string> {
+  const open: fs.Dir[] = [];
+  const descend = async (dir: string): Promise<void> => {
+    try {
+      open.push(await fs.promises.opendir(dir));
+    } catch {
+      // unreadable or vanished — skipped, as suppressErrors did
+    }
+  };
+  await descend(path.resolve(rootPath));
+  try {
+    while (open.length > 0) {
+      const dir = open[open.length - 1];
+      let dirent: fs.Dirent | null;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        dirent = await dir.read();
+      } catch {
+        dirent = null; // the directory went away mid-read
+      }
+      if (dirent === null) {
+        open.pop();
+        // eslint-disable-next-line no-await-in-loop
+        await dir.close().catch(() => {});
+        continue;
+      }
+      const absPath = path.join(dir.path, dirent.name);
+      let isDir = dirent.isDirectory();
+      let isFile = dirent.isFile();
+      if (typeUnknown(dirent)) {
+        // eslint-disable-next-line no-await-in-loop
+        const st = await fs.promises.lstat(absPath).catch(() => null);
+        isDir = st?.isDirectory() ?? false;
+        isFile = st?.isFile() ?? false;
+      }
+      if (isDir) {
+        // eslint-disable-next-line no-await-in-loop
+        if (!EXCLUDED.dir(dirent.name)) await descend(absPath);
+      } else if (
+        isFile &&
+        !EXCLUDED.file(dirent.name) &&
+        isIngestible(absPath)
+      ) {
+        yield path.sep === '/' ? absPath : toAbsPosix(absPath);
+      }
+    }
+  } finally {
+    // The consumer stopped early (abort, error): release what is still open.
+    await Promise.allSettled(open.map((dir) => dir.close()));
+  }
+}
+
+/**
+ * Every indexable file under `rootPath`, with its stats, in `walkPaths`'s
+ * order and just as lazily. `lstat` (the link, never its target — the walk
+ * already skipped links; a path swapped for one since is dropped) supplies
+ * size/mtime/ctime/birthtime for the SIZE-aware `decideLocalFile` check, so a
+ * file whose extension passes but whose real on-disk size is over its
+ * pipeline's cap (including the outer edge of the local PDF ladder) never
+ * enters the listing at all. Sync, reconcile and `countFiles` all enumerate
+ * through here, so the preview count can never drift from what a folder
+ * would actually index.
+ */
+export async function* walkRoot(
+  rootPath: string,
+): AsyncGenerator<ScannedEntry> {
+  for await (const absPath of walkPaths(rootPath)) {
+    let stats: fs.Stats;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      stats = await fs.promises.lstat(absPath);
+    } catch {
+      continue; // vanished since the directory was read
+    }
+    if (stats.isFile() && decideLocalFile(absPath, stats.size).kind === 'index')
+      yield { absPath, stats };
+  }
 }
 
 export interface FileCount {
@@ -129,30 +233,19 @@ export interface FileCount {
 }
 
 /**
- * Streamed recursive file count for the folder-picker preview. Uses the
- * same enumeration rules as sync (including the size-aware gate — `stats:
- * true` on the stream too), so the number shown is the number of documents
- * adding this folder would index. Caps at `cap` and aborts the walk early
- * (capped: true). Never throws — unreadable/nonexistent roots count as 0
- * (ENUMERATION_OPTIONS.suppressErrors handles that).
+ * Recursive file count for the folder-picker preview, through `walkRoot` —
+ * the enumeration sync uses, size-aware gate included — so the number shown
+ * is the number of documents adding this folder would index. Caps at `cap`
+ * and stops the walk early (capped: true). Never throws — unreadable or
+ * nonexistent roots count as 0.
  */
 export async function countFiles(
   rootPath: string,
   cap = 50_000,
 ): Promise<FileCount> {
   let count = 0;
-  const stream = fg.stream(['**/*'], {
-    ...ENUMERATION_OPTIONS,
-    cwd: rootPath,
-    absolute: true,
-    stats: true,
-  });
-  for await (const raw of stream) {
-    const entry = raw as unknown as Entry;
-    // Same gate as listEntries: the preview must promise the number of
-    // documents this folder will actually produce, not the file count.
-    if (decideLocalFile(entry.path, entry.stats?.size).kind !== 'index')
-      continue;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  for await (const _entry of walkRoot(rootPath)) {
     count += 1;
     if (count >= cap) return { count, capped: true };
   }
@@ -173,8 +266,8 @@ export function toAbsPosix(absPath: string): string {
  * Source allowed fs access for content — so `toDocument` stays pure/sync.
  *
  * Routes on `decideLocalFile`'s pipeline (size-aware — the same decision
- * `listEntries` already applied at enumeration, recomputed here because a
- * watcher event calls this directly without going through `listEntries`):
+ * `walkRoot` already applied at enumeration, recomputed here because a
+ * watcher event calls this directly without going through `walkRoot`):
  *  - `ignore` → `null`. `unsupported` and `too-large` are no longer document
  *    outcomes — a file this policy rejects produces no row at all, not a
  *    metadata-only one.

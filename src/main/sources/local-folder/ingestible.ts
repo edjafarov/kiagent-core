@@ -38,7 +38,7 @@ export const INGESTIBLE_DENY_RE = SENSITIVE_BASENAME_RE;
  * `sizeBytes` is OPTIONAL and, when omitted, admits size-capped categories
  * provisionally (unknown size is never treated as over any cap) — callers
  * that only have a path (the coarse enumeration-time / watcher pre-filter)
- * get the coarse answer; callers that also have `fs.Stats` (listEntries,
+ * get the coarse answer; callers that also have `fs.Stats` (walkRoot,
  * buildItem, fetchBytes) get the size-aware one, including the local PDF's
  * two-budget ladder (see `@shared/file-indexability`'s `decideFileIndexing`
  * step 5).
@@ -61,7 +61,7 @@ export function decideLocalFile(
  * actually turn into text? Cheap, PATH-ONLY (no size) — the enumeration-time
  * and watcher-event pre-filter; a size-capped category that turns out
  * oversized still passes here and is caught later by the size-aware
- * `decideLocalFile` call in `listEntries`/`buildItem`/`fetchBytes`.
+ * `decideLocalFile` call in `walkRoot`/`buildItem`/`fetchBytes`.
  *
  * Before this gate existed the source ingested EVERY file, and anything
  * unparseable became a metadata-only document — title and path, no content.
@@ -71,7 +71,7 @@ export function decideLocalFile(
  * and a line in every reconcile diff, and none could ever answer a query.
  *
  * ⚠️ This predicate MUST be applied everywhere the source enumerates files —
- * `listEntries`, `countFiles`, and the watcher's events — or the watcher and
+ * `walkPaths` (sync, reconcile, `countFiles`) and the watcher's events — or the watcher and
  * scanner disagree about what exists and reconcile diffs a corpus against a
  * listing that never contained it. That exact divergence (via a symlink
  * cycle, not a type filter) is what produced two out-of-memory crashes; see

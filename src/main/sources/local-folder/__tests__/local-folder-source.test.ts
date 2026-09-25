@@ -1,8 +1,8 @@
 /**
  * @jest-environment node
  *
- * fast-glob's async walker uses `setImmediate`, which jsdom (the project's
- * default jest testEnvironment) does not provide — same fix as
+ * Real fs walks and chokidar watchers, which jsdom (the project's default
+ * jest testEnvironment) cannot host — same fix as
  * src/main/core/mcp/__tests__/server.test.ts.
  */
 import { EventEmitter } from 'node:events';
@@ -21,7 +21,7 @@ import type {
 } from '@shared/contracts';
 import { MAX_LOCAL_AUDIO_BYTES } from '@shared/file-indexability';
 
-import { buildItem, chunk } from '../scanner';
+import { BATCH_SIZE, buildItem, chunk } from '../scanner';
 import {
   connect,
   fetchBytes,
@@ -365,7 +365,7 @@ describe('pull — backfill (cursor === null)', () => {
 
 describe('pull — unavailable roots', () => {
   // The pull-side half of the "empty ≠ missing" guard (see reconcile's
-  // sibling test below): listEntries uses fast-glob's suppressErrors, so a
+  // sibling test below): the walk skips what it cannot read, so a
   // missing/unmounted root enumerates as ZERO entries with no error. Without
   // an up-front stat, backfill would stamp a bogus { completedAt } off that
   // empty listing and the root would take the incremental path forever —
@@ -874,7 +874,7 @@ describe('reconcile', () => {
     expect(refs.every((r) => r.type === 'file')).toBe(true);
   });
 
-  it('excludes archives and unknown extensions from the ref set — no second gate, `listEntries` alone decides this', async () => {
+  it('excludes archives and unknown extensions from the ref set — no second gate, the walk alone decides this', async () => {
     const dir = mkTmpDir();
     writeFile(dir, 'notes.txt', 'kept');
     writeFile(dir, 'backup.zip', 'excluded');
@@ -1119,8 +1119,7 @@ describe('watch enumeration parity (symlink cycles)', () => {
     const chokidar = require('chokidar') as typeof import('chokidar');
     const { WATCH_ENUMERATION_OPTIONS } =
       require('../watch') as typeof import('../watch');
-    const { listEntries } =
-      require('../scanner') as typeof import('../scanner');
+    const { walkRoot } = require('../scanner') as typeof import('../scanner');
 
     const dir = mkTmpDir();
     fs.mkdirSync(path.join(dir, 'sub'));
@@ -1132,7 +1131,7 @@ describe('watch enumeration parity (symlink cycles)', () => {
     // must as well, or every one becomes a document reconcile can't re-list.
     fs.symlinkSync(path.join(dir, 'a.txt'), path.join(dir, 'linkfile.txt'));
 
-    const scanned = (await listEntries(dir))
+    const scanned = (await collect(walkRoot(dir)))
       .map((e) => e.absPath.slice(dir.length))
       .sort();
 
@@ -1188,11 +1187,11 @@ describe('ingestion allowlist parity (scanner vs watcher)', () => {
   }
 
   it('the scanner lists only ingestible files, and countFiles agrees', async () => {
-    const { listEntries, countFiles } =
+    const { walkRoot, countFiles } =
       require('../scanner') as typeof import('../scanner');
     const { dir, ingestible } = mkMixedFixture();
 
-    const scanned = (await listEntries(dir))
+    const scanned = (await collect(walkRoot(dir)))
       .map((e) => e.absPath.slice(dir.length))
       .sort();
     expect(scanned).toEqual(ingestible);
@@ -1204,8 +1203,7 @@ describe('ingestion allowlist parity (scanner vs watcher)', () => {
   }, 20_000);
 
   it('the watcher emits for exactly the files the scanner lists', async () => {
-    const { listEntries } =
-      require('../scanner') as typeof import('../scanner');
+    const { walkRoot } = require('../scanner') as typeof import('../scanner');
     const { watchLoop } = require('../watch') as typeof import('../watch');
     const { dir, ingestible } = mkMixedFixture();
 
@@ -1246,7 +1244,7 @@ describe('ingestion allowlist parity (scanner vs watcher)', () => {
 
     expect([...new Set(seen)].sort()).toEqual(ingestible);
     // and the scanner, walking the same tree, agrees exactly
-    const scanned = (await listEntries(dir))
+    const scanned = (await collect(walkRoot(dir)))
       .map((e) => e.absPath.slice(dir.length))
       .sort();
     expect([...new Set(seen)].sort()).toEqual(scanned);
@@ -1615,5 +1613,75 @@ describe('watchLoop — scope attribution', () => {
 
     jest.dontMock('chokidar');
     jest.resetModules();
+  });
+});
+
+// alpha-cent#182: enumeration streams — nothing waits on, or holds, a whole
+// root's listing.
+describe('bounded enumeration', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('yields the first backfill batch before stating the rest of the tree', async () => {
+    const dir = mkTmpDir();
+    for (let d = 0; d < 3; d += 1)
+      for (let f = 0; f < 100; f += 1) writeFile(dir, `d${d}/f${f}.txt`, 'x');
+    const lstat = jest.spyOn(fs.promises, 'lstat');
+    const session = makeSession([dir], new AbortController().signal, false);
+
+    const batches = pull(session, null)[Symbol.asyncIterator]();
+    const first = await batches.next();
+    expect(first.value.items).toHaveLength(BATCH_SIZE);
+    // The estimate saw the whole tree, without a stat per file: this batch
+    // and the one read ahead to learn it was not the last are all that cost.
+    expect(first.value.estimateTotal).toBe(300);
+    expect(lstat.mock.calls.length).toBeLessThanOrEqual(2 * BATCH_SIZE + 1);
+    await batches.return?.(undefined);
+  });
+
+  it('reconcile pages each root as it walks it, never the whole account at once', async () => {
+    const small = mkTmpDir();
+    for (let i = 0; i < 10; i += 1) writeFile(small, `a${i}.txt`, 'x');
+    const big = mkTmpDir();
+    for (let i = 0; i < 600; i += 1) writeFile(big, `d${i % 6}/b${i}.txt`, 'x');
+    const lstat = jest.spyOn(fs.promises, 'lstat');
+    const session = makeSession([small, big], new AbortController().signal);
+
+    const pages = reconcile(session)[Symbol.asyncIterator]();
+    const first = await pages.next();
+    expect(first.value).toHaveLength(10);
+    expect(lstat).toHaveBeenCalledTimes(10); // `big` not walked yet
+    const rest: number[] = [];
+    for (let n = await pages.next(); !n.done; n = await pages.next())
+      rest.push(n.value.length);
+    expect(rest).toEqual([500, 100]);
+  });
+
+  it('an incremental rescan advances the watermark only on its last batch', async () => {
+    const dir = mkTmpDir();
+    for (let i = 0; i < 60; i += 1) writeFile(dir, `f${i}.txt`, 'x');
+    const sinceIso = new Date(Date.now() - 60_000).toISOString();
+    const since: LocalFolderCursor = {
+      roots: { [dir]: { completedAt: sinceIso } },
+    };
+    const session = makeSession([dir], new AbortController().signal, false);
+
+    const batches = await collect(pull(session, since));
+
+    expect(batches.map((b) => b.items.length)).toEqual([BATCH_SIZE, 10]);
+    // Committed with the new watermark, a crash right after the first batch
+    // would leave the other ten files older than it and never rescanned.
+    expect(batches[0].cursor).toEqual(since);
+    const last = batches[1].cursor as RootsCursor;
+    expect(last.roots[dir].completedAt > sinceIso).toBe(true);
+  });
+
+  it('stops before any batch when aborted during the estimate walk', async () => {
+    const dir = mkTmpDir();
+    writeFile(dir, 'a.txt', 'x');
+    const controller = new AbortController();
+    controller.abort();
+    const session = makeSession([dir], controller.signal, false);
+
+    expect(await collect(pull(session, null))).toEqual([]);
   });
 });

@@ -28,11 +28,11 @@ import {
   BATCH_SIZE,
   MAX_BATCH_READ_BYTES,
   buildItem,
-  chunk,
   chunkBySize,
   entryReadCost,
-  listEntries,
   toAbsPosix,
+  walkPaths,
+  walkRoot,
   type ScannedEntry,
 } from './scanner';
 import { toDocument, type LocalFolderItem } from './to-document';
@@ -106,10 +106,10 @@ export async function connect(
 /**
  * Stat every configured root up FRONT, before enumerating any of them, and
  * THROW if one is missing/unreadable rather than letting it silently
- * enumerate as empty. This matters because `listEntries` uses fast-glob's
- * `suppressErrors: true` — an unmounted volume or a deleted folder yields
- * ZERO entries with no error, which looks identical to "this root is now
- * genuinely empty." That sameness is dangerous on BOTH sync paths:
+ * enumerate as empty. This matters because `walkPaths` skips what it cannot
+ * read — an unmounted volume or a deleted folder yields ZERO entries with no
+ * error, which looks identical to "this root is now genuinely empty." That
+ * sameness is dangerous on BOTH sync paths:
  *  - pull/backfill: an unavailable root would stamp a bogus `{ completedAt }`
  *    watermark off the empty listing and take the incremental path forever
  *    after — its pre-existing files (mtime older than the bogus watermark)
@@ -204,23 +204,43 @@ async function buildBatch(
   return { items, deletions };
 }
 
+/** Each item paired with whether it is the last one, pulling ONE item
+ *  ahead — a root's final batch must carry its completion stamp, and a
+ *  streamed walk only knows which batch was final once the walk has ended. */
+async function* withLast<T>(
+  items: AsyncIterable<T>,
+): AsyncGenerator<{ value: T; last: boolean }> {
+  let pending: { value: T } | null = null;
+  for await (const value of items) {
+    if (pending) yield { value: pending.value, last: false };
+    pending = { value };
+  }
+  if (pending) yield { value: pending.value, last: true };
+}
+
+/** `entries` in ~50-file, byte-budgeted batches, each flagged final or not. */
+function batchesOf(entries: AsyncIterable<ScannedEntry>) {
+  return withLast(
+    chunkBySize(entries, BATCH_SIZE, MAX_BATCH_READ_BYTES, entryReadCost),
+  );
+}
+
 /**
- * `cursor` has no entry for `root` → full backfill over `entries` (listed by
- * `pull()` at cycle start — see the pre-listing note there), yielding ~50-file
- * batches. Every INTERMEDIATE batch leaves `root`'s cursor entry absent
- * (still catching up — see cursor.ts); only the FINAL batch stamps
- * `{ completedAt }` with `scanStartIso`, taken from BEFORE the listing so
- * nothing that changed during the walk is missed once incremental mode takes
- * over. `estimateTotal` is the WHOLE-ACCOUNT file count, not this root's —
- * the engine accumulates `done` across every root, so a per-root estimate
- * reads "242 / ~107" the moment a second root is involved. Returns the
- * cursor snapshot as of this root's completion (or `working` unchanged if
- * the root turned out empty — same one-batch shortcut either way) so the
- * next root in `pull()`'s loop starts from an up-to-date base.
+ * `cursor` has no entry for `root` → full backfill, walking the tree as it
+ * yields ~50-file batches (the walk holds one batch of entries, plus the one
+ * `withLast` reads ahead; bytes are read only for the batch being yielded).
+ * Every INTERMEDIATE batch leaves `root`'s cursor entry absent (still
+ * catching up — see cursor.ts); only the FINAL batch stamps `{ completedAt }`
+ * with `scanStartIso`, taken before the walk so nothing that changed during
+ * it is missed once incremental mode takes over. `estimateTotal` is the
+ * WHOLE-ACCOUNT file count, not this root's — the engine accumulates `done`
+ * across every root, so a per-root estimate reads "242 / ~107" the moment a
+ * second root is involved. Returns the cursor snapshot as of this root's
+ * completion so the next root in `pull()`'s loop starts from an up-to-date
+ * base; an empty root still yields one (empty) batch to carry the stamp.
  */
 async function* backfillRoot(
   root: string,
-  entries: ScannedEntry[],
   scanStartIso: string,
   estimateTotal: number,
   working: LocalFolderCursor,
@@ -228,25 +248,17 @@ async function* backfillRoot(
   Batch<LocalFolderCursor, LocalFolderItem>,
   LocalFolderCursor
 > {
-  if (entries.length === 0) {
-    const next = advanceCursor(working, root, scanStartIso);
-    yield { phase: 'backfill', items: [], cursor: next, estimateTotal };
-    return next;
-  }
-
-  const batches = chunkBySize(
-    entries,
-    BATCH_SIZE,
-    MAX_BATCH_READ_BYTES,
-    entryReadCost,
-  );
   let cursor = working;
-  for (let i = 0; i < batches.length; i += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    const { items, deletions } = await buildBatch(batches[i], root);
-    const isLast = i === batches.length - 1;
-    if (isLast) cursor = advanceCursor(cursor, root, scanStartIso);
+  let yielded = false;
+  for await (const { value: entries, last } of batchesOf(walkRoot(root))) {
+    const { items, deletions } = await buildBatch(entries, root);
+    if (last) cursor = advanceCursor(cursor, root, scanStartIso);
     yield { phase: 'backfill', items, deletions, cursor, estimateTotal };
+    yielded = true;
+  }
+  if (!yielded) {
+    cursor = advanceCursor(cursor, root, scanStartIso);
+    yield { phase: 'backfill', items: [], cursor, estimateTotal };
   }
   return cursor;
 }
@@ -265,14 +277,17 @@ async function* backfillRoot(
  * not archived → returns null, no feed churn) makes that a no-op write.
  * Offline DELETIONS are deliberately NOT handled here — that is `reconcile()`'s
  * job (below), matching the Source contract's two separate deletion channels.
- * Nothing changed → no batch yielded and `working` returned unchanged (this
- * root's watermark simply isn't advanced this cycle; the next cycle rescans
- * from the same point, which is safe/idempotent, just not maximally fresh).
+ *
+ * Like backfill, only the FINAL batch advances the watermark: an earlier one
+ * committed with it would, after a crash, leave the rest of this rescan's
+ * files older than the new watermark and never re-emitted. Nothing changed →
+ * no batch yielded and `working` returned unchanged (this root's watermark
+ * simply isn't advanced this cycle; the next cycle rescans from the same
+ * point, which is safe/idempotent, just not maximally fresh).
  */
 async function* incrementalRescanRoot(
   root: string,
   since: { completedAt: string },
-  entries: ScannedEntry[],
   rescanStartIso: string,
   working: LocalFolderCursor,
 ): AsyncGenerator<
@@ -280,24 +295,19 @@ async function* incrementalRescanRoot(
   LocalFolderCursor
 > {
   const sinceMs = Date.parse(since.completedAt);
-  const changed = entries.filter(
-    (e) => Math.max(e.stats.mtime.getTime(), e.stats.ctime.getTime()) > sinceMs,
-  );
-
-  if (changed.length === 0) return working;
-
-  const next = advanceCursor(working, root, rescanStartIso);
-  for (const b of chunkBySize(
-    changed,
-    BATCH_SIZE,
-    MAX_BATCH_READ_BYTES,
-    entryReadCost,
-  )) {
-    // eslint-disable-next-line no-await-in-loop
-    const { items, deletions } = await buildBatch(b, root);
-    yield { phase: 'live', items, deletions, cursor: next };
+  async function* changed(): AsyncGenerator<ScannedEntry> {
+    for await (const e of walkRoot(root)) {
+      if (Math.max(e.stats.mtime.getTime(), e.stats.ctime.getTime()) > sinceMs)
+        yield e;
+    }
   }
-  return next;
+  let cursor = working;
+  for await (const { value: entries, last } of batchesOf(changed())) {
+    const { items, deletions } = await buildBatch(entries, root);
+    if (last) cursor = advanceCursor(working, root, rescanStartIso);
+    yield { phase: 'live', items, deletions, cursor };
+  }
+  return cursor;
 }
 
 export async function* pull(
@@ -328,40 +338,37 @@ export async function* pull(
     yield { phase: 'live', items: [], cursor: working };
   }
 
-  // One walk per root per cycle, ALL taken up front (both branches of the
-  // per-root loop needed a listing anyway), so backfill batches can report
-  // the whole-account file count as `estimateTotal`. The engine accumulates
-  // `done` across every root; against a per-root estimate the progress line
-  // read "242 / ~107 (100%)" as soon as a second root's backfill started.
-  // The timestamp is captured BEFORE the listings so a root's eventual
-  // `{ completedAt }` stamp can never postdate its own scan.
+  // Backfill batches report the whole-account file count as
+  // `estimateTotal`: the engine accumulates `done` across every root (seeded
+  // with the documents already indexed), so against a per-root estimate the
+  // progress line read "242 / ~107 (100%)" as soon as a second root started.
+  // A count-only walk of every root comes first — paths only, no stat and
+  // nothing kept, so it costs one readdir pass and over-counts only files a
+  // size cap will drop — and only when some root backfills; nothing else
+  // reads the estimate. The timestamp is captured BEFORE any walk so a
+  // root's eventual `{ completedAt }` stamp can never postdate its own scan.
   const scanStartIso = new Date().toISOString();
-  const listings = new Map<string, ScannedEntry[]>();
-  for (const root of rootPaths) {
-    // eslint-disable-next-line no-await-in-loop
-    listings.set(root, await listEntries(root));
-  }
   let estimateTotal = 0;
-  for (const entries of listings.values()) estimateTotal += entries.length;
+  if (rootPaths.some((root) => !working?.roots?.[root])) {
+    for (const root of rootPaths) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-await-in-loop
+      for await (const _path of walkPaths(root)) {
+        if (session.signal.aborted) return;
+        estimateTotal += 1;
+      }
+    }
+  }
 
   let didBackfill = false;
   for (const root of rootPaths) {
     const since = working?.roots?.[root];
-    const entries = listings.get(root) ?? [];
     if (!since) {
       didBackfill = true;
-      working = yield* backfillRoot(
-        root,
-        entries,
-        scanStartIso,
-        estimateTotal,
-        working,
-      );
+      working = yield* backfillRoot(root, scanStartIso, estimateTotal, working);
     } else {
       working = yield* incrementalRescanRoot(
         root,
         since,
-        entries,
         scanStartIso,
         working,
       );
@@ -415,12 +422,14 @@ export async function fetchBytes(
 
 /**
  * Full listing of what exists on disk right now, across EVERY configured
- * root, chunked so a huge tree doesn't force one giant array — the engine
- * diffs this against what it has stored and archives anything missing
- * (offline deletions kiagent-ref would have caught via `reconcileRoot()`'s
- * present-set diff, instance.ts:68-85). The up-front `assertRootsAvailable`
- * is the anti-mass-archival guard: a missing root must throw here, never
- * enumerate as empty (see that helper's doc for the full rationale).
+ * root, streamed in pages of 500 as the walk goes — the engine stages each
+ * page, then diffs the whole listing against what it has stored and archives
+ * anything missing (offline deletions kiagent-ref would have caught via
+ * `reconcileRoot()`'s present-set diff, instance.ts:68-85). The up-front
+ * `assertRootsAvailable` is the anti-mass-archival guard: a missing root must
+ * throw here, never enumerate as empty (see that helper's doc for the full
+ * rationale). An aborted pass stops mid-walk; the engine never diffs a
+ * listing cut short by its signal.
  */
 export async function* reconcile(
   session: Session,
@@ -428,16 +437,22 @@ export async function* reconcile(
   const rootPaths = getRootPaths(session.account);
   await assertRootsAvailable(rootPaths);
 
-  const refs: ExternalRef[] = [];
   for (const root of rootPaths) {
     // eslint-disable-next-line no-await-in-loop
-    const entries = await listEntries(root);
-    for (const e of entries)
-      refs.push({ externalId: toAbsPosix(e.absPath), type: 'file' });
-  }
-  for (const c of chunk(refs, 500)) {
-    if (session.signal.aborted) return;
-    yield c;
+    for await (const page of chunkBySize(
+      walkRoot(root),
+      500,
+      Infinity,
+      () => 0,
+    )) {
+      if (session.signal.aborted) return;
+      yield page.map(
+        (e): ExternalRef => ({
+          externalId: toAbsPosix(e.absPath),
+          type: 'file',
+        }),
+      );
+    }
   }
 }
 
