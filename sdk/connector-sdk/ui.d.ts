@@ -25,10 +25,14 @@ export interface PageKiagent {
       ext?: string[];
     },
   ): Promise<Array<Record<string, any>>>;
-  invoke(
-    channel: 'app:get-state',
-    req?: undefined,
-  ): Promise<{
+  invoke(channel: 'app:get-state', req?: undefined): Promise<PageAppState>;
+  on(channel: 'push:app-state', cb: (push: PageAppState) => void): () => void;
+}
+
+/** What `app:get-state` resolves to and `push:app-state` delivers: the app
+ *  state wrapped in an envelope — read accounts from `.state.accounts`. */
+export interface PageAppState {
+  state: {
     accounts: Array<{
       account: {
         id: string;
@@ -37,8 +41,9 @@ export interface PageKiagent {
         config?: Record<string, unknown>;
       };
     }>;
-  }>;
-  on(channel: 'push:app-state', cb: (state: unknown) => void): () => void;
+  };
+  seq: number;
+  rev: number;
 }
 
 declare global {
