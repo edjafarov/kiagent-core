@@ -4,6 +4,8 @@ import { Icon } from '@shared/web-ui/icon-sprite';
 import { Busy } from '@shared/web-ui/components';
 import type { StorageStats } from '@shared/ipc';
 
+import { describeResetOutcome } from './reset-outcome';
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ['KB', 'MB', 'GB', 'TB'];
@@ -33,6 +35,9 @@ export function Storage(): React.ReactElement {
   // Cheap "something changed" signal to re-fetch stats — re-used from the
   // live projection instead of a bespoke push subscription.
   const seqSignal = useAppState((s) => s.accounts.length + s.processing.done);
+  const extensions = useAppState((s) => s.extensions);
+  const extensionName = (id: string) =>
+    extensions.find((e) => e.id === id)?.name ?? id;
 
   useEffect(() => {
     let alive = true;
@@ -112,7 +117,9 @@ export function Storage(): React.ReactElement {
     setBusy('reset');
     void window.kiagent
       .invoke('maintenance:reset-all', undefined)
-      .then(() => window.alert('All local data was wiped.'))
+      .then((outcome) =>
+        window.alert(describeResetOutcome(outcome, extensionName)),
+      )
       .catch((e: unknown) =>
         window.alert(
           `Failed: ${e instanceof Error ? e.message : 'unknown error'}`,

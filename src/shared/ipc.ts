@@ -138,6 +138,24 @@ export interface StorageStats {
   dataDir: string;
 }
 
+/** What a factory reset actually did (alpha-cent#192). Every extension's
+ *  data is reset first, one namespace at a time, stopping at the first
+ *  failure; the main index, accounts and credentials then go in ONE
+ *  transaction. `coreWiped` says whether that transaction committed: VACUUM
+ *  and the extension restarts come after it and can still fail, so neither
+ *  `ok: false` nor `error` means "nothing was deleted". Nothing is ever
+ *  restored. */
+export interface FactoryResetOutcome {
+  /** Everything wiped, and every extension running again. */
+  ok: boolean;
+  coreWiped: boolean;
+  /** Extensions whose data could not be reset (the reset stopped there) or
+   *  that did not start again afterwards; each now needs recovery. */
+  failed: Array<{ pluginId: string; error: string }>;
+  /** What stopped the reset, or failed after the core wipe. */
+  error: string | null;
+}
+
 export interface McpInfo {
   port: number | null;
   clients: Array<{ id: string; name: string; connected: boolean }>;
@@ -441,7 +459,7 @@ export interface Invokes {
   'storage:stats': { req: void; res: StorageStats };
   'maintenance:compact': { req: void; res: void };
   'maintenance:export': { req: { destDir: string }; res: void };
-  'maintenance:reset-all': { req: void; res: void };
+  'maintenance:reset-all': { req: void; res: FactoryResetOutcome };
 
   'inference:providers': {
     req: void;

@@ -73,6 +73,7 @@ import { createUpdater } from './updater/updater';
 import { createUpdateNotifier } from './updater/native-notify';
 import { subscribeUpdaterState, updaterInvokeHandlers } from './updater/ipc';
 import { createExtensionPlatform } from './platform/extension-platform';
+import { runFactoryReset } from './factory-reset';
 import type { ExtensionPlatform } from './platform/extension-platform';
 import { createExtInvokeHandler } from './platform/ext-invoke';
 import {
@@ -655,38 +656,48 @@ function registerIpc(
       }
       await p.store.maintenance.export(dir);
     },
-    'maintenance:reset-all': async () => {
-      // Stop every real account's sync loop BEFORE the wipe. engine.pause is
-      // the one public API that both aborts a running loop and (via its pause
-      // intent) blocks the cadence tick from resurrecting it mid-wipe. Without
-      // this, still-running loops keep committing against deleted accounts
-      // (throwing 'commit: unknown account') while the wipe runs. Worker
-      // consumers are deliberately NOT stopped — nothing restarts them until
-      // relaunch, and the emptied work ledger idles them out on its own.
-      const accounts = await p.store.read.accounts();
-      for (const account of accounts) {
-        if (account.source === 'worker') continue;
-        await p.engine.pause(account.id).catch(() => {});
-      }
-      if (extensionsPlatform) await extensionsPlatform.resetAll();
-      else await p.store.maintenance.resetAll();
-      // A factory reset is THE legitimate un-latch: the get-started checklist
-      // must come back for the now-empty app. Configuration prefs (theme,
-      // processing) survive — only the onboarding latches reset.
-      await p.prefs.patch({
-        onboarding: {
-          sourceBackfilledAt: null,
-          mcpConnectedAt: null,
-          firstQueryAt: null,
-          dismissedAt: null,
+    'maintenance:reset-all': () =>
+      runFactoryReset({
+        store: p.store,
+        platform: extensionsPlatform,
+        // Stop every real account's sync loop BEFORE the wipe. engine.pause
+        // is the one public API that both aborts a running loop and (via its
+        // pause intent) blocks the cadence tick from resurrecting it
+        // mid-wipe. Without this, still-running loops keep committing
+        // against deleted accounts (throwing 'commit: unknown account') while
+        // the wipe runs. Worker consumers are deliberately NOT stopped —
+        // nothing restarts them until relaunch, and the emptied work ledger
+        // idles them out on its own.
+        pauseSources: async () => {
+          const accounts = await p.store.read.accounts();
+          for (const account of accounts) {
+            if (account.source === 'worker') continue;
+            await p.engine.pause(account.id).catch(() => {});
+          }
         },
-      });
-      // The feed names titles of documents the reset just deleted — truncate
-      // it with them. No push needed: the panel re-pulls mcp-activity:recent
-      // on next mount (reset lives on Settings; Connection isn't mounted).
-      activity?.reset();
-      patchState({ identity: null, accounts: [] });
-    },
+        // Only once the core wipe committed (factory-reset.ts): a reset that
+        // stopped at an extension leaves the accounts in place.
+        afterCoreWipe: async () => {
+          // A factory reset is THE legitimate un-latch: the get-started
+          // checklist must come back for the now-empty app. Configuration
+          // prefs (theme, processing) survive — only the onboarding latches
+          // reset.
+          await p.prefs.patch({
+            onboarding: {
+              sourceBackfilledAt: null,
+              mcpConnectedAt: null,
+              firstQueryAt: null,
+              dismissedAt: null,
+            },
+          });
+          // The feed names titles of documents the reset just deleted —
+          // truncate it with them. No push needed: the panel re-pulls
+          // mcp-activity:recent on next mount (reset lives on Settings;
+          // Connection isn't mounted).
+          activity?.reset();
+          patchState({ identity: null, accounts: [] });
+        },
+      }),
 
     'inference:providers': () =>
       p.inference.providers().map((prov) => ({
