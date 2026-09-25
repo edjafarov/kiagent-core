@@ -32,7 +32,6 @@ const VIEW_TITLES: Partial<Record<KnownView, string>> = {
   connection: 'Connection',
   marketplace: 'Marketplace',
   logs: 'Logs',
-  settings: 'Settings',
 };
 
 /** B3: the title-lookup routing site (design spec's routing table) — a

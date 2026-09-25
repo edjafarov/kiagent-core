@@ -941,6 +941,8 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
   border-bottom: 1px solid var(--band-border);
   -webkit-app-region: drag;
 }
+/* 90px clears the macOS traffic lights: trafficLightPosition.x (16, in
+   src/main/window-chrome.ts) + the lights + a 22px gap. */
 .ui-shell.is-mac .ui-sidebar-head { padding-left: 90px; }
 .ui-brand { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
 .ui-nav {
@@ -1032,6 +1034,7 @@ button.ui-sb-line:focus-visible { outline: 2px solid var(--border-focus); outlin
 
 /* Signed-out gates keep the same white band. */
 .ui-titlebar {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   flex-shrink: 0;
@@ -1044,5 +1047,5 @@ button.ui-sb-line:focus-visible { outline: 2px solid var(--border-focus); outlin
   color: var(--text-primary);
   -webkit-app-region: drag;
 }
-.ui-titlebar.is-mac { padding-left: 90px; }
+.ui-titlebar.is-mac { padding-left: 90px; } /* see .ui-sidebar-head */
 .ui-titlebar.is-win, .ui-titlebar.is-linux { padding-right: 140px; }

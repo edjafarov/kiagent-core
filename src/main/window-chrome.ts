@@ -29,6 +29,7 @@ export function windowChrome(
     minWidth: MIN_WINDOW.width,
     minHeight: MIN_WINDOW.height,
     // Centres the lights on the band.
+    // ui.css pads the sidebar head and gate band 90px to clear these.
     trafficLightPosition: { x: 16, y: 17 },
     // On macOS a titleBarOverlay would override trafficLightPosition.
     ...(platform !== 'darwin' && {
