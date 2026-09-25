@@ -35,6 +35,7 @@ import {
 
 import { isDbWorkerTransientError } from '../../db/worker-client';
 
+import { RECONCILE_ERROR_PREFIX } from '../store/last-error';
 import type { CoreStore } from '../store/store';
 import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
 
@@ -265,11 +266,14 @@ async function reconcilePass(
   await store.reconcileBegin(account.id);
   // Records the pass's outcome on the account: `last_error` only. Never the
   // cursor — pull() commits concurrently, and a read-then-write of the cursor
-  // here could roll back one it just advanced (alpha-cent#181). While a pass
-  // runs in a cycle it owns `last_error`: pull batches leave it alone (see
-  // `reconcileOwnsError` in run()), so this is the write that clears it.
+  // here could roll back one it just advanced (alpha-cent#181). The pass
+  // shares `last_error` with pull(): each clears only its own error (see
+  // `sharesError` in run()), so a healthy pass never erases pull's failure.
   const finish = async (error: string | null): Promise<void> => {
-    await store.setAccountStatus(account.id, { error });
+    await store.setAccountStatus(
+      account.id,
+      error === null ? { error, errorScope: 'reconcile' } : { error },
+    );
   };
   // ONE failure path for the whole pass — drain, diff, archive and the final
   // commit (spec §5.8: a store that lost its staging throws from any of
@@ -329,7 +333,7 @@ async function reconcilePass(
     if (refusal !== null) {
       await store.reconcileEnd(account.id);
       const msg =
-        `reconcile: refusing to archive ${deletionCount} of ` +
+        `${RECONCILE_ERROR_PREFIX}refusing to archive ${deletionCount} of ` +
         `${liveCount} documents (${refusal}). If this shrinkage is real, ` +
         `re-save the account's settings to apply the cleanup.`;
       logs.log(scope, 'error', msg);
@@ -346,7 +350,7 @@ async function reconcilePass(
     if (signal.aborted) return; // cancellation-caused — not a real failure
     const msg = String(err instanceof Error ? err.message : err);
     logs.log(scope, 'error', `reconcile failed: ${msg}`);
-    await finish(`reconcile: ${msg}`);
+    await finish(`${RECONCILE_ERROR_PREFIX}${msg}`);
   }
 }
 
@@ -966,13 +970,13 @@ export function createEngine(deps: EngineDeps): Engine & {
               // the first Save's `ratio` and disarm §5.7(b)'s empty-listing
               // refusal on the first-declaration pass.
               const allowance = takeAllowance(account.id);
-              // A cycle that runs a reconcile pass hands `last_error` to it:
-              // pull batches then leave the column alone (`undefined` keeps
-              // what COALESCE finds) instead of clearing a failure the pass
-              // recorded moments earlier (alpha-cent#181). The pass clears it
-              // itself when it next succeeds; pull's own failures still land
-              // after it — the catch below awaits `reconciling` first.
-              const reconcileOwnsError = Boolean(src.reconcile) && !undeclared;
+              // A cycle that runs a reconcile pass shares `last_error` with
+              // it: a good pull batch clears only pull's own error, never a
+              // failure the pass recorded moments earlier (alpha-cent#181),
+              // and the pass clears only its own. Pull's failures still land
+              // after the pass — the catch below awaits `reconciling` first.
+              const sharesError = Boolean(src.reconcile) && !undeclared;
+              const errorScope = sharesError ? ('pull' as const) : undefined;
               if (src.reconcile && !undeclared) {
                 reconciling = reconcilePass(
                   src,
@@ -1038,7 +1042,8 @@ export function createEngine(deps: EngineDeps): Engine & {
                           totalEstimate: batch.estimateTotal,
                         }
                       : undefined,
-                  error: reconcileOwnsError ? undefined : null,
+                  error: null,
+                  errorScope,
                 });
                 retries = 0;
               }
@@ -1056,9 +1061,8 @@ export function createEngine(deps: EngineDeps): Engine & {
               // the scheduler re-runs them. Let this cycle's reconcile land
               // FIRST: it's concurrent with pull(), so without this await its
               // error commit could race the commit below and get clobbered.
-              // A cycle that ran a pass then leaves the `error` field to it —
-              // passing `undefined` leaves the column as COALESCE finds it
-              // (whatever reconcile just recorded, or unchanged).
+              // A cycle that ran a pass clears only pull's own error here,
+              // leaving whatever the pass just recorded.
               await reconciling;
               // Re-check: `await reconciling` is a real suspension point —
               // stop() can land during it, same hazard the abort guard above
@@ -1072,7 +1076,8 @@ export function createEngine(deps: EngineDeps): Engine & {
                 documents: [],
                 cursor: ((await store.account(account.id)) ?? account).cursor,
                 status,
-                error: reconcileOwnsError ? undefined : null,
+                error: null,
+                errorScope,
               });
               return;
             } catch (err) {

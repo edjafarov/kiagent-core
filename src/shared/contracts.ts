@@ -181,6 +181,10 @@ export interface EnrichInput {
   metadata?: Record<string, unknown>;
 }
 
+/** Whose error a clear (`error: null`) removes from an account that a
+ *  reconcile pass and pull() share: the pass's own, or everything else. */
+export type ErrorScope = 'reconcile' | 'pull';
+
 /** THE write primitive — the only one. Batch and cursor commit in one
  *  transaction, so "cursor saved but rows not committed" cannot be written. */
 export type CommitBatch =
@@ -193,6 +197,8 @@ export type CommitBatch =
       status?: SyncStatus;
       progress?: AccountProgress;
       error?: string | null;
+      /** With `error: null`: clear only an error of this origin. */
+      errorScope?: ErrorScope;
     }
   | {
       consumer: string;

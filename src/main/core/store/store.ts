@@ -11,6 +11,7 @@ import type {
   Credentials,
   Document,
   DocumentId,
+  ErrorScope,
   ExtensionId,
   ExternalRef,
   Identity,
@@ -31,6 +32,7 @@ import {
   rrfMerge,
   toTrigramMatch,
 } from './fuzzy';
+import { lastErrorAssignment } from './last-error';
 import { createOutboxStore, type OutboxStore } from './outbox';
 import {
   EXTRACTED_DOCS_WHERE,
@@ -208,10 +210,15 @@ export interface CoreStore extends Store {
    *
    *  Omitted keys are left alone (`COALESCE` / the same `CASE WHEN` idiom the
    *  commit path uses for `last_error`), so `{ error: null }` CLEARS the error
-   *  while `{}` would clear nothing. Never touches `cursor` or `config`. */
+   *  while `{}` would clear nothing — and `errorScope` narrows that clear to
+   *  one origin, as on commit. Never touches `cursor` or `config`. */
   setAccountStatus(
     id: AccountId,
-    patch: { status?: SyncStatus; error?: string | null },
+    patch: {
+      status?: SyncStatus;
+      error?: string | null;
+      errorScope?: ErrorScope;
+    },
   ): Promise<void>;
   /** (externalId, type, seq) for every non-archived document under an
    *  account — the diff surface `reconcile()` archiving needs, without
@@ -1360,17 +1367,13 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async setAccountStatus(id, patch) {
+      const lastError = lastErrorAssignment(patch.error, patch.errorScope);
       await db.batch([
         {
           sql: `UPDATE accounts SET status = COALESCE(?, status),
-                  last_error = CASE WHEN ? THEN ? ELSE last_error END
+                  ${lastError.sql}
                 WHERE id = ?`,
-          params: [
-            patch.status ?? null,
-            patch.error !== undefined ? 1 : 0,
-            patch.error ?? null,
-            id,
-          ],
+          params: [patch.status ?? null, ...lastError.params, id],
         },
         {
           sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,

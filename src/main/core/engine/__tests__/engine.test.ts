@@ -2331,6 +2331,68 @@ describe('engine', () => {
         expect((await store.account(account.id))?.lastError).toBeFalsy();
       });
 
+      it("a reconcile pass with nothing to archive leaves pull's own failure in place", async () => {
+        // Last cycle's pull failed; this cycle's pass is healthy before pull
+        // has done anything. The failure is pull's to clear, not the pass's.
+        const source = hangingSource({
+          async *reconcile() {
+            yield ['a', 'b', 'c'].map((externalId) => ({
+              externalId,
+              type: 'note',
+            }));
+          },
+        });
+        const engine = makeEngine(source);
+        const account = await seedDocsDirect(engine, source, ['a', 'b', 'c']);
+        await store.setAccountStatus(account.id, {
+          status: 'error',
+          error: 'token revoked upstream',
+        });
+        const recorded = jest.spyOn(store, 'setAccountStatus');
+
+        const handle = engine.run(account);
+        await waitFor(async () => recorded.mock.calls.length > 0);
+        await recorded.mock.results[0].value;
+        await handle.stop();
+        recorded.mockRestore();
+
+        expect((await store.account(account.id))?.lastError).toBe(
+          'token revoked upstream',
+        );
+      });
+
+      it("a good pull batch clears last cycle's pull failure while a pass is still running", async () => {
+        let releasePass: (() => void) | undefined;
+        const passGate = new Promise<void>((resolve) => {
+          releasePass = resolve;
+        });
+        const { source, release } = gatedPullSource({
+          // eslint-disable-next-line require-yield
+          async *reconcile() {
+            await passGate;
+          },
+        });
+        const engine = makeEngine(source);
+        const account = await seedDocsDirect(engine, source, ['a']);
+        await store.setAccountStatus(account.id, {
+          status: 'error',
+          error: 'token revoked upstream',
+        });
+
+        const handle = engine.run(account);
+        release();
+        await waitFor(
+          async () =>
+            !!(await store.read.byExternalId(account.id, 'p2', 'note')),
+        );
+        const acc = await store.account(account.id);
+        const stopped = handle.stop();
+        releasePass?.();
+        await stopped;
+
+        expect(acc?.lastError).toBeFalsy();
+      });
+
       it('recording the reconcile outcome never rewrites the cursor', async () => {
         // A pull batch advancing the cursor between reconcile's read of the
         // account and its write used to be rolled back by that write — here

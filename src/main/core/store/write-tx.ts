@@ -13,6 +13,7 @@ import type {
 
 import { newId } from '../ids';
 import { buildStemView } from '../stemming';
+import { lastErrorAssignment } from './last-error';
 import type { AccountRow, DocRow } from './store';
 
 /** Injected so the write path stays testable and Electron-free. Mirrors the
@@ -602,11 +603,12 @@ export function createWriteTx(
       if (seq !== null) last = seq;
     }
     last = appendChange('account', acc.id);
+    const lastError = lastErrorAssignment(batch.error, batch.errorScope);
     conn
       .prepare(
         `UPDATE accounts SET cursor = ?, status = COALESCE(?, status),
          progress = COALESCE(?, progress),
-         last_error = CASE WHEN ? THEN ? ELSE last_error END,
+         ${lastError.sql},
          last_sync_at = ?
        WHERE id = ?`,
       )
@@ -614,8 +616,7 @@ export function createWriteTx(
         JSON.stringify(batch.cursor ?? null),
         batch.status ?? null,
         batch.progress ? JSON.stringify(batch.progress) : null,
-        batch.error !== undefined ? 1 : 0,
-        batch.error ?? null,
+        ...lastError.params,
         deps.now(),
         acc.id,
       );
