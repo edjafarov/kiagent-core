@@ -516,3 +516,35 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-cb:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
 .ui-cb:disabled { opacity: 0.5; cursor: default; }
 .ui-cb-label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+
+/* ── Status and progress ──────────────────────────────────────────── */
+.ui-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.ui-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: #b9b2cc; }
+.ui-status.is-ok .ui-dot { background: var(--live-solid); }
+.ui-status.is-work { color: var(--working-solid); }
+.ui-status.is-work .ui-dot { background: var(--working-solid); }
+.ui-status.is-err { color: var(--error-solid); }
+.ui-status.is-err .ui-dot { background: var(--error-solid); }
+.ui-status.is-rec { color: var(--text-primary); }
+.ui-status.is-rec .ui-dot { background: var(--error-solid); }
+.ui-track {
+  display: flex;
+  height: 6px;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--track);
+  border-radius: var(--r-xs);
+}
+.ui-bar { height: 100%; }
+.ui-bar.is-v { background: #8b6fd6; }
+.ui-bar.is-f { background: #b3a1e6; }
+.ui-bar.is-brand {
+  background: color-mix(in oklab, var(--brand) var(--brand-tone), var(--brand-mute));
+}
