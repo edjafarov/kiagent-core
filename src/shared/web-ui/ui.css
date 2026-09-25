@@ -154,3 +154,31 @@
   line-height: 15px;
   color: var(--text-secondary);
 }
+
+/* ── Disclosure ───────────────────────────────────────────────────── */
+.ui-disc { min-width: 0; background: var(--band-quiet); border-radius: var(--r-field); }
+.ui-disc-hd {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 14px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.ui-disc-hd:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.ui-disc-hd .i { color: var(--text-secondary); flex-shrink: 0; }
+.ui-disc-lbl { font-weight: 600; }
+.ui-disc-sum {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.ui-disc-body { padding: 4px 16px 16px; }
