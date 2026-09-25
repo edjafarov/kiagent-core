@@ -8,3 +8,5 @@ export {
   EmptyState,
 } from './surfaces';
 export type { KeyValueItem } from './surfaces';
+export { AttentionList, AttentionRow, KpiGrid, Kpi } from './attention';
+export type { AttentionTone } from './attention';

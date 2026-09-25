@@ -1,0 +1,63 @@
+import React from 'react';
+import { cx } from './cx';
+
+export type AttentionTone = 'acc' | 'err' | 'work';
+
+export function AttentionList(props: {
+  children: React.ReactNode;
+  'aria-label'?: string;
+}): React.ReactElement {
+  return (
+    <ul className="ui-attn" aria-label={props['aria-label']}>
+      {props.children}
+    </ul>
+  );
+}
+
+/** One thing that needs the user: a coloured edge, a caps kind word,
+ *  a title (may hold bold parts), an optional second line, one action. */
+export function AttentionRow(props: {
+  tone: AttentionTone;
+  kind: string;
+  title: React.ReactNode;
+  sub?: React.ReactNode;
+  action?: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <li className={cx('ui-att', `is-${props.tone}`)}>
+      <span className="ui-att-k">{props.kind}</span>
+      <span className="ui-att-body">
+        <span className="ui-att-t">{props.title}</span>
+        {props.sub != null && <span className="ui-att-s">{props.sub}</span>}
+      </span>
+      {props.action != null && (
+        <span className="ui-att-act">{props.action}</span>
+      )}
+    </li>
+  );
+}
+
+export function KpiGrid(props: {
+  children: React.ReactNode;
+}): React.ReactElement {
+  return <div className="ui-kpis">{props.children}</div>;
+}
+
+export function Kpi(props: {
+  value: React.ReactNode;
+  /** A total, shown small after the value: "12 / 13". */
+  of?: React.ReactNode;
+  label: React.ReactNode;
+  /** Spans both columns of the grid. */
+  wide?: boolean;
+}): React.ReactElement {
+  return (
+    <div className={cx('ui-kpi', props.wide && 'is-wide')}>
+      <span className="ui-kpi-v">
+        {props.value}
+        {props.of != null && <small> / {props.of}</small>}
+      </span>
+      <span className="ui-kpi-l">{props.label}</span>
+    </div>
+  );
+}
