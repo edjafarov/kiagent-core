@@ -182,3 +182,69 @@
   color: var(--text-secondary);
 }
 .ui-disc-body { padding: 4px 16px 16px; }
+
+/* ── Rows ─────────────────────────────────────────────────────────── */
+.ui-rows {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin: 0 -8px;
+  padding: 0;
+  list-style: none;
+}
+.ui-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: var(--row-h);
+  min-width: 0;
+  padding: 0 8px;
+  border-radius: var(--r-xs);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.ui-row.is-34 { height: var(--row-h-l); }
+.ui-row.is-38 { height: var(--row-h-mid); }
+.ui-row.is-42 { height: var(--row-h-tall); }
+.ui-row.is-48 { height: var(--row-h-xl); }
+.ui-row.is-hot { background: var(--row-hover); }
+.ui-row.is-sel { background: var(--row-sel); }
+.ui-row.is-faint { color: var(--text-tertiary); }
+.ui-row.is-faint .ui-row-lead { opacity: 0.45; }
+.ui-row-main {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+button.ui-row-main { cursor: pointer; }
+button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.ui-row-lead { display: flex; align-items: center; flex-shrink: 0; }
+.ui-row-text { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.ui-row-t, .ui-row-s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-row-t b { font-weight: 600; }
+.ui-row-s { font-size: 12px; color: var(--text-secondary); }
+.ui-row-trail { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ui-row-time {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ui-row-acts { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.ui-day {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  margin-top: 12px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.ui-day:first-child { margin-top: 0; }

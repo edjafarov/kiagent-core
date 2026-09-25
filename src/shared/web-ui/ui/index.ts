@@ -11,3 +11,5 @@ export type { KeyValueItem } from './surfaces';
 export { AttentionList, AttentionRow, KpiGrid, Kpi } from './attention';
 export type { AttentionTone } from './attention';
 export { Disclosure } from './Disclosure';
+export { Rows, Row, DayGroup } from './rows';
+export type { RowSize } from './rows';
