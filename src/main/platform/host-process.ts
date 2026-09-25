@@ -234,12 +234,23 @@ export function createExtensionHost(deps: HostDeps): {
           lifecycle.abort();
           proxySet?.abortAll(teardownError);
           proxySet?.dispose();
+          // Unregister BEFORE the first await, so it runs synchronously
+          // inside the exit handler, ahead of the crash respawn it launches.
+          // Left behind a slow surfaces close, it would run after the
+          // respawn registered: the first-registration-wins tool registry
+          // would already have refused the respawn's tools, and this
+          // disposer's by-id source/sender unregisters would delete the
+          // respawn's re-registrations, leaving the extension 'activated'
+          // with nothing registered. The disposer touches only the
+          // source/sender/OAuth/tool registries and the bus (which isolates
+          // subscriber throws); the surfaces close below depends on none of
+          // them.
+          unregister?.();
+          unregister = null;
           await surfacesHandle?.close();
           endpoint?.dispose(teardownError);
           offExit?.();
           offExit = null;
-          unregister?.();
-          unregister = null;
         })();
         return cleanupPromise;
       };

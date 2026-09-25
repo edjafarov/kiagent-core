@@ -274,6 +274,65 @@ describe('createExtensionHost', () => {
     expect(pairs).toHaveLength(3); // 1 initial + 2 restarts; third crash stays down
   });
 
+  it("a crash respawn's contributions stay registered while the crashed incarnation's surfaces are still closing", async () => {
+    // Models the MCP tool registry: the first registration of a name wins
+    // (a duplicate is refused with a no-op disposer), and a disposer only
+    // removes the entry it registered itself.
+    const registry = new Map<string, number>();
+    let refused = 0;
+    let incarnations = 0;
+    let respawnRegistered!: () => void;
+    const respawned = new Promise<void>((resolve) => {
+      respawnRegistered = resolve;
+    });
+    let releaseClose!: () => void;
+    const slowClose = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    let surfacesMade = 0;
+    const { deps, statuses, pairs } = makeDeps(okModule, {
+      makeSurfaces: () => {
+        surfacesMade += 1;
+        return {
+          surfaces: { net: { fetch: async () => ({ status: 200 }) } },
+          // Only the incarnation that crashes has a slow teardown.
+          close: surfacesMade === 1 ? () => slowClose : jest.fn(),
+        };
+      },
+      registerContributions: (c: Contributions) => {
+        incarnations += 1;
+        const token = incarnations;
+        const won: string[] = [];
+        for (const t of c.tools) {
+          if (registry.has(t.name)) refused += 1;
+          else {
+            registry.set(t.name, token);
+            won.push(t.name);
+          }
+        }
+        if (token === 2) respawnRegistered();
+        return () =>
+          won.forEach((name) => {
+            if (registry.get(name) === token) registry.delete(name);
+          });
+      },
+    });
+    const host = createExtensionHost(deps as never);
+    await host.start();
+    expect(registry.get('t')).toBe(1);
+
+    pairs[0].simulateExit(1);
+    await respawned;
+    // Let the crashed incarnation's teardown run to completion.
+    releaseClose();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(refused).toBe(0);
+    expect(registry.get('t')).toBe(2);
+    expect(statuses.at(-1)?.status).toBe('activated');
+    await host.stop();
+  });
+
   it('a crash during the handshake is recovered by a respawn: start() resolves and no stale errored follows', async () => {
     const { deps, statuses, pairs } = makeDeps(okModule, {
       readyTimeoutMs: 30,
