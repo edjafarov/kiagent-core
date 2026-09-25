@@ -133,7 +133,24 @@ describe('shared plugin infrastructure real worker path', () => {
             },
           ],
           database: { schema: 'dist/database.json' },
-          contributes: { sources: [], senders: [] },
+          // Every tool activate() returns below must be declared, or the
+          // platform skips it.
+          contributes: {
+            sources: [],
+            tools: [
+              'read',
+              'cross',
+              'proc',
+              'tx',
+              'net',
+              'netSuccess',
+              'rollbackRows',
+              'crash',
+              'watch',
+              'fileStat',
+            ].map((tool) => `${id}.${tool}`),
+            senders: [],
+          },
         }),
       );
       fs.writeFileSync(
@@ -166,7 +183,11 @@ describe('shared plugin infrastructure real worker path', () => {
     };
     const rootOwnerId = 'test.root-owner';
     const rootPeerId = 'test.root-peer';
-    const makePrivilegedFixture = (id: string, source: string) => {
+    const makePrivilegedFixture = (
+      id: string,
+      toolNames: string[],
+      source: string,
+    ) => {
       const dir = path.join(bundledDir, id);
       fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
       fs.writeFileSync(
@@ -178,13 +199,18 @@ describe('shared plugin infrastructure real worker path', () => {
           engine: '^2.0.0',
           entry: 'dist/index.js',
           caps: ['files', 'unsafe.mainProcess'],
-          contributes: { sources: [], senders: [] },
+          contributes: {
+            sources: [],
+            tools: toolNames.map((tool) => `${id}.${tool}`),
+            senders: [],
+          },
         }),
       );
       fs.writeFileSync(path.join(dir, 'dist/index.js'), source);
     };
     makePrivilegedFixture(
       rootOwnerId,
+      ['pid', 'grantCount', 'stat', 'watch', 'handle', 'foreign', 'revoke'],
       `
       let rootId;
       let grantCount = 0;
@@ -211,6 +237,7 @@ describe('shared plugin infrastructure real worker path', () => {
     );
     makePrivilegedFixture(
       rootPeerId,
+      ['pid', 'roots', 'foreignRoots', 'statOwner', 'foreign'],
       `
       module.exports = { async activate(host, extras) {
         const mainProcess = extras?.mainProcess;
