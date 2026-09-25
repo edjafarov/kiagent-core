@@ -60,4 +60,35 @@ describe('DataTable', () => {
     expect(slack).toHaveAttribute('aria-current', 'true');
     expect(gmail).not.toHaveAttribute('aria-current');
   });
+
+  it('lets a control inside a cell act without activating the row', () => {
+    const onRowClick = jest.fn();
+    const onRetry = jest.fn();
+    const withAction: DataColumn<Src>[] = [
+      ...columns,
+      {
+        key: 'act',
+        header: '',
+        cell: (r) => (
+          <button type="button" onClick={() => onRetry(r.id)}>
+            Retry {r.name}
+          </button>
+        ),
+      },
+    ];
+    render(
+      <DataTable
+        aria-label="Sources"
+        columns={withAction}
+        rows={rows}
+        rowKey={(r) => r.id}
+        onRowClick={onRowClick}
+      />,
+    );
+    const retry = screen.getByRole('button', { name: 'Retry Gmail' });
+    fireEvent.click(retry);
+    fireEvent.keyDown(retry, { key: 'Enter' });
+    expect(onRetry).toHaveBeenCalledWith('gmail');
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
 });

@@ -36,32 +36,26 @@ describe('Row', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it('shows hover actions on hover and hides them again', () => {
+  it('keeps hover actions mounted and in tab order beside the time', () => {
     const { item } = renderRow();
-    expect(
-      screen.queryByRole('button', { name: 'Open' }),
-    ).not.toBeInTheDocument();
-    fireEvent.mouseEnter(item);
-    expect(screen.getByRole('button', { name: 'Open' })).toBeInTheDocument();
-    expect(screen.queryByText('09:15')).not.toBeInTheDocument();
-    fireEvent.mouseLeave(item);
-    expect(
-      screen.queryByRole('button', { name: 'Open' }),
-    ).not.toBeInTheDocument();
+    const open = screen.getByRole('button', { name: 'Open' });
+    expect(item.contains(open)).toBe(true);
+    expect(open.tabIndex).toBe(0);
+    expect(screen.getByText('09:15')).toBeInTheDocument();
   });
 
-  it('shows hover actions while the row holds keyboard focus', () => {
-    renderRow();
-    const main = screen.getByRole('button', { name: /Quarterly report/ });
-    fireEvent.focus(main);
-    const open = screen.getByRole('button', { name: 'Open' });
-    // Moving focus onto the action keeps the row active.
-    fireEvent.blur(main, { relatedTarget: open });
-    expect(screen.getByRole('button', { name: 'Open' })).toBeInTheDocument();
-    fireEvent.blur(open, { relatedTarget: document.body });
-    expect(
-      screen.queryByRole('button', { name: 'Open' }),
-    ).not.toBeInTheDocument();
+  it('reaches hover actions by keyboard on a row without a main action', () => {
+    render(
+      <Rows>
+        <Row
+          title="Static"
+          hoverActions={<button type="button">Retry</button>}
+        />
+      </Rows>,
+    );
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'Retry',
+    ]);
   });
 
   it('marks the selected row as current', () => {

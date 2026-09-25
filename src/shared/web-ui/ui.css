@@ -195,6 +195,7 @@
   list-style: none;
 }
 .ui-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -209,7 +210,7 @@
 .ui-row.is-38 { height: var(--row-h-mid); }
 .ui-row.is-42 { height: var(--row-h-tall); }
 .ui-row.is-48 { height: var(--row-h-xl); }
-.ui-row.is-hot { background: var(--row-hover); }
+.ui-row:hover, .ui-row:focus-within { background: var(--row-hover); }
 .ui-row.is-sel { background: var(--row-sel); }
 .ui-row.is-faint { color: var(--text-tertiary); }
 .ui-row.is-faint .ui-row-lead { opacity: 0.45; }
@@ -238,7 +239,22 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.ui-row-acts { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.ui-row-acts {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 8px;
+  background: inherit;
+  opacity: 0;
+}
+/* Hover actions stay mounted and focusable; they cover the time while
+   the row is hovered or holds focus. */
+.ui-row:hover .ui-row-acts, .ui-row:focus-within .ui-row-acts { opacity: 1; }
+.ui-row:hover .ui-row-time, .ui-row:focus-within .ui-row-time { visibility: hidden; }
 .ui-day {
   display: flex;
   align-items: center;

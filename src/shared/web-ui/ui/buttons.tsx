@@ -96,13 +96,19 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
 );
 
 /** Inline violet text action (a button, not a navigation link). */
-export function TextButton(props: NativeButton): React.ReactElement {
-  const { className, type, ...rest } = props;
-  return (
-    <button
-      type={type === 'submit' ? 'submit' : 'button'}
-      className={cx('ui-link', className)}
-      {...rest}
-    />
-  );
-}
+export const TextButton = React.forwardRef<HTMLButtonElement, NativeButton>(
+  function TextButton(
+    props: NativeButton,
+    ref: React.ForwardedRef<HTMLButtonElement>,
+  ) {
+    const { className, type, ...rest } = props;
+    return (
+      <button
+        ref={ref}
+        type={type === 'submit' ? 'submit' : 'button'}
+        className={cx('ui-link', className)}
+        {...rest}
+      />
+    );
+  },
+);

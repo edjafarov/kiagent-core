@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { cx } from './cx';
 
 export type RowSize = 30 | 34 | 38 | 42 | 48;
@@ -25,14 +25,13 @@ export function Row(props: {
   time?: React.ReactNode;
   selected?: boolean;
   faint?: boolean;
-  /** Shown only while the row is hovered or holds keyboard focus. */
+  /** Always mounted and in tab order; shown (over the time) while the
+   *  row is hovered or holds focus. */
   hoverActions?: React.ReactNode;
   onClick?: () => void;
   'aria-label'?: string;
 }): React.ReactElement {
-  const [hot, setHot] = useState(false);
   const size = props.size ?? 30;
-  const showActions = props.hoverActions != null && hot;
   const body = (
     <>
       {props.lead != null && <span className="ui-row-lead">{props.lead}</span>}
@@ -49,15 +48,7 @@ export function Row(props: {
         size !== 30 && `is-${size}`,
         props.selected && 'is-sel',
         props.faint && 'is-faint',
-        hot && 'is-hot',
       )}
-      onMouseEnter={() => setHot(true)}
-      onMouseLeave={() => setHot(false)}
-      onFocus={() => setHot(true)}
-      onBlur={(e) => {
-        const next = e.relatedTarget as Node | null;
-        if (!next || !e.currentTarget.contains(next)) setHot(false);
-      }}
     >
       {props.onClick ? (
         <button
@@ -75,10 +66,9 @@ export function Row(props: {
       {props.trail != null && (
         <span className="ui-row-trail">{props.trail}</span>
       )}
-      {showActions ? (
+      {props.time != null && <span className="ui-row-time">{props.time}</span>}
+      {props.hoverActions != null && (
         <span className="ui-row-acts">{props.hoverActions}</span>
-      ) : (
-        props.time != null && <span className="ui-row-time">{props.time}</span>
       )}
     </li>
   );

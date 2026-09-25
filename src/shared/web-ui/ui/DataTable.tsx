@@ -10,6 +10,16 @@ export interface DataColumn<T> {
   cell: (row: T) => React.ReactNode;
 }
 
+const CONTROL =
+  'button, a[href], input, select, textarea, [role="switch"], [role="checkbox"]';
+
+/** True when the event came from a control inside a cell, which acts on
+ *  its own and does not activate the row. */
+function fromControl(e: React.SyntheticEvent): boolean {
+  const control = (e.target as Element).closest(CONTROL);
+  return control != null && e.currentTarget.contains(control);
+}
+
 /** A real table with caps headers, 36px rows, no lines. Cells truncate;
  *  the table never scrolls sideways. */
 export function DataTable<T>(props: {
@@ -59,10 +69,17 @@ export function DataTable<T>(props: {
               )}
               aria-current={selected ? 'true' : undefined}
               tabIndex={onRowClick ? 0 : undefined}
-              onClick={onRowClick ? () => onRowClick(row) : undefined}
+              onClick={
+                onRowClick
+                  ? (e) => {
+                      if (!fromControl(e)) onRowClick(row);
+                    }
+                  : undefined
+              }
               onKeyDown={
                 onRowClick
                   ? (e) => {
+                      if (e.target !== e.currentTarget) return;
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
                         onRowClick(row);
