@@ -96,9 +96,8 @@ beforeEach(() => {
   mockState = signedInState();
 });
 
-/** Opens Settings the way a user does from the sidebar. */
+/** Opens Settings the way a user does from the sidebar: the gear. */
 function openSettingsPage(): void {
-  fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
 }
 
@@ -123,11 +122,15 @@ describe('App shell', () => {
     expect(sourcesMounts).toBe(2);
   });
 
-  it('opens Settings as a page from the account menu', () => {
+  it('opens Settings as a page from the account menu and the gear', () => {
     render(<App />);
-    openSettingsPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
     expect(screen.getByTestId('screen-settings')).toBeInTheDocument();
     expect(screen.queryByTestId('screen-sources')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Outbox' }));
+    openSettingsPage();
+    expect(screen.getByTestId('screen-settings')).toBeInTheDocument();
   });
 
   it('gives host views the app top bar and page views none', () => {

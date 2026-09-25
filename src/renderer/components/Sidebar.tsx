@@ -1,15 +1,12 @@
 import React from 'react';
 import { useAppState } from '@renderer/state/app-state';
 import { useView } from '@renderer/state/view';
-import { Icon, ICON_NAMES } from '@shared/web-ui/icon-sprite';
+import { ICON_NAMES } from '@shared/web-ui/icon-sprite';
 import { contributedNavRows } from '@renderer/components/contributed-nav';
 import { BracketMark } from '@shared/web-ui/components';
+import { NavItem, SidebarFrame, Status } from '@shared/web-ui/ui';
 import { AccountMenu } from '@renderer/components/AccountMenu';
 import type { AppState } from '@shared/contracts';
-import './Sidebar.css';
-
-const isMac =
-  typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 
 // Narrow selector (moved from TopBar): re-render only when a derived number
 // changes, not on every state push.
@@ -44,120 +41,88 @@ export function Sidebar(): React.ReactElement {
   const { view, navigate, openSettings } = useView();
 
   const mcpOnline = mcpPort != null;
+  const needs = `${erroringCount} ${erroringCount === 1 ? 'source needs' : 'sources need'} attention`;
 
   return (
-    <aside className={`kg-sidebar${isMac ? ' mac' : ''}`}>
-      <div className="kg-sb-head">
-        <span className="kg-sb-brand">
-          <BracketMark size={22} />
-          <span className="kg-sb-wordmark">KIAgent</span>
-        </span>
-      </div>
-
-      <nav className="kg-sb-nav">
-        <SideNavItem
-          label="Sources"
-          icon="database"
-          active={view === 'sources'}
-          onClick={() => navigate('sources')}
-        />
-        <SideNavItem
-          label="Outbox"
-          icon="mail"
-          active={view === 'outbox'}
-          onClick={() => navigate('outbox')}
-        />
-        <SideNavItem
-          label="Connection"
-          icon="link"
-          active={view === 'connection'}
-          onClick={() => navigate('connection')}
-          badge={mcpOnline ? 'on' : 'off'}
-          badgeTitle={
-            mcpOnline
-              ? `Local server online · 127.0.0.1:${mcpPort}/mcp`
-              : 'Local server offline'
-          }
-        />
-        <SideNavItem
-          label="Marketplace"
-          icon="puzzle"
-          active={view === 'marketplace'}
-          onClick={() => navigate('marketplace')}
-        />
-        {/* Core's sidebar has no groups, so a row's group is ignored here. */}
-        {contributedNavRows(extensions ?? [], ICON_NAMES).map((row) => (
-          <SideNavItem
-            key={row.view}
-            label={row.label}
-            icon={row.icon}
-            active={view === row.view}
-            onClick={() => navigate(row.view)}
-          />
-        ))}
-      </nav>
-
-      <div className="kg-sb-foot">
-        <div className="kg-sb-divider" />
-        {erroringCount > 0 ? (
-          <button
-            type="button"
-            className="kg-sb-status error"
-            aria-label={`${erroringCount} ${erroringCount === 1 ? 'source needs' : 'sources need'} attention`}
-            onClick={() => navigate('sources')}
-          >
-            <span className="dot" />
-            <span>
-              {erroringCount}{' '}
-              {erroringCount === 1 ? 'source needs' : 'sources need'} attention
+    <SidebarFrame
+      brand={
+        <>
+          <BracketMark size={20} />
+          <span>KIAgent</span>
+        </>
+      }
+      foot={
+        <>
+          {erroringCount > 0 ? (
+            <button
+              type="button"
+              className="ui-sb-line"
+              aria-label={needs}
+              onClick={() => navigate('sources')}
+            >
+              <Status tone="err">{needs}</Status>
+            </button>
+          ) : (
+            <span className="ui-sb-line">
+              <Status tone="off">
+                {liveCount} live · {totalDocs.toLocaleString()} docs
+              </Status>
             </span>
-          </button>
-        ) : (
-          <div className="kg-sb-status">
-            <span className="dot" />
-            <span>
-              {liveCount} live · {totalDocs.toLocaleString()} docs
-            </span>
-          </div>
-        )}
-        {identity && (
-          <AccountMenu
-            identity={identity}
-            collapsed={false}
-            onOpenSettings={openSettings}
-          />
-        )}
-      </div>
-    </aside>
-  );
-}
-
-function SideNavItem(props: {
-  label: string;
-  icon: string;
-  active: boolean;
-  onClick: () => void;
-  badge?: 'on' | 'off';
-  badgeTitle?: string;
-}): React.ReactElement {
-  const badgeAria = props.badge === 'on' ? 'online' : 'offline';
-  const ariaLabel = props.badge ? `${props.label} ${badgeAria}` : props.label;
-  return (
-    <button
-      type="button"
-      aria-label={ariaLabel}
-      onClick={props.onClick}
-      title={props.badgeTitle}
-      className={`side-item kg-sb-item${props.active ? ' active' : ''}`}
+          )}
+          {identity && (
+            <AccountMenu
+              identity={identity}
+              collapsed={false}
+              onOpenSettings={() => openSettings()}
+            />
+          )}
+        </>
+      }
     >
-      <Icon name={props.icon} size={13} />
-      <span>{props.label}</span>
-      {props.badge && (
-        <span
-          className={`tab-dot ${props.badge}`}
-          aria-label={`${props.label} ${badgeAria}`}
+      <NavItem
+        label="Sources"
+        icon="database"
+        active={view === 'sources'}
+        onClick={() => navigate('sources')}
+      />
+      <NavItem
+        label="Outbox"
+        icon="mail"
+        active={view === 'outbox'}
+        onClick={() => navigate('outbox')}
+      />
+      <NavItem
+        label="Connection"
+        icon="link"
+        active={view === 'connection'}
+        onClick={() => navigate('connection')}
+        dot={
+          mcpOnline
+            ? { tone: 'ok', label: 'online' }
+            : { tone: 'off', label: 'offline' }
+        }
+        title={
+          mcpOnline
+            ? `Local server online · 127.0.0.1:${mcpPort}/mcp`
+            : 'Local server offline'
+        }
+      />
+      <NavItem
+        label="Marketplace"
+        icon="puzzle"
+        active={view === 'marketplace'}
+        onClick={() => navigate('marketplace')}
+      />
+      {/* Core's sidebar has no groups, so a row's group is ignored here. */}
+      {contributedNavRows(extensions ?? [], ICON_NAMES).map((row) => (
+        <NavItem
+          key={row.view}
+          label={row.label}
+          icon={row.icon}
+          active={view === row.view}
+          onClick={() => navigate(row.view)}
         />
-      )}
-    </button>
+      ))}
+    </SidebarFrame>
   );
 }

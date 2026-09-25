@@ -1,6 +1,4 @@
 import '@testing-library/jest-dom';
-import fs from 'fs';
-import path from 'path';
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { AppState } from '@shared/contracts';
@@ -82,8 +80,9 @@ describe('Sidebar nav', () => {
 
   it('renders the four nav items with Sources active and navigates on click', () => {
     const ctx = renderSidebar();
-    expect(screen.getByRole('button', { name: 'Sources' })).toHaveClass(
-      'active',
+    expect(screen.getByRole('button', { name: 'Sources' })).toHaveAttribute(
+      'aria-current',
+      'page',
     );
     fireEvent.click(screen.getByRole('button', { name: 'Outbox' }));
     expect(ctx.navigate).toHaveBeenCalledWith('outbox');
@@ -103,45 +102,23 @@ describe('Sidebar nav', () => {
   });
 });
 
-/**
- * The MCP dot's on/off COLOURS live under a `.kg-tab` ancestor in
- * components.css, and the sidebar renders no `.kg-tab` — so the markup below
- * is only visible if Sidebar.css re-scopes those backgrounds. jsdom cannot
- * compute that (CSS imports are stubbed by identity-obj-proxy), so the pairing
- * is asserted in two halves: the class the markup emits, and the presence of a
- * sidebar-scoped background rule for it. Same shape as the ipc-handler
- * coverage test — scrape the source for what the compiler cannot see.
- */
 describe('Sidebar MCP dot', () => {
-  it('emits the on/off state class the stylesheet keys off', () => {
-    renderSidebar();
-    expect(
-      document.body.querySelector('.kg-sb-item .tab-dot.on'),
-    ).not.toBeNull();
-  });
-
-  it('falls back to the off class when the local server is down', () => {
+  it('names the offline state when the local server is down', () => {
     mockState = stateWith({
       mcp: { port: null },
     } as unknown as Partial<AppState>);
     renderSidebar();
     expect(
-      document.body.querySelector('.kg-sb-item .tab-dot.off'),
-    ).not.toBeNull();
+      screen.getByRole('button', { name: 'Connection offline' }),
+    ).toBeInTheDocument();
   });
 
-  it('Sidebar.css gives both dot states a sidebar-scoped background', () => {
-    const css = fs.readFileSync(
-      path.resolve(__dirname, '../Sidebar.css'),
-      'utf8',
-    );
-    for (const state of ['on', 'off']) {
-      expect(css).toMatch(
-        new RegExp(
-          `\\.kg-s[\\w.-]*\\s+\\.tab-dot\\.${state}\\b[^{]*\\{[^}]*background\\s*:`,
-        ),
-      );
-    }
+  it('keeps the dot decorative; the state is in the name', () => {
+    renderSidebar();
+    const item = screen.getByRole('button', { name: 'Connection online' });
+    expect(
+      item.querySelector('[aria-hidden="true"].ui-nav-dot'),
+    ).not.toBeNull();
   });
 });
 
@@ -187,14 +164,21 @@ describe('Sidebar brand row', () => {
 });
 
 describe('AccountMenu (core build)', () => {
-  it('renders the identity chip and opens a menu with Settings but NO Log out', () => {
+  it('opens a menu with Settings but NO Log out', () => {
     const ctx = renderSidebar();
     fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    expect(ctx.openSettings).toHaveBeenCalled();
+    expect(screen.getByRole('menu', { name: 'Account' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
+    expect(ctx.openSettings).toHaveBeenCalledWith();
     expect(
-      screen.queryByRole('button', { name: 'Log out' }),
+      screen.queryByRole('menuitem', { name: 'Log out' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('opens Settings from the gear', () => {
+    const ctx = renderSidebar();
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(ctx.openSettings).toHaveBeenCalledWith();
   });
 
   it('shows the identity initial and name', () => {
