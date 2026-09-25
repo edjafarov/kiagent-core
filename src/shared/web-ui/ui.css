@@ -900,3 +900,139 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-set-rt { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .ui-set-rd { margin-top: 2px; font-size: 12px; color: var(--text-secondary); }
 .ui-set-ctl { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* ── App shell ────────────────────────────────────────────────────── */
+.ui-shell {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.ui-sidebar {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: var(--sidebar-w);
+  min-height: 0;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--sidebar-border);
+}
+.ui-sidebar-head {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: var(--band-h);
+  padding: 0 16px;
+  background: var(--band-bg);
+  border-bottom: 1px solid var(--band-border);
+  -webkit-app-region: drag;
+}
+.ui-shell.is-mac .ui-sidebar-head { padding-left: 90px; }
+.ui-brand { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+.ui-nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 16px 0;
+}
+.ui-nav-group { display: flex; flex-direction: column; gap: 4px; }
+.ui-nav-group + .ui-nav-group { margin-top: 20px; }
+.ui-nav-item {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--nav-text);
+  cursor: pointer;
+}
+.ui-nav-item:hover { background: rgba(0, 0, 0, 0.045); }
+.ui-nav-item:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.ui-nav-item.is-active {
+  padding-left: 5px;
+  background: var(--card-bg);
+  border-left: 3px solid var(--accent-solid);
+  font-weight: 600;
+  color: var(--nav-active);
+}
+.ui-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-nav-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent-solid);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+.ui-nav-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: #b9b2cc; }
+.ui-nav-dot.is-ok { background: var(--live-solid); }
+.ui-nav-dot.is-work { background: var(--working-solid); }
+.ui-nav-dot.is-err { background: var(--error-solid); }
+.ui-sidebar-foot { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; padding: 12px 16px 16px; }
+.ui-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--bg-app); }
+.ui-legacy { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.ui-shell.is-win .ui-top, .ui-shell.is-linux .ui-top { padding-right: 140px; }
+
+/* Account row in the sidebar foot. */
+.ui-acct { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.ui-acct-who {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+.ui-acct-who:hover { background: rgba(0, 0, 0, 0.045); }
+.ui-acct-who:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.ui-acct-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.ui-acct-hn { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+.ui-acct-he { font-size: 11.5px; color: var(--text-secondary); }
+.ui-sb-line { all: unset; box-sizing: border-box; display: flex; padding: 0 6px; cursor: default; }
+button.ui-sb-line { cursor: pointer; }
+button.ui-sb-line:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+
+/* Signed-out gates keep the same white band. */
+.ui-titlebar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: var(--band-h);
+  padding: 0 16px;
+  background: var(--band-bg);
+  border-bottom: 1px solid var(--band-border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  -webkit-app-region: drag;
+}
+.ui-titlebar.is-mac { padding-left: 90px; }
+.ui-titlebar.is-win, .ui-titlebar.is-linux { padding-right: 140px; }

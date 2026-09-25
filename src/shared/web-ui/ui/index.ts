@@ -42,3 +42,12 @@ export type { Brand } from './brands';
 export { BrandGlyph, BrandMark, DateTile, Avatar, Chip } from './identity';
 export { SettingsLayout, SettingsGroup, SettingsRow } from './settings';
 export type { SettingsPane } from './settings';
+export {
+  AppShell,
+  SidebarFrame,
+  NavGroup,
+  NavItem,
+  HostFrame,
+  detectPlatform,
+} from './shell';
+export type { Platform, NavDotTone } from './shell';
