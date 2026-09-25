@@ -1,3 +1,5 @@
+import v8 from 'v8';
+
 import type {
   Account,
   AccountId,
@@ -196,5 +198,107 @@ describe('account-cursor-not-projected', () => {
     ]);
     expect(s.accounts.map((a) => a.account.cursor)).toEqual([null, null]);
     expect(s.accounts[0].docCount).toBe(3);
+  });
+});
+
+// #180 (alpha-cent): restoring an archived document keeps its original
+// ingestedAt, so the "new document" heuristic alone never counted it back.
+describe('appProjection archived → live transitions', () => {
+  const projection = createAppProjection(extras);
+  const base = {
+    accounts: [{ account: account('a1'), docCount: 0, recent: [] }],
+    processing: { pending: 0, done: 0, skipped: 0, failed: 0 },
+    mcp: { port: null, clients: 0 },
+    identity: null,
+    prefs: DEFAULT_PREFS,
+    extensions: [],
+    ready: true,
+  };
+  const archive = (seq: number, id: string) =>
+    docChange(seq, 'a1', id, {
+      ingestedAt: '2026-01-01T00:00:01Z',
+      updatedAt: `2026-01-01T00:00:0${seq}Z`,
+      archivedAt: `2026-01-01T00:00:0${seq}Z`,
+    });
+  const restore = (seq: number, id: string) =>
+    docChange(seq, 'a1', id, {
+      ingestedAt: '2026-01-01T00:00:01Z',
+      updatedAt: `2026-01-01T00:00:0${seq}Z`,
+    });
+
+  it('counts a restore back in and puts the document back in recents', () => {
+    let s = projection.apply(base, [docChange(1, 'a1', 'd1')]);
+    s = projection.apply(s, [archive(2, 'd1')]);
+    expect(s.accounts[0].docCount).toBe(0);
+    s = projection.apply(s, [restore(3, 'd1')]);
+    expect(s.accounts[0].docCount).toBe(1);
+    expect(s.accounts[0].recent.map((r) => r.id)).toEqual(['d1']);
+  });
+
+  it('counts a restore of a document that was already archived at init', async () => {
+    const withArchived = createAppProjection({
+      ...extras,
+      archivedIds: async () => ['d1' as Document['id']],
+    });
+    const read = {
+      document: jest.fn(async () => null),
+      children: jest.fn(async () => []),
+      byExternalId: jest.fn(async () => null),
+      search: jest.fn(async () => []),
+      count: jest.fn(async () => 0),
+      accounts: jest.fn(async () => [account('a1')]),
+    } as unknown as Query;
+    let s = await withArchived.init(read);
+    expect(s.accounts[0].docCount).toBe(0);
+    s = withArchived.apply(s, [restore(3, 'd1')]);
+    expect(s.accounts[0].docCount).toBe(1);
+  });
+
+  it('counts a replayed restore once', () => {
+    let s = projection.apply(base, [docChange(1, 'a1', 'd1')]);
+    s = projection.apply(s, [archive(2, 'd1')]);
+    s = projection.apply(s, [restore(3, 'd1')]);
+    s = projection.apply(s, [restore(3, 'd1')]);
+    expect(s.accounts[0].docCount).toBe(1);
+  });
+
+  it('counts a replayed archive, or an update to an archived document, once', () => {
+    let s = projection.apply(base, [
+      docChange(1, 'a1', 'd1'),
+      docChange(2, 'a1', 'd2'),
+    ]);
+    s = projection.apply(s, [archive(3, 'd1')]);
+    s = projection.apply(s, [archive(3, 'd1'), archive(4, 'd1')]);
+    expect(s.accounts[0].docCount).toBe(1);
+  });
+
+  it('stays pure: a later archive never leaks into an earlier state', () => {
+    const s1 = projection.apply(base, [
+      docChange(1, 'a1', 'd1'),
+      docChange(2, 'a1', 'd2'),
+    ]);
+    const s2 = projection.apply(s1, [archive(3, 'd1')]);
+    const s3 = projection.apply(s2, [archive(4, 'd2')]);
+    expect(s3.accounts[0].docCount).toBe(0);
+    // In s2's history d2 was never archived: this is an ordinary update.
+    expect(projection.apply(s2, [restore(5, 'd2')]).accounts[0].docCount).toBe(
+      1,
+    );
+    // Applying to the same state twice gives the same answer.
+    expect(projection.apply(s3, [restore(5, 'd2')]).accounts[0].docCount).toBe(
+      1,
+    );
+    expect(projection.apply(s3, [restore(5, 'd2')]).accounts[0].docCount).toBe(
+      1,
+    );
+  });
+
+  it('keeps the archived index out of the state windows receive', () => {
+    let s = projection.apply(base, [docChange(1, 'a1', 'd1')]);
+    s = projection.apply(s, [archive(2, 'd1')]);
+    // v8's serializer is the structured clone Electron IPC uses.
+    const cloned = v8.deserialize(v8.serialize(s));
+    expect(JSON.stringify(cloned)).not.toContain('"d1"');
+    expect(Object.getOwnPropertySymbols(s)).toEqual([]);
   });
 });

@@ -281,6 +281,10 @@ export interface CoreStore extends Store {
   ledgerCounts(consumer: string): Promise<LedgerCounts>;
   /** Across every consumer — drives the app-wide processing panel. */
   ledgerCountsAll(): Promise<LedgerCounts & { pending: number }>;
+  /** Ids of the account's archived, not yet purged, documents — seeds the app
+   *  projection's archived index so a restore counts back in (alpha-cent
+   *  #180). Store-level on purpose: `Query` is the extension/MCP read surface. */
+  archivedIds(account: AccountId): Promise<DocumentId[]>;
   /** ONE bounded page of deferred seqs, keyset-paged: seqs strictly greater
    *  than `after`, ascending, at most `limit`. Deliberately has no unbounded
    *  form — a 2.1M-entry backlog returned in one reply both blew the
@@ -1482,6 +1486,14 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         }
       }
       return counts;
+    },
+
+    async archivedIds(account) {
+      const rows = (await db.all(
+        `SELECT id FROM documents WHERE account_id = ? AND archived_at IS NOT NULL`,
+        [account],
+      )) as Array<{ id: string }>;
+      return rows.map((r) => r.id as DocumentId);
     },
 
     async ledgerCountsAll() {
