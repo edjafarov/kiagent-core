@@ -15,3 +15,5 @@ export { Rows, Row, DayGroup } from './rows';
 export type { RowSize } from './rows';
 export { DataTable } from './DataTable';
 export type { DataColumn } from './DataTable';
+export { Button, IconButton, Link } from './buttons';
+export type { ButtonVariant, ButtonProps, IconButtonProps } from './buttons';
