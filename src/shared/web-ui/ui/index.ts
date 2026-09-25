@@ -22,6 +22,7 @@ export type { TextFieldProps, SelectProps, TextAreaProps } from './fields';
 export { Segmented } from './Segmented';
 export type { SegmentedItem } from './Segmented';
 export { Toggle, Checkbox } from './toggles';
+export type { ToggleProps, CheckboxProps } from './toggles';
 export { Status, ProgressBar } from './status';
 export type { StatusTone } from './status';
 export { Spinner, Busy } from '../components';

@@ -1,9 +1,19 @@
 /* Design-system primitives for the app shell and its pages.
    Every class starts with `ui-`; state and variant modifiers are `is-*`.
    No legacy stylesheet styles `ui-*`. Colours, radii and layout sizes
-   come from tokens.css; type sizes are literal (the spec's type table).
+   come from tokens.css; type sizes are literal (the spec's type table), as
+   are a few one-off tints (on-accent white, count colours on the active
+   segment, danger edge, the off dot, bar fills, hover tint).
    Loaded after components.css and relies on its base: the `.ac` font and
    border-box sizing, and the sprite's `.i` icon class. */
+
+/* Brand colours are always shown toned toward slate. Declared on each
+   element that sets --brand, so the mix resolves against that element. */
+.ui-glyph,
+.ui-mk,
+.ui-bar.is-brand {
+  --brand-toned: color-mix(in oklab, var(--brand) var(--brand-tone), var(--brand-mute));
+}
 
 /* ── Surfaces ─────────────────────────────────────────────────────── */
 .ui-card {
@@ -564,7 +574,7 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-bar.is-v { background: #8b6fd6; }
 .ui-bar.is-f { background: #b3a1e6; }
 .ui-bar.is-brand {
-  background: color-mix(in oklab, var(--brand) var(--brand-tone), var(--brand-mute));
+  background: var(--brand-toned);
 }
 
 /* ── Sheet (modal dialog) ─────────────────────────────────────────── */
@@ -752,7 +762,7 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
   width: 24px;
   height: 24px;
   overflow: hidden;
-  background: color-mix(in oklab, var(--brand) var(--brand-tone), var(--brand-mute));
+  background: var(--brand-toned);
   border-radius: var(--r-xs);
   font-size: 10px;
   font-weight: 600;
@@ -773,7 +783,7 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
   width: 3px;
   height: 16px;
   border-radius: 1px;
-  background: color-mix(in oklab, var(--brand) var(--brand-tone), var(--brand-mute));
+  background: var(--brand-toned);
 }
 .ui-row.is-34 .ui-mk { height: 22px; }
 .ui-row.is-38 .ui-mk,

@@ -36,3 +36,36 @@ describe('Checkbox', () => {
     expect(onChange).toHaveBeenCalledWith(true);
   });
 });
+
+describe('native props', () => {
+  it('pass through to the switch and the checkbox, and refs forward', () => {
+    const ref = React.createRef<HTMLButtonElement>();
+    render(
+      <>
+        <p id="hint">Starts quietly.</p>
+        <Toggle
+          ref={ref}
+          id="t"
+          aria-label="T"
+          aria-describedby="hint"
+          checked
+          onChange={() => {}}
+        />
+        <Checkbox
+          name="apps"
+          aria-label="Zoom"
+          checked={false}
+          onChange={() => {}}
+        />
+      </>,
+    );
+    const sw = screen.getByRole('switch', { name: 'T' });
+    expect(ref.current).toBe(sw);
+    expect(sw).toHaveAttribute('id', 't');
+    expect(sw).toHaveAccessibleDescription('Starts quietly.');
+    expect(screen.getByRole('checkbox', { name: 'Zoom' })).toHaveAttribute(
+      'name',
+      'apps',
+    );
+  });
+});

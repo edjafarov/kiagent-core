@@ -68,6 +68,9 @@ export function DataTable<T>(props: {
                 faint?.(row) && 'is-faint',
               )}
               aria-current={selected ? 'true' : undefined}
+              // The row itself is the target (not a button in the first
+              // cell) so table semantics stay intact; Row in rows.tsx uses
+              // a real button because a list item has no such semantics.
               tabIndex={onRowClick ? 0 : undefined}
               onClick={
                 onRowClick

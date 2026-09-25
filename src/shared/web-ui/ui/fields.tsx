@@ -3,6 +3,9 @@ import { Icon } from '../icon-sprite';
 import { Button } from './buttons';
 import { cx } from './cx';
 
+/* Every field's `className` goes on its outer box: the wrapper for
+   TextField and Select, the element itself for TextArea. */
+
 export interface TextFieldProps
   extends React.InputHTMLAttributes<HTMLInputElement> {
   className?: string;
