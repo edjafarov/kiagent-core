@@ -1,19 +1,12 @@
-import React, {
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { subscribeAppState, getAppState } from '@renderer/state/app-state';
+import { useNavigation } from '@renderer/state/navigation';
 import {
   ViewContext,
   isExtView,
-  nextResolved,
   parseExtView,
   resolveInitialView,
   type KnownView,
-  type ResolvedView,
   type View,
   type ViewParams,
 } from '@renderer/state/view';
@@ -73,59 +66,7 @@ export default function App(): React.ReactElement {
   // deliberately can't express (see state/app-state.ts).
   const state = useSyncExternalStore(subscribeAppState, getAppState);
 
-  // Navigation is local component state, not the URL — there is exactly one
-  // BrowserWindow and no back/forward browser chrome to sync with.
-  const [resolved, setResolved] = useState<ResolvedView | null>(() =>
-    resolveInitialView(),
-  );
-  const historyRef = useRef<ResolvedView[]>([]);
-  // The pane last shown, for openSettings() with no pane.
-  const lastPaneRef = useRef<string | undefined>(undefined);
-  if (resolved?.view === 'settings' && resolved.params?.pane) {
-    lastPaneRef.current = resolved.params.pane;
-  }
-
-  const navigate = useCallback((to: View, params?: ViewParams) => {
-    setResolved((prev) => {
-      const { next, push } = nextResolved(prev, to, params);
-      if (push && prev !== null) historyRef.current.push(prev);
-      return next;
-    });
-  }, []);
-
-  const back = useCallback(() => {
-    const prev = historyRef.current.pop() ?? {
-      view: 'sources' as const,
-      epoch: 0,
-    };
-    setResolved(prev);
-  }, []);
-
-  // Some buttons pass openSettings straight to onClick, so a click event can
-  // arrive here; anything but a string means "no pane".
-  const openSettings = useCallback(
-    (pane?: unknown) => {
-      const wanted = typeof pane === 'string' ? pane : lastPaneRef.current;
-      navigate('settings', wanted ? { pane: wanted } : undefined);
-    },
-    [navigate],
-  );
-
-  const replaceParams = useCallback((params: ViewParams) => {
-    setResolved((prev) => (prev ? { ...prev, params } : prev));
-  }, []);
-
-  const viewContextValue = useMemo(
-    () => ({
-      view: resolved?.view ?? ('sources' as View),
-      params: resolved?.params ?? {},
-      navigate,
-      back,
-      openSettings,
-      replaceParams,
-    }),
-    [resolved, navigate, back, openSettings, replaceParams],
-  );
+  const nav = useNavigation<View, ViewParams>('sources', resolveInitialView);
 
   // Gate 1: nothing loaded yet.
   if (state === null) {
@@ -152,14 +93,13 @@ export default function App(): React.ReactElement {
     );
   }
 
-  const view = resolved?.view ?? 'sources';
-  const params = resolved?.params ?? {};
+  const { view, params, navigate, resolved } = nav;
   const screen = screenRegistry.get(view, params, navigate, state.extensions);
   const frame = screenRegistry.frame(view);
   const title = viewTitle(view, state.extensions);
 
   return (
-    <ViewContext.Provider value={viewContextValue}>
+    <ViewContext.Provider value={nav}>
       <IconSprite />
       <AppShell sidebar={<Sidebar />}>
         <React.Fragment key={`${view}:${resolved?.epoch ?? 0}`}>

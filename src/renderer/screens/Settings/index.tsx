@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { SettingsLayout } from '@shared/web-ui/ui';
 import { useView } from '@renderer/state/view';
 import { Account } from './Account';
@@ -30,14 +30,11 @@ function isKey(v: string | undefined): v is SettingsKey {
 
 export function Settings(props: { pane?: string }): React.ReactElement {
   const { replaceParams } = useView();
-  const [selected, setSelected] = useState<SettingsKey>(
-    isKey(props.pane) ? props.pane : 'account',
-  );
+  // The route is the one source of the pane; a switch rewrites the route.
+  const selected: SettingsKey = isKey(props.pane) ? props.pane : 'account';
 
   const select = (key: string): void => {
-    if (!isKey(key)) return;
-    setSelected(key);
-    replaceParams({ pane: key });
+    if (isKey(key)) replaceParams({ pane: key });
   };
 
   const pane =

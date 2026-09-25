@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react';
+import { nextResolved as nextResolvedOf, type Resolved } from './navigation';
 
 /**
  * Routed screens. Deliberately small: Sources owns its own in-screen
@@ -135,28 +136,16 @@ export function useView(): ViewContextValue {
   return useContext(ViewContext);
 }
 
-/** A concrete navigation target plus a monotonically increasing `epoch`.
- *  App keys the rendered screen on `${view}:${epoch}`, so re-navigating to
- *  the CURRENT view (clicking "Sources" while already there) remounts the
- *  screen and resets its in-screen state — the add-source panel, the
- *  source-detail sub-view. */
-export interface ResolvedView {
-  view: View;
-  params?: ViewParams;
-  epoch: number;
-}
+/** A concrete navigation target; see state/navigation.ts. */
+export type ResolvedView = Resolved<View, ViewParams>;
 
-/** Pure navigate transition: every call bumps `epoch`; same-view
- *  re-navigation is NOT pushed onto the back history (no duplicate stops). */
+/** The navigate transition, typed for this app's routes. */
 export function nextResolved(
   prev: ResolvedView | null,
   to: View,
   params?: ViewParams,
 ): { next: ResolvedView; push: boolean } {
-  return {
-    next: { view: to, params, epoch: (prev?.epoch ?? 0) + 1 },
-    push: prev !== null && prev.view !== to,
-  };
+  return nextResolvedOf<View, ViewParams>(prev, to, params);
 }
 
 /** The first view to show, from an optional `#view=<id>&params=<json>`
