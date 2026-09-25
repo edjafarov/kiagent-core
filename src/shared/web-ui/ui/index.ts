@@ -29,3 +29,5 @@ export { Sheet, ConfirmSheet } from './Sheet';
 export { portalRoot } from './portal';
 export { Menu } from './Menu';
 export type { MenuItem, MenuEntry } from './Menu';
+export { Page, TopBar, Split, Columns, Stack } from './layout';
+export type { Crumb, TopBarProps } from './layout';
