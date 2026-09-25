@@ -2,12 +2,13 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import type { AccountId, Document, DocumentInput } from '@shared/contracts';
+import type { AccountId, DocumentInput } from '@shared/contracts';
 
 import { openDb } from '../../../db/app-db';
 import { openStore } from '../../store/store';
 import type { CoreStore } from '../../store/store';
 import { buildBuiltinTools } from '../tools';
+import type { GetRelatedSummary } from '../tools/get-related';
 import type { SearchHit } from '../tools/search';
 import type { McpDocument } from '../tools/get';
 
@@ -308,7 +309,7 @@ describe('mcp built-in tools', () => {
     const related = (await call('get_related', {
       document_id: thread[0].id,
       relation: 'children',
-    })) as Document[];
+    })) as GetRelatedSummary[];
     expect(related).toHaveLength(2);
   });
 
@@ -319,7 +320,7 @@ describe('mcp built-in tools', () => {
     const related = (await call('get_related', {
       document_id: messages[0].id,
       relation: 'parent',
-    })) as Document[];
+    })) as GetRelatedSummary[];
     expect(related).toHaveLength(1);
     expect(related[0].type).toBe('email.thread');
   });

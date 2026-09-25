@@ -94,12 +94,13 @@ describe('source_url guidance', () => {
       expect(KIA_INSTRUCTIONS).toMatch(/empty/i);
     });
 
-    it('name the field get_related actually returns, and the raw path', () => {
-      // get_related projects the internal Document rows verbatim — the link
-      // is `url` there, NOT the `source_url` wire name search/get use.
-      expect(KIA_INSTRUCTIONS).toMatch(/get_related[^.]*\burl\b/);
-      // `url` is percent-escaped (file://${encodeURI(absPath)}); the raw
-      // filesystem path an agent should show the user is metadata.absPath.
+    it('tell the assistant get_related summaries carry source_url too', () => {
+      // get_related now projects the same snake_case summary shape as
+      // search/get (get-related.ts) — source_url, not a raw `url` field.
+      expect(KIA_INSTRUCTIONS).toMatch(/get_related[^.]*source_url/);
+      // `source_url` is percent-escaped (file://${encodeURI(absPath)}); the
+      // raw filesystem path an agent should show the user is metadata.absPath
+      // (only available via `get`, since get_related returns no metadata).
       expect(KIA_INSTRUCTIONS).toContain('absPath');
     });
   });

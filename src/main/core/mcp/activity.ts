@@ -227,7 +227,7 @@ function compactArgs(args: Record<string, unknown>): string {
  * Turn a successful tool call into the feed's human line + title list.
  * Shapes come from core/mcp/tools/*: search → SearchHit[] (or SearchHit[][]
  * for batch `queries`), get → McpDocument|null (or an array of those for
- * `ids`), get_related → Document[], count → Array<{key, count}>. Unknown
+ * `ids`), get_related → GetRelatedSummary[], count → Array<{key, count}>. Unknown
  * (extension) tools fall back to name + compact args, no detail.
  *
  * draft_reply/draft_message/list_outbox are outbound-drafting tools
