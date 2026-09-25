@@ -19,3 +19,5 @@ export { Button, IconButton, TextButton } from './buttons';
 export type { ButtonVariant, ButtonProps, IconButtonProps } from './buttons';
 export { TextField, Select, TextArea, CopyField, CodeBlock } from './fields';
 export type { TextFieldProps, SelectProps, TextAreaProps } from './fields';
+export { Segmented } from './Segmented';
+export type { SegmentedItem } from './Segmented';

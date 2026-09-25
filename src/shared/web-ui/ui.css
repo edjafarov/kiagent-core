@@ -432,3 +432,33 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
   white-space: pre;
   color: var(--text-primary);
 }
+
+/* ── Segmented control ────────────────────────────────────────────── */
+.ui-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-edge);
+}
+.ui-seg-i {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ui-seg-i:hover { background: var(--bg-muted); color: var(--text-primary); }
+.ui-seg-i:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.ui-seg-i.is-on { background: var(--accent-deep); color: #ffffff; }
+.ui-seg-n { font-weight: 600; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.ui-seg-i.is-on .ui-seg-n { color: #d4c8f5; }
+.ui-seg-n.is-work { color: var(--working-solid); }
+.ui-seg-i.is-on .ui-seg-n.is-work { color: #fcd34d; }
