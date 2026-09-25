@@ -106,8 +106,19 @@ export function Menu(props: {
         return;
       onClose();
     };
+    // The menu is fixed-positioned; if the page scrolls or the window
+    // resizes it would drift off its trigger, so it closes instead.
+    const onScroll = (e: Event): void => {
+      if (!menuRef.current?.contains(e.target as Node)) onClose();
+    };
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onClose);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onClose);
+    };
   }, [open, onClose, anchorRef]);
 
   if (!open) return null;
@@ -132,7 +143,8 @@ export function Menu(props: {
       e.stopPropagation();
       close(true);
     } else if (e.key === 'Tab') {
-      close(false);
+      // Back on the trigger, the browser's own Tab moves on from there.
+      close(true);
       return;
     } else return;
     e.preventDefault();
@@ -162,7 +174,8 @@ export function Menu(props: {
             disabled={entry.disabled}
             className={cx('ui-menu-i', entry.danger && 'is-danger')}
             onClick={() => {
-              if (!entry.keepOpen) close(false);
+              // Focus goes back to the trigger first; onSelect may move it on.
+              if (!entry.keepOpen) close(true);
               entry.onSelect();
             }}
           >

@@ -53,6 +53,17 @@ export function Sheet(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Going busy disables the focused control; hold focus on the dialog so it
+  // never drops to the page behind the scrim.
+  useEffect(() => {
+    if (!busy) return;
+    const active = document.activeElement as HTMLElement | null;
+    const inside = active != null && dialogRef.current?.contains(active);
+    if (!inside || (active as HTMLButtonElement).disabled) {
+      dialogRef.current?.focus();
+    }
+  }, [busy]);
+
   const onKeyDown = (e: React.KeyboardEvent): void => {
     if (e.key === 'Escape') {
       e.stopPropagation();
@@ -61,7 +72,12 @@ export function Sheet(props: {
     }
     if (e.key !== 'Tab') return;
     const items = focusables(dialogRef.current);
-    if (items.length === 0) return;
+    if (items.length === 0) {
+      // Every control is disabled (e.g. while busy): keep focus on the dialog.
+      e.preventDefault();
+      dialogRef.current?.focus();
+      return;
+    }
     const first = items[0];
     const last = items[items.length - 1];
     const active = document.activeElement;

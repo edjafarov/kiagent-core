@@ -99,6 +99,7 @@ describe('Menu', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
     expect(settings).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Account menu' })).toHaveFocus();
     openMenu();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Log out' }));
     expect(logout).toHaveBeenCalledTimes(1);
@@ -109,5 +110,23 @@ describe('Menu', () => {
     render(<Harness items={ITEMS} footer={<p role="alert">network down</p>} />);
     const menu = openMenu();
     expect(menu).toContainElement(screen.getByRole('alert'));
+  });
+
+  it('closes on Tab with focus back on the trigger', () => {
+    render(<Harness items={ITEMS} />);
+    const menu = openMenu();
+    fireEvent.keyDown(menu, { key: 'Tab' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Account menu' })).toHaveFocus();
+  });
+
+  it('closes when the page scrolls or the window resizes', () => {
+    render(<Harness items={ITEMS} />);
+    openMenu();
+    fireEvent.scroll(document);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    openMenu();
+    fireEvent(window, new Event('resize'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 });
