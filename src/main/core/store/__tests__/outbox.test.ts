@@ -56,7 +56,7 @@ describe('outbox schema', () => {
            body_markdown, confirm_mode, status, created_via, created_at, expires_at)
          VALUES ('x', 'a', 'new', 'r', 'b', 'review', 'bogus', 'mcp-local', 't', 't')`,
       ),
-    ).rejects.toThrow(/CHECK/);
+    ).rejects.toMatchObject({ message: expect.stringMatching(/CHECK/) });
   });
 
   it('accepts chat as a confirm mode', async () => {
@@ -82,7 +82,7 @@ describe('outbox schema', () => {
            body_markdown, confirm_mode, status, created_via, created_at, expires_at)
          VALUES ('c2', 'a', 'new', 'r', 'b', 'bogus', 'draft', 'mcp-local', 't', 't')`,
       ),
-    ).rejects.toThrow(/CHECK/);
+    ).rejects.toMatchObject({ message: expect.stringMatching(/CHECK/) });
   });
 
   it('keeps the account-status index across the rebuild', async () => {
