@@ -11,6 +11,10 @@
     "sources": [
       "fixsrc"
     ],
+    "tools": [
+      "sender_last_ctx",
+      "sender_last_intent"
+    ],
     "senders": [
       "fixsrc"
     ]

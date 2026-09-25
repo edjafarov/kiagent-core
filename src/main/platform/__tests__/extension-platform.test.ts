@@ -36,6 +36,11 @@ const FIXTURE_UNDECLARED = path.join(
   'fixtures',
   'ext-undeclared-source',
 );
+const FIXTURE_UNDECLARED_TOOL = path.join(
+  __dirname,
+  'fixtures',
+  'ext-undeclared-tool',
+);
 const FIXTURE_OAUTH = path.join(__dirname, 'fixtures', 'ext-oauth');
 const FIXTURE_SENDER = path.join(__dirname, 'fixtures', 'ext-sender');
 const FIXTURE_SENDER_NOCAP = path.join(
@@ -1789,6 +1794,34 @@ describe('createExtensionPlatform', () => {
     await expect(platform.uninstall('test.undeclared')).resolves.toEqual({
       ok: true,
     });
+  });
+
+  it('registerContributions skips a tool not declared in contributes.tools: declared ones still register, undeclared ones warn+skip', async () => {
+    await platform.start(); // empty dir — no-op
+    const preview = await platform.installPreview(FIXTURE_UNDECLARED_TOOL);
+    if (!('token' in preview))
+      throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+    await expect(platform.installCommit(preview.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.undeclared-tool',
+    });
+
+    // Declared tool registers normally; the undeclared one (a name
+    // activate() returned but the manifest never listed) is skipped.
+    expect(tools.has('declared_tool')).toBe(true);
+    expect(tools.has('sneaky_tool')).toBe(false);
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        scope: 'extension:test.undeclared-tool',
+        level: 'warn',
+        msg: "tool 'sneaky_tool' is not declared in the manifest — skipping",
+      }),
+    );
+
+    await expect(platform.uninstall('test.undeclared-tool')).resolves.toEqual({
+      ok: true,
+    });
+    expect(tools.has('declared_tool')).toBe(false);
   });
 
   it('a crash respawn keeps cadence jobs registered; only a deliberate deactivate stops them (F3)', async () => {

@@ -505,9 +505,20 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
     port,
 
     registerTool(tool: McpTool) {
+      // First registration wins. Builtins are seeded above before anything
+      // can call this, so no extension can shadow (or, via its disposer,
+      // delete) a builtin or another extension's tool.
+      if (registry.has(tool.name)) {
+        deps.logSink.log(
+          'mcp',
+          'warn',
+          `tool '${tool.name}' is already registered — refusing to overwrite`,
+        );
+        return () => {};
+      }
       registry.set(tool.name, tool);
       return () => {
-        registry.delete(tool.name);
+        if (registry.get(tool.name) === tool) registry.delete(tool.name);
       };
     },
 

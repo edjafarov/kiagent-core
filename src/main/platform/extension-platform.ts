@@ -49,6 +49,7 @@ import {
   oauthSourceBindings,
   senderContributions,
   sourceContributions,
+  toolContributions,
   uiContributions,
   containedRealPath,
   pageEntryPath,
@@ -657,6 +658,7 @@ export function createExtensionPlatform(
       sourceContributions(e.manifest).map((d) => [d.id, d]),
     );
     const declaredSenders = new Set(senderContributions(e.manifest));
+    const declaredTools = new Set(toolContributions(e.manifest));
     const registeredSources: string[] = [];
     const registeredOAuthSources: string[] = [];
     const registeredSenders: string[] = [];
@@ -755,7 +757,17 @@ export function createExtensionPlatform(
       });
       registeredSenders.push(id);
     }
+    // Like `c.senders`, `c.tools` arrives unfiltered from the child —
+    // activate() may return any name — so `contributes.tools` is the filter.
     for (const t of c.tools) {
+      if (!declaredTools.has(t.name)) {
+        deps.logSink.log(
+          `extension:${e.manifest.id}`,
+          'warn',
+          `tool '${t.name}' is not declared in the manifest — skipping`,
+        );
+        continue;
+      }
       toolDisposers.push(
         deps.registerTool({
           name: t.name,

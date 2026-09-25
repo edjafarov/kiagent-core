@@ -242,6 +242,81 @@ describe('startMcp (HTTP transport)', () => {
     expect(after.some((t) => t.name === 'echo')).toBe(false);
   });
 
+  it("registerTool refuses a builtin's name: the builtin keeps serving, and the refused disposer leaves it registered", async () => {
+    const client = await connectClient();
+    const builtin = (await client.listTools()).tools.find(
+      (t) => t.name === 'search',
+    );
+    expect(builtin).toBeDefined();
+
+    const dispose = handle.registerTool({
+      name: 'search',
+      description: 'SHADOW',
+      inputSchema: { type: 'object' },
+      call: async () => ({ shadowed: true }),
+    });
+
+    const during = (await client.listTools()).tools.filter(
+      (t) => t.name === 'search',
+    );
+    expect(during).toHaveLength(1);
+    expect(during[0].description).toBe(builtin!.description);
+
+    dispose();
+    const { tools: after } = await client.listTools();
+    expect(after.map((t) => t.name).sort()).toEqual(BUILTIN_TOOL_NAMES);
+    expect(after.find((t) => t.name === 'search')?.description).toBe(
+      builtin!.description,
+    );
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        scope: 'mcp',
+        level: 'warn',
+        msg: "tool 'search' is already registered — refusing to overwrite",
+      }),
+    );
+  });
+
+  it("refuses a second registration of the same name; the first registration's disposer still removes it", async () => {
+    const client = await connectClient();
+    const disposeFirst = handle.registerTool({
+      name: 'dup',
+      description: 'first',
+      inputSchema: { type: 'object' },
+      call: async () => 'first',
+    });
+    const disposeSecond = handle.registerTool({
+      name: 'dup',
+      description: 'second',
+      inputSchema: { type: 'object' },
+      call: async () => 'second',
+    });
+
+    try {
+      const dupOf = async () =>
+        (await client.listTools()).tools.filter((t) => t.name === 'dup');
+      expect((await dupOf()).map((t) => t.description)).toEqual(['first']);
+
+      // The refused registration never owned the name — its disposer must
+      // not take down the first one.
+      disposeSecond();
+      expect((await dupOf()).map((t) => t.description)).toEqual(['first']);
+
+      disposeFirst();
+      expect(await dupOf()).toEqual([]);
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          scope: 'mcp',
+          level: 'warn',
+          msg: "tool 'dup' is already registered — refusing to overwrite",
+        }),
+      );
+    } finally {
+      disposeFirst();
+      disposeSecond();
+    }
+  });
+
   it('advertises instructions and a server icon in the initialize handshake', async () => {
     const client = await connectClient();
     // The instructions string is what steers the calling LLM — assert it

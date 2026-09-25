@@ -11,6 +11,9 @@
     "sources": [
       "basicsrc"
     ],
+    "tools": [
+      "basic_echo"
+    ],
     "senders": []
   }
 }

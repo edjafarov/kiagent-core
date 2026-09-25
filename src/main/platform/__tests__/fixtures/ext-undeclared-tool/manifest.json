@@ -1,0 +1,15 @@
+{
+  "id": "test.undeclared-tool",
+  "name": "Undeclared Tool Test Extension",
+  "version": "1.0.0",
+  "engine": "^2.0.0",
+  "entry": "index.js",
+  "caps": [],
+  "contributes": {
+    "sources": [],
+    "tools": [
+      "declared_tool"
+    ],
+    "senders": []
+  }
+}

@@ -313,6 +313,14 @@ export function senderContributions(
   return manifest.contributes.senders;
 }
 
+/** The tool names this extension declares — THE way to consume
+ *  `contributes.tools`, defaulting to `[]` for a manifest that declares none. */
+export function toolContributions(
+  manifest: Pick<Manifest, 'contributes'>,
+): string[] {
+  return manifest.contributes.tools ?? [];
+}
+
 /** This extension's validated `contributes.ui` entries — THE way to consume
  *  them, defaulting to `[]` (never `undefined`) for a manifest that
  *  declares none. Feeds the lifecycle snapshot directly
