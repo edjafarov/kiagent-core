@@ -1,18 +1,17 @@
 import React from 'react';
 import { cx } from './cx';
 
-export function Card(props: {
-  children: React.ReactNode;
+/** Native section attributes (id, aria-label, aria-labelledby, …);
+ *  className is restated so the prop-types lint sees it. */
+interface SectionProps extends React.HTMLAttributes<HTMLElement> {
   className?: string;
-  /** Names the card when no visible header does. */
-  'aria-label'?: string;
-}): React.ReactElement {
+}
+
+export function Card(props: SectionProps): React.ReactElement {
+  const { className, children, ...rest } = props;
   return (
-    <section
-      className={cx('ui-card', props.className)}
-      aria-label={props['aria-label']}
-    >
-      {props.children}
+    <section className={cx('ui-card', className)} {...rest}>
+      {children}
     </section>
   );
 }
@@ -41,15 +40,14 @@ export function CardFooter(props: {
 }
 
 /** The selected-item panel on the right of a split page. */
-export function Panel(props: {
-  title?: React.ReactNode;
-  children: React.ReactNode;
-  className?: string;
-}): React.ReactElement {
+export function Panel(
+  props: Omit<SectionProps, 'title'> & { title?: React.ReactNode },
+): React.ReactElement {
+  const { title, className, children, ...rest } = props;
   return (
-    <section className={cx('ui-panel', props.className)}>
-      {props.title != null && <h3 className="ui-panel-title">{props.title}</h3>}
-      {props.children}
+    <section className={cx('ui-panel', className)} {...rest}>
+      {title != null && <h3 className="ui-panel-title">{title}</h3>}
+      {children}
     </section>
   );
 }
