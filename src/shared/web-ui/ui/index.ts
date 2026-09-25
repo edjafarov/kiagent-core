@@ -21,3 +21,4 @@ export { TextField, Select, TextArea, CopyField, CodeBlock } from './fields';
 export type { TextFieldProps, SelectProps, TextAreaProps } from './fields';
 export { Segmented } from './Segmented';
 export type { SegmentedItem } from './Segmented';
+export { Toggle, Checkbox } from './toggles';
