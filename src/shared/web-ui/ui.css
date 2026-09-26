@@ -728,6 +728,8 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-stack { display: flex; flex-direction: column; min-width: 0; }
 .ui-stack.is-page { gap: var(--gap-page); }
 .ui-stack.is-stack { gap: var(--gap-stack); }
+/* A tab strip keeps its own width in a column. */
+.ui-stack > .ui-seg { align-self: flex-start; }
 .ui-split {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--aside-sm);
