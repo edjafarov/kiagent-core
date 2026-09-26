@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.95.1](https://github.com/edjafarov/kiagent-core/compare/v0.95.0...v0.95.1) (2026-09-26)
+
+### Bug Fixes
+
+* **ci:** resolve lint errors and document attention schema ([6247441](https://github.com/edjafarov/kiagent-core/commit/624744161029873eb7166a59e3ddd155e3e04aba))
+* **deps:** bump undici to 7.30.0 to clear 12 high advisories in shipped code ([69e40b5](https://github.com/edjafarov/kiagent-core/commit/69e40b51312b3b9d60256e4ac0cecf2eebfc3585)), closes [#130](https://github.com/edjafarov/kiagent-core/issues/130)
+* **engine:** rerunDeferred records the ledger only after the page's output is committed ([a323f49](https://github.com/edjafarov/kiagent-core/commit/a323f49f78fcc39064a0f541e77b09c360521bb4)), closes [#63](https://github.com/edjafarov/kiagent-core/issues/63)
+* **logs:** rotate kiagent.log.jsonl at 10 MB, keeping one previous generation ([cf391df](https://github.com/edjafarov/kiagent-core/commit/cf391dff2aa8941a0f588fc35b7d23ed257d395d)), closes [#85](https://github.com/edjafarov/kiagent-core/issues/85)
+* **main:** Dock activate reopens the main window even when extension windows exist ([25196ac](https://github.com/edjafarov/kiagent-core/commit/25196acd434b4287992dc98035f8ea1d42d02014)), closes [#123](https://github.com/edjafarov/kiagent-core/issues/123)
+* **mcp:** get_related returns paged summaries in the snake_case wire shape instead of raw rows ([6e29e79](https://github.com/edjafarov/kiagent-core/commit/6e29e795cf280d7f076c1975d0111f199b990d66)), closes [#76](https://github.com/edjafarov/kiagent-core/issues/76)
+* **mcp:** redact bodies and recipients and cap argument size in the MCP call audit log ([69875d5](https://github.com/edjafarov/kiagent-core/commit/69875d513d37711f145d57a0fa84a310987c20bd)), closes [#131](https://github.com/edjafarov/kiagent-core/issues/131)
+* **platform:** a crash respawn's contributions are no longer deleted by the old incarnation's late unregister ([7f6d6e3](https://github.com/edjafarov/kiagent-core/commit/7f6d6e3e89ce5bbe6fa19b755532960bdbc6416a)), closes [#14](https://github.com/edjafarov/kiagent-core/issues/14)
+* **platform:** check a manifest's engine range before its schema so old builds say "requires platform" ([ab7ef23](https://github.com/edjafarov/kiagent-core/commit/ab7ef238a66d2cd1497264bcc5869bbd202941cb)), closes [#42](https://github.com/edjafarov/kiagent-core/issues/42)
+* **platform:** installCommit reports ok:false when the installed extension fails to activate ([60aef4b](https://github.com/edjafarov/kiagent-core/commit/60aef4b55d3b6dd9b72ad725be4fe7fe0140037a)), closes [#118](https://github.com/edjafarov/kiagent-core/issues/118)
+* **platform:** only register declared extension tools, and never let a registration overwrite an existing MCP tool ([e042205](https://github.com/edjafarov/kiagent-core/commit/e0422051366d75c24440208bfc618118df2fd09c)), closes [#14](https://github.com/edjafarov/kiagent-core/issues/14)
+
 ## [0.95.0](https://github.com/edjafarov/kiagent-core/compare/v0.94.0...v0.95.0) (2026-09-25)
 
 ### Features
