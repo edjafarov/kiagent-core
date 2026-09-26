@@ -1,42 +1,35 @@
 import React, { useEffect, useState } from 'react';
-import type { Account, AccountId } from '@shared/contracts';
+import type { AccountId } from '@shared/contracts';
 import { Page } from '@shared/web-ui/ui';
-import { useAppState } from '@renderer/state/app-state';
 import { useView, type ViewParams } from '@renderer/state/view';
-import { useSourceDescriptors } from './sources-registry';
-import { SourcesList } from './SourcesList';
+import { useSourceDescriptors, useVisibleAccounts } from './sources-registry';
+import {
+  INITIAL_SELECTION,
+  SourcesList,
+  type ListSelection,
+} from './SourcesList';
 import { SourceDetail } from './SourceDetail';
 import { SourceCatalog } from './SourceCatalog';
 import { AddSourcePanel } from './AddSourcePanel';
 import { sourceLabel } from './connector-meta';
 import './Sources.css';
 
-type Reconnect = { accountId: AccountId; sourceId: string; identifier: string };
-
 export type LocalView =
   | { view: 'list' }
-  | { view: 'detail'; accountId: AccountId }
+  | { view: 'detail'; accountId: AccountId; reconnect?: boolean }
   | { view: 'catalog'; install?: string }
-  | { view: 'connect'; sourceId: string }
-  | { view: 'reconnect'; target: Reconnect };
+  | { view: 'connect'; sourceId: string };
 
 /** The route params another screen may link with; each is used once. */
 function viewFromParams(
   params: ViewParams,
-  accounts: readonly Account[],
+  entries: ReturnType<typeof useVisibleAccounts>,
 ): LocalView | null {
   const { reconnect, add, install } = params;
   if (reconnect !== undefined) {
-    const a = accounts.find((x) => x.id === reconnect);
-    return a
-      ? {
-          view: 'reconnect',
-          target: {
-            accountId: a.id,
-            sourceId: a.source,
-            identifier: a.identifier,
-          },
-        }
+    const known = entries.find((e) => e.account.id === reconnect);
+    return known
+      ? { view: 'detail', accountId: known.account.id, reconnect: true }
       : { view: 'list' };
   }
   if (install !== undefined) return { view: 'catalog', install };
@@ -45,9 +38,8 @@ function viewFromParams(
   return null;
 }
 
-/** The wizard as a page of its own. */
+/** The wizard as a page of its own, under the catalog. */
 function ConnectPage(props: {
-  parent: string;
   sourceId: string;
   onBack: () => void;
   children: React.ReactNode;
@@ -56,7 +48,7 @@ function ConnectPage(props: {
   return (
     <Page
       crumb={{
-        parent: props.parent,
+        parent: 'Add a source',
         current: sourceLabel(props.sourceId, descriptors),
         onBack: props.onBack,
       }}
@@ -69,46 +61,50 @@ function ConnectPage(props: {
 /**
  * The Sources screen: list, a source's page, the catalog and the connect
  * wizard, as screen-local views (the shared `View` union has no sub-routes).
- * Links arrive as route params — `reconnect=<accountId>`, `add=<sourceId>`,
- * `add=` (the catalog), `install=<owner>/<repo>` — read once and cleared.
- * The product's policy (hidden sources, get-started) comes from the
- * app-root `SourceDescriptorsProvider`.
+ * Links arrive as route params — `reconnect=<accountId>` (that source's
+ * page, signing in again), `add=<sourceId>`, `add=` (the catalog),
+ * `install=<owner>/<repo>` — read once and cleared. The list's selection
+ * and filter live here so they survive a trip to a source's page. The
+ * product's policy (hidden sources, get-started) comes from the app-root
+ * `SourceDescriptorsProvider`.
  */
 export function SourcesScreen(props: {
   onOpenConnection: () => void;
 }): React.ReactElement {
   const { params, replaceParams } = useView();
-  const accountEntries = useAppState((s) => s.accounts);
+  const entries = useVisibleAccounts();
+  // A link is read at mount too, so the list never flashes first; the
+  // effect below then clears it (and reads later links).
   const [local, setLocal] = useState<LocalView>(
-    () =>
-      viewFromParams(
-        params,
-        accountEntries.map((e) => e.account),
-      ) ?? { view: 'list' },
+    () => viewFromParams(params, entries) ?? { view: 'list' },
   );
+  const [selection, setSelection] = useState<ListSelection>(INITIAL_SELECTION);
 
   useEffect(() => {
-    const { reconnect, add, install, ...rest } = params;
-    if (reconnect === undefined && add === undefined && install === undefined)
-      return;
-    const next = viewFromParams(
-      params,
-      accountEntries.map((e) => e.account),
-    );
+    const next = viewFromParams(params, entries);
+    if (!next) return;
+    const { reconnect: _r, add: _a, install: _i, ...rest } = params;
     replaceParams(rest);
-    if (next) setLocal(next);
+    setLocal(next);
     // Params only: the account list is read at the moment a link lands.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params, replaceParams]);
 
   const toList = (): void => setLocal({ view: 'list' });
-  const finished = (accountId?: AccountId): void =>
-    setLocal(accountId ? { view: 'detail', accountId } : { view: 'list' });
+  const toDetail = (accountId: AccountId, reconnect?: boolean): void =>
+    setLocal({ view: 'detail', accountId, reconnect });
 
   let body: React.ReactElement;
   switch (local.view) {
     case 'detail':
-      body = <SourceDetail accountId={local.accountId} onBack={toList} />;
+      body = (
+        <SourceDetail
+          key={local.accountId}
+          accountId={local.accountId}
+          reconnect={local.reconnect}
+          onBack={toList}
+        />
+      );
       break;
     case 'catalog':
       body = (
@@ -122,7 +118,6 @@ export function SourcesScreen(props: {
     case 'connect':
       body = (
         <ConnectPage
-          parent="Add a source"
           sourceId={local.sourceId}
           onBack={() => setLocal({ view: 'catalog' })}
         >
@@ -130,23 +125,8 @@ export function SourcesScreen(props: {
             key={local.sourceId}
             add={local.sourceId}
             onDone={(accountId) =>
-              accountId ? finished(accountId) : setLocal({ view: 'catalog' })
+              accountId ? toDetail(accountId) : setLocal({ view: 'catalog' })
             }
-          />
-        </ConnectPage>
-      );
-      break;
-    case 'reconnect':
-      body = (
-        <ConnectPage
-          parent="Sources"
-          sourceId={local.target.sourceId}
-          onBack={toList}
-        >
-          <AddSourcePanel
-            key={local.target.accountId}
-            reconnect={local.target}
-            onDone={finished}
           />
         </ConnectPage>
       );
@@ -154,19 +134,12 @@ export function SourcesScreen(props: {
     default:
       body = (
         <SourcesList
-          onOpenDetail={(accountId) => setLocal({ view: 'detail', accountId })}
+          selection={selection}
+          onSelection={setSelection}
+          onOpenDetail={(accountId) => toDetail(accountId)}
           onOpenConnection={props.onOpenConnection}
           onCatalog={(install) => setLocal({ view: 'catalog', install })}
-          onReconnect={(a) =>
-            setLocal({
-              view: 'reconnect',
-              target: {
-                accountId: a.id,
-                sourceId: a.source,
-                identifier: a.identifier,
-              },
-            })
-          }
+          onReconnect={(accountId) => toDetail(accountId, true)}
         />
       );
   }

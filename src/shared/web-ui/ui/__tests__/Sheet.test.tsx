@@ -155,4 +155,26 @@ describe('ConfirmSheet', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Remove' })).not.toBeDisabled();
   });
+
+  it('says what it is doing while busy, when given the words', async () => {
+    let resolve!: () => void;
+    render(
+      <ConfirmSheet
+        title="Remove?"
+        confirmLabel="Remove"
+        busyLabel="Removing…"
+        onConfirm={() =>
+          new Promise<void>((r) => {
+            resolve = r;
+          })
+        }
+        onClose={() => {}}
+      >
+        Sure?
+      </ConfirmSheet>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(screen.getByRole('button', { name: 'Removing…' })).toBeDisabled();
+    await act(async () => resolve());
+  });
 });

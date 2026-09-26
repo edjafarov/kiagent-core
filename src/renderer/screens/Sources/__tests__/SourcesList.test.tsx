@@ -2,7 +2,12 @@ import '@testing-library/jest-dom';
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type { Account, AppState } from '@shared/contracts';
-import { SourcesList } from '../SourcesList';
+import { ViewContext, type ViewContextValue } from '@renderer/state/view';
+import {
+  INITIAL_SELECTION,
+  SourcesList,
+  type ListSelection,
+} from '../SourcesList';
 import { Sources } from '..';
 import { SourceDescriptorsProvider } from '../sources-registry';
 
@@ -86,6 +91,7 @@ beforeEach(() => {
   invoke = jest.fn((channel: string) => {
     if (channel === 'sources:list') return Promise.resolve(DESCRIPTORS);
     if (channel === 'marketplace:list') return Promise.resolve([]);
+    if (channel === 'scheduler:jobs') return Promise.resolve([]);
     if (channel === 'accounts:start-reconnect')
       return Promise.resolve({ flowId: 'f1' });
     if (channel === 'accounts:add') return Promise.resolve({ flowId: 'f1' });
@@ -99,10 +105,21 @@ beforeEach(() => {
 
 const noop = (): void => {};
 
-async function list(
-  props: Partial<React.ComponentProps<typeof SourcesList>>,
-  hidden?: string[],
-) {
+type ListProps = Omit<
+  React.ComponentProps<typeof SourcesList>,
+  'selection' | 'onSelection'
+>;
+
+/** The screen keeps the selection; so does this harness. */
+function Harness(props: ListProps): React.ReactElement {
+  const [selection, setSelection] =
+    React.useState<ListSelection>(INITIAL_SELECTION);
+  return (
+    <SourcesList {...props} selection={selection} onSelection={setSelection} />
+  );
+}
+
+async function list(props: Partial<ListProps>, hidden?: string[]) {
   const all = {
     onOpenDetail: jest.fn(),
     onOpenConnection: noop,
@@ -110,13 +127,14 @@ async function list(
     onReconnect: jest.fn(),
     ...props,
   };
-  render(
+  const ui = (): React.ReactElement => (
     <SourceDescriptorsProvider hidden={hidden}>
-      <SourcesList {...all} />
-    </SourceDescriptorsProvider>,
+      <Harness {...all} />
+    </SourceDescriptorsProvider>
   );
+  const { rerender } = render(ui());
   await act(async () => {});
-  return all;
+  return { ...all, rerender: () => rerender(ui()) };
 }
 
 function panel(): HTMLElement {
@@ -171,15 +189,32 @@ describe('SourcesList', () => {
     expect(panel()).toHaveAccessibleName('Slack');
   });
 
+  test('a status change elsewhere does not move the selection', async () => {
+    seed([entry('a1', 'gmail', 'needsReauth'), entry('a2', 'slack', 'live')]);
+    const { rerender } = await list({});
+    expect(panel()).toHaveAccessibleName('Gmail');
+    seed([entry('a1', 'gmail', 'live'), entry('a2', 'slack', 'error')]);
+    rerender();
+    await act(async () => {});
+    expect(panel()).toHaveAccessibleName('Gmail');
+  });
+
+  test('an error offers Retry and, in case the sign-in died, Sign in again', async () => {
+    seed([entry('a1', 'slack', 'error')]);
+    const { onReconnect } = await list({});
+    fireEvent.click(
+      within(panel()).getByRole('button', { name: 'Sign in again' }),
+    );
+    expect(onReconnect).toHaveBeenCalledWith('a1');
+  });
+
   test('the panel offers each problem’s one fix', async () => {
     seed([entry('a1', 'gmail', 'needsReauth', { lastError: 'invalid_grant' })]);
     const { onReconnect } = await list({});
     fireEvent.click(screen.getByRole('button', { name: 'Why?' }));
     expect(screen.getByText('invalid_grant')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }));
-    expect(onReconnect).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'a1' }),
-    );
+    expect(onReconnect).toHaveBeenCalledWith('a1');
   });
 
   test('retry re-runs a plain error', async () => {
@@ -306,5 +341,63 @@ describe('Sources: Sign in again routes on the account and its descriptor', () =
       expect.anything(),
     );
     expect(screen.getByText('Connect Email (IMAP)')).toBeInTheDocument();
+  });
+});
+
+function withView(
+  params: ViewContextValue['params'],
+  replaceParams: jest.Mock = jest.fn(),
+) {
+  const value: ViewContextValue = {
+    view: 'sources',
+    params,
+    navigate: noop,
+    back: noop,
+    openSettings: noop,
+    replaceParams,
+  };
+  return function Wrapper(p: { children: React.ReactNode }) {
+    return (
+      <ViewContext.Provider value={value}>
+        <SourceDescriptorsProvider>{p.children}</SourceDescriptorsProvider>
+      </ViewContext.Provider>
+    );
+  };
+}
+
+describe('Sources: the screen', () => {
+  test('a trip to a source page and back keeps the picked row', async () => {
+    seed([entry('a1', 'gmail', 'needsReauth'), entry('a2', 'slack', 'live')]);
+    render(<Sources onOpenConnection={noop} />, { wrapper: withView({}) });
+    await act(async () => {});
+    fireEvent.click(screen.getByText('Slack'));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Slack' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Sources' }));
+    await act(async () => {});
+    expect(panel()).toHaveAccessibleName('Slack');
+  });
+
+  test('a reconnect= link opens that source signing in again, once', async () => {
+    seed([entry('a1', 'google-docs', 'needsReauth')]);
+    const replaceParams = jest.fn();
+    render(<Sources onOpenConnection={noop} />, {
+      wrapper: withView({ reconnect: 'a1', pane: 'x' }, replaceParams),
+    });
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledWith('accounts:start-reconnect', {
+      accountId: 'a1',
+    });
+    expect(replaceParams).toHaveBeenCalledWith({ pane: 'x' });
+  });
+
+  test('a reconnect= link to an unknown source lands on the list', async () => {
+    seed([entry('a1', 'gmail', 'live')]);
+    const replaceParams = jest.fn();
+    render(<Sources onOpenConnection={noop} />, {
+      wrapper: withView({ reconnect: 'gone' }, replaceParams),
+    });
+    await act(async () => {});
+    expect(screen.getByRole('table', { name: 'Sources' })).toBeInTheDocument();
+    expect(replaceParams).toHaveBeenCalledWith({});
   });
 });

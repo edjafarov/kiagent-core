@@ -16,7 +16,6 @@ import {
   TextButton,
   sourceBrand,
 } from '@shared/web-ui/ui';
-import { useAppState } from '@renderer/state/app-state';
 import { AddSourcePanel } from './AddSourcePanel';
 import { sourceLabel } from './connector-meta';
 import { accountLabel, formatRelative } from './format';
@@ -27,8 +26,8 @@ import {
   runFix,
   type SourceEntry,
 } from './source-actions';
-import { sourceStatus, type SourceFix } from './source-status';
-import { useSourceDescriptors } from './sources-registry';
+import { sourceStatus } from './source-status';
+import { useSourceDescriptors, useVisibleAccounts } from './sources-registry';
 import { TrackedFolders } from './sections/TrackedFolders';
 import { TrackedContent } from './sections/TrackedContent';
 import { Cadence } from './sections/Cadence';
@@ -37,56 +36,32 @@ import { Outbound } from './sections/Outbound';
 import { RecentActivity } from './sections/RecentActivity';
 import './SourceDetail.css';
 
-const PROBLEM: Record<SourceFix, { kind: string; title: string; sub: string }> =
-  {
-    reconnect: {
-      kind: 'Error',
-      title: 'Signed out',
-      sub: 'Nothing new arrives until you sign in again. What’s already here stays searchable.',
-    },
-    retry: {
-      kind: 'Error',
-      title: 'Stopped by an error',
-      sub: 'Nothing new arrives until it runs again.',
-    },
-    resume: {
-      kind: 'Paused',
-      title: 'Paused',
-      sub: 'Nothing new arrives until you resume it.',
-    },
-  };
-
 function Problem(props: {
   entry: SourceEntry;
   onReconnect: () => void;
 }): React.ReactElement | null {
-  const a = props.entry.account;
-  const { fix, tone } = sourceStatus(a);
-  if (fix === null) return null;
-  const words = PROBLEM[fix];
+  const { problem, tone, fixes } = sourceStatus(props.entry.account);
+  if (problem === null) return null;
   return (
     <AttentionList aria-label="Needs you">
       <AttentionRow
         tone={tone === 'err' ? 'err' : 'work'}
-        kind={words.kind}
-        title={words.title}
-        sub={fix === 'retry' && a.lastError ? a.lastError : words.sub}
+        kind={problem.kind}
+        title={problem.title}
+        sub={problem.sub}
         action={
           <>
-            {/* R4: an error can be a dead sign-in, so it can also sign in
-                again. */}
-            {fix === 'retry' && (
-              <Button size="sm" onClick={props.onReconnect}>
-                {FIX_WORDS.reconnect}
+            {/* The main fix last: it sits at the row's end. */}
+            {[...fixes].reverse().map((fix) => (
+              <Button
+                key={fix}
+                size="sm"
+                variant={fix === fixes[0] ? 'primary' : 'secondary'}
+                onClick={() => runFix(props.entry, fix, props.onReconnect)}
+              >
+                {FIX_WORDS[fix]}
               </Button>
-            )}
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => runFix(props.entry, fix, props.onReconnect)}
-            >
-              {FIX_WORDS[fix]}
-            </Button>
+            ))}
           </>
         }
       />
@@ -97,6 +72,7 @@ function Problem(props: {
 function RemoveCard(props: {
   entry: SourceEntry;
   name: string;
+  onDone: () => void;
 }): React.ReactElement {
   const [open, setOpen] = useState(false);
   return (
@@ -119,6 +95,7 @@ function RemoveCard(props: {
           entry={props.entry}
           name={props.name}
           onClose={() => setOpen(false)}
+          onDone={props.onDone}
         />
       )}
     </Card>
@@ -133,12 +110,16 @@ function RemoveCard(props: {
 export function SourceDetail(props: {
   accountId: AccountId;
   onBack: () => void;
+  /** Opens straight into signing in again. */
+  reconnect?: boolean;
 }): React.ReactElement {
-  const entry = useAppState((s) =>
-    s.accounts.find((a) => a.account.id === props.accountId),
+  const entry = useVisibleAccounts().find(
+    (a) => a.account.id === props.accountId,
   );
   const descriptors = useSourceDescriptors();
-  const [view, setView] = useState<'page' | 'items' | 'reconnect'>('page');
+  const [view, setView] = useState<'page' | 'items' | 'reconnect'>(
+    props.reconnect ? 'reconnect' : 'page',
+  );
 
   if (!entry) {
     return (
@@ -211,12 +192,22 @@ export function SourceDetail(props: {
               </div>
               <Disclosure
                 label="Technical details"
-                summary="settings, recent activity"
+                summary="settings, recent activity, sync position"
               >
                 <ConnectorConfig account={a} />
                 <RecentActivity account={a} recent={entry.recent} />
+                <section className="src-tech" aria-labelledby="src-cursor-lbl">
+                  <h3 id="src-cursor-lbl" className="src-tech-lbl">
+                    Sync position
+                  </h3>
+                  <code className="src-cursor">
+                    {a.cursor == null
+                      ? 'Not started'
+                      : JSON.stringify(a.cursor)}
+                  </code>
+                </section>
               </Disclosure>
-              <RemoveCard entry={entry} name={name} />
+              <RemoveCard entry={entry} name={name} onDone={props.onBack} />
             </>
           )}
         </Stack>

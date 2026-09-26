@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Button, Card, CardHeader, Select } from '@shared/web-ui/ui';
 import type { Account, Cadence as CadenceValue } from '@shared/contracts';
 import type { ScheduledJob } from '@shared/ipc';
-import { describeCadence, formatRelative } from '../format';
+import { describeCadence, formatRelative, formatUntil } from '../format';
+import { syncNow } from '../source-actions';
 
 interface Preset {
   key: string;
@@ -46,7 +47,8 @@ const jobIdFor = (a: Account): string => `source:${a.source}:${a.id}`;
  * `{cron}` / `'manual'`) set via `accounts:set-cadence`, and there is no
  * `pollable` flag on `SourceDescriptor` to gate visibility on, so this
  * always renders. Last/next run comes from `scheduler:jobs`, keyed by the
- * account's job id `source:<sourceId>:<accountId>`.
+ * account's job id `source:<sourceId>:<accountId>`; Run now syncs through
+ * `syncNow`, like every other manual sync.
  */
 export function Cadence(props: { account: Account }): React.ReactElement {
   const a = props.account;
@@ -80,7 +82,7 @@ export function Cadence(props: { account: Account }): React.ReactElement {
   async function runNow(): Promise<void> {
     setPending(true);
     try {
-      await window.kiagent.invoke('scheduler:trigger', { id: jobId });
+      await syncNow(a.id);
       await refreshJob();
     } finally {
       setPending(false);
@@ -128,7 +130,12 @@ export function Cadence(props: { account: Account }): React.ReactElement {
         <span className="src-sync-note">
           {a.status === 'paused'
             ? 'Paused — resume it from the menu'
-            : `Last checked ${job ? formatRelative(job.lastRun) : '—'}`}
+            : [
+                `Last checked ${formatRelative(job?.lastRun)}`,
+                job?.nextRun ? `next ${formatUntil(job.nextRun)}` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
         </span>
         <Button size="sm" disabled={pending} onClick={() => void runNow()}>
           Run now

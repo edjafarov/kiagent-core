@@ -27,6 +27,23 @@ export function formatRelative(
   return new Date(t).toISOString().slice(0, 10);
 }
 
+/** A time ahead, in words ("in 5 minutes"); a past one reads "soon". */
+export function formatUntil(
+  iso: string | null | undefined,
+  now: number = Date.now(),
+): string {
+  if (!iso) return '—';
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '—';
+  const min = Math.round((t - now) / 60_000);
+  if (min < 1) return 'soon';
+  if (min < 60) return `in ${min} ${min === 1 ? 'minute' : 'minutes'}`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `in ${hr} ${hr === 1 ? 'hour' : 'hours'}`;
+  const day = Math.round(hr / 24);
+  return `in ${day} ${day === 1 ? 'day' : 'days'}`;
+}
+
 /** Compact form for dense table cells ("12s ago", "4h ago"). */
 export function formatRelativeCompact(
   iso: string | null | undefined,

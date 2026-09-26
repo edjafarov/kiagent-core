@@ -1,20 +1,33 @@
 import { needsYou, sourceStatus } from '../source-status';
 
-test('each status names its one fix', () => {
+test('each status names its fixes, the main one first', () => {
   expect(sourceStatus({ status: 'needsReauth' })).toMatchObject({
     label: 'Signed out',
     tone: 'err',
-    fix: 'reconnect',
+    fixes: ['reconnect'],
   });
-  expect(sourceStatus({ status: 'error' })).toMatchObject({ fix: 'retry' });
+  // R4: an error can be a dead sign-in.
+  expect(sourceStatus({ status: 'error' })).toMatchObject({
+    fixes: ['retry', 'reconnect'],
+  });
   expect(sourceStatus({ status: 'paused' })).toMatchObject({
     label: 'Paused',
-    fix: 'resume',
+    fixes: ['resume'],
   });
   expect(sourceStatus({ status: 'live' })).toMatchObject({
     label: null,
-    fix: null,
+    fixes: [],
+    problem: null,
   });
+});
+
+test('an error’s problem sentence is its last error when there is one', () => {
+  expect(
+    sourceStatus({ status: 'error', lastError: 'rate limited' }).problem,
+  ).toMatchObject({ title: 'Stopped by an error', sub: 'rate limited' });
+  expect(sourceStatus({ status: 'error' }).problem?.sub).toBe(
+    'Nothing new arrives until it runs again.',
+  );
 });
 
 test('a first import reports its share only with a known total', () => {

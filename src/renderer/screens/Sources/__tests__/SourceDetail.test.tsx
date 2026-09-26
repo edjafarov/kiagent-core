@@ -12,6 +12,7 @@ jest.mock('@renderer/state/app-state', () => ({
 }));
 jest.mock('../sources-registry', () => ({
   useSourceDescriptors: () => mockDescriptors,
+  useVisibleAccounts: () => mockState.accounts ?? [],
 }));
 const mockTrackedContent = jest.fn(() => <div data-testid="items" />);
 
@@ -212,8 +213,27 @@ describe('SourceDetail: the page', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('Remove asks first, then removes', async () => {
+  it('opens straight into signing in again when asked', () => {
+    setAccount('needsReauth');
+    render(
+      <SourceDetail
+        accountId={'a1' as Account['id']}
+        onBack={noop}
+        reconnect
+      />,
+    );
+    expect(screen.getByTestId('add-source-panel')).toBeInTheDocument();
+  });
+
+  it('technical details show where the sync has got to', () => {
     render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
+    fireEvent.click(screen.getByRole('button', { name: /Technical details/ }));
+    expect(screen.getByText('Not started')).toBeInTheDocument();
+  });
+
+  it('Remove asks first, removes, then goes back', async () => {
+    const onBack = jest.fn();
+    render(<SourceDetail accountId={'a1' as Account['id']} onBack={onBack} />);
     fireEvent.click(screen.getByRole('button', { name: 'Remove…' }));
     const sheet = screen.getByRole('dialog', { name: 'Remove Google Drive?' });
     expect(sheet).toHaveTextContent('Its 3 items are deleted');
@@ -222,6 +242,7 @@ describe('SourceDetail: the page', () => {
     expect(invoke()).toHaveBeenCalledWith('accounts:remove', {
       accountId: 'a1',
     });
+    expect(onBack).toHaveBeenCalled();
   });
 
   it('a removed source says so instead of a blank page', () => {

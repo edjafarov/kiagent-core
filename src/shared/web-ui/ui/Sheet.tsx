@@ -143,6 +143,8 @@ export function ConfirmSheet(props: {
   title: React.ReactNode;
   children: React.ReactNode;
   confirmLabel: string;
+  /** The confirm button's words while `onConfirm` runs. */
+  busyLabel?: string;
   tone?: 'primary' | 'danger';
   onConfirm: () => Promise<void> | void;
   onClose: () => void;
@@ -151,6 +153,7 @@ export function ConfirmSheet(props: {
     title,
     children,
     confirmLabel,
+    busyLabel,
     tone = 'primary',
     onConfirm,
     onClose,
@@ -194,7 +197,7 @@ export function ConfirmSheet(props: {
             Cancel
           </Button>
           <Button variant={tone} disabled={busy} onClick={() => void confirm()}>
-            {confirmLabel}
+            {busy && busyLabel ? busyLabel : confirmLabel}
           </Button>
         </>
       }

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Account, AccountId, AppState } from '@shared/contracts';
 import {
   BrandGlyph,
@@ -28,6 +28,7 @@ import { sourceLabel } from './connector-meta';
 import { accountLabel, formatRelativeCompact } from './format';
 import { GetStartedPanel } from './GetStartedPanel';
 import { SourcePanel } from './SourcePanel';
+import { syncNow } from './source-actions';
 import { needsYou, sourceStatus } from './source-status';
 import {
   useSourceDescriptors,
@@ -39,6 +40,16 @@ import './SourcesList.css';
 
 type Entry = AppState['accounts'][number];
 type Filter = 'all' | SourceCategory;
+
+/** The list's filter and selected source, kept by the screen so a trip to
+ *  a source's page comes back to the same place. */
+export interface ListSelection {
+  filter: Filter;
+  /** `null` until the default is committed. */
+  picked: AccountId | null;
+}
+
+export const INITIAL_SELECTION: ListSelection = { filter: 'all', picked: null };
 
 const ADD_MORE_MAX = 5;
 
@@ -154,12 +165,9 @@ function SyncAllMenu(props: {
             label: 'Sync all',
             icon: 'refresh-cw',
             disabled: props.accounts.length === 0,
-            // accounts:sync-now takes one account: fan out.
+            // Syncing takes one account: fan out.
             onSelect: () => {
-              for (const a of props.accounts)
-                void window.kiagent.invoke('accounts:sync-now', {
-                  accountId: a.id,
-                });
+              for (const a of props.accounts) void syncNow(a.id);
             },
           },
         ]}
@@ -209,18 +217,20 @@ function AddMore(props: {
  * in a panel beside the table, and what else can be added.
  */
 export function SourcesList(props: {
+  selection: ListSelection;
+  onSelection: (next: ListSelection) => void;
   onOpenDetail: (accountId: AccountId) => void;
   onOpenConnection: () => void;
   /** Opens the catalog; with `owner/repo`, on that item's install sheet. */
   onCatalog: (install?: string) => void;
-  /** Signs in again to THIS account. */
-  onReconnect: (account: Account) => void;
+  /** Signs in again to THIS account (on its page). */
+  onReconnect: (accountId: AccountId) => void;
 }): React.ReactElement {
   const { showGetStarted } = useSourcesPolicy();
   const entries = useVisibleAccounts();
   const ready = useAppState((s) => s.ready);
-  const [filter, setFilter] = useState<Filter>('all');
-  const [picked, setPicked] = useState<AccountId | null>(null);
+  const { selection, onSelection } = props;
+  const { filter, picked } = selection;
 
   const counts = useMemo(() => {
     const m = new Map<SourceCategory, number>();
@@ -244,11 +254,15 @@ export function SourcesList(props: {
     active === 'all'
       ? entries
       : entries.filter((e) => sourceCategory(e.account.source) === active);
-  // Held while its account is on screen; otherwise the default.
+  // Held while its account is on screen; otherwise the default, committed
+  // once so a later status change doesn't move it.
   const selectedId = rows.some((e) => e.account.id === picked)
     ? picked
     : defaultSelection(rows);
   const selected = rows.find((e) => e.account.id === selectedId) ?? null;
+  useEffect(() => {
+    if (selectedId !== picked) onSelection({ filter, picked: selectedId });
+  }, [selectedId, picked, filter, onSelection]);
 
   let body: React.ReactNode;
   if (entries.length === 0) {
@@ -273,7 +287,7 @@ export function SourcesList(props: {
             aria-label="Filter by kind"
             items={tabs}
             value={active}
-            onChange={setFilter}
+            onChange={(f) => onSelection({ filter: f, picked })}
           />
         )}
         <Split
@@ -284,7 +298,7 @@ export function SourcesList(props: {
                 key={selected.account.id}
                 entry={selected}
                 onOpen={() => props.onOpenDetail(selected.account.id)}
-                onReconnect={() => props.onReconnect(selected.account)}
+                onReconnect={() => props.onReconnect(selected.account.id)}
               />
             )
           }
@@ -295,7 +309,7 @@ export function SourcesList(props: {
             rows={rows}
             rowKey={(e) => e.account.id}
             selectedKey={selectedId}
-            onRowClick={(e) => setPicked(e.account.id)}
+            onRowClick={(e) => onSelection({ filter, picked: e.account.id })}
           />
         </Split>
       </>

@@ -21,7 +21,7 @@ import {
   type SourceEntry,
 } from './source-actions';
 
-/** What is wrong, in words, and the one thing that fixes it. */
+/** What is wrong, in words, and what fixes it. */
 export function SourceProblem(props: {
   entry: SourceEntry;
   onReconnect: () => void;
@@ -29,19 +29,21 @@ export function SourceProblem(props: {
   const a = props.entry.account;
   const status = sourceStatus(a);
   const [why, setWhy] = useState(false);
-  if (status.label === null || status.fix === null) return null;
-  const { fix } = status;
+  if (status.label === null || status.fixes.length === 0) return null;
   return (
     <div className="src-problem">
       <Status tone={status.tone}>{status.label}</Status>
       <div className="src-problem-acts">
-        <Button
-          size="sm"
-          variant={status.tone === 'err' ? 'primary' : 'secondary'}
-          onClick={() => runFix(props.entry, fix, props.onReconnect)}
-        >
-          {FIX_WORDS[fix]}
-        </Button>
+        {status.fixes.map((fix, i) => (
+          <Button
+            key={fix}
+            size="sm"
+            variant={i === 0 && status.tone === 'err' ? 'primary' : 'secondary'}
+            onClick={() => runFix(props.entry, fix, props.onReconnect)}
+          >
+            {FIX_WORDS[fix]}
+          </Button>
+        ))}
         {a.lastError && (
           <TextButton aria-expanded={why} onClick={() => setWhy((w) => !w)}>
             Why?

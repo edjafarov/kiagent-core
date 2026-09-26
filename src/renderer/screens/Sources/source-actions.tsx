@@ -1,7 +1,7 @@
 // What a user can do to one source, shared by the list's panel and the
 // source's page: the ··· menu, the remove confirmation and the one fix.
 import React, { useRef, useState } from 'react';
-import type { AppState } from '@shared/contracts';
+import type { AccountId, AppState } from '@shared/contracts';
 import {
   ConfirmSheet,
   IconButton,
@@ -18,42 +18,51 @@ export const FIX_WORDS: Record<SourceFix, string> = {
   resume: 'Resume',
 };
 
+/** The one way to sync a source now: Sync now, Retry, Sync all and Run
+ *  now all come here. */
+export function syncNow(accountId: AccountId): Promise<void> {
+  return window.kiagent.invoke('accounts:sync-now', { accountId });
+}
+
 /** Runs a status's fix; reconnecting is the caller's flow. */
 export function runFix(
   entry: SourceEntry,
   fix: SourceFix,
   onReconnect: () => void,
 ): void {
-  if (fix === 'reconnect') {
-    onReconnect();
-    return;
-  }
-  void window.kiagent.invoke(
-    fix === 'resume' ? 'accounts:resume' : 'accounts:sync-now',
-    { accountId: entry.account.id },
-  );
+  if (fix === 'reconnect') onReconnect();
+  else if (fix === 'resume')
+    void window.kiagent.invoke('accounts:resume', {
+      accountId: entry.account.id,
+    });
+  else void syncNow(entry.account.id);
 }
 
 export function RemoveSourceSheet(props: {
   entry: SourceEntry;
   name: string;
   onClose: () => void;
+  /** After the source is gone; the source's page goes back with it. */
+  onDone?: () => void;
 }): React.ReactElement {
   const { entry, name } = props;
   return (
     <ConfirmSheet
       title={`Remove ${name}?`}
       confirmLabel="Remove"
+      busyLabel="Removing…"
       tone="danger"
-      onConfirm={() =>
-        window.kiagent.invoke('accounts:remove', {
+      onConfirm={async () => {
+        await window.kiagent.invoke('accounts:remove', {
           accountId: entry.account.id,
-        })
-      }
+        });
+        props.onDone?.();
+      }}
       onClose={props.onClose}
     >
       Its {entry.docCount.toLocaleString()} items are deleted from this
-      computer. Nothing changes in {name} itself.
+      computer. Nothing changes in {name} itself. A large source can take a few
+      minutes.
     </ConfirmSheet>
   );
 }
@@ -76,8 +85,7 @@ export function SourceMenu(props: {
       key: 'sync',
       label: 'Sync now',
       icon: 'refresh-cw',
-      onSelect: () =>
-        void window.kiagent.invoke('accounts:sync-now', { accountId: a.id }),
+      onSelect: () => void syncNow(a.id),
     },
     {
       key: 'pause',
