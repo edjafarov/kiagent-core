@@ -75,4 +75,15 @@ describe('Row', () => {
     expect(screen.getByText('ok')).toBeInTheDocument();
     expect(screen.getByTestId('static-row')).toBe(screen.getByRole('listitem'));
   });
+
+  it('shows a detail below the line and lets the row grow for it', () => {
+    const { item } = renderRow();
+    expect(item).not.toHaveClass('has-detail');
+    renderRow({ title: 'Invoice', detail: 'Moved because it is an invoice.' });
+    const other = screen.getByText('Invoice').closest('li')!;
+    expect(other).toHaveClass('has-detail');
+    expect(screen.getByText('Moved because it is an invoice.')).toHaveClass(
+      'ui-row-detail',
+    );
+  });
 });

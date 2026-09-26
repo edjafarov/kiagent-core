@@ -28,6 +28,9 @@ export function Row(props: {
   /** Always mounted and in tab order; shown (over the time) while the
    *  row is hovered or holds focus. */
   hoverActions?: React.ReactNode;
+  /** Shown below the line at its own height (an opened explanation); the
+   *  line keeps its size. */
+  detail?: React.ReactNode;
   onClick?: () => void;
   'aria-label'?: string;
   'data-testid'?: string;
@@ -49,6 +52,7 @@ export function Row(props: {
         size !== 30 && `is-${size}`,
         props.selected && 'is-sel',
         props.faint && 'is-faint',
+        props.detail != null && 'has-detail',
       )}
       data-testid={props['data-testid']}
     >
@@ -71,6 +75,9 @@ export function Row(props: {
       {props.time != null && <span className="ui-row-time">{props.time}</span>}
       {props.hoverActions != null && (
         <span className="ui-row-acts">{props.hoverActions}</span>
+      )}
+      {props.detail != null && (
+        <div className="ui-row-detail">{props.detail}</div>
       )}
     </li>
   );

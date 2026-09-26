@@ -106,10 +106,11 @@
 }
 .ui-att {
   --c: var(--label-color);
+  --h: 46px;
   display: flex;
   align-items: center;
   gap: 16px;
-  height: 46px;
+  height: var(--h);
   min-width: 0;
   padding: 0 12px 0 15px;
   background: var(--card-bg);
@@ -134,6 +135,17 @@
 .ui-att-t b { font-weight: 600; }
 .ui-att-s { font-size: 12px; color: var(--text-secondary); }
 .ui-att-act { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+/* An opened explanation below the line: the row grows to fit it, the line
+   itself keeps its height. */
+.ui-att.has-detail { height: auto; flex-wrap: wrap; row-gap: 0; padding-bottom: 10px; }
+.ui-att.has-detail > .ui-att-body { min-height: calc(var(--h) - 2px); justify-content: center; }
+.ui-att-detail, .ui-row-detail {
+  flex-basis: 100%;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
 
 /* ── KPI tiles ────────────────────────────────────────────────────── */
 .ui-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-width: 0; }
@@ -206,21 +218,25 @@
   list-style: none;
 }
 .ui-row {
+  --h: var(--row-h);
   position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
-  height: var(--row-h);
+  height: var(--h);
   min-width: 0;
   padding: 0 8px;
   border-radius: var(--r-xs);
   font-size: 13px;
   color: var(--text-primary);
 }
-.ui-row.is-34 { height: var(--row-h-l); }
-.ui-row.is-38 { height: var(--row-h-mid); }
-.ui-row.is-42 { height: var(--row-h-tall); }
-.ui-row.is-48 { height: var(--row-h-xl); }
+.ui-row.is-34 { --h: var(--row-h-l); }
+.ui-row.is-38 { --h: var(--row-h-mid); }
+.ui-row.is-42 { --h: var(--row-h-tall); }
+.ui-row.is-48 { --h: var(--row-h-xl); }
+.ui-row.has-detail { height: auto; flex-wrap: wrap; row-gap: 0; padding-bottom: 8px; }
+.ui-row.has-detail > .ui-row-main { height: var(--h); }
+.ui-row.has-detail > .ui-row-acts { bottom: auto; height: var(--h); }
 .ui-row:hover, .ui-row:focus-within { background: var(--row-hover); }
 .ui-row.is-sel { background: var(--row-sel); }
 .ui-row.is-faint { color: var(--text-tertiary); }

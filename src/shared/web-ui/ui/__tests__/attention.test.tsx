@@ -42,6 +42,29 @@ describe('AttentionList', () => {
     expect(screen.getByRole('listitem')).toHaveClass('is-work');
     expect(screen.getByTestId('sort-row')).toBe(screen.getByRole('listitem'));
   });
+
+  it('shows a detail below the line and lets the row grow for it', () => {
+    const { rerender } = render(
+      <AttentionList>
+        <AttentionRow tone="work" kind="Sort" title="report.pdf" />
+      </AttentionList>,
+    );
+    expect(screen.getByRole('listitem')).not.toHaveClass('has-detail');
+    rerender(
+      <AttentionList>
+        <AttentionRow
+          tone="work"
+          kind="Sort"
+          title="report.pdf"
+          detail="The text could not be read."
+        />
+      </AttentionList>,
+    );
+    expect(screen.getByRole('listitem')).toHaveClass('has-detail');
+    expect(screen.getByText('The text could not be read.')).toHaveClass(
+      'ui-att-detail',
+    );
+  });
 });
 
 describe('Kpi', () => {

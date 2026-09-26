@@ -15,18 +15,24 @@ export function AttentionList(props: {
 }
 
 /** One thing that needs the user: a coloured edge, a caps kind word,
- *  a title (may hold bold parts), an optional second line, one action. */
+ *  a title (may hold bold parts), an optional second line, one action,
+ *  and an optional `detail` shown below at its own height. */
 export function AttentionRow(props: {
   tone: AttentionTone;
   kind: string;
   title: React.ReactNode;
   sub?: React.ReactNode;
   action?: React.ReactNode;
+  detail?: React.ReactNode;
   'data-testid'?: string;
 }): React.ReactElement {
   return (
     <li
-      className={cx('ui-att', `is-${props.tone}`)}
+      className={cx(
+        'ui-att',
+        `is-${props.tone}`,
+        props.detail != null && 'has-detail',
+      )}
       data-testid={props['data-testid']}
     >
       <span className="ui-att-k">{props.kind}</span>
@@ -36,6 +42,9 @@ export function AttentionRow(props: {
       </span>
       {props.action != null && (
         <span className="ui-att-act">{props.action}</span>
+      )}
+      {props.detail != null && (
+        <div className="ui-att-detail">{props.detail}</div>
       )}
     </li>
   );
