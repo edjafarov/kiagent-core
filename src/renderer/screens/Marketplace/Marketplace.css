@@ -194,10 +194,8 @@
 }
 
 /* Detail pane (Task 10): action buttons, inline error notices, the
-   installed-caps summary (compact rows reusing ConsentModal's .cm-cap-row/
-   .cm-cap-label/.cm-elevated-tag classes — self-contained in
-   ConsentModal.css, already loaded since Detail always imports
-   ConsentModal), and README rendering. */
+   installed-access summary (the install sheet's AccessRows), and README
+   rendering. */
 .mkt-actions {
   display: flex;
   gap: 8px;

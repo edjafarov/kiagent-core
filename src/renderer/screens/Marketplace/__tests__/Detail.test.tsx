@@ -275,9 +275,7 @@ describe('Detail', () => {
     expect(within(dialog).getByText(CAP_CATALOG.db.label)).toBeInTheDocument();
     expect(within(dialog).getByText(CAP_CATALOG.ui.label)).toBeInTheDocument();
 
-    fireEvent.click(
-      within(dialog).getByRole('button', { name: 'Grant permissions' }),
-    );
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Allow' }));
 
     await waitFor(() =>
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
@@ -309,7 +307,9 @@ describe('Detail', () => {
     const paneRow = await screen.findByText(
       /Signs in with your Google account \(google-docs\)/,
     );
-    expect(paneRow.closest('.cm-cap-row')).toHaveClass('elevated');
+    expect(
+      within(paneRow.closest('li') as HTMLElement).getByText('Elevated'),
+    ).toBeInTheDocument();
 
     // Review-permissions dialog carries the same row.
     fireEvent.click(
@@ -557,18 +557,11 @@ describe('Detail', () => {
   ];
 
   function expectFolders(dialog: HTMLElement): void {
-    expect(
-      within(dialog).getByText('Reads these folders on your computer'),
-    ).toBeInTheDocument();
     expect(within(dialog).getByText('~/.claude')).toBeInTheDocument();
     expect(
       within(dialog).getByText('Claude Code sessions'),
     ).toBeInTheDocument();
-    expect(
-      within(dialog).getByText(
-        'The extension can read everything inside these folders.',
-      ),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/Read everything in/)).toBeInTheDocument();
   }
 
   test('consent-ui.install-shows-folders', async () => {
