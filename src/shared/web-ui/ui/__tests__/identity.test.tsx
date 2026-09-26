@@ -7,6 +7,7 @@ import {
   DateTile,
   Avatar,
   Chip,
+  EntityHeading,
   sourceBrand,
   clientBrand,
 } from '..';
@@ -81,5 +82,32 @@ describe('Avatar and Chip', () => {
     fireEvent.click(screen.getByRole('button', { name: /Notion/ }));
     expect(onClick).toHaveBeenCalled();
     expect(screen.getByText('3')).toBeInTheDocument();
+  });
+});
+
+describe('Chip action and EntityHeading', () => {
+  test('a chip with an action is named by it', () => {
+    const onClick = jest.fn();
+    render(
+      <Chip
+        brand={sourceBrand('dropbox')}
+        name="Dropbox"
+        action="Add"
+        onClick={onClick}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add Dropbox' }));
+    expect(onClick).toHaveBeenCalled();
+  });
+
+  test('a string title is the heading; actions follow', () => {
+    render(
+      <EntityHeading brand={sourceBrand('gmail')} title="Gmail" meta="a@b.c">
+        <button type="button">More</button>
+      </EntityHeading>,
+    );
+    expect(screen.getByRole('heading', { name: 'Gmail' })).toBeInTheDocument();
+    expect(screen.getByText('a@b.c')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument();
   });
 });

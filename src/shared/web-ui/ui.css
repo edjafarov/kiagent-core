@@ -866,6 +866,7 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-chip:hover { border-color: var(--border-strong); }
 .ui-chip:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
 .ui-chip-n { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-secondary); }
+.ui-chip-act { font-weight: 600; color: var(--accent-text); }
 
 /* ── Settings frame ───────────────────────────────────────────────── */
 .ui-set { display: flex; flex: 1; min-height: 0; }
@@ -1071,3 +1072,10 @@ button.ui-sb-line:focus-visible { outline: 2px solid var(--border-focus); outlin
 }
 .ui-titlebar.is-mac { padding-left: 90px; } /* see .ui-sidebar-head */
 .ui-titlebar.is-win, .ui-titlebar.is-linux { padding-right: 140px; }
+
+/* ── Entity heading ───────────────────────────────────────────────── */
+.ui-ent { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.ui-ent-name { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.ui-ent-t { margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: var(--text-primary); overflow-wrap: anywhere; }
+.ui-ent.is-page .ui-ent-t { font-size: 18px; line-height: 24px; }
+.ui-ent-m { font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }

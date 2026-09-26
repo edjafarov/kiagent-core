@@ -5,7 +5,8 @@
  * where the new `AppState` shape genuinely has no equivalent field.
  */
 
-import type { Cadence } from '@shared/contracts';
+import type { Account, Cadence } from '@shared/contracts';
+import { folderRoots } from './folder-roots';
 
 export function formatRelative(
   iso: string | null | undefined,
@@ -67,10 +68,30 @@ export function humanizeDocType(type: string): string {
   return type.replace(/[._-]+/g, ' ').trim() || 'document';
 }
 
-/** Human copy for a `Cadence` value ('{every:"15m"}' -> 'Every 15m'). */
+const UNITS: Record<string, [string, string]> = {
+  s: ['second', 'seconds'],
+  m: ['minute', 'minutes'],
+  h: ['hour', 'hours'],
+  d: ['day', 'days'],
+};
+
+/** Human copy for a `Cadence` value ('{every:"15m"}' -> 'Every 15 minutes',
+ *  '{every:"1h"}' -> 'Every hour'). */
 export function describeCadence(cadence: Cadence | undefined | null): string {
   if (cadence == null) return '—';
   if (cadence === 'manual') return 'Manual only';
   if ('cron' in cadence) return `Custom (cron: ${cadence.cron})`;
-  return `Every ${cadence.every}`;
+  const m = /^(\d+)\s*([smhd])$/.exec(cadence.every.trim());
+  if (!m) return `Every ${cadence.every}`;
+  const n = Number(m[1]);
+  const [one, many] = UNITS[m[2]];
+  return n === 1 ? `Every ${one}` : `Every ${n} ${many}`;
+}
+
+/** What names an account in a row: its identifier, or for local folders
+ *  (one machine-wide account) how many folders it tracks. */
+export function accountLabel(a: Account): string {
+  if (a.source !== 'local-folder') return a.identifier;
+  const n = folderRoots(a).length;
+  return `${n} ${n === 1 ? 'folder' : 'folders'}`;
 }

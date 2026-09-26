@@ -153,25 +153,21 @@ export function SourcesScreen(props: {
       break;
     default:
       body = (
-        <Page title="Sources">
-          <SourcesList
-            onOpenDetail={(accountId) =>
-              setLocal({ view: 'detail', accountId })
-            }
-            onOpenConnection={props.onOpenConnection}
-            onAdd={() => setLocal({ view: 'catalog' })}
-            onReconnect={(a) =>
-              setLocal({
-                view: 'reconnect',
-                target: {
-                  accountId: a.id,
-                  sourceId: a.source,
-                  identifier: a.identifier,
-                },
-              })
-            }
-          />
-        </Page>
+        <SourcesList
+          onOpenDetail={(accountId) => setLocal({ view: 'detail', accountId })}
+          onOpenConnection={props.onOpenConnection}
+          onCatalog={(install) => setLocal({ view: 'catalog', install })}
+          onReconnect={(a) =>
+            setLocal({
+              view: 'reconnect',
+              target: {
+                accountId: a.id,
+                sourceId: a.source,
+                identifier: a.identifier,
+              },
+            })
+          }
+        />
       );
   }
 

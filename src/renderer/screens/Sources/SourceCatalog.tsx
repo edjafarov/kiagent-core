@@ -46,7 +46,7 @@ function Section(props: {
   const id = useId();
   return (
     <section className="src-cat-sec" aria-labelledby={id}>
-      <h2 id={id} className="src-cat-lbl">
+      <h2 id={id} className="ui-card-lbl">
         {props.label}
       </h2>
       {props.children}

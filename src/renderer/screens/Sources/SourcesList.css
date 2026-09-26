@@ -1,0 +1,24 @@
+/* The Sources page: table + panel, the add-more chips. */
+.src-page { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.src-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.src-cell-name { font-weight: 600; color: var(--text-primary); white-space: nowrap; }
+.src-cell-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.src-items { display: inline-flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.src-num, .src-pct { font-variant-numeric: tabular-nums; }
+.src-pct { font-size: 12px; color: var(--text-secondary); }
+.src-bar { display: inline-block; width: 52px; }
+.src-when { color: var(--text-secondary); }
+.src-panel { display: flex; flex-direction: column; gap: 16px; }
+.src-problem { display: flex; flex-direction: column; gap: 10px; }
+.src-problem-acts { display: flex; align-items: center; gap: 12px; }
+.src-problem-why { margin: 0; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.src-panel-foot { display: flex; justify-content: space-between; }
+.src-more { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.src-more-hd { display: flex; align-items: center; justify-content: space-between; }
+.src-more-chips { display: flex; flex-wrap: wrap; gap: 8px; }

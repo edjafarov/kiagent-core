@@ -42,7 +42,14 @@ export {
   NEUTRAL_BRAND_COLOR,
 } from './brands';
 export type { Brand, SourceCategory } from './brands';
-export { BrandGlyph, BrandMark, DateTile, Avatar, Chip } from './identity';
+export {
+  BrandGlyph,
+  BrandMark,
+  DateTile,
+  Avatar,
+  Chip,
+  EntityHeading,
+} from './identity';
 export { SettingsLayout, SettingsGroup, SettingsRow } from './settings';
 export type { SettingsPane } from './settings';
 export {

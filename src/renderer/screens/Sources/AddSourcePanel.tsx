@@ -130,7 +130,7 @@ export function AddSourcePanel(props: {
   onDone: (accountId?: AccountId) => void;
   /** Connect THIS source — the catalog's pick. */
   add?: string;
-  /** Reconnect THIS account instead of adding a new one — the ErrorCard and
+  /** Reconnect THIS account instead of adding a new one — the list panel and
    *  SourceDetail Reconnect paths. On mount this starts
    *  `accounts:start-reconnect` when the source's descriptor carries
    *  `hasReauthenticate: true`, and today's `pick()` → `accounts:add
@@ -235,7 +235,7 @@ export function AddSourcePanel(props: {
   // expired password), microsoft and whatsapp do not. An unflagged source
   // therefore keeps TODAY'S route: `pick()`, i.e. accounts:add { sourceId }.
   // C-20 — THE DESCRIPTORS WAIT, and the reason this gate lives here rather
-  // than in SourcesList: both Reconnect entry points (the ErrorCard and
+  // than in SourcesList: both Reconnect entry points (the list panel and
   // SourceDetail's topbar) funnel through this one mount effect.
   // `useSourceDescriptors()` is null until sources:list resolves and [] if it
   // failed (sources-registry.tsx:15-31), so a null list is a WAIT (deps

@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useAppState } from '@renderer/state/app-state';
 import type { AccountId } from '@shared/contracts';
 import { Icon } from '@shared/web-ui/icon-sprite';
-import { StatusPill } from './StatusPill';
+import { Status } from '@shared/web-ui/ui';
+import { sourceStatus } from './source-status';
 import { AccountRowActions } from './AccountRowActions';
 import { AddSourcePanel } from './AddSourcePanel';
 import { useSourceDescriptors } from './sources-registry';
@@ -50,8 +51,7 @@ export function SourceDetail(props: {
   const descriptor = descriptors?.find((d) => d.id === a.source);
   // R4: Reconnect is offered for needsReauth and error only. It is deliberately
   // NOT offered on a healthy account — an OAuth round trip there can only lose
-  // information. ErrorCard's own gate stays needsReauth-only (ErrorCard.test.tsx:51):
-  // on the LIST, Retry is the primary action for a plain error.
+  // information. on the list's panel, Retry is the fix for a plain error.
   const canReconnect = a.status === 'needsReauth' || a.status === 'error';
 
   return (
@@ -63,7 +63,9 @@ export function SourceDetail(props: {
         <span className="h-section mono" style={{ fontSize: 13 }}>
           {a.identifier}
         </span>
-        <StatusPill account={a} />
+        {sourceStatus(a).label && (
+          <Status tone={sourceStatus(a).tone}>{sourceStatus(a).label}</Status>
+        )}
         <div style={{ flex: 1 }} />
         <button
           type="button"

@@ -94,13 +94,48 @@ export function Chip(props: {
   brand: Brand;
   name: string;
   count?: number;
+  /** A verb shown after the name in the accent colour, e.g. "Add". */
+  action?: string;
   onClick?: () => void;
 }): React.ReactElement {
   return (
-    <button type="button" className="ui-chip" onClick={props.onClick}>
+    <button
+      type="button"
+      className="ui-chip"
+      aria-label={props.action ? `${props.action} ${props.name}` : undefined}
+      onClick={props.onClick}
+    >
       <BrandMark brand={props.brand} />
       <span>{props.name}</span>
       {props.count != null && <span className="ui-chip-n">{props.count}</span>}
+      {props.action && <span className="ui-chip-act">{props.action}</span>}
     </button>
+  );
+}
+
+/** An entity's glyph, name and one meta line, with its actions after them:
+ *  the head of a panel or a page. A string title becomes the heading; a
+ *  node (e.g. an inline editor) is placed as given. */
+export function EntityHeading(props: {
+  brand: Brand;
+  title: React.ReactNode;
+  meta?: React.ReactNode;
+  size?: 'panel' | 'page';
+  children?: React.ReactNode;
+}): React.ReactElement {
+  const { brand, title, meta, size = 'panel', children } = props;
+  return (
+    <header className={cx('ui-ent', size === 'page' && 'is-page')}>
+      <BrandGlyph brand={brand} size={32} />
+      <div className="ui-ent-name">
+        {typeof title === 'string' ? (
+          <h2 className="ui-ent-t">{title}</h2>
+        ) : (
+          title
+        )}
+        {meta != null && <span className="ui-ent-m">{meta}</span>}
+      </div>
+      {children}
+    </header>
   );
 }
