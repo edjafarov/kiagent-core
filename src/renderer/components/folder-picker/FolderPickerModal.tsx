@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '@shared/web-ui/icon-sprite';
+import { Button, Sheet } from '@shared/web-ui/ui';
 import { formatCount } from './format-count';
 import {
   coveringRoots,
@@ -456,14 +457,6 @@ export function FolderPickerModal({
     walk(tree);
   }, [tree]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   function switchMode(next: string): void {
     setMode(next);
     setSingle(null);
@@ -627,124 +620,109 @@ export function FolderPickerModal({
       : 'Select folder';
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      onClick={onClose}
-      className="fp-backdrop"
-    >
-      <div onClick={(e) => e.stopPropagation()} className="tray-pop fp-modal">
-        <header className="fp-head">
-          <h3 className="fp-title">{title}</h3>
-          <button
-            type="button"
-            className="btn ghost sm icon-only"
-            aria-label="close"
-            onClick={onClose}
-          >
-            <Icon name="x" size={14} />
-          </button>
-        </header>
-
-        <div className="fp-modeswitch">
-          {(dataSource?.modes ?? LOCAL_FS_MODES).map((m) => (
-            <button
-              key={m.key}
-              type="button"
-              className={`btn sm${mode === m.key ? ' primary' : ''}`}
-              onClick={() => switchMode(m.key)}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="fp-tree">
-          {initialLoading && (
-            <div className="fp-row depth-0">
-              <span className="busy">
-                <span className="spinner" />
-                Loading folders…
-              </span>
-            </div>
-          )}
-          {rootsFailed && tree.length === 0 && (
-            <div className="fp-row failed depth-0">
-              <span className="t-meta">Couldn’t list folders.</span>
-              <button
-                type="button"
-                className="btn ghost sm"
-                onClick={() => void loadRoots(mode)}
-              >
-                Retry
-              </button>
-            </div>
-          )}
-          {tree.map((root) => (
-            <TreeRow
-              key={root.path}
-              node={root}
-              multiSelect={multiSelect}
-              checkState={checkState}
-              isTracked={isTracked}
-              loadingNodes={loadingNodes}
-              failedNodes={failedNodes}
-              onSelect={handleRowSelect}
-              onRetry={retryChildren}
-              onToggleExpand={toggleExpand}
-            />
-          ))}
-        </div>
-
-        {multiSelect && checked.size > 0 && (
-          <div className="fp-chip-tray">
-            {[...checked].map(([id, e]) => (
-              <span
-                key={id}
-                className="fp-chip"
-                // A dataSource picker's path is the adapter's synthetic
-                // '/'-joined encoding of provider ids — never show it.
-                title={dataSource ? e.name : (e.path ?? e.name)}
-              >
-                <span className="leaf">{e.name}</span>
-                <button
-                  type="button"
-                  className="x"
-                  aria-label={`remove ${e.name} from selection`}
-                  onClick={() => removeChecked(id)}
-                >
-                  <Icon name="x" size={10} />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-
-        {error != null && error !== '' && (
-          <div className="fp-notice si-error" role="alert">
-            {error}
-          </div>
-        )}
-
-        {note && <p className="fp-note t-meta">{note}</p>}
-
-        <footer className="fp-footer">
+    <Sheet
+      title={title}
+      onClose={onClose}
+      width={600}
+      footer={
+        <>
           <span className="fp-summary t-meta">{footerSummary}</span>
-          <button type="button" className="btn sm" onClick={onClose}>
+          <Button size="sm" onClick={onClose}>
             Cancel
-          </button>
-          <button
-            type="button"
-            className="btn primary sm"
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
             disabled={footerDisabled}
             onClick={confirmSelect}
           >
             {footerLabel}
+          </Button>
+        </>
+      }
+    >
+      <div className="fp-modeswitch">
+        {(dataSource?.modes ?? LOCAL_FS_MODES).map((m) => (
+          <button
+            key={m.key}
+            type="button"
+            className={`btn sm${mode === m.key ? ' primary' : ''}`}
+            onClick={() => switchMode(m.key)}
+          >
+            {m.label}
           </button>
-        </footer>
+        ))}
       </div>
-    </div>
+
+      <div className="fp-tree">
+        {initialLoading && (
+          <div className="fp-row depth-0">
+            <span className="busy">
+              <span className="spinner" />
+              Loading folders…
+            </span>
+          </div>
+        )}
+        {rootsFailed && tree.length === 0 && (
+          <div className="fp-row failed depth-0">
+            <span className="t-meta">Couldn’t list folders.</span>
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={() => void loadRoots(mode)}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        {tree.map((root) => (
+          <TreeRow
+            key={root.path}
+            node={root}
+            multiSelect={multiSelect}
+            checkState={checkState}
+            isTracked={isTracked}
+            loadingNodes={loadingNodes}
+            failedNodes={failedNodes}
+            onSelect={handleRowSelect}
+            onRetry={retryChildren}
+            onToggleExpand={toggleExpand}
+          />
+        ))}
+      </div>
+
+      {multiSelect && checked.size > 0 && (
+        <div className="fp-chip-tray">
+          {[...checked].map(([id, e]) => (
+            <span
+              key={id}
+              className="fp-chip"
+              // A dataSource picker's path is the adapter's synthetic
+              // '/'-joined encoding of provider ids — never show it.
+              title={dataSource ? e.name : (e.path ?? e.name)}
+            >
+              <span className="leaf">{e.name}</span>
+              <button
+                type="button"
+                className="x"
+                aria-label={`remove ${e.name} from selection`}
+                onClick={() => removeChecked(id)}
+              >
+                <Icon name="x" size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {error != null && error !== '' && (
+        <div className="fp-notice si-error" role="alert">
+          {error}
+        </div>
+      )}
+
+      {note && <p className="fp-note t-meta">{note}</p>}
+    </Sheet>
   );
 }
 

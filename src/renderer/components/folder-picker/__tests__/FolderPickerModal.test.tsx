@@ -821,3 +821,22 @@ describe('FolderPickerModal expandIds', () => {
     ).toBeInTheDocument();
   });
 });
+
+describe('FolderPickerModal as a sheet', () => {
+  it('Escape, Cancel and the close button each close it', async () => {
+    const onClose = jest.fn();
+    render(
+      <FolderPickerModal
+        dataSource={makeDataSource()}
+        onConfirm={jest.fn()}
+        onClose={onClose}
+      />,
+    );
+    await screen.findByText('Root One');
+    const dialog = screen.getByRole('dialog', { name: 'Choose a folder' });
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalledTimes(3);
+  });
+});

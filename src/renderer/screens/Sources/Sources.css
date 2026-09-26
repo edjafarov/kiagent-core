@@ -578,45 +578,14 @@ dl.kv dd {
    uses `.fp-cb` (the per-row checkbox indicator) and `.fp-chip-tray`/`.fp-chip`
    (the removable selection chips above the footer). */
 
-.fp-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  z-index: 2000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.fp-modal {
-  width: 480px;
-  max-width: calc(100vw - 32px);
-  height: 420px;
-  max-height: calc(100vh - 64px);
-  display: flex;
-  flex-direction: column;
-}
-.fp-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.fp-title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
 .fp-modeswitch {
   display: flex;
   gap: 8px;
-  padding: 8px 14px;
+  padding: 0 0 8px;
   border-bottom: 1px solid var(--border-subtle);
 }
 .fp-tree {
-  flex: 1;
-  min-height: 0;
+  height: 300px;
   overflow-y: auto;
   padding: 4px 0;
 }
@@ -747,16 +716,9 @@ dl.kv dd {
   margin: 0 16px 8px;
 }
 
-.fp-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-}
 .fp-summary {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
