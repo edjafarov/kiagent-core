@@ -110,7 +110,7 @@ function toolToWire(tool: McpTool): Record<string, unknown> {
  *
  * onActivity receives one enriched activity record per served call (win or
  * lose) — everything except `transport`, which the caller stamps ('http' in
- * server.ts, 'stdio' in mcp/stdio-entry.ts). Optional; and best-effort by
+ * server.ts — 'remote' for the product handler —, 'stdio' in mcp/stdio-entry.ts). Optional; and best-effort by
  * contract: a throwing callback or summarizer must never fail the call it
  * records.
  */

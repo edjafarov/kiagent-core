@@ -4,7 +4,7 @@ import { ConnectionHub } from './ConnectionHub';
 import { LocalClients } from './LocalClients';
 import { ManualSetup } from './ManualSetup';
 import { buildLocalHttpSnippet } from './snippets';
-import { ActivityPanel } from './ActivityPanel';
+import { Requests } from './Requests';
 import './Connection.css';
 
 /**
@@ -21,7 +21,7 @@ import './Connection.css';
  *    of legacy's `useAppStateSelector(s => s?.mcp) ?? 7421` fallback — a
  *    `null` port here is surfaced as an explicit "Not ready" state (see
  *    `ConnectionHub`) rather than papered over with a guessed default port.
- *  - A third element legacy never had: the ActivityPanel right column — the
+ *  - A third element legacy never had: the Requests right column — the
  *    MCP data-access trail (see specs/2026-07-06-mcp-activity-feed-design.md).
  */
 export function Connection(): React.ReactElement {
@@ -66,7 +66,7 @@ export function Connection(): React.ReactElement {
           </div>
         </div>
 
-        <ActivityPanel />
+        <Requests />
       </div>
     </div>
   );

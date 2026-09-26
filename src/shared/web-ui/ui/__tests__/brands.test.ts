@@ -71,6 +71,11 @@ describe('clientBrand', () => {
     ['codex-mcp-client', 'Codex', 'openai'],
     ['cursor-vscode', 'Cursor', 'cursor'],
     ['Visual Studio Code', 'VS Code', 'vscode'],
+    // the local app adapters' ids
+    ['claude-desktop', 'Claude Desktop', 'claude'],
+    ['cursor', 'Cursor', 'cursor'],
+    ['vscode', 'VS Code', 'vscode'],
+    ['codex', 'Codex', 'openai'],
   ])('maps %s to %s', (raw, name, key) => {
     expect(clientBrand(raw)).toMatchObject({ name, key });
   });

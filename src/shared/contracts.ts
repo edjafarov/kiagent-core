@@ -1371,7 +1371,8 @@ export interface LogStore {
  *  See src/main/core/mcp/activity.ts. */
 export interface McpActivityRecord {
   ts: string; // ISO timestamp
-  transport: 'http' | 'stdio';
+  /** 'remote' = served through the product's public handler. */
+  transport: 'http' | 'stdio' | 'remote';
   client: string | null; // MCP initialize clientInfo.name, e.g. "claude-desktop"
   tool: string;
   ok: boolean;

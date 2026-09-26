@@ -25,7 +25,12 @@ import path from 'path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-import type { Document, LogLevel, Query } from '@shared/contracts';
+import type {
+  Document,
+  LogLevel,
+  McpActivityRecord,
+  Query,
+} from '@shared/contracts';
 
 import { openDb } from '../../../db/app-db';
 import { PORT_CANDIDATES, startMcp } from '../server';
@@ -556,5 +561,66 @@ describe('startMcp (HTTP transport)', () => {
         });
       }
     });
+  });
+});
+
+describe('activity transport (D7)', () => {
+  let handle: McpServerHandle;
+  let dataDir: string;
+  const recs: McpActivityRecord[] = [];
+
+  beforeAll(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-mcp-activity-'));
+    const seedDb = await openDb(path.join(dataDir, 'kiagent.db'));
+    await seedDb.close();
+    handle = await startMcp({
+      query: fakeQuery(),
+      logSink: { log: () => {} },
+      dataDir,
+      portCandidates: [0],
+      onActivity: (rec) => recs.push(rec),
+    });
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  async function callInfo(url: string): Promise<void> {
+    const client = new Client({ name: 'test-client', version: '0.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+    try {
+      await client.callTool({ name: 'digital_memory_info', arguments: {} });
+    } finally {
+      await client.close().catch(() => {});
+    }
+  }
+
+  it('a loopback call is recorded as http', async () => {
+    recs.length = 0;
+    await callInfo(`http://127.0.0.1:${handle.port}/mcp`);
+    expect(recs.map((r) => r.transport)).toEqual(['http']);
+  });
+
+  it("a call through the product's handler is recorded as remote", async () => {
+    recs.length = 0;
+    const productHandler = handle.createMcpHandler();
+    const productServer = http.createServer((req, res) => {
+      void productHandler(req, res);
+    });
+    await new Promise<void>((resolve) => {
+      productServer.listen(0, '127.0.0.1', () => resolve());
+    });
+    const address = productServer.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    try {
+      await callInfo(`http://127.0.0.1:${port}/mcp`);
+    } finally {
+      await new Promise<void>((resolve) => {
+        productServer.close(() => resolve());
+      });
+    }
+    expect(recs.map((r) => r.transport)).toEqual(['remote']);
   });
 });

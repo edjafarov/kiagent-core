@@ -39,7 +39,7 @@ import { attachToolHandlers, createToolRegistry } from './registry';
 import { attachResourceHandlers } from './resources';
 import { buildBuiltinTools } from './tools';
 import { createRawSqlTools } from './tools/raw-sql';
-import { runWithTransport } from './transport-context';
+import { currentTransport, runWithTransport } from './transport-context';
 
 export interface McpDeps {
   query: Query;
@@ -281,8 +281,15 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       transport: StreamableHTTPServerTransport;
     } {
       const server = makeMcpServer();
+      // The product handler runs every request inside
+      // runWithTransport('remote', …), and the tool handler emits inside
+      // that request's async context — so this one callback tells a tunnel
+      // call from a loopback one.
       attachToolHandlers(server, registry, deps.logSink, (rec) =>
-        deps.onActivity?.({ ...rec, transport: 'http' }),
+        deps.onActivity?.({
+          ...rec,
+          transport: currentTransport() === 'remote' ? 'remote' : 'http',
+        }),
       );
       attachResourceHandlers(server, deps.query);
 

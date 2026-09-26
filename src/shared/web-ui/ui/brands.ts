@@ -179,6 +179,17 @@ const CLIENTS: Record<string, Entry> = {
     color: OPENAI,
     initials: 'Cx',
   },
+  // Local app ids (the MCP client adapters' ids), so Apps on this computer
+  // and the request list share one table.
+  'claude-desktop': {
+    key: 'claude',
+    name: 'Claude Desktop',
+    color: CLAUDE,
+    initials: 'CD',
+  },
+  cursor: { key: 'cursor', name: 'Cursor', color: '#1e293b', initials: 'Cu' },
+  vscode: { key: 'vscode', name: 'VS Code', color: '#0a6fc2', initials: 'VS' },
+  codex: { key: 'openai', name: 'Codex', color: OPENAI, initials: 'Cx' },
   'cursor-vscode': {
     key: 'cursor',
     name: 'Cursor',
