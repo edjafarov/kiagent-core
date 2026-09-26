@@ -139,6 +139,8 @@
    itself keeps its height. */
 .ui-att.has-detail { height: auto; flex-wrap: wrap; row-gap: 0; padding-bottom: 10px; }
 .ui-att.has-detail > .ui-att-body { min-height: calc(var(--h) - 2px); justify-content: center; }
+/* Under the title: past the kind word (50px) and the gap (16px). */
+.ui-att-detail { padding-left: 66px; }
 .ui-att-detail, .ui-row-detail {
   flex-basis: 100%;
   min-width: 0;
