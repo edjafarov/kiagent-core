@@ -3,6 +3,7 @@ import { Account } from './Account';
 import { Storage } from './Storage';
 import { LocalProcessing } from './LocalProcessing';
 import { Advanced } from './Advanced';
+import { Extensions } from './Extensions';
 import { About } from './About';
 import { SettingsPage, type SettingsPaneDef } from './SettingsPage';
 
@@ -23,6 +24,12 @@ const PANES: readonly SettingsPaneDef[] = [
     label: 'Local processing',
     icon: 'cpu',
     render: () => <LocalProcessing />,
+  },
+  {
+    key: 'extensions',
+    label: 'Extensions',
+    icon: 'puzzle',
+    render: () => <Extensions />,
   },
   {
     key: 'advanced',

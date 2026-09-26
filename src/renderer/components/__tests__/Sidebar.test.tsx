@@ -89,6 +89,13 @@ describe('Sidebar nav', () => {
     expect(ctx.navigate).toHaveBeenCalledWith('outbox');
   });
 
+  it('has no Marketplace row: extensions live in Settings and the catalog', () => {
+    renderSidebar();
+    expect(
+      screen.queryByRole('button', { name: 'Marketplace' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('re-clicking the active item still calls navigate (epoch remount contract)', () => {
     const ctx = renderSidebar({ view: 'sources' });
     fireEvent.click(screen.getByRole('button', { name: 'Sources' }));

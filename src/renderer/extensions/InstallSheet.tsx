@@ -8,7 +8,6 @@ import {
   Row,
   Rows,
   Sheet,
-  sourceBrand,
   type KeyValueItem,
 } from '@shared/web-ui/ui';
 import type {
@@ -21,7 +20,8 @@ import {
   OAUTH_PROVIDER_INFO,
   groupOAuthSources,
 } from '@renderer/components/cap-catalog';
-import { parseGithubRef, storeBrandId } from './match';
+import { extensionBrand } from './brand';
+import { parseGithubRef } from './match';
 import type { InstallMode, InstallRequest } from './use-extension-install';
 import './InstallSheet.css';
 
@@ -51,15 +51,6 @@ function originWords(ref?: string): string | null {
   if (ref?.startsWith('github:')) return 'From the store';
   if (ref?.startsWith('file:')) return 'From a file on this computer';
   return null;
-}
-
-/** A store ref's brand (so a tile keeps its colour here); else the icon. */
-function brandFor(r: InstallRequest): ReturnType<typeof sourceBrand> {
-  const gh = parseGithubRef(r.ref);
-  return sourceBrand(gh ? storeBrandId(gh.repo) : r.id, {
-    name: r.name,
-    iconDataUrl: r.iconDataUrl,
-  });
 }
 
 function Elevated(): React.ReactElement {
@@ -149,8 +140,11 @@ function Readme(props: { markdown: string }): React.ReactElement {
   );
 }
 
-/** The store README, fetched when the developer details open. */
-function StoreReadme(props: { storeRef: string }): React.ReactElement | null {
+/** The store README for a `github:` ref, fetched on mount (inside the
+ *  sheet, when the developer details open). */
+export function StoreReadme(props: {
+  storeRef: string;
+}): React.ReactElement | null {
   const [md, setMd] = useState<string | null>(null);
   useEffect(() => {
     const gh = parseGithubRef(props.storeRef);
@@ -205,7 +199,7 @@ export function InstallSheet(props: {
     <Sheet
       title={
         <span className="ext-sheet-id">
-          <BrandGlyph brand={brandFor(r)} size={32} />
+          <BrandGlyph brand={extensionBrand(r)} size={32} />
           <span className="ext-sheet-name">
             <span>{r.name}</span>
             <span className="ext-sheet-meta">{meta}</span>

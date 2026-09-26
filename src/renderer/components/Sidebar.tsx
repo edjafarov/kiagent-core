@@ -107,12 +107,6 @@ export function Sidebar(): React.ReactElement {
             : 'Local server offline'
         }
       />
-      <NavItem
-        label="Marketplace"
-        icon="puzzle"
-        active={view === 'marketplace'}
-        onClick={() => navigate('marketplace')}
-      />
       {/* Core's sidebar has no groups, so a row's group is ignored here. */}
       {contributedNavRows(extensions ?? [], ICON_NAMES).map((row) => (
         <NavItem
