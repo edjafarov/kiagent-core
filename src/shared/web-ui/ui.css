@@ -133,7 +133,7 @@
 .ui-att-t, .ui-att-s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ui-att-t b { font-weight: 600; }
 .ui-att-s { font-size: 12px; color: var(--text-secondary); }
-.ui-att-act { flex-shrink: 0; }
+.ui-att-act { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
 /* ── KPI tiles ────────────────────────────────────────────────────── */
 .ui-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-width: 0; }
