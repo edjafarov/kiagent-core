@@ -49,6 +49,7 @@ export interface ScreenRegistry {
 export function getDefaultScreens(): ScreenDefinitions {
   return {
     sources: {
+      frame: 'page',
       factory: (_params, navigate) => (
         <Sources onOpenConnection={() => navigate('connection')} />
       ),

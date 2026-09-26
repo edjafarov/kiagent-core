@@ -5,7 +5,7 @@ import type { AppState } from '@shared/contracts';
 import { AddSourcePanel } from '../AddSourcePanel';
 import { SourceDescriptorsProvider } from '../sources-registry';
 
-// Mutable: A-4's Add-tile routing reads the account projection. The factory
+// Mutable: A-4's add routing reads the account projection. The factory
 // body only runs at require time, so the `let` is initialised by then.
 let mockAccounts: unknown[] = [];
 
@@ -128,10 +128,10 @@ beforeEach(() => {
 async function openSlackPrompt(onDone = jest.fn()): Promise<jest.Mock> {
   render(
     <SourceDescriptorsProvider>
-      <AddSourcePanel onDone={onDone} />
+      <AddSourcePanel onDone={onDone} add="slack" />
     </SourceDescriptorsProvider>,
   );
-  fireEvent.click(await screen.findByRole('button', { name: /slack/i }));
+  await act(async () => {});
   // accounts:add resolves (flow state set), then the prompt event arrives.
   await act(async () => {});
   act(() => {
@@ -192,10 +192,10 @@ describe('AddSourcePanel wizard card', () => {
     // and its broker entries live until app quit.
     const { unmount } = render(
       <SourceDescriptorsProvider>
-        <AddSourcePanel onDone={jest.fn()} />
+        <AddSourcePanel onDone={jest.fn()} add="slack" />
       </SourceDescriptorsProvider>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: /slack/i }));
+    await act(async () => {});
     await act(async () => {});
     act(() => {
       pushHandler!({
@@ -215,10 +215,10 @@ describe('AddSourcePanel wizard card', () => {
   test('unmounting a settled flow does NOT send a stale cancel', async () => {
     const { unmount } = render(
       <SourceDescriptorsProvider>
-        <AddSourcePanel onDone={jest.fn()} />
+        <AddSourcePanel onDone={jest.fn()} add="slack" />
       </SourceDescriptorsProvider>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: /slack/i }));
+    await act(async () => {});
     await act(async () => {});
     act(() => {
       pushHandler!({ flowId: 'f1', kind: 'error', msg: 'boom' });
@@ -230,16 +230,23 @@ describe('AddSourcePanel wizard card', () => {
     ).not.toHaveBeenCalledWith('accounts:cancel-flow', expect.anything());
   });
 
-  test('tile-grid Cancel is a visible bordered button', async () => {
+  test('a start that fails shows why, with a way back', async () => {
+    const { kiagent } = window as unknown as { kiagent: { invoke: jest.Mock } };
+    const base = kiagent.invoke.getMockImplementation()!;
+    kiagent.invoke.mockImplementation((channel: string, req: unknown) =>
+      channel === 'accounts:add'
+        ? Promise.reject(new Error('no such source'))
+        : base(channel, req),
+    );
+    const onDone = jest.fn();
     render(
       <SourceDescriptorsProvider>
-        <AddSourcePanel onDone={jest.fn()} />
+        <AddSourcePanel onDone={onDone} add="slack" />
       </SourceDescriptorsProvider>,
     );
-    await screen.findByRole('button', { name: /slack/i });
-    const cancel = screen.getByRole('button', { name: 'Cancel' });
-    expect(cancel).toHaveClass('btn', 'sm');
-    expect(cancel).not.toHaveClass('ghost');
+    expect(await screen.findByText('no such source')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(onDone).toHaveBeenCalledWith();
   });
 
   test('reconnect starts an account-scoped reconnect flow, never accounts:add', async () => {
@@ -337,16 +344,14 @@ describe('AddSourcePanel wizard card', () => {
     ).not.toHaveBeenCalledWith('accounts:cancel-flow', expect.anything());
   });
 
-  test('A-4: the Add tile MANAGES an existing local-folder account, never accounts:add', async () => {
+  test('A-4: adding local files MANAGES an existing local-folder account, never accounts:add', async () => {
     mockAccounts = [LOCAL_ACCOUNT];
     render(
       <SourceDescriptorsProvider>
-        <AddSourcePanel onDone={jest.fn()} />
+        <AddSourcePanel onDone={jest.fn()} add="local-folder" />
       </SourceDescriptorsProvider>,
     );
-    fireEvent.click(
-      await screen.findByRole('button', { name: /Local files/i }),
-    );
+    await act(async () => {});
     await act(async () => {});
 
     const { invoke } = (window as unknown as { kiagent: { invoke: jest.Mock } })
@@ -362,16 +367,14 @@ describe('AddSourcePanel wizard card', () => {
     expect(screen.getByText('Add folders to Local files')).toBeInTheDocument();
   });
 
-  test('A-4: the Add tile still CONNECTS when no local-folder account exists', async () => {
+  test('A-4: adding local files still CONNECTS when no local-folder account exists', async () => {
     mockAccounts = [];
     render(
       <SourceDescriptorsProvider>
-        <AddSourcePanel onDone={jest.fn()} />
+        <AddSourcePanel onDone={jest.fn()} add="local-folder" />
       </SourceDescriptorsProvider>,
     );
-    fireEvent.click(
-      await screen.findByRole('button', { name: /Local files/i }),
-    );
+    await act(async () => {});
     await act(async () => {});
 
     const { invoke } = (window as unknown as { kiagent: { invoke: jest.Mock } })
@@ -436,12 +439,10 @@ describe('AddSourcePanel wizard card', () => {
     const onDone = jest.fn();
     render(
       <SourceDescriptorsProvider>
-        <AddSourcePanel onDone={onDone} />
+        <AddSourcePanel onDone={onDone} add="local-folder" />
       </SourceDescriptorsProvider>,
     );
-    fireEvent.click(
-      await screen.findByRole('button', { name: /Local files/i }),
-    );
+    await act(async () => {});
     await act(async () => {});
     act(() => {
       pushHandler!({
@@ -466,10 +467,10 @@ describe('AddSourcePanel wizard card', () => {
     // schema any more; the fast path and its existingPaths union are DELETED.
     render(
       <SourceDescriptorsProvider>
-        <AddSourcePanel onDone={jest.fn()} />
+        <AddSourcePanel onDone={jest.fn()} add="slack" />
       </SourceDescriptorsProvider>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: /slack/i }));
+    await act(async () => {});
     await act(async () => {});
     act(() => {
       pushHandler!({
@@ -495,10 +496,10 @@ describe('AddSourcePanel wizard card', () => {
     };
     render(
       <SourceDescriptorsProvider>
-        <AddSourcePanel onDone={jest.fn()} />
+        <AddSourcePanel onDone={jest.fn()} add="slack" />
       </SourceDescriptorsProvider>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: /slack/i }));
+    await act(async () => {});
     await act(async () => {});
     act(() => {
       pushHandler!({

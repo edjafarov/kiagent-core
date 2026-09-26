@@ -2,10 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ConnectEvent } from '@shared/ipc';
 import type { Account, AccountId, FolderNode } from '@shared/contracts';
 import { Icon } from '@shared/web-ui/icon-sprite';
+import { Card } from '@shared/web-ui/ui';
 import { useAppState } from '@renderer/state/app-state';
 import { FolderPickerField } from '@renderer/components/FolderPickerField';
 import { FolderPickerModal } from '@renderer/components/folder-picker/FolderPickerModal';
-import { connectorMeta, sourceLabel } from './connector-meta';
+import { sourceLabel } from './connector-meta';
 import {
   createConnectPickerAdapter,
   pickerRequestFromEvent,
@@ -18,20 +19,17 @@ import { useSourceDescriptors } from './sources-registry';
 import { openFlow } from './flow-client';
 
 /**
- * In-place "add a source" panel — swapped in over the Sources body, matching
- * the legacy AddSource screen's non-modal tile-grid + wizard (ui-inventory.md
- * §2.7, docs/screens/add-source.html). A tile per registered `SourceDescriptor`
- * (icon + label from connector-meta.ts) starts a CONNECT flow
- * (`accounts:add`); the ErrorCard/SourceDetail Reconnect paths start a
- * RECONNECT flow (`accounts:start-reconnect`) or, for a source with no
- * `reauthenticate`, fall back to the same connect route (C-9); and A-4's
- * machine-scoped carve-out routes an existing local-folder account's "Add" to
- * a MANAGE flow (`accounts:start-manage-folders`) instead of upserting over
- * it. All three funnel through one `push:connect` listener rendering whatever
- * the flow sends: a status line, a QR code, a schema-driven prompt form, a
- * folder picker, or one of the three terminals (done / reconnected /
- * scope-saved) / error. Flow states render as a centered wizard card;
- * guidance steps come from the schema's x-steps (prompt-guidance.ts).
+ * The connect wizard for one source. The catalog picks the source (`add`)
+ * and this starts a CONNECT flow (`accounts:add`); the reconnect paths pass
+ * `reconnect` and start a RECONNECT flow (`accounts:start-reconnect`) or,
+ * for a source with no `reauthenticate`, fall back to the connect route
+ * (C-9); and A-4's machine-scoped carve-out routes an existing local-folder
+ * account's add to a MANAGE flow (`accounts:start-manage-folders`) instead
+ * of upserting over it. All three funnel through one `push:connect`
+ * listener rendering whatever the flow sends: a status line, a QR code, a
+ * schema-driven prompt form, a folder picker, or one of the three terminals
+ * (done / reconnected / scope-saved) / error, in one card; guidance steps
+ * come from the schema's x-steps (prompt-guidance.ts).
  */
 
 /**
@@ -130,6 +128,8 @@ function QrCode(props: { data: string }): React.ReactElement {
 
 export function AddSourcePanel(props: {
   onDone: (accountId?: AccountId) => void;
+  /** Connect THIS source — the catalog's pick. */
+  add?: string;
   /** Reconnect THIS account instead of adding a new one — the ErrorCard and
    *  SourceDetail Reconnect paths. On mount this starts
    *  `accounts:start-reconnect` when the source's descriptor carries
@@ -268,6 +268,15 @@ export function AddSourcePanel(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [descriptors]);
 
+  // A catalog pick starts once, on mount.
+  const addStartedRef = useRef(false);
+  useEffect(() => {
+    if (!props.add || addStartedRef.current) return;
+    addStartedRef.current = true;
+    void pick(props.add);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function begin(
     sourceId: string,
     mode: FlowState['mode'],
@@ -370,7 +379,7 @@ export function AddSourcePanel(props: {
   }
 
   /**
-   * The tile grid's entry point, and the C-9 reconnect fallback's. A-4: for a
+   * The catalog pick's entry point, and the C-9 reconnect fallback's. A-4: for a
    * machine-scoped source that ALREADY has an account, "add" means "manage
    * that account's folders" — `accounts:add` there would upsert over the
    * existing account and archive every root it currently tracks. Both callers
@@ -402,15 +411,6 @@ export function AddSourcePanel(props: {
     });
     setAnswers({});
   }
-
-  const cancelFlow = (): void => {
-    unsubscribeRef.current?.();
-    unsubscribeRef.current = null;
-    // No-op when the flow already settled (the error-state Back button) —
-    // liveFlowRef is null then.
-    cancelFlowMainSide();
-    setFlow(null);
-  };
 
   if (flow) {
     // Computed once per render (rather than inline in the ternaries below) so
@@ -460,7 +460,7 @@ export function AddSourcePanel(props: {
 
     return (
       <div className="as-panel">
-        <div className="as-wizard card">
+        <Card className="as-wizard" aria-label="Connect">
           <div className="as-wizard-head">
             <SourceIcon sourceId={flow.sourceId} size={28} />
             <span className="h-section">
@@ -542,15 +542,12 @@ export function AddSourcePanel(props: {
                 {flow.error}
               </div>
               <div className="as-wizard-foot">
-                <button type="button" className="btn sm" onClick={cancelFlow}>
-                  ← Back
-                </button>
                 <button
                   type="button"
                   className="btn sm"
                   onClick={() => props.onDone()}
                 >
-                  Cancel
+                  Back
                 </button>
               </div>
             </>
@@ -642,53 +639,38 @@ export function AddSourcePanel(props: {
               </div>
             </>
           )}
-        </div>
+        </Card>
       </div>
     );
   }
 
+  // Before the flow's first event: starting, or the start failed.
   return (
     <div className="as-panel">
-      <div className="as-head">
-        <span className="as-title">Add a source</span>
-        <span className="t-meta as-sub">Everything stays on this machine.</span>
-        <div style={{ flex: 1 }} />
-        <button type="button" className="btn sm" onClick={() => props.onDone()}>
-          Cancel
-        </button>
-      </div>
-
-      {addError && <div className="si-error">{addError}</div>}
-
-      <div className="as-grid">
-        {descriptors === null ? (
-          <div className="t-meta">Loading sources…</div>
-        ) : descriptors.length === 0 ? (
-          <div className="t-meta">No sources available.</div>
-        ) : (
-          descriptors.map((s) => {
-            const meta = connectorMeta(s.id);
-            return (
+      <Card className="as-wizard" aria-label="Connect">
+        {addError ? (
+          <>
+            <div className="as-flow-msg err">
+              <Icon name="alert-circle" size={14} />
+              {addError}
+            </div>
+            <div className="as-wizard-foot">
               <button
-                key={s.id}
                 type="button"
-                className="as-tile"
-                onClick={() => void pick(s.id)}
+                className="btn sm"
+                onClick={() => props.onDone()}
               >
-                <span
-                  className="as-ic"
-                  style={{
-                    color: `var(--tag-${meta.tag}, var(--accent-text))`,
-                  }}
-                >
-                  <SourceIcon sourceId={s.id} size={24} />
-                </span>
-                <span className="as-nm">{sourceLabel(s.id, descriptors)}</span>
+                Back
               </button>
-            );
-          })
+            </div>
+          </>
+        ) : (
+          <div className="as-flow-msg">
+            <span className="spinner" />
+            Starting…
+          </div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

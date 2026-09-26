@@ -117,10 +117,11 @@ describe('createScreenRegistry — contributed views (ExtView)', () => {
 });
 
 describe('frame', () => {
-  it('marks settings as a page and everything else as host', () => {
+  it('marks settings and sources as pages and everything else as host', () => {
     const registry = createScreenRegistry(getDefaultScreens());
     expect(registry.frame('settings')).toBe('page');
-    expect(registry.frame('sources')).toBe('host');
+    expect(registry.frame('sources')).toBe('page');
+    expect(registry.frame('outbox')).toBe('host');
     expect(registry.frame('ext:kia.google-calendar/calendar' as View)).toBe(
       'host',
     );

@@ -1,5 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
-import Markdown from 'react-markdown';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
 import { Icon } from '@shared/web-ui/icon-sprite';
 import {
   BrandGlyph,
@@ -22,7 +21,7 @@ import {
   OAUTH_PROVIDER_INFO,
   groupOAuthSources,
 } from '@renderer/components/cap-catalog';
-import { storeBrandId } from './match';
+import { parseGithubRef, storeBrandId } from './match';
 import type { InstallMode, InstallRequest } from './use-extension-install';
 import './InstallSheet.css';
 
@@ -56,10 +55,8 @@ function originWords(ref?: string): string | null {
 
 /** A store ref's brand (so a tile keeps its colour here); else the icon. */
 function brandFor(r: InstallRequest): ReturnType<typeof sourceBrand> {
-  const repo = r.ref?.startsWith('github:')
-    ? r.ref.slice('github:'.length).split('@')[0].split('/')[1]
-    : undefined;
-  return sourceBrand(repo ? storeBrandId(repo) : r.id, {
+  const gh = parseGithubRef(r.ref);
+  return sourceBrand(gh ? storeBrandId(gh.repo) : r.id, {
     name: r.name,
     iconDataUrl: r.iconDataUrl,
   });
@@ -138,11 +135,46 @@ export function AccessRows(props: {
   );
 }
 
+// Loaded when a README shows, so every screen that can install does not
+// pull the markdown renderer in up front.
+const Markdown = React.lazy(() => import('react-markdown'));
+
+function Readme(props: { markdown: string }): React.ReactElement {
+  return (
+    <div className="ext-readme">
+      <Suspense fallback={null}>
+        <Markdown>{props.markdown}</Markdown>
+      </Suspense>
+    </div>
+  );
+}
+
+/** The store README, fetched when the developer details open. */
+function StoreReadme(props: { storeRef: string }): React.ReactElement | null {
+  const [md, setMd] = useState<string | null>(null);
+  useEffect(() => {
+    const gh = parseGithubRef(props.storeRef);
+    if (!gh) return undefined;
+    let alive = true;
+    window.kiagent
+      .invoke('marketplace:detail', gh)
+      .then((d) => {
+        if (alive) setMd(d.readmeMarkdown);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [props.storeRef]);
+  return md ? <Readme markdown={md} /> : null;
+}
+
 export function InstallSheet(props: {
   request: InstallRequest;
   /** The store's one-line description, when the caller has it. */
   description?: string;
-  /** The developer's README, when the caller has it. */
+  /** The developer's README when the caller has it; otherwise a store
+   *  ref's README is fetched when the details open. */
   readme?: string | null;
   /** Overrides the idle primary label, e.g. "Install & connect". */
   confirmLabel?: string;
@@ -230,11 +262,9 @@ export function InstallSheet(props: {
       </div>
       <Disclosure label="Details from the developer">
         <KeyValue items={facts} />
-        {readme && (
-          <div className="ext-readme">
-            <Markdown>{readme}</Markdown>
-          </div>
-        )}
+        {readme !== undefined
+          ? readme && <Readme markdown={readme} />
+          : r.ref && <StoreReadme storeRef={r.ref} />}
       </Disclosure>
     </Sheet>
   );

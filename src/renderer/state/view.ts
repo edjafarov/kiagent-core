@@ -113,6 +113,12 @@ export interface ViewParams {
   anchor?: string;
   /** Settings pane id. */
   pane?: string;
+  /** Sources: sign in again to this account id. */
+  reconnect?: string;
+  /** Sources: connect this source id; empty opens the catalog. */
+  add?: string;
+  /** Sources: the catalog with this store item's (`owner/repo`) install sheet. */
+  install?: string;
 }
 
 export type ViewContextValue = NavContextValue<View, ViewParams>;

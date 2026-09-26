@@ -3,7 +3,7 @@ import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { Account, AppState } from '@shared/contracts';
 import { SourcesList } from '../SourcesList';
-import { SourceDescriptorsProvider } from '../sources-registry';
+import { Sources } from '..';
 
 /**
  * `ready` distinguishes "still hydrating" from "genuinely no sources" —
@@ -96,14 +96,10 @@ function seedNeedsReauth(source: string): void {
   } as unknown as Partial<AppState>;
 }
 
-describe('SourcesList: ErrorCard Reconnect routes on the account and its descriptor', () => {
+describe('Sources: the list Reconnect routes on the account and its descriptor', () => {
   it('reconnects THAT account, not that source id, when the source can reauthenticate', async () => {
     seedNeedsReauth('google-docs');
-    render(
-      <SourceDescriptorsProvider>
-        <SourcesList onOpenDetail={noop} onOpenConnection={noop} />
-      </SourceDescriptorsProvider>,
-    );
+    render(<Sources onOpenConnection={noop} />);
     // Flush BEFORE the click: the panel's mount effect waits for a non-null
     // descriptor list (C-20), so letting sources:list settle first keeps this
     // assertion off a longer promise chain.
@@ -123,11 +119,7 @@ describe('SourcesList: ErrorCard Reconnect routes on the account and its descrip
 
   it('C-9: an imap account keeps TODAY’S accounts:add route and is never sent to start-reconnect', async () => {
     seedNeedsReauth('imap');
-    render(
-      <SourceDescriptorsProvider>
-        <SourcesList onOpenDetail={noop} onOpenConnection={noop} />
-      </SourceDescriptorsProvider>,
-    );
+    render(<Sources onOpenConnection={noop} />);
     await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
     await act(async () => {});
@@ -156,7 +148,14 @@ describe('SourcesList: ErrorCard Reconnect routes on the account and its descrip
 describe('SourcesList: loading vs. genuinely empty', () => {
   it('shows a loading status, not the empty state, while hydrating', async () => {
     mockState = stateWith(false);
-    render(<SourcesList onOpenDetail={noop} onOpenConnection={noop} />);
+    render(
+      <SourcesList
+        onOpenDetail={noop}
+        onOpenConnection={noop}
+        onAdd={noop}
+        onReconnect={noop}
+      />,
+    );
 
     expect(await screen.findByRole('status')).toHaveTextContent(
       'Loading sources…',
@@ -168,7 +167,14 @@ describe('SourcesList: loading vs. genuinely empty', () => {
 
   it('shows the empty state once ready with no accounts', () => {
     mockState = stateWith(true);
-    render(<SourcesList onOpenDetail={noop} onOpenConnection={noop} />);
+    render(
+      <SourcesList
+        onOpenDetail={noop}
+        onOpenConnection={noop}
+        onAdd={noop}
+        onReconnect={noop}
+      />,
+    );
 
     expect(
       screen.getByText(/No sources connected yet — add one to get started\./),

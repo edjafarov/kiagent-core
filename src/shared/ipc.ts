@@ -188,6 +188,9 @@ export interface ExtensionPreview {
   /** Contributed pages (platform 2.5.0) — a non-empty list adds the
    *  full-app-access consent row. */
   ui: UiContribution[];
+  /** The sources it contributes, so a catalog can offer "Install &
+   *  connect". Always populated by the platform; optional for literals. */
+  sourceIds?: string[];
   sizeBytes: number;
   integrity: string | null;
   /** data:image/png;base64 URI of the staged package's manifest icon — the

@@ -23,6 +23,8 @@ export interface InstallRequest {
   fileRoots?: DeclaredFileRoot[];
   /** The extension contributes pages, which run with full access to the app. */
   addsPages?: boolean;
+  /** Sources it contributes (install/update only). */
+  sourceIds?: string[];
   sizeBytes?: number;
   integrity?: string | null;
   iconDataUrl?: string;
@@ -96,6 +98,7 @@ export function useExtensionInstall(): ExtensionInstall {
           oauthSources: p.oauthSources,
           fileRoots: p.fileRoots,
           addsPages: p.ui.length > 0,
+          sourceIds: p.sourceIds ?? [],
           sizeBytes: p.sizeBytes,
           integrity: p.integrity,
           iconDataUrl: p.iconDataUrl,

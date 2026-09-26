@@ -1361,6 +1361,7 @@ export function createExtensionPlatform(
           oauthSources: oauthSourceBindings(p.manifest),
           fileRoots: p.manifest.fileRoots,
           ui: uiContributions(p.manifest),
+          sourceIds: sourceContributions(p.manifest).map((s) => s.id),
           sizeBytes: p.sizeBytes,
           integrity: p.integrity,
           iconDataUrl: loadIconDataUrl(p.stagingDir, p.manifest),

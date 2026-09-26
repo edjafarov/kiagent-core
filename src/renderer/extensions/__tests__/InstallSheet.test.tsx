@@ -144,13 +144,13 @@ describe('InstallSheet', () => {
     expect(screen.queryByText(/Add pages to KIAgent/)).toBeNull();
   });
 
-  test('developer details hold the facts and the README, closed at first', () => {
+  test('developer details hold the facts and the README, closed at first', async () => {
     sheet({ integrity: 'sha512-abc' }, { readme: '# Foo\n\nReadme body.' });
     expect(screen.queryByText(/Readme body\./)).not.toBeInTheDocument();
     fireEvent.click(
       screen.getByRole('button', { name: /Details from the developer/ }),
     );
-    expect(screen.getByText(/Readme body\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Readme body\./)).toBeInTheDocument();
     expect(screen.getByText('2.0 MB')).toBeInTheDocument();
     expect(screen.getByText('sha512-abc')).toBeInTheDocument();
     expect(

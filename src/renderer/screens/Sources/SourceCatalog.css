@@ -1,0 +1,49 @@
+/* Add a source: search, then tile sections. */
+.src-cat { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.src-cat-search { display: flex; flex-direction: column; gap: 6px; max-width: 420px; }
+.src-cat-note { margin: 0; font-size: 12px; color: var(--text-secondary); }
+.src-cat-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+.src-cat-err { margin: 0; font-size: 12.5px; color: var(--error-solid); }
+.src-cat-sec { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.src-cat-lbl {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--label-color);
+}
+.src-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.src-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  padding: 16px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--card-bg);
+  border: 1px solid var(--card-edge);
+  border-radius: var(--r-card);
+  cursor: pointer;
+}
+.src-tile:hover:not(:disabled) { border-color: var(--border-strong, var(--card-edge)); background: var(--band-quiet); }
+.src-tile:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.src-tile:disabled { cursor: default; opacity: 0.6; }
+.src-tile .ui-glyph { margin-bottom: 8px; }
+.src-tile-name { font-size: 13.5px; font-weight: 600; color: var(--text-primary); }
+.src-tile-sentence { font-size: 12.5px; color: var(--text-secondary); }
+.src-tile-foot { margin-top: 4px; font-size: 11.5px; color: var(--text-tertiary); }

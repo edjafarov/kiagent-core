@@ -5,8 +5,8 @@ import { Busy } from '@shared/web-ui/components';
 import type { Account, AccountId } from '@shared/contracts';
 import { ErrorCard } from './ErrorCard';
 import { SourceTable, type SourceTableEntry } from './SourceTable';
-import { AddSourcePanel } from './AddSourcePanel';
 import { GetStartedPanel } from './GetStartedPanel';
+import { useSourcesPolicy } from './sources-registry';
 
 function countConnectors(accounts: Account[]): number {
   return new Set(accounts.map((a) => a.source)).size;
@@ -15,21 +15,16 @@ function countConnectors(accounts: Account[]): number {
 export function SourcesList(props: {
   onOpenDetail: (accountId: AccountId) => void;
   onOpenConnection: () => void;
+  /** Opens the catalog. */
+  onAdd: () => void;
+  /** Reconnects THIS account (the error card's fix). */
+  onReconnect: (account: Account) => void;
 }): React.ReactElement {
-  const accountEntries = useAppState((s) => s.accounts);
+  const { hidden, showGetStarted } = useSourcesPolicy();
+  const accountEntries = useAppState((s) => s.accounts).filter(
+    (e) => !hidden.includes(e.account.source),
+  );
   const ready = useAppState((s) => s.ready);
-  // null = not adding; `reconnect` set = the ErrorCard Reconnect path, which
-  // skips the tile grid and names THAT EXACT ACCOUNT. The old
-  // `initialSourceId` carried only `a.source`, so reconnect was really
-  // accounts:add on a source id and relied on createAccount's
-  // (source, identifier) upsert to land back on the same account — the
-  // heuristic this feature deletes for every source that can reauthenticate,
-  // and keeps as the EXPLICIT fallback for the ones that cannot (C-9). Which
-  // of the two runs is decided in AddSourcePanel, off the descriptor; this
-  // component only carries the account's identity.
-  const [adding, setAdding] = useState<{
-    reconnect?: { accountId: AccountId; sourceId: string; identifier: string };
-  } | null>(null);
   // Drives the refresh-icon spin for a fixed beat so "Sync all" reads as a
   // real action even when every accounts:sync-now call resolves near-instantly.
   const [syncSpin, setSyncSpin] = useState(false);
@@ -68,80 +63,58 @@ export function SourcesList(props: {
 
   return (
     <div className="dash-body">
-      <GetStartedPanel onOpenConnection={props.onOpenConnection} />
-      {adding ? (
-        <AddSourcePanel
-          reconnect={adding.reconnect}
-          onDone={(accountId) => {
-            setAdding(null);
-            if (accountId) props.onOpenDetail(accountId);
-          }}
+      {showGetStarted && (
+        <GetStartedPanel onOpenConnection={props.onOpenConnection} />
+      )}
+      {erroring.map((a) => (
+        <ErrorCard
+          key={a.id}
+          account={a}
+          onReconnect={() => props.onReconnect(a)}
         />
+      ))}
+      {healthyEntries.length > 0 || erroring.length > 0 ? (
+        <SourceTable entries={healthyEntries} onRowClick={onRowClick} />
+      ) : !ready ? (
+        <Busy label="Loading sources…" />
       ) : (
-        <>
-          {erroring.map((a) => (
-            <ErrorCard
-              key={a.id}
-              account={a}
-              onReconnect={() =>
-                setAdding({
-                  reconnect: {
-                    accountId: a.id,
-                    sourceId: a.source,
-                    identifier: a.identifier,
-                  },
-                })
-              }
-            />
-          ))}
-          {healthyEntries.length > 0 || erroring.length > 0 ? (
-            <SourceTable entries={healthyEntries} onRowClick={onRowClick} />
-          ) : !ready ? (
-            <Busy label="Loading sources…" />
-          ) : (
-            <div className="src-empty">
-              <Icon
-                name="database"
-                size={20}
-                style={{ color: 'var(--text-tertiary)' }}
-              />
-              <div className="t-meta">
-                No sources connected yet — add one to get started.
-              </div>
-            </div>
-          )}
-          {/* Actions live below the list, not in the header: on Windows the
+        <div className="src-empty">
+          <Icon
+            name="database"
+            size={20}
+            style={{ color: 'var(--text-tertiary)' }}
+          />
+          <div className="t-meta">
+            No sources connected yet — add one to get started.
+          </div>
+        </div>
+      )}
+      {/* Actions live below the list, not in the header: on Windows the
               titleBarOverlay caption buttons overlay the pane's top-right,
               exactly where header-row buttons would sit. */}
-          <div className="row-flex src-actions">
-            <button
-              type="button"
-              className="btn primary sm"
-              onClick={() => setAdding({})}
-            >
-              <Icon name="plus" size={13} />
-              Add
-            </button>
-            <button
-              type="button"
-              className="btn sm"
-              disabled={syncSpin || accountCount === 0}
-              onClick={syncAll}
-            >
-              <Icon
-                name="refresh-cw"
-                size={13}
-                className={syncSpin ? 'i kg-spin' : 'i'}
-              />
-              Sync all
-            </button>
-            <span className="t-meta" style={{ marginLeft: 'auto' }}>
-              {connectorCount} {connectorCount === 1 ? 'type' : 'types'} ·{' '}
-              {accountCount} {accountCount === 1 ? 'source' : 'sources'}
-            </span>
-          </div>
-        </>
-      )}
+      <div className="row-flex src-actions">
+        <button type="button" className="btn primary sm" onClick={props.onAdd}>
+          <Icon name="plus" size={13} />
+          Add
+        </button>
+        <button
+          type="button"
+          className="btn sm"
+          disabled={syncSpin || accountCount === 0}
+          onClick={syncAll}
+        >
+          <Icon
+            name="refresh-cw"
+            size={13}
+            className={syncSpin ? 'i kg-spin' : 'i'}
+          />
+          Sync all
+        </button>
+        <span className="t-meta" style={{ marginLeft: 'auto' }}>
+          {connectorCount} {connectorCount === 1 ? 'type' : 'types'} ·{' '}
+          {accountCount} {accountCount === 1 ? 'source' : 'sources'}
+        </span>
+      </div>
     </div>
   );
 }

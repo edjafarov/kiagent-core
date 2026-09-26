@@ -29,3 +29,12 @@ export function bareGithubRef(ref: string): string {
 export function storeBrandId(repo: string): string {
   return repo.replace(/-kia-(connector|extension|plugin)$/, '');
 }
+
+/** `github:owner/repo[@tag]` → `{ owner, repo }`; anything else → null. */
+export function parseGithubRef(
+  ref: string | undefined,
+): { owner: string; repo: string } | null {
+  if (!ref?.startsWith('github:')) return null;
+  const [owner, repo] = bareGithubRef(ref).slice('github:'.length).split('/');
+  return owner && repo ? { owner, repo } : null;
+}

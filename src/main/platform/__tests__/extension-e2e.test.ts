@@ -114,7 +114,11 @@ describe('extension runtime e2e (real forked child)', () => {
   it('installs, activates in a real child, and the engine syncs its documents', async () => {
     await platform.start();
     const preview = await platform.installPreview(FIXTURE);
-    expect(preview).toMatchObject({ ok: true, id: 'test.basic' });
+    expect(preview).toMatchObject({
+      ok: true,
+      id: 'test.basic',
+      sourceIds: ['basicsrc'],
+    });
     const commit = await platform.installCommit(
       (preview as { token: string }).token,
     );
