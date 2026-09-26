@@ -1382,6 +1382,12 @@ export interface McpActivityRecord {
   error?: string; // present when ok === false
 }
 
+/** The key the local server is written under in an app's MCP settings —
+ *  by the one-click writer and in the manual-setup snippets alike. Kept
+ *  distinct from the legacy 'Kia' key: a fresh app identity, not a silent
+ *  takeover of an existing Kia entry in a shared config file. */
+export const MCP_SERVER_KEY = 'KIAgent';
+
 /** Records kept/replayed by the activity feed — the file's rotation target
  *  and the renderer's list cap (shared: the renderer can't import main). */
 export const MCP_ACTIVITY_RECENT_MAX = 200;

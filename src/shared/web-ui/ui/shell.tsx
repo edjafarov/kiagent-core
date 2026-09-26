@@ -13,6 +13,13 @@ export function detectPlatform(
   return 'linux';
 }
 
+/** What copy calls this machine: "Mac" on macOS, else "computer". */
+export function computerNoun(
+  platform: Platform = detectPlatform(),
+): 'Mac' | 'computer' {
+  return platform === 'mac' ? 'Mac' : 'computer';
+}
+
 /** The window: sidebar + one main area. `.ac` stays the root class so the
  *  `.ac *` box-sizing rule covers every screen, sheet and menu. */
 export function AppShell(props: {

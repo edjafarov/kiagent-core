@@ -1,11 +1,11 @@
 /**
  * Manual-setup snippets for the local server. The key and containers match
- * what `clients.ts` writes itself (SERVER_KEY, VS Code's `servers`), so a
+ * what `clients.ts` writes itself (MCP_SERVER_KEY, VS Code's `servers`), so a
  * hand-pasted entry looks exactly like a one-click one. Loopback needs no
  * auth header — the bind is the auth. Claude Desktop and Codex are
  * stdio-only (they launch this app's binary) and get no snippet here.
  */
-const KEY = 'KIAgent';
+import { MCP_SERVER_KEY as KEY } from '@shared/contracts';
 
 export type SnippetKind = 'json' | 'claude-code' | 'vscode';
 

@@ -12,9 +12,9 @@ import path from 'path';
 
 import * as TOML from '@iarna/toml';
 
-/** Kept distinct from the legacy 'Kia' key — a fresh app identity, not a
- *  silent takeover of an existing Kia server entry in a shared config file. */
-const SERVER_KEY = 'KIAgent';
+import { MCP_SERVER_KEY } from '@shared/contracts';
+
+const SERVER_KEY = MCP_SERVER_KEY;
 
 export type ClientId =
   | 'claude-desktop'

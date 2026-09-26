@@ -9,6 +9,7 @@ import {
   NavGroup,
   NavItem,
   HostFrame,
+  computerNoun,
   detectPlatform,
 } from '..';
 
@@ -139,4 +140,10 @@ describe('NavItem', () => {
     );
     expect(screen.getByRole('button', { name: 'Outbox' })).toBeInTheDocument();
   });
+});
+
+test('computerNoun: Mac on macOS, computer elsewhere', () => {
+  expect(computerNoun('mac')).toBe('Mac');
+  expect(computerNoun('win')).toBe('computer');
+  expect(computerNoun('linux')).toBe('computer');
 });

@@ -7,6 +7,7 @@ import {
   KeyValue,
   Segmented,
   Status,
+  computerNoun,
 } from '@shared/web-ui/ui';
 import { buildSnippet, localUrl, type SnippetKind } from './snippets';
 
@@ -46,7 +47,7 @@ export function LocalServer(props: {
               },
               {
                 label: 'Who can use it',
-                value: 'Apps on this computer only — no sign-in',
+                value: `Apps on this ${computerNoun()} only — no sign-in`,
               },
             ]}
           />

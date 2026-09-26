@@ -1,7 +1,7 @@
 import React from 'react';
-import { Button, Page, Split, Stack } from '@shared/web-ui/ui';
+import { Button, Page, Split, Stack, computerNoun } from '@shared/web-ui/ui';
 import { useAppState } from '@renderer/state/app-state';
-import { AppsOnThisMac, computerNoun } from './AppsOnThisMac';
+import { AppsOnThisMac } from './AppsOnThisMac';
 import { Requests } from './Requests';
 import { useMcpClients } from './use-mcp-clients';
 import './Connection.css';
@@ -9,7 +9,7 @@ import './Connection.css';
 /** What a product adds above the apps: its card and a meta phrase. */
 export interface ConnectionRemote {
   card: React.ReactNode;
-  meta: string;
+  meta?: string;
 }
 
 /**

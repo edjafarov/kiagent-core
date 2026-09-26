@@ -59,5 +59,6 @@ export {
   NavItem,
   HostFrame,
   detectPlatform,
+  computerNoun,
 } from './shell';
 export type { Platform, NavDotTone } from './shell';

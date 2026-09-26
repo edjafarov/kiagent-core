@@ -10,14 +10,9 @@ import {
   Rows,
   TextButton,
   clientBrand,
+  computerNoun,
 } from '@shared/web-ui/ui';
 import type { ClientInfo } from './use-mcp-clients';
-
-export function computerNoun(): 'Mac' | 'computer' {
-  return typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform)
-    ? 'Mac'
-    : 'computer';
-}
 
 /**
  * The AI apps detected on this computer (the server lists only those it
@@ -65,7 +60,7 @@ export function AppsOnThisMac(props: {
         <Busy label="Looking for apps…" />
       ) : clients.length === 0 ? (
         <p className="conn-note">
-          No supported apps found on this computer yet.
+          No supported apps found on this {computerNoun()} yet.
         </p>
       ) : (
         <Rows aria-label={`Apps on this ${computerNoun()}`}>
