@@ -71,7 +71,8 @@ export function DateTile(props: {
     <span className={cx('ui-dt', props.today && 'is-today')}>
       <span className="ui-dt-d">{props.date.getDate()}</span>
       <span className="ui-dt-m">
-        {props.date.toLocaleString('en-GB', { month: 'short' })}
+        {/* Three letters, as drawn: en-GB's short September is "Sept". */}
+        {props.date.toLocaleString('en-GB', { month: 'short' }).slice(0, 3)}
       </span>
     </span>
   );

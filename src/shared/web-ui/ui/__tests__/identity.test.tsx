@@ -58,7 +58,7 @@ describe('DateTile', () => {
   it('shows the day and short month', () => {
     render(<DateTile date={new Date(2026, 8, 24)} today />);
     expect(screen.getByText('24')).toBeInTheDocument();
-    expect(screen.getByText('Sept')).toBeInTheDocument();
+    expect(screen.getByText('Sep')).toBeInTheDocument();
   });
 });
 
