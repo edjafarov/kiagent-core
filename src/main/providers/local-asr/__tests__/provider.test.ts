@@ -79,7 +79,7 @@ describe('LocalAsrProvider', () => {
 
   // ── 1. status machine ──────────────────────────────────────────────────────
 
-  it('is unsupported when the vendored whisper-cli is missing (win32-arm64)', () => {
+  it('is unsupported when the vendored whisper-cli is missing', () => {
     const deps = makeDeps({
       asrModelsDir: tmpDir,
       probes: { platform: 'win32', totalMemBytes: 16 * 1024 ** 3 },

@@ -16,9 +16,10 @@ import {
 } from '../../scripts/whisper-assets.mjs';
 
 describe('whisper vendor slug contract', () => {
-  it('prebuilt slugs are exactly linux-x64 and win32-x64', () => {
+  it('prebuilt slugs are exactly linux-x64, win32-arm64 and win32-x64', () => {
     expect(Object.keys(WHISPER_ASSETS).sort()).toEqual([
       'linux-x64',
+      'win32-arm64',
       'win32-x64',
     ]);
   });
@@ -42,6 +43,7 @@ describe('whisper vendor slug contract', () => {
       ...whisperSlugsForHost('darwin', 'arm64'),
       ...whisperSlugsForHost('linux', 'x64'),
       ...whisperSlugsForHost('win32', 'x64'),
+      ...whisperSlugsForHost('win32', 'arm64'),
     ];
     for (const slug of all) {
       expect(slug).toMatch(/^(darwin|linux|win32)-(arm64|x64)$/);
@@ -57,11 +59,14 @@ describe('whisper vendor slug contract', () => {
     }
   });
 
-  it('darwin builds from source (empty fetch set); win32-arm64 ships nothing', () => {
+  it('darwin builds from source (empty fetch set); win32 fetches both arches', () => {
     expect(whisperSlugsForHost('darwin', 'arm64')).toEqual([]);
     expect(whisperSlugsForHost('darwin', 'x64')).toEqual([]);
-    // win32 fetch set is x64-only: no upstream arm64 build exists (spec §1).
-    expect(whisperSlugsForHost('win32', 'arm64')).toEqual(['win32-x64']);
+    // One NSIS installer carries both payloads, so a win32 host vendors both.
+    expect(whisperSlugsForHost('win32', 'x64')).toEqual([
+      'win32-x64',
+      'win32-arm64',
+    ]);
   });
 
   it('asset URLs pin the tag', () => {

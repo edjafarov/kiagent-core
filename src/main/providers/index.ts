@@ -24,8 +24,9 @@ function resolveLlamaBinary(llamaDir: string): string {
 
 /** Whisper slugs are accel-less BY DESIGN (scripts/whisper-assets.mjs), so
  *  platform-arch resolution is exact on every platform — the llama accel
- *  mismatch above cannot recur here. A missing dir (win32-arm64: no upstream
- *  build) simply fails the capability check → provider reports unsupported. */
+ *  mismatch above cannot recur here. A missing dir (a platform-arch with no
+ *  vendored build) simply fails the capability check → provider reports
+ *  unsupported. */
 function resolveWhisperBinary(whisperDir: string): string {
   const slug = `${process.platform}-${process.arch}`;
   const binName =

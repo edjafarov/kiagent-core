@@ -10,10 +10,13 @@
 // string (v1.9.2: a failed audio read logs it and exits 0; model-init failure
 // returns 3). The archives are sha-pinned, so the message cannot drift under
 // us between bumps.
-export const WHISPER_TAG = 'v1.9.2';
+// b5130 is upstream's CI build tag for v1.9.4 (same commit, 927cfce3): the
+// v1.9.4 GitHub release carries no binaries, b5130 carries them all —
+// including the first win-cpu-arm64 archive.
+export const WHISPER_TAG = 'b5130';
 // The commit the tag points at — build-whisper.mjs verifies its checkout
 // against this so the macOS from-source build is as pinned as the archives.
-export const WHISPER_COMMIT = '306c88f4d1286aec1bf96e544632897886af5501';
+export const WHISPER_COMMIT = '927cfce34f31707e17f2bff35c349632fb9e2c3a';
 
 /** slug → { asset (release archive filename), sha256 }. Prebuilt platforms
  *  only; darwin builds from source (no runnable macOS binary upstream — the
@@ -21,11 +24,15 @@ export const WHISPER_COMMIT = '306c88f4d1286aec1bf96e544632897886af5501';
 export const WHISPER_ASSETS = {
   'linux-x64': {
     asset: 'whisper-bin-ubuntu-x64.tar.gz',
-    sha256: '46811a3ecf584307480a220b9ef5ff81b7b22dc41577cbc274ce3afc61f753b1',
+    sha256: '53e7fd8b5764edad916b8848dd0af6abb1ff1d3b86c899e79c78652412536c32',
   },
   'win32-x64': {
     asset: 'whisper-bin-x64.zip',
-    sha256: '49dcc16de826f20bd53d44f947a1ae49dfa81f86cad67a64d80820cb192d674a',
+    sha256: 'f9ec6c52a2e949b62ab51fa21d0d497958f9e41c3010c157c4e42932d5316f3c',
+  },
+  'win32-arm64': {
+    asset: 'whisper-bin-win-cpu-arm64.zip',
+    sha256: '799543b926ab5b6c2d60cab269a2092e0ae8d27820e9e15429e59de3699546fc',
   },
 };
 
@@ -54,11 +61,11 @@ export function whisperVadModelPath() {
 }
 
 /** Which slugs a given CI runner must FETCH (build-whisper.mjs covers darwin).
- *  win32 is x64-only: upstream publishes no win-arm64 build, so arm64 Windows
- *  ships no ASR (the provider reports `unsupported` there — spec §1). */
+ *  win32 fetches both arches: one NSIS installer carries both payloads and
+ *  the runtime picks assets/whisper/win32-<arch> for its own arch. */
 export function whisperSlugsForHost(platform, arch) {
   if (platform === 'darwin') return []; // built from source, both arches
-  if (platform === 'win32') return ['win32-x64'];
+  if (platform === 'win32') return ['win32-x64', 'win32-arm64'];
   if (platform === 'linux') return ['linux-x64'];
   throw new Error(`no whisper vendor set for platform ${platform}`);
 }

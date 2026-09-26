@@ -6,8 +6,8 @@ export interface AsrCapabilityResult {
 }
 
 /** ASR capability = the vendored whisper-cli exists for this platform-arch.
- *  win32-arm64 has no upstream build, so no assets/whisper/win32-arm64/ dir
- *  is ever vendored — the missing binary IS the platform gate (spec §1). */
+ *  A platform-arch with no vendored assets/whisper/<slug>/ dir (e.g. linux
+ *  arm64) is unsupported — the missing binary IS the platform gate. */
 export function checkAsrCapability(
   binaryPath: string,
   exists: (p: string) => boolean = fs.existsSync,
