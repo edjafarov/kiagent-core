@@ -137,6 +137,7 @@
 
 /* ── KPI tiles ────────────────────────────────────────────────────── */
 .ui-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-width: 0; }
+.ui-kpis.is-row { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 .ui-kpi {
   display: flex;
   flex-direction: column;

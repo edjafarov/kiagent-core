@@ -50,4 +50,13 @@ describe('Kpi', () => {
     expect(screen.getByText('/ 13')).toBeInTheDocument();
     expect(screen.getByText('1,284')).toBeInTheDocument();
   });
+
+  it('runs in one row when asked', () => {
+    const { container } = render(
+      <KpiGrid layout="row">
+        <Kpi value={3} label="meetings today" />
+      </KpiGrid>,
+    );
+    expect(container.firstElementChild).toHaveClass('ui-kpis', 'is-row');
+  });
 });

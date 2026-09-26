@@ -37,10 +37,17 @@ export function AttentionRow(props: {
   );
 }
 
+/** Number tiles: two columns beside other content, or one row across the
+ *  page (`layout="row"`) when they stand alone. */
 export function KpiGrid(props: {
+  layout?: 'grid' | 'row';
   children: React.ReactNode;
 }): React.ReactElement {
-  return <div className="ui-kpis">{props.children}</div>;
+  return (
+    <div className={cx('ui-kpis', props.layout === 'row' && 'is-row')}>
+      {props.children}
+    </div>
+  );
 }
 
 export function Kpi(props: {
