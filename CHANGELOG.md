@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.95.3](https://github.com/edjafarov/kiagent-core/compare/v0.95.2...v0.95.3) (2026-09-26)
+
+### Bug Fixes
+
+* **converter:** small PDFs no longer fail with "bad XRef entry" ([01c3a1b](https://github.com/edjafarov/kiagent-core/commit/01c3a1b6b0044785b7d562250e5171e96b3e14dd))
+
 ## [0.95.2](https://github.com/edjafarov/kiagent-core/compare/v0.95.1...v0.95.2) (2026-09-26)
 
 ### Bug Fixes
