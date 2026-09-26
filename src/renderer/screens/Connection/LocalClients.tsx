@@ -83,8 +83,11 @@ export function LocalClients(props: {
         <span className="sub mono">127.0.0.1:{props.port ?? '—'}</span>
       </div>
       <span className="t-meta" style={{ marginTop: -4 }}>
-        Connect AI apps on this Mac — connect one to wire it up to your digital
-        memory.
+        Connect AI apps on this{' '}
+        {typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform)
+          ? 'Mac'
+          : 'computer'}{' '}
+        — connect one to wire it up to your digital memory.
       </span>
 
       {clients === null ? (

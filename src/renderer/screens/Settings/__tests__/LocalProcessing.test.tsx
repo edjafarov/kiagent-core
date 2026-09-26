@@ -5,6 +5,22 @@ import type { AppPrefs } from '@shared/contracts';
 import type { Invokes } from '@shared/ipc';
 import { LocalProcessing, pausedLine } from '../LocalProcessing';
 
+it('says "this Mac" on macOS and "this computer" elsewhere', () => {
+  const platform = jest.spyOn(navigator, 'platform', 'get');
+  try {
+    platform.mockReturnValue('MacIntel');
+    expect(pausedLine('until-idle', 1)).toBe(
+      'Paused — waiting for this Mac to be idle.',
+    );
+    platform.mockReturnValue('Win32');
+    expect(pausedLine('until-idle', 1)).toBe(
+      'Paused — waiting for this computer to be idle.',
+    );
+  } finally {
+    platform.mockRestore();
+  }
+});
+
 it.each([
   ['open lane shows nothing', 'open', 12, null],
   ['empty queue shows nothing even when closed', 'until-idle', 0, null],
@@ -12,7 +28,7 @@ it.each([
     'idle window, user active',
     'until-idle',
     1700,
-    'Paused — waiting for this Mac to be idle.',
+    'Paused — waiting for this computer to be idle.',
   ],
   [
     'night window, daytime',

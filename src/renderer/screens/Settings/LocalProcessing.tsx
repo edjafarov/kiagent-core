@@ -13,9 +13,17 @@ type ExtractionStatsRes = Invokes['inference:stats']['res'];
 type ModelsRes = Invokes['inference:models']['res'];
 type ModelsPrefs = AppPrefs['models'];
 
-const WINDOW_OPTIONS: ReadonlyArray<[ProcessingWindow, string, string]> = [
+/** "Mac" on macOS, "computer" elsewhere. Read at call time (not module
+ *  load) so a test can say which platform it describes. */
+function machine(): string {
+  return typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform)
+    ? 'Mac'
+    : 'computer';
+}
+
+const windowOptions = (): ReadonlyArray<[ProcessingWindow, string, string]> => [
   ['always', 'Always', 'Process continuously while the app is open.'],
-  ['idle', 'When idle', 'Wait until this Mac is idle.'],
+  ['idle', 'When idle', `Wait until this ${machine()} is idle.`],
   ['night', 'At night', 'Only run overnight (22:00–07:00).'],
 ];
 
@@ -35,7 +43,7 @@ export function pausedLine(lane: LaneState, queued: number): string | null {
       return 'Paused — runs overnight (22:00–07:00).';
     case 'until-idle':
     default:
-      return 'Paused — waiting for this Mac to be idle.';
+      return `Paused — waiting for this ${machine()} to be idle.`;
   }
 }
 
@@ -177,7 +185,7 @@ export function LocalProcessing(): React.ReactElement {
             <div className="pref-meta">
               <span className="pref-label">Window</span>
               <span className="pref-desc">
-                {WINDOW_OPTIONS.find(([v]) => v === processing.window)?.[2] ??
+                {windowOptions().find(([v]) => v === processing.window)?.[2] ??
                   ''}
               </span>
             </div>
@@ -186,7 +194,7 @@ export function LocalProcessing(): React.ReactElement {
               aria-label="Processing window"
               style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
             >
-              {WINDOW_OPTIONS.map(([value, label]) => (
+              {windowOptions().map(([value, label]) => (
                 <label key={value} className="radio-row">
                   <input
                     type="radio"
@@ -215,7 +223,7 @@ export function LocalProcessing(): React.ReactElement {
               value={models.override}
               onChange={(e) => setModelOverride(e.target.value)}
             >
-              <option value="auto">Auto — picked for this Mac</option>
+              <option value="auto">Auto — picked for this {machine()}</option>
               {modelCatalog?.options.map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.label} — {gb(o.totalBytes)} GB
