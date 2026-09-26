@@ -30,6 +30,7 @@ export function Row(props: {
   hoverActions?: React.ReactNode;
   onClick?: () => void;
   'aria-label'?: string;
+  'data-testid'?: string;
 }): React.ReactElement {
   const size = props.size ?? 30;
   const body = (
@@ -49,6 +50,7 @@ export function Row(props: {
         props.selected && 'is-sel',
         props.faint && 'is-faint',
       )}
+      data-testid={props['data-testid']}
     >
       {props.onClick ? (
         <button

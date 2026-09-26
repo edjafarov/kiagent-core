@@ -68,10 +68,11 @@ describe('Row', () => {
   it('renders a plain row without a button when it has no action', () => {
     render(
       <Rows>
-        <Row title="Static" trail={<span>ok</span>} />
+        <Row title="Static" trail={<span>ok</span>} data-testid="static-row" />
       </Rows>,
     );
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
     expect(screen.getByText('ok')).toBeInTheDocument();
+    expect(screen.getByTestId('static-row')).toBe(screen.getByRole('listitem'));
   });
 });
