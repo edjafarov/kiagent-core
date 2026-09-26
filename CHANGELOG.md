@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.95.5](https://github.com/edjafarov/kiagent-core/compare/v0.95.4...v0.95.5) (2026-09-26)
+
+### Bug Fixes
+
+* **renderer:** say "this computer", not "this Mac", off macOS ([ac364ae](https://github.com/edjafarov/kiagent-core/commit/ac364aebb1664519a168d7b63456fcb2bb9a9c99))
+
 ## [0.95.4](https://github.com/edjafarov/kiagent-core/compare/v0.95.3...v0.95.4) (2026-09-26)
 
 ### Features
