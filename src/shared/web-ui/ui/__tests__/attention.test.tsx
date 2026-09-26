@@ -31,10 +31,16 @@ describe('AttentionList', () => {
   it('marks the tone on the row', () => {
     render(
       <AttentionList>
-        <AttentionRow tone="work" kind="Sort" title="3 files" />
+        <AttentionRow
+          tone="work"
+          kind="Sort"
+          title="3 files"
+          data-testid="sort-row"
+        />
       </AttentionList>,
     );
     expect(screen.getByRole('listitem')).toHaveClass('is-work');
+    expect(screen.getByTestId('sort-row')).toBe(screen.getByRole('listitem'));
   });
 });
 

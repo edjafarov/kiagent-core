@@ -22,9 +22,13 @@ export function AttentionRow(props: {
   title: React.ReactNode;
   sub?: React.ReactNode;
   action?: React.ReactNode;
+  'data-testid'?: string;
 }): React.ReactElement {
   return (
-    <li className={cx('ui-att', `is-${props.tone}`)}>
+    <li
+      className={cx('ui-att', `is-${props.tone}`)}
+      data-testid={props['data-testid']}
+    >
       <span className="ui-att-k">{props.kind}</span>
       <span className="ui-att-body">
         <span className="ui-att-t">{props.title}</span>
