@@ -1,4 +1,11 @@
-import { sourceBrand, clientBrand, meetingAppBrand, initialsOf } from '..';
+import {
+  sourceBrand,
+  clientBrand,
+  meetingAppBrand,
+  initialsOf,
+  sourceCategory,
+  SOURCE_CATEGORIES,
+} from '..';
 
 describe('sourceBrand', () => {
   it('uses the table for a known source', () => {
@@ -109,5 +116,18 @@ describe('initialsOf', () => {
     expect(initialsOf('Google Calendar')).toBe('GC');
     expect(initialsOf('fixture')).toBe('Fi');
     expect(initialsOf('')).toBe('?');
+  });
+});
+
+describe('sourceCategory', () => {
+  it('files a known source under its category, anything else under other', () => {
+    expect(sourceCategory('gmail')).toBe('mail');
+    expect(sourceCategory('claude-code')).toBe('ai-sessions');
+    expect(sourceCategory('some-new-thing')).toBe('other');
+  });
+  it('lists every category once, other last', () => {
+    const keys = SOURCE_CATEGORIES.map((c) => c.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys[keys.length - 1]).toBe('other');
   });
 });

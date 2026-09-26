@@ -94,6 +94,56 @@ const SOURCES: Record<string, Entry> = {
   meetings: { key: 'mic', name: 'Meetings', color: '#475569', icon: 'mic' },
 };
 
+/** What a source brings in — the Sources list filters by it. */
+export type SourceCategory =
+  | 'mail'
+  | 'chat'
+  | 'docs'
+  | 'calendar'
+  | 'crm'
+  | 'files'
+  | 'ai-sessions'
+  | 'other';
+
+/** The filter order and labels; `other` catches ids the table lacks. */
+export const SOURCE_CATEGORIES: ReadonlyArray<{
+  key: SourceCategory;
+  label: string;
+}> = [
+  { key: 'mail', label: 'Mail' },
+  { key: 'chat', label: 'Chat' },
+  { key: 'docs', label: 'Docs' },
+  { key: 'calendar', label: 'Calendar' },
+  { key: 'crm', label: 'CRM' },
+  { key: 'files', label: 'Files' },
+  { key: 'ai-sessions', label: 'AI sessions' },
+  { key: 'other', label: 'Other' },
+];
+
+const CATEGORIES: Record<string, SourceCategory> = {
+  gmail: 'mail',
+  imap: 'mail',
+  ms365: 'mail',
+  slack: 'chat',
+  whatsapp: 'chat',
+  telegram: 'chat',
+  instagram: 'chat',
+  notion: 'docs',
+  'google-docs': 'docs',
+  linear: 'docs',
+  'google-calendar': 'calendar',
+  hubspot: 'crm',
+  'local-folder': 'files',
+  onedrive: 'files',
+  dropbox: 'files',
+  'claude-code': 'ai-sessions',
+  codex: 'ai-sessions',
+};
+
+export function sourceCategory(sourceId: string): SourceCategory {
+  return CATEGORIES[sourceId] ?? 'other';
+}
+
 const CLAUDE = '#c15f3c';
 const OPENAI = '#0f8a6b';
 
