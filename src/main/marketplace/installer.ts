@@ -86,7 +86,7 @@ export function createInstaller(deps: InstallerDeps) {
       // the marketplace branch — TOFU integrity-pinning only protects
       // RE-installs (it compares against a prior pinned hash), so a first
       // install over http is MITM-able. Checked before the isMarketplace
-      // test (which only recognizes github:/https:, per spec) so an http:
+      // check, which only recognizes github:/https:, per spec, so an http:
       // ref never falls through to the local-path branch and surfaces a
       // confusing "no such path" filesystem error instead of this one.
       if (/^http:/.test(ref)) {

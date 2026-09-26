@@ -26,6 +26,8 @@ describe('plugin SQL identifiers', () => {
   });
 
   it('rejects malformed markers in SQL code', () => {
-    expect(() => formatPluginSql('a.b', 'SELECT * FROM {{people', ['people'])).toThrow();
+    expect(() =>
+      formatPluginSql('a.b', 'SELECT * FROM {{people', ['people']),
+    ).toThrow();
   });
 });

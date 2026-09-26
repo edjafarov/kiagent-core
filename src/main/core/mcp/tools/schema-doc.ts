@@ -39,8 +39,10 @@ an \`accounts\` row. A document's SOURCE (gmail, imap, local-folder) is NOT on
 \`documents.account_id = accounts.id\`. Full-text indexes live in
 \`documents_fts\` (stemmed) and \`documents_tri\` (trigram substring fallback),
 both joined by \`doc_id = documents.id\`. \`changes\` is an ordered feed of
-everything that changed. All ids are TEXT (UUIDv7); timestamps are ISO-8601
-TEXT.`,
+everything that changed in the ingested corpus. Attention workflow state lives
+separately in \`attention_items\` and \`attention_revisions\`. Corpus ids are TEXT
+(UUIDv7) and timestamps are ISO-8601 TEXT; attention ids are producer-prefixed
+TEXT and attention timestamps are INTEGER Unix milliseconds.`,
 
   tables: [
     {
@@ -338,6 +340,91 @@ TEXT.`,
       ],
       prep_notes:
         'Sent/failed/discarded/expired rows are retained — this table IS the audit log, not just a queue.',
+    },
+    {
+      name: 'attention_items',
+      description:
+        'Current attention payloads published by extensions. Resolved and expired payloads are pruned seven days after their last transition; revision tombstones remain in attention_revisions.',
+      columns: [
+        {
+          name: 'id',
+          type: 'TEXT PK',
+          notes: 'Producer-prefixed stable item id: <producer>:<item-key>.',
+        },
+        {
+          name: 'producer',
+          type: 'TEXT',
+          notes: 'Publishing extension id; not an accounts.id foreign key.',
+        },
+        {
+          name: 'payload_json',
+          type: 'TEXT (JSON)',
+          notes:
+            'AttentionItemWire payload: id, producer, kind (waiting/happening/upcoming), title, detail, priority (1/2/3), dueAt, expiresAt, createdAt, updatedAt, revision, state, resolvedBy, actions, and optional people. Payload timestamps are Unix milliseconds; dueAt and expiresAt may be null.',
+        },
+        {
+          name: 'state',
+          type: 'TEXT',
+          notes: "One of 'open', 'resolved', 'expired'.",
+        },
+        {
+          name: 'revision',
+          type: 'INTEGER',
+          notes:
+            'Positive producer-supplied revision used to reject stale updates.',
+        },
+        {
+          name: 'transition_at',
+          type: 'INTEGER (Unix milliseconds)',
+          notes:
+            '0 while open; host-recorded Unix milliseconds when resolved or expired. Used for payload retention.',
+        },
+      ],
+      relations: ['attention_items.id = attention_revisions.id (logical join)'],
+      prep_notes:
+        "Filter state = 'open' for pending items. Raw SQL does not filter out unavailable producers; the attention service uses live extension availability. Attention changes are not part of the changes feed.",
+    },
+    {
+      name: 'attention_revisions',
+      description:
+        'Latest revision and state per attention item, retained after payload pruning to reject stale republishes. One row per item, not an append-only revision history.',
+      columns: [
+        {
+          name: 'id',
+          type: 'TEXT PK',
+          notes: 'Producer-prefixed stable item id; survives payload pruning.',
+        },
+        {
+          name: 'producer',
+          type: 'TEXT',
+          notes: 'Publishing extension id.',
+        },
+        {
+          name: 'revision',
+          type: 'INTEGER',
+          notes: 'Latest accepted positive producer-supplied revision.',
+        },
+        {
+          name: 'state',
+          type: 'TEXT',
+          notes: "One of 'open', 'resolved', 'expired'.",
+        },
+        {
+          name: 'resolved_by',
+          type: 'TEXT',
+          notes:
+            "'producer' for producer resolution, 'user' for dismissal; NULL when unresolved or expired.",
+        },
+        {
+          name: 'transition_at',
+          type: 'INTEGER (Unix milliseconds)',
+          notes:
+            '0 while open; host-recorded Unix milliseconds when resolved or expired.',
+        },
+      ],
+      relations: [
+        'attention_revisions.id = attention_items.id (logical join; payload may have been pruned)',
+      ],
     },
     {
       name: 'documents_fts',

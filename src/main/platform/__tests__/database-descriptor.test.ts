@@ -11,7 +11,10 @@ const GOOD = {
       name: 'settings',
       migrations: [
         { version: 0, statements: ['CREATE TABLE {{settings}} (id TEXT)'] },
-        { version: 1, statements: ['CREATE INDEX {{settings_idx}} ON {{settings}} (id)'] },
+        {
+          version: 1,
+          statements: ['CREATE INDEX {{settings_idx}} ON {{settings}} (id)'],
+        },
       ],
     },
   ],
@@ -36,7 +39,15 @@ describe('parseDatabaseDescriptor', () => {
     expect(() =>
       parseDatabaseDescriptor({
         ...GOOD,
-        modules: [{ ...GOOD.modules[0], migrations: [GOOD.modules[0].migrations[1], GOOD.modules[0].migrations[0]] }],
+        modules: [
+          {
+            ...GOOD.modules[0],
+            migrations: [
+              GOOD.modules[0].migrations[1],
+              GOOD.modules[0].migrations[0],
+            ],
+          },
+        ],
       }),
     ).toThrow();
   });
@@ -46,7 +57,17 @@ describe('parseDatabaseDescriptor', () => {
     expect(() =>
       parseDatabaseDescriptor({
         ...GOOD,
-        modules: [{ ...GOOD.modules[0], migrations: [{ version: 1, statements: ['CREATE TABLE {{missing}} (id TEXT)'] }] }],
+        modules: [
+          {
+            ...GOOD.modules[0],
+            migrations: [
+              {
+                version: 1,
+                statements: ['CREATE TABLE {{missing}} (id TEXT)'],
+              },
+            ],
+          },
+        ],
       }),
     ).toThrow();
   });
@@ -55,13 +76,22 @@ describe('parseDatabaseDescriptor', () => {
     expect(() =>
       parseDatabaseDescriptor({
         ...GOOD,
-        legacy: { ...GOOD.legacy, tables: [...GOOD.legacy.tables, { name: 'settings', columns: ['id'] }] },
+        legacy: {
+          ...GOOD.legacy,
+          tables: [
+            ...GOOD.legacy.tables,
+            { name: 'settings', columns: ['id'] },
+          ],
+        },
       }),
     ).toThrow(/duplicate legacy table/);
     expect(() =>
       parseDatabaseDescriptor({
         ...GOOD,
-        legacy: { ...GOOD.legacy, tables: [{ name: 'settings_idx', columns: ['id'] }] },
+        legacy: {
+          ...GOOD.legacy,
+          tables: [{ name: 'settings_idx', columns: ['id'] }],
+        },
       }),
     ).toThrow(/registered table object/);
     expect(() =>
@@ -76,15 +106,38 @@ describe('parseDatabaseDescriptor', () => {
     expect(() =>
       parseDatabaseDescriptor({
         ...GOOD,
-        modules: [{ ...GOOD.modules[0], migrations: [{ version: 1, statements: ['CREATE TABLE {{settings}} (id TEXT)'] }] }],
+        modules: [
+          {
+            ...GOOD.modules[0],
+            migrations: [
+              {
+                version: 1,
+                statements: ['CREATE TABLE {{settings}} (id TEXT)'],
+              },
+            ],
+          },
+        ],
         legacy: { tables: [{ name: 'settings', columns: ['id'] }] },
       }),
     ).toThrow(/version-zero bootstrap/);
     expect(
       parseDatabaseDescriptor({
         ...GOOD,
-        modules: [{ ...GOOD.modules[0], migrations: [{ version: 1, statements: ['CREATE TABLE {{settings}} (id TEXT)'] }] }],
-        legacy: { tables: [{ name: 'settings', columns: ['id'] }], versionTable: 'settings' },
+        modules: [
+          {
+            ...GOOD.modules[0],
+            migrations: [
+              {
+                version: 1,
+                statements: ['CREATE TABLE {{settings}} (id TEXT)'],
+              },
+            ],
+          },
+        ],
+        legacy: {
+          tables: [{ name: 'settings', columns: ['id'] }],
+          versionTable: 'settings',
+        },
       }),
     ).toEqual(expect.objectContaining({ modules: expect.any(Array) }));
   });
@@ -96,18 +149,37 @@ describe('parseDatabaseDescriptor', () => {
       modules: [
         {
           name: 'oauth',
-          migrations: [{ version: 1, statements: ['CREATE TABLE {{oidc_payload}} (id TEXT)'] }],
+          migrations: [
+            {
+              version: 1,
+              statements: ['CREATE TABLE {{oidc_payload}} (id TEXT)'],
+            },
+          ],
         },
       ],
       legacy: { tables: [{ name: 'oidc_payload', columns: ['id'] }] },
     };
-    expect(() => parseDatabaseDescriptor(direct)).toThrow(/version-zero bootstrap/);
+    expect(() => parseDatabaseDescriptor(direct)).toThrow(
+      /version-zero bootstrap/,
+    );
     expect(
       parseDatabaseDescriptor({
         ...direct,
-        modules: [{ ...direct.modules[0], migrations: [{ version: 0, statements: ['CREATE TABLE {{oidc_payload}} (id TEXT)'] }] }],
+        modules: [
+          {
+            ...direct.modules[0],
+            migrations: [
+              {
+                version: 0,
+                statements: ['CREATE TABLE {{oidc_payload}} (id TEXT)'],
+              },
+            ],
+          },
+        ],
       }),
     ).toEqual(expect.objectContaining({ modules: expect.any(Array) }));
-    expect(() => parseDatabaseDescriptor({ ...direct, modules: [] })).toThrow(/at least one module/);
+    expect(() => parseDatabaseDescriptor({ ...direct, modules: [] })).toThrow(
+      /at least one module/,
+    );
   });
 });

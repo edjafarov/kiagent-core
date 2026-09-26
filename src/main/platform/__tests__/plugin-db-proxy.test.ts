@@ -1,8 +1,7 @@
 /** @jest-environment node */
-import { createInMemoryHostPair, createRpcEndpoint } from '../transport';
-import { createPluginDbProxy } from '../plugin-db-proxy';
-import { callHost } from '../plugin-db-proxy';
 import { pluginIdentifier } from '@shared/plugin-sql';
+import { createInMemoryHostPair, createRpcEndpoint } from '../transport';
+import { createPluginDbProxy, callHost } from '../plugin-db-proxy';
 
 describe('plugin DB proxy', () => {
   it('uses an explicit token and rolls back when the callback fails', async () => {
@@ -54,7 +53,10 @@ describe('plugin DB proxy', () => {
       if (method === 'rollback') return undefined;
       throw new Error('network should not run');
     });
-    const host = { db: createPluginDbProxy(childEp, 'test.plugin'), net: { fetch: () => callHost(childEp, 'net', 'fetch', []) } };
+    const host = {
+      db: createPluginDbProxy(childEp, 'test.plugin'),
+      net: { fetch: () => callHost(childEp, 'net', 'fetch', []) },
+    };
     await expect(
       host.db.transaction(async () => host.net.fetch()),
     ).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
@@ -75,11 +77,21 @@ describe('plugin DB proxy', () => {
     const db = createPluginDbProxy(childEp, 'test.plugin');
     await expect(
       db.transaction(async () => {
-        await expect(db.query('SELECT 1')).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
-        await expect(db.exec('INSERT INTO {{items}} VALUES (1)')).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
-        await expect(db.batch([])).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
-        await expect(db.migrate('m', 1, [])).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
-        await expect(db.transaction(async () => undefined)).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
+        await expect(db.query('SELECT 1')).rejects.toMatchObject({
+          code: 'HOST_CALL_IN_TRANSACTION',
+        });
+        await expect(
+          db.exec('INSERT INTO {{items}} VALUES (1)'),
+        ).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
+        await expect(db.batch([])).rejects.toMatchObject({
+          code: 'HOST_CALL_IN_TRANSACTION',
+        });
+        await expect(db.migrate('m', 1, [])).rejects.toMatchObject({
+          code: 'HOST_CALL_IN_TRANSACTION',
+        });
+        await expect(
+          db.transaction(async () => undefined),
+        ).rejects.toMatchObject({ code: 'HOST_CALL_IN_TRANSACTION' });
       }),
     ).resolves.toBeUndefined();
     expect(seen).toEqual(['begin', 'commit']);

@@ -25,7 +25,10 @@ interface State {
  * boundary rather than reusing one that already caught.
  */
 export class ContributedScreenBoundary extends React.Component<Props, State> {
-  state: State = { threw: false };
+  constructor(props: Props) {
+    super(props);
+    this.state = { threw: false };
+  }
 
   static getDerivedStateFromError(): State {
     return { threw: true };

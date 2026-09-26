@@ -26,5 +26,9 @@ export interface PluginDbSession {
 export interface PluginDb extends PluginDbSession {
   identifier(name: string): string;
   transaction<T>(work: (tx: PluginDbSession) => Promise<T>): Promise<T>;
-  migrate(module: string, version: number, statements: readonly string[]): Promise<void>;
+  migrate(
+    module: string,
+    version: number,
+    statements: readonly string[],
+  ): Promise<void>;
 }
