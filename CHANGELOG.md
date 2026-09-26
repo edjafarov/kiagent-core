@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.95.4](https://github.com/edjafarov/kiagent-core/compare/v0.95.3...v0.95.4) (2026-09-26)
+
+### Features
+
+* **local-asr:** whisper.cpp v1.9.4 (b5130), local-asr on Windows ARM64 ([09a9c28](https://github.com/edjafarov/kiagent-core/commit/09a9c28b39a7bb90150588b9081ebe86e0dc8015))
+
 ## [0.95.3](https://github.com/edjafarov/kiagent-core/compare/v0.95.2...v0.95.3) (2026-09-26)
 
 ### Bug Fixes
