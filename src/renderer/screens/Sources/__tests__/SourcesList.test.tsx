@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { Account, AppState } from '@shared/contracts';
 import { SourcesList } from '../SourcesList';
 import { Sources } from '..';
+import { SourceDescriptorsProvider } from '../sources-registry';
 
 /**
  * `ready` distinguishes "still hydrating" from "genuinely no sources" —
@@ -22,6 +23,7 @@ function stateWith(ready: boolean): Partial<AppState> {
   return {
     accounts: [],
     ready,
+    extensions: [],
     prefs: {
       onboarding: {
         sourceBackfilledAt: null,
@@ -99,7 +101,9 @@ function seedNeedsReauth(source: string): void {
 describe('Sources: the list Reconnect routes on the account and its descriptor', () => {
   it('reconnects THAT account, not that source id, when the source can reauthenticate', async () => {
     seedNeedsReauth('google-docs');
-    render(<Sources onOpenConnection={noop} />);
+    render(<Sources onOpenConnection={noop} />, {
+      wrapper: SourceDescriptorsProvider,
+    });
     // Flush BEFORE the click: the panel's mount effect waits for a non-null
     // descriptor list (C-20), so letting sources:list settle first keeps this
     // assertion off a longer promise chain.
@@ -119,7 +123,9 @@ describe('Sources: the list Reconnect routes on the account and its descriptor',
 
   it('C-9: an imap account keeps TODAY’S accounts:add route and is never sent to start-reconnect', async () => {
     seedNeedsReauth('imap');
-    render(<Sources onOpenConnection={noop} />);
+    render(<Sources onOpenConnection={noop} />, {
+      wrapper: SourceDescriptorsProvider,
+    });
     await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
     await act(async () => {});
@@ -146,6 +152,13 @@ describe('Sources: the list Reconnect routes on the account and its descriptor',
 });
 
 describe('SourcesList: loading vs. genuinely empty', () => {
+  beforeEach(() => {
+    (window as unknown as { kiagent: unknown }).kiagent = {
+      invoke: jest.fn(() => Promise.resolve([])),
+      on: jest.fn(() => () => {}),
+    };
+  });
+
   it('shows a loading status, not the empty state, while hydrating', async () => {
     mockState = stateWith(false);
     render(
@@ -155,6 +168,7 @@ describe('SourcesList: loading vs. genuinely empty', () => {
         onAdd={noop}
         onReconnect={noop}
       />,
+      { wrapper: SourceDescriptorsProvider },
     );
 
     expect(await screen.findByRole('status')).toHaveTextContent(
@@ -174,6 +188,7 @@ describe('SourcesList: loading vs. genuinely empty', () => {
         onAdd={noop}
         onReconnect={noop}
       />,
+      { wrapper: SourceDescriptorsProvider },
     );
 
     expect(

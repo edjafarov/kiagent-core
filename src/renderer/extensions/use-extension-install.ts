@@ -33,6 +33,7 @@ export interface InstallRequest {
 
 export interface ExtensionInstall {
   consent: InstallRequest | null;
+  /** A preview, commit, uninstall or toggle is in flight. */
   busy: boolean;
   error: string | null;
   /** Stages `ref` and opens the sheet; a refusal lands in `error`. */
@@ -132,22 +133,28 @@ export function useExtensionInstall(): ExtensionInstall {
     id?: string;
   }> => {
     if (!consent) return { ok: false };
-    const r =
-      consent.mode === 'review'
-        ? {
-            ...(await window.kiagent.invoke('extension:grant-consent', {
+    setError(null);
+    setBusy(true);
+    try {
+      const r =
+        consent.mode === 'review'
+          ? {
+              ...(await window.kiagent.invoke('extension:grant-consent', {
+                id: consent.id,
+              })),
               id: consent.id,
-            })),
-            id: consent.id,
-          }
-        : await window.kiagent.invoke('extension:install-commit', {
-            token: consent.token!,
-          });
-    if (alive.current) {
-      if (!r.ok) setError(r.error ?? 'operation failed');
-      setConsent(null);
+            }
+          : await window.kiagent.invoke('extension:install-commit', {
+              token: consent.token!,
+            });
+      if (alive.current) {
+        if (!r.ok) setError(r.error ?? 'operation failed');
+        setConsent(null);
+      }
+      return { ok: r.ok, id: r.ok ? (r.id ?? consent.id) : undefined };
+    } finally {
+      if (alive.current) setBusy(false);
     }
-    return { ok: r.ok, id: r.ok ? (r.id ?? consent.id) : undefined };
   }, [consent]);
 
   const cancel = useCallback(() => setConsent(null), []);

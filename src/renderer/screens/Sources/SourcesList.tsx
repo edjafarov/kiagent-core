@@ -6,7 +6,7 @@ import type { Account, AccountId } from '@shared/contracts';
 import { ErrorCard } from './ErrorCard';
 import { SourceTable, type SourceTableEntry } from './SourceTable';
 import { GetStartedPanel } from './GetStartedPanel';
-import { useSourcesPolicy } from './sources-registry';
+import { useSourcesPolicy, useVisibleAccounts } from './sources-registry';
 
 function countConnectors(accounts: Account[]): number {
   return new Set(accounts.map((a) => a.source)).size;
@@ -20,10 +20,8 @@ export function SourcesList(props: {
   /** Reconnects THIS account (the error card's fix). */
   onReconnect: (account: Account) => void;
 }): React.ReactElement {
-  const { hidden, showGetStarted } = useSourcesPolicy();
-  const accountEntries = useAppState((s) => s.accounts).filter(
-    (e) => !hidden.includes(e.account.source),
-  );
+  const { showGetStarted } = useSourcesPolicy();
+  const accountEntries = useVisibleAccounts();
   const ready = useAppState((s) => s.ready);
   // Drives the refresh-icon spin for a fixed beat so "Sync all" reads as a
   // real action even when every accounts:sync-now call resolves near-instantly.

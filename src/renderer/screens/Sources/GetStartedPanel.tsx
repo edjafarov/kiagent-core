@@ -1,13 +1,14 @@
 import React from 'react';
 import { useAppState } from '@renderer/state/app-state';
 import { Icon } from '@shared/web-ui/icon-sprite';
+import { useVisibleAccounts } from './sources-registry';
 import { deriveOnboarding, step1Meta } from './onboarding-steps';
 
 export function GetStartedPanel(props: {
   onOpenConnection: () => void;
 }): React.ReactElement | null {
   const onboarding = useAppState((s) => s.prefs.onboarding);
-  const accounts = useAppState((s) => s.accounts);
+  const accounts = useVisibleAccounts();
   const d = deriveOnboarding(onboarding);
   if (!d.visible) return null;
 

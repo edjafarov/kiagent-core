@@ -223,9 +223,9 @@ export function Detail(props: { row: MarketplaceRow }): React.ReactElement {
         <InstallSheet
           request={flow.consent}
           description={row.catalog?.description}
-          readme={detail?.readmeMarkdown}
+          busy={busy}
           onClose={flow.cancel}
-          onConfirm={flow.commit}
+          onConfirm={() => void flow.commit()}
         />
       )}
     </>

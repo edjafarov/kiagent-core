@@ -1,12 +1,24 @@
 /* Install sheet: identity in the title, the access list, developer details. */
-.ext-sheet-id { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.ext-sheet-name { display: flex; flex-direction: column; min-width: 0; }
+.ext-sheet-id {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.ext-sheet-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 .ext-sheet-meta {
   font-size: 12px;
   font-weight: 400;
   color: var(--text-secondary);
 }
-.ext-sheet-desc { margin: 0 0 16px; color: var(--text-secondary); }
+.ext-sheet-desc {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+}
 .ext-sheet-label {
   margin: 0 0 6px;
   font-size: 10.5px;
@@ -15,8 +27,13 @@
   text-transform: uppercase;
   color: var(--label-color);
 }
-.ext-none { margin: 0; color: var(--text-secondary); }
-.ext-access { margin-bottom: 16px; }
+.ext-none {
+  margin: 0;
+  color: var(--text-secondary);
+}
+.ext-access {
+  margin-bottom: 16px;
+}
 .ext-elevated {
   font-size: 11px;
   color: var(--text-tertiary);
@@ -29,4 +46,6 @@
   font-size: 12.5px;
   color: var(--text-secondary);
 }
-.ext-readme > :first-child { margin-top: 0; }
+.ext-readme > :first-child {
+  margin-top: 0;
+}

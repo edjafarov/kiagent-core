@@ -35,6 +35,7 @@ function sheet(
   return render(
     <InstallSheet
       request={request(overrides)}
+      busy={false}
       onClose={jest.fn()}
       onConfirm={jest.fn()}
       {...props}
@@ -70,28 +71,25 @@ describe('InstallSheet', () => {
     expect(within(net).queryByText('Elevated')).not.toBeInTheDocument();
   });
 
-  test('confirm shows the busy label and holds Cancel and Escape until it settles', async () => {
-    let settle: () => void = () => {};
-    const onConfirm = jest.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          settle = resolve;
-        }),
-    );
+  test('confirm calls onConfirm; while busy the sheet shows progress and holds Cancel and Escape', () => {
+    const onConfirm = jest.fn();
     const onClose = jest.fn();
-    sheet({}, { onConfirm, onClose });
-
+    const { rerender } = sheet({}, { onConfirm, onClose });
     fireEvent.click(screen.getByRole('button', { name: 'Install' }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
-    expect(
-      await screen.findByRole('button', { name: 'Installing…' }),
-    ).toBeDisabled();
+
+    rerender(
+      <InstallSheet
+        request={request()}
+        busy
+        onClose={onClose}
+        onConfirm={onConfirm}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Installing…' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     expect(onClose).not.toHaveBeenCalled();
-
-    settle();
-    await screen.findByRole('button', { name: 'Install' });
   });
 
   test('Escape closes when idle', () => {
@@ -145,12 +143,20 @@ describe('InstallSheet', () => {
   });
 
   test('developer details hold the facts and the README, closed at first', async () => {
-    sheet({ integrity: 'sha512-abc' }, { readme: '# Foo\n\nReadme body.' });
-    expect(screen.queryByText(/Readme body\./)).not.toBeInTheDocument();
+    const invoke = jest.fn(() =>
+      Promise.resolve({ readmeMarkdown: '# Foo\n\nReadme body.' }),
+    );
+    (window as unknown as { kiagent: unknown }).kiagent = { invoke };
+    sheet({ integrity: 'sha512-abc' });
+    expect(invoke).not.toHaveBeenCalled();
     fireEvent.click(
       screen.getByRole('button', { name: /Details from the developer/ }),
     );
     expect(await screen.findByText(/Readme body\./)).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith('marketplace:detail', {
+      owner: 'acme',
+      repo: 'foo-kia-connector',
+    });
     expect(screen.getByText('2.0 MB')).toBeInTheDocument();
     expect(screen.getByText('sha512-abc')).toBeInTheDocument();
     expect(

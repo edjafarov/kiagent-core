@@ -72,10 +72,7 @@ test('store: only what is not installed, never an installed extension twice', ()
   expect(store[0].start).toEqual({ item: base.items[1] });
 });
 
-test('hidden sources and search narrow both sections', () => {
-  expect(
-    buildCatalog({ ...base, hidden: ['meetings'] }).sources.map((t) => t.name),
-  ).toEqual(['Gmail', 'Slack']);
+test('search narrows both sections', () => {
   const found = buildCatalog({ ...base, query: 'folders' });
   expect(found.sources).toEqual([]);
   expect(found.store.map((t) => t.name)).toEqual(['Dropbox']);

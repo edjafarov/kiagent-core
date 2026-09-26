@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { Icon } from '@shared/web-ui/icon-sprite';
 import {
   BrandGlyph,
@@ -173,33 +173,14 @@ export function InstallSheet(props: {
   request: InstallRequest;
   /** The store's one-line description, when the caller has it. */
   description?: string;
-  /** The developer's README when the caller has it; otherwise a store
-   *  ref's README is fetched when the details open. */
-  readme?: string | null;
   /** Overrides the idle primary label, e.g. "Install & connect". */
   confirmLabel?: string;
+  /** The install flow's busy flag: holds the sheet while it applies. */
+  busy: boolean;
   onClose: () => void;
-  onConfirm: () => unknown;
+  onConfirm: () => void;
 }): React.ReactElement {
-  const { request: r, description, readme, onClose, onConfirm } = props;
-  const [busy, setBusy] = useState(false);
-  const mounted = useRef(true);
-  useEffect(
-    () => () => {
-      mounted.current = false;
-    },
-    [],
-  );
-
-  const confirm = async (): Promise<void> => {
-    setBusy(true);
-    try {
-      await onConfirm();
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
-  };
-
+  const { request: r, description, busy, onClose, onConfirm } = props;
   const meta = [originWords(r.ref), `v${r.version}`]
     .filter(Boolean)
     .join(' · ');
@@ -238,11 +219,7 @@ export function InstallSheet(props: {
           <Button variant="ghost" disabled={busy} onClick={onClose}>
             Cancel
           </Button>
-          <Button
-            variant="primary"
-            disabled={busy}
-            onClick={() => void confirm()}
-          >
+          <Button variant="primary" disabled={busy} onClick={onConfirm}>
             {busy
               ? CONFIRM[r.mode].busy
               : (props.confirmLabel ?? CONFIRM[r.mode].idle)}
@@ -262,9 +239,7 @@ export function InstallSheet(props: {
       </div>
       <Disclosure label="Details from the developer">
         <KeyValue items={facts} />
-        {readme !== undefined
-          ? readme && <Readme markdown={readme} />
-          : r.ref && <StoreReadme storeRef={r.ref} />}
+        {r.ref && <StoreReadme storeRef={r.ref} />}
       </Disclosure>
     </Sheet>
   );

@@ -93,12 +93,14 @@ export function SourceCatalog(props: {
   useEffect(() => {
     if (!pending) return;
     const ext = extensions.find((e) => e.id === pending.id);
-    if (ext?.status === 'errored' || ext?.status === 'needs-consent') {
+    if (ext && ext.status !== 'activated' && ext.status !== 'activating') {
       setPending(null);
       setNote(
         ext.status === 'errored'
           ? `${ext.name} was installed but couldn’t start: ${ext.error ?? 'unknown error'}`
-          : `${ext.name} was installed and needs its permissions reviewed in Settings.`,
+          : ext.status === 'needs-consent'
+            ? `${ext.name} was installed and needs its permissions reviewed in Settings.`
+            : `${ext.name} was installed and is turned off in Settings.`,
       );
       return;
     }
@@ -234,8 +236,9 @@ export function SourceCatalog(props: {
           request={consent}
           description={listing ? listing.description : undefined}
           confirmLabel={connects ? 'Install & connect' : undefined}
+          busy={flow.busy}
           onClose={flow.cancel}
-          onConfirm={confirm}
+          onConfirm={() => void confirm()}
         />
       )}
     </Page>

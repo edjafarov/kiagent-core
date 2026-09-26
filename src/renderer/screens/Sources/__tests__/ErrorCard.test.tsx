@@ -3,6 +3,9 @@ import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { Account, AppState } from '@shared/contracts';
 import { ErrorCard } from '../ErrorCard';
+import { SourceDescriptorsProvider } from '../sources-registry';
+
+const wrapper = SourceDescriptorsProvider;
 
 jest.mock('@renderer/state/app-state', () => ({
   useAppState: (sel: (s: unknown) => unknown) =>
@@ -42,6 +45,7 @@ describe('ErrorCard reconnect action', () => {
     const onReconnect = jest.fn();
     render(
       <ErrorCard account={account('needsReauth')} onReconnect={onReconnect} />,
+      { wrapper },
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
@@ -49,7 +53,9 @@ describe('ErrorCard reconnect action', () => {
   });
 
   test('plain error status offers Retry, not Reconnect', () => {
-    render(<ErrorCard account={account('error')} onReconnect={jest.fn()} />);
+    render(<ErrorCard account={account('error')} onReconnect={jest.fn()} />, {
+      wrapper,
+    });
 
     expect(
       screen.queryByRole('button', { name: 'Reconnect' }),

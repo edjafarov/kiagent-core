@@ -5,17 +5,22 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import type { SourceDescriptor } from '@shared/contracts';
+import type { AppState, SourceDescriptor } from '@shared/contracts';
 import { useAppState } from '@renderer/state/app-state';
 
 /**
- * `sources:list` shared down the Sources screen tree — every place that
+ * `sources:list` and the product's Sources policy, provided once at the
+ * app root and shared by every surface (Sources, Home, Settings) — every place that
  * needs a connector's display name / auth kind / cadence default reads from
  * here instead of re-invoking. It re-reads when an extension is installed,
  * removed, turned on or off, or re-activated, so a just-installed
  * connector's source appears without a remount.
  */
-const SourceDescriptorsContext = createContext<SourceDescriptor[] | null>(null);
+// `undefined` = no provider above: a wiring mistake, reported loudly
+// rather than read as "still loading" forever.
+const SourceDescriptorsContext = createContext<
+  SourceDescriptor[] | null | undefined
+>(undefined);
 
 /** What a product decides about the Sources pages. */
 export interface SourcesPolicy {
@@ -25,8 +30,15 @@ export interface SourcesPolicy {
   showGetStarted: boolean;
 }
 
-const DEFAULT_POLICY: SourcesPolicy = { hidden: [], showGetStarted: true };
-const SourcesPolicyContext = createContext<SourcesPolicy>(DEFAULT_POLICY);
+const SourcesPolicyContext = createContext<SourcesPolicy | undefined>(
+  undefined,
+);
+
+function required<T>(value: T | undefined, hook: string): T {
+  if (value === undefined)
+    throw new Error(`${hook} needs a SourceDescriptorsProvider above it`);
+  return value;
+}
 
 export function SourceDescriptorsProvider(props: {
   hidden?: readonly string[];
@@ -83,9 +95,20 @@ export function SourceDescriptorsProvider(props: {
 /** `null` while loading, else the (possibly empty) descriptor list, minus
  *  the policy's hidden ids. */
 export function useSourceDescriptors(): SourceDescriptor[] | null {
-  return useContext(SourceDescriptorsContext);
+  return required(useContext(SourceDescriptorsContext), 'useSourceDescriptors');
 }
 
 export function useSourcesPolicy(): SourcesPolicy {
-  return useContext(SourcesPolicyContext);
+  return required(useContext(SourcesPolicyContext), 'useSourcesPolicy');
+}
+
+/** The account entries the product shows here: rows, counts, selection,
+ *  Sync all and get-started all read this one list. */
+export function useVisibleAccounts(): AppState['accounts'] {
+  const { hidden } = useSourcesPolicy();
+  const entries = useAppState((s) => s.accounts);
+  return useMemo(
+    () => entries.filter((e) => !hidden.includes(e.account.source)),
+    [entries, hidden],
+  );
 }

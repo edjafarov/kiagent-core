@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MarketplaceListItem } from '@shared/ipc';
 import { useAppState } from '@renderer/state/app-state';
 import { buildCatalog, type CatalogTile } from './catalog';
-import { useSourceDescriptors, useSourcesPolicy } from './sources-registry';
+import { useSourceDescriptors } from './sources-registry';
 
 export interface CatalogState {
   /** `null` while the source list loads. */
@@ -15,11 +15,10 @@ export interface CatalogState {
   retryStore: () => void;
 }
 
-/** The one catalog, loaded: sources now, the store when it answers. Reads
- *  the descriptor provider and its policy, so it lives under one. */
+/** The one catalog, loaded: sources now, the store when it answers. The
+ *  provider's descriptors already leave out the policy's hidden sources. */
 export function useCatalog(opts: { query?: string } = {}): CatalogState {
   const descriptors = useSourceDescriptors();
-  const { hidden } = useSourcesPolicy();
   const extensions = useAppState((s) => s.extensions);
   const accountEntries = useAppState((s) => s.accounts);
   const [items, setItems] = useState<MarketplaceListItem[] | null>(null);
@@ -57,10 +56,9 @@ export function useCatalog(opts: { query?: string } = {}): CatalogState {
             items: items ?? [],
             extensions,
             accounts: accountEntries.map((e) => e.account),
-            hidden,
             query: opts.query,
           }),
-    [descriptors, items, extensions, accountEntries, hidden, opts.query],
+    [descriptors, items, extensions, accountEntries, opts.query],
   );
 
   return {

@@ -205,6 +205,23 @@ describe('SourceCatalog', () => {
     );
   });
 
+  test('an extension that lands turned off drops the connect too', async () => {
+    const { onPick, rerender } = catalog({});
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /Dropbox/ }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Install & connect' }));
+    await act(async () => {});
+    mockState = { ...mockState, extensions: [dropboxExt('disabled')] };
+    rerender();
+    await act(async () => {});
+    expect(onPick).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Dropbox was installed and is turned off in Settings.',
+    );
+    expect(screen.getByRole('button', { name: /Gmail/ })).toBeEnabled();
+  });
+
   test('an unreachable store says so and can try again', async () => {
     invoke.mockImplementation((channel: string) =>
       channel === 'sources:list'
@@ -240,7 +257,9 @@ describe('Sources: links', () => {
     };
     render(
       <ViewContext.Provider value={ctx}>
-        <Sources onOpenConnection={jest.fn()} hidden={['slack']} />
+        <SourceDescriptorsProvider hidden={['slack']}>
+          <Sources onOpenConnection={jest.fn()} />
+        </SourceDescriptorsProvider>
       </ViewContext.Provider>,
     );
     return replaceParams;

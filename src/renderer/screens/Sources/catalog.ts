@@ -43,53 +43,47 @@ export function buildCatalog(input: {
   items: readonly MarketplaceListItem[];
   extensions: readonly ExtensionSnapshot[];
   accounts: readonly Pick<Account, 'source'>[];
-  /** Source ids a product manages elsewhere. */
-  hidden?: readonly string[];
   query?: string;
 }): Catalog {
-  const hidden = new Set(input.hidden ?? []);
   const connected = new Map<string, number>();
   for (const a of input.accounts)
     connected.set(a.source, (connected.get(a.source) ?? 0) + 1);
 
-  const sentenceFor = (sourceId: string): string => {
-    const builtIn = BUILT_IN_SENTENCES[sourceId];
-    if (builtIn) return builtIn;
-    const owner = input.extensions.find((e) => e.sourceIds.includes(sourceId));
-    const item =
-      owner &&
-      input.items.find(
-        (i) => matchInstalled(i, [...input.extensions])?.id === owner.id,
-      );
-    return item?.description ?? '';
-  };
+  // Each store listing's installed extension, found once.
+  const extensions = [...input.extensions];
+  const listingOf = new Map<string, MarketplaceListItem>();
+  for (const i of input.items) {
+    const e = matchInstalled(i, extensions);
+    if (e) listingOf.set(e.id, i);
+  }
 
-  const sources: CatalogTile[] = input.descriptors
-    .filter((d) => !hidden.has(d.id))
-    .map((d) => {
-      const n = connected.get(d.id) ?? 0;
-      const owner = input.extensions.find((e) => e.sourceIds.includes(d.id));
-      return {
-        key: `source:${d.id}`,
+  const sources: CatalogTile[] = input.descriptors.map((d) => {
+    const n = connected.get(d.id) ?? 0;
+    const owner = extensions.find((e) => e.sourceIds.includes(d.id));
+    return {
+      key: `source:${d.id}`,
+      name: d.name,
+      sentence:
+        BUILT_IN_SENTENCES[d.id] ??
+        (owner && listingOf.get(owner.id)?.description) ??
+        '',
+      brand: sourceBrand(d.id, {
         name: d.name,
-        sentence: sentenceFor(d.id),
-        brand: sourceBrand(d.id, {
-          name: d.name,
-          iconDataUrl: owner?.iconDataUrl,
-        }),
-        // No extension owns it: it ships with the app.
-        footer:
-          n > 0
-            ? { kind: 'connected', n }
-            : owner
-              ? { kind: 'none' }
-              : { kind: 'built-in' },
-        start: { sourceId: d.id },
-      };
-    });
+        iconDataUrl: owner?.iconDataUrl,
+      }),
+      // No extension owns it: it ships with the app.
+      footer:
+        n > 0
+          ? { kind: 'connected', n }
+          : owner
+            ? { kind: 'none' }
+            : { kind: 'built-in' },
+      start: { sourceId: d.id },
+    };
+  });
 
   const store: CatalogTile[] = input.items
-    .filter((i) => !matchInstalled(i, [...input.extensions]))
+    .filter((i) => !matchInstalled(i, extensions))
     .map((i) => ({
       key: `store:${i.owner}/${i.repo}`,
       name: i.displayName,

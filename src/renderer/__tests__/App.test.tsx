@@ -84,6 +84,7 @@ jest.mock('@renderer/screen-registry', () => {
 function signedInState(): AppState {
   return {
     accounts: [],
+    extensions: [],
     mcp: { port: null },
     identity: { name: 'Alice', emails: ['alice@example.com'], phones: [] },
   } as unknown as AppState;
@@ -94,6 +95,11 @@ beforeEach(() => {
   sourcesMounts = 0;
   settingsMounts = 0;
   mockState = signedInState();
+  // The app-root descriptor provider reads the source list.
+  (window as unknown as { kiagent: unknown }).kiagent = {
+    invoke: jest.fn(() => Promise.resolve([])),
+    on: jest.fn(() => () => {}),
+  };
 });
 
 /** Opens Settings the way a user does from the sidebar: the gear. */

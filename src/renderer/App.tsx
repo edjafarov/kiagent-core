@@ -15,6 +15,7 @@ import { TitleBar } from '@renderer/components/TitleBar';
 import { Sidebar } from '@renderer/components/Sidebar';
 import { BootSplash } from '@renderer/components/BootSplash';
 import { SignIn } from '@renderer/screens/SignIn';
+import { SourceDescriptorsProvider } from '@renderer/screens/Sources/sources-registry';
 import { IconSprite } from '@shared/web-ui/icon-sprite';
 import { AppShell, HostFrame } from '@shared/web-ui/ui';
 import {
@@ -90,15 +91,17 @@ export default function App(): React.ReactElement {
   return (
     <ViewContext.Provider value={nav}>
       <IconSprite />
-      <AppShell sidebar={<Sidebar />}>
-        <React.Fragment key={`${view}:${resolved?.epoch ?? 0}`}>
-          {frame === 'page' ? (
-            screen
-          ) : (
-            <HostFrame title={title}>{screen}</HostFrame>
-          )}
-        </React.Fragment>
-      </AppShell>
+      <SourceDescriptorsProvider>
+        <AppShell sidebar={<Sidebar />}>
+          <React.Fragment key={`${view}:${resolved?.epoch ?? 0}`}>
+            {frame === 'page' ? (
+              screen
+            ) : (
+              <HostFrame title={title}>{screen}</HostFrame>
+            )}
+          </React.Fragment>
+        </AppShell>
+      </SourceDescriptorsProvider>
     </ViewContext.Provider>
   );
 }
