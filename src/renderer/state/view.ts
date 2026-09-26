@@ -109,6 +109,7 @@ export function isExtView(v: string): v is ExtView {
 export type View = KnownView | ExtView;
 
 export interface ViewParams {
+  /** Sources: that source's page. */
   accountId?: string;
   anchor?: string;
   /** Settings pane id. */

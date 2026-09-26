@@ -390,6 +390,23 @@ describe('Sources: the screen', () => {
     expect(replaceParams).toHaveBeenCalledWith({ pane: 'x' });
   });
 
+  test('an accountId= link opens that source’s page', async () => {
+    seed([entry('a1', 'slack', 'live')]);
+    const replaceParams = jest.fn();
+    render(<Sources onOpenConnection={noop} />, {
+      wrapper: withView({ accountId: 'a1' }, replaceParams),
+    });
+    await act(async () => {});
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Slack' }),
+    ).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith(
+      'accounts:start-reconnect',
+      expect.anything(),
+    );
+    expect(replaceParams).toHaveBeenCalledWith({});
+  });
+
   test('a reconnect= link to an unknown source lands on the list', async () => {
     seed([entry('a1', 'gmail', 'live')]);
     const replaceParams = jest.fn();

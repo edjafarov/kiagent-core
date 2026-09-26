@@ -25,11 +25,16 @@ function viewFromParams(
   params: ViewParams,
   entries: ReturnType<typeof useVisibleAccounts>,
 ): LocalView | null {
-  const { reconnect, add, install } = params;
-  if (reconnect !== undefined) {
-    const known = entries.find((e) => e.account.id === reconnect);
+  const { reconnect, accountId, add, install } = params;
+  const target = reconnect ?? accountId;
+  if (target !== undefined) {
+    const known = entries.find((e) => e.account.id === target);
     return known
-      ? { view: 'detail', accountId: known.account.id, reconnect: true }
+      ? {
+          view: 'detail',
+          accountId: known.account.id,
+          reconnect: reconnect !== undefined || undefined,
+        }
       : { view: 'list' };
   }
   if (install !== undefined) return { view: 'catalog', install };
@@ -61,8 +66,8 @@ function ConnectPage(props: {
 /**
  * The Sources screen: list, a source's page, the catalog and the connect
  * wizard, as screen-local views (the shared `View` union has no sub-routes).
- * Links arrive as route params — `reconnect=<accountId>` (that source's
- * page, signing in again), `add=<sourceId>`, `add=` (the catalog),
+ * Links arrive as route params — `accountId=<id>` (that source's page),
+ * `reconnect=<accountId>` (the same, signing in again), `add=<sourceId>`, `add=` (the catalog),
  * `install=<owner>/<repo>` — read once and cleared. The list's selection
  * and filter live here so they survive a trip to a source's page. The
  * product's policy (hidden sources, get-started) comes from the app-root
@@ -83,7 +88,13 @@ export function SourcesScreen(props: {
   useEffect(() => {
     const next = viewFromParams(params, entries);
     if (!next) return;
-    const { reconnect: _r, add: _a, install: _i, ...rest } = params;
+    const {
+      reconnect: _r,
+      accountId: _id,
+      add: _a,
+      install: _i,
+      ...rest
+    } = params;
     replaceParams(rest);
     setLocal(next);
     // Params only: the account list is read at the moment a link lands.
