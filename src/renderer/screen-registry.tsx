@@ -54,7 +54,7 @@ export function getDefaultScreens(): ScreenDefinitions {
         <Sources onOpenConnection={() => navigate('connection')} />
       ),
     },
-    connection: { factory: () => <Connection /> },
+    connection: { frame: 'page', factory: () => <Connection /> },
     // Logs draws its own header row inside the main pane; the sidebar
     // stays visible (it has no nav entry — entered programmatically).
     logs: { factory: () => <Logs /> },

@@ -1,38 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import type { McpActivityRecord } from '@shared/contracts';
-import { MCP_ACTIVITY_RECENT_MAX } from '@shared/contracts';
 import { Card, CardHeader, clientBrand, cx } from '@shared/web-ui/ui';
+import { useMcpActivity } from './use-mcp-activity';
 import './Requests.css';
 
 /**
  * Requests: one row per MCP tool call, newest first — the literal summary,
- * the app that made it and when. Fed by mcp-activity:recent (seed) +
- * push:mcp-activity (live batches), capped like the file. A row with
+ * the app that made it and when (useMcpActivity). A row with
  * document titles or an error expands in place; titles are all it ever
  * shows of a document.
  */
 export function Requests(): React.ReactElement {
-  const [recs, setRecs] = useState<McpActivityRecord[]>([]);
+  const recs = useMcpActivity();
   const [expanded, setExpanded] = useState<McpActivityRecord | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    window.kiagent
-      .invoke('mcp-activity:recent', undefined)
-      .then((recent) => {
-        if (!cancelled) setRecs(recent.slice(-MCP_ACTIVITY_RECENT_MAX));
-      })
-      .catch(() => {
-        /* seed failure must not block the live push below */
-      });
-    const off = window.kiagent.on('push:mcp-activity', (batch) => {
-      setRecs((prev) => prev.concat(batch).slice(-MCP_ACTIVITY_RECENT_MAX));
-    });
-    return () => {
-      cancelled = true;
-      off();
-    };
-  }, []);
 
   const visible = recs.slice().reverse(); // newest first
 
