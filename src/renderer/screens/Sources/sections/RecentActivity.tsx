@@ -61,8 +61,8 @@ export function RecentActivity(props: {
 }): React.ReactElement {
   const events = buildEvents(props.account, props.recent).slice(0, MAX_EVENTS);
   return (
-    <section className="detail-card">
-      <div className="lbl-section">Recent activity</div>
+    <section className="src-tech">
+      <h3 className="src-tech-lbl">Recent activity</h3>
       {events.length === 0 ? (
         <div className="t-meta">No activity yet.</div>
       ) : (

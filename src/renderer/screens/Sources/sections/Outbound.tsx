@@ -1,4 +1,5 @@
 import React from 'react';
+import { Card, CardHeader } from '@shared/web-ui/ui';
 import type { Account, ConfirmMode } from '@shared/contracts';
 
 /**
@@ -24,8 +25,8 @@ export function Outbound(props: { account: Account }): React.ReactElement {
   };
 
   return (
-    <section className="detail-card">
-      <div className="lbl-section">Outbound</div>
+    <Card>
+      <CardHeader label="Sending" />
       <div className="field-row">
         {/* eslint-disable-next-line jsx-a11y/label-has-associated-control */}
         <label htmlFor="outbound-from" className="lbl">
@@ -104,6 +105,6 @@ export function Outbound(props: { account: Account }): React.ReactElement {
           }
         />
       </div>
-    </section>
+    </Card>
   );
 }

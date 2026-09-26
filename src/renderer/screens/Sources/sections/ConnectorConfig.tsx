@@ -21,8 +21,8 @@ export function ConnectorConfig(props: {
   const configEntries = Object.entries(a.config ?? {});
 
   return (
-    <section className="detail-card">
-      <div className="lbl-section">Connector settings</div>
+    <section className="src-tech">
+      <h3 className="src-tech-lbl">Connector settings</h3>
       <dl className="kv">
         <dt>Source id</dt>
         <dd className="mono">{a.source}</dd>
@@ -41,9 +41,7 @@ export function ConnectorConfig(props: {
         <dt>Default cadence</dt>
         <dd>{descriptor ? describeCadence(descriptor.cadence) : '—'}</dd>
       </dl>
-      <div className="lbl-section" style={{ marginTop: 8 }}>
-        Account config
-      </div>
+      <h3 className="src-tech-lbl">Account config</h3>
       {configEntries.length === 0 ? (
         <div className="t-meta">
           No connector-specific configuration stored.

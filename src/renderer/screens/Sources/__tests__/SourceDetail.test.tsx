@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type { Account, AppState, SourceDescriptor } from '@shared/contracts';
 import { SourceDetail } from '../SourceDetail';
 
@@ -13,13 +13,13 @@ jest.mock('@renderer/state/app-state', () => ({
 jest.mock('../sources-registry', () => ({
   useSourceDescriptors: () => mockDescriptors,
 }));
+const mockTrackedContent = jest.fn(() => <div data-testid="items" />);
 
 // Every other section is exercised by its own surface; this test is about
 // SourceDetail's COMPOSITION — which sections and affordances appear at which
 // descriptor/status.
-jest.mock('../sections/Overview', () => ({ Overview: () => <div /> }));
 jest.mock('../sections/TrackedContent', () => ({
-  TrackedContent: () => <div />,
+  TrackedContent: () => mockTrackedContent(),
 }));
 jest.mock('../sections/Cadence', () => ({ Cadence: () => <div /> }));
 jest.mock('../sections/ConnectorConfig', () => ({
@@ -29,8 +29,6 @@ jest.mock('../sections/Outbound', () => ({ Outbound: () => <div /> }));
 jest.mock('../sections/RecentActivity', () => ({
   RecentActivity: () => <div />,
 }));
-jest.mock('../sections/DangerZone', () => ({ DangerZone: () => <div /> }));
-jest.mock('../AccountRowActions', () => ({ AccountRowActions: () => <div /> }));
 jest.mock('../sections/TrackedFolders', () => ({
   TrackedFolders: () => <div data-testid="tracked-folders" />,
   folderRoots: () => [{ id: 'root', name: 'My Drive' }],
@@ -110,34 +108,38 @@ describe('SourceDetail: the Tracked folders gate is the descriptor', () => {
   });
 });
 
-describe('SourceDetail: Reconnect (R4 — needsReauth and error only)', () => {
-  it('a healthy account offers no Reconnect', () => {
+describe('SourceDetail: Sign in again (R4 — needsReauth and error only)', () => {
+  it('a healthy account offers no Sign in again', () => {
     render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
     expect(
-      screen.queryByRole('button', { name: 'Reconnect' }),
+      screen.queryByRole('button', { name: 'Sign in again' }),
     ).not.toBeInTheDocument();
   });
 
-  it('a needsReauth account offers Reconnect', () => {
+  it('a needsReauth account offers Sign in again', () => {
     setAccount('needsReauth');
     render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
     expect(
-      screen.getByRole('button', { name: 'Reconnect' }),
+      screen.getByRole('button', { name: 'Sign in again' }),
     ).toBeInTheDocument();
   });
 
-  it('an error account offers Reconnect', () => {
+  it('an error account offers Retry and Sign in again', () => {
     setAccount('error');
     render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
     expect(
-      screen.getByRole('button', { name: 'Reconnect' }),
+      screen.getByRole('button', { name: 'Sign in again' }),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(
+      (window as unknown as { kiagent: { invoke: jest.Mock } }).kiagent.invoke,
+    ).toHaveBeenCalledWith('accounts:sync-now', { accountId: 'a1' });
   });
 
-  it('Reconnect mounts AddSourcePanel with THIS account’s identity', () => {
+  it('Sign in again mounts AddSourcePanel with THIS account’s identity', () => {
     setAccount('needsReauth');
     render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }));
 
     // Decision 7: SourceDetail never invokes accounts:start-reconnect itself,
     // so it never needs to become an alpha-cent shadow — the panel it renders
@@ -153,5 +155,78 @@ describe('SourceDetail: Reconnect (R4 — needsReauth and error only)', () => {
       (window as unknown as { kiagent: { invoke: jest.Mock } }).kiagent.invoke,
     ).not.toHaveBeenCalledWith('accounts:start-reconnect', expect.anything());
     expect(screen.queryByTestId('tracked-folders')).not.toBeInTheDocument();
+  });
+});
+
+describe('SourceDetail: the page', () => {
+  const invoke = (): jest.Mock =>
+    (window as unknown as { kiagent: { invoke: jest.Mock } }).kiagent.invoke;
+
+  it('names the source in the crumb, which steps back', () => {
+    const onBack = jest.fn();
+    render(<SourceDetail accountId={'a1' as Account['id']} onBack={onBack} />);
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Google Drive' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/^3 items · last item/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Sources' }));
+    expect(onBack).toHaveBeenCalled();
+  });
+
+  it('a paused source says so and resumes', () => {
+    setAccount('paused');
+    render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    expect(invoke()).toHaveBeenCalledWith('accounts:resume', {
+      accountId: 'a1',
+    });
+  });
+
+  it('the menu syncs and pauses; Remove lives in its own card', () => {
+    render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Source actions' }));
+    expect(
+      screen.queryByRole('menuitem', { name: 'Remove' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Pause' }));
+    expect(invoke()).toHaveBeenCalledWith('accounts:pause', {
+      accountId: 'a1',
+    });
+  });
+
+  it('Browse opens the items as a sub-view with its own way back', () => {
+    render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
+    fireEvent.click(screen.getByRole('button', { name: /Browse 3 items/ }));
+    expect(screen.getByTestId('items')).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Back to Google Drive' }),
+    );
+    expect(screen.queryByTestId('items')).not.toBeInTheDocument();
+  });
+
+  it('technical details stay closed until asked for', () => {
+    render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
+    const toggle = screen.getByRole('button', { name: /Technical details/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('Remove asks first, then removes', async () => {
+    render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove…' }));
+    const sheet = screen.getByRole('dialog', { name: 'Remove Google Drive?' });
+    expect(sheet).toHaveTextContent('Its 3 items are deleted');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove' }));
+    await act(async () => {});
+    expect(invoke()).toHaveBeenCalledWith('accounts:remove', {
+      accountId: 'a1',
+    });
+  });
+
+  it('a removed source says so instead of a blank page', () => {
+    mockState = { accounts: [] } as unknown as Partial<AppState>;
+    render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
+    expect(screen.getByText('This source was removed.')).toBeInTheDocument();
   });
 });

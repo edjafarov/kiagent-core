@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { Button, Card, CardHeader, Select } from '@shared/web-ui/ui';
 import type { Account, Cadence as CadenceValue } from '@shared/contracts';
 import type { ScheduledJob } from '@shared/ipc';
-import { Icon } from '@shared/web-ui/icon-sprite';
 import { describeCadence, formatRelative } from '../format';
 
 interface Preset {
@@ -101,15 +101,17 @@ export function Cadence(props: { account: Account }): React.ReactElement {
       : PRESETS;
 
   return (
-    <section className="detail-card">
-      <div className="lbl-section">Sync frequency</div>
-      <div className="cadence-row">
-        <span className="lbl">Cadence</span>
-        <select
-          className="cadence-select"
+    <Card>
+      <CardHeader label="Sync" />
+      <div className="src-sync-row">
+        <label htmlFor={`cadence-${a.id}`} className="src-sync-lbl">
+          How often
+        </label>
+        <Select
+          id={`cadence-${a.id}`}
           value={currentKey}
           disabled={pending}
-          aria-label="Cadence"
+          aria-label="How often"
           onChange={(e) => {
             const opt = options.find((o) => o.key === e.target.value);
             if (opt) void apply(opt.cadence);
@@ -120,23 +122,18 @@ export function Cadence(props: { account: Account }): React.ReactElement {
               {o.label}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
-      <dl className="kv" style={{ marginTop: 4 }}>
-        <dt>Last run</dt>
-        <dd>{job ? formatRelative(job.lastRun) : '—'}</dd>
-        <dt>Next run</dt>
-        <dd>{job ? formatRelative(job.nextRun) : '—'}</dd>
-      </dl>
-      <button
-        type="button"
-        className="btn ghost sm"
-        disabled={pending}
-        onClick={() => void runNow()}
-      >
-        <Icon name="refresh-cw" size={11} />
-        Run now
-      </button>
-    </section>
+      <div className="src-sync-row">
+        <span className="src-sync-note">
+          {a.status === 'paused'
+            ? 'Paused — resume it from the menu'
+            : `Last checked ${job ? formatRelative(job.lastRun) : '—'}`}
+        </span>
+        <Button size="sm" disabled={pending} onClick={() => void runNow()}>
+          Run now
+        </Button>
+      </div>
+    </Card>
   );
 }

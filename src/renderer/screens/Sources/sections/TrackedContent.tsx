@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Card, CardHeader } from '@shared/web-ui/ui';
 import type { Account, Document } from '@shared/contracts';
 import { Icon } from '@shared/web-ui/icon-sprite';
 import { formatRelativeCompact, humanizeDocType } from '../format';
@@ -42,8 +43,8 @@ export function TrackedContent(props: {
   }, [account.id, offset]);
 
   return (
-    <section className="detail-card">
-      <div className="lbl-section">Tracked content</div>
+    <Card>
+      <CardHeader label="Items" />
       {error ? (
         <div className="si-error">{error}</div>
       ) : docs === null ? (
@@ -84,7 +85,7 @@ export function TrackedContent(props: {
           </div>
         </>
       )}
-    </section>
+    </Card>
   );
 }
 

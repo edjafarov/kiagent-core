@@ -2,83 +2,7 @@
    live in ../../App.css (shared by every routed screen — see that file's
    header comment for why). Everything below is specific to this directory. */
 
-.dash-body {
-  flex: 1;
-  min-height: 0;
-  padding: 14px 20px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  /* The body itself does not scroll — it's the fixed frame. The header row
-     stays pinned and the account table (.tbl-container) scrolls internally. */
-  overflow: hidden;
-}
-.dash-body > * {
-  flex-shrink: 0;
-}
-/* AddSourcePanel and the table each take the remaining vertical space. */
-.dash-body > .as-panel,
-.dash-body > .tbl-container,
-.dash-body > .src-empty {
-  flex: 1 1 auto;
-  min-height: 120px;
-}
-
-.src-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--text-tertiary);
-  border: 1px dashed var(--border-subtle);
-  padding: 24px;
-  text-align: center;
-}
-
-/* One-shot spin so "Sync all" gives a visible click acknowledgement even
-   when every accounts:sync-now call resolves near-instantly. */
-@keyframes kg-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-.kg-spin {
-  animation: kg-spin 0.7s var(--ease-out, ease-out);
-  transform-origin: center;
-}
-
 /* ── Source table ─────────────────────────────────────────────────── */
-
-.tbl-container {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  overflow-y: auto;
-  box-shadow: var(--shadow-xs);
-}
-.tbl-container thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--bg-surface);
-  box-shadow: inset 0 -1px 0 var(--border-subtle);
-}
-.src-row { cursor: pointer; }
-.src-source-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.src-source-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.src-identifier-cell {
-  font-size: 11.5px;
-  max-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .src-stripe {
   width: 2px;
@@ -97,58 +21,7 @@
 .src-stripe.instagram   { background: var(--tag-instagram); }
 .src-stripe.default     { background: var(--text-tertiary); }
 
-.scope-chip {
-  display: inline-block;
-  padding: 2px 6px;
-  background: var(--bg-muted);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  line-height: 1.5;
-}
-
 /* ── Error card (ErrorCard.tsx) ───────────────────────────────────── */
-
-.err-card-inner {
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.err-card-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.err-detail {
-  display: flex;
-  gap: 8px;
-  padding: 8px 10px;
-  background: var(--error-subtle);
-  align-items: flex-start;
-}
-.err-detail .title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--error-solid);
-}
-.err-detail .detail-mono {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--error-solid);
-  opacity: 0.85;
-}
-.err-links {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 11px;
-}
-.err-links .link {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
 
 /* ── Add-source panel (AddSourcePanel.tsx) ────────────────────────── */
 
@@ -157,55 +30,6 @@
   flex-direction: column;
   gap: 14px;
   overflow-y: auto;
-}
-.as-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.as-title {
-  font-size: 13px;
-  font-weight: 600;
-}
-.as-sub {
-  font-size: 11.5px;
-}
-
-.as-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-}
-.as-tile {
-  aspect-ratio: 1 / 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  text-align: center;
-  padding: 8px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  color: var(--text-primary);
-  font: inherit;
-  cursor: pointer;
-  box-shadow: var(--shadow-xs);
-}
-.as-tile:hover {
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.18);
-}
-.as-tile[disabled] {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-.as-ic {
-  display: inline-flex;
-}
-.as-nm {
-  font-size: 12.5px;
-  font-weight: 500;
 }
 
 .as-flow-msg {
@@ -334,31 +158,8 @@
 }
 
 /* ── Source detail shell ──────────────────────────────────────────── */
-
-.detail-body {
-  flex: 1;
-  min-height: 0;
-  padding: 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  overflow-y: auto;
-}
-.detail-body > * {
-  flex-shrink: 0;
-}
-.detail-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.detail-card .lbl-section.danger { color: var(--error-solid); }
 /* .detail-card is a flex-column; align-items:stretch would make a direct
    <button> child span the full card width — keep it content-sized. */
-.detail-card > .btn { align-self: flex-start; }
 
 dl.kv {
   display: grid;
@@ -373,13 +174,6 @@ dl.kv dt {
 dl.kv dd {
   margin: 0;
   font-size: 12px;
-}
-
-.ov-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 6px;
 }
 
 /* ── TrackedContent ────────────────────────────────────────────────  */
@@ -476,17 +270,6 @@ dl.kv dd {
 }
 
 /* ── Cadence ───────────────────────────────────────────────────────  */
-
-.cadence-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.cadence-row .lbl {
-  font-size: 12px;
-  color: var(--text-secondary);
-  min-width: 70px;
-}
 .cadence-select {
   height: 26px;
   padding: 0 8px;
@@ -532,44 +315,7 @@ dl.kv dd {
 
 /* ── DangerZone ────────────────────────────────────────────────────  */
 
-.dz-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 4px;
-}
-
 /* ── Remove-account confirm modal ─────────────────────────────────  */
-
-.ra-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  z-index: 2000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.ra-modal {
-  width: 380px;
-  padding: 16px;
-}
-.ra-modal-title {
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: 6px;
-  color: var(--text-primary);
-}
-.ra-modal-body {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-bottom: 14px;
-  line-height: 1.4;
-}
-.ra-modal-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
 
 /* ── Folder-tree picker (FolderPickerField "Choose…" modal, and
    AddSourcePanel's picker-first multi-select fast path) ──────────────

@@ -381,9 +381,10 @@ describe('TrackedFolders per-root Remove shortcut', () => {
       screen.getAllByRole('button', { name: /Remove/ })[1], // the Reports row
     );
     fireEvent.click(
-      within(
-        screen.getByRole('dialog', { name: 'Stop tracking folder' }),
-      ).getByRole('button', { name: /Remove/ }),
+      within(screen.getByRole('dialog', { name: /^Stop tracking/ })).getByRole(
+        'button',
+        { name: 'Stop tracking' },
+      ),
     );
     await act(async () => {});
     act(() => pushHandler!(PICKER_EVENT));
@@ -403,9 +404,10 @@ describe('TrackedFolders per-root Remove shortcut', () => {
     render(<TrackedFolders account={accountWith(TWO_ROOTS)} />);
     fireEvent.click(screen.getAllByRole('button', { name: /Remove/ })[1]);
     fireEvent.click(
-      within(
-        screen.getByRole('dialog', { name: 'Stop tracking folder' }),
-      ).getByRole('button', { name: /Remove/ }),
+      within(screen.getByRole('dialog', { name: /^Stop tracking/ })).getByRole(
+        'button',
+        { name: 'Stop tracking' },
+      ),
     );
     await act(async () => {});
     act(() =>

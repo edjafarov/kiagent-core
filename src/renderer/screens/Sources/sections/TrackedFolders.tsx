@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Card, CardHeader, ConfirmSheet } from '@shared/web-ui/ui';
 import type {
   Account,
   FolderNode,
@@ -65,6 +66,12 @@ interface ManageFlow {
   /** A confirm is in flight main-side. A ref can't drive a render, so this
    *  lives in state. */
   saving: boolean;
+}
+
+/** A root's name, with its id when the two differ (cloud roots). */
+function rootLabel(roots: FolderRootSelection[], id: string): string {
+  const root = roots.find((r) => r.id === id);
+  return !root || root.id === root.name ? id : `${root.name} — ${root.id}`;
 }
 
 /**
@@ -287,8 +294,8 @@ export function TrackedFolders(props: {
   }, [picker, pickerAdapter, flow?.removeId]);
 
   return (
-    <section className="detail-card">
-      <div className="lbl-section">Tracked folders</div>
+    <Card>
+      <CardHeader label="What’s tracked" />
       {roots.length === 0 ? (
         // Only folderScope sources mount this card (SourceDetail), so no
         // declared roots means the connector's defaults (§5.2).
@@ -385,81 +392,16 @@ export function TrackedFolders(props: {
       )}
 
       {confirmId !== null && (
-        <RemoveFolderModal
-          root={
-            roots.find((r) => r.id === confirmId) ?? {
-              id: confirmId,
-              name: confirmId,
-            }
-          }
-          onCancel={() => setConfirmId(null)}
-          onConfirm={() => {
-            setConfirmId(null);
-            void startManage(confirmId);
-          }}
-        />
+        <ConfirmSheet
+          title={`Stop tracking ${rootLabel(roots, confirmId)}?`}
+          confirmLabel="Stop tracking"
+          tone="danger"
+          onConfirm={() => void startManage(confirmId)}
+          onClose={() => setConfirmId(null)}
+        >
+          Its files are removed from search.
+        </ConfirmSheet>
       )}
-    </section>
-  );
-}
-
-/**
- * Confirm-remove dialog for a single tracked root — same modal chrome as
- * `RemoveAccountModal` (`ra-modal-*`: backdrop, Escape-to-cancel,
- * click-outside-to-cancel). Keyed by `FolderRootSelection` rather than a path
- * so it names a cloud root by its display name, with the opaque id shown only
- * when it differs.
- */
-function RemoveFolderModal(props: {
-  root: FolderRootSelection;
-  onCancel: () => void;
-  onConfirm: () => void;
-}): React.ReactElement {
-  const { root, onCancel, onConfirm } = props;
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onCancel();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onCancel]);
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Stop tracking folder"
-      onClick={onCancel}
-      className="ra-modal-backdrop"
-    >
-      <div onClick={(e) => e.stopPropagation()} className="tray-pop ra-modal">
-        <div className="ra-modal-title mono">
-          {root.id === root.name ? root.id : `${root.name} — ${root.id}`}
-        </div>
-        <div className="ra-modal-body">
-          Stop tracking this folder? Its files will be removed from search.
-        </div>
-        <div className="ra-modal-actions">
-          <button
-            type="button"
-            className="btn destructive sm"
-            style={{ justifyContent: 'flex-start' }}
-            onClick={onConfirm}
-          >
-            <Icon name="trash" size={12} />
-            Remove
-          </button>
-          <button
-            type="button"
-            className="btn ghost sm"
-            style={{ justifyContent: 'flex-start' }}
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
+    </Card>
   );
 }
