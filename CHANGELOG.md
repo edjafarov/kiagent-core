@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.95.2](https://github.com/edjafarov/kiagent-core/compare/v0.95.1...v0.95.2) (2026-09-26)
+
+### Bug Fixes
+
+* **windows:** boot and plugin-storage import no longer fail on fsync EPERM ([d2d3383](https://github.com/edjafarov/kiagent-core/commit/d2d3383a89c488dd20cf6d365a7f23f6eca5be34))
+
 ## [0.95.1](https://github.com/edjafarov/kiagent-core/compare/v0.95.0...v0.95.1) (2026-09-26)
 
 ### Bug Fixes
