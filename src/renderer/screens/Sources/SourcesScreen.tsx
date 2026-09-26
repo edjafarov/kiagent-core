@@ -150,6 +150,7 @@ export function SourcesScreen(props: {
           onOpenDetail={(accountId) => toDetail(accountId)}
           onOpenConnection={props.onOpenConnection}
           onCatalog={(install) => setLocal({ view: 'catalog', install })}
+          onConnect={(sourceId) => setLocal({ view: 'connect', sourceId })}
           onReconnect={(accountId) => toDetail(accountId, true)}
         />
       );

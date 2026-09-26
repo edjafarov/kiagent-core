@@ -54,3 +54,12 @@ test('Run now syncs the account the same way Sync now does', async () => {
     expect.anything(),
   );
 });
+
+test('a signed-out source says it waits for a sign-in', async () => {
+  render(
+    <Cadence account={{ ...account, status: 'needsReauth' } as Account} />,
+  );
+  expect(
+    await screen.findByText('Paused until you sign in again'),
+  ).toBeInTheDocument();
+});

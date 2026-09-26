@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  Button,
   EntityHeading,
   KeyValue,
   Panel,
@@ -14,12 +13,7 @@ import { folderRoots } from './folder-roots';
 import { accountLabel, describeCadence, formatRelative } from './format';
 import { sourceStatus } from './source-status';
 import { useSourceDescriptors } from './sources-registry';
-import {
-  FIX_WORDS,
-  SourceMenu,
-  runFix,
-  type SourceEntry,
-} from './source-actions';
+import { FixButtons, SourceMenu, type SourceEntry } from './source-actions';
 
 /** What is wrong, in words, and what fixes it. */
 export function SourceProblem(props: {
@@ -34,16 +28,12 @@ export function SourceProblem(props: {
     <div className="src-problem">
       <Status tone={status.tone}>{status.label}</Status>
       <div className="src-problem-acts">
-        {status.fixes.map((fix, i) => (
-          <Button
-            key={fix}
-            size="sm"
-            variant={i === 0 && status.tone === 'err' ? 'primary' : 'secondary'}
-            onClick={() => runFix(props.entry, fix, props.onReconnect)}
-          >
-            {FIX_WORDS[fix]}
-          </Button>
-        ))}
+        <FixButtons
+          entry={props.entry}
+          fixes={status.fixes}
+          tone={status.tone === 'err' ? 'err' : 'other'}
+          onReconnect={props.onReconnect}
+        />
         {a.lastError && (
           <TextButton aria-expanded={why} onClick={() => setWhy((w) => !w)}>
             Why?

@@ -176,13 +176,19 @@ function SyncAllMenu(props: {
   );
 }
 
-/** Store extensions not installed yet, a few, then the whole catalog. */
+/** What else can be added — sources not connected yet, then store
+ *  extensions — a few, then the whole catalog. */
 function AddMore(props: {
   onCatalog: (install?: string) => void;
+  onConnect: (sourceId: string) => void;
 }): React.ReactElement | null {
   const catalog = useCatalog();
   const store = catalog.store ?? [];
-  if (store.length === 0) return null;
+  const unconnected = (catalog.sources ?? []).filter(
+    (t) => t.footer.kind !== 'connected',
+  );
+  const tiles = [...unconnected, ...store].slice(0, ADD_MORE_MAX);
+  if (tiles.length === 0) return null;
   const total = (catalog.sources?.length ?? 0) + store.length;
   return (
     <section className="src-more" aria-labelledby="src-more-lbl">
@@ -195,16 +201,17 @@ function AddMore(props: {
         </TextButton>
       </div>
       <div className="src-more-chips">
-        {store.slice(0, ADD_MORE_MAX).map((t) => (
+        {tiles.map((t) => (
           <Chip
             key={t.key}
             brand={t.brand}
             name={t.name}
             action="Add"
-            onClick={() => {
-              if ('item' in t.start)
-                props.onCatalog(`${t.start.item.owner}/${t.start.item.repo}`);
-            }}
+            onClick={() =>
+              'sourceId' in t.start
+                ? props.onConnect(t.start.sourceId)
+                : props.onCatalog(`${t.start.item.owner}/${t.start.item.repo}`)
+            }
           />
         ))}
       </div>
@@ -223,6 +230,8 @@ export function SourcesList(props: {
   onOpenConnection: () => void;
   /** Opens the catalog; with `owner/repo`, on that item's install sheet. */
   onCatalog: (install?: string) => void;
+  /** Starts connecting a source that ships with the app or is installed. */
+  onConnect: (sourceId: string) => void;
   /** Signs in again to THIS account (on its page). */
   onReconnect: (accountId: AccountId) => void;
 }): React.ReactElement {
@@ -335,7 +344,7 @@ export function SourcesList(props: {
           <GetStartedPanel onOpenConnection={props.onOpenConnection} />
         )}
         {body}
-        <AddMore onCatalog={props.onCatalog} />
+        <AddMore onCatalog={props.onCatalog} onConnect={props.onConnect} />
       </div>
     </Page>
   );

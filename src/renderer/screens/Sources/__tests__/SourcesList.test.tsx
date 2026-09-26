@@ -124,6 +124,7 @@ async function list(props: Partial<ListProps>, hidden?: string[]) {
     onOpenDetail: jest.fn(),
     onOpenConnection: noop,
     onCatalog: jest.fn(),
+    onConnect: jest.fn(),
     onReconnect: jest.fn(),
     ...props,
   };
@@ -263,7 +264,7 @@ describe('SourcesList', () => {
     expect(screen.queryByText('Meetings')).not.toBeInTheDocument();
   });
 
-  test('add more: store extensions not installed open their install sheet', async () => {
+  test('add more: unconnected sources first, then the store', async () => {
     invoke.mockImplementation((channel: string) =>
       Promise.resolve(
         channel === 'sources:list'
@@ -281,8 +282,16 @@ describe('SourcesList', () => {
             : undefined,
       ),
     );
-    seed([entry('a1', 'gmail', 'live')]);
-    const { onCatalog } = await list({});
+    seed([
+      entry('a1', 'gmail', 'live'),
+      entry('a2', 'slack', 'live'),
+      entry('a3', 'google-calendar', 'live'),
+      entry('a4', 'google-docs', 'live'),
+      entry('a5', 'meetings', 'live'),
+    ]);
+    const { onCatalog, onConnect } = await list({});
+    fireEvent.click(screen.getByRole('button', { name: 'Add Email (IMAP)' }));
+    expect(onConnect).toHaveBeenCalledWith('imap');
     fireEvent.click(screen.getByRole('button', { name: 'Add Dropbox' }));
     expect(onCatalog).toHaveBeenCalledWith('example-org/dropbox-kia-connector');
     fireEvent.click(screen.getByRole('button', { name: /^All \d+ sources$/ }));

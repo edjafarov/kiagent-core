@@ -3,6 +3,7 @@
 import React, { useRef, useState } from 'react';
 import type { AccountId, AppState } from '@shared/contracts';
 import {
+  Button,
   ConfirmSheet,
   IconButton,
   Menu,
@@ -36,6 +37,35 @@ export function runFix(
       accountId: entry.account.id,
     });
   else void syncNow(entry.account.id);
+}
+
+/** A status's fixes as buttons; the main one is primary. The page's
+ *  attention row puts it last (at the row's end), the panel first. */
+export function FixButtons(props: {
+  entry: SourceEntry;
+  fixes: readonly SourceFix[];
+  tone: 'err' | 'other';
+  onReconnect: () => void;
+  primaryLast?: boolean;
+}): React.ReactElement {
+  const [main] = props.fixes;
+  const order = props.primaryLast ? [...props.fixes].reverse() : props.fixes;
+  return (
+    <>
+      {order.map((fix) => (
+        <Button
+          key={fix}
+          size="sm"
+          variant={
+            fix === main && props.tone === 'err' ? 'primary' : 'secondary'
+          }
+          onClick={() => runFix(props.entry, fix, props.onReconnect)}
+        >
+          {FIX_WORDS[fix]}
+        </Button>
+      ))}
+    </>
+  );
 }
 
 export function RemoveSourceSheet(props: {

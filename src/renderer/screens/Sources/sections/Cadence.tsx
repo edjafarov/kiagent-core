@@ -130,12 +130,14 @@ export function Cadence(props: { account: Account }): React.ReactElement {
         <span className="src-sync-note">
           {a.status === 'paused'
             ? 'Paused — resume it from the menu'
-            : [
-                `Last checked ${formatRelative(job?.lastRun)}`,
-                job?.nextRun ? `next ${formatUntil(job.nextRun)}` : null,
-              ]
-                .filter(Boolean)
-                .join(' · ')}
+            : a.status === 'needsReauth'
+              ? 'Paused until you sign in again'
+              : [
+                  `Last checked ${formatRelative(job?.lastRun)}`,
+                  job?.nextRun ? `next ${formatUntil(job.nextRun)}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
         </span>
         <Button size="sm" disabled={pending} onClick={() => void runNow()}>
           Run now

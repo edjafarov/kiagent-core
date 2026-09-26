@@ -20,10 +20,9 @@ import { AddSourcePanel } from './AddSourcePanel';
 import { sourceLabel } from './connector-meta';
 import { accountLabel, formatRelative } from './format';
 import {
-  FIX_WORDS,
+  FixButtons,
   RemoveSourceSheet,
   SourceMenu,
-  runFix,
   type SourceEntry,
 } from './source-actions';
 import { sourceStatus } from './source-status';
@@ -50,19 +49,13 @@ function Problem(props: {
         title={problem.title}
         sub={problem.sub}
         action={
-          <>
-            {/* The main fix last: it sits at the row's end. */}
-            {[...fixes].reverse().map((fix) => (
-              <Button
-                key={fix}
-                size="sm"
-                variant={fix === fixes[0] ? 'primary' : 'secondary'}
-                onClick={() => runFix(props.entry, fix, props.onReconnect)}
-              >
-                {FIX_WORDS[fix]}
-              </Button>
-            ))}
-          </>
+          <FixButtons
+            entry={props.entry}
+            fixes={fixes}
+            tone={tone === 'err' ? 'err' : 'other'}
+            onReconnect={props.onReconnect}
+            primaryLast
+          />
         }
       />
     </AttentionList>
