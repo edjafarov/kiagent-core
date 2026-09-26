@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { simulateWindowsFsync } from '@main/__tests__/helpers/windows-fsync';
 import {
   assertProfileStorageVersion,
   markProfileStorageVersion,
@@ -22,6 +23,18 @@ describe('profile shared-storage version gate', () => {
 
   it('marks a fresh profile at version one and accepts it under the same gate', async () => {
     await markProfileStorageVersion(profileDir, 1);
+    await expect(
+      assertProfileStorageVersion(profileDir, 1),
+    ).resolves.toBeUndefined();
+  });
+
+  it('marks the profile on Windows, where a directory cannot be flushed', async () => {
+    const restore = simulateWindowsFsync();
+    try {
+      await markProfileStorageVersion(profileDir, 1);
+    } finally {
+      restore();
+    }
     await expect(
       assertProfileStorageVersion(profileDir, 1),
     ).resolves.toBeUndefined();

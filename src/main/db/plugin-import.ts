@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { formatPluginSql } from '@shared/plugin-sql';
+import { syncDirectory } from '@main/durable-fs';
 import type { PluginDatabaseDescriptor } from '@main/platform/database-descriptor';
 import {
   descriptorDigest,
@@ -182,7 +183,8 @@ async function createFixedSnapshot(
   try {
     await source.backup(temporary);
     validate(temporary);
-    const fd = fs.openSync(temporary, 'r');
+    // 'r+', not 'r': Windows refuses to flush a read-only handle (EPERM).
+    const fd = fs.openSync(temporary, 'r+');
     try {
       fs.fsyncSync(fd);
     } finally {
@@ -190,12 +192,7 @@ async function createFixedSnapshot(
     }
     await beforePublish?.(temporary, snapshotPath);
     fs.renameSync(temporary, snapshotPath);
-    const dir = fs.openSync(path.dirname(snapshotPath), 'r');
-    try {
-      fs.fsyncSync(dir);
-    } finally {
-      fs.closeSync(dir);
-    }
+    syncDirectory(path.dirname(snapshotPath));
   } catch (cause) {
     if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
     if (

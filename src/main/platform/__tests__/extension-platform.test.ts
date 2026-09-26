@@ -1567,6 +1567,12 @@ describe('createExtensionPlatform', () => {
     ]);
     expect(registry.has('basicsrc')).toBe(false);
     expect(tools.has('basic_echo')).toBe(false);
+    // The failure is in the log, not only in the renderer's snapshot.
+    expect(logs).toContainEqual({
+      scope: 'extension:test.basic',
+      level: 'error',
+      msg: 'extension errored: consent store unavailable',
+    });
 
     // The spy's one-time rejection is now consumed — `store.consents.latest`
     // falls through to its real implementation again. Because the failed

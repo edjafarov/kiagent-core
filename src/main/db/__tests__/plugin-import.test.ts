@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { simulateWindowsFsync } from '@main/__tests__/helpers/windows-fsync';
 import { parseDatabaseDescriptor } from '@main/platform/database-descriptor';
 import { createPluginRegistry } from '../plugin-registry';
 import {
@@ -280,6 +281,26 @@ describe('registered legacy plugin import', () => {
       }),
     ).rejects.toMatchObject({ code: 'PLUGIN_DB_TARGET_NONEMPTY' });
     expect(registry.diagnostics('people.nonempty').state).toBe('registered');
+  });
+
+  it('imports on Windows, where read-only and directory handles cannot be flushed', async () => {
+    const registry = createPluginRegistry(target, { filename: targetFile });
+    const input = {
+      pluginId: 'people.contacts',
+      descriptor: DESCRIPTOR,
+      legacyPath: sourceFile,
+    };
+    registry.register(input);
+    const restore = simulateWindowsFsync();
+    try {
+      await importLegacyPluginStorage(registry, input);
+    } finally {
+      restore();
+    }
+    const prefix = 'p_70656f706c652e636f6e7461637473__';
+    expect(
+      target.prepare(`SELECT id FROM "${prefix}profiles" ORDER BY id`).all(),
+    ).toEqual([{ id: 'p-1' }, { id: 'p-2' }]);
   });
 
   it('preserves user overrides, queued and processing jobs, foreign keys and AUTOINCREMENT high water mark', async () => {

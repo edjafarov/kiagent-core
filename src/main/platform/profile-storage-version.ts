@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { syncDirectory } from '@main/durable-fs';
 
 export const PROFILE_STORAGE_VERSION = 1;
 const MARKER_RELATIVE_PATH = path.join('data', 'storage-version.json');
@@ -97,10 +98,5 @@ export async function markProfileStorageVersion(
     await handle.close();
   }
   await fs.rename(temp, filename);
-  const dirHandle = await fs.open(path.dirname(filename), 'r');
-  try {
-    await dirHandle.sync();
-  } finally {
-    await dirHandle.close();
-  }
+  syncDirectory(path.dirname(filename));
 }

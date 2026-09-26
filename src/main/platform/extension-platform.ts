@@ -633,6 +633,14 @@ export function createExtensionPlatform(
   const setStatus = (e: Entry, status: ExtensionStatus, error?: string) => {
     if (status === 'activated' && e.status !== 'activated')
       e.activatedAt = new Date().toISOString();
+    // The status is otherwise only visible to the renderer; a failed
+    // activation must leave a trace in the log.
+    if (status === 'errored' && (e.status !== 'errored' || e.error !== error))
+      deps.logSink.log(
+        `extension:${e.manifest.id}`,
+        'error',
+        `extension errored: ${error ?? 'unknown error'}`,
+      );
     e.status = status;
     e.error = error;
     changed();
