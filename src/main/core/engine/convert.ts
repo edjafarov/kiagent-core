@@ -48,7 +48,10 @@ async function parse(
 
   if (mime === 'application/pdf' || ext === 'pdf') {
     const pdfParse = (await import('pdf-parse')).default;
-    const out = await pdfParse(buf);
+    // A fresh copy, not `buf`: Buffer.from() places inputs under 4 KB in a
+    // slice of Node's shared pool, and pdf-parse's pdf.js reads the whole
+    // underlying ArrayBuffer — every small PDF failed "bad XRef entry".
+    const out = await pdfParse(new Uint8Array(buf) as Buffer);
     const text = out.text?.trim() ?? '';
     // Text-poor PDF (a scan): leave it for the vision worker.
     return text.length >= 32 ? text : null;
