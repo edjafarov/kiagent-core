@@ -37,14 +37,21 @@ const base = {
     d('meetings', 'Meetings'),
   ],
   items: [
-    item('slack-connector', 'Slack', 'Channels and DMs from your workspace'),
-    item('dropbox-connector', 'Dropbox', 'Files and folders from Dropbox'),
+    item(
+      'slack-kia-connector',
+      'Slack',
+      'Channels and DMs from your workspace',
+    ),
+    item('dropbox-kia-connector', 'Dropbox', 'Files and folders from Dropbox'),
   ],
-  extensions: [ext('slack-ext', 'slack-connector', ['slack'])],
+  extensions: [
+    ext('slack-ext', 'slack-kia-connector', ['slack']),
+    ext('meetings-ext', 'meetings', ['meetings']),
+  ],
   accounts: [{ source: 'slack' }, { source: 'slack' }],
 };
 
-test('sources: one tile per descriptor, with its sentence and footer', () => {
+test('sources: one tile per descriptor; built in when no extension owns it', () => {
   const { sources } = buildCatalog(base);
   expect(
     sources.map((t) => [t.name, t.sentence, footerWords(t.footer)]),
@@ -60,6 +67,8 @@ test('store: only what is not installed, never an installed extension twice', ()
   const { store } = buildCatalog(base);
   expect(store.map((t) => t.name)).toEqual(['Dropbox']);
   expect(footerWords(store[0].footer)).toBe('Install');
+  // The store tile wears the connector's brand, as it will once installed.
+  expect(store[0].brand).toMatchObject({ key: 'dropbox', color: '#0061fe' });
   expect(store[0].start).toEqual({ item: base.items[1] });
 });
 

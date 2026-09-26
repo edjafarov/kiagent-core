@@ -9,14 +9,7 @@ import type {
 } from '@shared/contracts';
 import type { MarketplaceListItem } from '@shared/ipc';
 import { sourceBrand, type Brand } from '@shared/web-ui/ui';
-import { matchInstalled } from '../Marketplace/rows';
-
-/** The sources core ships with. */
-export const BUILT_IN_SOURCE_IDS: ReadonlySet<string> = new Set([
-  'gmail',
-  'imap',
-  'local-folder',
-]);
+import { matchInstalled, storeBrandId } from '@renderer/extensions/match';
 
 const BUILT_IN_SENTENCES: Record<string, string> = {
   gmail: 'Mail, indexed and searchable',
@@ -84,12 +77,13 @@ export function buildCatalog(input: {
           name: d.name,
           iconDataUrl: owner?.iconDataUrl,
         }),
+        // No extension owns it: it ships with the app.
         footer:
           n > 0
             ? { kind: 'connected', n }
-            : BUILT_IN_SOURCE_IDS.has(d.id)
-              ? { kind: 'built-in' }
-              : { kind: 'none' },
+            : owner
+              ? { kind: 'none' }
+              : { kind: 'built-in' },
         start: { sourceId: d.id },
       };
     });
@@ -100,7 +94,7 @@ export function buildCatalog(input: {
       key: `store:${i.owner}/${i.repo}`,
       name: i.displayName,
       sentence: i.description,
-      brand: sourceBrand(i.repo, {
+      brand: sourceBrand(storeBrandId(i.repo), {
         name: i.displayName,
         iconDataUrl: i.iconDataUrl,
       }),

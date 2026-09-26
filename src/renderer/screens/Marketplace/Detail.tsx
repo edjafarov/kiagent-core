@@ -13,7 +13,8 @@ import {
 } from '@renderer/components/cap-catalog';
 import { ExtGlyph } from '@renderer/components/ExtGlyph';
 import type { PluginDetail } from '@shared/ipc';
-import { bareGithubRef, type MarketplaceRow } from './rows';
+import { bareGithubRef } from '@renderer/extensions/match';
+import type { MarketplaceRow } from './rows';
 
 /**
  * Marketplace detail pane — README, permissions, and the install / update /
