@@ -1,10 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { useAppState } from '@renderer/state/app-state';
-import { Icon } from '@shared/web-ui/icon-sprite';
-import { Busy } from '@shared/web-ui/components';
+import {
+  Busy,
+  Button,
+  Card,
+  ConfirmSheet,
+  Disclosure,
+  KeyValue,
+  SettingsGroup,
+  SettingsRow,
+  TextButton,
+  computerNoun,
+} from '@shared/web-ui/ui';
 import type { StorageStats } from '@shared/ipc';
-
-import { describeResetOutcome } from './reset-outcome';
+import { describeResetOutcome } from '@shared/reset-outcome';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -18,20 +27,34 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[unit]}`;
 }
 
-type Op = 'compact' | 'export' | 'reset';
+function failure(e: unknown): string {
+  return `Failed: ${e instanceof Error ? e.message : 'unknown error'}`;
+}
+
+type Op = 'compact' | 'export';
 
 /**
- * Storage pane. Per the rebuild's `StorageStats` contract this is just
- * `{dbBytes, docCount, accountCount, dataDir}` — much thinner than the
- * legacy screen's per-connector segment breakdown (segments/FTS size/
- * embedding count/deep-extraction backlog). Rather than fabricate a
- * distribution bar with no underlying data, that section is omitted; see
- * the task report for this and other noted gaps.
+ * Storage pane: what is stored and where, export, compact, and reset.
+ *
+ * `afterWipe` is a product build's last reset step (e.g. clearing a
+ * device-ownership record). It runs ONLY after the core wipe reports
+ * `coreWiped === true` — a partial or unknown wipe leaves whatever it
+ * guards in place, so a crash mid-reset fails closed. A returned sentence
+ * is added to the reset's own.
+ *
+ * The reset outcome is a native dialog: reset clears identity before it
+ * answers, so the identity gate unmounts this pane and only a dialog is
+ * still there to read.
  */
-export function Storage(): React.ReactElement {
+export function Storage(props: {
+  afterWipe?: () => Promise<string | null>;
+}): React.ReactElement {
+  const { afterWipe } = props;
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState<Op | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<'compact' | 'reset' | null>(null);
   // Cheap "something changed" signal to re-fetch stats — re-used from the
   // live projection instead of a bespoke push subscription.
   const seqSignal = useAppState((s) => s.accounts.length + s.processing.done);
@@ -55,221 +78,166 @@ export function Storage(): React.ReactElement {
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch on the cheap signal above
   }, [seqSignal]);
-
-  const openInFinder = () => {
-    if (!stats) return;
-    void window.kiagent.invoke('app:open-path', { path: stats.dataDir });
-  };
-  const copyPath = () => {
-    if (!stats) return;
-    void navigator.clipboard?.writeText(stats.dataDir).catch(() => {
-      /* clipboard may be unavailable — ignore */
-    });
-  };
-
-  const compact = () => {
-    if (busy) return;
-    if (
-      !window.confirm(
-        'Compact the database now? Safe to run at any time, but may take a minute on large databases.',
-      )
-    ) {
-      return;
-    }
-    setBusy('compact');
-    void window.kiagent
-      .invoke('maintenance:compact', undefined)
-      .then(() => window.alert('Database compacted.'))
-      .catch((e: unknown) =>
-        window.alert(
-          `Failed: ${e instanceof Error ? e.message : 'unknown error'}`,
-        ),
-      )
-      .finally(() => setBusy(null));
-  };
 
   const exportData = () => {
     if (busy) return;
     setBusy('export');
+    setNote(null);
     // Empty destDir asks main to show a directory picker.
     void window.kiagent
       .invoke('maintenance:export', { destDir: '' })
-      .then(() => window.alert('Export complete.'))
-      .catch((e: unknown) =>
-        window.alert(
-          `Failed: ${e instanceof Error ? e.message : 'unknown error'}`,
-        ),
-      )
+      .then(() => setNote('Export complete.'))
+      .catch((e: unknown) => setNote(failure(e)))
       .finally(() => setBusy(null));
   };
 
-  const resetAll = () => {
-    if (busy) return;
-    if (
-      !window.confirm(
-        'Reset ALL data? This will wipe everything and cannot be undone.',
-      )
-    ) {
-      return;
+  const compact = async () => {
+    setBusy('compact');
+    setNote(null);
+    try {
+      await window.kiagent.invoke('maintenance:compact', undefined);
+      setNote('Database compacted.');
+    } catch (e) {
+      setNote(failure(e));
+    } finally {
+      setBusy(null);
     }
-    setBusy('reset');
-    void window.kiagent
-      .invoke('maintenance:reset-all', undefined)
-      .then((outcome) =>
-        window.alert(describeResetOutcome(outcome, extensionName)),
-      )
-      .catch((e: unknown) =>
-        window.alert(
-          `Failed: ${e instanceof Error ? e.message : 'unknown error'}`,
-        ),
-      )
-      .finally(() => setBusy(null));
   };
+
+  const resetAll = async () => {
+    try {
+      const outcome = await window.kiagent.invoke(
+        'maintenance:reset-all',
+        undefined,
+      );
+      const told = describeResetOutcome(outcome, extensionName);
+      const extra =
+        outcome.coreWiped === true && afterWipe
+          ? await afterWipe().catch((e: unknown) => failure(e))
+          : null;
+      window.alert(extra ? `${told} ${extra}` : told);
+    } catch (e) {
+      window.alert(failure(e));
+    } finally {
+      // A reset that wiped the core has unmounted this pane by now; one
+      // that stopped short leaves the pane, so the sheet closes.
+      setConfirm(null);
+    }
+  };
+
+  if (stats == null)
+    return error ? (
+      <div className="set-note">Couldn’t load storage stats.</div>
+    ) : (
+      <Busy label="Loading storage stats…" />
+    );
 
   return (
     <>
-      <div>
-        <h2 className="h-screen">Storage</h2>
-        <div className="t-meta">Where your indexed data lives.</div>
-      </div>
-      <div className="div-h" />
+      <Card>
+        <KeyValue
+          items={[
+            { label: 'Items', value: stats.docCount.toLocaleString() },
+            { label: 'Sources', value: stats.accountCount.toLocaleString() },
+            { label: 'Size on disk', value: formatBytes(stats.dbBytes) },
+            {
+              label: 'Location',
+              value: (
+                <span className="set-actions">
+                  <span className="mono" data-testid="data-folder-path">
+                    {stats.dataDir}
+                  </span>
+                  <TextButton
+                    onClick={() =>
+                      void window.kiagent.invoke('app:open-path', {
+                        path: stats.dataDir,
+                      })
+                    }
+                  >
+                    Show in Finder
+                  </TextButton>
+                </span>
+              ),
+            },
+          ]}
+        />
+      </Card>
 
-      {error && stats == null ? (
-        <div className="t-meta" style={{ color: 'var(--error-solid)' }}>
-          Couldn&rsquo;t load storage stats.
-        </div>
-      ) : stats == null ? (
-        <Busy label="Loading storage stats…" />
-      ) : (
-        <>
-          <div className="metric-grid">
-            <MetricTile
-              label="Total documents"
-              value={stats.docCount.toLocaleString()}
-              sub="indexed"
-            />
-            <MetricTile
-              label="Database size"
-              value={formatBytes(stats.dbBytes)}
-              sub="SQLite on disk"
-            />
-            <MetricTile
-              label="Accounts"
-              value={stats.accountCount.toLocaleString()}
-              sub={
-                stats.accountCount === 1
-                  ? 'source connected'
-                  : 'sources connected'
-              }
-            />
-          </div>
+      <SettingsGroup>
+        <SettingsRow
+          title="Export your data"
+          description="A copy of everything, as files"
+          control={
+            <Button size="sm" disabled={!!busy} onClick={exportData}>
+              {busy === 'export' ? 'Exporting…' : 'Export…'}
+            </Button>
+          }
+        />
+      </SettingsGroup>
 
-          <div className="div-h" />
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div className="lbl-section">Data folder</div>
-            <div className="path-row">
-              <span className="lbl">Location</span>
-              <span
-                className="mono"
-                data-testid="data-folder-path"
-                style={{ flex: 1 }}
-              >
-                {stats.dataDir}
-              </span>
-              <button type="button" className="btn sm" onClick={openInFinder}>
-                <Icon name="folder" size={12} /> Show in Finder
-              </button>
-              <button
-                type="button"
-                className="btn ghost sm icon-only"
-                title="Copy path"
-                aria-label="Copy path"
-                onClick={copyPath}
-              >
-                <Icon name="copy" size={12} />
-              </button>
-            </div>
-          </div>
-
-          <div className="div-h" />
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div className="lbl-section">Maintenance</div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn sm"
-                disabled={!!busy}
-                onClick={compact}
-              >
-                <Icon name="database" size={12} />{' '}
-                {busy === 'compact' ? 'Compacting…' : 'Compact database'}
-              </button>
-              <button
-                type="button"
-                className="btn sm"
-                disabled={!!busy}
-                onClick={exportData}
-              >
-                <Icon name="external" size={12} />{' '}
-                {busy === 'export' ? 'Exporting…' : 'Export data'}
-              </button>
-            </div>
-            <div className="t-meta">
-              Compacting reclaims unused pages from soft-deleted rows. Safe to
-              run at any time.
-            </div>
-          </div>
-
-          <div className="div-h" />
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div
-              className="lbl-section"
-              style={{ color: 'var(--error-solid)' }}
+      <Disclosure label="Maintenance" summary="Compact the database">
+        <SettingsRow
+          title="Compact the database"
+          description="Reclaims unused pages from removed items. Safe to run at any time; may take a minute."
+          control={
+            <Button
+              size="sm"
+              disabled={!!busy}
+              onClick={() => setConfirm('compact')}
             >
-              Danger zone
-            </div>
-            <div className="danger-list">
-              <div className="danger-item">
-                <div className="copy">
-                  <div className="h">Reset all data</div>
-                  <div className="d">
-                    Wipe the entire local corpus and start over. Cannot be
-                    undone.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="btn destructive sm"
-                  disabled={!!busy}
-                  onClick={resetAll}
-                >
-                  <Icon name="trash" size={12} />{' '}
-                  {busy === 'reset' ? 'Resetting…' : 'Reset all'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
+              {busy === 'compact' ? 'Compacting…' : 'Compact'}
+            </Button>
+          }
+        />
+      </Disclosure>
+
+      {note && <div className="set-note">{note}</div>}
+
+      <SettingsGroup title="Reset">
+        <SettingsRow
+          title="Reset all data"
+          description={`Deletes your whole memory from this ${computerNoun()}. Can’t be undone.`}
+          control={
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={!!busy}
+              onClick={() => setConfirm('reset')}
+            >
+              Reset…
+            </Button>
+          }
+        />
+      </SettingsGroup>
+
+      {confirm === 'compact' && (
+        <ConfirmSheet
+          title="Compact the database?"
+          confirmLabel="Compact"
+          busyLabel="Compacting…"
+          onConfirm={async () => {
+            setConfirm(null);
+            await compact();
+          }}
+          onClose={() => setConfirm(null)}
+        >
+          Safe to run at any time, but may take a minute on a large memory.
+        </ConfirmSheet>
+      )}
+      {confirm === 'reset' && (
+        <ConfirmSheet
+          title="Reset all data?"
+          confirmLabel="Reset all data"
+          busyLabel="Resetting…"
+          tone="danger"
+          onConfirm={resetAll}
+          onClose={() => setConfirm(null)}
+        >
+          This deletes everything this app has stored on this {computerNoun()} —
+          every source, item and setting. It can’t be undone.
+        </ConfirmSheet>
       )}
     </>
-  );
-}
-
-function MetricTile(props: {
-  label: string;
-  value: string;
-  sub: string;
-}): React.ReactElement {
-  return (
-    <div className="metric-tile">
-      <span className="label">{props.label}</span>
-      <span className="value">{props.value}</span>
-      <span className="sub">{props.sub}</span>
-    </div>
   );
 }

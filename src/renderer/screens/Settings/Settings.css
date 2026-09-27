@@ -299,3 +299,8 @@ button.side-item {
 .set-brand-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .set-brand-tag { margin-top: 2px; font-size: 12.5px; color: var(--text-secondary); }
 .set-status { font-size: 12.5px; color: var(--text-secondary); }
+.set-id { display: flex; align-items: center; gap: 14px; }
+.set-id-body { flex: 1; min-width: 0; }
+.set-id-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.set-id-mail { margin-top: 2px; font-size: 12.5px; color: var(--text-secondary); }
+.set-id-edit { display: flex; flex-direction: column; gap: 8px; max-width: 360px; }
