@@ -1,5 +1,6 @@
 import React, {
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -64,6 +65,21 @@ function recordToPlainText(rec: LogRecord): string {
     .join(' ');
 }
 
+// A stable React key per record, assigned the first time a record is seen.
+// Records keep their object identity while they sit in state, so a new batch
+// (prepended to the newest-first list) doesn't shift existing rows' keys —
+// an index-based key would remount every row on every batch.
+const recordKeys = new WeakMap<LogRecord, number>();
+let nextRecordKey = 0;
+export function logRecordKey(rec: LogRecord): number {
+  let key = recordKeys.get(rec);
+  if (key === undefined) {
+    key = nextRecordKey++;
+    recordKeys.set(rec, key);
+  }
+  return key;
+}
+
 function matchesSearch(rec: LogRecord, q: string): boolean {
   if (q === '') return true;
   const needle = q.toLowerCase();
@@ -121,18 +137,22 @@ export function Logs(): React.ReactElement {
     return Array.from(set).sort();
   }, [source]);
 
+  // Typing stays responsive: filtering up to MAX_RECORDS rows runs at a
+  // lower priority than the keystroke itself.
+  const deferredSearch = useDeferredValue(search);
+
   const visible = useMemo(() => {
     const minRank = LEVEL_RANK[levelFilter];
     return source
       .filter((r) => {
         if (LEVEL_RANK[r.level] < minRank) return false;
         if (scopeFilter !== 'all' && r.scope !== scopeFilter) return false;
-        if (!matchesSearch(r, search.trim())) return false;
+        if (!matchesSearch(r, deferredSearch.trim())) return false;
         return true;
       })
       .slice()
       .reverse(); // newest first
-  }, [source, levelFilter, scopeFilter, search]);
+  }, [source, levelFilter, scopeFilter, deferredSearch]);
 
   const togglePause = useCallback(() => {
     setFrozen((current) => (current === null ? records : null));
@@ -228,9 +248,7 @@ export function Logs(): React.ReactElement {
               : 'No records match the current filters.'}
           </div>
         ) : (
-          visible.map((rec, i) => (
-            <LogRow key={`${rec.ts}-${i}-${rec.msg}`} rec={rec} />
-          ))
+          visible.map((rec) => <LogRow key={logRecordKey(rec)} rec={rec} />)
         )}
       </div>
 

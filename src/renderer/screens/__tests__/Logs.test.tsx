@@ -104,6 +104,16 @@ describe('Logs page', () => {
     expect(screen.getByText('Waiting for log activity…')).toBeInTheDocument();
   });
 
+  it('keeps existing rows mounted when a new batch arrives', async () => {
+    setup();
+    const before = await screen.findByText('Sync skipped');
+    act(() => push?.([rec('Fresh line', 'info', 'sync')]));
+    expect(screen.getByText('Fresh line')).toBeInTheDocument();
+    // The same DOM node: the row was not unmounted and re-created.
+    expect(screen.getByText('Sync skipped')).toBe(before);
+    expect(before).toBeInTheDocument();
+  });
+
   it('exports and says where', async () => {
     setup();
     await screen.findByText('Request from Claude');
