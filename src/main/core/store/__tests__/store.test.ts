@@ -1424,9 +1424,19 @@ describe('store', () => {
       const settled = jest.fn();
       void next.then(settled);
 
+      // Let the parked feed finish its first (empty) read, then watch for
+      // re-reads: a spurious wake-up costs one change-log read per feed.
+      await new Promise((r) => setTimeout(r, 20));
+      const reads = jest.spyOn(db, 'all');
       await store.setAccountStatus(accountId, { status: 'live' });
       await new Promise((r) => setTimeout(r, 50));
       expect(settled).not.toHaveBeenCalled();
+      expect(
+        reads.mock.calls.filter(([sql]) =>
+          /FROM changes WHERE seq >/.test(sql),
+        ),
+      ).toHaveLength(0);
+      reads.mockRestore();
 
       await store.setAccountStatus(accountId, { status: 'error' });
       const got = await next;
