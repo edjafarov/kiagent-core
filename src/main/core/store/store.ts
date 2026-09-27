@@ -1586,19 +1586,20 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     async ledgerCountsAll(consumers) {
       // Runs every 5 s. Counting 'skip' rows directly means scanning the whole
       // ledger (millions of rows, ~230 ms); instead count the rest through the
-      // partial work_ledger_active index and derive skip from the total.
-      const rows = (await db.all(LEDGER_ACTIVE_COUNT_SQL)) as Array<{
-        outcome: string | null;
-        c: number;
-      }>;
-      const total = (
-        (await db.all(`SELECT COUNT(*) AS c FROM work_ledger`))[0] as {
-          c: number;
-        }
-      ).c;
+      // partial work_ledger_active index and derive skip from the total. One
+      // statement, so both counts come from the same snapshot.
+      const rows = (await db.all(
+        `SELECT 0 AS total, outcome, c FROM (${LEDGER_ACTIVE_COUNT_SQL})
+         UNION ALL SELECT 1, NULL, COUNT(*) FROM work_ledger`,
+      )) as Array<{ total: number; outcome: string | null; c: number }>;
       const counts = { done: 0, skip: 0, failed: 0, deferred: 0, pending: 0 };
+      let total = 0;
       let notSkip = 0;
       for (const r of rows) {
+        if (r.total) {
+          total = r.c;
+          continue;
+        }
         notSkip += r.c;
         if (r.outcome && r.outcome in counts) {
           counts[r.outcome as keyof LedgerCounts] = r.c;
