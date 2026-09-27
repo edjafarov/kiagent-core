@@ -10,6 +10,7 @@ import type {
 import type { MarketplaceListItem } from '@shared/ipc';
 import { sourceBrand, type Brand } from '@shared/web-ui/ui';
 import { matchInstalled, storeBrandId } from '@renderer/extensions/match';
+import { sourceBrandOf } from './source-brand';
 
 const BUILT_IN_SENTENCES: Record<string, string> = {
   gmail: 'Mail, indexed and searchable',
@@ -67,10 +68,7 @@ export function buildCatalog(input: {
         BUILT_IN_SENTENCES[d.id] ??
         (owner && listingOf.get(owner.id)?.description) ??
         '',
-      brand: sourceBrand(d.id, {
-        name: d.name,
-        iconDataUrl: owner?.iconDataUrl,
-      }),
+      brand: sourceBrandOf(d.id, d.name, extensions),
       // No extension owns it: it ships with the app.
       footer:
         n > 0

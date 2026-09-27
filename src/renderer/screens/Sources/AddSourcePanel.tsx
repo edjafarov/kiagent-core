@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ConnectEvent } from '@shared/ipc';
 import type { Account, AccountId, FolderNode } from '@shared/contracts';
 import { Icon } from '@shared/web-ui/icon-sprite';
-import { Card } from '@shared/web-ui/ui';
+import { BrandGlyph, Card } from '@shared/web-ui/ui';
 import { useAppState } from '@renderer/state/app-state';
 import { FolderPickerField } from '@renderer/components/FolderPickerField';
 import { FolderPickerModal } from '@renderer/components/folder-picker/FolderPickerModal';
@@ -14,7 +14,7 @@ import {
 } from './connect-picker-adapter';
 import { schemaFields, schemaGuidance } from './prompt-guidance';
 import { GuidanceSteps } from './GuidanceSteps';
-import { SourceGlyph } from './source-brand';
+import { sourceBrandOf } from './source-brand';
 import { useSourceDescriptors } from './sources-registry';
 import { openFlow } from './flow-client';
 
@@ -147,6 +147,7 @@ export function AddSourcePanel(props: {
   // `pick`'s A-4 machine-scoped lookup always sees the CURRENT projection
   // rather than a snapshot from whenever the panel mounted.
   const accountEntries = useAppState((s) => s.accounts);
+  const extensions = useAppState((s) => s.extensions);
   const [flow, setFlow] = useState<FlowState | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [addError, setAddError] = useState<string | null>(null);
@@ -462,7 +463,14 @@ export function AddSourcePanel(props: {
       <div className="as-panel">
         <Card className="as-wizard" aria-label="Connect">
           <div className="as-wizard-head">
-            <SourceGlyph sourceId={flow.sourceId} size={32} />
+            <BrandGlyph
+              brand={sourceBrandOf(
+                flow.sourceId,
+                sourceLabel(flow.sourceId, descriptors),
+                extensions,
+              )}
+              size={32}
+            />
             <span className="h-section">
               {flow.mode === 'reconnect'
                 ? 'Reconnect'
