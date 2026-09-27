@@ -13,7 +13,6 @@ import './GateLayout.css';
 export function GateLayout(props: {
   tagline: React.ReactNode;
   blurb: React.ReactNode;
-  footer?: React.ReactNode;
   children: React.ReactNode;
 }): React.ReactElement {
   return (
@@ -31,12 +30,8 @@ export function GateLayout(props: {
         <div className="gate-col">
           {props.children}
           <div className="gate-foot">
-            {props.footer ?? (
-              <>
-                <Icon name="shield" size={12} />
-                <span>No telemetry · your data stays local</span>
-              </>
-            )}
+            <Icon name="shield" size={12} />
+            <span>No telemetry · your data stays local</span>
           </div>
         </div>
       </div>

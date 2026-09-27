@@ -92,13 +92,31 @@
   width: 100%;
   justify-content: center;
 }
+/* Gate actions can carry an email ("… start fresh as ada@…"): wrap
+   instead of overflowing the column. */
+.gate-form > .ui-btn,
+.gate-col > .ui-btn {
+  height: auto;
+  min-height: 36px;
+  padding-block: 8px;
+  white-space: normal;
+  text-align: center;
+}
 .gate-center {
   align-self: center;
 }
-.gate-status,
-.gate-err {
+.gate-err,
+.gate-note {
   font-size: 12px;
   line-height: 1.5;
+}
+.gate-note {
+  color: var(--text-tertiary);
+}
+/* A sentence-long status (wraps a `Status`, which is nowrap by default). */
+.gate-status .ui-status {
+  white-space: normal;
+  align-items: flex-start;
 }
 .gate-err {
   color: var(--error-solid);

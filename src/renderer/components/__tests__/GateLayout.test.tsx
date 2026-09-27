@@ -20,16 +20,6 @@ describe('GateLayout', () => {
     expect(brand).toHaveTextContent('Tag line');
     expect(brand).toHaveTextContent('A blurb');
   });
-
-  it('takes a footer of its own', () => {
-    render(
-      <GateLayout tagline="t" blurb="b" footer="Own footer">
-        <div />
-      </GateLayout>,
-    );
-    expect(screen.getByText('Own footer')).toBeInTheDocument();
-    expect(screen.queryByText(/No telemetry/)).not.toBeInTheDocument();
-  });
 });
 
 describe('BootSplash', () => {
