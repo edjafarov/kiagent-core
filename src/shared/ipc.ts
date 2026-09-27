@@ -488,6 +488,11 @@ export interface Invokes {
   'scheduler:trigger': { req: { id: string }; res: void };
 
   'storage:stats': { req: void; res: StorageStats };
+  /** Items that entered memory in the last 24 hours, per account. */
+  'storage:added-24h': {
+    req: void;
+    res: Array<{ accountId: AccountId; count: number }>;
+  };
   'maintenance:compact': { req: void; res: void };
   'maintenance:export': { req: { destDir: string }; res: void };
   'maintenance:reset-all': { req: void; res: FactoryResetOutcome };
@@ -707,6 +712,7 @@ const INVOKE_CHANNEL_MAP = {
   'scheduler:jobs': 0,
   'scheduler:trigger': 0,
   'storage:stats': 0,
+  'storage:added-24h': 0,
   'maintenance:compact': 0,
   'maintenance:export': 0,
   'maintenance:reset-all': 0,

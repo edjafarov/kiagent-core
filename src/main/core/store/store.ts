@@ -185,6 +185,12 @@ export interface ScheduleRow {
  * this type — they get the plain `Store` slices their caps allow.
  */
 export interface CoreStore extends Store {
+  /** Documents that entered the store at or after `since` (ISO), per
+   *  account — new items only: updates, moves and restores of older
+   *  documents do not count. Archived documents are left out. */
+  addedSince(
+    since: string,
+  ): Promise<Array<{ accountId: AccountId; count: number }>>;
   createAccount(a: {
     source: string;
     identifier: string;
@@ -977,6 +983,41 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
   const store: CoreStore = {
     read: query,
+
+    async addedSince(since) {
+      // The change log is append-only and stamped as it is written, so
+      // `at` rises with `seq`: find the first change at/after `since` by
+      // bisecting the primary key (no index on `at`), then join the
+      // document changes from there to the documents they inserted.
+      const max =
+        (
+          (await db.all(`SELECT MAX(seq) AS m FROM changes`))[0] as {
+            m: number | null;
+          }
+        ).m ?? 0;
+      let lo = 1;
+      let hi = max + 1;
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        const row = (
+          await db.all(
+            `SELECT seq, at FROM changes WHERE seq >= ? ORDER BY seq LIMIT 1`,
+            [mid],
+          )
+        )[0] as { seq: number; at: string } | undefined;
+        if (!row || row.at >= since) hi = mid;
+        else lo = row.seq + 1;
+      }
+      if (lo > max) return [];
+      return (await db.all(
+        `SELECT d.account_id AS accountId, COUNT(*) AS count
+           FROM changes c
+           JOIN documents d ON d.id = c.ref_id AND d.ingest_seq = c.seq
+          WHERE c.seq >= ? AND c.kind = 'document' AND d.archived_at IS NULL
+          GROUP BY d.account_id`,
+        [lo],
+      )) as Array<{ accountId: AccountId; count: number }>;
+    },
 
     async extractionStats() {
       // pendingOcr is a display-level approximation of the vision worker's

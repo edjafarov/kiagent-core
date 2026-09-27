@@ -687,6 +687,8 @@ function registerIpc(
         dbDiagnostics: (await p.db.plugin?.({ op: 'diagnostics' })) ?? null,
       };
     },
+    'storage:added-24h': () =>
+      p.store.addedSince(new Date(Date.now() - 24 * 3_600_000).toISOString()),
     'maintenance:compact': () => p.store.maintenance.compact(),
     'maintenance:export': async ({ destDir }) => {
       let dir = destDir;
