@@ -1420,7 +1420,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async setAccountStatus(id, patch) {
-      // Engines call this every pull cycle, mostly with the status the
+      // Reconcile passes and reconnects call this, mostly with the status the
       // account already has. Write — and log a change, and wake every feed —
       // only when the status or last_error actually differs. changes() in
       // the INSERT reads the UPDATE's row count: batch() runs both steps on

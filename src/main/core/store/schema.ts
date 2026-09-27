@@ -57,8 +57,10 @@ const QUERY_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [
   },
   // Backs ledgerCountsAll() (store.ts), which the processing-counter tick
   // runs every 5 s. Almost every ledger row is a terminal 'skip', so the
-  // index holds only the rest (NULL outcomes included); queries must repeat
-  // `outcome IS NOT 'skip'` for the planner to prove this partial WHERE.
+  // index holds only the rest (NULL outcomes included). A query uses it only
+  // if it repeats `outcome IS NOT 'skip'` (the planner must prove this
+  // partial WHERE). ledgerDeferred/ledgerHasDeferred don't yet: alpha-cent's
+  // vision patch anchors on their exact SQL and adds the term itself.
   {
     name: 'work_ledger_active',
     sql: `CREATE INDEX work_ledger_active ON work_ledger(consumer, outcome, seq) WHERE outcome IS NOT 'skip'`,
