@@ -232,7 +232,6 @@ export function outboundInvokeHandlers(deps: {
       const detail: OutboxDraftDetail = {
         ...panelRow(row, await store.account(row.accountId)),
         body: row.bodyMarkdown,
-        confirmMode: row.confirmMode,
       };
       return detail;
     },

@@ -608,7 +608,6 @@ describe('outbound ipc delegate', () => {
       draftId: r.draft_id,
       status: 'draft',
       body: 'Full\nbody',
-      confirmMode: 'review',
       sourceId: 'imap',
       accountLabel: 'me@example.com@imap.example.com',
       to: ['Alice <alice@example.com>'],

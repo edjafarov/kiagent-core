@@ -49,3 +49,7 @@
 .ob-note.is-err {
   color: var(--text-primary);
 }
+.ob-foot-warn {
+  margin-right: auto;
+  color: var(--text-primary);
+}

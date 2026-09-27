@@ -16,7 +16,6 @@ import type {
   LogRecord,
   McpActivityRecord,
   OAuthSourceBinding,
-  ConfirmMode,
   OutboxStatus,
   ProviderStatus,
   Query,
@@ -301,7 +300,6 @@ export interface OutboxPanelRow {
 /** One draft in full, for the in-app review. */
 export interface OutboxDraftDetail extends OutboxPanelRow {
   body: string;
-  confirmMode: ConfirmMode;
 }
 
 /** What the in-app Send did, with the row as it now stands (its `error`

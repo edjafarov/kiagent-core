@@ -111,6 +111,7 @@ export function Outbox(): React.ReactElement {
           key={open}
           draftId={open}
           sourceName={sourceName}
+          onOpen={setOpen}
           onClose={() => setOpen(null)}
         />
       )}

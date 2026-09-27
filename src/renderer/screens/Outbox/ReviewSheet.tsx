@@ -44,9 +44,11 @@ function errorText(e: unknown): string {
 export function ReviewSheet(props: {
   draftId: string;
   sourceName: (sourceId: string) => string;
+  /** Opens another message (the fresh draft after Draft again). */
+  onOpen: (draftId: string) => void;
   onClose: () => void;
 }): React.ReactElement {
-  const [draftId, setDraftId] = useState(props.draftId);
+  const { draftId } = props;
   const [detail, setDetail] = useState<OutboxDraftDetail | null | 'loading'>(
     'loading',
   );
@@ -65,9 +67,6 @@ export function ReviewSheet(props: {
   }, [draftId]);
 
   useEffect(() => {
-    setDetail('loading');
-    setError(null);
-    setConfirmRedraft(false);
     read();
     // A send from the browser page, or an expiry, while this is open.
     return window.kiagent.on('push:outbox-changed', read);
@@ -111,7 +110,7 @@ export function ReviewSheet(props: {
   const redraft = () =>
     act(async () => {
       const fresh = await window.kiagent.invoke('outbox:redraft', { draftId });
-      setDraftId(fresh.draftId);
+      props.onOpen(fresh.draftId);
     });
 
   const openInBrowser = () =>
@@ -133,7 +132,11 @@ export function ReviewSheet(props: {
   const action = actionFor(d);
   const sendable = action === 'review' || action === 'retry';
   const source = props.sourceName(d.sourceId);
-  const word = statusWord(d);
+  // The list shows no word for a sent row; a single message says so.
+  const word =
+    d.status === 'sent'
+      ? { label: `Sent ${formatRelativeCompact(d.sentAt)}` }
+      : statusWord(d);
 
   const items: KeyValueItem[] = [
     {
@@ -184,14 +187,27 @@ export function ReviewSheet(props: {
         </Button>
       </>
     );
-  else if (
-    action === 'redraft' ||
-    (action === 'redraft-guarded' && confirmRedraft)
-  )
+  else if (action === 'redraft')
     footer = (
       <Button variant="primary" disabled={busy} onClick={() => void redraft()}>
-        {action === 'redraft' ? 'Draft again' : 'Draft again anyway'}
+        Draft again
       </Button>
+    );
+  else if (action === 'redraft-guarded' && confirmRedraft)
+    // The warning sits beside the button it guards, never scrolled away.
+    footer = (
+      <>
+        <span className="ob-foot-warn">
+          It may already have been delivered — check the Sent folder first.
+        </span>
+        <Button
+          variant="primary"
+          disabled={busy}
+          onClick={() => void redraft()}
+        >
+          Draft again anyway
+        </Button>
+      </>
     );
   else if (action === 'redraft-guarded')
     footer = (
@@ -226,12 +242,6 @@ export function ReviewSheet(props: {
         </Disclosure>
       )}
       <div className="ob-body">{d.body}</div>
-      {confirmRedraft && (
-        <p className="ob-note is-warn">
-          It may already have been delivered. Check the Sent folder first —
-          sending it again could reach them twice.
-        </p>
-      )}
       {error && <p className="ob-note is-err">{error}</p>}
       {sendable && (
         <p className="ob-note">Nothing is sent until you press Send.</p>

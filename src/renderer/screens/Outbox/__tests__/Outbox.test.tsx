@@ -125,7 +125,7 @@ let sendResult: { outcome: string; row: OutboxPanelRow | null };
 function detail(id: string): OutboxDraftDetail | null {
   const fresh = row({ draftId: 'fresh', status: 'draft', createdVia: 'panel' });
   const r = [...rows, fresh].find((x) => x.draftId === id);
-  return r ? { ...r, body: `Full body of ${id}`, confirmMode: 'review' } : null;
+  return r ? { ...r, body: `Full body of ${id}` } : null;
 }
 
 beforeEach(() => {
@@ -452,6 +452,7 @@ test('review: Open in browser uses the signed page', async () => {
 test('review: a sent message opens read-only', async () => {
   const s = await openReview('sent');
   expect(s).toHaveTextContent('Message');
+  expect(s).toHaveTextContent('Sent 45m ago');
   expect(within(s).queryByRole('button', { name: 'Send' })).toBeNull();
   // The footer's Close beside the sheet's own close control.
   expect(within(s).getAllByRole('button', { name: 'Close' })).toHaveLength(2);
