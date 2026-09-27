@@ -1,29 +1,5 @@
-/* Settings shell layout + per-pane primitives — uses tokens.css /
-   components.css (shared). Ported from the legacy renderer's
-   Settings.css (see docs/screens/settings-*.html mockups), trimmed to what
-   this rebuild's contracts.ts actually exposes (e.g. no per-segment storage
-   distribution bar — StorageStats has no per-connector breakdown). */
+/* Settings panes: the few layout helpers the ui primitives do not cover. */
 
-.set-shell {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-}
-
-.set-sidebar {
-  width: 168px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--sidebar-border);
-  background: var(--bg-sidebar);
-  padding: 10px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.set-sidebar .lbl-section {
-  padding: 3px 8px;
-  margin-bottom: 2px;
-}
 button.side-item {
   border: none;
   background: transparent;
@@ -33,34 +9,6 @@ button.side-item {
   width: 100%;
 }
 
-.set-pane {
-  flex: 1;
-  min-width: 0;
-  padding: 14px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  overflow-y: auto;
-  background: var(--bg-app);
-}
-
-/* ── Account: identity row + inline edit form ─────────────────────────── */
-.acct-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-}
-.acct-edit {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-}
 .avatar {
   width: 32px;
   height: 32px;
@@ -79,39 +27,6 @@ button.side-item {
   height: 100%;
   object-fit: cover;
   display: block;
-}
-
-/* ── Shared preference list (toggle rows) ─────────────────────────────── */
-.pref-list {
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-}
-.pref-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-}
-.pref-row + .pref-row {
-  border-top: 1px solid var(--bg-muted);
-}
-.pref-row .pref-meta {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
-}
-.pref-row .pref-label {
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-.pref-row .pref-desc {
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-top: 2px;
 }
 
 .toggle {
@@ -148,19 +63,6 @@ button.side-item {
 .toggle:disabled {
   cursor: not-allowed;
   opacity: 0.6;
-}
-
-/* Plain radio row — Local processing's "window" choice (always/idle/night). */
-.radio-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-.radio-row input[disabled] {
-  cursor: not-allowed;
 }
 
 /* ── Field rows (Advanced's log-level select) ─────────────────────────── */
@@ -203,93 +105,6 @@ button.side-item {
   outline: none;
   border-color: var(--border-focus);
   box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.18);
-}
-
-/* ── Storage: metric tiles, data-folder path row, danger zone ─────────── */
-.metric-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-.metric-tile {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.metric-tile .label {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-secondary);
-}
-.metric-tile .value {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-.metric-tile .sub {
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-.path-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-}
-.path-row .lbl {
-  font-size: 11px;
-  color: var(--text-secondary);
-  width: 100px;
-}
-.path-row .mono {
-  font-size: 11.5px;
-}
-
-.danger-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.danger-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-}
-.danger-item .copy {
-  flex: 1;
-}
-.danger-item .copy .h {
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-.danger-item .copy .d {
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-top: 2px;
-}
-
-/* ── Local processing: empty state for the provider list ──────────────── */
-.lp-empty {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
 }
 
 /* ── Airy panes: the few pane-level pieces the primitives don't carry ── */
