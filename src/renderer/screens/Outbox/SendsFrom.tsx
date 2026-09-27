@@ -35,8 +35,7 @@ export function SendsFrom(props: {
       <CardHeader label="Sends from" />
       {sources !== null && senders.length === 0 ? (
         <EmptyState>
-          No account can send yet — connect Gmail, Outlook or a chat app in
-          Sources.
+          No account can send yet — connect an email or chat account in Sources.
         </EmptyState>
       ) : (
         <Rows aria-label="Accounts that can send">

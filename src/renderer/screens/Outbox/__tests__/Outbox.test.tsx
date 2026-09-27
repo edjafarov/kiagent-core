@@ -118,7 +118,8 @@ const ROWS: OutboxPanelRow[] = [
 ];
 
 let rows: OutboxPanelRow[];
-let push: (() => void) | null;
+let listeners: Set<() => void>;
+const push = () => listeners.forEach((fn) => fn());
 let invoke: jest.Mock;
 let sendResult: { outcome: string; row: OutboxPanelRow | null };
 
@@ -131,7 +132,7 @@ function detail(id: string): OutboxDraftDetail | null {
 beforeEach(() => {
   jest.useFakeTimers({ now: NOW, doNotFake: ['queueMicrotask'] });
   rows = ROWS;
-  push = null;
+  listeners = new Set();
   sendResult = { outcome: 'sent', row: null };
   mockState.prefs.outbound.defaultMode = 'review';
   invoke = jest.fn((channel: string, payload?: any) => {
@@ -165,8 +166,9 @@ beforeEach(() => {
   (window as any).kiagent = {
     invoke,
     on: jest.fn((channel: string, fn: () => void) => {
-      if (channel === 'push:outbox-changed') push = fn;
-      return () => {};
+      if (channel !== 'push:outbox-changed') return () => {};
+      listeners.add(fn);
+      return () => listeners.delete(fn);
     }),
   };
 });
@@ -327,7 +329,7 @@ test('a failed refresh keeps the rows and says they may be out of date', async (
       ? Promise.reject(new Error('boom'))
       : Promise.resolve([]),
   );
-  await act(async () => push?.());
+  await act(async () => push());
   expect(screen.getByText(/Couldn’t refresh/)).toBeInTheDocument();
   expect(within(history()).getAllByRole('button').length).toBeGreaterThan(0);
 });
@@ -335,7 +337,7 @@ test('a failed refresh keeps the rows and says they may be out of date', async (
 test('a push re-reads the outbox', async () => {
   await mount();
   rows = [];
-  await act(async () => push?.());
+  await act(async () => push());
   expect(screen.getByText(/Nothing sent yet/)).toBeInTheDocument();
   expect(screen.queryByRole('list', { name: 'Waiting for you' })).toBeNull();
 });
@@ -476,4 +478,18 @@ test('review: a maybe-delivered message drafts again only after a confirmation',
   expect(invoke).toHaveBeenCalledWith('outbox:redraft', { draftId: 'unsure' });
   expect(sheet()).toHaveTextContent('Full body of fresh');
   expect(sheet()).toHaveTextContent('You, from the Outbox');
+});
+
+test('a send from the browser updates the list and the open review together', async () => {
+  const s = await openReview('wait');
+  expect(within(s).getByRole('button', { name: 'Send' })).toBeInTheDocument();
+  rows = rows.map((r) =>
+    r.draftId === 'wait'
+      ? { ...r, status: 'sent', sentAt: iso(24, 11, 36) }
+      : r,
+  );
+  await act(async () => push());
+  expect(screen.queryByRole('list', { name: 'Waiting for you' })).toBeNull();
+  expect(within(sheet()).queryByRole('button', { name: 'Send' })).toBeNull();
+  expect(sheet()).toHaveTextContent('Sent');
 });
