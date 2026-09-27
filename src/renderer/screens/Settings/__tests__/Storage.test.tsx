@@ -95,6 +95,49 @@ describe('Storage reset and the afterWipe step', () => {
     );
   });
 
+  it('keeps the order: no afterWipe or dialog before the wipe answers, no dialog before afterWipe answers', async () => {
+    let answerWipe: (o: FactoryResetOutcome) => void = () => {};
+    let answerStep: (s: string | null) => void = () => {};
+    setup();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'storage:stats') return Promise.resolve(STATS);
+      if (channel === 'maintenance:reset-all')
+        return new Promise<FactoryResetOutcome>((r) => {
+          answerWipe = r;
+        });
+      return Promise.resolve(undefined);
+    });
+    const afterWipe = jest.fn(
+      () =>
+        new Promise<string | null>((r) => {
+          answerStep = r;
+        }),
+    );
+    await reset(afterWipe);
+    expect(afterWipe).not.toHaveBeenCalled();
+    expect(alert).not.toHaveBeenCalled();
+    await act(async () => answerWipe(wiped));
+    expect(afterWipe).toHaveBeenCalledTimes(1);
+    expect(alert).not.toHaveBeenCalled();
+    await act(async () => answerStep('Step done.'));
+    expect(alert).toHaveBeenCalledWith('All local data was wiped. Step done.');
+  });
+
+  it('a committed wipe with recovery failures still runs afterWipe', async () => {
+    setup({
+      ok: false,
+      coreWiped: true,
+      failed: [{ pluginId: 'x.mail', error: 'boom' }],
+      error: null,
+    });
+    const afterWipe = jest.fn().mockResolvedValue(null);
+    await reset(afterWipe);
+    expect(afterWipe).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith(
+      expect.stringMatching(/^All local data was wiped, but x\.mail/),
+    );
+  });
+
   it.each([
     ['stopped before the core wipe', false],
     ['could not tell', null],
