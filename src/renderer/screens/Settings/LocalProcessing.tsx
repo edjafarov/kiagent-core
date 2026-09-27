@@ -16,6 +16,7 @@ import {
   SettingsRow,
   Status,
   Toggle,
+  computerNoun,
 } from '@shared/web-ui/ui';
 import type { AppPrefs, LaneState, ProviderStatus } from '@shared/contracts';
 import type { Invokes } from '@shared/ipc';
@@ -25,14 +26,6 @@ type ProviderRow = Invokes['inference:providers']['res'][number];
 type ExtractionStatsRes = Invokes['inference:stats']['res'];
 type ModelsRes = Invokes['inference:models']['res'];
 type ModelsPrefs = AppPrefs['models'];
-
-/** "Mac" on macOS, "computer" elsewhere. Read at call time (not module
- *  load) so a test can say which platform it describes. */
-function machine(): string {
-  return typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform)
-    ? 'Mac'
-    : 'computer';
-}
 
 const WINDOWS: ReadonlyArray<{ key: ProcessingWindow; label: string }> = [
   { key: 'always', label: 'Always' },
@@ -56,7 +49,7 @@ export function pausedLine(lane: LaneState): string | null {
       return 'Paused — runs overnight (22:00–07:00).';
     case 'until-idle':
     default:
-      return `Paused — waiting for this ${machine()} to be idle.`;
+      return `Paused — waiting for this ${computerNoun()} to be idle.`;
   }
 }
 
@@ -84,7 +77,7 @@ function modelSummary(override: string, catalog: ModelsRes | null): string {
   const tier = catalog?.options.find((o) => o.id === catalog.selectedId);
   const picked = tier ? ` (${tier.label}, ${gb(tier.totalBytes)} GB)` : '';
   if (override === 'auto')
-    return `Auto — picked for this ${machine()}${picked}`;
+    return `Auto — picked for this ${computerNoun()}${picked}`;
   const chosen = catalog?.options.find((o) => o.id === override);
   return chosen ? `${chosen.label}, ${gb(chosen.totalBytes)} GB` : override;
 }
@@ -252,11 +245,11 @@ export function LocalProcessing(): React.ReactElement {
 
       <SettingsGroup>
         <SettingsRow
-          title={`Read files on this ${machine()}`}
-          description={`Reads scans, photos and recordings on this ${machine()}. Nothing leaves it.`}
+          title={`Read files on this ${computerNoun()}`}
+          description={`Reads scans, photos and recordings on this ${computerNoun()}. Nothing leaves it.`}
           control={
             <Toggle
-              aria-label={`Read files on this ${machine()}`}
+              aria-label={`Read files on this ${computerNoun()}`}
               checked={processing.enabled}
               onChange={(v) =>
                 patch({ processing: { ...processing, enabled: v } })
@@ -299,7 +292,9 @@ export function LocalProcessing(): React.ReactElement {
                 patch({ models: { ...models, override: e.target.value } })
               }
             >
-              <option value="auto">Auto — picked for this {machine()}</option>
+              <option value="auto">
+                Auto — picked for this {computerNoun()}
+              </option>
               {modelCatalog?.options.map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.label} — {gb(o.totalBytes)} GB
