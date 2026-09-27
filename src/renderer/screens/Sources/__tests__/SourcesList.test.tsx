@@ -10,6 +10,7 @@ import {
 } from '../SourcesList';
 import { Sources } from '..';
 import { SourceDescriptorsProvider } from '../sources-registry';
+import { invalidateCatalog } from '../use-catalog';
 
 let mockState: Partial<AppState>;
 jest.mock('@renderer/state/app-state', () => ({
@@ -88,6 +89,7 @@ function seed(
 }
 
 beforeEach(() => {
+  invalidateCatalog();
   invoke = jest.fn((channel: string) => {
     if (channel === 'sources:list') return Promise.resolve(DESCRIPTORS);
     if (channel === 'marketplace:list') return Promise.resolve([]);

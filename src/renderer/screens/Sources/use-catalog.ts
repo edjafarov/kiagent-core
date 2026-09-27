@@ -15,6 +15,27 @@ export interface CatalogState {
   retryStore: () => void;
 }
 
+// One store listing per session, shared by every catalog on screen. A
+// failed fetch is forgotten so the next mount or retry asks again; an
+// install or uninstall forgets it too (invalidateCatalog).
+let storeListing: Promise<MarketplaceListItem[]> | null = null;
+
+function fetchStore(): Promise<MarketplaceListItem[]> {
+  if (!storeListing) {
+    const listing = window.kiagent.invoke('marketplace:list', undefined);
+    storeListing = listing;
+    listing.catch(() => {
+      if (storeListing === listing) storeListing = null;
+    });
+  }
+  return storeListing;
+}
+
+/** Drops the shared store listing; the next catalog mount fetches it again. */
+export function invalidateCatalog(): void {
+  storeListing = null;
+}
+
 /** The one catalog, loaded: sources now, the store when it answers. The
  *  provider's descriptors already leave out the policy's hidden sources. */
 export function useCatalog(opts: { query?: string } = {}): CatalogState {
@@ -34,8 +55,7 @@ export function useCatalog(opts: { query?: string } = {}): CatalogState {
   const loadStore = useCallback(() => {
     setStoreError(null);
     setItems(null);
-    window.kiagent
-      .invoke('marketplace:list', undefined)
+    fetchStore()
       .then((list) => {
         if (alive.current) setItems(list);
       })

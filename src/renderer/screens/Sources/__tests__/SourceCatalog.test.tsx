@@ -5,6 +5,7 @@ import type { AppState, ExtensionSnapshot } from '@shared/contracts';
 import { ViewContext, type ViewContextValue } from '@renderer/state/view';
 import { SourceCatalog } from '../SourceCatalog';
 import { SourceDescriptorsProvider } from '../sources-registry';
+import { invalidateCatalog } from '../use-catalog';
 import { Sources } from '..';
 
 let mockState: Partial<AppState>;
@@ -71,6 +72,7 @@ function dropboxExt(status: ExtensionSnapshot['status']): ExtensionSnapshot {
 }
 
 beforeEach(() => {
+  invalidateCatalog();
   descriptors = [GMAIL, SLACK];
   mockState = {
     extensions: [],

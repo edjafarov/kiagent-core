@@ -7,6 +7,7 @@ import type {
   ExtensionSnapshot,
   OAuthSourceBinding,
 } from '@shared/contracts';
+import { invalidateCatalog } from '../screens/Sources/use-catalog';
 
 export type InstallMode = 'install' | 'update' | 'review';
 
@@ -63,12 +64,13 @@ export function useExtensionInstall(): ExtensionInstall {
     async (
       call: () => Promise<{ ok: boolean; error?: string }>,
       fail: string,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       setError(null);
       setBusy(true);
       try {
         const r = await call();
         if (alive.current && !r.ok) setError(r.error ?? fail);
+        return r.ok;
       } finally {
         if (alive.current) setBusy(false);
       }
@@ -147,6 +149,7 @@ export function useExtensionInstall(): ExtensionInstall {
           : await window.kiagent.invoke('extension:install-commit', {
               token: consent.token!,
             });
+      if (r.ok && consent.mode !== 'review') invalidateCatalog();
       if (alive.current) {
         if (!r.ok) setError(r.error ?? 'operation failed');
         setConsent(null);
@@ -160,21 +163,24 @@ export function useExtensionInstall(): ExtensionInstall {
   const cancel = useCallback(() => setConsent(null), []);
 
   const uninstall = useCallback(
-    (id: string) =>
-      run(
+    async (id: string): Promise<void> => {
+      const ok = await run(
         () => window.kiagent.invoke('extension:uninstall', { id }),
         'uninstall failed',
-      ),
+      );
+      if (ok) invalidateCatalog();
+    },
     [run],
   );
 
   const setEnabled = useCallback(
-    (id: string, on: boolean) =>
-      run(
+    async (id: string, on: boolean): Promise<void> => {
+      await run(
         () =>
           window.kiagent.invoke('extension:set-enabled', { id, enabled: on }),
         'operation failed',
-      ),
+      );
+    },
     [run],
   );
 
