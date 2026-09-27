@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DEFAULT_PRODUCT_NAME } from '@shared/product';
 import { About } from '../About';
 
@@ -72,14 +72,29 @@ describe('About brand name', () => {
   });
 
   it('keeps the repository identity independent of the product name', async () => {
-    // Re-branding the app must NOT re-brand the OSS repo links/labels.
+    // Re-branding the app must NOT re-brand the OSS repo links.
     mockBridge(appInfo('Acme Assistant'));
+    const open = jest.spyOn(window, 'open').mockImplementation(() => null);
     render(<About />);
     await waitFor(() =>
       expect(screen.getByText('Acme Assistant')).toBeInTheDocument(),
     );
+    fireEvent.click(screen.getByRole('button', { name: /GitHub/ }));
+    expect(open).toHaveBeenCalledWith(
+      'https://github.com/edjafarov/kiagent-core',
+      '_blank',
+    );
+    open.mockRestore();
+  });
+
+  it('lists version, platform and license, and no update controls', async () => {
+    mockBridge(appInfo('Acme Assistant'));
+    render(<About />);
+    await waitFor(() => expect(screen.getByText('1.2.3')).toBeInTheDocument());
+    expect(screen.getByText('macOS')).toBeInTheDocument();
+    expect(screen.getByText('MIT')).toBeInTheDocument();
     expect(
-      screen.getByText('github.com/edjafarov/kiagent-core'),
-    ).toBeInTheDocument();
+      screen.queryByRole('button', { name: /check/i }),
+    ).not.toBeInTheDocument();
   });
 });

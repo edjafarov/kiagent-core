@@ -1,18 +1,28 @@
 import React from 'react';
+import { General } from './General';
 import { Account } from './Account';
 import { Storage } from './Storage';
 import { LocalProcessing } from './LocalProcessing';
-import { Advanced } from './Advanced';
 import { Extensions } from './Extensions';
 import { About } from './About';
 import { SettingsPage, type SettingsPaneDef } from './SettingsPage';
 
-/**
- * Settings page panes. Panes print their own titles until each moves onto
- * the settings rows.
- */
+/** Settings page panes. A pane key is part of the route, so keys never
+ *  change once shipped (`local` is labelled Local AI). */
 const PANES: readonly SettingsPaneDef[] = [
+  {
+    key: 'general',
+    label: 'General',
+    icon: 'sliders',
+    render: () => <General />,
+  },
   { key: 'account', label: 'Account', icon: 'user', render: () => <Account /> },
+  {
+    key: 'local',
+    label: 'Local AI',
+    icon: 'cpu',
+    render: () => <LocalProcessing />,
+  },
   {
     key: 'storage',
     label: 'Storage',
@@ -20,22 +30,11 @@ const PANES: readonly SettingsPaneDef[] = [
     render: () => <Storage />,
   },
   {
-    key: 'local',
-    label: 'Local processing',
-    icon: 'cpu',
-    render: () => <LocalProcessing />,
-  },
-  {
     key: 'extensions',
     label: 'Extensions',
     icon: 'puzzle',
+    ownTitle: true,
     render: () => <Extensions />,
-  },
-  {
-    key: 'advanced',
-    label: 'Advanced',
-    icon: 'sliders',
-    render: () => <Advanced />,
   },
   { key: 'about', label: 'About', icon: 'info', render: () => <About /> },
 ];

@@ -15,8 +15,9 @@ export function Segmented<K extends string>(props: {
   value: K;
   onChange: (key: K) => void;
   'aria-label': string;
+  disabled?: boolean;
 }): React.ReactElement {
-  const { items, value, onChange } = props;
+  const { items, value, onChange, disabled } = props;
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const move = (to: number): void => {
@@ -49,6 +50,7 @@ export function Segmented<K extends string>(props: {
             role="tab"
             aria-selected={active}
             tabIndex={active ? 0 : -1}
+            disabled={disabled}
             className={cx('ui-seg-i', active && 'is-on')}
             onClick={() => onChange(item.key)}
             onKeyDown={(e) => onKeyDown(e, i)}

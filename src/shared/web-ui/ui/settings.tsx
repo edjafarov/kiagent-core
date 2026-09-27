@@ -55,11 +55,20 @@ export function SettingsLayout(props: {
 
 export function SettingsGroup(props: {
   title?: React.ReactNode;
+  /** Muted words after the title, e.g. "that can reach your memory". */
+  meta?: React.ReactNode;
   children: React.ReactNode;
 }): React.ReactElement {
   return (
     <section className="ui-set-group">
-      {props.title != null && <h3 className="ui-set-gt">{props.title}</h3>}
+      {props.title != null && (
+        <h3 className="ui-set-gt">
+          {props.title}
+          {props.meta != null && (
+            <span className="ui-set-gm">{props.meta}</span>
+          )}
+        </h3>
+      )}
       <div className="ui-set-card">{props.children}</div>
     </section>
   );

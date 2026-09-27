@@ -505,6 +505,7 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-seg-i:hover { background: var(--bg-muted); color: var(--text-primary); }
 .ui-seg-i:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
 .ui-seg-i.is-on { background: var(--accent-deep); color: #ffffff; }
+.ui-seg-i:disabled { opacity: 0.5; cursor: default; }
 .ui-seg-n { font-weight: 600; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .ui-seg-i.is-on .ui-seg-n { color: #d4c8f5; }
 .ui-seg-n.is-work { color: var(--working-solid); }
@@ -867,6 +868,21 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-chip:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
 .ui-chip-n { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-secondary); }
 .ui-chip-act { font-weight: 600; color: var(--accent-text); }
+.ui-chip.is-static { cursor: default; gap: 8px; padding-right: 6px; }
+.ui-chip.is-static:hover { border-color: var(--card-edge); }
+.ui-chip-x {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-size: 15px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.ui-chip-x:hover { color: var(--text-primary); }
+.ui-chip-x:focus-visible { outline: 2px solid var(--border-focus); }
 
 /* ── Settings frame ───────────────────────────────────────────────── */
 .ui-set { display: flex; flex: 1; min-height: 0; }
@@ -921,6 +937,14 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--label-color);
+}
+.ui-set-gm {
+  margin-left: 12px;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
 }
 .ui-set-card {
   padding: 2px 20px;

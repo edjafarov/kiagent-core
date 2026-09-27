@@ -100,6 +100,15 @@ describe('Chip action and EntityHeading', () => {
     expect(onClick).toHaveBeenCalled();
   });
 
+  test('a removable chip is a label with a named remove button', () => {
+    const onRemove = jest.fn();
+    const { container } = render(<Chip name="Signal" onRemove={onRemove} />);
+    expect(container.querySelector('.ui-mk')).toBeNull();
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Signal' }));
+    expect(onRemove).toHaveBeenCalled();
+  });
+
   test('a string title is the heading; actions follow', () => {
     render(
       <EntityHeading brand={sourceBrand('gmail')} title="Gmail" meta="a@b.c">

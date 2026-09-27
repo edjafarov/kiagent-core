@@ -8,6 +8,9 @@ export interface SettingsPaneDef {
   key: string;
   label: string;
   icon?: string;
+  /** The pane prints its own heading (a pane with sub-views); otherwise
+   *  the page titles it with its label. */
+  ownTitle?: boolean;
   render: () => React.ReactNode;
 }
 
@@ -29,6 +32,7 @@ export function SettingsPage(props: {
       panes={props.panes}
       active={active.key}
       onSelect={(key) => replaceParams({ pane: key })}
+      title={active.ownTitle ? undefined : active.label}
     >
       {active.render()}
     </SettingsLayout>

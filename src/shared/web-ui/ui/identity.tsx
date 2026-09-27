@@ -91,13 +91,39 @@ export function Avatar(props: {
 }
 
 export function Chip(props: {
-  brand: Brand;
+  /** Omitted: a plain word chip with no mark. */
+  brand?: Brand;
   name: string;
   count?: number;
   /** A verb shown after the name in the accent colour, e.g. "Add". */
   action?: string;
   onClick?: () => void;
+  /** Renders the chip as a label with a trailing × that removes it. */
+  onRemove?: () => void;
 }): React.ReactElement {
+  const body = (
+    <>
+      {props.brand && <BrandMark brand={props.brand} />}
+      <span>{props.name}</span>
+      {props.count != null && <span className="ui-chip-n">{props.count}</span>}
+      {props.action && <span className="ui-chip-act">{props.action}</span>}
+    </>
+  );
+  if (props.onRemove) {
+    return (
+      <span className="ui-chip is-static">
+        {body}
+        <button
+          type="button"
+          className="ui-chip-x"
+          aria-label={`Remove ${props.name}`}
+          onClick={props.onRemove}
+        >
+          ×
+        </button>
+      </span>
+    );
+  }
   return (
     <button
       type="button"
@@ -105,10 +131,7 @@ export function Chip(props: {
       aria-label={props.action ? `${props.action} ${props.name}` : undefined}
       onClick={props.onClick}
     >
-      <BrandMark brand={props.brand} />
-      <span>{props.name}</span>
-      {props.count != null && <span className="ui-chip-n">{props.count}</span>}
-      {props.action && <span className="ui-chip-act">{props.action}</span>}
+      {body}
     </button>
   );
 }

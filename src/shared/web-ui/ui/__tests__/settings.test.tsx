@@ -89,4 +89,15 @@ describe('SettingsGroup and SettingsRow', () => {
       screen.getByRole('switch', { name: 'Launch at login' }),
     ).toBeInTheDocument();
   });
+
+  it('prints the group meta after the title', () => {
+    render(
+      <SettingsGroup title="Devices" meta="that can reach your memory">
+        <span>row</span>
+      </SettingsGroup>,
+    );
+    expect(screen.getByRole('heading', { level: 3 })).toHaveTextContent(
+      'Devicesthat can reach your memory',
+    );
+  });
 });

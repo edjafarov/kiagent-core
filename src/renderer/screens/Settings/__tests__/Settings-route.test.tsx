@@ -10,7 +10,7 @@ jest.mock('../Storage', () => ({ Storage: () => <p>storage pane</p> }));
 jest.mock('../LocalProcessing', () => ({
   LocalProcessing: () => <p>local pane</p>,
 }));
-jest.mock('../Advanced', () => ({ Advanced: () => <p>advanced pane</p> }));
+jest.mock('../General', () => ({ General: () => <p>general pane</p> }));
 jest.mock('../About', () => ({ About: () => <p>about pane</p> }));
 
 function renderAt(pane: string | undefined, replaceParams = jest.fn()) {
@@ -35,14 +35,25 @@ function renderAt(pane: string | undefined, replaceParams = jest.fn()) {
 }
 
 describe('Settings page', () => {
-  it('shows the pane the route names, Account by default', () => {
+  it('shows the pane the route names, General by default', () => {
     renderAt(undefined);
-    expect(screen.getByText('account pane')).toBeInTheDocument();
+    expect(screen.getByText('general pane')).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'General' }),
+    ).toBeInTheDocument();
   });
 
-  it('shows the first pane for a pane it does not have', () => {
-    renderAt('nope');
-    expect(screen.getByText('account pane')).toBeInTheDocument();
+  it('shows the first pane for a pane it does not have, Advanced included', () => {
+    renderAt('advanced');
+    expect(screen.getByText('general pane')).toBeInTheDocument();
+  });
+
+  it('titles a pane with its label; Local AI keeps the local key', () => {
+    renderAt('local');
+    expect(screen.getByText('local pane')).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Local AI' }),
+    ).toBeInTheDocument();
   });
 
   it('switches by rewriting the route and follows the route', () => {

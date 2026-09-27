@@ -64,4 +64,19 @@ describe('Segmented', () => {
     fireEvent.keyDown(done, { key: 'Home' });
     expect(all).toHaveFocus();
   });
+
+  it('disabled tabs ignore clicks', () => {
+    const onChange = jest.fn();
+    render(
+      <Segmented
+        aria-label="When"
+        items={items}
+        value="all"
+        onChange={onChange}
+        disabled
+      />,
+    );
+    fireEvent.click(screen.getByRole('tab', { name: 'Done' }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });
