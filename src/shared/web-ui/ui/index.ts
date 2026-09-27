@@ -31,6 +31,15 @@ export { portalRoot } from './portal';
 export { Menu } from './Menu';
 export type { MenuItem, MenuEntry } from './Menu';
 export { Page, TopBar, Split, Columns, Stack } from './layout';
+export {
+  dayGroup,
+  startOfWeek,
+  clockTime,
+  dayMonth,
+  shortDay,
+  useNow,
+} from './time';
+export type { DayGroupName } from './time';
 export type { Crumb, TopBarProps } from './layout';
 export {
   sourceBrand,

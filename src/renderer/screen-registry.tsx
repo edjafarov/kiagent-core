@@ -58,7 +58,7 @@ export function getDefaultScreens(): ScreenDefinitions {
     // Logs draws its own header row inside the main pane; the sidebar
     // stays visible (it has no nav entry — entered programmatically).
     logs: { factory: () => <Logs /> },
-    outbox: { factory: () => <Outbox /> },
+    outbox: { frame: 'page', factory: () => <Outbox /> },
     marketplace: { factory: () => <Marketplace /> },
     settings: {
       frame: 'page',
