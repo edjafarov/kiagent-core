@@ -48,6 +48,15 @@ const QUERY_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [
     name: 'docs_account_recency',
     sql: `CREATE INDEX docs_account_recency ON documents(account_id, COALESCE(created_at, ingested_at) DESC) WHERE archived_at IS NULL`,
   },
+  // Backs the textless search() by type across ALL accounts with a date
+  // window — how extension pages read their documents (the Calendar page's
+  // calendar.event / meeting.transcript queries). Without it the planner
+  // walks docs_account_recency over the whole corpus and tests `type` row by
+  // row: ~150 ms warm, seconds cold, on a 343k-doc corpus, per query.
+  {
+    name: 'docs_type_recency',
+    sql: `CREATE INDEX docs_type_recency ON documents(type, COALESCE(created_at, ingested_at) DESC) WHERE archived_at IS NULL`,
+  },
 ];
 
 /**

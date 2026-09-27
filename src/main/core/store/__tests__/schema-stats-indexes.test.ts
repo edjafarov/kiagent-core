@@ -255,6 +255,24 @@ describe('schema: query-performance partial indexes', () => {
     );
   });
 
+  it('migrate() leaves docs_type_recency in sqlite_master with the exact desired SQL', () => {
+    expect(indexSql(db, 'docs_type_recency')).toBe(
+      `CREATE INDEX docs_type_recency ON documents(type, COALESCE(created_at, ingested_at) DESC) WHERE archived_at IS NULL`,
+    );
+  });
+
+  it('planner seeks docs_type_recency for a textless by-type search over a date window (no account)', () => {
+    seedMixedDocuments(db);
+    const sql = `SELECT d.* FROM documents d WHERE 1=1 AND d.archived_at IS NULL AND d.type='note'
+           AND COALESCE(d.created_at, d.ingested_at) >= '2025-12-01'
+           AND COALESCE(d.created_at, d.ingested_at) <= '2026-02-01'
+           ORDER BY COALESCE(d.created_at, d.ingested_at) DESC, d.id DESC
+           LIMIT 500 OFFSET 0`;
+    expect(planDetail(db, sql)).toContain(
+      'SEARCH d USING INDEX docs_type_recency',
+    );
+  });
+
   it('planner uses docs_account_recency for the per-account count query', () => {
     seedMixedDocuments(db);
     const sql = `SELECT COUNT(*) FROM documents WHERE archived_at IS NULL AND account_id='acc-1'`;
