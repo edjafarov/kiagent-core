@@ -8,7 +8,7 @@ import {
 } from '@shared/web-ui/ui';
 import { formatRelativeCompact } from '@renderer/screens/Sources/format';
 import { quoted } from './outbox-rows';
-import type { RowActions } from './use-row-action';
+import type { OutboxData } from './use-outbox';
 
 /** A chat message is "Slack message to #design"; mail is "Sam · Subject". */
 export function waitingTitle(r: OutboxPanelRow, source: string): string {
@@ -24,7 +24,7 @@ export function waitingTitle(r: OutboxPanelRow, source: string): string {
 export function WaitingDrafts(props: {
   rows: readonly OutboxPanelRow[];
   sourceName: (sourceId: string) => string;
-  actions: RowActions;
+  actions: Pick<OutboxData, 'busyId' | 'error' | 'run'>;
   onReview: (draftId: string) => void;
 }): React.ReactElement {
   const { actions } = props;

@@ -1,5 +1,5 @@
-/* The Outbox page. Layout, rows and cards are primitives; this is the
-   history row's trail (status word + action). */
+/* The Outbox page. Layout, rows, cards and the sheet are primitives; these
+   are the small pieces between them. */
 .ob-trail {
   display: inline-flex;
   align-items: center;
@@ -7,4 +7,45 @@
 }
 .ob-word {
   color: var(--text-secondary);
+}
+.ob-stale {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ob-check {
+  display: inline-flex;
+  width: 14px;
+  color: var(--accent-text);
+}
+.ob-to {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ob-to-via {
+  color: var(--text-secondary);
+}
+.ob-state {
+  margin-top: 12px;
+}
+.ob-detail {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ob-body {
+  margin-top: 16px;
+  padding: 16px 20px;
+  min-height: 200px;
+  border: 1px solid var(--border-subtle);
+  white-space: pre-wrap;
+  color: var(--text-primary);
+}
+.ob-note {
+  margin-top: 12px;
+  color: var(--text-secondary);
+}
+.ob-note.is-warn,
+.ob-note.is-err {
+  color: var(--text-primary);
 }

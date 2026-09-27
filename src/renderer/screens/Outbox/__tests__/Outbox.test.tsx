@@ -1,17 +1,43 @@
 import React from 'react';
 import '@testing-library/jest-dom';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import type { OutboxPanelRow } from '@shared/ipc';
+import type { OutboxDraftDetail, OutboxPanelRow } from '@shared/ipc';
 import { SourceDescriptorsProvider } from '@renderer/screens/Sources/sources-registry';
+import { ViewContext, type ViewContextValue } from '@renderer/state/view';
 import { Outbox, outboxMeta } from '../index';
 
+const mockState = {
+  extensions: [],
+  accounts: [
+    {
+      account: {
+        id: 'a1',
+        source: 'slack',
+        identifier: 'Northwind',
+        status: 'live',
+      },
+    },
+    {
+      account: {
+        id: 'a2',
+        source: 'gmail',
+        identifier: 'alex@example.com',
+        status: 'needsReauth',
+      },
+    },
+    {
+      account: {
+        id: 'a3',
+        source: 'notion',
+        identifier: 'Northwind wiki',
+        status: 'live',
+      },
+    },
+  ],
+  prefs: { outbound: { defaultMode: 'review' } },
+};
 jest.mock('@renderer/state/app-state', () => ({
-  useAppState: (sel: (s: unknown) => unknown) =>
-    sel({
-      extensions: [],
-      accounts: [],
-      prefs: { outbound: { defaultMode: 'review' } },
-    }),
+  useAppState: (sel: (s: unknown) => unknown) => sel(mockState),
 }));
 
 const NOW = new Date(2026, 8, 24, 11, 37);
@@ -36,29 +62,33 @@ function row(over: Partial<OutboxPanelRow>): OutboxPanelRow {
     to: ['sam@example.com'],
     cc: [],
     sourceId: 'gmail',
-    createdBy: 'claude-ai',
+    createdBy: 'Anthropic/ClaudeAI',
     createdVia: 'mcp-remote',
     ...over,
   };
 }
 
+const WAIT = row({
+  draftId: 'wait',
+  status: 'draft',
+  sourceId: 'slack',
+  accountLabel: 'Northwind',
+  recipientDisplay: '#design-review',
+  subject: null,
+  to: [],
+  bodyPreview: 'Here are the three logo directions',
+  sentAt: null,
+  createdAt: iso(24, 11, 30),
+});
+
 const ROWS: OutboxPanelRow[] = [
-  row({
-    draftId: 'wait',
-    status: 'draft',
-    sourceId: 'slack',
-    recipientDisplay: '#design-review',
-    subject: null,
-    to: [],
-    bodyPreview: 'Here are the three logo directions',
-    sentAt: null,
-    createdAt: iso(24, 11, 30),
-  }),
+  WAIT,
   row({ draftId: 'sent', sentAt: iso(24, 10, 52), sourceId: 'slack' }),
   row({
     draftId: 'retry',
     status: 'failed',
     error: 'Gmail is signed out — sign in again, then try again',
+    errorDetail: 'send failed: invalid_grant',
     canRetry: true,
     sentAt: null,
     createdAt: iso(24, 9, 15),
@@ -90,21 +120,47 @@ const ROWS: OutboxPanelRow[] = [
 let rows: OutboxPanelRow[];
 let push: (() => void) | null;
 let invoke: jest.Mock;
+let sendResult: { outcome: string; row: OutboxPanelRow | null };
+
+function detail(id: string): OutboxDraftDetail | null {
+  const fresh = row({ draftId: 'fresh', status: 'draft', createdVia: 'panel' });
+  const r = [...rows, fresh].find((x) => x.draftId === id);
+  return r ? { ...r, body: `Full body of ${id}`, confirmMode: 'review' } : null;
+}
 
 beforeEach(() => {
   jest.useFakeTimers({ now: NOW, doNotFake: ['queueMicrotask'] });
   rows = ROWS;
   push = null;
-  invoke = jest.fn((channel: string) => {
-    if (channel === 'outbox:list') return Promise.resolve(rows);
-    if (channel === 'sources:list')
-      return Promise.resolve([
-        { id: 'slack', name: 'Slack' },
-        { id: 'gmail', name: 'Gmail' },
-      ]);
-    if (channel === 'outbox:redraft')
-      return Promise.resolve({ draftId: 'fresh' });
-    return Promise.resolve(undefined);
+  sendResult = { outcome: 'sent', row: null };
+  mockState.prefs.outbound.defaultMode = 'review';
+  invoke = jest.fn((channel: string, payload?: any) => {
+    switch (channel) {
+      case 'outbox:list':
+        return Promise.resolve(rows);
+      case 'sources:list':
+        return Promise.resolve([
+          { id: 'slack', name: 'Slack' },
+          { id: 'gmail', name: 'Gmail' },
+          { id: 'notion', name: 'Notion' },
+        ]);
+      case 'outbox:redraft':
+        return Promise.resolve({ draftId: 'fresh' });
+      case 'outbox:get':
+        return Promise.resolve(detail(payload.draftId));
+      case 'outbox:send':
+        return Promise.resolve(sendResult);
+      case 'outbox:sender-sources':
+        return Promise.resolve(['slack', 'gmail']);
+      case 'app:info':
+        return Promise.resolve({
+          version: '1',
+          platform: 'darwin',
+          productName: 'Acme',
+        });
+      default:
+        return Promise.resolve(undefined);
+    }
   });
   (window as any).kiagent = {
     invoke,
@@ -119,17 +175,38 @@ afterEach(() => {
   delete (window as any).kiagent;
 });
 
-async function mount() {
+const navigate = jest.fn();
+const replaceParams = jest.fn();
+
+async function mount(params: Record<string, string> = {}) {
+  const nav = {
+    view: 'outbox',
+    params,
+    navigate,
+    back: () => {},
+    openSettings: () => {},
+    replaceParams,
+  } as unknown as ViewContextValue;
   render(
-    <SourceDescriptorsProvider>
-      <Outbox />
-    </SourceDescriptorsProvider>,
+    <ViewContext.Provider value={nav}>
+      <SourceDescriptorsProvider>
+        <Outbox />
+      </SourceDescriptorsProvider>
+    </ViewContext.Provider>,
   );
   await act(async () => {});
 }
 
 const history = () =>
   screen.getByRole('list', { name: 'Sent and past drafts' });
+const sheet = () => screen.getByRole('dialog');
+const groupsOf = (list: HTMLElement) =>
+  within(list)
+    .getAllByRole('listitem')
+    .filter((li) => li.className.includes('ui-day'))
+    .map((li) => li.textContent);
+
+// ── The page ─────────────────────────────────────────────────────────────
 
 test('meta counts the waiting drafts', () => {
   expect(outboxMeta(0)).toBe(
@@ -141,9 +218,8 @@ test('meta counts the waiting drafts', () => {
   expect(outboxMeta(3)).toMatch(/^3 drafts waiting/);
 });
 
-test('a waiting draft: chat title, Discard is immediate, Review & send opens it', async () => {
+test('a waiting draft: chat title, Discard is immediate, Review & send opens it here', async () => {
   await mount();
-  expect(screen.getByText('1 draft waiting', { exact: false })).toBeTruthy();
   const waiting = screen.getByRole('list', { name: 'Waiting for you' });
   expect(
     within(waiting).getByText('Slack message to #design-review'),
@@ -155,22 +231,18 @@ test('a waiting draft: chat title, Discard is immediate, Review & send opens it'
     within(waiting).getByRole('button', { name: 'Review & send' }),
   );
   await act(async () => {});
-  expect(invoke).toHaveBeenCalledWith('outbox:open-confirm', {
-    draftId: 'wait',
-  });
+  expect(sheet()).toHaveTextContent('Full body of wait');
+  expect(invoke).not.toHaveBeenCalledWith(
+    'outbox:open-confirm',
+    expect.anything(),
+  );
 });
 
 test('history: day groups in order, a status word only when it did not go out', async () => {
   await mount();
-  const groups = within(history())
-    .getAllByRole('listitem')
-    .filter((li) => li.className.includes('ui-day'))
-    .map((li) => li.textContent);
-  expect(groups).toEqual(['Today', 'Yesterday', 'Earlier']);
+  expect(groupsOf(history())).toEqual(['Today', 'Yesterday', 'Earlier']);
   const sent = within(history())
-    .getAllByRole('button', {
-      name: /Sam Patel/,
-    })[0]
+    .getAllByRole('button', { name: /Sam Patel/ })[0]
     .closest('li') as HTMLElement;
   expect(sent).toHaveTextContent('Slack · 10:52');
   expect(sent.textContent).not.toMatch(/Sent|Failed/);
@@ -185,19 +257,46 @@ test('history: day groups in order, a status word only when it did not go out', 
   ).toBeInTheDocument();
 });
 
+test('history orders by the time a row shows, not when it was drafted', async () => {
+  rows = [
+    row({
+      draftId: 'late',
+      recipientDisplay: 'Drafted early',
+      createdAt: iso(23, 9),
+      sentAt: iso(24, 11),
+    }),
+    row({
+      draftId: 'mid',
+      recipientDisplay: 'Sent yesterday',
+      createdAt: iso(23, 10),
+      sentAt: iso(23, 10, 5),
+    }),
+  ];
+  await mount();
+  expect(groupsOf(history())).toEqual(['Today', 'Yesterday']);
+});
+
 test('a sending row says so', async () => {
   rows = [row({ draftId: 's', status: 'sending', sentAt: null })];
   await mount();
   expect(within(history()).getByText('Sending…')).toBeInTheDocument();
 });
 
-test('Try again reopens the same row; Draft again makes a fresh draft', async () => {
+test('a maybe-delivered row offers no one-click action in the list', async () => {
+  await mount();
+  // Discarded and expired offer Draft again; the uncertain one does not.
+  expect(
+    within(history()).getAllByRole('button', { name: 'Draft again' }),
+  ).toHaveLength(2);
+});
+
+test('Try again opens the same row; Draft again opens the fresh draft', async () => {
   await mount();
   fireEvent.click(within(history()).getByRole('button', { name: 'Try again' }));
   await act(async () => {});
-  expect(invoke).toHaveBeenCalledWith('outbox:open-confirm', {
-    draftId: 'retry',
-  });
+  expect(sheet()).toHaveTextContent('Full body of retry');
+  fireEvent.keyDown(sheet(), { key: 'Escape' });
+  await act(async () => {});
   const [oneClick] = within(history()).getAllByRole('button', {
     name: 'Draft again',
   });
@@ -206,28 +305,10 @@ test('Try again reopens the same row; Draft again makes a fresh draft', async ()
   expect(invoke).toHaveBeenCalledWith('outbox:redraft', {
     draftId: 'discarded',
   });
+  expect(sheet()).toHaveTextContent('Full body of fresh');
 });
 
-test('a maybe-delivered row drafts again only after a confirmation', async () => {
-  await mount();
-  const buttons = within(history()).getAllByRole('button', {
-    name: 'Draft again',
-  });
-  // Row order: discarded (one click), unsure (guarded), expired (one click).
-  fireEvent.click(buttons[1]);
-  expect(invoke).not.toHaveBeenCalledWith('outbox:redraft', {
-    draftId: 'unsure',
-  });
-  const sheet = screen.getByRole('dialog');
-  expect(sheet).toHaveTextContent(/may already have been delivered/);
-  fireEvent.click(within(sheet).getByRole('button', { name: 'Draft again' }));
-  await act(async () => {});
-  expect(invoke).toHaveBeenCalledWith('outbox:redraft', {
-    draftId: 'unsure',
-  });
-});
-
-test('a failed read says so, never "nothing sent"', async () => {
+test('a failed first read says so, never "nothing sent", and shows no count', async () => {
   invoke.mockImplementation((channel: string) =>
     channel === 'outbox:list'
       ? Promise.reject(new Error('boom'))
@@ -236,6 +317,19 @@ test('a failed read says so, never "nothing sent"', async () => {
   await mount();
   expect(screen.getByText('Couldn’t load the outbox.')).toBeInTheDocument();
   expect(screen.queryByText(/Nothing sent yet/)).toBeNull();
+  expect(screen.queryByText(/waiting ·/)).toBeNull();
+});
+
+test('a failed refresh keeps the rows and says they may be out of date', async () => {
+  await mount();
+  invoke.mockImplementation((channel: string) =>
+    channel === 'outbox:list'
+      ? Promise.reject(new Error('boom'))
+      : Promise.resolve([]),
+  );
+  await act(async () => push?.());
+  expect(screen.getByText(/Couldn’t refresh/)).toBeInTheDocument();
+  expect(within(history()).getAllByRole('button').length).toBeGreaterThan(0);
 });
 
 test('a push re-reads the outbox', async () => {
@@ -244,4 +338,141 @@ test('a push re-reads the outbox', async () => {
   await act(async () => push?.());
   expect(screen.getByText(/Nothing sent yet/)).toBeInTheDocument();
   expect(screen.queryByRole('list', { name: 'Waiting for you' })).toBeNull();
+});
+
+test('a draft= link opens that review once', async () => {
+  await mount({ draft: 'wait' });
+  expect(sheet()).toHaveTextContent('Full body of wait');
+  expect(replaceParams).toHaveBeenCalledWith({});
+});
+
+// ── The side cards ───────────────────────────────────────────────────────
+
+test('confirm mode: the product name, the current choice, a click writes the pref', async () => {
+  await mount();
+  const choices = screen.getByRole('list', {
+    name: 'How drafts are confirmed',
+  });
+  expect(
+    within(choices).getByRole('button', { name: 'Review in Acme' }),
+  ).toHaveAttribute('aria-current', 'true');
+  expect(screen.queryByText(/30 per hour/)).toBeNull();
+  fireEvent.click(
+    within(choices).getByRole('button', { name: 'One-click link' }),
+  );
+  expect(invoke).toHaveBeenCalledWith('prefs:patch', {
+    outbound: { defaultMode: 'link' },
+  });
+});
+
+test('confirm mode: the chat choice carries its warning', async () => {
+  mockState.prefs.outbound.defaultMode = 'chat';
+  await mount();
+  expect(screen.getByText(/30 per hour per account/)).toBeInTheDocument();
+});
+
+test('sends from: only accounts that can send, signed-out marked', async () => {
+  await mount();
+  const list = screen.getByRole('list', { name: 'Accounts that can send' });
+  expect(within(list).getByText('Slack')).toBeInTheDocument();
+  expect(within(list).getByText('Northwind')).toBeInTheDocument();
+  expect(within(list).getByText('Signed out')).toBeInTheDocument();
+  expect(within(list).queryByText('Notion')).toBeNull();
+});
+
+// ── The review sheet ─────────────────────────────────────────────────────
+
+async function openReview(id: string) {
+  await mount({ draft: id });
+  return sheet();
+}
+
+test('review: a chat draft shows its target, who drafted it, the account and the body', async () => {
+  const s = await openReview('wait');
+  expect(s).toHaveTextContent('Review message');
+  expect(s).toHaveTextContent('#design-review · Slack (Northwind)');
+  expect(s).toHaveTextContent('Claude.ai');
+  expect(s).toHaveTextContent('Sending account');
+  expect(s).not.toHaveTextContent('Cc');
+  expect(s).toHaveTextContent('Full body of wait');
+  expect(s).toHaveTextContent('Nothing is sent until you press Send.');
+});
+
+test('review: an email lists every recipient and its Cc', async () => {
+  rows = [
+    row({
+      draftId: 'mail',
+      status: 'draft',
+      to: ['sam@example.com', 'jo@example.com'],
+      cc: ['pat@example.com'],
+      sentAt: null,
+    }),
+  ];
+  const s = await openReview('mail');
+  expect(s).toHaveTextContent('sam@example.com, jo@example.com');
+  expect(s).toHaveTextContent('pat@example.com');
+  expect(s).toHaveTextContent('Subject');
+});
+
+test('review: Send sends and closes', async () => {
+  const s = await openReview('wait');
+  fireEvent.click(within(s).getByRole('button', { name: 'Send' }));
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledWith('outbox:send', { draftId: 'wait' });
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+test('review: a failed send stays open with the reason; Send stays only if it never went out', async () => {
+  sendResult = {
+    outcome: 'failed',
+    row: row({
+      draftId: 'wait',
+      status: 'failed',
+      error: 'Slack refused it',
+      canRetry: false,
+      deliveryUncertain: true,
+    }),
+  };
+  const s = await openReview('wait');
+  fireEvent.click(within(s).getByRole('button', { name: 'Send' }));
+  await act(async () => {});
+  expect(sheet()).toHaveTextContent('Slack refused it');
+  expect(within(sheet()).queryByRole('button', { name: 'Send' })).toBeNull();
+});
+
+test('review: Open in browser uses the signed page', async () => {
+  const s = await openReview('wait');
+  fireEvent.click(within(s).getByRole('button', { name: 'Open in browser' }));
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledWith('outbox:open-confirm', {
+    draftId: 'wait',
+  });
+});
+
+test('review: a sent message opens read-only', async () => {
+  const s = await openReview('sent');
+  expect(s).toHaveTextContent('Message');
+  expect(within(s).queryByRole('button', { name: 'Send' })).toBeNull();
+  // The footer's Close beside the sheet's own close control.
+  expect(within(s).getAllByRole('button', { name: 'Close' })).toHaveLength(2);
+});
+
+test('review: a failure shows its technical details', async () => {
+  const s = await openReview('retry');
+  expect(s).toHaveTextContent('Technical details');
+  expect(within(s).getByRole('button', { name: 'Send' })).toBeInTheDocument();
+});
+
+test('review: a maybe-delivered message drafts again only after a confirmation', async () => {
+  const s = await openReview('unsure');
+  fireEvent.click(within(s).getByRole('button', { name: 'Draft again' }));
+  expect(invoke).not.toHaveBeenCalledWith('outbox:redraft', expect.anything());
+  expect(sheet()).toHaveTextContent(/may already have been delivered/);
+  fireEvent.click(
+    within(sheet()).getByRole('button', { name: 'Draft again anyway' }),
+  );
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledWith('outbox:redraft', { draftId: 'unsure' });
+  expect(sheet()).toHaveTextContent('Full body of fresh');
+  expect(sheet()).toHaveTextContent('You, from the Outbox');
 });

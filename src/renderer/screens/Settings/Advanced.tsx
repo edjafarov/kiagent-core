@@ -85,41 +85,6 @@ export function Advanced(): React.ReactElement {
           />
         </div>
 
-        <div className="lbl-section">Outbound</div>
-        <div className="field-row">
-          {/* eslint-disable-next-line jsx-a11y/label-has-associated-control */}
-          <label htmlFor="adv-outbound-mode" className="lbl">
-            Send confirmation
-          </label>
-          <select
-            id="adv-outbound-mode"
-            className="cadence-select"
-            value={prefs.outbound.defaultMode}
-            onChange={(e) =>
-              patch({
-                outbound: {
-                  defaultMode: e.target
-                    .value as AppPrefs['outbound']['defaultMode'],
-                },
-              })
-            }
-          >
-            <option value="review">Review page (recommended)</option>
-            <option value="link">One-click confirm link</option>
-            <option value="chat">
-              Chat confirmation (trusts the assistant)
-            </option>
-          </select>
-        </div>
-        {prefs.outbound.defaultMode === 'chat' && (
-          <div className="t-meta">
-            The assistant sends after you agree in chat — the app will not show
-            a review page. Applies to every account set to “App default”; give
-            an account its own Outbound mode to keep page confirmation there.
-            Sends are capped at 30 per hour per account.
-          </div>
-        )}
-
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button
             type="button"

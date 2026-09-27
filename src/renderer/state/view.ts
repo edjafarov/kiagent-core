@@ -120,6 +120,8 @@ export interface ViewParams {
   add?: string;
   /** Sources: the catalog with this store item's (`owner/repo`) install sheet. */
   install?: string;
+  /** Outbox: open this draft's review. */
+  draft?: string;
 }
 
 export type ViewContextValue = NavContextValue<View, ViewParams>;

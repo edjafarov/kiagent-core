@@ -1,11 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import type { OutboxPanelRow } from '@shared/ipc';
 import {
   BrandMark,
   Button,
   Card,
   CardHeader,
-  ConfirmSheet,
   DayGroup,
   EmptyState,
   Row,
@@ -19,20 +18,22 @@ import {
   type DayGroupName,
 } from '@shared/web-ui/ui';
 import { actionFor, isFaint, quoted, statusWord } from './outbox-rows';
-import type { RowActions } from './use-row-action';
+import type { OutboxData } from './use-outbox';
 
-function when(r: OutboxPanelRow): number {
+/** The moment a row shows: when it went out, else when it was drafted. */
+export function shownAt(r: OutboxPanelRow): number {
   return Date.parse(r.sentAt ?? r.createdAt);
 }
 
-/** Rows (already newest first) split into day groups, in order. */
+/** Rows newest first by the time they show, split into day groups. */
 function grouped(
   rows: readonly OutboxPanelRow[],
   now: number,
 ): Array<[DayGroupName, OutboxPanelRow[]]> {
   const out: Array<[DayGroupName, OutboxPanelRow[]]> = [];
-  for (const r of rows) {
-    const g = dayGroup(when(r), now);
+  const sorted = [...rows].sort((a, b) => shownAt(b) - shownAt(a));
+  for (const r of sorted) {
+    const g = dayGroup(shownAt(r), now);
     const last = out[out.length - 1];
     if (last && last[0] === g) last[1].push(r);
     else out.push([g, [r]]);
@@ -43,28 +44,18 @@ function grouped(
 /**
  * Sent & past drafts: one row per message in day groups — who it went to,
  * the words (or why it did not go), a status word only when it did not go
- * out, its one action, the source and the time. A row opens its message.
+ * out, its one-click action, the source and the time. A row opens its
+ * message, where everything else lives (the technical details, and Draft
+ * again for a message that may already have arrived).
  */
 export function History(props: {
   rows: readonly OutboxPanelRow[];
   now: number;
   sourceName: (sourceId: string) => string;
-  actions: RowActions;
+  actions: Pick<OutboxData, 'busyId' | 'error' | 'run'>;
   onOpen: (draftId: string) => void;
 }): React.ReactElement {
   const { rows, now, actions } = props;
-  const [guarded, setGuarded] = useState<OutboxPanelRow | null>(null);
-
-  const redraft = (r: OutboxPanelRow) =>
-    actions.run(r.draftId, async () => {
-      const { draftId } = await window.kiagent.invoke('outbox:redraft', {
-        draftId: r.draftId,
-      });
-      props.onOpen(draftId);
-    });
-
-  const allThisWeek =
-    rows.length > 0 && rows.every((r) => when(r) >= startOfWeek(now));
 
   const actionOf = (r: OutboxPanelRow): React.ReactNode => {
     const busy = actions.busyId === r.draftId;
@@ -81,13 +72,18 @@ export function History(props: {
         );
       case 'redraft':
         return (
-          <TextButton disabled={busy} onClick={() => void redraft(r)}>
-            Draft again
-          </TextButton>
-        );
-      case 'redraft-guarded':
-        return (
-          <TextButton disabled={busy} onClick={() => setGuarded(r)}>
+          <TextButton
+            disabled={busy}
+            onClick={() =>
+              void actions.run(r.draftId, async () => {
+                const { draftId } = await window.kiagent.invoke(
+                  'outbox:redraft',
+                  { draftId: r.draftId },
+                );
+                props.onOpen(draftId);
+              })
+            }
+          >
             Draft again
           </TextButton>
         );
@@ -95,6 +91,9 @@ export function History(props: {
         return null;
     }
   };
+
+  const allThisWeek =
+    rows.length > 0 && rows.every((r) => shownAt(r) >= startOfWeek(now));
 
   return (
     <Card>
@@ -150,7 +149,7 @@ export function History(props: {
                         </span>
                       ) : undefined
                     }
-                    time={`${source} · ${shortDay(when(r), now)}`}
+                    time={`${source} · ${shortDay(shownAt(r), now)}`}
                     onClick={() => props.onOpen(r.draftId)}
                     aria-label={`Open the message to ${r.recipientDisplay}`}
                   />
@@ -159,22 +158,6 @@ export function History(props: {
             </React.Fragment>
           ))}
         </Rows>
-      )}
-      {guarded && (
-        <ConfirmSheet
-          title="Draft this message again?"
-          confirmLabel="Draft again"
-          busyLabel="Drafting…"
-          onConfirm={async () => {
-            const r = guarded;
-            setGuarded(null);
-            await redraft(r);
-          }}
-          onClose={() => setGuarded(null)}
-        >
-          It may already have been delivered. Check the Sent folder first —
-          sending it again could reach them twice.
-        </ConfirmSheet>
       )}
     </Card>
   );
