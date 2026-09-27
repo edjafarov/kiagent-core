@@ -57,6 +57,11 @@ import {
 // count falls back to the scan instead of erroring.
 export const PENDING_VISUAL_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_pending_visual WHERE ${PENDING_VISUAL_WHERE}`;
 export const EXTRACTED_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_extracted WHERE ${EXTRACTED_DOCS_WHERE}`;
+/** Non-skip ledger outcomes, counted through the partial work_ledger_active
+ *  index (schema.ts); its WHERE must stay textually identical to the index's. */
+export const LEDGER_ACTIVE_COUNT_SQL = `SELECT outcome, COUNT(*) AS c FROM work_ledger WHERE outcome IS NOT 'skip' GROUP BY outcome`;
+/** Walks the docs_languages index (schema.ts), not the documents table. */
+export const CORPUS_LANGUAGES_SQL = `SELECT DISTINCT languages FROM documents`;
 
 interface BackupAsset {
   kind: 'copied' | 'external';
@@ -292,8 +297,12 @@ export interface CoreStore extends Store {
     outcome: 'done' | 'skip' | 'failed' | 'deferred' | null,
   ): Promise<void>;
   ledgerCounts(consumer: string): Promise<LedgerCounts>;
-  /** Across every consumer — drives the app-wide processing panel. */
-  ledgerCountsAll(): Promise<LedgerCounts & { pending: number }>;
+  /** Across every consumer — drives the app-wide processing panel. `pending`
+   *  is the largest feed lag among `consumers` (default: every consumer row);
+   *  pass the live workers so a retired consumer's stale cursor is ignored. */
+  ledgerCountsAll(
+    consumers?: readonly string[],
+  ): Promise<LedgerCounts & { pending: number }>;
   /** The account's live-document count and its archived (not yet purged)
    *  document ids, read by ONE statement so both come from the same
    *  snapshot — seeds the app projection, whose archived index lets a
@@ -571,14 +580,14 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     : null;
 
   // Distinct languages present in the corpus (∪ 'eng'), feeding query-side
-  // stem expansion. Invalidated on every commit, recomputed lazily — a
-  // search-as-you-type burst pays for the DISTINCT scan once.
+  // stem expansion. Invalidated on every commit, recomputed lazily; the
+  // DISTINCT walks the docs_languages index (schema.ts), not the table.
   let corpusLangsCache: string[] | null = null;
   const corpusLanguages = async (): Promise<string[]> => {
     if (corpusLangsCache) return corpusLangsCache;
-    const rows = (await db.all(
-      `SELECT DISTINCT languages FROM documents`,
-    )) as unknown as Array<{ languages: string }>;
+    const rows = (await db.all(CORPUS_LANGUAGES_SQL)) as unknown as Array<{
+      languages: string;
+    }>;
     const set = new Set<string>(['eng']);
     for (const r of rows)
       for (const l of JSON.parse(r.languages) as string[]) set.add(l);
@@ -1411,20 +1420,35 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async setAccountStatus(id, patch) {
+      // Engines call this every pull cycle, mostly with the status the
+      // account already has. Write — and log a change, and wake every feed —
+      // only when the status or last_error actually differs. changes() in
+      // the INSERT reads the UPDATE's row count: batch() runs both steps on
+      // one connection inside one transaction.
       const lastError = lastErrorAssignment(patch.error, patch.errorScope);
-      await db.batch([
+      const status = patch.status ?? null;
+      const [, logged] = await db.batch([
         {
           sql: `UPDATE accounts SET status = COALESCE(?, status),
                   ${lastError.sql}
-                WHERE id = ?`,
-          params: [patch.status ?? null, ...lastError.params, id],
+                WHERE id = ?
+                  AND (COALESCE(?, status) IS NOT status
+                    OR (${lastError.expr}) IS NOT last_error)`,
+          params: [
+            status,
+            ...lastError.params,
+            id,
+            status,
+            ...lastError.params,
+          ],
         },
         {
-          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
+          sql: `INSERT INTO changes(kind, ref_id, at)
+                  SELECT 'account', ?, ? WHERE changes() > 0`,
           params: [id, now()],
         },
       ]);
-      nudge.emit('commit');
+      if (logged.changes > 0) nudge.emit('commit');
     },
 
     async liveRefs(accountId, after, limit) {
@@ -1559,29 +1583,44 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       };
     },
 
-    async ledgerCountsAll() {
-      const rows = (await db.all(
-        `SELECT outcome, COUNT(*) AS c FROM work_ledger GROUP BY outcome`,
-      )) as Array<{ outcome: string | null; c: number }>;
+    async ledgerCountsAll(consumers) {
+      // Runs every 5 s. Counting 'skip' rows directly means scanning the whole
+      // ledger (millions of rows, ~230 ms); instead count the rest through the
+      // partial work_ledger_active index and derive skip from the total.
+      const rows = (await db.all(LEDGER_ACTIVE_COUNT_SQL)) as Array<{
+        outcome: string | null;
+        c: number;
+      }>;
+      const total = (
+        (await db.all(`SELECT COUNT(*) AS c FROM work_ledger`))[0] as {
+          c: number;
+        }
+      ).c;
       const counts = { done: 0, skip: 0, failed: 0, deferred: 0, pending: 0 };
+      let notSkip = 0;
       for (const r of rows) {
+        notSkip += r.c;
         if (r.outcome && r.outcome in counts) {
           counts[r.outcome as keyof LedgerCounts] = r.c;
         }
       }
+      counts.skip = total - notSkip;
       const head =
         (
           (await db.all(`SELECT MAX(seq) AS s FROM changes`))[0] as {
             s: number | null;
           }
         ).s ?? 0;
-      const lags = (await db.all(`SELECT cursor FROM consumers`)) as Array<{
+      const lags = (await db.all(
+        `SELECT name, cursor FROM consumers`,
+      )) as Array<{
+        name: string;
         cursor: number;
       }>;
-      counts.pending = lags.reduce(
-        (max, r) => Math.max(max, head - r.cursor),
-        0,
-      );
+      const live = consumers ? new Set(consumers) : null;
+      counts.pending = lags
+        .filter((r) => !live || live.has(r.name))
+        .reduce((max, r) => Math.max(max, head - r.cursor), 0);
       return counts;
     },
 

@@ -1316,6 +1316,130 @@ describe('store', () => {
     });
     await store.reconcileEnd(accountId);
   });
+
+  describe('ledgerCountsAll', () => {
+    it('counts every outcome, derives skip exactly (NULL outcomes are not skips), and computes pending over the given consumers only', async () => {
+      const head = await store.commit({
+        account: accountId,
+        documents: [doc('a'), doc('b')],
+        cursor: 'c1',
+      });
+      await store.ledgerRecordMany('worker:vision:v1', [
+        { seq: 1, attempts: 0, outcome: 'skip' },
+        { seq: 2, attempts: 0, outcome: 'skip' },
+        { seq: 3, attempts: 0, outcome: 'skip' },
+        { seq: 4, attempts: 1, outcome: 'done' },
+        { seq: 5, attempts: 1, outcome: 'done' },
+        { seq: 6, attempts: 3, outcome: 'failed' },
+        { seq: 7, attempts: 1, outcome: 'deferred' },
+        { seq: 8, attempts: 0, outcome: null },
+      ]);
+      // A live worker at the head, and a retired one frozen far behind it.
+      await db.run(`INSERT INTO consumers(name, cursor) VALUES(?, ?), (?, ?)`, [
+        'worker:vision:v1',
+        head,
+        'worker:audio:v1',
+        0,
+      ]);
+
+      expect(await store.ledgerCountsAll(['worker:vision:v1'])).toEqual({
+        done: 2,
+        skip: 3,
+        failed: 1,
+        deferred: 1,
+        pending: 0,
+      });
+      // Without a consumer list every row counts, the retired one included.
+      expect((await store.ledgerCountsAll()).pending).toBe(head);
+      // No live workers yet (boot): nothing is pending.
+      expect((await store.ledgerCountsAll([])).pending).toBe(0);
+    });
+  });
+
+  describe('setAccountStatus', () => {
+    const accountChanges = async () =>
+      (
+        (
+          await db.all(
+            `SELECT COUNT(*) AS c FROM changes WHERE kind = 'account' AND ref_id = ?`,
+            [accountId],
+          )
+        )[0] as { c: number }
+      ).c;
+
+    it('logs an account change only when the status or last_error actually changes', async () => {
+      const base = await accountChanges();
+
+      await store.setAccountStatus(accountId, { status: 'live' });
+      expect(await accountChanges()).toBe(base + 1);
+      // Same status again: no write, no change row.
+      await store.setAccountStatus(accountId, { status: 'live' });
+      await store.setAccountStatus(accountId, {});
+      expect(await accountChanges()).toBe(base + 1);
+
+      await store.setAccountStatus(accountId, { error: 'boom' });
+      expect(await accountChanges()).toBe(base + 2);
+      expect((await store.account(accountId))?.lastError).toBe('boom');
+      await store.setAccountStatus(accountId, {
+        status: 'live',
+        error: 'boom',
+      });
+      expect(await accountChanges()).toBe(base + 2);
+
+      await store.setAccountStatus(accountId, { error: null });
+      expect(await accountChanges()).toBe(base + 3);
+      expect((await store.account(accountId))?.lastError).toBeUndefined();
+    });
+
+    it('keeps scoped clearing: each scope clears only its own error, and a no-op clear logs nothing', async () => {
+      await store.setAccountStatus(accountId, {
+        status: 'live',
+        error: 'reconcile: listing failed',
+      });
+      const base = await accountChanges();
+
+      // pull's clear leaves the reconcile error in place: nothing changed.
+      await store.setAccountStatus(accountId, {
+        error: null,
+        errorScope: 'pull',
+      });
+      expect((await store.account(accountId))?.lastError).toBe(
+        'reconcile: listing failed',
+      );
+      expect(await accountChanges()).toBe(base);
+
+      await store.setAccountStatus(accountId, {
+        error: null,
+        errorScope: 'reconcile',
+      });
+      expect((await store.account(accountId))?.lastError).toBeUndefined();
+      expect(await accountChanges()).toBe(base + 1);
+    });
+
+    it('wakes the change feed on a real change but not on a no-op', async () => {
+      await store.setAccountStatus(accountId, { status: 'live' });
+      const head = await store.headSeq();
+      const it = store.feed(head)[Symbol.asyncIterator]();
+      const next = it.next();
+      const settled = jest.fn();
+      void next.then(settled);
+
+      await store.setAccountStatus(accountId, { status: 'live' });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(settled).not.toHaveBeenCalled();
+
+      await store.setAccountStatus(accountId, { status: 'error' });
+      const got = await next;
+      expect(got.done).toBe(false);
+      expect(got.value).toEqual([
+        expect.objectContaining({
+          kind: 'account',
+          account: expect.objectContaining({ id: accountId, status: 'error' }),
+        }),
+      ]);
+      await it.return?.();
+    });
+  });
 });
 
 // Guards the feed lost-wakeup fix: once the DB is worker-hosted, `materialize`

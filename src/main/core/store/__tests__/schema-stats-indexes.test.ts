@@ -20,7 +20,12 @@ import {
   migrate,
   PENDING_VISUAL_WHERE,
 } from '../schema';
-import { EXTRACTED_COUNT_SQL, PENDING_VISUAL_COUNT_SQL } from '../store';
+import {
+  CORPUS_LANGUAGES_SQL,
+  EXTRACTED_COUNT_SQL,
+  LEDGER_ACTIVE_COUNT_SQL,
+  PENDING_VISUAL_COUNT_SQL,
+} from '../store';
 
 /** Join EXPLAIN QUERY PLAN's `detail` rows into one string for substring checks. */
 function planDetail(db: Database.Database, sql: string): string {
@@ -331,5 +336,30 @@ describe('schema: query-performance partial indexes', () => {
     expect(indexSql(db, 'docs_account_recency')).toBe(
       `CREATE INDEX docs_account_recency ON documents(account_id, COALESCE(created_at, ingested_at) DESC) WHERE archived_at IS NULL`,
     );
+  });
+
+  it('planner counts non-skip ledger outcomes through work_ledger_active, never a ledger scan', () => {
+    // Production shape: nearly every row is a terminal 'skip' (the vision
+    // redrive markers). The 5 s processing tick must not walk them.
+    const insert = db.prepare(
+      `INSERT INTO work_ledger(consumer, seq, attempts, outcome, updated_at)
+       VALUES(?, ?, 0, ?, '2026-01-01T00:00:00Z')`,
+    );
+    db.transaction(() => {
+      for (let i = 1; i <= 2000; i++)
+        insert.run('worker:vision:v1', i, i % 100 === 0 ? 'done' : 'skip');
+    })();
+    expect(indexSql(db, 'work_ledger_active')).toBe(
+      `CREATE INDEX work_ledger_active ON work_ledger(consumer, outcome, seq) WHERE outcome IS NOT 'skip'`,
+    );
+    expect(planDetail(db, LEDGER_ACTIVE_COUNT_SQL)).toContain(
+      'USING COVERING INDEX work_ledger_active',
+    );
+  });
+
+  it('planner reads corpus languages from docs_languages, not the documents table', () => {
+    seedMixedDocuments(db);
+    const plan = planDetail(db, CORPUS_LANGUAGES_SQL);
+    expect(plan).toContain('USING COVERING INDEX docs_languages');
   });
 });

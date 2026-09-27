@@ -1009,7 +1009,9 @@ app
     // Ownership split: the projection owns the FEED-derived slice (accounts);
     // identity/prefs/processing/mcp live here and change via patchState —
     // seeded from their real sources so the first diff can't regress them.
-    const initialLedger = await p.store.ledgerCountsAll();
+    const initialLedger = await p.store.ledgerCountsAll(
+      p.engine.activeConsumers(),
+    );
     let rev = 0;
     let lastPush: AppStatePush = {
       state: {
@@ -1034,7 +1036,7 @@ app
       identity: () => p.store.identity.get(),
       mcp: () => ({ port: mcp?.port ?? null, clients: 0 }),
       processing: async () => {
-        const all = await p.store.ledgerCountsAll();
+        const all = await p.store.ledgerCountsAll(p.engine.activeConsumers());
         return {
           pending: all.pending,
           done: all.done,
@@ -1279,7 +1281,7 @@ app
         // so a 'battery' -> 'disabled' transition (both closed) still
         // emits. refreshLane() itself never throws.
         extensionsPlatform?.refreshLane();
-        const all = await p.store.ledgerCountsAll();
+        const all = await p.store.ledgerCountsAll(p.engine.activeConsumers());
         const processing = {
           pending: all.pending,
           done: all.done,

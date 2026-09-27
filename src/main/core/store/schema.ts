@@ -48,6 +48,21 @@ const QUERY_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [
     name: 'docs_account_recency',
     sql: `CREATE INDEX docs_account_recency ON documents(account_id, COALESCE(created_at, ingested_at) DESC) WHERE archived_at IS NULL`,
   },
+  // Backs corpusLanguages() (store.ts): SELECT DISTINCT languages walks this
+  // small index instead of scanning every document. The distinct set is tiny
+  // (a few dozen JSON arrays), and the cache is recomputed after each commit.
+  {
+    name: 'docs_languages',
+    sql: `CREATE INDEX docs_languages ON documents(languages)`,
+  },
+  // Backs ledgerCountsAll() (store.ts), which the processing-counter tick
+  // runs every 5 s. Almost every ledger row is a terminal 'skip', so the
+  // index holds only the rest (NULL outcomes included); queries must repeat
+  // `outcome IS NOT 'skip'` for the planner to prove this partial WHERE.
+  {
+    name: 'work_ledger_active',
+    sql: `CREATE INDEX work_ledger_active ON work_ledger(consumer, outcome, seq) WHERE outcome IS NOT 'skip'`,
+  },
 ];
 
 /**

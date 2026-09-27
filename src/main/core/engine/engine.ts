@@ -384,6 +384,10 @@ function pickScopeKeys(
 }
 
 export function createEngine(deps: EngineDeps): Engine & {
+  /** Feed-consumer names of the currently attached workers. The consumers
+   *  table also keeps rows of retired workers (e.g. an old version), whose
+   *  frozen cursors must not count as pending work. */
+  activeConsumers(): string[];
   /** Re-drive a worker's deferred changes (scheduler calls this on cadence). */
   rerunDeferred(worker: Worker): Promise<void>;
   /** Stop every running handle (app shutdown). */
@@ -493,6 +497,9 @@ export function createEngine(deps: EngineDeps): Engine & {
     string,
     { stop(): Promise<void>; active(): boolean }
   >();
+  /** Consumer names of attached workers (a subset of `running`'s keys, which
+   *  also hold account loops). */
+  const attachedWorkers = new Set<string>();
   /** Accounts with a pause in flight: set BEFORE pause() aborts the loop,
    *  cleared only after the 'paused' status commit lands. run() consults it
    *  so the cadence-tick supervisor (or sync-now) can't resurrect the loop
@@ -1763,10 +1770,16 @@ export function createEngine(deps: EngineDeps): Engine & {
           abort.abort();
           await done.catch(() => {});
           running.delete(consumer);
+          attachedWorkers.delete(consumer);
         },
       };
       running.set(consumer, handle);
+      attachedWorkers.add(consumer);
       return handle;
+    },
+
+    activeConsumers(): string[] {
+      return [...attachedWorkers];
     },
 
     async rerunDeferred(worker: Worker): Promise<void> {
