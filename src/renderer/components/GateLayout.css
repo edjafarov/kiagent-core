@@ -100,6 +100,7 @@
   min-height: 36px;
   padding-block: 8px;
   white-space: normal;
+  line-height: 1.4;
   text-align: center;
 }
 .gate-center {
