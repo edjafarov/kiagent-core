@@ -9,7 +9,7 @@ import {
   Status,
   useNow,
 } from '@shared/web-ui/ui';
-import { sourceLabel } from '@renderer/screens/Sources/connector-meta';
+import { sourceLabel } from '@renderer/screens/Sources/source-label';
 import { useSourceDescriptors } from '@renderer/screens/Sources/sources-registry';
 import { useView } from '@renderer/state/view';
 import { ConfirmModeCard } from './ConfirmModeCard';

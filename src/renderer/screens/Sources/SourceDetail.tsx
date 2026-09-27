@@ -17,7 +17,7 @@ import {
   sourceBrand,
 } from '@shared/web-ui/ui';
 import { AddSourcePanel } from './AddSourcePanel';
-import { sourceLabel } from './connector-meta';
+import { sourceLabel } from './source-label';
 import { accountLabel, formatRelative } from './format';
 import {
   FixButtons,

@@ -2,25 +2,6 @@
    live in ../../App.css (shared by every routed screen — see that file's
    header comment for why). Everything below is specific to this directory. */
 
-/* ── Source table ─────────────────────────────────────────────────── */
-
-.src-stripe {
-  width: 2px;
-  height: 14px;
-  flex-shrink: 0;
-  background: var(--text-tertiary);
-}
-.src-stripe.gmail       { background: var(--tag-gmail); }
-.src-stripe.google-docs { background: var(--tag-google-docs); }
-.src-stripe.local       { background: var(--tag-local); }
-.src-stripe.notion      { background: var(--tag-notion); }
-.src-stripe.onedrive    { background: var(--tag-onedrive); }
-.src-stripe.slack       { background: var(--tag-slack); }
-.src-stripe.browser     { background: var(--tag-browser); }
-.src-stripe.whatsapp    { background: var(--tag-whatsapp); }
-.src-stripe.instagram   { background: var(--tag-instagram); }
-.src-stripe.default     { background: var(--text-tertiary); }
-
 /* ── Error card (ErrorCard.tsx) ───────────────────────────────────── */
 
 /* ── Add-source panel (AddSourcePanel.tsx) ────────────────────────── */

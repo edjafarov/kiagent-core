@@ -11,7 +11,7 @@ import {
 import { SourceDetail } from './SourceDetail';
 import { SourceCatalog } from './SourceCatalog';
 import { AddSourcePanel } from './AddSourcePanel';
-import { sourceLabel } from './connector-meta';
+import { sourceLabel } from './source-label';
 import './Sources.css';
 
 export type LocalView =

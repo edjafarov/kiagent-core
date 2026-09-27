@@ -6,7 +6,7 @@ import { Card } from '@shared/web-ui/ui';
 import { useAppState } from '@renderer/state/app-state';
 import { FolderPickerField } from '@renderer/components/FolderPickerField';
 import { FolderPickerModal } from '@renderer/components/folder-picker/FolderPickerModal';
-import { sourceLabel } from './connector-meta';
+import { sourceLabel } from './source-label';
 import {
   createConnectPickerAdapter,
   pickerRequestFromEvent,
@@ -14,7 +14,7 @@ import {
 } from './connect-picker-adapter';
 import { schemaFields, schemaGuidance } from './prompt-guidance';
 import { GuidanceSteps } from './GuidanceSteps';
-import { SourceIcon } from './SourceIcon';
+import { SourceGlyph } from './source-brand';
 import { useSourceDescriptors } from './sources-registry';
 import { openFlow } from './flow-client';
 
@@ -462,7 +462,7 @@ export function AddSourcePanel(props: {
       <div className="as-panel">
         <Card className="as-wizard" aria-label="Connect">
           <div className="as-wizard-head">
-            <SourceIcon sourceId={flow.sourceId} size={28} />
+            <SourceGlyph sourceId={flow.sourceId} size={32} />
             <span className="h-section">
               {flow.mode === 'reconnect'
                 ? 'Reconnect'

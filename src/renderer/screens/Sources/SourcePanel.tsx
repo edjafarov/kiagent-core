@@ -8,7 +8,7 @@ import {
   sourceBrand,
   type KeyValueItem,
 } from '@shared/web-ui/ui';
-import { sourceLabel } from './connector-meta';
+import { sourceLabel } from './source-label';
 import { folderRoots } from './folder-roots';
 import { accountLabel, describeCadence, formatRelative } from './format';
 import { sourceStatus } from './source-status';

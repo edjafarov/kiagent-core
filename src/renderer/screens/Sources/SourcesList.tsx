@@ -24,7 +24,7 @@ import {
 } from '@shared/web-ui/ui';
 import { Icon } from '@shared/web-ui/icon-sprite';
 import { useAppState } from '@renderer/state/app-state';
-import { sourceLabel } from './connector-meta';
+import { sourceLabel } from './source-label';
 import { accountLabel, formatRelativeCompact } from './format';
 import { GetStartedPanel } from './GetStartedPanel';
 import { SourcePanel } from './SourcePanel';

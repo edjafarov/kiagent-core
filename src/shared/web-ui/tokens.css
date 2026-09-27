@@ -63,16 +63,6 @@
   --paused-solid:  #64748b; --paused-subtle:  #f1f5f9;
   --info-solid:    #0891b2; --info-subtle:    #cffafe;
 
-  /* ── Connector identity stripes ────────────────────────────────── */
-  --tag-gmail:       #e11d48;
-  --tag-google-docs: #4285f4;
-  --tag-onedrive:    #094ab2;
-  --tag-local:       #2563eb;
-  --tag-notion:      #0f172a;
-  --tag-slack:       #7c3aed;
-  --tag-browser:     #0891b2;
-  --tag-whatsapp:    #25d366;
-  --tag-instagram:   #E1306C;
 
   /* ── Font stacks ───────────────────────────────────────────────── */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',

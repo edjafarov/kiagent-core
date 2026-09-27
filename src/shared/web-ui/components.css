@@ -109,16 +109,6 @@
   overflow: hidden;
 }
 .card.danger { border-color: var(--error-solid); }
-.card .stripe { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
-.card .stripe.gmail       { background: var(--tag-gmail); }
-.card .stripe.google-docs { background: var(--tag-google-docs); }
-.card .stripe.onedrive    { background: var(--tag-onedrive); }
-.card .stripe.local       { background: var(--tag-local); }
-.card .stripe.notion      { background: var(--tag-notion); }
-.card .stripe.slack       { background: var(--tag-slack); }
-.card .stripe.browser     { background: var(--tag-browser); }
-.card .stripe.whatsapp    { background: var(--tag-whatsapp); }
-.card .stripe.instagram   { background: var(--tag-instagram); }
 .card .card-inner { padding-left: 20px; }
 
 /* ── Inputs ───────────────────────────────────────────────────── */
