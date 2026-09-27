@@ -6,7 +6,10 @@
  * confirm URL main-side and hands it to the injected `openExternal`. Review
  * in the app (Airy §9): `outbox:send` runs the page confirm's OWN gate and
  * send (`service.sendById` → the shared `confirmRow`), so the in-app Send
- * can never do what the page's Send button could not.
+ * can never do what the page's Send button could not. No token there: a
+ * token proves possession of a link that may leak; in the app the caller is
+ * the user's own renderer (the sender guard admits only it), and the bound
+ * is the row's own `expires_at`, which `confirmRow`'s sweep applies.
  *
  * CLASSIFICATION POSTURE: `error-copy.ts` is main-process code and the
  * renderer must not import across that layer, so every failure verdict is
@@ -236,21 +239,15 @@ export function outboundInvokeHandlers(deps: {
 
     'outbox:send': async ({ draftId }) => {
       const outcome = await service.sendById(draftId);
-      switch (outcome.kind) {
-        case 'sent':
-          return { outcome: 'sent' };
-        case 'failed':
-          // The stored summary, shaped into the row's human sentence — the
-          // same words the history row will show.
-          return {
-            outcome: 'failed',
-            error: errorFieldsOf(outcome.row).error ?? outcome.error,
-          };
-        case 'already':
-          return { outcome: 'already' };
-        default:
-          return { outcome: 'gone' };
-      }
+      if (outcome.kind === 'invalid') return { outcome: 'gone', row: null };
+      const kind =
+        outcome.kind === 'sent' || outcome.kind === 'failed'
+          ? outcome.kind
+          : 'already';
+      return {
+        outcome: kind,
+        row: panelRow(outcome.row, await store.account(outcome.row.accountId)),
+      };
     },
 
     'outbox:sender-sources': async () => service.senderSources(),

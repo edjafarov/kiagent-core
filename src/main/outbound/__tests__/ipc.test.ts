@@ -620,25 +620,26 @@ describe('outbound ipc delegate', () => {
 
   it('outbox:send runs the page confirm: sent, then already; unknown is gone', async () => {
     const r = await service.draftReply({ documentId: docId, body: 'x' });
-    expect(await invoke('outbox:send', { draftId: r.draft_id })).toEqual({
-      outcome: 'sent',
-    });
-    expect(await invoke('outbox:send', { draftId: r.draft_id })).toEqual({
-      outcome: 'already',
-    });
+    const first = await invoke('outbox:send', { draftId: r.draft_id });
+    expect(first.outcome).toBe('sent');
+    expect(first.row?.status).toBe('sent');
+    const again = await invoke('outbox:send', { draftId: r.draft_id });
+    expect(again.outcome).toBe('already');
+    expect(again.row?.status).toBe('sent');
     expect(await invoke('outbox:send', { draftId: 'nope' })).toEqual({
       outcome: 'gone',
+      row: null,
     });
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
-  it("outbox:send reports a failure in the row's own words", async () => {
+  it('outbox:send returns a failed row in its own words, with its retry verdict', async () => {
     sendMock.mockRejectedValueOnce(new Error('socket hang up'));
     const r = await service.draftReply({ documentId: docId, body: 'x' });
     const res = await invoke('outbox:send', { draftId: r.draft_id });
     expect(res.outcome).toBe('failed');
-    const [row] = await invoke('outbox:list', { status: ['failed'] });
-    expect(res.error).toBe(row.error);
+    const [listed] = await invoke('outbox:list', { status: ['failed'] });
+    expect(res.row).toEqual(listed);
   });
 
   it('outbox:sender-sources lists the sources that can send', async () => {

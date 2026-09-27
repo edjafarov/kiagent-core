@@ -13,6 +13,9 @@ export const SENDER_VALIDATED_CHANNELS = new Set([
   // silently reaching `handlers['ext:invoke']` (itself hardened to be
   // inert — see main.ts).
   'ext:invoke',
+  // The in-app review's Send carries no signed token (Airy §9): only the
+  // app's own renderer may name a draft to send.
+  'outbox:send',
 ]);
 
 export function guardIpcHandler<Req, Res>(

@@ -304,10 +304,12 @@ export interface OutboxDraftDetail extends OutboxPanelRow {
   confirmMode: ConfirmMode;
 }
 
-/** What the in-app Send did. `gone` = no such draft. */
+/** What the in-app Send did, with the row as it now stands (its `error`
+ *  and `canRetry` say what to show after a failure). `gone` = no such
+ *  draft, `row` null. */
 export interface OutboxSendResult {
   outcome: 'sent' | 'failed' | 'already' | 'gone';
-  error?: string;
+  row: OutboxPanelRow | null;
 }
 
 /** invoke(channel, payload) → response. */

@@ -26,7 +26,17 @@ describe('trusted attention renderer sender', () => {
       }),
     ).toBe(false);
     expect(SENDER_VALIDATED_CHANNELS).toEqual(
-      new Set(['attention:list', 'attention:act', 'ext:invoke']),
+      new Set(['attention:list', 'attention:act', 'ext:invoke', 'outbox:send']),
+    );
+  });
+
+  it('rejects an untrusted outbox:send without sending', () => {
+    const handler = jest.fn(() => 'sent');
+    const guarded = guardIpcHandler('outbox:send', handler, () => false);
+    expect(() => guarded({}, { draftId: 'd' })).toThrow('untrusted renderer');
+    expect(handler).not.toHaveBeenCalled();
+    expect(guardIpcHandler('outbox:send', handler, () => true)({}, {})).toBe(
+      'sent',
     );
   });
 
