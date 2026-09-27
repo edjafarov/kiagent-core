@@ -1,9 +1,22 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAppState } from '@renderer/state/app-state';
 import { formatRelative } from '@renderer/screens/Sources/format';
-import { Busy, Pill } from '@shared/web-ui/components';
-import type { PillVariant } from '@shared/web-ui/components';
-import { Icon } from '@shared/web-ui/icon-sprite';
+import {
+  AttentionList,
+  AttentionRow,
+  Busy,
+  Button,
+  Disclosure,
+  ProgressBar,
+  Row,
+  Rows,
+  Segmented,
+  Select,
+  SettingsGroup,
+  SettingsRow,
+  Status,
+  Toggle,
+} from '@shared/web-ui/ui';
 import type { AppPrefs, LaneState, ProviderStatus } from '@shared/contracts';
 import type { Invokes } from '@shared/ipc';
 
@@ -21,10 +34,10 @@ function machine(): string {
     : 'computer';
 }
 
-const windowOptions = (): ReadonlyArray<[ProcessingWindow, string, string]> => [
-  ['always', 'Always', 'Process continuously while the app is open.'],
-  ['idle', 'When idle', `Wait until this ${machine()} is idle.`],
-  ['night', 'At night', 'Only run overnight (22:00–07:00).'],
+const WINDOWS: ReadonlyArray<{ key: ProcessingWindow; label: string }> = [
+  { key: 'always', label: 'Always' },
+  { key: 'idle', label: 'When idle' },
+  { key: 'night', label: 'At night' },
 ];
 
 /** One decimal place, e.g. 7121860000 -> "6.6". */
@@ -66,52 +79,82 @@ function activeModelLine(catalog: ModelsRes | null): string | null {
   return `Active model: ${tier.label} — ${gb(tier.totalBytes)} GB${suffix}`;
 }
 
+/** The Model disclosure's summary: the override, or what Auto resolved to. */
+function modelSummary(override: string, catalog: ModelsRes | null): string {
+  const tier = catalog?.options.find((o) => o.id === catalog.selectedId);
+  const picked = tier ? ` (${tier.label}, ${gb(tier.totalBytes)} GB)` : '';
+  if (override === 'auto')
+    return `Auto — picked for this ${machine()}${picked}`;
+  const chosen = catalog?.options.find((o) => o.id === override);
+  return chosen ? `${chosen.label}, ${gb(chosen.totalBytes)} GB` : override;
+}
+
+/** Items waiting for local processing. One expression, so a product build
+ *  that counts more kinds of waiting work patches exactly this line. */
+function waitingCount(stats: ExtractionStatsRes): number {
+  return stats.pendingOcr;
+}
+
+/** The pane's first line: ready or paused (and why), waiting, done. */
+function statusLine(stats: ExtractionStatsRes): {
+  tone: 'ok' | 'work';
+  text: string;
+} {
+  const waiting = waitingCount(stats);
+  const paused = pausedLine(stats.lane, waiting);
+  const counts = `${waiting.toLocaleString()} ${
+    waiting === 1 ? 'item' : 'items'
+  } waiting · ${stats.processed.toLocaleString()} read or transcribed so far`;
+  return paused
+    ? { tone: 'work', text: `${paused.replace(/\.$/, '')} · ${counts}` }
+    : { tone: 'ok', text: `Ready · ${counts}` };
+}
+
+/** People's names for the providers; unknown ids show as they are. */
+const PROVIDER_NAMES: Record<string, string> = {
+  'local-llm': 'Language model',
+  'local-asr': 'Speech model',
+  'apple-vision': 'Vision (built in)',
+  'local-ocr': 'Text recognition',
+};
 /**
- * Local processing pane. `AppPrefs.processing` is a small
- * `{enabled, window}` pair (no per-model download/schedule config like the
- * legacy deep-runtime screen) — the "Settings" section below is that pair.
- * The provider list is a separate, unrelated read
- * (`inference:providers`) with no push channel in this contract's `Pushes`
- * union, so it's fetched once on mount plus a manual Refresh button rather
- * than faking a live subscription.
+ * Local AI pane: whether and when background local processing runs, which
+ * model, what it did last — and the providers, only when one needs the
+ * user (an error, a download in flight, or a model that will not download
+ * by itself). The provider list has no push channel, so it is read on
+ * mount and polled while a download runs; stats and the model catalog are
+ * re-read after this pane's own pref writes land.
  */
 export function LocalProcessing(): React.ReactElement {
   const processing = useAppState((s) => s.prefs.processing);
   const models = useAppState((s) => s.prefs.models);
   const [providers, setProviders] = useState<ProviderRow[] | null>(null);
   const [providersError, setProvidersError] = useState(false);
-  const [loadingProviders, setLoadingProviders] = useState(false);
   const [stats, setStats] = useState<ExtractionStatsRes | null>(null);
   const [modelCatalog, setModelCatalog] = useState<ModelsRes | null>(null);
 
   const loadProviders = useCallback(() => {
-    setLoadingProviders(true);
     window.kiagent
       .invoke('inference:providers', undefined)
       .then((list) => {
         setProviders(list);
         setProvidersError(false);
       })
-      .catch(() => setProvidersError(true))
-      .finally(() => setLoadingProviders(false));
-    // Piggybacked model catalog + resolved selection — same clock as the
-    // provider reads (mount, Refresh, download poll). Safe to ride the
-    // download poll: selectedModel() memoizes the hardware probe on the
-    // provider (`backend`, detected once, lazily), so repeated calls don't
-    // re-detect. On failure keep the last-known values.
-    window.kiagent
-      .invoke('inference:models', undefined)
-      .then(setModelCatalog)
-      .catch(() => {});
+      .catch(() => setProvidersError(true));
   }, []);
 
-  // Queue/processed stats — an expensive query, deliberately NOT on the 2s
-  // download poll's clock (mount + manual Refresh only). On failure keep
-  // the last-known values.
+  // Queue/processed stats and the model catalog — an expensive query,
+  // deliberately NOT on the 2s download poll's clock (mount and after this
+  // pane's own writes). selectedModel() memoizes the hardware probe, so the
+  // catalog read is cheap. On failure keep the last-known values.
   const loadStats = useCallback(() => {
     window.kiagent
       .invoke('inference:stats', undefined)
       .then(setStats)
+      .catch(() => {});
+    window.kiagent
+      .invoke('inference:models', undefined)
+      .then(setModelCatalog)
       .catch(() => {});
   }, []);
 
@@ -130,98 +173,103 @@ export function LocalProcessing(): React.ReactElement {
     return () => clearInterval(id);
   }, [providers, loadProviders]);
 
-  // AppPrefs.processing is a single nested object (not itself Partial), so a
-  // patch must resend it whole — merge the current value with the one field
-  // that changed rather than dropping its sibling.
-  const toggleEnabled = () => {
-    void window.kiagent.invoke('prefs:patch', {
-      processing: { ...processing, enabled: !processing.enabled },
-    });
+  // AppPrefs.processing / .models are nested objects (not themselves
+  // Partial), so a patch resends the whole object with one field changed.
+  const patch = (delta: Partial<AppPrefs>) => {
+    void window.kiagent
+      .invoke('prefs:patch', delta)
+      .then(loadStats)
+      .catch(() => {});
   };
-  const setWindow = (w: ProcessingWindow) => {
-    void window.kiagent.invoke('prefs:patch', {
-      processing: { ...processing, window: w },
-    });
-  };
-  const setModelOverride = (override: string) => {
-    void window.kiagent.invoke('prefs:patch', {
-      models: { ...models, override },
-    });
-  };
+
+  const attention = (providers ?? []).filter((p) => needsAttention(p, models));
+  const last = stats?.recent[0];
 
   return (
     <>
-      <div>
-        <h2 className="h-screen">Local processing</h2>
-        <div className="t-meta">
-          Local inference providers, and when background work runs.
+      {stats == null ? (
+        <Busy label="Loading processing status…" />
+      ) : (
+        <div className="set-status">
+          <Status tone={statusLine(stats).tone}>
+            {statusLine(stats).text}
+          </Status>
         </div>
-      </div>
-      <div className="div-h" />
+      )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div className="lbl-section">Settings</div>
-        <div className="pref-list">
-          <div className="pref-row">
-            <div className="pref-meta">
-              <span className="pref-label">Enabled</span>
-              <span className="pref-desc">
-                Allow background local processing to run at all.
-              </span>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={processing.enabled}
-              aria-label="Enabled"
-              className={processing.enabled ? 'toggle on' : 'toggle'}
-              onClick={toggleEnabled}
-            >
-              <span className="knob" />
-            </button>
-          </div>
+      {(attention.length > 0 || providersError) && (
+        <AttentionList aria-label="Providers that need you">
+          {providersError && (
+            <AttentionRow
+              tone="err"
+              kind="Error"
+              title="Couldn’t load the local AI providers."
+              action={
+                <Button size="sm" onClick={loadProviders}>
+                  Try again
+                </Button>
+              }
+            />
+          )}
+          {attention.map((p) => (
+            <ProviderAttention
+              key={p.id}
+              provider={p}
+              refresh={loadProviders}
+              onError={() => setProvidersError(true)}
+            />
+          ))}
+        </AttentionList>
+      )}
 
-          <div className="pref-row" style={{ alignItems: 'flex-start' }}>
-            <div className="pref-meta">
-              <span className="pref-label">Window</span>
-              <span className="pref-desc">
-                {windowOptions().find(([v]) => v === processing.window)?.[2] ??
-                  ''}
-              </span>
-            </div>
-            <div
-              role="radiogroup"
-              aria-label="Processing window"
-              style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
-            >
-              {windowOptions().map(([value, label]) => (
-                <label key={value} className="radio-row">
-                  <input
-                    type="radio"
-                    name="processing-window"
-                    value={value}
-                    checked={processing.window === value}
-                    disabled={!processing.enabled}
-                    onChange={() => setWindow(value)}
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-          </div>
+      <SettingsGroup>
+        <SettingsRow
+          title={`Read files on this ${machine()}`}
+          description={`Reads scans, photos and recordings on this ${machine()}. Nothing leaves it.`}
+          control={
+            <Toggle
+              aria-label={`Read files on this ${machine()}`}
+              checked={processing.enabled}
+              onChange={(v) =>
+                patch({ processing: { ...processing, enabled: v } })
+              }
+            />
+          }
+        />
+        <SettingsRow
+          title="When to run"
+          description="Heavy work waits so it doesn’t slow you down"
+          control={
+            <Segmented
+              aria-label="When to run"
+              items={WINDOWS}
+              value={processing.window}
+              disabled={!processing.enabled}
+              onChange={(w) =>
+                patch({ processing: { ...processing, window: w } })
+              }
+            />
+          }
+        />
+      </SettingsGroup>
 
-          <div className="pref-row">
-            <div className="pref-meta">
-              <span className="pref-label">Model</span>
-              <span className="pref-desc">
-                Which local model tier handles scanned documents.
-              </span>
-            </div>
-            <select
-              className="cadence-select"
+      <Disclosure
+        label="Model"
+        summary={modelSummary(models.override, modelCatalog)}
+      >
+        <SettingsRow
+          title="Model"
+          description={
+            activeModelLine(modelCatalog) ??
+            'Which local model tier handles scanned documents.'
+          }
+          control={
+            <Select
               aria-label="Model override"
               value={models.override}
-              onChange={(e) => setModelOverride(e.target.value)}
+              onChange={(e) =>
+                patch({ models: { ...models, override: e.target.value } })
+              }
             >
               <option value="auto">Auto — picked for this {machine()}</option>
               {modelCatalog?.options.map((o) => (
@@ -230,192 +278,119 @@ export function LocalProcessing(): React.ReactElement {
                   {o.installed ? ' · installed' : ''}
                 </option>
               ))}
-            </select>
-          </div>
-        </div>
-      </div>
+            </Select>
+          }
+        />
+      </Disclosure>
 
-      <div className="div-h" />
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div className="lbl-section">Providers</div>
-          <span style={{ flex: 1 }} />
-          <button
-            type="button"
-            className="btn ghost sm"
-            disabled={loadingProviders}
-            onClick={() => {
-              loadProviders();
-              loadStats();
-            }}
-          >
-            <Icon name="refresh-cw" size={12} />{' '}
-            {loadingProviders ? 'Refreshing…' : 'Refresh'}
-          </button>
-        </div>
-
-        {providersError && (
-          <div className="t-meta" style={{ color: 'var(--error-solid)' }}>
-            Couldn&rsquo;t load inference providers.
-          </div>
-        )}
-        {providers == null ? (
-          providersError ? null : (
-            <div className="t-meta">Loading providers…</div>
-          )
-        ) : providers.length === 0 ? (
-          <div className="lp-empty">
-            <div className="t-meta">No local model is installed yet.</div>
-            <div className="t-meta">
-              Local inference runs entirely on this machine once a provider is
-              available. The local models download automatically when scanned
-              documents or audio need them, or on demand above.
-            </div>
-          </div>
+      <Disclosure
+        label="Recently processed"
+        summary={
+          last
+            ? `last: ${last.title ?? last.filename ?? last.type} · ${formatRelative(last.updatedAt)}`
+            : 'nothing yet'
+        }
+      >
+        {stats == null || stats.recent.length === 0 ? (
+          <div className="set-note">Nothing processed yet.</div>
         ) : (
-          <div className="pref-list">
-            {providers.map((p) => (
-              <ProviderRowView
-                key={p.id}
-                provider={p}
-                models={models}
-                modelCatalog={modelCatalog}
-                refresh={loadProviders}
-                setProvidersError={setProvidersError}
+          <Rows aria-label="Recently processed">
+            {stats.recent.map((r) => (
+              <Row
+                key={r.id}
+                title={r.title ?? r.filename ?? r.type}
+                trail={
+                  <span className="set-note">{engineLabel(r.engine)}</span>
+                }
+                time={formatRelative(r.updatedAt)}
               />
             ))}
-          </div>
+          </Rows>
         )}
+      </Disclosure>
 
-        {stats == null && <Busy label="Loading processing status…" />}
-        {stats != null && (
-          <div className="t-meta">
-            {stats.pendingOcr} visual documents queued for processing ·{' '}
-            {stats.processed} extracted or transcribed
-          </div>
-        )}
-        {stats != null && pausedLine(stats.lane, stats.pendingOcr) != null && (
-          <div className="t-meta">
-            {pausedLine(stats.lane, stats.pendingOcr)}
-          </div>
-        )}
+      <div className="set-note">
+        Providers (vision, language, speech) only appear here when one needs
+        attention.
       </div>
-
-      {stats != null && (
-        <>
-          <div className="div-h" />
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div className="lbl-section">Recently processed</div>
-            {stats.recent.length === 0 ? (
-              <div className="t-meta">Nothing processed yet.</div>
-            ) : (
-              <div className="pref-list">
-                {stats.recent.map((r) => (
-                  <div key={r.id} className="pref-row">
-                    <div className="pref-meta">
-                      <span
-                        className="pref-label"
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                        }}
-                      >
-                        {r.title ?? r.filename ?? r.type}
-                        <Pill variant="info">{engineLabel(r.engine)}</Pill>
-                      </span>
-                    </div>
-                    <span className="t-meta">
-                      {formatRelative(r.updatedAt)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </>
-      )}
     </>
   );
 }
 
-function ProviderRowView(props: {
+/** A provider the user has to act on or wait for. */
+function needsAttention(p: ProviderRow, models: ModelsPrefs): boolean {
+  const { kind } = describeStatus(p.status);
+  if (kind === 'error' || kind === 'downloading') return true;
+  return kind === 'standby' && p.installable && !models.autoInstall;
+}
+
+function ProviderAttention(props: {
   provider: ProviderRow;
-  models: ModelsPrefs;
-  modelCatalog: ModelsRes | null;
   refresh: () => void;
-  setProvidersError: (error: boolean) => void;
+  onError: () => void;
 }): React.ReactElement {
-  const { provider, models, modelCatalog, refresh, setProvidersError } = props;
-  const { kind, pill, detail, percent } = describeStatus(provider.status);
-  const isLocalLlm = provider.id === 'local-llm';
-  const canInstall = provider.installable;
-  const activeModel = isLocalLlm ? activeModelLine(modelCatalog) : null;
-
-  const install = () => {
-    void window.kiagent
-      .invoke('inference:install', { providerId: provider.id })
-      .then(refresh)
-      .catch(() => setProvidersError(true));
+  const { provider, refresh, onError } = props;
+  const { kind, detail, percent } = describeStatus(provider.status);
+  const name = PROVIDER_NAMES[provider.id] ?? provider.id;
+  const run = (act: Promise<unknown>) => {
+    void act.then(refresh).catch(onError);
   };
-  const cancel = () => {
-    void window.kiagent
-      .invoke('inference:cancel', undefined)
-      .then(refresh)
-      .catch(() => setProvidersError(true));
-  };
+  const install = () =>
+    run(
+      window.kiagent.invoke('inference:install', { providerId: provider.id }),
+    );
+  const cancel = () =>
+    run(window.kiagent.invoke('inference:cancel', undefined));
 
+  if (kind === 'downloading')
+    return (
+      <AttentionRow
+        tone="work"
+        kind="Download"
+        title={`${name} — downloading ${percent ?? 0}%`}
+        detail={
+          <ProgressBar
+            aria-label={`${name} download`}
+            value={(percent ?? 0) / 100}
+          />
+        }
+        action={
+          provider.installable ? (
+            <Button size="sm" onClick={cancel}>
+              Cancel
+            </Button>
+          ) : undefined
+        }
+      />
+    );
+  if (kind === 'error')
+    return (
+      <AttentionRow
+        tone="err"
+        kind="Error"
+        title={name}
+        sub={detail}
+        action={
+          provider.installable ? (
+            <Button size="sm" onClick={install}>
+              Retry
+            </Button>
+          ) : undefined
+        }
+      />
+    );
   return (
-    <div className="pref-row" style={{ alignItems: 'flex-start' }}>
-      <div className="pref-meta">
-        <span
-          className="pref-label"
-          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-        >
-          {provider.id}
-          {pill && <Pill variant={pill.variant}>{pill.label}</Pill>}
-        </span>
-        <span className="pref-desc">
-          Supports:{' '}
-          {provider.supports.length > 0 ? provider.supports.join(', ') : '—'}
-        </span>
-        {activeModel && <span className="pref-desc">{activeModel}</span>}
-        {detail && (
-          <span className="pref-desc" style={{ color: 'var(--error-solid)' }}>
-            {detail}
-          </span>
-        )}
-        {canInstall && kind === 'standby' && (
-          <span className="pref-desc">
-            {models.autoInstall
-              ? 'Downloads automatically when needed.'
-              : 'Automatic download is off.'}
-          </span>
-        )}
-        {percent != null && (
-          <div className="progress" style={{ marginTop: 4 }}>
-            <i style={{ width: `${percent}%` }} />
-          </div>
-        )}
-      </div>
-      {canInstall && kind === 'standby' && (
-        <button type="button" className="btn ghost sm" onClick={install}>
+    <AttentionRow
+      tone="acc"
+      kind="Model"
+      title={name}
+      sub="Automatic download is off."
+      action={
+        <Button size="sm" onClick={install}>
           Download now
-        </button>
-      )}
-      {canInstall && kind === 'downloading' && (
-        <button type="button" className="btn ghost sm" onClick={cancel}>
-          Cancel
-        </button>
-      )}
-      {canInstall && kind === 'error' && (
-        <button type="button" className="btn ghost sm" onClick={install}>
-          Retry
-        </button>
-      )}
-    </div>
+        </Button>
+      }
+    />
   );
 }
 
@@ -429,49 +404,21 @@ function isDownloadingStatus(
 
 function describeStatus(status: ProviderStatus): {
   kind: 'ready' | 'standby' | 'unsupported' | 'downloading' | 'error';
-  pill: { variant: PillVariant; label: string } | null;
   detail: string | null;
   percent: number | null;
 } {
-  if (status === 'ready') {
-    return {
-      kind: 'ready',
-      pill: { variant: 'live', label: 'Ready' },
-      detail: null,
-      percent: null,
-    };
-  }
-  if (status === 'standby') {
-    return {
-      kind: 'standby',
-      pill: { variant: 'paused', label: 'Standby' },
-      detail: null,
-      percent: null,
-    };
-  }
-  if (status === 'unsupported') {
-    return {
-      kind: 'unsupported',
-      pill: null,
-      detail: 'Unsupported on this hardware.',
-      percent: null,
-    };
-  }
-  if (isDownloadingStatus(status)) {
+  if (status === 'ready') return { kind: 'ready', detail: null, percent: null };
+  if (status === 'standby')
+    return { kind: 'standby', detail: null, percent: null };
+  if (status === 'unsupported')
+    return { kind: 'unsupported', detail: null, percent: null };
+  if (isDownloadingStatus(status))
     return {
       kind: 'downloading',
-      pill: { variant: 'working', label: 'Downloading' },
       detail: null,
       percent: Math.round(status.downloading.pct),
     };
-  }
-  if (typeof status === 'object' && status !== null && 'error' in status) {
-    return {
-      kind: 'error',
-      pill: { variant: 'error', label: 'Error' },
-      detail: status.error,
-      percent: null,
-    };
-  }
-  return { kind: 'unsupported', pill: null, detail: null, percent: null };
+  if (typeof status === 'object' && status !== null && 'error' in status)
+    return { kind: 'error', detail: status.error, percent: null };
+  return { kind: 'unsupported', detail: null, percent: null };
 }

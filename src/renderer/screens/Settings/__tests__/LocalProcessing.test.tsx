@@ -48,9 +48,9 @@ it.each([
 });
 
 /**
- * Component coverage for the stats loading state and its decoupling from
- * the 2s download poll (`loadProviders` no longer fetches `inference:stats`
- * — that's `loadStats`, run on mount and Refresh only).
+ * Component coverage: the status line, the stats read kept off the 2s
+ * download poll (mount and after this pane's own pref writes only), and
+ * providers shown only when one needs the user.
  */
 
 type ProviderRow = Invokes['inference:providers']['res'][number];
@@ -125,8 +125,10 @@ function mockInvoke(
   });
 }
 
-describe('LocalProcessing: stats loading state', () => {
-  test('shows a Busy placeholder until stats resolve, then the queued line', async () => {
+const READY_LINE = 'Ready · 3 items waiting · 7 read or transcribed so far';
+
+describe('LocalProcessing: status line', () => {
+  test('shows a Busy placeholder until stats resolve, then the status line', async () => {
     let resolveStats: (v: StatsRes) => void = () => {};
     const pending = new Promise<StatsRes>((resolve) => {
       resolveStats = resolve;
@@ -137,16 +139,21 @@ describe('LocalProcessing: stats loading state', () => {
 
     const status = await screen.findByRole('status');
     expect(status).toHaveTextContent('Loading processing status…');
-    expect(screen.queryByText(/queued for processing/)).not.toBeInTheDocument();
 
     resolveStats(statsRes({ pendingOcr: 3, processed: 7 }));
 
+    expect(await screen.findByText(READY_LINE)).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  test('a closed lane with work waiting says why it is paused', async () => {
+    mockInvoke({ stats: statsRes({ lane: 'until-night', pendingOcr: 1 }) });
+    render(<LocalProcessing />);
     expect(
       await screen.findByText(
-        '3 visual documents queued for processing · 7 extracted or transcribed',
+        'Paused — runs overnight (22:00–07:00) · 1 item waiting · 7 read or transcribed so far',
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });
 
@@ -164,8 +171,7 @@ describe('LocalProcessing: stats off the download poll', () => {
 
     await act(async () => {
       render(<LocalProcessing />);
-      // Flush the mount effect's invoke().then().catch().finally() chains
-      // (each link is its own microtask tick).
+      // Flush the mount effect's invoke().then().catch() chains.
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
@@ -182,7 +188,6 @@ describe('LocalProcessing: stats off the download poll', () => {
       // eslint-disable-next-line no-await-in-loop
       await act(async () => {
         await jest.advanceTimersByTimeAsync(2000);
-        // Flush the re-triggered invoke().then().catch().finally() chain.
         await Promise.resolve();
         await Promise.resolve();
         await Promise.resolve();
@@ -195,31 +200,67 @@ describe('LocalProcessing: stats off the download poll', () => {
   });
 });
 
-describe('LocalProcessing: Refresh', () => {
-  test('Refresh re-invokes both providers and stats', async () => {
+describe('LocalProcessing: settings', () => {
+  test('a pref write re-reads stats and the model catalog once it lands', async () => {
     mockInvoke();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'inference:providers') return Promise.resolve([]);
+      if (channel === 'inference:stats') return Promise.resolve(statsRes());
+      if (channel === 'inference:models') return Promise.resolve(modelsRes());
+      if (channel === 'prefs:patch') return Promise.resolve(undefined);
+      return Promise.reject(new Error(`unexpected channel ${channel}`));
+    });
     render(<LocalProcessing />);
-
-    await screen.findByText(
-      '3 visual documents queued for processing · 7 extracted or transcribed',
-    );
+    await screen.findByText(READY_LINE);
     invoke.mockClear();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
-      // Flush the re-triggered invoke().then().catch().finally() chains.
-      await Promise.resolve();
+      fireEvent.click(screen.getByRole('tab', { name: 'At night' }));
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(invoke).toHaveBeenCalledWith('inference:providers', undefined);
+    expect(invoke).toHaveBeenCalledWith('prefs:patch', {
+      processing: { enabled: true, window: 'night' },
+    });
     expect(invoke).toHaveBeenCalledWith('inference:stats', undefined);
+    expect(invoke).toHaveBeenCalledWith('inference:models', undefined);
+  });
+
+  test('When to run is disabled while processing is off', async () => {
+    mockPrefs.processing = { enabled: false, window: 'idle' };
+    mockInvoke();
+    render(<LocalProcessing />);
+    await screen.findByText(/items waiting/);
+    expect(screen.getByRole('tab', { name: 'At night' })).toBeDisabled();
   });
 });
 
-describe('LocalProcessing: install gating on `installable`', () => {
-  test('local-asr standby row shows Download now; clicking it installs THAT provider', async () => {
+describe('LocalProcessing: providers only when one needs the user', () => {
+  test('healthy providers are not listed; the footnote says so', async () => {
+    mockInvoke({
+      providers: [
+        { id: 'local-llm', supports: [], status: 'ready', installable: true },
+        {
+          id: 'local-asr',
+          supports: ['hear'],
+          status: 'standby',
+          installable: true,
+        },
+      ],
+    });
+    render(<LocalProcessing />);
+    await screen.findByText(READY_LINE);
+    expect(
+      screen.queryByRole('list', { name: 'Providers that need you' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/only appear here when one needs attention/),
+    ).toBeInTheDocument();
+  });
+
+  test('a standby model with automatic download off offers Download now for THAT provider', async () => {
+    mockPrefs.models = { override: 'auto', autoInstall: false };
     mockInvoke({
       providers: [
         {
@@ -247,7 +288,7 @@ describe('LocalProcessing: install gating on `installable`', () => {
     });
   });
 
-  test('apple-vision unsupported/error rows get NO install/retry controls (installable:false)', async () => {
+  test('a non-installable provider in error is shown with NO install/retry control', async () => {
     mockInvoke({
       providers: [
         {
@@ -260,20 +301,14 @@ describe('LocalProcessing: install gating on `installable`', () => {
     });
     render(<LocalProcessing />);
 
-    await screen.findByText('apple-vision');
+    await screen.findByText('Vision (built in)');
 
     expect(
-      screen.queryByRole('button', { name: /retry/i }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /download now/i }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /cancel/i }),
+      screen.queryByRole('button', { name: /retry|download now|cancel/i }),
     ).not.toBeInTheDocument();
   });
 
-  test('local-asr downloading row shows Cancel and the progress bar', async () => {
+  test('a downloading provider shows Cancel and its progress', async () => {
     mockInvoke({
       providers: [
         {
@@ -284,17 +319,18 @@ describe('LocalProcessing: install gating on `installable`', () => {
         },
       ],
     });
-    const { container } = render(<LocalProcessing />);
+    render(<LocalProcessing />);
 
     await screen.findByRole('button', { name: /cancel/i });
 
-    const bar = container.querySelector('.progress i');
-    expect(bar).toHaveStyle({ width: '40%' });
+    expect(
+      screen.getByRole('progressbar', { name: 'Speech model download' }),
+    ).toHaveAttribute('aria-valuenow', '40');
   });
 });
 
-describe('LocalProcessing: recently-processed engine labels', () => {
-  test('local-asr labeled Transcript, local-ocr+vlm and local-ocr unchanged', async () => {
+describe('LocalProcessing: recently processed', () => {
+  test('summary names the last item; rows carry the engine labels', async () => {
     mockInvoke({
       stats: statsRes({
         recent: [
@@ -327,19 +363,10 @@ describe('LocalProcessing: recently-processed engine labels', () => {
     });
     render(<LocalProcessing />);
 
-    expect(await screen.findByText('Transcript')).toBeInTheDocument();
+    expect(await screen.findByText(/last: voice memo/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Recently processed/ }));
+    expect(screen.getByText('Transcript')).toBeInTheDocument();
     expect(screen.getByText('OCR + description')).toBeInTheDocument();
     expect(screen.getByText('OCR')).toBeInTheDocument();
-  });
-});
-
-describe('LocalProcessing: queue count copy', () => {
-  test('says visual documents', async () => {
-    mockInvoke({ stats: statsRes({ pendingOcr: 3, processed: 7 }) });
-    render(<LocalProcessing />);
-
-    expect(
-      await screen.findByText(/3 visual documents queued for processing/),
-    ).toBeInTheDocument();
   });
 });

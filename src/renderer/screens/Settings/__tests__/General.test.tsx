@@ -109,7 +109,7 @@ describe('General pane', () => {
     expect(screen.getByText('Downloading 1.3.0 · 42%')).toBeInTheDocument();
     expect(
       screen.getByRole('progressbar', { name: 'Update download' }),
-    ).toBeInTheDocument();
+    ).toHaveAttribute('aria-valuenow', '42');
     expect(screen.getByRole('button', { name: 'Check now' })).toBeDisabled();
   });
 

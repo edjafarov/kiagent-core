@@ -216,7 +216,10 @@ export function General(): React.ReactElement {
             <>
               {updateLine(update, Date.now())}
               {percent != null && (
-                <ProgressBar aria-label="Update download" value={percent} />
+                <ProgressBar
+                  aria-label="Update download"
+                  value={percent / 100}
+                />
               )}
             </>
           }
