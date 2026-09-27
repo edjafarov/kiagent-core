@@ -122,7 +122,8 @@ describe('frame', () => {
     expect(registry.frame('settings')).toBe('page');
     expect(registry.frame('sources')).toBe('page');
     expect(registry.frame('outbox')).toBe('page');
-    expect(registry.frame('logs')).toBe('host');
+    expect(registry.frame('logs')).toBe('page');
+    expect(registry.frame('marketplace')).toBe('host');
     expect(registry.frame('ext:kia.google-calendar/calendar' as View)).toBe(
       'host',
     );

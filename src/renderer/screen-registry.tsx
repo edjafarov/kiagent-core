@@ -55,9 +55,9 @@ export function getDefaultScreens(): ScreenDefinitions {
       ),
     },
     connection: { frame: 'page', factory: () => <Connection /> },
-    // Logs draws its own header row inside the main pane; the sidebar
-    // stays visible (it has no nav entry — entered programmatically).
-    logs: { factory: () => <Logs /> },
+    // Logs is a page under Settings (breadcrumb "Settings › Logs"); it has
+    // no nav entry — General › Diagnostics and error cards open it.
+    logs: { frame: 'page', factory: () => <Logs /> },
     outbox: { frame: 'page', factory: () => <Outbox /> },
     marketplace: { factory: () => <Marketplace /> },
     settings: {

@@ -5,11 +5,17 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { useAppState } from '@renderer/state/app-state';
 import { useView } from '@renderer/state/view';
 import { Icon } from '@shared/web-ui/icon-sprite';
-import { Wordmark, Pill } from '@shared/web-ui/components';
-import type { AppState, LogLevel, LogRecord } from '@shared/contracts';
+import {
+  Button,
+  Page,
+  Select,
+  Status,
+  TextButton,
+  TextField,
+} from '@shared/web-ui/ui';
+import type { LogLevel, LogRecord } from '@shared/contracts';
 import './Logs.css';
 
 // Filter semantics: minimum severity threshold (e.g. "info" shows info+warn+error).
@@ -26,6 +32,14 @@ function fmtTs(iso: string): string {
     `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
     `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
   );
+}
+
+/** The row's time: the clock with seconds (the full stamp is in Copy). */
+function clockTs(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function stringifyValue(v: unknown): string {
@@ -68,20 +82,6 @@ function matchesSearch(rec: LogRecord, q: string): boolean {
     }
   }
   return false;
-}
-
-function selectLogsTopBarSlice(s: AppState): {
-  live: number;
-  totalDocs: number;
-} {
-  let live = 0;
-  let totalDocs = 0;
-  for (const a of s.accounts) {
-    if (a.account.status === 'live' || a.account.status === 'backfilling')
-      live += 1;
-    totalDocs += a.docCount;
-  }
-  return { live, totalDocs };
 }
 
 export function Logs(): React.ReactElement {
@@ -167,140 +167,93 @@ export function Logs(): React.ReactElement {
       );
   }, []);
 
-  const { live, totalDocs } = useAppState(selectLogsTopBarSlice);
   const { back, openSettings } = useView();
 
   return (
-    <div className="logs-shell">
-      <div className="dash-topbar">
-        <button type="button" className="btn ghost sm" onClick={back}>
-          ← Back
-        </button>
-        <Wordmark />
-        <Pill variant="live">
-          {live} live · {totalDocs.toLocaleString()} docs
-        </Pill>
-        <span className="t-meta" style={{ marginLeft: 8 }}>
-          Diagnostic log stream
-        </span>
-        <div style={{ flex: 1 }} />
-        <button type="button" className="btn ghost sm" onClick={doExport}>
-          <Icon name="external" size={13} />
-          <span style={{ color: 'var(--text-secondary)' }}>Export logs</span>
-        </button>
-        <button
-          type="button"
-          className="btn ghost sm"
-          aria-label="Settings"
-          onClick={() => openSettings()}
+    <Page
+      className="logs-page"
+      crumb={{
+        parent: 'Settings',
+        current: 'Logs',
+        onBack: back,
+        onParent: () => openSettings(),
+      }}
+    >
+      <div className="logs-toolbar">
+        <span className="logs-lbl">Filter</span>
+        <Select
+          aria-label="Filter by level"
+          value={levelFilter}
+          onChange={(e) => setLevelFilter(e.target.value as LogLevel)}
         >
-          <Icon name="settings" size={14} />
-        </button>
+          {LEVEL_FILTERS.map((l) => (
+            <option key={l} value={l}>
+              Level: {l}+
+            </option>
+          ))}
+        </Select>
+        <Select
+          aria-label="Filter by scope"
+          value={scopeFilter}
+          onChange={(e) => setScopeFilter(e.target.value)}
+        >
+          <option value="all">Scope: All scopes</option>
+          {scopes.map((sc) => (
+            <option key={sc} value={sc}>
+              Scope: {sc}
+            </option>
+          ))}
+        </Select>
+        <TextField
+          search
+          className="logs-search"
+          placeholder="Search messages…"
+          aria-label="Search messages"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <Button size="sm" onClick={togglePause} aria-pressed={paused}>
+          <Icon name={paused ? 'play' : 'pause'} size={12} />
+          {paused ? 'Resume' : 'Pause'}
+        </Button>
+        <TextButton onClick={copy}>
+          <Icon name="copy" size={12} /> Copy
+        </TextButton>
+        <TextButton onClick={doExport}>
+          <Icon name="external" size={12} /> Export
+        </TextButton>
+        <TextButton onClick={clear}>
+          <Icon name="trash" size={12} /> Clear
+        </TextButton>
       </div>
 
-      <div className="logs-body">
-        <div className="logs-toolbar">
-          <span className="lbl-section">Filter</span>
+      <div className="logs-table" ref={tableRef}>
+        {visible.length === 0 ? (
+          <div className="logs-empty">
+            {source.length === 0
+              ? 'Waiting for log activity…'
+              : 'No records match the current filters.'}
+          </div>
+        ) : (
+          visible.map((rec, i) => (
+            <LogRow key={`${rec.ts}-${i}-${rec.msg}`} rec={rec} />
+          ))
+        )}
+      </div>
 
-          <label className="logs-select">
-            <span className="k">Level:</span>
-            <select
-              aria-label="Filter by level"
-              value={levelFilter}
-              onChange={(e) => setLevelFilter(e.target.value as LogLevel)}
-            >
-              {LEVEL_FILTERS.map((l) => (
-                <option key={l} value={l}>
-                  {l}+
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="logs-select">
-            <span className="k">Scope:</span>
-            <select
-              aria-label="Filter by scope"
-              value={scopeFilter}
-              onChange={(e) => setScopeFilter(e.target.value)}
-            >
-              <option value="all">All scopes</option>
-              {scopes.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="logs-search">
-            <Icon name="search" size={12} />
-            <input
-              type="text"
-              placeholder="Search messages…"
-              aria-label="Search messages"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </label>
-
-          <div className="div-v" />
-
-          <span className="t-meta">tail</span>
-          <button
-            type="button"
-            className="btn sm"
-            onClick={togglePause}
-            aria-pressed={paused}
-          >
-            <Icon name={paused ? 'play' : 'pause'} size={12} />
-            {paused ? 'Resume' : 'Pause'}
-          </button>
-          <button type="button" className="btn ghost sm" onClick={copy}>
-            <Icon name="copy" size={12} />
-            <span style={{ color: 'var(--text-secondary)' }}>Copy</span>
-          </button>
-
-          <div style={{ flex: 1 }} />
-
-          <button type="button" className="btn ghost sm" onClick={clear}>
-            <Icon name="trash" size={12} />
-            <span style={{ color: 'var(--text-secondary)' }}>Clear</span>
-          </button>
-        </div>
-
-        <div className="logs-table" ref={tableRef}>
-          {visible.length === 0 ? (
-            <div className="logs-empty">
-              {source.length === 0
-                ? 'Waiting for log activity…'
-                : 'No records match the current filters.'}
-            </div>
-          ) : (
-            visible.map((rec, i) => (
-              <LogRow key={`${rec.ts}-${i}-${rec.msg}`} rec={rec} />
-            ))
-          )}
-        </div>
-
-        <div className="footbar">
-          <span className="mono">{exportMsg ?? ' '}</span>
-          <div style={{ flex: 1 }} />
-          <span>
-            {visible.length} of{' '}
-            <span className="mono">{source.length.toLocaleString()}</span>{' '}
-            {source.length === 1 ? 'line' : 'lines'}
-          </span>
-          <span
-            className={paused ? 'stream-pill paused' : 'stream-pill'}
-            aria-live="polite"
-          >
-            <span className="dot" />
+      <div className="logs-foot">
+        <span className="mono">
+          {visible.length} of {source.length.toLocaleString()}{' '}
+          {source.length === 1 ? 'line' : 'lines'}
+        </span>
+        <span aria-live="polite">
+          <Status tone={paused ? 'off' : 'ok'}>
             {paused ? 'Paused' : 'Streaming'}
-          </span>
-        </div>
+          </Status>
+        </span>
+        {exportMsg && <span className="mono">{exportMsg}</span>}
       </div>
-    </div>
+    </Page>
   );
 }
 
@@ -318,7 +271,9 @@ const LogRow = React.memo(function LogRow(props: {
         : 'log-row';
   return (
     <div className={rowClass}>
-      <span className="ts">{fmtTs(rec.ts)}</span>
+      <span className="ts" title={fmtTs(rec.ts)}>
+        {clockTs(rec.ts)}
+      </span>
       <span className={`lvl ${rec.level}`}>{rec.level.toUpperCase()}</span>
       <span className="src">{rec.scope}</span>
       <span className="msg">
