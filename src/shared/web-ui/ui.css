@@ -758,12 +758,14 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-split.is-md { grid-template-columns: minmax(0, 1fr) var(--aside-md); }
 .ui-split-main, .ui-split-aside { min-width: 0; }
 /* The side column stays in view while the main column scrolls, so a
-   panel opened from far down a list shows where it was clicked. A tall
-   side column scrolls on its own. 24px is the pane's top padding. */
+   panel opened from far down a list shows where it was clicked. It sticks
+   flush under the top bar: sticky insets count from inside the pane's
+   24px top padding, so -24px cancels it. A tall side column scrolls on
+   its own. */
 .ui-split-aside {
   position: sticky;
-  top: 24px;
-  max-height: calc(100vh - var(--band-h) - 48px);
+  top: -24px;
+  max-height: calc(100vh - var(--band-h));
   overflow-y: auto;
 }
 .ui-cols {
