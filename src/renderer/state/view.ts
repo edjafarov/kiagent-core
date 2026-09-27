@@ -25,7 +25,6 @@ export const ROUTE_META = {
   connection: { title: 'Connection' },
   logs: { title: 'Logs' },
   outbox: { title: 'Outbox' },
-  marketplace: { title: 'Marketplace' },
   settings: { title: 'Settings' },
 } as const satisfies Record<string, RouteMeta>;
 

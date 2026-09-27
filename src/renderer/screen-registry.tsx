@@ -10,7 +10,6 @@ import { Sources } from '@renderer/screens/Sources';
 import { Connection } from '@renderer/screens/Connection';
 import { Logs } from '@renderer/screens/Logs';
 import { Outbox } from '@renderer/screens/Outbox';
-import { Marketplace } from '@renderer/screens/Marketplace';
 import { Settings } from '@renderer/screens/Settings';
 import {
   ContributedUnavailable,
@@ -59,7 +58,6 @@ export function getDefaultScreens(): ScreenDefinitions {
     // no nav entry — General › Diagnostics and error cards open it.
     logs: { frame: 'page', factory: () => <Logs /> },
     outbox: { frame: 'page', factory: () => <Outbox /> },
-    marketplace: { factory: () => <Marketplace /> },
     settings: {
       frame: 'page',
       factory: (params) => <Settings pane={params.pane} />,

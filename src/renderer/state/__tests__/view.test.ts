@@ -26,8 +26,8 @@ describe('nextResolved', () => {
 
   test('cross-view navigation bumps epoch and pushes history', () => {
     const prev: ResolvedView = { view: 'sources', epoch: 3 };
-    expect(nextResolved(prev, 'marketplace')).toEqual({
-      next: { view: 'marketplace', params: undefined, epoch: 4 },
+    expect(nextResolved(prev, 'outbox')).toEqual({
+      next: { view: 'outbox', params: undefined, epoch: 4 },
       push: true,
     });
   });
@@ -53,7 +53,6 @@ describe('isKnownView / KNOWN_VIEWS', () => {
       'connection',
       'logs',
       'outbox',
-      'marketplace',
       'settings',
     ]);
     for (const v of KNOWN_VIEWS) expect(isKnownView(v)).toBe(true);

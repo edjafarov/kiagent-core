@@ -16,7 +16,7 @@ export type ContributedUnavailableReason =
   | 'disabled'
   | 'activating'
   /** Installed, but the user has not granted consent for its current
-   *  manifest (e.g. it gained a page) — Marketplace → Review permissions. */
+   *  manifest (e.g. it gained a page) — Settings › Extensions → Review permissions. */
   | 'needs-consent'
   /** The extension's own activation failed. */
   | 'failed'
@@ -46,7 +46,8 @@ const REASON_COPY: Record<
   },
   'needs-consent': {
     headline: 'needs your permission',
-    detail: 'is waiting for you to review its permissions in Marketplace.',
+    detail:
+      'is waiting for you to review its permissions in Settings › Extensions.',
   },
   failed: {
     headline: 'failed to start',

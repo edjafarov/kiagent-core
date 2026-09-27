@@ -19,10 +19,9 @@ jest.mock('@renderer/contributed-page', () => ({
   ),
 }));
 
-// getDefaultScreens() pulls in Marketplace -> Detail.tsx -> react-markdown,
-// which is ESM-only and must be mocked under ts-jest in every test that
-// imports screen-registry.tsx, directly or transitively — same mock as
-// Marketplace/__tests__/{Marketplace,Detail}.test.tsx.
+// getDefaultScreens() pulls in the install sheet -> react-markdown, which is
+// ESM-only and must be mocked under ts-jest in every test that imports
+// screen-registry.tsx, directly or transitively.
 jest.mock(
   'react-markdown',
   () =>
@@ -117,13 +116,12 @@ describe('createScreenRegistry — contributed views (ExtView)', () => {
 });
 
 describe('frame', () => {
-  it('marks the migrated screens as pages and everything else as host', () => {
+  it('marks the core screens as pages and contributed pages as host', () => {
     const registry = createScreenRegistry(getDefaultScreens());
     expect(registry.frame('settings')).toBe('page');
     expect(registry.frame('sources')).toBe('page');
     expect(registry.frame('outbox')).toBe('page');
     expect(registry.frame('logs')).toBe('page');
-    expect(registry.frame('marketplace')).toBe('host');
     expect(registry.frame('ext:kia.google-calendar/calendar' as View)).toBe(
       'host',
     );
