@@ -757,6 +757,15 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 }
 .ui-split.is-md { grid-template-columns: minmax(0, 1fr) var(--aside-md); }
 .ui-split-main, .ui-split-aside { min-width: 0; }
+/* The side column stays in view while the main column scrolls, so a
+   panel opened from far down a list shows where it was clicked. A tall
+   side column scrolls on its own. 24px is the pane's top padding. */
+.ui-split-aside {
+  position: sticky;
+  top: 24px;
+  max-height: calc(100vh - var(--band-h) - 48px);
+  overflow-y: auto;
+}
 .ui-cols {
   display: grid;
   grid-template-columns: var(--ui-cols);
@@ -769,6 +778,7 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 }
 @container pane (max-width: 819px) {
   .ui-split, .ui-split.is-md { grid-template-columns: minmax(0, 1fr); }
+  .ui-split-aside { position: static; max-height: none; overflow-y: visible; }
 }
 @container pane (max-width: 619px) {
   .ui-cols { grid-template-columns: 1fr; }
