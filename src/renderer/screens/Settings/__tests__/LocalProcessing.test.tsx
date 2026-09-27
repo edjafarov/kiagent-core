@@ -9,11 +9,11 @@ it('says "this Mac" on macOS and "this computer" elsewhere', () => {
   const platform = jest.spyOn(navigator, 'platform', 'get');
   try {
     platform.mockReturnValue('MacIntel');
-    expect(pausedLine('until-idle', 1)).toBe(
+    expect(pausedLine('until-idle')).toBe(
       'Paused — waiting for this Mac to be idle.',
     );
     platform.mockReturnValue('Win32');
-    expect(pausedLine('until-idle', 1)).toBe(
+    expect(pausedLine('until-idle')).toBe(
       'Paused — waiting for this computer to be idle.',
     );
   } finally {
@@ -22,29 +22,25 @@ it('says "this Mac" on macOS and "this computer" elsewhere', () => {
 });
 
 it.each([
-  ['open lane shows nothing', 'open', 12, null],
-  ['empty queue shows nothing even when closed', 'until-idle', 0, null],
+  ['open lane shows nothing', 'open', null],
   [
     'idle window, user active',
     'until-idle',
-    1700,
     'Paused — waiting for this computer to be idle.',
   ],
   [
     'night window, daytime',
     'until-night',
-    3,
     'Paused — runs overnight (22:00–07:00).',
   ],
-  ['on battery', 'battery', 3, 'Paused — on battery power.'],
+  ['on battery', 'battery', 'Paused — on battery power.'],
   [
     'processing disabled',
     'disabled',
-    3,
-    'Paused — background processing is turned off.',
+    'Off — background processing is turned off.',
   ],
-] as const)('%s', (_n, lane, queued, want) => {
-  expect(pausedLine(lane, queued)).toBe(want);
+] as const)('%s', (_n, lane, want) => {
+  expect(pausedLine(lane)).toBe(want);
 });
 
 /**
@@ -146,6 +142,21 @@ describe('LocalProcessing: status line', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
+  test.each([
+    ['battery', 'Paused — on battery power · 0 items waiting'],
+    ['disabled', 'Off — background processing is turned off · 0 items waiting'],
+  ] as const)(
+    'a closed lane (%s) is never Ready, even with nothing waiting',
+    async (lane, want) => {
+      mockInvoke({ stats: statsRes({ lane, pendingOcr: 0 }) });
+      render(<LocalProcessing />);
+      expect(
+        await screen.findByText(new RegExp(`^${want}`)),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/^Ready/)).not.toBeInTheDocument();
+    },
+  );
+
   test('a closed lane with work waiting says why it is paused', async () => {
     mockInvoke({ stats: statsRes({ lane: 'until-night', pendingOcr: 1 }) });
     render(<LocalProcessing />);
@@ -225,6 +236,8 @@ describe('LocalProcessing: settings', () => {
     });
     expect(invoke).toHaveBeenCalledWith('inference:stats', undefined);
     expect(invoke).toHaveBeenCalledWith('inference:models', undefined);
+    // A model change can change which provider needs a download.
+    expect(invoke).toHaveBeenCalledWith('inference:providers', undefined);
   });
 
   test('When to run is disabled while processing is off', async () => {
@@ -285,6 +298,27 @@ describe('LocalProcessing: providers only when one needs the user', () => {
 
     expect(invoke).toHaveBeenCalledWith('inference:install', {
       providerId: 'local-asr',
+    });
+  });
+
+  test('with automatic download on, a standby model can still be fetched from the Model section', async () => {
+    mockInvoke({
+      providers: [
+        { id: 'local-llm', supports: [], status: 'standby', installable: true },
+      ],
+    });
+    render(<LocalProcessing />);
+    await screen.findByText(READY_LINE);
+    expect(
+      screen.queryByRole('list', { name: 'Providers that need you' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Model/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Download now' }));
+      await Promise.resolve();
+    });
+    expect(invoke).toHaveBeenCalledWith('inference:install', {
+      providerId: 'local-llm',
     });
   });
 

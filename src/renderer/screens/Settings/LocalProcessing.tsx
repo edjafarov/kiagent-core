@@ -43,13 +43,13 @@ const WINDOWS: ReadonlyArray<{ key: ProcessingWindow; label: string }> = [
 /** One decimal place, e.g. 7121860000 -> "6.6". */
 const gb = (totalBytes: number): string => (totalBytes / 1024 ** 3).toFixed(1);
 
-/** Why queued work isn't moving right now — or null when it is (lane open)
- *  or there's nothing waiting (a pause reason with an empty queue is noise). */
-export function pausedLine(lane: LaneState, queued: number): string | null {
-  if (lane === 'open' || queued === 0) return null;
+/** Why background work isn't running right now — or null when it is (lane
+ *  open). Said whether or not anything is waiting: the lane is the truth. */
+export function pausedLine(lane: LaneState): string | null {
+  if (lane === 'open') return null;
   switch (lane) {
     case 'disabled':
-      return 'Paused — background processing is turned off.';
+      return 'Off — background processing is turned off.';
     case 'battery':
       return 'Paused — on battery power.';
     case 'until-night':
@@ -97,17 +97,19 @@ function waitingCount(stats: ExtractionStatsRes): number {
 
 /** The pane's first line: ready or paused (and why), waiting, done. */
 function statusLine(stats: ExtractionStatsRes): {
-  tone: 'ok' | 'work';
+  tone: 'ok' | 'work' | 'off';
   text: string;
 } {
   const waiting = waitingCount(stats);
-  const paused = pausedLine(stats.lane, waiting);
+  const paused = pausedLine(stats.lane);
   const counts = `${waiting.toLocaleString()} ${
     waiting === 1 ? 'item' : 'items'
   } waiting · ${stats.processed.toLocaleString()} read or transcribed so far`;
-  return paused
-    ? { tone: 'work', text: `${paused.replace(/\.$/, '')} · ${counts}` }
-    : { tone: 'ok', text: `Ready · ${counts}` };
+  if (!paused) return { tone: 'ok', text: `Ready · ${counts}` };
+  return {
+    tone: stats.lane === 'disabled' ? 'off' : 'work',
+    text: `${paused.replace(/\.$/, '')} · ${counts}`,
+  };
 }
 
 /** People's names for the providers; unknown ids show as they are. */
@@ -115,7 +117,6 @@ const PROVIDER_NAMES: Record<string, string> = {
   'local-llm': 'Language model',
   'local-asr': 'Speech model',
   'apple-vision': 'Vision (built in)',
-  'local-ocr': 'Text recognition',
 };
 /**
  * Local AI pane: whether and when background local processing runs, which
@@ -163,6 +164,14 @@ export function LocalProcessing(): React.ReactElement {
     loadStats();
   }, [loadProviders, loadStats]);
 
+  // The lane moves on its own (battery, idle, the clock) and has no push
+  // channel: coming back to the window re-reads it.
+  useEffect(() => {
+    const onFocus = () => loadStats();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [loadStats]);
+
   // No push channel carries download progress, so poll while any provider
   // is mid-download; stop as soon as none are (and on unmount).
   useEffect(() => {
@@ -175,12 +184,31 @@ export function LocalProcessing(): React.ReactElement {
 
   // AppPrefs.processing / .models are nested objects (not themselves
   // Partial), so a patch resends the whole object with one field changed.
+  // A model change can also change which provider needs a download, so
+  // providers are re-read with the stats.
   const patch = (delta: Partial<AppPrefs>) => {
     void window.kiagent
       .invoke('prefs:patch', delta)
-      .then(loadStats)
+      .then(() => {
+        loadStats();
+        loadProviders();
+      })
       .catch(() => {});
   };
+  const install = (providerId: string) => {
+    void window.kiagent
+      .invoke('inference:install', { providerId })
+      .then(loadProviders)
+      .catch(() => setProvidersError(true));
+  };
+  // A model that will download when needed can be fetched now (e.g. before
+  // going offline); one with automatic download off is an attention row.
+  const optional = (providers ?? []).filter(
+    (p) =>
+      p.installable &&
+      describeStatus(p.status).kind === 'standby' &&
+      models.autoInstall,
+  );
 
   const attention = (providers ?? []).filter((p) => needsAttention(p, models));
   const last = stats?.recent[0];
@@ -281,6 +309,18 @@ export function LocalProcessing(): React.ReactElement {
             </Select>
           }
         />
+        {optional.map((p) => (
+          <SettingsRow
+            key={p.id}
+            title={PROVIDER_NAMES[p.id] ?? p.id}
+            description="Downloads automatically when needed."
+            control={
+              <Button size="sm" onClick={() => install(p.id)}>
+                Download now
+              </Button>
+            }
+          />
+        ))}
       </Disclosure>
 
       <Disclosure
