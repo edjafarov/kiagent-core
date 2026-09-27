@@ -1,9 +1,8 @@
-/* Shared component primitives — buttons, pills, cards, inputs, progress,
-   typography helpers, link, scroll-y, toast, table, window chrome,
-   sidebar, tray, connector glyphs, wordmark, provider rows. Imported by
-   the desktop renderer (via App.css), the web SPA (via index.html link
-   tag), and the server-rendered HTML (via renderShell, which inlines
-   this file). Tokens live in tokens.css. */
+/* Legacy component classes — buttons, pills, cards, inputs, progress,
+   spinner, typography helpers, link, wordmark, provider rows. Imported by
+   the desktop renderer (renderer/index.tsx) as the base under ui.css, and
+   inlined into the server-rendered HTML (loader-node / renderShell). New
+   screens use the ui primitives instead. Tokens live in tokens.css. */
 
 /* ── Container / utility ──────────────────────────────────────── */
 .ac { font-family: var(--font-sans); color: var(--text-primary); background: var(--bg-canvas); font-size: 13px; line-height: 1.4; }
@@ -141,9 +140,6 @@
 
 .link { color: var(--accent-text); text-decoration: none; cursor: pointer; background: none; border: 0; border-bottom: 1px solid transparent; padding: 0; font: inherit; }
 .link:hover { border-bottom-color: var(--accent-text); }
-
-/* Stat card — small inline KPI tile, used in /admin's stats grid. */
-.stat { display: inline-block; padding: 0.5rem 0.9rem; border: 1px solid var(--border-subtle); margin: 0.25rem; min-width: 8rem; }
 
 /* ── Wordmark ─────────────────────────────────────────────────── */
 .wordmark {

@@ -13,15 +13,31 @@ relies on its base: the `.ac` font and `border-box` sizing, and the sprite's
 
 ## Styling contract for extension pages
 
-Contributed pages mount in the host document, so `tokens.css` and `ui.css`
-reach them. Only these are stable for extensions:
+Contributed pages (an extension's `ui` screens) mount in the host document,
+so `tokens.css` and `ui.css` reach them. This contract covers those pages
+only — the server-rendered shells and the product's own web styles keep
+their own stylesheets. Only these are stable for extensions:
 
-- the tokens in `tokens.css`;
-- `ui-card` (+ `ui-card-hd` for its header row, with `ui-card-lbl`);
-- `ui-row` (inside a `ui-rows` list);
-- `ui-btn` with `is-primary`, `is-secondary`, `is-ghost`, `is-danger`, `is-sm`;
-- `ui-seg` with `ui-seg-i` items and `is-on` for the active one;
-- `ui-status` with `is-ok`, `is-work`, `is-err`, `is-off`, `is-rec` and a `ui-dot` child.
+<!-- stable-tokens -->
+- `--text-primary`, `--text-secondary`, `--text-tertiary`
+- `--bg-app`, `--bg-surface`, `--bg-elevated`, `--bg-muted`
+- `--border-subtle`, `--border-strong`
+- `--accent-solid`, `--accent-solid-hover`, `--accent-subtle`, `--accent-text`
+- `--error-solid`, `--working-solid`, `--live-solid`
+- `--radius-sm`, `--radius-md`
+- `--shadow-sm`, `--shadow-md`, `--shadow-lg`
+- `--font-sans`, `--font-mono`
+<!-- /stable-tokens -->
 
-Every other `ui-` class is internal and may change. React primitives are not
-exported to extensions yet.
+<!-- stable-classes -->
+- `ui-card`, with `ui-card-hd` for its header row and `ui-card-lbl` for the label
+- `ui-rows` holding `ui-row` items
+- `ui-btn` (the plain one is the secondary look), with `is-primary`, `is-ghost`, `is-danger`, `is-sm`; `ui-ibtn` makes it square for a glyph
+- `ui-link` for a text action
+- `ui-seg` with `ui-seg-i` items and `is-on` for the active one
+- `ui-status` (the plain one is the off look) with `is-ok`, `is-work`, `is-err`, `is-rec` and a `ui-dot` child
+<!-- /stable-classes -->
+
+Every other token and `ui-` class is internal and may change. React
+primitives are not exported to extensions yet. A test holds each name above
+to a rule in `tokens.css` / `ui.css`.
