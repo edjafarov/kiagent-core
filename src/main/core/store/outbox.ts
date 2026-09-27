@@ -33,6 +33,8 @@ export interface OutboxDraftInput {
   threading?: Record<string, unknown> | null;
   confirmMode: ConfirmMode;
   createdVia: 'mcp-local' | 'mcp-remote' | 'panel';
+  /** The drafting MCP client's name; null for the panel or an unnamed app. */
+  createdBy?: string | null;
   expiresAt: string;
 }
 
@@ -112,6 +114,7 @@ interface OutboxRowSql {
   error: string | null;
   external_message_id: string | null;
   created_via: 'mcp-local' | 'mcp-remote' | 'panel';
+  created_by: string | null;
   created_at: string;
   sent_at: string | null;
   expires_at: string;
@@ -138,6 +141,7 @@ function toRow(r: OutboxRowSql): OutboxRow {
     error: r.error,
     externalMessageId: r.external_message_id,
     createdVia: r.created_via,
+    createdBy: r.created_by ?? null,
     createdAt: r.created_at,
     sentAt: r.sent_at,
     expiresAt: r.expires_at,
@@ -225,8 +229,8 @@ export function createOutboxStore(
         `INSERT INTO outbox (id, account_id, kind, reply_to_document_id,
            outbound_ref, recipient_display, to_json, cc_json, subject,
            body_markdown, threading_json, confirm_mode, status, created_via,
-           created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
+           created_by, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
         [
           id,
           d.accountId,
@@ -243,6 +247,7 @@ export function createOutboxStore(
           d.threading ? JSON.stringify(d.threading) : null,
           d.confirmMode,
           d.createdVia,
+          d.createdBy ?? null,
           deps.now(),
           d.expiresAt,
         ],

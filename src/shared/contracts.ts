@@ -673,6 +673,10 @@ export interface OutboxRow {
   error: string | null;
   externalMessageId: string | null;
   createdVia: 'mcp-local' | 'mcp-remote' | 'panel';
+  /** The drafting MCP client's self-reported name (`clientInfo.name`);
+   *  null for panel re-drafts, rows older than schema v8, or an app that
+   *  never named itself. */
+  createdBy: string | null;
   createdAt: string;
   sentAt: string | null;
   expiresAt: string;

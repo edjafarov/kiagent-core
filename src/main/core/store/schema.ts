@@ -1110,6 +1110,16 @@ const MIGRATIONS: Migration[] = [
         `ALTER TABLE documents ADD COLUMN ingest_seq INTEGER NOT NULL DEFAULT 0`,
       );
   },
+
+  // v8 — `outbox.created_by`: the MCP client name that drafted the row, for
+  // the review's "Drafted by". Legacy rows read NULL (an unnamed app).
+  (db) => {
+    const cols = db.prepare(`PRAGMA table_info(outbox)`).all() as {
+      name: string;
+    }[];
+    if (!cols.some((c) => c.name === 'created_by'))
+      db.exec(`ALTER TABLE outbox ADD COLUMN created_by TEXT`);
+  },
 ];
 
 /**

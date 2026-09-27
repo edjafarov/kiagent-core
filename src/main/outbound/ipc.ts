@@ -1,17 +1,23 @@
 /**
- * IPC delegate for the in-app Outbox history panel (spec §10).
+ * IPC delegate for the in-app Outbox (spec §10, Airy §9).
  *
- * SECURITY POSTURE: the renderer never sends or receives a URL. It sends a
- * draft id; this module mints the signed confirm URL main-side and hands it
- * to the injected `openExternal`. Confirmation itself never happens in-app —
- * spec §13 (user decision): served pages only, POST behind a button.
+ * SECURITY POSTURE: the renderer never sends or receives a URL or a token.
+ * It names a draft id. Review in the browser: this module mints the signed
+ * confirm URL main-side and hands it to the injected `openExternal`. Review
+ * in the app (Airy §9): `outbox:send` runs the page confirm's OWN gate and
+ * send (`service.sendById` → the shared `confirmRow`), so the in-app Send
+ * can never do what the page's Send button could not.
  *
  * CLASSIFICATION POSTURE: `error-copy.ts` is main-process code and the
  * renderer must not import across that layer, so every failure verdict is
  * computed HERE and rides the wire on `OutboxPanelRow`.
  */
 import type { Account, AccountId, OutboxRow } from '@shared/contracts';
-import type { InvokeHandlers, OutboxPanelRow } from '@shared/ipc';
+import type {
+  InvokeHandlers,
+  OutboxDraftDetail,
+  OutboxPanelRow,
+} from '@shared/ipc';
 
 import type { CoreStore } from '../core/store/store';
 import { shapeOutboundError } from './error-copy';
@@ -78,7 +84,29 @@ function errorFieldsOf(
   };
 }
 
-/** The five outbox channels, as a slice of main's exhaustive handler map.
+/** One row on the wire — the ONE mapping `outbox:list` and `outbox:get`
+ *  share. `account` null = it vanished (the FK cascades, so only a race). */
+function panelRow(row: OutboxRow, account: Account | null): OutboxPanelRow {
+  return {
+    draftId: row.id,
+    status: row.status,
+    kind: row.kind,
+    accountLabel: account?.identifier ?? '(removed)',
+    recipientDisplay: row.recipientDisplay,
+    subject: row.subject,
+    bodyPreview: row.bodyMarkdown.replace(/\s+/g, ' ').trim().slice(0, 140),
+    createdAt: row.createdAt,
+    sentAt: row.sentAt,
+    to: row.to,
+    cc: row.cc,
+    sourceId: account?.source ?? '',
+    createdBy: row.createdBy,
+    createdVia: row.createdVia,
+    ...errorFieldsOf(row),
+  };
+}
+
+/** The eight outbox channels, as a slice of main's exhaustive handler map.
  *
  *  Returned rather than registered, for the same reason as the updater's
  *  slice: a module that registers its own channels sits outside the one map
@@ -98,6 +126,9 @@ export function outboundInvokeHandlers(deps: {
   | 'outbox:discard'
   | 'outbox:open-confirm'
   | 'outbox:redraft'
+  | 'outbox:get'
+  | 'outbox:send'
+  | 'outbox:sender-sources'
 > {
   const { service, store, openExternal } = deps;
 
@@ -140,35 +171,16 @@ export function outboundInvokeHandlers(deps: {
         },
       });
 
-      const labels = new Map<AccountId, string>();
+      const accounts = new Map<AccountId, Account | null>();
       const out: OutboxPanelRow[] = [];
       for (const row of rows) {
-        let label = labels.get(row.accountId);
-        if (label === undefined) {
-          const account: Account | null = await store.account(row.accountId);
+        if (!accounts.has(row.accountId)) {
           // The outbox FK is ON DELETE CASCADE (schema.ts:205), so removing an
           // account erases its rows — '(removed)' is only reachable if the
           // account vanished between listRecent and this lookup.
-          label = account?.identifier ?? '(removed)';
-          labels.set(row.accountId, label);
+          accounts.set(row.accountId, await store.account(row.accountId));
         }
-        out.push({
-          draftId: row.id,
-          status: row.status,
-          kind: row.kind,
-          accountLabel: label,
-          recipientDisplay: row.recipientDisplay,
-          subject: row.subject,
-          bodyPreview: row.bodyMarkdown
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 140),
-          createdAt: row.createdAt,
-          sentAt: row.sentAt,
-          to: row.to,
-          cc: row.cc,
-          ...errorFieldsOf(row),
-        });
+        out.push(panelRow(row, accounts.get(row.accountId) ?? null));
       }
       return out;
     },
@@ -204,15 +216,43 @@ export function outboundInvokeHandlers(deps: {
 
     'outbox:redraft': async ({ draftId }) => {
       // redraft() calls assertReady() before its insert, so a cold base throws
-      // here rather than leaving an orphan row.
+      // here rather than leaving an orphan row. The fresh draft opens in the
+      // app's review sheet (Airy §9), not the browser.
       const fresh = await minting(() => service.redraft(draftId));
-      // Under a GLOBAL 'chat' default the fresh row's frozen mode is 'chat' and
-      // the model would get no link — but the panel mints one anyway and
-      // routes.ts:176-187 falls a chat token through to the FULL review page.
-      // Intended, and strictly stronger than what the model can offer.
-      const url = await minting(() => service.confirmUrlFor(fresh.id));
-      if (url) await openExternal(url);
       return { draftId: fresh.id };
     },
+
+    'outbox:get': async ({ draftId }) => {
+      await store.outbox.expireOverdue();
+      const row = await store.outbox.get(draftId);
+      if (!row) return null;
+      const detail: OutboxDraftDetail = {
+        ...panelRow(row, await store.account(row.accountId)),
+        body: row.bodyMarkdown,
+        confirmMode: row.confirmMode,
+      };
+      return detail;
+    },
+
+    'outbox:send': async ({ draftId }) => {
+      const outcome = await service.sendById(draftId);
+      switch (outcome.kind) {
+        case 'sent':
+          return { outcome: 'sent' };
+        case 'failed':
+          // The stored summary, shaped into the row's human sentence — the
+          // same words the history row will show.
+          return {
+            outcome: 'failed',
+            error: errorFieldsOf(outcome.row).error ?? outcome.error,
+          };
+        case 'already':
+          return { outcome: 'already' };
+        default:
+          return { outcome: 'gone' };
+      }
+    },
+
+    'outbox:sender-sources': async () => service.senderSources(),
   };
 }

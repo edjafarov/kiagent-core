@@ -117,13 +117,16 @@ describe('outbound ipc delegate', () => {
   const tokenOf = (r: { confirm_url?: string }) =>
     r.confirm_url!.split('/outbox/confirm/')[1];
 
-  it('registers the five outbox channels', () => {
+  it('registers the eight outbox channels', () => {
     expect([...handlers.keys()].sort()).toEqual([
       'outbox:discard',
+      'outbox:get',
       'outbox:list',
       'outbox:open-confirm',
       'outbox:pending-count',
       'outbox:redraft',
+      'outbox:send',
+      'outbox:sender-sources',
     ]);
   });
 
@@ -373,6 +376,8 @@ describe('outbound ipc delegate', () => {
       'canRetry',
       'cc',
       'createdAt',
+      'createdBy',
+      'createdVia',
       'deliveryUncertain',
       'draftId',
       'error',
@@ -380,6 +385,7 @@ describe('outbound ipc delegate', () => {
       'kind',
       'recipientDisplay',
       'sentAt',
+      'sourceId',
       'status',
       'subject',
       'to',
@@ -580,7 +586,7 @@ describe('outbound ipc delegate', () => {
     ).rejects.toThrow(/status is 'discarded'/);
   });
 
-  it('outbox:redraft creates a fresh draft and opens its page', async () => {
+  it('outbox:redraft creates a fresh draft for the in-app review (no browser)', async () => {
     sendMock.mockRejectedValueOnce(new Error('socket hang up'));
     const r = await service.draftReply({ documentId: docId, body: 'orig' });
     await service.confirmByToken(tokenOf(r));
@@ -589,7 +595,54 @@ describe('outbound ipc delegate', () => {
     expect(draftId).not.toBe(r.draft_id);
     expect((await store.outbox.get(draftId))?.status).toBe('draft');
     expect((await store.outbox.get(draftId))?.createdVia).toBe('panel');
-    expect(opened.some((u) => u.includes('/outbox/confirm/'))).toBe(true);
+    expect(opened).toEqual([]);
+  });
+
+  it('outbox:get returns one draft in full, and null for an unknown id', async () => {
+    const r = await service.draftReply({
+      documentId: docId,
+      body: 'Full\nbody',
+    });
+    const d = await invoke('outbox:get', { draftId: r.draft_id });
+    expect(d).toMatchObject({
+      draftId: r.draft_id,
+      status: 'draft',
+      body: 'Full\nbody',
+      confirmMode: 'review',
+      sourceId: 'imap',
+      accountLabel: 'me@example.com@imap.example.com',
+      to: ['Alice <alice@example.com>'],
+      createdVia: 'mcp-local',
+      createdBy: null,
+    });
+    expect(await invoke('outbox:get', { draftId: 'nope' })).toBeNull();
+  });
+
+  it('outbox:send runs the page confirm: sent, then already; unknown is gone', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'x' });
+    expect(await invoke('outbox:send', { draftId: r.draft_id })).toEqual({
+      outcome: 'sent',
+    });
+    expect(await invoke('outbox:send', { draftId: r.draft_id })).toEqual({
+      outcome: 'already',
+    });
+    expect(await invoke('outbox:send', { draftId: 'nope' })).toEqual({
+      outcome: 'gone',
+    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("outbox:send reports a failure in the row's own words", async () => {
+    sendMock.mockRejectedValueOnce(new Error('socket hang up'));
+    const r = await service.draftReply({ documentId: docId, body: 'x' });
+    const res = await invoke('outbox:send', { draftId: r.draft_id });
+    expect(res.outcome).toBe('failed');
+    const [row] = await invoke('outbox:list', { status: ['failed'] });
+    expect(res.error).toBe(row.error);
+  });
+
+  it('outbox:sender-sources lists the sources that can send', async () => {
+    expect(await invoke('outbox:sender-sources', undefined)).toEqual(['imap']);
   });
 
   it('reports a cold local server in human words', async () => {

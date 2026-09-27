@@ -11,6 +11,7 @@ import {
   createToolRegistry,
   redactArgsForLog,
 } from '../registry';
+import { currentClient } from '../transport-context';
 
 type ActivityRec = Omit<McpActivityRecord, 'transport'>;
 
@@ -92,6 +93,25 @@ it('client is null when the session has no clientInfo yet', async () => {
   attachToolHandlers(mcp, registry, logSink as never, (r) => got.push(r));
   await handlers[1]({ params: { name: 'search', arguments: {} } });
   expect(got[0].client).toBeNull();
+});
+
+it("a tool runs inside the calling client's name", async () => {
+  let seen: string | null | undefined;
+  const probe: McpTool = {
+    name: 'probe',
+    description: '',
+    inputSchema: {},
+    call: async () => {
+      await Promise.resolve(); // survives an await, as a real tool's I/O does
+      seen = currentClient();
+      return null;
+    },
+  };
+  const { mcp, handlers } = capture('claude-ai');
+  attachToolHandlers(mcp, createToolRegistry([probe]), logSink as never);
+  await handlers[1]({ params: { name: 'probe', arguments: {} } });
+  expect(seen).toBe('claude-ai');
+  expect(currentClient()).toBeNull(); // never leaks past the call
 });
 
 it('works without onActivity (callers may pass nothing)', async () => {

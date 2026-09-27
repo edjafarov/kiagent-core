@@ -46,6 +46,7 @@ describe('outbox schema', () => {
       'created_at',
       'sent_at',
       'expires_at',
+      'created_by', // v8, appended by ALTER TABLE
     ]);
   });
 

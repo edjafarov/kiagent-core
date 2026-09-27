@@ -16,6 +16,7 @@ import type {
   LogRecord,
   McpActivityRecord,
   OAuthSourceBinding,
+  ConfirmMode,
   OutboxStatus,
   ProviderStatus,
   Query,
@@ -289,6 +290,24 @@ export interface OutboxPanelRow {
   /** Verbatim from the row (`store/outbox.ts` `OutboxRow.to`/`.cc`). */
   to: string[];
   cc: string[];
+  /** The account's source id (brand mark, "Slack · 10:52"). */
+  sourceId: string;
+  /** The drafting MCP client's name; null for panel re-drafts and rows
+   *  older than schema v8. */
+  createdBy: string | null;
+  createdVia: 'mcp-local' | 'mcp-remote' | 'panel';
+}
+
+/** One draft in full, for the in-app review. */
+export interface OutboxDraftDetail extends OutboxPanelRow {
+  body: string;
+  confirmMode: ConfirmMode;
+}
+
+/** What the in-app Send did. `gone` = no such draft. */
+export interface OutboxSendResult {
+  outcome: 'sent' | 'failed' | 'already' | 'gone';
+  error?: string;
 }
 
 /** invoke(channel, payload) → response. */
@@ -449,11 +468,17 @@ export interface Invokes {
   'outbox:pending-count': { req: void; res: { pending: number } };
   /** Discard a pending draft (no-op if it left 'draft' meanwhile). */
   'outbox:discard': { req: { draftId: string }; res: void };
-  /** Duplicate a terminal row into a fresh draft and open its confirm page. */
+  /** Duplicate a terminal row into a fresh draft (the app opens its review). */
   'outbox:redraft': { req: { draftId: string }; res: { draftId: string } };
   /** Open the confirm page for a still-actionable row in the default
    *  browser (pending drafts, and retryable failures → "Try again"). */
   'outbox:open-confirm': { req: { draftId: string }; res: void };
+  /** One draft in full (after the overdue sweep); null for an unknown id. */
+  'outbox:get': { req: { draftId: string }; res: OutboxDraftDetail | null };
+  /** The in-app review's Send: the page confirm's own gate and send. */
+  'outbox:send': { req: { draftId: string }; res: OutboxSendResult };
+  /** Source ids that can send (bundled + extension senders). */
+  'outbox:sender-sources': { req: void; res: string[] };
 
   'mcp:info': { req: void; res: McpInfo };
   'mcp:connect-client': { req: { id: string }; res: void };
@@ -673,6 +698,9 @@ const INVOKE_CHANNEL_MAP = {
   'outbox:discard': 0,
   'outbox:redraft': 0,
   'outbox:open-confirm': 0,
+  'outbox:get': 0,
+  'outbox:send': 0,
+  'outbox:sender-sources': 0,
   'mcp:info': 0,
   'mcp:connect-client': 0,
   'mcp:disconnect-client': 0,

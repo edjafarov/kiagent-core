@@ -17,7 +17,7 @@ import type {
   Sender,
 } from '@shared/contracts';
 
-import { currentTransport } from '../core/mcp/transport-context';
+import { currentClient, currentTransport } from '../core/mcp/transport-context';
 import type { LogSink } from '../core/engine/engine';
 import type { CoreStore } from '../core/store/store';
 import { isShapedSummary, shapeOutboundError } from './error-copy';
@@ -161,6 +161,14 @@ export interface OutboundService extends OutboundToolApi {
    *
    *  PANEL-ONLY — see confirmUrlFor. */
   redraft(draftId: string): Promise<OutboxRow>;
+  /** Panel support (Airy §9): the in-app review's Send — the page
+   *  confirm's gate and send (`confirmRow`) for the draft the user is
+   *  looking at. Same outcomes as `confirmByToken`; `invalid` = no such
+   *  row. PANEL-ONLY — see confirmUrlFor. */
+  sendById(draftId: string): Promise<ConfirmOutcome>;
+  /** Panel support: the source ids that can send (bundled + extension
+   *  senders), for the Outbox's "Sends from". PANEL-ONLY. */
+  senderSources(): string[];
 }
 
 export function createOutboundService(deps: {
@@ -463,6 +471,49 @@ export function createOutboundService(deps: {
     return Number.isFinite(n) && n > 0 ? n : 30;
   };
 
+  /** The page's confirm, once the caller has shown who is asking (a
+   *  verified token, or the user's own click in the app): sweep, re-read,
+   *  the retryable-failure gate, the CAS from the OBSERVED status, send.
+   *  The ONE body `confirmByToken` and `sendById` share, so the two paths
+   *  cannot drift. */
+  const confirmRow = async (draftId: string): Promise<ConfirmOutcome> => {
+    // Mirror peekByToken's lazy sweep: a token minted near the end of its
+    // (short) TTL — or a review sheet left open — can still be nominally valid past the draft row's own
+    // (much longer) expires_at if nothing called peekByToken/listOutbox
+    // first to trigger the sweep — without this, the CAS below would
+    // happily move an expired draft into 'sending'.
+    await deps.store.outbox.expireOverdue();
+    const row = await deps.store.outbox.get(draftId);
+    if (!row) return { kind: 'invalid' };
+    if (row.status !== 'draft') {
+      // A failed row may be re-confirmed (Try again, spec §3) ONLY when
+      // its stored error classifies as provably-not-sent — ambiguous
+      // failures stay terminal so a duplicate can never be user-invited.
+      const retryableFailed =
+        row.status === 'failed' && shapeOutboundError(row.error ?? '').canRetry;
+      if (!retryableFailed) return { kind: 'already', row };
+    }
+
+    // The atomicity primitive (spec's CAS gate): only the caller that wins
+    // this UPDATE proceeds to send. The from-state is the OBSERVED status
+    // — never the union ['draft','failed'] — so a confirm that read
+    // 'draft' can't steal a row that concurrently became 'failed' and
+    // bypass the canRetry gate above. A losing concurrent confirm re-reads
+    // the row (now owned by the winner) and reports 'already' — it never
+    // reaches the Sender.
+    const moved = await deps.store.outbox.transition(
+      row.id,
+      [row.status],
+      'sending',
+    );
+    if (!moved) {
+      const raced = await deps.store.outbox.get(row.id);
+      return { kind: 'already', row: raced ?? row };
+    }
+
+    return executeSend(row);
+  };
+
   return {
     setBaseUrl(url) {
       baseUrl = url;
@@ -516,6 +567,7 @@ export function createOutboundService(deps: {
           bodyMarkdown: body,
           confirmMode: mode,
           createdVia: createdViaNow(),
+          createdBy: currentClient(),
           expiresAt: expiresAt(),
         });
       } else if (target !== undefined) {
@@ -544,6 +596,7 @@ export function createOutboundService(deps: {
           threading: r.threading,
           confirmMode: mode,
           createdVia: createdViaNow(),
+          createdBy: currentClient(),
           expiresAt: expiresAt(),
         });
       } else if (account.source !== 'imap') {
@@ -577,6 +630,7 @@ export function createOutboundService(deps: {
           threading: r.threading,
           confirmMode: mode,
           createdVia: createdViaNow(),
+          createdBy: currentClient(),
           expiresAt: expiresAt(),
         });
       }
@@ -604,6 +658,7 @@ export function createOutboundService(deps: {
         bodyMarkdown: body,
         confirmMode: modeFor(account),
         createdVia: createdViaNow(),
+        createdBy: currentClient(),
         expiresAt: expiresAt(),
       });
       return toolResult(row, []);
@@ -758,43 +813,12 @@ export function createOutboundService(deps: {
       const secret = await deps.store.outbox.secret();
       const parsed = verifyConfirmToken(secret, token, nowMs());
       if (!parsed) return { kind: 'invalid' };
-      // Mirror peekByToken's lazy sweep: a token minted near the end of its
-      // (short) TTL can still be nominally valid past the draft row's own
-      // (much longer) expires_at if nothing called peekByToken/listOutbox
-      // first to trigger the sweep — without this, the CAS below would
-      // happily move an expired draft into 'sending'.
-      await deps.store.outbox.expireOverdue();
-      const row = await deps.store.outbox.get(parsed.draftId);
-      if (!row) return { kind: 'invalid' };
-      if (row.status !== 'draft') {
-        // A failed row may be re-confirmed (Try again, spec §3) ONLY when
-        // its stored error classifies as provably-not-sent — ambiguous
-        // failures stay terminal so a duplicate can never be user-invited.
-        const retryableFailed =
-          row.status === 'failed' &&
-          shapeOutboundError(row.error ?? '').canRetry;
-        if (!retryableFailed) return { kind: 'already', row };
-      }
-
-      // The atomicity primitive (spec's CAS gate): only the caller that wins
-      // this UPDATE proceeds to send. The from-state is the OBSERVED status
-      // — never the union ['draft','failed'] — so a confirm that read
-      // 'draft' can't steal a row that concurrently became 'failed' and
-      // bypass the canRetry gate above. A losing concurrent confirm re-reads
-      // the row (now owned by the winner) and reports 'already' — it never
-      // reaches the Sender.
-      const moved = await deps.store.outbox.transition(
-        row.id,
-        [row.status],
-        'sending',
-      );
-      if (!moved) {
-        const raced = await deps.store.outbox.get(row.id);
-        return { kind: 'already', row: raced ?? row };
-      }
-
-      return executeSend(row);
+      return confirmRow(parsed.draftId);
     },
+
+    sendById: (draftId) => confirmRow(draftId),
+
+    senderSources: () => lookup.ids(),
 
     async cancelByToken(token) {
       const secret = await deps.store.outbox.secret();
@@ -898,6 +922,7 @@ export function createOutboundService(deps: {
         // (routes.ts:176-187). Intended, and strictly stronger.
         confirmMode: modeFor(account),
         createdVia: 'panel',
+        createdBy: null,
         expiresAt: expiresAt(),
       });
     },

@@ -24,3 +24,20 @@ export function runWithTransport<T>(
 export function currentTransport(): McpTransport {
   return als.getStore() ?? 'local';
 }
+
+// The calling MCP client's self-reported name (`clientInfo.name`), for
+// records that say which app did something (the outbox's "Drafted by").
+// Set by the tool handler on EVERY transport, stdio included.
+const clientAls = new AsyncLocalStorage<string | null>();
+
+export function runWithClient<T>(
+  name: string | null,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return clientAls.run(name, fn);
+}
+
+/** Null outside a tool call, or when the client never named itself. */
+export function currentClient(): string | null {
+  return clientAls.getStore() ?? null;
+}

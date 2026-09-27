@@ -19,7 +19,10 @@ import {
   type OutboundService,
 } from '../service';
 import { signConfirmToken, verifyConfirmToken } from '../tokens';
-import { runWithTransport } from '../../core/mcp/transport-context';
+import {
+  runWithClient,
+  runWithTransport,
+} from '../../core/mcp/transport-context';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -693,6 +696,70 @@ describe('outbound service — drafts', () => {
     expect(out.kind).toBe('already');
     const row = await store.outbox.get(r.draft_id);
     expect(row?.status).toBe('sent');
+  });
+
+  describe('sendById (the in-app review)', () => {
+    it('sends a draft like the page confirm does', async () => {
+      const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+      const out = await service.sendById(r.draft_id);
+      expect(out.kind).toBe('sent');
+      expect((await store.outbox.get(r.draft_id))?.externalMessageId).toBe(
+        '<sent@x>',
+      );
+    });
+
+    it('two sends of one draft — sheet and page, or a double click — send once', async () => {
+      const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+      const [a, b] = await Promise.all([
+        service.sendById(r.draft_id),
+        service.confirmByToken(tokenOf(r)),
+      ]);
+      expect([a.kind, b.kind].sort()).toEqual(['already', 'sent']);
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-sends a retryable failure on the same row (Try again)', async () => {
+      sendMock.mockRejectedValueOnce(new Error(SMOKE_403));
+      const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+      expect((await service.sendById(r.draft_id)).kind).toBe('failed');
+      expect((await service.sendById(r.draft_id)).kind).toBe('sent');
+      expect(sendMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('a sent row is already; an unknown id is invalid; an expired draft is swept, not sent', async () => {
+      const r = await service.draftReply({ documentId: docId, body: 'Yo' });
+      await service.sendById(r.draft_id);
+      expect((await service.sendById(r.draft_id)).kind).toBe('already');
+      expect((await service.sendById('nope')).kind).toBe('invalid');
+      const stale = await store.outbox.create({
+        accountId,
+        kind: 'new',
+        recipientDisplay: 'x@example.com',
+        to: ['x@example.com'],
+        cc: [],
+        subject: 's',
+        bodyMarkdown: 'b',
+        confirmMode: 'review',
+        createdVia: 'mcp-local',
+        expiresAt: new Date(Date.now() - 1_000).toISOString(),
+      });
+      expect((await service.sendById(stale.id)).kind).toBe('already');
+      expect((await store.outbox.get(stale.id))?.status).toBe('expired');
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('a draft records the MCP client that asked for it', async () => {
+    const r = await runWithClient('claude-ai', () =>
+      service.draftReply({ documentId: docId, body: 'Yo' }),
+    );
+    expect((await store.outbox.get(r.draft_id))?.createdBy).toBe('claude-ai');
+    const bare = await service.draftReply({ documentId: docId, body: 'Hi' });
+    expect((await store.outbox.get(bare.draft_id))?.createdBy).toBeNull();
+  });
+
+  it('senderSources lists every source that can send', () => {
+    expect(service.senderSources().sort()).toEqual(['gmail', 'imap']);
   });
 
   it('garbage tokens are invalid for both operations', async () => {

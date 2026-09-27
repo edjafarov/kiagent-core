@@ -21,6 +21,7 @@ import type { McpActivityRecord, McpTool } from '@shared/contracts';
 
 import type { LogSink } from '../engine/engine';
 import { summarizeCall } from './activity';
+import { runWithClient } from './transport-context';
 
 /** The live, mutable tool set. A plain Map so registerTool()/its disposer are
  *  synchronous, in-memory operations with no session bookkeeping. */
@@ -133,6 +134,7 @@ export function attachToolHandlers(
     // tool.call would report a call that already happened (e.g. send_draft)
     // as failed.
     const loggedArgs = redactArgsForLog(args);
+    const client = mcp.server.getClientVersion()?.name ?? null;
 
     const emit = (ok: boolean, result: unknown, error?: string): void => {
       if (!onActivity) return;
@@ -142,7 +144,7 @@ export function attachToolHandlers(
           : { summary: `${name} failed`, detail: undefined };
         onActivity({
           ts: new Date().toISOString(),
-          client: mcp.server.getClientVersion()?.name ?? null,
+          client,
           tool: name,
           ok,
           ms: Date.now() - started,
@@ -170,7 +172,9 @@ export function attachToolHandlers(
     }
 
     try {
-      const result = await tool.call(args);
+      // The tool runs inside the client's name, so what it records (an
+      // outbox draft) can say which app asked.
+      const result = await runWithClient(client, () => tool.call(args));
       logSink.log('mcp.call', 'info', name, {
         args: loggedArgs,
         ok: true,

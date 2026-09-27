@@ -318,6 +318,13 @@ TEXT and attention timestamps are INTEGER Unix milliseconds.`,
             "'panel' when the user re-drafted it from the in-app Outbox screen.",
         },
         {
+          name: 'created_by',
+          type: 'TEXT',
+          notes:
+            'The drafting MCP client’s self-reported name (e.g. ' +
+            "'claude-ai'); NULL for panel re-drafts and older rows.",
+        },
+        {
           name: 'created_at',
           type: 'TEXT (ISO-8601)',
           notes: 'When the draft was frozen.',

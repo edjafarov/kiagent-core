@@ -481,6 +481,7 @@ function baseRow(overrides: Partial<OutboxRow> = {}): OutboxRow {
     error: null,
     externalMessageId: null,
     createdVia: 'mcp-local',
+    createdBy: null,
     createdAt: '2026-07-01T00:00:00Z',
     sentAt: null,
     expiresAt: '2026-07-02T00:00:00Z',
