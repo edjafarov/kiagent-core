@@ -63,7 +63,6 @@
   --paused-solid:  #64748b; --paused-subtle:  #f1f5f9;
   --info-solid:    #0891b2; --info-subtle:    #cffafe;
 
-
   /* ── Font stacks ───────────────────────────────────────────────── */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
                Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -175,56 +174,12 @@
    primitives (.btn, .pill, …) live in components.css.
    ───────────────────────────────────────────────────────────────── */
 
-.kg-display {
-  font-family: var(--font-sans);
-  font-size: var(--text-2xl); line-height: var(--text-2xl-lh);
-  font-weight: var(--weight-semibold); letter-spacing: -0.015em;
-  color: var(--text-primary); margin: 0;
-}
-.kg-h1 {
-  font-family: var(--font-sans);
-  font-size: var(--text-xl); line-height: var(--text-xl-lh);
-  font-weight: var(--weight-semibold); letter-spacing: -0.01em;
-  color: var(--text-primary); margin: 0;
-}
-.kg-h2 {
-  font-family: var(--font-sans);
-  font-size: var(--text-lg); line-height: var(--text-lg-lh);
-  font-weight: var(--weight-semibold); color: var(--text-primary); margin: 0;
-}
-.kg-h3 {
-  font-family: var(--font-sans);
-  font-size: var(--text-md); line-height: var(--text-md-lh);
-  font-weight: var(--weight-semibold); color: var(--text-primary); margin: 0;
-  letter-spacing: -0.005em;
-}
-.kg-body {
-  font-family: var(--font-sans);
-  font-size: var(--text-base); line-height: var(--text-base-lh);
-  font-weight: var(--weight-regular); color: var(--text-primary);
-}
-.kg-meta {
-  font-family: var(--font-sans);
-  font-size: var(--text-xs); line-height: var(--text-xs-lh);
-  color: var(--text-secondary);
-}
-.kg-tiny {
-  font-family: var(--font-sans);
-  font-size: var(--text-xxs); color: var(--text-tertiary);
-}
 .kg-label {
   font-family: var(--font-sans);
   font-size: var(--text-xxs); font-weight: var(--weight-semibold);
   text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--text-secondary);
 }
-.kg-code, .kg-mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--text-sm); line-height: var(--text-sm-lh);
-  color: var(--text-primary);
-}
-.kg-num { font-variant-numeric: tabular-nums; }
 .kg-link {
   color: var(--accent-text); text-decoration: none; cursor: pointer;
   border-bottom: 1px solid transparent;

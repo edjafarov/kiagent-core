@@ -1,5 +1,5 @@
 /* Renderer-wide base. Tokens + component primitives (.btn, .pill,
-   .card, .mac-window, .conn-glyph, .prov-row, …) are imported as
+   .card, …) are imported as
    JS modules from @kiagent/web-ui in src/renderer/index.tsx, not via
    @import here — webpack-dev-server HMR misses CSS-side @import
    changes, which leaves stale styles in the renderer window. */
@@ -62,72 +62,6 @@ body {
   scrollbar-color: rgba(124, 58, 237, 0.45) transparent;
 }
 
-/* Gate-only titlebar strip (BootSplash / SignIn — the signed-in shell has
-   no strip; the sidebar header is the drag region there). */
-.kg-titlebar {
-  height: 30px; /* matches the Windows titleBarOverlay caption height */
-  flex-shrink: 0;
-  position: relative;
-  display: flex;
-  align-items: center;
-  background: var(--bg-app);
-  -webkit-app-region: drag;
-  -webkit-user-select: none;
-  user-select: none;
-}
-.kg-titlebar.mac { height: 38px; }
-
-.kg-titlebar-title {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-tertiary);
-  letter-spacing: -0.01em;
-}
-
-/* ── Sidebar shell (2026-08 redesign) ──────────────────────────────── */
-.kg-shell {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-}
-.kg-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  /* Painted here, not per-screen: `.ac` is --bg-canvas (#fff), so a screen
-     that forgets its own background (Outbox) reads as a different pane. */
-  background: var(--bg-app);
-}
-/* Top line over the main pane, every platform — the window drag band
-   (with the also-draggable sidebar header it makes the whole top line
-   draggable) AND the page-title bar, ChatGPT/Codex style, so the strip
-   isn't dead space. On Windows it clears the titleBarOverlay caption
-   buttons drawn over the pane's top-right (title is left-aligned, away
-   from them). Taller on macOS (.mac) so the title centers on the traffic
-   lights' line (lights sit at y 18–32 in the sidebar). */
-.kg-topline {
-  height: 30px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  padding: 0 20px; /* matches the 20px pane gutter every screen uses */
-  -webkit-app-region: drag;
-  -webkit-user-select: none;
-  user-select: none;
-}
-.kg-topline.mac { height: 50px; }
-.kg-topline-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: -0.01em;
-}
-
 /* ── Shared screen-shell chrome ───────────────────────────────────────────
    Reused by every routed screen (Sources, Connection, Marketplace) and by
    the Settings modal's body. In the legacy renderer these lived in
@@ -143,15 +77,6 @@ body {
   flex-direction: column;
   min-height: 0;
   background: var(--bg-app);
-}
-
-.dash-topbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 20px;
-  border-bottom: 1px solid var(--border-subtle);
-  flex-shrink: 0;
 }
 
 .row-flex {
