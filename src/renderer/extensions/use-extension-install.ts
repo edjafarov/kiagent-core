@@ -7,7 +7,7 @@ import type {
   ExtensionSnapshot,
   OAuthSourceBinding,
 } from '@shared/contracts';
-import { invalidateCatalog } from '../screens/Sources/use-catalog';
+import { invalidateStoreListing } from './store-listing';
 
 export type InstallMode = 'install' | 'update' | 'review';
 
@@ -149,7 +149,7 @@ export function useExtensionInstall(): ExtensionInstall {
           : await window.kiagent.invoke('extension:install-commit', {
               token: consent.token!,
             });
-      if (r.ok && consent.mode !== 'review') invalidateCatalog();
+      if (r.ok && consent.mode !== 'review') invalidateStoreListing();
       if (alive.current) {
         if (!r.ok) setError(r.error ?? 'operation failed');
         setConsent(null);
@@ -168,7 +168,7 @@ export function useExtensionInstall(): ExtensionInstall {
         () => window.kiagent.invoke('extension:uninstall', { id }),
         'uninstall failed',
       );
-      if (ok) invalidateCatalog();
+      if (ok) invalidateStoreListing();
     },
     [run],
   );

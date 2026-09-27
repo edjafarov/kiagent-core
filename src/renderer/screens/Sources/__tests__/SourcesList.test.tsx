@@ -3,6 +3,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type { Account, AppState } from '@shared/contracts';
 import { ViewContext, type ViewContextValue } from '@renderer/state/view';
+import { invalidateStoreListing } from '@renderer/extensions/store-listing';
 import {
   INITIAL_SELECTION,
   SourcesList,
@@ -10,7 +11,6 @@ import {
 } from '../SourcesList';
 import { Sources } from '..';
 import { SourceDescriptorsProvider } from '../sources-registry';
-import { invalidateCatalog } from '../use-catalog';
 
 let mockState: Partial<AppState>;
 jest.mock('@renderer/state/app-state', () => ({
@@ -89,7 +89,7 @@ function seed(
 }
 
 beforeEach(() => {
-  invalidateCatalog();
+  invalidateStoreListing();
   invoke = jest.fn((channel: string) => {
     if (channel === 'sources:list') return Promise.resolve(DESCRIPTORS);
     if (channel === 'marketplace:list') return Promise.resolve([]);

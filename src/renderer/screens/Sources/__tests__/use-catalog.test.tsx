@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import type { MarketplaceListItem } from '@shared/ipc';
-import { invalidateCatalog, useCatalog } from '../use-catalog';
+import { invalidateStoreListing } from '@renderer/extensions/store-listing';
+import { useCatalog } from '../use-catalog';
 
 jest.mock('@renderer/state/app-state', () => ({
   useAppState: (sel: (s: unknown) => unknown) =>
@@ -12,7 +13,7 @@ jest.mock('../sources-registry', () => ({
 
 let list: jest.Mock;
 beforeEach(() => {
-  invalidateCatalog();
+  invalidateStoreListing();
   list = jest.fn(() => Promise.resolve([] as MarketplaceListItem[]));
   (window as any).kiagent = {
     invoke: (ch: string) =>
@@ -41,13 +42,13 @@ test('a failed fetch is asked again by the next mount', async () => {
   expect(second.result.current.storeError).toBeNull();
 });
 
-test('a mount after invalidateCatalog fetches again', async () => {
+test('a mount after invalidateStoreListing fetches again', async () => {
   renderHook(() => useCatalog()).unmount();
   await act(async () => {});
   renderHook(() => useCatalog());
   await act(async () => {});
   expect(list).toHaveBeenCalledTimes(1);
-  invalidateCatalog();
+  invalidateStoreListing();
   renderHook(() => useCatalog());
   await act(async () => {});
   expect(list).toHaveBeenCalledTimes(2);

@@ -3,9 +3,9 @@ import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type { AppState, ExtensionSnapshot } from '@shared/contracts';
 import { ViewContext, type ViewContextValue } from '@renderer/state/view';
+import { invalidateStoreListing } from '@renderer/extensions/store-listing';
 import { SourceCatalog } from '../SourceCatalog';
 import { SourceDescriptorsProvider } from '../sources-registry';
-import { invalidateCatalog } from '../use-catalog';
 import { Sources } from '..';
 
 let mockState: Partial<AppState>;
@@ -72,7 +72,7 @@ function dropboxExt(status: ExtensionSnapshot['status']): ExtensionSnapshot {
 }
 
 beforeEach(() => {
-  invalidateCatalog();
+  invalidateStoreListing();
   descriptors = [GMAIL, SLACK];
   mockState = {
     extensions: [],
