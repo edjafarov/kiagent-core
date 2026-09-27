@@ -1,0 +1,121 @@
+/* The signed-out gate (GateLayout) and the pieces every sign-in form shares. */
+.gate {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-app);
+}
+
+.gate-brand {
+  width: 34%;
+  min-width: 240px;
+  padding: 40px;
+  display: flex;
+  flex-direction: column;
+  background: var(--brand-violet-deep);
+  color: var(--text-on-brand);
+}
+
+/* The framed mark on a white tile: the reticle + star without the app tile. */
+.gate-mark {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  background: #fff;
+}
+.gate-mark .kg-spark.size-app {
+  width: 48px;
+  height: 48px;
+  background: none;
+  box-shadow: none;
+}
+.gate-mark .kg-spark.size-app .kg-spark__star {
+  width: 48px;
+  height: 48px;
+}
+
+.gate-copy {
+  margin-top: auto;
+}
+.gate-tagline {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.27;
+  letter-spacing: -0.01em;
+  color: #fff;
+}
+.gate-blurb {
+  margin-top: 12px;
+  max-width: 300px;
+  font-size: 13px;
+  line-height: 1.55;
+  opacity: 0.82;
+}
+
+.gate-main {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+.gate-col {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.gate-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+.gate-lead {
+  margin: -4px 0 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.gate-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.gate-form > .ui-btn,
+.gate-col > .ui-btn {
+  width: 100%;
+  justify-content: center;
+}
+.gate-center {
+  align-self: center;
+}
+.gate-status,
+.gate-err {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.gate-err {
+  color: var(--error-solid);
+}
+.gate-foot {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.gate-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}

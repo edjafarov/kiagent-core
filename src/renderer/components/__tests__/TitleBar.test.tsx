@@ -4,8 +4,13 @@ import { render, screen } from '@testing-library/react';
 import { TitleBar } from '../TitleBar';
 
 describe('TitleBar', () => {
-  it('is the 48px band with the product name', () => {
+  it('is the 48px band with the product name from app:info', async () => {
+    (window as unknown as { kiagent: unknown }).kiagent = {
+      invoke: jest.fn().mockResolvedValue({ productName: 'Acme' }),
+    };
     render(<TitleBar />);
-    expect(screen.getByText('KIAgent').closest('.ui-titlebar')).not.toBeNull();
+    expect(
+      (await screen.findByText('Acme')).closest('.ui-titlebar'),
+    ).not.toBeNull();
   });
 });
