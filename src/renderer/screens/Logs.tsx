@@ -7,14 +7,7 @@ import React, {
 } from 'react';
 import { useView } from '@renderer/state/view';
 import { Icon } from '@shared/web-ui/icon-sprite';
-import {
-  Button,
-  Page,
-  Select,
-  Status,
-  TextButton,
-  TextField,
-} from '@shared/web-ui/ui';
+import { Button, Page, Select, Status, TextField } from '@shared/web-ui/ui';
 import type { LogLevel, LogRecord } from '@shared/contracts';
 import './Logs.css';
 
@@ -216,15 +209,15 @@ export function Logs(): React.ReactElement {
           <Icon name={paused ? 'play' : 'pause'} size={12} />
           {paused ? 'Resume' : 'Pause'}
         </Button>
-        <TextButton onClick={copy}>
+        <Button size="sm" variant="ghost" onClick={copy}>
           <Icon name="copy" size={12} /> Copy
-        </TextButton>
-        <TextButton onClick={doExport}>
+        </Button>
+        <Button size="sm" variant="ghost" onClick={doExport}>
           <Icon name="external" size={12} /> Export
-        </TextButton>
-        <TextButton onClick={clear}>
+        </Button>
+        <Button size="sm" variant="ghost" onClick={clear}>
           <Icon name="trash" size={12} /> Clear
-        </TextButton>
+        </Button>
       </div>
 
       <div className="logs-table" ref={tableRef}>

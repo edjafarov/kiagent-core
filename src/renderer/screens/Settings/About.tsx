@@ -43,7 +43,9 @@ export function About(): React.ReactElement {
     <>
       <Card>
         <div className="set-brand">
-          <Spark size="app" />
+          <span className="set-brand-mark">
+            <Spark size="app" />
+          </span>
           <div>
             <div className="set-brand-name">{productName}</div>
             <div className="set-brand-tag">

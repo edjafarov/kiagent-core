@@ -188,7 +188,8 @@ button.side-item {
   appearance: none;
   -webkit-appearance: none;
   border-radius: 0;
-  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
     linear-gradient(135deg, currentColor 50%, transparent 50%);
   background-position:
     calc(100% - 14px) 50%,
@@ -292,16 +293,79 @@ button.side-item {
 }
 
 /* ── Airy panes: the few pane-level pieces the primitives don't carry ── */
-.set-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.set-note { font-size: 12px; color: var(--text-secondary); }
-.set-diag { display: flex; flex-direction: column; gap: 10px; }
-.set-brand { display: flex; align-items: center; gap: 16px; }
-.set-brand-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.set-brand-tag { margin-top: 2px; font-size: 12.5px; color: var(--text-secondary); }
-.set-status { font-size: 12.5px; color: var(--text-secondary); }
-.set-id { display: flex; align-items: center; gap: 14px; }
-.set-id-body { flex: 1; min-width: 0; }
-.set-id-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.set-id-mail { margin-top: 2px; font-size: 12.5px; color: var(--text-secondary); }
-.set-id-edit { display: flex; flex-direction: column; gap: 8px; max-width: 360px; }
-.set-err { color: var(--error-solid); }
+.set-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.set-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.set-diag {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.set-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.set-brand-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.set-brand-tag {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.set-status {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.set-id {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.set-id-body {
+  flex: 1;
+  min-width: 0;
+}
+.set-id-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.set-id-mail {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.set-id-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+}
+.set-err {
+  color: var(--error-solid);
+}
+.set-brand-mark {
+  display: inline-flex;
+}
+/* The framed mark at card size: the reticle without the app tile. */
+.set-brand-mark .kg-spark.size-app {
+  width: 44px;
+  height: 44px;
+  background: none;
+  box-shadow: none;
+}
+.set-brand-mark .kg-spark.size-app .kg-spark__star {
+  width: 44px;
+  height: 44px;
+}
