@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.97.0](https://github.com/edjafarov/kiagent-core/compare/v0.96.0...v0.97.0) (2026-09-28)
+
+### Features
+
+* **extraction:** convert worker — one parse path for every attachment ([53ede71](https://github.com/edjafarov/kiagent-core/commit/53ede71160928c14952e79bc56100bbb65c12bb4))
+* **imap:** attachments become documents; children live and die with their parent ([2e6bb9b](https://github.com/edjafarov/kiagent-core/commit/2e6bb9bea236230c5faf5a40953baeeab0866af6))
+* **sidebar:** the account row is one button into Settings ([6f02eab](https://github.com/edjafarov/kiagent-core/commit/6f02eab1919d9fcc7b5bba0f62de9617b58c12c4))
+
+### Bug Fixes
+
+* **extraction:** children of mid-pass parents survive reconcile; no oversized or re-auth fetches ([77beefb](https://github.com/edjafarov/kiagent-core/commit/77beefbcec7d5aeec37afd535534dd90b18e7e13))
+* **extraction:** defer failed fetches engine-wide; pending-OCR mirrors the PDF gate ([7ec09ba](https://github.com/edjafarov/kiagent-core/commit/7ec09ba9a0c974e5d2b465059ac16c96e6ce4438))
+
 ## [0.96.0](https://github.com/edjafarov/kiagent-core/compare/v0.95.5...v0.96.0) (2026-09-28)
 
 ### Features
