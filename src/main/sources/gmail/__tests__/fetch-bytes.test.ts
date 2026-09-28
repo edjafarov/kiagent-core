@@ -108,6 +108,24 @@ describe('gmail fetchBytes', () => {
     expect(api.getAttachment).toHaveBeenLastCalledWith(session, 'm1', 'NEW');
   });
 
+  it('resolves the current id from partId when the doc stores no attachmentId', async () => {
+    (api.getMessage as jest.Mock).mockResolvedValue(
+      FIXTURE_MESSAGE_WITH_PART_2_NEW_ID,
+    );
+    (api.getAttachment as jest.Mock).mockResolvedValue({
+      size: 1,
+      data: Buffer.from([7]).toString('base64url'),
+    });
+    const bytes = await gmailSource.fetchBytes!(session, {
+      id: 'd2',
+      type: 'attachment',
+      metadata: { messageId: 'm1', partId: '2', mime: 'application/pdf' },
+    } as never);
+    expect([...bytes!]).toEqual([7]);
+    expect(api.getAttachment).toHaveBeenCalledTimes(1);
+    expect(api.getAttachment).toHaveBeenCalledWith(session, 'm1', 'NEW');
+  });
+
   it('returns null for docs without attachment metadata', async () => {
     const out = await gmailSource.fetchBytes!(session, {
       id: 'x',

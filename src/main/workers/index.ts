@@ -1,12 +1,13 @@
 import type { Handle, Worker } from '@shared/contracts';
 
-import { backgroundLaneOpen } from '../core/boot';
+import { attachWorker, backgroundLaneOpen } from '../core/boot';
 import type { CorePlatform } from '../core/boot';
 import { workerConsumerName } from '../core/engine/engine';
 import type { VisionHelper } from '../providers/apple-vision/vision-helper';
 import type { LocalAsrProvider } from '../providers/local-asr';
 import type { LocalLlmProvider } from '../providers/local-llm/provider';
 import { createAudioWorker } from './audio/audio-worker';
+import { createConvertWorker } from './convert/convert-worker';
 import type { ImageDownscaler } from './vision/downscale';
 import { pickRasterizer } from './vision/rasterize';
 import { createVisionWorker } from './vision/vision-worker';
@@ -22,6 +23,12 @@ export function attachBundledWorkers(
     downscale?: ImageDownscaler;
   },
 ): Handle {
+  // The parse stage: bytes-less attachments (Gmail) get the same converter
+  // local files get at commit time. Plain attachWorker — its re-drive only
+  // retries docs whose source was still registering, and parsing needs no
+  // inference, so it is not held to the processing window.
+  attachWorker(platform, createConvertWorker());
+
   const worker = createVisionWorker({
     rasterizer: pickRasterizer(deps.visionHelper),
     laneOpen: () => backgroundLaneOpen(platform),

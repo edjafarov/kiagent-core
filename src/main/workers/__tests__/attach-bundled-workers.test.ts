@@ -205,3 +205,43 @@ describe('attachBundledWorkers — audio worker dep wiring', () => {
     await expect(fs.stat(path.dirname(seen[0][0]))).rejects.toThrow();
   });
 });
+
+describe('convert worker wiring', () => {
+  it('attaches the convert worker with a re-drive that ignores the processing window', async () => {
+    const jobs = new Map<string, () => Promise<void>>();
+    const reran: string[] = [];
+    const attached: Worker[] = [];
+    const platform = {
+      // Processing disabled: gated re-drives (vision/audio) must not run.
+      prefs: {
+        get: () => ({ processing: { enabled: false, window: 'always' } }),
+      },
+      scheduler: {
+        env: { onBattery: false, userActive: false },
+        register: (name: string, _c: unknown, fn: () => Promise<void>) => {
+          jobs.set(name, fn);
+        },
+      },
+      store: { ledgerHasDeferred: async () => true },
+      engine: {
+        attach: (w: Worker) => {
+          attached.push(w);
+          return { stop: () => {} };
+        },
+        rerunDeferred: async (w: Worker) => {
+          reran.push(w.name);
+        },
+      },
+      inference: { providers: () => [] },
+    };
+    attachBundledWorkers(platform as never, {
+      visionHelper: null,
+      localLlm: fakeProvider() as never,
+      localAsr: fakeProvider() as never,
+    });
+    expect(attached.map((w) => w.name)).toContain('convert');
+    await jobs.get('worker:convert')!();
+    await jobs.get('worker:vision')!();
+    expect(reran).toEqual(['convert']);
+  });
+});

@@ -5,6 +5,8 @@ import {
   VISUAL_EXTENSIONS,
 } from '@shared/file-indexability';
 
+import { pdfReadyForOcr } from '../convert/outcome';
+
 /** Canonical visual-candidate extensions. Also consumed by the store's
  *  `extractionStats` display query, which mirrors this classifier in SQL —
  *  keep the regexp derived from this list so the two can never drift.
@@ -27,6 +29,7 @@ interface VisualMeta {
   /** Local-folder docs ingested before 2026-07 carry only this key. */
   size?: number;
   extraction?: unknown;
+  conversion?: unknown;
 }
 
 export function isPdfDoc(doc: Document): boolean {
@@ -77,6 +80,9 @@ export function classifyDocument(doc: Document): 'candidate' | 'skip' {
     (typeof meta.mime === 'string' && meta.mime.startsWith('image/')) ||
     (!pdf && VISUAL_EXT_RE.test(name) && !/\.pdf$/i.test(name));
   if (!pdf && !image) return 'skip';
+  // PDFs go to the parser first (workers/convert); only one it found
+  // text-poor, could not parse, or would not fetch reaches OCR.
+  if (pdf && !pdfReadyForOcr(meta.conversion)) return 'skip';
   if (
     image &&
     (meta.sizeBytes ?? meta.size ?? Number.MAX_SAFE_INTEGER) < TINY_IMAGE_BYTES

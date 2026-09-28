@@ -26,7 +26,9 @@ function tinyPdf(text: string): Uint8Array {
 
 describe('converter: pdf', () => {
   it('extracts a PDF small enough to land in a slice of the shared Buffer pool', async () => {
-    const bytes = tinyPdf('The marker word for pdf documents is kiasmokepdf.');
+    const bytes = tinyPdf(
+      'The marker word for pdf documents is kiasmokepdf. '.repeat(5),
+    );
     expect(bytes.length).toBeLessThan(4096);
     const logs = { log: jest.fn() };
     const out = await createConverter(logs)({
@@ -39,5 +41,25 @@ describe('converter: pdf', () => {
     } as never);
     expect(logs.log).not.toHaveBeenCalled();
     expect(out.markdown).toContain('kiasmokepdf');
+  });
+
+  it('leaves a text-poor PDF (under TEXT_POOR_CHARS) markdown-null for OCR', async () => {
+    const out = await createConverter({ log: jest.fn() })({
+      externalId: 'scan.pdf',
+      type: 'file',
+      title: 'scan.pdf',
+      markdown: null,
+      binary: {
+        // 60+ chars: passed the old 32-char bar, still text-poor at 200.
+        bytes: tinyPdf(
+          'Scanned by OfficeJet 4650 on 2026-08-25, page 1 of 3, batch 17',
+        ),
+        mime: 'application/pdf',
+        filename: 'scan.pdf',
+      },
+      metadata: {},
+    } as never);
+    expect(out.markdown).toBeNull();
+    expect(out).not.toHaveProperty('binary');
   });
 });

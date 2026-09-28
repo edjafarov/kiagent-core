@@ -1034,7 +1034,10 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       // caps and tiny-image rules but mirrors the type gate, the has-real-
       // text gate, and both candidate shapes: mime-carrying docs (gmail
       // attachments) and ext-carrying ones (local-folder files, which store
-      // no mime). The WHERE text is shared verbatim with the
+      // no mime). It also counts PDFs still waiting on the convert worker
+      // (classify now sends a PDF to OCR only after the parser gave up on
+      // it) — pending either way, and keeping the SQL unchanged spares a
+      // partial-index rebuild. The WHERE text is shared verbatim with the
       // docs_pending_visual / docs_extracted partial indexes (schema.ts) so
       // the planner can prove they apply — and the counts are pinned to
       // them besides (see PENDING_VISUAL_COUNT_SQL above for why).

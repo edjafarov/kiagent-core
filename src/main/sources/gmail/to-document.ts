@@ -140,7 +140,9 @@ export function toDocument(
         externalId: `${att.messageId}/${att.partId}`,
         type: 'attachment',
         title: att.filename || null,
-        markdown: null, // text-poor by construction — the vision worker's pool
+        // Bytes-less: the convert worker fetches and parses what the
+        // converter handles; images (and PDFs it finds text-poor) go to vision.
+        markdown: null,
         url: threadDoc.url,
         metadata: {
           mime: att.mimeType,
@@ -148,7 +150,10 @@ export function toDocument(
           sizeBytes: att.sizeBytes,
           messageId: att.messageId,
           partId: att.partId,
-          attachmentId: att.attachmentId, // rotates — fetchBytes re-resolves via partId
+          // No attachmentId: Gmail rotates it between API sessions and this
+          // metadata is hashed, so storing it re-wrote every attachment (and
+          // wiped its conversion/extraction outcome) on each thread refresh.
+          // fetchBytes resolves the current id from messageId + partId.
           scopeBucket,
         },
         scopeRootId: scopeBucket,

@@ -1,4 +1,5 @@
 import type { Change, Document, WorkerSession } from '@shared/contracts';
+import { SourceNotReadyError } from '@main/core/engine/source-not-ready';
 import { NoProviderError } from '@main/core/inference';
 import type { Rasterizer } from '../rasterize';
 import { createVisionWorker } from '../vision-worker';
@@ -10,7 +11,11 @@ const baseDoc = {
   type: 'attachment',
   title: 'scan.pdf',
   markdown: null,
-  metadata: { mime: 'application/pdf', sizeBytes: 50_000 },
+  metadata: {
+    mime: 'application/pdf',
+    sizeBytes: 50_000,
+    conversion: { status: 'text-poor' },
+  },
   createdAt: null,
   parentId: null,
   contentHash: 'h',
@@ -350,4 +355,18 @@ it('with no downscaler wired, `see` gets the original bytes (identity fallback)'
   expect(see).toHaveBeenCalledWith(full, expect.any(String), {
     mime: 'image/jpeg',
   });
+});
+
+it('defers (not terminal skip) while the source is still registering', async () => {
+  const session = fakeSession({
+    fetchBytes: async () => {
+      throw new SourceNotReadyError('gmail');
+    },
+  });
+  const worker = createVisionWorker({
+    rasterizer: { pdfToPngs: jest.fn(async () => []) },
+    laneOpen: () => true,
+  });
+  expect(await worker.work(change({}), session)).toBe('defer');
+  expect(session.enriched).toHaveLength(0);
 });

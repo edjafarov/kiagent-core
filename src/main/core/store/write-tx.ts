@@ -486,6 +486,16 @@ export function createWriteTx(
                 ...e.metadata,
               })
             : row.metadata;
+          if (e.markdown === undefined) {
+            // Metadata-only write-back: body, FTS and languages stay as-is.
+            conn
+              .prepare(
+                `UPDATE documents SET metadata=?, seq=?, updated_at=? WHERE id=?`,
+              )
+              .run(metadata, seq, deps.now(), row.id);
+            last = seq;
+            continue;
+          }
           const text = `${row.title ?? ''}\n${e.markdown}`.trim();
           const languages = text ? deps.detectLanguages(text) : [];
           conn

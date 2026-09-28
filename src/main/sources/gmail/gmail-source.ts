@@ -371,19 +371,23 @@ export const gmailSource: Source<GmailCursor, GmailThreadItem> = {
       partId?: string;
       attachmentId?: string;
     };
-    if (!meta.messageId || !meta.attachmentId) return null;
+    if (!meta.messageId || (!meta.attachmentId && !meta.partId)) return null;
     const decode = (data: string) =>
       new Uint8Array(Buffer.from(data, 'base64url'));
-    try {
-      const res = await getAttachment(
-        session,
-        meta.messageId,
-        meta.attachmentId,
-      );
-      if (res.data) return decode(res.data);
-    } catch (err) {
-      if (!isGmailNotFoundError(err)) throw err;
-      // attachment ids rotate between API sessions — fall through and re-resolve
+    // Docs ingested before 0.97 still carry a (possibly stale) attachmentId;
+    // new ones only have partId and go straight to the re-resolve below.
+    if (meta.attachmentId) {
+      try {
+        const res = await getAttachment(
+          session,
+          meta.messageId,
+          meta.attachmentId,
+        );
+        if (res.data) return decode(res.data);
+      } catch (err) {
+        if (!isGmailNotFoundError(err)) throw err;
+        // attachment ids rotate between API sessions — fall through and re-resolve
+      }
     }
     const msg = await getMessage(session, meta.messageId);
     const fresh = attachmentsOf(msg).find((a) => a.partId === meta.partId);

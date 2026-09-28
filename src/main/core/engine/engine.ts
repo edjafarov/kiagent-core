@@ -38,6 +38,7 @@ import { isDbWorkerTransientError } from '../../db/worker-client';
 import { RECONCILE_ERROR_PREFIX } from '../store/last-error';
 import type { CoreStore } from '../store/store';
 import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
+import { SourceNotReadyError } from './source-not-ready';
 
 export interface LogSink {
   log(
@@ -705,7 +706,12 @@ export function createEngine(deps: EngineDeps): Engine & {
           const account = await store.account(doc.accountId);
           if (!account) return null;
           const source = deps.sources.get(account.source);
-          if (!source?.fetchBytes) return null;
+          // Workers attach before sources register (bundled sources a few
+          // steps later in boot, extension sources when their host comes
+          // up). Not-yet-registered is transient — a null here would read as
+          // "the source cannot serve these bytes" and end the doc for good.
+          if (!source) throw new SourceNotReadyError(account.source);
+          if (!source.fetchBytes) return null;
           return source.fetchBytes(makeSession(account, signal, scope), doc);
         },
         emit(doc) {

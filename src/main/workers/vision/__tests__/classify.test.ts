@@ -8,7 +8,12 @@ const base = {
   type: 'attachment',
   title: 'scan.pdf',
   markdown: null,
-  metadata: { mime: 'application/pdf', sizeBytes: 50_000 },
+  // The parser already gave up on it — the state in which a PDF reaches OCR.
+  metadata: {
+    mime: 'application/pdf',
+    sizeBytes: 50_000,
+    conversion: { status: 'text-poor' },
+  },
   createdAt: null,
   parentId: null,
   contentHash: 'h',
@@ -23,6 +28,31 @@ const base = {
 
 it.each([
   ['pdf attachment, no markdown', base, 'candidate'],
+  [
+    'pdf the parser has not seen yet',
+    { ...base, metadata: { mime: 'application/pdf', sizeBytes: 50_000 } },
+    'skip',
+  ],
+  ...(['failed', 'too-large'] as const).map(
+    (status): [string, Document, string] => [
+      `pdf the parser gave up on (${status})`,
+      {
+        ...base,
+        metadata: { ...base.metadata, conversion: { status } },
+      } as Document,
+      'candidate',
+    ],
+  ),
+  ...(['ok', 'unavailable'] as const).map(
+    (status): [string, Document, string] => [
+      `pdf the parser settled (${status})`,
+      {
+        ...base,
+        metadata: { ...base.metadata, conversion: { status } },
+      } as Document,
+      'skip',
+    ],
+  ),
   [
     'already enriched',
     { ...base, metadata: { ...base.metadata, extraction: {} } },

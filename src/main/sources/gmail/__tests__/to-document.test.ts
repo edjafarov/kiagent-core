@@ -276,8 +276,9 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
       sizeBytes: 50_000,
       messageId: 'm1',
       partId: '2',
-      attachmentId: 'AAA',
     });
+    // Rotating id kept out of the hashed metadata (fetchBytes re-resolves).
+    expect(atts[0].metadata).not.toHaveProperty('attachmentId');
   });
 
   describe('scope bucket (spec §4)', () => {

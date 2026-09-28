@@ -38,7 +38,61 @@ function stripBinary(input: DocumentInput): DocumentInput {
   return rest;
 }
 
-async function parse(
+/** What the converter can parse. `parse()` dispatches on this and the
+ *  convert worker (workers/convert) matches on it, so "which documents get
+ *  parsed" has exactly one answer whichever path the bytes arrive by. */
+export type ConvertibleKind =
+  | 'pdf'
+  | 'docx'
+  | 'html'
+  | 'csv'
+  | 'spreadsheet'
+  | 'email'
+  | 'text';
+
+export function convertibleKind(
+  mime: string | null | undefined,
+  filename?: string | null,
+): ConvertibleKind | null {
+  const m = typeof mime === 'string' ? mime.toLowerCase() : '';
+  const ext =
+    typeof filename === 'string' && filename.includes('.')
+      ? (filename.toLowerCase().split('.').pop() ?? '')
+      : '';
+  if (m === 'application/pdf' || ext === 'pdf') return 'pdf';
+  if (
+    m ===
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    ext === 'docx'
+  )
+    return 'docx';
+  if (m === 'text/html' || ext === 'html' || ext === 'htm') return 'html';
+  if (m === 'text/csv' || ext === 'csv') return 'csv';
+  if (
+    m === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    ext === 'xlsx' ||
+    ext === 'xls'
+  )
+    return 'spreadsheet';
+  if (
+    m === 'message/rfc822' ||
+    m === 'application/mbox' ||
+    ['eml', 'emlx', 'mbox'].includes(ext)
+  )
+    return 'email';
+  if (m.startsWith('text/') || ['md', 'txt', 'json', 'log'].includes(ext))
+    return 'text';
+  return null;
+}
+
+/** Below this many non-whitespace characters a PDF counts as text-poor (a
+ *  scan) and is left for OCR. Same bar as the vision worker's
+ *  OCR_SUFFICIENT_CHARS, so the chain has one definition of "enough text". */
+export const TEXT_POOR_CHARS = 200;
+
+/** Bytes → markdown. `null` means text-poor (a scan, or nothing to parse);
+ *  a throw means the file could not be parsed. */
+export async function parse(
   bytes: Uint8Array,
   mime: string,
   filename?: string,
@@ -46,65 +100,44 @@ async function parse(
   const buf = Buffer.from(bytes);
   const ext = (filename ?? '').toLowerCase().split('.').pop() ?? '';
 
-  if (mime === 'application/pdf' || ext === 'pdf') {
-    const pdfParse = (await import('pdf-parse')).default;
-    // A fresh copy, not `buf`: Buffer.from() places inputs under 4 KB in a
-    // slice of Node's shared pool, and pdf-parse's pdf.js reads the whole
-    // underlying ArrayBuffer — every small PDF failed "bad XRef entry".
-    const out = await pdfParse(new Uint8Array(buf) as Buffer);
-    const text = out.text?.trim() ?? '';
-    // Text-poor PDF (a scan): leave it for the vision worker.
-    return text.length >= 32 ? text : null;
-  }
-
-  if (
-    mime ===
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-    ext === 'docx'
-  ) {
-    const mammoth = await import('mammoth');
-    const out = await mammoth.convertToMarkdown({ buffer: buf });
-    return out.value;
-  }
-
-  if (mime === 'text/html' || ext === 'html' || ext === 'htm') {
-    return htmlToMarkdown(buf.toString('utf8'));
-  }
-
-  if (mime === 'text/csv' || ext === 'csv') {
-    return csvToMarkdown(buf.toString('utf8'));
-  }
-
-  if (
-    mime ===
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-    ext === 'xlsx' ||
-    ext === 'xls'
-  ) {
-    const XLSX = await import('xlsx');
-    const wb = XLSX.read(buf, { type: 'buffer' });
-    const parts: string[] = [];
-    for (const name of wb.SheetNames.slice(0, 10)) {
-      const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name]);
-      parts.push(`## ${name}\n\n${csvToMarkdown(csv)}`);
+  switch (convertibleKind(mime, filename)) {
+    case 'pdf': {
+      const pdfParse = (await import('pdf-parse')).default;
+      // A fresh copy, not `buf`: Buffer.from() places inputs under 4 KB in a
+      // slice of Node's shared pool, and pdf-parse's pdf.js reads the whole
+      // underlying ArrayBuffer — every small PDF failed "bad XRef entry".
+      const out = await pdfParse(new Uint8Array(buf) as Buffer);
+      const text = out.text?.trim() ?? '';
+      // Text-poor PDF (a scan): leave it for the vision worker.
+      return text.replace(/\s+/g, '').length >= TEXT_POOR_CHARS ? text : null;
     }
-    return parts.join('\n\n');
+    case 'docx': {
+      const mammoth = await import('mammoth');
+      const out = await mammoth.convertToMarkdown({ buffer: buf });
+      return out.value;
+    }
+    case 'html':
+      return htmlToMarkdown(buf.toString('utf8'));
+    case 'csv':
+      return csvToMarkdown(buf.toString('utf8'));
+    case 'spreadsheet': {
+      const XLSX = await import('xlsx');
+      const wb = XLSX.read(buf, { type: 'buffer' });
+      const parts: string[] = [];
+      for (const name of wb.SheetNames.slice(0, 10)) {
+        const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name]);
+        parts.push(`## ${name}\n\n${csvToMarkdown(csv)}`);
+      }
+      return parts.join('\n\n');
+    }
+    case 'email':
+      return emailToMarkdown(buf, ext);
+    case 'text':
+      return buf.toString('utf8');
+    default:
+      // Images and unknown binaries: vision territory.
+      return null;
   }
-
-  if (
-    mime === 'message/rfc822' ||
-    mime === 'application/mbox' ||
-    ['eml', 'emlx', 'mbox'].includes(ext)
-  ) {
-    return emailToMarkdown(buf, ext);
-  }
-
-  if (mime.startsWith('text/') || ['md', 'txt', 'json', 'log'].includes(ext)) {
-    return buf.toString('utf8');
-  }
-
-  // Images and unknown binaries: vision territory.
-  return null;
 }
 
 async function htmlToMarkdown(html: string): Promise<string> {

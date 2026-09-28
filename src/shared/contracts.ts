@@ -180,7 +180,9 @@ export type Change =
  *  own content still dedupes on its next real change. */
 export interface EnrichInput {
   documentId: DocumentId;
-  markdown: string;
+  /** Omitted = leave the row's markdown untouched (a metadata-only
+   *  write-back, e.g. recording an extraction outcome). */
+  markdown?: string;
   metadata?: Record<string, unknown>;
 }
 
