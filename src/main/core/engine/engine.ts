@@ -715,6 +715,13 @@ export function createEngine(deps: EngineDeps): Engine & {
               `source '${account.source}' is not registered yet`,
             );
           if (!source.fetchBytes) return null;
+          // Needs re-auth: don't hammer the provider (an IMAP login per doc
+          // each re-drive is what gets accounts throttled or locked). Park
+          // until the user reconnects.
+          if (account.status === 'needsReauth')
+            throw new FetchDeferredError(
+              `${account.source} account needs re-authentication`,
+            );
           try {
             return await source.fetchBytes(
               makeSession(account, signal, scope),

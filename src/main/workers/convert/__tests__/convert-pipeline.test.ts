@@ -213,6 +213,35 @@ describe('convert pipeline (real store + engine)', () => {
     await handle.stop();
   });
 
+  it('never calls the source for bytes while the account needs re-auth — defers instead', async () => {
+    const bytes = await tinyDocx('unused');
+    const fetchBytes = jest.fn(async () => bytes);
+    const source: Source = { ...bytesOnlySource(bytes), fetchBytes };
+    const engine = engineWith(new Map([['mail', source]]));
+    const account = await store.createAccount({
+      source: 'mail',
+      identifier: 'x',
+    });
+    await store.commit({
+      account: account.id,
+      documents: [],
+      cursor: null,
+      status: 'needsReauth',
+    });
+    const handle = engine.attach(createConvertWorker());
+
+    await store.commit({
+      account: account.id,
+      documents: [attachment('m1/7')],
+      cursor: 1,
+    });
+    await waitFor(
+      async () => (await store.ledgerHasDeferred('worker:convert:v1')) === true,
+    );
+    expect(fetchBytes).not.toHaveBeenCalled();
+    await handle.stop();
+  });
+
   it('a metadata-only enrich records the outcome without touching existing markdown', async () => {
     const account = await store.createAccount({
       source: 'mail',

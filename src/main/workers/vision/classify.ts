@@ -88,6 +88,15 @@ export function classifyDocument(doc: Document): 'candidate' | 'skip' {
     (meta.sizeBytes ?? meta.size ?? Number.MAX_SAFE_INTEGER) < TINY_IMAGE_BYTES
   )
     return 'skip';
+  // Over the cap by DECLARED size: skip before any fetch. Fetching first
+  // only to discard would, for a cloud source whose transport refuses
+  // bodies that large, throw → defer → re-drive the same doc forever.
+  const declared = meta.sizeBytes ?? meta.size;
+  if (
+    typeof declared === 'number' &&
+    declared > (pdf ? MAX_PDF_BYTES : MAX_IMAGE_BYTES)
+  )
+    return 'skip';
   if ((doc.markdown ?? '').trim().length >= HAS_TEXT_CHARS) return 'skip'; // has real text already
   return 'candidate';
 }

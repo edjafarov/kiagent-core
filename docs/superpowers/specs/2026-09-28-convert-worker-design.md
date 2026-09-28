@@ -220,7 +220,9 @@ gains `attachment`. No bytes are held in items (memory unchanged).
 - **Backfill (codex, blocking):** IMAP mailbox cursor entries gain
   `attachments: 1`; an entry without it re-fetches the mailbox once from
   UID 0 (no reset, nothing archived; unchanged messages hash-skip).
-  ms365 cursor bumps to v3; a v2 cursor restarts enumeration once.
+  ms365: same shape — the v2 cursor gains `attachments: 1`; any cursor
+  without it (v1 included) restarts enumeration once, which let the v1→v2
+  migration be deleted. (Implemented this way instead of a v3 bump.)
 - **ms365 identity (fable blocking + codex):** every Graph request sends
   `Prefer: IdType="ImmutableId"`. Child externalId =
   `<immutableMessageId>#<name>#<size>`; metadata holds only the immutable
@@ -251,3 +253,23 @@ gains `attachment`. No bytes are held in items (memory unchanged).
 - **Known limit, stated plainly:** a message deleted from a still-live
   thread leaves its attachments indexed (routine for ms365/Gmail
   conversations). Deferred.
+
+### Part 2 — Revision 2 (after fable + codex astra implementation review)
+
+- **Reconcile race, other direction (codex, blocking):** a parent refreshed
+  mid-pass is protected by the snapshot, but its unchanged children were
+  still eligible. The shared diff/archive predicate now keeps a child while
+  its parent is live and either listed or newer than the snapshot.
+- **Oversized files never fetched by vision (codex, blocking):** vision's
+  classifier skips by DECLARED size over its caps (50 MB PDF / 20 MB image)
+  before any fetch — fetching first would, for an extension transport that
+  refuses such bodies, throw → defer → re-drive forever.
+- **No fetch while an account needs re-auth (fable):** the engine's
+  `fetchBytes` defers without calling the source, so a stale IMAP password
+  is not one LOGIN per doc per re-drive.
+- ms365: exact name+size match only (a same-named replacement never fills
+  the old identity); attachment listing `$top=999`; version 2.2.0.
+- **Not done — pre-existing Gmail orphans (fable):** the live corpus has
+  none (checked 2026-09-28), so no one-way schema migration was added.
+- **Live smoke owed:** ms365 `$expand=attachments(...)` + `$filter` +
+  `Prefer: IdType="ImmutableId"` are only exercised against a mocked Graph.

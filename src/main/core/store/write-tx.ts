@@ -760,28 +760,39 @@ export function createWriteTx(
   // about, so it is excluded rather than treated as a deletion (the TOCTOU
   // guard that used to live in reconcilePass).
   const ELIGIBLE = `account_id = ? AND archived_at IS NULL AND seq <= ?`;
-  // A CHILD (attachment under a message) counts as listed when its PARENT
-  // is: no mail source lists attachments, and they live and die with their
-  // message — see archiveChildren for the other half of that rule.
-  const UNLISTED = `NOT EXISTS (
+  // A CHILD (attachment under a message) is not judged on its own: no mail
+  // source lists attachments, and they live and die with their message. It
+  // is kept while its parent is live and either listed or newer than the
+  // snapshot (refreshed mid-pass, so protected by ELIGIBLE); otherwise it
+  // goes with the parent (archiveChildren covers the parent's side).
+  // `startSeq` is interpolated, not bound: the diff and archive queries bind
+  // ELIGIBLE's params in different positions relative to this predicate.
+  const unlisted = (startSeq: Seq): string => {
+    const seq = Number(startSeq);
+    if (!Number.isSafeInteger(seq)) throw new Error(`bad startSeq ${startSeq}`);
+    return `NOT EXISTS (
       SELECT 1 FROM reconcile_listing l
        WHERE l.account_id = documents.account_id
          AND l.external_id = documents.external_id
          AND l.type = documents.type)
      AND NOT EXISTS (
       SELECT 1 FROM documents p
-        JOIN reconcile_listing lp
-          ON lp.account_id = p.account_id
-         AND lp.external_id = p.external_id
-         AND lp.type = p.type
-       WHERE p.id = documents.parent_id)`;
+       WHERE p.id = documents.parent_id
+         AND p.archived_at IS NULL
+         AND (p.seq > ${seq}
+              OR EXISTS (
+               SELECT 1 FROM reconcile_listing lp
+                WHERE lp.account_id = p.account_id
+                  AND lp.external_id = p.external_id
+                  AND lp.type = p.type)))`;
+  };
 
   const archiveBatchTx = conn.transaction(
     (accountId: string, startSeq: Seq): number => {
       const rows = conn
         .prepare(
           `SELECT id FROM documents
-            WHERE ${ELIGIBLE} AND ${UNLISTED}
+            WHERE ${ELIGIBLE} AND ${unlisted(startSeq)}
             LIMIT ?`,
         )
         .all(accountId, startSeq, RECONCILE_ARCHIVE_BATCH) as Array<{
@@ -1015,7 +1026,7 @@ export function createWriteTx(
       const counts = conn
         .prepare(
           `SELECT COUNT(*) AS live,
-                  SUM(CASE WHEN ${UNLISTED} THEN 1 ELSE 0 END) AS gone
+                  SUM(CASE WHEN ${unlisted(startSeq)} THEN 1 ELSE 0 END) AS gone
              FROM documents WHERE ${ELIGIBLE}`,
         )
         .get(accountId, startSeq) as { live: number; gone: number | null };

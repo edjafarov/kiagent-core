@@ -106,6 +106,27 @@ describe('parent/child lifetime', () => {
     expect(await archived('m2#0', 'attachment')).toBe(true);
   });
 
+  it('reconcile keeps the children of a parent refreshed mid-pass (protected by the snapshot)', async () => {
+    const startSeq = await store.headSeq();
+    await store.reconcileBegin(accountId);
+    await store.reconcileStage(accountId, [
+      { externalId: 'm1', type: 'email.message' },
+    ]);
+    // m2 re-synced during the pass (new body) — so it is newer than the
+    // listing; its attachment is unchanged and still sits under the snapshot.
+    await store.commit({
+      account: accountId,
+      documents: [{ ...msg('m2'), markdown: 'edited body' }, att('m2#0', 'm2')],
+      cursor: 2,
+    });
+    const diff = await store.reconcileDiff(accountId, startSeq);
+    await store.reconcileArchive(accountId, startSeq);
+    await store.reconcileEnd(accountId);
+    expect(await archived('m2', 'email.message')).toBe(false);
+    expect(await archived('m2#0', 'attachment')).toBe(false);
+    expect(diff.deletionCount).toBe(0);
+  });
+
   it('a deletion archives the message and its attachments together', async () => {
     await store.commit({
       account: accountId,

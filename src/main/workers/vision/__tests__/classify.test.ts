@@ -69,6 +69,20 @@ it.each([
     'candidate',
   ],
   ['archived', { ...base, archivedAt: '2026-01-01' }, 'skip'],
+  [
+    'PDF over the vision cap by declared size (never fetched)',
+    { ...base, metadata: { ...base.metadata, sizeBytes: 60 * 1024 * 1024 } },
+    'skip',
+  ],
+  [
+    'image over the vision cap by declared size',
+    {
+      ...base,
+      title: 'shot.png',
+      metadata: { mime: 'image/png', sizeBytes: 30 * 1024 * 1024 },
+    },
+    'skip',
+  ],
   ['wrong type', { ...base, type: 'email.thread' }, 'skip'],
   [
     'tiny image',
