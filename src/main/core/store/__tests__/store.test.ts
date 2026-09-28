@@ -623,11 +623,31 @@ describe('store', () => {
           markdown: null,
           metadata: { ext: 'jpg', size: 12345, absPath: '/x/a.jpg' },
         }),
-        // Local-folder scanned PDF: converter left markdown null — counts.
+        // Local-folder scanned PDF the parser found text-poor — counts.
         doc('lf-pdf', {
           type: 'file',
           markdown: null,
-          metadata: { ext: 'pdf', absPath: '/x/b.pdf' },
+          metadata: {
+            ext: 'pdf',
+            absPath: '/x/b.pdf',
+            conversion: { status: 'text-poor' },
+          },
+        }),
+        // PDFs vision will not take (yet / ever): not parsed yet, or the
+        // source has no bytes — neither is pending OCR.
+        doc('lf-pdf-unparsed', {
+          type: 'file',
+          markdown: null,
+          metadata: { ext: 'pdf', absPath: '/x/e.pdf' },
+        }),
+        doc('lf-pdf-gone', {
+          type: 'file',
+          markdown: null,
+          metadata: {
+            ext: 'pdf',
+            absPath: '/x/f.pdf',
+            conversion: { status: 'unavailable' },
+          },
         }),
         // Text-rich PDF: real extracted markdown — the worker skips it, so
         // the stat must too.
@@ -696,7 +716,11 @@ describe('store', () => {
         doc('pdf-1', {
           type: 'file',
           markdown: null,
-          metadata: { mime: 'application/pdf', filename: 'doc.pdf' },
+          metadata: {
+            mime: 'application/pdf',
+            filename: 'doc.pdf',
+            conversion: { status: 'failed' },
+          },
         }),
         // Already processed — nested marker, as the vision worker writes it.
         doc('done-1', {

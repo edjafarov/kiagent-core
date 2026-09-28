@@ -3,7 +3,7 @@ import JSZip from 'jszip';
 
 import type { Change, Document, WorkerSession } from '@shared/contracts';
 import { convertibleKind } from '@main/core/engine/convert';
-import { SourceNotReadyError } from '@main/core/engine/source-not-ready';
+import { FetchDeferredError } from '@main/core/engine/fetch-deferred';
 
 import {
   createConvertWorker,
@@ -229,19 +229,13 @@ describe('convert worker', () => {
     expect(s.enriched[0].metadata.conversion.status).toBe('unavailable');
   });
 
-  it('defers — records nothing — while the source is still registering', async () => {
+  it('records nothing when the fetch fails right now — the engine defers it', async () => {
     const s = fakeSession(async () => {
-      throw new SourceNotReadyError('gmail');
+      throw new FetchDeferredError('gmail fetchBytes failed: 401');
     });
-    expect(await worker.work(change(doc()), s)).toBe('defer');
-    expect(s.enriched).toHaveLength(0);
-  });
-
-  it('rethrows other fetch failures for the engine retry, recording nothing', async () => {
-    const s = fakeSession(async () => {
-      throw new Error('401');
-    });
-    await expect(worker.work(change(doc()), s)).rejects.toThrow('401');
+    await expect(worker.work(change(doc()), s)).rejects.toBeInstanceOf(
+      FetchDeferredError,
+    );
     expect(s.enriched).toHaveLength(0);
   });
 

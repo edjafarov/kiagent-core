@@ -177,6 +177,42 @@ describe('convert pipeline (real store + engine)', () => {
     await handle.stop();
   });
 
+  it('an offline/auth fetch failure is deferred (not failed) and converted once the source recovers', async () => {
+    const bytes = await tinyDocx('Travel expenses need prior approval.');
+    let online = false;
+    const source: Source = {
+      ...bytesOnlySource(bytes),
+      fetchBytes: async () => {
+        if (!online)
+          throw new Error('getaddrinfo ENOTFOUND gmail.googleapis.com');
+        return bytes;
+      },
+    };
+    const engine = engineWith(new Map([['mail', source]]));
+    const account = await store.createAccount({
+      source: 'mail',
+      identifier: 'x',
+    });
+    const worker = createConvertWorker();
+    const handle = engine.attach(worker);
+
+    await store.commit({
+      account: account.id,
+      documents: [attachment('m1/6')],
+      cursor: 1,
+    });
+    await waitFor(
+      async () => (await store.ledgerHasDeferred('worker:convert:v1')) === true,
+    );
+    expect((await store.ledgerCounts('worker:convert:v1')).failed).toBe(0);
+
+    online = true;
+    await engine.rerunDeferred(worker);
+    const d = await read(account.id, 'm1/6');
+    expect(d.markdown).toContain('Travel expenses need prior approval');
+    await handle.stop();
+  });
+
   it('a metadata-only enrich records the outcome without touching existing markdown', async () => {
     const account = await store.createAccount({
       source: 'mail',

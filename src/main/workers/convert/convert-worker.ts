@@ -8,16 +8,16 @@ import type {
 import { MAX_LOCAL_BINARY_BYTES } from '@shared/file-indexability';
 
 import { convertibleKind, parse } from '@main/core/engine/convert';
-import { SourceNotReadyError } from '@main/core/engine/source-not-ready';
 
-import type { ConversionOutcome, ConversionStatus } from './outcome';
+import {
+  HAS_TEXT_CHARS,
+  type ConversionOutcome,
+  type ConversionStatus,
+} from './outcome';
 
 /** Largest file the worker will fetch and parse — the same cap local files
  *  get on the commit path. Parsing runs in-process, like the commit path. */
 export const MAX_CONVERT_BYTES = MAX_LOCAL_BINARY_BYTES;
-
-/** Mirrors the vision classifier's "has real text already" bar. */
-const HAS_TEXT_CHARS = 16;
 
 interface ConvertMeta {
   mime?: unknown;
@@ -96,13 +96,10 @@ export function createConvertWorker(deps: { now?: () => Date } = {}): Worker {
       if (declared !== undefined && declared > MAX_CONVERT_BYTES)
         return record('too-large');
 
-      let bytes: Uint8Array | null;
-      try {
-        bytes = await session.fetchBytes(doc);
-      } catch (err) {
-        if (err instanceof SourceNotReadyError) return 'defer';
-        throw err; // auth/network: the engine's bounded retry
-      }
+      // A fetch that fails right now (source still registering, offline,
+      // re-auth needed) throws FetchDeferredError; the engine parks it for
+      // the re-drive. Only a definite "no bytes" (null) is recorded here.
+      const bytes = await session.fetchBytes(doc);
       if (!bytes) return record('unavailable');
       if (bytes.length > MAX_CONVERT_BYTES) return record('too-large');
 

@@ -132,3 +132,28 @@ Supersedes the sections above where they differ.
 - **Gmail:** `attachmentId` removed from attachment metadata (it rotates and
   sits in `contentHash`, so every thread refresh wiped `conversion` /
   `extraction`). `fetchBytes` resolves the current id from `partId`.
+
+## Revision 2 (after fable + codex astra implementation review)
+
+- **Fetch failures defer, engine-wide.** Both reviewers: a rethrown
+  auth/network error spent the engine's 3 retries and ended as a terminal
+  `failed` ledger row no re-drive revisits (and, with `attachmentId` out of
+  the hash, no thread refresh re-emits it either). Now
+  `WorkerSession.fetchBytes` throws `FetchDeferredError` both when the
+  source is not registered yet AND when the source's own fetch throws;
+  `workOne` records it as `deferred` without spending retries. Convert,
+  vision, audio (and third-party workers) get it for free — the three
+  per-worker catch blocks are gone. `null` stays the terminal "no bytes".
+  Cost: an account needing re-auth has its deferred docs retried each
+  re-drive (convert 5 m, ungated; vision/audio on their gated cadence).
+- **`PENDING_VISUAL_WHERE` now mirrors the PDF gate** (codex): PDFs count
+  as pending OCR only with `conversion.status` text-poor/failed/too-large,
+  so `unavailable` PDFs stop showing as pending forever. The partial index
+  is rebuilt automatically on first open (SQL-text change).
+- `HAS_TEXT_CHARS` (16) shared by the convert and vision classifiers.
+
+**One-time transition to expect (fable):** legacy Gmail attachment docs
+still carry `attachmentId`; the first refresh of their thread changes the
+hash, and `upsertDocument` rewrites metadata + markdown wholesale — so each
+such attachment is converted (and each image OCR'd) once more. Bounded,
+one-time; afterwards thread refreshes no longer churn attachments.

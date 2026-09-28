@@ -5,7 +5,7 @@ import {
   VISUAL_EXTENSIONS,
 } from '@shared/file-indexability';
 
-import { pdfReadyForOcr } from '../convert/outcome';
+import { HAS_TEXT_CHARS, pdfReadyForOcr } from '../convert/outcome';
 
 /** Canonical visual-candidate extensions. Also consumed by the store's
  *  `extractionStats` display query, which mirrors this classifier in SQL —
@@ -88,6 +88,6 @@ export function classifyDocument(doc: Document): 'candidate' | 'skip' {
     (meta.sizeBytes ?? meta.size ?? Number.MAX_SAFE_INTEGER) < TINY_IMAGE_BYTES
   )
     return 'skip';
-  if ((doc.markdown ?? '').trim().length >= 16) return 'skip'; // has real text already
+  if ((doc.markdown ?? '').trim().length >= HAS_TEXT_CHARS) return 'skip'; // has real text already
   return 'candidate';
 }

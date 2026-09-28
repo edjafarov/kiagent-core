@@ -8,8 +8,6 @@ import type {
   WorkOutcome,
 } from '@shared/contracts';
 
-import { SourceNotReadyError } from '@main/core/engine/source-not-ready';
-
 import { MAX_SOURCE_BYTES, audioExt, classifyTranscribable } from './classify';
 import { mp3DurationSeconds } from './mp3-duration';
 import {
@@ -109,14 +107,9 @@ export function createAudioWorker(deps: {
       // Outside the processing window: park cheaply (mirrors the vision worker).
       if (!deps.laneOpen()) return 'defer';
 
-      let bytes: Uint8Array | null;
-      try {
-        bytes = await session.fetchBytes(doc);
-      } catch (err) {
-        // Source still registering at boot: park, the re-drive retries.
-        if (err instanceof SourceNotReadyError) return 'defer';
-        throw err;
-      }
+      // A fetch that fails right now (source still registering, offline)
+      // throws FetchDeferredError, which the engine parks for the re-drive.
+      const bytes = await session.fetchBytes(doc);
       if (!bytes) return 'skip'; // source can't serve the audio — terminal
       // Backstop for docs whose metadata carried no size (classify gates the rest).
       if (bytes.length > MAX_SOURCE_BYTES) return 'skip';

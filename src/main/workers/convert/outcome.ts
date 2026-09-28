@@ -9,6 +9,10 @@
  * - `too-large`   over the parse cap, never fetched.
  * - `unavailable` the source answered "no bytes" (e.g. deleted upstream).
  */
+/** A doc with at least this much markdown already has real text: neither
+ *  the convert worker nor OCR touches it. */
+export const HAS_TEXT_CHARS = 16;
+
 export type ConversionStatus =
   | 'ok'
   | 'text-poor'
@@ -25,11 +29,12 @@ export interface ConversionOutcome {
 /** Outcomes after which a PDF is handed to OCR. `unavailable` is absent on
  *  purpose: vision fetches through the same source and would get the same
  *  null. */
-const PDF_OCR_AFTER: ReadonlySet<string> = new Set([
+export const PDF_OCR_AFTER_STATUSES = [
   'text-poor',
   'failed',
   'too-large',
-]);
+] as const satisfies readonly ConversionStatus[];
+const PDF_OCR_AFTER: ReadonlySet<string> = new Set(PDF_OCR_AFTER_STATUSES);
 
 export function pdfReadyForOcr(conversion: unknown): boolean {
   const status =

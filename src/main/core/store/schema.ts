@@ -1,5 +1,6 @@
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { PDF_OCR_AFTER_STATUSES } from '@main/workers/convert/outcome';
 import { VISUAL_EXTS } from '@main/workers/vision/classify';
 import {
   decideFileIndexing,
@@ -24,8 +25,14 @@ export const PENDING_VISUAL_WHERE = `json_extract(metadata,'$.extraction') IS NU
    AND type IN ('attachment','file')
    AND (markdown IS NULL OR length(trim(markdown)) < 16)
    AND (json_extract(metadata,'$.mime') LIKE 'image/%'
-        OR json_extract(metadata,'$.mime') = 'application/pdf'
-        OR lower(json_extract(metadata,'$.ext')) IN (${VISUAL_EXTS.map((e) => `'${e}'`).join(',')}))
+        OR lower(json_extract(metadata,'$.ext')) IN (${VISUAL_EXTS.filter(
+          (e) => e !== 'pdf',
+        )
+          .map((e) => `'${e}'`)
+          .join(',')})
+        OR ((json_extract(metadata,'$.mime') = 'application/pdf'
+             OR lower(json_extract(metadata,'$.ext')) = 'pdf')
+            AND json_extract(metadata,'$.conversion.status') IN (${PDF_OCR_AFTER_STATUSES.map((s) => `'${s}'`).join(',')})))
    AND archived_at IS NULL`;
 
 const QUERY_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [

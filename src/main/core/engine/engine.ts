@@ -38,7 +38,7 @@ import { isDbWorkerTransientError } from '../../db/worker-client';
 import { RECONCILE_ERROR_PREFIX } from '../store/last-error';
 import type { CoreStore } from '../store/store';
 import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
-import { SourceNotReadyError } from './source-not-ready';
+import { FetchDeferredError } from './fetch-deferred';
 
 export interface LogSink {
   log(
@@ -710,9 +710,23 @@ export function createEngine(deps: EngineDeps): Engine & {
           // steps later in boot, extension sources when their host comes
           // up). Not-yet-registered is transient — a null here would read as
           // "the source cannot serve these bytes" and end the doc for good.
-          if (!source) throw new SourceNotReadyError(account.source);
+          if (!source)
+            throw new FetchDeferredError(
+              `source '${account.source}' is not registered yet`,
+            );
           if (!source.fetchBytes) return null;
-          return source.fetchBytes(makeSession(account, signal, scope), doc);
+          try {
+            return await source.fetchBytes(
+              makeSession(account, signal, scope),
+              doc,
+            );
+          } catch (err) {
+            if (signal.aborted) throw err;
+            throw new FetchDeferredError(
+              `${account.source} fetchBytes failed: ${String(err)}`,
+              { cause: err },
+            );
+          }
         },
         emit(doc) {
           emitted.push(doc);
@@ -734,6 +748,17 @@ export function createEngine(deps: EngineDeps): Engine & {
         };
       } catch (err) {
         if (signal.aborted) throw err;
+        if (err instanceof FetchDeferredError) {
+          // Bytes unavailable right now — park for the re-drive rather than
+          // burn retries into a terminal 'failed' (see fetch-deferred.ts).
+          logs.log(scope, 'warn', `deferred seq ${change.seq}: ${err.message}`);
+          return {
+            docs: [],
+            enrich: [],
+            attempts: attempt,
+            outcome: 'deferred',
+          };
+        }
         logs.log(
           scope,
           'warn',

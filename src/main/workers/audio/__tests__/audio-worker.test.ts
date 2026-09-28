@@ -5,7 +5,6 @@ import path from 'node:path';
 import type { Change, Document, WorkerSession } from '@shared/contracts';
 
 import { workerConsumerName } from '@main/core/engine/engine';
-import { SourceNotReadyError } from '@main/core/engine/source-not-ready';
 import { NoProviderError } from '@main/core/inference';
 import { AsrInputRejectedError } from '@main/providers/local-asr/whisper-cli';
 
@@ -269,18 +268,6 @@ describe('createAudioWorker — call order and gates', () => {
     expect(outcome).toBe('defer');
     expect(h.fetchBytes).not.toHaveBeenCalled();
     expect(h.order).toEqual(['requestAsr', 'hearReady', 'laneOpen']);
-  });
-
-  it('defers (not terminal skip) while the source is still registering', async () => {
-    const h = setup({
-      session: {
-        fetchBytes: async () => {
-          throw new SourceNotReadyError('gmail');
-        },
-      } as never,
-    });
-    expect(await h.worker.work(change(), h.session)).toBe('defer');
-    expect(h.transcribeFile).not.toHaveBeenCalled();
   });
 
   it('never routes audio through session.hear', async () => {
