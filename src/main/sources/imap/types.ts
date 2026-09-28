@@ -68,6 +68,8 @@ export interface ImapClient {
 export interface FolderCursorEntry {
   uidValidity: string;
   lastUid: number;
+  /** ATTACHMENTS_VERSION once synced with attachment children (cursor.ts). */
+  attachments?: number;
 }
 
 /** The Source's cursor: one entry per synced mailbox. */
@@ -100,4 +102,16 @@ export interface ImapMessageItem {
   /** Lower-cased header map, used only for automated-sender filtering. */
   headers: Record<string, string>;
   evidence?: MessageEvidenceV1;
+  /** Attachment METADATA only — bytes are re-fetched on demand by
+   *  `fetchBytes`, so no attachment content is held in a batch. */
+  attachments?: ImapAttachmentMeta[];
+}
+
+export interface ImapAttachmentMeta {
+  /** Position in mailparser's `attachments` array for this message — stable
+   *  for the same RFC822 bytes, which is what `fetchBytes` re-parses. */
+  index: number;
+  filename: string | null;
+  mime: string;
+  sizeBytes: number;
 }

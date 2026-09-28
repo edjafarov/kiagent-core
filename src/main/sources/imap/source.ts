@@ -1,6 +1,7 @@
 import type {
   AuthChannel,
   Batch,
+  Document,
   DocumentInput,
   ExternalRef,
   PullPhase,
@@ -15,7 +16,7 @@ import { describeConnectError } from './errors';
 import { isAutomatedMessage } from './filter';
 import { resolveMailboxes } from './folders';
 import { buildExternalId } from './ids';
-import { parseImapMessage } from './parse';
+import { attachmentContent, parseImapMessage } from './parse';
 import { normalizeAuthor } from '../email-evidence';
 import type {
   ImapAccountConfig,
@@ -86,12 +87,16 @@ export function createImapSource(
   const connectFn = deps.connect ?? connectImapClient;
   const sleepFn = deps.sleep ?? defaultSleep;
   const pollIntervalMs = deps.pollIntervalMs ?? LIVE_POLL_INTERVAL_MS;
+  // One raw message kept between fetchBytes calls: a mail's attachments sit
+  // next to each other on the feed, so an N-attachment mail downloads once.
+  // Safe to reuse — under one UIDVALIDITY a UID's content never changes.
+  let lastRaw: { key: string; source: Buffer } | null = null;
 
   return {
     descriptor: {
       id: 'imap',
       name: 'Email (IMAP)',
-      documentTypes: ['email.message'],
+      documentTypes: ['email.message', 'attachment'],
       auth: 'password',
       multiAccount: true,
       cadence: { every: '15m' },
@@ -295,7 +300,7 @@ export function createImapSource(
       }
     },
 
-    toDocument(item: ImapMessageItem): DocumentInput | null {
+    toDocument(item: ImapMessageItem): DocumentInput | DocumentInput[] | null {
       const filt = isAutomatedMessage(item.headers, item.from ?? '');
       if (filt.matched) return null;
 
@@ -318,8 +323,13 @@ export function createImapSource(
         };
       }
 
-      return {
-        externalId: buildExternalId(item.mailbox, item.uidValidity, item.uid),
+      const messageExternalId = buildExternalId(
+        item.mailbox,
+        item.uidValidity,
+        item.uid,
+      );
+      const message: DocumentInput = {
+        externalId: messageExternalId,
         type: 'email.message',
         title: subject,
         markdown: item.bodyText,
@@ -327,6 +337,76 @@ export function createImapSource(
         createdAt: item.date,
         url: undefined,
       };
+      // Bytes-less children: the convert worker (and vision, for images and
+      // scans) pull the bytes back through fetchBytes.
+      const attachments: DocumentInput[] = (item.attachments ?? []).map(
+        (att) => ({
+          externalId: `${messageExternalId}#${att.index}`,
+          type: 'attachment',
+          title: att.filename,
+          markdown: null,
+          metadata: {
+            mime: att.mime,
+            filename: att.filename,
+            sizeBytes: att.sizeBytes,
+            mailbox: item.mailbox,
+            uid: item.uid,
+            uidValidity: item.uidValidity,
+            attachmentIndex: att.index,
+          },
+          createdAt: item.date,
+          parent: { externalId: messageExternalId, type: 'email.message' },
+        }),
+      );
+      return attachments.length ? [message, ...attachments] : message;
+    },
+
+    async fetchBytes(session: Session, doc: Document) {
+      if (doc.type !== 'attachment') return null;
+      const meta = doc.metadata as {
+        mailbox?: unknown;
+        uid?: unknown;
+        uidValidity?: unknown;
+        attachmentIndex?: unknown;
+      };
+      if (
+        typeof meta.mailbox !== 'string' ||
+        typeof meta.uid !== 'number' ||
+        typeof meta.uidValidity !== 'string' ||
+        typeof meta.attachmentIndex !== 'number'
+      )
+        return null;
+      const key = [
+        session.account.id,
+        meta.mailbox,
+        meta.uidValidity,
+        meta.uid,
+      ].join('\u0000');
+      let source = lastRaw?.key === key ? lastRaw.source : null;
+      if (!source) {
+        const config = session.account.config as unknown as ImapAccountConfig;
+        const creds = await session.credentials();
+        if (!creds?.password) {
+          throw new SourceAuthError(
+            'imap: account has no stored password credential',
+          );
+        }
+        const client = await connectFn(config, creds.password);
+        try {
+          const status = await client.status(meta.mailbox);
+          // A different UIDVALIDITY means this UID now names another message.
+          if (String(status.uidValidity) !== meta.uidValidity) return null;
+          const raws = await client.fetchMany(meta.mailbox, [meta.uid]);
+          const raw = raws.find((r) => r.uid === meta.uid);
+          if (!raw) return null; // message deleted upstream
+          source = raw.source;
+          lastRaw = { key, source };
+        } finally {
+          await client.close().catch(() => {});
+        }
+      }
+      const content = await attachmentContent(source, meta.attachmentIndex);
+      return content ? new Uint8Array(content) : null;
     },
 
     async readMessageEvidence(session, doc, options) {

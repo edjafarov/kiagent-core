@@ -441,7 +441,28 @@ export function createWriteTx(
         `UPDATE documents SET archived_at = ?, seq = ?, updated_at = ? WHERE id = ?`,
       )
       .run(deps.now(), seq, deps.now(), row.id);
-    return seq;
+    return archiveChildren(row.id) ?? seq;
+  };
+
+  /** Children (attachments) live and die with their parent: archiving a
+   *  document archives its live children in the same transaction. One level
+   *  — attachments have no children of their own. */
+  const archiveChildren = (parentId: string): Seq | null => {
+    const kids = conn
+      .prepare(
+        `SELECT id FROM documents WHERE parent_id = ? AND archived_at IS NULL`,
+      )
+      .all(parentId) as Array<{ id: string }>;
+    let last: Seq | null = null;
+    for (const { id } of kids) {
+      last = appendChange('document', id);
+      conn
+        .prepare(
+          `UPDATE documents SET archived_at = ?, seq = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(deps.now(), last, deps.now(), id);
+    }
+    return last;
   };
 
   // ── the write primitive ───────────────────────────────────────────────────
@@ -739,11 +760,21 @@ export function createWriteTx(
   // about, so it is excluded rather than treated as a deletion (the TOCTOU
   // guard that used to live in reconcilePass).
   const ELIGIBLE = `account_id = ? AND archived_at IS NULL AND seq <= ?`;
+  // A CHILD (attachment under a message) counts as listed when its PARENT
+  // is: no mail source lists attachments, and they live and die with their
+  // message — see archiveChildren for the other half of that rule.
   const UNLISTED = `NOT EXISTS (
       SELECT 1 FROM reconcile_listing l
        WHERE l.account_id = documents.account_id
          AND l.external_id = documents.external_id
-         AND l.type = documents.type)`;
+         AND l.type = documents.type)
+     AND NOT EXISTS (
+      SELECT 1 FROM documents p
+        JOIN reconcile_listing lp
+          ON lp.account_id = p.account_id
+         AND lp.external_id = p.external_id
+         AND lp.type = p.type
+       WHERE p.id = documents.parent_id)`;
 
   const archiveBatchTx = conn.transaction(
     (accountId: string, startSeq: Seq): number => {
@@ -762,6 +793,9 @@ export function createWriteTx(
       for (const { id } of rows) {
         const seq = appendChange('document', id);
         upd.run(deps.now(), seq, deps.now(), id);
+        // Past the seq snapshot too: a child the convert worker touched
+        // mid-pass must not outlive its archived parent.
+        archiveChildren(id);
       }
       return rows.length;
     },

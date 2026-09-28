@@ -1,6 +1,10 @@
 import { simpleParser, type AddressObject } from 'mailparser';
 import { extractMessageEvidence } from '../email-evidence';
-import type { ImapMessageItem, ImapRawMessage } from './types';
+import type {
+  ImapAttachmentMeta,
+  ImapMessageItem,
+  ImapRawMessage,
+} from './types';
 import { cleanBody } from './body';
 import { stripAngle } from './ids';
 
@@ -10,10 +14,10 @@ import { stripAngle } from './ids';
  * Buffer in is a fixture ImapMessageItem out, so this is unit-tested with
  * fixtures rather than a live server.
  *
- * Mirrors kiagent-ref/src/main/connectors/imap/message-parser.ts, minus
- * attachments (which only mattered for legacy's thread rebuild) — the
- * threading fields (cc/replyTo/references) ARE preserved, for reply
- * resolution (see src/main/outbound/resolve.ts).
+ * Mirrors kiagent-ref/src/main/connectors/imap/message-parser.ts. The
+ * threading fields (cc/replyTo/references) are preserved for reply
+ * resolution (see src/main/outbound/resolve.ts); attachments are kept as
+ * METADATA only (see `attachmentMeta`) and become child documents.
  */
 export async function parseImapMessage(
   raw: ImapRawMessage,
@@ -60,6 +64,7 @@ export async function parseImapMessage(
     date: mail.date ? mail.date.toISOString() : null,
     bodyText,
     headers,
+    attachments: attachmentMeta(mail.attachments ?? []),
     evidence: extractMessageEvidence({
       messageKey: messageId ?? `imap:${uidValidity}:${raw.uid}`,
       author: from,
@@ -68,6 +73,42 @@ export async function parseImapMessage(
       html: typeof mail.html === 'string' ? mail.html : null,
     }),
   };
+}
+
+/** The bytes of attachment `index` (mailparser order) of one raw message,
+ *  or null when the message no longer has that attachment. */
+export async function attachmentContent(
+  source: Buffer,
+  index: number,
+): Promise<Buffer | null> {
+  const mail = await simpleParser(source);
+  return mail.attachments?.[index]?.content ?? null;
+}
+
+/** Inline images under this size are signatures/logos/tracking pixels —
+ *  the same bar the Gmail source uses. */
+export const TINY_INLINE_IMAGE_BYTES = 8 * 1024;
+
+/** Every real attachment's metadata, indexed by its position in mailparser's
+ *  array (the key `fetchBytes` re-resolves by). Tiny images are dropped but
+ *  keep their index slot, so indexes stay aligned with a re-parse. */
+export function attachmentMeta(
+  attachments: ReadonlyArray<{
+    filename?: string;
+    contentType?: string;
+    size?: number;
+    content?: Buffer;
+  }>,
+): ImapAttachmentMeta[] {
+  const out: ImapAttachmentMeta[] = [];
+  attachments.forEach((a, index) => {
+    const mime = (a.contentType ?? 'application/octet-stream').toLowerCase();
+    const sizeBytes = a.size ?? a.content?.length ?? 0;
+    if (mime.startsWith('image/') && sizeBytes < TINY_INLINE_IMAGE_BYTES)
+      return;
+    out.push({ index, filename: a.filename ?? null, mime, sizeBytes });
+  });
+  return out;
 }
 
 function addrText(a: AddressObject | AddressObject[] | undefined): string {

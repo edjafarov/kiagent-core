@@ -26,19 +26,19 @@ describe('planMailboxSync', () => {
   });
 
   it('steady state: only UIDs beyond lastUid, same UIDVALIDITY', () => {
-    const prev = { uidValidity: '111', lastUid: 10 };
+    const prev = { uidValidity: '111', lastUid: 10, attachments: 1 };
     const plan = planMailboxSync(prev, 111, [8, 9, 10, 11, 12]);
     expect(plan).toEqual({ reset: false, uidsToFetch: [11, 12] });
   });
 
   it('steady state with nothing new yields an empty fetch list', () => {
-    const prev = { uidValidity: '111', lastUid: 10 };
+    const prev = { uidValidity: '111', lastUid: 10, attachments: 1 };
     const plan = planMailboxSync(prev, 111, [8, 9, 10]);
     expect(plan).toEqual({ reset: false, uidsToFetch: [] });
   });
 
   it('UIDVALIDITY change forces a reset: resume from 0 regardless of lastUid', () => {
-    const prev = { uidValidity: '111', lastUid: 10 };
+    const prev = { uidValidity: '111', lastUid: 10, attachments: 1 };
     const plan = planMailboxSync(prev, 222, [1, 2, 3]);
     expect(plan).toEqual({ reset: true, uidsToFetch: [1, 2, 3] });
   });
@@ -51,13 +51,13 @@ describe('advanceCursor / emptyCursor', () => {
 
   it('adds/replaces only the named mailbox, preserving others', () => {
     const cur: ImapCursor = {
-      mailboxes: { INBOX: { uidValidity: '1', lastUid: 5 } },
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 5, attachments: 1 } },
     };
     const next = advanceCursor(cur, 'Sent', 42, 7);
     expect(next).toEqual({
       mailboxes: {
-        INBOX: { uidValidity: '1', lastUid: 5 },
-        Sent: { uidValidity: '42', lastUid: 7 },
+        INBOX: { uidValidity: '1', lastUid: 5, attachments: 1 },
+        Sent: { uidValidity: '42', lastUid: 7, attachments: 1 },
       },
     });
     // original untouched

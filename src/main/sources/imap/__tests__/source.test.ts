@@ -135,7 +135,7 @@ describe('createImapSource — descriptor', () => {
     expect(source.descriptor).toMatchObject({
       id: 'imap',
       name: 'Email (IMAP)',
-      documentTypes: ['email.message'],
+      documentTypes: ['email.message', 'attachment'],
       auth: 'password',
       multiAccount: true,
       cadence: { every: '15m' },
@@ -424,6 +424,7 @@ describe('createImapSource — pull', () => {
     expect(batches[2].cursor.mailboxes.INBOX).toEqual({
       uidValidity: '555',
       lastUid: 120,
+      attachments: 1,
     });
     expect(state.closed).toBe(true);
   });
@@ -446,7 +447,7 @@ describe('createImapSource — pull', () => {
       },
     });
     const cursor: ImapCursor = {
-      mailboxes: { INBOX: { uidValidity: '1', lastUid: 2 } },
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 2, attachments: 1 } },
     };
     const session = makeSession(CONFIG, { signal: controller.signal });
 
@@ -474,7 +475,7 @@ describe('createImapSource — pull', () => {
       sleep: async () => controller.abort(),
     });
     const cursor: ImapCursor = {
-      mailboxes: { INBOX: { uidValidity: '1', lastUid: 1 } },
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 1, attachments: 1 } },
     };
     const session = makeSession(CONFIG, { signal: controller.signal });
 
@@ -514,7 +515,7 @@ describe('createImapSource — pull', () => {
       },
     });
     const cursor: ImapCursor = {
-      mailboxes: { INBOX: { uidValidity: '1', lastUid: 2 } },
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 2, attachments: 1 } },
     };
     const session = makeSession(CONFIG, { signal: controller.signal });
 
@@ -527,6 +528,7 @@ describe('createImapSource — pull', () => {
     expect(batches[1].cursor.mailboxes.INBOX).toEqual({
       uidValidity: '1',
       lastUid: 3,
+      attachments: 1,
     });
     expect(sleepCalls).toBe(2);
   });
@@ -546,7 +548,7 @@ describe('createImapSource — pull', () => {
     });
     // Stale cursor from before the rollover.
     const cursor: ImapCursor = {
-      mailboxes: { INBOX: { uidValidity: '1', lastUid: 50 } },
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 50, attachments: 1 } },
     };
     const session = makeSession(CONFIG, { signal: controller.signal });
 
@@ -570,6 +572,7 @@ describe('createImapSource — pull', () => {
     expect(batches[0].cursor.mailboxes.INBOX).toEqual({
       uidValidity: '1',
       lastUid: 50, // stale entry preserved until the resync lands
+      attachments: 1,
     });
 
     // Then: the from-scratch resync under the new UIDVALIDITY.
@@ -578,6 +581,7 @@ describe('createImapSource — pull', () => {
     expect(batches[1].cursor.mailboxes.INBOX).toEqual({
       uidValidity: '999',
       lastUid: 2,
+      attachments: 1,
     });
 
     // Finally the heartbeat, on the post-rollover cursor — the resync it
@@ -587,6 +591,7 @@ describe('createImapSource — pull', () => {
     expect(batches[2].cursor.mailboxes.INBOX).toEqual({
       uidValidity: '999',
       lastUid: 2,
+      attachments: 1,
     });
   });
 
@@ -613,7 +618,7 @@ describe('createImapSource — pull', () => {
     controller.abort();
     const source = createImapSource({ connect: async () => client });
     const cursor: ImapCursor = {
-      mailboxes: { INBOX: { uidValidity: '1', lastUid: 1 } },
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 1, attachments: 1 } },
     };
     const session = makeSession(CONFIG, { signal: controller.signal });
 

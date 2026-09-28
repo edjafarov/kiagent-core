@@ -9,6 +9,10 @@ export function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+/** Stamped on every mailbox entry once its messages are synced WITH
+ *  attachment children. An entry without it predates attachments. */
+export const ATTACHMENTS_VERSION = 1;
+
 export interface MailboxSyncPlan {
   /** true if UIDVALIDITY changed vs the persisted cursor — a full resync of
    *  this mailbox is required (its previously-recorded UIDs no longer mean
@@ -32,7 +36,13 @@ export function planMailboxSync(
 ): MailboxSyncPlan {
   const uidValidityStr = String(currentUidValidity);
   const reset = prev !== undefined && prev.uidValidity !== uidValidityStr;
-  const resumeFrom = prev && !reset ? prev.lastUid : 0;
+  // An entry written before attachments were ingested re-fetches the whole
+  // mailbox once (unchanged messages are hash-skipped; only the new
+  // attachment children land). Not a reset: nothing is archived.
+  const resumeFrom =
+    prev && !reset && prev.attachments === ATTACHMENTS_VERSION
+      ? prev.lastUid
+      : 0;
   const uidsToFetch = presentUids
     .filter((uid) => uid > resumeFrom)
     .sort((a, b) => a - b);
@@ -51,7 +61,11 @@ export function advanceCursor(
   return {
     mailboxes: {
       ...cur.mailboxes,
-      [mailbox]: { uidValidity: String(uidValidity), lastUid },
+      [mailbox]: {
+        uidValidity: String(uidValidity),
+        lastUid,
+        attachments: ATTACHMENTS_VERSION,
+      },
     },
   };
 }

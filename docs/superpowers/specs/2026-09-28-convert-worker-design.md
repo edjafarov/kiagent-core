@@ -157,3 +157,97 @@ still carry `attachmentId`; the first refresh of their thread changes the
 hash, and `upsertDocument` rewrites metadata + markdown wholesale — so each
 such attachment is converted (and each image OCR'd) once more. Bounded,
 one-time; afterwards thread refreshes no longer churn attachments.
+
+## Part 2 — IMAP and ms365 mail attachments (2026-09-28)
+
+Goal: both mail sources emit bytes-less `attachment` child documents with a
+`fetchBytes`, exactly like Gmail, so the convert → OCR chain above covers
+them with no per-source parsing.
+
+### Core: children live and die with their parent (generic)
+
+Today (a) `reconcile` archives every live doc of the account whose
+`(externalId, type)` was not listed, and (b) `deletions` archive exactly the
+named refs. Attachment children are listed by no mail source, so (a) would
+archive every IMAP attachment on each reconcile pass, and (b) already
+orphans Gmail attachments when their thread is deleted.
+
+- **Reconcile:** a document with `parent_id` counts as listed when its
+  parent row is listed. (Survey: of the sources that emit children —
+  gmail, hubspot, slack, instagram, telegram, whatsapp, agent-sessions —
+  none implements `reconcile`, so no current behaviour changes; the sources
+  that reconcile — imap, ms365, onedrive, google-docs, notion, local-folder
+  — only IMAP/ms365 will have children, via this change.)
+- **Deletions:** `archiveByRef` also archives the target's live children in
+  the same transaction (one level; attachments have none).
+- Known limit: a child that disappears while its parent survives (one mail
+  removed from a still-live thread) stays live. Rare; not addressed.
+
+### IMAP (core)
+
+`fetchMany` already downloads the full RFC822 source and mailparser already
+parses attachments — they were discarded. Now `parseImapMessage` keeps
+attachment METADATA only (index, filename, contentType, size), skipping
+tiny inline images (Gmail's 8 KB rule). `toDocument` returns
+`[message, ...attachments]`; child `externalId = <messageExternalId>#<index>`,
+`parent = {message externalId, 'email.message'}`, metadata `{mime,
+filename, sizeBytes, mailbox, uid, uidValidity, attachmentIndex}`.
+`fetchBytes`: reconnect, check UIDVALIDITY, `fetchMany([uid])`, re-parse,
+return `attachments[attachmentIndex].content` (null when the UID/validity/
+index no longer matches → terminal `unavailable`). Descriptor documentTypes
+gains `attachment`. No bytes are held in items (memory unchanged).
+
+### ms365 (marketplace connector, `~/work/ms365-kia-connector`)
+
+- Pull: for messages with `hasAttachments`, list
+  `/me/messages/{id}/attachments?$select=id,name,contentType,size,isInline`
+  (metadata only, no contentBytes), skip tiny inline images and non-file
+  attachments (item/reference attachments have no bytes).
+- `toDocument` → `[thread, ...attachments]`. Graph message ids are NOT
+  immutable (they change on folder moves), so the child externalId is
+  `<conversationId>/<internetMessageId>/<index>` (stable across moves);
+  the CURRENT `messageId`/`attachmentId` live in metadata and refresh
+  whenever the thread re-emits (a move changes the thread hash).
+- `fetchBytes`: `GET /me/messages/{messageId}/attachments/{attachmentId}/$value`;
+  404 → null (terminal `unavailable`; a later move re-emits fresh ids and
+  the upsert resets the outcome).
+- Size: skip fetch over the connector's existing binary cap.
+- Released as ms365 connector 2.2.0 against the current SDK (contract
+  unchanged for sources).
+
+### Part 2 — Revision 1 (after fable + codex astra design review)
+
+- **Backfill (codex, blocking):** IMAP mailbox cursor entries gain
+  `attachments: 1`; an entry without it re-fetches the mailbox once from
+  UID 0 (no reset, nothing archived; unchanged messages hash-skip).
+  ms365 cursor bumps to v3; a v2 cursor restarts enumeration once.
+- **ms365 identity (fable blocking + codex):** every Graph request sends
+  `Prefer: IdType="ImmutableId"`. Child externalId =
+  `<immutableMessageId>#<name>#<size>`; metadata holds only the immutable
+  `messageId`, `filename`, `mime`, `sizeBytes` — no mutable attachment id —
+  so a folder move never churns the child's hash. `fetchBytes` lists the
+  message's attachments (`$select=id,name,size`), matches name+size, GETs
+  `$value`; no match / 404 → null (terminal `unavailable`).
+- **ms365 enumeration (codex, blocking):** `hasAttachments` is false for
+  inline-only mail, so attachment metadata comes from
+  `$expand=attachments($select=id,name,contentType,size,isInline)` on the
+  existing conversation fetch — no per-message request, no flag.
+  Only `#microsoft.graph.fileAttachment` entries; tiny inline images
+  dropped (8 KB, as Gmail/IMAP).
+- **ms365 binary transport (both, blocking):** `GraphClient.request` gains
+  `responseType: 'bytes'` (keeps bearer, 401 → auth error, 429 retry).
+  No connector size cap — the convert worker refuses oversize before
+  fetching; vision has its own caps.
+- **ms365 children carry the thread's `scopeRootId`** (folder-scoped
+  account).
+- **Reconcile race (codex):** archiving a parent — via deletions,
+  reconcile, or folder-scope refs — archives its live children in the same
+  transaction regardless of their seq. The listing rule keys on the parent
+  being in `reconcile_listing` (fable), shared by the archive and the diff
+  count.
+- **IMAP:** `fetchBytes` runs `simpleParser` on a one-message cache
+  (last raw source by account/mailbox/uidValidity/uid), so an N-attachment
+  mail is downloaded once, not N times.
+- **Known limit, stated plainly:** a message deleted from a still-live
+  thread leaves its attachments indexed (routine for ms365/Gmail
+  conversations). Deferred.
