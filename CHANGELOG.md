@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.97.1](https://github.com/edjafarov/kiagent-core/compare/v0.97.0...v0.97.1) (2026-09-28)
+
+### Bug Fixes
+
+* **convert:** a short real PDF keeps its text ([e9fdee3](https://github.com/edjafarov/kiagent-core/commit/e9fdee3e960c432dfe610c403b0aa564c60853d4))
+
 ## [0.97.0](https://github.com/edjafarov/kiagent-core/compare/v0.96.0...v0.97.0) (2026-09-28)
 
 ### Features
