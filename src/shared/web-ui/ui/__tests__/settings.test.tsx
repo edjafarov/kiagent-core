@@ -48,6 +48,36 @@ describe('SettingsLayout', () => {
   });
 });
 
+describe('SettingsLayout nav foot', () => {
+  it('pins a build item under the pane list, inside the nav', () => {
+    render(
+      <SettingsLayout
+        panes={PANES}
+        active="general"
+        onSelect={() => {}}
+        navFoot={<button type="button">Log out</button>}
+      >
+        <p>body</p>
+      </SettingsLayout>,
+    );
+    const nav = screen.getByRole('navigation', { name: 'Settings' });
+    const out = screen.getByRole('button', { name: 'Log out' });
+    expect(nav).toContainElement(out);
+    expect(out.parentElement).toHaveClass('ui-set-foot');
+    // It comes after every pane.
+    expect(nav.lastElementChild).toBe(out.parentElement);
+  });
+
+  it('renders no foot when a build passes none', () => {
+    const { container } = render(
+      <SettingsLayout panes={PANES} active="general" onSelect={() => {}}>
+        <p>body</p>
+      </SettingsLayout>,
+    );
+    expect(container.querySelector('.ui-set-foot')).toBeNull();
+  });
+});
+
 describe('SettingsLayout pane icons', () => {
   it('draws a pane icon when given one', () => {
     const { container } = render(

@@ -932,6 +932,15 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
   font-weight: 600;
   color: var(--nav-active);
 }
+/* A build's items under the pane list (the product's Log out). */
+.ui-set-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: auto;
+  padding-top: 12px;
+}
+.ui-set-item.is-danger:hover { color: var(--error-solid); }
 .ui-set-body { flex: 1; min-width: 0; overflow-y: auto; }
 .ui-set-col { display: flex; flex-direction: column; gap: 20px; max-width: 720px; padding: 28px 40px 32px; }
 .ui-set-title {
@@ -1060,22 +1069,27 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-legacy { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .ui-shell.is-win .ui-top, .ui-shell.is-linux .ui-top { padding-right: 140px; }
 
-/* Account row in the sidebar foot. */
-.ui-acct { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.ui-acct-who {
+/* Account row in the sidebar foot: one button, gear included. */
+.ui-acct {
   all: unset;
   box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 1;
   min-width: 0;
-  height: 32px;
-  padding: 0 6px;
+  height: 36px;
+  padding: 0 8px 0 6px;
+  color: var(--nav-text);
   cursor: pointer;
 }
-.ui-acct-who:hover { background: rgba(0, 0, 0, 0.045); }
-.ui-acct-who:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.ui-acct:hover { background: rgba(0, 0, 0, 0.045); color: var(--text-primary); }
+.ui-acct:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.ui-acct.is-active {
+  padding-left: 3px;
+  background: var(--card-bg);
+  border-left: 3px solid var(--accent-solid);
+  color: var(--nav-active);
+}
 .ui-acct-name {
   flex: 1;
   min-width: 0;
@@ -1086,8 +1100,6 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
   font-weight: 500;
   color: var(--text-primary);
 }
-.ui-acct-hn { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
-.ui-acct-he { font-size: 11.5px; color: var(--text-secondary); }
 .ui-sb-line { all: unset; box-sizing: border-box; display: flex; padding: 0 6px; cursor: default; }
 button.ui-sb-line { cursor: pointer; }
 button.ui-sb-line:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }

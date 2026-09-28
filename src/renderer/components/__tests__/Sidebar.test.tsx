@@ -171,62 +171,56 @@ describe('Sidebar brand row', () => {
   });
 });
 
-describe('AccountMenu (core build)', () => {
-  it('opens a menu with Settings but NO Log out', () => {
+describe('account row', () => {
+  it('is one button: avatar, name and gear open the Account pane', () => {
     const ctx = renderSidebar();
-    fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
-    expect(screen.getByRole('menu', { name: 'Account' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
-    expect(ctx.openSettings).toHaveBeenCalledWith();
+    const row = screen.getByRole('button', {
+      name: 'Settings — Alice Example',
+    });
+    expect(row).toHaveTextContent('A');
+    expect(row).toHaveTextContent('Alice Example');
+    fireEvent.click(row);
+    expect(ctx.openSettings).toHaveBeenCalledWith('account');
+    // No menu and no separate gear button any more.
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(
-      screen.queryByRole('menuitem', { name: 'Log out' }),
+      screen.queryByRole('button', { name: 'Settings' }),
     ).not.toBeInTheDocument();
   });
 
-  it('opens Settings from the gear', () => {
-    const ctx = renderSidebar();
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    expect(ctx.openSettings).toHaveBeenCalledWith();
+  it('stays highlighted while Settings is open', () => {
+    renderSidebar({ view: 'settings' });
+    const row = screen.getByRole('button', {
+      name: 'Settings — Alice Example',
+    });
+    expect(row).toHaveClass('is-active');
+    expect(row).toHaveAttribute('aria-current', 'page');
   });
 
-  it('shows the identity initial and name', () => {
-    renderSidebar();
-    expect(screen.getByText('A')).toBeInTheDocument();
-    expect(screen.getByText('Alice Example')).toBeInTheDocument();
+  it('is not highlighted on other pages', () => {
+    renderSidebar({ view: 'sources' });
+    expect(
+      screen.getByRole('button', { name: 'Settings — Alice Example' }),
+    ).not.toHaveClass('is-active');
   });
 });
 
 describe('AccountRow', () => {
-  it('adds build entries after Settings, shows a footer, and reports opening', () => {
-    const onOpen = jest.fn();
-    const logout = jest.fn();
+  it('falls back to the email and keeps only the avatar when collapsed', () => {
+    const open = jest.fn();
     render(
       <AccountRow
-        identity={{
-          name: 'Alex Morgan',
-          emails: ['alex@northwind.test'],
-          phones: [],
-        }}
-        collapsed={false}
-        onOpenSettings={jest.fn()}
-        extraItems={[
-          'separator',
-          { key: 'logout', label: 'Log out', onSelect: logout },
-        ]}
-        footer={<p role="alert">network down</p>}
-        onOpen={onOpen}
+        identity={{ name: '', emails: ['alex@northwind.test'], phones: [] }}
+        collapsed
+        onOpenSettings={open}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
-    expect(onOpen).toHaveBeenCalledTimes(1);
-    expect(screen.getAllByRole('menuitem').map((m) => m.textContent)).toEqual([
-      'Settings',
-      'Log out',
-    ]);
-    expect(screen.getByRole('menu')).toContainElement(
-      screen.getByRole('alert'),
-    );
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Log out' }));
-    expect(logout).toHaveBeenCalled();
+    const row = screen.getByRole('button', {
+      name: 'Settings — alex@northwind.test',
+    });
+    expect(row).toHaveAttribute('title', 'Settings');
+    expect(row).not.toHaveTextContent('alex@northwind.test');
+    fireEvent.click(row);
+    expect(open).toHaveBeenCalledTimes(1);
   });
 });

@@ -17,6 +17,8 @@ export function SettingsLayout(props: {
   onSelect: (key: string) => void;
   /** The pane title; omit for a pane that prints its own. */
   title?: React.ReactNode;
+  /** Pinned under the pane list, e.g. a build's Log out. */
+  navFoot?: React.ReactNode;
   children: React.ReactNode;
 }): React.ReactElement {
   return (
@@ -39,6 +41,9 @@ export function SettingsLayout(props: {
               </button>
             );
           })}
+          {props.navFoot != null && (
+            <div className="ui-set-foot">{props.navFoot}</div>
+          )}
         </nav>
         <div className="ui-set-body">
           <div className="ui-set-col">

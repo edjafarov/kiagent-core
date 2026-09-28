@@ -23,6 +23,8 @@ export interface SettingsPaneDef {
 export function SettingsPage(props: {
   panes: readonly SettingsPaneDef[];
   pane?: string;
+  /** Pinned under the pane list (the product's Log out). */
+  navFoot?: React.ReactNode;
 }): React.ReactElement {
   const { replaceParams } = useView();
   const active =
@@ -33,6 +35,7 @@ export function SettingsPage(props: {
       active={active.key}
       onSelect={(key) => replaceParams({ pane: key })}
       title={active.ownTitle ? undefined : active.label}
+      navFoot={props.navFoot}
     >
       {active.render()}
     </SettingsLayout>

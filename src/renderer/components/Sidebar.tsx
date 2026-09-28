@@ -5,7 +5,7 @@ import { ICON_NAMES } from '@shared/web-ui/icon-sprite';
 import { contributedNavRows } from '@renderer/components/contributed-nav';
 import { BracketMark } from '@shared/web-ui/components';
 import { NavItem, SidebarFrame, Status } from '@shared/web-ui/ui';
-import { AccountMenu } from '@renderer/components/AccountMenu';
+import { AccountRow } from '@renderer/components/AccountRow';
 import type { AppState } from '@shared/contracts';
 
 // Narrow selector (moved from TopBar): re-render only when a derived number
@@ -70,10 +70,11 @@ export function Sidebar(): React.ReactElement {
             </span>
           )}
           {identity && (
-            <AccountMenu
+            <AccountRow
               identity={identity}
               collapsed={false}
-              onOpenSettings={() => openSettings()}
+              active={view === 'settings'}
+              onOpenSettings={() => openSettings('account')}
             />
           )}
         </>

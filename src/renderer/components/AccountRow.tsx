@@ -1,89 +1,43 @@
-import React, { useRef, useState } from 'react';
+import React from 'react';
 import type { Identity } from '@shared/contracts';
-import { Avatar, IconButton, Menu, type MenuEntry } from '@shared/web-ui/ui';
+import { Avatar, cx } from '@shared/web-ui/ui';
+import { Icon } from '@shared/web-ui/icon-sprite';
 
 /**
- * The account row in the sidebar foot: avatar and name open the account
- * menu, the gear opens Settings directly. The menu always starts with
- * Settings; a build adds its own entries after it (the KIAgent product adds
- * Log out) and may show a footer line (e.g. a sign-out error).
+ * The account row in the sidebar foot: avatar, name and a gear drawn as one
+ * button that opens Settings. It stays highlighted while Settings is open.
+ * Signing out lives in Settings (a build adds it to the pane list's foot).
  *
- * Not shadowed: both builds' `AccountMenu` wrap this.
+ * Not shadowed: both builds' sidebars render it.
  */
 export interface AccountRowProps {
   identity: Identity;
   collapsed: boolean;
   onOpenSettings: () => void;
-  /** Entries after Settings. */
-  extraItems?: readonly MenuEntry[];
-  /** A line under the menu items. */
-  footer?: React.ReactNode;
-  /** Called when the menu opens (e.g. to drop a stale error). */
-  onOpen?: () => void;
+  /** Settings is the current page. */
+  active?: boolean;
 }
 
 export function AccountRow(props: AccountRowProps): React.ReactElement {
-  const {
-    identity,
-    collapsed,
-    onOpenSettings,
-    extraItems = [],
-    footer,
-    onOpen,
-  } = props;
-  const [open, setOpen] = useState(false);
-  const whoRef = useRef<HTMLButtonElement>(null);
+  const { identity, collapsed, onOpenSettings, active = false } = props;
   const primary = identity.name || identity.emails[0] || '—';
   const email = identity.emails[0];
 
   return (
-    <div className="ui-acct">
-      <button
-        ref={whoRef}
-        type="button"
-        className="ui-acct-who"
-        aria-label="Account menu"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => {
-          if (!open) onOpen?.();
-          setOpen(!open);
-        }}
-      >
-        <Avatar
-          name={identity.name || email || '?'}
-          imageUrl={identity.avatarUrl}
-        />
-        {!collapsed && <span className="ui-acct-name">{primary}</span>}
-      </button>
-      <IconButton
-        icon="settings"
-        label="Settings"
-        onClick={() => onOpenSettings()}
+    <button
+      type="button"
+      className={cx('ui-acct', active && 'is-active')}
+      aria-label={`Settings — ${primary}`}
+      aria-current={active ? 'page' : undefined}
+      title={collapsed ? 'Settings' : undefined}
+      onClick={() => onOpenSettings()}
+    >
+      <Avatar
+        name={identity.name || email || '?'}
+        imageUrl={identity.avatarUrl}
       />
-      <Menu
-        open={open}
-        anchorRef={whoRef}
-        onClose={() => setOpen(false)}
-        aria-label="Account"
-        placement="top-start"
-        header={
-          <>
-            <div className="ui-acct-hn">{primary}</div>
-            {email && <div className="ui-acct-he">{email}</div>}
-          </>
-        }
-        items={[
-          {
-            key: 'settings',
-            label: 'Settings',
-            icon: 'settings',
-            onSelect: () => onOpenSettings(),
-          },
-          ...extraItems,
-        ]}
-        footer={footer}
-      />
-    </div>
+      {!collapsed && <span className="ui-acct-name">{primary}</span>}
+      {!collapsed && <Icon name="settings" size={16} />}
+    </button>
   );
 }

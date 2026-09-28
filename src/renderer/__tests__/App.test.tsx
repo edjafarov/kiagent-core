@@ -45,7 +45,7 @@ jest.mock('@renderer/screen-registry', () => {
     }, []);
     return R.createElement(
       'div',
-      { 'data-testid': 'screen-settings', 'data-pane': p.pane ?? 'account' },
+      { 'data-testid': 'screen-settings', 'data-pane': p.pane ?? '(none)' },
       R.createElement(
         'button',
         { onClick: () => replaceParams({ pane: 'advanced' }) },
@@ -104,7 +104,7 @@ beforeEach(() => {
 
 /** Opens Settings the way a user does from the sidebar: the gear. */
 function openSettingsPage(): void {
-  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Settings — / }));
 }
 
 describe('App shell', () => {
@@ -128,15 +128,20 @@ describe('App shell', () => {
     expect(sourcesMounts).toBe(2);
   });
 
-  it('opens Settings as a page from the account menu and the gear', () => {
+  it('opens Settings on the Account pane from the account row', () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
-    expect(screen.getByTestId('screen-settings')).toBeInTheDocument();
+    openSettingsPage();
+    const page = screen.getByTestId('screen-settings');
+    expect(page).toHaveAttribute('data-pane', 'account');
     expect(screen.queryByTestId('screen-sources')).not.toBeInTheDocument();
+    // Even after another pane was used, the row lands on Account.
+    fireEvent.click(screen.getByRole('button', { name: 'to-advanced' }));
     fireEvent.click(screen.getByRole('button', { name: 'Outbox' }));
     openSettingsPage();
-    expect(screen.getByTestId('screen-settings')).toBeInTheDocument();
+    expect(screen.getByTestId('screen-settings')).toHaveAttribute(
+      'data-pane',
+      'account',
+    );
   });
 
   it('gives host views the app top bar and page views none', () => {
