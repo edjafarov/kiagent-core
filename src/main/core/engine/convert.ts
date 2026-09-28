@@ -1,5 +1,7 @@
 import type { DocumentInput } from '@shared/contracts';
 
+import { HAS_TEXT_CHARS } from '@main/workers/convert/outcome';
+
 import type { LogSink } from './engine';
 
 /**
@@ -85,11 +87,6 @@ export function convertibleKind(
   return null;
 }
 
-/** Below this many non-whitespace characters a PDF counts as text-poor (a
- *  scan) and is left for OCR. Same bar as the vision worker's
- *  OCR_SUFFICIENT_CHARS, so the chain has one definition of "enough text". */
-export const TEXT_POOR_CHARS = 200;
-
 /** Bytes → markdown. `null` means text-poor (a scan, or nothing to parse);
  *  a throw means the file could not be parsed. */
 export async function parse(
@@ -108,8 +105,11 @@ export async function parse(
       // underlying ArrayBuffer — every small PDF failed "bad XRef entry".
       const out = await pdfParse(new Uint8Array(buf) as Buffer);
       const text = out.text?.trim() ?? '';
-      // Text-poor PDF (a scan): leave it for the vision worker.
-      return text.replace(/\s+/g, '').length >= TEXT_POOR_CHARS ? text : null;
+      // No real text layer (a scan): leave it for the vision worker. The bar
+      // is the chain's "has real text" (HAS_TEXT_CHARS), not OCR's 200-char
+      // sufficiency bar: a short real PDF (a receipt, a ticket) must keep
+      // its text, since OCR is off by default and absent on Windows.
+      return text.replace(/\s+/g, '').length >= HAS_TEXT_CHARS ? text : null;
     }
     case 'docx': {
       const mammoth = await import('mammoth');

@@ -202,6 +202,19 @@ describe('convert worker', () => {
     expect(s.enriched[0].metadata.conversion.status).toBe('text-poor');
   });
 
+  it('parses a short real PDF to ok, keeping its text', async () => {
+    const pdf = doc({
+      title: 'receipt.pdf',
+      metadata: { mime: 'application/pdf', filename: 'receipt.pdf' },
+    });
+    const s = fakeSession(async () =>
+      tinyPdf('Total due: EUR 40.00, paid by card'),
+    );
+    expect(await worker.work(change(pdf), s)).toBe('done');
+    expect(s.enriched[0].markdown).toContain('EUR 40.00');
+    expect(s.enriched[0].metadata.conversion.status).toBe('ok');
+  });
+
   it('parses a real PDF with a real text layer to ok', async () => {
     const pdf = doc({
       title: 'offer.pdf',

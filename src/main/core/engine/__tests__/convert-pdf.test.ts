@@ -43,17 +43,32 @@ describe('converter: pdf', () => {
     expect(out.markdown).toContain('kiasmokepdf');
   });
 
-  it('leaves a text-poor PDF (under TEXT_POOR_CHARS) markdown-null for OCR', async () => {
+  it('keeps the text of a short real PDF (a receipt, a one-liner)', async () => {
+    const out = await createConverter({ log: jest.fn() })({
+      externalId: 'receipt.pdf',
+      type: 'file',
+      title: 'receipt.pdf',
+      markdown: null,
+      binary: {
+        // 42 non-space chars, like the release smoke fixture: under OCR's
+        // 200-char bar, but a real text layer that OCR may never reach.
+        bytes: tinyPdf('The marker word for pdf documents is kiasmokepdf.'),
+        mime: 'application/pdf',
+        filename: 'receipt.pdf',
+      },
+      metadata: {},
+    } as never);
+    expect(out.markdown).toContain('kiasmokepdf');
+  });
+
+  it('leaves a PDF with no real text layer markdown-null for OCR', async () => {
     const out = await createConverter({ log: jest.fn() })({
       externalId: 'scan.pdf',
       type: 'file',
       title: 'scan.pdf',
       markdown: null,
       binary: {
-        // 60+ chars: passed the old 32-char bar, still text-poor at 200.
-        bytes: tinyPdf(
-          'Scanned by OfficeJet 4650 on 2026-08-25, page 1 of 3, batch 17',
-        ),
+        bytes: tinyPdf('Page 1 of 3'),
         mime: 'application/pdf',
         filename: 'scan.pdf',
       },

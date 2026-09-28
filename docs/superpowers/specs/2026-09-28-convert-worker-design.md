@@ -124,9 +124,12 @@ Supersedes the sections above where they differ.
   vision (it would get the same null).
 - **Scheduling:** `schedule: {every: '5m'}`, attached via `boot.attachWorker`
   (live tail + ungated re-drive). No new contract.
-- **One text-poor threshold:** `TEXT_POOR_CHARS = 200` non-whitespace chars
-  (= vision's `OCR_SUFFICIENT_CHARS`) for PDFs, in `parse()` itself, so the
-  commit path and the worker agree.
+- **One text-poor threshold:** a PDF is text-poor below `HAS_TEXT_CHARS`
+  (16) non-whitespace chars, in `parse()` itself, so the commit path and the
+  worker agree. (v0.97.0 used 200, vision's `OCR_SUFFICIENT_CHARS`, and
+  dropped the text of every short real PDF: OCR is off by default and has no
+  provider on Windows, so a receipt stayed unsearchable. Fixed in v0.97.1; a
+  scan with a short printed header is not OCR'd, as before v0.97.)
 - **Vision PDF gate mirrored in `PENDING_VISUAL_WHERE`** (partial index is
   rebuilt on SQL-text change; no migration).
 - **Gmail:** `attachmentId` removed from attachment metadata (it rotates and
