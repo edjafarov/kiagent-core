@@ -157,6 +157,9 @@ export interface Credentials {
    *  time. Absent on blobs written before this field existed — treat
    *  undefined as "unknown", never as "missing". */
   scope?: string;
+  /** An opaque secret payload owned by an extension — for example a
+   *  third-party tool's credential file, stored verbatim. */
+  secret?: string;
 }
 
 export interface Identity {

@@ -46,6 +46,7 @@ export interface MainProcessApi {
   vault: {
     load(accountId: AccountId): Promise<Credentials | null>;
     save(accountId: AccountId, creds: Credentials): Promise<void>;
+    delete(accountId: AccountId): Promise<void>;
   };
   localFolders: {
     roots(): Promise<Array<{ accountId: string; roots: string[] }>>;
@@ -211,6 +212,7 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
     vault: {
       load: (accountId) => deps.store.vault.load(accountId),
       save: (accountId, creds) => deps.store.vault.save(accountId, creds),
+      delete: (accountId) => deps.store.vault.delete(accountId),
     },
     localFolders: {
       roots: async () => {

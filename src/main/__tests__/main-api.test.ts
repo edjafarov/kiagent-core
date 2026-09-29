@@ -865,3 +865,34 @@ describe('buildMainApi busy', () => {
     expect(busy.get().busy).toBe(true);
   });
 });
+
+describe('buildMainApi vault', () => {
+  function build(store: CoreStore) {
+    return buildMainApi({
+      store,
+      mcp: stubMcp().mcp,
+      app: stubApp(),
+      dataDir: '/fake/data',
+      tray: stubTray().tray,
+      ui: { openWindow: () => {} },
+      outbound: stubOutbound(true).outbound,
+    });
+  }
+
+  it('delete passes through to the store', async () => {
+    const deleted: unknown[] = [];
+    const { store } = stubStore();
+    (store.vault as { delete: (id: unknown) => Promise<void> }).delete =
+      async (id) => {
+        deleted.push(id);
+      };
+    await build(store).vault.delete('ext:x/y' as never);
+    expect(deleted).toEqual(['ext:x/y']);
+  });
+
+  it('save carries an opaque secret', async () => {
+    const { store, vaultSaveArgs } = stubStore();
+    await build(store).vault.save('ext:x/y' as never, { secret: '{"a":1}' });
+    expect(vaultSaveArgs).toEqual([['ext:x/y', { secret: '{"a":1}' }]]);
+  });
+});
