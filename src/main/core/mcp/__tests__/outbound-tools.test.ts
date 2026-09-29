@@ -216,6 +216,20 @@ describe('outbound MCP tools', () => {
     expect((await store.outbox.get(local.draft_id))?.status).toBe('draft');
   });
 
+  it("'agent' transport never receives a confirm link — only the Outbox page can send", async () => {
+    const r = (await runWithTransport('agent', () =>
+      call('draft_reply', { document_id: docId, body: 'Thanks!' }),
+    )) as { draft_id: string; confirm_url?: string; instruction: string };
+    expect(r.confirm_url).toBeUndefined();
+    expect(JSON.stringify(r)).not.toContain('/outbox/confirm/');
+    expect(r.instruction).toMatch(/Outbox/);
+    const listing = (await runWithTransport('agent', () =>
+      call('list_outbox', {}),
+    )) as Array<{ draft_id: string; confirm_url: string | null }>;
+    expect(listing.length).toBeGreaterThan(0);
+    expect(listing.every((x) => x.confirm_url === null)).toBe(true);
+  });
+
   it("'local' drafting is unchanged", async () => {
     const r = (await call('draft_reply', {
       document_id: docId,

@@ -312,6 +312,19 @@ export function createOutboundService(deps: {
           `draft instead. Never call send_draft without a clear yes.`,
       };
     }
+    if (currentTransport() === 'agent') {
+      // A confirm link is a send capability (a POST to it sends), so a
+      // hosted agent never holds one: the user sends from the Outbox page.
+      return {
+        draft_id: row.id,
+        mode,
+        recipient_display: row.recipientDisplay,
+        warnings,
+        instruction:
+          `Draft created — nothing has been sent. It waits in the user's ` +
+          `Outbox in KIAgent, where they review and send it.`,
+      };
+    }
     const url = await confirmUrl(row.id, mode);
     if (mode === 'review') {
       return {
@@ -696,7 +709,7 @@ export function createOutboundService(deps: {
       const out: OutboxListItem[] = [];
       for (const row of rows) {
         let url: string | null = null;
-        if (row.status === 'draft') {
+        if (row.status === 'draft' && currentTransport() !== 'agent') {
           url = buildConfirmUrl(secret as Buffer, row.id, row.confirmMode);
         }
         out.push({
