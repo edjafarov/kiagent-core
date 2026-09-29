@@ -43,31 +43,53 @@ the legacy-undeclared rule all come for free.
 
 - `config.folderRoots: {id, name}[]`; `id` = the mailbox PATH as LIST
   returns it (INBOX normalised to `INBOX`), `name` = the path for display.
-- A root covers its SUBTREE: a mailbox is in scope when its path equals a
-  root id or starts with `rootId + delimiter`. New subfolders the user
-  creates later under a ticked folder are picked up automatically.
-- Never synced even inside a ticked subtree: `\Noselect`, `\NonExistent`,
-  and `\Trash` / `\Junk` / `\Drafts` UNLESS that exact mailbox is itself a
-  root (explicit opt-in, like Gmail's Trash/Spam buckets).
-- Gmail rule: if an in-scope mailbox carries `\All`, the resolved set is
-  that `\All` mailbox plus any explicitly-rooted `\Trash`/`\Junk`; every
-  other in-scope mailbox is dropped (it is a label view of All Mail).
-- No `folderRoots` key (every existing account = legacy/undeclared):
-  resolution is EXACTLY today's `resolveMailboxes`. Engine §5.3 already
-  skips reconcile for an undeclared folder-scoped account until its first
-  Save; that is the accepted MS365 precedent.
-- Default selection (connect, and the legacy picker's preselection): today's
+- **Special folders** — Trash, Junk, Drafts — are recognised by SPECIAL-USE
+  (`\Trash \Junk \Drafts`) OR by name (mirroring `SENT_NAMES`: Trash,
+  Deleted Items/Messages, Junk, Spam, Bulk Mail, Drafts). They are NEVER part
+  of the folder tree and never covered by a parent root. Trash and Junk are
+  offered as separate top-level OPT-IN rows ("Trash", "Junk"); Drafts is
+  never synced. This is the only way to represent the opt-in with the
+  picker's covering-root semantics (contracts.ts:483; the renderer shows a
+  covered descendant checked-but-inert).
+- **Two picker shapes, one resolver:**
+  - *All-Mail server* (a `\All` mailbox exists — Gmail): the picker offers
+    exactly `All Mail` (required) + the Trash/Junk opt-ins, mirroring the
+    Gmail source's bucket model (gmail-source.ts:117). Label folders are
+    not offered, so the Gmail duplicate case cannot be selected.
+  - *Folder server* (everything else): the real mailbox tree (via
+    `delimiter`/`parentPath`) minus special folders, + the Trash/Junk
+    opt-ins. A root covers its SUBTREE: a mailbox is in scope when its path
+    equals a root id or starts with `rootId + delimiter`.
+- Never synced: `\Noselect` / `\NonExistent` mailboxes (a `\Noselect`
+  parent is shown in the tree as a container and, as a root, covers its
+  children).
+- **Defaults** (connect, and the legacy picker preselection): today's
   `resolveMailboxes` paths, plus the `\Archive` special-use mailbox when
-  there is no `\All`.
-- A root whose path no longer exists resolves to nothing (no throw). If the
-  whole resolved set is empty, pull/reconcile throw as today (so reconcile
-  can never mass-archive off an empty listing).
+  there is no `\All`. NOTE: on `INBOX.`-namespace servers (Courier/cPanel)
+  the `INBOX` root therefore covers every user folder (minus specials) —
+  that is intended; indexing filed mail is the point of this change.
+- **Legacy accounts** (no `folderRoots` key — every existing IMAP account):
+  resolution is EXACTLY today's `resolveMailboxes`. Consequence, stated
+  plainly: flipping `folderScope: true` makes them *undeclared*, and engine
+  §5.3 then SKIPS reconcile for them until the user's first Save — upstream
+  deletions stop being archived for those accounts until then (unlike MS365,
+  legacy IMAP did reconcile). Accepted under the no-backward-compat rule;
+  the Tracked folders card already reads "Default folders — Manage to
+  change" for them (TrackedFolders.tsx:299).
+- A root whose path no longer exists resolves to nothing (no throw). An
+  empty resolved set makes pull/reconcile throw as today (reconcile can
+  never mass-archive off an empty listing).
+- Every document is stamped `scopeRootId` = the root that covers its
+  mailbox (message AND attachments), so the store's folder-scoped
+  "unattributed row" warning (write-tx.ts:615) never fires. Stamps are
+  bookkeeping only; archiving uses `archiveRefs`.
 
 One pure module, `scope.ts`, owns: `rootsOf(config)` (null = undeclared),
-`resolveScopedMailboxes(folders, roots|null)`, `defaultRoots(folders)`,
-`pickerTree(folders)` (roots/children/expand). `pull`, `reconcile`,
-`connect` and `manageFolders` all call `resolveScopedMailboxes`; nothing
-else decides which mailboxes are synced.
+`isSpecial(folder)`, `resolveScopedMailboxes(folders, roots|null)` →
+`{path, rootId}[]`, `defaultRoots(folders)`, `pickerModel(folders)`
+(roots/children/expand). `pull`, `reconcile`, `connect` and `manageFolders`
+all call `resolveScopedMailboxes`; nothing else decides which mailboxes are
+synced.
 
 `client.ts#listFolders` additionally returns `delimiter` and `parentPath`
 (already on imapflow's ListResponse); `flags` already carries
@@ -75,53 +97,57 @@ else decides which mailboxes are synced.
 
 ### connect()
 
-After the credential check (the client is closed first — the picker can sit
-open for minutes), open `auth.pickFolders({purpose:'connect', …})` with the
-defaults preselected and their ancestors in `expand`, tree callbacks served
-from the one folder list already fetched. Store `folderRoots` from the
-answer. Cancelling the picker cancels the connect (same as local-folder).
+NO picker (both reviews, blocking): IMAP has no `reauthenticate`, so
+Reconnect after an expired app-password runs `connect()` again; a picker
+there sets `usedPicker` and bypasses the engine's scope-preservation guard
+(engine.ts:857-876), resetting the user's selection while the cursor
+survives. Like Gmail, connect writes `folderRoots = defaultRoots(folders)`;
+the engine then preserves an existing account's scope (or its legacy
+absence) on re-add/reconnect. Manage folders is the only picker entry.
 
 ### manageFolders(session, channel)
 
-1. Connect with stored credentials, list folders once, close before the
-   picker opens.
-2. Picker: `purpose:'manage'`, preselected = current roots (legacy: the
-   defaults), `expand` = their ancestors, `note` = "Mail in folders you
-   untick is removed from kia. Trash, Junk and Drafts inside a ticked folder
-   are skipped unless you tick them on their own."
-3. `before` = resolve(prev roots | legacy) ∪ keys of the cursor;
-   `after` = resolve(next roots). `removed = before \ after`.
-4. For each removed mailbox: if it still exists, reconnect and `listUids`
-   + `status` → `archiveRefs` with `buildExternalId(path, uidValidity, uid)`,
-   type `email.message` (attachments cascade — the store archives live
-   children with their parent). If it no longer exists, use the cursor
-   entry's `uidValidity` × `1..lastUid` (unknown refs are ignored).
-5. Return `{config: {...config, folderRoots}, cursor: cursor minus removed
-   entries, archiveScopeRootIds: [], archiveRefs}`. IMAP documents carry no
-   `scope_root_id`; archiveRefs is the exact per-document mechanism the
-   contract provides for this (as MS365 uses it). `res.archived > 0` then
-   earns the engine's `full` reconcile allowance, as intended.
-6. Empty picker answer or empty `after` → throw a user-facing error; nothing
-   is written.
+1. Connect with stored credentials, list folders once, close BEFORE the
+   picker opens; no network after it.
+2. Picker (`purpose:'manage'`, `multiSelect`): the model above; preselected
+   = current roots (legacy: the defaults), `expand` = their ancestors,
+   `note` = "Mail in folders you untick is removed from kia."
+3. Validate: at least one non-special root (All Mail on an All-Mail
+   server), else throw a user-facing error; nothing is written.
+4. `before` = keys of the cursor; `after` = resolve(next roots) paths.
+   `removed = before \ after`.
+5. `archiveRefs` = for each removed mailbox, its cursor generation
+   `uidValidity × 1..lastUid` as `email.message` refs (the same cleanup
+   `syncMailboxOnce` already does on a UIDVALIDITY reset; unknown refs are
+   ignored; attachments cascade with their parent). Cursor-derived, not
+   `listUids`, so mail indexed and since moved out of the folder is covered
+   too, and Save cannot fail on a second connection.
+6. Return `{config: {...config, folderRoots}, cursor: cursor minus removed
+   entries, archiveScopeRootIds: [], archiveRefs}`. `res.archived > 0` earns
+   the engine's `full` reconcile allowance as intended.
 
 ### pull()
 
-Unchanged except: mailboxes come from `resolveScopedMailboxes`; and a
-mailbox with NO cursor entry on a returning account (a newly ticked folder)
-syncs with phase `backfill` and `estimateTotal = status.exists`, so the
-progress bar shows its import instead of a silent "live" ingest. Cursor
-entries for mailboxes no longer resolved are left alone (manageFolders
-already removed the ones the user unticked).
+- Mailboxes come from `resolveScopedMailboxes`, and each item carries its
+  `rootId` for the stamp.
+- The live loop re-LISTs folders every 15 polls (~15 min) and re-resolves:
+  a newly created subfolder under a ticked folder is picked up; a mailbox
+  that disappeared upstream simply stops being polled (reconcile archives
+  its mail).
+- A mailbox with NO cursor entry on a returning account (newly ticked or
+  newly discovered) syncs with phase `backfill` and
+  `estimateTotal = status.exists`, so the import shows progress.
 
 ### reconcile()
 
-Lists only `resolveScopedMailboxes` mailboxes. (Engine skips it for legacy
-accounts; for declared accounts, anything outside the scope that was not
-archived at Save is caught here, under the normal breaker.)
+Lists only `resolveScopedMailboxes` mailboxes. For declared accounts,
+anything outside the scope not archived at Save is caught here under the
+normal breaker.
 
 ## Out of scope
 
-- X-GM-MSGID dedupe (the `\All` rule removes the Gmail duplication case).
+- X-GM-MSGID dedupe (All-Mail servers are offered All Mail + opt-ins only,
+  so overlapping labels cannot be selected).
 - Per-folder counts in the picker (`count` omitted — STATUS per node is slow
   on big servers).
 - Renamed folders: a renamed ticked folder drops out of scope (its mail is
@@ -133,21 +159,25 @@ archived at Save is caught here, under the normal breaker.)
 1. Legacy config (no `folderRoots`) resolves byte-for-byte as
    `resolveMailboxes` today — same list, same order.
 2. Root covers its subtree using each mailbox's delimiter (`/` and `.`);
-   `INBOX` root matching is case-insensitive.
-3. `\Trash`/`\Junk`/`\Drafts` inside a ticked subtree are skipped; ticked
-   on their own they are synced.
-4. Gmail `\All` rule: All Mail + label folders ticked → only All Mail
-   (+ explicitly ticked Spam/Trash).
+   `INBOX` matching is case-insensitive.
+3. Special folders (by SPECIAL-USE and by name) never appear in the tree,
+   are never covered by a parent root, and are synced only when their
+   top-level opt-in row is ticked; Drafts never.
+4. All-Mail server: picker roots are exactly All Mail + Trash/Junk opt-ins;
+   no label folders.
 5. `\Noselect` parent as a root covers its children and is never itself
    `status`-ed; `\NonExistent` never appears.
 6. Root path that no longer exists → excluded, no throw; all roots gone →
-   pull and reconcile throw (no empty listing).
-7. manageFolders narrowing → `archiveRefs` = exactly the removed mailboxes'
-   present UIDs; cursor drops exactly those entries; config carries the new
-   roots.
+   pull and reconcile throw.
+7. manageFolders narrowing → `archiveRefs` = the removed mailboxes' cursor
+   generations (uidValidity × 1..lastUid); cursor drops exactly those
+   entries; no network call after the picker resolves.
 8. manageFolders widening → no `archiveRefs`; next pull syncs the new
-   mailbox with phase `backfill`.
-9. manageFolders on a legacy account → picker preselects the defaults.
-10. connect → picker opens with defaults preselected and `expand` =
-    their ancestors; `folderRoots` stored; cancel rejects connect.
-11. Reconcile yields refs only for resolved mailboxes.
+   mailbox with phase `backfill` and an estimate.
+9. manageFolders legacy account → picker preselects the defaults.
+10. connect → no picker; `folderRoots` = defaults.
+11. Live loop re-LIST: a subfolder created under a ticked root after the
+    session started is synced within the refresh interval.
+12. Every emitted document (message + attachments) carries `scopeRootId` =
+    the covering root.
+13. Reconcile yields refs only for resolved mailboxes.
