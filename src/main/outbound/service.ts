@@ -224,10 +224,19 @@ export function createOutboundService(deps: {
     baseFor();
   };
 
-  const createdViaNow = (): 'mcp-local' | 'mcp-remote' =>
-    currentTransport() === 'remote' ? 'mcp-remote' : 'mcp-local';
+  const createdViaNow = (): 'mcp-local' | 'mcp-remote' | 'mcp-agent' => {
+    const t = currentTransport();
+    return t === 'remote'
+      ? 'mcp-remote'
+      : t === 'agent'
+        ? 'mcp-agent'
+        : 'mcp-local';
+  };
 
   const modeFor = (account: Account): ConfirmMode => {
+    // A hosted agent's drafts always wait for the page, whatever the
+    // account or default says — chat confirmation would let it send.
+    if (currentTransport() === 'agent') return 'review';
     const cfg = (account.config as { outbound?: { mode?: unknown } }).outbound;
     if (cfg?.mode === 'review' || cfg?.mode === 'link') return cfg.mode;
     // Optional access on purpose: partial Prefs fakes (tests) and pre-Task-9
@@ -714,6 +723,12 @@ export function createOutboundService(deps: {
       // created it, and the user's agreement is observed by the model
       // wherever the conversation happens. The gates that matter here are
       // the live chat opt-in and the per-account rate limit, both below.
+      if (currentTransport() === 'agent') {
+        throw new Error(
+          "send_draft: this draft needs the user's confirmation on the " +
+            'Outbox review page — it can never send.',
+        );
+      }
       await deps.store.outbox.expireOverdue();
       const row = await deps.store.outbox.get(draftId);
       if (!row) throw new Error(`send_draft: unknown draft '${draftId}'`);

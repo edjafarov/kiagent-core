@@ -674,7 +674,7 @@ export interface OutboxRow {
   status: OutboxStatus;
   error: string | null;
   externalMessageId: string | null;
-  createdVia: 'mcp-local' | 'mcp-remote' | 'panel';
+  createdVia: 'mcp-local' | 'mcp-remote' | 'mcp-agent' | 'panel';
   /** The drafting MCP client's self-reported name (`clientInfo.name`);
    *  null for panel re-drafts, rows older than schema v8, or an app that
    *  never named itself. */

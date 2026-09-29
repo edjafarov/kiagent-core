@@ -9,7 +9,9 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-export type McpTransport = 'local' | 'remote';
+// 'agent' is a hosted assistant acting for the user: it may draft, but every
+// draft waits for the user's page confirmation and it can never send.
+export type McpTransport = 'local' | 'remote' | 'agent';
 
 const als = new AsyncLocalStorage<McpTransport>();
 

@@ -14,6 +14,7 @@ import { openDb } from '../../../db/app-db';
 import { openStore, type CoreStore } from '../../store/store';
 import { createOutboundService } from '../../../outbound/service';
 import { buildBuiltinTools } from '../tools';
+import { runWithTransport } from '../transport-context';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -189,5 +190,39 @@ describe('outbound MCP tools', () => {
     await expect(t!.call({ draft_id: 'x' })).rejects.toThrow(
       /unavailable on this transport/i,
     );
+  });
+  it("'agent' transport freezes drafts to review even when chat is the default", async () => {
+    defaultMode = 'chat';
+    const r = (await runWithTransport('agent', () =>
+      call('draft_reply', { document_id: docId, body: 'Thanks!' }),
+    )) as { draft_id: string };
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.confirmMode).toBe('review');
+    expect(row?.createdVia).toBe('mcp-agent');
+  });
+
+  it("'agent' transport never sends, not even a chat-mode draft made locally", async () => {
+    defaultMode = 'chat';
+    const local = (await call('draft_reply', {
+      document_id: docId,
+      body: 'hi',
+    })) as { draft_id: string };
+    expect((await store.outbox.get(local.draft_id))?.confirmMode).toBe('chat');
+    await expect(
+      runWithTransport('agent', () =>
+        call('send_draft', { draft_id: local.draft_id }),
+      ),
+    ).rejects.toThrow(/needs the user's confirmation/);
+    expect((await store.outbox.get(local.draft_id))?.status).toBe('draft');
+  });
+
+  it("'local' drafting is unchanged", async () => {
+    const r = (await call('draft_reply', {
+      document_id: docId,
+      body: 'x',
+    })) as {
+      draft_id: string;
+    };
+    expect((await store.outbox.get(r.draft_id))?.createdVia).toBe('mcp-local');
   });
 });

@@ -294,7 +294,7 @@ export interface OutboxPanelRow {
   /** The drafting MCP client's name; null for panel re-drafts and rows
    *  older than schema v8. */
   createdBy: string | null;
-  createdVia: 'mcp-local' | 'mcp-remote' | 'panel';
+  createdVia: 'mcp-local' | 'mcp-remote' | 'mcp-agent' | 'panel';
 }
 
 /** One draft in full, for the in-app review. */
