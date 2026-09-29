@@ -147,6 +147,16 @@ export class LaneClosedError extends Error {
 // `'../inference'` keep compiling unchanged.
 export { ModelChangedError };
 
+/** What a remote provider throws when it can't serve a call right now
+ *  (disconnected, over budget, busy). The plane answers the call locally
+ *  instead. Callers across RPC discriminate by `name`. */
+export class RemoteUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RemoteUnavailableError';
+  }
+}
+
 /** Normalizes a provider's `complete` result: every provider today returns
  *  a plain string, so it maps to usage-less meta; a provider that opts into
  *  the richer shape (task 3's local provider) is passed through as-is. */
@@ -315,61 +325,88 @@ export function createInference(
     );
   };
 
+  /** Runs `attempt` on the provider `pick(kind, task)` resolves. When that
+   *  is a REMOTE provider and it answers "not now" (an error NAMED
+   *  RemoteUnavailableError — by name, it crosses RPC), the call is retried
+   *  exactly once on the local order, as if it had no task. A local
+   *  failure is never retried anywhere. */
+  const withLocalFallback = async <T>(
+    kind: 'complete' | 'see',
+    task: string | undefined,
+    attempt: (p: InferenceProvider, task: string | undefined) => Promise<T>,
+  ): Promise<T> => {
+    const p = pick(kind, task);
+    try {
+      return await attempt(p, task);
+    } catch (err) {
+      if (!p.remote || (err as Error)?.name !== 'RemoteUnavailableError') {
+        throw err;
+      }
+      logs.log(
+        'inference',
+        'info',
+        `${p.id} can't serve ${task ?? kind} now — answering locally`,
+      );
+      return attempt(pick(kind), undefined);
+    }
+  };
+
   const completeWithMeta: InferencePlane['completeWithMeta'] = async (
     prompt,
     opts,
   ) => {
     const lane = opts?.lane ?? 'interactive';
     gate(lane);
-    const p = pick('complete', opts?.task);
-    checkGeneration(p, 'complete', opts?.generation);
-    const modelId = modelIdOf(p, 'complete');
     const profile: CompletionProfile = opts?.profile ?? 'default';
-    // `expectModelId`: when the caller passed a `generation`, prefer the
-    // FIRST-WRITE-WINS value some `describe('complete')` call recorded for
-    // the current generation (`describedAt`) over the fresh `modelId` just
-    // computed above — as long as a record actually exists and its
-    // generation still matches the one the caller passed (it always will
-    // once `checkGeneration` has passed AND an entry exists, per
-    // `describedAt`'s clear-on-bump invariant; the fallback only matters
-    // when a caller passes a `generation` nothing ever recorded, e.g. one
-    // it never actually got from `describe()`). Recomputing fresh here
-    // would make this field always equal what `handle()` itself resolves
-    // moments later (see `describedAt`'s comment) — forwarding the
-    // RECORDED value is what keeps the provider's own re-check meaningful.
-    const recorded = describedAt.get(describedKey('complete', opts?.task));
-    const expectModelId =
-      opts?.generation !== undefined
-        ? recorded?.generation === opts.generation
-          ? recorded.modelId
-          : modelId
-        : undefined;
-    const raw = await p.handle({
-      kind: 'complete',
-      payload: {
-        prompt,
-        maxTokens: opts?.maxTokens,
+    return withLocalFallback('complete', opts?.task, async (p, task) => {
+      checkGeneration(p, 'complete', opts?.generation);
+      const modelId = modelIdOf(p, 'complete');
+      // `expectModelId`: when the caller passed a `generation`, prefer the
+      // FIRST-WRITE-WINS value some `describe('complete')` call recorded for
+      // the current generation (`describedAt`) over the fresh `modelId` just
+      // computed above — as long as a record actually exists and its
+      // generation still matches the one the caller passed (it always will
+      // once `checkGeneration` has passed AND an entry exists, per
+      // `describedAt`'s clear-on-bump invariant; the fallback only matters
+      // when a caller passes a `generation` nothing ever recorded, e.g. one
+      // it never actually got from `describe()`). Recomputing fresh here
+      // would make this field always equal what `handle()` itself resolves
+      // moments later (see `describedAt`'s comment) — forwarding the
+      // RECORDED value is what keeps the provider's own re-check meaningful.
+      const recorded = describedAt.get(describedKey('complete', task));
+      const expectModelId =
+        opts?.generation !== undefined
+          ? recorded?.generation === opts.generation
+            ? recorded.modelId
+            : modelId
+          : undefined;
+      const raw = await p.handle({
+        kind: 'complete',
+        payload: {
+          prompt,
+          maxTokens: opts?.maxTokens,
+          profile,
+          system: opts?.system,
+          generation: opts?.generation,
+          expectModelId,
+          task: opts?.task,
+          budgetKey: opts?.budgetKey,
+        },
+        lane,
+      });
+      const normalized = normalizeCompletion(raw);
+      return {
+        text: normalized.text,
+        providerId: p.id,
+        // A remote provider learns its model from the call itself.
+        modelId: p.remote ? modelIdOf(p, 'complete') : modelId,
+        generation,
         profile,
-        system: opts?.system,
-        generation: opts?.generation,
-        expectModelId,
-        task: opts?.task,
-        budgetKey: opts?.budgetKey,
-      },
-      lane,
+        promptTokens: normalized.promptTokens,
+        completionTokens: normalized.completionTokens,
+        truncated: normalized.truncated,
+      };
     });
-    const normalized = normalizeCompletion(raw);
-    return {
-      text: normalized.text,
-      providerId: p.id,
-      // A remote provider learns its model from the call itself.
-      modelId: p.remote ? modelIdOf(p, 'complete') : modelId,
-      generation,
-      profile,
-      promptTokens: normalized.promptTokens,
-      completionTokens: normalized.completionTokens,
-      truncated: normalized.truncated,
-    };
   };
 
   const seeWithMeta: InferencePlane['seeWithMeta'] = async (
@@ -379,24 +416,25 @@ export function createInference(
   ) => {
     const lane = opts?.lane ?? 'interactive';
     gate(lane);
-    const p = pick('see', opts?.task);
-    const modelId = modelIdOf(p, 'see');
-    const out = await p.handle({
-      kind: 'see',
-      payload: {
-        image,
-        prompt,
-        mime: opts?.mime,
-        task: opts?.task,
-        budgetKey: opts?.budgetKey,
-      },
-      lane,
+    return withLocalFallback('see', opts?.task, async (p) => {
+      const modelId = modelIdOf(p, 'see');
+      const out = await p.handle({
+        kind: 'see',
+        payload: {
+          image,
+          prompt,
+          mime: opts?.mime,
+          task: opts?.task,
+          budgetKey: opts?.budgetKey,
+        },
+        lane,
+      });
+      return {
+        text: String(out),
+        providerId: p.id,
+        modelId: p.remote ? modelIdOf(p, 'see') : modelId,
+      };
     });
-    return {
-      text: String(out),
-      providerId: p.id,
-      modelId: p.remote ? modelIdOf(p, 'see') : modelId,
-    };
   };
 
   return {

@@ -602,3 +602,145 @@ describe('remote providers and per-task routes', () => {
     ).resolves.toMatchObject({ providerId: 'r', modelId: 'answered-by' });
   });
 });
+
+describe('remote → local fallback', () => {
+  const unavailable = () =>
+    Object.assign(new Error('not now'), { name: 'RemoteUnavailableError' });
+  function setup(
+    o: {
+      remoteHandle?: InferenceProvider['handle'];
+      localHandle?: InferenceProvider['handle'];
+      localModel?: () => string;
+    } = {},
+  ) {
+    const calls: Array<{ id: string; payload: Record<string, unknown> }> = [];
+    const plane = createInference(fakeLogs(), { generationSeed: 1 });
+    const track =
+      (
+        id: string,
+        h?: InferenceProvider['handle'],
+      ): InferenceProvider['handle'] =>
+      async (req) => {
+        calls.push({ id, payload: req.payload as Record<string, unknown> });
+        return h ? h(req) : `${id}:${req.kind}`;
+      };
+    plane.register({
+      id: 'local',
+      supports: ['complete', 'see'],
+      status: () => 'ready',
+      describe: () => ({ modelId: o.localModel?.() ?? 'L' }),
+      handle: track('local', o.localHandle),
+    });
+    const remoteHandle =
+      o.remoteHandle ??
+      (async () => {
+        throw unavailable();
+      });
+    plane.register({
+      id: 'r',
+      remote: true,
+      supports: ['complete', 'see'],
+      status: () => 'ready',
+      describe: () => ({ modelId: 'R' }),
+      handle: track('r', remoteHandle),
+    });
+    plane.setRoute('task.a', 'r');
+    return { plane, calls };
+  }
+
+  it('RemoteUnavailableError → exactly one local retry, and the meta reports local', async () => {
+    const { plane, calls } = setup();
+    await expect(
+      plane.completeWithMeta('p', { task: 'task.a' }),
+    ).resolves.toMatchObject({
+      text: 'local:complete',
+      providerId: 'local',
+      modelId: 'L',
+    });
+    expect(calls.map((c) => c.id)).toEqual(['r', 'local']);
+    await expect(
+      plane.seeWithMeta(new Uint8Array([1]), 'p', { task: 'task.a' }),
+    ).resolves.toEqual({
+      text: 'local:see',
+      providerId: 'local',
+      modelId: 'L',
+    });
+    await expect(plane.complete('p', { task: 'task.a' })).resolves.toBe(
+      'local:complete',
+    );
+  });
+
+  it('the local retry failing propagates its own error (no second retry)', async () => {
+    const { plane, calls } = setup({
+      localHandle: async () => {
+        throw new Error('local broke');
+      },
+    });
+    await expect(plane.complete('p', { task: 'task.a' })).rejects.toThrow(
+      'local broke',
+    );
+    expect(calls.map((c) => c.id)).toEqual(['r', 'local']);
+  });
+
+  it('a local provider error is never retried on a remote', async () => {
+    const { plane, calls } = setup({
+      localHandle: async () => {
+        throw unavailable();
+      },
+    });
+    await expect(plane.complete('p')).rejects.toThrow('not now');
+    expect(calls.map((c) => c.id)).toEqual(['local']);
+  });
+
+  it('another error from a remote propagates', async () => {
+    const { plane, calls } = setup({
+      remoteHandle: async () => {
+        throw new Error('boom');
+      },
+    });
+    await expect(plane.complete('p', { task: 'task.a' })).rejects.toThrow(
+      'boom',
+    );
+    expect(calls.map((c) => c.id)).toEqual(['r']);
+  });
+
+  it("a caller's generation is checked against the answering provider", async () => {
+    let bumpNow: (() => void) | null = null;
+    const plane = createInference(fakeLogs(), { generationSeed: 1 });
+    plane.register(provider('local', ['complete'], 'local'));
+    plane.register({
+      id: 'r',
+      remote: true,
+      supports: ['complete'],
+      status: () => 'ready',
+      onChange: (cb) => {
+        bumpNow = cb;
+        return () => {};
+      },
+      handle: async () => {
+        bumpNow!();
+        throw unavailable();
+      },
+    });
+    plane.setRoute('task.a', 'r');
+    const d = await plane.describe('complete', 'task.a');
+    await expect(
+      plane.complete('p', { task: 'task.a', generation: d!.generation }),
+    ).rejects.toMatchObject({ name: 'ModelChangedError' });
+  });
+
+  it("fallback checks the local provider's own model id", async () => {
+    const { plane, calls } = setup();
+    const plain = await plane.describe('complete');
+    const routed = await plane.describe('complete', 'task.a');
+    expect(routed?.providerId).toBe('r');
+    await plane.complete('p', {
+      task: 'task.a',
+      generation: plain!.generation,
+    });
+    expect(calls[1]).toMatchObject({
+      id: 'local',
+      payload: { expectModelId: 'L' },
+    });
+  });
+});
