@@ -117,6 +117,12 @@ export function createVisionWorker(deps: {
       // Pass 2 — VLM describe (only reachable when a see-provider is ready).
       try {
         const results: PageResult[] = [];
+        // Who described each page: a routed task may be answered remotely
+        // for some pages and locally for others (fallback mid-document).
+        const byModel = new Map<
+          string,
+          { providerId: string; modelId: string; pages: number }
+        >();
         for (let i = 0; i < pages.length; i += 1) {
           // Pass 2 ONLY. Pass 1 (OCR) above deliberately reads the full-size
           // page: transcription accuracy scales with resolution, and the OCR
@@ -126,10 +132,20 @@ export function createVisionWorker(deps: {
           // pixels anyway.
           // eslint-disable-next-line no-await-in-loop
           const page = await downscale(pages[i], pageMime);
-          const description = await session.see(page.bytes, INDEXING_PROMPT, {
+          // eslint-disable-next-line no-await-in-loop
+          const seen = await session.seeWithMeta(page.bytes, INDEXING_PROMPT, {
             mime: page.mime,
+            task: 'vision.describe',
           });
-          results.push({ ocrText: ocr[i], description });
+          results.push({ ocrText: ocr[i], description: seen.text });
+          const key = `${seen.providerId}\u0000${seen.modelId}`;
+          const row = byModel.get(key) ?? {
+            providerId: seen.providerId,
+            modelId: seen.modelId,
+            pages: 0,
+          };
+          row.pages += 1;
+          byModel.set(key, row);
         }
         session.enrich({
           documentId: doc.id,
@@ -138,6 +154,7 @@ export function createVisionWorker(deps: {
             extraction: {
               engine: 'local-ocr+vlm',
               at: new Date().toISOString(),
+              providers: [...byModel.values()],
             },
           },
         });

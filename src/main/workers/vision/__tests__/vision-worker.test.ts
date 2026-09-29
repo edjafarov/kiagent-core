@@ -341,6 +341,7 @@ it('downscales for `see` but hands `read` the FULL-SIZE page', async () => {
   expect(read).toHaveBeenCalledWith(full, { mime: 'image/jpeg' });
   expect(see).toHaveBeenCalledWith(shrunk, expect.any(String), {
     mime: 'image/jpeg',
+    task: 'vision.describe',
   });
 });
 
@@ -364,5 +365,51 @@ it('with no downscaler wired, `see` gets the original bytes (identity fallback)'
 
   expect(see).toHaveBeenCalledWith(full, expect.any(String), {
     mime: 'image/jpeg',
+    task: 'vision.describe',
   });
+});
+
+it("pass 2 passes the task 'vision.describe'", async () => {
+  const opts: unknown[] = [];
+  const session = fakeSession({
+    read: async () => 'thin',
+    seeWithMeta: async (_b, _p, o) => {
+      opts.push(o);
+      return { text: 'd', providerId: 'local', modelId: 'vlm' };
+    },
+  });
+  const worker = createVisionWorker({
+    rasterizer: { pdfToPngs: jest.fn(async () => [new Uint8Array([1])]) },
+    laneOpen: () => true,
+  });
+  await expect(worker.work(change({}), session)).resolves.toBe('done');
+  expect(opts[0]).toMatchObject({ task: 'vision.describe' });
+});
+
+it('mixed providers across pages aggregate into extraction.providers', async () => {
+  let n = 0;
+  const session = fakeSession({
+    read: async () => 'thin',
+    seeWithMeta: async () => {
+      n += 1;
+      return n <= 3
+        ? { text: `r${n}`, providerId: 'r', modelId: 'm1' }
+        : { text: `l${n}`, providerId: 'local', modelId: 'm2' };
+    },
+  });
+  const worker = createVisionWorker({
+    rasterizer: {
+      pdfToPngs: jest.fn(async () =>
+        Array.from({ length: 5 }, (_, i) => new Uint8Array([i])),
+      ),
+    },
+    laneOpen: () => true,
+  });
+  await expect(worker.work(change({}), session)).resolves.toBe('done');
+  const { extraction } = session.enriched[0].metadata;
+  expect(extraction.engine).toBe('local-ocr+vlm');
+  expect(extraction.providers).toEqual([
+    { providerId: 'r', modelId: 'm1', pages: 3 },
+    { providerId: 'local', modelId: 'm2', pages: 2 },
+  ]);
 });
