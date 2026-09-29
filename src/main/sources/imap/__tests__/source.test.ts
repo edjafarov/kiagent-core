@@ -41,6 +41,9 @@ function rfc822(
 interface FakeMailbox {
   path: string;
   specialUse?: string;
+  delimiter?: string;
+  parentPath?: string;
+  flags?: string[];
   uidValidity: number;
   messages: Map<number, string>;
 }
@@ -57,7 +60,9 @@ function makeFakeClient(mailboxes: FakeMailbox[]) {
       return mailboxes.map((m) => ({
         path: m.path,
         specialUse: m.specialUse,
-        flags: [],
+        delimiter: m.delimiter,
+        parentPath: m.parentPath,
+        flags: m.flags ?? [],
       }));
     },
     async status(path: string) {
@@ -181,7 +186,10 @@ describe('createImapSource — connect', () => {
     );
 
     expect(result.identifier).toBe('alice@example.com@imap.example.com');
-    expect(result.config).toEqual(CONFIG);
+    expect(result.config).toEqual({
+      ...CONFIG,
+      folderRoots: [{ id: 'INBOX', name: 'INBOX' }],
+    });
     expect(connectFn).toHaveBeenCalledWith(CONFIG, 'hunter2');
   });
 

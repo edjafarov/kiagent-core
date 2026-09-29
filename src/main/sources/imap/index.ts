@@ -20,5 +20,6 @@ export {
   resolveScopedMailboxes,
   defaultRoots,
   pickerModel,
+  validateSelection,
 } from './scope';
 export type { SpecialKind, ScopedMailbox, PickerModel } from './scope';

@@ -4,6 +4,9 @@ import type {
   Document,
   DocumentInput,
   ExternalRef,
+  FolderNode,
+  FolderScopeUpdate,
+  FolderSelectionChannel,
   PullPhase,
   Session,
   Source,
@@ -11,17 +14,30 @@ import type {
 import { SourceAuthError } from '@shared/source-errors';
 
 import { connectImapClient } from './client';
-import { advanceCursor, chunk, planMailboxSync } from './cursor';
+import {
+  advanceCursor,
+  chunk,
+  generationRefs,
+  planMailboxSync,
+} from './cursor';
 import { describeConnectError } from './errors';
 import { isAutomatedMessage } from './filter';
-import { resolveMailboxes } from './folders';
 import { buildExternalId } from './ids';
 import { attachmentContent, parseImapMessage } from './parse';
+import {
+  defaultRoots,
+  pickerModel,
+  resolveScopedMailboxes,
+  rootsOf,
+  validateSelection,
+} from './scope';
+import type { ScopedMailbox } from './scope';
 import { normalizeAuthor } from '../email-evidence';
 import type {
   ImapAccountConfig,
   ImapClient,
   ImapCursor,
+  ImapFolderInfo,
   ImapMessageItem,
 } from './types';
 
@@ -43,6 +59,11 @@ const BATCH_SIZE = 50;
  * this interval.
  */
 const LIVE_POLL_INTERVAL_MS = 60_000;
+
+/** The live loop re-LISTs the account's folders every N polls (~15 min at
+ *  the default interval) so a folder created under a ticked root is picked
+ *  up without a restart. */
+const RELIST_EVERY_POLLS = 15;
 
 export type ConnectFn = (
   config: ImapAccountConfig,
@@ -68,12 +89,49 @@ function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/** Connect and classify a failure: only a genuine credential rejection is
+ *  auth ('needsReauth'); everything else stays a retryable plain Error. */
+async function openClient(
+  connectFn: ConnectFn,
+  config: ImapAccountConfig,
+  password: string,
+): Promise<ImapClient> {
+  try {
+    return await connectFn(config, password);
+  } catch (e) {
+    // imapflow reports auth failures in a structured field, not the
+    // message (see describeConnectError). But it sets authenticationFailed
+    // on EVERY rejected LOGIN — including temporary server conditions
+    // (RFC 5530 [UNAVAILABLE]/[INUSE]/[LIMIT]: auth backend down, too many
+    // connections). Only a genuine credential rejection is 'needsReauth'
+    // (which nothing auto-retries); the transient codes must keep the
+    // plain-Error path so the retry+supervisor machinery self-heals once
+    // the throttle lifts. imapflow puts the bracketed code on
+    // serverResponseCode (uppercased).
+    const err = e as {
+      authenticationFailed?: boolean;
+      serverResponseCode?: string;
+    };
+    const respCode = err.serverResponseCode?.toUpperCase();
+    const transient =
+      respCode === 'UNAVAILABLE' ||
+      respCode === 'INUSE' ||
+      respCode === 'LIMIT';
+    if (err.authenticationFailed === true && !transient) {
+      throw new SourceAuthError(describeConnectError(e));
+    }
+    throw new Error(describeConnectError(e));
+  }
+}
+
 export interface ImapSourceDeps {
   /** Overridable for tests — fakes the imapflow-backed client entirely. */
   connect?: ConnectFn;
   /** Overridable for tests — avoids real waiting in the live poll loop. */
   sleep?: SleepFn;
   pollIntervalMs?: number;
+  /** Overridable for tests — polls between live-phase folder re-LISTs. */
+  relistEveryPolls?: number;
 }
 
 /**
@@ -87,6 +145,7 @@ export function createImapSource(
   const connectFn = deps.connect ?? connectImapClient;
   const sleepFn = deps.sleep ?? defaultSleep;
   const pollIntervalMs = deps.pollIntervalMs ?? LIVE_POLL_INTERVAL_MS;
+  const relistEveryPolls = deps.relistEveryPolls ?? RELIST_EVERY_POLLS;
   // One raw message kept between fetchBytes calls: a mail's attachments sit
   // next to each other on the feed, so an N-attachment mail downloads once.
   // Safe to reuse — under one UIDVALIDITY a UID's content never changes.
@@ -100,6 +159,7 @@ export function createImapSource(
       auth: 'password',
       multiAccount: true,
       cadence: { every: '15m' },
+      folderScope: true,
     },
 
     async connect(auth: AuthChannel) {
@@ -155,10 +215,11 @@ export function createImapSource(
       const config: ImapAccountConfig = { host, port, secure, user };
 
       let client: ImapClient | undefined;
+      let folders: ImapFolderInfo[];
       try {
         client = await connectFn(config, password);
-        const folders = await client.listFolders();
-        if (resolveMailboxes(folders).length === 0) {
+        folders = await client.listFolders();
+        if (resolveScopedMailboxes(folders, null).length === 0) {
           throw new Error(
             'imap: connected, but found no mail folders to sync (expected INBOX or an All-Mail folder)',
           );
@@ -169,9 +230,77 @@ export function createImapSource(
         await client?.close().catch(() => {});
       }
 
+      // No picker here: Reconnect re-runs connect(), and a picker would reset
+      // the user's selection. Manage folders is the only picker entry.
       return {
         identifier: `${user}@${host}`,
-        config: config as unknown as Record<string, unknown>,
+        config: {
+          ...config,
+          folderRoots: defaultRoots(folders),
+        } as unknown as Record<string, unknown>,
+      };
+    },
+
+    async manageFolders(
+      session: Session,
+      channel: FolderSelectionChannel,
+    ): Promise<FolderScopeUpdate<ImapCursor>> {
+      const config = session.account.config ?? {};
+      const creds = await session.credentials();
+      if (!creds?.password) {
+        throw new SourceAuthError(
+          'imap: account has no stored password credential',
+        );
+      }
+      // One LIST, then close: no network once the picker is open or after.
+      const client = await openClient(
+        connectFn,
+        config as unknown as ImapAccountConfig,
+        creds.password,
+      );
+      let folders: ImapFolderInfo[];
+      try {
+        folders = await client.listFolders();
+      } finally {
+        await client.close().catch(() => {});
+      }
+
+      const model = pickerModel(folders);
+      // Only ids the model offers are preselected: a vanished folder is not.
+      const selectedIds = (rootsOf(config) ?? defaultRoots(folders))
+        .map((r) => r.id)
+        .filter((id) => model.node(id));
+      const picked = await channel.pickFolders({
+        modes: [{ key: 'mail', label: 'Mail' }],
+        multiSelect: true,
+        purpose: 'manage',
+        selected: selectedIds.map((id) => model.node(id) as FolderNode),
+        expand: model.expand(selectedIds),
+        note: 'Mail in folders you untick is removed from kia.',
+        roots: async () => model.roots,
+        children: async (id) => model.children(id),
+      });
+
+      const folderRoots = validateSelection(
+        folders,
+        picked.map((n) => n.id),
+      );
+
+      const after = new Set(
+        resolveScopedMailboxes(folders, folderRoots).map((m) => m.path),
+      );
+      const prev = (session.account.cursor as ImapCursor | null) ?? null;
+      const kept: ImapCursor['mailboxes'] = {};
+      const archiveRefs: ExternalRef[] = [];
+      for (const [path, entry] of Object.entries(prev?.mailboxes ?? {})) {
+        if (after.has(path)) kept[path] = entry;
+        else archiveRefs.push(...generationRefs(path, entry));
+      }
+      return {
+        config: { ...config, folderRoots },
+        cursor: prev ? { mailboxes: kept } : null,
+        archiveScopeRootIds: [],
+        archiveRefs,
       };
     },
 
@@ -185,36 +314,13 @@ export function createImapSource(
         );
       }
 
-      let client: ImapClient;
+      const client = await openClient(connectFn, config, creds.password);
       try {
-        client = await connectFn(config, creds.password);
-      } catch (e) {
-        // imapflow reports auth failures in a structured field, not the
-        // message (see describeConnectError). But it sets authenticationFailed
-        // on EVERY rejected LOGIN — including temporary server conditions
-        // (RFC 5530 [UNAVAILABLE]/[INUSE]/[LIMIT]: auth backend down, too many
-        // connections). Only a genuine credential rejection is 'needsReauth'
-        // (which nothing auto-retries); the transient codes must keep the
-        // plain-Error path so the retry+supervisor machinery self-heals once
-        // the throttle lifts. imapflow puts the bracketed code on
-        // serverResponseCode (uppercased).
-        const err = e as {
-          authenticationFailed?: boolean;
-          serverResponseCode?: string;
-        };
-        const respCode = err.serverResponseCode?.toUpperCase();
-        const transient =
-          respCode === 'UNAVAILABLE' ||
-          respCode === 'INUSE' ||
-          respCode === 'LIMIT';
-        if (err.authenticationFailed === true && !transient) {
-          throw new SourceAuthError(describeConnectError(e));
-        }
-        throw new Error(describeConnectError(e));
-      }
-      try {
-        const folders = await client.listFolders();
-        const mailboxes = resolveMailboxes(folders).map((f) => f.path);
+        const declared = rootsOf(config as unknown as Record<string, unknown>);
+        let mailboxes = resolveScopedMailboxes(
+          await client.listFolders(),
+          declared,
+        );
         if (mailboxes.length === 0) {
           throw new Error(
             'imap: no syncable mailboxes found (expected INBOX/All Mail and/or Sent)',
@@ -222,40 +328,42 @@ export function createImapSource(
         }
 
         let cur: ImapCursor = cursor ?? { mailboxes: {} };
-        const isFreshAccount = cursor === null;
 
-        // A brand-new account backfills; combine every mailbox's message
-        // count into one account-wide progress estimate, matching legacy's
-        // single progress bar (kiagent-ref backfill.ts) rather than one that
-        // resets per mailbox.
-        let combinedTotal: number | undefined;
-        if (isFreshAccount) {
-          combinedTotal = 0;
-          for (const path of mailboxes) {
-            if (session.signal.aborted) return;
-            combinedTotal += (await client.status(path)).exists;
+        // Bring every mailbox forward from its persisted cursor. A mailbox
+        // with NO entry (fresh account, newly ticked or newly discovered
+        // folder) is a backfill; the engine's progress is account-wide, so
+        // its estimate is the sum over ALL resolved mailboxes.
+        const sweep = async function* (): AsyncGenerator<
+          Batch<ImapCursor, ImapMessageItem>
+        > {
+          let total: number | undefined;
+          if (mailboxes.some((m) => !cur.mailboxes[m.path])) {
+            total = 0;
+            for (const m of mailboxes) {
+              if (session.signal.aborted) return;
+              total += (await client.status(m.path)).exists;
+            }
           }
-        }
+          for (const mb of mailboxes) {
+            if (session.signal.aborted) return;
+            for await (const batch of syncMailboxOnce(
+              client,
+              mb,
+              cur,
+              cur.mailboxes[mb.path] ? 'live' : 'backfill',
+              session,
+              total,
+            )) {
+              cur = batch.cursor;
+              yield batch;
+              if (session.signal.aborted) return;
+            }
+          }
+        };
 
-        // First pass: bring every mailbox forward from its persisted cursor.
-        // On a fresh account this IS the backfill; on a returning account
-        // it's a (usually empty) catch-up; a UIDVALIDITY change forces a
-        // from-scratch resync regardless (planMailboxSync.reset).
-        for (const path of mailboxes) {
-          if (session.signal.aborted) return;
-          for await (const batch of syncMailboxOnce(
-            client,
-            path,
-            cur,
-            isFreshAccount ? 'backfill' : 'live',
-            session,
-            combinedTotal,
-          )) {
-            cur = batch.cursor;
-            yield batch;
-            if (session.signal.aborted) return;
-          }
-        }
+        // First pass (a UIDVALIDITY change forces a from-scratch resync of
+        // that mailbox regardless: planMailboxSync.reset).
+        for await (const batch of sweep()) yield batch;
 
         // Heartbeat: one empty batch per session, right after the catch-up
         // pass. This is the ONLY commit a quiet account ever produces — no
@@ -277,23 +385,27 @@ export function createImapSource(
         // Live phase: poll each mailbox for new mail until the engine aborts
         // this session (see LIVE_POLL_INTERVAL_MS doc above for why poll
         // instead of imapflow idle()).
+        let polls = 0;
         for (;;) {
           if (session.signal.aborted) return;
-          for (const path of mailboxes) {
-            if (session.signal.aborted) return;
-            for await (const batch of syncMailboxOnce(
-              client,
-              path,
-              cur,
-              'live',
-              session,
-            )) {
-              cur = batch.cursor;
-              yield batch;
-              if (session.signal.aborted) return;
+          if (polls > 0 && polls % relistEveryPolls === 0) {
+            const next = resolveScopedMailboxes(
+              await client.listFolders(),
+              declared,
+            );
+            // Never throw mid-live over an odd LIST: keep the last good set.
+            if (next.length === 0) {
+              session.log(
+                'warn',
+                'imap: folder re-list resolved to no mailboxes — keeping the previous set',
+              );
+            } else {
+              mailboxes = next;
             }
           }
+          for await (const batch of sweep()) yield batch;
           await sleepFn(pollIntervalMs, session.signal);
+          polls += 1;
         }
       } finally {
         await client.close().catch(() => {});
@@ -336,6 +448,9 @@ export function createImapSource(
         metadata,
         createdAt: item.date,
         url: undefined,
+        ...(item.scopeRootId !== undefined && {
+          scopeRootId: item.scopeRootId,
+        }),
       };
       // Bytes-less children: the convert worker (and vision, for images and
       // scans) pull the bytes back through fetchBytes.
@@ -356,6 +471,9 @@ export function createImapSource(
           },
           createdAt: item.date,
           parent: { externalId: messageExternalId, type: 'email.message' },
+          ...(item.scopeRootId !== undefined && {
+            scopeRootId: item.scopeRootId,
+          }),
         }),
       );
       return attachments.length ? [message, ...attachments] : message;
@@ -458,7 +576,10 @@ export function createImapSource(
       const client = await connectFn(config, creds.password);
       try {
         const folders = await client.listFolders();
-        const mailboxes = resolveMailboxes(folders).map((f) => f.path);
+        const mailboxes = resolveScopedMailboxes(
+          folders,
+          rootsOf(config as unknown as Record<string, unknown>),
+        ).map((m) => m.path);
         // Mirror pull()'s guard: a listFolders that resolves to zero syncable
         // mailboxes would otherwise yield a complete-but-EMPTY listing, which
         // the engine's reconcile diff reads as "everything was deleted
@@ -496,12 +617,13 @@ export function createImapSource(
  */
 async function* syncMailboxOnce(
   client: ImapClient,
-  path: string,
+  mb: ScopedMailbox,
   cur: ImapCursor,
   defaultPhase: PullPhase,
   session: Session,
   totalEstimateOverride?: number,
 ): AsyncGenerator<Batch<ImapCursor, ImapMessageItem>> {
+  const { path } = mb;
   const status = await client.status(path);
   const prev = cur.mailboxes[path];
   const presentUids = await client.listUids(path);
@@ -525,18 +647,12 @@ async function* syncMailboxOnce(
     // what this resync re-commits. Refs without a matching row are ignored
     // by archiveByRef, and a crash mid-resync just re-emits these on the
     // next pass (prev is only replaced once a batch cursor commits below).
-    for (const uids of chunk(
-      Array.from({ length: prev.lastUid }, (_, i) => i + 1),
-      1000,
-    )) {
+    for (const deletions of chunk(generationRefs(path, prev), 1000)) {
       if (session.signal.aborted) return;
       yield {
         phase,
         items: [],
-        deletions: uids.map((uid) => ({
-          externalId: buildExternalId(path, prev.uidValidity, uid),
-          type: 'email.message' as const,
-        })),
+        deletions,
         // Deliberately does NOT advance this mailbox's cursor entry: the
         // stale entry keeps plan.reset (and this cleanup) re-triggering
         // until the resync below lands its first real batch.
@@ -566,7 +682,10 @@ async function* syncMailboxOnce(
     const items: ImapMessageItem[] = [];
     for (const raw of raws) {
       try {
-        items.push(await parseImapMessage(raw, path, status.uidValidity));
+        items.push({
+          ...(await parseImapMessage(raw, path, status.uidValidity)),
+          scopeRootId: mb.rootId,
+        });
       } catch (e) {
         session.log(
           'warn',

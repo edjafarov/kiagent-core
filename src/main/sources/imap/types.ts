@@ -109,6 +109,8 @@ export interface ImapMessageItem {
   /** Attachment METADATA only — bytes are re-fetched on demand by
    *  `fetchBytes`, so no attachment content is held in a batch. */
   attachments?: ImapAttachmentMeta[];
+  /** Id of the folder root covering this mailbox (stamped as scopeRootId). */
+  scopeRootId?: string;
 }
 
 export interface ImapAttachmentMeta {

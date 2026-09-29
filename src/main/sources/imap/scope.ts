@@ -24,8 +24,10 @@ export interface PickerModel {
   children(id: string): FolderNode[];
   /** ANCESTOR ids of the selected ids (never the ids themselves), deduped. */
   expand(selectedIds: string[]): string[];
-  /** Is this id a node the picker can show? */
-  offers(id: string): boolean;
+  /** The node the picker shows for this id; undefined = not offered. */
+  node(id: string): FolderNode | undefined;
+  /** Ids of the fixed Trash/Junk opt-in rows (not real mail roots). */
+  optInIds: Set<string>;
 }
 
 const SPECIAL_USE: Record<string, SpecialKind> = {
@@ -80,6 +82,11 @@ export function resolveScopedMailboxes(
 
   const all = allMailFolder(folders);
   const specialPaths = specialPathsOf(folders);
+  // A root whose own mailbox left the LIST resolves to nothing — it must not
+  // keep covering the children that remain (the picker no longer offers it).
+  const liveRoots = roots.filter((r) =>
+    folders.some((g) => !isNonExistent(g) && samePath(r.id, g.path)),
+  );
   const out: ScopedMailbox[] = [];
   const seen = new Set<string>();
   for (const f of folders) {
@@ -95,7 +102,7 @@ export function resolveScopedMailboxes(
       // All-Mail server: only All Mail is offered; label roots select nothing.
       if (f === all && isRoot(roots, f)) rootId = f.path;
     } else if (!underSpecial(f, specialPaths)) {
-      rootId = roots.find((r) => covers(r.id, f))?.id;
+      rootId = liveRoots.find((r) => covers(r.id, f))?.id;
     }
     if (rootId === undefined) continue;
     seen.add(f.path);
@@ -114,7 +121,16 @@ export function defaultRoots(folders: ImapFolderInfo[]): FolderRootSelection[] {
     );
     if (archive) paths.push(archive.path);
   }
-  return [...new Set(paths)].map((p) => ({ id: p, name: p }));
+  // A covering set: drop a path another default already covers (INBOX covers
+  // INBOX.Sent on INBOX-namespace servers), so a no-op Save round-trips.
+  const uniq = [...new Set(paths)];
+  const folderOf = (p: string) => folders.find((f) => f.path === p);
+  return uniq
+    .filter((p) => {
+      const f = folderOf(p);
+      return !f || !uniq.some((q) => q !== p && covers(q, f));
+    })
+    .map((p) => ({ id: p, name: p }));
 }
 
 /** What the folder picker shows for this server (see PickerModel). */
@@ -145,12 +161,12 @@ export function pickerModel(folders: ImapFolderInfo[]): PickerModel {
       { id: all.path, name: 'All Mail', hasChildren: false },
       ...optIns,
     ];
-    const ids = new Set(roots.map((n) => n.id));
     return {
       roots,
       children: () => [],
       expand: () => [],
-      offers: (id) => ids.has(id),
+      node: (id) => roots.find((n) => n.id === id),
+      optInIds: new Set(optIns.map((n) => n.id)),
     };
   }
 
@@ -205,8 +221,30 @@ export function pickerModel(folders: ImapFolderInfo[]): PickerModel {
       }
       return out;
     },
-    offers: (id) => shown.has(id) || optIds.has(id),
+    node: (id) =>
+      optIns.find((n) => n.id === id) ??
+      (shown.has(id) ? node(cand.get(id)!) : undefined),
+    optInIds: optIds,
   };
+}
+
+/**
+ * The roots a manageFolders pick becomes: ids the picker model does not offer
+ * are dropped, and at least one must be a real mail root (not only the
+ * Trash/Junk opt-ins). Throws a user-facing Error otherwise.
+ */
+export function validateSelection(
+  folders: ImapFolderInfo[],
+  pickedIds: string[],
+): FolderRootSelection[] {
+  const model = pickerModel(folders);
+  const ids = [...new Set(pickedIds)].filter((id) => model.node(id));
+  if (!ids.some((id) => !model.optInIds.has(id))) {
+    throw new Error(
+      'imap: select at least one mail folder (not only Trash or Junk)',
+    );
+  }
+  return ids.map((id) => ({ id, name: id }));
 }
 
 function isNonExistent(f: ImapFolderInfo): boolean {

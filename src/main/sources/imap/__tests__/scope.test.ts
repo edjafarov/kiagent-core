@@ -6,6 +6,7 @@ import {
   resolveScopedMailboxes,
   rootsOf,
   specialKind,
+  validateSelection,
 } from '../scope';
 import type { ImapFolderInfo } from '../types';
 
@@ -204,9 +205,9 @@ describe('special folders', () => {
     const m = pickerModel(slash());
     const all = [...m.roots, ...m.roots.flatMap((n) => m.children(n.id))];
     expect(all.map((n) => n.id)).not.toContain('Drafts');
-    expect(m.offers('Drafts')).toBe(false);
-    expect(m.offers('Trash')).toBe(true);
-    expect(m.offers('Spam')).toBe(true);
+    expect(m.node('Drafts')).toBeUndefined();
+    expect(m.node('Trash')).toBeDefined();
+    expect(m.node('Spam')).toBeDefined();
     expect(m.roots.filter((n) => n.name === 'Trash')).toEqual([
       { id: 'Trash', name: 'Trash', hasChildren: false },
     ]);
@@ -223,7 +224,7 @@ describe('special folders', () => {
     expect(paths(resolveScopedMailboxes(folders, roots('INBOX')))).toEqual([
       'INBOX',
     ]);
-    expect(pickerModel(folders).offers('INBOX.Trash.Old')).toBe(false);
+    expect(pickerModel(folders).node('INBOX.Trash.Old')).toBeUndefined();
   });
   it('prefers a SPECIAL-USE trash over a name match for the opt-in row', () => {
     const folders = [
@@ -249,9 +250,9 @@ describe('All-Mail server', () => {
       { id: '[Gmail]/Spam', name: 'Junk', hasChildren: false },
     ]);
     expect(m.children('[Gmail]/All Mail')).toEqual([]);
-    expect(m.offers('Label1')).toBe(false);
-    expect(m.offers('INBOX')).toBe(false);
-    expect(m.offers('[Gmail]/Drafts')).toBe(false);
+    expect(m.node('Label1')).toBeUndefined();
+    expect(m.node('INBOX')).toBeUndefined();
+    expect(m.node('[Gmail]/Drafts')).toBeUndefined();
   });
   it('resolve ignores label roots, keeping All Mail and exact opt-ins', () => {
     const r = resolveScopedMailboxes(
@@ -298,11 +299,11 @@ describe('Noselect and NonExistent', () => {
       f('INBOX'),
       f('Empty', { flags: ['\\noselect'] }),
     ]);
-    expect(lonely.offers('Empty')).toBe(false);
+    expect(lonely.node('Empty')).toBeUndefined();
   });
   it('NonExistent never appears anywhere', () => {
     const m = pickerModel(slash());
-    expect(m.offers('Ghost')).toBe(false);
+    expect(m.node('Ghost')).toBeUndefined();
     expect(paths(resolveScopedMailboxes(slash(), roots('Ghost')))).toEqual([]);
     expect(
       paths(resolveScopedMailboxes(slash(), roots('INBOX', 'Receipts'))),
@@ -320,14 +321,52 @@ describe('roots that no longer exist', () => {
     expect(resolveScopedMailboxes(slash(), roots('Gone', 'Nope'))).toEqual([]);
     expect(resolveScopedMailboxes(slash(), [])).toEqual([]);
   });
+  it('a missing root does not keep covering the children that remain', () => {
+    const list = slash().filter((x) => x.path !== 'Projects');
+    expect(resolveScopedMailboxes(list, roots('Projects'))).toEqual([]);
+    expect(pickerModel(list).node('Projects')).toBeUndefined();
+    // A listed \Noselect container still counts as present.
+    expect(paths(resolveScopedMailboxes(slash(), roots('Projects')))).toContain(
+      'Projects/Acme',
+    );
+  });
+  it('a \\NonExistent root does not cover its children', () => {
+    const list = slash().map((x) =>
+      x.path === 'Projects' ? { ...x, flags: ['\\nonexistent'] } : x,
+    );
+    expect(resolveScopedMailboxes(list, roots('Projects'))).toEqual([]);
+  });
+  it('INBOX root presence is case-insensitive', () => {
+    expect(paths(resolveScopedMailboxes(dotted(), roots('inbox')))).toContain(
+      'INBOX.Work',
+    );
+  });
+});
+
+describe('validateSelection', () => {
+  it('drops ids the picker does not offer, dedupes, names by id', () => {
+    expect(validateSelection(slash(), ['INBOX', 'Nope', 'INBOX'])).toEqual(
+      roots('INBOX'),
+    );
+  });
+  it('throws a user-facing error without a non-special root', () => {
+    expect(() => validateSelection(slash(), ['Trash'])).toThrow(/at least one/);
+    expect(() => validateSelection(slash(), ['Nope'])).toThrow(/at least one/);
+    expect(() => validateSelection(slash(), [])).toThrow(/at least one/);
+  });
+  it('accepts Trash alongside a mail root', () => {
+    expect(validateSelection(slash(), ['Receipts', 'Trash'])).toEqual(
+      roots('Receipts', 'Trash'),
+    );
+  });
 });
 
 describe('defaultRoots on a folder server', () => {
   it('is INBOX + Sent + Archive, deduped', () => {
     expect(defaultRoots(slash())).toEqual(roots('INBOX', 'Sent', 'Archive'));
   });
-  it('omits Archive when absent', () => {
-    expect(defaultRoots(dotted())).toEqual(roots('INBOX', 'INBOX.Sent'));
+  it('omits Archive when absent; INBOX covers INBOX.Sent so only INBOX remains', () => {
+    expect(defaultRoots(dotted())).toEqual(roots('INBOX'));
   });
   it("dedupes when Archive is also today's pick", () => {
     const folders = [f('INBOX'), f('Archive', { specialUse: '\\All' })];
@@ -361,11 +400,25 @@ describe('pickerModel on a folder server', () => {
     const m = pickerModel([f('A/B', { delimiter: '/', parentPath: 'A' })]);
     expect(m.roots.map((n) => n.id)).toEqual(['A/B']);
   });
+  it('node() names tree rows by leaf and opt-in rows fixed; optInIds lists the latter', () => {
+    const m = pickerModel(slash());
+    expect(m.node('Projects/Beta/Old')).toEqual({
+      id: 'Projects/Beta/Old',
+      name: 'Old',
+      hasChildren: false,
+    });
+    expect(m.node('Trash')?.name).toBe('Trash');
+    expect(m.node('Spam')?.name).toBe('Junk');
+    expect([...m.optInIds].sort()).toEqual(['Spam', 'Trash']);
+    expect(pickerModel(gmail()).node('[Gmail]/All Mail')?.name).toBe(
+      'All Mail',
+    );
+  });
   it('offers any node at any depth, and opt-in rows', () => {
     const m = pickerModel(slash());
-    expect(m.offers('Projects/Beta/Old')).toBe(true);
-    expect(m.offers('Projects')).toBe(true);
-    expect(m.offers('Unknown')).toBe(false);
+    expect(m.node('Projects/Beta/Old')).toBeDefined();
+    expect(m.node('Projects')).toBeDefined();
+    expect(m.node('Unknown')).toBeUndefined();
   });
   it('expand returns ancestors only, deduped, never the ids themselves', () => {
     const m = pickerModel(slash());

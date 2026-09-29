@@ -1,3 +1,6 @@
+import type { ExternalRef } from '@shared/contracts';
+
+import { buildExternalId } from './ids';
 import type { FolderCursorEntry, ImapCursor } from './types';
 
 /** Split an array into fixed-size chunks, preserving order. */
@@ -72,4 +75,16 @@ export function advanceCursor(
 
 export function emptyCursor(): ImapCursor {
   return { mailboxes: {} };
+}
+
+/** Every ref one cursor generation of a mailbox may have indexed:
+ *  uidValidity × 1..lastUid. Unknown refs are ignored by the archiver. */
+export function generationRefs(
+  mailbox: string,
+  entry: FolderCursorEntry,
+): ExternalRef[] {
+  return Array.from({ length: entry.lastUid }, (_, i) => ({
+    externalId: buildExternalId(mailbox, entry.uidValidity, i + 1),
+    type: 'email.message',
+  }));
 }
