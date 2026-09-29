@@ -263,7 +263,7 @@ describe('imap folder scope — manageFolders', () => {
     },
   });
 
-  it('narrowing: archiveRefs = removed generations, cursor drops them, no network after the picker', async () => {
+  it('narrowing: archiveRefs = removed generations, cursor drops them, only removed mailboxes are touched after the picker', async () => {
     const { client, log } = folderServer();
     const { channel } = fakeChannel(() => [node('INBOX'), node('Sent')], log);
     const src = createImapSource({ connect: async () => client });
@@ -284,7 +284,146 @@ describe('imap folder scope — manageFolders', () => {
     expect(res.config.folderRoots).toEqual(roots('INBOX', 'Sent'));
     expect(res.config.host).toBe('imap.example.com');
     // Order: list -> close -> pick, and nothing after the pick.
-    expect(log).toEqual(['list', 'close', 'pick']);
+    // The only network after the picker is the cleanup status of the
+    // REMOVED mailbox, on a fresh connection.
+    expect(log).toEqual(['list', 'close', 'pick', 'status:Receipts', 'close']);
+  });
+
+  it('archives mail indexed while the picker was open (stale cursor)', async () => {
+    const { client, boxes, log } = folderServer();
+    const cfg = { ...BASE, folderRoots: roots('INBOX', 'Sent') };
+    const snapshot: ImapCursor = {
+      mailboxes: { INBOX: { uidValidity: '1', lastUid: 2, attachments: 1 } },
+    };
+    const { channel } = fakeChannel(() => {
+      // Sync ran while the picker was open: Sent grew to uid 5.
+      const sent = boxes.find((b) => b.path === 'Sent')!;
+      for (const u of [2, 3, 4, 5]) sent.messages.set(u, rfc822(u));
+      return [node('INBOX')];
+    }, log);
+    const src = createImapSource({ connect: async () => client });
+    const res = await src.manageFolders!(
+      makeSession(cfg, { cursor: snapshot }),
+      channel,
+    );
+    expect(res.archiveRefs?.map((r) => r.externalId)).toEqual([
+      'Sent:2:1',
+      'Sent:2:2',
+      'Sent:2:3',
+      'Sent:2:4',
+      'Sent:2:5',
+    ]);
+    expect(res.cursor).toEqual(snapshot);
+    expect(log.slice(log.indexOf('pick'))).toEqual([
+      'pick',
+      'status:Sent',
+      'close',
+    ]);
+  });
+
+  it('also archives the old generation when UIDVALIDITY changed under the cursor', async () => {
+    const { client } = folderServer();
+    const cur: ImapCursor = {
+      mailboxes: {
+        INBOX: { uidValidity: '1', lastUid: 2, attachments: 1 },
+        Sent: { uidValidity: '9', lastUid: 2, attachments: 1 },
+      },
+    };
+    const cfg = { ...BASE, folderRoots: roots('INBOX', 'Sent') };
+    const src = createImapSource({ connect: async () => client });
+    const res = await src.manageFolders!(
+      makeSession(cfg, { cursor: cur }),
+      fakeChannel(() => [node('INBOX')]).channel,
+    );
+    expect(res.archiveRefs?.map((r) => r.externalId)).toEqual([
+      'Sent:2:1',
+      'Sent:2:2', // max(cursor lastUid, uidNext - 1)
+      'Sent:9:1',
+      'Sent:9:2',
+    ]);
+  });
+
+  it('a removed mailbox that no longer exists falls back to its cursor generation', async () => {
+    const { client, log } = folderServer();
+    const cur: ImapCursor = {
+      mailboxes: {
+        INBOX: { uidValidity: '1', lastUid: 2, attachments: 1 },
+        Gone: { uidValidity: '8', lastUid: 3, attachments: 1 },
+      },
+    };
+    const cfg = { ...BASE, folderRoots: roots('INBOX', 'Gone') };
+    const src = createImapSource({ connect: async () => client });
+    const res = await src.manageFolders!(
+      makeSession(cfg, { cursor: cur }),
+      fakeChannel(() => [node('INBOX')], log).channel,
+    );
+    expect(res.archiveRefs?.map((r) => r.externalId)).toEqual([
+      'Gone:8:1',
+      'Gone:8:2',
+      'Gone:8:3',
+    ]);
+    expect(log).not.toContain('status:Gone');
+  });
+
+  it('a cleanup status failure throws and writes nothing', async () => {
+    const { client } = folderServer();
+    const realStatus = client.status.bind(client);
+    let armed = false;
+    client.status = async (p) => {
+      if (armed) throw new Error('boom');
+      return realStatus(p);
+    };
+    const cfg = { ...BASE, folderRoots: roots('INBOX', 'Sent') };
+    const src = createImapSource({ connect: async () => client });
+    await expect(
+      src.manageFolders!(
+        makeSession(cfg, { cursor: cursor() }),
+        fakeChannel(() => {
+          armed = true;
+          return [node('INBOX')];
+        }).channel,
+      ),
+    ).rejects.toThrow(/try again/);
+  });
+
+  it('a very large removed generation does not overflow the stack', async () => {
+    const { client } = folderServer();
+    const cur: ImapCursor = {
+      mailboxes: {
+        INBOX: { uidValidity: '1', lastUid: 2, attachments: 1 },
+        Receipts: { uidValidity: '3', lastUid: 200000, attachments: 1 },
+      },
+    };
+    const cfg = { ...BASE, folderRoots: roots('INBOX', 'Receipts') };
+    const src = createImapSource({ connect: async () => client });
+    const res = await src.manageFolders!(
+      makeSession(cfg, { cursor: cur }),
+      fakeChannel(() => [node('INBOX')]).channel,
+    );
+    expect(res.archiveRefs).toHaveLength(200000);
+  });
+
+  it('first Save on a legacy Gmail-over-IMAP account archives the Sent generation', async () => {
+    const { client } = allMailServer();
+    const cur: ImapCursor = {
+      mailboxes: {
+        '[Gmail]/All Mail': { uidValidity: '2', lastUid: 1, attachments: 1 },
+        '[Gmail]/Sent Mail': { uidValidity: '3', lastUid: 1, attachments: 1 },
+      },
+    };
+    const { channel, specs } = fakeChannel(() => [node('[Gmail]/All Mail')]);
+    const src = createImapSource({ connect: async () => client });
+    const res = await src.manageFolders!(
+      makeSession({ ...BASE }, { cursor: cur }),
+      channel,
+    );
+    expect(specs[0].selected?.map((n) => n.id)).toEqual(['[Gmail]/All Mail']);
+    expect(res.archiveRefs).toEqual([
+      { externalId: '[Gmail]/Sent Mail:3:1', type: 'email.message' },
+    ]);
+    expect(Object.keys((res.cursor as ImapCursor).mailboxes)).toEqual([
+      '[Gmail]/All Mail',
+    ]);
   });
 
   it('widening: no archiveRefs; the new mailbox backfills with the summed estimate', async () => {
@@ -416,7 +555,7 @@ describe('imap folder scope — manageFolders', () => {
 
 describe('imap folder scope — pull', () => {
   it('syncs only the covered mailboxes and stamps every document with its root', async () => {
-    const { client } = folderServer();
+    const { client, log } = folderServer();
     const src = createImapSource({ connect: async () => client });
     const ctl = new AbortController();
     const session = makeSession(
@@ -428,6 +567,7 @@ describe('imap folder scope — pull', () => {
       items.push(...b.items);
       if (b.phase === 'live') ctl.abort();
     }
+    expect(log).not.toContain('status:Projects'); // the \\Noselect parent
     expect(new Set(items.map((i) => i.mailbox))).toEqual(
       new Set(['INBOX', 'Projects/Acme']),
     );
@@ -508,6 +648,12 @@ describe('imap folder scope — pull', () => {
     expect(fresh[0].items[0].scopeRootId).toBe('Projects');
     // Σ exists of resolved mailboxes: Acme 2 + New 2.
     expect(fresh[0].estimateTotal).toBe(4);
+    // Exactly one heartbeat follows the backfill (plus the initial one).
+    const at = batches.indexOf(fresh[0]);
+    expect(batches[at + 1]).toMatchObject({ phase: 'live', items: [] });
+    expect(
+      batches.filter((b) => b.phase === 'live' && !b.items.length),
+    ).toHaveLength(2);
     expect(log.filter((l) => l === 'list')).toHaveLength(2);
   });
 
@@ -539,6 +685,15 @@ describe('imap folder scope — pull', () => {
       src.pull(makeSession(cfg, { signal: ctl.signal, cursor: cur }), cur),
     );
     expect(batches.flatMap((b) => b.deletions ?? [])).toEqual([]);
+    // The cursor sheds the vanished mailbox via one empty live batch.
+    const shed = batches.filter(
+      (b) => b.items.length === 0 && !('Receipts' in b.cursor.mailboxes),
+    );
+    expect(shed.length).toBeGreaterThanOrEqual(1);
+    expect(shed[0].phase).toBe('live');
+    expect(Object.keys(batches[batches.length - 1].cursor.mailboxes)).toEqual([
+      'INBOX',
+    ]);
     const idx = log.indexOf('list', 1);
     expect(log.slice(idx).some((l) => l.endsWith('Receipts'))).toBe(false);
   });

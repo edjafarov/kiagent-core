@@ -124,6 +124,11 @@ async function openClient(
   }
 }
 
+/** Append without spreading: a spread of 100k+ refs overflows the stack. */
+function concatInto(target: ExternalRef[], more: ExternalRef[]): void {
+  for (const r of more) target.push(r);
+}
+
 export interface ImapSourceDeps {
   /** Overridable for tests — fakes the imapflow-backed client entirely. */
   connect?: ConnectFn;
@@ -252,7 +257,7 @@ export function createImapSource(
           'imap: account has no stored password credential',
         );
       }
-      // One LIST, then close: no network once the picker is open or after.
+      // One LIST, then close: no connection is held while the picker is open.
       const client = await openClient(
         connectFn,
         config as unknown as ImapAccountConfig,
@@ -290,11 +295,63 @@ export function createImapSource(
         resolveScopedMailboxes(folders, folderRoots).map((m) => m.path),
       );
       const prev = (session.account.cursor as ImapCursor | null) ?? null;
+      // The cursor is a pre-picker snapshot and sync may have run meanwhile,
+      // so the leaving set also covers what the OLD roots resolved to.
+      const leaving = new Set([
+        ...Object.keys(prev?.mailboxes ?? {}),
+        ...resolveScopedMailboxes(folders, rootsOf(config)).map((m) => m.path),
+      ]);
+      const removed = [...leaving].filter((p) => !after.has(p));
+      // A retained mailbox missing from this snapshot cursor only re-fetches
+      // idempotently, so the returned cursor is snapshot minus removed.
       const kept: ImapCursor['mailboxes'] = {};
-      const archiveRefs: ExternalRef[] = [];
       for (const [path, entry] of Object.entries(prev?.mailboxes ?? {})) {
         if (after.has(path)) kept[path] = entry;
-        else archiveRefs.push(...generationRefs(path, entry));
+      }
+
+      const archiveRefs: ExternalRef[] = [];
+      if (removed.length > 0) {
+        // Deliberately after the picker: read the CURRENT extent of each
+        // leaving mailbox so mail indexed while the picker was open is
+        // archived too. A failure throws — nothing is written, user retries.
+        const live = new Set(
+          folders
+            .filter((f) => !f.flags.includes('\\noselect'))
+            .map((f) => f.path),
+        );
+        const cleanup = await openClient(
+          connectFn,
+          config as unknown as ImapAccountConfig,
+          creds.password,
+        );
+        try {
+          for (const path of removed) {
+            const entry = prev?.mailboxes[path];
+            if (!live.has(path)) {
+              if (entry) concatInto(archiveRefs, generationRefs(path, entry));
+              continue;
+            }
+            let st;
+            try {
+              st = await cleanup.status(path);
+            } catch (e) {
+              throw new Error(
+                `imap: could not read "${path}" to remove its mail (${String(e)}) — try again`,
+              );
+            }
+            const uidValidity = String(st.uidValidity);
+            const lastUid = Math.max(entry?.lastUid ?? 0, st.uidNext - 1);
+            concatInto(
+              archiveRefs,
+              generationRefs(path, { uidValidity, lastUid }),
+            );
+            if (entry && entry.uidValidity !== uidValidity) {
+              concatInto(archiveRefs, generationRefs(path, entry));
+            }
+          }
+        } finally {
+          await cleanup.close().catch(() => {});
+        }
       }
       return {
         config: { ...config, folderRoots },
@@ -401,9 +458,29 @@ export function createImapSource(
               );
             } else {
               mailboxes = next;
+              // Drop cursor entries of mailboxes that left the set, so one
+              // that returns is backfilled rather than "already synced".
+              // No deletions: reconcile owns the archive.
+              const gone = Object.keys(cur.mailboxes).filter(
+                (p) => !next.some((m) => m.path === p),
+              );
+              if (gone.length > 0) {
+                const rest = { ...cur.mailboxes };
+                for (const p of gone) delete rest[p];
+                cur = { mailboxes: rest };
+                yield { phase: 'live', items: [], cursor: cur };
+              }
             }
           }
-          for await (const batch of sweep()) yield batch;
+          let backfilled = false;
+          for await (const batch of sweep()) {
+            if (batch.phase === 'backfill') backfilled = true;
+            yield batch;
+          }
+          // A newly discovered folder just backfilled: say "caught up" once.
+          if (backfilled && !session.signal.aborted) {
+            yield { phase: 'live', items: [], cursor: cur };
+          }
           await sleepFn(pollIntervalMs, session.signal);
           polls += 1;
         }
