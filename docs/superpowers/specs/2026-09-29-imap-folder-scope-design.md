@@ -63,11 +63,16 @@ the legacy-undeclared rule all come for free.
 - Never synced: `\Noselect` / `\NonExistent` mailboxes (a `\Noselect`
   parent is shown in the tree as a container and, as a root, covers its
   children).
-- **Defaults** (connect, and the legacy picker preselection): today's
-  `resolveMailboxes` paths, plus the `\Archive` special-use mailbox when
-  there is no `\All`. NOTE: on `INBOX.`-namespace servers (Courier/cPanel)
-  the `INBOX` root therefore covers every user folder (minus specials) —
-  that is intended; indexing filed mail is the point of this change.
+- **Defaults** (connect, and the legacy picker preselection):
+  - All-Mail server: `[\\All]` ONLY. Sent is a label view of All Mail;
+    today's All Mail + Sent pair is the duplicate this change removes.
+  - Folder server: today's `resolveMailboxes` paths (INBOX + Sent), plus the
+    `\\Archive` special-use mailbox. NOTE: on `INBOX.`-namespace servers
+    (Courier/cPanel) the `INBOX` root therefore covers every user folder
+    (minus specials) — intended; indexing filed mail is the point.
+  - `manageFolders` drops any picked root the picker model does not offer
+    before returning `config`, so `folderRoots` never holds a root the tree
+    cannot show.
 - **Legacy accounts** (no `folderRoots` key — every existing IMAP account):
   resolution is EXACTLY today's `resolveMailboxes`. Consequence, stated
   plainly: flipping `folderScope: true` makes them *undeclared*, and engine
@@ -132,11 +137,14 @@ absence) on re-add/reconnect. Manage folders is the only picker entry.
   `rootId` for the stamp.
 - The live loop re-LISTs folders every 15 polls (~15 min) and re-resolves:
   a newly created subfolder under a ticked folder is picked up; a mailbox
-  that disappeared upstream simply stops being polled (reconcile archives
-  its mail).
+  that disappeared upstream simply stops being polled. Its mail is archived
+  by the NEXT pull cycle's reconcile (reconcile runs once per cycle and the
+  cadence does not restart a running loop) — deferred cleanup, accepted.
 - A mailbox with NO cursor entry on a returning account (newly ticked or
-  newly discovered) syncs with phase `backfill` and
-  `estimateTotal = status.exists`, so the import shows progress.
+  newly discovered) syncs with phase `backfill`, and `estimateTotal` = the
+  SUM of `exists` over all resolved mailboxes (pull's existing
+  `combinedTotal` convention) — the engine's `done` is account-wide
+  (engine.ts:1010-1016), so a per-mailbox estimate would read 50 000/500.
 
 ### reconcile()
 
@@ -173,9 +181,11 @@ normal breaker.
    generations (uidValidity × 1..lastUid); cursor drops exactly those
    entries; no network call after the picker resolves.
 8. manageFolders widening → no `archiveRefs`; next pull syncs the new
-   mailbox with phase `backfill` and an estimate.
+   mailbox with phase `backfill` and estimateTotal = Σ exists of all
+   resolved mailboxes.
 9. manageFolders legacy account → picker preselects the defaults.
-10. connect → no picker; `folderRoots` = defaults.
+10. connect → no picker; `folderRoots` = defaults; on an All-Mail server
+    that is `[All Mail]` only (no Sent).
 11. Live loop re-LIST: a subfolder created under a ticked root after the
     session started is synced within the refresh interval.
 12. Every emitted document (message + attachments) carries `scopeRootId` =
