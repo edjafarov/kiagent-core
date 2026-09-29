@@ -705,6 +705,7 @@ function registerIpc(
     'maintenance:reset-all': () =>
       runFactoryReset(factoryResetDeps(p, patchState)),
 
+    'inference:routes': () => p.inference.routes(),
     'inference:providers': () =>
       p.inference.providers().map((prov) => ({
         id: prov.id,

@@ -497,6 +497,12 @@ export interface Invokes {
   'maintenance:export': { req: { destDir: string }; res: void };
   'maintenance:reset-all': { req: void; res: FactoryResetOutcome };
 
+  /** Tasks the plane routes to a provider (typically off this computer),
+   *  for the "Some tasks are sent to …" line. */
+  'inference:routes': {
+    req: void;
+    res: Array<{ task: string; providerName: string }>;
+  };
   'inference:providers': {
     req: void;
     res: Array<{
@@ -717,6 +723,7 @@ const INVOKE_CHANNEL_MAP = {
   'maintenance:export': 0,
   'maintenance:reset-all': 0,
   'inference:providers': 0,
+  'inference:routes': 0,
   'inference:install': 0,
   'inference:cancel': 0,
   'inference:stats': 0,

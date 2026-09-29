@@ -108,6 +108,7 @@ function mockInvoke(
     providers?: ProviderRow[];
     stats?: StatsRes | Promise<StatsRes>;
     models?: ModelsRes;
+    routes?: Array<{ task: string; providerName: string }>;
   } = {},
 ): void {
   const providers = opts.providers ?? [];
@@ -117,6 +118,8 @@ function mockInvoke(
     if (channel === 'inference:providers') return Promise.resolve(providers);
     if (channel === 'inference:stats') return Promise.resolve(stats);
     if (channel === 'inference:models') return Promise.resolve(models);
+    if (channel === 'inference:routes')
+      return Promise.resolve(opts.routes ?? []);
     return Promise.reject(new Error(`unexpected channel ${channel}`));
   });
 }
@@ -402,5 +405,29 @@ describe('LocalProcessing: recently processed', () => {
     expect(screen.getByText('Transcript')).toBeInTheDocument();
     expect(screen.getByText('OCR + description')).toBeInTheDocument();
     expect(screen.getByText('OCR')).toBeInTheDocument();
+  });
+});
+
+describe('LocalProcessing: tasks routed off this computer', () => {
+  test('no routes: nothing leaves it', async () => {
+    mockInvoke();
+    render(<LocalProcessing />);
+    expect(await screen.findByText(/Nothing leaves it\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Some tasks are sent to/)).toBeNull();
+  });
+
+  test('a route names its provider and qualifies the promise', async () => {
+    mockInvoke({
+      routes: [
+        { task: 'task.a', providerName: 'Remote' },
+        { task: 'task.b', providerName: 'Remote' },
+      ],
+    });
+    render(<LocalProcessing />);
+    expect(
+      await screen.findByText(
+        /Nothing else leaves it\. Some tasks are sent to Remote\./,
+      ),
+    ).toBeInTheDocument();
   });
 });

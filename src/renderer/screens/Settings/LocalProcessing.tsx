@@ -123,6 +123,7 @@ export function LocalProcessing(): React.ReactElement {
   const processing = useAppState((s) => s.prefs.processing);
   const models = useAppState((s) => s.prefs.models);
   const [providers, setProviders] = useState<ProviderRow[] | null>(null);
+  const [routedTo, setRoutedTo] = useState<string[]>([]);
   const [providersError, setProvidersError] = useState(false);
   const [stats, setStats] = useState<ExtractionStatsRes | null>(null);
   const [modelCatalog, setModelCatalog] = useState<ModelsRes | null>(null);
@@ -155,6 +156,10 @@ export function LocalProcessing(): React.ReactElement {
   useEffect(() => {
     loadProviders();
     loadStats();
+    window.kiagent
+      .invoke('inference:routes', undefined)
+      .then((rs) => setRoutedTo([...new Set(rs.map((r) => r.providerName))]))
+      .catch(() => {});
   }, [loadProviders, loadStats]);
 
   // The lane moves on its own (battery, idle, the clock) and has no push
@@ -246,7 +251,11 @@ export function LocalProcessing(): React.ReactElement {
       <SettingsGroup>
         <SettingsRow
           title={`Read files on this ${computerNoun()}`}
-          description={`Reads scans, photos and recordings on this ${computerNoun()}. Nothing leaves it.`}
+          description={
+            routedTo.length
+              ? `Reads scans, photos and recordings on this ${computerNoun()}. Nothing else leaves it. Some tasks are sent to ${routedTo.join(' and ')}.`
+              : `Reads scans, photos and recordings on this ${computerNoun()}. Nothing leaves it.`
+          }
           control={
             <Toggle
               aria-label={`Read files on this ${computerNoun()}`}
