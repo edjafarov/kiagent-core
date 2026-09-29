@@ -94,7 +94,7 @@ export interface McpServerHandle {
    *  repeated calls return the SAME handler over the SAME product session pool.
    *  Auth-free — the product's own middleware (e.g. JWT) runs before this.
    *  `transport` (default 'remote') tags every call it serves: 'agent' is a
-   *  hosted assistant acting for the user, whose drafts always wait for the
+   *  hosted agent acting for the user, whose drafts always wait for the
    *  page. One handler and session pool per transport. */
   createMcpHandler(opts?: {
     transport?: 'remote' | 'agent';

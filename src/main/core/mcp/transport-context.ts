@@ -9,7 +9,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-// 'agent' is a hosted assistant acting for the user: it may draft, but every
+// 'agent' is a hosted agent acting for the user: it may draft, but every
 // draft waits for the user's page confirmation and it can never send.
 export type McpTransport = 'local' | 'remote' | 'agent';
 
