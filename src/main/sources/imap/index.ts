@@ -13,3 +13,12 @@ export type {
   MailboxRole,
   FolderCursorEntry,
 } from './types';
+export {
+  rootsOf,
+  specialKind,
+  allMailFolder,
+  resolveScopedMailboxes,
+  defaultRoots,
+  pickerModel,
+} from './scope';
+export type { SpecialKind, ScopedMailbox, PickerModel } from './scope';

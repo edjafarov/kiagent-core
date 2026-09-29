@@ -34,6 +34,10 @@ export interface ImapFolderInfo {
   specialUse?: string;
   /** Lower-cased flag/attribute strings for heuristic fallback. */
   flags: string[];
+  /** Hierarchy delimiter for this mailbox ('/' or '.'), as LIST reports it. */
+  delimiter?: string;
+  /** Path of the parent mailbox; empty/undefined for a top-level one. */
+  parentPath?: string;
 }
 
 export interface ImapMailboxStatus {

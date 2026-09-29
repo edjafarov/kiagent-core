@@ -28,6 +28,23 @@ export function toImapFlowOptions(
   };
 }
 
+/** Pure mapping from an imapflow LIST entry to our folder shape (unit-tested). */
+export function toFolderInfo(m: {
+  path: string;
+  specialUse?: string;
+  flags: Iterable<unknown>;
+  delimiter?: string;
+  parentPath?: string;
+}): ImapFolderInfo {
+  return {
+    path: m.path,
+    specialUse: m.specialUse,
+    flags: [...m.flags].map((f) => String(f).toLowerCase()),
+    delimiter: m.delimiter,
+    parentPath: m.parentPath,
+  };
+}
+
 /**
  * Attach an 'error' listener so an asynchronous socket failure can't crash
  * the process — imapflow's ImapFlow is an EventEmitter, and Node THROWS any
@@ -62,11 +79,7 @@ export async function connectImapClient(
   return {
     async listFolders(): Promise<ImapFolderInfo[]> {
       const list = await flow.list();
-      return list.map((m) => ({
-        path: m.path,
-        specialUse: m.specialUse,
-        flags: [...m.flags].map((f) => String(f).toLowerCase()),
-      }));
+      return list.map(toFolderInfo);
     },
 
     async status(path: string): Promise<ImapMailboxStatus> {

@@ -1,5 +1,9 @@
 import { EventEmitter } from 'node:events';
-import { attachImapErrorHandler, toImapFlowOptions } from '../client';
+import {
+  attachImapErrorHandler,
+  toFolderInfo,
+  toImapFlowOptions,
+} from '../client';
 import type { ImapAccountConfig } from '../types';
 
 describe('toImapFlowOptions', () => {
@@ -54,5 +58,31 @@ describe('attachImapErrorHandler', () => {
       'ECONNRESET',
       'reset',
     );
+  });
+});
+
+describe('toFolderInfo', () => {
+  it('carries delimiter and parentPath and lower-cases flags', () => {
+    expect(
+      toFolderInfo({
+        path: 'Projects/Acme',
+        specialUse: undefined,
+        flags: new Set(['\\HasNoChildren', '\\Noselect']),
+        delimiter: '/',
+        parentPath: 'Projects',
+      }),
+    ).toEqual({
+      path: 'Projects/Acme',
+      specialUse: undefined,
+      flags: ['\\hasnochildren', '\\noselect'],
+      delimiter: '/',
+      parentPath: 'Projects',
+    });
+  });
+
+  it('keeps an absent parentPath absent for top-level mailboxes', () => {
+    const f = toFolderInfo({ path: 'INBOX', flags: [], delimiter: '.' });
+    expect(f.parentPath).toBeUndefined();
+    expect(f.delimiter).toBe('.');
   });
 });
