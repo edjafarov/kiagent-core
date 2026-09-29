@@ -705,6 +705,36 @@ describe('buildSurfaces', () => {
     });
   });
 
+  it('the extension surface exposes completeWithMeta with the interactive default', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const { deps } = makeDeps({
+      inference: {
+        complete: async () => '',
+        completeWithMeta: async (_p, opts) => {
+          calls.push({ ...opts });
+          return { text: 't', providerId: 'p', modelId: 'm' };
+        },
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'open' as const,
+        describe: async () => null,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await expect(
+      surfaces.inference.completeWithMeta('hi', {
+        task: 'task.a',
+        budgetKey: 'k',
+      } as never),
+    ).resolves.toMatchObject({ text: 't', providerId: 'p', modelId: 'm' });
+    expect(calls[0]).toEqual({
+      lane: 'interactive',
+      task: 'task.a',
+      budgetKey: 'k',
+    });
+  });
+
   it('inference.hear delegates to the plane, keeping format and passing the lane through', async () => {
     // CapSurfaces.inference promises the WHOLE Inference plane, so a child
     // granted 'inference' may call hear() — before it was wired here that

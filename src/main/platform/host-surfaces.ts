@@ -121,12 +121,25 @@ export interface SurfaceDeps {
          *  ModelChangedError (by `name`, not `instanceof` — it crosses the
          *  extension RPC boundary) when the model changed since. */
         generation?: number;
+        task?: string;
+        budgetKey?: string;
       },
     ): Promise<string>;
+    /** The plane's `completeWithMeta`. Optional so surface fakes that never
+     *  call it keep compiling; the surface throws when it is absent. */
+    completeWithMeta?(
+      prompt: string,
+      opts?: Record<string, unknown>,
+    ): Promise<{ text: string; providerId: string; modelId: string }>;
     see(
       image: Uint8Array,
       prompt: string,
-      opts?: { mime?: string; lane?: 'interactive' | 'background' },
+      opts?: {
+        mime?: string;
+        lane?: 'interactive' | 'background';
+        task?: string;
+        budgetKey?: string;
+      },
     ): Promise<string>;
     read(
       image: Uint8Array,
@@ -527,6 +540,16 @@ export function buildSurfaces(deps: SurfaceDeps): {
           lane: 'interactive',
           ...(opts as object),
         }),
+      completeWithMeta: async (prompt, opts) => {
+        if (!deps.inference.completeWithMeta) {
+          throw new Error('inference.completeWithMeta is not wired');
+        }
+        const m = await deps.inference.completeWithMeta(String(prompt), {
+          lane: 'interactive',
+          ...(opts as object),
+        });
+        return { text: m.text, providerId: m.providerId, modelId: m.modelId };
+      },
       see: (image, prompt, opts) =>
         deps.inference.see(image as Uint8Array, String(prompt), {
           lane: 'interactive',

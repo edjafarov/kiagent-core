@@ -74,7 +74,15 @@ export const NS_METHODS: Record<string, string[]> = {
     'migrate',
   ],
   ui: ['notify', 'handle', 'unhandle', 'broadcast'],
-  inference: ['complete', 'see', 'read', 'hear', 'lane', 'describe'],
+  inference: [
+    'complete',
+    'completeWithMeta',
+    'see',
+    'read',
+    'hear',
+    'lane',
+    'describe',
+  ],
   files: [
     'roots',
     'stat',

@@ -367,6 +367,56 @@ describe('engine', () => {
     expect(states[states.length - 1]).toBe(2);
   });
 
+  it('WorkerSession.seeWithMeta uses the background lane', async () => {
+    const opts: unknown[] = [];
+    const engine = createEngine({
+      store,
+      sources: { get: () => undefined },
+      inference: {
+        complete: async () => 'c',
+        see: async () => 's',
+        read: async () => 'r',
+        hear: async () => 'h',
+        seeWithMeta: async (_i: Uint8Array, _p: string, o?: unknown) => {
+          opts.push(o);
+          return { text: 'd', providerId: 'p', modelId: 'm' };
+        },
+      },
+      convert: async (d: DocumentInput) => d,
+      logs: noopLogs,
+    });
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'y',
+    });
+    let got: unknown = null;
+    const handle = engine.attach({
+      name: 'meta',
+      version: 1,
+      matches: (ch) => ch.kind === 'document',
+      async work(_ch, session) {
+        got = await session.seeWithMeta(new Uint8Array([1]), 'p', {
+          mime: 'image/png',
+          task: 'task.a',
+        });
+        return 'done';
+      },
+    });
+    await store.commit({
+      account: account.id,
+      documents: [doc('img')],
+      cursor: 1,
+    });
+    await waitFor(async () => got !== null, 5000);
+    await handle.stop();
+    expect(got).toEqual({ text: 'd', providerId: 'p', modelId: 'm' });
+    expect(opts[0]).toEqual({
+      mime: 'image/png',
+      task: 'task.a',
+      lane: 'background',
+    });
+  });
+
   it('worker session: read/see route to the plane, enrich commits with the cursor', async () => {
     // fake inference recording lanes
     const calls: string[] = [];

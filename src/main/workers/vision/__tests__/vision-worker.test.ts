@@ -31,11 +31,17 @@ function fakeSession(
   over: Partial<WorkerSession> = {},
 ): WorkerSession & { enriched: any[] } {
   const enriched: any[] = [];
-  return {
+  const s: WorkerSession & { enriched: any[] } = {
     enriched,
     signal: new AbortController().signal,
     inference: async () => 'x',
     see: async () => 'a description of the page',
+    // Delegates to `see` at call time, so a test's `see` override or spy
+    // is what pass 2 sees; `seeMeta` names who answered.
+    seeWithMeta: async (image, prompt, opts) => ({
+      text: await s.see(image, prompt, opts),
+      ...seeMeta,
+    }),
     read: async () => 'plenty of ocr text '.repeat(20), // > 200 chars
     hear: async () => 'a transcript',
     fetchBytes: async () => new Uint8Array(100_000),
@@ -44,7 +50,12 @@ function fakeSession(
     log: () => {},
     ...over,
   };
+  return s;
 }
+let seeMeta = { providerId: 'local', modelId: 'vlm' };
+beforeEach(() => {
+  seeMeta = { providerId: 'local', modelId: 'vlm' };
+});
 
 const change = (doc: Partial<Document>) =>
   ({ seq: 1, kind: 'document', document: { ...baseDoc, ...doc } }) as Change;

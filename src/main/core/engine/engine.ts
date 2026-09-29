@@ -14,6 +14,7 @@ import type {
   FolderScopeUpdate,
   Handle,
   Inference,
+  Lane,
   LogLevel,
   Projection,
   Seq,
@@ -52,7 +53,15 @@ export interface LogSink {
 export interface EngineDeps {
   store: CoreStore;
   sources: { get(id: string): Source | undefined };
-  inference: Inference;
+  /** The plane. `seeWithMeta` is optional so engine fakes that never call
+   *  it keep compiling; a session's `seeWithMeta` throws when absent. */
+  inference: Inference & {
+    seeWithMeta?(
+      image: Uint8Array,
+      prompt: string,
+      opts?: { mime?: string; lane?: Lane; task?: string },
+    ): Promise<{ text: string; providerId: string; modelId: string }>;
+  };
   /** The commit-path conversion stage: binary in, markdown out. Deterministic
    *  parsers only — text-poor results are left for a vision worker ('defer'). */
   convert(input: DocumentInput): Promise<DocumentInput>;
@@ -692,6 +701,15 @@ export function createEngine(deps: EngineDeps): Engine & {
         },
         see(image, prompt, opts) {
           return deps.inference.see(image, prompt, {
+            ...opts,
+            lane: 'background',
+          });
+        },
+        seeWithMeta(image, prompt, opts) {
+          if (!deps.inference.seeWithMeta) {
+            throw new Error('inference.seeWithMeta is not wired');
+          }
+          return deps.inference.seeWithMeta(image, prompt, {
             ...opts,
             lane: 'background',
           });

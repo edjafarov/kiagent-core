@@ -41,6 +41,9 @@ export interface InferencePlane extends Inference {
        *  the provider (before any request reaches the model) and rejects
        *  with ModelChangedError on a mismatch. */
       generation?: number;
+      /** Caller-owned task id and budget key, threaded to the provider. */
+      task?: string;
+      budgetKey?: string;
     },
   ): Promise<string>;
   /** Same request as `complete`, but returns identity + usage alongside the
@@ -53,15 +56,26 @@ export interface InferencePlane extends Inference {
       profile?: CompletionProfile;
       system?: string;
       generation?: number;
+      task?: string;
+      budgetKey?: string;
     },
   ): Promise<CompletionMeta>;
+  /** `see`, plus the provider and model that described the image. */
+  seeWithMeta(
+    image: Uint8Array,
+    prompt: string,
+    opts?: { mime?: string; lane?: Lane; task?: string; budgetKey?: string },
+  ): Promise<{ text: string; providerId: string; modelId: string }>;
   /** Resolves the provider that WOULD answer `kind` right now, exactly as
    *  the call path's `pick(kind)` does, and reports its model identity plus
    *  the plane's current generation — so a caller can compute a cache key
    *  BEFORE calling, and later pass the generation back to `complete`/
    *  `completeWithMeta` to be rejected if the model changed underneath it.
    *  `null` when no ready provider supports the kind; never throws. */
-  describe(kind: 'complete' | 'see' | 'read' | 'hear'): Promise<{
+  describe(
+    kind: 'complete' | 'see' | 'read' | 'hear',
+    task?: string,
+  ): Promise<{
     providerId: string;
     modelId: string;
     generation: number;
@@ -216,9 +230,13 @@ export function createInference(
    *  sees Y); only this internal bookkeeping record is pinned to the
    *  first observer. */
   const describedAt = new Map<
-    'complete' | 'see' | 'read' | 'hear',
+    string,
     { generation: number; modelId: string }
   >();
+  /** One record per (kind, task): a task's describe never overwrites the
+   *  task-less one a caller without that task will compare against. */
+  const describedKey = (kind: string, task: string | undefined): string =>
+    `${kind}|${task ?? ''}`;
 
   const bump = (): void => {
     generation += 1;
@@ -293,7 +311,7 @@ export function createInference(
     // would make this field always equal what `handle()` itself resolves
     // moments later (see `describedAt`'s comment) — forwarding the
     // RECORDED value is what keeps the provider's own re-check meaningful.
-    const recorded = describedAt.get('complete');
+    const recorded = describedAt.get(describedKey('complete', opts?.task));
     const expectModelId =
       opts?.generation !== undefined
         ? recorded?.generation === opts.generation
@@ -309,6 +327,8 @@ export function createInference(
         system: opts?.system,
         generation: opts?.generation,
         expectModelId,
+        task: opts?.task,
+        budgetKey: opts?.budgetKey,
       },
       lane,
     });
@@ -325,13 +345,36 @@ export function createInference(
     };
   };
 
+  const seeWithMeta: InferencePlane['seeWithMeta'] = async (
+    image,
+    prompt,
+    opts,
+  ) => {
+    const lane = opts?.lane ?? 'interactive';
+    gate(lane);
+    const p = pick('see');
+    const modelId = modelIdOf(p, 'see');
+    const out = await p.handle({
+      kind: 'see',
+      payload: {
+        image,
+        prompt,
+        mime: opts?.mime,
+        task: opts?.task,
+        budgetKey: opts?.budgetKey,
+      },
+      lane,
+    });
+    return { text: String(out), providerId: p.id, modelId };
+  };
+
   return {
     async complete(prompt, opts) {
       const meta = await completeWithMeta(prompt, opts);
       return meta.text;
     },
     completeWithMeta,
-    async describe(kind) {
+    async describe(kind, task) {
       let p: InferenceProvider;
       try {
         p = pick(kind);
@@ -346,23 +389,17 @@ export function createInference(
       // already recorded one this generation — keep it. The RETURN value
       // below is unaffected: this caller still gets the live,
       // freshly-resolved modelId regardless of who wrote first.
-      if (!describedAt.has(kind)) {
-        describedAt.set(kind, { generation, modelId });
+      const key = describedKey(kind, task);
+      if (!describedAt.has(key)) {
+        describedAt.set(key, { generation, modelId });
       }
       return { providerId: p.id, modelId, generation };
     },
     generation: () => generation,
     async see(image, prompt, opts) {
-      const lane = opts?.lane ?? 'interactive';
-      gate(lane);
-      const p = pick('see');
-      const out = await p.handle({
-        kind: 'see',
-        payload: { image, prompt, mime: opts?.mime },
-        lane,
-      });
-      return String(out);
+      return (await seeWithMeta(image, prompt, opts)).text;
     },
+    seeWithMeta,
     async read(image, opts) {
       const lane = opts?.lane ?? 'interactive';
       gate(lane);

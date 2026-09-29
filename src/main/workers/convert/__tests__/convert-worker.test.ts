@@ -92,6 +92,7 @@ function fakeSession(
     signal: new AbortController().signal,
     inference: async () => 'x',
     see: async () => 'x',
+    seeWithMeta: async () => ({ text: 'x', providerId: 'p', modelId: 'm' }),
     read: async () => 'x',
     hear: async () => 'x',
     fetchBytes,

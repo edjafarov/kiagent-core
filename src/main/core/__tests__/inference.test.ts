@@ -422,3 +422,63 @@ describe('inference plane', () => {
     );
   });
 });
+
+describe('tasks and budget keys on calls', () => {
+  it('task and budgetKey reach the provider payload for complete and see', async () => {
+    const seen: unknown[] = [];
+    const plane = createInference(fakeLogs(), { generationSeed: 1 });
+    plane.register(
+      fakeProvider({
+        id: 'p',
+        supports: ['complete', 'see'],
+        handle: async (req) => {
+          seen.push(req.payload);
+          return 'ok';
+        },
+      }),
+    );
+    await plane.complete('hi', { task: 'task.a', budgetKey: 'k1' });
+    await plane.see(new Uint8Array([1]), 'what', {
+      task: 'task.b',
+      budgetKey: 'k2',
+    });
+    expect(seen[0]).toMatchObject({ task: 'task.a', budgetKey: 'k1' });
+    expect(seen[1]).toMatchObject({ task: 'task.b', budgetKey: 'k2' });
+  });
+
+  it("describe with a task doesn't overwrite describe without one", async () => {
+    let modelId = 'm1';
+    const payloads: Array<Record<string, unknown>> = [];
+    const plane = createInference(fakeLogs(), { generationSeed: 1 });
+    plane.register({
+      id: 'p',
+      supports: ['complete'],
+      status: () => 'ready',
+      describe: () => ({ modelId }),
+      handle: async (req) => {
+        payloads.push(req.payload as Record<string, unknown>);
+        return 'ok';
+      },
+    });
+    const withTask = await plane.describe('complete', 'task.a');
+    modelId = 'm2';
+    const plain = await plane.describe('complete');
+    expect(withTask?.generation).toBe(plain?.generation);
+    await plane.complete('hi', { generation: plain!.generation });
+    expect(payloads[0].expectModelId).toBe('m2');
+  });
+
+  it('seeWithMeta returns text + providerId + modelId', async () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 1 });
+    plane.register(
+      fakeProvider({ id: 'vlm', supports: ['see'], modelId: 'gemma' }),
+    );
+    await expect(
+      plane.seeWithMeta(new Uint8Array([1]), 'what'),
+    ).resolves.toEqual({
+      text: 'vlm:see',
+      providerId: 'vlm',
+      modelId: 'gemma',
+    });
+  });
+});

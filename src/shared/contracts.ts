@@ -731,13 +731,26 @@ export type Lane = 'interactive' | 'background';
 export interface Inference {
   complete(
     prompt: string,
-    opts?: { maxTokens?: number; lane?: Lane },
+    opts?: {
+      maxTokens?: number;
+      lane?: Lane;
+      /** A caller-owned task id; a provider routed for that task may
+       *  answer it (see `InferencePlane.setRoute`). */
+      task?: string;
+      /** Groups calls of one caller-defined run for a provider's budget. */
+      budgetKey?: string;
+    },
   ): Promise<string>;
   /** Vision: OCR, layout, "what is in this image". */
   see(
     image: Uint8Array,
     prompt: string,
-    opts?: { mime?: string; lane?: Lane },
+    opts?: {
+      mime?: string;
+      lane?: Lane;
+      task?: string;
+      budgetKey?: string;
+    },
   ): Promise<string>;
   /** OCR only: image/page in, plain text out. Distinct from `see` because
    *  cheap native OCR and the costly VLM route to DIFFERENT providers —
@@ -803,8 +816,24 @@ export interface ExtensionInference extends Inference {
       profile?: 'default' | 'deterministic';
       system?: string;
       generation?: number;
+      task?: string;
+      budgetKey?: string;
     },
   ): Promise<string>;
+  /** `complete`, plus who answered — the provider and model that actually
+   *  served the call (after any fallback). */
+  completeWithMeta(
+    prompt: string,
+    opts?: {
+      maxTokens?: number;
+      lane?: Lane;
+      profile?: 'default' | 'deterministic';
+      system?: string;
+      generation?: number;
+      task?: string;
+      budgetKey?: string;
+    },
+  ): Promise<{ text: string; providerId: string; modelId: string }>;
   /** Resolves the provider that WOULD answer `kind` right now, exactly as
    *  the call path's internal `pick(kind)` does, and reports its model
    *  identity plus the plane's current generation token — so an extension
@@ -931,6 +960,13 @@ export interface WorkerSession {
     prompt: string,
     opts?: { mime?: string },
   ): Promise<string>;
+  /** `see`, plus who described the image (the answering provider and
+   *  model), pinned to the 'background' lane. */
+  seeWithMeta(
+    image: Uint8Array,
+    prompt: string,
+    opts?: { mime?: string; task?: string },
+  ): Promise<{ text: string; providerId: string; modelId: string }>;
   /** OCR sugar over the Inference plane, pinned to the 'background' lane. */
   read(image: Uint8Array, opts?: { mime?: string }): Promise<string>;
   /** ASR sugar over the Inference plane, pinned to the 'background' lane. */
