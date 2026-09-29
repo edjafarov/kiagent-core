@@ -41,9 +41,10 @@ export function planMailboxSync(
   const reset = prev !== undefined && prev.uidValidity !== uidValidityStr;
   // An entry written before attachments were ingested re-fetches the whole
   // mailbox once (unchanged messages are hash-skipped; only the new
-  // attachment children land). Not a reset: nothing is archived.
+  // attachment children land). Not a reset: nothing is archived. A stale
+  // entry (mailbox left scope, maybe archived, now back) does the same.
   const resumeFrom =
-    prev && !reset && prev.attachments === ATTACHMENTS_VERSION
+    prev && !reset && !prev.stale && prev.attachments === ATTACHMENTS_VERSION
       ? prev.lastUid
       : 0;
   const uidsToFetch = presentUids

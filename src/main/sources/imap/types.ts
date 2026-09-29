@@ -74,6 +74,9 @@ export interface FolderCursorEntry {
   lastUid: number;
   /** ATTACHMENTS_VERSION once synced with attachment children (cursor.ts). */
   attachments?: number;
+  /** The mailbox left the resolved set mid-session: if it returns it is
+   *  re-fetched from 0, or reset when its UIDVALIDITY changed. */
+  stale?: true;
 }
 
 /** The Source's cursor: one entry per synced mailbox. */

@@ -685,17 +685,90 @@ describe('imap folder scope — pull', () => {
       src.pull(makeSession(cfg, { signal: ctl.signal, cursor: cur }), cur),
     );
     expect(batches.flatMap((b) => b.deletions ?? [])).toEqual([]);
-    // The cursor sheds the vanished mailbox via one empty live batch.
-    const shed = batches.filter(
-      (b) => b.items.length === 0 && !('Receipts' in b.cursor.mailboxes),
+    // The entry is kept but marked stale, via one empty live batch.
+    const marked = batches.filter(
+      (b) => b.items.length === 0 && b.cursor.mailboxes.Receipts?.stale,
     );
-    expect(shed.length).toBeGreaterThanOrEqual(1);
-    expect(shed[0].phase).toBe('live');
-    expect(Object.keys(batches[batches.length - 1].cursor.mailboxes)).toEqual([
-      'INBOX',
-    ]);
+    expect(marked).toHaveLength(1);
+    expect(marked[0].phase).toBe('live');
+    expect(marked[0].cursor.mailboxes.Receipts).toEqual({
+      uidValidity: '3',
+      lastUid: 3,
+      attachments: 1,
+      stale: true,
+    });
     const idx = log.indexOf('list', 1);
     expect(log.slice(idx).some((l) => l.endsWith('Receipts'))).toBe(false);
+  });
+
+  async function pullStale(entry: ImapCursor['mailboxes'][string]) {
+    const { client } = folderServer();
+    const ctl = new AbortController();
+    const src = createImapSource({ connect: async () => client });
+    const cur: ImapCursor = {
+      mailboxes: {
+        INBOX: { uidValidity: '1', lastUid: 2, attachments: 1 },
+        Receipts: entry,
+      },
+    };
+    const cfg = { ...BASE, folderRoots: roots('INBOX', 'Receipts') };
+    const out: Batch<ImapCursor, ImapMessageItem>[] = [];
+    for await (const b of src.pull(
+      makeSession(cfg, { signal: ctl.signal, cursor: cur }),
+      cur,
+    )) {
+      out.push(b);
+      if (b.phase === 'live' && b.items.length === 0 && !b.deletions)
+        ctl.abort();
+    }
+    return out;
+  }
+
+  it('a stale entry returning under the SAME UIDVALIDITY re-fetches from uid 1', async () => {
+    const batches = await pullStale({
+      uidValidity: '3',
+      lastUid: 3,
+      attachments: 1,
+      stale: true,
+    });
+    const items = batches
+      .flatMap((b) => b.items)
+      .filter((i) => i.mailbox === 'Receipts');
+    expect(items.map((i) => i.uid)).toEqual([1, 2, 3]);
+    const first = batches.find((b) =>
+      b.items.some((i) => i.mailbox === 'Receipts'),
+    )!;
+    expect(first.phase).toBe('backfill');
+    expect(first.estimateTotal).toBe(2 + 3);
+    expect(batches.flatMap((b) => b.deletions ?? [])).toEqual([]);
+    const last = batches[batches.length - 1];
+    expect(last.cursor.mailboxes.Receipts.stale).toBeUndefined();
+  });
+
+  it('a stale entry returning under a NEW UIDVALIDITY archives the old generation, then backfills', async () => {
+    const batches = await pullStale({
+      uidValidity: '8',
+      lastUid: 200,
+      attachments: 1,
+      stale: true,
+    });
+    const dels = batches.flatMap((b) => b.deletions ?? []);
+    expect(dels).toHaveLength(200);
+    expect(dels[0]).toEqual({
+      externalId: 'Receipts:8:1',
+      type: 'email.message',
+    });
+    const firstItems = batches.findIndex((b) =>
+      b.items.some((i) => i.mailbox === 'Receipts'),
+    );
+    const lastDel = batches.map((b) => !!b.deletions?.length).lastIndexOf(true);
+    expect(lastDel).toBeLessThan(firstItems);
+    expect(
+      batches
+        .flatMap((b) => b.items)
+        .filter((i) => i.mailbox === 'Receipts')
+        .map((i) => i.uid),
+    ).toEqual([1, 2, 3]);
   });
 
   it('a re-LIST that resolves to nothing keeps the previous set and warns', async () => {

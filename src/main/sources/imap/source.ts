@@ -36,6 +36,7 @@ import { normalizeAuthor } from '../email-evidence';
 import type {
   ImapAccountConfig,
   ImapClient,
+  FolderCursorEntry,
   ImapCursor,
   ImapFolderInfo,
   ImapMessageItem,
@@ -122,6 +123,11 @@ async function openClient(
     }
     throw new Error(describeConnectError(e));
   }
+}
+
+/** No entry, or a stale one: the whole mailbox is (re)fetched. */
+function needsBackfill(entry: FolderCursorEntry | undefined): boolean {
+  return entry === undefined || entry.stale === true;
 }
 
 /** Append without spreading: a spread of 100k+ refs overflows the stack. */
@@ -301,6 +307,10 @@ export function createImapSource(
         ...Object.keys(prev?.mailboxes ?? {}),
         ...resolveScopedMailboxes(folders, rootsOf(config)).map((m) => m.path),
       ]);
+      // Accepted residual: mail synced between the post-picker STATUS and the
+      // engine quiescing, or a folder created under a ticked root while the
+      // picker is open, is not in archiveRefs. The engine restarts the account
+      // after Save and that cycle's reconcile archives it.
       const removed = [...leaving].filter((p) => !after.has(p));
       // A retained mailbox missing from this snapshot cursor only re-fetches
       // idempotently, so the returned cursor is snapshot minus removed.
@@ -394,7 +404,7 @@ export function createImapSource(
           Batch<ImapCursor, ImapMessageItem>
         > {
           let total: number | undefined;
-          if (mailboxes.some((m) => !cur.mailboxes[m.path])) {
+          if (mailboxes.some((m) => needsBackfill(cur.mailboxes[m.path]))) {
             total = 0;
             for (const m of mailboxes) {
               if (session.signal.aborted) return;
@@ -407,7 +417,7 @@ export function createImapSource(
               client,
               mb,
               cur,
-              cur.mailboxes[mb.path] ? 'live' : 'backfill',
+              needsBackfill(cur.mailboxes[mb.path]) ? 'backfill' : 'live',
               session,
               total,
             )) {
@@ -458,16 +468,18 @@ export function createImapSource(
               );
             } else {
               mailboxes = next;
-              // Drop cursor entries of mailboxes that left the set, so one
-              // that returns is backfilled rather than "already synced".
-              // No deletions: reconcile owns the archive.
-              const gone = Object.keys(cur.mailboxes).filter(
-                (p) => !next.some((m) => m.path === p),
+              // Mark entries of mailboxes that left the set stale (not
+              // deleted: a return under a NEW UIDVALIDITY must still archive
+              // the old generation). A same-UIDVALIDITY return re-fetches
+              // from 0; advanceCursor drops the flag. No deletions here:
+              // reconcile owns the archive.
+              const gone = Object.entries(cur.mailboxes).filter(
+                ([p, e]) => !e.stale && !next.some((m) => m.path === p),
               );
               if (gone.length > 0) {
-                const rest = { ...cur.mailboxes };
-                for (const p of gone) delete rest[p];
-                cur = { mailboxes: rest };
+                const marked = { ...cur.mailboxes };
+                for (const [p, e] of gone) marked[p] = { ...e, stale: true };
+                cur = { mailboxes: marked };
                 yield { phase: 'live', items: [], cursor: cur };
               }
             }

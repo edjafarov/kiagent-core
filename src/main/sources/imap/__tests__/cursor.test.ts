@@ -42,6 +42,29 @@ describe('planMailboxSync', () => {
     const plan = planMailboxSync(prev, 222, [1, 2, 3]);
     expect(plan).toEqual({ reset: true, uidsToFetch: [1, 2, 3] });
   });
+
+  it('a stale entry with the same UIDVALIDITY re-fetches from 0 without a reset', () => {
+    const prev = {
+      uidValidity: '111',
+      lastUid: 2,
+      attachments: 1,
+      stale: true as const,
+    };
+    expect(planMailboxSync(prev, 111, [1, 2, 3])).toEqual({
+      reset: false,
+      uidsToFetch: [1, 2, 3],
+    });
+  });
+
+  it('a stale entry with a different UIDVALIDITY resets', () => {
+    const prev = {
+      uidValidity: '111',
+      lastUid: 2,
+      attachments: 1,
+      stale: true as const,
+    };
+    expect(planMailboxSync(prev, 222, [1, 2]).reset).toBe(true);
+  });
 });
 
 describe('advanceCursor / emptyCursor', () => {
@@ -62,5 +85,16 @@ describe('advanceCursor / emptyCursor', () => {
     });
     // original untouched
     expect(cur.mailboxes.Sent).toBeUndefined();
+  });
+
+  it('drops the stale flag when the mailbox syncs again', () => {
+    const cur: ImapCursor = {
+      mailboxes: {
+        Sent: { uidValidity: '42', lastUid: 7, attachments: 1, stale: true },
+      },
+    };
+    expect(
+      advanceCursor(cur, 'Sent', 42, 9).mailboxes.Sent.stale,
+    ).toBeUndefined();
   });
 });
