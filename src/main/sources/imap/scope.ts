@@ -233,7 +233,7 @@ function norm(path: string, delimiter: string | undefined): string {
   if (path.slice(0, 5).toUpperCase() !== 'INBOX') return path;
   const next = path.charAt(5);
   return next === '' || seps(delimiter).includes(next)
-    ? 'INBOX' + path.slice(5)
+    ? `INBOX${path.slice(5)}`
     : path;
 }
 
