@@ -550,18 +550,15 @@ describe('remote providers and per-task routes', () => {
     await expect(plane.complete('p')).rejects.toBeInstanceOf(NoProviderError);
   });
 
-  it('setRoute bumps only on a real change', () => {
+  it('a route flip never moves the generation: a pinned task-less caller survives it', async () => {
     const { plane } = setup();
-    const g0 = plane.generation();
+    const d = await plane.describe('complete');
     plane.setRoute('task.a', 'r');
-    const g1 = plane.generation();
-    expect(g1).toBe(g0 + 1);
-    plane.setRoute('task.a', 'r');
-    expect(plane.generation()).toBe(g1);
     plane.setRoute('task.a', null);
-    expect(plane.generation()).toBe(g1 + 1);
-    plane.setRoute('task.a', null);
-    expect(plane.generation()).toBe(g1 + 1);
+    expect(plane.generation()).toBe(d!.generation);
+    await expect(
+      plane.complete('p', { generation: d!.generation }),
+    ).resolves.toBe('local:complete');
   });
 
   it('the disposer clears routes naming it', async () => {
@@ -692,16 +689,63 @@ describe('remote → local fallback', () => {
     expect(calls.map((c) => c.id)).toEqual(['local']);
   });
 
-  it('another error from a remote propagates', async () => {
+  it('any other remote error also ends locally', async () => {
     const { plane, calls } = setup({
       remoteHandle: async () => {
-        throw new Error('boom');
+        throw new TypeError('provider bug');
       },
     });
-    await expect(plane.complete('p', { task: 'task.a' })).rejects.toThrow(
-      'boom',
+    await expect(plane.complete('p', { task: 'task.a' })).resolves.toBe(
+      'local:complete',
     );
+    expect(calls.map((c) => c.id)).toEqual(['r', 'local']);
+  });
+
+  it('the local retry re-checks the lane: a lane closed meanwhile defers, never runs locally', async () => {
+    let planeRef: ReturnType<typeof createInference> | null = null;
+    const { plane, calls } = setup({
+      remoteHandle: async () => {
+        planeRef!.setBackgroundOpen(false);
+        throw unavailable();
+      },
+    });
+    planeRef = plane;
+    await expect(
+      plane.seeWithMeta(new Uint8Array([1]), 'p', {
+        task: 'task.a',
+        lane: 'background',
+      }),
+    ).rejects.toBeInstanceOf(LaneClosedError);
     expect(calls.map((c) => c.id)).toEqual(['r']);
+  });
+
+  it("a routed describe's model id is never checked against the local provider", async () => {
+    let remoteReady = true;
+    const calls: Array<Record<string, unknown>> = [];
+    const plane = createInference(fakeLogs(), { generationSeed: 1 });
+    plane.register({
+      id: 'local',
+      supports: ['complete'],
+      status: () => 'ready',
+      describe: () => ({ modelId: 'L' }),
+      handle: async (req) => {
+        calls.push(req.payload as Record<string, unknown>);
+        return 'ok';
+      },
+    });
+    plane.register({
+      id: 'r',
+      remote: true,
+      supports: ['complete'],
+      status: () => (remoteReady ? 'ready' : 'standby'),
+      describe: () => ({ modelId: 'R' }),
+      handle: async () => 'remote',
+    });
+    plane.setRoute('task.a', 'r');
+    const d = await plane.describe('complete', 'task.a');
+    remoteReady = false;
+    await plane.complete('p', { task: 'task.a', generation: d!.generation });
+    expect(calls[0].expectModelId).toBe('L');
   });
 
   it("a caller's generation is checked against the answering provider", async () => {

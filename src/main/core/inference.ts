@@ -88,8 +88,8 @@ export interface InferencePlane extends Inference {
   providers(): InferenceProvider[];
   /** Route a caller-owned task to a registered provider (typically a
    *  remote one), or clear it with `null`. In memory only; the owner
-   *  re-applies routes after a restart. A real change bumps the
-   *  generation. A provider's disposer clears the routes naming it. */
+   *  re-applies routes after a restart. Never bumps the generation. A
+   *  provider's disposer clears the routes naming it. */
   setRoute(task: string, providerId: string | null): void;
   /** The current routes, for a user-facing "some tasks leave this
    *  machine" line. */
@@ -250,7 +250,7 @@ export function createInference(
    *  first observer. */
   const describedAt = new Map<
     string,
-    { generation: number; modelId: string }
+    { generation: number; modelId: string; providerId: string }
   >();
   /** One record per (kind, task): a task's describe never overwrites the
    *  task-less one a caller without that task will compare against. */
@@ -326,22 +326,31 @@ export function createInference(
   };
 
   /** Runs `attempt` on the provider `pick(kind, task)` resolves. When that
-   *  is a REMOTE provider and it answers "not now" (an error NAMED
-   *  RemoteUnavailableError — by name, it crosses RPC), the call is retried
-   *  exactly once on the local order, as if it had no task. A local
-   *  failure is never retried anywhere. */
+   *  is a REMOTE provider and it fails — "not now" (RemoteUnavailableError)
+   *  or anything else, since a remote failure never has a local meaning —
+   *  the call is retried exactly once on the local order, as if it had no
+   *  task, after re-checking the lane. The plane's own fences
+   *  (ModelChangedError, LaneClosedError) propagate. A local failure is
+   *  never retried anywhere. */
   const withLocalFallback = async <T>(
     kind: 'complete' | 'see',
     task: string | undefined,
+    lane: Lane,
     attempt: (p: InferenceProvider, task: string | undefined) => Promise<T>,
   ): Promise<T> => {
     const p = pick(kind, task);
     try {
       return await attempt(p, task);
     } catch (err) {
-      if (!p.remote || (err as Error)?.name !== 'RemoteUnavailableError') {
+      const name = (err as Error)?.name;
+      if (
+        !p.remote ||
+        name === 'ModelChangedError' ||
+        name === 'LaneClosedError'
+      ) {
         throw err;
       }
+      gate(lane);
       logs.log(
         'inference',
         'info',
@@ -358,7 +367,7 @@ export function createInference(
     const lane = opts?.lane ?? 'interactive';
     gate(lane);
     const profile: CompletionProfile = opts?.profile ?? 'default';
-    return withLocalFallback('complete', opts?.task, async (p, task) => {
+    return withLocalFallback('complete', opts?.task, lane, async (p, task) => {
       checkGeneration(p, 'complete', opts?.generation);
       const modelId = modelIdOf(p, 'complete');
       // `expectModelId`: when the caller passed a `generation`, prefer the
@@ -374,9 +383,12 @@ export function createInference(
       // moments later (see `describedAt`'s comment) — forwarding the
       // RECORDED value is what keeps the provider's own re-check meaningful.
       const recorded = describedAt.get(describedKey('complete', task));
+      // Only a record made for THIS provider: a routed task that ends up
+      // local never carries the remote's model id into the local check.
       const expectModelId =
         opts?.generation !== undefined
-          ? recorded?.generation === opts.generation
+          ? recorded?.generation === opts.generation &&
+            recorded.providerId === p.id
             ? recorded.modelId
             : modelId
           : undefined;
@@ -416,7 +428,7 @@ export function createInference(
   ) => {
     const lane = opts?.lane ?? 'interactive';
     gate(lane);
-    return withLocalFallback('see', opts?.task, async (p) => {
+    return withLocalFallback('see', opts?.task, lane, async (p) => {
       const modelId = modelIdOf(p, 'see');
       const out = await p.handle({
         kind: 'see',
@@ -460,7 +472,7 @@ export function createInference(
       // freshly-resolved modelId regardless of who wrote first.
       const key = describedKey(kind, task);
       if (!describedAt.has(key)) {
-        describedAt.set(key, { generation, modelId });
+        describedAt.set(key, { generation, modelId, providerId: p.id });
       }
       return { providerId: p.id, modelId, generation };
     },
@@ -523,9 +535,11 @@ export function createInference(
     providers: () => [...providers],
     setRoute(task, providerId) {
       if ((routeTable.get(task) ?? null) === providerId) return;
+      // No bump: a route decides only which provider serves its task;
+      // pinned callers are fenced per provider (describedAt.providerId),
+      // so a flip must not fail unrelated in-flight work.
       if (providerId === null) routeTable.delete(task);
       else routeTable.set(task, providerId);
-      bump();
     },
     routes: () =>
       [...routeTable].map(([task, id]) => {
