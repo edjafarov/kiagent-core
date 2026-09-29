@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Account, FolderScopeUpdate } from '@shared/contracts';
 import { buildMainApi } from '../main-api';
+import { createBusyRegistry } from '../core/busy';
 import type { CoreStore } from '../core/store/store';
 import type { McpServerHandle } from '../core/mcp/server';
 import type { TrayMenuController } from '../tray-menu';
@@ -840,5 +841,27 @@ describe('buildMainApi outbound dep', () => {
     await expect(
       mainApi.outbound.handleRequest({} as never, {} as never),
     ).resolves.toBe(false);
+  });
+});
+
+describe('buildMainApi busy', () => {
+  it('shares the registry it is given, so every extension sees one state', () => {
+    const busy = createBusyRegistry();
+    const deps = {
+      store: stubStore().store,
+      mcp: stubMcp().mcp,
+      app: stubApp(),
+      dataDir: '/fake/data',
+      tray: stubTray().tray,
+      ui: { openWindow: () => {} },
+      outbound: stubOutbound(true).outbound,
+      busy,
+    };
+    buildMainApi(deps).busy.set('ext.a', 'recording');
+    expect(buildMainApi(deps).busy.get()).toEqual({
+      busy: true,
+      reasons: ['recording'],
+    });
+    expect(busy.get().busy).toBe(true);
   });
 });

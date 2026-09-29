@@ -57,6 +57,7 @@ import { parseGitHubRef, formatGitHubRef } from './marketplace/github-ref';
 import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
+import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
 import { wireAttentionPush } from './attention/push';
 import {
@@ -1135,6 +1136,8 @@ app
     // through `outbound`, so having two instances is intentional, not a
     // duplication bug.
     const outboundRoutes = createOutboundRoutes(outbound);
+    // One do-not-disturb state for the run, shared by every extension.
+    const busy = createBusyRegistry();
 
     extensionsPlatform = createExtensionPlatform({
       extDir: path.join(app.getPath('userData'), 'extensions'),
@@ -1164,6 +1167,7 @@ app
           outbound: { service: outbound, routes: outboundRoutes },
           readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
           inference: p.inference,
+          busy,
           runAccount: (account) => runAccount(p, account),
           applyFolderScope: async (accountId, update, configAtOpen) => {
             await p.engine.applyScope(accountId, update, configAtOpen);

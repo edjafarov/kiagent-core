@@ -11,6 +11,7 @@ import type {
 } from '@shared/contracts';
 import { coveringRoots, isUnder } from '@shared/folder-paths';
 
+import { createBusyRegistry, type BusyRegistry } from './core/busy';
 import type { McpServerHandle } from './core/mcp/server';
 import type { CoreStore } from './core/store/store';
 import type { TrayMenuController } from './tray-menu';
@@ -121,6 +122,9 @@ export interface MainProcessApi {
   inference?: {
     generation(): number;
   };
+  /** Do-not-disturb state shared by every extension: an owner says it is
+   *  busy and why (recording, presenting), anyone can read it. */
+  busy: BusyRegistry;
 }
 
 export interface BuildMainApiDeps {
@@ -153,6 +157,9 @@ export interface BuildMainApiDeps {
   inference?: {
     generation(): number;
   };
+  /** One registry for the app run, shared across every extension's API. A
+   *  private one is made when absent (tests, single-extension hosts). */
+  busy?: BusyRegistry;
   /** Starts the loop for an account created by localFolders.ensureRoot. */
   runAccount?(account: Account): void;
   /** Narrow bridge to the engine's folder-scope transaction. */
@@ -278,6 +285,7 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
           return { status: 'added' as const, accountId: account.id };
         }),
     },
+    busy: deps.busy ?? createBusyRegistry(),
     mcp: {
       port: deps.mcp.port,
       registerTool: (tool) => deps.mcp.registerTool(tool),
