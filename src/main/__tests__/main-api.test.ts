@@ -58,24 +58,28 @@ function stubStore(): {
 function stubMcp(): {
   mcp: McpServerHandle;
   registerToolArgs: unknown[];
+  handlerOpts: unknown[];
   sessionHandlerCalls: number;
 } {
   const registerToolArgs: unknown[] = [];
   let sessionHandlerCalls = 0;
+  const handlerOpts: unknown[] = [];
   const mcp = {
     port: 7421,
     registerTool: (tool: unknown) => {
       registerToolArgs.push(tool);
       return () => {};
     },
-    createMcpHandler: () => {
+    createMcpHandler: (opts?: unknown) => {
       sessionHandlerCalls += 1;
+      handlerOpts.push(opts);
       return async () => {};
     },
   } as unknown as McpServerHandle;
   return {
     mcp,
     registerToolArgs,
+    handlerOpts,
     get sessionHandlerCalls() {
       return sessionHandlerCalls;
     },
@@ -698,6 +702,8 @@ describe('buildMainApi', () => {
     expect(registerToolArgs).toEqual([{ name: 't' }]);
     mainApi.mcp.createMcpHandler();
     expect(mcpStub.sessionHandlerCalls).toBe(1);
+    mainApi.mcp.createMcpHandler({ transport: 'agent' });
+    expect(mcpStub.handlerOpts[1]).toEqual({ transport: 'agent' });
 
     expect(mainApi.paths.userData).toBe('/fake/userData');
     expect(mainApi.paths.dataDir).toBe('/fake/data');

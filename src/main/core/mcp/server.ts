@@ -92,12 +92,24 @@ export interface McpServerHandle {
    *  session id, so a product remote server can serve many concurrent sessions
    *  and reconnects (not one session for its whole lifetime). Memoized:
    *  repeated calls return the SAME handler over the SAME product session pool.
-   *  Auth-free — the product's own middleware (e.g. JWT) runs before this. */
-  createMcpHandler(): (
+   *  Auth-free — the product's own middleware (e.g. JWT) runs before this.
+   *  `transport` (default 'remote') tags every call it serves: 'agent' is a
+   *  hosted assistant acting for the user, whose drafts always wait for the
+   *  page. One handler and session pool per transport. */
+  createMcpHandler(opts?: {
+    transport?: 'remote' | 'agent';
+  }): (
     req: http.IncomingMessage,
     res: http.ServerResponse,
     parsedBody?: unknown,
   ) => Promise<void>;
+}
+
+/** Activity feed label for the transport a call arrived on. */
+function activityTransport(
+  t: 'local' | 'remote' | 'agent',
+): 'http' | 'remote' | 'agent' {
+  return t === 'local' ? 'http' : t;
 }
 
 const HOST = '127.0.0.1';
@@ -288,7 +300,7 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       attachToolHandlers(server, registry, deps.logSink, (rec) =>
         deps.onActivity?.({
           ...rec,
-          transport: currentTransport() === 'remote' ? 'remote' : 'http',
+          transport: activityTransport(currentTransport()),
         }),
       );
       attachResourceHandlers(server, deps.query);
@@ -469,19 +481,22 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   // registerTool()/createMcpHandler() make anything reachable.
   deps.outbound?.setBaseUrl(`http://${HOST}:${port}`);
 
-  // Lazily created on first createMcpHandler() call; disposed in stop().
-  let productDispatcher: ReturnType<typeof createSessionDispatcher> | null =
-    null;
-  // Memoized alongside productDispatcher itself — createMcpHandler() must
-  // return the SAME function reference on repeated calls (a product build
-  // mounts it once on its own router), so the runWithTransport wrapper below
-  // is built exactly once too, not as a fresh closure per call.
+  // One dispatcher + handler per transport, created on first
+  // createMcpHandler() call for it and disposed in stop(). Memoized so
+  // repeated calls return the SAME function reference (a product build
+  // mounts it once on its own router), each with its own session pool.
   type ProductHandler = (
     req: http.IncomingMessage,
     res: http.ServerResponse,
     parsedBody?: unknown,
   ) => Promise<void>;
-  let productHandler: ProductHandler | null = null;
+  const productHandlers = new Map<
+    'remote' | 'agent',
+    {
+      dispatcher: ReturnType<typeof createSessionDispatcher>;
+      handler: ProductHandler;
+    }
+  >();
 
   // Built once: the launch descriptor + client registry used by clients()/
   // connectClient()/disconnectClient(). `__dirname` resolves to wherever the
@@ -534,29 +549,26 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       };
     },
 
-    createMcpHandler() {
-      // One product-facing dispatcher for the life of this handle, with its
-      // OWN session pool (independent of loopback's) over the SAME live
-      // registry. Memoized so repeated calls return the same multiplexing
-      // handler sharing one product session pool — the product mounts it on
-      // its remote transport and it serves many sessions + reconnects.
-      if (!productDispatcher) productDispatcher = createSessionDispatcher();
-      // Every request this handler ever serves is a REMOTE MCP connection —
-      // tag it via the ALS seam so anything deep in the call stack (the
-      // outbound service's assertReady()) can tell loopback and remote
-      // sessions apart without a flag threaded through every signature. The
-      // loopback listener above never calls runWithTransport, so its calls
-      // read 'local' (currentTransport()'s default). Memoized alongside
-      // productDispatcher so repeated calls return the SAME function
-      // reference (a product build mounts it once on its own router).
-      if (!productHandler) {
-        const dispatcher = productDispatcher;
-        productHandler = (req, res, parsedBody) =>
-          runWithTransport('remote', () =>
-            dispatcher.handleMcp(req, res, parsedBody),
-          );
+    createMcpHandler(opts) {
+      // Every request a handler serves runs inside runWithTransport(t, …),
+      // so anything deep in the call stack (the outbound service) can tell
+      // loopback, remote and agent sessions apart without a flag threaded
+      // through every signature. The loopback listener never calls
+      // runWithTransport, so its calls read 'local'.
+      const t = opts?.transport ?? 'remote';
+      let entry = productHandlers.get(t);
+      if (!entry) {
+        const dispatcher = createSessionDispatcher();
+        entry = {
+          dispatcher,
+          handler: (req, res, parsedBody) =>
+            runWithTransport(t, () =>
+              dispatcher.handleMcp(req, res, parsedBody),
+            ),
+        };
+        productHandlers.set(t, entry);
       }
-      return productHandler;
+      return entry.handler;
     },
 
     async clients(): Promise<
@@ -619,9 +631,11 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
 
     async stop() {
       // Tear down both dispatchers' sweep timers + open sessions (loopback
-      // always exists; the product dispatcher only if createMcpHandler() ran).
+      // always exists; product dispatchers only if createMcpHandler() ran).
       loopback.dispose();
-      productDispatcher?.dispose();
+      for (const { dispatcher } of productHandlers.values()) {
+        dispatcher.dispose();
+      }
       try {
         await rawSql.dispose();
       } catch {

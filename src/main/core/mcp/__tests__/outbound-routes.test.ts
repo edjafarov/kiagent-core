@@ -458,6 +458,54 @@ describe('createMcpHandler() tags every call transport=remote', () => {
   });
 });
 
+describe("createMcpHandler({ transport: 'agent' })", () => {
+  let agentServer: http.Server;
+  let agentUrl: URL;
+  let client: Client | null = null;
+
+  beforeAll(async () => {
+    const h = mcp.createMcpHandler({ transport: 'agent' });
+    agentServer = http.createServer((req, res) => {
+      void h(req, res);
+    });
+    await new Promise<void>((resolve) => agentServer.listen(0, resolve));
+    const { port } = agentServer.address() as AddressInfo;
+    agentUrl = new URL(`http://127.0.0.1:${port}/mcp`);
+  });
+
+  afterAll(async () => {
+    await client?.close().catch(() => {});
+    await new Promise<void>((resolve) => agentServer.close(() => resolve()));
+  });
+
+  it('is memoized per transport and distinct from the remote handler', () => {
+    const a = mcp.createMcpHandler({ transport: 'agent' });
+    expect(mcp.createMcpHandler({ transport: 'agent' })).toBe(a);
+    expect(mcp.createMcpHandler()).not.toBe(a);
+    expect(mcp.createMcpHandler({ transport: 'remote' })).toBe(
+      mcp.createMcpHandler(),
+    );
+  });
+
+  it('drafts on the agent transport land as review drafts from mcp-agent', async () => {
+    defaultMode = 'chat';
+    client = new Client({ name: 'agent-client', version: '0.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(agentUrl));
+    const result = await client.callTool({
+      name: 'draft_reply',
+      arguments: { document_id: docId, body: 'from the agent' },
+    });
+    defaultMode = 'review';
+    expect(result.isError).toBeFalsy();
+    const { draft_id: id } = JSON.parse(
+      (result.content as Array<{ text: string }>)[0].text,
+    ) as { draft_id: string };
+    const row = await store.outbox.get(id);
+    expect(row?.createdVia).toBe('mcp-agent');
+    expect(row?.confirmMode).toBe('review');
+  });
+});
+
 // Unit-level: drive createOutboundRoutes directly against a fake
 // OutboundService (no real store/HTTP server) so the honest-error and
 // terminal-status rendering can be pinned down for cases the integration

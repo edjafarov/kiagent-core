@@ -281,7 +281,7 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
     mcp: {
       port: deps.mcp.port,
       registerTool: (tool) => deps.mcp.registerTool(tool),
-      createMcpHandler: () => deps.mcp.createMcpHandler(),
+      createMcpHandler: (opts) => deps.mcp.createMcpHandler(opts),
     },
     paths: {
       userData: deps.app.getPath('userData'),
