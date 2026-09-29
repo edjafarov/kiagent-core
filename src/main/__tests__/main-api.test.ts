@@ -657,12 +657,56 @@ describe('buildMainApi', () => {
       tray,
       ui: { openWindow: () => {} },
       outbound: stubOutbound(true).outbound,
-      inference: { generation: () => generation },
+      inference: {
+        generation: () => generation,
+        register: () => () => {},
+        setRoute: () => {},
+      },
     });
 
     expect(mainApi.inference?.generation()).toBe(7);
     generation = 8;
     expect(mainApi.inference?.generation()).toBe(8);
+  });
+
+  it('mainApi.inference.registerProvider/setRoute pass through to the plane', () => {
+    const calls: unknown[] = [];
+    const off = jest.fn();
+    const { store } = stubStore();
+    const { mcp } = stubMcp();
+    const { tray } = stubTray();
+    const mainApi = buildMainApi({
+      store,
+      mcp,
+      app: stubApp(),
+      dataDir: '/fake/data',
+      tray,
+      ui: { openWindow: () => {} },
+      outbound: stubOutbound(true).outbound,
+      inference: {
+        generation: () => 1,
+        register: (p) => {
+          calls.push(['register', p.id]);
+          return off;
+        },
+        setRoute: (task, id) => {
+          calls.push(['route', task, id]);
+        },
+      },
+    });
+    const dispose = mainApi.inference!.registerProvider({
+      id: 'r',
+      supports: ['complete'],
+      status: () => 'ready',
+      handle: async () => '',
+    });
+    mainApi.inference!.setRoute('task.a', 'r');
+    dispose();
+    expect(calls).toEqual([
+      ['register', 'r'],
+      ['route', 'task.a', 'r'],
+    ]);
+    expect(off).toHaveBeenCalledTimes(1);
   });
 
   it('assembles the full MainProcessApi shape at apiVersion 1', async () => {
@@ -882,10 +926,11 @@ describe('buildMainApi vault', () => {
   it('delete passes through to the store', async () => {
     const deleted: unknown[] = [];
     const { store } = stubStore();
-    (store.vault as { delete: (id: unknown) => Promise<void> }).delete =
-      async (id) => {
-        deleted.push(id);
-      };
+    (store.vault as { delete: (id: unknown) => Promise<void> }).delete = async (
+      id,
+    ) => {
+      deleted.push(id);
+    };
     await build(store).vault.delete('ext:x/y' as never);
     expect(deleted).toEqual(['ext:x/y']);
   });

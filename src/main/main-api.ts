@@ -6,6 +6,7 @@ import type {
   Credentials,
   FolderScopeUpdate,
   Identity,
+  InferenceProvider,
   MessageEvidenceReadInput,
   MessageEvidenceReadResult,
 } from '@shared/contracts';
@@ -119,9 +120,13 @@ export interface MainProcessApi {
   messageEvidence?: {
     read(input: MessageEvidenceReadInput): Promise<MessageEvidenceReadResult>;
   };
-  /** Read-only generation token for fencing work across model changes. */
+  /** Generation token for fencing work across model changes, plus the
+   *  seam a trusted extension uses to add a provider and route its own
+   *  tasks to it. */
   inference?: {
     generation(): number;
+    registerProvider(p: InferenceProvider): () => void;
+    setRoute(task: string, providerId: string | null): void;
   };
   /** Do-not-disturb state shared by every extension: an owner says it is
    *  busy and why (recording, presenting), anyone can read it. */
@@ -157,6 +162,8 @@ export interface BuildMainApiDeps {
   ) => Promise<MessageEvidenceReadResult>;
   inference?: {
     generation(): number;
+    register(p: InferenceProvider): () => void;
+    setRoute(task: string, providerId: string | null): void;
   };
   /** One registry for the app run, shared across every extension's API. A
    *  private one is made when absent (tests, single-extension hosts). */
@@ -378,7 +385,15 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
       ? { messageEvidence: { read: deps.readMessageEvidence } }
       : {}),
     ...(deps.inference
-      ? { inference: { generation: () => deps.inference!.generation() } }
+      ? {
+          inference: {
+            generation: () => deps.inference!.generation(),
+            registerProvider: (p: InferenceProvider) =>
+              deps.inference!.register(p),
+            setRoute: (task: string, id: string | null) =>
+              deps.inference!.setRoute(task, id),
+          },
+        }
       : {}),
   };
 }

@@ -858,8 +858,16 @@ export type ProviderStatus =
  *  cloud tomorrow; callers never know. */
 export interface InferenceProvider {
   readonly id: string; // 'local' | 'lan:mac-studio' | 'anthropic'
+  /** Display name for user-facing lines ("Some tasks are sent to …"). */
+  readonly name?: string;
+  /** Off this machine. A remote provider is picked ONLY for a task that
+   *  has an explicit route to it (`InferencePlane.setRoute`), never by
+   *  kind alone. */
+  readonly remote?: boolean;
   readonly supports: Array<'complete' | 'see' | 'read' | 'hear'>;
-  status(): ProviderStatus;
+  /** `task` is set when the plane asks on behalf of a routed task; a
+   *  remote provider answers whether it can serve THAT task now. */
+  status(task?: string): ProviderStatus;
   handle(req: {
     kind: 'complete' | 'see' | 'read' | 'hear';
     payload: unknown;

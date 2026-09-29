@@ -86,6 +86,14 @@ export interface InferencePlane extends Inference {
   generation(): number;
   register(provider: InferenceProvider): () => void;
   providers(): InferenceProvider[];
+  /** Route a caller-owned task to a registered provider (typically a
+   *  remote one), or clear it with `null`. In memory only; the owner
+   *  re-applies routes after a restart. A real change bumps the
+   *  generation. A provider's disposer clears the routes naming it. */
+  setRoute(task: string, providerId: string | null): void;
+  /** The current routes, for a user-facing "some tasks leave this
+   *  machine" line. */
+  routes(): Array<{ task: string; providerName: string }>;
   /** Scheduler-controlled: false closes the background lane (battery, user
    *  active, outside the processing window) — background requests then fail
    *  fast with LaneClosedError. Interactive always flows. */
@@ -183,6 +191,7 @@ export function createInference(
   config?: { generationSeed?: number },
 ): InferencePlane {
   const providers: InferenceProvider[] = [];
+  const routeTable = new Map<string, string>();
   let backgroundOpen = true;
   const laneSubs = new Set<(open: boolean) => void>();
 
@@ -247,11 +256,28 @@ export function createInference(
     if (lane !== 'interactive' && !backgroundOpen) throw new LaneClosedError();
   };
 
+  /** A task with a route goes to its provider when that provider serves
+   *  the kind and says it can take the task now. Everything else — and a
+   *  routed task whose provider can't — goes to the first ready LOCAL
+   *  provider: a remote one is never chosen by kind alone. */
   const pick = (
     kind: 'complete' | 'see' | 'read' | 'hear',
+    task?: string,
   ): InferenceProvider => {
+    const routedId = task === undefined ? undefined : routeTable.get(task);
+    const routed =
+      routedId === undefined
+        ? undefined
+        : providers.find((x) => x.id === routedId);
+    if (
+      routed &&
+      routed.supports.includes(kind) &&
+      routed.status(task) === 'ready'
+    ) {
+      return routed;
+    }
     const p = providers.find(
-      (x) => x.supports.includes(kind) && x.status() === 'ready',
+      (x) => !x.remote && x.supports.includes(kind) && x.status() === 'ready',
     );
     if (!p) {
       throw new NoProviderError(kind);
@@ -295,7 +321,7 @@ export function createInference(
   ) => {
     const lane = opts?.lane ?? 'interactive';
     gate(lane);
-    const p = pick('complete');
+    const p = pick('complete', opts?.task);
     checkGeneration(p, 'complete', opts?.generation);
     const modelId = modelIdOf(p, 'complete');
     const profile: CompletionProfile = opts?.profile ?? 'default';
@@ -336,7 +362,8 @@ export function createInference(
     return {
       text: normalized.text,
       providerId: p.id,
-      modelId,
+      // A remote provider learns its model from the call itself.
+      modelId: p.remote ? modelIdOf(p, 'complete') : modelId,
       generation,
       profile,
       promptTokens: normalized.promptTokens,
@@ -352,7 +379,7 @@ export function createInference(
   ) => {
     const lane = opts?.lane ?? 'interactive';
     gate(lane);
-    const p = pick('see');
+    const p = pick('see', opts?.task);
     const modelId = modelIdOf(p, 'see');
     const out = await p.handle({
       kind: 'see',
@@ -365,7 +392,11 @@ export function createInference(
       },
       lane,
     });
-    return { text: String(out), providerId: p.id, modelId };
+    return {
+      text: String(out),
+      providerId: p.id,
+      modelId: p.remote ? modelIdOf(p, 'see') : modelId,
+    };
   };
 
   return {
@@ -377,7 +408,7 @@ export function createInference(
     async describe(kind, task) {
       let p: InferenceProvider;
       try {
-        p = pick(kind);
+        p = pick(kind, task);
       } catch (err) {
         if (err instanceof NoProviderError) return null;
         throw err;
@@ -445,10 +476,24 @@ export function createInference(
         const i = providers.indexOf(provider);
         if (i >= 0) providers.splice(i, 1);
         offChange?.();
+        for (const [task, id] of routeTable) {
+          if (id === provider.id) routeTable.delete(task);
+        }
         bump();
       };
     },
     providers: () => [...providers],
+    setRoute(task, providerId) {
+      if ((routeTable.get(task) ?? null) === providerId) return;
+      if (providerId === null) routeTable.delete(task);
+      else routeTable.set(task, providerId);
+      bump();
+    },
+    routes: () =>
+      [...routeTable].map(([task, id]) => {
+        const p = providers.find((x) => x.id === id);
+        return { task, providerName: p?.name ?? id };
+      }),
     setBackgroundOpen(open) {
       if (open === backgroundOpen) return;
       backgroundOpen = open;

@@ -482,3 +482,123 @@ describe('tasks and budget keys on calls', () => {
     });
   });
 });
+
+describe('remote providers and per-task routes', () => {
+  function remote(
+    over: Partial<InferenceProvider> & {
+      ready?: (task?: string) => boolean;
+    } = {},
+  ): InferenceProvider {
+    const { ready, ...rest } = over;
+    return {
+      id: 'r',
+      name: 'Remote',
+      remote: true,
+      supports: ['complete', 'see'],
+      status: (task?: string) =>
+        (ready ?? (() => true))(task) ? 'ready' : 'standby',
+      handle: async (req) => `r:${req.kind}`,
+      ...rest,
+    };
+  }
+  const setup = (r = remote()) => {
+    const plane = createInference(fakeLogs(), { generationSeed: 1 });
+    plane.register(provider('local', ['complete', 'see', 'read'], 'local'));
+    const off = plane.register(r);
+    return { plane, off };
+  };
+
+  it('a route is honoured for its task only', async () => {
+    const { plane } = setup();
+    plane.setRoute('task.a', 'r');
+    await expect(plane.complete('p', { task: 'task.a' })).resolves.toBe(
+      'r:complete',
+    );
+    await expect(plane.complete('p', { task: 'task.b' })).resolves.toBe(
+      'local:complete',
+    );
+  });
+
+  it('remote is never picked without a route', async () => {
+    const { plane } = setup();
+    await expect(plane.complete('p')).resolves.toBe('local:complete');
+    await expect(plane.read(new Uint8Array([1]))).resolves.toBe('local:read');
+    await expect(plane.complete('p', { task: 'task.a' })).resolves.toBe(
+      'local:complete',
+    );
+    plane.setRoute('task.a', 'r');
+    await expect(plane.complete('p')).resolves.toBe('local:complete');
+    await expect(plane.describe('complete')).resolves.toMatchObject({
+      providerId: 'local',
+    });
+    await expect(plane.describe('complete', 'task.a')).resolves.toMatchObject({
+      providerId: 'r',
+    });
+  });
+
+  it('a route to a not-ready-for-task provider → local', async () => {
+    const { plane } = setup(remote({ ready: (t) => t !== 'task.a' }));
+    plane.setRoute('task.a', 'r');
+    await expect(plane.complete('p', { task: 'task.a' })).resolves.toBe(
+      'local:complete',
+    );
+  });
+
+  it('no local → NoProviderError even with a remote registered and unrouted', async () => {
+    const plane = createInference(fakeLogs(), { generationSeed: 1 });
+    plane.register(remote());
+    await expect(plane.complete('p')).rejects.toBeInstanceOf(NoProviderError);
+  });
+
+  it('setRoute bumps only on a real change', () => {
+    const { plane } = setup();
+    const g0 = plane.generation();
+    plane.setRoute('task.a', 'r');
+    const g1 = plane.generation();
+    expect(g1).toBe(g0 + 1);
+    plane.setRoute('task.a', 'r');
+    expect(plane.generation()).toBe(g1);
+    plane.setRoute('task.a', null);
+    expect(plane.generation()).toBe(g1 + 1);
+    plane.setRoute('task.a', null);
+    expect(plane.generation()).toBe(g1 + 1);
+  });
+
+  it('the disposer clears routes naming it', async () => {
+    const { plane, off } = setup();
+    plane.setRoute('task.a', 'r');
+    expect(plane.routes()).toEqual([
+      { task: 'task.a', providerName: 'Remote' },
+    ]);
+    const g = plane.generation();
+    off();
+    expect(plane.routes()).toEqual([]);
+    expect(plane.generation()).toBeGreaterThan(g);
+    // Re-registering does not resurrect the old route.
+    plane.register(remote());
+    await expect(plane.complete('p', { task: 'task.a' })).resolves.toBe(
+      'local:complete',
+    );
+  });
+
+  it("a remote provider's per-call model id is reported (read after the call)", async () => {
+    let model = 'before';
+    const { plane } = setup(
+      remote({
+        describe: () => ({ modelId: model }),
+        handle: async () => {
+          model = 'answered-by';
+          return 'text';
+        },
+      }),
+    );
+    plane.setRoute('task.a', 'r');
+    await expect(
+      plane.completeWithMeta('p', { task: 'task.a' }),
+    ).resolves.toMatchObject({ providerId: 'r', modelId: 'answered-by' });
+    model = 'before';
+    await expect(
+      plane.seeWithMeta(new Uint8Array([1]), 'p', { task: 'task.a' }),
+    ).resolves.toMatchObject({ providerId: 'r', modelId: 'answered-by' });
+  });
+});
