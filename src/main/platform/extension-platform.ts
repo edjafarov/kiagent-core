@@ -83,6 +83,7 @@ import type { NetworkService } from './network-service';
 import { createInMemoryHostPair, type HostTransport } from './transport';
 import { runExtensionHost } from './extension-host-entry';
 import { createUiRegistry, type UiBroadcastEvent } from './ui-registry';
+import { withAccountTypes } from './account-types';
 
 // Loads a privileged (in-process) extension entry via Node's real internal
 // module loader, Module._load — the primitive require() itself delegates to.
@@ -944,7 +945,9 @@ export function createExtensionPlatform(
             owner,
             network,
             files,
-            query: deps.store.read,
+            // Accounts name their source's documentTypes (calendar
+            // accounts are found by type, never by source id).
+            query: withAccountTypes(deps.store.read, deps.sources),
             inference: {
               ...deps.inference,
               lane: async () => deps.laneState(),
