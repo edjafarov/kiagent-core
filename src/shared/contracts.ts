@@ -110,6 +110,46 @@ export interface Document
   scopeRootId: string | null;
 }
 
+/** The calendar document type: one document per event OCCURRENCE. Any source
+ *  whose descriptor lists it in `documentTypes` is a calendar source (the
+ *  product discovers calendars that way, never by source id). Metadata and
+ *  the markdown layout (`# title`, blank line, `**When:**`… header lines,
+ *  blank line, plain-text description) are APPEND-ONLY. */
+export const CALENDAR_EVENT_DOCUMENT_TYPE = 'calendar.event';
+
+export interface CalendarEventAttendee {
+  email: string;
+  name: string | null;
+  response: string | null;
+}
+
+export interface CalendarEventMetadata {
+  calendarId: string;
+  calendarName: string;
+  calendarColor: string | null;
+  eventId: string;
+  iCalUID: string | null;
+  /** Stable identity of one occurrence; transcripts link by it. */
+  occurrenceKey: string;
+  /** UTC ISO instants. */
+  start: string;
+  end: string;
+  allDay: boolean;
+  /** All-day only: local dates, end EXCLUSIVE. */
+  startDate?: string;
+  endDate?: string;
+  timeZone: string;
+  status: string;
+  organizer: string | null;
+  selfResponse: string | null;
+  attendees: CalendarEventAttendee[];
+  participants: string[];
+  conferenceUrl: string | null;
+  location: string | null;
+  eventType: string;
+  transparency: string;
+}
+
 /** When recurring work runs. Declared as DATA on contributions — never a
  *  plugin-side timer: the platform's scheduler wakes the process. */
 export type Cadence =
@@ -223,6 +263,10 @@ export type CommitBatch =
    *  recurring schedule; `before` is now minus `ARCHIVE_RETENTION_DAYS`. */
   | { purgeArchived: { before: string } };
 
+/** An account as `Query.accounts()` returns it. The extension host fills
+ *  `documentTypes` from the source registry; other callers may omit it. */
+export type QueryAccount = Account & { documentTypes?: string[] };
+
 /** Read-only query surface — shared verbatim by the renderer, MCP, and the
  *  `query` capability. */
 export interface Query {
@@ -291,7 +335,7 @@ export interface Query {
     toDate?: string;
     includeArchived?: boolean;
   }): Promise<Array<{ key: string; count: number }>>;
-  accounts(): Promise<Account[]>;
+  accounts(): Promise<QueryAccount[]>;
 }
 
 export interface ConsentRecord {
