@@ -1,5 +1,6 @@
 import semver from 'semver';
 import { MAX_ICON_BYTES } from '@main/platform/manifest';
+import { PLATFORM_API_VERSION } from '@shared/extension-rpc';
 import type { MarketplaceListItem, PluginDetail } from '@shared/ipc';
 import { parseGitHubRef } from './github-ref';
 import type { createGitHubCache } from './github-cache';
@@ -150,8 +151,11 @@ export function createGitHubSource(deps: {
   org?: string;
   topic?: string;
   fetchImpl?: typeof fetch;
+  /** The platform API releases are matched against; this build's by default. */
+  platformApi?: string;
 }) {
   const org = deps.org ?? MARKETPLACE_ORG;
+  const platformApi = deps.platformApi ?? PLATFORM_API_VERSION;
   const topic = deps.topic ?? PLUGIN_TOPIC;
 
   /** Pre-install icon: the conventional root-level icon.png at HEAD (the
@@ -224,6 +228,48 @@ export function createGitHubSource(deps: {
     return rels.map(toReleaseInfo);
   }
 
+  /** Whether this app can run a release: the engine range its manifest.json
+   *  declares at the release's tag must admit this platform. A manifest that
+   *  can't be read (offline, none at the repo root) counts as runnable — the
+   *  installer's own engine check still guards the install. */
+  async function runsHere(
+    owner: string,
+    repo: string,
+    r: ReleaseInfo,
+  ): Promise<boolean> {
+    let engine: unknown;
+    try {
+      engine = (
+        await deps.cache.getJSON<{ engine?: unknown } | null>(
+          `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(r.tag)}/manifest.json`,
+        )
+      )?.engine;
+    } catch {
+      return true;
+    }
+    if (typeof engine !== 'string') return true;
+    return (
+      semver.validRange(engine) !== null &&
+      semver.satisfies(platformApi, engine)
+    );
+  }
+
+  /** The newest stable release this app can run, and the newest stable one
+   *  overall when that one needs a newer app. */
+  async function pickRelease(
+    owner: string,
+    repo: string,
+    releases: ReleaseInfo[],
+  ): Promise<{ runnable: ReleaseInfo | null; newer: ReleaseInfo | null }> {
+    const stable = releases.filter((r) => !r.prerelease);
+    for (const r of stable) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await runsHere(owner, repo, r))
+        return { runnable: r, newer: r === stable[0] ? null : stable[0] };
+    }
+    return { runnable: null, newer: stable[0] ?? null };
+  }
+
   async function getDetail(owner: string, repo: string): Promise<PluginDetail> {
     const [repoMeta, releases, readmeMarkdown, iconDataUrl, displayName] =
       await Promise.all([
@@ -247,7 +293,7 @@ export function createGitHubSource(deps: {
         iconDataUrl,
       },
       readmeMarkdown,
-      latest: releases.find((r) => !r.prerelease) ?? null,
+      latest: (await pickRelease(owner, repo, releases)).runnable,
     };
   }
 
@@ -259,12 +305,32 @@ export function createGitHubSource(deps: {
     const releases = await listReleases(parsed.owner, parsed.repo);
     const pick = parsed.tag
       ? releases.find((r) => r.tag === parsed.tag)
-      : releases.find((r) => !r.prerelease);
+      : (await pickRelease(parsed.owner, parsed.repo, releases)).runnable;
     if (!pick || !pick.tarballUrl) return null;
     return {
       tarballUrl: pick.tarballUrl,
       version: pick.version,
       tag: pick.tag,
+    };
+  }
+
+  /** For the update check: the newest version this app can run (null when
+   *  none can), plus `newerVersion` when a newer release needs a newer app. */
+  async function latestReleases(
+    ref: string,
+  ): Promise<{ version: string | null; newerVersion?: string } | null> {
+    const parsed = parseGitHubRef(ref);
+    if (!parsed) return null;
+    const releases = await listReleases(parsed.owner, parsed.repo);
+    const { runnable, newer } = await pickRelease(
+      parsed.owner,
+      parsed.repo,
+      releases,
+    );
+    if (!runnable && !newer) return null;
+    return {
+      version: runnable?.version ?? null,
+      ...(newer ? { newerVersion: newer.version } : {}),
     };
   }
 
@@ -278,5 +344,11 @@ export function createGitHubSource(deps: {
     return readBoundedBuffer(r, MAX_DOWNLOAD_BYTES);
   }
 
-  return { listOrgPlugins, getDetail, resolveGitHubRef, downloadAsset };
+  return {
+    listOrgPlugins,
+    getDetail,
+    resolveGitHubRef,
+    latestReleases,
+    downloadAsset,
+  };
 }

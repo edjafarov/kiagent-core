@@ -4,7 +4,11 @@ import { parseGitHubRef, formatGitHubRef } from './github-ref';
 
 export async function checkUpdates(deps: {
   installed: Array<{ id: string; version: string; ref?: string }>;
-  resolveLatest: (ref: string) => Promise<{ version: string } | null>;
+  /** `version`: the newest release this app can run (null when none can);
+   *  `newerVersion`: a newer release that needs a newer app. */
+  resolveLatest: (
+    ref: string,
+  ) => Promise<{ version: string | null; newerVersion?: string } | null>;
 }): Promise<UpdateInfo[]> {
   const out: UpdateInfo[] = [];
   for (const rec of deps.installed) {
@@ -18,17 +22,24 @@ export async function checkUpdates(deps: {
       ? formatGitHubRef(parsed.owner, parsed.repo)
       : rec.ref;
     const latest = await deps.resolveLatest(repoRef).catch(() => null);
-    if (
-      latest &&
-      semver.valid(latest.version) &&
-      semver.valid(rec.version) &&
-      semver.gt(latest.version, rec.version)
-    ) {
+    const newer = (v: string | null | undefined): v is string =>
+      !!v && !!semver.valid(v) && semver.gt(v, rec.version);
+    if (!latest || !semver.valid(rec.version)) continue;
+    if (newer(latest.version)) {
       out.push({
         id: rec.id,
         installedVersion: rec.version,
         latestVersion: latest.version,
         ref: rec.ref,
+      });
+    } else if (newer(latest.newerVersion)) {
+      // Nothing installable yet: the next version needs a newer app.
+      out.push({
+        id: rec.id,
+        installedVersion: rec.version,
+        latestVersion: latest.newerVersion,
+        ref: rec.ref,
+        needsNewerApp: true,
       });
     }
   }

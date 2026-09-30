@@ -23,11 +23,12 @@ describe('marketplace catalog', () => {
 
   let listOrgPlugins: jest.Mock;
   let getDetail: jest.Mock;
-  let resolveGitHubRef: jest.Mock;
+  let latestReleases: jest.Mock;
   let source: {
     listOrgPlugins: jest.Mock;
     getDetail: jest.Mock;
     resolveGitHubRef: jest.Mock;
+    latestReleases: jest.Mock;
     downloadAsset: jest.Mock;
   };
 
@@ -35,11 +36,12 @@ describe('marketplace catalog', () => {
     snapshotItems = [];
     listOrgPlugins = jest.fn();
     getDetail = jest.fn();
-    resolveGitHubRef = jest.fn();
+    latestReleases = jest.fn();
     source = {
       listOrgPlugins,
       getDetail,
-      resolveGitHubRef,
+      resolveGitHubRef: jest.fn(),
+      latestReleases,
       downloadAsset: jest.fn(),
     };
   });
@@ -158,15 +160,11 @@ describe('marketplace catalog', () => {
           ref: 'github:acme/widget@v1.0.0',
         }),
       ];
-      resolveGitHubRef.mockResolvedValueOnce({
-        tarballUrl: 'https://example.com/v2.0.0.tgz',
-        version: '2.0.0',
-        tag: 'v2.0.0',
-      });
+      latestReleases.mockResolvedValueOnce({ version: '2.0.0' });
 
       const result = await makeCatalog().checkUpdates();
 
-      expect(resolveGitHubRef).toHaveBeenCalledWith('github:acme/widget');
+      expect(latestReleases).toHaveBeenCalledWith('github:acme/widget');
       expect(result).toEqual([
         {
           id: 'plugin-a',
@@ -185,11 +183,7 @@ describe('marketplace catalog', () => {
           ref: 'github:acme/widget@v2.0.0',
         }),
       ];
-      resolveGitHubRef.mockResolvedValueOnce({
-        tarballUrl: 'https://example.com/v2.0.0.tgz',
-        version: '2.0.0',
-        tag: 'v2.0.0',
-      });
+      latestReleases.mockResolvedValueOnce({ version: '2.0.0' });
 
       const result = await makeCatalog().checkUpdates();
 
@@ -207,7 +201,7 @@ describe('marketplace catalog', () => {
 
       const result = await makeCatalog().checkUpdates();
 
-      expect(resolveGitHubRef).not.toHaveBeenCalled();
+      expect(latestReleases).not.toHaveBeenCalled();
       expect(result).toEqual([]);
     });
   });

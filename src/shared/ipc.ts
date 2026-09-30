@@ -227,6 +227,9 @@ export interface UpdateInfo {
   installedVersion: string;
   latestVersion: string;
   ref: string;
+  /** `latestVersion` needs a newer app than this one — nothing to install
+   *  until the app itself updates. */
+  needsNewerApp?: boolean;
 }
 
 /** Lifecycle of an update check/download. `disabled` = gated off (dev/unsigned-mac). */

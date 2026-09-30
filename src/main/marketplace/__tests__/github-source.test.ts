@@ -658,6 +658,129 @@ describe('github-source', () => {
     });
   });
 
+  describe('platform compatibility', () => {
+    const rel = (tag: string, prerelease = false) => ({
+      tag_name: tag,
+      name: tag,
+      published_at: '2024-01-01T00:00:00Z',
+      body: null,
+      prerelease,
+      assets: [
+        {
+          name: 'plugin.tgz',
+          browser_download_url: `https://example.com/${tag}.tgz`,
+        },
+      ],
+    });
+    const manifestUrl = (tag: string) =>
+      `https://raw.githubusercontent.com/owner/repo/${tag}/manifest.json`;
+    /** Releases for the list call; each tag's manifest declares `engines[tag]`
+     *  (a missing entry = no readable manifest). */
+    const serve = (releases: unknown[], engines: Record<string, string>) =>
+      mockCache.getJSON.mockImplementation(async (url: string) => {
+        if (url.endsWith('/releases?per_page=30')) return releases;
+        const tag = Object.keys(engines).find((t) => url === manifestUrl(t));
+        if (tag) return { id: 'kia.x', engine: engines[tag] };
+        throw new Error(`GitHub 404 ${url}`);
+      });
+
+    it('unpinned resolve skips a release that needs a newer platform', async () => {
+      serve([rel('v3.0.0'), rel('v2.2.1'), rel('v2.2.0')], {
+        'v3.0.0': '^2.6.0',
+        'v2.2.1': '^2.1.0',
+      });
+      const source = createGitHubSource({
+        cache: mockCache as any,
+        platformApi: '2.5.0',
+      });
+
+      expect(await source.resolveGitHubRef('github:owner/repo')).toEqual({
+        tarballUrl: 'https://example.com/v2.2.1.tgz',
+        version: '2.2.1',
+        tag: 'v2.2.1',
+      });
+    });
+
+    it('a pinned tag resolves as-is (the installer checks its engine)', async () => {
+      serve([rel('v3.0.0'), rel('v2.2.1')], { 'v3.0.0': '^2.6.0' });
+      const source = createGitHubSource({
+        cache: mockCache as any,
+        platformApi: '2.5.0',
+      });
+
+      expect(
+        (await source.resolveGitHubRef('github:owner/repo@v3.0.0'))?.version,
+      ).toBe('3.0.0');
+    });
+
+    it('latestReleases reports the runnable release and a newer one this app cannot run', async () => {
+      serve([rel('v3.0.0'), rel('v2.2.1')], {
+        'v3.0.0': '^2.6.0',
+        'v2.2.1': '^2.1.0',
+      });
+      const source = createGitHubSource({
+        cache: mockCache as any,
+        platformApi: '2.5.0',
+      });
+
+      expect(await source.latestReleases('github:owner/repo')).toEqual({
+        version: '2.2.1',
+        newerVersion: '3.0.0',
+      });
+    });
+
+    it('latestReleases has no runnable version when every release needs a newer platform', async () => {
+      serve([rel('v3.0.0')], { 'v3.0.0': '^2.6.0' });
+      const source = createGitHubSource({
+        cache: mockCache as any,
+        platformApi: '2.5.0',
+      });
+
+      expect(await source.latestReleases('github:owner/repo')).toEqual({
+        version: null,
+        newerVersion: '3.0.0',
+      });
+    });
+
+    it('a release whose manifest cannot be read counts as runnable', async () => {
+      serve([rel('v3.0.0'), rel('v2.2.1')], { 'v2.2.1': '^2.1.0' });
+      const source = createGitHubSource({
+        cache: mockCache as any,
+        platformApi: '2.5.0',
+      });
+
+      expect(await source.latestReleases('github:owner/repo')).toEqual({
+        version: '3.0.0',
+      });
+    });
+
+    it('the detail page offers the newest runnable release', async () => {
+      mockCache.getJSON.mockImplementation(async (url: string) => {
+        if (url === 'https://api.github.com/repos/owner/repo')
+          return {
+            name: 'repo',
+            owner: { login: 'owner' },
+            full_name: 'owner/repo',
+            description: null,
+          };
+        if (url.endsWith('/releases?per_page=30'))
+          return [rel('v3.0.0'), rel('v2.2.1')];
+        if (url === manifestUrl('v3.0.0')) return { engine: '^2.6.0' };
+        if (url === manifestUrl('v2.2.1')) return { engine: '^2.1.0' };
+        throw new Error(`GitHub 404 ${url}`);
+      });
+      mockCache.getText.mockResolvedValue('');
+      const source = createGitHubSource({
+        cache: mockCache as any,
+        platformApi: '2.5.0',
+      });
+
+      expect((await source.getDetail('owner', 'repo')).latest?.version).toBe(
+        '2.2.1',
+      );
+    });
+  });
+
   describe('downloadAsset', () => {
     it('should return buffer when status is ok', async () => {
       const mockFetch = jest.fn();

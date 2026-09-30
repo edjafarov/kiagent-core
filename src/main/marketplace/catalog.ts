@@ -36,7 +36,7 @@ export function createMarketplaceCatalog(deps: {
     async checkUpdates(): Promise<UpdateInfo[]> {
       return checkUpdates({
         installed: deps.snapshot(),
-        resolveLatest: (ref) => deps.source.resolveGitHubRef(ref),
+        resolveLatest: (ref) => deps.source.latestReleases(ref),
       });
     },
   };

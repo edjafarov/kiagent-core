@@ -125,6 +125,30 @@ test('each update is its own, through the install sheet', async () => {
   });
 });
 
+test('an update that needs a newer app says so and offers no button', async () => {
+  seed(
+    [ext({})],
+    [
+      {
+        id: 'kia.calendar',
+        installedVersion: '1.0.0',
+        latestVersion: '2.0.0',
+        ref: 'github:example-org/calendar-sync-kia-connector@v1.0.0',
+        needsNewerApp: true,
+      },
+    ],
+  );
+  await renderPane();
+  const updates = screen.getByRole('list', { name: 'Updates' });
+  expect(within(updates).getByText('Calendar Sync 2.0.0')).toBeInTheDocument();
+  expect(
+    within(updates).getByText('Needs a newer KIAgent · you have v1.0.0'),
+  ).toBeInTheDocument();
+  expect(
+    within(updates).queryByRole('button', { name: 'Update' }),
+  ).not.toBeInTheDocument();
+});
+
 test('a spent update entry (already applied) is not offered', async () => {
   seed(
     [ext({ version: '1.1.0' })],

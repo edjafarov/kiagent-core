@@ -187,4 +187,54 @@ describe('update-check', () => {
 
     expect(result[0].ref).toBe('github:owner/repo@v1.0.0-custom');
   });
+  it('offers the newest runnable version when a newer one needs a newer app', async () => {
+    const result = await checkUpdates({
+      installed: [
+        { id: 'kia.ms365', version: '2.2.0', ref: 'github:o/r@v2.2.0' },
+      ],
+      resolveLatest: async () => ({ version: '2.2.1', newerVersion: '3.0.0' }),
+    });
+
+    expect(result).toEqual([
+      {
+        id: 'kia.ms365',
+        installedVersion: '2.2.0',
+        latestVersion: '2.2.1',
+        ref: 'github:o/r@v2.2.0',
+      },
+    ]);
+  });
+
+  it('flags an update that needs a newer app instead of offering it', async () => {
+    const result = await checkUpdates({
+      installed: [
+        { id: 'kia.ms365', version: '2.2.0', ref: 'github:o/r@v2.2.0' },
+      ],
+      resolveLatest: async () => ({ version: '2.2.0', newerVersion: '3.0.0' }),
+    });
+
+    expect(result).toEqual([
+      {
+        id: 'kia.ms365',
+        installedVersion: '2.2.0',
+        latestVersion: '3.0.0',
+        ref: 'github:o/r@v2.2.0',
+        needsNewerApp: true,
+      },
+    ]);
+  });
+
+  it('flags it too when no release at all runs on this app', async () => {
+    const result = await checkUpdates({
+      installed: [
+        { id: 'kia.ms365', version: '2.2.0', ref: 'github:o/r@v2.2.0' },
+      ],
+      resolveLatest: async () => ({ version: null, newerVersion: '3.0.0' }),
+    });
+
+    expect(result[0]).toMatchObject({
+      latestVersion: '3.0.0',
+      needsNewerApp: true,
+    });
+  });
 });

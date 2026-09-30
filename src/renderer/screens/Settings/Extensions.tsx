@@ -197,18 +197,24 @@ export function Extensions(): React.ReactElement {
               tone="acc"
               kind="Update"
               title={`${ext.name} ${update.latestVersion}`}
-              sub={`You have v${update.installedVersion}`}
+              sub={
+                update.needsNewerApp
+                  ? `Needs a newer KIAgent · you have v${update.installedVersion}`
+                  : `You have v${update.installedVersion}`
+              }
               action={
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={flow.busy}
-                  onClick={() =>
-                    void flow.preview(bareGithubRef(update.ref), 'update')
-                  }
-                >
-                  Update
-                </Button>
+                update.needsNewerApp ? undefined : (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    disabled={flow.busy}
+                    onClick={() =>
+                      void flow.preview(bareGithubRef(update.ref), 'update')
+                    }
+                  >
+                    Update
+                  </Button>
+                )
               }
             />
           ))}
