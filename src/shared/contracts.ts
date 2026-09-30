@@ -1439,6 +1439,9 @@ export interface AppPrefs {
    *  2026-07-27) — the per-account setting offers only review/link and acts
    *  as the opt-out for individual accounts. */
   outbound: { defaultMode: ConfirmMode };
+  /** Product feature switches. A missing key means "not decided": the
+   *  product applies its own default. Core knows no feature names. */
+  features: Record<string, boolean>;
 }
 
 export interface Prefs {

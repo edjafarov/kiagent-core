@@ -11,6 +11,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   processing: { enabled: true, window: 'idle' },
   models: { override: 'auto', autoInstall: true },
   outbound: { defaultMode: 'review' },
+  features: {},
   onboarding: {
     sourceBackfilledAt: null,
     mcpConnectedAt: null,
@@ -51,6 +52,11 @@ function sanitize(raw: unknown): AppPrefs {
           ? r.outbound.defaultMode
           : 'review',
     },
+    features: Object.fromEntries(
+      Object.entries(
+        r.features && typeof r.features === 'object' ? r.features : {},
+      ).filter(([, v]) => typeof v === 'boolean'),
+    ) as Record<string, boolean>,
     onboarding: {
       sourceBackfilledAt: isoOrNull(r.onboarding?.sourceBackfilledAt),
       mcpConnectedAt: isoOrNull(r.onboarding?.mcpConnectedAt),
@@ -81,6 +87,7 @@ export function createPrefs(dir: string): Prefs {
         models: { ...current.models, ...(p.models ?? {}) },
         outbound: { ...current.outbound, ...(p.outbound ?? {}) },
         onboarding: { ...current.onboarding, ...(p.onboarding ?? {}) },
+        features: { ...current.features, ...(p.features ?? {}) },
       });
       fs.writeFileSync(file, JSON.stringify(current, null, 2));
       for (const cb of listeners) cb(current);

@@ -28,6 +28,7 @@ function makeAppState(): AppState {
       processing: { enabled: false, window: 'always' },
       models: { override: 'auto', autoInstall: false },
       outbound: { defaultMode: 'review' },
+      features: {},
       onboarding: {
         sourceBackfilledAt: null,
         mcpConnectedAt: null,

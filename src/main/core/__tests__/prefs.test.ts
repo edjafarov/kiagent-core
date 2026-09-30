@@ -174,3 +174,34 @@ describe('prefs.onboarding', () => {
     expect(createPrefs(dir).get().onboarding.mcpConnectedAt).toBeNull();
   });
 });
+
+describe('prefs.features', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-prefs-'));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('defaults to an empty map', () => {
+    expect(createPrefs(dir).get().features).toEqual({});
+  });
+
+  it('keeps boolean values and drops the rest on load', () => {
+    fs.writeFileSync(
+      path.join(dir, 'prefs.json'),
+      JSON.stringify({ features: { calendar: true, junk: 'yes' } }),
+    );
+    expect(createPrefs(dir).get().features).toEqual({ calendar: true });
+  });
+
+  it('patch merges per key', async () => {
+    const p = createPrefs(dir);
+    await p.patch({ features: { calendar: false } });
+    await p.patch({ features: { other: true } });
+    expect(p.get().features).toEqual({ calendar: false, other: true });
+    expect(createPrefs(dir).get().features).toEqual({
+      calendar: false,
+      other: true,
+    });
+  });
+});
