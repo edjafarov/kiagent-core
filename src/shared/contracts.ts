@@ -374,6 +374,10 @@ export interface SourceDescriptor {
    *  Enables the Tracked folders card and `accounts:start-manage-folders`.
    *  A descriptor with this flag MUST implement `manageFolders`. */
   folderScope?: boolean;
+  /** Accounts of this source can ORIGINATE email (`draft_message`): the
+   *  source's Sender sends as the account's own mailbox, so core asks for
+   *  no From address. Without it an extension source is reply-only. */
+  compose?: 'email';
   /** Populated by CORE at registry-list time, never authored by a connector —
    *  a value set in a manifest or a connector's own descriptor is ignored.
    *  Lets the renderer route Reconnect without guessing. */

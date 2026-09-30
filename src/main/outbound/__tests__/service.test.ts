@@ -1070,6 +1070,176 @@ describe('outbound service — drafts', () => {
     ).rejects.toThrow(/stores no per-message reply targets/);
   });
 
+  // An email-shaped extension source (ms365): stored `to`/`cc` per
+  // variant, a `replyAll` variant, and `compose: 'email'` on its descriptor.
+  const mailSetup = async (opts: { compose?: boolean } = {}) => {
+    const mailSend: jest.Mock = jest.fn(async () => ({}));
+    const svc = createOutboundService({
+      store,
+      prefs: fakePrefs(),
+      senders: {
+        get: (id: string) => (id === 'ms365' ? { send: mailSend } : undefined),
+        ids: () => ['ms365'],
+      },
+      descriptorFor: (id) =>
+        id === 'ms365'
+          ? {
+              id: 'ms365',
+              name: 'Microsoft 365',
+              documentTypes: ['email.thread'],
+              auth: 'oauth',
+              ...(opts.compose === false ? {} : { compose: 'email' as const }),
+            }
+          : undefined,
+      logSink,
+    });
+    svc.setBaseUrl('http://127.0.0.1:7421');
+    const account = await store.createAccount({
+      source: 'ms365',
+      identifier: 'me@contoso.com',
+      config: {},
+    });
+    const outbound = (
+      over: Record<string, unknown> = {},
+    ): Record<string, unknown> => ({
+      ref: { messageId: 'AAMk-last-from-alice' },
+      display: 'alice@contoso.com',
+      to: ['alice@contoso.com'],
+      cc: [],
+      replyAll: {
+        ref: { messageId: 'AAMk-last' },
+        display: 'alice@contoso.com, bob@contoso.com; cc carol@contoso.com',
+        to: ['alice@contoso.com', 'bob@contoso.com'],
+        cc: ['carol@contoso.com'],
+      },
+      ...over,
+    });
+    const commitThread = async (
+      externalId: string,
+      meta: Record<string, unknown>,
+    ) => {
+      await store.commit({
+        account: account.id,
+        documents: [
+          {
+            externalId,
+            type: 'email.thread',
+            title: 'Offer',
+            markdown: 'thread',
+            metadata: { outbound: meta },
+            createdAt: '2026-07-01T00:00:00Z',
+          },
+        ],
+        cursor: null,
+      });
+      const hit = await store.read.byExternalId(
+        account.id,
+        externalId,
+        'email.thread',
+      );
+      return hit!.id as string;
+    };
+    return { svc, mailSend, accountId: account.id, outbound, commitThread };
+  };
+
+  it('stored to/cc freeze onto the row and reach the Sender as intent.to/cc', async () => {
+    const { svc, mailSend, outbound, commitThread } = await mailSetup();
+    const id = await commitThread('conv-1', outbound());
+    const r = await svc.draftReply({ documentId: id, body: 'Thanks' });
+    expect(r.recipient_display).toBe('alice@contoso.com');
+    const row = await store.outbox.get(r.draft_id);
+    expect(row?.to).toEqual(['alice@contoso.com']);
+    expect(row?.cc).toEqual([]);
+    await svc.confirmByToken(tokenOf(r));
+    const intent = mailSend.mock.calls[0][0];
+    expect(intent.outboundRef).toEqual({ messageId: 'AAMk-last-from-alice' });
+    expect(intent.to).toEqual(['alice@contoso.com']);
+  });
+
+  it('reply_all picks the stored replyAll variant — ref, display, to and cc', async () => {
+    const { svc, mailSend, outbound, commitThread } = await mailSetup();
+    const id = await commitThread('conv-1', outbound());
+    const r = await svc.draftReply({
+      documentId: id,
+      body: 'Thanks all',
+      replyAll: true,
+    });
+    expect(r.recipient_display).toBe(
+      'alice@contoso.com, bob@contoso.com; cc carol@contoso.com',
+    );
+    await svc.confirmByToken(tokenOf(r));
+    const intent = mailSend.mock.calls[0][0];
+    expect(intent.outboundRef).toEqual({ messageId: 'AAMk-last' });
+    expect(intent.to).toEqual(['alice@contoso.com', 'bob@contoso.com']);
+    expect(intent.cc).toEqual(['carol@contoso.com']);
+  });
+
+  it('reply_all without a stored replyAll variant keeps the default (Slack today)', async () => {
+    const { svc, slackSend, hookDocId } = await slackSetup();
+    const r = await svc.draftReply({
+      documentId: hookDocId,
+      body: 'x',
+      replyAll: true,
+    });
+    expect(r.recipient_display).toBe('#general (thread)');
+    await svc.confirmByToken(tokenOf(r));
+    expect(slackSend.mock.calls[0][0].outboundRef).toEqual({
+      channel: 'C9',
+      thread_ts: '1719.00',
+    });
+  });
+
+  it('a stored to/cc that is not a list of addresses is refused, never half-used', async () => {
+    const { svc, mailSend, outbound, commitThread } = await mailSetup();
+    const id = await commitThread(
+      'conv-bad',
+      outbound({ to: ['not an address'] }),
+    );
+    await expect(svc.draftReply({ documentId: id, body: 'x' })).rejects.toThrow(
+      /stored reply target is malformed/,
+    );
+    const bad = await commitThread(
+      'conv-bad-all',
+      outbound({
+        replyAll: { ref: {}, display: 'x', to: 'alice@contoso.com' },
+      }),
+    );
+    await expect(
+      svc.draftReply({ documentId: bad, body: 'x', replyAll: true }),
+    ).rejects.toThrow(/stored reply target is malformed/);
+    expect(mailSend).not.toHaveBeenCalled();
+    expect(await svc.listOutbox({})).toHaveLength(0);
+  });
+
+  it("draft_message composes from a source whose descriptor declares compose: 'email'", async () => {
+    const { svc, mailSend, accountId: mailAccount } = await mailSetup();
+    const r = await svc.draftMessage({
+      accountId: mailAccount,
+      to: ['dana@contoso.com'],
+      subject: 'Hello',
+      body: 'Hi Dana',
+    });
+    await svc.confirmByToken(tokenOf(r));
+    expect(mailSend.mock.calls[0][0]).toMatchObject({
+      kind: 'new',
+      to: ['dana@contoso.com'],
+      subject: 'Hello',
+      bodyMarkdown: 'Hi Dana',
+    });
+  });
+
+  it('draft_message stays refused for the same source without compose', async () => {
+    const { svc, accountId: mailAccount } = await mailSetup({ compose: false });
+    await expect(
+      svc.draftMessage({
+        accountId: mailAccount,
+        to: ['dana@contoso.com'],
+        subject: 'Hello',
+        body: 'Hi',
+      }),
+    ).rejects.toThrow(/compose is email-only/);
+  });
+
   it('draft_message refuses non-email sources honestly', async () => {
     const { svc, slackAccountId } = await slackSetup();
     await expect(

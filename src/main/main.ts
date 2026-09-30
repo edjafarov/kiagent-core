@@ -948,6 +948,7 @@ app
         buildBundledSenders({ store: p.store, logSink: p.logSink }),
         p.senders,
       ),
+      descriptorFor: (id) => p.sources.get(id)?.descriptor,
       logSink: p.logSink,
     });
     // Rows stuck in 'sending' can only mean a previous process died
