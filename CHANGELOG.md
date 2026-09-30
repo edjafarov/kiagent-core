@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.99.0](https://github.com/edjafarov/kiagent-core/compare/v0.98.0...v0.99.0) (2026-09-30)
+
+### Features
+
+* **contracts:** calendar.event document type + QueryAccount ([94bdca9](https://github.com/edjafarov/kiagent-core/commit/94bdca964de5829914f77fcbb171974c03c7b797))
+* **marketplace:** offer only releases this app can run ([4b6cfc9](https://github.com/edjafarov/kiagent-core/commit/4b6cfc9ef4f25ad7c25716d04953036d15473477))
+* **outbound:** senders for more sources — not-sent marker, fresh sender credentials, mail reply variants ([d914dbb](https://github.com/edjafarov/kiagent-core/commit/d914dbbb1448877ea739cb95038c08a4380c2d64))
+* **platform:** extension query.accounts() names each source's documentTypes ([e5c571e](https://github.com/edjafarov/kiagent-core/commit/e5c571ef5935e3482657fcec61a3f851378df6e6))
+* **prefs:** generic features map, merged per key ([b8fd61d](https://github.com/edjafarov/kiagent-core/commit/b8fd61d85af69d1bcac2e552d5dc05c93c4a1817))
+* **sources:** Reconnect in the source menu whenever the source can re-authenticate ([4dcaaa1](https://github.com/edjafarov/kiagent-core/commit/4dcaaa162b4dc3b9070c39a3fade9e740b264785))
+
 ## [0.98.0](https://github.com/edjafarov/kiagent-core/compare/v0.97.1...v0.98.0) (2026-09-30)
 
 ### Features
