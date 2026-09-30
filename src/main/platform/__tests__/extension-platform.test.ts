@@ -15,6 +15,7 @@ import { openDb } from '@main/db/app-db';
 import { openStore, type CoreStore } from '@main/core/store/store';
 
 import { googleOAuthProfile, googleRefresher } from '@main/sources/gmail/oauth';
+import { shapeOutboundError } from '@main/outbound/error-copy';
 
 import {
   createExtensionPlatform,
@@ -2520,6 +2521,87 @@ describe('createExtensionPlatform', () => {
       });
 
       loadSpy.mockRestore();
+    });
+
+    /** A platform whose OAuth refresher map binds `fixsrc` — the sender
+     *  fixture's source — to `refresh`. */
+    async function oauthSenderPlatform(
+      refresh: (creds: never) => Promise<unknown>,
+    ) {
+      await platform.stop();
+      platform = makePlatform({
+        oauth: {
+          registerProfile: () => {},
+          unregisterProfile: () => {},
+          refreshers: new Map([['fixsrc', refresh]]) as never,
+        },
+      });
+      await platform.start();
+      await installSenderFixture(FIXTURE_SENDER, 'test.sender');
+      const account = await store.createAccount({
+        source: 'fixsrc',
+        identifier: 'me@example.com',
+        config: {},
+        status: 'live',
+      });
+      // Expired an hour ago — the state every OAuth token is in once the
+      // last sync's refresh is older than the token lifetime.
+      await store.vault.save(account.id, {
+        accessToken: 'STALE',
+        refreshToken: 'R',
+        expiresAt: new Date(Date.now() - 3_600_000).toISOString(),
+      });
+      const send = () =>
+        senderRegistry.get('fixsrc')!.send({
+          accountId: account.id,
+          kind: 'new',
+          to: ['someone@example.com'],
+          bodyMarkdown: 'hi',
+        });
+      return { account, send };
+    }
+
+    it('hands an extension sender REFRESHED oauth credentials (and saves them), never the expired vault token', async () => {
+      const refresh = jest.fn(async () => ({
+        accessToken: 'FRESH',
+        refreshToken: 'R',
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      }));
+      const { account, send } = await oauthSenderPlatform(refresh as never);
+      await expect(send()).resolves.toEqual({ externalMessageId: 'fix-1' });
+      expect(refresh).toHaveBeenCalledTimes(1);
+      await expect(tools.get('sender_last_ctx')!.call({})).resolves.toEqual({
+        ctx: {
+          credentials: expect.objectContaining({ accessToken: 'FRESH' }),
+        },
+      });
+      expect((await store.vault.load(account.id))?.accessToken).toBe('FRESH');
+    });
+
+    it('re-words a rejected refresh into the outbound auth contract, without calling the sender', async () => {
+      const refresh = jest.fn(async () => {
+        throw Object.assign(
+          new Error('microsoft oauth token request failed: invalid_grant'),
+          { code: 'auth' },
+        );
+      });
+      const { send } = await oauthSenderPlatform(refresh as never);
+      const err = await send().then(
+        () => null,
+        (e: Error) => e,
+      );
+      expect(err?.message).toMatch(
+        /sign-in has expired — reconnect me@example\.com in Settings$/,
+      );
+      // Classifies as a provably-unsent auth failure (Try again), not as
+      // "may have been sent".
+      expect(shapeOutboundError(err!.message)).toMatchObject({
+        kind: 'auth',
+        canRetry: true,
+      });
+      await expect(tools.get('sender_last_ctx')!.call({})).resolves.toEqual({
+        ctx: null,
+      });
     });
 
     it('refuses to register a sender from an extension without the send cap: warns, registers nothing, source still registers', async () => {

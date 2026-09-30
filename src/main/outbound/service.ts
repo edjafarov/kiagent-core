@@ -15,6 +15,7 @@ import type {
   SendIntent,
   SendResult,
   Sender,
+  SourceDescriptor,
 } from '@shared/contracts';
 
 import { currentClient, currentTransport } from '../core/mcp/transport-context';
@@ -46,26 +47,85 @@ function subjectFor(title: string | null): string | null {
   return title === null ? null : /^re:/i.test(title) ? title : `Re: ${title}`;
 }
 
-/** Resolve a `draft_reply` target key against `metadata.outbound.targets` —
- *  the optional per-message reply targets a source may store alongside the
- *  document's default ref (a Slack day doc lists one per message so a reply
- *  can thread under it). The metadata is source-written and untyped, so
- *  every field is validated before use; a malformed entry is treated as
- *  absent, never half-used. */
-function pickReplyTarget(
-  targets: unknown,
-  key: string,
-): { ref: unknown; display: string } | undefined {
-  if (!Array.isArray(targets)) return undefined;
-  const hit = targets.find(
-    (t): t is { key: string; ref?: unknown; display?: unknown } =>
-      typeof t === 'object' &&
-      t !== null &&
-      (t as { key?: unknown }).key === key,
-  );
-  if (!hit || hit.ref === undefined || typeof hit.display !== 'string')
-    return undefined;
-  return { ref: hit.ref, display: hit.display };
+/** One reply variant a source stored in `metadata.outbound`: the opaque
+ *  `ref` round-tripped to its Sender, the `display` the user confirms, and —
+ *  for email-shaped sources (ms365) — the exact `to`/`cc` addresses, which
+ *  the draft row freezes so every surface shows real recipients. The
+ *  metadata is source-written and untyped, so every field is validated;
+ *  `to`/`cc`, when present, must be arrays of addresses. */
+interface OutboundVariant {
+  ref: unknown;
+  display: string;
+  to: string[];
+  cc: string[];
+}
+
+function parseVariant(v: unknown): OutboundVariant | 'malformed' | undefined {
+  if (typeof v !== 'object' || v === null) return undefined;
+  const o = v as {
+    ref?: unknown;
+    display?: unknown;
+    to?: unknown;
+    cc?: unknown;
+  };
+  if (typeof o.display !== 'string') return undefined;
+  const addrs = (x: unknown): string[] | null =>
+    x === undefined
+      ? []
+      : Array.isArray(x) &&
+          x.every((a) => typeof a === 'string' && EMAIL_RX.test(a))
+        ? (x as string[])
+        : null;
+  const to = addrs(o.to);
+  const cc = addrs(o.cc);
+  if (to === null || cc === null) return 'malformed';
+  return { ref: o.ref, display: o.display, to, cc };
+}
+
+/** Pick the stored reply variant for a `draft_reply` call: an explicit
+ *  per-message `target` key (e.g. a Slack day doc lists one per message so
+ *  a reply can thread under it) wins; else `replyAll` when asked for and
+ *  stored; else the document's default. Grounding holds because the model
+ *  picks a key or a flag, never supplies a ref or an address. Undefined =
+ *  the document stores no outbound metadata at all. */
+function pickOutbound(
+  meta: unknown,
+  opts: { target?: string; replyAll: boolean },
+): OutboundVariant | undefined {
+  const m = meta as { targets?: unknown; replyAll?: unknown } | undefined;
+  const base = parseVariant(m);
+  if (base === undefined) return undefined;
+  const malformed = () =>
+    new Error(
+      `draft_reply: this document's stored reply target is malformed — ` +
+        `re-sync the account and try again`,
+    );
+  if (base === 'malformed') throw malformed();
+  if (opts.target !== undefined) {
+    const hit = Array.isArray(m?.targets)
+      ? (m.targets as unknown[]).find(
+          (t) =>
+            typeof t === 'object' &&
+            t !== null &&
+            (t as { key?: unknown }).key === opts.target,
+        )
+      : undefined;
+    const picked = parseVariant(hit);
+    if (picked === 'malformed') throw malformed();
+    if (!picked || picked.ref === undefined)
+      throw new Error(
+        `draft_reply: target '${opts.target}' matches none of the reply ` +
+          `targets stored in this document — use a target key the ` +
+          `document shows, or omit target for its default`,
+      );
+    return picked;
+  }
+  if (opts.replyAll) {
+    const all = parseVariant(m?.replyAll);
+    if (all === 'malformed') throw malformed();
+    if (all) return all;
+  }
+  return base;
 }
 
 export interface DraftToolResult {
@@ -179,6 +239,10 @@ export function createOutboundService(deps: {
    *  existing caller keeps passing a Map unchanged. */
   senders: Map<string, Sender> | SenderLookup;
   logSink: LogSink;
+  /** The registered source's descriptor — read for `compose: 'email'`
+   *  (an extension email source whose accounts may originate mail).
+   *  Optional: without it every non-bundled source stays reply-only. */
+  descriptorFor?: (sourceId: string) => SourceDescriptor | undefined;
   nowMs?: () => number; // injectable clock for tests; default Date.now
 }): OutboundService {
   // Bound to a local first: property narrowing on `deps.senders` would not
@@ -556,35 +620,21 @@ export function createOutboundService(deps: {
       // Universality hook (spec §6): a source that wrote metadata.outbound
       // owns its reply addressing — the ref is opaque and round-trips to
       // that source's Sender verbatim. Bundled email resolution otherwise.
-      const outboundMeta = doc.metadata.outbound as
-        | { ref?: unknown; display?: unknown; targets?: unknown }
-        | undefined;
+      const picked = pickOutbound(doc.metadata.outbound, {
+        target,
+        replyAll: replyAll === true,
+      });
       let row: OutboxRow;
       let warnings: string[] = [];
-      if (outboundMeta && typeof outboundMeta.display === 'string') {
-        // `target` selects among the STORED per-message targets — grounding
-        // holds because the model picks a key, never supplies a ref.
-        let { ref } = outboundMeta;
-        let { display } = outboundMeta;
-        if (target !== undefined) {
-          const picked = pickReplyTarget(outboundMeta.targets, target);
-          if (!picked)
-            throw new Error(
-              `draft_reply: target '${target}' matches none of the reply ` +
-                `targets stored in this document — use a target key the ` +
-                `document shows, or omit target for its default`,
-            );
-          ref = picked.ref;
-          display = picked.display;
-        }
+      if (picked) {
         row = await deps.store.outbox.create({
           accountId: account.id,
           kind: 'reply',
           replyToDocumentId: doc.id,
-          outboundRef: ref,
-          recipientDisplay: display,
-          to: [],
-          cc: [],
+          outboundRef: picked.ref,
+          recipientDisplay: picked.display,
+          to: picked.to,
+          cc: picked.cc,
           subject: null,
           bodyMarkdown: body,
           confirmMode: mode,
@@ -662,7 +712,12 @@ export function createOutboundService(deps: {
     async draftMessage({ accountId, to, subject, body }) {
       assertReady();
       const account = await accountFor(accountId);
-      senderAddressFor(account); // fail fast when no From address resolves
+      // An extension source that declares `compose: 'email'` sends as the
+      // account's own mailbox (its Sender owns From). Everything else must
+      // resolve a From address here — which also refuses compose for
+      // reply-only extension sources (Slack, chats) with its own wording.
+      if (deps.descriptorFor?.(account.source)?.compose !== 'email')
+        senderAddressFor(account); // fail fast when no From address resolves
       const trimmed = to.map((t) => t.trim());
       const bad = trimmed.filter((t) => !EMAIL_RX.test(t));
       if (trimmed.length === 0 || bad.length > 0) {

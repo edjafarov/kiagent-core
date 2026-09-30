@@ -48,6 +48,14 @@ const SMTP_TRANSIENT = /^smtp transient (\d{3}):/;
 const AUTH_MARKERS =
   /reconnect .* in Settings|no Gmail credentials|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficientPermissions/i;
 const UNSUPPORTED = /is not supported yet/;
+// `not sent: <reason>` is the second CROSS-REPO contract (alongside
+// AUTH_MARKERS): an extension sender prefixes a failure it can PROVE
+// happened before anything left the device — its live connection is down,
+// the platform refused the recipient up front, the reply target is gone —
+// but that is neither auth nor quota. Anchored and checked before every
+// other marker, so a reason that happens to mention "429" or "reconnect"
+// cannot re-route it.
+const NOT_SENT = /^not sent: /;
 
 const BUSY_MESSAGE =
   'The mail service is busy right now — this message was NOT sent. ' +
@@ -106,6 +114,15 @@ export function shapeOutboundError(raw: string): ShapedOutboundError {
   // prefix by coincidence would be treated as already-shaped too, same as
   // the pre-existing empty-input placeholder case already is.
   const already = isShapedSummary(text);
+  if (NOT_SENT.test(text)) {
+    const reason = text.slice('not sent: '.length).replace(/[.\s]+$/, '');
+    return {
+      kind: 'transient',
+      summary: truncate(text, 200),
+      message: `This message was NOT sent — ${reason}.`,
+      canRetry: true,
+    };
+  }
 
   const smtp = SMTP_TRANSIENT.exec(text);
   if (smtp) {

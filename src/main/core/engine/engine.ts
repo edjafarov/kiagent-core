@@ -40,6 +40,7 @@ import { RECONCILE_ERROR_PREFIX } from '../store/last-error';
 import type { CoreStore } from '../store/store';
 import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
 import { FetchDeferredError } from './fetch-deferred';
+import { freshCredentials } from './fresh-credentials';
 
 export interface LogSink {
   log(
@@ -630,31 +631,13 @@ export function createEngine(deps: EngineDeps): Engine & {
   ): Session => ({
     account,
     signal,
-    async credentials(): Promise<Credentials | null> {
-      const creds = await store.vault.load(account.id);
-      if (!creds) return null;
-      const refresh = deps.refreshers?.get(account.source);
-      const expiringSoon =
-        creds.expiresAt !== undefined &&
-        Date.parse(creds.expiresAt) < Date.now() + 60_000;
-      if (refresh && expiringSoon) {
-        try {
-          const fresh = await refresh(creds);
-          if (fresh) {
-            await store.vault.save(account.id, fresh);
-            return fresh;
-          }
-        } catch (err) {
-          // An auth-coded refresh failure (revoked grant) must PROPAGATE:
-          // returning the stale token would just move the failure to the
-          // next API call as an untyped 401 retry-storm. Swallow-and-warn
-          // stays correct only for transient failures (network, 5xx), where
-          // the stale token may in fact still work.
-          if (sourceErrorCode(err) === 'auth') throw err;
-          logs.log(scope, 'warn', `token refresh failed: ${String(err)}`);
-        }
-      }
-      return creds;
+    credentials(): Promise<Credentials | null> {
+      return freshCredentials({
+        vault: store.vault,
+        account: account.id,
+        refresh: deps.refreshers?.get(account.source),
+        warn: (msg) => logs.log(scope, 'warn', msg),
+      });
     },
     log(level, msg) {
       logs.log(scope, level, msg);

@@ -11,6 +11,7 @@ import os from 'os';
 import NodeModule from 'module';
 
 import type {
+  AccountId,
   Cap,
   ConsentRecord,
   Credentials,
@@ -26,7 +27,7 @@ import type {
 } from '@shared/contracts';
 import type { ExtensionPreview, ExtInvokeEnvelope } from '@shared/ipc';
 import type { Contributions } from '@shared/extension-rpc';
-import { wireErrorCode } from '@shared/source-errors';
+import { sourceErrorCode, wireErrorCode } from '@shared/source-errors';
 import type { AppDb } from '@main/db/app-db';
 import type { DbOwner } from '@main/db/coordinator';
 import type { AttentionService } from '@main/attention/service';
@@ -35,6 +36,7 @@ import type { CoreStore } from '@main/core/store/store';
 import type { CoreScheduler } from '@main/core/scheduler';
 import type { SenderRegistry, SourceRegistry } from '@main/core/boot';
 import type { LogSink } from '@main/core/engine/engine';
+import { freshCredentials } from '@main/core/engine/fresh-credentials';
 import type { OAuthProfile } from '@main/auth/oauth-window';
 
 import {
@@ -658,6 +660,34 @@ export function createExtensionPlatform(
     );
   }
 
+  /** Credentials for an extension Sender, resolved host-side at send time
+   *  (past the confirmation gate): refreshed exactly like a pull's
+   *  `session.credentials()`. A refresh the provider REJECTED (revoked or
+   *  expired grant) is re-worded into the outbound layer's auth contract —
+   *  `reconnect … in Settings` — because the send pipeline classifies by
+   *  message text, and the provider's own wording would render as "may have
+   *  been sent" for a send that never started. */
+  async function senderCredentials(
+    sourceId: string,
+    accountId: AccountId,
+  ): Promise<Credentials | null> {
+    try {
+      return await freshCredentials({
+        vault: deps.store.vault,
+        account: accountId,
+        refresh: deps.oauth?.refreshers.get(sourceId),
+        warn: (msg) => deps.logSink.log(`sender:${sourceId}`, 'warn', msg),
+      });
+    } catch (err) {
+      if (sourceErrorCode(err) !== 'auth') throw err;
+      const account = await deps.store.account(accountId);
+      const name = deps.sources.get(sourceId)?.descriptor.name ?? sourceId;
+      throw new Error(
+        `your ${name} sign-in has expired — reconnect ${account?.identifier ?? 'the account'} in Settings`,
+      );
+    }
+  }
+
   function registerContributions(
     e: Entry,
     c: Contributions,
@@ -753,7 +783,7 @@ export function createExtensionPlatform(
           // past the confirmation gate — and hands them over in the ctx.
           // Passed UNCONDITIONALLY: SenderContext is optional on the
           // Sender contract, so a dropped argument would compile silently.
-          const credentials = await deps.store.vault.load(intent.accountId);
+          const credentials = await senderCredentials(id, intent.accountId);
           const call = e.host!.callSender(id, intent, { credentials });
           // The RPC has no timeout; a hung child must not wedge the
           // confirmation pipeline (the row would sit in 'sending').

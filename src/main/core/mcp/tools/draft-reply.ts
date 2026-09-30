@@ -6,7 +6,7 @@
  */
 import type { OutboundToolApi } from '@main/outbound/service';
 
-export const draftReplyDescription = `Create a DRAFT reply to an email document from the corpus (use the document id from search/get results). The app resolves the recipient and threading from the stored document — do not supply addresses. NOTHING IS SENT by this tool: the result includes an instruction and a confirmation link for the user; follow the instruction exactly.`;
+export const draftReplyDescription = `Create a DRAFT reply to an email or chat document from the corpus (use the document id from search/get results; for a chat, the day document of the conversation). The app resolves the recipient and threading from the stored document — do not supply addresses. NOTHING IS SENT by this tool: the result includes an instruction and a confirmation link for the user; follow the instruction exactly.`;
 
 export const draftReplyInputSchema = {
   type: 'object',
@@ -24,10 +24,11 @@ export const draftReplyInputSchema = {
     target: {
       type: 'string',
       description:
-        'Optional reply-target key shown in the document (e.g. the `ts` ' +
-        'value next to a message in a Slack day document) — threads the ' +
-        'reply under that specific message. Omit to use the document’s ' +
-        'default reply target.',
+        'Optional reply-target key from the document (e.g. the `ts` value ' +
+        'next to a message in a Slack day document, or a message id from ' +
+        'a Telegram day document’s metadata.outbound.targets) — threads ' +
+        'the reply under that specific message. Omit to use the ' +
+        'document’s default reply target.',
     },
   },
   required: ['document_id', 'body'],

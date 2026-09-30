@@ -88,6 +88,31 @@ describe('shapeOutboundError', () => {
       'auth',
     );
   });
+  it("classifies an extension sender's `not sent:` prefix as retryable, in its own words", () => {
+    const r = shapeOutboundError(
+      "not sent: WhatsApp isn't connected right now — try again in a moment",
+    );
+    expect(r.kind).toBe('transient');
+    expect(r.canRetry).toBe(true);
+    expect(r.summary).toBe(
+      "not sent: WhatsApp isn't connected right now — try again in a moment",
+    );
+    expect(r.message).toBe(
+      "This message was NOT sent — WhatsApp isn't connected right now — try again in a moment.",
+    );
+  });
+
+  it('`not sent:` wins over any other marker in its reason, and only when anchored', () => {
+    const r = shapeOutboundError(
+      'not sent: graph 503 https://x 429 quotaExceeded',
+    );
+    expect(r.kind).toBe('transient');
+    expect(r.canRetry).toBe(true);
+    const mid = shapeOutboundError('upstream said not sent: maybe');
+    expect(mid.kind).toBe('unknown');
+    expect(mid.canRetry).toBe(false);
+  });
+
   it('classifies unsupported-source copy, not retryable', () => {
     const s = shapeOutboundError(
       "sending from 'slack' accounts is not supported yet — supported: gmail, imap",
@@ -126,6 +151,8 @@ describe('shapeOutboundError', () => {
       STACK_TRACE_WITH_EMBEDDED_429,
       QUOTA_MARKER_ON_OWN_LINE,
       QUOTA_MARKER_WITH_DISQUALIFYING_STATUS,
+      "not sent: WhatsApp isn't connected right now — try again in a moment",
+      'wrapped not sent: mid-string is not the marker',
     ]) {
       const first = shapeOutboundError(raw);
       const second = shapeOutboundError(first.summary);
