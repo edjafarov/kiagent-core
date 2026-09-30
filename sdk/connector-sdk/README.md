@@ -171,6 +171,19 @@ even for an unscripted (rejecting) call, which is how a test asserts that a
 manage edit opened with the account's current roots in `spec.selected` and
 `spec.purpose === 'manage'`.
 
+## Calendar sources
+
+A source is a **calendar source** when its descriptor lists
+`CALENDAR_EVENT_DOCUMENT_TYPE` (`'calendar.event'`) in `documentTypes`
+(platform `^2.6.0`). The app shows its events on its own Calendar page, links
+recordings to them and briefs on them; the connector ships no UI. Emit one
+document per event **occurrence** with `CalendarEventMetadata` as `metadata`,
+`createdAt` = the start and `scopeRootId` = the calendar id. The markdown
+layout is part of the contract: `# <title>`, a blank line, the `**When:**` /
+`**Where:**` / `**Calendar:**` / `**Organizer:**` / `**Attendees:**` /
+`**Conference:**` lines, a blank line, then the plain-text description. Both
+are append-only.
+
 ## Contributing a page
 
 An extension can add a page to the app's sidebar (platform `^2.5.0`). A page
@@ -236,7 +249,7 @@ reloads the page.
 
 ## Versioning
 
-Current release: **1.3.0**, `kiagentCore: 0.89.1` (platform API **2.2.0**).
+Current release: **1.7.0**, `kiagentCore: 0.98.0` (platform API **2.6.0**).
 The SDK version, core version and manifest `engine` range are independent.
 Newer core contracts do not retroactively appear in a published SDK tarball.
 Running `build` here regenerates from the *current checkout*, so a locally
