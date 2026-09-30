@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.98.0](https://github.com/edjafarov/kiagent-core/compare/v0.97.1...v0.98.0) (2026-09-30)
+
+### Features
+
+* **imap:** folder scope model (scope.ts) ([0aea3d8](https://github.com/edjafarov/kiagent-core/commit/0aea3d835b28f685408391f9962de3f8aff1367c))
+* **imap:** Tracked folders for IMAP accounts ([9634978](https://github.com/edjafarov/kiagent-core/commit/9634978ab5344f2808fb321a998a6a24ad8a0a40))
+* **inference:** a remote provider that cannot serve now falls back once to local ([0fd9c56](https://github.com/edjafarov/kiagent-core/commit/0fd9c565e236f6dcab004066f343772d3bb22b7a))
+* **inference:** task + budgetKey on calls; meta calls on extension and worker surfaces ([66e2dc2](https://github.com/edjafarov/kiagent-core/commit/66e2dc2fb2459ce96f480386280e0bd5fc0792a0))
+* **inference:** task-aware remote providers and explicit per-task routes ([f869936](https://github.com/edjafarov/kiagent-core/commit/f869936bd88526368d86498578205c40c336218d))
+* **main-api:** busy registry shared by every bundled extension ([94c49b2](https://github.com/edjafarov/kiagent-core/commit/94c49b2712d8cd82f4698b7deb7e1f8b4af66f2b))
+* **main-api:** vault.delete and an opaque Credentials.secret ([a8a084f](https://github.com/edjafarov/kiagent-core/commit/a8a084fa86ad2cb1f07bbe5faa6851099b9bba98))
+* **mcp:** 'agent' transport — drafts always wait for the page, never sends ([f6d27b6](https://github.com/edjafarov/kiagent-core/commit/f6d27b659b4416d4b23b302f35b9533d4d7aa180))
+* **mcp:** createMcpHandler takes a transport — one handler per transport ([8437c90](https://github.com/edjafarov/kiagent-core/commit/8437c900ef10abed7dbfd598aaf7b097eec2a330))
+* **settings:** Local processing names the provider routed tasks are sent to ([a8dbb30](https://github.com/edjafarov/kiagent-core/commit/a8dbb306ab492c5b7a113d57665e5a4b0628b30d))
+* **vision:** pass 2 carries a task and records who described each page ([9bb21fb](https://github.com/edjafarov/kiagent-core/commit/9bb21fbb862003689c585d4ce7e2dd25791febdf))
+
+### Bug Fixes
+
+* **imap:** archive mail synced while the picker was open; live re-LIST hygiene ([6eda416](https://github.com/edjafarov/kiagent-core/commit/6eda4161423bcb40ad602bb5c928acc96c59d21d))
+* **imap:** mark vanished mailboxes stale instead of pruning their cursor entry ([6742da0](https://github.com/edjafarov/kiagent-core/commit/6742da097052119b4a9653c292803fd5ba370fc2))
+* **inference:** fallback re-checks the lane and runs on any remote failure; routes never bump; describe records its provider ([40611b8](https://github.com/edjafarov/kiagent-core/commit/40611b8df01116d7a1ddf39e72b161719fbda737))
+* **outbound:** the agent transport never receives a confirm link ([da59f78](https://github.com/edjafarov/kiagent-core/commit/da59f78697d81057fd670117c91df5d3e9a22a60))
+
 ## [0.97.1](https://github.com/edjafarov/kiagent-core/compare/v0.97.0...v0.97.1) (2026-09-28)
 
 ### Bug Fixes
