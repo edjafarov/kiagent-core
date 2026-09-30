@@ -251,3 +251,21 @@ describe('SourceDetail: the page', () => {
     expect(screen.getByText('This source was removed.')).toBeInTheDocument();
   });
 });
+
+describe('SourceDetail: Reconnect in the source menu', () => {
+  it('a healthy account whose source can re-authenticate offers Reconnect', () => {
+    mockDescriptors = [{ ...SCOPED[0], hasReauthenticate: true }];
+    render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Source actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Reconnect/ }));
+    expect(screen.getByTestId('add-source-panel')).toBeInTheDocument();
+  });
+
+  it('no Reconnect when the source cannot re-authenticate', () => {
+    render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Source actions' }));
+    expect(
+      screen.queryByRole('menuitem', { name: /Reconnect/ }),
+    ).not.toBeInTheDocument();
+  });
+});

@@ -91,7 +91,13 @@ export function SourcePanel(props: {
         title={name}
         meta={accountLabel(a)}
       >
-        <SourceMenu entry={entry} name={name} />
+        <SourceMenu
+          entry={entry}
+          name={name}
+          onReconnect={
+            descriptor?.hasReauthenticate ? props.onReconnect : undefined
+          }
+        />
       </EntityHeading>
       <SourceProblem entry={entry} onReconnect={props.onReconnect} />
       <KeyValue items={facts} />

@@ -148,7 +148,18 @@ export function SourceDetail(props: {
   return (
     <Page
       crumb={{ parent: 'Sources', current: name, onBack: props.onBack }}
-      actions={<SourceMenu entry={entry} name={name} withRemove={false} />}
+      actions={
+        <SourceMenu
+          entry={entry}
+          name={name}
+          withRemove={false}
+          onReconnect={
+            descriptor?.hasReauthenticate
+              ? () => setView('reconnect')
+              : undefined
+          }
+        />
+      }
     >
       <div className="src-detail">
         <Stack gap="page">

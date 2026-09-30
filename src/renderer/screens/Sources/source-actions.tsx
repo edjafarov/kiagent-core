@@ -97,12 +97,15 @@ export function RemoveSourceSheet(props: {
   );
 }
 
-/** A source's ··· menu: Sync now, Pause/Resume and, unless the page has its
+/** A source's ··· menu: Sync now, Pause/Resume, Reconnect when the caller
+ *  offers it (the source can re-authenticate — a healthy account too, e.g.
+ *  to grant a scope a newer connector asks for) and, unless the page has its
  *  own Remove card, Remove. */
 export function SourceMenu(props: {
   entry: SourceEntry;
   name: string;
   withRemove?: boolean;
+  onReconnect?: () => void;
 }): React.ReactElement {
   const { entry, name, withRemove = true } = props;
   const a = entry.account;
@@ -127,6 +130,16 @@ export function SourceMenu(props: {
           { accountId: a.id },
         ),
     },
+    ...(props.onReconnect
+      ? [
+          {
+            key: 'reconnect',
+            label: 'Reconnect',
+            icon: 'refresh-cw',
+            onSelect: props.onReconnect,
+          },
+        ]
+      : []),
     ...(withRemove
       ? ([
           'separator',
