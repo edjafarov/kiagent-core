@@ -154,7 +154,10 @@ function buildRemoteHost(
       };
       uiRegistrations.set(key, current);
     }
-    if (current.removal) return current.removal;
+    if (current.removal) {
+      await current.removal;
+      return;
+    }
 
     const removal = (async (): Promise<void> => {
       // Local-first: dispatch stops immediately, while the host call waits
@@ -174,7 +177,7 @@ function buildRemoteHost(
       }
     })();
     current.removal = removal;
-    return removal;
+    await removal;
   };
   for (const cap of boot.caps) {
     if (cap === 'events') {
