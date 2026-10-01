@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.99.1](https://github.com/edjafarov/kiagent-core/compare/v0.99.0...v0.99.1) (2026-10-01)
+
+### Bug Fixes
+
+* **ui:** keep child handler registration state coherent ([271073e](https://github.com/edjafarov/kiagent-core/commit/271073eb7cb0843015c75cb4cfa2f6d1cb19118c))
+
 ## [0.99.0](https://github.com/edjafarov/kiagent-core/compare/v0.98.0...v0.99.0) (2026-09-30)
 
 ### Features
