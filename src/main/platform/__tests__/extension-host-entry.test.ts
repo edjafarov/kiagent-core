@@ -635,6 +635,213 @@ describe('runExtensionHost — source runner', () => {
 describe('runExtensionHost — host.ui (B1 host-owned renderer eventing, RPC mechanics)', () => {
   const UI_BOOT = { ...BOOT, caps: [...BOOT.caps, 'ui'] as Cap[] };
 
+  it('unhandle waits for an in-flight handle and suppresses its late local install', async () => {
+    let releaseHandle!: () => void;
+    const handleAck = new Promise<void>((resolve) => {
+      releaseHandle = resolve;
+    });
+    let releaseUnhandle!: () => void;
+    const unhandleAck = new Promise<void>((resolve) => {
+      releaseUnhandle = resolve;
+    });
+    const calls: string[] = [];
+    const mod = {
+      async activate(host: {
+        ui: {
+          handle(name: string, fn: (p: unknown) => unknown): Promise<unknown>;
+          unhandle(name: string): Promise<void>;
+        };
+      }) {
+        void host.ui.handle('echo', async () => 'late');
+        return {
+          tools: [
+            {
+              name: 'drop',
+              description: '',
+              inputSchema: {},
+              call: () => host.ui.unhandle('echo'),
+            },
+          ],
+        };
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (ns, method) => {
+      calls.push(`${ns}.${method}`);
+      if (ns === 'ui' && method === 'handle') {
+        await handleAck;
+        return undefined;
+      }
+      if (ns === 'ui' && method === 'unhandle') {
+        await unhandleAck;
+        return undefined;
+      }
+      throw new Error(`unexpected ${ns}.${method}`);
+    });
+    const activated = waitFor('activated');
+    mainEp.post(UI_BOOT);
+    await activated;
+
+    const dropping = mainEp.call('tool', 'drop', [{}]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(calls).toEqual(['ui.handle']);
+    await expect(mainEp.call('ui', 'echo', ['x'])).rejects.toThrow(
+      /unknown ui handler/,
+    );
+
+    releaseHandle();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(calls).toEqual(['ui.handle', 'ui.unhandle']);
+    await expect(mainEp.call('ui', 'echo', ['x'])).rejects.toThrow(
+      /unknown ui handler/,
+    );
+    releaseUnhandle();
+    await expect(dropping).resolves.toBeUndefined();
+  });
+
+  it('a stale disposer cannot remove a later registration, even when it reuses the callback', async () => {
+    const calls: string[] = [];
+    const shared = async () => 'shared';
+    let disposeFirst!: () => Promise<void>;
+    const mod = {
+      async activate(host: {
+        ui: {
+          handle(
+            name: string,
+            fn: (p: unknown) => unknown,
+          ): Promise<() => Promise<void>>;
+        };
+      }) {
+        disposeFirst = await host.ui.handle('echo', shared);
+        return {
+          tools: [
+            {
+              name: 'replace',
+              description: '',
+              inputSchema: {},
+              call: async () => {
+                await disposeFirst();
+                await host.ui.handle('echo', shared);
+                return 'replaced';
+              },
+            },
+            {
+              name: 'stale',
+              description: '',
+              inputSchema: {},
+              call: () => disposeFirst(),
+            },
+          ],
+        };
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (ns, method) => {
+      calls.push(`${ns}.${method}`);
+      if (ns === 'ui' && (method === 'handle' || method === 'unhandle'))
+        return undefined;
+      throw new Error(`unexpected ${ns}.${method}`);
+    });
+    const activated = waitFor('activated');
+    mainEp.post(UI_BOOT);
+    await activated;
+
+    await expect(mainEp.call('tool', 'replace', [{}])).resolves.toBe(
+      'replaced',
+    );
+    expect(calls).toEqual(['ui.handle', 'ui.unhandle', 'ui.handle']);
+    await expect(mainEp.call('tool', 'stale', [{}])).resolves.toBeUndefined();
+    expect(calls).toEqual(['ui.handle', 'ui.unhandle', 'ui.handle']);
+    await expect(mainEp.call('ui', 'echo', [1])).resolves.toBe('shared');
+  });
+
+  it('propagates unhandle failure and restores the local handler for retry', async () => {
+    let failUnhandle = true;
+    const mod = {
+      async activate(host: {
+        ui: {
+          handle(name: string, fn: (p: unknown) => unknown): Promise<unknown>;
+          unhandle(name: string): Promise<void>;
+        };
+      }) {
+        await host.ui.handle('echo', async () => 'still-live');
+        return {
+          tools: [
+            {
+              name: 'drop',
+              description: '',
+              inputSchema: {},
+              call: () => host.ui.unhandle('echo'),
+            },
+          ],
+        };
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (ns, method) => {
+      if (ns === 'ui' && method === 'handle') return undefined;
+      if (ns === 'ui' && method === 'unhandle') {
+        if (failUnhandle) throw new Error('host unhandle failed');
+        return undefined;
+      }
+      throw new Error(`unexpected ${ns}.${method}`);
+    });
+    const activated = waitFor('activated');
+    mainEp.post(UI_BOOT);
+    await activated;
+
+    await expect(mainEp.call('tool', 'drop', [{}])).rejects.toThrow(
+      'host unhandle failed',
+    );
+    await expect(mainEp.call('ui', 'echo', [1])).resolves.toBe('still-live');
+    failUnhandle = false;
+    await expect(mainEp.call('tool', 'drop', [{}])).resolves.toBeUndefined();
+    await expect(mainEp.call('ui', 'echo', [1])).rejects.toThrow(
+      /unknown ui handler/,
+    );
+  });
+
+  it('rejects non-function ui handlers before making a host call', async () => {
+    const calls: string[] = [];
+    const mod = {
+      async activate(host: {
+        ui: { handle(name: string, fn: unknown): Promise<unknown> };
+      }) {
+        return {
+          tools: [
+            {
+              name: 'bad',
+              description: '',
+              inputSchema: {},
+              call: async () => {
+                try {
+                  await host.ui.handle('bad', null);
+                  return 'unexpected';
+                } catch (error) {
+                  return error instanceof TypeError
+                    ? error.message
+                    : String(error);
+                }
+              },
+            },
+          ],
+        };
+      },
+    };
+    const { mainEp, waitFor } = boot(mod);
+    mainEp.onCall(async (ns, method) => {
+      calls.push(`${ns}.${method}`);
+      throw new Error(`unexpected ${ns}.${method}`);
+    });
+    const activated = waitFor('activated');
+    mainEp.post(UI_BOOT);
+    await activated;
+    await expect(mainEp.call('tool', 'bad', [{}])).resolves.toBe(
+      'host.ui.handle requires a function',
+    );
+    expect(calls).toEqual([]);
+  });
+
   it('handle() resolves ONLY on host acknowledgement — the local dispatch map is not populated before that (not optimistic)', async () => {
     let ackHandle: () => void = () => {};
     const acked = new Promise<void>((resolve) => {
