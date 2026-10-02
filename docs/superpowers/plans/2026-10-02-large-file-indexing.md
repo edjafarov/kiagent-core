@@ -663,9 +663,10 @@ it('a doc with several changes in one feed batch is worked once', async () => {
     matches: (ch) => ch.kind === 'document' && ch.document.externalId === 'm',
     async work() { runs += 1; return 'done'; } };
   // three changes for the same doc BEFORE the worker attaches → one replay batch
-  await store.commit({ account: account.id, documents: [doc('m', { markdown: 'a' })], cursor: 1 });
-  await store.commit({ account: account.id, documents: [doc('m', { markdown: 'b' })], cursor: 2 });
-  await store.commit({ account: account.id, documents: [doc('m', { markdown: 'c' })], cursor: 3 });
+  // engine.test.ts's doc(externalId, markdown) helper takes the markdown as a string
+  await store.commit({ account: account.id, documents: [doc('m', 'a')], cursor: 1 });
+  await store.commit({ account: account.id, documents: [doc('m', 'b')], cursor: 2 });
+  await store.commit({ account: account.id, documents: [doc('m', 'c')], cursor: 3 });
   const handle = engine.attach(worker);
   await new Promise((r) => setTimeout(r, 1_000));
   await handle.stop();

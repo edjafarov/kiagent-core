@@ -199,6 +199,14 @@ it('unknown declared size, 30 MiB docx after download → none, measured size pe
   expect(calls.length).toBe(before);
 });
 
+it('a size-less file measured earlier as deferred is NOT re-downloaded on an unchanged re-listing', async () => {
+  const query = fakeQuery([fakeDoc('ns2', 'file', { etag: 'etag-ns2-1', extraction_status: 'deferred', size_bytes: 40 * MiB })]);
+  const { source, calls } = makeSource({ deltaPages: one('ns2', 'n2.pdf', { size: undefined }) }, query);
+  const { session } = makeSession({ config: oneRoot });
+  expect(((await collect(source.pull(session, null))) as B[]).flatMap(ids)).toEqual([]);
+  expect(calls.some((u) => u.includes('download.example'))).toBe(false);
+});
+
 it('unknown declared size, 30 MiB PNG after download → still ignored + archived', async () => {
   const query = fakeQuery([fakeDoc('ni', 'file', { etag: 'etag-OLD', extraction_status: 'ok' })]);
   const { source } = makeSource({
@@ -280,13 +288,35 @@ export function statusFor(route: Extract<OneDriveRoute, { kind: 'binary' }>): 'o
 `src/source.ts`:
 
 1. `OneDriveItem.extractionStatus: 'ok' | 'deferred' | 'none' | 'failed';`. Update its doc comment: deferred/none are metadata-only rows for documents over the eager cap.
-2. `hashSkip(deps, itemId, etag, want: 'ok' | 'deferred' | 'none')`: replace `if (meta.extraction_status !== 'ok') return false;` with `if (meta.extraction_status !== want) return false;`. Rewrite the doc comment: "pins only a row whose stored status is the one the current route would write; `'failed'`, legacy `'unsupported'`/`'too-large'`, and any route change re-fetch".
+2. `hashSkip(deps, itemId, etag, want, recheck?)`. It pins only a row whose stored status is the one the current route would write. When upstream omitted the size, the **stored measured size** decides that route. The function already reads the stored row, so this costs no extra I/O:
+
+```ts
+type Status = 'ok' | 'deferred' | 'none';
+async function hashSkip(deps: ItemDeps, itemId: string, etag: string | undefined,
+  want: Status, recheck?: (storedSize: number) => Status | 'ignore'): Promise<boolean> {
+  if (!etag) return false;
+  const existing = await deps.query.byExternalId(deps.session.account.id, itemId, 'file');
+  if (!existing || existing.archivedAt) return false;
+  const meta = existing.metadata as Record<string, unknown>;
+  if (meta.etag !== etag) return false;
+  if (meta.extraction_status === want) return true;
+  // Upstream sent no size: an unchanged file measured on an earlier download
+  // routes by that measurement, or it would be re-downloaded every listing.
+  return recheck !== undefined && typeof meta.size_bytes === 'number'
+    && meta.extraction_status === recheck(meta.size_bytes);
+}
+```
+
+Rewrite the doc comment: "`'failed'`, legacy `'unsupported'`/`'too-large'`, and any route change re-fetch".
 3. Rename `failedItem` to `metadataItem(raw, status, displayPath, rootFolderId)` returning `{ file: raw, markdown: '', extractionStatus: status, displayPath, rootFolderId }`. Update its one caller to pass `'failed'`.
 4. `buildItem(raw, root, route, deps, deletions)` takes the pre-check route from `pageChunks`:
 
 ```ts
 const want = statusFor(route);
-if (await hashSkip(deps, raw.id, raw.eTag, want)) return null;
+const recheck = raw.size == null
+  ? (n: number) => { const r = chooseRoute(mime, raw.name, n); return r.kind === 'ignore' ? 'ignore' as const : statusFor(r); }
+  : undefined;
+if (await hashSkip(deps, raw.id, raw.eTag, want, recheck)) return null;
 if (route.bytes !== 'eager') return metadataItem(raw, route.bytes, displayPath, root.rootFolderId);
 // …existing downloadUrl refresh + download unchanged…
 const postRoute = chooseRoute(mime, raw.name, bytes.byteLength);
@@ -558,6 +588,16 @@ it('unknown size, 40 MiB after download → deferred item without bytes', async 
   expect(source.toDocument(items[0]).metadata).toMatchObject({ size_bytes: 40 * MiB, sizeBytes: 40 * MiB });
 });
 
+it('a size-less file measured earlier as none is NOT re-downloaded on an unchanged re-listing', async () => {
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const query = fakeQuery([fakeDoc('nd', 'file', { md5_checksum: 'md5-nd-1', extraction_status: 'none', size_bytes: 30 * MiB })]);
+  const { source, calls } = makeSource({ startPageToken: 'spt-1',
+    lists: { root: [binaryFile('nd', 'n.docx', DOCX, { size: undefined })] } }, query);
+  const { session } = makeSession();
+  expect(((await collect(source.pull(session, null))) as B[]).flatMap(ids)).toEqual([]);
+  expect(calls.some((u) => u.includes('alt=media'))).toBe(false);
+});
+
 it('hash-skip pins an unchanged deferred row and re-fetches when the route changed', async () => {
   const query = fakeQuery([
     fakeDoc('big', 'file', { md5_checksum: 'md5-big-1', extraction_status: 'deferred' }),
@@ -625,13 +665,16 @@ export function statusFor(route: Extract<DriveRoute, { kind: 'binary' }>): 'ok' 
 `src/source.ts`:
 
 1. `DriveItem.extractionStatus: 'ok' | 'deferred' | 'none' | 'unsupported' | 'too-large' | 'failed';`.
-2. `hashSkip(deps, fileId, type, metaKey, value, want: 'ok' | 'deferred' | 'none' = 'ok')`: replace `!== 'ok'` with `!== want`, and update the comment as for OneDrive. The native-doc call keeps the default `'ok'`.
+2. `hashSkip(deps, fileId, type, metaKey, value, want: 'ok' | 'deferred' | 'none' = 'ok', recheck?)` gets the same body change as OneDrive's: exact `want` match, else a stored `size_bytes` re-route when upstream sent no size. Update the comment as for OneDrive. The native-doc call keeps the default `'ok'` and passes no `recheck`.
 3. `metadataOnly(file, docType, extractionStatus: 'deferred' | 'none' | 'failed', …)`. Its comment changes to: "EMPTY-STRING markdown, no binary: core's convert worker enrolls a `deferred` row and fetches it through `fetchBytes`".
 4. In `buildItem`'s binary branch:
 
 ```ts
 // route.kind === 'binary'
-if (await hashSkip(deps, file.id, 'file', 'md5_checksum', file.md5Checksum, statusFor(route))) return null;
+const recheck = file.size == null
+  ? (n: number) => { const r = chooseRoute(file.mimeType, file.name, n); return r.kind === 'binary' ? statusFor(r) : 'ignore' as const; }
+  : undefined;
+if (await hashSkip(deps, file.id, 'file', 'md5_checksum', file.md5Checksum, statusFor(route), recheck)) return null;
 if (route.bytes !== 'eager') {
   return { kind: 'item', item: metadataOnly(file, 'file', route.bytes, displayPath, root.rootFolderId) };
 }
