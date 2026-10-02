@@ -40,9 +40,9 @@ If `better-sqlite3` reports a NODE_MODULE_VERSION mismatch under jest, run `npm 
 
 ## Review Focus
 
-1. **A 60 MiB scanned PDF in a local folder.** It must appear by name right after the scan, get parsed (text-poor), then be OCR'd in windows. It must never be read eagerly in `buildItem`. Owned by Tasks 1 and 9.
+1. **A 60 MiB scanned PDF in a local folder.** It must appear by name right after the scan, get parsed (text-poor), then be OCR'd in windows. It must never be read eagerly in `buildItem`. Owned by Tasks 1 and 8.
 2. **A cloud source going offline while large PDFs are pending.** Repeated `FetchDeferredError` must never mark a doc `failed`. Owned by Task 5.
-3. **App quit in the middle of a 200-page OCR.** On resume it continues at the next missing page; pages already OCR'd are never redone. Owned by Task 9.
+3. **App quit in the middle of a 200-page OCR.** On resume it continues at the next missing page; pages already OCR'd are never redone. Owned by Task 7.
 4. **An upgrade with existing `too-large` rows and an old local cursor.** The rows are re-parsed, and only newly admitted local files are re-emitted. Owned by Tasks 3 and 5.
 5. **A docx over 20 MiB.** It gets a row and `too-large`, and is never fetched. Owned by Tasks 1 and 5.
 
@@ -172,7 +172,7 @@ Then:
 - Local audio → `mediaCap(size, MAX_LOCAL_AUDIO_BYTES, 'audio')`.
 - Converter branch → `docCap(size, local ? MAX_LOCAL_BINARY_BYTES : MAX_CLOUD_BINARY_BYTES, 'converter')`.
 
-Delete `MAX_LOCAL_PDF_BYTES` **only if** no other module imports it. `src/main/workers/vision/classify.ts` does; Task 8 switches it to `MAX_FETCH_BYTES`. Keep the export until then.
+Delete `MAX_LOCAL_PDF_BYTES` **only if** no other module imports it. `src/main/workers/vision/classify.ts` does; Task 7 switches it to `MAX_FETCH_BYTES`. Keep the export until then.
 
 Add:
 
@@ -292,6 +292,12 @@ const d = decideLocalFile(absPath, stat.size);
 if (d.kind === 'ignore' || d.bytes === 'none') return null;
 ```
 
+`entryReadCost` (`scanner.ts:46`): a metadata-only entry costs 0. Without this, a 60 MiB deferred PDF would still be counted at full size when sizing batches.
+
+```ts
+if (decision.kind !== 'index' || decision.bytes !== 'eager') return 0;
+```
+
 - [ ] **Step 4: Run, and confirm they pass**
 
 Run: `npx jest src/main/sources/local-folder`
@@ -306,34 +312,50 @@ git commit -m "feat(local-folder): metadata-only rows for deferred/none files; f
 
 ---
 
-### Task 3: Local policy re-walk (`policyVersion` in the cursor)
+### Task 3: Local policy recovery (`policyVersion` in the cursor)
 
 **Files:**
 - Modify: `src/main/sources/local-folder/cursor.ts`
-- Modify: `src/main/sources/local-folder/local-folder-source.ts` (`pruneToConfiguredRoots`, `pull`, new `policyRewalk`)
+- Modify: `src/main/sources/local-folder/local-folder-source.ts` (`pruneToConfiguredRoots`, `incrementalRescanRoot`, `pull`)
 - Test: `src/main/sources/local-folder/__tests__/local-folder-source.test.ts`
 
 **Interfaces:**
-- Consumes: `newlyAdmitted`, `FILE_POLICY_VERSION` (Task 1); `decideLocalFile`'s candidate shape.
+- Consumes: `newlyAdmitted`, `FILE_POLICY_VERSION` (Task 1); `resolvePathMime` (`./mime`).
 - Produces: `LocalFolderCursor = { roots: Record<string,{completedAt:string}>; policyVersion?: number } | null`.
 
-- [ ] **Step 1: Failing test**
+**Design.** There is no separate re-walk pass. The existing per-root incremental rescan already walks every file of a root each cycle (it filters on mtime/ctime). It also admits `newlyAdmitted(candidate, fromVersion)`. Roots that backfill this cycle already enumerate everything under the new policy. One trailing cursor-only batch, after every root has finished, stamps `policyVersion`.
+
+A crash before that stamp just repeats the newly-admitted emission next cycle. That is cheap: deferred/none entries read no bytes, and the hash short-circuit absorbs the rest. A cursor that mixes old and new roots therefore recovers its old roots correctly, which an "every root just backfilled" shortcut would not.
+
+This deviates from the spec's "watermarks untouched". The incremental rescan advances watermarks on its last batch every cycle anyway. The spec's real concern is preserved: eager files are never re-emitted.
+
+- [ ] **Step 1: Failing tests**
 
 ```ts
-it('an old cursor re-walks once, emitting only newly admitted files', async () => {
+it('an old cursor emits only newly admitted files once, then stamps policyVersion', async () => {
   // 3 small pdfs already indexed + 1 sparse 60 MiB pdf the old policy dropped
   for (const n of ['a', 'b', 'c']) await fs.promises.writeFile(path.join(root, `${n}.pdf`), tinyPdf(n));
   const big = path.join(root, 'big.pdf');
   const fh = await fs.promises.open(big, 'w'); await fh.truncate(60 * 1024 * 1024); await fh.close();
-  const old = { roots: { [root]: { completedAt: new Date(Date.now() + 60_000).toISOString() } } }; // watermark in the future: incremental finds nothing
+  const future = new Date(Date.now() + 60_000).toISOString(); // watermark in the future: mtime filter finds nothing
+  const old = { roots: { [root]: { completedAt: future } } };
   const batches = await collect(pull(sessionFor([root], { watch: false }), old));
-  const emitted = batches.flatMap((b) => b.items.map((i) => path.basename(i.absPath)));
-  expect(emitted).toEqual(['big.pdf']);
-  const last = batches[batches.length - 1].cursor as { policyVersion?: number; roots: object };
-  expect(last.policyVersion).toBe(FILE_POLICY_VERSION);
-  expect(last.roots).toEqual(old.roots); // watermarks untouched
+  expect(batches.flatMap((b) => b.items.map((i) => path.basename(i.absPath)))).toEqual(['big.pdf']);
+  expect((batches[batches.length - 1].cursor as { policyVersion?: number }).policyVersion).toBe(FILE_POLICY_VERSION);
 });
-it('a current cursor does not re-walk', async () => {
+it('mixed cursor: an old root is recovered even though a new root backfilled this cycle', async () => {
+  const fresh = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'kia-new-root-'));
+  await fs.promises.writeFile(path.join(fresh, 'n.txt'), 'hello');
+  const big = path.join(root, 'big.pdf');
+  const fh = await fs.promises.open(big, 'w'); await fh.truncate(60 * 1024 * 1024); await fh.close();
+  const old = { roots: { [root]: { completedAt: new Date(Date.now() + 60_000).toISOString() } } };
+  const batches = await collect(pull(sessionFor([root, fresh], { watch: false }), old));
+  const names = batches.flatMap((b) => b.items.map((i) => path.basename(i.absPath)));
+  expect(names).toEqual(expect.arrayContaining(['big.pdf', 'n.txt']));
+});
+it('a current cursor emits nothing', async () => {
+  const big = path.join(root, 'big.pdf');
+  const fh = await fs.promises.open(big, 'w'); await fh.truncate(60 * 1024 * 1024); await fh.close();
   const cur = { roots: { [root]: { completedAt: new Date(Date.now() + 60_000).toISOString() } }, policyVersion: FILE_POLICY_VERSION };
   const batches = await collect(pull(sessionFor([root], { watch: false }), cur));
   expect(batches.flatMap((b) => b.items)).toEqual([]);
@@ -341,15 +363,15 @@ it('a current cursor does not re-walk', async () => {
 it('a fresh backfill stamps policyVersion', async () => {
   await fs.promises.writeFile(path.join(root, 'a.txt'), 'hi');
   const batches = await collect(pull(sessionFor([root], { watch: false }), null));
-  expect((batches[batches.length - 1].cursor as any).policyVersion).toBe(FILE_POLICY_VERSION);
+  expect((batches[batches.length - 1].cursor as { policyVersion?: number }).policyVersion).toBe(FILE_POLICY_VERSION);
 });
 ```
 
-`collect`, `sessionFor` and `tinyPdf`: reuse the file's existing helpers. If `tinyPdf` doesn't exist there, copy the 20-line `tinyPdf` from `src/main/workers/convert/__tests__/convert-worker.test.ts` into this test file. If `sessionFor` has no watch option, use whatever config disables `watchLoop` in the existing tests (grep `isWatchEnabled`).
+Reuse the file's existing `collect` and `sessionFor` helpers. If `tinyPdf` is missing, copy it from `src/main/workers/convert/__tests__/convert-worker.test.ts`. If `sessionFor` has no watch option, use whatever config the existing tests use to disable `watchLoop` (grep `isWatchEnabled`).
 
 - [ ] **Step 2: Run, and confirm they fail**
 
-Run: `npx jest src/main/sources/local-folder/__tests__/local-folder-source.test.ts -t "re-walk|policyVersion"`
+Run: `npx jest src/main/sources/local-folder/__tests__/local-folder-source.test.ts -t "policyVersion|newly admitted|mixed cursor|current cursor"`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement**
@@ -359,8 +381,7 @@ Expected: FAIL.
 ```ts
 export type LocalFolderCursor = {
   roots: Record<string, { completedAt: string }>;
-  /** FILE_POLICY_VERSION the roots were last fully enumerated under;
-   *  absent = 1 (pre-versioning). */
+  /** FILE_POLICY_VERSION the roots were last enumerated under; absent = 1. */
   policyVersion?: number;
 } | null;
 
@@ -369,71 +390,47 @@ export function advanceCursor(cur: LocalFolderCursor, root: string, completedAt:
 }
 ```
 
-`pruneToConfiguredRoots` must carry `policyVersion`: `return { ...cursor, roots };`.
+`pruneToConfiguredRoots` carries the version: `return { ...cursor, roots };`. `watch.ts` goes through `advanceCursor`, so the watch loop keeps it too.
 
-New generator in `local-folder-source.ts`:
+`incrementalRescanRoot(root, since, rescanStartIso, working, fromVersion: number)`. In `changed()`:
 
 ```ts
-/** One-time pass after a FILE_POLICY_VERSION bump: walk every root and emit
- *  ONLY files the previous policy ignored (`newlyAdmitted`). A separate pass
- *  on purpose: re-emitting everything would re-read and re-parse every
- *  local PDF/docx in main (buildItem reads eager bytes, and the engine
- *  converts before the content-hash short-circuit). Watermarks are left
- *  untouched; the final batch stamps policyVersion. */
-async function* policyRewalk(
-  rootPaths: string[],
-  fromVersion: number,
-  working: LocalFolderCursor,
-): AsyncGenerator<Batch<LocalFolderCursor, LocalFolderItem>, LocalFolderCursor> {
-  async function* admitted(root: string): AsyncGenerator<ScannedEntry> {
-    for await (const e of walkRoot(root)) {
-      if (newlyAdmitted({ profile: 'local-folder', filename: path.basename(e.absPath),
-            mime: resolvePathMime(e.absPath), sizeBytes: e.stats.size, path: e.absPath }, fromVersion))
-        yield e;
-    }
-  }
-  for (const root of rootPaths) {
-    for await (const { value: entries } of batchesOf(admitted(root))) {
-      const { items, deletions } = await buildBatch(entries, root);
-      yield { phase: 'live', items, deletions, cursor: working };
-    }
-  }
-  const done: LocalFolderCursor = { ...(working ?? { roots: {} }), policyVersion: FILE_POLICY_VERSION };
-  yield { phase: 'live', items: [], cursor: done };
-  return done;
+for await (const e of walkRoot(root)) {
+  const touched = Math.max(e.stats.mtime.getTime(), e.stats.ctime.getTime()) > sinceMs;
+  // After a FILE_POLICY_VERSION bump, also files the previous policy ignored
+  // (deferred/none PDFs, newly admitted types). Never eager files that were
+  // already indexed: re-emitting those would re-read and re-parse them in main.
+  if (touched || newlyAdmitted({ profile: 'local-folder', filename: path.basename(e.absPath),
+        mime: resolvePathMime(e.absPath), sizeBytes: e.stats.size, path: e.absPath }, fromVersion))
+    yield e;
 }
 ```
 
-In `pull()`, after the per-root backfill/incremental loop and **before** the `didBackfill` cursor-only batch:
+In `pull()`:
 
 ```ts
 const fromVersion = working?.policyVersion ?? 1;
-if (working !== null && fromVersion < FILE_POLICY_VERSION) {
-  if (didBackfill && rootPaths.every((r) => working?.roots?.[r])) {
-    // every root was JUST fully backfilled under the current policy
-    working = { ...working, policyVersion: FILE_POLICY_VERSION };
-  } else {
-    working = yield* policyRewalk(rootPaths, fromVersion, working);
-  }
-}
+…per-root loop passes fromVersion to incrementalRescanRoot…
+const stamp = didBackfill || fromVersion < FILE_POLICY_VERSION;
+if (stamp) working = { ...(working ?? { roots: {} }), policyVersion: FILE_POLICY_VERSION };
+// (replaces `if (didBackfill)`) — the cursor-only live batch now also commits the stamp
+if (stamp) yield { phase: 'live', items: [], cursor: working };
 ```
 
-**Edge.** A cursor that was `null` at entry, so every root backfilled this cycle, takes the first branch: no double walk.
-
-**Edge.** A cursor that was mixed, with one root new and one old, takes the re-walk branch. The new root's files get re-emitted only if they are deferred/none (cheap). That is accepted.
+Never put the stamp into `working` before or inside the per-root loop. An intermediate batch would persist it mid-walk.
 
 Imports: `newlyAdmitted`, `FILE_POLICY_VERSION` from `@shared/file-indexability`; `resolvePathMime` from `./mime`.
 
 - [ ] **Step 4: Run, and confirm they pass**
 
 Run: `npx jest src/main/sources/local-folder`
-Expected: PASS, including existing cursor tests. If an existing test asserts an exact cursor shape with `toEqual`, add `policyVersion: FILE_POLICY_VERSION` where a backfill completed.
+Expected: PASS, including the existing cursor tests. Where an existing test asserts an exact cursor shape with `toEqual` after a completed backfill, add `policyVersion: FILE_POLICY_VERSION`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/main/sources/local-folder
-git commit -m "feat(local-folder): one-time policy re-walk on FILE_POLICY_VERSION mismatch"
+git commit -m "feat(local-folder): recover newly admitted files once per FILE_POLICY_VERSION"
 ```
 
 ---
@@ -495,17 +492,17 @@ Append to `MIGRATIONS` in `schema.ts`, as the next version after v8:
   // OUTSIDE the batch commit and WITHOUT appending a change, so a worker can
   // fence a crash-prone step (session.bump) without re-feeding the doc. Rows
   // are deleted in the commit that persists the doc's `done` outcome.
-  `CREATE TABLE work_attempts (
+  (db) => db.exec(`CREATE TABLE work_attempts (
      consumer TEXT NOT NULL,
      doc_id TEXT NOT NULL,
      key TEXT NOT NULL,
      n INTEGER NOT NULL,
      updated_at TEXT NOT NULL,
      PRIMARY KEY (consumer, doc_id, key)
-   );`,
+   );`),
 ```
 
-(Match the surrounding entries' form: plain SQL string vs `{ up(conn) }`. Copy the v8 entry's shape.)
+Migrations are functions; copy the v8 entry's exact signature.
 
 `store.ts`, `CoreStore` interface (next to `ledgerRecord`):
 
@@ -585,9 +582,9 @@ it('session.bump is durable, change-free, and cleared on done', async () => {
   const handle = engine.attach(worker);
   await store.commit({ account: account.id, documents: [doc('p')], cursor: 1 });
   await new Promise((r) => setTimeout(r, 1_000));
-  // deferred once on the live tail; force re-drives:
-  await handle.redriveNow?.(); await handle.redriveNow?.();
-  await new Promise((r) => setTimeout(r, 1_000));
+  // deferred once on the live tail; force two re-drives (the scheduler's API):
+  await engine.rerunDeferred(worker);
+  await engine.rerunDeferred(worker);
   await handle.stop();
   expect(counts).toEqual([1, 2, 3]);
   // cleared on done: a fresh bump starts at 1
@@ -598,7 +595,31 @@ it('session.bump is durable, change-free, and cleared on done', async () => {
 });
 ```
 
-**Re-drive trigger.** Check how existing engine tests force a deferred re-drive (grep `REDRIVE_PAGE` / `schedule` usage in `engine.test.ts`) and use that mechanism in place of `redriveNow`. If the tests drive cadence via fake timers or a short `schedule: { every }`, set the worker's `schedule` the same way.
+Add the crash case the spec requires: the process dies after `work()` returned `done` but before the batch committed. Attempt rows are written by their own immediate statement, so "the process died" is, for the DB, "the commit never ran". Simulate it by closing the store without committing, then reopening the **same on-disk file**. Use the file-backed store helper the store tests use (grep `openStore`/`tmpdir` in `store.test.ts`). An in-memory DB would vanish.
+
+```ts
+it('attempt rows survive a crash before the done commit', async () => {
+  const file = path.join(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'kia-att-')), 'core.db');
+  let s1 = await openTestStore(file);
+  expect(await s1.bumpAttempt('worker:convert:v2', 'd1', 'parse')).toBe(1);
+  await s1.close(); // died: no commit carried clearAttempts
+  const s2 = await openTestStore(file);
+  expect(await s2.bumpAttempt('worker:convert:v2', 'd1', 'parse')).toBe(2);
+  await s2.close();
+});
+```
+
+`openTestStore` is the store test file's existing file-backed opener; adapt to its real name. A real child-process kill test is **not** added. Process death has exactly one DB effect, a missing commit, and this test pins that.
+
+**Retired consumers.** A worker version bump orphans the old consumer's attempt rows. Sweep them where the engine already computes `activeConsumers()` at attach/start (one statement, in a new store method):
+
+```ts
+  /** Drop attempt rows of consumers no longer attached (retired versions). */
+  pruneAttempts(active: string[]): Promise<void>;
+  // impl: DELETE FROM work_attempts WHERE consumer NOT IN (?, ?, …)   (no-op when active is empty)
+```
+
+Call it once after the bundled workers attach, from the same place that first uses `activeConsumers()`. Test: two rows for `worker:x:v1` and `worker:x:v2`; `pruneAttempts(['worker:x:v2'])`; a v1 bump returns 1 again and a v2 bump returns 2.
 
 - [ ] **Step 6: Run, and confirm it fails**
 
@@ -664,73 +685,97 @@ git commit -m "feat(engine): durable change-free attempt counter (session.bump),
 
 ---
 
-### Task 5: Convert worker: per-kind cap, re-admission, crash fence, output cap, version 2
+### Task 5: Convert worker: per-kind cap, re-admission, crash fence, shared output cap, net cap, version 2
 
 **Files:**
 - Modify: `src/main/workers/convert/convert-worker.ts`
 - Modify: `src/main/workers/convert/outcome.ts`
-- Test: `src/main/workers/convert/__tests__/convert-worker.test.ts`
+- Modify: `src/main/core/engine/convert.ts` (`MAX_MARKDOWN_CHARS`, `capMarkdown`, `createConverter`)
+- Modify: `src/main/platform/net-guard.ts` (`MAX_NET_FETCH_BYTES`)
+- Test: `src/main/workers/convert/__tests__/convert-worker.test.ts`, `src/main/core/engine/__tests__/convert-email.test.ts`, `src/main/core/engine/__tests__/engine.test.ts` (upgrade case), `src/main/platform/__tests__/net-guard.test.ts`
 
 **Interfaces:**
-- Consumes: `MAX_FETCH_BYTES`, `MAX_LOCAL_BINARY_BYTES` (Task 1); `session.bump` (Task 4).
+- Consumes: `MAX_FETCH_BYTES`, `MAX_LOCAL_BINARY_BYTES`, `MAX_CLOUD_BINARY_BYTES` (Task 1); `session.bump` (Task 4).
 - Produces:
-  - `MAX_CONVERT_BYTES` is removed, replaced by `convertCapFor(kind: ConvertibleKind): number`
-  - `MAX_MARKDOWN_CHARS = 2 * 1024 * 1024`
+  - `MAX_CONVERT_BYTES` is removed, replaced by `convertCapFor(kind: ConvertibleKind): number` (pdf → 100 MiB, else 25 MiB)
+  - `MAX_MARKDOWN_CHARS = 2 * 1024 * 1024` and `capMarkdown(md)`, both in `convert.ts`
+  - `createConvertWorker({ now?, parse? })`
+  - `MAX_NET_FETCH_BYTES = MAX_FETCH_BYTES`
   - `ConversionOutcome` gains `truncated?: true`
   - worker `version: 2`
   - `PDF_OCR_AFTER_STATUSES = ['text-poor', 'failed']`
 
 - [ ] **Step 1: Failing tests**
 
-Add to `convert-worker.test.ts`, reusing its `baseDoc`, `tinyPdf` and the session fake (which now has `bump`):
+Add to `convert-worker.test.ts`. First extend its `fakeSession(fetchBytes)` (`:86`) with an optional second argument, so existing call sites keep working:
 
 ```ts
+function fakeSession(fetchBytes: WorkerSession['fetchBytes'], over: Partial<WorkerSession> = {}) {
+  // …existing literal…, plus:
+  //   bump: async () => 1,
+  //   ...over,
+}
+```
+
+`baseDoc.metadata` carries `filename: 'offer.docx'`, and `fileName()` prefers it. So every non-docx case below **must** override `filename`.
+
+```ts
+import { MAX_CLOUD_BINARY_BYTES, MAX_FETCH_BYTES } from '@shared/file-indexability';
 const MiB = 1024 * 1024;
+const pdfDoc = (sizeBytes: number, over: Record<string, unknown> = {}) =>
+  doc({ title: 'big.pdf', metadata: { mime: 'application/pdf', filename: 'big.pdf', sizeBytes, ...over } });
+
 it('a 40 MiB PDF is fetched and parsed (fetch cap, not eager cap)', async () => {
-  const s = session({ fetchBytes: async () => tinyPdf('large pdf body text here') });
-  const out = await createConvertWorker().work(change({ metadata: { mime: 'application/pdf', sizeBytes: 40 * MiB } }), s);
-  expect(out).toBe('done');
+  const s = fakeSession(async () => tinyPdf('large pdf body text here'));
+  expect(await createConvertWorker().work(change(pdfDoc(40 * MiB)), s)).toBe('done');
   expect(s.enriched[0].metadata.conversion.status).toBe('ok');
 });
-it('a 30 MiB docx is too-large and never fetched', async () => {
+it('a docx over the cloud eager cap is too-large and never fetched', async () => {
   const fetchBytes = jest.fn();
-  const s = session({ fetchBytes });
-  await createConvertWorker().work(change({ title: 'a.docx', metadata: { mime: DOCX_MIME, sizeBytes: 30 * MiB } }), s);
+  const s = fakeSession(fetchBytes);
+  await createConvertWorker().work(change(doc({ metadata: { sizeBytes: MAX_CLOUD_BINARY_BYTES + 1 } })), s);
   expect(fetchBytes).not.toHaveBeenCalled();
   expect(s.enriched[0].metadata.conversion.status).toBe('too-large');
 });
-it('re-admits a too-large PDF now under the cap', () => {
-  expect(isConvertCandidate(docWith({ metadata: { mime: 'application/pdf', sizeBytes: 40 * MiB,
-    conversion: { status: 'too-large', at: 'x' } } }))).toBe(true);
-  expect(isConvertCandidate(docWith({ metadata: { mime: 'application/pdf', sizeBytes: 150 * MiB,
-    conversion: { status: 'too-large', at: 'x' } } }))).toBe(false);
-  expect(isConvertCandidate(docWith({ title: 'a.docx', metadata: { mime: DOCX_MIME, sizeBytes: 30 * MiB,
-    conversion: { status: 'too-large', at: 'x' } } }))).toBe(false);
+it('a 22 MiB cloud docx (between the local and cloud eager caps) is parsed', async () => {
+  const s = fakeSession(async () => tinyDocx('docx body text here'));
+  await createConvertWorker().work(change(doc({ metadata: { sizeBytes: 22 * MiB } })), s);
+  expect(s.enriched[0].metadata.conversion.status).not.toBe('too-large');
 });
-it('fence: a third parse attempt over the eager cap records failed without parsing', async () => {
-  const s = session({ fetchBytes: async () => tinyPdf('x'.repeat(40)), bump: async () => 3 });
-  await createConvertWorker().work(change({ metadata: { mime: 'application/pdf', sizeBytes: 40 * MiB } }), s);
+it('re-admits a too-large row only when the current cap admits it', () => {
+  const tl = { conversion: { status: 'too-large', at: 'x' } };
+  expect(isConvertCandidate(pdfDoc(40 * MiB, tl))).toBe(true);
+  expect(isConvertCandidate(pdfDoc(MAX_FETCH_BYTES + 1, tl))).toBe(false);
+  expect(isConvertCandidate(doc({ metadata: { sizeBytes: 30 * MiB, ...tl } }))).toBe(false);
+});
+it('fence: the third attempt on an over-eager-cap doc records failed WITHOUT parsing', async () => {
+  // Declared 40 MiB; the fence keys on max(declared, actual), so a tiny
+  // fixture is enough. The parse spy proves the third attempt never parses.
+  const parse = jest.fn(async () => 'never');
+  const s = fakeSession(async () => tinyPdf('x'.repeat(40)), { bump: async () => 3 });
+  await createConvertWorker({ parse }).work(change(pdfDoc(40 * MiB)), s);
   expect(s.enriched[0].metadata.conversion.status).toBe('failed');
+  expect(parse).not.toHaveBeenCalled();
 });
 it('fence is not consulted for eager-size docs', async () => {
   const bump = jest.fn(async () => 99);
-  const s = session({ fetchBytes: async () => tinyPdf('small pdf body text'), bump });
-  await createConvertWorker().work(change({ metadata: { mime: 'application/pdf', sizeBytes: 1000 } }), s);
+  const s = fakeSession(async () => tinyPdf('small pdf body text'), { bump });
+  await createConvertWorker().work(change(pdfDoc(1000)), s);
   expect(bump).not.toHaveBeenCalled();
 });
 it('a deferred fetch never bumps', async () => {
   const bump = jest.fn(async () => 1);
-  const s = session({ fetchBytes: async () => { throw new FetchDeferredError('offline'); }, bump });
-  await expect(createConvertWorker().work(change({ metadata: { mime: 'application/pdf', sizeBytes: 40 * MiB } }), s))
-    .rejects.toBeInstanceOf(FetchDeferredError);
+  const s = fakeSession(async () => { throw new FetchDeferredError('offline'); }, { bump });
+  await expect(createConvertWorker().work(change(pdfDoc(40 * MiB)), s)).rejects.toBeInstanceOf(FetchDeferredError);
   expect(bump).not.toHaveBeenCalled();
 });
 it('output over 2 MiB chars is truncated and marked', async () => {
   const big = 'word '.repeat(600_000); // 3,000,000 chars
-  const s = session({ fetchBytes: async () => new TextEncoder().encode(big) });
-  await createConvertWorker().work(change({ title: 'a.txt', metadata: { mime: 'text/plain', sizeBytes: big.length } }), s);
+  const s = fakeSession(async () => new TextEncoder().encode(big));
+  await createConvertWorker().work(change(doc({ title: 'a.txt',
+    metadata: { mime: 'text/plain', filename: 'a.txt', sizeBytes: big.length } })), s);
   const e = s.enriched[0];
-  expect(e.markdown.length).toBeLessThanOrEqual(2 * MiB + 20);
+  expect(e.markdown.length).toBeLessThanOrEqual(MAX_MARKDOWN_CHARS + 20);
   expect(e.markdown.endsWith('[truncated]')).toBe(true);
   expect(e.metadata.conversion.truncated).toBe(true);
 });
@@ -739,7 +784,25 @@ it('worker version is 2 (one shared replay for this release)', () => {
 });
 ```
 
-`session()`, `change()` and `docWith()`: use or extend the file's existing helpers. If the existing fake is a single `session` factory, add an `over` parameter the way `vision-worker.test.ts`'s `fakeSession(over)` does.
+`createConvertWorker(deps)` gains an optional `parse` (default: the real `parse` from `convert.ts`), next to its existing `now`. That makes it a test seam only.
+
+In `convert-email.test.ts` (the eager path, `createConverter`):
+
+```ts
+it('the eager commit path applies the same 2 MiB output cap', async () => {
+  const big = 'word '.repeat(600_000);
+  const out = await convert(input('big.txt', 'text/plain', big));
+  expect(out.markdown!.length).toBeLessThanOrEqual(MAX_MARKDOWN_CHARS + 20);
+  expect(out.markdown!.endsWith('[truncated]')).toBe(true);
+});
+```
+
+**Upgrade (engine integration, the spec's required test)**, in `engine.test.ts`:
+1. Attach a `createConvertWorker()` whose `version` is overridden to 1. Commit an attachment doc (`application/pdf`, `sizeBytes: 40 MiB`). Let the v1 worker record `too-large`; assert it.
+2. Stop it. Attach the real v2 worker, with a source fake whose `fetchBytes` returns `tinyPdf('large pdf body text here')`.
+3. Wait about 1 s. Assert `metadata.conversion.status === 'ok'` and that the markdown contains `large pdf body`.
+
+This proves the cursor-0 replay plus re-admission through the real feed. For the v1 run, use `{ ...createConvertWorker(), version: 1, work: async (_c, s) => { s.enrich({ documentId: id, metadata: { conversion: { status: 'too-large', at: 'x' } } }); return 'done'; } }`. That fakes the old worker's verdict without the old code.
 
 In `outcome` tests (or `convert-worker.test.ts`):
 
@@ -770,17 +833,17 @@ Update the doc comment: `too-large` = over the per-kind cap. It is re-admitted w
 `convert-worker.ts`:
 
 ```ts
-import { MAX_FETCH_BYTES, MAX_LOCAL_BINARY_BYTES } from '@shared/file-indexability';
-import { convertibleKind, parse, type ConvertibleKind } from '@main/core/engine/convert';
+import { MAX_CLOUD_BINARY_BYTES, MAX_FETCH_BYTES, MAX_LOCAL_BINARY_BYTES } from '@shared/file-indexability';
+import { capMarkdown, convertibleKind, parse as realParse, type ConvertibleKind } from '@main/core/engine/convert';
 
 /** Largest file the worker fetches+parses, per kind: PDFs up to the fetch
- *  cap; everything else only up to the eager cap (their parsers inline
- *  images and are not hardened for huge inputs). */
+ *  cap; everything else up to the LARGEST eager cap (cloud, 25 MiB) — their
+ *  parsers inline images and are not hardened for huge inputs. The worker
+ *  does not know the source's profile; a local file over ITS eager cap is
+ *  `bytes: 'none'`, whose fetchBytes returns null without reading. */
 export function convertCapFor(kind: ConvertibleKind): number {
-  return kind === 'pdf' ? MAX_FETCH_BYTES : MAX_LOCAL_BINARY_BYTES;
+  return kind === 'pdf' ? MAX_FETCH_BYTES : MAX_CLOUD_BINARY_BYTES;
 }
-export const MAX_MARKDOWN_CHARS = 2 * 1024 * 1024;
-const EAGER_MAX = MAX_LOCAL_BINARY_BYTES;
 
 export function isConvertCandidate(doc: Document): boolean {
   if (doc.archivedAt) return false;
@@ -817,56 +880,40 @@ In `work()`:
       if (bytes.length > capBytes) return record('too-large');
       // Crash fence AFTER the bytes arrive, BEFORE the parse: only a parse can
       // kill main; counting deferred fetches would fail docs on an outage.
-      if (bytes.length > EAGER_MAX && (await session.bump('parse')) > 2)
+      // Keyed on max(declared, actual): the size is what makes a parse risky.
+      const large = Math.max(declared ?? 0, bytes.length) > MAX_LOCAL_BINARY_BYTES;
+      if (large && (await session.bump('parse')) > 2)
         return record('failed', { error: 'parser crashed twice on this document' });
 
       let markdown: string | null;
       try { markdown = await parse(bytes, str(meta.mime) ?? '', name); }
       catch (err) { session.log('warn', `parse failed for ${name ?? doc.id}: ${String(err)}`);
                     return record('failed', { error: String(err) }); }
+      if (large) logPeak(session, name ?? doc.id, bytes.length, rssBefore); // the memory probe
       if (markdown === null || markdown.trim().length === 0) return record('text-poor');
-      if (markdown.length > MAX_MARKDOWN_CHARS)
-        return record('ok', { markdown: `${markdown.slice(0, MAX_MARKDOWN_CHARS)}\n\n[truncated]`, truncated: true });
-      return record('ok', { markdown });
+      const capped = capMarkdown(markdown);
+      return record('ok', { markdown: capped.markdown, ...(capped.truncated ? { truncated: true as const } : {}) });
 ```
+
+Here `parse` is `deps.parse ?? realParse`, and `rssBefore = process.memoryUsage().rss` is captured just before the parse. The memory-gate task defines `logPeak`; until then, leave that line out.
 
 `record` gains `truncated?: true` in `extra` and writes it into `conversion` when set.
 
-Remove the `MAX_CONVERT_BYTES` export. Fix its importers: grep `MAX_CONVERT_BYTES`. The existing test imports it; switch to `convertCapFor('docx')`.
-
-- [ ] **Step 4: Run, and confirm they pass**
-
-Run: `npx jest src/main/workers/convert src/main/core/store`
-Expected: PASS. `PENDING_VISUAL_WHERE` derives from the status list; the store tests confirm it still builds.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/main/workers/convert
-git commit -m "feat(convert): per-kind fetch cap, cap-relative too-large re-admission, parse crash fence, 2 MiB output cap, v2"
-```
-
----
-
-### Task 6: Net-guard cap follows the fetch cap
-
-**Files:**
-- Modify: `src/main/platform/net-guard.ts:37`
-- Test: `src/main/platform/__tests__/net-guard.test.ts` (existing)
-
-- [ ] **Step 1: Failing test**
+**One output cap for both conversion paths.** In `src/main/core/engine/convert.ts`:
 
 ```ts
-import { MAX_FETCH_BYTES } from '@shared/file-indexability';
-import { MAX_NET_FETCH_BYTES } from '../net-guard';
-it('net fetch cap equals the worker fetch cap', () => {
-  expect(MAX_NET_FETCH_BYTES).toBe(MAX_FETCH_BYTES);
-});
+/** Upper bound on one document's markdown, whichever path parsed it. */
+export const MAX_MARKDOWN_CHARS = 2 * 1024 * 1024;
+export function capMarkdown(md: string): { markdown: string; truncated: boolean } {
+  return md.length > MAX_MARKDOWN_CHARS
+    ? { markdown: `${md.slice(0, MAX_MARKDOWN_CHARS)}\n\n[truncated]`, truncated: true }
+    : { markdown: md, truncated: false };
+}
 ```
 
-- [ ] **Step 2: Run, and confirm it fails.** `npx jest src/main/platform/__tests__/net-guard.test.ts`: FAIL (50 MiB ≠ 100 MiB).
+In `createConverter`, return `{ ...stripBinary(input), markdown: capMarkdown(markdown).markdown }`. The commit path writes no `conversion` marker, so it gets no `truncated` flag either.
 
-- [ ] **Step 3: Implement**
+**Net-guard** (formerly a separate task). In `src/main/platform/net-guard.ts:37`:
 
 ```ts
 import { MAX_FETCH_BYTES } from '@shared/file-indexability';
@@ -875,18 +922,25 @@ import { MAX_FETCH_BYTES } from '@shared/file-indexability';
 export const MAX_NET_FETCH_BYTES = MAX_FETCH_BYTES;
 ```
 
-If an existing test asserts that a 60 MiB body is refused, change it to `MAX_FETCH_BYTES + 1`.
+Add a test to `src/main/platform/__tests__/net-guard.test.ts`: `expect(MAX_NET_FETCH_BYTES).toBe(MAX_FETCH_BYTES)`. If an existing test asserts that a 60 MiB body is refused, change it to `MAX_FETCH_BYTES + 1`.
 
-- [ ] **Step 4: Run, and confirm it passes.** Then commit:
+Remove the `MAX_CONVERT_BYTES` export. Fix its importers: grep `MAX_CONVERT_BYTES`. The existing test imports it; switch to `convertCapFor('docx')`.
+
+- [ ] **Step 4: Run, and confirm they pass**
+
+Run: `npx jest src/main/workers/convert src/main/core/store src/main/core/engine src/main/platform`
+Expected: PASS. `PENDING_VISUAL_WHERE` derives from the status list; the store tests confirm it still builds.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/main/platform
-git commit -m "feat(net-guard): fetch cap follows MAX_FETCH_BYTES (100 MiB)"
+git add src/main/workers/convert src/main/core/engine src/main/platform
+git commit -m "feat(convert): per-kind fetch cap, too-large re-admission, parse crash fence, shared 2 MiB output cap, v2"
 ```
 
 ---
 
-### Task 7: Rasterizer renders an explicit page list and reports the page count
+### Task 6: Rasterizer renders an explicit page list and reports the page count
 
 **Files:**
 - Modify: `src/main/workers/vision/rasterize.ts`
@@ -996,27 +1050,49 @@ rm -f assets/vision/darwin-*/kia-vision && node scripts/build-vision-helper.mjs
 
 Expected JSON: `pageNumbers: [1,3]`, `pageCount: 3`.
 
-- [ ] **Step 7: Run tests and commit**
+- [ ] **Step 7: Keep today's caller working (no behaviour change)**
 
-Run: `npx jest src/main/workers/vision src/main/providers/apple-vision` (vision-worker tests will fail until Task 9; run `-t` on the rasterize/helper suites only now).
+`vision-worker.ts` calls `pdfToPngs(bytes, { maxPages })` today. Adapt it in place, so this task leaves every suite green:
+
+```ts
+const first = Array.from({ length: MAX_PAGES }, (_, i) => i + 1);
+const pages = (await deps.rasterizer.pdfToPngs(bytes, { pages: first })).pages.map((p) => p.png);
+```
+
+Change the `vision-worker.test.ts` fakes from `async () => [png, png]` to `async () => ({ pageCount: 2, pages: [{ page: 1, png }, { page: 2, png }] })`.
+
+- [ ] **Step 8: Run tests and commit**
+
+Run: `npx tsc -p tsconfig.json --noEmit && npx jest src/main/workers/vision src/main/providers/apple-vision`
+Expected: PASS.
 
 ```bash
-git add src/main/workers/vision/rasterize.ts src/main/providers/apple-vision native/vision-helper src/main/workers/vision/__tests__/rasterize.test.ts
+git add src/main/workers/vision src/main/providers/apple-vision native/vision-helper
 git commit -m "feat(vision): rasterize an explicit page list and report pageCount (wasm + kia-vision --pages)"
 ```
 
 ---
 
-### Task 8: `mergeExtraction` labels real page numbers
+### Task 7: Windowed, resumable OCR in the vision worker (with real page labels)
 
 **Files:**
+- Modify: `src/main/workers/vision/classify.ts`
 - Modify: `src/main/workers/vision/merge.ts`
-- Test: `src/main/workers/vision/__tests__/merge.test.ts`
+- Modify: `src/main/workers/vision/vision-worker.ts`
+- Modify: `src/main/core/store/schema.ts` (`PENDING_VISUAL_WHERE`)
+- Test: `src/main/workers/vision/__tests__/vision-worker.test.ts`, `classify.test.ts`, `merge.test.ts`, `src/main/core/engine/__tests__/engine.test.ts` (one integration case)
 
 **Interfaces:**
-- Produces: `PageResult = { page?: number; ocrText?: string; description?: string }`. Labels use `page ?? index + 1`. Multi-page labelling applies when `pages.length > 1` **or** any `page > 1`.
+- Consumes: `Rasterizer.pdfToPngs(bytes, {pages}) → {pageCount, pages:[{page,png}]}` (Task 6); `MAX_FETCH_BYTES` (Task 1).
+- Produces:
+  - `metadata.ocrProgress = { pageCount: number; pages: Record<string, string> }`. Keys are page numbers as strings; the value is the OCR text, possibly `''`.
+  - `MAX_OCR_PAGES = 200`, `OCR_WINDOW = 10`.
+  - `PageResult = { page?: number; ocrText?: string; description?: string }`. Labels use `page ?? index + 1`. Multi-page labelling applies when `pages.length > 1` **or** any `page > 1`.
+  - One completion writer, `complete(engine, pagesOut)`. It writes the markdown of **every** OCR'd page (with descriptions merged in where the VLM ran), `extraction: { engine, at, pagesSkipped? }` and `ocrProgress: undefined`.
 
-- [ ] **Step 1: Failing test**
+- [ ] **Step 0: Page labels (`merge.ts`)**
+
+Failing test in `merge.test.ts`:
 
 ```ts
 it('labels by real page number', () => {
@@ -1030,7 +1106,7 @@ it('a single page numbered > 1 is still labelled', () => {
 });
 ```
 
-- [ ] **Step 2: Run, confirm it fails, then implement**
+Implement:
 
 ```ts
 export interface PageResult { page?: number; ocrText?: string; description?: string }
@@ -1039,32 +1115,6 @@ export function mergeExtraction(pages: PageResult[]): string {
   …
     parts.push(multi ? [`--- page ${p.page ?? i + 1} ---`, ...sec].join('\n\n') : sec.join('\n\n'));
 ```
-
-- [ ] **Step 3: Run, confirm it passes, and commit**
-
-`npx jest src/main/workers/vision/__tests__/merge.test.ts`
-
-```bash
-git add src/main/workers/vision/merge.ts src/main/workers/vision/__tests__/merge.test.ts
-git commit -m "feat(vision): merge labels real page numbers"
-```
-
----
-
-### Task 9: Windowed, resumable OCR in the vision worker
-
-**Files:**
-- Modify: `src/main/workers/vision/classify.ts`
-- Modify: `src/main/workers/vision/vision-worker.ts`
-- Modify: `src/main/core/store/schema.ts` (`PENDING_VISUAL_WHERE`)
-- Test: `src/main/workers/vision/__tests__/vision-worker.test.ts`, `classify.test.ts`, `src/main/core/engine/__tests__/engine.test.ts` (one integration case)
-
-**Interfaces:**
-- Consumes: `Rasterizer.pdfToPngs(bytes, {pages}) → {pageCount, pages:[{page,png}]}` (Task 7); `mergeExtraction` with `page` (Task 8); `MAX_FETCH_BYTES` (Task 1).
-- Produces:
-  - `metadata.ocrProgress = { pageCount: number; pages: Record<string, string> }`. Keys are page numbers as strings; the value is the OCR text, possibly `''`.
-  - `MAX_OCR_PAGES = 200`, `OCR_WINDOW = 10`.
-  - Completion writes `extraction: { engine:'local-ocr', at, pagesSkipped? }` and `ocrProgress: undefined`.
 
 - [ ] **Step 1: Failing classifier tests**
 
@@ -1148,6 +1198,27 @@ it('a thin whole-doc OCR still runs VLM pass 2 on the first ≤20 pages', async 
   expect(see).toHaveBeenCalledTimes(3);
   expect(calls[calls.length - 1]).toEqual([1, 2, 3]);
 });
+it('the VLM completion keeps OCR text of pages beyond the first 20, and pagesSkipped', async () => {
+  const { r } = pagedRasterizer(230);
+  // 199 pages already done with a whisper of text; total stays under the sufficiency bar
+  const done = Object.fromEntries(Array.from({ length: 199 }, (_, i) => [String(i + 1), i === 149 ? 'p150' : '']));
+  const s = fakeSession({ read: async () => '', see: async () => 'desc' });
+  await createVisionWorker({ rasterizer: r, laneOpen: () => true })
+    .work(change({ metadata: { ...baseDoc.metadata, ocrProgress: { pageCount: 230, pages: done } } }), s);
+  const e = s.enriched[0];
+  expect(e.metadata.extraction.engine).toBe('local-ocr+vlm');
+  expect(e.metadata.extraction.pagesSkipped).toBe(30);
+  expect(e.markdown).toContain('p150');
+  expect(e.metadata).toHaveProperty('ocrProgress', undefined);
+});
+it('no read provider: first window marks pages empty and goes straight to the VLM', async () => {
+  const { r } = pagedRasterizer(5);
+  const see = jest.fn(async () => 'desc');
+  const s = fakeSession({ read: async () => { throw new NoProviderError('read'); }, see });
+  expect(await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(change({}), s)).toBe('done');
+  expect(see).toHaveBeenCalledTimes(5);
+  expect(s.enriched[0].metadata.extraction.engine).toBe('local-ocr+vlm');
+});
 ```
 
 Existing worker tests that build `pdfToPngs: jest.fn(async () => [png, png])` must return the new `{ pageCount, pages }` shape. Update them.
@@ -1220,37 +1291,46 @@ In `work()`, after the lane check:
 
       const raster = await deps.rasterizer.pdfToPngs(bytes, { pages: next });
       const pageCount = raster.pageCount;
+      const cap = Math.min(pageCount, MAX_OCR_PAGES);
       for (const { page, png } of raster.pages) {
         try { done[String(page)] = (await session.read(png, { mime: 'image/png' })) ?? ''; }
         catch (err) {
-          if (err instanceof NoProviderError) { cache = null; return vlmOnly(); } // no OCR at all: legacy pass-2 path
-          return 'defer';
+          if (!(err instanceof NoProviderError)) return 'defer';
+          // No OCR provider at all: mark every page empty (no rendering) and
+          // fall through. chars = 0 < OCR_SUFFICIENT_CHARS → the VLM pass,
+          // exactly today's ocrFailed path. One path, no special case.
+          for (let n = 1; n <= cap; n += 1) done[String(n)] ??= '';
+          break;
         }
       }
-      const cap = Math.min(pageCount, MAX_OCR_PAGES);
       const remaining = Array.from({ length: cap }, (_, i) => i + 1).some((n) => !(String(n) in done));
-      const pagesOut = Object.keys(done).map(Number).sort((a, b) => a - b)
-        .map((n): PageResult => ({ page: n, ocrText: done[String(n)] }));
+      const pagesOut = (): PageResult[] => Object.keys(done).map(Number).sort((a, b) => a - b)
+        .map((n) => ({ page: n, ocrText: done[String(n)] }));
       if (remaining) {
-        session.enrich({ documentId: doc.id, markdown: mergeExtraction(pagesOut),
+        session.enrich({ documentId: doc.id, markdown: mergeExtraction(pagesOut()),
           metadata: { ocrProgress: { pageCount, pages: done } } });
         return 'done';
       }
       cache = null;
-      const chars = Object.values(done).join('').replace(/\s+/g, '').length;
-      if (chars >= OCR_SUFFICIENT_CHARS) {
-        session.enrich({ documentId: doc.id, markdown: mergeExtraction(pagesOut), metadata: {
+      // The ONE completion writer: every OCR'd page, page-ordered, with VLM
+      // descriptions merged in where pass 2 ran.
+      const complete = (engine: string, pages: PageResult[], extra: Record<string, unknown> = {}): WorkOutcome => {
+        session.enrich({ documentId: doc.id, markdown: mergeExtraction(pages), metadata: {
           ocrProgress: undefined,
-          extraction: { engine: 'local-ocr', at: new Date().toISOString(),
+          extraction: { engine, at: new Date().toISOString(), ...extra,
             ...(pageCount > MAX_OCR_PAGES ? { pagesSkipped: pageCount - MAX_OCR_PAGES } : {}) } } });
         return 'done';
-      }
-      return vlmPass(pagesOut, Math.min(pageCount, MAX_PAGES));
+      };
+      const chars = Object.values(done).join('').replace(/\s+/g, '').length;
+      if (chars >= OCR_SUFFICIENT_CHARS) return complete('local-ocr', pagesOut());
+      return vlmPass(pagesOut(), Math.min(pageCount, MAX_PAGES), complete);
 ```
 
-**`vlmPass` and `vlmOnly`.** Extract today's pass-2 block into a local `vlmPass(ocrPages, firstN)`. It rasterizes `pages: [1..firstN]`, calls `seeWithMeta` per page (keep the existing downscale and `byModel` bookkeeping), merges `{ page, ocrText: done[page], description }`, and writes `extraction: { engine: 'local-ocr+vlm', … }` **plus `ocrProgress: undefined`**. It returns `'defer'` on a caught error, exactly as today.
-
-`vlmOnly()` is `vlmPass([], Math.min(pageCount ?? MAX_PAGES, MAX_PAGES))`. It handles the case where `read` has no provider: there is no OCR, so the VLM gets the first ≤20 pages, exactly as today's `ocrFailed` branch does. For `vlmOnly`, call the rasterizer once with `pages: [1..20]` to learn `pageCount`.
+**`vlmPass(pages, firstN, complete)`** is today's pass-2 block, extracted:
+- It rasterizes `pages: [1..firstN]` and calls `seeWithMeta` per page. Keep the existing downscale and the `byModel` bookkeeping.
+- It sets `description` on the matching `pages` entry, so pages beyond `firstN` keep their OCR text.
+- It finishes with `complete('local-ocr+vlm', pages, { …today's model fields… })`.
+- It returns `'defer'` on a caught error, exactly as today. The Windows OCR plan later refines that catch.
 
 Keep the non-VLM-decodable image branch unchanged (images only).
 
@@ -1294,69 +1374,144 @@ git commit -m "feat(vision): windowed resumable OCR (10 pages/run, 200 max, per-
 
 ---
 
-### Task 10: Memory gate on real large PDFs (release check)
+### Task 8: Memory gate in the real app (release check)
 
 **Files:**
-- Create: `scripts/measure-large-pdf.mjs`
+- Create: `src/main/workers/mem-probe.ts`
+- Modify: `src/main/workers/convert/convert-worker.ts` (the `logPeak` call from Task 5)
+- Modify: `src/main/workers/vision/vision-worker.ts` (around one window's rasterize + OCR)
+- Test: `src/main/workers/__tests__/mem-probe.test.ts`
 
-- [ ] **Step 1: Write the measurement script**
+**Why in-app, not a script.** The gate must cover the real path: the converter's buffer copies, the source transport, and pdfium/kia-vision rasterization. `process.resourceUsage().maxRSS` is the kernel's high-water mark, in KiB, on every platform. Unlike a timer it cannot miss a peak while a synchronous parse blocks the event loop. Both buffers and wasm heaps live in RSS.
 
-```js
-// Usage: ELECTRON_RUN_AS_NODE=1 npx electron scripts/measure-large-pdf.mjs <file.pdf>
-// Parses one PDF with the SAME pdf-parse the converter uses and reports the
-// peak RSS / external memory increase. Gate: < 400 MB increase.
-import fs from 'node:fs';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const pdfParse = require('pdf-parse');
-const file = process.argv[2];
-const base = process.memoryUsage();
-let peakRss = base.rss, peakExt = base.external;
-const t = setInterval(() => { const m = process.memoryUsage(); peakRss = Math.max(peakRss, m.rss); peakExt = Math.max(peakExt, m.external); }, 20);
-const bytes = new Uint8Array(fs.readFileSync(file));
-const out = await pdfParse(bytes);
-clearInterval(t);
-const mb = (n) => Math.round(n / 1024 / 1024);
-console.log(JSON.stringify({ file, sizeMB: mb(bytes.length), pages: out.numpages, chars: out.text.length,
-  rssIncreaseMB: mb(peakRss - base.rss), externalIncreaseMB: mb(peakExt - base.external) }));
-process.exit(peakRss - base.rss > 400 * 1024 * 1024 ? 1 : 0);
+- [ ] **Step 1: Failing test**
+
+```ts
+import { peakIncreaseMB } from '../mem-probe';
+it('peak increase is the high-water mark over the pre-step RSS, in MB', () => {
+  expect(peakIncreaseMB(100 * 1024 * 1024, { maxRSS: 600 * 1024 })).toBe(500);
+  expect(peakIncreaseMB(700 * 1024 * 1024, { maxRSS: 600 * 1024 })).toBe(0);
+});
 ```
 
-- [ ] **Step 2: Run on a ~77 MB text PDF and a ~77 MB scanned PDF**
+- [ ] **Step 2: Implement**
 
-Run: `ELECTRON_RUN_AS_NODE=1 npx electron scripts/measure-large-pdf.mjs ~/path/big-text.pdf`
-Expected: exit 0 and `rssIncreaseMB` < 400. **If either file exits 1, stop.** Do not release. Open a follow-up to move `parse()` for deferred docs into a utility process. That decision is the spec's gate.
+```ts
+// src/main/workers/mem-probe.ts
+import type { WorkerSession } from '@shared/contracts';
+/** Main-process memory gate for large-file work (large-file spec, Rollout).
+ *  maxRSS is a high-water mark (KiB), so the increase is exact even when a
+ *  synchronous parse blocks the event loop. It is process-wide: concurrent
+ *  work inflates it, so the gate is read on a quiet dev app. */
+export function peakIncreaseMB(rssBefore: number, usage: { maxRSS: number } = process.resourceUsage()): number {
+  return Math.max(0, Math.round((usage.maxRSS * 1024 - rssBefore) / (1024 * 1024)));
+}
+export function logPeak(session: WorkerSession, what: string, bytes: number, rssBefore: number): void {
+  session.log('info', `mem: ${what} ${Math.round(bytes / 1048576)} MB → peak +${peakIncreaseMB(rssBefore)} MB`);
+}
+```
 
-- [ ] **Step 3: Live check in the dev app (macOS)**
+Wire it in:
+- **Convert worker:** the `logPeak` line from Task 5, only for `large` docs.
+- **Vision worker:** capture `rssBefore` before `pdfToPngs` for a PDF over the eager cap, and call `logPeak(session, `ocr window ${next[0]}-${next.at(-1)}`, bytes.length, rssBefore)` after the window's OCR.
 
-Run against a **dedicated dev profile**, never a shared checkout's running app. Put the 77 MB PDFs in a local-folder root and check:
-- the rows appear by name right after the scan;
-- the text appears after the convert worker runs;
-- for the scan, OCR text arrives in 10-page increments (`ocrProgress` grows, visible via MCP `get`);
-- the app's RSS stays flat between windows.
+- [ ] **Step 3: Run and commit**
 
-- [ ] **Step 4: Commit**
+Run: `npx jest src/main/workers`
+Expected: PASS.
 
 ```bash
-git add scripts/measure-large-pdf.mjs
-git commit -m "chore(scripts): large-PDF memory gate for the fetch-cap rollout"
+git add src/main/workers
+git commit -m "feat(workers): maxRSS memory probe on large-file parse and OCR windows"
 ```
 
+- [ ] **Step 4: The gate (macOS dev app, dedicated profile and worktree)**
+
+Never use a shared checkout's running app (see the `dev-app-in-shared-checkout-restarts` memory).
+
+- Start the dev app **fresh**. A long-running app's high-water mark already includes old peaks, so the probe would under-report.
+- Put a ~77 MB **text** PDF and a ~77 MB **scanned** PDF into a local-folder root.
+- Wait for the `mem:` lines in the main log.
+
+Gate: every `mem:` line shows `peak +` < 400 MB.
+
+Also check:
+- the rows appear by name right after the scan;
+- the text appears after the convert worker runs;
+- OCR arrives in 10-page increments (MCP `get` shows `ocrProgress` growing).
+
+**If any line exceeds 400 MB, stop.** Do not release. Moving `parse()` for deferred docs into a utility process becomes a release blocker; that is the spec's gate.
+
 ---
+
+### Task 9: Regenerate and release the connector SDK
+
+**Files:**
+- Modify: `sdk/connector-sdk/package.json` (`version` 1.7.0 → 1.8.0; `kiagentCore` → the core version being released)
+- Test: `sdk/connector-sdk/test/file-indexability.test.mjs`
+
+The SDK copies `src/shared/file-indexability.ts` verbatim (`scripts/generate.mjs`). Connectors consume the new `bytes` field and `MAX_FETCH_BYTES` / `FILE_POLICY_VERSION` from it (connectors plan, `2026-10-02-large-file-connectors.md`).
+
+- [ ] **Step 1: Failing SDK test**
+
+Add to `file-indexability.test.mjs`, following its existing import style (it imports from the built `dist`):
+
+```js
+test('exports the bytes-aware policy', () => {
+  assert.equal(sdk.FILE_POLICY_VERSION, 2);
+  assert.equal(sdk.MAX_FETCH_BYTES, 100 * 1024 * 1024);
+  assert.deepEqual(
+    sdk.decideFileIndexing({ profile: 'cloud-drive', filename: 'a.pdf', mime: 'application/pdf', sizeBytes: 60 * 1024 * 1024 }),
+    { kind: 'index', pipeline: 'converter', bytes: 'deferred' });
+});
+```
+
+- [ ] **Step 2: Build and test**
+
+Run: `cd sdk/connector-sdk && npm test`
+Expected: PASS. `npm test` runs `generate`, so the new policy is copied in.
+
+- [ ] **Step 3: Commit, then release at release time**
+
+```bash
+git add sdk/connector-sdk
+git commit -m "chore(sdk): connector-sdk 1.8.0 with the bytes-aware file policy"
+```
+
+The release runs **after** the core release that contains this branch, from the tagged commit: `sdk/connector-sdk/scripts/release.sh`. It refuses a dirty `sdk/` tree and tags `sdk-v1.8.0` at HEAD. During development, connectors use `npm pack` output from this worktree (connectors plan, Setup).
+
+## Rollout (where each step lives)
+
+1. Core release: Tasks 1–8 on this branch, with the gate in Task 8, Step 4. Then the SDK release (Task 9).
+2. alpha-cent `core.lock` pin, then the app release (release runbook).
+3. OneDrive and gdrive releases: `2026-10-02-large-file-connectors.md`, Task 4.
 
 ## Self-Review notes
 
 - **Spec coverage:**
   - §1 → T1, T2.
-  - §2 → T5, T6 (output cap in T5; `too-large` removal in T5).
-  - §3 → T5 (re-admission, fence) and T4 (bump).
-  - §4 → T7, T8, T9.
-  - §5/§6 local → T3. Cloud re-enumeration lives in the connectors plan (`2026-10-02-large-file-connectors.md`).
-  - §7 → T4.
-  - Rollout gate → T10.
+  - §2 → T5 (per-kind cap, net cap, shared output cap, `too-large` removal).
+  - §3 → T5 (re-admission, fence, upgrade test) and T4 (bump).
+  - §4 → T6, T7.
+  - §5/§6 local → T3. Cloud → the connectors plan.
+  - §7 → T4 (including the retired-consumer sweep).
+  - Rollout gate → T8. SDK → T9.
 - **Types:**
-  - `FileIndexDecision.bytes` (T1) is used in T2 and T3.
-  - `RasterResult`/`RasterPage` (T7) are used in T9.
-  - `PageResult.page` (T8) is used in T9.
+  - `FileIndexDecision.bytes` (T1) is used in T2, T3 and T9.
+  - `RasterResult`/`RasterPage` (T6) are used in T7.
+  - `PageResult.page` is defined and used in T7.
   - `session.bump` (T4) is used in T5.
-  - `convertCapFor` (T5) is defined and used in T5 only.
+  - `capMarkdown` (T5) is used in both conversion paths.
+  - `logPeak` (T8) is called from T5's line, added in T8.
+- **Review-round-1 changes:**
+  - T3 is folded into the incremental rescan, which fixes mixed old/new roots.
+  - The non-PDF worker cap is 25 MiB.
+  - Fence tests use the declared size; the parse is injected.
+  - `rerunDeferred` replaces the made-up re-drive API.
+  - A crash is simulated by reopening the on-disk DB.
+  - The upgrade replay test is added.
+  - One output cap covers both paths.
+  - The old net-guard task is folded into T5, and the old merge-labels task into the OCR task (T7).
+  - `vlmOnly` is deleted, and there is one completion writer.
+  - The memory gate is in-app via maxRSS.
+  - The SDK task is added.
