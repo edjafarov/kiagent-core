@@ -12,7 +12,13 @@ import type {
 } from '@shared/contracts';
 
 import { openDb } from '../../../db/app-db';
+import { createConverter } from '../../../core/engine/convert';
 import { createEngine } from '../../../core/engine/engine';
+import {
+  multiPagePdf,
+  PROSE_LINES,
+} from '../../../core/engine/__tests__/pdf-fixture';
+import { createVisionWorker } from '../../vision/vision-worker';
 import { openStore } from '../../../core/store/store';
 import type { CoreStore } from '../../../core/store/store';
 import { classifyDocument } from '../../vision/classify';
@@ -401,4 +407,92 @@ describe('convert pipeline (real store + engine)', () => {
     expect((d.metadata as any).conversion.status).toBe('ok');
     expect(d.markdown).toContain('large pdf body');
   });
+
+  it('needs-ocr end to end: the commit path marks page 2, vision OCRs only it and keeps the prose', async () => {
+    const bytes = multiPagePdf([{ text: PROSE_LINES }, { scan: true }]);
+    const source: Source = {
+      descriptor: {
+        id: 'pdfsrc',
+        name: 'PDF',
+        documentTypes: ['file'],
+        auth: 'none',
+      },
+      async connect() {
+        return { identifier: 'pdf@test' };
+      },
+      async *pull(_session, cursor) {
+        if (cursor) return;
+        yield {
+          phase: 'backfill',
+          cursor: 1,
+          items: [
+            {
+              externalId: 'mixed.pdf',
+              type: 'file',
+              title: 'mixed.pdf',
+              markdown: null,
+              binary: { bytes, mime: 'application/pdf', filename: 'mixed.pdf' },
+              metadata: { mime: 'application/pdf', sizeBytes: bytes.length },
+              createdAt: null,
+            } as DocumentInput,
+          ],
+        };
+      },
+      toDocument: (item) => item as DocumentInput,
+      fetchBytes: async () => bytes,
+    } as Source;
+    const ocrCalls: number[][] = [];
+    const engine = createEngine({
+      store,
+      sources: { get: (id) => (id === 'pdfsrc' ? source : undefined) },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => 'scanned exhibit page two',
+        hear: async () => '',
+      },
+      convert: createConverter({ log: () => {} }),
+      logs: { log: () => {} },
+    });
+    const vision = engine.attach(
+      createVisionWorker({
+        rasterizer: {
+          pdfToPngs: async (_b, { pages }) => {
+            ocrCalls.push(pages);
+            return {
+              pageCount: 2,
+              pages: pages.map((n) => ({ page: n, png: new Uint8Array([n]) })),
+            };
+          },
+        },
+        laneOpen: () => true,
+      }),
+    );
+    const account = await engine.connect(source, {
+      oauth: async () => ({}),
+      showQr: () => {},
+      prompt: async () => ({}),
+      status: () => {},
+      pickFolders: async () => [],
+    });
+    const run = engine.run(account);
+    const get = async () =>
+      store.read.byExternalId(account.id, 'mixed.pdf', 'file');
+    await waitFor(
+      async () =>
+        ((await get())?.metadata as { extraction?: { engine?: string } })
+          ?.extraction?.engine === 'local-ocr',
+    );
+    await run.stop();
+    await vision.stop();
+    const d = (await get())!;
+    expect(ocrCalls).toEqual([[2]]);
+    expect(d.markdown).toContain('tenant shall pay');
+    expect(d.markdown).toContain('scanned exhibit page two');
+    expect((d.metadata as { conversion?: unknown }).conversion).toEqual({
+      status: 'needs-ocr',
+      pages: [2],
+      quality: 1,
+    });
+  }, 15000);
 });

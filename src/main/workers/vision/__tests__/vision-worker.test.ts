@@ -1,7 +1,14 @@
+/** @jest-environment node */
 import type { Change, Document, WorkerSession } from '@shared/contracts';
 import { NoProviderError } from '@main/core/inference';
 import { MAX_LOCAL_BINARY_BYTES } from '@shared/file-indexability';
+import {
+  multiPagePdf,
+  PROSE_LINES,
+  shifted,
+} from '@main/core/engine/__tests__/pdf-fixture';
 import type { Rasterizer } from '../rasterize';
+
 import { MAX_PDF_BYTES } from '../classify';
 import { createVisionWorker } from '../vision-worker';
 
@@ -615,5 +622,206 @@ describe('windowed OCR', () => {
     ).toBe('done');
     expect(see).toHaveBeenCalledTimes(5);
     expect(s.enriched[0].metadata.extraction.engine).toBe('local-ocr+vlm');
+  });
+});
+
+describe('needs-ocr: only the listed pages', () => {
+  function pagedRasterizer(pageCount: number) {
+    const calls: number[][] = [];
+    const r: Rasterizer = {
+      pdfToPngs: jest.fn(async (_b, { pages }) => {
+        calls.push(pages);
+        return {
+          pageCount,
+          pages: pages
+            .filter((n) => n <= pageCount)
+            .map((n) => ({ page: n, png: new Uint8Array([n]) })),
+        };
+      }),
+    };
+    return { r, calls };
+  }
+  const needsOcr = (pages: number[], extra: Record<string, unknown> = {}) =>
+    change({
+      markdown: 'layer text',
+      metadata: {
+        ...baseDoc.metadata,
+        mime: 'application/pdf',
+        conversion: { status: 'needs-ocr', pages, quality: 1 },
+        ...extra,
+      },
+    });
+
+  it('OCRs only the listed pages and merges them with the text layer in page order, no VLM', async () => {
+    const { r, calls } = pagedRasterizer(4);
+    const see = jest.fn();
+    const fetchBytes = async () =>
+      multiPagePdf([
+        { text: ['one one one one one one'] },
+        { scan: true },
+        { scan: true },
+        { text: ['four four four four four'] },
+      ]);
+    const s = fakeSession({
+      read: async (png: Uint8Array) => `ocr page ${png[0]} text`,
+      see,
+      fetchBytes,
+    });
+    expect(
+      await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(
+        needsOcr([2, 3]),
+        s,
+      ),
+    ).toBe('done');
+    expect(calls).toEqual([[2, 3]]);
+    expect(see).not.toHaveBeenCalled();
+    const md = s.enriched[0].markdown as string;
+    expect(md.indexOf('one one')).toBeLessThan(md.indexOf('ocr page 2'));
+    expect(md.indexOf('ocr page 3')).toBeLessThan(md.indexOf('four four'));
+    expect(s.enriched[0].metadata.extraction.engine).toBe('local-ocr');
+  });
+  it("empty OCR for a page keeps that page's text-layer text", async () => {
+    const { r } = pagedRasterizer(2);
+    const fetchBytes = async () =>
+      multiPagePdf([{ text: PROSE_LINES }, { text: shifted(PROSE_LINES) }]);
+    const s = fakeSession({ read: async () => '', fetchBytes });
+    await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(
+      needsOcr([2]),
+      s,
+    );
+    expect(s.enriched[0].markdown).toContain(
+      shifted(PROSE_LINES)[0].slice(0, 20),
+    );
+  });
+  it('no read provider → defer, text untouched', async () => {
+    const { r } = pagedRasterizer(2);
+    const s = fakeSession({
+      read: async () => {
+        throw new NoProviderError('read');
+      },
+      fetchBytes: async () =>
+        multiPagePdf([{ text: PROSE_LINES }, { scan: true }]),
+    });
+    expect(
+      await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(
+        needsOcr([2]),
+        s,
+      ),
+    ).toBe('defer');
+    expect(s.enriched).toEqual([]);
+  });
+  it('60 pages, bad pages 3/17/41/58: resumes from ocrProgress after a restart and renders every page in order', async () => {
+    const pages = Array.from({ length: 60 }, (_, i) =>
+      [3, 17, 41, 58].includes(i + 1)
+        ? { scan: true }
+        : { text: [`body of page ${i + 1} here`] },
+    ) as never;
+    const bytes = multiPagePdf(pages);
+    const { r, calls } = pagedRasterizer(60);
+    const prior = { pageCount: 60, pages: { 3: 'ocr3', 17: 'ocr17' } };
+    // fresh worker = "process restarted": empty cache
+    const s = fakeSession({
+      read: async (png: Uint8Array) => `ocr${png[0]}`,
+      fetchBytes: async () => bytes,
+    });
+    await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(
+      needsOcr([3, 17, 41, 58], { ocrProgress: prior }),
+      s,
+    );
+    expect(calls).toEqual([[41, 58]]);
+    const md = s.enriched[0].markdown as string;
+    expect(md.indexOf('body of page 2 ')).toBeLessThan(md.indexOf('ocr3'));
+    expect(md.indexOf('ocr58')).toBeLessThan(md.indexOf('body of page 59 '));
+  });
+  it('MAX_OCR_PAGES caps the number of listed pages and records pagesSkipped', async () => {
+    const listed = Array.from({ length: 250 }, (_, i) => i + 1);
+    const done = Object.fromEntries(
+      listed.slice(0, 200).map((n) => [String(n), `o${n}`]),
+    );
+    const { r, calls } = pagedRasterizer(250);
+    const s = fakeSession({
+      read: async () => 'x',
+      fetchBytes: async () =>
+        multiPagePdf(
+          Array.from({ length: 250 }, () => ({ scan: true })) as never,
+        ),
+    });
+    await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(
+      needsOcr(listed, { ocrProgress: { pageCount: 250, pages: done } }),
+      s,
+    );
+    expect(calls).toEqual([]); // nothing left within the cap
+    expect(s.enriched[0].metadata.extraction.pagesSkipped).toBe(50);
+  });
+
+  it('no read provider: later needs-ocr docs defer WITHOUT fetching until the retry window passes', async () => {
+    const { r } = pagedRasterizer(2);
+    const fetchBytes = jest.fn(async () =>
+      multiPagePdf([{ text: PROSE_LINES }, { scan: true }]),
+    );
+    const s = fakeSession({
+      read: async () => {
+        throw new NoProviderError('read');
+      },
+      fetchBytes,
+    });
+    const w = createVisionWorker({ rasterizer: r, laneOpen: () => true });
+    expect(await w.work(needsOcr([2]), s)).toBe('defer');
+    expect(await w.work(needsOcr([2], { filename: 'other.pdf' }), s)).toBe(
+      'defer',
+    );
+    expect(fetchBytes).toHaveBeenCalledTimes(1);
+  });
+  it('a listed page the rasterizer skips does not loop: the doc completes with its text-layer text', async () => {
+    const skipping = {
+      pdfToPngs: jest.fn(async (_b: Uint8Array, o: { pages: number[] }) => ({
+        pageCount: 3,
+        pages: o.pages
+          .filter((n) => n !== 2)
+          .map((n) => ({ page: n, png: new Uint8Array([n]) })),
+      })),
+    };
+    const s = fakeSession({
+      read: async () => 'ocr',
+      fetchBytes: async () =>
+        multiPagePdf([
+          { text: PROSE_LINES },
+          { text: shifted(PROSE_LINES) },
+          { scan: true },
+        ]),
+    });
+    expect(
+      await createVisionWorker({
+        rasterizer: skipping as never,
+        laneOpen: () => true,
+      }).work(needsOcr([2, 3]), s),
+    ).toBe('done');
+    expect(s.enriched[0].metadata.extraction.engine).toBe('local-ocr');
+    expect(s.enriched[0].markdown).toContain(
+      shifted(PROSE_LINES)[0].slice(0, 20),
+    );
+  });
+
+  it('keeps text-layer text beyond 1M chars when rendering needs-ocr pages', async () => {
+    const big = Array.from(
+      { length: 1700 },
+      () => 'Vertragstext der Parteien Absatz eins zwei drei vier fuenf sechs',
+    ); // ~110 KB per page
+    const pages = Array.from({ length: 12 }, (_, i) =>
+      i === 11 ? { scan: true as const } : { text: [...big, `ENDE${i + 1}`] },
+    );
+    const { r } = pagedRasterizer(12);
+    const s = fakeSession({
+      read: async () => 'ocr12',
+      fetchBytes: async () => multiPagePdf(pages) as never,
+    });
+    await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(
+      needsOcr([12]),
+      s,
+    );
+    const md = s.enriched.at(-1)!.markdown as string;
+    expect(md.length).toBeGreaterThan(1_000_000);
+    expect(md).toContain('ENDE11');
+    expect(md).toContain('ocr12');
   });
 });

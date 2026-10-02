@@ -6,6 +6,7 @@ import type {
   WorkOutcome,
 } from '@shared/contracts';
 
+import { capMarkdown, parsePdfPages } from '@main/core/engine/convert';
 import { NoProviderError } from '@main/core/inference';
 import { MAX_LOCAL_BINARY_BYTES } from '@shared/file-indexability';
 
@@ -26,6 +27,19 @@ import { passthroughDownscaler, type ImageDownscaler } from './downscale';
 import { INDEXING_PROMPT, mergeExtraction } from './merge';
 import type { PageResult } from './merge';
 import type { Rasterizer } from './rasterize';
+
+const READ_RETRY_MS = 25 * 60_000;
+
+/** needs-ocr rendering: every page in order, text-layer or OCR. Not
+ *  mergeExtraction: its 1M-char cap and "Text content (OCR)" labels are for
+ *  VLM output; a long text-layer PDF keeps up to MAX_MARKDOWN_CHARS. */
+function renderListedPages(texts: string[]): string {
+  const body =
+    texts.length > 1
+      ? texts.map((t, i) => `--- page ${i + 1} ---\n\n${t.trim()}`).join('\n\n')
+      : (texts[0] ?? '').trim();
+  return capMarkdown(body).markdown;
+}
 
 /** Windowed OCR state on a PDF in flight: OCR text per page read so far
  *  (keys are 1-based page numbers; `''` = read, nothing found). */
@@ -58,8 +72,17 @@ export function createVisionWorker(deps: {
   // N re-feeds the doc immediately). Dropped on completion or a different doc.
   // rssBefore: the memory probe's baseline, taken before the doc's first
   // fetch — one per document, so growth across windows shows up.
-  let cache: { key: string; bytes: Uint8Array; rssBefore: number } | null =
-    null;
+  // layer: the per-page text-layer text of a needs-ocr PDF, parsed once.
+  let cache: {
+    key: string;
+    bytes: Uint8Array;
+    rssBefore: number;
+    layer?: string[];
+  } | null = null;
+  // One probe per cadence across ALL needs-ocr docs while no read provider
+  // exists (a Linux host, or Windows before OCR ships). Without it every
+  // needs-ocr doc re-downloads, parses and rasterizes every 30 min.
+  let readUnavailableUntil = 0;
   const keyOf = (d: Document) => `${d.id}:${d.contentHash}`;
 
   /** Pass 2 — VLM describe over `pageImages` (only reachable when a
@@ -151,6 +174,23 @@ export function createVisionWorker(deps: {
     if (!deps.laneOpen()) return 'defer';
 
     const pdf = isPdfDoc(doc);
+    // needs-ocr: the parser kept the text layer and listed the pages whose
+    // layer is missing or garbled; only those are OCR'd, never the VLM.
+    const conv = (doc.metadata as { conversion?: unknown }).conversion as
+      | { status?: unknown; pages?: unknown }
+      | undefined;
+    const listedAll =
+      pdf && conv?.status === 'needs-ocr' && Array.isArray(conv.pages)
+        ? [
+            ...new Set(
+              conv.pages.filter(
+                (n): n is number => Number.isInteger(n) && n >= 1,
+              ),
+            ),
+          ].sort((a, b) => a - b)
+        : null;
+    const listed = listedAll?.slice(0, MAX_OCR_PAGES) ?? null;
+    if (listed && Date.now() < readUnavailableUntil) return 'defer';
     const key = keyOf(doc);
     let bytes = cache?.key === key ? cache.bytes : null;
     if (!bytes) {
@@ -222,15 +262,20 @@ export function createVisionWorker(deps: {
       prog?.pageCount ?? Number.MAX_SAFE_INTEGER,
       MAX_OCR_PAGES,
     );
-    const next: number[] = [];
-    for (let n = 1; n <= limit && next.length < OCR_WINDOW; n += 1)
-      if (!(String(n) in done)) next.push(n);
+    // One windowed loop, two candidate lists: the listed pages, or 1..limit.
+    const candidates = listed ?? Array.from({ length: limit }, (_, i) => i + 1);
+    const next = candidates
+      .filter((n) => !(String(n) in done))
+      .slice(0, OCR_WINDOW);
 
-    const raster = await deps.rasterizer.pdfToPngs(bytes, { pages: next });
-    const { pageCount } = raster;
+    // Only the listed path can reach an empty window (all listed pages done).
+    const raster = next.length
+      ? await deps.rasterizer.pdfToPngs(bytes, { pages: next })
+      : null;
+    const pageCount = raster?.pageCount ?? prog?.pageCount ?? 0;
     const cap = Math.min(pageCount, MAX_OCR_PAGES);
     // Pass 1 — OCR, one window.
-    for (const { page, png } of raster.pages) {
+    for (const { page, png } of raster?.pages ?? []) {
       try {
         // eslint-disable-next-line no-await-in-loop
         done[String(page)] =
@@ -238,6 +283,12 @@ export function createVisionWorker(deps: {
       } catch (err) {
         // Same transient-vs-absent split as the image path above.
         if (!(err instanceof NoProviderError)) return 'defer';
+        if (listed) {
+          // No VLM for needs-ocr, and its text is already indexed: park
+          // every needs-ocr doc for a while instead of re-fetching each.
+          readUnavailableUntil = Date.now() + READ_RETRY_MS;
+          return 'defer';
+        }
         // No OCR provider at all: mark every page empty (no rendering) and
         // fall through. chars = 0 < OCR_SUFFICIENT_CHARS → the VLM pass.
         for (let n = 1; n <= cap; n += 1) done[String(n)] ??= '';
@@ -247,14 +298,56 @@ export function createVisionWorker(deps: {
     // A requested page the rasterizer did not return (kia-vision skips a
     // page it cannot load) is recorded empty — else every window would
     // re-request it and the doc would re-feed forever.
-    for (const n of next) if (n <= cap) done[String(n)] ??= '';
-    if (cache && bytes.length > MAX_LOCAL_BINARY_BYTES)
+    // Listed pages come from pdf.js, page renders from pdfium: a listed page
+    // pdfium cannot render is recorded empty too (it keeps its layer text).
+    for (const n of next) if (listed || n <= cap) done[String(n)] ??= '';
+    if (cache && next.length && bytes.length > MAX_LOCAL_BINARY_BYTES)
       logPeak(
         session,
         `ocr window ${next[0]}-${next.at(-1)}`,
         bytes.length,
         cache.rssBefore,
       );
+    if (listed) {
+      // The text layer, parsed lazily (only when rendering, so a deferred doc
+      // never pays for it); OCR replaces a page's layer text only when it
+      // read something.
+      let layer: string[];
+      try {
+        layer = cache?.layer ?? (await parsePdfPages(bytes));
+      } catch {
+        return 'defer';
+      }
+      if (layer.length === 0) return 'defer'; // never render from nothing
+      if (cache) cache.layer = layer;
+      const texts = layer.map((t, i) => {
+        const o = done[String(i + 1)];
+        return o && o.trim() ? o : t;
+      });
+      if (listed.some((n) => !(String(n) in done))) {
+        session.enrich({
+          documentId: doc.id,
+          markdown: renderListedPages(texts),
+          metadata: { ocrProgress: { pageCount, pages: done } },
+        });
+        return 'done';
+      }
+      cache = null;
+      const skipped = Math.max(0, (listedAll?.length ?? 0) - MAX_OCR_PAGES);
+      session.enrich({
+        documentId: doc.id,
+        markdown: renderListedPages(texts),
+        metadata: {
+          ocrProgress: undefined,
+          extraction: {
+            engine: 'local-ocr',
+            at: new Date().toISOString(),
+            ...(skipped ? { pagesSkipped: skipped } : {}),
+          },
+        },
+      });
+      return 'done';
+    }
     const pagesOut = (): PageResult[] =>
       Object.keys(done)
         .map(Number)
