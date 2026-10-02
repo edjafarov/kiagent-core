@@ -185,3 +185,30 @@ it('a 90 MiB text-poor pdf is a candidate (fetch cap)', () => {
     }),
   ).toBe('candidate');
 });
+
+it('needs-ocr with markdown and no extraction is a candidate', () => {
+  expect(
+    classifyDocument({
+      ...base,
+      markdown: 'x'.repeat(500),
+      metadata: {
+        mime: 'application/pdf',
+        conversion: { status: 'needs-ocr', pages: [2], quality: 1 },
+      },
+    }),
+  ).toBe('candidate');
+});
+
+it('needs-ocr with extraction is done', () => {
+  expect(
+    classifyDocument({
+      ...base,
+      markdown: 'x',
+      metadata: {
+        mime: 'application/pdf',
+        conversion: { status: 'needs-ocr', pages: [2], quality: 1 },
+        extraction: { engine: 'local-ocr', at: 'x' },
+      },
+    }),
+  ).toBe('skip');
+});

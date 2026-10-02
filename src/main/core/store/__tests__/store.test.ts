@@ -671,6 +671,65 @@ describe('store', () => {
     expect(stats.pendingOcr).toBe(2); // lf-img + lf-pdf only
   });
 
+  it('PENDING_VISUAL_WHERE counts a needs-ocr doc with text', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [
+        doc('needs-ocr-pdf', {
+          type: 'file',
+          markdown: 'x'.repeat(500),
+          metadata: {
+            mime: 'application/pdf',
+            conversion: { status: 'needs-ocr', pages: [2], quality: 1 },
+          },
+        }),
+      ],
+      cursor: 1,
+    });
+    expect((await store.extractionStats()).pendingOcr).toBe(1);
+  });
+
+  it('re-committing an unchanged needs-ocr file keeps contentHash, extraction and ocrProgress', async () => {
+    const a = await store.createAccount({ source: 't', identifier: 'h' });
+    const input = {
+      externalId: 'p',
+      type: 'file',
+      title: 'p.pdf',
+      markdown: 'text layer',
+      url: 'u',
+      metadata: {
+        mime: 'application/pdf',
+        conversion: { status: 'needs-ocr', pages: [2], quality: 1 },
+      },
+    };
+    await store.commit({
+      account: a.id,
+      documents: [input as never],
+      cursor: 1,
+    });
+    const d1 = (await store.read.byExternalId(a.id, 'p', 'file'))!;
+    await store.commit({
+      consumer: 'worker:vision:v1',
+      cursor: 0,
+      enrich: [
+        {
+          documentId: d1.id,
+          markdown: 'ocr merged',
+          metadata: { ocrProgress: { pageCount: 2, pages: { 2: 'o' } } },
+        },
+      ],
+    });
+    await store.commit({
+      account: a.id,
+      documents: [input as never],
+      cursor: 2,
+    });
+    const d2 = (await store.read.byExternalId(a.id, 'p', 'file'))!;
+    expect(d2.contentHash).toBe(d1.contentHash);
+    expect(d2.markdown).toBe('ocr merged');
+    expect((d2.metadata as any).ocrProgress).toBeDefined();
+  });
+
   it('extractionStats: counts survive missing partial indexes (degraded boot falls back to the unpinned scan)', async () => {
     await store.commit({
       account: accountId,

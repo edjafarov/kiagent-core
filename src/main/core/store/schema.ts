@@ -25,6 +25,7 @@ export const PENDING_VISUAL_WHERE = `json_extract(metadata,'$.extraction') IS NU
    AND archived_at IS NULL
    AND type IN ('attachment','file')
    AND (json_extract(metadata,'$.ocrProgress') IS NOT NULL
+        OR json_extract(metadata,'$.conversion.status') = 'needs-ocr'
         OR ((markdown IS NULL OR length(trim(markdown)) < 16)
    AND (json_extract(metadata,'$.mime') LIKE 'image/%'
         OR lower(json_extract(metadata,'$.ext')) IN (${VISUAL_EXTS.filter(

@@ -14,7 +14,8 @@ import {
 import {
   capMarkdown,
   convertibleKind,
-  parse as realParse,
+  needsOcrMarker,
+  parseDetailed as realParse,
   type ConvertibleKind,
 } from '@main/core/engine/convert';
 
@@ -124,6 +125,7 @@ export function createConvertWorker(
           error?: string;
           truncated?: true;
           bytes?: number;
+          quality?: 1;
         } = {},
       ): WorkOutcome => {
         const conversion: ConversionOutcome = {
@@ -132,6 +134,7 @@ export function createConvertWorker(
           ...(extra.error ? { error: extra.error.slice(0, 500) } : {}),
           ...(extra.truncated ? { truncated: true as const } : {}),
           ...(extra.bytes !== undefined ? { bytes: extra.bytes } : {}),
+          ...(extra.quality ? { quality: extra.quality } : {}),
         };
         session.enrich({
           documentId: doc.id,
@@ -171,9 +174,9 @@ export function createConvertWorker(
           error: 'parser crashed twice on this document',
         });
 
-      let markdown: string | null;
+      let res: { markdown: string | null; ocrPages?: number[] };
       try {
-        markdown = await parse(bytes, str(meta.mime) ?? '', name);
+        res = await parse(bytes, str(meta.mime) ?? '', name);
       } catch (err) {
         session.log(
           'warn',
@@ -182,12 +185,25 @@ export function createConvertWorker(
         return record('failed', { error: String(err) });
       }
       if (large) logPeak(session, name ?? doc.id, bytes.length, rssBefore); // the memory probe
-      if (markdown === null || markdown.trim().length === 0)
+      if (res.markdown === null || res.markdown.trim().length === 0)
         return record('text-poor');
-      const capped = capMarkdown(markdown);
+      const capped = capMarkdown(res.markdown);
+      if (res.ocrPages) {
+        // Deterministic marker, no `at` (the commit path writes the same
+        // one; contentHash covers metadata). All text is kept: OCR replaces
+        // a listed page's text only when it reads something.
+        session.enrich({
+          documentId: doc.id,
+          markdown: capped.markdown,
+          metadata: { conversion: needsOcrMarker(res.ocrPages) },
+        });
+        return 'done';
+      }
       return record('ok', {
         markdown: capped.markdown,
         ...(capped.truncated ? { truncated: true as const } : {}),
+        // Assessed by the current text-quality rules (garbled-PDF §5).
+        ...(kind === 'pdf' ? { quality: 1 as const } : {}),
       });
     },
   };

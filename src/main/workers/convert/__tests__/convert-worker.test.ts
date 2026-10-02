@@ -11,10 +11,15 @@ import {
 } from '@shared/file-indexability';
 
 import {
+  multiPagePdf,
+  PROSE_LINES,
+} from '@main/core/engine/__tests__/pdf-fixture';
+import {
   convertCapFor,
   createConvertWorker,
   isConvertCandidate,
 } from '../convert-worker';
+
 import { pdfReadyForOcr } from '../outcome';
 
 const DOCX_MIME =
@@ -314,6 +319,26 @@ describe('large files (fetch cap, re-admission, crash fence, output cap)', () =>
       },
     });
 
+  it('a mixed PDF records needs-ocr with pages, quality and NO timestamp, keeping all text', async () => {
+    const s = fakeSession(async () =>
+      multiPagePdf([{ text: PROSE_LINES }, { scan: true }]),
+    );
+    await createConvertWorker().work(change(pdfDoc(5000)), s);
+    expect(s.enriched[0].metadata.conversion).toEqual({
+      status: 'needs-ocr',
+      pages: [2],
+      quality: 1,
+    });
+    expect(s.enriched[0].markdown).toContain('tenant shall pay');
+  });
+  it('a clean PDF records ok with quality 1', async () => {
+    const s = fakeSession(async () => multiPagePdf([{ text: PROSE_LINES }]));
+    await createConvertWorker().work(change(pdfDoc(5000)), s);
+    expect(s.enriched[0].metadata.conversion).toMatchObject({
+      status: 'ok',
+      quality: 1,
+    });
+  });
   it('a 40 MiB PDF is fetched and parsed (fetch cap, not eager cap)', async () => {
     const s = fakeSession(async () => tinyPdf('large pdf body text here'));
     expect(await createConvertWorker().work(change(pdfDoc(40 * MiB)), s)).toBe(
@@ -370,7 +395,7 @@ describe('large files (fetch cap, re-admission, crash fence, output cap)', () =>
   it('fence: the third attempt on an over-eager-cap doc records failed WITHOUT parsing', async () => {
     // Declared 40 MiB; the fence keys on max(declared, actual), so a tiny
     // fixture is enough. The parse spy proves the third attempt never parses.
-    const parse = jest.fn(async () => 'never');
+    const parse = jest.fn(async () => ({ markdown: 'never' }));
     const s = fakeSession(async () => tinyPdf('x'.repeat(40)), {
       bump: async () => 3,
     });
@@ -379,7 +404,7 @@ describe('large files (fetch cap, re-admission, crash fence, output cap)', () =>
     expect(parse).not.toHaveBeenCalled();
   });
   it('fence: a small .msg is fenced too (an in-process parse of mail can kill main at any size)', async () => {
-    const parse = jest.fn(async () => 'never');
+    const parse = jest.fn(async () => ({ markdown: 'never' }));
     const s = fakeSession(async () => new Uint8Array(2048), {
       bump: async () => 3,
     });
@@ -401,14 +426,18 @@ describe('large files (fetch cap, re-admission, crash fence, output cap)', () =>
     expect(parse).not.toHaveBeenCalled();
   });
   it('fence: the second attempt still parses', async () => {
-    const parse = jest.fn(async () => 'parsed text from the large pdf');
+    const parse = jest.fn(async () => ({
+      markdown: 'parsed text from the large pdf',
+    }));
     const s = fakeSession(async () => tinyPdf('x'), { bump: async () => 2 });
     await createConvertWorker({ parse }).work(change(pdfDoc(40 * MiB)), s);
     expect(parse).toHaveBeenCalledTimes(1);
     expect(s.enriched[0].metadata.conversion.status).toBe('ok');
   });
   it('a large parse logs the memory probe line; an eager-size one does not', async () => {
-    const parse = jest.fn(async () => 'parsed text from the large pdf');
+    const parse = jest.fn(async () => ({
+      markdown: 'parsed text from the large pdf',
+    }));
     const big: string[] = [];
     await createConvertWorker({ parse }).work(
       change(pdfDoc(40 * MiB)),

@@ -80,6 +80,9 @@ export function classifyDocument(doc: Document): 'candidate' | 'skip' {
   // Windowed OCR in progress: continue it even though markdown exists now.
   if (meta.ocrProgress != null && typeof meta.ocrProgress === 'object')
     return 'candidate';
+  // A PDF with listed pages to OCR keeps its text layer; markdown exists.
+  const conv = meta.conversion as { status?: unknown } | undefined;
+  if (conv?.status === 'needs-ocr') return 'candidate';
   const name = meta.filename ?? doc.title ?? '';
   const pdf = isPdfDoc(doc);
   // typeof guard: metadata is connector-supplied JSON and a throw out of
