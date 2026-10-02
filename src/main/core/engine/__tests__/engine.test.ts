@@ -12,6 +12,8 @@ import type {
 } from '@shared/contracts';
 
 import { openDb } from '../../../db/app-db';
+import type { Rasterizer } from '../../../workers/vision/rasterize';
+import { createVisionWorker } from '../../../workers/vision/vision-worker';
 import { openStore } from '../../store/store';
 import type { CoreStore } from '../../store/store';
 import { createEngine, RECONCILE_STAGE_BATCH, REDRIVE_PAGE } from '../engine';
@@ -554,6 +556,75 @@ describe('engine', () => {
       expect(await store.ledgerHasDeferred('worker:redrive:v1')).toBe(false);
     });
   });
+
+  it('windowed OCR: each window enrich re-feeds the doc until every page is read', async () => {
+    const rasterizer: Rasterizer = {
+      pdfToPngs: async (_bytes, { pages }) => ({
+        pageCount: 25,
+        pages: pages
+          .filter((n) => n <= 25)
+          .map((n) => ({ page: n, png: new Uint8Array([n]) })),
+      }),
+    };
+    const pdfSource = {
+      descriptor: { id: 'pdfsrc' },
+      fetchBytes: async () => new Uint8Array(10),
+    } as unknown as Source;
+    const engine = createEngine({
+      store,
+      sources: { get: (id) => (id === 'pdfsrc' ? pdfSource : undefined) },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => 'ocr text '.repeat(10),
+        hear: async () => '',
+      },
+      convert: async (d: DocumentInput) => d,
+      logs: noopLogs,
+    });
+    const account = await store.createAccount({
+      source: 'pdfsrc',
+      identifier: 'w',
+    });
+    const handle = engine.attach(
+      createVisionWorker({ rasterizer, laneOpen: () => true }),
+    );
+    await store.commit({
+      account: account.id,
+      documents: [
+        {
+          externalId: 'big.pdf',
+          type: 'file',
+          title: 'big.pdf',
+          markdown: null,
+          metadata: {
+            mime: 'application/pdf',
+            sizeBytes: 1000,
+            conversion: { status: 'text-poor', at: 'x' },
+          },
+          createdAt: null,
+        } as unknown as DocumentInput,
+      ],
+      cursor: 1,
+    });
+    const stored = async () =>
+      (await store.read.search({ account: account.id, limit: 10 })).find(
+        (x) => x.externalId === 'big.pdf',
+      );
+    await waitFor(
+      async () =>
+        (
+          (await stored())?.metadata as {
+            extraction?: { engine?: string };
+          }
+        )?.extraction?.engine === 'local-ocr',
+      5000,
+    );
+    await handle.stop();
+    const d = (await stored())!;
+    expect(d.markdown).toContain('--- page 25 ---');
+    expect(d.metadata).not.toHaveProperty('ocrProgress');
+  }, 10000);
 
   it('worker session: read/see route to the plane, enrich commits with the cursor', async () => {
     // fake inference recording lanes

@@ -42,7 +42,6 @@ export interface FileIndexCandidate {
 export const MAX_LOCAL_TEXT_BYTES = 2 * 1024 * 1024; // scanner.ts MAX_INLINE_TEXT_BYTES
 export const MAX_LOCAL_BINARY_BYTES = 20 * 1024 * 1024; // scanner.ts MAX_BINARY_READ_BYTES
 export const MAX_LOCAL_IMAGE_BYTES = 20 * 1024 * 1024; // vision MAX_IMAGE_BYTES
-export const MAX_LOCAL_PDF_BYTES = 50 * 1024 * 1024; // vision MAX_PDF_BYTES
 export const MAX_LOCAL_AUDIO_BYTES = 200 * 1024 * 1024; // audio MAX_SOURCE_BYTES
 export const MAX_CLOUD_BINARY_BYTES = 25 * 1024 * 1024; // connector MAX_BINARY_BYTES
 export const MAX_CLOUD_IMAGE_BYTES = 20 * 1024 * 1024; // vision would skip anything larger

@@ -70,8 +70,8 @@ it.each([
   ],
   ['archived', { ...base, archivedAt: '2026-01-01' }, 'skip'],
   [
-    'PDF over the vision cap by declared size (never fetched)',
-    { ...base, metadata: { ...base.metadata, sizeBytes: 60 * 1024 * 1024 } },
+    'PDF over the fetch cap by declared size (never fetched)',
+    { ...base, metadata: { ...base.metadata, sizeBytes: 101 * 1024 * 1024 } },
     'skip',
   ],
   [
@@ -162,4 +162,26 @@ describe('non-string metadata (connector-supplied JSON) never throws', () => {
       } as Document),
     ).toBe(true);
   });
+});
+
+it('a doc with ocrProgress and no extraction is a candidate even with markdown', () => {
+  expect(
+    classifyDocument({
+      ...base,
+      markdown: 'x'.repeat(500),
+      metadata: {
+        ...base.metadata,
+        ocrProgress: { pageCount: 45, pages: { 1: 'a' } },
+      },
+    }),
+  ).toBe('candidate');
+});
+
+it('a 90 MiB text-poor pdf is a candidate (fetch cap)', () => {
+  expect(
+    classifyDocument({
+      ...base,
+      metadata: { ...base.metadata, sizeBytes: 90 * 1024 * 1024 },
+    }),
+  ).toBe('candidate');
 });

@@ -1,7 +1,7 @@
 import type { Document } from '@shared/contracts';
 import {
+  MAX_FETCH_BYTES,
   MAX_LOCAL_IMAGE_BYTES,
-  MAX_LOCAL_PDF_BYTES,
   VISUAL_EXTENSIONS,
 } from '@shared/file-indexability';
 
@@ -19,8 +19,12 @@ const VISUAL_EXT_RE = new RegExp(`\\.(${VISUAL_EXTS.join('|')})$`, 'i');
 const TINY_IMAGE_BYTES = 8 * 1024;
 export const OCR_SUFFICIENT_CHARS = 200;
 export const MAX_IMAGE_BYTES = MAX_LOCAL_IMAGE_BYTES;
-export const MAX_PDF_BYTES = MAX_LOCAL_PDF_BYTES;
+export const MAX_PDF_BYTES = MAX_FETCH_BYTES;
+/** Pages the VLM (pass 2) describes. */
 export const MAX_PAGES = 20;
+/** Pages OCR (pass 1) reads, OCR_WINDOW per work() run. */
+export const MAX_OCR_PAGES = 200;
+export const OCR_WINDOW = 10;
 
 interface VisualMeta {
   mime?: string;
@@ -30,6 +34,8 @@ interface VisualMeta {
   size?: number;
   extraction?: unknown;
   conversion?: unknown;
+  /** Windowed OCR in flight (vision-worker). */
+  ocrProgress?: unknown;
 }
 
 export function isPdfDoc(doc: Document): boolean {
@@ -71,6 +77,9 @@ export function classifyDocument(doc: Document): 'candidate' | 'skip' {
   if (doc.type !== 'attachment' && doc.type !== 'file') return 'skip';
   const meta = doc.metadata as VisualMeta;
   if (meta.extraction != null) return 'skip'; // already enriched
+  // Windowed OCR in progress: continue it even though markdown exists now.
+  if (meta.ocrProgress != null && typeof meta.ocrProgress === 'object')
+    return 'candidate';
   const name = meta.filename ?? doc.title ?? '';
   const pdf = isPdfDoc(doc);
   // typeof guard: metadata is connector-supplied JSON and a throw out of

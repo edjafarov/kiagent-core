@@ -1,4 +1,6 @@
 export interface PageResult {
+  /** 1-based page number; defaults to the entry's position. */
+  page?: number;
   ocrText?: string;
   description?: string;
 }
@@ -16,7 +18,8 @@ export const INDEXING_PROMPT =
   'description only.';
 
 export function mergeExtraction(pages: PageResult[]): string {
-  const multi = pages.length > 1;
+  // A lone page numbered > 1 is a window of a longer document: label it.
+  const multi = pages.length > 1 || pages.some((p) => (p.page ?? 1) > 1);
   const parts: string[] = [];
   pages.forEach((p, i) => {
     const sec: string[] = [];
@@ -26,7 +29,9 @@ export function mergeExtraction(pages: PageResult[]): string {
     if (ocr) sec.push(`**Text content (OCR):**\n\n${ocr}`);
     if (sec.length === 0) return;
     parts.push(
-      multi ? [`--- page ${i + 1} ---`, ...sec].join('\n\n') : sec.join('\n\n'),
+      multi
+        ? [`--- page ${p.page ?? i + 1} ---`, ...sec].join('\n\n')
+        : sec.join('\n\n'),
     );
   });
   return parts.join('\n\n').slice(0, MAX_MERGED_CHARS);

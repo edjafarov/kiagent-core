@@ -1,6 +1,7 @@
 import type { Change, Document, WorkerSession } from '@shared/contracts';
 import { NoProviderError } from '@main/core/inference';
 import type { Rasterizer } from '../rasterize';
+import { MAX_PDF_BYTES } from '../classify';
 import { createVisionWorker } from '../vision-worker';
 
 /** Rasterizer result for pages 1..n holding the given PNGs. */
@@ -249,7 +250,7 @@ it('fetchBytes null → skip', async () => {
 
 it('oversized PDF → skip', async () => {
   const session = fakeSession({
-    fetchBytes: async () => new Uint8Array(50 * 1024 * 1024 + 1),
+    fetchBytes: async () => new Uint8Array(MAX_PDF_BYTES + 1),
   });
   const rasterizer: Rasterizer = {
     pdfToPngs: jest.fn(),
@@ -421,4 +422,143 @@ it('mixed providers across pages aggregate into extraction.providers', async () 
     { providerId: 'r', modelId: 'm1', pages: 3 },
     { providerId: 'local', modelId: 'm2', pages: 2 },
   ]);
+});
+
+describe('windowed OCR', () => {
+  function pagedRasterizer(pageCount: number) {
+    const calls: number[][] = [];
+    const r: Rasterizer = {
+      pdfToPngs: jest.fn(async (_b, { pages }) => {
+        calls.push(pages);
+        return {
+          pageCount,
+          pages: pages
+            .filter((n) => n <= pageCount)
+            .map((n) => ({ page: n, png: new Uint8Array([n]) })),
+        };
+      }),
+    };
+    return { r, calls };
+  }
+  const ocrByPage = async (img: Uint8Array) => `page text ${img[0]} `.repeat(5);
+  const withProgress = (ocrProgress: unknown) =>
+    change({ metadata: { ...baseDoc.metadata, ocrProgress } });
+
+  it('OCRs the first 10 pages, records progress, re-renders markdown, returns done', async () => {
+    const { r, calls } = pagedRasterizer(45);
+    const s = fakeSession({ read: ocrByPage });
+    const out = await createVisionWorker({
+      rasterizer: r,
+      laneOpen: () => true,
+    }).work(change({}), s);
+    expect(out).toBe('done');
+    expect(calls[0]).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    const e = s.enriched[0];
+    expect(Object.keys(e.metadata.ocrProgress.pages)).toHaveLength(10);
+    expect(e.metadata.ocrProgress.pageCount).toBe(45);
+    expect(e.metadata.extraction).toBeUndefined();
+    expect(e.markdown).toContain('--- page 10 ---');
+  });
+
+  it('resumes from ocrProgress and finishes on the last window', async () => {
+    const { r, calls } = pagedRasterizer(12);
+    const s = fakeSession({ read: ocrByPage });
+    const prior = {
+      pageCount: 12,
+      pages: Object.fromEntries(
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => [
+          String(n),
+          `page text ${n} `.repeat(5),
+        ]),
+      ),
+    };
+    const out = await createVisionWorker({
+      rasterizer: r,
+      laneOpen: () => true,
+    }).work(withProgress(prior), s);
+    expect(out).toBe('done');
+    expect(calls[0]).toEqual([11, 12]);
+    const e = s.enriched[0];
+    expect(e.metadata.extraction.engine).toBe('local-ocr');
+    expect(e.metadata).toHaveProperty('ocrProgress', undefined);
+    expect(e.markdown.indexOf('page text 1 ')).toBeLessThan(
+      e.markdown.indexOf('page text 12 '),
+    );
+  });
+
+  it('caps at MAX_OCR_PAGES and records pagesSkipped', async () => {
+    const { r } = pagedRasterizer(250);
+    const done = Object.fromEntries(
+      Array.from({ length: 190 }, (_, i) => [String(i + 1), 'x '.repeat(30)]),
+    );
+    const s = fakeSession({ read: ocrByPage });
+    await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(
+      withProgress({ pageCount: 250, pages: done }),
+      s,
+    );
+    expect(s.enriched[0].metadata.extraction.pagesSkipped).toBe(50);
+  });
+
+  it('fetches bytes once across consecutive windows of the same doc', async () => {
+    const { r } = pagedRasterizer(25);
+    const fetchBytes = jest.fn(async () => new Uint8Array(100));
+    const worker = createVisionWorker({ rasterizer: r, laneOpen: () => true });
+    const s1 = fakeSession({ read: ocrByPage, fetchBytes });
+    await worker.work(change({}), s1);
+    const s2 = fakeSession({ read: ocrByPage, fetchBytes });
+    await worker.work(withProgress(s1.enriched[0].metadata.ocrProgress), s2);
+    expect(fetchBytes).toHaveBeenCalledTimes(1);
+  });
+
+  it('a thin whole-doc OCR still runs VLM pass 2 on the first ≤20 pages', async () => {
+    const { r, calls } = pagedRasterizer(3);
+    const see = jest.fn(async () => 'desc');
+    const s = fakeSession({ read: async () => '', see });
+    await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(
+      change({}),
+      s,
+    );
+    expect(see).toHaveBeenCalledTimes(3);
+    expect(calls[calls.length - 1]).toEqual([1, 2, 3]);
+  });
+
+  it('the VLM completion keeps OCR text of pages beyond the first 20, and pagesSkipped', async () => {
+    const { r } = pagedRasterizer(230);
+    // 199 pages already done with a whisper of text; total stays under the sufficiency bar
+    const done = Object.fromEntries(
+      Array.from({ length: 199 }, (_, i) => [
+        String(i + 1),
+        i === 149 ? 'p150' : '',
+      ]),
+    );
+    const s = fakeSession({ read: async () => '', see: async () => 'desc' });
+    await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(
+      withProgress({ pageCount: 230, pages: done }),
+      s,
+    );
+    const e = s.enriched[0];
+    expect(e.metadata.extraction.engine).toBe('local-ocr+vlm');
+    expect(e.metadata.extraction.pagesSkipped).toBe(30);
+    expect(e.markdown).toContain('p150');
+    expect(e.metadata).toHaveProperty('ocrProgress', undefined);
+  });
+
+  it('no read provider: first window marks pages empty and goes straight to the VLM', async () => {
+    const { r } = pagedRasterizer(5);
+    const see = jest.fn(async () => 'desc');
+    const s = fakeSession({
+      read: async () => {
+        throw new NoProviderError('read');
+      },
+      see,
+    });
+    expect(
+      await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(
+        change({}),
+        s,
+      ),
+    ).toBe('done');
+    expect(see).toHaveBeenCalledTimes(5);
+    expect(s.enriched[0].metadata.extraction.engine).toBe('local-ocr+vlm');
+  });
 });

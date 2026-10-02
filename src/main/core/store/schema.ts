@@ -22,8 +22,10 @@ import { corpusTooNewMessage } from './corpus-refusal';
 export const EXTRACTED_DOCS_WHERE = `json_extract(metadata,'$.extraction') IS NOT NULL AND archived_at IS NULL`;
 
 export const PENDING_VISUAL_WHERE = `json_extract(metadata,'$.extraction') IS NULL
+   AND archived_at IS NULL
    AND type IN ('attachment','file')
-   AND (markdown IS NULL OR length(trim(markdown)) < 16)
+   AND (json_extract(metadata,'$.ocrProgress') IS NOT NULL
+        OR ((markdown IS NULL OR length(trim(markdown)) < 16)
    AND (json_extract(metadata,'$.mime') LIKE 'image/%'
         OR lower(json_extract(metadata,'$.ext')) IN (${VISUAL_EXTS.filter(
           (e) => e !== 'pdf',
@@ -32,8 +34,7 @@ export const PENDING_VISUAL_WHERE = `json_extract(metadata,'$.extraction') IS NU
           .join(',')})
         OR ((json_extract(metadata,'$.mime') = 'application/pdf'
              OR lower(json_extract(metadata,'$.ext')) = 'pdf')
-            AND json_extract(metadata,'$.conversion.status') IN (${PDF_OCR_AFTER_STATUSES.map((s) => `'${s}'`).join(',')})))
-   AND archived_at IS NULL`;
+            AND json_extract(metadata,'$.conversion.status') IN (${PDF_OCR_AFTER_STATUSES.map((s) => `'${s}'`).join(',')})))))`;
 
 const QUERY_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [
   {

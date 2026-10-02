@@ -25,3 +25,19 @@ it('caps at 1MB', () => {
 it('empty pages produce empty string', () => {
   expect(mergeExtraction([{}, { ocrText: '   ' }])).toBe('');
 });
+
+it('labels by real page number', () => {
+  const md = mergeExtraction([
+    { page: 3, ocrText: 'three' },
+    { page: 17, ocrText: 'seventeen' },
+  ]);
+  expect(md).toContain('--- page 3 ---');
+  expect(md).toContain('--- page 17 ---');
+  expect(md.indexOf('three')).toBeLessThan(md.indexOf('seventeen'));
+});
+
+it('a single page numbered > 1 is still labelled', () => {
+  expect(mergeExtraction([{ page: 5, ocrText: 'five' }])).toContain(
+    '--- page 5 ---',
+  );
+});
