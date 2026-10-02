@@ -57,6 +57,15 @@ describe('windows-ocr helper', () => {
   });
 });
 
+it('selftest: a crashed probe (no {ok:false} on stdout) reports why, not "no language"', async () => {
+  await withEnv({ FAKE_WOCR_SELFTEST_CRASH: '1' }, async () =>
+    expect(await makeWindowsOcrHelper(FAKE, log).selftest()).toEqual({
+      ok: false,
+      error: 'Failure extracting contents of the application bundle',
+    }),
+  );
+});
+
 describe('windows-ocr provider status', () => {
   const helper = (ok: boolean) => ({
     ocrImage: jest.fn(),
@@ -104,6 +113,21 @@ describe('windows-ocr provider status', () => {
       setImmediate(r);
     });
     expect(q.status()).toEqual({ error: NO_OCR_LANGUAGE });
+  });
+  it('a helper that cannot run shows its own error, not the language guidance', async () => {
+    const p = createWindowsOcrProvider({
+      binaryPath: FAKE,
+      helper: {
+        ocrImage: jest.fn(),
+        selftest: jest.fn(async () => ({ ok: false, error: 'blocked' })),
+      },
+      platform: 'win32',
+      log,
+    });
+    await new Promise((r) => {
+      setImmediate(r);
+    });
+    expect(p.status()).toEqual({ error: 'windows-ocr helper failed: blocked' });
   });
   it('handle routes read to ocrImage', async () => {
     const h = helper(true);

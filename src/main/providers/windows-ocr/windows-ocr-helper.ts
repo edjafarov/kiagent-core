@@ -72,19 +72,29 @@ export function makeWindowsOcrHelper(
         await fs.promises.rm(dir, { recursive: true, force: true });
       }
     },
-    /** Exit 1 + {"ok":false} = no OCR language on this profile. */
-    async selftest(): Promise<{ ok: boolean }> {
+    /** A parsed {"ok":false} (exit 1) = no OCR language on this profile.
+     *  Anything else that is not ok — a crash, a timeout, AV blocking the
+     *  exe — carries `error` with the reason, so the UI can tell them apart. */
+    async selftest(): Promise<{ ok: boolean; error?: string }> {
+      let r: { code: number; stdout: string; stderr: string };
       try {
-        const r = await run(['selftest']);
-        return {
-          ok:
-            r.code === 0 &&
-            (JSON.parse(r.stdout) as { ok?: boolean }).ok === true,
-        };
+        r = await run(['selftest']);
       } catch (err) {
         log('warn', `windows-ocr selftest failed: ${String(err)}`);
-        return { ok: false };
+        return { ok: false, error: String(err) };
       }
+      let parsed: { ok?: unknown } | null = null;
+      try {
+        parsed = JSON.parse(r.stdout) as { ok?: unknown };
+      } catch {
+        parsed = null;
+      }
+      if (parsed?.ok === true && r.code === 0) return { ok: true };
+      if (parsed?.ok === false) return { ok: false };
+      const reason =
+        r.stderr.trim().split('\n')[0] || `windows-ocr exited ${r.code}`;
+      log('warn', `windows-ocr selftest failed: ${r.stderr.trim() || reason}`);
+      return { ok: false, error: reason };
     },
   };
 }

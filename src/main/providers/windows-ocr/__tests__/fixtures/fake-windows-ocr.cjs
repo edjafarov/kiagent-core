@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 // Env-driven stand-in for windows-ocr.exe (tests only).
 const { env } = process;
+if (process.argv[2] === 'selftest' && env.FAKE_WOCR_SELFTEST_CRASH) {
+  process.stderr.write(
+    'Failure extracting contents of the application bundle\n',
+  );
+  process.exit(1);
+}
 if (process.argv[2] === 'selftest') {
   const ok = env.FAKE_WOCR_NOLANG !== '1';
   process.stdout.write(`${JSON.stringify({ ok })}\n`);

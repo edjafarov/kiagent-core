@@ -20,10 +20,10 @@ export function createWindowsOcrProvider(deps: {
 }): InferenceProvider {
   const platform = deps.platform ?? process.platform;
   // Languages are probed once, at boot. Until the probe resolves: standby.
-  let probed: boolean | null = null;
+  let probed: { ok: boolean; error?: string } | null = null;
   if (platform === 'win32' && fs.existsSync(deps.binaryPath)) {
     void deps.helper.selftest().then((r) => {
-      probed = r.ok;
+      probed = r;
     });
   }
   return {
@@ -43,7 +43,10 @@ export function createWindowsOcrProvider(deps: {
       if (!fs.existsSync(deps.binaryPath))
         return { error: 'windows-ocr helper missing' };
       if (probed === null) return 'standby';
-      return probed ? 'ready' : { error: NO_OCR_LANGUAGE };
+      if (probed.ok) return 'ready';
+      return probed.error
+        ? { error: `windows-ocr helper failed: ${probed.error}` }
+        : { error: NO_OCR_LANGUAGE };
     },
     async handle(req) {
       if (req.kind !== 'read')
