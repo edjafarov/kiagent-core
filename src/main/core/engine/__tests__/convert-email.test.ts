@@ -5,7 +5,7 @@
  * does not provide. The converter only ever runs in the main process, so the
  * node environment is also the truthful one here.
  */
-import { createConverter } from '../convert';
+import { createConverter, MAX_MARKDOWN_CHARS } from '../convert';
 
 const logs = { log: jest.fn() };
 
@@ -109,5 +109,16 @@ describe('converter: email formats', () => {
   it('leaves a malformed message to the caller rather than throwing', async () => {
     const out = await convert(input('bad.eml', 'message/rfc822', ''));
     expect(out.binary).toBeUndefined();
+  });
+});
+
+describe('converter: output cap', () => {
+  const convert = createConverter(logs as never);
+
+  it('the eager commit path applies the same 2 MiB output cap', async () => {
+    const big = 'word '.repeat(600_000);
+    const out = await convert(input('big.txt', 'text/plain', big));
+    expect(out.markdown!.length).toBeLessThanOrEqual(MAX_MARKDOWN_CHARS + 20);
+    expect(out.markdown!.endsWith('[truncated]')).toBe(true);
   });
 });

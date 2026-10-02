@@ -1041,7 +1041,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       // text gate, and both candidate shapes: mime-carrying docs (gmail
       // attachments) and ext-carrying ones (local-folder files, which store
       // no mime) — and, like classify, it counts a PDF only once the
-      // convert worker gave up on it (text-poor / failed / too-large).
+      // convert worker gave up on it (text-poor / failed).
       // The WHERE text is shared verbatim with the
       // docs_pending_visual / docs_extracted partial indexes (schema.ts) so
       // the planner can prove they apply — and the counts are pinned to

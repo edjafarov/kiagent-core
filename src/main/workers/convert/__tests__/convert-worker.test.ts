@@ -2,14 +2,20 @@
 import JSZip from 'jszip';
 
 import type { Change, Document, WorkerSession } from '@shared/contracts';
-import { convertibleKind } from '@main/core/engine/convert';
+import { convertibleKind, MAX_MARKDOWN_CHARS } from '@main/core/engine/convert';
 import { FetchDeferredError } from '@main/core/engine/fetch-deferred';
 
 import {
+  MAX_CLOUD_BINARY_BYTES,
+  MAX_FETCH_BYTES,
+} from '@shared/file-indexability';
+
+import {
+  convertCapFor,
   createConvertWorker,
   isConvertCandidate,
-  MAX_CONVERT_BYTES,
 } from '../convert-worker';
+import { pdfReadyForOcr } from '../outcome';
 
 const DOCX_MIME =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -85,6 +91,7 @@ const change = (d: Document) =>
 
 function fakeSession(
   fetchBytes: WorkerSession['fetchBytes'],
+  over: Partial<WorkerSession> = {},
 ): WorkerSession & { enriched: any[] } {
   const enriched: any[] = [];
   return {
@@ -100,6 +107,7 @@ function fakeSession(
     emit: () => {},
     enrich: (e) => enriched.push(e),
     log: () => {},
+    ...over,
   };
 }
 
@@ -232,7 +240,7 @@ describe('convert worker', () => {
   it('records too-large without fetching when the declared size is over the cap', async () => {
     const fetchBytes = jest.fn(async () => new Uint8Array(1));
     const s = fakeSession(fetchBytes);
-    const big = doc({ metadata: { sizeBytes: MAX_CONVERT_BYTES + 1 } });
+    const big = doc({ metadata: { sizeBytes: convertCapFor('docx') + 1 } });
     expect(await worker.work(change(big), s)).toBe('done');
     expect(fetchBytes).not.toHaveBeenCalled();
     expect(s.enriched[0].metadata.conversion.status).toBe('too-large');
@@ -259,5 +267,124 @@ describe('convert worker', () => {
     await worker.work(change(doc()), s);
     const after = doc({ metadata: s.enriched[0].metadata });
     expect(worker.matches(change(after))).toBe(false);
+  });
+});
+
+describe('large files (fetch cap, re-admission, crash fence, output cap)', () => {
+  const MiB = 1024 * 1024;
+  const pdfDoc = (sizeBytes: number, over: Record<string, unknown> = {}) =>
+    doc({
+      title: 'big.pdf',
+      metadata: {
+        mime: 'application/pdf',
+        filename: 'big.pdf',
+        sizeBytes,
+        ...over,
+      },
+    });
+
+  it('a 40 MiB PDF is fetched and parsed (fetch cap, not eager cap)', async () => {
+    const s = fakeSession(async () => tinyPdf('large pdf body text here'));
+    expect(await createConvertWorker().work(change(pdfDoc(40 * MiB)), s)).toBe(
+      'done',
+    );
+    expect(s.enriched[0].metadata.conversion.status).toBe('ok');
+  });
+  it('a docx over the cloud eager cap is too-large and never fetched', async () => {
+    const fetchBytes = jest.fn();
+    const s = fakeSession(fetchBytes);
+    await createConvertWorker().work(
+      change(doc({ metadata: { sizeBytes: MAX_CLOUD_BINARY_BYTES + 1 } })),
+      s,
+    );
+    expect(fetchBytes).not.toHaveBeenCalled();
+    expect(s.enriched[0].metadata.conversion.status).toBe('too-large');
+  });
+  it('a 22 MiB cloud docx (between the local and cloud eager caps) is parsed', async () => {
+    const s = fakeSession(async () => tinyDocx('docx body text here'));
+    await createConvertWorker().work(
+      change(doc({ metadata: { sizeBytes: 22 * MiB } })),
+      s,
+    );
+    expect(s.enriched[0].metadata.conversion.status).toBe('ok');
+  });
+  it('re-admits a too-large row only when the current cap admits it', () => {
+    const tl = { conversion: { status: 'too-large', at: 'x' } };
+    expect(isConvertCandidate(pdfDoc(40 * MiB, tl))).toBe(true);
+    expect(isConvertCandidate(pdfDoc(MAX_FETCH_BYTES + 1, tl))).toBe(false);
+    expect(
+      isConvertCandidate(doc({ metadata: { sizeBytes: 30 * MiB, ...tl } })),
+    ).toBe(false);
+    // any other outcome stays final
+    expect(
+      isConvertCandidate(
+        pdfDoc(40 * MiB, { conversion: { status: 'failed', at: 'x' } }),
+      ),
+    ).toBe(false);
+  });
+  it('fence: the third attempt on an over-eager-cap doc records failed WITHOUT parsing', async () => {
+    // Declared 40 MiB; the fence keys on max(declared, actual), so a tiny
+    // fixture is enough. The parse spy proves the third attempt never parses.
+    const parse = jest.fn(async () => 'never');
+    const s = fakeSession(async () => tinyPdf('x'.repeat(40)), {
+      bump: async () => 3,
+    });
+    await createConvertWorker({ parse }).work(change(pdfDoc(40 * MiB)), s);
+    expect(s.enriched[0].metadata.conversion.status).toBe('failed');
+    expect(parse).not.toHaveBeenCalled();
+  });
+  it('fence: the second attempt still parses', async () => {
+    const parse = jest.fn(async () => 'parsed text from the large pdf');
+    const s = fakeSession(async () => tinyPdf('x'), { bump: async () => 2 });
+    await createConvertWorker({ parse }).work(change(pdfDoc(40 * MiB)), s);
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(s.enriched[0].metadata.conversion.status).toBe('ok');
+  });
+  it('fence is not consulted for eager-size docs', async () => {
+    const bump = jest.fn(async () => 99);
+    const s = fakeSession(async () => tinyPdf('small pdf body text'), { bump });
+    await createConvertWorker().work(change(pdfDoc(1000)), s);
+    expect(bump).not.toHaveBeenCalled();
+  });
+  it('a deferred fetch never bumps', async () => {
+    const bump = jest.fn(async () => 1);
+    const s = fakeSession(
+      async () => {
+        throw new FetchDeferredError('offline');
+      },
+      { bump },
+    );
+    await expect(
+      createConvertWorker().work(change(pdfDoc(40 * MiB)), s),
+    ).rejects.toBeInstanceOf(FetchDeferredError);
+    expect(bump).not.toHaveBeenCalled();
+  });
+  it('output over 2 MiB chars is truncated and marked', async () => {
+    const big = 'word '.repeat(600_000); // 3,000,000 chars
+    const s = fakeSession(async () => new TextEncoder().encode(big));
+    await createConvertWorker().work(
+      change(
+        doc({
+          title: 'a.txt',
+          metadata: {
+            mime: 'text/plain',
+            filename: 'a.txt',
+            sizeBytes: big.length,
+          },
+        }),
+      ),
+      s,
+    );
+    const e = s.enriched[0];
+    expect(e.markdown.length).toBeLessThanOrEqual(MAX_MARKDOWN_CHARS + 20);
+    expect(e.markdown.endsWith('[truncated]')).toBe(true);
+    expect(e.metadata.conversion.truncated).toBe(true);
+  });
+  it('worker version is 2 (one shared replay for this release)', () => {
+    expect(createConvertWorker().version).toBe(2);
+  });
+  it('too-large no longer hands a PDF to OCR', () => {
+    expect(pdfReadyForOcr({ status: 'too-large' })).toBe(false);
+    expect(pdfReadyForOcr({ status: 'text-poor' })).toBe(true);
   });
 });

@@ -1,8 +1,10 @@
 /** @jest-environment node */
+import { MAX_FETCH_BYTES } from '@shared/file-indexability';
 import {
   assertPublicHostname,
   classifyAddress,
   createNetFetch,
+  MAX_NET_FETCH_BYTES,
   normalizeAddress,
   NetDestinationError,
   type LookupFn,
@@ -313,11 +315,15 @@ describe('createNetFetch', () => {
       fetchImpl: (async () =>
         new Response('tiny-body', {
           status: 200,
-          headers: { 'content-length': String(60 * 1024 * 1024) },
+          headers: { 'content-length': String(MAX_FETCH_BYTES + 1) },
         })) as unknown as typeof fetch,
     });
     await expect(netFetch('https://api.example.com/big')).rejects.toThrow(
-      /50 MiB/,
+      /100 MiB/,
     );
+  });
+
+  it('the download cap equals the worker fetch cap, so a deferred 100 MiB PDF is reachable', () => {
+    expect(MAX_NET_FETCH_BYTES).toBe(MAX_FETCH_BYTES);
   });
 });

@@ -12,6 +12,20 @@ import type { LogSink } from './engine';
  * Runs in-process for now; the crash-isolated worker pool rides the
  * converter/worker.ts entry when it lands (see LEFTOVERS).
  */
+/** Upper bound on one document's markdown, whichever path parsed it. */
+export const MAX_MARKDOWN_CHARS = 2 * 1024 * 1024;
+export function capMarkdown(md: string): {
+  markdown: string;
+  truncated: boolean;
+} {
+  return md.length > MAX_MARKDOWN_CHARS
+    ? {
+        markdown: `${md.slice(0, MAX_MARKDOWN_CHARS)}\n\n[truncated]`,
+        truncated: true,
+      }
+    : { markdown: md, truncated: false };
+}
+
 export function createConverter(
   logs: LogSink,
 ): (input: DocumentInput) => Promise<DocumentInput> {
@@ -21,7 +35,10 @@ export function createConverter(
     try {
       const markdown = await parse(bytes, mime, filename);
       if (markdown !== null) {
-        return { ...stripBinary(input), markdown };
+        return {
+          ...stripBinary(input),
+          markdown: capMarkdown(markdown).markdown,
+        };
       }
     } catch (err) {
       logs.log(

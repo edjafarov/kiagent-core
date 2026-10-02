@@ -28,13 +28,16 @@ import dns from 'dns';
 import net from 'net';
 import { Agent } from 'undici';
 
+import { MAX_FETCH_BYTES } from '@shared/file-indexability';
+
 /**
  * `net.fetch` is reachable by semi-trusted third-party connector
  * extensions — a huge or malicious endpoint must not be able to buffer an
- * unbounded response in the main process. 50 MiB comfortably covers
- * ordinary API/webhook payloads.
+ * unbounded response in the main process. It equals the worker fetch cap
+ * (one connector download for one background fetchBytes), so a deferred
+ * 100 MiB PDF is reachable.
  */
-export const MAX_NET_FETCH_BYTES = 50 * 1024 * 1024; // 50 MiB
+export const MAX_NET_FETCH_BYTES = MAX_FETCH_BYTES;
 
 /** Redirect hops followed before giving up. Each hop is re-validated. */
 export const MAX_NET_FETCH_REDIRECTS = 5;

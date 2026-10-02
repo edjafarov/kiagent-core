@@ -5,9 +5,18 @@ import type {
   WorkerSession,
   WorkOutcome,
 } from '@shared/contracts';
-import { MAX_LOCAL_BINARY_BYTES } from '@shared/file-indexability';
+import {
+  MAX_CLOUD_BINARY_BYTES,
+  MAX_FETCH_BYTES,
+  MAX_LOCAL_BINARY_BYTES,
+} from '@shared/file-indexability';
 
-import { convertibleKind, parse } from '@main/core/engine/convert';
+import {
+  capMarkdown,
+  convertibleKind,
+  parse as realParse,
+  type ConvertibleKind,
+} from '@main/core/engine/convert';
 
 import {
   HAS_TEXT_CHARS,
@@ -15,9 +24,14 @@ import {
   type ConversionStatus,
 } from './outcome';
 
-/** Largest file the worker will fetch and parse — the same cap local files
- *  get on the commit path. Parsing runs in-process, like the commit path. */
-export const MAX_CONVERT_BYTES = MAX_LOCAL_BINARY_BYTES;
+/** Largest file the worker fetches+parses, per kind: PDFs up to the fetch
+ *  cap; everything else up to the LARGEST eager cap (cloud, 25 MiB) — their
+ *  parsers inline images and are not hardened for huge inputs. The worker
+ *  does not know the source's profile; a local file over ITS eager cap is
+ *  `bytes: 'none'`, whose fetchBytes returns null without reading. */
+export function convertCapFor(kind: ConvertibleKind): number {
+  return kind === 'pdf' ? MAX_FETCH_BYTES : MAX_CLOUD_BINARY_BYTES;
+}
 
 interface ConvertMeta {
   mime?: unknown;
@@ -47,9 +61,21 @@ export function isConvertCandidate(doc: Document): boolean {
   if (doc.archivedAt) return false;
   if (doc.type !== 'attachment' && doc.type !== 'file') return false;
   const meta = doc.metadata as ConvertMeta;
-  if (meta.conversion != null || meta.extraction != null) return false;
+  if (meta.extraction != null) return false;
+  const kind = convertibleKind(str(meta.mime), fileName(doc));
+  if (kind === null) return false;
+  if (meta.conversion != null) {
+    // too-large is cap-relative: re-admit when the current cap admits it.
+    const st = (meta.conversion as { status?: unknown }).status;
+    const declared = num(meta.sizeBytes) ?? num(meta.size);
+    return (
+      st === 'too-large' &&
+      declared !== undefined &&
+      declared <= convertCapFor(kind)
+    );
+  }
   if ((doc.markdown ?? '').trim().length >= HAS_TEXT_CHARS) return false;
-  return convertibleKind(str(meta.mime), fileName(doc)) !== null;
+  return true;
 }
 
 /**
@@ -60,11 +86,20 @@ export function isConvertCandidate(doc: Document): boolean {
  * waits for that marker. No inference is involved, so the re-drive is not
  * held to the processing window.
  */
-export function createConvertWorker(deps: { now?: () => Date } = {}): Worker {
+export function createConvertWorker(
+  deps: {
+    now?: () => Date;
+    /** Test seam only; defaults to the real parser. */
+    parse?: typeof realParse;
+  } = {},
+): Worker {
   const now = deps.now ?? (() => new Date());
+  const parse = deps.parse ?? realParse;
   return {
     name: 'convert',
-    version: 1,
+    // bump = one full feed replay: re-admits too-large rows (large-file),
+    // .msg attachments, garbled PDFs. The ONLY convert bump this release.
+    version: 2,
     schedule: { every: '5m' }, // re-drive for docs deferred while their source was registering
     matches: (change: Change) =>
       change.kind === 'document' && isConvertCandidate(change.document),
@@ -77,12 +112,13 @@ export function createConvertWorker(deps: { now?: () => Date } = {}): Worker {
 
       const record = (
         status: ConversionStatus,
-        extra: { markdown?: string; error?: string } = {},
+        extra: { markdown?: string; error?: string; truncated?: true } = {},
       ): WorkOutcome => {
         const conversion: ConversionOutcome = {
           status,
           at: now().toISOString(),
           ...(extra.error ? { error: extra.error.slice(0, 500) } : {}),
+          ...(extra.truncated ? { truncated: true as const } : {}),
         };
         session.enrich({
           documentId: doc.id,
@@ -92,8 +128,11 @@ export function createConvertWorker(deps: { now?: () => Date } = {}): Worker {
         return 'done';
       };
 
+      const kind = convertibleKind(str(meta.mime), name);
+      if (kind === null) return 'skip';
+      const capBytes = convertCapFor(kind);
       const declared = num(meta.sizeBytes) ?? num(meta.size);
-      if (declared !== undefined && declared > MAX_CONVERT_BYTES)
+      if (declared !== undefined && declared > capBytes)
         return record('too-large');
 
       // A fetch that fails right now (source still registering, offline,
@@ -101,7 +140,16 @@ export function createConvertWorker(deps: { now?: () => Date } = {}): Worker {
       // the re-drive. Only a definite "no bytes" (null) is recorded here.
       const bytes = await session.fetchBytes(doc);
       if (!bytes) return record('unavailable');
-      if (bytes.length > MAX_CONVERT_BYTES) return record('too-large');
+      if (bytes.length > capBytes) return record('too-large');
+      // Crash fence AFTER the bytes arrive, BEFORE the parse: only a parse
+      // can kill main; counting deferred fetches would fail docs on an
+      // outage. Keyed on max(declared, actual): size makes a parse risky.
+      const large =
+        Math.max(declared ?? 0, bytes.length) > MAX_LOCAL_BINARY_BYTES;
+      if (large && (await session.bump('parse')) > 2)
+        return record('failed', {
+          error: 'parser crashed twice on this document',
+        });
 
       let markdown: string | null;
       try {
@@ -115,7 +163,11 @@ export function createConvertWorker(deps: { now?: () => Date } = {}): Worker {
       }
       if (markdown === null || markdown.trim().length === 0)
         return record('text-poor');
-      return record('ok', { markdown });
+      const capped = capMarkdown(markdown);
+      return record('ok', {
+        markdown: capped.markdown,
+        ...(capped.truncated ? { truncated: true as const } : {}),
+      });
     },
   };
 }

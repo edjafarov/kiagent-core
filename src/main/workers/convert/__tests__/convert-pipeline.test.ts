@@ -4,7 +4,12 @@ import os from 'os';
 import path from 'path';
 import JSZip from 'jszip';
 
-import type { Document, DocumentInput, Source } from '@shared/contracts';
+import type {
+  Document,
+  DocumentInput,
+  Source,
+  Worker,
+} from '@shared/contracts';
 
 import { openDb } from '../../../db/app-db';
 import { createEngine } from '../../../core/engine/engine';
@@ -65,6 +70,29 @@ function bytesOnlySource(bytes: Uint8Array): Source {
     toDocument: (item) => item as DocumentInput,
     fetchBytes: async () => bytes,
   };
+}
+
+/** A minimal one-page PDF whose only text is `text` (see convert-pdf.test). */
+function tinyPdf(text: string): Uint8Array {
+  const stream = `BT /F1 12 Tf 72 720 Td (${text}) Tj ET`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = objects.map((body, i) => {
+    const at = out.length;
+    out += `${i + 1} 0 obj\n${body}\nendobj\n`;
+    return at;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const at of offsets) out += `${String(at).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new TextEncoder().encode(out);
 }
 
 async function waitFor(cond: () => Promise<boolean>, ms = 5000) {
@@ -161,7 +189,7 @@ describe('convert pipeline (real store + engine)', () => {
       cursor: 1,
     });
     await waitFor(
-      async () => (await store.ledgerHasDeferred('worker:convert:v1')) === true,
+      async () => (await store.ledgerHasDeferred('worker:convert:v2')) === true,
     );
     // Not marked unavailable — nothing was written back.
     expect((await read(account.id, 'm1/3')).metadata).not.toHaveProperty(
@@ -202,9 +230,9 @@ describe('convert pipeline (real store + engine)', () => {
       cursor: 1,
     });
     await waitFor(
-      async () => (await store.ledgerHasDeferred('worker:convert:v1')) === true,
+      async () => (await store.ledgerHasDeferred('worker:convert:v2')) === true,
     );
-    expect((await store.ledgerCounts('worker:convert:v1')).failed).toBe(0);
+    expect((await store.ledgerCounts('worker:convert:v2')).failed).toBe(0);
 
     online = true;
     await engine.rerunDeferred(worker);
@@ -236,7 +264,7 @@ describe('convert pipeline (real store + engine)', () => {
       cursor: 1,
     });
     await waitFor(
-      async () => (await store.ledgerHasDeferred('worker:convert:v1')) === true,
+      async () => (await store.ledgerHasDeferred('worker:convert:v2')) === true,
     );
     expect(fetchBytes).not.toHaveBeenCalled();
     await handle.stop();
@@ -304,5 +332,73 @@ describe('convert pipeline (real store + engine)', () => {
         metadata: { ...pdf.metadata, conversion: { status: 'text-poor' } },
       }),
     ).toBe('candidate');
+  });
+
+  it('upgrade: the v2 replay re-parses an old too-large PDF, even with several historical changes', async () => {
+    const engine = engineWith(
+      new Map([['mail', bytesOnlySource(tinyPdf('large pdf body text here'))]]),
+    );
+    const account = await store.createAccount({
+      source: 'mail',
+      identifier: 'u',
+    });
+    const pdf = (rev: number): DocumentInput => ({
+      externalId: 'm1/att',
+      type: 'attachment',
+      title: 'big.pdf',
+      markdown: null,
+      metadata: {
+        mime: 'application/pdf',
+        filename: 'big.pdf',
+        sizeBytes: 40 * 1024 * 1024,
+        rev,
+      },
+      createdAt: null,
+    });
+    // three historical changes for the same doc → one v2 replay batch
+    // eslint-disable-next-line no-await-in-loop
+    for (const rev of [1, 2, 3])
+      await store.commit({
+        account: account.id,
+        documents: [pdf(rev)],
+        cursor: rev,
+      });
+
+    // 1. the OLD worker's verdict: too-large (faked; the v1 code is gone)
+    const v1: Worker = {
+      ...createConvertWorker(),
+      version: 1,
+      matches: (ch) =>
+        ch.kind === 'document' &&
+        ch.document.type === 'attachment' &&
+        (ch.document.metadata as { conversion?: unknown }).conversion == null,
+      work: async (ch, s) => {
+        if (ch.kind !== 'document') return 'skip';
+        s.enrich({
+          documentId: ch.document.id,
+          metadata: { conversion: { status: 'too-large', at: 'x' } },
+        });
+        return 'done';
+      },
+    };
+    const h1 = engine.attach(v1);
+    await waitFor(
+      async () =>
+        ((await read(account.id, 'm1/att')).metadata as any).conversion
+          ?.status === 'too-large',
+    );
+    await h1.stop();
+
+    // 2. the real v2 worker replays the feed from 0
+    const h2 = engine.attach(createConvertWorker());
+    await waitFor(
+      async () =>
+        ((await read(account.id, 'm1/att')).metadata as any).conversion
+          ?.status !== 'too-large',
+    );
+    await h2.stop();
+    const d = await read(account.id, 'm1/att');
+    expect((d.metadata as any).conversion.status).toBe('ok');
+    expect(d.markdown).toContain('large pdf body');
   });
 });

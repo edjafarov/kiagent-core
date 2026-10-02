@@ -6,7 +6,8 @@
  * - `ok`          parsed; the markdown was written.
  * - `text-poor`   parsed, but too little text (a scanned PDF).
  * - `failed`      the parser threw; `error` holds the message.
- * - `too-large`   over the parse cap, never fetched.
+ * - `too-large`   over the per-kind cap (convertCapFor). Cap-relative: the
+ *                 convert worker re-admits it when the cap rises. Never OCR'd.
  * - `unavailable` the source answered "no bytes" (e.g. deleted upstream).
  */
 /** A doc with at least this much markdown already has real text: neither
@@ -24,6 +25,8 @@ export interface ConversionOutcome {
   status: ConversionStatus;
   at: string;
   error?: string;
+  /** The markdown was cut at MAX_MARKDOWN_CHARS. */
+  truncated?: true;
 }
 
 /** Outcomes after which a PDF is handed to OCR. `unavailable` is absent on
@@ -32,7 +35,6 @@ export interface ConversionOutcome {
 export const PDF_OCR_AFTER_STATUSES = [
   'text-poor',
   'failed',
-  'too-large',
 ] as const satisfies readonly ConversionStatus[];
 const PDF_OCR_AFTER: ReadonlySet<string> = new Set(PDF_OCR_AFTER_STATUSES);
 

@@ -33,17 +33,17 @@ it.each([
     { ...base, metadata: { mime: 'application/pdf', sizeBytes: 50_000 } },
     'skip',
   ],
-  ...(['failed', 'too-large'] as const).map(
-    (status): [string, Document, string] => [
-      `pdf the parser gave up on (${status})`,
-      {
-        ...base,
-        metadata: { ...base.metadata, conversion: { status } },
-      } as Document,
-      'candidate',
-    ],
-  ),
-  ...(['ok', 'unavailable'] as const).map(
+  ...(['failed'] as const).map((status): [string, Document, string] => [
+    `pdf the parser gave up on (${status})`,
+    {
+      ...base,
+      metadata: { ...base.metadata, conversion: { status } },
+    } as Document,
+    'candidate',
+  ]),
+  // too-large is cap-relative: the convert worker re-admits it when its cap
+  // rises; OCR never takes it (past every cap, its bytes are never fetched).
+  ...(['ok', 'unavailable', 'too-large'] as const).map(
     (status): [string, Document, string] => [
       `pdf the parser settled (${status})`,
       {

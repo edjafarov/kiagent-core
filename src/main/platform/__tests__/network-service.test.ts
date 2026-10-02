@@ -1,6 +1,11 @@
 /** @jest-environment node */
 import { createNetworkService } from '../network-service';
-import { createNetFetch, readBoundedBody, type LookupFn } from '../net-guard';
+import {
+  createNetFetch,
+  MAX_NET_FETCH_BYTES,
+  readBoundedBody,
+  type LookupFn,
+} from '../net-guard';
 
 const lookup: LookupFn = async () => ['93.184.216.34'];
 
@@ -315,7 +320,7 @@ describe('createNetworkService', () => {
         fetchImpl: (async () =>
           new Response(body, {
             status: 200,
-            headers: { 'content-length': String(60 * 1024 * 1024) },
+            headers: { 'content-length': String(MAX_NET_FETCH_BYTES + 1) },
           })) as typeof fetch,
       }),
     });
