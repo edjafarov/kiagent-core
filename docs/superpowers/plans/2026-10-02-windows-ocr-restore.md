@@ -16,7 +16,7 @@
 
 ## Global Constraints
 
-- Lands on top of the large-file core plan (`2026-10-02-large-file-indexing.md`). It needs Task 4 (`session.bump`, cleared in the `done` commit) and Task 7 (windowed OCR: `vlmPass(pages, firstN, complete)`, `complete`, and the `NoProviderError` fill-and-fall-through).
+- Lands on top of the large-file core plan (`2026-10-02-large-file-indexing.md`). It needs Task 4 (`session.bump`, cleared in the `done` commit) and Task 7 (windowed OCR: `vlmPass`, `complete`, and the `NoProviderError` fill-and-fall-through). Task 4 below changes `vlmPass` to take prepared images and `ocrRan`.
 - The VLM failure threshold is 3 (`n >= 3`), keyed `'vlm'`. `LaneClosedError` never counts. A `NoProviderError('see')` while `mayBecomeReady('see')` holds never counts.
 - Complete OCR-only **only when pass 1 ran**. With no `read` provider (Linux, or Windows without an OCR language), keep deferring; never bury a doc with empty text.
 - Helper timeout is 60 s, with `windowsHide: true`. A selftest non-zero exit means `ok: false`; it is never a throw.
@@ -137,29 +137,38 @@ git commit -m "build(windows-ocr): cross-publish net10.0-windows10.0.19041.0 fro
 
 - [ ] **Step 1: Failing verifier tests**
 
-In `verify-win-installer.test.mjs`, following its existing `pe(machine)` helper and the `checkInferenceBinaries` cases:
+In `verify-win-installer.test.mjs`, **first extend the shared fixtures**. Once `REQUIRED_INFERENCE` lists the helpers, a `GOOD_INFERENCE` without them yields two extra "missing" violations, and that breaks the clean-payload test plus the exact `v.length` counts in the rc.5 and wrong-arch tests:
 
 ```js
-const ALL = [
-  'resources/assets/llama/win32-x64-cpu/llama-server.exe',
-  'resources/assets/llama/win32-arm64-cpu/llama-server.exe',
-  'resources/assets/whisper/win32-x64/whisper-cli.exe',
-  'resources/assets/whisper/win32-arm64/whisper-cli.exe',
-  'resources/assets/ocr/win32-x64/windows-ocr.exe',
-  'resources/assets/ocr/win32-arm64/windows-ocr.exe',
+const GOOD_INFERENCE = {
+  …existing five entries…,
+  [`${ASSETS}/ocr/win32-x64/windows-ocr.exe`]: pe(MACHINE.x64),
+  [`${ASSETS}/ocr/win32-arm64/windows-ocr.exe`]: pe(MACHINE.arm64),
+};
+const inferenceListing = (files) => [
+  `${ASSETS}/llama`,
+  `${ASSETS}/whisper`,
+  `${ASSETS}/ocr`,
+  `${ASSETS}/whisper/ggml-silero-v5.1.2.bin`,
+  ...Object.keys(files).flatMap((f) => [f.replace(/\/[^/]+$/, ''), f]),
 ];
-const kindByArch = (p) => binaryKind(pe(p.includes('arm64') ? 0xaa64 : 0x8664));
+```
 
-test('a complete payload with both windows-ocr helpers passes', () => {
-  assert.deepEqual(checkInferenceBinaries(ALL, kindByArch), []);
+Then add the new cases, derived from that fixture:
+
+```js
+test('checkInferenceBinaries: a missing windows-ocr helper fails the gate', () => {
+  const files = { ...GOOD_INFERENCE };
+  delete files[`${ASSETS}/ocr/win32-arm64/windows-ocr.exe`];
+  const v = checkInferenceBinaries(inferenceListing(files), kindsFrom(files));
+  assert.equal(v.length, 1, v.join('\n'));
+  assert.match(v[0], /ocr\/win32-arm64\/windows-ocr\.exe missing/);
 });
-test('a missing windows-ocr helper fails the gate', () => {
-  const v = checkInferenceBinaries(ALL.filter((p) => !p.includes('ocr/win32-arm64')), kindByArch);
-  assert.match(v.join('\n'), /ocr\/win32-arm64\/windows-ocr\.exe missing/);
-});
-test('a wrong-arch windows-ocr helper fails the gate', () => {
-  const v = checkInferenceBinaries(ALL, (p) => binaryKind(pe(0x8664)));
-  assert.match(v.join('\n'), /ocr\/win32-arm64\/windows-ocr\.exe is PE x64, expected PE arm64/);
+test('checkInferenceBinaries: a wrong-arch windows-ocr helper fails the gate', () => {
+  const files = { ...GOOD_INFERENCE, [`${ASSETS}/ocr/win32-arm64/windows-ocr.exe`]: pe(MACHINE.x64) };
+  const v = checkInferenceBinaries(inferenceListing(files), kindsFrom(files));
+  assert.equal(v.length, 1, v.join('\n'));
+  assert.match(v[0], /ocr\/win32-arm64\/windows-ocr\.exe is PE x64, expected PE arm64/);
 });
 test('REQUIRED_INFERENCE lists both helpers', () => {
   assert.ok(REQUIRED_INFERENCE.includes('ocr/win32-x64/windows-ocr.exe'));
@@ -167,7 +176,7 @@ test('REQUIRED_INFERENCE lists both helpers', () => {
 });
 ```
 
-Match `describeKind`'s real wording in the regexes. Read it in the file (e.g. `PE x64`/`PE ARM64`), and adjust the pattern, not the code.
+Add `REQUIRED_INFERENCE` to the file's import from `./verify-win-installer.mjs` (it is already exported). The existing clean-payload, rc.5 and llama wrong-arch tests stay unchanged. With the extended fixture, they keep their counts.
 
 - [ ] **Step 2: Run, and confirm they fail.** `node --test build/verify-win-installer.test.mjs`
 
@@ -256,13 +265,13 @@ process.stdout.write(JSON.stringify({ text: env.FAKE_WOCR_TEXT ?? '', width: 1, 
 ```ts
 import path from 'path';
 import { makeWindowsOcrHelper } from '../windows-ocr-helper';
-import { createWindowsOcrProvider } from '../provider';
+import { createWindowsOcrProvider, NO_OCR_LANGUAGE } from '../provider';
 
 const FAKE = path.join(__dirname, 'fixtures', 'fake-windows-ocr.cjs');
 const log = jest.fn();
 const withEnv = async <T>(env: Record<string, string>, f: () => Promise<T>) => {
-  const saved = { ...process.env }; Object.assign(process.env, env);
-  try { return await f(); } finally { process.env = saved; }
+  Object.assign(process.env, env);
+  try { return await f(); } finally { for (const k of Object.keys(env)) delete process.env[k]; }
 };
 
 describe('windows-ocr helper', () => {
@@ -301,7 +310,7 @@ describe('windows-ocr provider status', () => {
     expect(p.status()).toBe('ready');
     const q = createWindowsOcrProvider({ binaryPath: FAKE, helper: helper(false), platform: 'win32', log });
     await new Promise((r) => setImmediate(r));
-    expect(q.status()).toEqual({ error: 'no Windows OCR language installed' });
+    expect(q.status()).toEqual({ error: NO_OCR_LANGUAGE });
   });
   it('handle routes read to ocrImage', async () => {
     const h = helper(true); h.ocrImage.mockResolvedValue('text');
@@ -311,7 +320,7 @@ describe('windows-ocr provider status', () => {
 });
 ```
 
-In `src/main/providers/__tests__/` (where the registration tests live; match their setup), add: `registerBundledProviders` registers `windows-ocr` on win32 and not on darwin. Stub `process.platform` the way the existing tests stub it.
+Create `src/main/providers/__tests__/register-bundled-providers.test.ts` (no registration tests exist yet; that folder holds only `install-registry.test.ts`). Assert that `registerBundledProviders` registers `windows-ocr` on win32 and not on darwin. Stub `process.platform` with `Object.defineProperty(process, 'platform', { value: 'win32' })`, and restore it in `afterEach`. The fake `CorePlatform` needs `inference.register` (a `jest.fn`), `logSink.log`, and `prefs.get`/`prefs.onChange`. local-llm and local-asr construct fine against a nonexistent `modelsDir`.
 
 - [ ] **Step 3: Run, and confirm they fail.** `npx jest src/main/providers`
 
@@ -376,6 +385,10 @@ import fs from 'fs';
 import type { InferenceProvider, LogLevel, ProviderStatus } from '@shared/contracts';
 import type { WindowsOcrHelper } from './windows-ocr-helper';
 
+/** Selftest runs only at boot, so the guidance must say restart. */
+export const NO_OCR_LANGUAGE =
+  'No text-recognition language is installed. Add a language in Windows Settings → Time & language → Language & region (one with Optical character recognition), then restart KIAgent.';
+
 export function createWindowsOcrProvider(deps: {
   binaryPath: string; helper: Pick<WindowsOcrHelper, 'ocrImage' | 'selftest'>;
   platform?: string; log: (level: LogLevel, msg: string) => void;
@@ -394,7 +407,7 @@ export function createWindowsOcrProvider(deps: {
       if (platform !== 'win32') return 'unsupported';
       if (!fs.existsSync(deps.binaryPath)) return { error: 'windows-ocr helper missing' };
       if (probed === null) return 'standby';
-      return probed ? 'ready' : { error: 'no Windows OCR language installed' };
+      return probed ? 'ready' : { error: NO_OCR_LANGUAGE };
     },
     async handle(req) {
       if (req.kind !== 'read') throw new Error(`windows-ocr only supports 'read' (got '${req.kind}')`);
@@ -416,14 +429,27 @@ export function createWindowsOcrProvider(deps: {
   }
 ```
 
-**In-app help copy.** Find the processing-help text that describes OCR (grep `OCR` under `src/renderer`). Add, for Windows: "Add your documents' languages in Windows Settings → Language, then restart KIAgent." If no such help text exists, skip this; don't invent a new surface.
+**In-app language and restart guidance (spec §2, required).** The selftest runs only at boot, so the user must hear "restart". The guidance goes in the existing provider-error display: `LocalProcessing.tsx` lists any provider in `{ error }` with its name and `status.error` as the detail. Don't build a new surface.
+- `provider.ts`: `NO_OCR_LANGUAGE` (above) is the selftest-failed error.
+- `src/renderer/screens/Settings/LocalProcessing.tsx`: add `'windows-ocr': 'Text recognition (Windows)'` to `PROVIDER_NAMES`.
+- Add a test in `src/renderer/screens/Settings/__tests__/LocalProcessing.test.tsx`, next to "a non-installable provider in error…":
 
-- [ ] **Step 5: Run, and confirm they pass.** `npx jest src/main/providers`
+```tsx
+test('windows-ocr without a language shows the language + restart guidance', async () => {
+  mockInvoke({ providers: [{ id: 'windows-ocr', supports: ['read'],
+    status: { error: 'No text-recognition language is installed. Add a language in Windows Settings → Time & language → Language & region (one with Optical character recognition), then restart KIAgent.' }, installable: false }] });
+  render(<LocalProcessing />);
+  await screen.findByText('Text recognition (Windows)');
+  expect(screen.getByText(/then restart KIAgent/)).toBeInTheDocument();
+});
+```
+
+- [ ] **Step 5: Run, and confirm they pass.** `npx jest src/main/providers src/renderer/screens/Settings`
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/main/providers
+git add src/main/providers src/renderer/screens/Settings
 git commit -m "feat(providers): windows-ocr read provider (WinRT helper, selftest-gated)"
 ```
 
@@ -548,7 +574,7 @@ it('no read provider (pass 1 never ran): keeps deferring even after 3 VLM failur
   expect(s.enriched).toEqual([]);
 });
 it('non-VLM-decodable TIFF: defers when OCR did not run, completes when it did', async () => {
-  const tiff = change({ title: 'scan.tif', metadata: { mime: 'image/tiff', filename: 'scan.tif', sizeBytes: 5000 } });
+  const tiff = change({ title: 'scan.tif', metadata: { mime: 'image/tiff', filename: 'scan.tif', sizeBytes: 50_000 } });
   const w = createVisionWorker({ rasterizer: thinPdf(), laneOpen: () => true });
   expect(await w.work(tiff, fakeSession({ read: async () => { throw new NoProviderError('read'); } }))).toBe('defer');
   const s = fakeSession({ read: async () => 'tiff text' });
@@ -561,9 +587,34 @@ it('non-VLM-decodable TIFF: defers when OCR did not run, completes when it did',
 
 - [ ] **Step 4: Implement in `vision-worker.ts`**
 
-**Pass 1 ran?** In the large-file plan's windowed loop, the `NoProviderError` branch sets a local `let ocrRan = true` to `false` before filling pages with `''`. The single-image path already has `ocrFailed`; use `ocrRan = !ocrFailed` there.
+**Pass 1 ran?** In the large-file plan's windowed loop, the `NoProviderError` branch sets a local `let ocrRan = true` to `false` before it fills pages with `''`. The single-image path already has `ocrFailed`; use `ocrRan = !ocrFailed` there.
 
-`vlmPass`'s catch replaces today's `catch { return 'defer'; }`:
+**Gate both completions on it**, not just the VLM-failure one. The inherited completion after the window loop changes to:
+
+```ts
+const chars = Object.values(done).join('').replace(/\s+/g, '').length;
+if (ocrRan && chars >= OCR_SUFFICIENT_CHARS) return complete('local-ocr', pagesOut());
+// Resumed doc, and OCR vanished between windows: the '' fills are pages that were
+// never read. Completing now would make them permanently unsearchable. Wait for OCR.
+if (!ocrRan && prog) return 'defer';
+return vlmPass(pagesOut(), pdfImages(Math.min(pageCount, MAX_PAGES)), complete, ocrRan);
+```
+
+(`!ocrRan` with no prior progress is today's whole-doc no-OCR path: the VLM may describe it.)
+
+**`vlmPass` takes prepared images, not PDF bytes.** Its signature becomes:
+
+```ts
+type VlmImage = { page: number; bytes: Uint8Array; mime: string };
+vlmPass(pages: PageResult[], images: () => Promise<VlmImage[]>, complete, ocrRan: boolean)
+```
+
+- PDF caller: `const pdfImages = (n: number) => async () => (await deps.rasterizer.pdfToPngs(bytes, { pages: Array.from({ length: n }, (_, i) => i + 1) })).pages.map((p) => ({ page: p.page, bytes: p.png, mime: 'image/png' }));`
+- Single-image caller: `async () => [{ page: 1, bytes, mime: mime ?? 'image/png' }]`. The image bytes never reach PDFium.
+
+Inside `vlmPass`, load the images **before** the failure-counting `try`. A rasterizer error is not a VLM failure: `let imgs: VlmImage[]; try { imgs = await images(); } catch { return 'defer'; }`. Then, per image, it calls `downscale(img.bytes, img.mime)` → `seeWithMeta`, as today.
+
+`vlmPass`'s counting catch replaces today's `catch { return 'defer'; }`:
 
 ```ts
 } catch (err) {
@@ -579,15 +630,38 @@ it('non-VLM-decodable TIFF: defers when OCR did not run, completes when it did',
 }
 ```
 
-`vlmPass` receives `ocrRan`, so its signature is `vlmPass(pages, firstN, complete, ocrRan)`. The single-image path calls the same `vlmPass` (it already shares the pass-2 block), with `complete` built for one image.
+Add these tests to Step 1's block:
+
+```ts
+it('OCR lost between windows: a resumed doc defers instead of completing with unread pages', async () => {
+  const { r } = pagedRasterizer(25);
+  const prior = { pageCount: 25, pages: Object.fromEntries(Array.from({ length: 10 }, (_, i) => [String(i + 1), 'plenty of text '.repeat(20)])) };
+  const s = fakeSession({ read: async () => { throw new NoProviderError('read'); }, see: jest.fn() });
+  expect(await createVisionWorker({ rasterizer: r, laneOpen: () => true })
+    .work(change({ metadata: { ...baseDoc.metadata, mime: 'application/pdf', ocrProgress: prior } }), s)).toBe('defer');
+  expect(s.enriched).toEqual([]);
+});
+it('a text-poor PNG goes to the VLM as a PNG, never through the PDF rasterizer', async () => {
+  const pdfToPngs = jest.fn();
+  const see = jest.fn(async () => ({ text: 'a chart of sales', model: 'm' }));
+  const png = change({ title: 'chart.png', metadata: { ...baseDoc.metadata, mime: 'image/png', filename: 'chart.png' } });
+  const s = fakeSession({ read: async () => 'few', seeWithMeta: see });
+  expect(await createVisionWorker({ rasterizer: { pdfToPngs } as never, laneOpen: () => true }).work(png, s)).toBe('done');
+  expect(pdfToPngs).not.toHaveBeenCalled();
+  expect(see.mock.calls[0][2]).toMatchObject({ mime: 'image/png' });
+  expect(s.enriched[0].metadata.extraction.engine).toBe('local-ocr+vlm');
+});
+```
+
+Match `seeWithMeta`'s fake shape to the existing `vision-worker.test.ts` helpers; the assertion is on the MIME it receives.
 
 Non-VLM-decodable branch (~l.104): prefix it with `if (ocrFailed) return 'defer';`. Leave the rest as is. Update its comment: it finalizes only when pass 1 actually ran.
 
 - [ ] **Step 5: Engine integration (real ledger, real re-drives)**
 
 In `engine.test.ts`:
-- Attach a real `createVisionWorker`, with `read` returning `'few words'` and `see` throwing the spawn error.
-- Commit a text-poor PDF doc, then call `engine.rerunDeferred(worker)` twice.
+- Attach a real `createVisionWorker`. The inference fake has `read` returning `'few words'`, and **both** `see` and `seeWithMeta` throwing the spawn error. Otherwise the session's "seeWithMeta is not wired" Error is what gets counted.
+- Commit a text-poor PDF doc. **Wait** until the live tail has deferred it: poll `store.ledgerHasDeferred(workerConsumerName(worker))` until it's true (≤ 2 s). Only then call `engine.rerunDeferred(worker)` twice. Calling it earlier finds no deferred row, so the count never reaches 3.
 
 Assert:
 - `metadata.extraction` is `{ engine: 'local-ocr', vlm: 'unavailable', … }`;
