@@ -43,6 +43,10 @@
  */
 export type LocalFolderCursor = {
   roots: Record<string, { completedAt: string }>;
+  /** FILE_POLICY_VERSION the roots were last enumerated under; absent = 1.
+   *  A lower value makes the incremental rescan also emit files the old
+   *  policy ignored (see `newlyAdmitted`), once, before `pull()` stamps it. */
+  policyVersion?: number;
 } | null;
 
 /**
@@ -56,5 +60,8 @@ export function advanceCursor(
   root: string,
   completedAt: string,
 ): LocalFolderCursor {
-  return { roots: { ...(cur?.roots ?? {}), [root]: { completedAt } } };
+  return {
+    ...(cur ?? {}),
+    roots: { ...(cur?.roots ?? {}), [root]: { completedAt } },
+  };
 }

@@ -23,7 +23,12 @@ import {
   validateFolderRoots,
 } from './folder-roots';
 import { folderPickerSpec, selectionNodes } from './picker';
+import {
+  FILE_POLICY_VERSION,
+  newlyAdmitted,
+} from '@shared/file-indexability';
 import { decideLocalFile } from './ingestible';
+import { resolvePathMime } from './mime';
 import {
   BATCH_SIZE,
   MAX_BATCH_READ_BYTES,
@@ -160,7 +165,7 @@ function pruneToConfiguredRoots(
   for (const [root, entry] of Object.entries(cursor.roots)) {
     if (configured.has(root)) roots[root] = entry;
   }
-  return { roots };
+  return { ...cursor, roots };
 }
 
 /** Whether `pruneToConfiguredRoots` actually dropped one or more entries
@@ -290,6 +295,7 @@ async function* incrementalRescanRoot(
   since: { completedAt: string },
   rescanStartIso: string,
   working: LocalFolderCursor,
+  fromVersion: number,
 ): AsyncGenerator<
   Batch<LocalFolderCursor, LocalFolderItem>,
   LocalFolderCursor
@@ -297,7 +303,25 @@ async function* incrementalRescanRoot(
   const sinceMs = Date.parse(since.completedAt);
   async function* changed(): AsyncGenerator<ScannedEntry> {
     for await (const e of walkRoot(root)) {
-      if (Math.max(e.stats.mtime.getTime(), e.stats.ctime.getTime()) > sinceMs)
+      const touched =
+        Math.max(e.stats.mtime.getTime(), e.stats.ctime.getTime()) > sinceMs;
+      // After a FILE_POLICY_VERSION bump, also files the previous policy
+      // ignored (deferred/none PDFs, newly admitted types). Never eager files
+      // that were already indexed: re-emitting those would re-read and
+      // re-parse them in main.
+      if (
+        touched ||
+        newlyAdmitted(
+          {
+            profile: 'local-folder',
+            filename: path.basename(e.absPath),
+            mime: resolvePathMime(e.absPath),
+            sizeBytes: e.stats.size,
+            path: e.absPath,
+          },
+          fromVersion,
+        )
+      )
         yield e;
     }
   }
@@ -359,6 +383,9 @@ export async function* pull(
     }
   }
 
+  // Policy recovery rides the per-root rescan below; the stamp is applied
+  // only after EVERY root finished, so no intermediate batch persists it.
+  const fromVersion = working?.policyVersion ?? 1;
   let didBackfill = false;
   for (const root of rootPaths) {
     const since = working?.roots?.[root];
@@ -371,6 +398,7 @@ export async function* pull(
         since,
         scanStartIso,
         working,
+        fromVersion,
       );
     }
   }
@@ -379,8 +407,15 @@ export async function* pull(
   // and the watch loop below commits nothing until a file actually changes —
   // without this cursor-only live batch the account would sit on
   // "Backfilling … (100%)" indefinitely after the walk finished. Gated on
-  // didBackfill so quiet steady-state cycles stay zero-commit.
-  if (didBackfill) {
+  // didBackfill so quiet steady-state cycles stay zero-commit. The same
+  // batch commits the FILE_POLICY_VERSION stamp after a policy recovery; a
+  // crash before it just repeats the cheap newly-admitted emission.
+  const stamp = didBackfill || fromVersion < FILE_POLICY_VERSION;
+  if (stamp) {
+    working = {
+      ...(working ?? { roots: {} }),
+      policyVersion: FILE_POLICY_VERSION,
+    };
     yield { phase: 'live', items: [], cursor: working };
   }
 

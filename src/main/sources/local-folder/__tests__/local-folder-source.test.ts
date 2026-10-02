@@ -19,7 +19,10 @@ import type {
   FolderSelectionChannel,
   Session,
 } from '@shared/contracts';
-import { MAX_LOCAL_AUDIO_BYTES } from '@shared/file-indexability';
+import {
+  FILE_POLICY_VERSION,
+  MAX_LOCAL_AUDIO_BYTES,
+} from '@shared/file-indexability';
 
 import { BATCH_SIZE, buildItem, chunk } from '../scanner';
 import {
@@ -30,6 +33,7 @@ import {
   reconcile,
 } from '../local-folder-source';
 import type { LocalFolderCursor } from '../cursor';
+import type { LocalFolderItem } from '../to-document';
 
 const NO_ROOTS_ERROR =
   'Local-folder account has no tracked folders — remove this source and re-add its folder.';
@@ -630,6 +634,7 @@ describe('pull — per-root incremental rescan', () => {
     await sleep(20);
     const since: LocalFolderCursor = {
       roots: { [dir]: { completedAt: new Date().toISOString() } },
+      policyVersion: FILE_POLICY_VERSION,
     };
 
     const controller = new AbortController();
@@ -1690,6 +1695,7 @@ describe('bounded enumeration', () => {
     const sinceIso = new Date(Date.now() - 60_000).toISOString();
     const since: LocalFolderCursor = {
       roots: { [dir]: { completedAt: sinceIso } },
+      policyVersion: FILE_POLICY_VERSION,
     };
     const session = makeSession([dir], new AbortController().signal, false);
 
@@ -1711,5 +1717,111 @@ describe('bounded enumeration', () => {
     const session = makeSession([dir], controller.signal, false);
 
     expect(await collect(pull(session, null))).toEqual([]);
+  });
+});
+
+describe('policy recovery (FILE_POLICY_VERSION in the cursor)', () => {
+  const sparse = (dir: string, name: string, size: number): string => {
+    const abs = path.join(dir, name);
+    const fd = fs.openSync(abs, 'w');
+    fs.ftruncateSync(fd, size); // sparse, no real disk use
+    fs.closeSync(fd);
+    return abs;
+  };
+  // A watermark in the future: the mtime/ctime filter alone finds nothing.
+  const future = () => new Date(Date.now() + 60_000).toISOString();
+  const names = (batches: Array<{ items: LocalFolderItem[] }>) =>
+    batches.flatMap((b) => b.items.map((i) => path.basename(i.absPath)));
+  const versionOf = (c: unknown) =>
+    (c as { policyVersion?: number } | null)?.policyVersion;
+
+  it('an old cursor emits only newly admitted files once, then stamps policyVersion', async () => {
+    const root = mkTmpDir();
+    // 3 small pdfs already indexed + 1 sparse 60 MiB pdf the old policy dropped
+    for (const n of ['a', 'b', 'c']) writeFile(root, `${n}.pdf`, `%PDF ${n}`);
+    sparse(root, 'big.pdf', 60 * 1024 * 1024);
+    const old: LocalFolderCursor = { roots: { [root]: { completedAt: future() } } };
+    const batches = await collect(
+      pull(makeSession([root], new AbortController().signal, false), old),
+    );
+    expect(names(batches)).toEqual(['big.pdf']);
+    expect(versionOf(batches[batches.length - 1].cursor)).toBe(
+      FILE_POLICY_VERSION,
+    );
+  });
+
+  it('mixed cursor: an old root is recovered even though a new root backfilled this cycle', async () => {
+    const root = mkTmpDir();
+    const fresh = mkTmpDir();
+    writeFile(fresh, 'n.txt', 'hello');
+    sparse(root, 'big.pdf', 60 * 1024 * 1024);
+    const old: LocalFolderCursor = { roots: { [root]: { completedAt: future() } } };
+    const batches = await collect(
+      pull(makeSession([root, fresh], new AbortController().signal, false), old),
+    );
+    expect(names(batches)).toEqual(expect.arrayContaining(['big.pdf', 'n.txt']));
+    expect(versionOf(batches[batches.length - 1].cursor)).toBe(
+      FILE_POLICY_VERSION,
+    );
+  });
+
+  it('a current cursor emits nothing', async () => {
+    const root = mkTmpDir();
+    sparse(root, 'big.pdf', 60 * 1024 * 1024);
+    const cur: LocalFolderCursor = {
+      roots: { [root]: { completedAt: future() } },
+      policyVersion: FILE_POLICY_VERSION,
+    };
+    const batches = await collect(
+      pull(makeSession([root], new AbortController().signal, false), cur),
+    );
+    expect(batches.flatMap((b) => b.items)).toEqual([]);
+  });
+
+  it('a fresh backfill stamps policyVersion', async () => {
+    const root = mkTmpDir();
+    writeFile(root, 'a.txt', 'hi');
+    const batches = await collect(
+      pull(makeSession([root], new AbortController().signal, false), null),
+    );
+    expect(versionOf(batches[batches.length - 1].cursor)).toBe(
+      FILE_POLICY_VERSION,
+    );
+  });
+
+  it('the stamp is never committed mid-walk: intermediate batches keep the old version', async () => {
+    const root = mkTmpDir();
+    for (let i = 0; i < BATCH_SIZE + 5; i += 1) sparse(root, `big${i}.pdf`, 30 * 1024 * 1024);
+    const old: LocalFolderCursor = { roots: { [root]: { completedAt: future() } } };
+    const batches = await collect(
+      pull(makeSession([root], new AbortController().signal, false), old),
+    );
+    expect(names(batches)).toHaveLength(BATCH_SIZE + 5);
+    expect(batches.slice(0, -1).map((b) => versionOf(b.cursor))).not.toContain(
+      FILE_POLICY_VERSION,
+    );
+    expect(versionOf(batches[batches.length - 1].cursor)).toBe(
+      FILE_POLICY_VERSION,
+    );
+  });
+
+  it('pruning a removed root keeps policyVersion', async () => {
+    const a = mkTmpDir();
+    const gone = mkTmpDir();
+    const cur: LocalFolderCursor = {
+      roots: {
+        [a]: { completedAt: future() },
+        [gone]: { completedAt: future() },
+      },
+      policyVersion: FILE_POLICY_VERSION,
+    };
+    const batches = await collect(
+      pull(makeSession([a], new AbortController().signal, false), cur),
+    );
+    expect(batches).toHaveLength(1); // the prune's cursor-only batch
+    expect(batches[0].cursor).toEqual({
+      roots: { [a]: { completedAt: expect.any(String) } },
+      policyVersion: FILE_POLICY_VERSION,
+    });
   });
 });
