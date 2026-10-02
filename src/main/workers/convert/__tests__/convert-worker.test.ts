@@ -13,6 +13,7 @@ import {
 import {
   multiPagePdf,
   PROSE_LINES,
+  shifted,
 } from '@main/core/engine/__tests__/pdf-fixture';
 import {
   convertCapFor,
@@ -501,5 +502,61 @@ describe('large files (fetch cap, re-admission, crash fence, output cap)', () =>
   it('too-large no longer hands a PDF to OCR', () => {
     expect(pdfReadyForOcr({ status: 'too-large' })).toBe(false);
     expect(pdfReadyForOcr({ status: 'text-poor' })).toBe(true);
+  });
+});
+
+describe('re-assessing old garbled PDF rows (garbled-PDF §5)', () => {
+  const garbledText = shifted([...PROSE_LINES, ...PROSE_LINES]).join('\n');
+  const oldPdf = (markdown: string, conversion?: object) =>
+    doc({
+      title: 'old.pdf',
+      markdown,
+      metadata: {
+        mime: 'application/pdf',
+        filename: 'old.pdf',
+        sizeBytes: 5000,
+        ...(conversion ? { conversion } : {}),
+      },
+    });
+
+  it('admits an old garbled PDF row (no marker, or ok without quality)', () => {
+    expect(isConvertCandidate(oldPdf(garbledText))).toBe(true);
+    expect(
+      isConvertCandidate(oldPdf(garbledText, { status: 'ok', at: 'x' })),
+    ).toBe(true);
+  });
+  it('does not admit a clean old row, or anything carrying quality', () => {
+    expect(isConvertCandidate(oldPdf(PROSE_LINES.join('\n')))).toBe(false);
+    expect(
+      isConvertCandidate(
+        oldPdf(garbledText, { status: 'ok', at: 'x', quality: 1 }),
+      ),
+    ).toBe(false);
+    expect(
+      isConvertCandidate(
+        oldPdf(garbledText, { status: 'needs-ocr', pages: [1], quality: 1 }),
+      ),
+    ).toBe(false);
+  });
+  it('re-assessment records needs-ocr with quality and leaves the markdown as is', async () => {
+    const s = fakeSession(async () =>
+      multiPagePdf([{ text: shifted(PROSE_LINES) }, { text: PROSE_LINES }]),
+    );
+    await createConvertWorker().work(change(oldPdf(garbledText)), s);
+    expect(s.enriched[0]).toEqual({
+      documentId: 'd',
+      metadata: {
+        conversion: { status: 'needs-ocr', pages: [1], quality: 1 },
+      },
+    });
+  });
+  it('re-assessment of a clean re-parse records ok + quality, markdown untouched', async () => {
+    const s = fakeSession(async () => multiPagePdf([{ text: PROSE_LINES }]));
+    await createConvertWorker().work(change(oldPdf(garbledText)), s);
+    expect(s.enriched[0].markdown).toBeUndefined();
+    expect(s.enriched[0].metadata.conversion).toMatchObject({
+      status: 'ok',
+      quality: 1,
+    });
   });
 });

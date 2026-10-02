@@ -17,6 +17,7 @@ import { createEngine } from '../../../core/engine/engine';
 import {
   multiPagePdf,
   PROSE_LINES,
+  shifted,
 } from '../../../core/engine/__tests__/pdf-fixture';
 import { createVisionWorker } from '../../vision/vision-worker';
 import { openStore } from '../../../core/store/store';
@@ -495,4 +496,58 @@ describe('convert pipeline (real store + engine)', () => {
       quality: 1,
     });
   }, 15000);
+
+  it('v2 replay re-assesses an old garbled PDF row once and never fetches a clean one', async () => {
+    const garbledText = shifted([...PROSE_LINES, ...PROSE_LINES]).join('\n');
+    const fetched: string[] = [];
+    const src: Source = {
+      ...bytesOnlySource(multiPagePdf([{ text: shifted(PROSE_LINES) }])),
+      fetchBytes: async (_s: unknown, d: Document) => {
+        fetched.push(d.externalId);
+        return multiPagePdf([{ text: shifted(PROSE_LINES) }]);
+      },
+    } as Source;
+    const engine = engineWith(new Map([[src.descriptor.id, src]]));
+    const account = await store.createAccount({
+      source: src.descriptor.id,
+      identifier: 'r',
+    });
+    const pdfRow = (externalId: string, markdown: string) =>
+      ({
+        externalId,
+        type: 'attachment',
+        title: `${externalId}.pdf`,
+        markdown,
+        metadata: {
+          mime: 'application/pdf',
+          filename: `${externalId}.pdf`,
+          sizeBytes: 5000,
+          conversion: { status: 'ok', at: 'x' },
+        },
+        createdAt: null,
+      }) as DocumentInput;
+    await store.commit({
+      account: account.id,
+      documents: [
+        pdfRow('garbled', garbledText),
+        pdfRow('clean', PROSE_LINES.join('\n')),
+      ],
+      cursor: 1,
+    });
+    const handle = engine.attach(createConvertWorker());
+    const conv = async (id: string) =>
+      ((await read(account.id, id)).metadata as { conversion?: unknown })
+        .conversion;
+    await waitFor(async () =>
+      JSON.stringify(await conv('garbled')).includes('needs-ocr'),
+    );
+    await handle.stop();
+    expect(await conv('garbled')).toEqual({
+      status: 'needs-ocr',
+      pages: [1],
+      quality: 1,
+    });
+    expect((await read(account.id, 'garbled')).markdown).toBe(garbledText);
+    expect(fetched).toEqual(['garbled']);
+  });
 });

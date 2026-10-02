@@ -11,6 +11,7 @@ import {
   MAX_LOCAL_BINARY_BYTES,
 } from '@shared/file-indexability';
 
+import { assessPage } from '@main/core/engine/text-quality';
 import {
   capMarkdown,
   convertibleKind,
@@ -76,14 +77,36 @@ export function isConvertCandidate(doc: Document): boolean {
     const declared = num(meta.sizeBytes) ?? num(meta.size);
     // The observed size wins: a body larger than its declared size stays
     // too-large until the cap itself grows past it.
-    return (
+    const reAdmitTooLarge =
       st === 'too-large' &&
       declared !== undefined &&
-      Math.max(declared, num(fetched) ?? 0) <= convertCapFor(kind)
+      Math.max(declared, num(fetched) ?? 0) <= convertCapFor(kind);
+    return (
+      reAdmitTooLarge ||
+      needsReassessment(
+        doc,
+        kind,
+        meta.conversion as { status?: unknown; quality?: unknown },
+      )
     );
   }
-  if ((doc.markdown ?? '').trim().length >= HAS_TEXT_CHARS) return false;
+  if ((doc.markdown ?? '').trim().length >= HAS_TEXT_CHARS)
+    return needsReassessment(doc, kind, undefined);
   return true;
+}
+
+/** Garbled-spec §5: an old PDF whose stored text is itself garbled gets one
+ *  per-page re-assessment. `quality` marks "assessed by this algorithm" —
+ *  never re-admitted. O(n) on the markdown, so it runs after the cheap checks. */
+function needsReassessment(
+  doc: Document,
+  kind: ConvertibleKind,
+  conv: { status?: unknown; quality?: unknown } | undefined,
+): boolean {
+  if (kind !== 'pdf' || conv?.quality != null) return false;
+  if (conv != null && conv.status !== 'ok') return false;
+  const md = doc.markdown ?? '';
+  return md.trim().length >= HAS_TEXT_CHARS && assessPage(md) === 'garbled';
 }
 
 /**
@@ -185,6 +208,19 @@ export function createConvertWorker(
         return record('failed', { error: String(err) });
       }
       if (large) logPeak(session, name ?? doc.id, bytes.length, rssBefore); // the memory probe
+      // A doc that arrived WITH text is only re-assessed (§5): its markdown
+      // is never touched, only the outcome marker is written.
+      if ((doc.markdown ?? '').trim().length >= HAS_TEXT_CHARS) {
+        const conversion = res.ocrPages
+          ? needsOcrMarker(res.ocrPages)
+          : {
+              status: 'ok' as const,
+              at: now().toISOString(),
+              quality: 1 as const,
+            };
+        session.enrich({ documentId: doc.id, metadata: { conversion } });
+        return 'done';
+      }
       if (res.markdown === null || res.markdown.trim().length === 0)
         return record('text-poor');
       const capped = capMarkdown(res.markdown);
