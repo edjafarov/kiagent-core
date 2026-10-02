@@ -347,8 +347,8 @@ const cases: Case[] = [
     },
     { kind: 'index', pipeline: 'vision', bytes: 'eager' },
   ],
-  // Email and legacy Excel: local converts them today, cloud does not. This
-  // change narrows; it must not quietly widen the cloud download set.
+  // Email: both profiles convert it; .msg and cloud .eml since policy v2.
+  // Legacy Excel stays local-only.
   [
     'local eml',
     {
@@ -368,7 +368,7 @@ const cases: Case[] = [
       mime: 'message/rfc822',
       sizeBytes: 100,
     },
-    { kind: 'ignore', reason: 'unsupported' },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
   ],
   [
     'local xls',
@@ -673,4 +673,95 @@ describe('newlyAdmitted', () => {
       newlyAdmitted(local('a.pdf', 60 * 1024 * 1024), FILE_POLICY_VERSION),
     ).toBe(false);
   });
+});
+
+const msgCases: Case[] = [
+  [
+    'local msg',
+    {
+      profile: 'local-folder',
+      filename: 'm.msg',
+      mime: 'application/vnd.ms-outlook',
+      sizeBytes: 100,
+      path: '/d/m.msg',
+    },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
+  ],
+  [
+    'cloud msg (outlook mime)',
+    {
+      profile: 'cloud-drive',
+      filename: 'm.msg',
+      mime: 'application/vnd.ms-outlook',
+      sizeBytes: 100,
+    },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
+  ],
+  [
+    'cloud msg (octet-stream, ext rescue)',
+    {
+      profile: 'cloud-drive',
+      filename: 'm.msg',
+      mime: 'application/octet-stream',
+      sizeBytes: 100,
+    },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
+  ],
+  [
+    'cloud eml (octet-stream, ext rescue)',
+    {
+      profile: 'cloud-drive',
+      filename: 'm.eml',
+      mime: 'application/octet-stream',
+      sizeBytes: 100,
+    },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
+  ],
+  [
+    'cloud msg (no mime, ext rescue)',
+    { profile: 'cloud-drive', filename: 'm.msg', sizeBytes: 100 },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
+  ],
+  [
+    'cloud octet-stream without msg/eml ext stays unsupported',
+    {
+      profile: 'cloud-drive',
+      filename: 'blob',
+      mime: 'application/octet-stream',
+      sizeBytes: 100,
+    },
+    { kind: 'ignore', reason: 'unsupported' },
+  ],
+  [
+    'cloud msg over eager cap → none',
+    {
+      profile: 'cloud-drive',
+      filename: 'm.msg',
+      mime: 'application/vnd.ms-outlook',
+      sizeBytes: MAX_CLOUD_BINARY_BYTES + 1,
+    },
+    { kind: 'index', pipeline: 'converter', bytes: 'none' },
+  ],
+];
+it.each(msgCases)('%s', (_n, c, want) =>
+  expect(decideFileIndexing(c)).toEqual(want),
+);
+
+it('newlyAdmitted re-emits an eager local .msg for a version-1 cursor only', () => {
+  const c = {
+    profile: 'local-folder' as const,
+    filename: 'm.msg',
+    mime: 'application/vnd.ms-outlook',
+    sizeBytes: 100,
+    path: '/d/m.msg',
+  };
+  expect(newlyAdmitted(c, 1)).toBe(true);
+  expect(newlyAdmitted(c, FILE_POLICY_VERSION)).toBe(false);
+  // local eml was always admitted
+  expect(
+    newlyAdmitted(
+      { ...c, filename: 'm.eml', mime: 'message/rfc822', path: '/d/m.eml' },
+      1,
+    ),
+  ).toBe(false);
 });

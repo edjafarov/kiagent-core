@@ -55,7 +55,7 @@ export const FILE_POLICY_VERSION = 2;
 /** Extensions first admitted at a given policy version (eager files the
  *  old policy ignored by TYPE, not size). */
 export const ADMITTED_SINCE: Record<number, ReadonlySet<string>> = {
-  2: new Set<string>(),
+  2: new Set(['msg']),
 };
 
 // Verbatim from local-folder/ingestible.ts:22-23 and :31. `ingestible.ts`
@@ -215,12 +215,18 @@ export const LOCAL_CONVERTER_MIMES = new Set([
   'text/csv',
   'message/rfc822',
   'application/mbox',
+  'application/vnd.ms-outlook',
 ]);
 const CLOUD_CONVERTER_MIMES = new Set([
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-outlook',
+  'message/rfc822',
 ]);
+/** Saved-email extensions Graph/Drive commonly report with no or a generic
+ *  MIME; the converter dispatches on the extension, so they are safe to admit. */
+const CLOUD_EMAIL_EXT_RESCUE = new Set(['msg', 'eml']);
 
 const normalizedSize = (v: number | null | undefined): number | null =>
   typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
@@ -343,16 +349,16 @@ export function decideFileIndexing(c: FileIndexCandidate): FileIndexDecision {
       return mediaCap(size, MAX_LOCAL_AUDIO_BYTES, 'audio');
     }
   }
-  // 9. Converter. Cloud admits text/* plus the three Office/PDF MIMEs, which
-  //    is isConvertibleMime minus images; local admits exactly the mimes
-  //    BINARY_PARSEABLE_MIMES admits today. Neither set gains a member here.
-  //    Also looks like a bug: a cloud .eml or .xls is 'unsupported' because
-  //    neither connector's isConvertibleMime admits it today, and widening
-  //    cloud coverage does not belong in a change advertised as strictly
-  //    narrowing — local keeps converting both.
+  // 9. Converter. Cloud admits text/* plus the Office/PDF MIMEs and saved
+  //    email (.msg/.eml) — by MIME or, for a generic MIME, by extension;
+  //    local admits exactly the mimes BINARY_PARSEABLE_MIMES admits (plus
+  //    .msg since policy v2). A cloud .xls stays 'unsupported'.
+  const generic = mime === '' || mime === 'application/octet-stream';
   const converter = local
     ? LOCAL_CONVERTER_MIMES.has(mime)
-    : mime.startsWith('text/') || CLOUD_CONVERTER_MIMES.has(mime);
+    : mime.startsWith('text/') ||
+      CLOUD_CONVERTER_MIMES.has(mime) ||
+      (generic && CLOUD_EMAIL_EXT_RESCUE.has(ext));
   if (converter) {
     return docCap(
       size,
