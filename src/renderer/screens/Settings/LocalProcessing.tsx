@@ -110,6 +110,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   'local-llm': 'Language model',
   'local-asr': 'Speech model',
   'apple-vision': 'Vision (built in)',
+  'windows-ocr': 'Text recognition (Windows)',
 };
 /**
  * Local AI pane: whether and when background local processing runs, which

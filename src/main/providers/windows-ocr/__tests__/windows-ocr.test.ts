@@ -1,0 +1,124 @@
+/** @jest-environment node */
+import path from 'path';
+
+import { createWindowsOcrProvider, NO_OCR_LANGUAGE } from '../provider';
+import { makeWindowsOcrHelper } from '../windows-ocr-helper';
+
+const FAKE = path.join(__dirname, 'fixtures', 'fake-windows-ocr.cjs');
+const log = jest.fn();
+const withEnv = async <T>(
+  env: Record<string, string>,
+  f: () => Promise<T>,
+): Promise<T> => {
+  Object.assign(process.env, env);
+  try {
+    return await f();
+  } finally {
+    for (const k of Object.keys(env)) delete process.env[k];
+  }
+};
+
+describe('windows-ocr helper', () => {
+  it('returns the recognized text', async () => {
+    await withEnv({ FAKE_WOCR_TEXT: 'Rechnung Nr. 42' }, async () =>
+      expect(
+        await makeWindowsOcrHelper(FAKE, log).ocrImage(
+          new Uint8Array([1, 2]),
+          'image/png',
+        ),
+      ).toBe('Rechnung Nr. 42'),
+    );
+  });
+  it('a non-zero exit rejects with stderr', async () => {
+    await withEnv({ FAKE_WOCR_FAIL: '1' }, async () =>
+      expect(
+        makeWindowsOcrHelper(FAKE, log).ocrImage(new Uint8Array([1])),
+      ).rejects.toThrow('boom'),
+    );
+  });
+  it('a hung helper times out', async () => {
+    await withEnv({ FAKE_WOCR_HANG: '1' }, async () =>
+      expect(
+        makeWindowsOcrHelper(FAKE, log, { timeoutMs: 300 }).ocrImage(
+          new Uint8Array([1]),
+        ),
+      ).rejects.toThrow(/timed out/),
+    );
+  });
+  it('selftest: exit 1 with {ok:false} is ok:false, not a throw', async () => {
+    await withEnv({ FAKE_WOCR_NOLANG: '1' }, async () =>
+      expect(await makeWindowsOcrHelper(FAKE, log).selftest()).toEqual({
+        ok: false,
+      }),
+    );
+    expect(await makeWindowsOcrHelper(FAKE, log).selftest()).toEqual({
+      ok: true,
+    });
+  });
+});
+
+describe('windows-ocr provider status', () => {
+  const helper = (ok: boolean) => ({
+    ocrImage: jest.fn(),
+    selftest: jest.fn(async () => ({ ok })),
+  });
+  it('unsupported off win32', () => {
+    expect(
+      createWindowsOcrProvider({
+        binaryPath: FAKE,
+        helper: helper(true),
+        platform: 'darwin',
+        log,
+      }).status(),
+    ).toBe('unsupported');
+  });
+  it('missing exe → error', () => {
+    expect(
+      createWindowsOcrProvider({
+        binaryPath: '/nope.exe',
+        helper: helper(true),
+        platform: 'win32',
+        log,
+      }).status(),
+    ).toEqual({ error: 'windows-ocr helper missing' });
+  });
+  it('standby until selftest resolves, then ready / no-language error', async () => {
+    const p = createWindowsOcrProvider({
+      binaryPath: FAKE,
+      helper: helper(true),
+      platform: 'win32',
+      log,
+    });
+    expect(p.status()).toBe('standby');
+    await new Promise((r) => {
+      setImmediate(r);
+    });
+    expect(p.status()).toBe('ready');
+    const q = createWindowsOcrProvider({
+      binaryPath: FAKE,
+      helper: helper(false),
+      platform: 'win32',
+      log,
+    });
+    await new Promise((r) => {
+      setImmediate(r);
+    });
+    expect(q.status()).toEqual({ error: NO_OCR_LANGUAGE });
+  });
+  it('handle routes read to ocrImage', async () => {
+    const h = helper(true);
+    h.ocrImage.mockResolvedValue('text');
+    const p = createWindowsOcrProvider({
+      binaryPath: FAKE,
+      helper: h,
+      platform: 'win32',
+      log,
+    });
+    expect(
+      await p.handle({
+        kind: 'read',
+        payload: { image: new Uint8Array([1]), mime: 'image/png' },
+      } as never),
+    ).toBe('text');
+  });
+});

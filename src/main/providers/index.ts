@@ -9,6 +9,8 @@ import { createLocalAsrProvider } from './local-asr';
 import type { LocalAsrProvider } from './local-asr';
 import { createLocalLlmProvider } from './local-llm/provider';
 import type { LocalLlmProvider } from './local-llm/provider';
+import { createWindowsOcrProvider } from './windows-ocr/provider';
+import { makeWindowsOcrHelper } from './windows-ocr/windows-ocr-helper';
 
 /** darwin is Metal-implicit (no accel in the slug); other platforms would
  *  carry the accel (see ref catalog.ts llamaSlug), but accel is only known
@@ -62,6 +64,22 @@ export function registerBundledProviders(
       createAppleVisionProvider({
         binaryPath: visionBinary,
         helper: visionHelper,
+        log: log('inference'),
+      }),
+    );
+  }
+
+  if (process.platform === 'win32') {
+    const wocr = path.join(
+      opts.assetsDir,
+      'ocr',
+      `win32-${process.arch}`,
+      'windows-ocr.exe',
+    );
+    platform.inference.register(
+      createWindowsOcrProvider({
+        binaryPath: wocr,
+        helper: makeWindowsOcrHelper(wocr, log('inference')),
         log: log('inference'),
       }),
     );

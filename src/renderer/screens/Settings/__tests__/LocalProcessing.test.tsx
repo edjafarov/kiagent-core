@@ -345,6 +345,25 @@ describe('LocalProcessing: providers only when one needs the user', () => {
     ).not.toBeInTheDocument();
   });
 
+  test('windows-ocr without a language shows the language + restart guidance', async () => {
+    mockInvoke({
+      providers: [
+        {
+          id: 'windows-ocr',
+          supports: ['read'],
+          status: {
+            error:
+              'No text-recognition language is installed. Add a language in Windows Settings → Time & language → Language & region (one with Optical character recognition), then restart KIAgent.',
+          },
+          installable: false,
+        },
+      ],
+    });
+    render(<LocalProcessing />);
+    await screen.findByText('Text recognition (Windows)');
+    expect(screen.getByText(/then restart KIAgent/)).toBeInTheDocument();
+  });
+
   test('a downloading provider shows Cancel and its progress', async () => {
     mockInvoke({
       providers: [
