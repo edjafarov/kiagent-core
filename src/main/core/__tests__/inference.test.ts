@@ -788,3 +788,46 @@ describe('remote → local fallback', () => {
     });
   });
 });
+
+describe('mayBecomeReady (windows-ocr spec §3)', () => {
+  it('true while a see provider downloads or says it may; false otherwise', () => {
+    const plane = createInference(noopLogs);
+    plane.register({
+      id: 'dl',
+      supports: ['see'],
+      status: () => ({ downloading: { pct: 10 } }),
+      handle: jest.fn(),
+    } as never);
+    expect(plane.mayBecomeReady('see')).toBe(true);
+    const p2 = createInference(noopLogs);
+    p2.register({
+      id: 'sb',
+      supports: ['see'],
+      status: () => 'standby',
+      mayBecomeReady: () => false,
+      handle: jest.fn(),
+    } as never);
+    expect(p2.mayBecomeReady('see')).toBe(false);
+    p2.register({
+      id: 'sb2',
+      supports: ['see'],
+      status: () => 'standby',
+      mayBecomeReady: () => true,
+      handle: jest.fn(),
+    } as never);
+    expect(p2.mayBecomeReady('see')).toBe(true);
+    expect(p2.mayBecomeReady('read')).toBe(false);
+  });
+  it('a remote provider never counts', () => {
+    const plane = createInference(noopLogs);
+    plane.register({
+      id: 'r',
+      remote: true,
+      supports: ['see'],
+      status: () => ({ downloading: { pct: 1 } }),
+      mayBecomeReady: () => true,
+      handle: jest.fn(),
+    } as never);
+    expect(plane.mayBecomeReady('see')).toBe(false);
+  });
+});

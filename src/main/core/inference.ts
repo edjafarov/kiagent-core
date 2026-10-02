@@ -86,6 +86,9 @@ export interface InferencePlane extends Inference {
   generation(): number;
   register(provider: InferenceProvider): () => void;
   providers(): InferenceProvider[];
+  /** A local provider of `kind` is downloading or says it may become ready
+   *  on its own (`InferenceProvider.mayBecomeReady`). Remote ones never count. */
+  mayBecomeReady(kind: 'complete' | 'see' | 'read' | 'hear'): boolean;
   /** Route a caller-owned task to a registered provider (typically a
    *  remote one), or clear it with `null`. In memory only; the owner
    *  re-applies routes after a restart. Never bumps the generation. A
@@ -510,6 +513,16 @@ export function createInference(
         lane,
       });
       return String(out);
+    },
+    mayBecomeReady(kind) {
+      return providers.some((p) => {
+        if (p.remote || !p.supports.includes(kind)) return false;
+        const st = p.status();
+        return (
+          (typeof st === 'object' && 'downloading' in st) ||
+          p.mayBecomeReady?.() === true
+        );
+      });
     },
     register(provider) {
       // No caller can hold a valid `describe()` generation before ANY

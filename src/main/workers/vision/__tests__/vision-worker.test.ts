@@ -1,6 +1,6 @@
 /** @jest-environment node */
 import type { Change, Document, WorkerSession } from '@shared/contracts';
-import { NoProviderError } from '@main/core/inference';
+import { LaneClosedError, NoProviderError } from '@main/core/inference';
 import { MAX_LOCAL_BINARY_BYTES } from '@shared/file-indexability';
 import {
   multiPagePdf,
@@ -61,6 +61,7 @@ function fakeSession(
     hear: async () => 'a transcript',
     fetchBytes: async () => new Uint8Array(100_000),
     bump: async () => 1,
+    mayBecomeReady: () => false,
     emit: () => {},
     enrich: (e) => enriched.push(e),
     log: () => {},
@@ -823,5 +824,180 @@ describe('needs-ocr: only the listed pages', () => {
     expect(md.length).toBeGreaterThan(1_000_000);
     expect(md).toContain('ENDE11');
     expect(md).toContain('ocr12');
+  });
+});
+
+describe('a dead VLM never strands a doc whose OCR ran (windows-ocr §3)', () => {
+  const thinPdf = (pageCount = 2): Rasterizer => ({
+    pdfToPngs: jest.fn(async (_b, { pages }) => ({
+      pageCount,
+      pages: pages
+        .filter((n) => n <= pageCount)
+        .map((n) => ({ page: n, png: new Uint8Array([n]) })),
+    })),
+  });
+  const spawnErr = async (): Promise<string> => {
+    throw Object.assign(new Error('spawn llama-server ENOENT'), {
+      code: 'ENOENT',
+    });
+  };
+  const worker = (r: Rasterizer = thinPdf()) =>
+    createVisionWorker({ rasterizer: r, laneOpen: () => true });
+
+  it('a real VLM failure counts; the 3rd completes OCR-only with vlm: unavailable', async () => {
+    const bump = jest
+      .fn()
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(3);
+    const w = worker();
+    const mk = () =>
+      fakeSession({ read: async () => 'few', see: spawnErr, bump });
+    expect(await w.work(change({}), mk())).toBe('defer');
+    expect(await w.work(change({}), mk())).toBe('defer');
+    const s3 = mk();
+    expect(await w.work(change({}), s3)).toBe('done');
+    expect(bump).toHaveBeenCalledWith('vlm');
+    expect(s3.enriched[0].metadata.extraction).toMatchObject({
+      engine: 'local-ocr',
+      vlm: 'unavailable',
+    });
+    expect(s3.enriched[0].markdown).toContain('few');
+  });
+  it('LaneClosedError never counts', async () => {
+    const bump = jest.fn();
+    const s = fakeSession({
+      read: async () => 'few',
+      see: async () => {
+        throw new LaneClosedError();
+      },
+      bump,
+    });
+    expect(await worker().work(change({}), s)).toBe('defer');
+    expect(bump).not.toHaveBeenCalled();
+  });
+  it('NoProviderError(see) while a see provider may become ready never counts', async () => {
+    const bump = jest.fn();
+    const s = fakeSession({
+      read: async () => 'few',
+      see: async () => {
+        throw new NoProviderError('see');
+      },
+      bump,
+      mayBecomeReady: () => true,
+    });
+    expect(await worker().work(change({}), s)).toBe('defer');
+    expect(bump).not.toHaveBeenCalled();
+  });
+  it('NoProviderError(see) with nothing that can become ready DOES count', async () => {
+    const bump = jest.fn(async () => 3);
+    const s = fakeSession({
+      read: async () => 'few',
+      see: async () => {
+        throw new NoProviderError('see');
+      },
+      bump,
+      mayBecomeReady: () => false,
+    });
+    expect(await worker().work(change({}), s)).toBe('done');
+    expect(s.enriched[0].metadata.extraction.vlm).toBe('unavailable');
+  });
+  it('no read provider (pass 1 never ran): keeps deferring even after 3 VLM failures', async () => {
+    const s = fakeSession({
+      read: async () => {
+        throw new NoProviderError('read');
+      },
+      see: spawnErr,
+      bump: async () => 9,
+    });
+    expect(await worker().work(change({}), s)).toBe('defer');
+    expect(s.enriched).toEqual([]);
+  });
+  it('a rasterizer error before the VLM is not a VLM failure', async () => {
+    let call = 0;
+    const r: Rasterizer = {
+      pdfToPngs: jest.fn(async (_b, { pages }) => {
+        call += 1;
+        if (call > 1) throw new Error('pdfium broke');
+        return {
+          pageCount: 2,
+          pages: pages.map((n) => ({ page: n, png: new Uint8Array([n]) })),
+        };
+      }),
+    };
+    const bump = jest.fn(async () => 3);
+    const s = fakeSession({ read: async () => 'few', see: spawnErr, bump });
+    expect(await worker(r).work(change({}), s)).toBe('defer');
+    expect(bump).not.toHaveBeenCalled();
+  });
+  it('non-VLM-decodable TIFF: defers when OCR did not run, completes when it did', async () => {
+    const tiff = change({
+      title: 'scan.tif',
+      type: 'file',
+      metadata: { mime: 'image/tiff', filename: 'scan.tif', sizeBytes: 50_000 },
+    });
+    const w = worker();
+    expect(
+      await w.work(
+        tiff,
+        fakeSession({
+          read: async () => {
+            throw new NoProviderError('read');
+          },
+        }),
+      ),
+    ).toBe('defer');
+    const s = fakeSession({ read: async () => 'tiff text' });
+    expect(await w.work(tiff, s)).toBe('done');
+    expect(s.enriched[0].markdown).toContain('tiff text');
+  });
+  it('OCR lost between windows: a resumed doc defers instead of completing with unread pages', async () => {
+    const prior = {
+      pageCount: 25,
+      pages: Object.fromEntries(
+        Array.from({ length: 10 }, (_, i) => [
+          String(i + 1),
+          'plenty of text '.repeat(20),
+        ]),
+      ),
+    };
+    const see = jest.fn();
+    const s = fakeSession({
+      read: async () => {
+        throw new NoProviderError('read');
+      },
+      see,
+    });
+    expect(
+      await worker(thinPdf(25)).work(
+        change({
+          metadata: { ...baseDoc.metadata, ocrProgress: prior },
+        }),
+        s,
+      ),
+    ).toBe('defer');
+    expect(s.enriched).toEqual([]);
+    expect(see).not.toHaveBeenCalled();
+  });
+  it('a text-poor PNG goes to the VLM as a PNG, never through the PDF rasterizer', async () => {
+    const pdfToPngs = jest.fn();
+    const see = jest.fn(async () => 'a chart of sales');
+    const png = change({
+      title: 'chart.png',
+      type: 'file',
+      metadata: { mime: 'image/png', filename: 'chart.png', sizeBytes: 50_000 },
+    });
+    const s = fakeSession({ read: async () => 'few', see });
+    expect(
+      await createVisionWorker({
+        rasterizer: { pdfToPngs } as never,
+        laneOpen: () => true,
+      }).work(png, s),
+    ).toBe('done');
+    expect(pdfToPngs).not.toHaveBeenCalled();
+    expect((see.mock.calls[0] as unknown[])[2]).toMatchObject({
+      mime: 'image/png',
+    });
+    expect(s.enriched[0].metadata.extraction.engine).toBe('local-ocr+vlm');
   });
 });

@@ -110,6 +110,7 @@ function fakeSession(
     hear: async () => 'x',
     fetchBytes,
     bump: async () => 1,
+    mayBecomeReady: () => false,
     emit: () => {},
     enrich: (e) => enriched.push(e),
     log: () => {},

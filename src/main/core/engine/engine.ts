@@ -62,6 +62,8 @@ export interface EngineDeps {
       prompt: string,
       opts?: { mime?: string; lane?: Lane; task?: string },
     ): Promise<{ text: string; providerId: string; modelId: string }>;
+    /** Optional so engine fakes keep compiling; absent = nothing may. */
+    mayBecomeReady?(kind: 'see' | 'read'): boolean;
   };
   /** The commit-path conversion stage: binary in, markdown out. Deterministic
    *  parsers only — text-poor results are left for a vision worker ('defer'). */
@@ -745,6 +747,8 @@ export function createEngine(deps: EngineDeps): Engine & {
             key,
           );
         },
+        mayBecomeReady: (kind) =>
+          deps.inference.mayBecomeReady?.(kind) ?? false,
         emit(doc) {
           emitted.push(doc);
         },

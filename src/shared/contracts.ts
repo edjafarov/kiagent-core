@@ -938,6 +938,10 @@ export interface InferenceProvider {
    *  on each call. Optional for the same reason as `describe`; a provider
    *  that never changes model mid-run need not implement it. */
   onChange?(cb: () => void): () => void;
+  /** Can this provider still become `ready` without user action (it will
+   *  auto-install)? Absent = no. Tells "wait" from "this will never work"
+   *  (windows-ocr spec §3); a `downloading` status counts on its own. */
+  mayBecomeReady?(): boolean;
 }
 
 /** Thrown when a caller passes a `generation` it got from `describe()` and
@@ -1037,6 +1041,9 @@ export interface WorkerSession {
    *  NO document change (so it never re-feeds the doc). Returns the count
    *  including this attempt. Cleared when the doc's `done` outcome commits. */
   bump(key: string): Promise<number>;
+  /** Could a local provider of `kind` still become ready without user
+   *  action (downloading, or will auto-install)? False when nothing can. */
+  mayBecomeReady(kind: 'see' | 'read'): boolean;
   /** Emitted docs are committed by the ENGINE (under the worker's synthetic
    *  account) in the SAME transaction as this worker's cursor. */
   emit(doc: DocumentInput): void;

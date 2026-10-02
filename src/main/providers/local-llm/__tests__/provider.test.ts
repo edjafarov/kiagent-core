@@ -156,6 +156,41 @@ describe('LocalLlmProvider', () => {
     expect(deps.download).toHaveBeenCalled();
   });
 
+  it('mayBecomeReady: selected model not installed + autoInstall on → true', () => {
+    const { deps } = makeDeps({
+      modelsDir: path.join(tmpDir, 'none'),
+      prefs: { models: { override: 'auto', autoInstall: true } },
+      filesPresent: () => false,
+    });
+    expect(createLocalLlmProvider(deps).mayBecomeReady?.()).toBe(true);
+  });
+  it('mayBecomeReady: autoInstall off (a cancelled download) → false', () => {
+    const { deps } = makeDeps({
+      modelsDir: path.join(tmpDir, 'none'),
+      prefs: { models: { override: 'auto', autoInstall: false } },
+      filesPresent: () => false,
+    });
+    expect(createLocalLlmProvider(deps).mayBecomeReady?.()).toBe(false);
+  });
+  it('mayBecomeReady: selected model installed (nothing to become) → false', async () => {
+    const { deps } = makeDeps({
+      modelsDir: tmpDir,
+      prefs: { models: { override: 'auto', autoInstall: true } },
+    });
+    await fsp.mkdir(path.join(tmpDir, CURATED_MODEL.id), { recursive: true });
+    const provider = createLocalLlmProvider(deps);
+    expect(provider.status()).toBe('ready');
+    expect(provider.mayBecomeReady?.()).toBe(false);
+  });
+  it('mayBecomeReady: unsupported hardware → false', () => {
+    mockCapability.checkCapability.mockReturnValue({
+      ok: false,
+      reason: 'insufficient_ram',
+    });
+    const { deps } = makeDeps({ modelsDir: tmpDir });
+    expect(createLocalLlmProvider(deps).mayBecomeReady?.()).toBe(false);
+  });
+
   it('unsupported hardware', async () => {
     // Test with insufficient RAM on non-darwin
     mockCapability.checkCapability.mockReturnValue({

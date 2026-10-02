@@ -7,7 +7,7 @@ import type {
 } from '@shared/contracts';
 
 import { capMarkdown, parsePdfPages } from '@main/core/engine/convert';
-import { NoProviderError } from '@main/core/inference';
+import { LaneClosedError, NoProviderError } from '@main/core/inference';
 import { MAX_LOCAL_BINARY_BYTES } from '@shared/file-indexability';
 
 import { logPeak } from '../mem-probe';
@@ -60,6 +60,9 @@ interface OcrProgress {
  * returns done; that enrich re-feeds the doc, which classifies as a
  * candidate while `ocrProgress` is set, so the next window follows.
  */
+/** One image handed to the VLM pass. */
+type VlmImage = { page: number; bytes: Uint8Array; mime: string };
+
 export function createVisionWorker(deps: {
   rasterizer: Rasterizer;
   laneOpen(): boolean;
@@ -85,20 +88,29 @@ export function createVisionWorker(deps: {
   let readUnavailableUntil = 0;
   const keyOf = (d: Document) => `${d.id}:${d.contentHash}`;
 
-  /** Pass 2 — VLM describe over `pageImages` (only reachable when a
-   *  see-provider is ready). Descriptions land on the matching `pages`
-   *  entries, so pages without an image keep their OCR text. */
+  /** Pass 2 — VLM describe over prepared images (PNG pages of a PDF, or the
+   *  image itself). Descriptions land on the matching `pages` entries, so
+   *  pages without an image keep their OCR text. A real VLM failure counts
+   *  (durable, change-free `bump('vlm')`); after 3, a doc whose OCR ran
+   *  completes OCR-only instead of re-driving forever. */
   async function vlmPass(
     session: WorkerSession,
     pages: PageResult[],
-    pageImages: Array<{ page: number; png: Uint8Array }>,
-    pageMime: string | undefined,
+    images: () => Promise<VlmImage[]>,
     complete: (
       engine: string,
       pages: PageResult[],
       extra?: Record<string, unknown>,
     ) => WorkOutcome,
+    ocrRan: boolean,
   ): Promise<WorkOutcome> {
+    // Loading the images is not a VLM call: a rasterizer error never counts.
+    let pageImages: VlmImage[];
+    try {
+      pageImages = await images();
+    } catch {
+      return 'defer';
+    }
     try {
       // Who described each page: a routed task may be answered remotely
       // for some pages and locally for others (fallback mid-document).
@@ -106,7 +118,7 @@ export function createVisionWorker(deps: {
         string,
         { providerId: string; modelId: string; pages: number }
       >();
-      for (const { page: n, png } of pageImages) {
+      for (const { page: n, bytes: img, mime: imgMime } of pageImages) {
         // Pass 2 ONLY. Pass 1 (OCR) deliberately reads the full-size
         // page: transcription accuracy scales with resolution, and the OCR
         // helper takes a temp-file PATH rather than a base64 payload, so it
@@ -114,7 +126,7 @@ export function createVisionWorker(deps: {
         // heap strings per call — and the one that discards the extra
         // pixels anyway.
         // eslint-disable-next-line no-await-in-loop
-        const page = await downscale(png, pageMime);
+        const page = await downscale(img, imgMime);
         // eslint-disable-next-line no-await-in-loop
         const seen = await session.seeWithMeta(page.bytes, INDEXING_PROMPT, {
           mime: page.mime,
@@ -136,8 +148,17 @@ export function createVisionWorker(deps: {
       return complete('local-ocr+vlm', pages, {
         providers: [...byModel.values()],
       });
-    } catch {
-      return 'defer'; // model not installed/ready, or lane closed mid-run — the re-drive picks it up
+    } catch (err) {
+      // Ordinary scheduling: the window closed mid-run. Never a failure.
+      if (err instanceof LaneClosedError) return 'defer';
+      // A see provider is downloading / will auto-install: wait for it.
+      if (err instanceof NoProviderError && session.mayBecomeReady('see'))
+        return 'defer';
+      // A real VLM failure (incl. a NoProviderError nothing can ever fix).
+      const n = await session.bump('vlm');
+      if (n >= 3 && ocrRan)
+        return complete('local-ocr', pages, { vlm: 'unavailable' });
+      return 'defer'; // pass 1 never ran → stay recoverable for when OCR appears
     }
   }
 
@@ -231,6 +252,7 @@ export function createVisionWorker(deps: {
     if (!pdf) {
       // Single image: one OCR read, then the same sufficiency/VLM ladder.
       let ocrText: string | undefined;
+      let ocrFailed = false;
       try {
         ocrText = await session.read(bytes, { mime });
       } catch (err) {
@@ -240,6 +262,7 @@ export function createVisionWorker(deps: {
         // closed mid-run) defers the same way. Only a genuine "no read
         // provider" (e.g. non-mac host) falls through to pass 2.
         if (!(err instanceof NoProviderError)) return 'defer';
+        ocrFailed = true;
       }
       const pages: PageResult[] = [{ page: 1, ocrText }];
       if ((ocrText ?? '').replace(/\s+/g, '').length >= OCR_SUFFICIENT_CHARS)
@@ -249,9 +272,21 @@ export function createVisionWorker(deps: {
       // forever — fetch+OCR+VLM every cadence, uncapped, since the `see`
       // call fails on every attempt. Complete with the OCR-only result
       // (whatever pass 1 produced) instead of deferring. PDFs rasterize to
-      // PNG, so they're exempt.
-      if (!isVlmDecodable(doc)) return complete('local-ocr', pages);
-      return vlmPass(session, pages, [{ page: 1, png: bytes }], mime, complete);
+      // PNG, so they're exempt. Only when pass 1 actually ran: with no OCR
+      // provider, completing would bury the image with no text — defer
+      // until one appears.
+      if (!isVlmDecodable(doc)) {
+        if (ocrFailed) return 'defer';
+        return complete('local-ocr', pages);
+      }
+      const image = bytes;
+      return vlmPass(
+        session,
+        pages,
+        async () => [{ page: 1, bytes: image, mime: mime ?? 'image/png' }],
+        complete,
+        !ocrFailed,
+      );
     }
 
     const prog =
@@ -274,7 +309,8 @@ export function createVisionWorker(deps: {
       : null;
     const pageCount = raster?.pageCount ?? prog?.pageCount ?? 0;
     const cap = Math.min(pageCount, MAX_OCR_PAGES);
-    // Pass 1 — OCR, one window.
+    // Pass 1 — OCR, one window. ocrRan: false once OCR turned out absent.
+    let ocrRan = true;
     for (const { page, png } of raster?.pages ?? []) {
       try {
         // eslint-disable-next-line no-await-in-loop
@@ -291,6 +327,7 @@ export function createVisionWorker(deps: {
         }
         // No OCR provider at all: mark every page empty (no rendering) and
         // fall through. chars = 0 < OCR_SUFFICIENT_CHARS → the VLM pass.
+        ocrRan = false;
         for (let n = 1; n <= cap; n += 1) done[String(n)] ??= '';
         break;
       }
@@ -370,13 +407,20 @@ export function createVisionWorker(deps: {
     const finish: typeof complete = (engine, pages, extra) =>
       complete(engine, pages, extra, pageCount);
     const chars = Object.values(done).join('').replace(/\s+/g, '').length;
-    if (chars >= OCR_SUFFICIENT_CHARS) return finish('local-ocr', pagesOut());
+    if (ocrRan && chars >= OCR_SUFFICIENT_CHARS)
+      return finish('local-ocr', pagesOut());
+    // Resumed doc, and OCR vanished between windows: the '' fills are pages
+    // never read. Completing now would make them unsearchable for good.
+    if (!ocrRan && prog) return 'defer';
     const first = Array.from(
       { length: Math.min(pageCount, MAX_PAGES) },
       (_, i) => i + 1,
     );
-    const images = (await deps.rasterizer.pdfToPngs(bytes, { pages: first }))
-      .pages;
-    return vlmPass(session, pagesOut(), images, 'image/png', finish);
+    const pdfBytes = bytes;
+    const images = async (): Promise<VlmImage[]> =>
+      (await deps.rasterizer.pdfToPngs(pdfBytes, { pages: first })).pages.map(
+        (p) => ({ page: p.page, bytes: p.png, mime: 'image/png' }),
+      );
+    return vlmPass(session, pagesOut(), images, finish, ocrRan);
   }
 }

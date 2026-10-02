@@ -663,6 +663,96 @@ describe('engine', () => {
     expect(d.metadata).not.toHaveProperty('ocrProgress');
   }, 10000);
 
+  it('a dead VLM: 3 real see failures over re-drives complete the doc OCR-only, with exactly one feed change', async () => {
+    const rasterizer: Rasterizer = {
+      pdfToPngs: async (_b, { pages }) => ({
+        pageCount: 2,
+        pages: pages
+          .filter((n) => n <= 2)
+          .map((n) => ({ page: n, png: new Uint8Array([n]) })),
+      }),
+    };
+    const pdfSource = {
+      descriptor: { id: 'pdfsrc' },
+      fetchBytes: async () => new Uint8Array(10),
+    } as unknown as Source;
+    const spawnErr = async (): Promise<never> => {
+      throw Object.assign(new Error('spawn llama-server ENOENT'), {
+        code: 'ENOENT',
+      });
+    };
+    const engine = createEngine({
+      store,
+      sources: { get: (id) => (id === 'pdfsrc' ? pdfSource : undefined) },
+      inference: {
+        complete: async () => '',
+        see: spawnErr,
+        seeWithMeta: spawnErr,
+        read: async () => 'few words',
+        hear: async () => '',
+      },
+      convert: async (d: DocumentInput) => d,
+      logs: noopLogs,
+    });
+    const account = await store.createAccount({
+      source: 'pdfsrc',
+      identifier: 'vlm',
+    });
+    const worker = createVisionWorker({ rasterizer, laneOpen: () => true });
+    const handle = engine.attach(worker);
+    // Every feed change for the doc (the commit appends an 'account' change
+    // too, so seq arithmetic would not count the doc's own changes).
+    const seen: Array<Record<string, unknown>> = [];
+    const spy = engine.attach({
+      name: 'spy',
+      version: 1,
+      matches: (ch) =>
+        ch.kind === 'document' && ch.document.externalId === 'thin.pdf',
+      async work(ch) {
+        if (ch.kind === 'document') seen.push(ch.document.metadata);
+        return 'done';
+      },
+    });
+    await store.commit({
+      account: account.id,
+      documents: [
+        {
+          externalId: 'thin.pdf',
+          type: 'file',
+          title: 'thin.pdf',
+          markdown: null,
+          metadata: {
+            mime: 'application/pdf',
+            sizeBytes: 1000,
+            conversion: { status: 'text-poor', at: 'x' },
+          },
+          createdAt: null,
+        } as unknown as DocumentInput,
+      ],
+      cursor: 1,
+    });
+    const stored = async () =>
+      (await store.read.search({ account: account.id, limit: 10 })).find(
+        (x) => x.externalId === 'thin.pdf',
+      )!;
+    await waitFor(() => store.ledgerHasDeferred('worker:vision:v1'), 2000);
+    await engine.rerunDeferred(worker);
+    await engine.rerunDeferred(worker);
+    await handle.stop();
+    await waitFor(async () => seen.length >= 2, 2000);
+    await new Promise((r) => setTimeout(r, 300)); // nothing else may follow
+    await spy.stop();
+    const d = await stored();
+    expect(d.metadata.extraction).toMatchObject({
+      engine: 'local-ocr',
+      vlm: 'unavailable',
+    });
+    expect(d.markdown).toContain('few words');
+    // Bumps and defers append no change: the commit, then the completion.
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toHaveProperty('extraction');
+  }, 10000);
+
   it('worker session: read/see route to the plane, enrich commits with the cursor', async () => {
     // fake inference recording lanes
     const calls: string[] = [];

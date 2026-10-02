@@ -344,6 +344,13 @@ export function createLocalLlmProvider(deps: {
       if (selectedInstalled()) return 'ready';
       return 'standby';
     },
+    mayBecomeReady() {
+      if (!capability.ok || selectedInstalled()) return false;
+      return (
+        downloadPct !== null ||
+        (lastError === null && deps.prefs.get().models.autoInstall)
+      );
+    },
     describe() {
       // Ignores `kind`: local-llm serves one model for every kind it
       // supports, and by the time the PLANE calls this, `pick(kind)` has
