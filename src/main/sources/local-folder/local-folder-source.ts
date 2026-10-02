@@ -397,9 +397,10 @@ export async function* pull(
  *  Rechecks `decideLocalFile` against the file's CURRENT on-disk size before
  *  reading — the doc's stored metadata can be stale (grown since it was
  *  indexed), and this is the first bound this function has ever had. The
- *  check applies the PIPELINE's own cap, not one flat ceiling: this is
- *  deliberately how a 20-50 MiB local PDF (committed metadata-only, `vision`
- *  pipeline, 50 MiB cap) still gets its bytes fetched here for OCR, while a
+ *  check applies the decision's own bound, not one flat ceiling: this is
+ *  deliberately how a 20-100 MiB local PDF (committed metadata-only,
+ *  `bytes: 'deferred'`) still gets its bytes fetched here by the convert and
+ *  vision workers, while a `bytes: 'none'` file (past MAX_FETCH_BYTES) or a
  *  300 MiB audio file (`audio` pipeline, 200 MiB cap) does not. Any stat/read
  *  race still returns `null`, as before. */
 export async function fetchBytes(
@@ -413,7 +414,8 @@ export async function fetchBytes(
   if (!rootPaths.some((root) => isUnder(absPath, root))) return null;
   try {
     const stat = await fs.promises.stat(absPath);
-    if (decideLocalFile(absPath, stat.size).kind === 'ignore') return null;
+    const d = decideLocalFile(absPath, stat.size);
+    if (d.kind === 'ignore' || d.bytes === 'none') return null;
     return new Uint8Array(await fs.promises.readFile(absPath));
   } catch {
     return null;

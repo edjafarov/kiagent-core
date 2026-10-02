@@ -747,8 +747,8 @@ describe('pull — strict indexability policy', () => {
   });
 });
 
-describe('buildItem — over-cap files are excluded entirely (no metadata-only doc)', () => {
-  it('returns null for an oversized plain-text file rather than a doc with dropped markdown', async () => {
+describe('buildItem — over-cap documents are name-only rows (nothing read)', () => {
+  it('an oversized plain-text file is a row with no markdown, and is never read', async () => {
     const dir = mkTmpDir();
     const abs = writeFile(dir, 'big.txt', 'small content on disk');
     const oversizedStats = {
@@ -756,11 +756,16 @@ describe('buildItem — over-cap files are excluded entirely (no metadata-only d
       mtime: new Date(),
       birthtime: new Date(),
     } as fs.Stats;
+    const readFileSpy = jest.spyOn(fs.promises, 'readFile');
     const item = await buildItem(abs, oversizedStats);
-    expect(item).toBeNull();
+    expect(item).not.toBeNull();
+    expect(item!.markdownText).toBeNull();
+    expect(item!.binary).toBeNull();
+    expect(readFileSpy).not.toHaveBeenCalled();
+    readFileSpy.mockRestore();
   });
 
-  it('returns null for an oversized parseable-binary file rather than a doc with dropped bytes', async () => {
+  it('an oversized parseable file is a row with no bytes, and is never read', async () => {
     const dir = mkTmpDir();
     const abs = writeFile(dir, 'big.csv', 'a,b');
     const oversizedStats = {
@@ -768,8 +773,13 @@ describe('buildItem — over-cap files are excluded entirely (no metadata-only d
       mtime: new Date(),
       birthtime: new Date(),
     } as fs.Stats;
+    const readFileSpy = jest.spyOn(fs.promises, 'readFile');
     const item = await buildItem(abs, oversizedStats);
-    expect(item).toBeNull();
+    expect(item).not.toBeNull();
+    expect(item!.markdownText).toBeNull();
+    expect(item!.binary).toBeNull();
+    expect(readFileSpy).not.toHaveBeenCalled();
+    readFileSpy.mockRestore();
   });
 });
 
@@ -824,11 +834,11 @@ describe('fetchBytes', () => {
     readFileSpy.mockRestore();
   });
 
-  it('does NOT cap a 25 MiB PDF at the local read cap — the vision pipeline still reads it for OCR', async () => {
-    // This is the behavior fetchBytes must preserve: a 20-50 MiB local PDF
-    // is committed metadata-only (converter cap exceeded, vision pipeline
-    // applies instead), and the vision worker pulls its bytes back through
-    // exactly this function. A flat cap here would silently kill that path.
+  it('does NOT cap a 25 MiB PDF at the local read cap — a deferred file is fetched later by a worker', async () => {
+    // This is the behavior fetchBytes must preserve: a PDF over the read cap
+    // is committed metadata-only (bytes: deferred), and the convert/vision
+    // workers pull its bytes back through exactly this function. A flat cap
+    // here would silently kill that path.
     const dir = mkTmpDir();
     const abs = path.join(dir, 'mid.pdf');
     const fd = fs.openSync(abs, 'w');
@@ -847,6 +857,23 @@ describe('fetchBytes', () => {
     const bytes = await fetchBytes(session, doc);
     expect(bytes).not.toBeNull();
     expect(readFileSpy).toHaveBeenCalled();
+    readFileSpy.mockRestore();
+  });
+
+  it('fetchBytes refuses a bytes:none file', async () => {
+    const dir = mkTmpDir();
+    const abs = path.join(dir, 'huge.pdf');
+    const fd = fs.openSync(abs, 'w');
+    fs.ftruncateSync(fd, 150 * 1024 * 1024); // sparse, no real disk use
+    fs.closeSync(fd);
+    const controller = new AbortController();
+    const session = makeSession([dir], controller.signal, false);
+    const doc = {
+      metadata: { absPath: abs },
+    } as unknown as Parameters<typeof fetchBytes>[1];
+    const readFileSpy = jest.spyOn(fs.promises, 'readFile');
+    expect(await fetchBytes(session, doc)).toBeNull();
+    expect(readFileSpy).not.toHaveBeenCalled();
     readFileSpy.mockRestore();
   });
 });
@@ -1036,7 +1063,7 @@ describe('watchLoop', () => {
 });
 
 describe('watchLoop — a change event that fails the post-stat policy check', () => {
-  it('indexes notes.txt, then a change event on a file grown past the text cap archives it instead of leaving a stale row', async () => {
+  it('indexes photo.jpg, then a change event on a file grown past the image cap archives it instead of leaving a stale row', async () => {
     // NOTE ON THE BRIEF: it describes this scenario as "rename/change [the
     // file] to an ignored archive candidate". That literal case is
     // unreachable through watchLoop: onEvent's isIngestible(path) pre-filter
@@ -1046,8 +1073,9 @@ describe('watchLoop — a change event that fails the post-stat policy check', (
     // reachable equivalent — and the actual new code path this task adds —
     // is a file whose EXTENSION still passes that coarse pre-filter but
     // whose SIZE (only knowable after stat, which is exactly what changed)
-    // now fails decideLocalFile's cap check. An oversized text file exercises
-    // the identical buildItem-returns-null branch.
+    // now fails decideLocalFile's cap check. An oversized image exercises
+    // the identical buildItem-returns-null branch. (An oversized TEXT file no
+    // longer does: documents over their eager cap are name-only rows.)
     class FakeWatcher extends EventEmitter {
       closed = false;
 
@@ -1062,7 +1090,7 @@ describe('watchLoop — a change event that fails the post-stat policy check', (
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { watchLoop } = require('../watch') as typeof import('../watch');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { MAX_LOCAL_TEXT_BYTES } =
+    const { MAX_LOCAL_IMAGE_BYTES } =
       require('@shared/file-indexability') as typeof import('@shared/file-indexability');
 
     const dir = mkTmpDir();
@@ -1070,7 +1098,7 @@ describe('watchLoop — a change event that fails the post-stat policy check', (
     const session = makeSession([dir], controller.signal, true);
     const it = watchLoop([dir], session, null);
 
-    const p = writeFile(dir, 'notes.txt', 'hello');
+    const p = writeFile(dir, 'photo.jpg', 'hello');
     const expectedExternalId = toExternalId(p);
 
     const p1 = it.next();
@@ -1079,10 +1107,10 @@ describe('watchLoop — a change event that fails the post-stat policy check', (
     expect(r1.value?.items).toHaveLength(1);
     expect(r1.value?.deletions).toBeUndefined();
 
-    // Grow the SAME path past the text cap — sparse, no real disk write —
+    // Grow the SAME path past the image cap — sparse, no real disk write —
     // then re-fire the SAME path as a 'change' event.
     const fd = fs.openSync(p, 'r+');
-    fs.ftruncateSync(fd, MAX_LOCAL_TEXT_BYTES + 1);
+    fs.ftruncateSync(fd, MAX_LOCAL_IMAGE_BYTES + 1);
     fs.closeSync(fd);
     const p2 = it.next();
     fakeWatcher.emit('change', p);

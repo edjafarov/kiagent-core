@@ -6,8 +6,8 @@
  * testEnvironment — does not provide.
  */
 import {
+  MAX_FETCH_BYTES,
   MAX_LOCAL_BINARY_BYTES,
-  MAX_LOCAL_PDF_BYTES,
 } from '@shared/file-indexability';
 import fg from 'fast-glob';
 import fs from 'node:fs';
@@ -91,7 +91,7 @@ describe('entryReadCost — decision-based, not bucket-based', () => {
   });
 });
 
-describe('the local PDF ladder — two budgets, not one', () => {
+describe('the local PDF ladder — eager, deferred, name-only', () => {
   it('at/under the read cap: listed, full read cost, buildItem reads bytes eagerly', async () => {
     const dir = mkTmpDir();
     const p = sparseFile(dir, 'small.pdf', MAX_LOCAL_BINARY_BYTES);
@@ -106,7 +106,7 @@ describe('the local PDF ladder — two budgets, not one', () => {
     expect(item!.binary).not.toBeNull();
   });
 
-  it('20-50 MiB band: still listed, zero read cost, buildItem commits metadata-only (no eager binary) for the vision worker to OCR via fetchBytes', async () => {
+  it('over the read cap (deferred): still listed, zero read cost, buildItem commits metadata-only for a worker to fetch later', async () => {
     const dir = mkTmpDir();
     const size = MAX_LOCAL_BINARY_BYTES + 5 * 1024 * 1024; // 25 MiB
     const p = sparseFile(dir, 'mid.pdf', size);
@@ -123,12 +123,46 @@ describe('the local PDF ladder — two budgets, not one', () => {
     expect(item!.mime).toBe('application/pdf');
   });
 
-  it('over the outer PDF cap: absent from the walk entirely — no row, no candidate', async () => {
+  it('over the fetch cap (none): still listed and still a row — findable by name, never read', async () => {
     const dir = mkTmpDir();
-    sparseFile(dir, 'huge.pdf', MAX_LOCAL_PDF_BYTES + 1);
+    const p = sparseFile(dir, 'huge.pdf', MAX_FETCH_BYTES + 1);
+    const entry = toEntry(p);
 
+    expect(entryReadCost(entry)).toBe(0);
     const entries = await listEntries(dir);
-    expect(entries).toEqual([]);
+    expect(entries.map((e) => e.absPath)).toEqual([p]);
+
+    const item = await buildItem(p, entry.stats);
+    expect(item).not.toBeNull();
+    expect(item!.binary).toBeNull();
+    expect(item!.markdownText).toBeNull();
+    expect(item!.size).toBe(MAX_FETCH_BYTES + 1);
+  });
+});
+
+describe('buildItem honours bytes', () => {
+  it('a 30 MiB pdf is metadata-only (no eager read)', async () => {
+    const dir = mkTmpDir();
+    const p = sparseFile(dir, 'big.pdf', 30 * 1024 * 1024);
+    const item = await buildItem(p, fs.statSync(p));
+    expect(item).not.toBeNull();
+    expect(item!.binary).toBeNull();
+    expect(item!.markdownText).toBeNull();
+    expect(item!.size).toBe(30 * 1024 * 1024);
+  });
+  it('a 150 MiB pdf still yields a row', async () => {
+    const dir = mkTmpDir();
+    const p = sparseFile(dir, 'huge.pdf', 150 * 1024 * 1024);
+    const item = await buildItem(p, fs.statSync(p));
+    expect(item).not.toBeNull();
+    expect(item!.binary).toBeNull();
+  });
+  it('a text file over the inline cap is a name-only row, never read', async () => {
+    const dir = mkTmpDir();
+    const p = sparseFile(dir, 'big.log', 3 * 1024 * 1024);
+    const item = await buildItem(p, fs.statSync(p));
+    expect(item).not.toBeNull();
+    expect(item!.markdownText).toBeNull();
   });
 });
 

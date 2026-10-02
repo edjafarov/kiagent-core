@@ -36,15 +36,15 @@ export const MAX_BATCH_READ_BYTES = 64 * 1024 * 1024; // 64 MiB
 
 /**
  * Bytes `buildItem` will actually read off disk for one entry — mirrors
- * `decideLocalFile`'s pipeline routing so the chunker's byte budget lines up
- * exactly with real read cost. Only the `inline-text` and `converter`
- * pipelines read bytes eagerly (see `buildItem`); `vision`/`audio` commit
+ * `decideLocalFile`'s routing so the chunker's byte budget lines up exactly
+ * with real read cost. Only EAGER `inline-text` and `converter` entries read
+ * bytes (see `buildItem`); `deferred`/`none` rows and `vision`/`audio` commit
  * metadata-only, and an `ignore`d entry costs 0 too (defensive — it should
  * never reach here, since `walkRoot` already filters those out).
  */
 export function entryReadCost(entry: ScannedEntry): number {
   const decision = decideLocalFile(entry.absPath, entry.stats.size);
-  if (decision.kind !== 'index') return 0;
+  if (decision.kind !== 'index' || decision.bytes !== 'eager') return 0;
   return decision.pipeline === 'inline-text' ||
     decision.pipeline === 'converter'
     ? entry.stats.size
@@ -275,11 +275,13 @@ export function toAbsPosix(absPath: string): string {
  *    needed.
  *  - `converter` → raw bytes carried on the item for `toDocument` to attach
  *    as `DocumentInput.binary`; the ENGINE's converter does the extraction.
- *  - `vision` / `audio` → metadata-only (no eager markdown/binary): this is
- *    deliberate, not a fallback — it's how a 20-50 MiB local PDF (over the
- *    read-eagerly cap but under the outer PDF cap) and every image/audio/
- *    video candidate commit today, with the vision/audio WORKER pulling
- *    bytes back later through `fetchBytes`.
+ *  - `vision` / `audio` → metadata-only (no eager markdown/binary): every
+ *    image/audio/video candidate commits this way, with the vision/audio
+ *    WORKER pulling bytes back later through `fetchBytes`.
+ *  - `bytes: 'deferred'` → metadata-only: a document over the read-eagerly
+ *    cap (a 20-100 MiB PDF) that the convert worker fetches later.
+ *  - `bytes: 'none'` → metadata-only, and nothing ever fetches it: the row
+ *    exists so the file is findable by name.
  *  - unreadable (vanished between listing and read) or NUL-byte-containing
  *    "text" (an extension that lied — see below) → `null`, same as `ignore`.
  *    A file that passed the cheap metadata gate but failed this final
@@ -318,7 +320,7 @@ export async function buildItem(
   let binary: LocalFolderItem['binary'] = null;
 
   try {
-    if (decision.pipeline === 'inline-text') {
+    if (decision.bytes === 'eager' && decision.pipeline === 'inline-text') {
       const bytes = await fs.promises.readFile(absPath);
       // The text extension set routes by extension, and an extension can
       // lie: `.ts` is TypeScript almost always and an MPEG transport stream
@@ -327,7 +329,10 @@ export async function buildItem(
       // and the search index. No document is the honest answer.
       if (bytes.includes(0)) return null;
       markdownText = bytes.toString('utf-8');
-    } else if (decision.pipeline === 'converter') {
+    } else if (
+      decision.bytes === 'eager' &&
+      decision.pipeline === 'converter'
+    ) {
       const bytes = await fs.promises.readFile(absPath);
       binary = {
         bytes: new Uint8Array(bytes),
@@ -335,7 +340,8 @@ export async function buildItem(
         filename: path.basename(absPath),
       };
     }
-    // `vision` / `audio`: metadata-only pending candidate, no eager read.
+    // deferred / none / vision / audio: metadata-only pending candidate,
+    // no eager read.
   } catch {
     // Vanished or unreadable between listing and read — no document rather
     // than a metadata-only fallback (see the doc comment above).
