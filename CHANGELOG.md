@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.99.2](https://github.com/edjafarov/kiagent-core/compare/v0.99.1...v0.99.2) (2026-10-02)
+
+### Bug Fixes
+
+* **platform:** retry an extension handshake timeout with backoff ([fbb14b6](https://github.com/edjafarov/kiagent-core/commit/fbb14b6f15213042e909f088fb13ac5224f5797f))
+
 ## [0.99.1](https://github.com/edjafarov/kiagent-core/compare/v0.99.0...v0.99.1) (2026-10-01)
 
 ### Bug Fixes
