@@ -43,7 +43,7 @@ describe('vision-helper driver (execFile protocol)', () => {
     expect(fs.existsSync(path.dirname(imagePath!))).toBe(false);
   });
 
-  it('spawns the binary with ["rasterize", <pdf path>, <out dir>, "--max-pages", n] and resolves with page bytes', async () => {
+  it('spawns the binary with ["rasterize", <pdf path>, <out dir>, "--pages", list] and resolves numbered pages + pageCount', async () => {
     let seenArgs: string[] | undefined;
     let outDir: string | undefined;
     let pdfPath: string | undefined;
@@ -51,21 +51,28 @@ describe('vision-helper driver (execFile protocol)', () => {
       seenArgs = args;
       [, pdfPath, outDir] = args;
       fs.mkdirSync(outDir, { recursive: true });
-      const pagePath = path.join(outDir, 'page-0.png');
-      fs.writeFileSync(pagePath, Buffer.from([9, 9, 9]));
-      callback(null, JSON.stringify({ pages: [pagePath], pageCount: 1 }), '');
+      const p1 = path.join(outDir, 'page-1.png');
+      const p3 = path.join(outDir, 'page-3.png');
+      fs.writeFileSync(p1, Buffer.from([1, 1]));
+      fs.writeFileSync(p3, Buffer.from([9, 9, 9]));
+      callback(
+        null,
+        JSON.stringify({ pages: [p1, p3], pageNumbers: [1, 3], pageCount: 7 }),
+        '',
+      );
     };
     const helper = makeVisionHelper('/opt/kia-vision', noop, {
       execFileFn: exec,
     });
 
-    const pages = await helper.rasterizePdf(new Uint8Array([1, 2, 3, 4]), 5);
+    const r = await helper.rasterizePdf(new Uint8Array([1, 2, 3, 4]), [3, 1]);
 
     expect(seenArgs?.[0]).toBe('rasterize');
     expect(pdfPath).toMatch(/input\.pdf$/);
-    expect(seenArgs?.slice(3)).toEqual(['--max-pages', '5']);
-    expect(pages).toHaveLength(1);
-    expect(Array.from(pages[0])).toEqual([9, 9, 9]);
+    expect(seenArgs?.slice(3)).toEqual(['--pages', '3,1']);
+    expect(r.pageCount).toBe(7);
+    expect(r.pages.map((p) => p.page)).toEqual([1, 3]);
+    expect(Array.from(r.pages[1].png)).toEqual([9, 9, 9]);
     // temp-file cleanup on success: the tmp root (parent of outDir) is gone.
     expect(fs.existsSync(path.dirname(outDir!))).toBe(false);
   });
@@ -115,7 +122,7 @@ describe('vision-helper driver (execFile protocol)', () => {
     });
 
     await expect(
-      helper.rasterizePdf(new Uint8Array([1, 2]), 3),
+      helper.rasterizePdf(new Uint8Array([1, 2]), [3]),
     ).rejects.toThrow(/kia-vision rasterize failed: no such helper mode/);
     expect(fs.existsSync(path.dirname(pdfPath!))).toBe(false);
   });

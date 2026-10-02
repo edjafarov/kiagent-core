@@ -5,6 +5,8 @@ import path from 'node:path';
 import type { LogLevel } from '@shared/contracts';
 import { dir as createTempDir } from 'tmp-promise';
 
+import type { RasterResult } from '../../workers/vision/rasterize';
+
 /** Narrow execFile shape used by VisionHelper — avoids coupling to node's overloaded typeof execFile. */
 export type ExecFileFn = (
   file: string,
@@ -19,7 +21,8 @@ export type ExecFileFn = (
 
 export interface VisionHelper {
   ocrImage(bytes: Uint8Array, mime?: string): Promise<string>;
-  rasterizePdf(bytes: Uint8Array, maxPages: number): Promise<Uint8Array[]>;
+  /** Renders the requested 1-based pages; out-of-range numbers are skipped. */
+  rasterizePdf(bytes: Uint8Array, pages: number[]): Promise<RasterResult>;
 }
 
 interface OcrResult {
@@ -31,6 +34,8 @@ interface OcrResult {
 
 interface RasterizeResult {
   pages: string[];
+  /** 1-based page number of each entry in `pages` (absent from old helpers). */
+  pageNumbers?: number[];
   pageCount: number;
 }
 
@@ -97,11 +102,10 @@ class VisionHelperImpl implements VisionHelper {
   private rasterize(
     pdfPath: string,
     outDir: string,
-    opts: { maxPages?: number; scale?: number } = {},
+    opts: { pages?: number[]; scale?: number } = {},
   ): Promise<RasterizeResult> {
     const args = ['rasterize', pdfPath, outDir];
-    if (opts.maxPages !== undefined)
-      args.push('--max-pages', String(opts.maxPages));
+    if (opts.pages) args.push('--pages', opts.pages.join(','));
     if (opts.scale !== undefined) args.push('--scale', String(opts.scale));
     return this.runJson<RasterizeResult>(args);
   }
@@ -122,22 +126,26 @@ class VisionHelperImpl implements VisionHelper {
 
   async rasterizePdf(
     bytes: Uint8Array,
-    maxPages: number,
-  ): Promise<Uint8Array[]> {
+    pages: number[],
+  ): Promise<RasterResult> {
     const tmpDir = await createTempDir({ unsafeCleanup: true });
     // The helper creates outDir itself (withIntermediateDirectories).
     const outDir = path.join(tmpDir.path, 'pages');
     const pdfPath = path.join(tmpDir.path, 'input.pdf');
     try {
       await fs.promises.writeFile(pdfPath, bytes);
-      const result = await this.rasterize(pdfPath, outDir, { maxPages });
-      const pngBytes = await Promise.all(
+      const result = await this.rasterize(pdfPath, outDir, { pages });
+      const pngs = await Promise.all(
         result.pages.map(async (pagePath) => {
           const data = await fs.promises.readFile(pagePath);
           return new Uint8Array(data);
         }),
       );
-      return pngBytes;
+      const numbers = result.pageNumbers ?? pngs.map((_, i) => i + 1);
+      return {
+        pageCount: result.pageCount,
+        pages: pngs.map((png, i) => ({ page: numbers[i], png })),
+      };
     } finally {
       await tmpDir.cleanup();
     }

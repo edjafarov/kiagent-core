@@ -3,6 +3,12 @@ import { NoProviderError } from '@main/core/inference';
 import type { Rasterizer } from '../rasterize';
 import { createVisionWorker } from '../vision-worker';
 
+/** Rasterizer result for pages 1..n holding the given PNGs. */
+const raster = (...pngs: Uint8Array[]) => ({
+  pageCount: pngs.length,
+  pages: pngs.map((png, i) => ({ page: i + 1, png })),
+});
+
 const baseDoc = {
   id: 'd',
   accountId: 'a',
@@ -65,7 +71,9 @@ it('OCR-sufficient PDF → done, enrich with per-page OCR, no `see` call', async
   const session = fakeSession();
   const see = jest.spyOn(session, 'see');
   const rasterizer: Rasterizer = {
-    pdfToPngs: jest.fn(async () => [new Uint8Array([1]), new Uint8Array([2])]),
+    pdfToPngs: jest.fn(async () =>
+      raster(new Uint8Array([1]), new Uint8Array([2])),
+    ),
   };
 
   const worker = createVisionWorker({
@@ -86,7 +94,7 @@ it('OCR-sufficient PDF → done, enrich with per-page OCR, no `see` call', async
 it('Thin OCR + see available → done with descriptions', async () => {
   const session = fakeSession({ read: async () => 'thin' });
   const rasterizer: Rasterizer = {
-    pdfToPngs: jest.fn(async () => [new Uint8Array([1])]),
+    pdfToPngs: jest.fn(async () => raster(new Uint8Array([1]))),
   };
 
   const worker = createVisionWorker({
@@ -112,7 +120,7 @@ it('Thin OCR + see throws (no provider) → defer', async () => {
     },
   });
   const rasterizer: Rasterizer = {
-    pdfToPngs: jest.fn(async () => [new Uint8Array([1])]),
+    pdfToPngs: jest.fn(async () => raster(new Uint8Array([1]))),
   };
 
   const worker = createVisionWorker({
@@ -133,7 +141,7 @@ it('read throws NoProviderError (no OCR provider, e.g. non-mac) → straight to 
     },
   });
   const rasterizer: Rasterizer = {
-    pdfToPngs: jest.fn(async () => [new Uint8Array([1])]),
+    pdfToPngs: jest.fn(async () => raster(new Uint8Array([1]))),
   };
 
   const worker = createVisionWorker({
@@ -161,7 +169,7 @@ it('read throws a generic error (helper crash) → defer, no enrich', async () =
     see,
   });
   const rasterizer: Rasterizer = {
-    pdfToPngs: jest.fn(async () => [new Uint8Array([1])]),
+    pdfToPngs: jest.fn(async () => raster(new Uint8Array([1]))),
   };
 
   const worker = createVisionWorker({
@@ -380,7 +388,7 @@ it("pass 2 passes the task 'vision.describe'", async () => {
     },
   });
   const worker = createVisionWorker({
-    rasterizer: { pdfToPngs: jest.fn(async () => [new Uint8Array([1])]) },
+    rasterizer: { pdfToPngs: jest.fn(async () => raster(new Uint8Array([1]))) },
     laneOpen: () => true,
   });
   await expect(worker.work(change({}), session)).resolves.toBe('done');
@@ -401,7 +409,7 @@ it('mixed providers across pages aggregate into extraction.providers', async () 
   const worker = createVisionWorker({
     rasterizer: {
       pdfToPngs: jest.fn(async () =>
-        Array.from({ length: 5 }, (_, i) => new Uint8Array([i])),
+        raster(...Array.from({ length: 5 }, (_, i) => new Uint8Array([i]))),
       ),
     },
     laneOpen: () => true,

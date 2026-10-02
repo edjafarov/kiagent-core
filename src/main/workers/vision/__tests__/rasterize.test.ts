@@ -26,56 +26,71 @@ jest.mock('@hyzyla/pdfium', () => ({
   },
 }));
 
+const PNG_MAGIC = new Uint8Array([0x50, 0x4e, 0x47]);
+
 describe('rasterizer', () => {
   describe('wasmRasterizer', () => {
-    it('respects maxPages limit', async () => {
-      const rasterizer = wasmRasterizer();
-      const pngs = await rasterizer.pdfToPngs(new Uint8Array([0, 1, 2]), 2);
-      expect(pngs).toHaveLength(2);
+    it('renders only the requested pages and reports pageCount', async () => {
+      const r = await wasmRasterizer().pdfToPngs(new Uint8Array([0, 1, 2]), {
+        pages: [3, 1, 9, 1],
+      });
+      expect(r.pageCount).toBe(3);
+      expect(r.pages.map((p) => p.page)).toEqual([1, 3]); // sorted, deduped, 9 skipped
+      for (const p of r.pages) expect(p.png.subarray(1, 4)).toEqual(PNG_MAGIC);
     });
 
     it('converts BGRA to RGBA', async () => {
-      const rasterizer = wasmRasterizer();
-      const pngs = await rasterizer.pdfToPngs(new Uint8Array([0, 1, 2]), 1);
-      expect(pngs).toHaveLength(1);
+      const r = await wasmRasterizer().pdfToPngs(new Uint8Array([0, 1, 2]), {
+        pages: [1],
+      });
+      expect(r.pages).toHaveLength(1);
 
       // Decode the PNG: BGRA [1, 2, 3, 4] must come back as RGBA [3, 2, 1, 4].
-      const png = PNG.sync.read(Buffer.from(pngs[0]));
+      const png = PNG.sync.read(Buffer.from(r.pages[0].png));
       expect([...png.data]).toEqual([3, 2, 1, 4]);
     });
   });
 
   describe('pickRasterizer', () => {
     it('delegates to helper.rasterizePdf on darwin with helper', async () => {
-      const helperPages = [new Uint8Array([1])];
+      const helperResult = {
+        pageCount: 5,
+        pages: [{ page: 2, png: new Uint8Array([1]) }],
+      };
       const helper: VisionHelper = {
-        rasterizePdf: jest.fn(async () => helperPages),
+        rasterizePdf: jest.fn(async () => helperResult),
       };
 
       const rasterizer = pickRasterizer(helper, 'darwin');
-      const pngs = await rasterizer.pdfToPngs(new Uint8Array([0, 1, 2]), 1);
+      const r = await rasterizer.pdfToPngs(new Uint8Array([0, 1, 2]), {
+        pages: [2],
+      });
 
-      expect(pngs).toBe(helperPages);
+      expect(r).toBe(helperResult);
       expect(helper.rasterizePdf).toHaveBeenCalledWith(
         new Uint8Array([0, 1, 2]),
-        1,
+        [2],
       );
     });
 
     it('returns wasm rasterizer on darwin without helper', async () => {
-      const rasterizer = pickRasterizer(null, 'darwin');
-      const pngs = await rasterizer.pdfToPngs(new Uint8Array([0, 1, 2]), 1);
-      expect(pngs).toHaveLength(1);
+      const r = await pickRasterizer(null, 'darwin').pdfToPngs(
+        new Uint8Array([0, 1, 2]),
+        { pages: [1] },
+      );
+      expect(r.pages).toHaveLength(1);
     });
 
     it('returns wasm rasterizer on non-darwin platform', async () => {
       const helper: VisionHelper = {
-        rasterizePdf: jest.fn(async () => [new Uint8Array([1])]),
+        rasterizePdf: jest.fn(async () => ({ pageCount: 1, pages: [] })),
       };
 
-      const rasterizer = pickRasterizer(helper, 'linux');
-      const pngs = await rasterizer.pdfToPngs(new Uint8Array([0, 1, 2]), 1);
-      expect(pngs).toHaveLength(1);
+      const r = await pickRasterizer(helper, 'linux').pdfToPngs(
+        new Uint8Array([0, 1, 2]),
+        { pages: [1] },
+      );
+      expect(r.pages).toHaveLength(1);
       expect(helper.rasterizePdf).not.toHaveBeenCalled();
     });
   });

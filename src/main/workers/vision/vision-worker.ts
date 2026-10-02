@@ -59,8 +59,11 @@ export function createVisionWorker(deps: {
       if (bytes.length > (pdf ? MAX_PDF_BYTES : MAX_IMAGE_BYTES)) return 'skip';
 
       const { mime } = doc.metadata as { mime?: string };
+      const first = Array.from({ length: MAX_PAGES }, (_, i) => i + 1);
       const pages = pdf
-        ? await deps.rasterizer.pdfToPngs(bytes, MAX_PAGES)
+        ? (await deps.rasterizer.pdfToPngs(bytes, { pages: first })).pages.map(
+            (p) => p.png,
+          )
         : [bytes];
       const pageMime = pdf ? 'image/png' : mime;
 

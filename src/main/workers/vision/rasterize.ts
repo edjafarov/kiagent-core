@@ -6,11 +6,27 @@ import { PNG } from 'pngjs';
  * needs, so this module stays decoupled from the helper implementation.
  */
 export interface VisionHelper {
-  rasterizePdf(bytes: Uint8Array, maxPages: number): Promise<Uint8Array[]>;
+  rasterizePdf(bytes: Uint8Array, pages: number[]): Promise<RasterResult>;
 }
 
+/** One rendered page; `page` is 1-based. */
+export interface RasterPage {
+  page: number;
+  png: Uint8Array;
+}
+
+export interface RasterResult {
+  pageCount: number;
+  pages: RasterPage[];
+}
+
+/** Renders the requested 1-based pages (deduped, ascending); page numbers
+ *  outside 1..pageCount are silently skipped. */
 export interface Rasterizer {
-  pdfToPngs(bytes: Uint8Array, maxPages: number): Promise<Uint8Array[]>;
+  pdfToPngs(
+    bytes: Uint8Array,
+    opts: { pages: number[] },
+  ): Promise<RasterResult>;
 }
 
 const DEFAULT_SCALE = 2;
@@ -36,10 +52,7 @@ function encodePng(data: Uint8Array, width: number, height: number): Buffer {
 
 export function wasmRasterizer(): Rasterizer {
   return {
-    async pdfToPngs(
-      bytes: Uint8Array,
-      maxPages: number,
-    ): Promise<Uint8Array[]> {
+    async pdfToPngs(bytes, { pages }) {
       // @hyzyla/pdfium is ESM-only; this module compiles to CommonJS, so it must
       // be pulled in via dynamic import rather than a static (require-producing) one.
       const { PDFiumLibrary } = await import('@hyzyla/pdfium');
@@ -48,20 +61,22 @@ export function wasmRasterizer(): Rasterizer {
         const doc = await library.loadDocument(bytes);
         try {
           const pageCount = doc.getPageCount();
-          const limit = Math.min(maxPages, pageCount);
-          const pngs: Uint8Array[] = [];
+          const wanted = [...new Set(pages)]
+            .filter((n) => n >= 1 && n <= pageCount)
+            .sort((a, b) => a - b);
+          const out: RasterPage[] = [];
 
-          for (let i = 0; i < limit; i++) {
-            const page = doc.getPage(i);
+          for (const n of wanted) {
+            const page = doc.getPage(n - 1);
             const img = await page.render({
               scale: DEFAULT_SCALE,
               render: 'bitmap',
             });
             const buf = encodePng(img.data, img.width, img.height);
-            pngs.push(new Uint8Array(buf));
+            out.push({ page: n, png: new Uint8Array(buf) });
           }
 
-          return pngs;
+          return { pageCount, pages: out };
         } finally {
           doc.destroy();
         }
@@ -78,7 +93,7 @@ export function pickRasterizer(
 ): Rasterizer {
   if (platform === 'darwin' && helper) {
     return {
-      pdfToPngs: (bytes, maxPages) => helper.rasterizePdf(bytes, maxPages),
+      pdfToPngs: (bytes, { pages }) => helper.rasterizePdf(bytes, pages),
     };
   }
   return wasmRasterizer();

@@ -8,7 +8,7 @@ import { createAppleVisionProvider } from '../provider';
 const noop = () => {};
 const fakeHelper = {
   ocrImage: jest.fn(async () => 'ocr result'),
-  rasterizePdf: jest.fn(async () => []),
+  rasterizePdf: jest.fn(async () => ({ pageCount: 0, pages: [] })),
 };
 
 describe('apple-vision provider', () => {
