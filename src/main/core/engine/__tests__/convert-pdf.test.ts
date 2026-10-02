@@ -12,7 +12,7 @@ const conv = (bytes: Uint8Array) =>
     metadata: { mime: 'application/pdf' },
   } as never);
 
-it('a clean 3-page PDF has no marker', async () => {
+it('a clean 3-page PDF is stamped assessed-ok (deterministic, no at) so the convert worker never re-reads it', async () => {
   const out = await conv(
     multiPagePdf([
       { text: PROSE_LINES },
@@ -21,7 +21,10 @@ it('a clean 3-page PDF has no marker', async () => {
     ]),
   );
   expect(out.markdown).toContain('tenant shall pay');
-  expect((out.metadata as any).conversion).toBeUndefined();
+  expect((out.metadata as any).conversion).toEqual({
+    status: 'ok',
+    quality: 1,
+  });
 });
 it('a blank last page → needs-ocr [3], text intact', async () => {
   const out = await conv(
@@ -74,7 +77,7 @@ it('a page of numbers stays good', async () => {
       `2026-03-${String(i + 1).padStart(2, '0')}  1.234,56 EUR  -${i},00`,
   );
   const out = await conv(multiPagePdf([{ text: nums }, { text: PROSE_LINES }]));
-  expect((out.metadata as any).conversion).toBeUndefined();
+  expect((out.metadata as any).conversion.status).toBe('ok');
 });
 it('a whole document under 16 chars stays text-poor (null), as today', async () => {
   const r = await parseDetailed(

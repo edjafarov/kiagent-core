@@ -95,9 +95,10 @@ export function isConvertCandidate(doc: Document): boolean {
   return true;
 }
 
-/** Garbled-spec §5: an old PDF whose stored text is itself garbled gets one
- *  per-page re-assessment. `quality` marks "assessed by this algorithm" —
- *  never re-admitted. O(n) on the markdown, so it runs after the cheap checks. */
+/** Garbled-spec §5: an old PDF with text not yet assessed by the current
+ *  rules. `quality` marks "assessed" — never re-admitted. Deliberately O(1)
+ *  in the markdown: matches() runs synchronously over every feed row, so the
+ *  O(n) garble check runs once in work(), which persists its verdict. */
 function needsReassessment(
   doc: Document,
   kind: ConvertibleKind,
@@ -105,8 +106,7 @@ function needsReassessment(
 ): boolean {
   if (kind !== 'pdf' || conv?.quality != null) return false;
   if (conv != null && conv.status !== 'ok') return false;
-  const md = doc.markdown ?? '';
-  return md.trim().length >= HAS_TEXT_CHARS && assessPage(md) === 'garbled';
+  return (doc.markdown ?? '').trim().length >= HAS_TEXT_CHARS;
 }
 
 /**
@@ -169,6 +169,23 @@ export function createConvertWorker(
 
       const kind = convertibleKind(str(meta.mime), name);
       if (kind === null) return 'skip';
+      // An unassessed old PDF whose stored text reads clean: persist the
+      // verdict without fetching (matches() no longer reads the text).
+      const prior = meta.conversion as
+        | { status?: unknown; quality?: unknown }
+        | undefined;
+      if (
+        needsReassessment(doc, kind, prior) &&
+        assessPage(doc.markdown ?? '') !== 'garbled'
+      ) {
+        session.enrich({
+          documentId: doc.id,
+          metadata: {
+            conversion: { ...prior, status: 'ok', quality: 1 },
+          },
+        });
+        return 'done';
+      }
       const capBytes = convertCapFor(kind);
       const declared = num(meta.sizeBytes) ?? num(meta.size);
       if (declared !== undefined && declared > capBytes)

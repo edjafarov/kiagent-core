@@ -525,8 +525,30 @@ describe('re-assessing old garbled PDF rows (garbled-PDF §5)', () => {
       isConvertCandidate(oldPdf(garbledText, { status: 'ok', at: 'x' })),
     ).toBe(true);
   });
-  it('does not admit a clean old row, or anything carrying quality', () => {
-    expect(isConvertCandidate(oldPdf(PROSE_LINES.join('\n')))).toBe(false);
+  it('admits any unassessed old PDF row without reading its text (matches stays O(1) in the markdown)', () => {
+    // The garble check is O(n) in the markdown; run in matches() it blocked
+    // the main loop for every clean row on every replay (review: 500 clean
+    // 100 KB rows → 1.8 s). work() assesses once and persists the verdict.
+    expect(isConvertCandidate(oldPdf(PROSE_LINES.join('\n')))).toBe(true);
+  });
+  it('work() marks a clean old row ok + quality WITHOUT fetching; it then no longer matches', async () => {
+    const s = fakeSession(async () => {
+      throw new Error('must not fetch a clean row');
+    });
+    const old = oldPdf(PROSE_LINES.join('\n'));
+    expect(await createConvertWorker().work(change(old), s)).toBe('done');
+    expect(s.enriched).toHaveLength(1);
+    expect(s.enriched[0].markdown).toBeUndefined();
+    const { conversion } = s.enriched[0].metadata;
+    expect(conversion).toMatchObject({ status: 'ok', quality: 1 });
+    expect(
+      isConvertCandidate({
+        ...old,
+        metadata: { ...old.metadata, conversion },
+      }),
+    ).toBe(false);
+  });
+  it('does not admit anything carrying quality', () => {
     expect(
       isConvertCandidate(
         oldPdf(garbledText, { status: 'ok', at: 'x', quality: 1 }),

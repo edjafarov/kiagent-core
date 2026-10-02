@@ -46,16 +46,26 @@ export function createConverter(
           markdown: capMarkdown(md).markdown,
         };
         // Deterministic, no timestamp: contentHash covers metadata (garbled
-        // spec §3), so the same bytes always commit the same row.
-        return ocrPages
-          ? {
-              ...base,
-              metadata: {
-                ...input.metadata,
-                conversion: needsOcrMarker(ocrPages),
-              },
-            }
-          : base;
+        // spec §3), so the same bytes always commit the same row. A clean
+        // PDF is stamped assessed too, so the convert worker never re-reads
+        // its text to decide whether it is garbled.
+        if (ocrPages)
+          return {
+            ...base,
+            metadata: {
+              ...input.metadata,
+              conversion: needsOcrMarker(ocrPages),
+            },
+          };
+        if (convertibleKind(mime, filename) === 'pdf')
+          return {
+            ...base,
+            metadata: {
+              ...input.metadata,
+              conversion: { status: 'ok', quality: QUALITY_VERSION },
+            },
+          };
+        return base;
       }
     } catch (err) {
       logs.log(
