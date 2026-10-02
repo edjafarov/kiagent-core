@@ -650,11 +650,39 @@ Expected: FAIL (`session.bump` is not a function).
 
 (If `workOne` lacks `change`/`worker` in scope at that point, thread them in. Both are its parameters today.)
 
-**Live tail commit** (~l.1726): collect done doc ids:
+**One doc, one `work()` per batch.** `store.feed` materializes every change row as the doc's **current** row (`store.ts:650`). A version-bump replay therefore hands a worker the same document once per historical change, all in one uncommitted batch. Without coalescing, a 40 MiB PDF with 3 historical changes would be parsed twice successfully and then, on the third invocation, be fenced `failed` by `bump('parse')` without any crash, at twice the parse cost.
+
+Both commit loops keep a per-batch `seen: Set<DocumentId>`. A document change whose doc is already in `seen` is **not** worked: no `workOne`, no ledger row. The cursor still advances past it. Every copy is the same current row, so skipping it is exact. If the first copy deferred, its ledger row re-drives the doc.
+
+Failing test in `engine.test.ts` (same setup as the bump test):
+
+```ts
+it('a doc with several changes in one feed batch is worked once', async () => {
+  let runs = 0;
+  const worker: Worker = { name: 'once', version: 1,
+    matches: (ch) => ch.kind === 'document' && ch.document.externalId === 'm',
+    async work() { runs += 1; return 'done'; } };
+  // three changes for the same doc BEFORE the worker attaches → one replay batch
+  await store.commit({ account: account.id, documents: [doc('m', { markdown: 'a' })], cursor: 1 });
+  await store.commit({ account: account.id, documents: [doc('m', { markdown: 'b' })], cursor: 2 });
+  await store.commit({ account: account.id, documents: [doc('m', { markdown: 'c' })], cursor: 3 });
+  const handle = engine.attach(worker);
+  await new Promise((r) => setTimeout(r, 1_000));
+  await handle.stop();
+  expect(runs).toBe(1);
+});
+```
+
+**Live tail commit** (~l.1726): coalesce, and collect done doc ids:
 
 ```ts
               let clear: string[] = [];
+              const seen = new Set<string>();
               …
+                if (matched && change.kind === 'document') {
+                  if (seen.has(change.document.id)) { cursor = change.seq; continue; }
+                  seen.add(change.document.id);
+                }
                 if (matched) {
                   const r = await workOne(worker, change, abort.signal);
                   …
@@ -667,7 +695,7 @@ Expected: FAIL (`session.bump` is not a function).
                 clearAttempts: clear.length ? clear : undefined });
 ```
 
-**Re-drive commit** (~l.1880): same collection, and commit when `emitted.length || enrich.length || clear.length`.
+**Re-drive commit** (~l.1880): the same `seen` coalescing per re-drive page. A skipped duplicate's ledger row is resolved the same way a `skip` outcome resolves it today, so it is not re-driven forever. Collect `clear` the same way, and commit when `emitted.length || enrich.length || clear.length`.
 
 Worker fakes: add `bump: async () => 1,` to every `WorkerSession` literal in the files listed under Files.
 
@@ -802,7 +830,7 @@ it('the eager commit path applies the same 2 MiB output cap', async () => {
 2. Stop it. Attach the real v2 worker, with a source fake whose `fetchBytes` returns `tinyPdf('large pdf body text here')`.
 3. Wait about 1 s. Assert `metadata.conversion.status === 'ok'` and that the markdown contains `large pdf body`.
 
-This proves the cursor-0 replay plus re-admission through the real feed. For the v1 run, use `{ ...createConvertWorker(), version: 1, work: async (_c, s) => { s.enrich({ documentId: id, metadata: { conversion: { status: 'too-large', at: 'x' } } }); return 'done'; } }`. That fakes the old worker's verdict without the old code.
+Commit the doc **three times** (three historical changes) before step 1, so that the v2 replay meets it three times in one batch. Assert `status === 'ok'`, never `failed`. This proves the cursor-0 replay, re-admission and per-batch coalescing through the real feed. For the v1 run, use `{ ...createConvertWorker(), version: 1, work: async (_c, s) => { s.enrich({ documentId: id, metadata: { conversion: { status: 'too-large', at: 'x' } } }); return 'done'; } }`. That fakes the old worker's verdict without the old code.
 
 In `outcome` tests (or `convert-worker.test.ts`):
 
@@ -895,7 +923,7 @@ In `work()`:
       return record('ok', { markdown: capped.markdown, ...(capped.truncated ? { truncated: true as const } : {}) });
 ```
 
-Here `parse` is `deps.parse ?? realParse`, and `rssBefore = process.memoryUsage().rss` is captured just before the parse. The memory-gate task defines `logPeak`; until then, leave that line out.
+Here `parse` is `deps.parse ?? realParse`. `rssBefore = process.memoryUsage().rss` is captured **before `session.fetchBytes`**, so the measured peak covers fetch, transport copies and parse together. The memory-gate task defines `logPeak`; until then, leave that line out.
 
 `record` gains `truncated?: true` in `extra` and writes it into `conversion` when set.
 
@@ -1413,7 +1441,7 @@ export function logPeak(session: WorkerSession, what: string, bytes: number, rss
 
 Wire it in:
 - **Convert worker:** the `logPeak` line from Task 5, only for `large` docs.
-- **Vision worker:** capture `rssBefore` before `pdfToPngs` for a PDF over the eager cap, and call `logPeak(session, `ocr window ${next[0]}-${next.at(-1)}`, bytes.length, rssBefore)` after the window's OCR.
+- **Vision worker:** for a PDF over the eager cap, capture `rssBefore` **before the doc's first `fetchBytes`** and keep it in the single-entry bytes cache (`cache = { key, bytes, rssBefore }`). Every window logs `logPeak(session, `ocr window ${next[0]}-${next.at(-1)}`, bytes.length, cache.rssBefore)` after its OCR. One baseline per document, so growth that accumulates across windows shows up.
 
 - [ ] **Step 3: Run and commit**
 
@@ -1429,8 +1457,9 @@ git commit -m "feat(workers): maxRSS memory probe on large-file parse and OCR wi
 
 Never use a shared checkout's running app (see the `dev-app-in-shared-checkout-restarts` memory).
 
-- Start the dev app **fresh**. A long-running app's high-water mark already includes old peaks, so the probe would under-report.
-- Put a ~77 MB **text** PDF and a ~77 MB **scanned** PDF into a local-folder root.
+- Start the dev app **fresh for each fixture**: one file per run, then quit. A long-running app's high-water mark already includes old peaks, so the probe would under-report.
+- Run 1: a ~77 MB **text** PDF in a local-folder root. Run 2: a ~77 MB **scanned** PDF.
+- The cloud transport (connector download → net-guard → bridge) is gated in the connectors plan's live check, with the same `mem:` lines and the same 400 MB bar, before the connector release.
 - Wait for the `mem:` lines in the main log.
 
 Gate: every `mem:` line shows `peak +` < 400 MB.
@@ -1507,6 +1536,9 @@ The release runs **after** the core release that contains this branch, from the 
   - T3 is folded into the incremental rescan, which fixes mixed old/new roots.
   - The non-PDF worker cap is 25 MiB.
   - Fence tests use the declared size; the parse is injected.
+  - (round 2) Per-batch coalescing: a doc is worked once per feed batch, so a replay can't trip the fence.
+  - (round 2) The memory baseline is taken before the fetch, once per document.
+  - (round 2) Local non-PDF files of 20–25 MiB end `unavailable` (local `fetchBytes` refuses `none`), not `too-large`. This is cosmetic: nothing re-admits either status for them.
   - `rerunDeferred` replaces the made-up re-drive API.
   - A crash is simulated by reopening the on-disk DB.
   - The upgrade replay test is added.

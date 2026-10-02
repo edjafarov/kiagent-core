@@ -786,6 +786,7 @@ Make the release commit: bump `manifest.json`, `package.json` and `package-lock.
 - The PDF's body text is findable once the convert worker has run.
 - The docx stays name-only.
 - On the account that existed before the upgrade, the extension log shows exactly one re-enumeration, and no download for unchanged files.
+- **Memory gate for the cloud transport** (core plan, Task 8). On a fresh dev app, a single 77 MB OneDrive PDF produces `mem:` lines all under `peak +400 MB`. Do this **before** Step 2's release, using the branch build side-loaded into the dev profile. If any line is over the bar, do not release.
 
 ## Self-Review notes
 
