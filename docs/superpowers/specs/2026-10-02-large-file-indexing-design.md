@@ -1,6 +1,6 @@
 # Large files: always findable, PDFs text-searchable up to 100 MiB
 
-Status: r2 (fable + codex-astra round 1 folded in) · 2026-10-02
+Status: r3 (review round 2 folded in) · 2026-10-02
 
 This spec also defines two shared mechanisms the sibling specs reuse:
 **§6 policy re-enumeration** and **§7 durable attempt counter**.
@@ -87,8 +87,9 @@ text-poor.
 - `fetchBytes` serves `deferred` and refuses `none`.
 
 The **local-folder source** treats both like its existing metadata-only
-path. Its `fetchBytes` already re-runs `decideLocalFile` and refuses
-`none`.
+path. Its `fetchBytes` re-runs `decideLocalFile`. Today that check is
+`kind === 'ignore'` only, so it must also refuse `bytes: 'none'` (a
+one-line change).
 
 The SDK ships `file-indexability.ts` verbatim, so this is a core policy
 change regenerated into the SDK.
@@ -127,9 +128,14 @@ and the partial index rebuilds on SQL change.
 - Rows that already carry `extraction` (local 20–50 MiB PDFs OCR'd under the
   old route) stay OCR-only. Re-parsing them is not worth a special case.
 - **Crash fence.** For a doc over the eager cap, the convert worker calls
-  `await session.bump('fetch')` (§7) **before** fetching:
-  - when it returns > 2, it records `failed` without fetching;
-  - a doc that kills the process twice is never tried again.
+  `await session.bump('parse')` (§7) **after the bytes arrive and before
+  `parse()`**.
+  - The parse is what can kill main; a ≤ 100 MiB buffer is not.
+  - Bumping before the fetch would count ordinary `FetchDeferredError`
+    deferrals (source still registering at boot, re-auth, a transport
+    blip) as crashes.
+  - When `bump` returns > 2, the worker records `failed` without parsing.
+    A doc that kills the process twice is never parsed again.
 
 ### 4. Windowed OCR, one window per run
 
@@ -196,11 +202,22 @@ the source does one full re-enumeration:
 - **OneDrive:** the cursor gains `policy_version`. A mismatch means a delta
   from scratch, as the `attachments:1` precedent did in ms365 2.2.0.
 - **local-folder:** `LocalFolderCursor` gains `policyVersion`. A mismatch
-  drops all `roots` entries, so each root takes `backfillRoot`.
+  starts **one policy re-walk** of every root, a separate pass that leaves
+  the `roots` watermarks alone. It emits **only** entries that
+  `newlyAdmitted(candidate, fromVersion)` says the previous policy ignored.
+  - `newlyAdmitted` is a pure helper exported from `file-indexability.ts`,
+    derived from the candidate alone (the scanner has no store): size
+    against the old caps, plus newly admitted kinds such as `.msg`.
+  - Unlike cloud, a local re-emit is **not** cheap: the scanner reads
+    converter-pipeline bytes eagerly, and the engine runs
+    `convert(input)` before the content-hash short-circuit. Re-emitting
+    everything would re-parse every local PDF/docx in main.
+  - When the re-walk completes, the cursor's `policyVersion` is updated.
 
-Re-enumeration is cheap where nothing changed: unchanged rows hit the
-store's same-`content_hash` short-circuit, so there is no feed churn. The
-`.msg` spec bumps nothing extra; it ships in the same policy version.
+Cloud re-enumeration **is** cheap where nothing changed: `hashSkip` pins
+`ok` rows by eTag/md5 without downloading, and unchanged rows hit the
+store's same-`content_hash` short-circuit. The `.msg` spec bumps nothing
+extra; it ships in the same policy version.
 
 ### 7. Shared: durable attempt counter (`session.bump`)
 
@@ -216,7 +233,7 @@ neither crash-safe nor loop-free.
 - **Lifetime.** The engine deletes a doc's rows for that consumer when
   `work()` returns `done`. Rows of retired consumers are swept with them.
 
-Users: §3's crash fence (`'fetch'`), and the windows-ocr spec's VLM failure
+Users: §3's crash fence (`'parse'`), and the windows-ocr spec's VLM failure
 count (`'vlm'`).
 
 ## Rollout
@@ -249,8 +266,12 @@ count (`'vlm'`).
 - **Upgrade (engine integration, not hand-called workers):** an account
   whose old convert consumer already recorded a 40 MiB PDF `too-large` gets
   it parsed after upgrade.
-- **Fence:** a fake parser that crashes the worker process twice ends in
-  `failed`. Use real process termination in an integration test.
+- **Fence:**
+  - A fake parser that crashes the worker process twice ends in `failed`.
+    Use real process termination in an integration test.
+  - Two `FetchDeferredError` deferrals do **not** count.
+- **Local policy re-walk:** an old cursor with a 60 MiB PDF, a `.msg` and
+  200 already-indexed PDFs emits exactly the first two.
 - **Windowed OCR:** a 45-page scanned fixture produces 5 committed runs,
   and the markdown has every page in order. Killing the process after run
   2 resumes at page 21. The bytes are fetched once.

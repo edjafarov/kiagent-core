@@ -1,6 +1,6 @@
 # Restore Windows OCR
 
-Status: r2 (fable + codex-astra round 1 folded in) · 2026-10-02
+Status: r3 (review round 2 folded in) · 2026-10-02
 Uses the large-file spec's §7 `session.bump`. If this spec lands first, it
 brings that primitive with it.
 
@@ -70,10 +70,16 @@ and arm64: the meetings `KiaAudio`/`KiaDiarize` with
   - publish both arches into `assets/ocr/win32-{x64,arm64}/windows-ocr.exe`;
   - run it from `vendor-deep-extraction.mjs` on every host that builds a
     Windows target, which includes the Docker leg.
-- **Gate.** Add `ocr/win32-x64/windows-ocr.exe` and
-  `ocr/win32-arm64/windows-ocr.exe` to `verify-win-installer.mjs`'s required
-  list (next to `REQUIRED_INFERENCE`). Extend its path regex to cover
-  `assets/ocr`.
+- **Gate.** In `verify-win-installer.mjs`:
+  - add `ocr/win32-x64/windows-ocr.exe` and
+    `ocr/win32-arm64/windows-ocr.exe` to the required list (next to
+    `REQUIRED_INFERENCE`);
+  - extend `INFERENCE_RE` **and** the `INFERENCE_CLI` mapping to cover `ocr`;
+  - extend the payload extraction filter (~:295), which currently drops
+    `windows-ocr.exe`.
+
+  Tests: a complete installer passes; a missing helper, or one of the wrong
+  architecture, fails.
 - Core's `extraResources` already ships `./assets/**`; nothing to add there.
 - **Fallback** if the WinRT projection doesn't cross-publish: build on the
   `windows-latest` CI runner once per helper change, upload as a pinned
@@ -119,10 +125,17 @@ In the vision worker's pass 2, the `catch` distinguishes three cases:
 
 - **`LaneClosedError`** (the processing window closed): `defer`, not
   counted. This is ordinary scheduling.
-- **`NoProviderError('see')` while a `see` provider can still become ready**
-  (status `standby` or `downloading`, i.e. a model download in progress):
+- **`NoProviderError('see')` while a `see` provider can still become ready:**
   `defer`, not counted. The check is a new
-  `inference.mayBecomeReady('see')`.
+  `inference.mayBecomeReady('see')`, which is true only when a `see`
+  provider is either:
+  - `downloading`; or
+  - `standby` **with `prefs.models.autoInstall` on and no cancelled
+    install**.
+
+  A `standby` provider whose install is disabled or was cancelled
+  (`ensureInstalled` refuses it) will never become ready, so it counts as a
+  failure.
 - **Anything else** is a real VLM failure, including a `NoProviderError`
   with no provider that can ever become ready:
   `n = await session.bump('vlm')` (durable, **no document change**, so there
@@ -165,6 +178,9 @@ Fix the stale text in:
     3rd re-drive. No extra feed changes are produced.
   - `LaneClosedError` during pass 2 does not count.
   - `NoProviderError` with a `downloading` provider does not count.
+  - With `autoInstall` off, or the install cancelled, it **does** count.
+  - With no `read` provider (pass 1 never ran), the doc keeps deferring and
+    is never finalized.
 - **Build:** `verify-win-installer` fails when either exe is missing; the
   Docker leg passes with them.
 - **Live, Windows UTM VM** (`ssh win`, see the `windows-utm-vm-test-recipe`
