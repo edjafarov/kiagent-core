@@ -262,6 +262,8 @@ export function createVisionWorker(deps: {
         // closed mid-run) defers the same way. Only a genuine "no read
         // provider" (e.g. non-mac host) falls through to pass 2.
         if (!(err instanceof NoProviderError)) return 'defer';
+        // An OCR provider still starting is not "no OCR": wait for it.
+        if (session.mayBecomeReady('read')) return 'defer';
         ocrFailed = true;
       }
       const pages: PageResult[] = [{ page: 1, ocrText }];
@@ -319,6 +321,7 @@ export function createVisionWorker(deps: {
       } catch (err) {
         // Same transient-vs-absent split as the image path above.
         if (!(err instanceof NoProviderError)) return 'defer';
+        if (session.mayBecomeReady('read')) return 'defer';
         if (listed) {
           // No VLM for needs-ocr, and its text is already indexed: park
           // every needs-ocr doc for a while instead of re-fetching each.

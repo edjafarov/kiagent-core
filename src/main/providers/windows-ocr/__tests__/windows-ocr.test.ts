@@ -122,3 +122,22 @@ describe('windows-ocr provider status', () => {
     ).toBe('text');
   });
 });
+
+it('mayBecomeReady while the boot selftest is pending, not after it resolves', async () => {
+  let resolve!: (r: { ok: boolean }) => void;
+  const pending = new Promise<{ ok: boolean }>((r) => {
+    resolve = r;
+  });
+  const p = createWindowsOcrProvider({
+    binaryPath: FAKE,
+    helper: { ocrImage: jest.fn(), selftest: () => pending },
+    platform: 'win32',
+    log,
+  });
+  expect(p.mayBecomeReady?.()).toBe(true);
+  resolve({ ok: false });
+  await new Promise((r) => {
+    setImmediate(r);
+  });
+  expect(p.mayBecomeReady?.()).toBe(false);
+});

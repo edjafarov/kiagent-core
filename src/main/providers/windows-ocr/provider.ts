@@ -29,6 +29,15 @@ export function createWindowsOcrProvider(deps: {
   return {
     id: 'windows-ocr',
     supports: ['read'],
+    // While the boot selftest is pending, a `read` must wait rather than
+    // conclude there is no OCR (and let a VLM finish the doc without it).
+    mayBecomeReady() {
+      return (
+        platform === 'win32' &&
+        probed === null &&
+        fs.existsSync(deps.binaryPath)
+      );
+    },
     status(): ProviderStatus {
       if (platform !== 'win32') return 'unsupported';
       if (!fs.existsSync(deps.binaryPath))

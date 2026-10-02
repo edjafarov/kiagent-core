@@ -1001,3 +1001,72 @@ describe('a dead VLM never strands a doc whose OCR ran (windows-ocr §3)', () =>
     expect(s.enriched[0].metadata.extraction.engine).toBe('local-ocr+vlm');
   });
 });
+
+describe('a read provider still starting (selftest pending) is waited for', () => {
+  const pdf = (pageCount = 2): Rasterizer => ({
+    pdfToPngs: jest.fn(async (_b, { pages }) => ({
+      pageCount,
+      pages: pages
+        .filter((n) => n <= pageCount)
+        .map((n) => ({ page: n, png: new Uint8Array([n]) })),
+    })),
+  });
+  const starting = (over: Partial<WorkerSession> = {}) =>
+    fakeSession({
+      read: async () => {
+        throw new NoProviderError('read');
+      },
+      mayBecomeReady: (kind) => kind === 'read',
+      ...over,
+    });
+
+  it('a scanned PDF defers instead of completing VLM-only', async () => {
+    const see = jest.fn(async () => 'desc');
+    const s = starting({ see });
+    expect(
+      await createVisionWorker({ rasterizer: pdf(), laneOpen: () => true }).work(
+        change({}),
+        s,
+      ),
+    ).toBe('defer');
+    expect(see).not.toHaveBeenCalled();
+    expect(s.enriched).toEqual([]);
+  });
+  it('an image defers instead of completing VLM-only', async () => {
+    const see = jest.fn(async () => 'desc');
+    const s = starting({ see });
+    const png = change({
+      title: 'a.png',
+      type: 'file',
+      metadata: { mime: 'image/png', filename: 'a.png', sizeBytes: 50_000 },
+    });
+    expect(
+      await createVisionWorker({ rasterizer: pdf(), laneOpen: () => true }).work(
+        png,
+        s,
+      ),
+    ).toBe('defer');
+    expect(see).not.toHaveBeenCalled();
+  });
+  it('a needs-ocr PDF defers WITHOUT parking every needs-ocr doc for the retry window', async () => {
+    const listed = (id: string) =>
+      change({
+        id,
+        markdown: PROSE_LINES.join('\n'),
+        metadata: {
+          ...baseDoc.metadata,
+          conversion: { status: 'needs-ocr', pages: [1], quality: 1 },
+        },
+      });
+    const bytes = multiPagePdf([{ text: shifted(PROSE_LINES) }]);
+    const w = createVisionWorker({ rasterizer: pdf(1), laneOpen: () => true });
+    expect(
+      await w.work(listed('d1'), starting({ fetchBytes: async () => bytes })),
+    ).toBe('defer');
+    // OCR is up now: the next needs-ocr doc is OCR'd at once, not parked.
+    const read = jest.fn(async () => 'ocr text of page one '.repeat(5));
+    const s2 = fakeSession({ read, fetchBytes: async () => bytes });
+    expect(await w.work(listed('d2'), s2)).toBe('done');
+    expect(read).toHaveBeenCalled();
+  });
+});
