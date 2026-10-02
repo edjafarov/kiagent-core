@@ -1735,6 +1735,26 @@ describe('policy recovery (FILE_POLICY_VERSION in the cursor)', () => {
   const versionOf = (c: unknown) =>
     (c as { policyVersion?: number } | null)?.policyVersion;
 
+  it('an old cursor emits an unchanged .msg the old policy ignored', async () => {
+    const root = mkTmpDir();
+    fs.copyFileSync(
+      path.join(
+        __dirname,
+        '../../../core/engine/__tests__/fixtures/msg/plain.msg',
+      ),
+      path.join(root, 'mail.msg'),
+    );
+    const old: LocalFolderCursor = {
+      roots: { [root]: { completedAt: future() } },
+    };
+    const batches = await collect(
+      pull(makeSession([root], new AbortController().signal, false), old),
+    );
+    const items = batches.flatMap((b) => b.items);
+    expect(items.map((i) => path.basename(i.absPath))).toEqual(['mail.msg']);
+    expect(items[0].binary).not.toBeNull(); // eager bytes, converted at commit
+  });
+
   it('an old cursor emits only newly admitted files once, then stamps policyVersion', async () => {
     const root = mkTmpDir();
     // 3 small pdfs already indexed + 1 sparse 60 MiB pdf the old policy dropped

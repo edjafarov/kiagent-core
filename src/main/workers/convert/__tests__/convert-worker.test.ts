@@ -270,6 +270,37 @@ describe('convert worker', () => {
   });
 });
 
+it('an octet-stream .msg attachment and an extensionless Outlook-MIME one are convert candidates', () => {
+  expect(
+    isConvertCandidate(
+      doc({
+        type: 'attachment',
+        title: 'fwd.msg',
+        markdown: null,
+        metadata: {
+          mime: 'application/octet-stream',
+          filename: 'fwd.msg',
+          sizeBytes: 20480,
+        },
+      }),
+    ),
+  ).toBe(true);
+  expect(
+    isConvertCandidate(
+      doc({
+        type: 'attachment',
+        title: 'attachment',
+        markdown: null,
+        metadata: {
+          mime: 'application/vnd.ms-outlook',
+          filename: 'attachment',
+          sizeBytes: 20480,
+        },
+      }),
+    ),
+  ).toBe(true);
+});
+
 describe('large files (fetch cap, re-admission, crash fence, output cap)', () => {
   const MiB = 1024 * 1024;
   const pdfDoc = (sizeBytes: number, over: Record<string, unknown> = {}) =>
