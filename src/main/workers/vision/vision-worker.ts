@@ -7,6 +7,9 @@ import type {
 } from '@shared/contracts';
 
 import { NoProviderError } from '@main/core/inference';
+import { MAX_LOCAL_BINARY_BYTES } from '@shared/file-indexability';
+
+import { logPeak } from '../mem-probe';
 
 import {
   classifyDocument,
@@ -53,7 +56,10 @@ export function createVisionWorker(deps: {
   const downscale = deps.downscale ?? passthroughDownscaler;
   // One doc's bytes, kept across its consecutive windows (the enrich of window
   // N re-feeds the doc immediately). Dropped on completion or a different doc.
-  let cache: { key: string; bytes: Uint8Array } | null = null;
+  // rssBefore: the memory probe's baseline, taken before the doc's first
+  // fetch — one per document, so growth across windows shows up.
+  let cache: { key: string; bytes: Uint8Array; rssBefore: number } | null =
+    null;
   const keyOf = (d: Document) => `${d.id}:${d.contentHash}`;
 
   /** Pass 2 — VLM describe over `pageImages` (only reachable when a
@@ -131,13 +137,14 @@ export function createVisionWorker(deps: {
       const key = keyOf(doc);
       let bytes = cache?.key === key ? cache.bytes : null;
       if (!bytes) {
+        const rssBefore = process.memoryUsage().rss;
         // A fetch that fails right now (source still registering, offline)
         // throws FetchDeferredError, which the engine parks for the re-drive.
         bytes = await session.fetchBytes(doc);
         if (!bytes) return 'skip'; // source can't serve bytes — terminal
         if (bytes.length > (pdf ? MAX_PDF_BYTES : MAX_IMAGE_BYTES))
           return 'skip';
-        cache = pdf ? { key, bytes } : null;
+        cache = pdf ? { key, bytes, rssBefore } : null;
       }
 
       const { mime } = doc.metadata as { mime?: string };
@@ -227,6 +234,13 @@ export function createVisionWorker(deps: {
           break;
         }
       }
+      if (cache && bytes.length > MAX_LOCAL_BINARY_BYTES)
+        logPeak(
+          session,
+          `ocr window ${next[0]}-${next.at(-1)}`,
+          bytes.length,
+          cache.rssBefore,
+        );
       const pagesOut = (): PageResult[] =>
         Object.keys(done)
           .map(Number)

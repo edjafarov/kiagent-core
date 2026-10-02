@@ -18,6 +18,8 @@ import {
   type ConvertibleKind,
 } from '@main/core/engine/convert';
 
+import { logPeak } from '../mem-probe';
+
 import {
   HAS_TEXT_CHARS,
   type ConversionOutcome,
@@ -138,6 +140,9 @@ export function createConvertWorker(
       // A fetch that fails right now (source still registering, offline,
       // re-auth needed) throws FetchDeferredError; the engine parks it for
       // the re-drive. Only a definite "no bytes" (null) is recorded here.
+      // Before the fetch: the memory probe's peak covers fetch, transport
+      // copies and parse together.
+      const rssBefore = process.memoryUsage().rss;
       const bytes = await session.fetchBytes(doc);
       if (!bytes) return record('unavailable');
       if (bytes.length > capBytes) return record('too-large');
@@ -161,6 +166,7 @@ export function createConvertWorker(
         );
         return record('failed', { error: String(err) });
       }
+      if (large) logPeak(session, name ?? doc.id, bytes.length, rssBefore); // the memory probe
       if (markdown === null || markdown.trim().length === 0)
         return record('text-poor');
       const capped = capMarkdown(markdown);

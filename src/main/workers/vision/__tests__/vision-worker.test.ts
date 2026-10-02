@@ -1,5 +1,6 @@
 import type { Change, Document, WorkerSession } from '@shared/contracts';
 import { NoProviderError } from '@main/core/inference';
+import { MAX_LOCAL_BINARY_BYTES } from '@shared/file-indexability';
 import type { Rasterizer } from '../rasterize';
 import { MAX_PDF_BYTES } from '../classify';
 import { createVisionWorker } from '../vision-worker';
@@ -497,6 +498,23 @@ describe('windowed OCR', () => {
       s,
     );
     expect(s.enriched[0].metadata.extraction.pagesSkipped).toBe(50);
+  });
+
+  it('a PDF over the eager cap logs one memory-probe line per window', async () => {
+    const { r } = pagedRasterizer(25);
+    const logs: string[] = [];
+    const s = fakeSession({
+      read: ocrByPage,
+      fetchBytes: async () => new Uint8Array(MAX_LOCAL_BINARY_BYTES + 1),
+      log: (_l, m) => logs.push(m),
+    });
+    await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(
+      change({}),
+      s,
+    );
+    expect(
+      logs.filter((m) => m.startsWith('mem: ocr window 1-10 ')),
+    ).toHaveLength(1);
   });
 
   it('fetches bytes once across consecutive windows of the same doc', async () => {

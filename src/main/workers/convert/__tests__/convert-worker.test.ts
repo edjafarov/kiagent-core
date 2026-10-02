@@ -340,6 +340,25 @@ describe('large files (fetch cap, re-admission, crash fence, output cap)', () =>
     expect(parse).toHaveBeenCalledTimes(1);
     expect(s.enriched[0].metadata.conversion.status).toBe('ok');
   });
+  it('a large parse logs the memory probe line; an eager-size one does not', async () => {
+    const parse = jest.fn(async () => 'parsed text from the large pdf');
+    const big: string[] = [];
+    await createConvertWorker({ parse }).work(
+      change(pdfDoc(40 * MiB)),
+      fakeSession(async () => tinyPdf('x'), {
+        log: (_l: string, m: string) => big.push(m),
+      }),
+    );
+    expect(big.filter((m) => m.startsWith('mem: big.pdf '))).toHaveLength(1);
+    const small: string[] = [];
+    await createConvertWorker({ parse }).work(
+      change(pdfDoc(1024)),
+      fakeSession(async () => tinyPdf('x'), {
+        log: (_l: string, m: string) => small.push(m),
+      }),
+    );
+    expect(small.filter((m) => m.startsWith('mem:'))).toEqual([]);
+  });
   it('fence is not consulted for eager-size docs', async () => {
     const bump = jest.fn(async () => 99);
     const s = fakeSession(async () => tinyPdf('small pdf body text'), { bump });
