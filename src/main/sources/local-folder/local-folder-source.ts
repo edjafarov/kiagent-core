@@ -15,6 +15,7 @@ import type {
 } from '@shared/contracts';
 import { isUnder } from '@shared/folder-paths';
 
+import { FILE_POLICY_VERSION, newlyAdmitted } from '@shared/file-indexability';
 import { advanceCursor, type LocalFolderCursor } from './cursor';
 import {
   folderScopedConfig,
@@ -23,10 +24,6 @@ import {
   validateFolderRoots,
 } from './folder-roots';
 import { folderPickerSpec, selectionNodes } from './picker';
-import {
-  FILE_POLICY_VERSION,
-  newlyAdmitted,
-} from '@shared/file-indexability';
 import { decideLocalFile } from './ingestible';
 import { resolvePathMime } from './mime';
 import {

@@ -1740,7 +1740,9 @@ describe('policy recovery (FILE_POLICY_VERSION in the cursor)', () => {
     // 3 small pdfs already indexed + 1 sparse 60 MiB pdf the old policy dropped
     for (const n of ['a', 'b', 'c']) writeFile(root, `${n}.pdf`, `%PDF ${n}`);
     sparse(root, 'big.pdf', 60 * 1024 * 1024);
-    const old: LocalFolderCursor = { roots: { [root]: { completedAt: future() } } };
+    const old: LocalFolderCursor = {
+      roots: { [root]: { completedAt: future() } },
+    };
     const batches = await collect(
       pull(makeSession([root], new AbortController().signal, false), old),
     );
@@ -1755,11 +1757,18 @@ describe('policy recovery (FILE_POLICY_VERSION in the cursor)', () => {
     const fresh = mkTmpDir();
     writeFile(fresh, 'n.txt', 'hello');
     sparse(root, 'big.pdf', 60 * 1024 * 1024);
-    const old: LocalFolderCursor = { roots: { [root]: { completedAt: future() } } };
+    const old: LocalFolderCursor = {
+      roots: { [root]: { completedAt: future() } },
+    };
     const batches = await collect(
-      pull(makeSession([root, fresh], new AbortController().signal, false), old),
+      pull(
+        makeSession([root, fresh], new AbortController().signal, false),
+        old,
+      ),
     );
-    expect(names(batches)).toEqual(expect.arrayContaining(['big.pdf', 'n.txt']));
+    expect(names(batches)).toEqual(
+      expect.arrayContaining(['big.pdf', 'n.txt']),
+    );
     expect(versionOf(batches[batches.length - 1].cursor)).toBe(
       FILE_POLICY_VERSION,
     );
@@ -1791,8 +1800,11 @@ describe('policy recovery (FILE_POLICY_VERSION in the cursor)', () => {
 
   it('the stamp is never committed mid-walk: intermediate batches keep the old version', async () => {
     const root = mkTmpDir();
-    for (let i = 0; i < BATCH_SIZE + 5; i += 1) sparse(root, `big${i}.pdf`, 30 * 1024 * 1024);
-    const old: LocalFolderCursor = { roots: { [root]: { completedAt: future() } } };
+    for (let i = 0; i < BATCH_SIZE + 5; i += 1)
+      sparse(root, `big${i}.pdf`, 30 * 1024 * 1024);
+    const old: LocalFolderCursor = {
+      roots: { [root]: { completedAt: future() } },
+    };
     const batches = await collect(
       pull(makeSession([root], new AbortController().signal, false), old),
     );
