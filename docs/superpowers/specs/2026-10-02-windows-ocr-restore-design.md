@@ -149,6 +149,11 @@ In the vision worker's pass 2, the `catch` distinguishes three cases:
     behaviour. Those docs must stay recoverable for when the user adds a
     language and restarts, so they are never buried with empty text.
 
+**The same safeguard applies to the existing non-VLM-decodable branch**
+(`vision-worker.ts` ~104, for HEIC/WebP/TIFF). Today it finalizes with the
+OCR-only result even when `read` threw `NoProviderError`. It now returns
+`defer` when `ocrFailed`, and finalizes only when pass 1 actually ran.
+
 The worker reaches `mayBecomeReady` through a new
 `WorkerSession.mayBecomeReady(kind)`. It does not reach for the plane
 directly.
@@ -181,6 +186,8 @@ Fix the stale text in:
   - With `autoInstall` off, or the install cancelled, it **does** count.
   - With no `read` provider (pass 1 never ran), the doc keeps deferring and
     is never finalized.
+  - The same holds for a TIFF/HEIC on the non-VLM-decodable branch. After
+    a `read` provider appears, it is OCR'd.
 - **Build:** `verify-win-installer` fails when either exe is missing; the
   Docker leg passes with them.
 - **Live, Windows UTM VM** (`ssh win`, see the `windows-utm-vm-test-recipe`
