@@ -153,7 +153,7 @@ The worker reaches `mayBecomeReady` through a new
 `WorkerSession.mayBecomeReady(kind)`. It does not reach for the plane
 directly.
 
-This ends the forever re-drive on Windows/Linux. A healthy Mac whose VLM
+This ends the forever re-drive on Windows hosts whose OCR runs. A healthy Mac whose VLM
 works never reaches it. Docs whose OCR gave ≥ 200 characters complete in
 pass 1 and never get here.
 

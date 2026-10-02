@@ -211,3 +211,17 @@ through the worker), never `quality`.
   - A row with `quality: 1` is never re-admitted.
 - **Live:** a real broken-font PDF becomes searchable by a body phrase
   after the processing window runs (macOS).
+
+## Implementation notes
+
+- **Clear `ocrProgress` consistently.** Enrich merges metadata shallowly.
+  - Clear it by writing `undefined` (the key is dropped), or make
+    `classifyDocument` and `PENDING_VISUAL_WHERE` treat `null` as absent.
+- **Order the §5 check last.** The whole-text `assessPage(markdown)` check
+  in `matches()` sees every PDF change without `quality`. All-good commits
+  carry no marker, so that is forever.
+  - It is O(n) and cheap, but keep it after the cheaper predicates in
+    `isConvertCandidate`.
+- **Bound `ocrProgress.pages`.** It holds up to about 2 MiB transiently
+  while OCR is in flight.
+  - Never add a `json_extract` over it to a hot query.
