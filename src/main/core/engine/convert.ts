@@ -187,7 +187,7 @@ export async function parseDetailed(
   // Whole doc under the chain's "has real text" bar (HAS_TEXT_CHARS, not
   // OCR's 200-char sufficiency bar): today's text-poor path (whole-doc OCR +
   // VLM). Above it the text is KEPT — a short real PDF (a receipt) must keep
-  // its text, since OCR is off by default and absent on Windows — and only
+  // its text, since OCR is off by default — and only
   // the pages that are not `good` are listed for OCR.
   if (text.replace(/\s+/g, '').length < HAS_TEXT_CHARS)
     return { markdown: null };

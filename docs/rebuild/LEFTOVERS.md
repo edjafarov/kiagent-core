@@ -16,13 +16,20 @@ differently), **deferred** (planned, tracked as an issue), or a **deviation**
    pinning), a functional Marketplace screen with ConsentModal, and the
    Notion connector ported and published as
    `kia-plugins/notion-kia-connector` v2.0.0.
-2. **Inference providers** — two providers now ship, registered in
+2. **Inference providers** — three providers now ship, registered in
    `src/main/providers/index.ts`:
    - `apple-vision` (capability: `read`) — a bundled Swift/Vision helper
      (`native/vision-helper/main.swift`, compiled to
      `assets/vision/darwin-<arch>/kia-vision` by
      `scripts/build-vision-helper.mjs`) does native OCR. darwin-only; ready
      as soon as the helper binary is present, no download.
+   - `windows-ocr` (capability: `read`) — the WinRT helper
+     (`native/windows-ocr/Program.cs`, cross-published to
+     `assets/ocr/win32-<arch>/windows-ocr.exe` by
+     `scripts/build-windows-ocr-helper.mjs` on alpha-cent's docker leg; the
+     installer verifier requires both arches). win32-only; `standby` until a
+     boot-time `selftest` resolves, then `ready`, or an error telling the
+     user to add an OCR language and restart.
    - `local-llm` (capabilities: `complete` + `see`) — a vendored
      `llama-server` (`scripts/fetch-llama-server.mjs` →
      `assets/llama/<slug>/llama-server`) fronts a tiered, curated Gemma GGUF
@@ -30,11 +37,8 @@ differently), **deferred** (planned, tracked as an issue), or a **deviation**
      smallest tier) and auto-download on first use (SHA-256-verified,
      resumable, cancellable via `inference:cancel`). No user model picking
      in this pass — `prefs.models.override` is the only escape hatch.
-   Both run through the same one-front-door/two-lane/provider-registry
-   plane. Deferred to Phase C: the Windows WinRT OCR helper now BUILDS and
-   is vendored into win32 packaging (`scripts/build-windows-ocr-helper.mjs`,
-   run by `scripts/vendor-deep-extraction.mjs`) but no runtime `read`
-   provider is registered for it — it ships as dead weight; the GLM-OCR WASM
+   All run through the same one-front-door/two-lane/provider-registry
+   plane. Deferred to Phase C: the GLM-OCR WASM
    fallback exists only as a model descriptor (`GLM_OCR_MODEL` in
    `local-llm/models.ts`), never loaded or registered; Vulkan/accel probing
    has parsing/detection scaffolding (`parseVulkanDevices`, `detectBackend`
