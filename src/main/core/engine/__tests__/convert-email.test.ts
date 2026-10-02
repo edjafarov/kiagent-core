@@ -227,6 +227,47 @@ describe('converter: Outlook .msg', () => {
     expect(out.binary).toBeUndefined();
   });
 
+  describe('a corrupt CFB structure fails the parse instead of looping until OOM', () => {
+    const plain = () =>
+      Buffer.from(fs.readFileSync(path.join(FIX, 'plain.msg')));
+    const asMsg = (bytes: Buffer) =>
+      ({
+        ...(msg('plain.msg') as any),
+        binary: {
+          bytes: new Uint8Array(bytes),
+          mime: 'application/vnd.ms-outlook',
+          filename: 'bad.msg',
+        },
+      }) as never;
+    const sector = (x: Buffer) => 1 << x.readUInt16LE(0x1e);
+
+    it('every FAT entry pointing at block 0 (cyclic sector chains)', async () => {
+      const x = plain();
+      const fat = (x.readUInt32LE(0x4c) + 1) * sector(x); // DIFAT[0]
+      for (let i = 0; i < sector(x); i += 4) x.writeUInt32LE(0, fat + i);
+      const out = await convert(asMsg(x));
+      expect(out.markdown ?? null).toBeNull();
+    });
+
+    it('a directory entry that is its own sibling (cyclic tree)', async () => {
+      const x = plain();
+      const dir = (x.readUInt32LE(0x30) + 1) * sector(x);
+      x.writeInt32LE(1, dir + 0x4c); // root.child = entry 1
+      x.writeInt32LE(1, dir + 128 + 0x48); // entry 1's right sibling = itself
+      const out = await convert(asMsg(x));
+      expect(out.markdown ?? null).toBeNull();
+    });
+
+    it('a stream size larger than the file (no ~2 GiB allocation)', async () => {
+      const x = plain();
+      const dir = (x.readUInt32LE(0x30) + 1) * sector(x);
+      // entry 2 is a 16-byte property stream; claim ~2 GiB instead
+      x.writeUInt32LE(0x7ff00000, dir + 2 * 128 + 0x78);
+      const out = await convert(asMsg(x));
+      expect(out.markdown ?? null).toBeNull();
+    });
+  });
+
   it('.eml output is unchanged apart from the new Cc line', async () => {
     const parts = (
       await convert(input('note.eml', 'message/rfc822', EML))

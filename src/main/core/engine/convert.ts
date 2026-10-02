@@ -3,6 +3,7 @@ import type { DocumentInput } from '@shared/contracts';
 import { HAS_TEXT_CHARS } from '@main/workers/convert/outcome';
 
 import type { LogSink } from './engine';
+import { guardCfbReader } from './msg-guard';
 
 /**
  * Commit-path stage 1: deterministic binary → markdown. Parsers only — no
@@ -222,9 +223,13 @@ async function msgToMarkdown(buf: Buffer): Promise<string> {
   const { default: MsgReader } =
     require('@kenjiuno/msgreader') as typeof import('@kenjiuno/msgreader');
   // DataView: no copy, and correct for small Buffers living in Node's shared pool.
-  const d = new MsgReader(
+  const reader = new MsgReader(
     new DataView(buf.buffer, buf.byteOffset, buf.byteLength),
-  ).getFileData();
+  );
+  // Before getFileData() (which parses): a corrupt pointer in the file would
+  // otherwise loop until the main process runs out of heap.
+  guardCfbReader((reader as unknown as { reader: unknown }).reader);
+  const d = reader.getFileData();
   if (d.error) throw new Error(`msg: ${d.error}`);
   // An Exchange sender carries an X.500 DN ("/O=…"), not an address: show the name.
   const who = (name?: string, email?: string): string => {

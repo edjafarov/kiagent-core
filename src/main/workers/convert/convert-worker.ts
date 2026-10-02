@@ -163,7 +163,10 @@ export function createConvertWorker(
       // outage. Keyed on max(declared, actual): size makes a parse risky.
       const large =
         Math.max(declared ?? 0, bytes.length) > MAX_LOCAL_BINARY_BYTES;
-      if (large && (await session.bump('parse')) > 2)
+      // Mail (.msg, .eml…) is fenced at any size: it arrives from anyone as
+      // an attachment, and a hostile one need not be large to kill the
+      // in-process parser.
+      if ((large || kind === 'email') && (await session.bump('parse')) > 2)
         return record('failed', {
           error: 'parser crashed twice on this document',
         });

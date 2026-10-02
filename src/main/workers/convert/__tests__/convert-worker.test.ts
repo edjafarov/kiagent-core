@@ -378,6 +378,28 @@ describe('large files (fetch cap, re-admission, crash fence, output cap)', () =>
     expect(s.enriched[0].metadata.conversion.status).toBe('failed');
     expect(parse).not.toHaveBeenCalled();
   });
+  it('fence: a small .msg is fenced too (an in-process parse of mail can kill main at any size)', async () => {
+    const parse = jest.fn(async () => 'never');
+    const s = fakeSession(async () => new Uint8Array(2048), {
+      bump: async () => 3,
+    });
+    await createConvertWorker({ parse }).work(
+      change(
+        doc({
+          type: 'attachment',
+          title: 'fwd.msg',
+          metadata: {
+            mime: 'application/vnd.ms-outlook',
+            filename: 'fwd.msg',
+            sizeBytes: 2048,
+          },
+        }),
+      ),
+      s,
+    );
+    expect(s.enriched[0].metadata.conversion.status).toBe('failed');
+    expect(parse).not.toHaveBeenCalled();
+  });
   it('fence: the second attempt still parses', async () => {
     const parse = jest.fn(async () => 'parsed text from the large pdf');
     const s = fakeSession(async () => tinyPdf('x'), { bump: async () => 2 });
