@@ -661,6 +661,7 @@ Non-VLM-decodable branch (~l.104): prefix it with `if (ocrFailed) return 'defer'
 
 In `engine.test.ts`:
 - Attach a real `createVisionWorker`. The inference fake has `read` returning `'few words'`, and **both** `see` and `seeWithMeta` throwing the spawn error. Otherwise the session's "seeWithMeta is not wired" Error is what gets counted.
+- The rasterizer fake reports **2 pages** (`pagedRasterizer(2)`, not the large-file plan's 25), and `read` stays under 200 non-whitespace chars in total. More than 10 pages adds windowed progress enriches, and ≥ 200 chars completes in pass 1. Either one breaks the exactly-one-change assertion, and that assertion must not be loosened.
 - Commit a text-poor PDF doc. **Wait** until the live tail has deferred it: poll `store.ledgerHasDeferred(workerConsumerName(worker))` until it's true (≤ 2 s). Only then call `engine.rerunDeferred(worker)` twice. Calling it earlier finds no deferred row, so the count never reaches 3.
 
 Assert:

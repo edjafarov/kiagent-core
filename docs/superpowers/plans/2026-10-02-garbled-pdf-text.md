@@ -78,6 +78,10 @@ const NOT_PROSE_BUT_GOOD = {
   '§-dense statute index': '§ 1 Anwendungsbereich § 2 Begriffe § 3 Pflichten § 4 Haftung § 5 Kündigung § 6 Schlussbestimmungen',
   'currency-heavy line': '£ 1,200.00 ¥ 34,000 € 990.10 £ 15.00 ¥ 1,000 § 4 total £ 2,205.10 paid',
   'terse heading': 'Anlage K 12 – Schreiben der Beklagten vom 3. März 2026',
+  'statement with distinct hex payment refs': Array.from({ length: 30 }, (_, i) =>
+    `2026-03-${String(i + 1).padStart(2, '0')} GBP 123.45 Payment Ref ${(0x5feceb66 + i * 7919).toString(16)}ffc86f38d952786c6d696c79`).join('\n'),
+  'transfers with IBANs and invoice refs': Array.from({ length: 30 }, (_, i) =>
+    `2026-03-${i + 1} Überweisung an DE${89370400440532013000n + BigInt(i)} Verwendungszweck RG-${4711 + i}/2026 Kunde K${i}X${i}`).join('\n'),
 };
 
 describe('assessPage', () => {
@@ -131,7 +135,7 @@ const COMMON_PAIRS = new Set((
   'wa we wh wi wn wo wu ye yo za ze zi zu cz sz dz wy kt zy yc ej aj je ja sk'
 ).split(' '));
 
-const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss').toLowerCase();
+const fold = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ß/g, 'ss').toLowerCase();
 
 export function assessPage(text: string): PageQuality {
   const compact = text.replace(/\s+/g, '');
@@ -140,7 +144,10 @@ export function assessPage(text: string): PageQuality {
   const bad = compact.match(BAD_CHAR)?.length ?? 0;
   if (bad / n > BAD_RATIO) return 'garbled';
   // Distinct words, so 30 rows of "CHF" or "SEPA Lastschrift" count once.
-  const words = new Set(fold(text).split(/[^a-z]+/).filter((w) => w.length >= 2));
+  // Tokens holding a digit (payment refs, hashes, IBANs, SKUs) are identifiers,
+  // not language: drop them BEFORE splitting into letter runs.
+  const words = new Set(text.split(/\s+/).filter((t) => !/\d/.test(t))
+    .flatMap((t) => fold(t).split(/[^a-z]+/)).filter((w) => w.length >= 2));
   let pairs = 0;
   let common = 0;
   for (const w of words) {
@@ -155,6 +162,8 @@ export function assessPage(text: string): PageQuality {
 ```
 
 Non-Latin scripts (Cyrillic, Greek, CJK) fold to no `a-z` words, so signal (b) never fires on them. Only (a) applies there.
+
+The 0.71 floor holds for real *language*: prose, statements, lists, and codes mixed with words. It is not universal. A long page of pure digit-free non-words (a base64 blob, a long acronym table) can score lower and gets one OCR pass, with its text kept. The spec accepts that cost.
 
 Tune only the constants, and only if a fixture fails. Never add a signal that fires on low letter density alone. The measured margin is narrow but clean: real text scores ≥ 0.71 (the bank footer codes), and shifts score ≤ 0.62. If you add a common pair, re-run the all-shifts test. Every pair you add raises the shifted scores too.
 
