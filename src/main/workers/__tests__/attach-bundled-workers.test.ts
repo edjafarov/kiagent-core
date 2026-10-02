@@ -125,6 +125,7 @@ function fakeSession(bytes: Uint8Array | null) {
     read: async () => '',
     hear: async () => 'must never happen',
     fetchBytes,
+    bump: async () => 1,
     emit: () => {},
     enrich: (e: unknown) => enriched.push(e),
     log: () => {},

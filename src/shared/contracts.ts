@@ -253,6 +253,9 @@ export type CommitBatch =
       cursor: Seq;
       documents?: DocumentInput[];
       enrich?: EnrichInput[];
+      /** Doc ids whose work_attempts rows (this consumer) are deleted in this
+       *  same transaction — the commit that persists their `done` outcome. */
+      clearAttempts?: string[];
     }
   /** ONE cascade: purge documents (tombstones into the feed), delete cursor,
    *  config, credentials. */
@@ -1029,6 +1032,11 @@ export interface WorkerSession {
   hear(audio: Uint8Array, opts?: { format?: 'wav' | 'mp3' }): Promise<string>;
   /** Bytes via the document's own source (its `fetchBytes`). */
   fetchBytes(doc: Document): Promise<Uint8Array | null>;
+  /** Durable attempt counter for a crash-prone step, keyed per (worker,
+   *  document, key). Written immediately, outside the batch, and appends
+   *  NO document change (so it never re-feeds the doc). Returns the count
+   *  including this attempt. Cleared when the doc's `done` outcome commits. */
+  bump(key: string): Promise<number>;
   /** Emitted docs are committed by the ENGINE (under the worker's synthetic
    *  account) in the SAME transaction as this worker's cursor. */
   emit(doc: DocumentInput): void;

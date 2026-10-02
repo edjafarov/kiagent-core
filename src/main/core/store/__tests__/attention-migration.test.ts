@@ -81,7 +81,7 @@ describe('attention schema migration', () => {
       ]);
       expect(
         db.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get(),
-      ).toEqual({ value: '8' });
+      ).toEqual({ value: '9' });
     } finally {
       db.close();
     }
@@ -125,7 +125,7 @@ describe('attention schema migration', () => {
       migrate(db);
       expect(
         db.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get(),
-      ).toEqual({ value: '8' });
+      ).toEqual({ value: '9' });
       expect(
         db
           .prepare(
@@ -149,7 +149,7 @@ describe('attention schema migration', () => {
       migrate(db);
       expect(
         db.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get(),
-      ).toEqual({ value: '8' });
+      ).toEqual({ value: '9' });
       expect(
         db
           .prepare(

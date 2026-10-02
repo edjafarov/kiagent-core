@@ -178,6 +178,7 @@ function setup(
     read: async () => '',
     hear,
     fetchBytes,
+    bump: async () => 1,
     emit: () => {},
     enrich: (e: unknown) => enriched.push(e),
     log: (level: string, msg: string) => logs.push({ level, msg }),

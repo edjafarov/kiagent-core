@@ -937,6 +937,10 @@ app
       // jest never has to mock `electron` to exercise them).
       downscale: makeNativeImageDownscaler(nativeImage),
     });
+    // Retired worker versions leave orphaned work_attempts rows; sweep them
+    // once the bundled workers are attached. Best-effort: a stale row only
+    // costs one extra counted attempt for a worker that comes back.
+    p.store.pruneAttempts(p.engine.activeConsumers()).catch(() => {});
 
     const outbound = createOutboundService({
       store: p.store,

@@ -61,6 +61,7 @@ describe('schema-doc drift detector', () => {
       'meta',
       'consumers',
       'work_ledger',
+      'work_attempts',
       'vault',
       'consents',
       'schedule',

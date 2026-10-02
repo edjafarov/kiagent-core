@@ -1474,6 +1474,83 @@ describe('store', () => {
       await it.return?.();
     });
   });
+
+  describe('work_attempts', () => {
+    const maxSeq = async () =>
+      ((await db.all(`SELECT MAX(seq) AS s FROM changes`))[0] as { s: number })
+        .s;
+
+    it('bumpAttempt increments durably per key, and the consumer commit clears it', async () => {
+      expect(
+        await store.bumpAttempt('worker:convert:v2', 'doc1', 'parse'),
+      ).toBe(1);
+      expect(
+        await store.bumpAttempt('worker:convert:v2', 'doc1', 'parse'),
+      ).toBe(2);
+      expect(await store.bumpAttempt('worker:convert:v2', 'doc1', 'vlm')).toBe(
+        1,
+      );
+      await store.commit({
+        consumer: 'worker:convert:v2',
+        cursor: 0,
+        clearAttempts: ['doc1'],
+      });
+      expect(
+        await store.bumpAttempt('worker:convert:v2', 'doc1', 'parse'),
+      ).toBe(1);
+      expect(await store.bumpAttempt('worker:convert:v2', 'doc1', 'vlm')).toBe(
+        1,
+      );
+    });
+
+    it('clearAttempts only clears its own consumer', async () => {
+      await store.bumpAttempt('worker:a:v1', 'doc1', 'parse');
+      await store.bumpAttempt('worker:b:v1', 'doc1', 'parse');
+      await store.commit({
+        consumer: 'worker:a:v1',
+        cursor: 0,
+        clearAttempts: ['doc1'],
+      });
+      expect(await store.bumpAttempt('worker:b:v1', 'doc1', 'parse')).toBe(2);
+    });
+
+    it('bumpAttempt appends no change to the feed', async () => {
+      await store.commit({
+        account: accountId,
+        documents: [doc('x')],
+        cursor: 1,
+      });
+      const before = await maxSeq();
+      await store.bumpAttempt('c', 'whatever', 'k');
+      expect(await maxSeq()).toBe(before);
+    });
+
+    it('attempt rows survive a crash before the done commit', async () => {
+      expect(await store.bumpAttempt('worker:convert:v2', 'd1', 'parse')).toBe(
+        1,
+      );
+      await store.close(); // died: no commit carried clearAttempts
+      db = await openDb(path.join(dir, 'test.db'));
+      store = openStore(db, deps);
+      expect(await store.bumpAttempt('worker:convert:v2', 'd1', 'parse')).toBe(
+        2,
+      );
+    });
+
+    it('pruneAttempts drops rows of retired consumers only', async () => {
+      await store.bumpAttempt('worker:x:v1', 'd', 'parse');
+      await store.bumpAttempt('worker:x:v2', 'd', 'parse');
+      await store.pruneAttempts(['worker:x:v2']);
+      expect(await store.bumpAttempt('worker:x:v1', 'd', 'parse')).toBe(1);
+      expect(await store.bumpAttempt('worker:x:v2', 'd', 'parse')).toBe(2);
+    });
+
+    it('pruneAttempts with no active consumers is a no-op', async () => {
+      await store.bumpAttempt('worker:x:v1', 'd', 'parse');
+      await store.pruneAttempts([]);
+      expect(await store.bumpAttempt('worker:x:v1', 'd', 'parse')).toBe(2);
+    });
+  });
 });
 
 // Guards the feed lost-wakeup fix: once the DB is worker-hosted, `materialize`

@@ -483,6 +483,12 @@ export function createWriteTx(
          ON CONFLICT(name) DO UPDATE SET cursor = excluded.cursor`,
         )
         .run(batch.consumer, batch.cursor);
+      if (batch.clearAttempts?.length) {
+        const del = conn.prepare(
+          `DELETE FROM work_attempts WHERE consumer = ? AND doc_id = ?`,
+        );
+        for (const id of batch.clearAttempts) del.run(batch.consumer, id);
+      }
       if (batch.documents?.length) {
         // Worker emissions land under the worker's synthetic account,
         // atomically with its cursor.

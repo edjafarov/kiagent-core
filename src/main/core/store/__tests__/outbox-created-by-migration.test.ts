@@ -25,13 +25,13 @@ describe('outbox.created_by migration (v8)', () => {
       migrate(db);
       const version = () =>
         db.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get();
-      expect(version()).toEqual({ value: '8' });
+      expect(version()).toEqual({ value: '9' });
       expect(
         db.prepare(`SELECT created_by FROM outbox WHERE id='old'`).get(),
       ).toEqual({ created_by: null });
 
       migrate(db);
-      expect(version()).toEqual({ value: '8' });
+      expect(version()).toEqual({ value: '9' });
     } finally {
       db.close();
     }

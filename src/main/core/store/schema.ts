@@ -1144,6 +1144,21 @@ const MIGRATIONS: Migration[] = [
     if (!cols.some((c) => c.name === 'created_by'))
       db.exec(`ALTER TABLE outbox ADD COLUMN created_by TEXT`);
   },
+
+  // v9 — work_attempts: a per-(consumer, doc, key) attempt counter written
+  // OUTSIDE the batch commit and WITHOUT appending a change, so a worker can
+  // fence a crash-prone step (session.bump) without re-feeding the doc. Rows
+  // are deleted in the commit that persists the doc's `done` outcome.
+  (db) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS work_attempts (
+      consumer TEXT NOT NULL,
+      doc_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      n INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (consumer, doc_id, key)
+    )`);
+  },
 ];
 
 /**

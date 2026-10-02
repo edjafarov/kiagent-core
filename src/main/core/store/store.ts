@@ -297,6 +297,12 @@ export interface CoreStore extends Store {
     outcome: 'done' | 'skip' | 'failed' | 'deferred' | null,
   ): Promise<void>;
   ledgerCounts(consumer: string): Promise<LedgerCounts>;
+  /** Durable, change-free attempt counter (see work_attempts in schema.ts).
+   *  Returns the count INCLUDING this attempt. */
+  bumpAttempt(consumer: string, docId: string, key: string): Promise<number>;
+  /** Drop attempt rows of consumers no longer attached (retired worker
+   *  versions). No-op when `active` is empty. */
+  pruneAttempts(active: readonly string[]): Promise<void>;
   /** Across every consumer — drives the app-wide processing panel. `pending`
    *  is the largest feed lag among `consumers` (default: every consumer row);
    *  pass the live workers so a retired consumer's stale cursor is ignored. */
@@ -1548,6 +1554,28 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
            SET attempts = excluded.attempts, outcome = excluded.outcome,
                updated_at = excluded.updated_at`,
         [consumer, seq, attempts, outcome, now()],
+      );
+    },
+
+    async bumpAttempt(consumer, docId, key) {
+      const rows = (await db.all(
+        `INSERT INTO work_attempts(consumer, doc_id, key, n, updated_at)
+         VALUES(?, ?, ?, 1, ?)
+         ON CONFLICT(consumer, doc_id, key) DO UPDATE
+           SET n = n + 1, updated_at = excluded.updated_at
+         RETURNING n`,
+        [consumer, docId, key, now()],
+      )) as Array<{ n: number }>;
+      return rows[0].n;
+    },
+
+    async pruneAttempts(active) {
+      if (active.length === 0) return;
+      await db.run(
+        `DELETE FROM work_attempts WHERE consumer NOT IN (${active
+          .map(() => '?')
+          .join(', ')})`,
+        [...active],
       );
     },
 

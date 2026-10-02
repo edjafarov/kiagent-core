@@ -736,6 +736,15 @@ export function createEngine(deps: EngineDeps): Engine & {
             );
           }
         },
+        async bump(key: string) {
+          if (change.kind !== 'document')
+            throw new Error('bump() needs a document change');
+          return store.bumpAttempt(
+            workerConsumerName(worker),
+            change.document.id,
+            key,
+          );
+        },
         emit(doc) {
           emitted.push(doc);
         },
@@ -1705,6 +1714,12 @@ export function createEngine(deps: EngineDeps): Engine & {
               if (abort.signal.aborted) return;
               let emitted: DocumentInput[] = [];
               let enrich: EnrichInput[] = [];
+              const clear: string[] = [];
+              // One doc, one work() per batch: the feed materializes every
+              // change row as the doc's CURRENT row, so a replay hands the
+              // worker identical copies. Working each would repeat the cost
+              // and trip session.bump fences without any crash.
+              const seen = new Set<string>();
               let cursor: Seq = await store.consumerCursor(consumer);
               for (const change of changes) {
                 if (abort.signal.aborted) return;
@@ -1722,6 +1737,15 @@ export function createEngine(deps: EngineDeps): Engine & {
                     `matches() threw on seq ${change.seq} — treated as non-match: ${String(err)}`,
                   );
                 }
+                // Only MATCHED document changes enter `seen`; non-matching,
+                // account and purge changes keep their path untouched.
+                if (matched && change.kind === 'document') {
+                  if (seen.has(change.document.id)) {
+                    cursor = change.seq;
+                    continue;
+                  }
+                  seen.add(change.document.id);
+                }
                 if (matched) {
                   const r = await workOne(worker, change, abort.signal);
                   await store.ledgerRecord(
@@ -1732,6 +1756,8 @@ export function createEngine(deps: EngineDeps): Engine & {
                   );
                   emitted = emitted.concat(r.docs);
                   enrich = enrich.concat(r.enrich);
+                  if (r.outcome === 'done' && change.kind === 'document')
+                    clear.push(change.document.id);
                 }
                 cursor = change.seq;
               }
@@ -1740,6 +1766,7 @@ export function createEngine(deps: EngineDeps): Engine & {
                 cursor,
                 documents: emitted.length ? emitted : undefined,
                 enrich: enrich.length ? enrich : undefined,
+                clearAttempts: clear.length ? clear : undefined,
               });
               retries = 0; // durable progress — a later crash starts fresh
             }
@@ -1851,6 +1878,11 @@ export function createEngine(deps: EngineDeps): Engine & {
         const emitted: DocumentInput[] = [];
         const enrich: EnrichInput[] = [];
         const ledger: LedgerEntry[] = [];
+        const clear: string[] = [];
+        // Same per-batch coalescing as the live tail: changesAt materializes
+        // the CURRENT doc for every seq, so a doc with several deferred rows
+        // is worked once; its duplicates resolve like a skip.
+        const seen = new Set<string>();
         for (const change of changes) {
           // changesAt materializes the CURRENT document, so a doc that gained
           // real markdown between defer and re-drive no longer matches, and an
@@ -1865,10 +1897,19 @@ export function createEngine(deps: EngineDeps): Engine & {
             ledger.push({ seq: change.seq, attempts: 0, outcome: 'skip' });
             continue;
           }
+          if (change.kind === 'document') {
+            if (seen.has(change.document.id)) {
+              ledger.push({ seq: change.seq, attempts: 0, outcome: 'skip' });
+              continue;
+            }
+            seen.add(change.document.id);
+          }
           // eslint-disable-next-line no-await-in-loop
           const r = await workOne(worker, change, abort.signal);
           emitted.push(...r.docs);
           enrich.push(...r.enrich);
+          if (r.outcome === 'done' && change.kind === 'document')
+            clear.push(change.document.id);
           ledger.push({
             seq: change.seq,
             attempts: r.attempts,
@@ -1879,7 +1920,7 @@ export function createEngine(deps: EngineDeps): Engine & {
         // Commit per page rather than accumulating across the whole backlog:
         // the old cross-loop `concat` accumulators grew without bound (and
         // reallocated on every iteration).
-        if (emitted.length || enrich.length) {
+        if (emitted.length || enrich.length || clear.length) {
           // eslint-disable-next-line no-await-in-loop
           await store.commit({
             consumer,
@@ -1887,6 +1928,7 @@ export function createEngine(deps: EngineDeps): Engine & {
             cursor: await store.consumerCursor(consumer),
             documents: emitted.length ? emitted : undefined,
             enrich: enrich.length ? enrich : undefined,
+            clearAttempts: clear.length ? clear : undefined,
           });
         }
         // Only now resolve the page's ledger entries — its skips and worked

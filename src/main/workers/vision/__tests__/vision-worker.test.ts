@@ -45,6 +45,7 @@ function fakeSession(
     read: async () => 'plenty of ocr text '.repeat(20), // > 200 chars
     hear: async () => 'a transcript',
     fetchBytes: async () => new Uint8Array(100_000),
+    bump: async () => 1,
     emit: () => {},
     enrich: (e) => enriched.push(e),
     log: () => {},

@@ -417,6 +417,144 @@ describe('engine', () => {
     });
   });
 
+  describe('attempt counter (session.bump) and per-batch coalescing', () => {
+    const plainEngine = () =>
+      createEngine({
+        store,
+        sources: { get: () => undefined },
+        inference: {
+          complete: async () => '',
+          see: async () => '',
+          read: async () => '',
+          hear: async () => '',
+        },
+        convert: async (d: DocumentInput) => d,
+        logs: noopLogs,
+      });
+    const settle = () => new Promise((r) => setTimeout(r, 1_000));
+
+    it('session.bump is durable, change-free, and cleared on done', async () => {
+      const engine = plainEngine();
+      const account = await store.createAccount({
+        source: 'test',
+        identifier: 'b',
+      });
+      const counts: number[] = [];
+      let runs = 0;
+      const worker: Worker = {
+        name: 'bumper',
+        version: 1,
+        matches: (ch) =>
+          ch.kind === 'document' && ch.document.externalId === 'p',
+        async work(_ch, session) {
+          runs += 1;
+          counts.push(await session.bump('parse'));
+          return runs < 3 ? 'defer' : 'done';
+        },
+      };
+      const handle = engine.attach(worker);
+      await store.commit({
+        account: account.id,
+        documents: [doc('p')],
+        cursor: 1,
+      });
+      await settle();
+      // deferred once on the live tail; force two re-drives (the scheduler's API):
+      await engine.rerunDeferred(worker);
+      await engine.rerunDeferred(worker);
+      await handle.stop();
+      expect(counts).toEqual([1, 2, 3]);
+      // cleared on done: a fresh bump starts at 1
+      const d = (await store.read.search({ limit: 10 })).find(
+        (x) => x.externalId === 'p',
+      )!;
+      expect(await store.bumpAttempt('worker:bumper:v1', d.id, 'parse')).toBe(
+        1,
+      );
+      // bumps never re-fed the doc: exactly the live run + two re-drives
+      expect(runs).toBe(3);
+    });
+
+    it('a doc with several changes in one feed batch is worked once', async () => {
+      const engine = plainEngine();
+      const account = await store.createAccount({
+        source: 'test',
+        identifier: 'o',
+      });
+      let runs = 0;
+      const worker: Worker = {
+        name: 'once',
+        version: 1,
+        matches: (ch) =>
+          ch.kind === 'document' && ch.document.externalId === 'm',
+        async work() {
+          runs += 1;
+          return 'done';
+        },
+      };
+      // three changes for the same doc BEFORE the worker attaches → one replay batch
+      await store.commit({
+        account: account.id,
+        documents: [doc('m', 'a')],
+        cursor: 1,
+      });
+      await store.commit({
+        account: account.id,
+        documents: [doc('m', 'b')],
+        cursor: 2,
+      });
+      await store.commit({
+        account: account.id,
+        documents: [doc('m', 'c')],
+        cursor: 3,
+      });
+      const handle = engine.attach(worker);
+      await settle();
+      await handle.stop();
+      expect(runs).toBe(1);
+    });
+
+    it('a re-drive page works a doc once and resolves its duplicate ledger rows', async () => {
+      const engine = plainEngine();
+      const account = await store.createAccount({
+        source: 'test',
+        identifier: 'r',
+      });
+      let runs = 0;
+      let redriving = false;
+      const worker: Worker = {
+        name: 'redrive',
+        version: 1,
+        matches: (ch) =>
+          ch.kind === 'document' && ch.document.externalId === 'q',
+        async work() {
+          runs += 1;
+          return redriving ? 'done' : 'defer';
+        },
+      };
+      const handle = engine.attach(worker);
+      // two separate live batches → two deferred ledger rows for one doc
+      await store.commit({
+        account: account.id,
+        documents: [doc('q', 'a')],
+        cursor: 1,
+      });
+      await settle();
+      await store.commit({
+        account: account.id,
+        documents: [doc('q', 'b')],
+        cursor: 2,
+      });
+      await settle();
+      expect(runs).toBe(2);
+      redriving = true;
+      await engine.rerunDeferred(worker);
+      await handle.stop();
+      expect(runs).toBe(3);
+      expect(await store.ledgerHasDeferred('worker:redrive:v1')).toBe(false);
+    });
+  });
+
   it('worker session: read/see route to the plane, enrich commits with the cursor', async () => {
     // fake inference recording lanes
     const calls: string[] = [];
