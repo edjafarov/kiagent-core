@@ -679,6 +679,8 @@ it('a doc with several changes in one feed batch is worked once', async () => {
               let clear: string[] = [];
               const seen = new Set<string>();
               …
+                // Only MATCHED document changes enter `seen`; non-matching,
+                // account and purge changes keep today's path untouched.
                 if (matched && change.kind === 'document') {
                   if (seen.has(change.document.id)) { cursor = change.seq; continue; }
                   seen.add(change.document.id);
