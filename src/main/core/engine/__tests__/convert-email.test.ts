@@ -5,7 +5,14 @@
  * does not provide. The converter only ever runs in the main process, so the
  * node environment is also the truthful one here.
  */
-import { createConverter, MAX_MARKDOWN_CHARS } from '../convert';
+import fs from 'node:fs';
+import path from 'node:path';
+
+import {
+  convertibleKind,
+  createConverter,
+  MAX_MARKDOWN_CHARS,
+} from '../convert';
 
 const logs = { log: jest.fn() };
 
@@ -120,5 +127,118 @@ describe('converter: output cap', () => {
     const out = await convert(input('big.txt', 'text/plain', big));
     expect(out.markdown!.length).toBeLessThanOrEqual(MAX_MARKDOWN_CHARS + 20);
     expect(out.markdown!.endsWith('[truncated]')).toBe(true);
+  });
+});
+
+const FIX = path.join(__dirname, 'fixtures', 'msg');
+const msg = (name: string) =>
+  ({
+    externalId: name,
+    type: 'file',
+    title: name,
+    markdown: null,
+    binary: {
+      bytes: new Uint8Array(fs.readFileSync(path.join(FIX, name))),
+      mime: 'application/vnd.ms-outlook',
+      filename: name,
+    },
+    metadata: {},
+  }) as never;
+
+describe('converter: Outlook .msg', () => {
+  const convert = createConverter(logs as never);
+
+  it('routes .msg to the email kind by MIME or by extension alone', () => {
+    expect(convertibleKind('application/vnd.ms-outlook', 'a.msg')).toBe(
+      'email',
+    );
+    expect(convertibleKind('application/octet-stream', 'A.MSG')).toBe('email');
+    expect(convertibleKind(null, 'a.msg')).toBe('email');
+  });
+
+  it('renders the same layout as .eml: subject heading, From, To, Date, body', async () => {
+    const md = (await convert(msg('attachments.msg'))).markdown!;
+    expect(md.startsWith('# attachmentFiles')).toBe(true);
+    expect(md).toContain('**From:** hmailuser <hmailuser@hmailserver.test>');
+    expect(md).toContain('**To:** hmailuser@hmailserver.test');
+    expect(md).toMatch(/\*\*Date:\*\* 2023-11-01T00:48:31/);
+    expect(md).toContain('**Attachments:** jpg.jpg, png.png, tif.tif');
+  });
+
+  it('lists To and Cc, never Bcc', async () => {
+    const md = (await convert(msg('to-cc-bcc.msg'))).markdown!;
+    expect(md).toContain('**To:** ToUser <to@example.com>');
+    expect(md).toContain('**Cc:** ToCc <cc@example.com>');
+    expect(md).not.toContain('bcc@example.com');
+    expect(md).toContain('Message');
+  });
+
+  it('falls back to the HTML bytes when the plain body is empty (new Outlook)', async () => {
+    const md = (await convert(msg('html-only.msg'))).markdown!;
+    expect(md).toContain('# Microsoft Outlook テスト メッセージ');
+    expect(md).toContain('この電子メール メッセージは');
+    expect(md).not.toContain('<meta');
+  });
+
+  it('keeps Unicode and ANSI bodies intact', async () => {
+    const cjk = (await convert(msg('unicode-cjk.msg'))).markdown!;
+    expect(cjk).toContain('你好');
+    expect(cjk).toContain('안녕하세요');
+    expect((await convert(msg('ansi.msg'))).markdown).toContain(
+      'Non Unicode mail body!',
+    );
+  });
+
+  it('names an embedded-message attachment by its name and never prints undefined', async () => {
+    const md = (await convert(msg('msg-in-msg.msg'))).markdown!;
+    expect(md).toContain(
+      '**Attachments:** Microsoft Outlook テスト メッセージ, green.png',
+    );
+    expect(md).not.toContain('undefined');
+  });
+
+  it('shows the display name, not an Exchange X.500 DN, for an EX sender', async () => {
+    const md = (await convert(msg('sent2.msg'))).markdown!;
+    expect(md).toContain('**From:** UnoKenji');
+    expect(md).not.toContain('/O=EXCHANGELABS');
+  });
+
+  it('an extensionless attachment with the Outlook MIME is parsed by msgreader, not mailparser', async () => {
+    const m = msg('plain.msg') as any;
+    const out = await convert({
+      ...m,
+      title: 'attachment',
+      binary: { ...m.binary, filename: 'attachment' },
+    } as never);
+    expect(out.markdown!.startsWith('# Simple')).toBe(true);
+  });
+
+  it('a file that is not a real .msg leaves markdown null (convert worker records failed)', async () => {
+    const bad = {
+      ...(msg('plain.msg') as any),
+      binary: {
+        bytes: new Uint8Array(64),
+        mime: 'application/vnd.ms-outlook',
+        filename: 'bad.msg',
+      },
+    };
+    const out = await convert(bad as never);
+    expect(out.markdown ?? null).toBeNull();
+    expect(out.binary).toBeUndefined();
+  });
+
+  it('.eml output is unchanged apart from the new Cc line', async () => {
+    const parts = (
+      await convert(input('note.eml', 'message/rfc822', EML))
+    ).markdown!.split('\n\n');
+    expect(parts[0]).toBe('# Notes on the Analytical Engine');
+    // mailparser 3.9 quotes display names ("Ada Lovelace"); pin layout + order, not its quoting
+    expect(parts[1]).toMatch(
+      /^\*\*From:\*\* "?Ada Lovelace"? <ada@example\.com>$/,
+    );
+    expect(parts[2]).toMatch(
+      /^\*\*To:\*\* "?Charles Babbage"? <charles@example\.com>$/,
+    );
+    expect(parts[3]).toBe('**Date:** 1843-08-12T09:00:00.000Z');
   });
 });

@@ -96,7 +96,8 @@ export function convertibleKind(
   if (
     m === 'message/rfc822' ||
     m === 'application/mbox' ||
-    ['eml', 'emlx', 'mbox'].includes(ext)
+    m === 'application/vnd.ms-outlook' ||
+    ['eml', 'emlx', 'mbox', 'msg'].includes(ext)
   )
     return 'email';
   if (m.startsWith('text/') || ['md', 'txt', 'json', 'log'].includes(ext))
@@ -148,7 +149,7 @@ export async function parse(
       return parts.join('\n\n');
     }
     case 'email':
-      return emailToMarkdown(buf, ext);
+      return emailToMarkdown(buf, ext, (mime ?? '').toLowerCase());
     case 'text':
       return buf.toString('utf8');
     default:
@@ -184,9 +185,83 @@ function csvToMarkdown(csv: string): string {
  *  the markdown a single row carries. */
 const MBOX_MAX_MESSAGES = 500;
 
+interface MailParts {
+  subject?: string;
+  from?: string;
+  to?: string;
+  cc?: string;
+  date?: Date;
+  attachments: string[];
+  body: string;
+}
+
+/** The ONE email layout, for .eml/.emlx/.mbox (mailparser) and .msg
+ *  (msgreader) alike, so search sees the same shape whatever the format. */
+function renderMail(m: MailParts): string {
+  const head: string[] = [];
+  if (m.subject) head.push(`# ${m.subject}`);
+  if (m.from) head.push(`**From:** ${m.from}`);
+  if (m.to) head.push(`**To:** ${m.to}`);
+  if (m.cc) head.push(`**Cc:** ${m.cc}`);
+  if (m.date && !Number.isNaN(m.date.getTime()))
+    head.push(`**Date:** ${m.date.toISOString()}`);
+  if (m.attachments.length > 0)
+    head.push(`**Attachments:** ${m.attachments.join(', ')}`);
+  return [head.join('\n\n'), m.body.trim()].filter(Boolean).join('\n\n');
+}
+
+/** Outlook .msg → the same markdown as .eml. Body: plain text, else the HTML
+ *  body (string or, from "new Outlook", raw UTF-8 bytes). RTF-only messages
+ *  index headers + attachment names (deliberate spec deviation, see the
+ *  outlook-msg plan). */
+async function msgToMarkdown(buf: Buffer): Promise<string> {
+  // A typed lazy require, NOT `await import()`: under module node16 a dynamic
+  // import of this CJS package yields the class at `.default.default` (TS2351
+  // "not constructable"). Same pattern as local-folder/mime.ts.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { default: MsgReader } =
+    require('@kenjiuno/msgreader') as typeof import('@kenjiuno/msgreader');
+  // DataView: no copy, and correct for small Buffers living in Node's shared pool.
+  const d = new MsgReader(
+    new DataView(buf.buffer, buf.byteOffset, buf.byteLength),
+  ).getFileData();
+  if (d.error) throw new Error(`msg: ${d.error}`);
+  // An Exchange sender carries an X.500 DN ("/O=…"), not an address: show the name.
+  const who = (name?: string, email?: string): string => {
+    const addr = email && !email.startsWith('/') ? email : undefined;
+    if (name && addr && name !== addr) return `${name} <${addr}>`;
+    return name ?? addr ?? '';
+  };
+  const rcpt = (type: 'to' | 'cc') =>
+    (d.recipients ?? [])
+      .filter((r) => r.recipType === type)
+      .map((r) => who(r.name, r.smtpAddress ?? r.email))
+      .filter(Boolean)
+      .join(', ');
+  // `html` bytes are decoded as UTF-8 (new Outlook writes UTF-8). Classic
+  // Outlook messages with codepage HTML always carry a plain `body`, so they
+  // never reach this branch.
+  const html =
+    d.bodyHtml ?? (d.html ? new TextDecoder().decode(d.html) : undefined);
+  const body = d.body?.trim() ? d.body : html ? await htmlToMarkdown(html) : '';
+  const when = d.messageDeliveryTime ?? d.clientSubmitTime;
+  return renderMail({
+    subject: d.subject,
+    from: who(d.senderName, d.senderSmtpAddress ?? d.senderEmail),
+    to: rcpt('to'),
+    cc: rcpt('cc'),
+    date: when ? new Date(when) : undefined,
+    attachments: (d.attachments ?? [])
+      .map((a) => a.fileName ?? a.name)
+      .filter((n): n is string => Boolean(n)),
+    body,
+  });
+}
+
 /**
  * Locally-saved email → markdown, via the same `mailparser` the IMAP source
- * uses (src/main/sources/imap/parse.ts) rather than a second implementation.
+ * uses (src/main/sources/imap/parse.ts) rather than a second implementation;
+ * `.msg` goes through msgreader.
  *
  * Raw decoding is NOT an option even though these files look like text: a
  * body is quoted-printable or base64, and an attachment is a base64 blob that
@@ -194,31 +269,38 @@ const MBOX_MAX_MESSAGES = 500;
  * "words". Attachments are reduced to their filenames, which is the part a
  * person actually searches for.
  */
-async function emailToMarkdown(buf: Buffer, ext: string): Promise<string> {
+async function emailToMarkdown(
+  buf: Buffer,
+  ext: string,
+  mime: string,
+): Promise<string> {
+  // Outlook's binary CFB format: by extension OR by MIME (an extensionless
+  // attachment carries only the MIME; mailparser would read nothing from it).
+  if (ext === 'msg' || mime === 'application/vnd.ms-outlook')
+    return msgToMarkdown(buf);
+
   const { simpleParser } = await import('mailparser');
 
   const render = async (raw: Buffer): Promise<string> => {
     const mail = await simpleParser(raw);
-    const head: string[] = [];
     const addr = (v: unknown): string =>
       v && typeof v === 'object' && 'text' in (v as Record<string, unknown>)
         ? String((v as { text?: string }).text ?? '')
         : '';
-    if (mail.subject) head.push(`# ${mail.subject}`);
-    if (mail.from) head.push(`**From:** ${addr(mail.from)}`);
-    const to = Array.isArray(mail.to)
-      ? mail.to.map(addr).join(', ')
-      : addr(mail.to);
-    if (to) head.push(`**To:** ${to}`);
-    if (mail.date) head.push(`**Date:** ${mail.date.toISOString()}`);
-    const names = (mail.attachments ?? [])
-      .map((a) => a.filename)
-      .filter((n): n is string => Boolean(n));
-    if (names.length > 0) head.push(`**Attachments:** ${names.join(', ')}`);
-    // `text` is the decoded text/plain part; fall back to the HTML part.
-    const body =
-      mail.text ?? (mail.html ? await htmlToMarkdown(mail.html) : '');
-    return [head.join('\n\n'), body.trim()].filter(Boolean).join('\n\n');
+    const list = (v: unknown) =>
+      Array.isArray(v) ? v.map(addr).join(', ') : addr(v);
+    return renderMail({
+      subject: mail.subject,
+      from: addr(mail.from),
+      to: list(mail.to),
+      cc: list(mail.cc),
+      date: mail.date,
+      attachments: (mail.attachments ?? [])
+        .map((a) => a.filename)
+        .filter((n): n is string => Boolean(n)),
+      // `text` is the decoded text/plain part; fall back to the HTML part.
+      body: mail.text ?? (mail.html ? await htmlToMarkdown(mail.html) : ''),
+    });
   };
 
   if (ext === 'emlx') {
