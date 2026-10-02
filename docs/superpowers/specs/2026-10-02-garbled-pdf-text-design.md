@@ -1,6 +1,6 @@
 # Garbled or missing PDF text layers: OCR the pages that need it
 
-Status: r2 (fable + codex-astra round 1 folded in) · 2026-10-02
+Status: r3 (review round 2 folded in) · 2026-10-02
 Depends on: large-file spec §4 (page-list rasterizer, one-window-per-run
 OCR). This spec lands after it.
 
@@ -20,7 +20,7 @@ OCR'd. Quality is judged per document, but the defect is per page.
 
 ## Goals
 
-- Pages that are garbled, or that are image-only, get OCR'd. Good
+- Pages that are garbled, or that have (almost) no text layer, get OCR'd. Good
   text-layer pages keep their text.
 - The existing corpus is re-assessed once, with no user action.
 - **No text loss when OCR can't run.** A false positive must never cost
@@ -39,15 +39,21 @@ OCR'd. Quality is judged per document, but the defect is per page.
 New module `src/main/core/engine/text-quality.ts`:
 
 ```ts
-type PageQuality = 'good' | 'blank' | 'image-only' | 'garbled';
-assessPage(text: string, hasImages: boolean): PageQuality
+type PageQuality = 'good' | 'sparse' | 'garbled';
+assessPage(text: string): PageQuality
 ```
 
 Here `n` = the page's non-whitespace characters.
 
-- If `n < 16`, the page is `image-only` when `hasImages` is true, and
-  `blank` otherwise. A blank page is treated like a good page: there is
-  nothing to OCR. This covers duplex backs and separator sheets.
+- If `n < 16`, the page is `sparse`: an image-only scan or a blank page.
+  Both simply get OCR'd.
+  - A blank page costs one rasterize plus one cheap `read`, and needs no
+    VLM pass (§4).
+  - We deliberately don't detect images at parse time: pdf.js's
+    `getOperatorList()` decodes every image XObject, about 35 MB RGBA per
+    300-dpi page, in the main process on the ingest path.
+  - Optionally, vision skips the `read` call for a near-uniform rasterized
+    page.
 - If `n ≥ 16`, the page is `garbled` only on **positive corruption
   evidence**. Low letter density alone never qualifies, because numeric
   statements and schedules must stay `good`. Either signal suffices:
@@ -55,8 +61,10 @@ Here `n` = the page's non-whitespace characters.
     - U+FFFD;
     - the Private Use Area;
     - C0/C1 controls other than tab and newline;
-    - Latin-1 symbol characters U+00A1–U+00BF (e.g. `¶ ¸ ¤`), which only
-      occur this densely in mis-mapped glyphs.
+    - the rare Latin-1 marks `¤ ¦ ¨ ¯ ´ ¸ ¶ ¬`.
+
+    Currency (`£ ¥ ¢`), `§`, `° ± µ`, fractions, quotes and `© ®` are
+    legitimate and never count.
   - **(b) Latin text with no words in it.** The page has ≥ 60 Latin letters
     and **zero** hits from a small function-word list (de/en/fr/it/es, about
     15 words each: `der die und the and of le la et il di de per…`), **and**
@@ -70,16 +78,15 @@ Thresholds are constants, tuned on the fixtures.
 
 ### 2. Per-page parse
 
-For PDFs, `parse()` uses pdf-parse's `pagerender` hook. `pageData` is a
-pdf.js `PDFPageProxy`, which gives each page's text and whether its
-`getOperatorList()` contains an image paint op (`paintImageXObject`,
-`paintInlineImageXObject`, `paintJpegXObject`). It returns a structured
+For PDFs, `parse()` uses pdf-parse's `pagerender` hook to get each page's
+text (`getTextContent()` only, no operator list). It returns a structured
 result:
 
 ```ts
 interface PdfParseResult {
-  markdown: string | null;      // good pages' text, in page order
-  ocrPages: number[];           // 1-based, garbled + image-only pages
+  pages: { n: number; text: string; quality: PageQuality }[]; // 1-based
+  markdown: string | null;   // ALL pages' text in order (as today), or null
+  ocrPages: number[];        // garbled + sparse page numbers
 }
 ```
 
@@ -88,9 +95,13 @@ dispatch on kind.
 
 | Pages | Outcome |
 |---|---|
-| all `good`/`blank` | markdown = text; status `ok` (today's behaviour) |
-| some bad, some good | markdown = good pages; status `needs-ocr`, `pages: ocrPages` |
-| no good pages | markdown `null`; status `text-poor` with `reason: 'garbled'` when any page was garbled (diagnostics only, same flow as today) |
+| all `good` | markdown = text; status `ok` (today's behaviour) |
+| any page `garbled` or `sparse` | markdown = **all** text (today's text, suspect pages included as a searchable fallback); status `needs-ocr`, `pages: ocrPages` |
+| no text at all (every page empty) | `null` → `text-poor` (today's behaviour) |
+
+**No text is ever dropped on suspicion.** A false positive costs one OCR
+pass, never searchable text. Suspect text is replaced only by **non-empty**
+OCR for that page.
 
 ### 3. Whoever parses writes the marker, deterministically
 
@@ -119,14 +130,18 @@ this algorithm, so the backfill (§5) never re-admits it.
   R2. The partial index is recreated in an append-only migration.
 - Per run, the worker:
   1. Fetches the bytes.
-  2. Re-parses per page to recover the good pages' text.
+  2. Re-parses per page (`PdfParseResult.pages`) to recover the
+     text-layer text of every page.
   3. Rasterizes **only the next window of `pages`**, using the large-file
      spec's page-list rasterizer (`pdfToPngs(bytes, { pages })`), and OCRs
      it.
-  4. Writes markdown merged in page order (text layer for good pages, OCR
-     for done pages, nothing yet for pending ones), plus the large-file
-     spec's `ocrProgress` sibling key.
-  5. Uses the same single-entry bytes cache, so the next window does not
+  4. Records each OCR'd page's text **by page number** in the large-file
+     spec's `ocrProgress.pages` map (§4 there). Pages that came back empty
+     are recorded too, so they are not redone.
+  5. Re-renders markdown from the per-page representation in page order:
+     OCR text where it is non-empty, otherwise the text-layer text
+     (including suspect text).
+  6. Uses the same single-entry bytes cache, so the next window does not
      re-download.
 - One window per run, as in the large-file spec, so each window is
   committed durably.
@@ -136,7 +151,7 @@ this algorithm, so the backfill (§5) never re-admits it.
   window.
 - `NoProviderError('read')` still defers, so the doc gets OCR when a
   provider appears (Windows spec).
-- A `needs-ocr` doc that never gets OCR keeps its good-page text. No
+- A `needs-ocr` doc that never gets OCR keeps all of today's text. No
   regression.
 
 ### 5. Re-assessing the existing corpus
@@ -150,11 +165,9 @@ through the worker), never `quality`.
 - `matches()` additionally admits a PDF with markdown ≥ 16 chars, status
   absent or `ok`, no `quality`, whose **whole stored text** assesses
   `garbled` under §1 (a)/(b).
-- For those, the worker re-fetches and runs §2's per-page parse. It then
-  writes:
-  - the outcome with `quality: 1` (`ok`, `needs-ocr` or `text-poor`);
-  - and, for `text-poor`, an **explicit `markdown: ''`**, so the garbage is
-    gone and vision's has-text skip doesn't block OCR.
+- For those, the worker re-fetches, runs §2's per-page parse, and writes
+  the outcome with `quality: 1` (`ok` or `needs-ocr`). The markdown is
+  left as is; vision replaces suspect pages as their OCR arrives.
 - A doc re-parsed as clean records `ok` with `quality: 1` and is never
   re-admitted.
 - Mixed scanned + text PDFs already in the corpus look clean as whole text,
@@ -169,19 +182,31 @@ through the worker), never `quality`.
     `good`.
   - Caesar-shifted text, PUA-heavy text, Latin-1-symbol-heavy text
     (`Í¶ÈÆ¸…`) and U+FFFD runs → `garbled`.
-  - Empty with images → `image-only`; empty without → `blank`.
+  - Empty → `sparse`.
+  - A `§`-dense statute-index page → `good`.
+  - A currency-heavy statement (`£`, `¥`, `§`) → `good`.
+- **No text loss:**
+  - With OCR unavailable, a `needs-ocr` doc keeps its full text.
+  - With OCR returning empty for a page, that page keeps its text-layer
+    text.
 - **PDF fixtures** (small, committed):
-  - a clean 3-page PDF with a blank last page → `ok`;
-  - a no-ToUnicode-font PDF (generated by a script) → `text-poor`/garbled;
-  - a 4-page mixed PDF with pages 2–3 image-only → `needs-ocr [2,3]`;
+  - a clean 3-page PDF → `ok`; with a blank last page → `needs-ocr [3]`,
+    with text intact;
+  - a no-ToUnicode-font PDF (generated by a script) → `needs-ocr`, all
+    pages;
+  - a 4-page mixed PDF with pages 2–3 scanned → `needs-ocr [2,3]`;
   - a text cover plus a scanned exhibit (2 pages) → `needs-ocr [2]`.
 - **Hash stability:** rescan of an unchanged `needs-ocr` file → same
   `contentHash`, and `extraction` is preserved.
-- **Vision:** the mixed fixture merges text pages 1 and 4 with fake-OCR
-  pages 2–3 in order, with no VLM call.
+- **Vision:**
+  - The mixed fixture merges text pages 1 and 4 with fake-OCR pages 2–3 in
+    order, with no VLM call.
+  - A 60-page fixture with scattered bad pages (3, 17, 41, 58), with a
+    process kill between windows, resumes from `ocrProgress.pages` and
+    renders every page in order.
 - **Backfill:**
   - An old `ok` row with garbled markdown is admitted, then becomes
-    `text-poor` + `markdown ''`.
+    `needs-ocr` with its text intact.
   - A clean old row is not admitted.
   - A row with `quality: 1` is never re-admitted.
 - **Live:** a real broken-font PDF becomes searchable by a body phrase

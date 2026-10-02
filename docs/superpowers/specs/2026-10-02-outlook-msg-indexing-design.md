@@ -45,10 +45,10 @@ client's data room lost four legal correspondence emails this way.
 Add `@kenjiuno/msgreader`. It is pure JS, Apache-2.0, v1.28.0, and has two
 deps (`iconv-lite`, `@kenjiuno/decompressrtf`).
 
-- **Where to declare it.** Like `mailparser`, it goes in
-  `release/app/package.json` (the packaged runtime) **and** in the root
-  `package.json` (dev and tests), in both kiagent-core and alpha-cent's
-  overlay manifests. A missing packaged dep would make the `import()` fail
+- **Where to declare it.** In `release/app/package.json` (the packaged
+  runtime, where `mailparser` lives) **and** in the root `package.json`
+  (dev and tests; `mailparser` has only its `@types` there), in both
+  kiagent-core and alpha-cent's overlay manifests. A missing packaged dep would make the `import()` fail
   and record every `.msg` as `failed`.
 - **OSS IQ.** It crashed on 2026-10-02 (`UnboundLocalError:
   anyof_constraints`, an ossiq bug). Re-run it at implementation time with

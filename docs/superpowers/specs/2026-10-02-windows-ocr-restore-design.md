@@ -40,8 +40,9 @@ Every scanned PDF and image on Windows never gets text.
 - Windows installers carry `windows-ocr.exe` for x64 and arm64. A build
   gate fails without it.
 - Windows scans and images get OCR text.
-- On any platform, a document is never re-driven forever because a VLM
-  will never work.
+- A document whose OCR ran is never re-driven forever because a VLM will
+  never work. A host with neither OCR nor VLM (Linux; Windows with no OCR
+  language) keeps re-driving, by design, so a later fix recovers its docs.
 
 ## Non-goals
 
@@ -57,8 +58,13 @@ The Docker image already cross-publishes `net10.0-windows` exes for win-x64
 and arm64: the meetings `KiaAudio`/`KiaDiarize` with
 `EnableWindowsTargeting=true` (`release-local.sh` ~163). Do the same:
 
-- Retarget `native/windows-ocr/windows-ocr.csproj` to `net10.0-windows`
-  (matching meetings) and add `<EnableWindowsTargeting>true`.
+- Retarget `native/windows-ocr/windows-ocr.csproj` to the **versioned**
+  `net10.0-windows10.0.19041.0` and add `<EnableWindowsTargeting>true`.
+  `Windows.Media.Ocr`, `Windows.Graphics.Imaging` and `Windows.Storage` are
+  WinRT projections that exist only on a versioned Windows TFM. The meetings
+  helpers use NAudio/sherpa, not WinRT, so they prove the Docker toolchain
+  but not that `Microsoft.Windows.SDK.NET.Ref` restores on Linux. Try
+  cross-publish first; the fallback below is a real option.
 - `build-windows-ocr-helper.mjs`:
   - drop the win32 guard;
   - publish both arches into `assets/ocr/win32-{x64,arm64}/windows-ocr.exe`;
@@ -122,8 +128,17 @@ In the vision worker's pass 2, the `catch` distinguishes three cases:
   `n = await session.bump('vlm')` (durable, **no document change**, so there
   is no feed loop).
   - `n < 3` → `defer`.
-  - `n ≥ 3` → **complete** with whatever pass 1 produced (possibly empty):
+  - `n ≥ 3` **and pass 1 actually ran** (`!ocrFailed`): **complete** with
+    whatever OCR produced (possibly empty, which is then genuinely final):
     `extraction: { engine: 'local-ocr', vlm: 'unavailable' }`.
+  - `n ≥ 3` but pass 1 did not run (no `read` provider, e.g. a Windows host
+    with no OCR language, or Linux): keep deferring. That is today's
+    behaviour. Those docs must stay recoverable for when the user adds a
+    language and restarts, so they are never buried with empty text.
+
+The worker reaches `mayBecomeReady` through a new
+`WorkerSession.mayBecomeReady(kind)`. It does not reach for the plane
+directly.
 
 This ends the forever re-drive on Windows/Linux. A healthy Mac whose VLM
 works never reaches it. Docs whose OCR gave ≥ 200 characters complete in

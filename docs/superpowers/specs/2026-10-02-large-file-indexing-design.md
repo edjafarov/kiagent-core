@@ -142,9 +142,16 @@ OOM, so the change is windowed:
   Windows needs no helper change. Page *lists*, not ranges, so the
   garbled-pdf spec can pick scattered pages.
 - **One window per `work()` run.** The vision worker OCRs the next 10
-  pages, enriches markdown-so-far plus progress, and returns `done`.
+  pages, enriches progress plus markdown re-rendered from it, and returns
+  `done`.
   - Progress lives in a sibling key,
-    `ocrProgress: { done: number, pageCount }`, never inside `extraction`.
+    `ocrProgress: { pageCount, pages: Record<pageNo, text> }`, never inside
+    `extraction`. Per-page OCR text is keyed by the **original page
+    number**, including pages that came back empty.
+  - Markdown is always re-rendered from that map. `merge.ts` labels pages
+    by their real number, not array position.
+  - On completion, `ocrProgress` is cleared and `extraction` is set.
+  - The garbled-pdf spec uses the same representation for scattered pages.
     `extraction` keeps meaning "finished", and the SQL mirror's
     `extraction IS NULL` stays true while in progress.
   - Every enrich appends a document change, so the doc re-enters the feed
