@@ -8,7 +8,7 @@
 - Both connectors already route every file through the SDK's verbatim `decideFileIndexing` (`chooseRoute`). The binary route now carries the policy's `bytes` field.
 - `bytes !== 'eager'` produces the metadata-only item shape each connector already has, with `extraction_status` set to the `bytes` value (`'deferred'` / `'none'`), no download and `markdown: ''`. Core's convert worker fetches `deferred` rows later through `fetchBytes`, which refuses `none`.
 - `hashSkip` pins a row when the stored `extraction_status` equals the status the current route would write. One rule covers `ok`, `deferred` and `none`, and a later policy change that alters the route re-fetches automatically.
-- Each cursor gains `policy_version`. It is stamped at each connector's single existing stamping site, and a stale value triggers exactly one re-enumeration.
+- Each cursor gains `policy_version`. It is **stamped** only at each connector's single `pull` stamping site, and **carried through unchanged** by the one other cursor writer, `manageFolders`. A stale value triggers exactly one re-enumeration.
 
 **Tech Stack:** TypeScript, jest + ts-jest, esbuild, `@kiagent/connector-sdk` (GitHub-release tgz).
 
@@ -46,6 +46,7 @@ During development each connector installs that local tarball. Task 5 swaps it f
 3. **An unknown-size PDF that turns out to be 40 MiB after download.** It becomes a `deferred` item without bytes, not an ignore plus deletion. Owned by Tasks 2 and 3.
 4. **A 30 MiB PNG.** It is still ignored, and a pre-existing row is still archived. Owned by Tasks 2 and 3.
 5. **A crash mid-re-enumeration.** The resumed walk continues; it never restarts from scratch forever, and never skips the rest. Owned by Tasks 2b and 3b.
+6. **A Manage-folders save after the migration.** It must not reset the account to policy version 1, which would mean a full re-enumeration per save. Owned by Tasks 2b and 3b.
 
 ---
 
@@ -106,6 +107,9 @@ In `ingest.test.ts`, replace the five size-cap tests:
 - "downloads, then drops, an unknown-declared-size file";
 - "post-download-oversize … archived via exactly one deletion";
 - "post-download-oversize does NOT emit a deletion".
+
+Also flip these existing tests, which assert the old drop-the-PDF behaviour:
+- **`document.test.ts`:** "returns null when the size in metadata exceeds the cap" (26 MiB PDF), and the over-cap half of the inclusive-cap `fetchBytes` test (`:160-169`). Switch the PDF to `MAX_FETCH_BYTES + 1`; the expected null is unchanged.
 
 Use the following. `MAX_FETCH_BYTES` is imported from `@kiagent/connector-sdk`.
 
@@ -179,6 +183,22 @@ it('unknown declared size, 40 MiB after download → deferred item without bytes
   expect(batches.flatMap((b) => b.deletions ?? [])).toEqual([]);
 });
 
+it('unknown declared size, 30 MiB docx after download → none, measured size persisted, fetchBytes refuses it', async () => {
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const { source, calls } = makeSource({
+    deltaPages: one('nd', 'n.docx', { size: undefined, file: { mimeType: DOCX } }),
+    downloads: { 'https://download.example/nd': new Uint8Array(30 * MiB) },
+  });
+  const { session } = makeSession({ config: oneRoot });
+  const items = ((await collect(source.pull(session, null))) as B[]).flatMap((b) => b.items);
+  expect(items.map((i) => i.extractionStatus)).toEqual(['none']);
+  const doc = fakeDoc('nd', 'file', source.toDocument(items[0]).metadata as Record<string, unknown>);
+  expect(doc.metadata).toMatchObject({ size_bytes: 30 * MiB, sizeBytes: 30 * MiB });
+  const before = calls.length;
+  expect(await source.fetchBytes!(session, doc)).toBeNull();
+  expect(calls.length).toBe(before);
+});
+
 it('unknown declared size, 30 MiB PNG after download → still ignored + archived', async () => {
   const query = fakeQuery([fakeDoc('ni', 'file', { etag: 'etag-OLD', extraction_status: 'ok' })]);
   const { source } = makeSource({
@@ -214,7 +234,7 @@ In the `fetchBytes` tests (grep `fetchBytes` in `src/__tests__/`, or add to `doc
 ```ts
 it('fetchBytes serves a deferred 60 MiB PDF and refuses a "none" one without any network call', async () => {
   const { fetchFn, calls } = graphFetch({
-    gets: { big: { '@microsoft.graph.downloadUrl': 'https://download.example/big' } },
+    items: { big: { '@microsoft.graph.downloadUrl': 'https://download.example/big' } },
     downloads: { 'https://download.example/big': new Uint8Array([7]) },
   });
   const source = createOneDriveSource(makeHost(fetchFn, fakeQuery()), instantClock);
@@ -228,7 +248,7 @@ it('fetchBytes serves a deferred 60 MiB PDF and refuses a "none" one without any
 });
 ```
 
-Check the `graphFetch` world key for item GETs in `src/testing/harness.ts`, and match it (the existing "refreshes the downloadUrl" test shows the shape).
+(`items` is the `GraphWorld` key for item GETs.) In `document.test.ts`, add the imports: `import { MAX_FETCH_BYTES } from '@kiagent/connector-sdk';` and `const MiB = 1024 * 1024;`.
 
 - [ ] **Step 2: Run, and confirm they fail**
 
@@ -272,8 +292,10 @@ if (route.bytes !== 'eager') return metadataItem(raw, route.bytes, displayPath, 
 const postRoute = chooseRoute(mime, raw.name, bytes.byteLength);
 if (postRoute.kind === 'ignore') { /* existing ignore + deletion branch, unchanged */ }
 if (postRoute.bytes !== 'eager') {
-  // Unknown declared size, oversized document: keep the row, drop the bytes.
-  return metadataItem(raw, postRoute.bytes, displayPath, root.rootFolderId);
+  // Unknown declared size, oversized document: keep the row, drop the bytes,
+  // and RECORD the measured size. Otherwise fetchBytes (and core's convert
+  // worker) would re-route the size-less row as eager and download it again.
+  return metadataItem({ ...raw, size: bytes.byteLength }, postRoute.bytes, displayPath, root.rootFolderId);
 }
 return { file: raw, markdown: null, bytes, extractionStatus: 'ok', displayPath, rootFolderId: root.rootFolderId };
 ```
@@ -313,7 +335,7 @@ git commit -m "feat: metadata-only rows for documents over the eager cap"
 - Produces: `OneDriveCursor.policy_version?: number`.
 
 **Design.** A stale cursor (`(policy_version ?? 1) < FILE_POLICY_VERSION`) does two things in the same `pull`:
-1. If the normalized cursor is live (`backfillDone`), it first drains one ordinary `delta()` with the **old** version stamped. This catches up deletions the old tokens would report; OneDrive has no reconcile, so a fresh enumeration can never report them.
+1. For every configured root that **holds a token**, it first drains one ordinary `delta()` with the **old** version stamped. This applies even when another root is still mid-backfill. It catches up deletions the old tokens would report; OneDrive has no reconcile, so a fresh enumeration can never report them.
 2. It then runs `backfill()` from a null cursor (a delta from scratch, as ms365 2.2.0's `attachments:1` did), stamped with the **new** version.
 
 A crash during step 1 replays step 1. A crash during step 2 resumes the backfill, since its `backfill` state is in a cursor already carrying the new version. `hashSkip` makes re-seen files free, apart from the listing.
@@ -351,9 +373,24 @@ it('an old cursor without policy_version catches up deletions, then re-enumerate
   expect(batches.flatMap(ids)).toEqual(['big']);
   expect(calls.some((u) => u.includes('download.example'))).toBe(false);
   expect(batches.at(-1)!.cursor).toEqual({ delta_tokens: { FA: 'NEW' }, scope_roots: ['FA'], policy_version: FILE_POLICY_VERSION });
-  // catch-up batches still carry the old version: a crash there replays the catch-up
-  const firstBackfill = batches.findIndex((b) => b.cursor.backfill);
-  expect(batches.slice(0, firstBackfill).every((b) => (b.cursor.policy_version ?? 1) === 1)).toBe(true);
+  // the catch-up batch carries the old version: a crash there replays the catch-up
+  expect(batches[0].cursor.policy_version).toBe(1);
+});
+
+it('a partially backfilled old cursor still drains the tokens it has before re-enumerating', async () => {
+  const twoRoots = { roots: [{ rootFolderId: 'FA', rootName: 'Alpha' }, { rootFolderId: 'FB', rootName: 'Beta' }] };
+  const query = fakeQuery([fakeDoc('gone', 'file', { etag: 'e', extraction_status: 'ok' })]);
+  const { source } = makeSource({ deltaPages: {
+    [`${GRAPH_BASE}/me/drive/items/FA/delta?token=OLD`]: {
+      value: [{ id: 'gone', name: 'g.pdf', deleted: { state: 'deleted' } }], '@odata.deltaLink': finalLink('FA', 'OLD2') },
+    [deltaUrl('FA')]: { value: [], '@odata.deltaLink': finalLink('FA', 'NA') },
+    [deltaUrl('FB')]: { value: [], '@odata.deltaLink': finalLink('FB', 'NB') },
+  } }, query);
+  const { session } = makeSession({ config: twoRoots });
+  const old = { delta_tokens: { FA: 'OLD' }, scope_roots: ['FA', 'FB'], backfill: { root_index: 1 } };
+  const batches = (await collect(source.pull(session, old))) as B[];
+  expect(batches.flatMap((b) => b.deletions ?? [])).toEqual([{ externalId: 'gone', type: 'file' }]);
+  expect(batches.at(-1)!.cursor.policy_version).toBe(FILE_POLICY_VERSION);
 });
 
 it('a current cursor polls delta normally (no re-enumeration)', async () => {
@@ -416,10 +453,13 @@ async *pull(session: Session, cursor: OneDriveCursor | null) {
   };
   if (stale) {
     // Catch up what the OLD tokens know (deletions above all — OneDrive has no
-    // reconcile, and a from-scratch enumeration never reports them), then
+    // reconcile, and a from-scratch enumeration never reports them), for every
+    // root that holds a token — even while another root is mid-backfill — then
     // re-enumerate under the new policy. Each phase is resumable on its own.
-    if (backfillDone(start, roots)) {
-      yield* stamp(delta(client, session, host.query, host.net.fetch, start!, roots, processed, budget), fromVersion);
+    const tokened = roots.filter((r) => typeof start?.delta_tokens?.[r.rootFolderId] === 'string');
+    if (start && tokened.length > 0) {
+      yield* stamp(delta(client, session, host.query, host.net.fetch,
+        { delta_tokens: start.delta_tokens }, tokened, processed, budget), fromVersion);
       processed.clear();
     }
     yield* stamp(backfill(client, session, host.query, host.net.fetch, null, roots, processed, budget), FILE_POLICY_VERSION);
@@ -432,9 +472,22 @@ async *pull(session: Session, cursor: OneDriveCursor | null) {
 }
 ```
 
-A stale cursor that is mid-backfill (`!backfillDone`) skips the catch-up: its tokens are incomplete anyway. It restarts as a fresh backfill, which is the same cost as the ongoing one.
+`delta()` requires every root it is given to hold a token, which `tokened` guarantees. A stale cursor that was mid-backfill loses its `backfill` resume point. That is harmless: phase 2 re-enumerates every root from scratch anyway.
 
-Add `policy_version: FILE_POLICY_VERSION` to every cursor literal that test expectations compare with `toEqual`, and to every cursor **input** that represents a live, current account. Run `grep -n "scope_roots" src/__tests__/*.ts` to find them all. Inputs that deliberately model a pre-upgrade cursor keep no version.
+**`manageFolders` (`source.ts:1371`) is the other cursor writer.** It must **carry** the stored version, never stamp the current one. Stamping it would skip the one-time re-enumeration for roots retained across the save:
+
+```ts
+const cursor: OneDriveCursor = {
+  delta_tokens, scope_roots: [...nextIds],
+  ...(prev?.policy_version !== undefined ? { policy_version: prev.policy_version } : {}),
+};
+```
+
+The conditional spread keeps the existing `manage-folders` `toEqual` expectations green. Update the module comment on "ONE stamping site": pull stamps it; manageFolders carries it.
+
+Add `policy_version: FILE_POLICY_VERSION` to every cursor literal that test expectations compare with `toEqual` after a `pull`, and to every pull cursor **input** that represents a live, current account. Find them with `grep -n "delta_tokens" src/__tests__/*.ts`, **not** `scope_roots`. Many inputs, e.g. `batch-budget.test.ts:74,103,144,184,285` and `delta.test.ts:~48`, have no `scope_roots`, and would otherwise turn stale and hit a missing from-scratch fixture. Inputs that deliberately model a pre-upgrade cursor keep no version. `manageFolders` expectations need no change: absent stays absent.
+
+Add a test in the manage-folders suite: given `prev = { delta_tokens: { FA: 'T' }, scope_roots: ['FA'], policy_version: FILE_POLICY_VERSION }` and an unchanged selection, the returned cursor keeps `policy_version: FILE_POLICY_VERSION`. A `prev` without the field returns a cursor without it.
 
 - [ ] **Step 4: Run, and confirm everything passes**
 
@@ -464,7 +517,12 @@ git commit -m "feat: one-time re-enumeration when the file policy version change
 
 - [ ] **Step 1: Failing tests**
 
-In `backfill.test.ts`, find the existing "routing (unsupported / too-large)" cases that expect an oversized PDF to be ignored (grep `MAX_BINARY_BYTES`). Change them to use an **image** over `MAX_CLOUD_IMAGE_BYTES` for the ignore expectation, and add:
+Flip the existing tests that assert the old drop-the-PDF behaviour. Use an **image** over 20 MiB, or a PDF over `MAX_FETCH_BYTES`, wherever an ignore, a null or a deletion is still the point:
+- `backfill.test.ts:161`: the literal `26 * 1024 * 1024` PDF, plus any case found by grepping `MAX_BINARY_BYTES`;
+- `reconcile-and-document.test.ts:363`: the over-cap PDF `fetchBytes` null;
+- `delta.test.ts:154`: an unknown-size, post-download `MAX_BINARY_BYTES + 1` PDF expecting a deletion. It is now a deferred item with no deletion. Assert that, and move the deletion expectation to a PNG.
+
+Then add:
 
 ```ts
 import { MAX_FETCH_BYTES } from '@kiagent/connector-sdk';
@@ -497,6 +555,7 @@ it('unknown size, 40 MiB after download → deferred item without bytes', async 
   const { session } = makeSession();
   const items = ((await collect(source.pull(session, null))) as B[]).flatMap((b) => b.items);
   expect(items.map((i) => [i.extractionStatus, i.bytes])).toEqual([['deferred', undefined]]);
+  expect(source.toDocument(items[0]).metadata).toMatchObject({ size_bytes: 40 * MiB, sizeBytes: 40 * MiB });
 });
 
 it('hash-skip pins an unchanged deferred row and re-fetches when the route changed', async () => {
@@ -581,7 +640,10 @@ const bytes = await deps.client.request<Uint8Array>(mediaUrl(file.id), { respons
 const post = chooseRoute(file.mimeType, file.name, bytes.byteLength);
 if (post.kind === 'ignore') return { kind: 'ignored', reason: post.reason, fileId: file.id };
 if (post.kind === 'binary' && post.bytes !== 'eager') {
-  return { kind: 'item', item: metadataOnly(file, 'file', post.bytes, displayPath, root.rootFolderId) };
+  // Record the measured size (see the OneDrive twin): a size-less row would be
+  // re-routed as eager by fetchBytes and core's convert worker.
+  const sized = { ...file, size: String(bytes.byteLength) };
+  return { kind: 'item', item: metadataOnly(sized, 'file', post.bytes, displayPath, root.rootFolderId) };
 }
 ```
 
@@ -663,7 +725,16 @@ export interface DriveCursor {
 }
 ```
 
-In `withScopeRoots`, stamp `{ ...batch.cursor, scope_roots: scopeRoots, policy_version: FILE_POLICY_VERSION }`. Keep the name, and extend its doc comment: "also stamps `policy_version`; one owner for both".
+In `withScopeRoots`, stamp `{ ...batch.cursor, scope_roots: scopeRoots, policy_version: FILE_POLICY_VERSION }`. Keep the name, and extend its doc comment: "also stamps `policy_version`; one owner for both (manageFolders only carries it)".
+
+`manageFolders` (`source.ts:1520-1532`) **carries** the prior version and never stamps it:
+
+```ts
+? { page_token: prior.page_token, backfill_done: rewalk ? false : prior.backfill_done, scope_roots: scopeRoots,
+    ...(prior.policy_version !== undefined ? { policy_version: prior.policy_version } : {}) }
+```
+
+Test, in `folder-scope.test.ts` next to `:396`: an unchanged save with `prior.policy_version = FILE_POLICY_VERSION` keeps it, and the next `pull` goes straight to delta.
 
 In `pull`:
 
@@ -674,7 +745,7 @@ if (!cursor || !cursor.backfill_done || stalePolicy || !sameRootSet(cursor.scope
 
 Update the phase-switch comment: "…or the file policy admitted files the previous walk ignored".
 
-Add `policy_version: FILE_POLICY_VERSION` to the cursor literals in test expectations and current-account inputs (`grep -n "backfill_done" src/__tests__/*.ts`). Pre-upgrade inputs stay as they are.
+Add `policy_version: FILE_POLICY_VERSION` to the cursor literals in pull expectations, and to current-account pull inputs (`grep -n "backfill_done" src/__tests__/*.ts`). Pre-upgrade inputs and `manageFolders` expectations stay as they are.
 
 - [ ] **Step 4: Run, and confirm everything passes**
 
