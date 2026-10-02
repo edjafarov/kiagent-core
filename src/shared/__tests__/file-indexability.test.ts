@@ -6,6 +6,9 @@ import {
   MAX_LOCAL_BINARY_BYTES,
   MAX_LOCAL_PDF_BYTES,
   MAX_LOCAL_TEXT_BYTES,
+  MAX_FETCH_BYTES,
+  newlyAdmitted,
+  FILE_POLICY_VERSION,
 } from '../file-indexability';
 
 type Case = [
@@ -23,7 +26,7 @@ const cases: Case[] = [
       mime: 'text/plain',
       sizeBytes: 10,
     },
-    { kind: 'index', pipeline: 'converter' },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
   ],
   [
     'cloud pdf at cap',
@@ -33,7 +36,7 @@ const cases: Case[] = [
       mime: 'application/pdf',
       sizeBytes: MAX_CLOUD_BINARY_BYTES,
     },
-    { kind: 'index', pipeline: 'converter' },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
   ],
   [
     'cloud pdf over cap',
@@ -43,7 +46,7 @@ const cases: Case[] = [
       mime: 'application/pdf',
       sizeBytes: MAX_CLOUD_BINARY_BYTES + 1,
     },
-    { kind: 'ignore', reason: 'too-large' },
+    { kind: 'index', pipeline: 'converter', bytes: 'deferred' },
   ],
   [
     'cloud image at cap',
@@ -53,7 +56,7 @@ const cases: Case[] = [
       mime: 'image/png',
       sizeBytes: MAX_CLOUD_IMAGE_BYTES,
     },
-    { kind: 'index', pipeline: 'vision' },
+    { kind: 'index', pipeline: 'vision', bytes: 'eager' },
   ],
   [
     'cloud image over cap',
@@ -128,7 +131,7 @@ const cases: Case[] = [
   [
     'cloud unknown size supported',
     { profile: 'cloud-drive', filename: 'a.pdf', mime: 'application/pdf' },
-    { kind: 'index', pipeline: 'converter' },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
   ],
   [
     'local text at cap',
@@ -139,7 +142,7 @@ const cases: Case[] = [
       sizeBytes: MAX_LOCAL_TEXT_BYTES,
       path: '/d/a.ts',
     },
-    { kind: 'index', pipeline: 'inline-text' },
+    { kind: 'index', pipeline: 'inline-text', bytes: 'eager' },
   ],
   [
     'local text over cap',
@@ -150,7 +153,7 @@ const cases: Case[] = [
       sizeBytes: MAX_LOCAL_TEXT_BYTES + 1,
       path: '/d/a.ts',
     },
-    { kind: 'ignore', reason: 'too-large' },
+    { kind: 'index', pipeline: 'inline-text', bytes: 'none' },
   ],
   [
     'local pdf at cap',
@@ -161,7 +164,7 @@ const cases: Case[] = [
       sizeBytes: MAX_LOCAL_BINARY_BYTES,
       path: '/d/a.pdf',
     },
-    { kind: 'index', pipeline: 'converter' },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
   ],
   [
     'local mp3',
@@ -172,7 +175,7 @@ const cases: Case[] = [
       sizeBytes: MAX_LOCAL_AUDIO_BYTES,
       path: '/d/meeting.mp3',
     },
-    { kind: 'index', pipeline: 'audio' },
+    { kind: 'index', pipeline: 'audio', bytes: 'eager' },
   ],
   [
     'local mp3 over cap',
@@ -194,7 +197,7 @@ const cases: Case[] = [
       sizeBytes: 100,
       path: '/d/meeting.mp4',
     },
-    { kind: 'index', pipeline: 'audio' },
+    { kind: 'index', pipeline: 'audio', bytes: 'eager' },
   ],
   [
     'local webm video',
@@ -255,7 +258,7 @@ const cases: Case[] = [
   // local PDF is committed metadata-only and OCR'd by the vision worker, and a
   // single 20 MiB cap would delete that path and archive PDFs already OCR'd.
   [
-    'local pdf over converter cap goes to vision',
+    'local pdf over converter cap is deferred',
     {
       profile: 'local-folder',
       filename: 'big.pdf',
@@ -263,7 +266,7 @@ const cases: Case[] = [
       sizeBytes: MAX_LOCAL_BINARY_BYTES + 1,
       path: '/d/big.pdf',
     },
-    { kind: 'index', pipeline: 'vision' },
+    { kind: 'index', pipeline: 'converter', bytes: 'deferred' },
   ],
   [
     'local pdf at vision cap',
@@ -274,7 +277,7 @@ const cases: Case[] = [
       sizeBytes: MAX_LOCAL_PDF_BYTES,
       path: '/d/big.pdf',
     },
-    { kind: 'index', pipeline: 'vision' },
+    { kind: 'index', pipeline: 'converter', bytes: 'deferred' },
   ],
   [
     'local pdf over vision cap',
@@ -285,7 +288,7 @@ const cases: Case[] = [
       sizeBytes: MAX_LOCAL_PDF_BYTES + 1,
       path: '/d/big.pdf',
     },
-    { kind: 'ignore', reason: 'too-large' },
+    { kind: 'index', pipeline: 'converter', bytes: 'deferred' },
   ],
   // Local audio is extension-gated, exactly like isTranscribableExt. A blanket
   // video/* allow would admit these two and produce permanent empty rows.
@@ -320,7 +323,7 @@ const cases: Case[] = [
       sizeBytes: 100,
       path: '/d/v.3gp',
     },
-    { kind: 'index', pipeline: 'audio' },
+    { kind: 'index', pipeline: 'audio', bytes: 'eager' },
   ],
   // Local images are VISUAL_EXTS membership (isIngestible); cloud is image/*
   // (isConvertibleMime). SVG separates the two.
@@ -343,7 +346,7 @@ const cases: Case[] = [
       mime: 'image/svg+xml',
       sizeBytes: 100,
     },
-    { kind: 'index', pipeline: 'vision' },
+    { kind: 'index', pipeline: 'vision', bytes: 'eager' },
   ],
   // Email and legacy Excel: local converts them today, cloud does not. This
   // change narrows; it must not quietly widen the cloud download set.
@@ -356,7 +359,7 @@ const cases: Case[] = [
       sizeBytes: 100,
       path: '/d/m.eml',
     },
-    { kind: 'index', pipeline: 'converter' },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
   ],
   [
     'cloud eml',
@@ -377,7 +380,7 @@ const cases: Case[] = [
       sizeBytes: 100,
       path: '/d/b.xls',
     },
-    { kind: 'index', pipeline: 'converter' },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
   ],
   [
     'cloud xls',
@@ -397,7 +400,7 @@ const cases: Case[] = [
       mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       sizeBytes: 100,
     },
-    { kind: 'index', pipeline: 'converter' },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
   ],
   [
     'cloud jar',
@@ -509,7 +512,7 @@ describe('mime parameters and malformed sizes', () => {
         sizeBytes: 100,
         path: '/d/meeting.mp3',
       }),
-    ).toEqual({ kind: 'index', pipeline: 'audio' });
+    ).toEqual({ kind: 'index', pipeline: 'audio', bytes: 'eager' });
   });
 
   it.each([-1, -1024, NaN, Infinity, -Infinity])(
@@ -522,7 +525,7 @@ describe('mime parameters and malformed sizes', () => {
           mime: 'application/pdf',
           sizeBytes,
         }),
-      ).toEqual({ kind: 'index', pipeline: 'converter' });
+      ).toEqual({ kind: 'index', pipeline: 'converter', bytes: 'eager' });
     },
   );
 });
@@ -538,3 +541,137 @@ describe('mime parameters and malformed sizes', () => {
 // fail, which is worse than no test at all. The real regression coverage for
 // local-folder eligibility now lives in `local-folder/__tests__/*.test.ts`,
 // which exercises `decideLocalFile`/`isIngestible` against real files.
+
+const more: Case[] = [
+  [
+    'cloud pdf just over eager cap',
+    {
+      profile: 'cloud-drive',
+      filename: 'a.pdf',
+      mime: 'application/pdf',
+      sizeBytes: MAX_CLOUD_BINARY_BYTES + 1,
+    },
+    { kind: 'index', pipeline: 'converter', bytes: 'deferred' },
+  ],
+  [
+    'cloud pdf at fetch cap',
+    {
+      profile: 'cloud-drive',
+      filename: 'a.pdf',
+      mime: 'application/pdf',
+      sizeBytes: MAX_FETCH_BYTES,
+    },
+    { kind: 'index', pipeline: 'converter', bytes: 'deferred' },
+  ],
+  [
+    'cloud pdf over fetch cap',
+    {
+      profile: 'cloud-drive',
+      filename: 'a.pdf',
+      mime: 'application/pdf',
+      sizeBytes: MAX_FETCH_BYTES + 1,
+    },
+    { kind: 'index', pipeline: 'converter', bytes: 'none' },
+  ],
+  [
+    'local pdf 30 MiB',
+    { profile: 'local-folder', filename: 'a.pdf', sizeBytes: 30 * 1024 * 1024 },
+    { kind: 'index', pipeline: 'converter', bytes: 'deferred' },
+  ],
+  [
+    'local pdf 150 MiB',
+    {
+      profile: 'local-folder',
+      filename: 'a.pdf',
+      sizeBytes: 150 * 1024 * 1024,
+    },
+    { kind: 'index', pipeline: 'converter', bytes: 'none' },
+  ],
+  [
+    'cloud docx over eager cap',
+    {
+      profile: 'cloud-drive',
+      filename: 'a.docx',
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      sizeBytes: MAX_CLOUD_BINARY_BYTES + 1,
+    },
+    { kind: 'index', pipeline: 'converter', bytes: 'none' },
+  ],
+  [
+    'local docx over eager cap',
+    {
+      profile: 'local-folder',
+      filename: 'a.docx',
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      sizeBytes: MAX_LOCAL_BINARY_BYTES + 1,
+    },
+    { kind: 'index', pipeline: 'converter', bytes: 'none' },
+  ],
+  [
+    'local text over inline cap',
+    {
+      profile: 'local-folder',
+      filename: 'a.log',
+      sizeBytes: MAX_LOCAL_TEXT_BYTES + 1,
+    },
+    { kind: 'index', pipeline: 'inline-text', bytes: 'none' },
+  ],
+  [
+    'cloud image over cap stays ignored',
+    {
+      profile: 'cloud-drive',
+      filename: 'a.png',
+      mime: 'image/png',
+      sizeBytes: 30 * 1024 * 1024,
+    },
+    { kind: 'ignore', reason: 'too-large' },
+  ],
+  [
+    'local audio over cap stays ignored',
+    {
+      profile: 'local-folder',
+      filename: 'a.mp3',
+      sizeBytes: MAX_LOCAL_AUDIO_BYTES + 1,
+    },
+    { kind: 'ignore', reason: 'too-large' },
+  ],
+];
+it.each(more)('%s', (_n, c, want) =>
+  expect(decideFileIndexing(c)).toEqual(want),
+);
+
+describe('newlyAdmitted', () => {
+  // The local source always passes the path-derived MIME (decideLocalFile).
+  const local = (filename: string, sizeBytes: number, mime?: string) => ({
+    profile: 'local-folder' as const,
+    filename,
+    sizeBytes,
+    mime,
+    path: `/r/${filename}`,
+  });
+  it('a version-1 cursor re-emits deferred and none rows', () => {
+    expect(newlyAdmitted(local('a.pdf', 60 * 1024 * 1024), 1)).toBe(true);
+    expect(
+      newlyAdmitted(
+        local(
+          'a.docx',
+          30 * 1024 * 1024,
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ),
+        1,
+      ),
+    ).toBe(true);
+  });
+  it('a version-1 cursor does NOT re-emit eager files', () => {
+    expect(newlyAdmitted(local('a.pdf', 1024), 1)).toBe(false);
+    expect(newlyAdmitted(local('notes.txt', 10), 1)).toBe(false);
+  });
+  it('never re-emits ignored files', () => {
+    expect(newlyAdmitted(local('a.zip', 10), 1)).toBe(false);
+  });
+  it('is false once the cursor is current', () => {
+    expect(
+      newlyAdmitted(local('a.pdf', 60 * 1024 * 1024), FILE_POLICY_VERSION),
+    ).toBe(false);
+  });
+});

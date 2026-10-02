@@ -132,15 +132,15 @@ function seedMatrix(db: Database.Database): void {
   );
   // 'size' only, no sizeBytes/size_bytes — and unlike local-mp3 (whose
   // decision doesn't depend on size at all), THIS decision flips on whether
-  // the tier is actually read: over the 50 MiB local-PDF vision cap when
+  // the tier is actually read: over the 20 MiB local image cap when
   // read correctly (archived); an unread size is never treated as over any
   // cap, which would instead index it. Discriminates the 3rd size tier.
   seedDoc(
     db,
-    candidate('local-huge-pdf-size-tier', 'acc-local', 'file', {
-      mime: 'application/pdf',
-      filename: 'huge3.pdf',
-      absPath: '/Users/x/Documents/huge3.pdf',
+    candidate('local-huge-image-size-tier', 'acc-local', 'file', {
+      mime: 'image/png',
+      filename: 'huge3.png',
+      absPath: '/Users/x/Documents/huge3.png',
       size: 60 * 1024 * 1024,
     }),
   );
@@ -252,22 +252,22 @@ function seedMatrix(db: Database.Database): void {
   );
   seedDoc(
     db,
-    candidate('onedrive-big-pdf', 'acc-onedrive', 'file', {
-      mime: 'application/pdf',
-      filename: 'huge.pdf',
-      sizeBytes: 30 * 1024 * 1024, // over the 25 MiB cloud cap — pins tier 1.
+    candidate('onedrive-big-image', 'acc-onedrive', 'file', {
+      mime: 'image/png',
+      filename: 'huge.png',
+      sizeBytes: 30 * 1024 * 1024, // over the 20 MiB cloud image cap — pins tier 1.
     }),
   );
-  // 'size_bytes' only, no sizeBytes/size — same over-cap PDF as
-  // onedrive-big-pdf above, but read through the 2nd size tier instead of
+  // 'size_bytes' only, no sizeBytes/size — same over-cap image as
+  // onedrive-big-image above, but read through the 2nd size tier instead of
   // the 1st. Discriminates that tier specifically: an unread size_bytes
   // falls through to the absent 'size' tier, size becomes unknown, and an
   // unknown size is never treated as over any cap — it would index instead.
   seedDoc(
     db,
-    candidate('onedrive-big-pdf-size-bytes-tier', 'acc-onedrive', 'file', {
-      mime: 'application/pdf',
-      filename: 'huge2.pdf',
+    candidate('onedrive-big-image-size-bytes-tier', 'acc-onedrive', 'file', {
+      mime: 'image/png',
+      filename: 'huge2.png',
       size_bytes: 30 * 1024 * 1024,
     }),
   );
@@ -364,7 +364,7 @@ describe('schema v2: archive file-indexability rejects', () => {
     expect(live(db, 'local-pdf')).toBe(true);
     expect(live(db, 'local-mp3')).toBe(true);
     expect(live(db, 'local-zip')).toBe(false);
-    expect(live(db, 'local-huge-pdf-size-tier')).toBe(false); // size-tier-3 discriminator
+    expect(live(db, 'local-huge-image-size-tier')).toBe(false); // size-tier-3 discriminator
     expect(live(db, 'google-pdf')).toBe(true);
     expect(live(db, 'google-mp3')).toBe(false);
     expect(live(db, 'google-mp4')).toBe(false);
@@ -376,8 +376,8 @@ describe('schema v2: archive file-indexability rejects', () => {
     expect(live(db, 'google-other-type-zip')).toBe(true); // type 'gdocs.folder' — never classified
     expect(live(db, 'onedrive-pdf')).toBe(true);
     expect(live(db, 'onedrive-mp3')).toBe(false);
-    expect(live(db, 'onedrive-big-pdf')).toBe(false);
-    expect(live(db, 'onedrive-big-pdf-size-bytes-tier')).toBe(false); // size-tier-2 discriminator
+    expect(live(db, 'onedrive-big-image')).toBe(false);
+    expect(live(db, 'onedrive-big-image-size-bytes-tier')).toBe(false); // size-tier-2 discriminator
     expect(live(db, 'gmail-mp3')).toBe(true); // source outside scope
 
     // 3, not 2: `rewindToV1` replays the WHOLE ladder, whose top is now v3.
@@ -389,15 +389,15 @@ describe('schema v2: archive file-indexability rejects', () => {
 
     const archivedIds = [
       'local-zip',
-      'local-huge-pdf-size-tier',
+      'local-huge-image-size-tier',
       'google-mp3',
       'google-mp4',
       'google-zip',
       'google-sheet',
       'google-presentation',
       'onedrive-mp3',
-      'onedrive-big-pdf',
-      'onedrive-big-pdf-size-bytes-tier',
+      'onedrive-big-image',
+      'onedrive-big-image-size-bytes-tier',
     ];
     const liveIds = [
       'local-pdf',

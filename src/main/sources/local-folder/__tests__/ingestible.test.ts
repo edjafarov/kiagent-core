@@ -3,7 +3,7 @@ import {
   MAX_LOCAL_AUDIO_BYTES,
   MAX_LOCAL_BINARY_BYTES,
   MAX_LOCAL_IMAGE_BYTES,
-  MAX_LOCAL_PDF_BYTES,
+  MAX_FETCH_BYTES,
   MAX_LOCAL_TEXT_BYTES,
 } from '@shared/file-indexability';
 import fs from 'node:fs';
@@ -161,38 +161,41 @@ describe('isIngestible', () => {
 });
 
 describe('decideLocalFile — exact size-cap boundaries', () => {
-  it('text: size === cap indexes, cap + 1 is ignored as too-large', () => {
+  it('text: size === cap indexes eagerly, cap + 1 is a name-only row', () => {
     expect(decideLocalFile('/d/a.txt', MAX_LOCAL_TEXT_BYTES)).toEqual({
       kind: 'index',
       pipeline: 'inline-text',
+      bytes: 'eager',
     });
     expect(decideLocalFile('/d/a.txt', MAX_LOCAL_TEXT_BYTES + 1)).toEqual({
-      kind: 'ignore',
-      reason: 'too-large',
+      kind: 'index',
+      pipeline: 'inline-text',
+      bytes: 'none',
     });
   });
 
-  it('PDF: the two-budget ladder — read-eagerly cap converts, the metadata-only band routes to vision, and only the outer cap ignores', () => {
-    // At/under the read cap: converter, bytes read eagerly.
+  it('PDF: eager within the read cap, deferred up to the fetch cap, a name-only row beyond', () => {
     expect(decideLocalFile('/d/a.pdf', MAX_LOCAL_BINARY_BYTES)).toEqual({
       kind: 'index',
       pipeline: 'converter',
+      bytes: 'eager',
     });
-    // Just over the read cap: still indexed, but metadata-only via vision —
-    // this is the 20-50 MiB band the vision worker OCRs through fetchBytes.
+    // Over the read cap: metadata-only now, bytes fetched later by a worker.
     expect(decideLocalFile('/d/a.pdf', MAX_LOCAL_BINARY_BYTES + 1)).toEqual({
       kind: 'index',
-      pipeline: 'vision',
+      pipeline: 'converter',
+      bytes: 'deferred',
     });
-    // At the outer PDF cap: still indexed (vision).
-    expect(decideLocalFile('/d/a.pdf', MAX_LOCAL_PDF_BYTES)).toEqual({
+    expect(decideLocalFile('/d/a.pdf', MAX_FETCH_BYTES)).toEqual({
       kind: 'index',
-      pipeline: 'vision',
+      pipeline: 'converter',
+      bytes: 'deferred',
     });
-    // One byte past the outer cap: ignored.
-    expect(decideLocalFile('/d/a.pdf', MAX_LOCAL_PDF_BYTES + 1)).toEqual({
-      kind: 'ignore',
-      reason: 'too-large',
+    // Past the fetch cap: still a row (findable by name), never fetched.
+    expect(decideLocalFile('/d/a.pdf', MAX_FETCH_BYTES + 1)).toEqual({
+      kind: 'index',
+      pipeline: 'converter',
+      bytes: 'none',
     });
   });
 
@@ -200,6 +203,7 @@ describe('decideLocalFile — exact size-cap boundaries', () => {
     expect(decideLocalFile('/d/a.jpg', MAX_LOCAL_IMAGE_BYTES)).toEqual({
       kind: 'index',
       pipeline: 'vision',
+      bytes: 'eager',
     });
     expect(decideLocalFile('/d/a.jpg', MAX_LOCAL_IMAGE_BYTES + 1)).toEqual({
       kind: 'ignore',
@@ -211,6 +215,7 @@ describe('decideLocalFile — exact size-cap boundaries', () => {
     expect(decideLocalFile('/d/a.mp3', MAX_LOCAL_AUDIO_BYTES)).toEqual({
       kind: 'index',
       pipeline: 'audio',
+      bytes: 'eager',
     });
     expect(decideLocalFile('/d/a.mp3', MAX_LOCAL_AUDIO_BYTES + 1)).toEqual({
       kind: 'ignore',
@@ -222,10 +227,12 @@ describe('decideLocalFile — exact size-cap boundaries', () => {
     expect(decideLocalFile('/d/a.txt')).toEqual({
       kind: 'index',
       pipeline: 'inline-text',
+      bytes: 'eager',
     });
     expect(decideLocalFile('/d/a.txt', undefined)).toEqual({
       kind: 'index',
       pipeline: 'inline-text',
+      bytes: 'eager',
     });
   });
 });

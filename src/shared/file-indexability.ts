@@ -27,8 +27,9 @@ export type FileIgnoreReason =
   | 'cloud-media'
   | 'unsupported'
   | 'too-large';
+export type FileBytes = 'eager' | 'deferred' | 'none';
 export type FileIndexDecision =
-  | { kind: 'index'; pipeline: FilePipeline }
+  | { kind: 'index'; pipeline: FilePipeline; bytes: FileBytes }
   | { kind: 'ignore'; reason: FileIgnoreReason };
 export interface FileIndexCandidate {
   profile: FileSourceProfile;
@@ -45,6 +46,18 @@ export const MAX_LOCAL_PDF_BYTES = 50 * 1024 * 1024; // vision MAX_PDF_BYTES
 export const MAX_LOCAL_AUDIO_BYTES = 200 * 1024 * 1024; // audio MAX_SOURCE_BYTES
 export const MAX_CLOUD_BINARY_BYTES = 25 * 1024 * 1024; // connector MAX_BINARY_BYTES
 export const MAX_CLOUD_IMAGE_BYTES = 20 * 1024 * 1024; // vision would skip anything larger
+/** One later fetchBytes by a background worker (convert/vision), never a
+ *  batch. Separate from the EAGER caps, which bound bytes shipped inside an
+ *  ingest batch. */
+export const MAX_FETCH_BYTES = 100 * 1024 * 1024;
+/** Bumped whenever a policy change makes previously IGNORED files
+ *  indexable; each file source re-enumerates once on a mismatch. */
+export const FILE_POLICY_VERSION = 2;
+/** Extensions first admitted at a given policy version (eager files the
+ *  old policy ignored by TYPE, not size). */
+export const ADMITTED_SINCE: Record<number, ReadonlySet<string>> = {
+  2: new Set<string>(),
+};
 
 // Verbatim from local-folder/ingestible.ts:22-23 and :31. `ingestible.ts`
 // re-exports the first as INGESTIBLE_DENY_RE, the name its test imports.
@@ -219,14 +232,28 @@ const extension = (name: string): string => {
 };
 const over = (size: number | null, cap: number): boolean =>
   size !== null && size > cap;
-const cap = (
+const eager = (pipeline: FilePipeline): FileIndexDecision => ({
+  kind: 'index',
+  pipeline,
+  bytes: 'eager',
+});
+/** Media over their cap stay ignored: no later worker could use them. */
+const mediaCap = (
+  size: number | null,
+  limit: number,
+  pipeline: FilePipeline,
+): FileIndexDecision =>
+  over(size, limit) ? { kind: 'ignore', reason: 'too-large' } : eager(pipeline);
+/** Documents over their eager cap still get a row (name, path, size) —
+ *  findable by name — with no bytes shipped. */
+const docCap = (
   size: number | null,
   limit: number,
   pipeline: FilePipeline,
 ): FileIndexDecision =>
   over(size, limit)
-    ? { kind: 'ignore', reason: 'too-large' }
-    : { kind: 'index', pipeline };
+    ? { kind: 'index', pipeline, bytes: 'none' }
+    : eager(pipeline);
 
 export function decideFileIndexing(c: FileIndexCandidate): FileIndexDecision {
   const local = c.profile === 'local-folder';
@@ -268,17 +295,17 @@ export function decideFileIndexing(c: FileIndexCandidate): FileIndexDecision {
     return { kind: 'ignore', reason: 'cloud-media' };
   }
   // 5. PDFs, before the generic image branch (VISUAL_EXTENSIONS holds 'pdf').
-  //    Local PDFs have TWO budgets: over the source's read cap they are
-  //    committed metadata-only and the vision worker pulls their bytes back
-  //    through fetchBytes — the behavior that exists today. A cloud PDF gets
-  //    one cap because the connector's own fetchBytes refuses anything larger,
-  //    so the vision route is unreachable above it.
+  //    Within the eager cap the bytes ride the ingest batch. Above it the row
+  //    is committed metadata-only and a background worker fetches the bytes
+  //    later (`deferred`), up to MAX_FETCH_BYTES; beyond that the row stays
+  //    name-only (`none`).
   if (mime === 'application/pdf' || ext === 'pdf') {
-    if (!local) return cap(size, MAX_CLOUD_BINARY_BYTES, 'converter');
-    if (!over(size, MAX_LOCAL_BINARY_BYTES)) {
-      return { kind: 'index', pipeline: 'converter' };
+    const eagerCap = local ? MAX_LOCAL_BINARY_BYTES : MAX_CLOUD_BINARY_BYTES;
+    if (!over(size, eagerCap)) return eager('converter');
+    if (!over(size, MAX_FETCH_BYTES)) {
+      return { kind: 'index', pipeline: 'converter', bytes: 'deferred' };
     }
-    return cap(size, MAX_LOCAL_PDF_BYTES, 'vision');
+    return { kind: 'index', pipeline: 'converter', bytes: 'none' };
   }
   // 6. Images. Local matches isIngestible (VISUAL_EXTS membership); cloud
   //    matches each connector's isConvertibleMime (any image/*).
@@ -286,7 +313,7 @@ export function decideFileIndexing(c: FileIndexCandidate): FileIndexDecision {
     ? VISUAL_EXTENSIONS.has(ext)
     : mime.startsWith('image/') || VISUAL_EXTENSIONS.has(ext);
   if (image) {
-    return cap(
+    return mediaCap(
       size,
       local ? MAX_LOCAL_IMAGE_BYTES : MAX_CLOUD_IMAGE_BYTES,
       'vision',
@@ -300,7 +327,7 @@ export function decideFileIndexing(c: FileIndexCandidate): FileIndexDecision {
       mime === 'text/plain' ||
       mime === 'text/markdown')
   ) {
-    return cap(size, MAX_LOCAL_TEXT_BYTES, 'inline-text');
+    return docCap(size, MAX_LOCAL_TEXT_BYTES, 'inline-text');
   }
   // 8. Local audio/video — EXACTLY isTranscribableExt: deny .mkv/.webm, then
   //    allow the two extension sets. An audio/* MIME still needs a known
@@ -314,7 +341,7 @@ export function decideFileIndexing(c: FileIndexCandidate): FileIndexDecision {
       return { kind: 'ignore', reason: 'unsupported' };
     }
     if (AUDIO_EXTENSIONS.has(ext) || LOCAL_VIDEO_EXTENSIONS.has(ext)) {
-      return cap(size, MAX_LOCAL_AUDIO_BYTES, 'audio');
+      return mediaCap(size, MAX_LOCAL_AUDIO_BYTES, 'audio');
     }
   }
   // 9. Converter. Cloud admits text/* plus the three Office/PDF MIMEs, which
@@ -328,11 +355,31 @@ export function decideFileIndexing(c: FileIndexCandidate): FileIndexDecision {
     ? LOCAL_CONVERTER_MIMES.has(mime)
     : mime.startsWith('text/') || CLOUD_CONVERTER_MIMES.has(mime);
   if (converter) {
-    return cap(
+    return docCap(
       size,
       local ? MAX_LOCAL_BINARY_BYTES : MAX_CLOUD_BINARY_BYTES,
       'converter',
     );
   }
   return { kind: 'ignore', reason: 'unsupported' };
+}
+
+/** Would a source whose cursor was written under `fromVersion` have
+ *  ignored this file? Pure, candidate-only (the local scanner has no
+ *  store). Deferred/none rows are cheap to re-emit (no bytes are read), so
+ *  every one is re-emitted; eager rows only when their extension is newly
+ *  admitted since `fromVersion`. */
+export function newlyAdmitted(
+  c: FileIndexCandidate,
+  fromVersion: number,
+): boolean {
+  if (fromVersion >= FILE_POLICY_VERSION) return false;
+  const d = decideFileIndexing(c);
+  if (d.kind === 'ignore') return false;
+  if (d.bytes !== 'eager') return true;
+  const ext = extension(typeof c.filename === 'string' ? c.filename : '');
+  for (let v = fromVersion + 1; v <= FILE_POLICY_VERSION; v += 1) {
+    if (ADMITTED_SINCE[v]?.has(ext)) return true;
+  }
+  return false;
 }
