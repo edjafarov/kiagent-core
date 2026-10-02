@@ -20,6 +20,14 @@
  * first-settle-wins resolver pair lets ANY incarnation (initial or
  * crash-respawned) resolve it by activating, so an early crash can never
  * fail start() out from under a respawn that goes on to activate.
+ *
+ * Handshake timeouts (no 'ready' or no 'activated' in time) are not crashes
+ * and not the extension's own error: a child starved of CPU — every
+ * extension boots at once, on a slow machine — misses them while healthy.
+ * Such an incarnation is killed and respawned after a backoff (10s, 30s,
+ * 90s, … capped at 30min — see handshakeRetryDelayMs), staying 'activating'
+ * meanwhile. start() settles as soon as the retry is scheduled, so boot never
+ * waits out a backoff. An error the child reports is never retried.
  */
 import type {
   Cap,
@@ -47,6 +55,23 @@ import {
 
 const CRASH_LOOP_MAX = 3;
 const CRASH_LOOP_WINDOW_MS = 60_000;
+// Covers process start AND loading the extension's bundle, contended with
+// every other extension booting in parallel.
+const READY_TIMEOUT_MS = 30_000;
+const HANDSHAKE_RETRY_FIRST_MS = 10_000;
+const HANDSHAKE_RETRY_FACTOR = 3;
+const HANDSHAKE_RETRY_MAX_MS = 30 * 60_000;
+
+/** Delay before respawn attempt `attempt` (1-based) after a handshake
+ *  timeout: 10s, 30s, 90s, … tripling, capped at 30 minutes. */
+export function handshakeRetryDelayMs(attempt: number): number {
+  return Math.min(
+    HANDSHAKE_RETRY_FIRST_MS * HANDSHAKE_RETRY_FACTOR ** (attempt - 1),
+    HANDSHAKE_RETRY_MAX_MS,
+  );
+}
+
+class HandshakeTimeout extends Error {}
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -88,6 +113,7 @@ export interface HostDeps {
   killAfterMs?: number;
   readyTimeoutMs?: number;
   activateTimeoutMs?: number;
+  handshakeRetryDelayMs?(attempt: number): number;
 }
 
 interface Incarnation {
@@ -129,6 +155,10 @@ export function createExtensionHost(deps: HostDeps): {
   const crashes: number[] = [];
   let pendingSpawn: Promise<void> | null = null;
   let pendingSpawnAbort: (() => void) | null = null;
+  // Consecutive handshake timeouts since the last activation, and the
+  // pending backoff respawn they scheduled.
+  let handshakeTimeouts = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   // First-settle-wins gate for the in-flight start() call. ANY incarnation
   // (initial or crash-respawned) resolves it by activating. Breaker
@@ -164,7 +194,7 @@ export function createExtensionHost(deps: HostDeps): {
         settled = true;
         off();
         setAbort(null);
-        reject(new Error(`timed out waiting for ${what}`));
+        reject(new HandshakeTimeout(`timed out waiting for ${what}`));
       }, timeoutMs);
       const off = endpoint.onNotify((m) => {
         if (!kinds.includes(m.kind)) return;
@@ -323,7 +353,7 @@ export function createExtensionHost(deps: HostDeps): {
       const readyOrError = waitNotify(
         endpoint,
         ['ready', 'errored'],
-        deps.readyTimeoutMs ?? 10_000,
+        deps.readyTimeoutMs ?? READY_TIMEOUT_MS,
         'ready',
         (fn) => {
           abortPending = fn;
@@ -364,6 +394,7 @@ export function createExtensionHost(deps: HostDeps): {
         contributions,
         proxySet!.makeSource,
       );
+      handshakeTimeouts = 0;
       deps.onStatus('activated');
       resolveStart();
     } catch (e) {
@@ -390,6 +421,27 @@ export function createExtensionHost(deps: HostDeps): {
         // its own exit listener observes the teardown — no stale errored.
         return;
       }
+      if (e instanceof HandshakeTimeout) {
+        handshakeTimeouts += 1;
+        const delay = (deps.handshakeRetryDelayMs ?? handshakeRetryDelayMs)(
+          handshakeTimeouts,
+        );
+        deps.logSink.log(scope, 'warn', 'extension handshake timed out', {
+          error: e.message,
+          attempt: handshakeTimeouts,
+          retryInMs: delay,
+        });
+        deps.onStatus(
+          'activating',
+          `${e.message}; retrying in ${Math.round(delay / 1000)}s`,
+        );
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          if (!stopped && !stopping) launchSpawn();
+        }, delay);
+        resolveStart();
+        return;
+      }
       stopped = true;
       deps.onStatus('errored', errMsg(e));
       rejectStart(e instanceof Error ? e : new Error(errMsg(e)));
@@ -411,6 +463,7 @@ export function createExtensionHost(deps: HostDeps): {
       stopping = false;
       stopped = false;
       crashes.length = 0;
+      handshakeTimeouts = 0;
       return new Promise<void>((resolve, reject) => {
         startResolve = resolve;
         startReject = reject;
@@ -418,6 +471,10 @@ export function createExtensionHost(deps: HostDeps): {
       });
     },
     async stop() {
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
       if (stopped && !current) {
         stopping = false;
         deps.onStatus('disabled');

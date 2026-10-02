@@ -8,7 +8,7 @@ import type {
 import type { Contributions } from '@shared/extension-rpc';
 
 import { runExtensionHost } from '../extension-host-entry';
-import { createExtensionHost } from '../host-process';
+import { createExtensionHost, handshakeRetryDelayMs } from '../host-process';
 import { createInMemoryHostPair } from '../transport';
 
 const noopLog = { log: jest.fn() };
@@ -558,5 +558,165 @@ describe('createExtensionHost', () => {
     expect(statuses.map((s) => s.status)).toEqual(['activating', 'disabled']);
     expect(statuses.some((s) => s.status === 'activated')).toBe(false);
     expect(registered).toHaveLength(0); // contributions were never registered
+  });
+});
+
+describe('handshake timeout retry', () => {
+  // The first `silent` incarnations never run the child runtime, so they
+  // never answer the bootstrap: a hung or starved child that misses 'ready'.
+  function silentFirst(
+    silent: number,
+    overrides: Record<string, unknown> = {},
+  ) {
+    const made = makeDeps(okModule, {
+      readyTimeoutMs: 20,
+      handshakeRetryDelayMs: () => 10,
+      ...overrides,
+    });
+    const real = made.deps.transportFactory;
+    let spawned = 0;
+    made.deps.transportFactory = () => {
+      spawned += 1;
+      if (spawned > silent) return real();
+      const pair = createInMemoryHostPair();
+      made.pairs.push(pair);
+      return pair.main;
+    };
+    return { ...made, spawned: () => spawned };
+  }
+  const until = async (cond: () => boolean, ms = 2000) => {
+    const end = Date.now() + ms;
+    while (!cond()) {
+      if (Date.now() > end) throw new Error('condition never held');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  };
+
+  it('backs off 10s, 30s, 90s, tripling up to a 30-minute cap', () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 20].map(handshakeRetryDelayMs)).toEqual([
+      10_000, 30_000, 90_000, 270_000, 810_000, 1_800_000, 1_800_000, 1_800_000,
+    ]);
+  });
+
+  it('a ready timeout respawns after the backoff instead of erroring', async () => {
+    const { deps, statuses, registered, spawned } = silentFirst(1);
+    const host = createExtensionHost(deps as never);
+    // start() settles once the retry is scheduled, so boot never waits out
+    // a backoff — the extension stays 'activating' meanwhile.
+    await host.start();
+    expect(statuses.at(-1)).toEqual({
+      status: 'activating',
+      error: expect.stringMatching(/timed out waiting for ready.*retrying/),
+    });
+    await until(() => statuses.at(-1)?.status === 'activated');
+    expect(spawned()).toBe(2);
+    expect(statuses.some((s) => s.status === 'errored')).toBe(false);
+    expect(registered).toHaveLength(1);
+    await host.stop();
+    expect(statuses.at(-1)?.status).toBe('disabled');
+  });
+
+  it('kills each timed-out child and waits a growing delay before the next', async () => {
+    const delays: number[] = [];
+    const { deps, pairs, statuses, spawned } = silentFirst(3, {
+      handshakeRetryDelayMs: (attempt: number) => {
+        delays.push(attempt);
+        return 10;
+      },
+    });
+    const exits: number[] = [];
+    const real = deps.transportFactory;
+    deps.transportFactory = () => {
+      const t = real();
+      const i = pairs.length - 1;
+      t.onExit(() => exits.push(i));
+      return t;
+    };
+    const host = createExtensionHost(deps as never);
+    await host.start();
+    await until(() => statuses.at(-1)?.status === 'activated');
+    expect(spawned()).toBe(4);
+    expect(delays).toEqual([1, 2, 3]);
+    expect(exits).toEqual([0, 1, 2]);
+    await host.stop();
+  });
+
+  it('a successful activation resets the backoff', async () => {
+    const delays: number[] = [];
+    const { deps, statuses } = silentFirst(1, {
+      handshakeRetryDelayMs: (attempt: number) => {
+        delays.push(attempt);
+        return 10;
+      },
+    });
+    const host = createExtensionHost(deps as never);
+    await host.start();
+    await until(() => statuses.at(-1)?.status === 'activated');
+    await host.stop();
+    await host.start();
+    expect(statuses.at(-1)?.status).toBe('activated');
+    expect(delays).toEqual([1]);
+    await host.stop();
+  });
+
+  it('stop() during the backoff cancels the respawn', async () => {
+    const { deps, statuses, spawned } = silentFirst(5, {
+      handshakeRetryDelayMs: () => 50,
+    });
+    const host = createExtensionHost(deps as never);
+    await host.start();
+    await host.stop();
+    expect(statuses.at(-1)?.status).toBe('disabled');
+    await new Promise((r) => setTimeout(r, 150));
+    expect(spawned()).toBe(1);
+    expect(statuses.at(-1)?.status).toBe('disabled');
+  });
+
+  it('an error the child reports is not retried', async () => {
+    const { deps, statuses } = makeDeps(
+      {
+        activate: async () => {
+          throw new Error('nope');
+        },
+      },
+      { handshakeRetryDelayMs: () => 10 },
+    );
+    let spawned = 0;
+    const real = deps.transportFactory;
+    deps.transportFactory = () => {
+      spawned += 1;
+      return real();
+    };
+    const host = createExtensionHost(deps as never);
+    await expect(host.start()).rejects.toThrow(/nope/);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(spawned).toBe(1);
+    expect(statuses.at(-1)?.status).toBe('errored');
+  });
+
+  it('waits 30s for ready by default', async () => {
+    jest.useFakeTimers({
+      doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'],
+    });
+    try {
+      const { deps, statuses } = silentFirst(1, { readyTimeoutMs: undefined });
+      const host = createExtensionHost(deps as never);
+      const started = host.start();
+      await jest.advanceTimersByTimeAsync(29_000);
+      expect(statuses.at(-1)).toEqual({
+        status: 'activating',
+        error: undefined,
+      });
+      await jest.advanceTimersByTimeAsync(1_500);
+      await started;
+      expect(
+        statuses.some((s) => /timed out waiting for ready/.test(s.error ?? '')),
+      ).toBe(true);
+      const stopped = host.stop();
+      await jest.advanceTimersByTimeAsync(1_000);
+      await stopped;
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

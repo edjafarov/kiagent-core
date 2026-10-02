@@ -1650,9 +1650,15 @@ describe('createExtensionPlatform', () => {
         const pair = createInMemoryHostPair();
         if (failNextTransport) {
           failNextTransport = false;
-          // Simulate an immediate child process exit (e.g., crash on spawn).
-          // This causes host.start() to fail waiting for the ready handshake.
-          pair.simulateExit(1);
+          // The child fails to load the extension and reports it, which
+          // fails host.start(). (A handshake timeout would be retried
+          // instead, so it cannot stand in for a failed start.)
+          runExtensionHost(pair.child, {
+            exit: (c) => pair.simulateExit(c),
+            requireModule: () => {
+              throw new Error('entry failed to load');
+            },
+          });
           return pair.main;
         }
         runExtensionHost(pair.child, { exit: (c) => pair.simulateExit(c) });
