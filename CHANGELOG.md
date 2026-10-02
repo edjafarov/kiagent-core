@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.100.0](https://github.com/edjafarov/kiagent-core/compare/v0.99.2...v0.100.0) (2026-10-02)
+
+### Features
+
+* **convert:** one-time per-page re-assessment of old garbled PDF rows (v2 replay) ([35309b7](https://github.com/edjafarov/kiagent-core/commit/35309b71ee3c2d4ad19b8d2f252ae231b7352677))
+* **convert:** Outlook .msg via msgreader; one renderMail for every email format (+Cc) ([66325c2](https://github.com/edjafarov/kiagent-core/commit/66325c20f643c8993e6e6513d5e2a9ca69f17774))
+* **convert:** per-kind fetch cap, too-large re-admission, parse crash fence, shared 2 MiB output cap, v2 ([06ea7e5](https://github.com/edjafarov/kiagent-core/commit/06ea7e5b06ed6eb31f08034427e5115f42196d1a))
+* **convert:** per-page PDF parse; deterministic needs-ocr marker on the commit path ([eab75ef](https://github.com/edjafarov/kiagent-core/commit/eab75ef0376719a1b095a64119cf5635bdb8f00c))
+* **convert:** per-page text-layer quality assessment ([7926601](https://github.com/edjafarov/kiagent-core/commit/79266010580ef4a715d62e8c07f0eb65a5bffb2c))
+* **engine:** durable change-free attempt counter (session.bump), cleared in the done commit ([90837fa](https://github.com/edjafarov/kiagent-core/commit/90837fadcc3e1a0c949ff4b4322824cc48c1f886))
+* **local-folder:** metadata-only rows for deferred/none files; fetchBytes refuses none ([9b9159c](https://github.com/edjafarov/kiagent-core/commit/9b9159caa3efb65d4e2c88f686ff8aeafd529fc9))
+* **local-folder:** recover newly admitted files once per FILE_POLICY_VERSION ([b4fd34b](https://github.com/edjafarov/kiagent-core/commit/b4fd34b80acbfbc1cb679fbbc8ba1177f225d84b))
+* needs-ocr marker from the convert worker; vision + pending SQL pick it up ([c9d7b4b](https://github.com/edjafarov/kiagent-core/commit/c9d7b4b5341262afda2b25f959082659bf82c8ca))
+* **policy:** admit Outlook .msg everywhere and saved email on cloud drives (policy v2) ([5f2220a](https://github.com/edjafarov/kiagent-core/commit/5f2220a0fc1a32796084be72d1f8750d8118d70e))
+* **policy:** bytes field (eager/deferred/none), MAX_FETCH_BYTES, FILE_POLICY_VERSION ([372708f](https://github.com/edjafarov/kiagent-core/commit/372708f89b3fec49d2c6ad637e9b1da024d56529))
+* **providers:** windows-ocr read provider (WinRT helper, selftest-gated) ([8d69dcf](https://github.com/edjafarov/kiagent-core/commit/8d69dcf35abb7c3e22ed7eccc868898920396569))
+* **vision:** count real VLM failures (session.bump); finish OCR-only after 3 when OCR ran ([0e3aede](https://github.com/edjafarov/kiagent-core/commit/0e3aede458efd581faae5b4c37b3e1aeb21963cb))
+* **vision:** OCR only needs-ocr pages; merge with the text layer, no VLM ([8e6ee44](https://github.com/edjafarov/kiagent-core/commit/8e6ee4452adc5c1fa1510b9f96d9528dfc5ffc0d))
+* **vision:** rasterize an explicit page list and report pageCount (wasm + kia-vision --pages) ([d1c5180](https://github.com/edjafarov/kiagent-core/commit/d1c5180d145813ed7d058dd7db7aade354945e11))
+* **vision:** windowed resumable OCR (10 pages/run, 200 max, per-page ocrProgress, single-entry bytes cache) ([1f5213e](https://github.com/edjafarov/kiagent-core/commit/1f5213e514008c9d83f3e96c1f8b03282adb1e12))
+* **workers:** maxRSS memory probe on large-file parse and OCR windows ([d187329](https://github.com/edjafarov/kiagent-core/commit/d187329fb3da3b2047129d2034c6094e87df8aad))
+
+### Bug Fixes
+
+* **convert:** garble check leaves matches() and runs once per doc ([936d6e4](https://github.com/edjafarov/kiagent-core/commit/936d6e45d90d687190d990ea90cc9208fc4b4528))
+* **fixtures:** .msg files are binary (eol=lf normalisation corrupted them) ([0235759](https://github.com/edjafarov/kiagent-core/commit/02357596db199bd8575c96959b0e69ebd1b50b3a))
+* **indexing:** final-review fixes — OCR missing-page livelock, sticky too-large, quit is not a crash, drop parked bytes ([84fd393](https://github.com/edjafarov/kiagent-core/commit/84fd3934a0cedb398dc264fe2b393f72221e5bcd))
+* **msg:** a corrupt .msg fails the parse instead of OOM-killing main ([519c685](https://github.com/edjafarov/kiagent-core/commit/519c68503affeadf2a429923722c3916c56cc81f))
+* **vision:** wait for an OCR provider still running its boot selftest ([b4e5dd5](https://github.com/edjafarov/kiagent-core/commit/b4e5dd5313ec1f798965cdcade3d897bc749e1ea))
+* **windows-ocr:** a selftest that cannot run reports why, not "no OCR language" ([aaa08ea](https://github.com/edjafarov/kiagent-core/commit/aaa08eaa34692accce9cfa5e62290199876f5041))
+
 ## [0.99.2](https://github.com/edjafarov/kiagent-core/compare/v0.99.1...v0.99.2) (2026-10-02)
 
 ### Bug Fixes
