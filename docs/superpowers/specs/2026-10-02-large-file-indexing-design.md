@@ -1,6 +1,6 @@
 # Large files: always findable, PDFs text-searchable up to 100 MiB
 
-Status: r3 (review round 2 folded in) · 2026-10-02
+Status: r4 (codex round 2 folded in) · 2026-10-02
 
 This spec also defines two shared mechanisms the sibling specs reuse:
 **§6 policy re-enumeration** and **§7 durable attempt counter**.
@@ -230,28 +230,45 @@ neither crash-safe nor loop-free.
 - **Worker session.** `bump(key): Promise<number>` increments and commits
   **immediately**, in its own write, with **no** document change. It
   returns the new count.
-- **Lifetime.** The engine deletes a doc's rows for that consumer when
-  `work()` returns `done`. Rows of retired consumers are swept with them.
+- **Lifetime.** A doc's rows for a consumer are deleted **inside the same
+  `store.commit` transaction** that persists that doc's `done` outcome
+  (enrich + cursor). The commit gains a `clearAttempts: docId[]` field,
+  used by both the live-tail commit and the deferred re-drive commit.
+  - Deleting when `work()` returns would be wrong: the batch is still
+    buffered, so a crash later in the batch would erase the fence **and**
+    lose the doc's terminal marker.
+  - Rows of retired consumers are swept with them.
 
 Users: §3's crash fence (`'parse'`), and the windows-ocr spec's VLM failure
 count (`'vlm'`).
 
 ## Rollout
 
-1. **Core release, one release.** Policy `bytes` field + `FILE_POLICY_VERSION`,
-   local re-enumeration, per-kind caps, net cap, output cap, re-admission
-   via the worker version bump, `session.bump` + fence, removal of
-   `too-large` from the OCR hand-off. It regenerates the SDK.
-   - **Gate:** in the dev app, parse a real 77 MB PDF and a 77 MB scanned
-     PDF. Measure **peak RSS and `process.memoryUsage().external`**, not just
-     heap snapshots.
-   - If the peak main-process increase exceeds 400 MB, move `parse()` for
-     deferred docs into a utility process before release.
+1. **One core release** with everything core-side:
+   - policy `bytes` field + `FILE_POLICY_VERSION`, and the local policy
+     re-walk;
+   - per-kind caps, net cap and output cap;
+   - re-admission via the worker version bump;
+   - `session.bump` + fence, and removal of `too-large` from the OCR
+     hand-off;
+   - **and windowed OCR** (including the Swift helper `--pages`, which
+     lives in core's `native/`).
+
+   Windowed OCR ships in the same release, not later. Otherwise large
+   scans admitted by the cap rise would finish OCR at 20 pages with a
+   terminal `extraction`, and stay stranded there.
+
+   The release regenerates the SDK.
+
+   **Gate:** in the dev app, parse a real 77 MB PDF and OCR a 77 MB
+   scanned PDF. Measure **peak RSS and `process.memoryUsage().external`**,
+   not just heap snapshots. If the peak main-process increase exceeds
+   400 MB, move `parse()` for deferred docs into a utility process before
+   release.
 2. **alpha-cent pin + app release.**
-3. **OneDrive + gdrive connector releases** against the new SDK. These ship
+3. **OneDrive + gdrive connector releases** against the new SDK. They ship
    after the app, so no new-connector-on-old-core window produces rows the
    old core mishandles. After this step, cloud files come back findable.
-4. **Windowed OCR** (core + Swift helper `--pages`): scans up to 200 pages.
 
 ## Testing
 
@@ -270,6 +287,9 @@ count (`'vlm'`).
   - A fake parser that crashes the worker process twice ends in `failed`.
     Use real process termination in an integration test.
   - Two `FetchDeferredError` deferrals do **not** count.
+  - Killing the process after `work()` returns `done` but before the batch
+    commits keeps the attempt rows. The doc is retried with its fence
+    intact.
 - **Local policy re-walk:** an old cursor with a 60 MiB PDF, a `.msg` and
   200 already-indexed PDFs emits exactly the first two.
 - **Windowed OCR:** a 45-page scanned fixture produces 5 committed runs,
