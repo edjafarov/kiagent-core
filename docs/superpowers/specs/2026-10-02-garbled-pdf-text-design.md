@@ -65,12 +65,15 @@ Here `n` = the page's non-whitespace characters.
 
     Currency (`£ ¥ ¢`), `§`, `° ± µ`, fractions, quotes and `© ®` are
     legitimate and never count.
-  - **(b) Latin text with no words in it.** The page has ≥ 60 Latin letters
-    and **zero** hits from a small function-word list (de/en/fr/it/es, about
-    15 words each: `der die und the and of le la et il di de per…`), **and**
-    fewer than 50% of its ≥ 3-letter Latin tokens contain a vowel.
-    Shifted-glyph garbage fails this; real prose of any of those languages,
-    even a terse one, hits a function word.
+  - **(b) Latin letters that don't form words.** Over the page's
+    *distinct* words (accents folded), fewer than 68% of adjacent letter
+    pairs are pairs common in en/de/fr/it/es/nl/pl/cs words, given ≥ 40
+    pairs of evidence. A font-offset (Caesar) shift of any of those
+    languages scores ≤ 0.62. Real text scores ≥ 0.71, including bank
+    statements, term lists, invoices and code footers. Distinct words keep
+    repeated rows (`CHF`, `SEPA Lastschrift`) from dominating. (Plan-time
+    revision: the earlier vowel/function-word rule missed shifts that map
+    consonants onto vowels and flagged numeric `CHF`/`GBP` statements.)
 - Otherwise the page is `good`.
 - Non-Latin scripts are judged by (a) only.
 

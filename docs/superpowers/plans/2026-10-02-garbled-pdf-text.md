@@ -49,36 +49,53 @@
 ```ts
 import { assessPage } from '../text-quality';
 
-const shift = (s: string, k: number) => s.replace(/[a-z]/g, (c) => String.fromCharCode(((c.charCodeAt(0) - 97 + k) % 26) + 97));
+// Shifts upper- and lower-case letters, like a PDF font with a wrong ToUnicode offset.
+const shift = (s: string, k: number) =>
+  s.replace(/[a-z]/g, (c) => String.fromCharCode(((c.charCodeAt(0) - 97 + k) % 26) + 97))
+   .replace(/[A-Z]/g, (c) => String.fromCharCode(((c.charCodeAt(0) - 65 + k) % 26) + 65));
 const PROSE = {
-  en: 'The tenant shall pay the rent on the first day of each month and the landlord shall maintain the property.',
-  de: 'Der Mieter zahlt die Miete am ersten Tag jedes Monats und der Vermieter hält die Wohnung in gutem Zustand.',
-  fr: 'Le locataire paie le loyer le premier jour de chaque mois et le bailleur entretient le logement.',
-  it: 'Il conduttore paga il canone il primo giorno di ogni mese e il locatore mantiene la proprietà.',
+  en: 'The tenant shall pay the rent on the first day of each month and the landlord shall maintain the property. The parties agree that any dispute shall be settled by the court of the place where the property is located.',
+  de: 'Der Mieter zahlt die Miete am ersten Tag jedes Monats und der Vermieter hält die Wohnung in gutem Zustand. Streitigkeiten werden vom zuständigen Landgericht München entschieden.',
+  fr: 'Le locataire paie le loyer le premier jour de chaque mois et le bailleur entretient le logement. Les parties conviennent que tout litige sera tranché par le tribunal.',
+  it: 'Il conduttore paga il canone il primo giorno di ogni mese e il locatore mantiene la proprietà. Le parti convengono che ogni controversia sarà decisa dal tribunale.',
+  es: 'El inquilino paga el alquiler el primer día de cada mes y el arrendador mantiene la propiedad. Las partes acuerdan que cualquier disputa será resuelta por el tribunal.',
+  nl: 'De huurder betaalt de huur op de eerste dag van elke maand en de verhuurder onderhoudt de woning. Geschillen worden beslecht door de bevoegde rechter.',
+  pl: 'Najemca płaci czynsz pierwszego dnia każdego miesiąca, a wynajmujący utrzymuje lokal w należytym stanie. Spory rozstrzyga właściwy sąd.',
+  cs: 'Nájemce platí nájemné první den každého měsíce a pronajímatel udržuje nemovitost v dobrém stavu. Spory rozhoduje příslušný soud.',
+  tr: 'Kiracı kirayı her ayın ilk günü öder ve ev sahibi mülkü bakımlı tutar. Anlaşmazlıklar yetkili mahkeme tarafından çözülür.',
   ru: 'Арендатор оплачивает аренду в первый день каждого месяца, а арендодатель содержит имущество.',
+};
+const NOT_PROSE_BUT_GOOD = {
+  'numeric statement (CHF)': Array.from({ length: 30 }, (_, i) => `2026-03-${String(i + 1).padStart(2, '0')}  4711-${i}  1.234,${String(i).padStart(2, '0')} CHF  -56,78`).join('\n'),
+  'numeric statement (GBP)': Array.from({ length: 30 }, (_, i) => `2026-03-${String(i + 1).padStart(2, '0')}  4711-${i}  1,234.${String(i).padStart(2, '0')} GBP  -56.78`).join('\n'),
+  'bank statement rows': Array.from({ length: 25 }, (_, i) => `2026-03-${String(i + 1).padStart(2, '0')} SEPA Lastschrift REWE Markt GmbH Kartenzahlung VISA ${i},99 EUR`).join('\n'),
+  'table of contents': 'Invoice Summary Customer Account Balance Payment History Contact Details Shipping Address Billing Information Order Number Tax Total',
+  'German term list': 'Kläger Beklagter Streitwert Aktenzeichen Landgericht München Kammer Termin Verhandlung Beweisaufnahme Zeugen Sachverständiger Gutachten Urteil Berufung',
+  'surname list': 'Müller Schmidt Schneider Fischer Weber Meyer Wagner Becker Schulz Hoffmann Schäfer Koch Bauer Richter Klein Wolf Schröder Neumann Schwarz Zimmermann',
+  'invoice lines': 'Pos Art.-Nr. Bezeichnung Menge Einzelpreis Gesamt 1 XK-4471-B Schraube M8x40 verzinkt 200 0,12 24,00 2 ZB-993 Dübel Fischer SX 8 100 0,09 9,00 3 HKZ-12 Winkel 90° 40 1,10 44,00 Zwischensumme Versand MwSt 19% Gesamtbetrag',
+  'bank footer codes': 'IBAN DE89 3704 0044 0532 0130 00 BIC COBADEFFXXX USt-IdNr DE123456789 HRB 12345 Amtsgericht Köln GmbH KG AG',
+  'URLs and addresses': 'https://www.example.com/de/kundenportal?ref=xyz123 support@example.com www.bundesanzeiger.de kontakt@kanzlei-mueller.de https://login.microsoftonline.com/common/oauth2',
+  '§-dense statute index': '§ 1 Anwendungsbereich § 2 Begriffe § 3 Pflichten § 4 Haftung § 5 Kündigung § 6 Schlussbestimmungen',
+  'currency-heavy line': '£ 1,200.00 ¥ 34,000 € 990.10 £ 15.00 ¥ 1,000 § 4 total £ 2,205.10 paid',
+  'terse heading': 'Anlage K 12 – Schreiben der Beklagten vom 3. März 2026',
 };
 
 describe('assessPage', () => {
   it.each(Object.entries(PROSE))('%s prose is good', (_l, t) => expect(assessPage(t)).toBe('good'));
-  it('a numeric statement page is good', () => {
-    const rows = Array.from({ length: 30 }, (_, i) => `2026-03-${String(i + 1).padStart(2, '0')}  4711-${i}  1.234,${String(i).padStart(2, '0')} EUR  -56,78`).join('\n');
-    expect(assessPage(rows)).toBe('good');
+  it.each(Object.entries(NOT_PROSE_BUT_GOOD))('%s is good', (_l, t) => expect(assessPage(t)).toBe('good'));
+  it.each(['en', 'de', 'fr', 'it', 'es'] as const)('%s prose under every Caesar shift is garbled', (l) => {
+    for (let k = 1; k < 26; k++) expect([k, assessPage(shift(PROSE[l], k))]).toEqual([k, 'garbled']);
   });
-  it('a §-dense statute index is good', () => {
-    expect(assessPage('§ 1 Anwendungsbereich § 2 Begriffe § 3 Pflichten § 4 Haftung § 5 Kündigung § 6 Schlussbestimmungen')).toBe('good');
-  });
-  it('a currency-heavy statement is good', () => {
-    expect(assessPage('£ 1,200.00 ¥ 34,000 € 990.10 £ 15.00 ¥ 1,000 § 4 total £ 2,205.10 paid')).toBe('good');
-  });
-  it('Caesar-shifted prose is garbled', () => expect(assessPage(shift(PROSE.en.toLowerCase(), 7))).toBe('garbled'));
-  it('PUA-heavy text is garbled', () => expect(assessPage(' abc  def ')).toBe('garbled'));
+  it('the classic -29 ToUnicode offset ("7KH") is garbled', () =>
+    expect(assessPage('7KH WHQDQW VKDOO SD\\ WKH UHQW RQ WKH ILUVW GD\\ RI HDFK PRQWK DQG WKH ODQGORUG VKDOO PDLQWDLQ WKH SURSHUW\\ LQ JRRG UHSDLU')).toBe('garbled'));
+  it('PUA-heavy text is garbled', () =>
+    expect(assessPage('\uE001\uE002\uE003 \uE004\uE005\uE006 \uE007\uE008\uE009 \uE00A\uE00B\uE00C \uE00D\uE00E\uE00F \uE010\uE011')).toBe('garbled'));
   it('Latin-1 symbol soup is garbled', () => expect(assessPage('Í¶ÈÆ¸ ´¨¯ ¤¦¬ Í¶ÈÆ¸ ´¨¯ ¤¦¬ Í¶ÈÆ¸')).toBe('garbled'));
-  it('U+FFFD runs are garbled', () => expect(assessPage('Vertrag ���� zwischen ��� und')).toBe('garbled'));
+  it('U+FFFD runs are garbled', () => expect(assessPage('Vertrag \uFFFD\uFFFD\uFFFD\uFFFD zwischen \uFFFD\uFFFD\uFFFD und')).toBe('garbled'));
   it('empty and near-empty pages are sparse', () => {
     expect(assessPage('')).toBe('sparse');
     expect(assessPage('  Page 3  ')).toBe('sparse');
   });
-  it('a terse real heading page is not garbled', () => expect(assessPage('Anlage K 12 – Schreiben der Beklagten vom 3. März 2026')).toBe('good'));
 });
 ```
 
@@ -93,22 +110,28 @@ describe('assessPage', () => {
 export type PageQuality = 'good' | 'sparse' | 'garbled';
 export const QUALITY_VERSION = 1;
 
-const SPARSE_BELOW = 16;          // non-whitespace chars
-const BAD_RATIO = 0.05;           // signal (a)
-const MIN_LATIN_LETTERS = 60;     // signal (b)
-const VOWEL_TOKEN_RATIO = 0.5;
-// ~15 function words each, de/en/fr/it/es; matched as whole lowercase tokens.
-const FUNCTION_WORDS = new Set([
-  'der','die','das','und','ist','nicht','mit','von','den','dem','zu','im','auf','für','ein',
-  'the','and','of','to','in','is','that','for','with','on','by','as','this','be','are',
-  'le','la','les','et','des','du','un','une','est','pour','dans','que','qui','sur','pas',
-  'il','di','che','per','del','della','non','una','sono','con','al','gli','le','da','nel',
-  'el','los','las','y','en','que','por','con','para','una','del','se','es','lo','al',
-]);
+const SPARSE_BELOW = 16;     // non-whitespace chars
+const BAD_RATIO = 0.05;      // signal (a)
+const MIN_PAIRS = 40;        // signal (b) needs this much evidence
+const COMMON_PAIR_RATIO = 0.68;
 // (a) U+FFFD, Private Use Area, C0/C1 controls except \t \n \r, rare Latin-1 marks.
-const BAD_CHAR = /[�-\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F¤¦¨¯´¸¶¬]/gu;
-const LATIN_LETTER = /[A-Za-zÀ-ÖØ-öø-ÿ]/g;
-const VOWEL = /[aeiouyäöüàâéèêëîïôûùáíóú]/i;
+const BAD_CHAR = /[\uFFFD\uE000-\uF8FF\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F¤¦¨¯´¸¶¬]/gu;
+// (b) Letter pairs common inside words of en/de/fr/it/es/nl plus the most
+// frequent Polish/Czech ones (accents folded, ß → ss). Real text — prose,
+// statements, term lists, codes — scores ≥ 0.71 over its DISTINCT words; a
+// font-offset (Caesar) shift of any of those languages scores ≤ 0.62.
+const COMMON_PAIRS = new Set((
+  'ab ac ad af ag ah ai ak al am an ap ar as at au av aw ay ba be bi bl bo br bu by ca cc ce ch ci ck cl co cr ct cu ' +
+  'da de di do dr ds du ea ec ed ee ef eg eh ei el em en eo ep er es et eu ev ew ex ey fa fe ff fi fl fo fr ft fu ' +
+  'ga ge gg gh gi gl gn go gr gt gu ha he hi hl hm hn ho hr hs ht hu ia ib ic id ie if ig ih il im in io ip ir is it iv iz ' +
+  'ka ke ki kl ko ks la ld le li ll lo ls lt lu ly lz ma me mi mm mo mp ms mu my na nc nd ne nf ng ni nk nl nn no ns nt nu ny nz ' +
+  'ob oc od oe of og oh oi ok ol om on oo op or os ot ou ov ow pa pe ph pi pl po pp pr pt pu qu ' +
+  'ra rb rc rd re rf rg ri rk rl rm rn ro rr rs rt ru rv ry rz sa sc se sh si sm so sp ss st su sy ' +
+  'ta te th ti tl to tr ts tt tu tw ty tz ua ub uc ud ue ug uh ui ul um un up ur us ut uz va ve vi vo ' +
+  'wa we wh wi wn wo wu ye yo za ze zi zu cz sz dz wy kt zy yc ej aj je ja sk'
+).split(' '));
+
+const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss').toLowerCase();
 
 export function assessPage(text: string): PageQuality {
   const compact = text.replace(/\s+/g, '');
@@ -116,21 +139,24 @@ export function assessPage(text: string): PageQuality {
   if (n < SPARSE_BELOW) return 'sparse';
   const bad = compact.match(BAD_CHAR)?.length ?? 0;
   if (bad / n > BAD_RATIO) return 'garbled';
-  const latin = text.match(LATIN_LETTER)?.length ?? 0;
-  if (latin >= MIN_LATIN_LETTERS) {
-    const tokens = text.toLowerCase().split(/[^a-zà-öø-ÿ]+/).filter(Boolean);
-    const hasFunctionWord = tokens.some((t) => FUNCTION_WORDS.has(t));
-    if (!hasFunctionWord) {
-      const long = tokens.filter((t) => t.length >= 3);
-      const voweled = long.filter((t) => VOWEL.test(t)).length;
-      if (long.length > 0 && voweled / long.length < VOWEL_TOKEN_RATIO) return 'garbled';
+  // Distinct words, so 30 rows of "CHF" or "SEPA Lastschrift" count once.
+  const words = new Set(fold(text).split(/[^a-z]+/).filter((w) => w.length >= 2));
+  let pairs = 0;
+  let common = 0;
+  for (const w of words) {
+    for (let i = 0; i < w.length - 1; i++) {
+      pairs++;
+      if (COMMON_PAIRS.has(w.slice(i, i + 2))) common++;
     }
   }
+  if (pairs >= MIN_PAIRS && common / pairs < COMMON_PAIR_RATIO) return 'garbled';
   return 'good';
 }
 ```
 
-Tune only the constants, and only if a fixture fails. Never add a signal that fires on low letter density alone. A Caesar shift by 7 leaves some tokens with vowels: if that test fails on the vowel ratio, check the shifted tokens and adjust `VOWEL_TOKEN_RATIO` (≤ 0.6), not the logic.
+Non-Latin scripts (Cyrillic, Greek, CJK) fold to no `a-z` words, so signal (b) never fires on them. Only (a) applies there.
+
+Tune only the constants, and only if a fixture fails. Never add a signal that fires on low letter density alone. The measured margin is narrow but clean: real text scores ≥ 0.71 (the bank footer codes), and shifts score ≤ 0.62. If you add a common pair, re-run the all-shifts test. Every pair you add raises the shifted scores too.
 
 - [ ] **Step 4: Run, and confirm it passes. Then commit**
 
@@ -447,7 +473,7 @@ git commit -m "feat: needs-ocr marker from the convert worker; vision + pending 
 
 **Interfaces:**
 - Consumes: the large-file plan's windowed loop: `done`, `next`, `remaining`, the single-entry `cache`, `complete(engine, pages, extra)`, `pagedRasterizer`.
-- Produces: `cache` entries also hold `layer?: string[]` (the per-page text-layer text, parsed once per doc); `complete`'s `pagesSkipped` comes from the caller.
+- Produces: `cache` entries also hold `layer?: string[]` (the per-page text-layer text, parsed once per doc). `complete` is unchanged; the listed path writes its own completion.
 
 - [ ] **Step 1: Failing tests**
 
@@ -505,43 +531,121 @@ it('MAX_OCR_PAGES caps the number of listed pages and records pagesSkipped', asy
 });
 ```
 
+**Bounded cost and no livelock:**
+
+```ts
+it('no read provider: later needs-ocr docs defer WITHOUT fetching until the retry window passes', async () => {
+  const { r } = pagedRasterizer(2);
+  const fetchBytes = jest.fn(async () => multiPagePdf([{ text: PROSE_LINES }, { scan: true }]));
+  const s = fakeSession({ read: async () => { throw new NoProviderError('read'); }, fetchBytes });
+  const w = createVisionWorker({ rasterizer: r, laneOpen: () => true });
+  expect(await w.work(needsOcr([2]), s)).toBe('defer');
+  expect(await w.work(needsOcr([2], { filename: 'other.pdf' }), s)).toBe('defer');
+  expect(fetchBytes).toHaveBeenCalledTimes(1);
+});
+it('a listed page the rasterizer skips does not loop: the doc completes with its text-layer text', async () => {
+  const skipping = { pdfToPngs: jest.fn(async (_b: Uint8Array, o: { pages: number[] }) =>
+    ({ pageCount: 3, pages: o.pages.filter((n) => n !== 2).map((n) => ({ page: n, png: new Uint8Array([n]) })) })) };
+  const s = fakeSession({ read: async () => 'ocr', fetchBytes: async () => multiPagePdf([{ text: PROSE_LINES }, { text: shifted(PROSE_LINES) }, { scan: true }]) });
+  expect(await createVisionWorker({ rasterizer: skipping as never, laneOpen: () => true }).work(needsOcr([2, 3]), s)).toBe('done');
+  expect(s.enriched[0].metadata.extraction.engine).toBe('local-ocr');
+  expect(s.enriched[0].markdown).toContain(shifted(PROSE_LINES)[0].slice(0, 20));
+});
+```
+
+**Long text layers survive** (the `mergeExtraction` cap would cut at 1,000,000 chars):
+
+```ts
+it('keeps text-layer text beyond 1M chars when rendering needs-ocr pages', async () => {
+  const big = Array.from({ length: 1700 }, () => 'Vertragstext der Parteien Absatz eins zwei drei vier fuenf sechs'); // ~110 KB per page
+  const pages = Array.from({ length: 12 }, (_, i) => (i === 11 ? { scan: true as const } : { text: [...big, `ENDE${i + 1}`] }));
+  const { r } = pagedRasterizer(12);
+  const s = fakeSession({ read: async () => 'ocr12', fetchBytes: async () => multiPagePdf(pages) as never });
+  await createVisionWorker({ rasterizer: r, laneOpen: () => true }).work(needsOcr([12]), s);
+  const md = s.enriched.at(-1)!.markdown as string;
+  expect(md.length).toBeGreaterThan(1_000_000);
+  expect(md).toContain('ENDE11');
+  expect(md).toContain('ocr12');
+});
+```
+
 `pagedRasterizer` returns `png[0] = page number`, so `ocr${png[0]}` identifies the page. A 250-page `multiPagePdf` is about 60 KB; that is fine.
 
 **Engine integration** (in `engine.test.ts`, same setup as the large-file plan's windowed-OCR case):
-- Commit one file doc through the **real commit path**, with the converter from `createConverter` and the bytes of `multiPagePdf([{ text: PROSE_LINES }, { scan: true }])`.
+- Get one file doc through the **real commit path**. `store.commit` bypasses `deps.convert`; conversion runs only inside `src.pull` (`engine.ts` ~1074). So use a source fake whose pull yields the doc with the binary `multiPagePdf([{ text: PROSE_LINES }, { scan: true }])`, and keep the engine's `createConverter`.
 - Attach `createVisionWorker` with a fake rasterizer and `read`.
 - After about 2 s, the stored doc has `extraction.engine === 'local-ocr'` and markdown containing both the prose and the page-2 OCR text.
 
 - [ ] **Step 2: Run, and confirm they fail.** `npx jest src/main/workers/vision`
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Implement: one windowed loop, two candidate lists**
 
-In `work()`, after the bytes are obtained (and cached):
+Don't add a second loop. Generalize the large-file plan's loop so `next` and `remaining` come from one candidate list:
+
+```ts
+// Worker-local: one probe per cadence across ALL needs-ocr docs while no
+// read provider exists (a Linux host, or Windows before OCR ships). Without
+// it every needs-ocr doc re-downloads, parses and rasterizes every 30 min.
+let readUnavailableUntil = 0;
+const READ_RETRY_MS = 25 * 60_000;
+```
+
+In `work()`, **before** `fetchBytes`:
 
 ```ts
 const conv = meta.conversion as { status?: string; pages?: number[] } | undefined;
-const listed = conv?.status === 'needs-ocr' ? [...new Set(conv.pages ?? [])].sort((a, b) => a - b) : null;
+const listed = conv?.status === 'needs-ocr'
+  ? [...new Set(conv.pages ?? [])].sort((a, b) => a - b).slice(0, MAX_OCR_PAGES) : null;
+if (listed && Date.now() < readUnavailableUntil) return 'defer';
 ```
 
-**When `listed`:**
-- **Window:** `next = listed.slice(0, MAX_OCR_PAGES).filter((n) => !(String(n) in done)).slice(0, OCR_WINDOW)`, and `remaining` is computed against that same capped list.
-- **Text layer, parsed once per doc:** `layer = cache.layer ??= await parsePdfPages(bytes)`.
-- **Read errors:** a `NoProviderError` means `cache = null; return 'defer'` (no VLM, text kept). Any other read error → `'defer'`, as today.
-- **Render** with one page per text-layer page:
+Then, in the large-file loop:
+- **Candidates:** `const candidates = listed ?? Array.from({ length: limit }, (_, i) => i + 1);` (`limit` ≤ `MAX_OCR_PAGES`, as there).
+- **Window:** `next = candidates.filter((n) => !(String(n) in done)).slice(0, OCR_WINDOW)`.
+- **Raster:** `const raster = next.length ? await deps.rasterizer.pdfToPngs(bytes, { pages: next }) : null;`. Use `pageCount = raster?.pageCount ?? prog?.pageCount ?? 0` (only the `listed` path can reach `raster === null`).
+- **Read errors.** On `NoProviderError`:
+  - when `listed`: `readUnavailableUntil = Date.now() + READ_RETRY_MS; cache = null; return 'defer';`. There is no VLM and the text is kept.
+  - when not `listed`: the existing fill-and-fall-through.
+
+  Any other read error → `'defer'`, as today.
+- **No livelock:** when `listed`, after the read loop, run `for (const n of next) done[String(n)] ??= '';`. Listed pages come from pdf.js, but `done` keys come from pdfium. A page pdfium skips or can't render would otherwise stay "remaining" forever, and every progress enrich would re-feed the doc.
+- **Remaining:** `candidates.some((n) => !(String(n) in done))` for `listed`. The default path keeps its `cap`-based check.
+- **Text layer:** parse it lazily, only when rendering, so a deferred doc never pays for it:
 
   ```ts
-  layer.map((t, i) => {
-    const o = done[String(i + 1)];
-    return { page: i + 1, ocrText: o && o.trim() ? o : t };
-  })
+  let layer: string[];
+  try { layer = cache.layer ??= await parsePdfPages(bytes); } catch { cache = null; return 'defer'; }
+  if (layer.length === 0) { cache = null; return 'defer'; }   // never render from nothing
+  const texts = layer.map((t, i) => { const o = done[String(i + 1)]; return o && o.trim() ? o : t; });
   ```
 
-  → `mergeExtraction`. Both the progress enrich and the completion use this rendering.
-- **Completion:** `complete('local-ocr', rendered, { pagesSkipped })` with `pagesSkipped = Math.max(0, listed.length - MAX_OCR_PAGES)` when > 0. There is **never** a sufficiency check or VLM pass.
+- **Render** with `renderListedPages(texts)`, a small helper next to `work()`:
 
-Change the large-file plan's `complete` to take `pagesSkipped` from its caller. The default path keeps `Math.max(0, pageCount - MAX_OCR_PAGES)`.
+  ```ts
+  /** needs-ocr rendering: every page in order, text-layer or OCR. Not
+   *  mergeExtraction: its 1M-char cap and "Text content (OCR)" labels are for
+   *  VLM output; a long text-layer PDF keeps up to MAX_MARKDOWN_CHARS. */
+  function renderListedPages(texts: string[]): string {
+    const body = texts.length > 1
+      ? texts.map((t, i) => `--- page ${i + 1} ---\n\n${t.trim()}`).join('\n\n')
+      : (texts[0] ?? '').trim();
+    return capMarkdown(body).markdown;
+  }
+  ```
 
-The default (non-`listed`) path is unchanged.
+  Import `capMarkdown` from `@main/core/engine/convert` (large-file plan Task 5). The progress enrich uses this rendering too when `listed`.
+- **Completion (listed)** writes the enrich directly. There is **never** a sufficiency check or VLM pass:
+
+  ```ts
+  cache = null;
+  const skipped = Math.max(0, new Set(conv!.pages ?? []).size - MAX_OCR_PAGES);
+  session.enrich({ documentId: doc.id, markdown: renderListedPages(texts), metadata: {
+    ocrProgress: undefined,
+    extraction: { engine: 'local-ocr', at: new Date().toISOString(), ...(skipped ? { pagesSkipped: skipped } : {}) } } });
+  return 'done';
+  ```
+
+The default (non-`listed`) path and its `complete` are unchanged.
 
 - [ ] **Step 4: Run, and confirm they pass.** `npx jest src/main/workers src/main/core`
 
@@ -621,7 +725,8 @@ In `work()`, for a doc that arrived **with** text (`(doc.markdown ?? '').trim().
 
 ```ts
 const reassess = (doc.markdown ?? '').trim().length >= HAS_TEXT_CHARS;
-…after parseDetailed…
+// Immediately after `res = await parse(...)` and BEFORE Task 3's text-poor /
+// needs-ocr enrich, which would overwrite the existing markdown.
 if (reassess) {
   const conversion = res.ocrPages ? needsOcrMarker(res.ocrPages) : { status: 'ok' as const, at: now().toISOString(), quality: 1 as const };
   session.enrich({ documentId: doc.id, metadata: { conversion } });
