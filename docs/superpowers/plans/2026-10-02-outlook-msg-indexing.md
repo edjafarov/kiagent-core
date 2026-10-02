@@ -134,9 +134,10 @@ interface MailParts { subject?: string; from?: string; to?: string; cc?: string;
 Append to `convert-email.test.ts`:
 
 ```ts
+// Merge into the file's existing top-of-file imports (lint: import/first, no duplicates):
 import fs from 'node:fs';
 import path from 'node:path';
-import { convertibleKind } from '../convert';
+import { createConverter, convertibleKind } from '../convert';
 
 const FIX = path.join(__dirname, 'fixtures', 'msg');
 const msg = (name: string) => ({
@@ -197,6 +198,12 @@ describe('converter: Outlook .msg', () => {
     expect(md).not.toContain('/O=EXCHANGELABS');
   });
 
+  it('an extensionless attachment with the Outlook MIME is parsed by msgreader, not mailparser', async () => {
+    const m = msg('plain.msg') as any;
+    const out = await convert({ ...m, title: 'attachment', binary: { ...m.binary, filename: 'attachment' } } as never);
+    expect(out.markdown!.startsWith('# Simple')).toBe(true);
+  });
+
   it('a file that is not a real .msg leaves markdown null (convert worker records failed)', async () => {
     const bad = { ...(msg('plain.msg') as any), binary: { bytes: new Uint8Array(64), mime: 'application/vnd.ms-outlook', filename: 'bad.msg' } };
     const out = await convert(bad as never);
@@ -205,13 +212,12 @@ describe('converter: Outlook .msg', () => {
   });
 
   it('.eml output is unchanged apart from the new Cc line', async () => {
-    const out = await convert(input('note.eml', 'message/rfc822', EML));
-    expect(out.markdown!.split('\n\n').slice(0, 4)).toEqual([
-      '# Notes on the Analytical Engine',
-      '**From:** Ada Lovelace <ada@example.com>',
-      '**To:** Charles Babbage <charles@example.com>',
-      '**Date:** 1843-08-12T09:00:00.000Z',
-    ]);
+    const parts = (await convert(input('note.eml', 'message/rfc822', EML))).markdown!.split('\n\n');
+    expect(parts[0]).toBe('# Notes on the Analytical Engine');
+    // mailparser 3.9 quotes display names ("Ada Lovelace"); pin layout + order, not its quoting
+    expect(parts[1]).toMatch(/^\*\*From:\*\* "?Ada Lovelace"? <ada@example\.com>$/);
+    expect(parts[2]).toMatch(/^\*\*To:\*\* "?Charles Babbage"? <charles@example\.com>$/);
+    expect(parts[3]).toBe('**Date:** 1843-08-12T09:00:00.000Z');
   });
 });
 ```
@@ -272,19 +278,26 @@ In `emailToMarkdown`, `render` becomes:
       body: mail.text ?? (mail.html ? await htmlToMarkdown(mail.html) : ''),
     });
   };
-  if (ext === 'msg') return msgToMarkdown(buf);
+  // Outlook's binary CFB format: by extension OR by MIME (an extensionless
+  // attachment carries only the MIME; mailparser would read nothing from it).
+  if (ext === 'msg' || mime === 'application/vnd.ms-outlook') return msgToMarkdown(buf);
 ```
 
-Add the `if (ext === 'msg')` line before the `emlx` branch, and update the function's doc comment: "`.msg` (Outlook's binary CFB format) goes through msgreader".
+Add that line before the `emlx` branch. `emailToMarkdown` gains a `mime` parameter: `parse()` passes the lower-cased MIME it already has (`emailToMarkdown(buf, ext, (mime ?? '').toLowerCase())`). Update the function's doc comment: "`.msg` goes through msgreader".
 
 ```ts
 /** Outlook .msg → the same markdown as .eml. Body: plain text, else the HTML
  *  body (string or, from "new Outlook", raw UTF-8 bytes). RTF-only messages
  *  index headers + attachment names (see plan: deliberate spec deviation). */
 async function msgToMarkdown(buf: Buffer): Promise<string> {
-  const { default: MsgReader } = await import('@kenjiuno/msgreader');
-  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
-  const d = new MsgReader(ab).getFileData();
+  // A typed lazy require, NOT `await import()`: under module node16 a dynamic
+  // import of this CJS package yields the class at `.default.default` (TS2351
+  // "not constructable"). Same pattern as local-folder/mime.ts. Verified with
+  // tsc (node16) + runtime on 2026-10-02.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { default: MsgReader } = require('@kenjiuno/msgreader') as typeof import('@kenjiuno/msgreader');
+  // DataView: no copy, and correct for small Buffers living in Node's shared pool.
+  const d = new MsgReader(new DataView(buf.buffer, buf.byteOffset, buf.byteLength)).getFileData();
   if (d.error) throw new Error(`msg: ${d.error}`);
   // An Exchange sender carries an X.500 DN ("/O=…"), not an address: show the name.
   const who = (name?: string, email?: string): string => {
@@ -298,6 +311,9 @@ async function msgToMarkdown(buf: Buffer): Promise<string> {
       .map((r) => who(r.name, r.smtpAddress ?? r.email))
       .filter(Boolean)
       .join(', ');
+  // `html` bytes are decoded as UTF-8 (new Outlook writes UTF-8). Classic
+  // Outlook messages with codepage HTML always carry a plain `body`, so they
+  // never reach this branch.
   const html = d.bodyHtml ?? (d.html ? new TextDecoder().decode(d.html) : undefined);
   const body = d.body?.trim() ? d.body : html ? await htmlToMarkdown(html) : '';
   const when = d.messageDeliveryTime ?? d.clientSubmitTime;
@@ -448,23 +464,28 @@ it('an old cursor emits an unchanged .msg the old policy ignored', async () => {
 
 `MSG_FIX = path.join(__dirname, '../../../core/engine/__tests__/fixtures/msg')`. Adjust the relative path to the test file's location.
 
-- [ ] **Step 2: Attachment: a `.msg` attachment consumed by convert v1 is parsed by v2**
+- [ ] **Step 2: Attachment: a `.msg` attachment is a convert candidate**
 
-In `engine.test.ts`, alongside the large-file plan's upgrade test (same pattern):
-1. Commit an `attachment` doc `{ title: 'fwd.msg', metadata: { mime: 'application/octet-stream', filename: 'fwd.msg', sizeBytes: 20480 } }`.
-2. Advance a `worker:convert:v1` consumer past it. Use a stand-in v1 worker whose `matches` returns false, which is what v1 did: `convertibleKind` had no `.msg` case.
-3. Attach the real v2 worker, with a source fake whose `fetchBytes` returns the bytes of `plain.msg`.
-4. After about 1 s, assert `conversion.status === 'ok'` and markdown starting `# Simple`.
+The v2 replay itself is pinned by the large-file plan's upgrade test: `worker:convert:v2` starts at cursor 0 whatever v1 did. The only `.msg`-specific fact is candidacy. In `convert-worker.test.ts`:
+
+```ts
+it('an octet-stream .msg attachment and an extensionless Outlook-MIME one are convert candidates', () => {
+  expect(isConvertCandidate(doc({ type: 'attachment', title: 'fwd.msg', markdown: null,
+    metadata: { mime: 'application/octet-stream', filename: 'fwd.msg', sizeBytes: 20480 } }))).toBe(true);
+  expect(isConvertCandidate(doc({ type: 'attachment', title: 'attachment', markdown: null,
+    metadata: { mime: 'application/vnd.ms-outlook', filename: 'attachment', sizeBytes: 20480 } }))).toBe(true);
+});
+```
 
 - [ ] **Step 3: Run**
 
-Run: `npx jest src/main/core/engine/__tests__/engine.test.ts src/main/sources/local-folder -t "msg"`
+Run: `npx jest src/main/workers/convert src/main/sources/local-folder -t "msg"`
 Expected: PASS. These tests pass as soon as Tasks 2–3 and the large-file plan are in; there is no red phase of their own. Confirm each one fails when you temporarily revert Task 3's `ADMITTED_SINCE[2]` and `convertibleKind` changes (mutation check), then restore them.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/main/core/engine/__tests__/engine.test.ts src/main/sources/local-folder/__tests__
+git add src/main/workers/convert/__tests__ src/main/sources/local-folder/__tests__
 git commit -m "test(msg): upgrade recovery for local .msg files and mail .msg attachments"
 ```
 
