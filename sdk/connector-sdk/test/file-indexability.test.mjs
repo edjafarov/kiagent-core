@@ -8,7 +8,8 @@ const sdkRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 // is the test that matters most in the SDK: contracts.ts and
 // source-errors.ts are types and error classes, so nothing else proves the
 // generated copy of file-indexability.ts ships working RUNTIME code.
-const { decideFileIndexing } = await import(join(sdkRoot, 'dist', 'index.js'));
+const sdk = await import(join(sdkRoot, 'dist', 'index.js'));
+const { decideFileIndexing } = sdk;
 
 test('cloud mp3 is cloud-media', () => {
   assert.deepEqual(
@@ -31,7 +32,7 @@ test('local mp3 is audio', () => {
       sizeBytes: 100,
       path: '/d/meeting.mp3',
     }),
-    { kind: 'index', pipeline: 'audio' },
+    { kind: 'index', pipeline: 'audio', bytes: 'eager' },
   );
 });
 
@@ -47,7 +48,7 @@ test('zip is archive', () => {
   );
 });
 
-test('a 30 MiB local pdf is vision', () => {
+test('a 30 MiB local pdf is a deferred converter row', () => {
   assert.deepEqual(
     decideFileIndexing({
       profile: 'local-folder',
@@ -56,6 +57,20 @@ test('a 30 MiB local pdf is vision', () => {
       sizeBytes: 30 * 1024 * 1024,
       path: '/d/big.pdf',
     }),
-    { kind: 'index', pipeline: 'vision' },
+    { kind: 'index', pipeline: 'converter', bytes: 'deferred' },
+  );
+});
+
+test('exports the bytes-aware policy', () => {
+  assert.equal(sdk.FILE_POLICY_VERSION, 2);
+  assert.equal(sdk.MAX_FETCH_BYTES, 100 * 1024 * 1024);
+  assert.deepEqual(
+    sdk.decideFileIndexing({
+      profile: 'cloud-drive',
+      filename: 'a.pdf',
+      mime: 'application/pdf',
+      sizeBytes: 60 * 1024 * 1024,
+    }),
+    { kind: 'index', pipeline: 'converter', bytes: 'deferred' },
   );
 });
