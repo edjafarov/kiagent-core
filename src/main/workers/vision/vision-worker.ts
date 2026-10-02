@@ -127,150 +127,163 @@ export function createVisionWorker(deps: {
       classifyDocument(change.document) === 'candidate',
 
     async work(change: Change, session: WorkerSession): Promise<WorkOutcome> {
-      if (change.kind !== 'document') return 'skip';
-      const doc = change.document;
-      // Outside the processing window: park instead of blocking on the lane
-      // gate — a parked ledger row is free, a blocked work() stalls the tail.
-      if (!deps.laneOpen()) return 'defer';
-
-      const pdf = isPdfDoc(doc);
-      const key = keyOf(doc);
-      let bytes = cache?.key === key ? cache.bytes : null;
-      if (!bytes) {
-        const rssBefore = process.memoryUsage().rss;
-        // A fetch that fails right now (source still registering, offline)
-        // throws FetchDeferredError, which the engine parks for the re-drive.
-        bytes = await session.fetchBytes(doc);
-        if (!bytes) return 'skip'; // source can't serve bytes — terminal
-        if (bytes.length > (pdf ? MAX_PDF_BYTES : MAX_IMAGE_BYTES))
-          return 'skip';
-        cache = pdf ? { key, bytes, rssBefore } : null;
+      // Only a 'done' window is followed at once by the next one; anything
+      // else parks the doc (re-drive, lane window), so never hold its bytes
+      // (up to MAX_PDF_BYTES) while it waits.
+      let out: WorkOutcome | undefined;
+      try {
+        out = await workOne(change, session);
+        return out;
+      } finally {
+        if (out !== 'done') cache = null;
       }
-
-      const { mime } = doc.metadata as { mime?: string };
-      const complete = (
-        engine: string,
-        pages: PageResult[],
-        extra: Record<string, unknown> = {},
-        pageCount = 1,
-      ): WorkOutcome => {
-        session.enrich({
-          documentId: doc.id,
-          markdown: mergeExtraction(pages),
-          metadata: {
-            ocrProgress: undefined,
-            extraction: {
-              engine,
-              at: new Date().toISOString(),
-              ...extra,
-              ...(pageCount > MAX_OCR_PAGES
-                ? { pagesSkipped: pageCount - MAX_OCR_PAGES }
-                : {}),
-            },
-          },
-        });
-        return 'done';
-      };
-
-      if (!pdf) {
-        // Single image: one OCR read, then the same sufficiency/VLM ladder.
-        let ocrText: string | undefined;
-        try {
-          ocrText = await session.read(bytes, { mime });
-        } catch (err) {
-          // A crashed OCR helper is transient — DEFER so the re-drive can
-          // recover the doc, rather than silently degrading to pass 2 (or,
-          // worse, an OCR-less permanent record). LaneClosedError (window
-          // closed mid-run) defers the same way. Only a genuine "no read
-          // provider" (e.g. non-mac host) falls through to pass 2.
-          if (!(err instanceof NoProviderError)) return 'defer';
-        }
-        const pages: PageResult[] = [{ page: 1, ocrText }];
-        if ((ocrText ?? '').replace(/\s+/g, '').length >= OCR_SUFFICIENT_CHARS)
-          return complete('local-ocr', pages);
-        // VLM-decodable guard: a text-poor image whose format llama.cpp's
-        // stb_image cannot decode (HEIC/WebP/TIFF…) would re-drive pass 2
-        // forever — fetch+OCR+VLM every cadence, uncapped, since the `see`
-        // call fails on every attempt. Complete with the OCR-only result
-        // (whatever pass 1 produced) instead of deferring. PDFs rasterize to
-        // PNG, so they're exempt.
-        if (!isVlmDecodable(doc)) return complete('local-ocr', pages);
-        return vlmPass(
-          session,
-          pages,
-          [{ page: 1, png: bytes }],
-          mime,
-          complete,
-        );
-      }
-
-      const prog =
-        (doc.metadata as { ocrProgress?: OcrProgress }).ocrProgress ?? null;
-      const done: Record<string, string> = { ...(prog?.pages ?? {}) };
-      // First window: pageCount is unknown until the rasterizer reports it.
-      const limit = Math.min(
-        prog?.pageCount ?? Number.MAX_SAFE_INTEGER,
-        MAX_OCR_PAGES,
-      );
-      const next: number[] = [];
-      for (let n = 1; n <= limit && next.length < OCR_WINDOW; n += 1)
-        if (!(String(n) in done)) next.push(n);
-
-      const raster = await deps.rasterizer.pdfToPngs(bytes, { pages: next });
-      const { pageCount } = raster;
-      const cap = Math.min(pageCount, MAX_OCR_PAGES);
-      // Pass 1 — OCR, one window.
-      for (const { page, png } of raster.pages) {
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          done[String(page)] =
-            (await session.read(png, { mime: 'image/png' })) ?? '';
-        } catch (err) {
-          // Same transient-vs-absent split as the image path above.
-          if (!(err instanceof NoProviderError)) return 'defer';
-          // No OCR provider at all: mark every page empty (no rendering) and
-          // fall through. chars = 0 < OCR_SUFFICIENT_CHARS → the VLM pass.
-          for (let n = 1; n <= cap; n += 1) done[String(n)] ??= '';
-          break;
-        }
-      }
-      if (cache && bytes.length > MAX_LOCAL_BINARY_BYTES)
-        logPeak(
-          session,
-          `ocr window ${next[0]}-${next.at(-1)}`,
-          bytes.length,
-          cache.rssBefore,
-        );
-      const pagesOut = (): PageResult[] =>
-        Object.keys(done)
-          .map(Number)
-          .sort((a, b) => a - b)
-          .map((n) => ({ page: n, ocrText: done[String(n)] }));
-      const remaining = Array.from({ length: cap }, (_, i) => i + 1).some(
-        (n) => !(String(n) in done),
-      );
-      if (remaining) {
-        session.enrich({
-          documentId: doc.id,
-          markdown: mergeExtraction(pagesOut()),
-          metadata: { ocrProgress: { pageCount, pages: done } },
-        });
-        return 'done';
-      }
-      cache = null;
-      // The ONE completion writer: every OCR'd page, page-ordered, with VLM
-      // descriptions merged in where pass 2 ran.
-      const finish: typeof complete = (engine, pages, extra) =>
-        complete(engine, pages, extra, pageCount);
-      const chars = Object.values(done).join('').replace(/\s+/g, '').length;
-      if (chars >= OCR_SUFFICIENT_CHARS) return finish('local-ocr', pagesOut());
-      const first = Array.from(
-        { length: Math.min(pageCount, MAX_PAGES) },
-        (_, i) => i + 1,
-      );
-      const images = (await deps.rasterizer.pdfToPngs(bytes, { pages: first }))
-        .pages;
-      return vlmPass(session, pagesOut(), images, 'image/png', finish);
     },
   };
+
+  async function workOne(
+    change: Change,
+    session: WorkerSession,
+  ): Promise<WorkOutcome> {
+    if (change.kind !== 'document') return 'skip';
+    const doc = change.document;
+    // Outside the processing window: park instead of blocking on the lane
+    // gate — a parked ledger row is free, a blocked work() stalls the tail.
+    if (!deps.laneOpen()) return 'defer';
+
+    const pdf = isPdfDoc(doc);
+    const key = keyOf(doc);
+    let bytes = cache?.key === key ? cache.bytes : null;
+    if (!bytes) {
+      const rssBefore = process.memoryUsage().rss;
+      // A fetch that fails right now (source still registering, offline)
+      // throws FetchDeferredError, which the engine parks for the re-drive.
+      bytes = await session.fetchBytes(doc);
+      if (!bytes) return 'skip'; // source can't serve bytes — terminal
+      if (bytes.length > (pdf ? MAX_PDF_BYTES : MAX_IMAGE_BYTES)) return 'skip';
+      cache = pdf ? { key, bytes, rssBefore } : null;
+    }
+
+    const { mime } = doc.metadata as { mime?: string };
+    const complete = (
+      engine: string,
+      pages: PageResult[],
+      extra: Record<string, unknown> = {},
+      pageCount = 1,
+    ): WorkOutcome => {
+      session.enrich({
+        documentId: doc.id,
+        markdown: mergeExtraction(pages),
+        metadata: {
+          ocrProgress: undefined,
+          extraction: {
+            engine,
+            at: new Date().toISOString(),
+            ...extra,
+            ...(pageCount > MAX_OCR_PAGES
+              ? { pagesSkipped: pageCount - MAX_OCR_PAGES }
+              : {}),
+          },
+        },
+      });
+      return 'done';
+    };
+
+    if (!pdf) {
+      // Single image: one OCR read, then the same sufficiency/VLM ladder.
+      let ocrText: string | undefined;
+      try {
+        ocrText = await session.read(bytes, { mime });
+      } catch (err) {
+        // A crashed OCR helper is transient — DEFER so the re-drive can
+        // recover the doc, rather than silently degrading to pass 2 (or,
+        // worse, an OCR-less permanent record). LaneClosedError (window
+        // closed mid-run) defers the same way. Only a genuine "no read
+        // provider" (e.g. non-mac host) falls through to pass 2.
+        if (!(err instanceof NoProviderError)) return 'defer';
+      }
+      const pages: PageResult[] = [{ page: 1, ocrText }];
+      if ((ocrText ?? '').replace(/\s+/g, '').length >= OCR_SUFFICIENT_CHARS)
+        return complete('local-ocr', pages);
+      // VLM-decodable guard: a text-poor image whose format llama.cpp's
+      // stb_image cannot decode (HEIC/WebP/TIFF…) would re-drive pass 2
+      // forever — fetch+OCR+VLM every cadence, uncapped, since the `see`
+      // call fails on every attempt. Complete with the OCR-only result
+      // (whatever pass 1 produced) instead of deferring. PDFs rasterize to
+      // PNG, so they're exempt.
+      if (!isVlmDecodable(doc)) return complete('local-ocr', pages);
+      return vlmPass(session, pages, [{ page: 1, png: bytes }], mime, complete);
+    }
+
+    const prog =
+      (doc.metadata as { ocrProgress?: OcrProgress }).ocrProgress ?? null;
+    const done: Record<string, string> = { ...(prog?.pages ?? {}) };
+    // First window: pageCount is unknown until the rasterizer reports it.
+    const limit = Math.min(
+      prog?.pageCount ?? Number.MAX_SAFE_INTEGER,
+      MAX_OCR_PAGES,
+    );
+    const next: number[] = [];
+    for (let n = 1; n <= limit && next.length < OCR_WINDOW; n += 1)
+      if (!(String(n) in done)) next.push(n);
+
+    const raster = await deps.rasterizer.pdfToPngs(bytes, { pages: next });
+    const { pageCount } = raster;
+    const cap = Math.min(pageCount, MAX_OCR_PAGES);
+    // Pass 1 — OCR, one window.
+    for (const { page, png } of raster.pages) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        done[String(page)] =
+          (await session.read(png, { mime: 'image/png' })) ?? '';
+      } catch (err) {
+        // Same transient-vs-absent split as the image path above.
+        if (!(err instanceof NoProviderError)) return 'defer';
+        // No OCR provider at all: mark every page empty (no rendering) and
+        // fall through. chars = 0 < OCR_SUFFICIENT_CHARS → the VLM pass.
+        for (let n = 1; n <= cap; n += 1) done[String(n)] ??= '';
+        break;
+      }
+    }
+    // A requested page the rasterizer did not return (kia-vision skips a
+    // page it cannot load) is recorded empty — else every window would
+    // re-request it and the doc would re-feed forever.
+    for (const n of next) if (n <= cap) done[String(n)] ??= '';
+    if (cache && bytes.length > MAX_LOCAL_BINARY_BYTES)
+      logPeak(
+        session,
+        `ocr window ${next[0]}-${next.at(-1)}`,
+        bytes.length,
+        cache.rssBefore,
+      );
+    const pagesOut = (): PageResult[] =>
+      Object.keys(done)
+        .map(Number)
+        .sort((a, b) => a - b)
+        .map((n) => ({ page: n, ocrText: done[String(n)] }));
+    const remaining = Array.from({ length: cap }, (_, i) => i + 1).some(
+      (n) => !(String(n) in done),
+    );
+    if (remaining) {
+      session.enrich({
+        documentId: doc.id,
+        markdown: mergeExtraction(pagesOut()),
+        metadata: { ocrProgress: { pageCount, pages: done } },
+      });
+      return 'done';
+    }
+    cache = null;
+    // The ONE completion writer: every OCR'd page, page-ordered, with VLM
+    // descriptions merged in where pass 2 ran.
+    const finish: typeof complete = (engine, pages, extra) =>
+      complete(engine, pages, extra, pageCount);
+    const chars = Object.values(done).join('').replace(/\s+/g, '').length;
+    if (chars >= OCR_SUFFICIENT_CHARS) return finish('local-ocr', pagesOut());
+    const first = Array.from(
+      { length: Math.min(pageCount, MAX_PAGES) },
+      (_, i) => i + 1,
+    );
+    const images = (await deps.rasterizer.pdfToPngs(bytes, { pages: first }))
+      .pages;
+    return vlmPass(session, pagesOut(), images, 'image/png', finish);
+  }
 }

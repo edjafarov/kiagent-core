@@ -517,6 +517,43 @@ describe('windowed OCR', () => {
     ).toHaveLength(1);
   });
 
+  it('a page the rasterizer never returns is recorded empty, so the doc still completes', async () => {
+    // kia-vision skips a page CGPDFDocument cannot load; without this the
+    // missing page is re-requested by every window forever.
+    const rasterizer: Rasterizer = {
+      pdfToPngs: jest.fn(async (_b, { pages }) => ({
+        pageCount: 3,
+        pages: pages
+          .filter((n) => n !== 2 && n <= 3)
+          .map((n) => ({ page: n, png: new Uint8Array([n]) })),
+      })),
+    };
+    const s = fakeSession({ read: ocrByPage, see: async () => 'desc' });
+    const out = await createVisionWorker({
+      rasterizer,
+      laneOpen: () => true,
+    }).work(change({}), s);
+    expect(out).toBe('done');
+    expect(s.enriched).toHaveLength(1);
+    expect(s.enriched[0].metadata.extraction).toBeDefined();
+    expect(s.enriched[0].metadata).toHaveProperty('ocrProgress', undefined);
+  });
+
+  it('a deferred window drops the bytes cache (no 100 MiB held while parked)', async () => {
+    const { r } = pagedRasterizer(25);
+    const fetchBytes = jest.fn(async () => new Uint8Array(100));
+    const worker = createVisionWorker({ rasterizer: r, laneOpen: () => true });
+    const failing = fakeSession({
+      read: async () => {
+        throw new Error('helper crashed');
+      },
+      fetchBytes,
+    });
+    expect(await worker.work(change({}), failing)).toBe('defer');
+    await worker.work(change({}), fakeSession({ read: ocrByPage, fetchBytes }));
+    expect(fetchBytes).toHaveBeenCalledTimes(2);
+  });
+
   it('fetches bytes once across consecutive windows of the same doc', async () => {
     const { r } = pagedRasterizer(25);
     const fetchBytes = jest.fn(async () => new Uint8Array(100));

@@ -322,6 +322,20 @@ describe('large files (fetch cap, re-admission, crash fence, output cap)', () =>
       ),
     ).toBe(false);
   });
+  it('a body over the cap (declared size understated) records too-large that stays final', async () => {
+    // Mail parsers fall back to sizeBytes 0; re-admitting on the declared
+    // size alone would re-download the body every cycle forever.
+    const s = fakeSession(
+      async () => new Uint8Array(MAX_CLOUD_BINARY_BYTES + 1),
+    );
+    const d = doc({ metadata: { sizeBytes: 0 } });
+    await createConvertWorker().work(change(d), s);
+    const { conversion } = s.enriched[0].metadata;
+    expect(conversion.status).toBe('too-large');
+    expect(
+      isConvertCandidate({ ...d, metadata: { ...d.metadata, conversion } }),
+    ).toBe(false);
+  });
   it('fence: the third attempt on an over-eager-cap doc records failed WITHOUT parsing', async () => {
     // Declared 40 MiB; the fence keys on max(declared, actual), so a tiny
     // fixture is enough. The parse spy proves the third attempt never parses.

@@ -68,12 +68,17 @@ export function isConvertCandidate(doc: Document): boolean {
   if (kind === null) return false;
   if (meta.conversion != null) {
     // too-large is cap-relative: re-admit when the current cap admits it.
-    const st = (meta.conversion as { status?: unknown }).status;
+    const { status: st, bytes: fetched } = meta.conversion as {
+      status?: unknown;
+      bytes?: unknown;
+    };
     const declared = num(meta.sizeBytes) ?? num(meta.size);
+    // The observed size wins: a body larger than its declared size stays
+    // too-large until the cap itself grows past it.
     return (
       st === 'too-large' &&
       declared !== undefined &&
-      declared <= convertCapFor(kind)
+      Math.max(declared, num(fetched) ?? 0) <= convertCapFor(kind)
     );
   }
   if ((doc.markdown ?? '').trim().length >= HAS_TEXT_CHARS) return false;
@@ -114,13 +119,19 @@ export function createConvertWorker(
 
       const record = (
         status: ConversionStatus,
-        extra: { markdown?: string; error?: string; truncated?: true } = {},
+        extra: {
+          markdown?: string;
+          error?: string;
+          truncated?: true;
+          bytes?: number;
+        } = {},
       ): WorkOutcome => {
         const conversion: ConversionOutcome = {
           status,
           at: now().toISOString(),
           ...(extra.error ? { error: extra.error.slice(0, 500) } : {}),
           ...(extra.truncated ? { truncated: true as const } : {}),
+          ...(extra.bytes !== undefined ? { bytes: extra.bytes } : {}),
         };
         session.enrich({
           documentId: doc.id,
@@ -145,7 +156,8 @@ export function createConvertWorker(
       const rssBefore = process.memoryUsage().rss;
       const bytes = await session.fetchBytes(doc);
       if (!bytes) return record('unavailable');
-      if (bytes.length > capBytes) return record('too-large');
+      if (bytes.length > capBytes)
+        return record('too-large', { bytes: bytes.length });
       // Crash fence AFTER the bytes arrive, BEFORE the parse: only a parse
       // can kill main; counting deferred fetches would fail docs on an
       // outage. Keyed on max(declared, actual): size makes a parse risky.

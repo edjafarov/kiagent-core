@@ -27,6 +27,9 @@ export interface ConversionOutcome {
   error?: string;
   /** The markdown was cut at MAX_MARKDOWN_CHARS. */
   truncated?: true;
+  /** too-large only: the size actually fetched, when it exceeded the cap
+   *  although the declared size did not. */
+  bytes?: number;
 }
 
 /** Outcomes after which a PDF is handed to OCR. `unavailable` is absent on

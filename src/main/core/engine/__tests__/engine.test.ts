@@ -477,6 +477,43 @@ describe('engine', () => {
       expect(runs).toBe(3);
     });
 
+    it('a cooperative stop mid-batch does not count as a crash for docs already worked', async () => {
+      const engine = plainEngine();
+      const account = await store.createAccount({
+        source: 'test',
+        identifier: 'q',
+      });
+      let handle: { stop(): Promise<void> } | undefined;
+      const worker: Worker = {
+        name: 'quitter',
+        version: 1,
+        matches: (ch) => ch.kind === 'document',
+        async work(ch, session) {
+          await session.bump('parse');
+          // app quit while this batch is still being worked
+          if (ch.kind === 'document' && ch.document.externalId === 'q2')
+            void handle?.stop();
+          return 'done';
+        },
+      };
+      // three docs before attach → one replay batch
+      await store.commit({
+        account: account.id,
+        documents: [doc('q1'), doc('q2'), doc('q3')],
+        cursor: 1,
+      });
+      handle = engine.attach(worker);
+      await settle();
+      await handle.stop();
+      const q1 = (await store.read.search({ limit: 10 })).find(
+        (x) => x.externalId === 'q1',
+      )!;
+      // the batch was dropped, but q1's work() returned: no attempt left behind
+      expect(await store.bumpAttempt('worker:quitter:v1', q1.id, 'parse')).toBe(
+        1,
+      );
+    });
+
     it('a doc with several changes in one feed batch is worked once', async () => {
       const engine = plainEngine();
       const account = await store.createAccount({

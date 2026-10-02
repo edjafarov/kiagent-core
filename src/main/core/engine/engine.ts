@@ -1720,9 +1720,28 @@ export function createEngine(deps: EngineDeps): Engine & {
               // worker identical copies. Working each would repeat the cost
               // and trip session.bump fences without any crash.
               const seen = new Set<string>();
-              let cursor: Seq = await store.consumerCursor(consumer);
+              const batchStart: Seq = await store.consumerCursor(consumer);
+              let cursor: Seq = batchStart;
+              // Docs whose work() RETURNED in this batch. A stop drops the
+              // batch (re-worked next start), but none of them crashed the
+              // process: clear their session.bump counters so a quit is
+              // never counted as a parser crash. The cursor stays put.
+              const worked: string[] = [];
+              const dropBatch = () =>
+                worked.length
+                  ? store
+                      .commit({
+                        consumer,
+                        cursor: batchStart,
+                        clearAttempts: worked,
+                      })
+                      .catch(() => {})
+                  : undefined;
               for (const change of changes) {
-                if (abort.signal.aborted) return;
+                if (abort.signal.aborted) {
+                  await dropBatch();
+                  return;
+                }
                 // A matcher throw is a worker bug over untrusted connector
                 // metadata, not a store failure — contained here so one
                 // poisoned document can't stop the loop permanently (the
@@ -1748,6 +1767,8 @@ export function createEngine(deps: EngineDeps): Engine & {
                 }
                 if (matched) {
                   const r = await workOne(worker, change, abort.signal);
+                  if (change.kind === 'document')
+                    worked.push(change.document.id);
                   await store.ledgerRecord(
                     consumer,
                     change.seq,
