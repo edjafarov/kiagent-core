@@ -1024,10 +1024,10 @@ describe('a read provider still starting (selftest pending) is waited for', () =
     const see = jest.fn(async () => 'desc');
     const s = starting({ see });
     expect(
-      await createVisionWorker({ rasterizer: pdf(), laneOpen: () => true }).work(
-        change({}),
-        s,
-      ),
+      await createVisionWorker({
+        rasterizer: pdf(),
+        laneOpen: () => true,
+      }).work(change({}), s),
     ).toBe('defer');
     expect(see).not.toHaveBeenCalled();
     expect(s.enriched).toEqual([]);
@@ -1041,10 +1041,10 @@ describe('a read provider still starting (selftest pending) is waited for', () =
       metadata: { mime: 'image/png', filename: 'a.png', sizeBytes: 50_000 },
     });
     expect(
-      await createVisionWorker({ rasterizer: pdf(), laneOpen: () => true }).work(
-        png,
-        s,
-      ),
+      await createVisionWorker({
+        rasterizer: pdf(),
+        laneOpen: () => true,
+      }).work(png, s),
     ).toBe('defer');
     expect(see).not.toHaveBeenCalled();
   });
