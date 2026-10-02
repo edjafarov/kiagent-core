@@ -1,23 +1,17 @@
 // Usage: node scripts/build-windows-ocr-helper.mjs
 // Publishes native/windows-ocr into assets/ocr/win32-<arch>/windows-ocr.exe
-// (self-contained single-file .NET 8) for both win-x64 and win-arm64.
-// Windows-only; requires the .NET 8 SDK (preinstalled on GitHub's
-// windows-latest, or via actions/setup-dotnet). arm64 cross-compiles from an
-// x64 host, so a single x64 runner produces both binaries; the runtime picks
-// assets/ocr/win32-${process.arch}/ at startup and falls back to GLM-OCR when
-// the arch's exe is absent.
-import { existsSync, mkdirSync, statSync, readdirSync, copyFileSync, rmSync } from 'node:fs';
+// (self-contained single-file .NET 10) for both win-x64 and win-arm64.
+// Requires the .NET 10 SDK; runs on win32 and on the linux docker leg
+// (cross-publish: EnableWindowsTargeting pulls the WinRT projection as a
+// NuGet reference package). One host produces both arches; the runtime picks
+// assets/ocr/win32-${process.arch}/ at startup.
+import { existsSync, mkdirSync, statSync, readdirSync, readFileSync, copyFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-if (process.platform !== 'win32') {
-  console.error(`windows-ocr only builds on win32 (got ${process.platform})`);
-  process.exit(1);
-}
 
 const proj = path.join(ROOT, 'native', 'windows-ocr', 'windows-ocr.csproj');
 const program = path.join(ROOT, 'native', 'windows-ocr', 'Program.cs');
@@ -52,6 +46,7 @@ for (const { arch, rid } of TARGETS) {
       '-r', rid,
       '--self-contained', 'true',
       '-p:PublishSingleFile=true',
+      '-p:EnableWindowsTargeting=true',
       '-o', publishDir,
     ],
     { stdio: 'inherit' },
@@ -64,6 +59,15 @@ for (const { arch, rid } of TARGETS) {
 
   if (!existsSync(path.join(publishDir, 'windows-ocr.exe'))) {
     console.error(`publish (${rid}) did not produce windows-ocr.exe in ${publishDir}`);
+    process.exit(1);
+  }
+  // A wrong-arch or non-PE output must fail here, not at the installer gate.
+  const pe = readFileSync(path.join(publishDir, 'windows-ocr.exe'));
+  const off = pe.readUInt32LE(0x3c);
+  const machine = pe.readUInt16LE(off + 4);
+  const want = { x64: 0x8664, arm64: 0xaa64 }[arch];
+  if (pe.toString('latin1', off, off + 4) !== 'PE\0\0' || machine !== want) {
+    console.error(`windows-ocr (${arch}) is not a PE ${arch} binary`);
     process.exit(1);
   }
   mkdirSync(destDir, { recursive: true });

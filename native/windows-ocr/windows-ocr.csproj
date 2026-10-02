@@ -2,7 +2,10 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <!-- The Windows TFM pulls in the WinRT projections (Windows.Media.Ocr). -->
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <!-- Cross-publish from the linux docker leg (release-local.sh), like the
+         meetings helpers; the WinRT projection is a NuGet reference package. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- No RuntimeIdentifier here: the build script passes -r win-x64 / -r
          win-arm64 per target so one csproj publishes both arches (arm64
          cross-compiles from an x64 host). A pinned RID would override the

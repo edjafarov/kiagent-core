@@ -8,7 +8,7 @@
 //     and darwin fetches no whisper slugs at all) — without it the `hear`
 //     route decodes silence into hallucinated repeats.
 //   - kia-vision: built only on darwin (native OCR via Swift Vision framework).
-//   - windows-ocr: built only on win32 (native OCR via .NET 8 + Windows.Media.Ocr).
+//   - windows-ocr: native OCR (.NET 10 + Windows.Media.Ocr); Windows packages get it from alpha-cent's docker leg (cross-publish) or a win32 host.
 //     Win/Linux without a native helper use the WASM rasterizer + GLM-OCR.
 import { spawnSync } from 'node:child_process';
 

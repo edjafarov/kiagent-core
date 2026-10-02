@@ -3,7 +3,8 @@
 //     -> {"text":"...","width":W,"height":H,"confidence":C}  (stdout, exit 0)
 //   windows-ocr selftest
 //     -> {"ok":true|false}  (exit 0 if an OCR engine is available, else 1)
-// Errors go to stderr with a non-zero exit. Mirrors native/vision-helper/main.swift.
+// Errors go to stderr with a non-zero exit. Images over OcrEngine.MaxImageDimension
+// are downscaled to fit (never returned empty). Mirrors native/vision-helper/main.swift.
 using System;
 using System.Linq;
 using System.Text;
@@ -47,17 +48,22 @@ internal static class Program
                 return 1;
             }
 
-            // Windows.Media.Ocr caps the input dimension; oversize → empty text
-            // (best-effort, like the macOS helper — description still runs).
-            if (width > OcrEngine.MaxImageDimension || height > OcrEngine.MaxImageDimension)
+            // Windows.Media.Ocr refuses images over MaxImageDimension; the worker
+            // sends full-size images (it downscales only for the VLM). Scale to
+            // fit, keep the aspect ratio, honour EXIF orientation.
+            var transform = new BitmapTransform();
+            uint maxDim = OcrEngine.MaxImageDimension;
+            if (width > maxDim || height > maxDim)
             {
-                Emit(new { text = "", width, height, confidence = 0.0 });
-                return 0;
+                double s = Math.Min((double)maxDim / width, (double)maxDim / height);
+                transform.ScaledWidth = (uint)Math.Max(1, Math.Floor(width * s));
+                transform.ScaledHeight = (uint)Math.Max(1, Math.Floor(height * s));
+                transform.InterpolationMode = BitmapInterpolationMode.Fant;
             }
-
-            using var raw = await decoder.GetSoftwareBitmapAsync();
-            using var bitmap = SoftwareBitmap.Convert(
-                raw, BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+            using var bitmap = await decoder.GetSoftwareBitmapAsync(
+                BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, transform,
+                ExifOrientationMode.RespectExifOrientation,
+                ColorManagementMode.DoNotColorManage);
             var result = await engine.RecognizeAsync(bitmap);
 
             // Windows.Media.Ocr exposes no per-line/word confidence; the field is
