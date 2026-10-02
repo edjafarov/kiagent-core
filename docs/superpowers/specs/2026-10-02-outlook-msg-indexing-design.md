@@ -1,148 +1,130 @@
 # Outlook `.msg` files: index them like `.eml`
 
-Status: r1 (draft) · 2026-10-02
+Status: r2 (fable + codex-astra round 1 folded in) · 2026-10-02
+Ships in the same core release as the large-file spec and reuses its §6
+(policy re-enumeration) and §3 (convert worker version bump).
 
 ## Problem
 
-Outlook "Save As" `.msg` files sitting in folders are not indexed at all. A
+Outlook "Save As" `.msg` files in folders are not indexed at all. A
 client's data room lost four legal correspondence emails this way.
 
-- `.msg` is Outlook's binary OLE/CFB format, not MIME, so `mailparser`
-  cannot read it.
-- `decideFileIndexing` returns `ignore: unsupported` for it on both
-  profiles. Its MIME (`application/vnd.ms-outlook`) is in neither
-  `LOCAL_CONVERTER_MIMES` nor `CLOUD_CONVERTER_MIMES`.
-- `convertibleKind` has no case for it, so `.msg` **attachments** (Gmail,
-  IMAP, ms365: forwarded-as-attachment Outlook mails are common) are not
-  parsed either.
-
-A second, smaller gap in the same place: cloud `.eml` is also
-`unsupported`. The policy comment calls this out as deliberately deferred
-"widening".
+- `.msg` is Outlook's binary OLE/CFB format, which `mailparser` can't read.
+- `decideFileIndexing` returns `ignore: unsupported`: its MIME,
+  `application/vnd.ms-outlook`, is in neither converter set.
+- `convertibleKind` has no case for it, so `.msg` **attachments** are not
+  parsed either. Forwarded-as-attachment Outlook mails are common in
+  Gmail, IMAP and ms365.
+- Cloud `.eml` is `unsupported` too; the policy comment marks that as
+  deferred widening.
 
 ## Goals
 
 - A `.msg` in a local folder, OneDrive or Google Drive, or attached to an
-  email, is indexed with the same markdown shape as an `.eml`: subject as
-  title; headers; body; attachment names.
-- Cloud `.eml` is indexed too, since the cloud set is being widened anyway.
+  email, is indexed with the same markdown as an `.eml`: subject as title,
+  headers, body and attachment names.
+- Cloud `.eml` is indexed too.
+- Files and attachments that are already present come back without user
+  action.
 
 ## Non-goals
 
-- Indexing attachments *inside* a `.msg` as their own documents. We list
-  their names, exactly like `.eml` today. Recursing is a separate feature.
-- `.pst` / `.ost` mail stores (MB–GB archives; a different problem).
-- Threading `.msg` files with mail from mail sources.
+- Indexing attachments *inside* a `.msg` as their own documents. Names
+  only, like `.eml`.
+- `.pst` / `.ost` archives.
+- Threading with mail-source messages.
+- **Setting `created_at` from the message date.** `.eml` doesn't do it
+  either: the scanner uses birthtime/mtime, and `parse()` and `EnrichInput`
+  have no channel for it. If wanted, that is a follow-up covering both
+  formats.
 
 ## Design
 
 ### Parser
 
-Add `@kenjiuno/msgreader` as a dependency of the core runtime and of
-`release/app`, like `mailparser`. It is:
+Add `@kenjiuno/msgreader`. It is pure JS, Apache-2.0, v1.28.0, and has two
+deps (`iconv-lite`, `@kenjiuno/decompressrtf`).
 
-- pure JS (no native build);
-- Apache-2.0;
-- v1.28.0, maintained, with two deps (`iconv-lite`,
-  `@kenjiuno/decompressrtf`).
-
-An OSS IQ check was attempted on 2026-10-02 but the tool crashed (an ossiq
-bug, not a package finding). Re-run it at implementation time and pin the
-recommended version.
+- **Where to declare it.** Like `mailparser`, it goes in
+  `release/app/package.json` (the packaged runtime) **and** in the root
+  `package.json` (dev and tests), in both kiagent-core and alpha-cent's
+  overlay manifests. A missing packaged dep would make the `import()` fail
+  and record every `.msg` as `failed`.
+- **OSS IQ.** It crashed on 2026-10-02 (`UnboundLocalError:
+  anyof_constraints`, an ossiq bug). Re-run it at implementation time with
+  `OSSIQ_GITHUB_TOKEN` set, and pin the recommended version.
 
 In `core/engine/convert.ts`:
 
-- `convertibleKind` maps MIME `application/vnd.ms-outlook` or ext `msg` to
-  the existing `'email'` kind.
+- `convertibleKind` maps `application/vnd.ms-outlook` **or ext `msg`** to
+  the existing `'email'` kind. It already falls back on the extension for
+  `eml`/`emlx`/`mbox`, and every caller passes the filename. So a cloud
+  `.msg` arriving as `application/octet-stream` parses with **no connector
+  MIME change**.
 - `emailToMarkdown(buf, ext)` dispatches `ext === 'msg'` to a new
-  `msgToMarkdown(buf)`.
-
-`msgToMarkdown` emits the **same markdown layout** `emailToMarkdown`
-produces for `.eml`: subject, From, To, Cc, Date, a blank line, the body,
-then the attachment-names line. One layout means search snippets and the
-MCP `get` view look the same whatever the mail format.
-
-**Body preference:**
-
-1. The plain `body`.
-2. If that is empty, `bodyHtml` → the existing `htmlToMarkdown`.
-3. If that is empty, the decompressed RTF body with control words stripped.
-   For Outlook, RTF-only bodies are usually encapsulated HTML; when the RTF
-   contains `\fromhtml1`, extract and use that HTML.
-
-**Dates:** `messageDeliveryTime`, falling back to `clientSubmitTime`. Also
-set the doc's `created_at` to that date, so the mail sorts by when it was
-sent rather than by file mtime. This matches what local `.eml` does today;
-confirm in `local-folder` scanner where it reads `mail.date`.
-
-A file that fails to parse is recorded `conversion.status: 'failed'` by the
-existing path. Nothing new is needed.
+  `msgToMarkdown(buf)`, which emits the **same markdown layout** as
+  `.eml`: subject, From, To, Cc, Date, blank line, body, attachment names.
+- **Body preference:**
+  1. Plain `body`.
+  2. Otherwise `bodyHtml` → `htmlToMarkdown`.
+  3. Otherwise the decompressed RTF body. Use its encapsulated HTML when
+     `\fromhtml1` is present; otherwise strip control words.
+- A parse failure becomes `conversion: failed` through the existing path.
 
 ### Policy (`file-indexability.ts`)
 
-- Add `application/vnd.ms-outlook` to `LOCAL_CONVERTER_MIMES`.
-  - Local MIME comes from the extension via the `mime` package, which maps
-    `msg` to it. Verify, and add an explicit ext mapping in
-    `local-folder/mime.ts` if not.
-- Add `application/vnd.ms-outlook` and `message/rfc822` to
-  `CLOUD_CONVERTER_MIMES`.
-- **Cloud ext fallback:** Graph and Drive often report `.msg` / `.eml` as
-  `application/octet-stream`. In the cloud converter branch, a generic or
-  missing MIME with ext `msg` or `eml` is admitted as the canonical MIME.
-  The connectors pass that canonical MIME on to the engine.
-
-Size: the same eager cap as other converter types. Email files are small;
-no special case.
+- Local: add `application/vnd.ms-outlook` to `LOCAL_CONVERTER_MIMES`.
+  `mime@3` already maps `.msg` to it (verified).
+- Cloud:
+  - Add `application/vnd.ms-outlook` and `message/rfc822` to
+    `CLOUD_CONVERTER_MIMES`.
+  - **Ext rescue.** The cloud converter branch is MIME-only today. When the
+    MIME is missing or `application/octet-stream` and the ext is `msg` or
+    `eml`, route to `converter`. Graph and Drive commonly report these
+    files that way.
+- Size: the same caps as other non-PDF documents (large-file spec §1–2).
+- This widening is part of the large-file spec's `FILE_POLICY_VERSION`
+  bump.
 
 ### Connectors
 
-OneDrive and gdrive pick the policy up through the SDK's verbatim copy of
-`file-indexability.ts` (`chooseRoute`), so each needs only:
+OneDrive and gdrive pick the policy up through the SDK's verbatim
+`file-indexability.ts` (`chooseRoute`). Each connector needs the SDK bump,
+a fixture test, and the release they already get for the large-file spec.
+They keep emitting the provider MIME; the engine dispatches on the
+extension.
 
-- an SDK bump;
-- a test fixture;
-- a release.
+### Recovering existing files and attachments
 
-The engine does the conversion. Connectors already ship converter-route
-bytes as `DocumentInput.binary`, so there is no parser in the connectors.
-
-**Existing files:** a `.msg` that was ignored has no row and is unchanged
-upstream.
-
-- gdrive's next full walk picks it up.
-- OneDrive needs the cursor re-enumeration bump. If the large-file spec's
-  OneDrive release ships at the same time, **one** cursor bump covers both.
-- Local folders pick it up on the next rescan only if the rescan re-lists
-  unchanged files the policy now admits. Confirm `incrementalRescanRoot`
-  behaviour. If it filters on mtime only, bump the local policy version so
-  one full rescan runs. The `schemaVersion` gate from strict indexability is
-  the precedent.
-
-### Attachments
-
-Gmail, IMAP and ms365 attachments flow through the convert worker via
-`convertibleKind`, so `.msg` attachments are parsed with no source change.
+| Where | Mechanism |
+|---|---|
+| Local, OneDrive, gdrive files with no row | large-file §6 policy re-enumeration (same version bump) |
+| Mail attachments already past the convert worker's cursor | large-file §3 convert worker version bump (same bump) |
 
 ## Testing
 
 - **Fixtures:**
-  - a plain-text `.msg`;
-  - an HTML-body `.msg`;
-  - an RTF-only `.msg` (encapsulated HTML);
-  - a `.msg` with attachments;
-  - a German `.msg` with umlauts in subject and body (encoding through
-    `iconv-lite`).
+  - plain-text `.msg`;
+  - HTML-body `.msg`;
+  - RTF-only `.msg` (encapsulated HTML);
+  - `.msg` with attachments;
+  - German `.msg` with umlauts in subject and body.
 
-  Generate them with Outlook once, or use the msgreader repo's test
-  fixtures if their licence allows.
-- `convert.ts` unit tests check the markdown matches the `.eml` layout,
-  with no mojibake in umlauts.
-- Policy table tests:
+  Generate them with Outlook once, or reuse msgreader's test fixtures if
+  the licence allows.
+- `convert.ts`: the markdown matches the `.eml` layout, and umlauts are
+  intact.
+- **Policy table:**
   - local `.msg` → converter;
-  - cloud `.msg` with `application/vnd.ms-outlook` → converter;
-  - cloud `.msg` / `.eml` with `application/octet-stream` → converter;
-  - cloud `.msg` over the eager cap → as the large-file spec decides.
-- OneDrive / gdrive connector fixture tests: a `.msg` drive item downloads
-  and emits binary with the canonical MIME.
-- Live check: drop the four real-world `.msg` shapes into a local folder and
-  find them by subject and body text through MCP search.
+  - cloud `.msg` as `vnd.ms-outlook` → converter;
+  - cloud `.msg` / `.eml` as `octet-stream` → converter;
+  - cloud `.msg` with no ext and `octet-stream` → unsupported.
+- **Connector fixture:** a `.msg` drive item downloads and emits binary.
+  The engine converts it via the extension.
+- **Upgrade (engine integration):**
+  - A local folder with an unchanged, previously ignored `.msg` and an old
+    cursor indexes it after upgrade.
+  - A Gmail attachment `.msg` already consumed by the old convert worker is
+    parsed after the version bump.
+- **Live:** the four real-world shapes in a local folder are findable by
+  subject and body phrase through MCP search.

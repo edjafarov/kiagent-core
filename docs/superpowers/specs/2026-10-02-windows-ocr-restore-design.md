@@ -1,141 +1,162 @@
 # Restore Windows OCR
 
-Status: r1 (draft) · 2026-10-02
+Status: r2 (fable + codex-astra round 1 folded in) · 2026-10-02
+Uses the large-file spec's §7 `session.bump`. If this spec lands first, it
+brings that primitive with it.
 
-## Problem: a silent regression
+## Problem: a silent regression, and a packaging gap
 
-Windows OCR **shipped and worked** in June 2026 (alpha-cent commits
-`ea10c21` WinRT helper, `9c04a07` execFile wrapper, `3c89dd9` `WindowsOcr`
-provider, `7fa50b8` main wiring, `fe40e009` selftest gate). The greenfield
-rebuild kept the native half and dropped the runtime half.
-`docs/rebuild/LEFTOVERS.md` §2 records it:
+Windows OCR shipped in June 2026: alpha-cent `ea10c21` (WinRT helper),
+`9c04a07` (execFile wrapper), `3c89dd9` (`WindowsOcr` provider), `7fa50b8`
+(main wiring), `fe40e009` (selftest gate). The greenfield rebuild kept the
+native half and dropped the runtime half.
 
-> the Windows WinRT OCR helper now BUILDS and is vendored into win32
-> packaging … but no runtime `read` provider is registered for it — it ships
-> as dead weight
+**Today, no installer can contain the helper.**
 
-So on Windows today:
+- The Windows installer is built on the Docker (Linux) leg of
+  `scripts/release-local.sh`.
+- `vendor-deep-extraction.mjs` skips the helper off win32, and
+  `build-windows-ocr-helper.mjs` exits 1 off win32.
+- `release-local.sh` says so itself: "No native windows-ocr helper from this
+  path either".
+- `LEFTOVERS.md` §2 ("vendored into win32 packaging") is only true on a
+  win32 build host, which the pipeline doesn't use.
 
-- `providers/index.ts` registers `apple-vision` (the only `read` provider)
+**And no runtime provider exists.**
+
+- `providers/index.ts` registers `apple-vision`, the only `read` provider,
   on darwin only.
-- `session.read` throws `NoProviderError('read')`. The vision worker sets
-  `ocrFailed` and falls to pass 2 (VLM).
-- Pass 2's `see` needs the local LLM, which does not start on Windows
-  (core#127). Its error is caught and the doc is **deferred forever**.
-- Every scanned PDF and image on Windows is re-driven every 30 minutes and
-  never gets text. A client's 247 scanned legal documents are a likely
-  instance.
+- On Windows, `session.read` throws `NoProviderError('read')` and the vision
+  worker falls to pass 2.
+- Pass 2's local LLM goes standby → downloads → ready, then fails `see` with
+  a spawn error (core#127).
+- The caught error returns `defer`, so the doc is re-driven every 30
+  minutes, forever: fetch + rasterize + nothing.
 
-The `convert.ts:111` comment ("OCR is … absent on Windows") is accurate
-today, and wrong after this spec.
+Every scanned PDF and image on Windows never gets text.
 
 ## Goals
 
-- Windows scans and images get OCR text through the shipped
-  `windows-ocr.exe`.
-- A document whose OCR found text is never deferred forever for want of a
-  VLM, on any platform.
+- Windows installers carry `windows-ocr.exe` for x64 and arm64. A build
+  gate fails without it.
+- Windows scans and images get OCR text.
+- On any platform, a document is never re-driven forever because a VLM
+  will never work.
 
 ## Non-goals
 
 - Fixing the local LLM on Windows/Linux (core#127).
-- Linux OCR. No helper exists; GLM-OCR stays a descriptor only.
-- Choosing OCR languages beyond what Windows provides (below).
+- Linux OCR.
+- An OCR language setting.
 
 ## Design
 
-### 1. `windows-ocr` provider (mirror of `apple-vision`)
+### 1. Build the helper on the Docker leg
+
+The Docker image already cross-publishes `net10.0-windows` exes for win-x64
+and arm64: the meetings `KiaAudio`/`KiaDiarize` with
+`EnableWindowsTargeting=true` (`release-local.sh` ~163). Do the same:
+
+- Retarget `native/windows-ocr/windows-ocr.csproj` to `net10.0-windows`
+  (matching meetings) and add `<EnableWindowsTargeting>true`.
+- `build-windows-ocr-helper.mjs`:
+  - drop the win32 guard;
+  - publish both arches into `assets/ocr/win32-{x64,arm64}/windows-ocr.exe`;
+  - run it from `vendor-deep-extraction.mjs` on every host that builds a
+    Windows target, which includes the Docker leg.
+- **Gate.** Add `ocr/win32-x64/windows-ocr.exe` and
+  `ocr/win32-arm64/windows-ocr.exe` to `verify-win-installer.mjs`'s required
+  list (next to `REQUIRED_INFERENCE`). Extend its path regex to cover
+  `assets/ocr`.
+- Core's `extraResources` already ships `./assets/**`; nothing to add there.
+- **Fallback** if the WinRT projection doesn't cross-publish: build on the
+  `windows-latest` CI runner once per helper change, upload as a pinned
+  release asset, and fetch it like `fetch-whisper-cli.mjs`.
+
+### 2. `windows-ocr` provider (mirror of `apple-vision`)
 
 New `src/main/providers/windows-ocr/`:
 
-- **`windows-ocr-helper.ts`** (port of the June `WindowsOcrHelper`,
-  `4c553207`; trimmed to today's `VisionHelper` style):
+- **`windows-ocr-helper.ts`**, ported from the June `4c553207` + `fe40e009`:
   - `ocrImage(bytes, mime)` writes a temp PNG, runs
     `execFile(exe, ['ocr', path], { timeout: 60_000, windowsHide: true })`,
-    parses `{text}` and removes the temp dir. Same temp-file approach as
-    `vision-helper.ocrImage`.
-  - `selftest()` runs `exe selftest` and returns `ok`.
-- **`provider.ts`**: `id: 'windows-ocr'`, `supports: ['read']`.
+    parses `{ text }` and cleans up.
+  - `selftest()` treats a **non-zero exit as `ok: false`, not a throw**: the
+    helper exits 1 with `{ok:false}` when no OCR language exists.
+- **`provider.ts`:** `id: 'windows-ocr'`, `supports: ['read']`.
   - `status()` is `'unsupported'` off win32, `{ error: 'windows-ocr helper
-    missing' }` when the exe is absent, and
-    `{ error: 'no Windows OCR language installed' }` when selftest failed.
-    Otherwise it is `'ready'`.
-  - Selftest runs **once at boot**, async. Until it resolves, status is
-    `'standby'`, and a re-probe runs on the next boot only.
-- **`providers/index.ts`** registers it when `process.platform === 'win32'`,
-  with the exe at `assets/ocr/win32-<arch>/windows-ocr.exe`. That is the
-  path `scripts/build-windows-ocr-helper.mjs` publishes to.
+    missing' }` without the exe, and `{ error: 'no Windows OCR language
+    installed' }` when selftest is false.
+  - Selftest runs once at boot (async), with `'standby'` until it resolves.
+    Otherwise status is `'ready'`.
+- **`providers/index.ts`** registers it on win32 with the exe at
+  `assets/ocr/win32-<arch>/windows-ocr.exe`.
 
-The vision worker's existing `read` call routes to it with no worker
-change. Rasterization on Windows is the wasm pdfium path (`pickRasterizer`),
-which already runs there.
+The vision worker's `read` calls route to it unchanged. Windows
+rasterization is the wasm pdfium path, which already runs.
 
-**Languages.** The helper uses `OcrEngine.TryCreateFromUserProfileLanguages()`:
-OCR quality follows the languages in the Windows user profile, as the June
-version did. A German-only data room on an English-profile Windows still
-OCRs (Latin script), but umlauts and ß may degrade. We document this in the
-in-app processing help ("add your document languages in Windows Settings →
-Language"). We don't add a language setting.
+**Large images.** `Program.cs` returns empty text when a side exceeds
+`OcrEngine.MaxImageDimension`, and the worker sends full-size images (it
+downscales only for the VLM). The helper therefore **downscales in-process**
+to fit `MaxImageDimension`, keeping the aspect ratio, before recognizing,
+instead of returning empty.
 
-### 2. A VLM outage never strands OCR text
+**Languages.** The helper uses `TryCreateFromUserProfileLanguages()`, so
+quality follows the Windows profile languages (Latin text OCRs on an English
+profile, but umlauts may degrade). The in-app processing help says: "add
+your documents' languages in Windows Settings → Language, **then restart
+KIAgent**". Selftest only re-probes at boot.
 
-Today any pass-2 failure returns `'defer'`, forever. That is correct for a
-transient crash and wrong when the VLM will never come up. It affects
-Windows/Linux (core#127), and any mac whose model download is broken.
+### 3. A dead VLM never strands a document
 
-The change:
+In the vision worker's pass 2, the `catch` distinguishes three cases:
 
-- Count pass-2 failures on the doc: `extraction.vlmFailures`, written as a
-  metadata-only enrich before returning `'defer'`.
-- When `vlmFailures ≥ 3` **and** pass 1 produced ≥ `HAS_TEXT_CHARS` (16)
-  characters, complete with the OCR-only result:
-  `extraction: { engine: 'local-ocr', vlm: 'unavailable' }`.
-- A doc with < 16 OCR chars keeps deferring: nothing would be gained by
-  completing it empty.
+- **`LaneClosedError`** (the processing window closed): `defer`, not
+  counted. This is ordinary scheduling.
+- **`NoProviderError('see')` while a `see` provider can still become ready**
+  (status `standby` or `downloading`, i.e. a model download in progress):
+  `defer`, not counted. The check is a new
+  `inference.mayBecomeReady('see')`.
+- **Anything else** is a real VLM failure, including a `NoProviderError`
+  with no provider that can ever become ready:
+  `n = await session.bump('vlm')` (durable, **no document change**, so there
+  is no feed loop).
+  - `n < 3` → `defer`.
+  - `n ≥ 3` → **complete** with whatever pass 1 produced (possibly empty):
+    `extraction: { engine: 'local-ocr', vlm: 'unavailable' }`.
 
-**Interaction with the classifier.** `classifyDocument` skips any doc with
-an `extraction` marker. The failure counter must therefore live where it
-does not mark the doc done. Either:
+This ends the forever re-drive on Windows/Linux. A healthy Mac whose VLM
+works never reaches it. Docs whose OCR gave ≥ 200 characters complete in
+pass 1 and never get here.
 
-- use a sibling key `visionAttempts: { vlmFailures }`, or
-- teach `classifyDocument` that an `extraction` with no `engine` is
-  in-progress.
+### 4. Doc cleanup
 
-The first is simpler; use it.
+Fix the stale text in:
 
-### 3. Packaging check
-
-The June wiring was verified on Windows. The rebuild changed packaging
-(`build/inject.mjs`, the core/alpha-cent split), so confirm
-`resources/assets/ocr/win32-x64/windows-ocr.exe` (and arm64) is present in
-the installed app. If it is missing, add the `assets/ocr` dir to the same
-extraResources merge that carries `assets/vision`.
-
-Also add a `windows-ocr selftest` step to `build/release-smoke.mjs`'s win
-leg. It is already the one command for release smoke.
-
-### 4. Comment and docs cleanup
-
-- Fix `convert.ts:111`.
-- Fix `LEFTOVERS.md` §2.
-- Update the README OCR section, which still describes the GLM-OCR swap.
+- `convert.ts:111` ("OCR … absent on Windows");
+- `LEFTOVERS.md` §2;
+- `docs/rebuild/backend-surface.md`;
+- `vendor-deep-extraction.mjs:12`;
+- `release-local.sh:224`.
 
 ## Testing
 
-- **Unit tests:**
-  - The helper wrapper against a fake exe (the June
-    `fake-windows-ocr.cjs` fixture pattern): success JSON, non-zero exit,
-    timeout, and selftest false → provider status error.
-  - Provider registration happens only on win32.
-- **Vision worker:**
-  - With a `read` provider returning 50 chars and `see` throwing, the doc
-    completes OCR-only on the 3rd attempt.
-  - With `read` returning 0 chars, it keeps deferring.
-  - mac behaviour is unchanged when `see` succeeds.
-- **Live, Windows UTM VM** (`ssh win`; recipe in memory
-  `windows-utm-vm-test-recipe`):
+- **Unit:**
+  - Helper wrapper against a fake exe (June `fake-windows-ocr.cjs`
+    pattern): success, non-zero exit, timeout, selftest exit 1 → `ok:false`.
+  - Provider status per case. Registration on win32 only.
+- **Vision worker (engine integration, real ledger):**
+  - With `see` throwing a spawn error, the doc completes OCR-only after the
+    3rd re-drive. No extra feed changes are produced.
+  - `LaneClosedError` during pass 2 does not count.
+  - `NoProviderError` with a `downloading` provider does not count.
+- **Build:** `verify-win-installer` fails when either exe is missing; the
+  Docker leg passes with them.
+- **Live, Windows UTM VM** (`ssh win`, see the `windows-utm-vm-test-recipe`
+  memory):
   - Install the RC build.
-  - Put a scanned German PDF and a PNG screenshot in a local folder.
+  - Put a scanned German PDF, a phone photo of a page (> 4000 px) and a
+    screenshot into a local folder.
   - Leave the app idle on AC power.
-  - Check the docs' markdown holds OCR text via the dev DB or MCP `get`.
-  - Run once with a German language pack and once without.
+  - The markdown holds OCR text, and the oversized photo is not empty.
+  - Run with and without the German language pack.
