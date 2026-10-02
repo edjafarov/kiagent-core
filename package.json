@@ -127,6 +127,7 @@
     "@electron/notarize": "^3.1.0",
     "@hyzyla/pdfium": "^2.1.13",
     "@iarna/toml": "^2.2.5",
+    "@kenjiuno/msgreader": "1.28.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "acme-client": "^5.4.0",
     "chokidar": "^3.6.0",

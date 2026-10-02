@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@chainsafe/libp2p-yamux": "^7.0.4",
+    "@kenjiuno/msgreader": "1.28.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.11.1",
     "chokidar": "^3.6.0",
