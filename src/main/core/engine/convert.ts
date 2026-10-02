@@ -4,6 +4,7 @@ import { HAS_TEXT_CHARS } from '@main/workers/convert/outcome';
 
 import type { LogSink } from './engine';
 import { guardCfbReader } from './msg-guard';
+import { assessPage, QUALITY_VERSION } from './text-quality';
 
 /**
  * Commit-path stage 1: deterministic binary → markdown. Parsers only — no
@@ -34,12 +35,27 @@ export function createConverter(
     if (!input.binary || input.markdown !== null) return stripBinary(input);
     const { bytes, mime, filename } = input.binary;
     try {
-      const markdown = await parse(bytes, mime, filename);
-      if (markdown !== null) {
-        return {
+      const { markdown: md, ocrPages } = await parseDetailed(
+        bytes,
+        mime,
+        filename,
+      );
+      if (md !== null) {
+        const base = {
           ...stripBinary(input),
-          markdown: capMarkdown(markdown).markdown,
+          markdown: capMarkdown(md).markdown,
         };
+        // Deterministic, no timestamp: contentHash covers metadata (garbled
+        // spec §3), so the same bytes always commit the same row.
+        return ocrPages
+          ? {
+              ...base,
+              metadata: {
+                ...input.metadata,
+                conversion: needsOcrMarker(ocrPages),
+              },
+            }
+          : base;
       }
     } catch (err) {
       logs.log(
@@ -106,9 +122,81 @@ export function convertibleKind(
   return null;
 }
 
-/** Bytes → markdown. `null` means text-poor (a scan, or nothing to parse);
- *  a throw means the file could not be parsed. */
+/** pdf-parse's default page renderer, kept verbatim (line joining by y),
+ *  but recording each page's text by its index. A page pdf.js fails on is
+ *  caught inside pdf-parse and never reaches the hook → stays ''. */
+export async function parsePdfPages(bytes: Uint8Array): Promise<string[]> {
+  const pdfParse = (await import('pdf-parse')).default;
+  const pages: string[] = [];
+  // A fresh copy: Buffer.from() places inputs under 4 KB in a slice of
+  // Node's shared pool, and pdf-parse's pdf.js reads the whole underlying
+  // ArrayBuffer — every small PDF failed "bad XRef entry".
+  const out = await pdfParse(new Uint8Array(bytes) as Buffer, {
+    pagerender: async (pageData: {
+      pageIndex: number;
+      getTextContent: (o: object) => Promise<{
+        items: Array<{ str: string; transform: number[] }>;
+      }>;
+    }) => {
+      const tc = await pageData.getTextContent({
+        normalizeWhitespace: false,
+        disableCombineTextItems: false,
+      });
+      let lastY: number | undefined;
+      let text = '';
+      for (const item of tc.items) {
+        const y = item.transform[5];
+        text += lastY === y || lastY === undefined ? item.str : `\n${item.str}`;
+        lastY = y;
+      }
+      pages[pageData.pageIndex] = text;
+      return text;
+    },
+  });
+  return Array.from({ length: out.numpages }, (_, i) => pages[i] ?? '');
+}
+
+/** The deterministic `conversion` marker for a PDF whose listed pages
+ *  (1-based, ascending) have a missing or garbled text layer. No `at`. */
+export function needsOcrMarker(pages: number[]) {
+  return { status: 'needs-ocr' as const, pages, quality: QUALITY_VERSION };
+}
+
+/** Bytes → markdown, plus — for a PDF — the pages whose text layer needs
+ *  OCR. `markdown: null` means text-poor (a scan, or nothing to parse); a
+ *  throw means the file could not be parsed. */
+export async function parseDetailed(
+  bytes: Uint8Array,
+  mime: string,
+  filename?: string,
+): Promise<{ markdown: string | null; ocrPages?: number[] }> {
+  if (convertibleKind(mime, filename) !== 'pdf')
+    return { markdown: await parseOther(bytes, mime, filename) };
+  const pages = await parsePdfPages(bytes);
+  const text = pages.join('\n\n').trim();
+  // Whole doc under the chain's "has real text" bar (HAS_TEXT_CHARS, not
+  // OCR's 200-char sufficiency bar): today's text-poor path (whole-doc OCR +
+  // VLM). Above it the text is KEPT — a short real PDF (a receipt) must keep
+  // its text, since OCR is off by default and absent on Windows — and only
+  // the pages that are not `good` are listed for OCR.
+  if (text.replace(/\s+/g, '').length < HAS_TEXT_CHARS)
+    return { markdown: null };
+  const ocrPages = pages.flatMap((t, i) =>
+    assessPage(t) === 'good' ? [] : [i + 1],
+  );
+  return { markdown: text, ...(ocrPages.length ? { ocrPages } : {}) };
+}
+
+/** Bytes → markdown (see parseDetailed). */
 export async function parse(
+  bytes: Uint8Array,
+  mime: string,
+  filename?: string,
+): Promise<string | null> {
+  return (await parseDetailed(bytes, mime, filename)).markdown;
+}
+
+async function parseOther(
   bytes: Uint8Array,
   mime: string,
   filename?: string,
@@ -117,19 +205,6 @@ export async function parse(
   const ext = (filename ?? '').toLowerCase().split('.').pop() ?? '';
 
   switch (convertibleKind(mime, filename)) {
-    case 'pdf': {
-      const pdfParse = (await import('pdf-parse')).default;
-      // A fresh copy, not `buf`: Buffer.from() places inputs under 4 KB in a
-      // slice of Node's shared pool, and pdf-parse's pdf.js reads the whole
-      // underlying ArrayBuffer — every small PDF failed "bad XRef entry".
-      const out = await pdfParse(new Uint8Array(buf) as Buffer);
-      const text = out.text?.trim() ?? '';
-      // No real text layer (a scan): leave it for the vision worker. The bar
-      // is the chain's "has real text" (HAS_TEXT_CHARS), not OCR's 200-char
-      // sufficiency bar: a short real PDF (a receipt, a ticket) must keep
-      // its text, since OCR is off by default and absent on Windows.
-      return text.replace(/\s+/g, '').length >= HAS_TEXT_CHARS ? text : null;
-    }
     case 'docx': {
       const mammoth = await import('mammoth');
       const out = await mammoth.convertToMarkdown({ buffer: buf });
