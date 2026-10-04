@@ -98,6 +98,9 @@ export interface McpServerHandle {
    *  page. One handler and session pool per transport. */
   createMcpHandler(opts?: {
     transport?: 'remote' | 'agent';
+    /** Server-side tool fence: only these tools are listed or callable.
+     *  Handlers are memoized per (transport, allow set). */
+    allowTools?: readonly string[];
   }): (
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -278,7 +281,7 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   // transport share one tool registry while keeping independent session pools.
   // Auth-free by design (loopback is loopback-trusted; the product's own
   // middleware runs before it calls `handleMcp`).
-  function createSessionDispatcher(): {
+  function createSessionDispatcher(allow?: ReadonlySet<string>): {
     handleMcp: (
       req: http.IncomingMessage,
       res: http.ServerResponse,
@@ -297,11 +300,16 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       // runWithTransport('remote', …), and the tool handler emits inside
       // that request's async context — so this one callback tells a tunnel
       // call from a loopback one.
-      attachToolHandlers(server, registry, deps.logSink, (rec) =>
-        deps.onActivity?.({
-          ...rec,
-          transport: activityTransport(currentTransport()),
-        }),
+      attachToolHandlers(
+        server,
+        registry,
+        deps.logSink,
+        (rec) =>
+          deps.onActivity?.({
+            ...rec,
+            transport: activityTransport(currentTransport()),
+          }),
+        allow,
       );
       attachResourceHandlers(server, deps.query);
 
@@ -481,7 +489,7 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   // registerTool()/createMcpHandler() make anything reachable.
   deps.outbound?.setBaseUrl(`http://${HOST}:${port}`);
 
-  // One dispatcher + handler per transport, created on first
+  // One dispatcher + handler per (transport, allow set), created on first
   // createMcpHandler() call for it and disposed in stop(). Memoized so
   // repeated calls return the SAME function reference (a product build
   // mounts it once on its own router), each with its own session pool.
@@ -491,7 +499,7 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
     parsedBody?: unknown,
   ) => Promise<void>;
   const productHandlers = new Map<
-    'remote' | 'agent',
+    string,
     {
       dispatcher: ReturnType<typeof createSessionDispatcher>;
       handler: ProductHandler;
@@ -556,9 +564,14 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       // through every signature. The loopback listener never calls
       // runWithTransport, so its calls read 'local'.
       const t = opts?.transport ?? 'remote';
-      let entry = productHandlers.get(t);
+      const key = `${t}|${
+        opts?.allowTools ? [...opts.allowTools].sort().join(',') : '*'
+      }`;
+      let entry = productHandlers.get(key);
       if (!entry) {
-        const dispatcher = createSessionDispatcher();
+        const dispatcher = createSessionDispatcher(
+          opts?.allowTools ? new Set(opts.allowTools) : undefined,
+        );
         entry = {
           dispatcher,
           handler: (req, res, parsedBody) =>
@@ -566,7 +579,7 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
               dispatcher.handleMcp(req, res, parsedBody),
             ),
         };
-        productHandlers.set(t, entry);
+        productHandlers.set(key, entry);
       }
       return entry.handler;
     },

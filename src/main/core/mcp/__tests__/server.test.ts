@@ -597,6 +597,20 @@ describe('activity transport (D7)', () => {
     }
   }
 
+  it('allowTools handlers are memoized per allow set', () => {
+    const a = handle.createMcpHandler({
+      transport: 'agent',
+      allowTools: ['search', 'get'],
+    });
+    const b = handle.createMcpHandler({
+      transport: 'agent',
+      allowTools: ['get', 'search'],
+    });
+    const c = handle.createMcpHandler({ transport: 'agent' });
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+  });
+
   it('a loopback call is recorded as http', async () => {
     recs.length = 0;
     await callInfo(`http://127.0.0.1:${handle.port}/mcp`);

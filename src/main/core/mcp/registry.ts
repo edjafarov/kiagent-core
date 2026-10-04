@@ -120,9 +120,14 @@ export function attachToolHandlers(
   registry: ToolRegistry,
   logSink: LogSink,
   onActivity?: (rec: Omit<McpActivityRecord, 'transport'>) => void,
+  /** When set, only these tools are listed or callable on this session —
+   *  a server-side fence for hosted agents, independent of the client. */
+  allow?: ReadonlySet<string>,
 ): void {
   mcp.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...registry.values()].map(toolToWire),
+    tools: [...registry.values()]
+      .filter((t) => !allow || allow.has(t.name))
+      .map(toolToWire),
   }));
 
   mcp.server.setRequestHandler(CallToolRequestSchema, async (req) => {
@@ -156,6 +161,20 @@ export function attachToolHandlers(
         /* the feed is best-effort — never break the call it records */
       }
     };
+
+    if (allow && !allow.has(name)) {
+      logSink.log('mcp.call', 'info', name, {
+        args: loggedArgs,
+        ok: false,
+        ms: Date.now() - started,
+        error: 'not allowed',
+      });
+      emit(false, undefined, 'not allowed');
+      return {
+        isError: true,
+        content: [{ type: 'text', text: `tool '${name}' is not available` }],
+      };
+    }
 
     if (!tool) {
       logSink.log('mcp.call', 'info', name, {

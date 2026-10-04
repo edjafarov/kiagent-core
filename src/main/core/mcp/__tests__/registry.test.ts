@@ -333,3 +333,25 @@ describe('redactArgsForLog', () => {
     expect(out).toEqual({ n: 42, b: true, nil: null });
   });
 });
+
+it('an allow set hides and refuses unlisted tools', async () => {
+  const sendTool: McpTool = { ...okTool, name: 'send_draft' };
+  const registry = createToolRegistry([okTool, sendTool]);
+  const { mcp, handlers } = capture();
+  const got: ActivityRec[] = [];
+  attachToolHandlers(
+    mcp,
+    registry,
+    logSink as never,
+    (r) => got.push(r),
+    new Set(['search']),
+  );
+  const list = (await handlers[0]({})) as { tools: Array<{ name: string }> };
+  expect(list.tools.map((t) => t.name)).toEqual(['search']);
+  const r = (await handlers[1]({
+    params: { name: 'send_draft', arguments: {} },
+  })) as { isError?: boolean; content: unknown };
+  expect(r.isError).toBe(true);
+  expect(JSON.stringify(r.content)).toContain('not available');
+  expect(got[0].ok).toBe(false);
+});
