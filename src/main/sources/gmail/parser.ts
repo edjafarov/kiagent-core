@@ -1,6 +1,6 @@
 import EmailReplyParser from 'email-reply-parser';
 import { type MessageEvidenceV1 } from '@shared/message-evidence';
-import { extractMessageEvidence } from '../email-evidence';
+import { extractMessageEvidence, htmlToText } from '../email-evidence';
 
 /**
  * Gmail message payload shapes and parsing, ported from legacy
@@ -53,6 +53,16 @@ export interface ParsedEmail {
 export function stripQuotedReplies(text: string): string {
   const parsed = new EmailReplyParser().read(text);
   return parsed.getVisibleText().trim();
+}
+
+/** The message's full text as written — text/plain, else HTML converted to
+ *  text — WITHOUT quote stripping (callers that strip do it themselves). */
+export function plainTextOf(msg: GmailApiMessage): string {
+  if (!msg.payload) return '';
+  const plain = findBody(msg.payload, 'text/plain');
+  if (plain) return plain;
+  const html = findBody(msg.payload, 'text/html');
+  return html ? htmlToText(html) : '';
 }
 
 export function parseGmailMessage(msg: GmailApiMessage): ParsedEmail {

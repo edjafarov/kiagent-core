@@ -45,7 +45,7 @@ export function extractMessageEvidence(input: {
   };
 }
 
-function htmlToText(html: string): string {
+export function htmlToText(html: string): string {
   return new TurndownService({ headingStyle: 'atx', bulletListMarker: '-' })
     .turndown(html)
     .replace(/\n{3,}/g, '\n\n')

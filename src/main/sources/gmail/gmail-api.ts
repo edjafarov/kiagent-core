@@ -162,6 +162,32 @@ export function getMessage(
   return fetchGmail(session, `${BASE}/messages/${id}?format=full`);
 }
 
+/** One page of `users.messages.list` for a search query, Spam and Trash
+ *  included. */
+export function listMessagesPage(
+  session: Session,
+  q: string,
+  pageToken?: string,
+): Promise<{ messages?: Array<{ id: string }>; nextPageToken?: string }> {
+  const u = new URL(`${BASE}/messages`);
+  u.searchParams.set('q', q);
+  u.searchParams.set('includeSpamTrash', 'true');
+  u.searchParams.set('maxResults', '100');
+  if (pageToken) u.searchParams.set('pageToken', pageToken);
+  return fetchGmail(session, u.toString());
+}
+
+export function getMessageMetadata(
+  session: Session,
+  id: string,
+  headers: readonly string[],
+): Promise<GmailApiMessage> {
+  const u = new URL(`${BASE}/messages/${encodeURIComponent(id)}`);
+  u.searchParams.set('format', 'metadata');
+  for (const h of headers) u.searchParams.append('metadataHeaders', h);
+  return fetchGmail(session, u.toString());
+}
+
 export interface GmailSendResult {
   id: string;
   threadId: string;
