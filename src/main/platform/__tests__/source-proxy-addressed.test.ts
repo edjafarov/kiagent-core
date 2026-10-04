@@ -120,8 +120,12 @@ it('reports hasListAddressedTo per source and proxies the call with a live sessi
   expect(seen).toEqual([{ q, creds: { accessToken: 'tok' } }]);
 });
 
-it('rejects malformed rows from the connector', async () => {
-  const { proxySet, entry } = await setup([{ providerId: 'p', sent: 'yes' }]);
+it.each([
+  ['a non-boolean sent', [{ providerId: 'p', sent: 'yes' }]],
+  ['a missing providerId', [{ sent: true }]],
+  ['a non-array result', { rows: [] }],
+])('rejects %s from the connector', async (_label, rows) => {
+  const { proxySet, entry } = await setup(rows);
   const src = proxySet.makeSource(entry('mailsrc'));
   await expect(
     src.listAddressedTo!(session, { toAddress: 'a+kia@x.com', since: 0 }),
