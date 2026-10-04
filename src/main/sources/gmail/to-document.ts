@@ -35,6 +35,22 @@ export interface GmailThreadItem {
   selectedBuckets: readonly GmailBucket[];
 }
 
+/** True for mail on the owner channel: stamped by core's ownerMail
+ *  (`X-Kia-Channel`), or addressed To/Cc the account's `+kia` address. */
+export function isOwnerChannelMessage(
+  m: GmailApiMessage,
+  accountEmail: string,
+): boolean {
+  const hs = m.payload?.headers ?? [];
+  if (hs.some((h) => h.name.toLowerCase() === 'x-kia-channel')) return true;
+  const [local, domain] = accountEmail.toLowerCase().split('@');
+  if (!local || !domain) return false;
+  const kia = `${local}+kia@${domain}`;
+  return hs.some(
+    (h) => /^(to|cc)$/i.test(h.name) && h.value.toLowerCase().includes(kia),
+  );
+}
+
 /** PURE thread → DocumentInput mapping. Returns null for a thread with zero
  *  messages (mirrors legacy's `emptyThreadReason` skip) and for a thread in
  *  an unselected bucket — spec §4: skipped, never deleted; its indexed row
@@ -43,8 +59,16 @@ export interface GmailThreadItem {
  *  with the thread doc followed by attachment child docs if attachments exist,
  *  otherwise returns just the thread doc. */
 export function toDocument(
-  item: GmailThreadItem,
+  thread: GmailThreadItem,
 ): DocumentInput | DocumentInput[] | null {
+  // Owner-channel mail (requests to you+kia@ and Kia's answers) is a
+  // conversation with the assistant, not the user's mail — never indexed.
+  const item = {
+    ...thread,
+    messages: thread.messages.filter(
+      (m) => !isOwnerChannelMessage(m, thread.accountEmail),
+    ),
+  };
   if (item.messages.length === 0) return null;
   // One bucket per thread (spec §4). In the HASHED metadata, not only the
   // stamp: the label union cannot tell "one trashed reply" from "all

@@ -376,3 +376,55 @@ describe('toDocument (gmail thread -> DocumentInput)', () => {
     });
   });
 });
+
+describe('owner-channel mail stays out of the corpus', () => {
+  const msg = (
+    id: string,
+    headers: Record<string, string>,
+  ): GmailApiMessage => ({
+    id,
+    threadId: 'tk',
+    labelIds: ['INBOX'],
+    internalDate: '1704106800000',
+    payload: {
+      mimeType: 'text/plain',
+      headers: Object.entries(headers).map(([name, value]) => ({
+        name,
+        value,
+      })),
+      body: { data: Buffer.from(`body ${id}`).toString('base64url') },
+    },
+  });
+  const item = (messages: GmailApiMessage[]): GmailThreadItem => ({
+    id: 'tk',
+    accountEmail: 'me@gmail.com',
+    selectedBuckets: ['mail'],
+    messages,
+  });
+
+  it('drops owner-channel messages from a thread; null when none remain', () => {
+    const kia = msg('k', {
+      From: 'me@gmail.com',
+      To: 'Me <ME+kia@gmail.com>',
+      'Message-ID': '<k@x>',
+    });
+    const ans = msg('a', {
+      From: 'me@gmail.com',
+      To: 'me@gmail.com',
+      'X-Kia-Channel': 'owner',
+      'Message-ID': '<a@x>',
+    });
+    const real = msg('r', {
+      From: 'bob@x.com',
+      To: 'me@gmail.com',
+      'Message-ID': '<r@x>',
+    });
+    expect(toDocument(item([kia, ans]))).toBeNull();
+    const out = toDocument(item([kia, real, ans]));
+    const doc = (Array.isArray(out) ? out[0] : out) as DocumentInput;
+    const text = JSON.stringify(doc);
+    expect(text).toContain('bob@x.com');
+    expect(text).not.toContain('kia@gmail.com');
+    expect(text).not.toContain('body a');
+  });
+});
