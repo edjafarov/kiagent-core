@@ -405,6 +405,7 @@ export function runExtensionHost(
           hasReconcile: typeof s.reconcile === 'function',
           hasManageFolders: typeof s.manageFolders === 'function',
           hasReauthenticate: typeof s.reauthenticate === 'function',
+          hasListAddressedTo: typeof s.listAddressedTo === 'function',
         })),
         tools: [...tools.values()].map((t) => ({
           name: t.name,
@@ -610,6 +611,20 @@ export function runExtensionHost(
       const abort = new AbortController();
       const session = makeSession(sessionId, account, abort);
       return (await source.fetchBytes(session as never, doc as never)) ?? null;
+    }
+    if (method === 'list-addressed-to') {
+      const [sessionId, sourceId, account, q] = args as [
+        number,
+        string,
+        unknown,
+        unknown,
+      ];
+      const source = sources.get(sourceId);
+      if (!source?.listAddressedTo)
+        throw new Error(`source ${sourceId} has no listAddressedTo`);
+      const abort = new AbortController();
+      const session = makeSession(sessionId, account, abort);
+      return source.listAddressedTo(session as never, q as never);
     }
     if (method === 'manage-folders') {
       const [sessionId, sourceId, account] = args as [number, string, unknown];

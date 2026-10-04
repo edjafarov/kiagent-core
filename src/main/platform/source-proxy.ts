@@ -7,6 +7,8 @@
  */
 import type {
   Account,
+  AddressedMail,
+  AddressedQuery,
   AuthChannel,
   Batch,
   Credentials,
@@ -322,6 +324,42 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
               doc,
             ]);
             return v == null ? null : (v as Uint8Array);
+          } finally {
+            sessions.delete(id);
+          }
+        };
+      }
+      if (entry.hasListAddressedTo) {
+        source.listAddressedTo = async (
+          session: Session,
+          q: AddressedQuery,
+        ): Promise<AddressedMail[]> => {
+          const id = nextId;
+          nextId += 1;
+          sessions.set(id, {
+            credentials: () => session.credentials(),
+            log: (l, m) => session.log(l, m),
+          });
+          try {
+            const rows = await endpoint.call('source', 'list-addressed-to', [
+              id,
+              descriptor.id,
+              session.account,
+              q,
+            ]);
+            // Untrusted connector output: the channel gates on `sent`, so a
+            // row without a real boolean there must never pass through.
+            if (
+              !Array.isArray(rows) ||
+              !rows.every(
+                (r) =>
+                  !!r &&
+                  typeof (r as AddressedMail).providerId === 'string' &&
+                  typeof (r as AddressedMail).sent === 'boolean',
+              )
+            )
+              throw new Error('invalid addressed mail from connector');
+            return rows as AddressedMail[];
           } finally {
             sessions.delete(id);
           }
