@@ -169,6 +169,62 @@ describe('gmail sender', () => {
     const sender = createGmailSender({ store });
     await expect(sender.send(intent())).rejects.toThrow(/reconnect/);
   });
+  const sendable = () =>
+    store.vault.save(accountId, {
+      accessToken: 'tok-1',
+      expiresAt: futureIso(),
+      scope: 'https://www.googleapis.com/auth/gmail.send',
+    });
+
+  it('6. owner-channel send sets Reply-To, Message-ID, channel headers and returns threadId', async () => {
+    await sendable();
+    fetchMock = jest.fn(async () => okJson({ id: 'm9', threadId: 't123' }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const sender = createGmailSender({ store });
+    const r = await sender.send({
+      accountId,
+      kind: 'new',
+      to: ['me@gmail.com'],
+      subject: 'Re: hi',
+      bodyMarkdown: 'answer',
+      replyTo: 'me+kia@gmail.com',
+      messageId: '<abc@kia.local>',
+      ownerChannel: true,
+      threading: {
+        gmailThreadId: 't123',
+        inReplyTo: '<q@x>',
+        references: ['<q@x>'],
+      },
+    });
+    expect(r).toEqual({ externalMessageId: 'm9', providerThreadId: 't123' });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const raw = Buffer.from(body.raw, 'base64url').toString('utf8');
+    expect(raw).toMatch(/^Reply-To: me\+kia@gmail\.com\r?$/m);
+    expect(raw).toMatch(/^Message-ID: <abc@kia\.local>\r?$/m);
+    expect(raw).toMatch(/^X-Kia-Channel: owner\r?$/m);
+    expect(raw).toMatch(/^X-Auto-Response-Suppress: OOF, AutoReply\r?$/m);
+    expect(raw).toMatch(/^Auto-Submitted: auto-replied\r?$/m);
+    expect(body.threadId).toBe('t123');
+  });
+
+  it('7. ordinary send carries no channel headers', async () => {
+    await sendable();
+    fetchMock = jest.fn(async () => okJson({ id: 'm1', threadId: 't1' }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const sender = createGmailSender({ store });
+    await sender.send({
+      accountId,
+      kind: 'new',
+      to: ['x@y.com'],
+      subject: 's',
+      bodyMarkdown: 'b',
+    });
+    const raw = Buffer.from(
+      JSON.parse(fetchMock.mock.calls[0][1].body).raw,
+      'base64url',
+    ).toString('utf8');
+    expect(raw).not.toMatch(/X-Kia-Channel|Reply-To|Auto-Submitted/);
+  });
 });
 
 describe('bundled senders (phase 5: gmail joins imap)', () => {

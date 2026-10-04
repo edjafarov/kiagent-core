@@ -23,6 +23,13 @@ import { senderAddressFor } from '../identity';
 
 const REFRESH_MARGIN_MS = 60_000;
 
+/** Stamped on owner-channel mail only (core ownerMail). */
+export const OWNER_CHANNEL_HEADERS = {
+  'X-Kia-Channel': 'owner',
+  'X-Auto-Response-Suppress': 'OOF, AutoReply',
+  'Auto-Submitted': 'auto-replied',
+} as const;
+
 function composeRaw(opts: {
   from: string;
   to: string[];
@@ -31,6 +38,9 @@ function composeRaw(opts: {
   text: string;
   inReplyTo?: string;
   references?: string[];
+  replyTo?: string;
+  messageId?: string;
+  ownerChannel?: boolean;
 }): Promise<Buffer> {
   const mail = new MailComposer({
     from: opts.from,
@@ -40,6 +50,9 @@ function composeRaw(opts: {
     text: opts.text,
     inReplyTo: opts.inReplyTo,
     references: opts.references?.length ? opts.references : undefined,
+    replyTo: opts.replyTo,
+    messageId: opts.messageId,
+    headers: opts.ownerChannel ? { ...OWNER_CHANNEL_HEADERS } : undefined,
   });
   return new Promise((resolve, reject) => {
     mail.compile().build((err, message) => {
@@ -98,6 +111,9 @@ export function createGmailSender(deps: {
         text: intent.bodyMarkdown,
         inReplyTo: threading.inReplyTo,
         references: threading.references,
+        replyTo: intent.replyTo,
+        messageId: intent.messageId,
+        ownerChannel: intent.ownerChannel,
       });
       try {
         const r = await sendGmailMessage(
@@ -105,7 +121,7 @@ export function createGmailSender(deps: {
           raw,
           threading.gmailThreadId,
         );
-        return { externalMessageId: r.id };
+        return { externalMessageId: r.id, providerThreadId: r.threadId };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (
