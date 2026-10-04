@@ -679,6 +679,10 @@ export interface Source<Cursor = unknown, Item = unknown> {
    *  belongs to `account` and throw otherwise. Returns no config: reconnect
    *  never changes scope. */
   reauthenticate?(account: Account, auth: AuthChannel): Promise<void>;
+  /** Every message addressed To `q.toAddress` in the window, mailbox-wide
+   *  (spam/trash/other folders included, drafts excluded), each marked
+   *  `sent`. The adapter pages internally: the result is the whole window. */
+  listAddressedTo?(session: Session, q: AddressedQuery): Promise<AddressedMail[]>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -749,10 +753,15 @@ export interface SendIntent {
   subject?: string;
   bodyMarkdown: string;
   threading?: Record<string, unknown>;
+  /** Owner channel only (set by core's ownerMail, never by the Outbox). */
+  replyTo?: string;
+  messageId?: string;
+  ownerChannel?: boolean;
 }
 
 export interface SendResult {
   externalMessageId?: string;
+  providerThreadId?: string;
 }
 
 /** What the host hands a Sender alongside the intent. Bundled senders read
@@ -761,6 +770,35 @@ export interface SendResult {
  *  account's credentials and passes them in at send time. */
 export interface SenderContext {
   credentials: Credentials | null;
+}
+
+/** A message addressed To a given address, as an owner-channel source lists
+ *  it. `sent` = it is in this account's own Sent mail (only mail the account
+ *  actually sent is). Non-sent rows are metadata only: `text` is ''. */
+export interface AddressedMail {
+  providerId: string;
+  messageId: string;
+  inReplyTo?: string;
+  references: string[];
+  providerThreadId?: string;
+  sent: boolean;
+  from: string;
+  sender?: string;
+  subject: string;
+  date: number;
+  to: string[];
+  cc: string[];
+  text: string;
+  ownChannel: boolean;
+  automated: boolean;
+}
+
+export interface AddressedQuery {
+  toAddress: string;
+  /** Request window start (ms epoch): Sent rows on/after it. */
+  since: number;
+  /** Audit window start for non-Sent rows; defaults to `since`. */
+  auditSince?: number;
 }
 
 /** Outbound transport for one source id. Reachable ONLY from the send
