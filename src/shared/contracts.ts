@@ -682,7 +682,10 @@ export interface Source<Cursor = unknown, Item = unknown> {
   /** Every message addressed To `q.toAddress` in the window, mailbox-wide
    *  (spam/trash/other folders included, drafts excluded), each marked
    *  `sent`. The adapter pages internally: the result is the whole window. */
-  listAddressedTo?(session: Session, q: AddressedQuery): Promise<AddressedMail[]>;
+  listAddressedTo?(
+    session: Session,
+    q: AddressedQuery,
+  ): Promise<AddressedMail[]>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
