@@ -100,6 +100,7 @@ import {
 import { outboundInvokeHandlers } from './outbound/ipc';
 import { createOutboundRoutes } from './outbound/routes';
 import { buildBundledSenders, composeSenders } from './outbound/senders';
+import { createOwnerMail } from './outbound/owner-mail';
 import { loadProductConfig } from './product';
 import { registerBundledProviders } from './providers';
 import { createInstallRegistry } from './providers/install-registry';
@@ -942,16 +943,17 @@ app
     // costs one extra counted attempt for a worker that comes back.
     p.store.pruneAttempts(p.engine.activeConsumers()).catch(() => {});
 
+    // Bundled transports SHADOW extension senders on a colliding source
+    // id, and both sides are read live on every send — so an extension
+    // activating after this point is picked up without re-composing.
+    const senderLookup = composeSenders(
+      buildBundledSenders({ store: p.store, logSink: p.logSink }),
+      p.senders,
+    );
     const outbound = createOutboundService({
       store: p.store,
       prefs: p.prefs,
-      // Bundled transports SHADOW extension senders on a colliding source
-      // id, and both sides are read live on every send — so an extension
-      // activating after this point is picked up without re-composing.
-      senders: composeSenders(
-        buildBundledSenders({ store: p.store, logSink: p.logSink }),
-        p.senders,
-      ),
+      senders: senderLookup,
       descriptorFor: (id) => p.sources.get(id)?.descriptor,
       logSink: p.logSink,
     });
@@ -964,6 +966,14 @@ app
     // extensionsPlatform.start() guard below) — startMcp/createTray/
     // resumeAccounts/createWindow must all still run; any 'sending' rows
     // left behind are simply picked up by the next boot's sweep.
+    // Owner-only route for the assistant's email channel: no Outbox, the
+    // recipient is pinned to the account's own address by core.
+    const ownerMail = createOwnerMail({
+      account: (id) => p.store.account(id),
+      sources: p.sources,
+      senders: senderLookup,
+      session: (a, signal) => p.engine.session(a, signal, 'owner-mail'),
+    });
     try {
       await p.store.outbox.recoverOrphanedSending();
     } catch (err) {
@@ -1172,6 +1182,7 @@ app
           ui: { openWindow: showMainWindow },
           outbound: { service: outbound, routes: outboundRoutes },
           readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
+          ownerMail,
           inference: p.inference,
           busy,
           runAccount: (account) => runAccount(p, account),

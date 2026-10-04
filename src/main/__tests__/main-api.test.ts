@@ -923,6 +923,26 @@ describe('buildMainApi vault', () => {
     });
   }
 
+  it('exposes ownerMail when provided', () => {
+    const ownerMail = {
+      describe: jest.fn(),
+      listAddressedTo: jest.fn(),
+      sendToOwner: jest.fn(),
+    };
+    const api = buildMainApi({
+      store: stubStore().store,
+      mcp: stubMcp().mcp,
+      app: stubApp(),
+      dataDir: '/fake/data',
+      tray: stubTray().tray,
+      ui: { openWindow: () => {} },
+      outbound: stubOutbound(true).outbound,
+      ownerMail,
+    });
+    expect(api.ownerMail).toBe(ownerMail);
+    expect(build(stubStore().store).ownerMail).toBeUndefined();
+  });
+
   it('delete passes through to the store', async () => {
     const deleted: unknown[] = [];
     const { store } = stubStore();
