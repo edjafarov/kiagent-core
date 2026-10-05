@@ -762,6 +762,10 @@ export interface SendIntent {
   ownerChannel?: boolean;
   /** Owner channel only: display name on From; the address stays the account's. */
   fromName?: string;
+  /** Owner channel only: a plus-variant of the account address to send as
+   *  (a Gmail "Send mail as" alias); Gmail falls back to the account address
+   *  when it is not configured. */
+  fromAddress?: string;
 }
 
 export interface SendResult {

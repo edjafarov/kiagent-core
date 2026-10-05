@@ -36,6 +36,8 @@ export interface OwnerMessage {
   providerThreadId?: string;
   /** Display name on From (e.g. "Kia"); the address is always the owner. */
   fromName?: string;
+  /** Send-as address; must be a plus-variant of the owner, like replyTo. */
+  fromAddress?: string;
 }
 
 export interface OwnerMailApi {
@@ -122,6 +124,10 @@ export function createOwnerMail(deps: {
         );
       if (/[\r\n]/.test(m.subject))
         throw new Error('ownerMail: subject must be one line');
+      if (m.fromAddress !== undefined && !rx.test(m.fromAddress))
+        throw new Error(
+          'ownerMail: fromAddress must be a plus-variant of the owner address',
+        );
       if (m.fromName !== undefined && !NAME_RX.test(m.fromName))
         throw new Error('ownerMail: fromName must be a plain display name');
       for (const x of [m.messageId, m.inReplyTo, ...(m.references ?? [])])
@@ -151,6 +157,7 @@ export function createOwnerMail(deps: {
         replyTo: m.replyTo.toLowerCase(),
         ...(m.messageId ? { messageId: m.messageId } : {}),
         ...(m.fromName ? { fromName: m.fromName } : {}),
+        ...(m.fromAddress ? { fromAddress: m.fromAddress.toLowerCase() } : {}),
         ownerChannel: true,
         ...(Object.keys(threading).length ? { threading } : {}),
       });

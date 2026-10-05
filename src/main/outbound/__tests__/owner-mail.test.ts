@@ -100,6 +100,38 @@ test.each([
   expect(sender.send).not.toHaveBeenCalled();
 });
 
+test('Kia may send as a plus-variant of the owner', async () => {
+  const { om, sent } = setup();
+  await om.sendToOwner('a1', {
+    replyTo: 'me+kia@gmail.com',
+    subject: 's',
+    bodyText: 'b',
+    fromAddress: 'Me+Kia@gmail.com',
+  });
+  expect(sent[0]).toMatchObject({
+    fromAddress: 'me+kia@gmail.com',
+    to: ['me@gmail.com'],
+  });
+});
+
+test.each([
+  ['other@gmail.com'],
+  ['me@gmail.com'],
+  ['me+kia@evil.com'],
+  ['me+kia@gmail.com\r\nBcc: x@y'],
+])('rejects fromAddress %p', async (fromAddress) => {
+  const { om, sender } = setup();
+  await expect(
+    om.sendToOwner('a1', {
+      replyTo: 'me+kia@gmail.com',
+      subject: 's',
+      bodyText: 'b',
+      fromAddress,
+    }),
+  ).rejects.toThrow(/fromAddress/);
+  expect(sender.send).not.toHaveBeenCalled();
+});
+
 test('native reply uses kind reply + outboundRef', async () => {
   const { om, sent } = setup();
   await om.sendToOwner('a1', {

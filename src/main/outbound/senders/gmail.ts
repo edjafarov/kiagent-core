@@ -62,6 +62,17 @@ function composeRaw(opts: {
   });
 }
 
+/** The account address, or (owner channel only) its send-as alias and
+ *  display name. ownerMail has already validated both. */
+function fromFor(
+  intent: SendIntent,
+  account: string,
+): string | { name: string; address: string } {
+  if (!intent.ownerChannel) return account;
+  const address = intent.fromAddress ?? account;
+  return intent.fromName ? { name: intent.fromName, address } : address;
+}
+
 export function createGmailSender(deps: {
   store: CoreStore;
   refresher?: typeof googleRefresher;
@@ -104,10 +115,7 @@ export function createGmailSender(deps: {
         references?: string[];
       };
       const raw = await composeRaw({
-        from:
-          intent.ownerChannel && intent.fromName
-            ? { name: intent.fromName, address: senderAddressFor(account) }
-            : senderAddressFor(account),
+        from: fromFor(intent, senderAddressFor(account)),
         to: intent.to ?? [],
         cc: intent.cc,
         subject: intent.subject,
