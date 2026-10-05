@@ -69,6 +69,37 @@ test('sendToOwner pins recipient to owner and stamps channel fields', async () =
   });
 });
 
+test('a display name rides along; the address stays the owner', async () => {
+  const { om, sent } = setup();
+  await om.sendToOwner('a1', {
+    replyTo: 'me+kia@gmail.com',
+    subject: 's',
+    bodyText: 'b',
+    fromName: 'Kia',
+  });
+  expect(sent[0]).toMatchObject({ fromName: 'Kia', to: ['me@gmail.com'] });
+});
+
+test.each([
+  ['Kia <other@x.com>'],
+  ['other@x.com'],
+  ['Kia"'],
+  ['Kia\r\nBcc: x@y'],
+  [''],
+  ['x'.repeat(41)],
+])('rejects fromName %p', async (fromName) => {
+  const { om, sender } = setup();
+  await expect(
+    om.sendToOwner('a1', {
+      replyTo: 'me+kia@gmail.com',
+      subject: 's',
+      bodyText: 'b',
+      fromName,
+    }),
+  ).rejects.toThrow(/fromName/);
+  expect(sender.send).not.toHaveBeenCalled();
+});
+
 test('native reply uses kind reply + outboundRef', async () => {
   const { om, sent } = setup();
   await om.sendToOwner('a1', {

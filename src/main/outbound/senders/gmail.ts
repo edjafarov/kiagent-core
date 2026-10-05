@@ -31,7 +31,7 @@ export const OWNER_CHANNEL_HEADERS = {
 } as const;
 
 function composeRaw(opts: {
-  from: string;
+  from: string | { name: string; address: string };
   to: string[];
   cc?: string[];
   subject?: string;
@@ -104,7 +104,10 @@ export function createGmailSender(deps: {
         references?: string[];
       };
       const raw = await composeRaw({
-        from: senderAddressFor(account),
+        from:
+          intent.ownerChannel && intent.fromName
+            ? { name: intent.fromName, address: senderAddressFor(account) }
+            : senderAddressFor(account),
         to: intent.to ?? [],
         cc: intent.cc,
         subject: intent.subject,

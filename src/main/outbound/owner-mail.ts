@@ -19,6 +19,8 @@ import type { SenderLookup } from './senders';
 const HOUR = 3_600_000;
 const CAP = 60;
 const ID_RX = /^<[^\s<>@]+@[^\s<>@]+>$/;
+/** A plain display name: no address, quotes, brackets or line breaks. */
+const NAME_RX = /^[\p{L}\p{N} .'-]{1,40}$/u;
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export interface OwnerMessage {
@@ -32,6 +34,8 @@ export interface OwnerMessage {
   /** Provider-native reply target (Graph /reply), when the source has one. */
   replyToProviderId?: string;
   providerThreadId?: string;
+  /** Display name on From (e.g. "Kia"); the address is always the owner. */
+  fromName?: string;
 }
 
 export interface OwnerMailApi {
@@ -118,6 +122,8 @@ export function createOwnerMail(deps: {
         );
       if (/[\r\n]/.test(m.subject))
         throw new Error('ownerMail: subject must be one line');
+      if (m.fromName !== undefined && !NAME_RX.test(m.fromName))
+        throw new Error('ownerMail: fromName must be a plain display name');
       for (const x of [m.messageId, m.inReplyTo, ...(m.references ?? [])])
         if (x !== undefined && !ID_RX.test(x))
           throw new Error('ownerMail: malformed message id');
@@ -144,6 +150,7 @@ export function createOwnerMail(deps: {
         bodyMarkdown: m.bodyText,
         replyTo: m.replyTo.toLowerCase(),
         ...(m.messageId ? { messageId: m.messageId } : {}),
+        ...(m.fromName ? { fromName: m.fromName } : {}),
         ownerChannel: true,
         ...(Object.keys(threading).length ? { threading } : {}),
       });

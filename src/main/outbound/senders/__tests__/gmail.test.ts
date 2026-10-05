@@ -205,6 +205,28 @@ describe('gmail sender', () => {
     expect(raw).toMatch(/^X-Auto-Response-Suppress: OOF, AutoReply\r?$/m);
     expect(raw).toMatch(/^Auto-Submitted: auto-replied\r?$/m);
     expect(body.threadId).toBe('t123');
+    expect(raw).toMatch(/^From: me@gmail\.com\r?$/m);
+  });
+
+  it('6b. an owner-channel display name goes on From with the account address', async () => {
+    await sendable();
+    fetchMock = jest.fn(async () => okJson({ id: 'm9', threadId: 't1' }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    await createGmailSender({ store }).send({
+      accountId,
+      kind: 'new',
+      to: ['me@gmail.com'],
+      subject: 's',
+      bodyMarkdown: 'b',
+      replyTo: 'me+kia@gmail.com',
+      fromName: 'Kia',
+      ownerChannel: true,
+    });
+    const raw = Buffer.from(
+      JSON.parse(fetchMock.mock.calls[0][1].body).raw,
+      'base64url',
+    ).toString('utf8');
+    expect(raw).toMatch(/^From: Kia <me@gmail\.com>\r?$/m);
   });
 
   it('7. ordinary send carries no channel headers', async () => {

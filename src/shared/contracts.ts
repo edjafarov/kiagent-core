@@ -760,6 +760,8 @@ export interface SendIntent {
   replyTo?: string;
   messageId?: string;
   ownerChannel?: boolean;
+  /** Owner channel only: display name on From; the address stays the account's. */
+  fromName?: string;
 }
 
 export interface SendResult {
