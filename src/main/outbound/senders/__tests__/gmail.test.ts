@@ -202,8 +202,9 @@ describe('gmail sender', () => {
     expect(raw).toMatch(/^Reply-To: me\+kia@gmail\.com\r?$/m);
     expect(raw).toMatch(/^Message-ID: <abc@kia\.local>\r?$/m);
     expect(raw).toMatch(/^X-Kia-Channel: owner\r?$/m);
-    expect(raw).toMatch(/^X-Auto-Response-Suppress: OOF, AutoReply\r?$/m);
-    expect(raw).toMatch(/^Auto-Submitted: auto-replied\r?$/m);
+    // No auto-reply markers: phones treat such mail as automated and stay
+    // silent, and Kia's own loop guard is X-Kia-Channel.
+    expect(raw).not.toMatch(/Auto-Submitted|X-Auto-Response-Suppress/);
     expect(body.threadId).toBe('t123');
     expect(raw).toMatch(/^From: me@gmail\.com\r?$/m);
   });

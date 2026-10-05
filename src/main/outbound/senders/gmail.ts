@@ -26,8 +26,6 @@ const REFRESH_MARGIN_MS = 60_000;
 /** Stamped on owner-channel mail only (core ownerMail). */
 export const OWNER_CHANNEL_HEADERS = {
   'X-Kia-Channel': 'owner',
-  'X-Auto-Response-Suppress': 'OOF, AutoReply',
-  'Auto-Submitted': 'auto-replied',
 } as const;
 
 function composeRaw(opts: {
