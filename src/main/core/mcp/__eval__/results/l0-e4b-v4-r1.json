@@ -1,0 +1,1984 @@
+[
+  {
+    "kind": "question",
+    "id": "tomorrow",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "dentist"
+      ],
+      [
+        "standup"
+      ],
+      [
+        "deploy"
+      ]
+    ],
+    "wrong": [],
+    "ms": 236,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What happens tomorrow?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No information is available regarding what happens tomorrow.",
+    "raw": "No information is available regarding what happens tomorrow."
+  },
+  {
+    "kind": "question",
+    "id": "tomorrow",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3400,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "calendar",
+          "on_date": "2026-10-06"
+        },
+        "hits": 3
+      }
+    ],
+    "invented": [],
+    "answer": "Tomorrow, Tuesday, 6 Oct 2026, you have the following events:\n\nDentist at 09:00 (Europe/Berlin)\nTeam standup at 10:00 (Europe/Berlin)\nDeploy window at 01:00 (Europe/Berlin)",
+    "raw": "Tomorrow, Tuesday, 6 Oct 2026, you have the following events:\n\nDentist at 09:00 (Europe/Berlin)\nTeam standup at 10:00 (Europe/Berlin)\nDeploy window at 01:00 (Europe/Berlin)"
+  },
+  {
+    "kind": "question",
+    "id": "today",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "yoga"
+      ],
+      [
+        "standup"
+      ]
+    ],
+    "wrong": [],
+    "ms": 234,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What's on my calendar today?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No calendar information was provided.",
+    "raw": "No calendar information was provided."
+  },
+  {
+    "kind": "question",
+    "id": "today",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2168,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "calendar",
+          "on_date": "2026-10-05"
+        },
+        "hits": 2
+      }
+    ],
+    "invented": [],
+    "answer": "Today, Monday, 5 Oct 2026, you have two events on your calendar:\n\n1. Team standup at 10:00 (Europe/Berlin)\n2. Yoga at 18:00 (Europe/Berlin)",
+    "raw": "Today, Monday, 5 Oct 2026, you have two events on your calendar:\n\n1. Team standup at 10:00 (Europe/Berlin)\n2. Yoga at 18:00 (Europe/Berlin)"
+  },
+  {
+    "kind": "question",
+    "id": "acme-call-when",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "oct 8",
+        "october 8",
+        "8 oct",
+        "8. oct",
+        "10-08",
+        "08.10",
+        "thursday"
+      ],
+      [
+        "15:00",
+        "3 pm",
+        "3pm",
+        "15.00",
+        "3:00 pm",
+        "3:00pm"
+      ]
+    ],
+    "wrong": [],
+    "ms": 542,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "When is the Acme renewal call?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: Acme renewal call\n\nThe Acme renewal call is scheduled for next Tuesday.\n\n[Source 1]",
+    "raw": "Subject: Re: Acme renewal call\n\nThe Acme renewal call is scheduled for next Tuesday.\n\n[Source 1]"
+  },
+  {
+    "kind": "question",
+    "id": "acme-call-when",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3316,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "calendar",
+          "query": "Acme renewal call"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a23d-78ab-b0ac-638f640eedb8"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The Acme renewal call is scheduled for Thursday, 8 Oct 2026, from 15:00 to 15:45 in Europe/Berlin.",
+    "raw": "The Acme renewal call is scheduled for Thursday, 8 Oct 2026, from 15:00 to 15:45 in Europe/Berlin."
+  },
+  {
+    "kind": "question",
+    "id": "acme-final-offer",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "12%",
+        "12 %",
+        "12 percent"
+      ]
+    ],
+    "wrong": [],
+    "ms": 554,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What price increase did Acme finally offer?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: Price Increase Inquiry\n\nAcme finally offered a 15% price increase.\n\n[Source 1]",
+    "raw": "Subject: Re: Price Increase Inquiry\n\nAcme finally offered a 15% price increase.\n\n[Source 1]"
+  },
+  {
+    "kind": "question",
+    "id": "acme-final-offer",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2849,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "Acme price increase"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a1f3-78c3-b637-a6266ba99325"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The final price increase offered by Acme was 12% (from the email titled \"Acme renewal\").",
+    "raw": "The final price increase offered by Acme was 12% (from the email titled \"Acme renewal\")."
+  },
+  {
+    "kind": "question",
+    "id": "acme-deadline",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "oct 8",
+        "october 8",
+        "8 oct",
+        "8. oct",
+        "10-08",
+        "08.10",
+        "thursday"
+      ]
+    ],
+    "wrong": [],
+    "ms": 328,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "By when do we need to sign with Acme?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No information is available regarding a deadline to sign with Acme.",
+    "raw": "No information is available regarding a deadline to sign with Acme."
+  },
+  {
+    "kind": "question",
+    "id": "acme-deadline",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4631,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "query": "Acme signing deadline"
+        },
+        "hits": 4
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a1f3-78c3-b637-a6266ba99325"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The mail thread \"Acme renewal\" states that the final offer is 12% if you sign the 3-year term by Thursday, October 8.",
+    "raw": "The mail thread \"Acme renewal\" states that the final offer is 12% if you sign the 3-year term by Thursday, October 8."
+  },
+  {
+    "kind": "question",
+    "id": "offsite-where",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "porto"
+      ]
+    ],
+    "wrong": [],
+    "ms": 520,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "Where is the November offsite?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: November Offsite Location\n\nThe November offsite location is not specified in the provided information.",
+    "raw": "Subject: Re: November Offsite Location\n\nThe November offsite location is not specified in the provided information."
+  },
+  {
+    "kind": "question",
+    "id": "offsite-where",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3372,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "November offsite"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a1f8-773c-a750-7243b0bbccf3"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The November offsite is scheduled for November 18–20 in Porto at Hotel Infante Sagres. This information is from the mail thread \"Offsite planning\".",
+    "raw": "The November offsite is scheduled for November 18–20 in Porto at Hotel Infante Sagres. This information is from the mail thread \"Offsite planning\"."
+  },
+  {
+    "kind": "question",
+    "id": "sarah-pricing",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "49"
+      ],
+      [
+        "volume",
+        "50 seats",
+        "discount"
+      ]
+    ],
+    "wrong": [],
+    "ms": 493,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What did Sarah say about pricing?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: Pricing Inquiry\n\nSarah stated that the pricing is competitive and reflects the quality of the product [Source 1].",
+    "raw": "Subject: Re: Pricing Inquiry\n\nSarah stated that the pricing is competitive and reflects the quality of the product [Source 1]."
+  },
+  {
+    "kind": "question",
+    "id": "sarah-pricing",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3355,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "Sarah pricing"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a21d-780e-b0fc-d4eb739f72ea"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Sarah Chen stated in the email \"Pricing feedback\" that the Pro tier at €49 per seat is too expensive and that they would need a volume discount above 50 seats to move forward.",
+    "raw": "Sarah Chen stated in the email \"Pricing feedback\" that the Pro tier at €49 per seat is too expensive and that they would need a volume discount above 50 seats to move forward."
+  },
+  {
+    "kind": "question",
+    "id": "invoice",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "1,840",
+        "1840",
+        "1.840"
+      ],
+      [
+        "oct 15",
+        "october 15",
+        "15 oct",
+        "15. oct",
+        "10-15",
+        "15.10"
+      ]
+    ],
+    "wrong": [],
+    "ms": 528,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "How much is the CloudHost invoice and when is it due?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: CloudHost Invoice Inquiry\n\nThe CloudHost invoice amount and due date are not available in the provided sources.",
+    "raw": "Subject: Re: CloudHost Invoice Inquiry\n\nThe CloudHost invoice amount and due date are not available in the provided sources."
+  },
+  {
+    "kind": "question",
+    "id": "invoice",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2476,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "CloudHost invoice"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a217-7f3f-ada7-02ceb4e3da74"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The CloudHost invoice INV-2291 is for €1,840.00 and is due on October 15, 2026.",
+    "raw": "The CloudHost invoice INV-2291 is for €1,840.00 and is due on October 15, 2026."
+  },
+  {
+    "kind": "question",
+    "id": "school-holidays",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "19"
+      ],
+      [
+        "30"
+      ]
+    ],
+    "wrong": [],
+    "ms": 455,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "When are the school autumn holidays?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: School Autumn Holidays\n\nThe school autumn holidays dates are not available in the provided sources.",
+    "raw": "Subject: Re: School Autumn Holidays\n\nThe school autumn holidays dates are not available in the provided sources."
+  },
+  {
+    "kind": "question",
+    "id": "school-holidays",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2417,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "files",
+          "query": "school autumn holidays"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a219-71c3-b0a4-66f924e7a06b"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The school autumn holidays run from October 19 to October 30. School resumes on Monday, November 2. This information is from the email titled \"Autumn holidays\".",
+    "raw": "The school autumn holidays run from October 19 to October 30. School resumes on Monday, November 2. This information is from the email titled \"Autumn holidays\"."
+  },
+  {
+    "kind": "question",
+    "id": "priya-start",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "nov 2",
+        "november 2",
+        "2 nov",
+        "2. nov",
+        "11-02",
+        "02.11"
+      ]
+    ],
+    "wrong": [],
+    "ms": 524,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "When does Priya start?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: Priya's Start Date\n\nPriya starts on October 15th.\n\n[Source 1]",
+    "raw": "Subject: Re: Priya's Start Date\n\nPriya starts on October 15th.\n\n[Source 1]"
+  },
+  {
+    "kind": "question",
+    "id": "priya-start",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2253,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "query": "Priya start"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a21a-75f1-97c6-32a44e55dd3d"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Priya starts on November 2.",
+    "raw": "Priya starts on November 2."
+  },
+  {
+    "kind": "question",
+    "id": "product-sync",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "q1"
+      ],
+      [
+        "export",
+        "feature x"
+      ]
+    ],
+    "wrong": [],
+    "ms": 220,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What did we decide in the last product sync?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No sources were provided.",
+    "raw": "No sources were provided."
+  },
+  {
+    "kind": "question",
+    "id": "product-sync",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2640,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "meetings",
+          "query": "product sync"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a244-7e8f-a794-a2220aa7f109"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The last product sync, \"Weekly product sync\" on Thu, 1 Oct 2026, 11:00, decided that feature X (bulk export) is delayed to Q1 2027. The action item was for Dana to draft the hiring plan.",
+    "raw": "The last product sync, \"Weekly product sync\" on Thu, 1 Oct 2026, 11:00, decided that feature X (bulk export) is delayed to Q1 2027. The action item was for Dana to draft the hiring plan."
+  },
+  {
+    "kind": "question",
+    "id": "acme-actions",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "proposal"
+      ],
+      [
+        "budget"
+      ]
+    ],
+    "wrong": [],
+    "ms": 220,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What were the action items from the last Acme meeting?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No sources were provided.",
+    "raw": "No sources were provided."
+  },
+  {
+    "kind": "question",
+    "id": "acme-actions",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2629,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "meetings",
+          "query": "Acme"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a242-746b-9837-4ad7b0f35b47"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The action items from the Acme renewal call on Thu, 10 Sept 2026, 15:00 are:\n1. Bob sends a pricing proposal.\n2. Alex checks the budget for a 3-year term.",
+    "raw": "The action items from the Acme renewal call on Thu, 10 Sept 2026, 15:00 are:\n1. Bob sends a pricing proposal.\n2. Alex checks the budget for a 3-year term."
+  },
+  {
+    "kind": "question",
+    "id": "globex-qbr-ask",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "sso",
+        "saml"
+      ]
+    ],
+    "wrong": [],
+    "ms": 544,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What did Globex ask for in the last QBR?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: QBR Follow-up\n\nGlobex requested a review of the QBR materials [Source 1].",
+    "raw": "Subject: Re: QBR Follow-up\n\nGlobex requested a review of the QBR materials [Source 1]."
+  },
+  {
+    "kind": "question",
+    "id": "globex-qbr-ask",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2138,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "meetings",
+          "query": "Globex QBR"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a245-78bd-9ba7-a0f58950cfe1"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Globex asked for Northwind to deliver SSO (SAML) by Q4 during the Globex QBR.",
+    "raw": "Globex asked for Northwind to deliver SSO (SAML) by Q4 during the Globex QBR."
+  },
+  {
+    "kind": "question",
+    "id": "flight",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "lh1234",
+        "lh 1234"
+      ],
+      [
+        "08:15",
+        "8:15"
+      ],
+      [
+        "oct 14",
+        "october 14",
+        "14 oct",
+        "14. oct",
+        "10-14",
+        "14.10"
+      ]
+    ],
+    "wrong": [],
+    "ms": 257,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What's my flight to Lisbon?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No flight information to Lisbon was provided.",
+    "raw": "No flight information to Lisbon was provided."
+  },
+  {
+    "kind": "question",
+    "id": "flight",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2906,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "flight Lisbon"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a21f-7922-86de-66f6aef3ca2a"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The flight to Lisbon is LH1234, departing from Munich (MUC) on October 14 at 08:15. The return flight is LH1235 on October 17 at 18:40. The booking code is QX7P2M (Booking confirmation LH1234).",
+    "raw": "The flight to Lisbon is LH1234, departing from Munich (MUC) on October 14 at 08:15. The return flight is LH1235 on October 17 at 18:40. The booking code is QX7P2M (Booking confirmation LH1234)."
+  },
+  {
+    "kind": "question",
+    "id": "q3-revenue",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "412"
+      ]
+    ],
+    "wrong": [],
+    "ms": 483,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What was our Q3 revenue?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: Q3 Revenue\n\nOur Q3 revenue was $1.2 million [Source 1].",
+    "raw": "Subject: Re: Q3 Revenue\n\nOur Q3 revenue was $1.2 million [Source 1]."
+  },
+  {
+    "kind": "question",
+    "id": "q3-revenue",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2351,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "files",
+          "query": "Q3 revenue"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a247-7769-a874-ed318ce16e4f"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The Q3 2026 revenue was €412,000, according to the file \"Q3 numbers.xlsx\".",
+    "raw": "The Q3 2026 revenue was €412,000, according to the file \"Q3 numbers.xlsx\"."
+  },
+  {
+    "kind": "question",
+    "id": "my-discount-ask",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "10%",
+        "10 %",
+        "10 percent"
+      ]
+    ],
+    "wrong": [],
+    "ms": 235,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What discount did I ask Acme for?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No sources were provided.",
+    "raw": "No sources were provided."
+  },
+  {
+    "kind": "question",
+    "id": "my-discount-ask",
+    "arm": "agent",
+    "ok": false,
+    "missing": [
+      [
+        "10%",
+        "10 %",
+        "10 percent"
+      ]
+    ],
+    "wrong": [],
+    "ms": 2925,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "Acme discount"
+        },
+        "hits": 3
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a21d-780e-b0fc-d4eb739f72ea"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The email thread \"Pricing feedback\" (\"Pricing feedback\") indicates that you asked for a volume discount above 50 seats.",
+    "raw": "The email thread \"Pricing feedback\" (01a10cd1-a21d-780e-b0fc-d4eb739f72ea) indicates that you asked for a volume discount above 50 seats."
+  },
+  {
+    "kind": "question",
+    "id": "board-ask",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "q3"
+      ],
+      [
+        "oct 7",
+        "october 7",
+        "7 oct",
+        "7. oct",
+        "10-07",
+        "07.10"
+      ]
+    ],
+    "wrong": [],
+    "ms": 200,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What does Jordan need from me for the board meeting, and by when?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No sources were provided.",
+    "raw": "No sources were provided."
+  },
+  {
+    "kind": "question",
+    "id": "board-ask",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2065,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "Jordan board meeting"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a222-7bf1-97df-9106dd23f5f6"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Jordan needs the Q3 numbers by October 7 for the board meeting on October 9.",
+    "raw": "Jordan needs the Q3 numbers by October 7 for the board meeting on October 9."
+  },
+  {
+    "kind": "question",
+    "id": "board-when",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "oct 9",
+        "october 9",
+        "9 oct",
+        "9. oct",
+        "10-09",
+        "09.10",
+        "friday"
+      ]
+    ],
+    "wrong": [],
+    "ms": 507,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "When is the board meeting?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: Board Meeting Time\n\nThe board meeting is scheduled for next Tuesday.\n\n[Source 1]",
+    "raw": "Subject: Re: Board Meeting Time\n\nThe board meeting is scheduled for next Tuesday.\n\n[Source 1]"
+  },
+  {
+    "kind": "question",
+    "id": "board-when",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3000,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "calendar",
+          "query": "board meeting"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a23f-78bc-b902-ab399af5657f"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The board meeting is on Friday, 9 Oct 2026, from 10:00 to 13:00 in Europe/Berlin.",
+    "raw": "The board meeting is on Friday, 9 Oct 2026, from 10:00 to 13:00 in Europe/Berlin."
+  },
+  {
+    "kind": "question",
+    "id": "dinner",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "friday"
+      ],
+      [
+        "trattoria",
+        "7pm",
+        "7 pm",
+        "19:00"
+      ]
+    ],
+    "wrong": [],
+    "ms": 326,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "Any dinner plans this week?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: Dinner plans\n\nNo dinner plans this week.",
+    "raw": "Subject: Re: Dinner plans\n\nNo dinner plans this week."
+  },
+  {
+    "kind": "question",
+    "id": "dinner",
+    "arm": "agent",
+    "ok": false,
+    "missing": [
+      [
+        "friday"
+      ],
+      [
+        "trattoria",
+        "7pm",
+        "7 pm",
+        "19:00"
+      ]
+    ],
+    "wrong": [],
+    "ms": 6673,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "calendar"
+        },
+        "hits": 8
+      }
+    ],
+    "invented": [],
+    "answer": "There are no specific dinner plans listed in your calendar for this week. Your scheduled events are:\n\n*   Today, Mon, 5 Oct 2026: Deploy window (ends at 00:00 on Tue, 6 Oct 2026)\n*   Tue, 6 Oct 2026: Dentist (07:00 - 07:45)\n*   Tue, 6 Oct 2026: Team standup (08:00 - 08:15)\n*   Wed, 7 Oct 2026: Call with Tokyo office (22:30 - 23:30)\n*   Thu, 8 Oct 2026: Acme renewal call (13:00 - 13:45)\n*   Fri, 9 Oct 2026: Board meeting (10:00 - 11:00)\n*   Mon, 12 Oct 2026: Globex QBR (11:00 - 12:00)\n*   Mon, 2 Nov 2026: Onboarding Priya (09:00 - 10:00)",
+    "raw": "There are no specific dinner plans listed in your calendar for this week. Your scheduled events are:\n\n*   Today, Mon, 5 Oct 2026: Deploy window (ends at 00:00 on Tue, 6 Oct 2026)\n*   Tue, 6 Oct 2026: Dentist (07:00 - 07:45)\n*   Tue, 6 Oct 2026: Team standup (08:00 - 08:15)\n*   Wed, 7 Oct 2026: Call with Tokyo office (22:30 - 23:30)\n*   Thu, 8 Oct 2026: Acme renewal call (13:00 - 13:45)\n*   Fri, 9 Oct 2026: Board meeting (10:00 - 11:00)\n*   Mon, 12 Oct 2026: Globex QBR (11:00 - 12:00)\n*   Mon, 2 Nov 2026: Onboarding Priya (09:00 - 10:00)"
+  },
+  {
+    "kind": "question",
+    "id": "slack-globex",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "sso",
+        "saml"
+      ]
+    ],
+    "wrong": [],
+    "ms": 244,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What did Mia say in Slack about Globex?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No sources were provided.",
+    "raw": "No sources were provided."
+  },
+  {
+    "kind": "question",
+    "id": "slack-globex",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2646,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "chats",
+          "query": "Mia Globex"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a24a-7a57-b5c2-00a78c46796c"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Mia said in Slack on Fri, 2 Oct 2026, at 09:12 that \"Globex says SSO is the blocker for their renewal.\" (Source: #sales — 2026-10-02)",
+    "raw": "Mia said in Slack on Fri, 2 Oct 2026, at 09:12 that \"Globex says SSO is the blocker for their renewal.\" (Source: #sales — 2026-10-02)"
+  },
+  {
+    "kind": "question",
+    "id": "deploy-when",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "01:00",
+        "1:00",
+        "1 am",
+        "1am"
+      ],
+      [
+        "tuesday",
+        "tonight",
+        "oct 6",
+        "6 oct"
+      ]
+    ],
+    "wrong": [],
+    "ms": 314,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "When is the 4.2 deploy?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No information is available regarding the 4.2 deploy.",
+    "raw": "No information is available regarding the 4.2 deploy."
+  },
+  {
+    "kind": "question",
+    "id": "deploy-when",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4207,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "query": "4.2 deploy"
+        },
+        "hits": 2
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a239-757f-97eb-15e75d63a023"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The 4.2 deploy is scheduled for Tuesday, 6 Oct 2026, from 01:00 to 02:00 in Europe/Berlin, according to the \"Deploy window\" calendar event.",
+    "raw": "The 4.2 deploy is scheduled for Tuesday, 6 Oct 2026, from 01:00 to 02:00 in Europe/Berlin, according to the \"Deploy window\" calendar event."
+  },
+  {
+    "kind": "question",
+    "id": "count-tomorrow",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "3",
+        "three"
+      ]
+    ],
+    "wrong": [],
+    "ms": 260,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "How many calendar events do I have tomorrow?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No calendar events are listed for tomorrow.",
+    "raw": "No calendar events are listed for tomorrow."
+  },
+  {
+    "kind": "question",
+    "id": "count-tomorrow",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 987,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "count",
+        "args": {
+          "kind": "calendar",
+          "on_date": "2026-10-06"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "There are 3 calendar events tomorrow, 2026-10-06.",
+    "raw": "There are 3 calendar events tomorrow, 2026-10-06."
+  },
+  {
+    "kind": "question",
+    "id": "pricing-2027",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "55"
+      ]
+    ],
+    "wrong": [],
+    "ms": 386,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What's the proposed Pro tier price for 2027?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No information is available regarding the proposed Pro tier price for 2027.",
+    "raw": "No information is available regarding the proposed Pro tier price for 2027."
+  },
+  {
+    "kind": "question",
+    "id": "pricing-2027",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2926,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "files",
+          "query": "Pro tier price 2027"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a248-7ede-8db7-425148454432"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The proposed Pro tier price for 2027 is €55 per seat, according to the document \"Pricing 2027 proposal\".",
+    "raw": "The proposed Pro tier price for 2027 is €55 per seat, according to the document \"Pricing 2027 proposal\"."
+  },
+  {
+    "kind": "question",
+    "id": "followup-before",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "20%",
+        "20 %",
+        "20 percent"
+      ]
+    ],
+    "wrong": [],
+    "ms": 712,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "And what did he propose before that?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: Acme renewal\n\nBob offered a 12% increase if you sign the 3-year term by Thursday, October 8 (Acme renewal).",
+    "raw": "Subject: Re: Acme renewal\n\nBob offered a 12% increase if you sign the 3-year term by Thursday, October 8 (Acme renewal)."
+  },
+  {
+    "kind": "question",
+    "id": "followup-before",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2712,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "Bob renewal"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a1f3-78c3-b637-a6266ba99325"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Bob's initial proposal in the email \"Acme renewal\" was a 20% price increase on a 3-year term.",
+    "raw": "Bob's initial proposal in the email \"Acme renewal\" was a 20% price increase on a 3-year term."
+  },
+  {
+    "kind": "question",
+    "id": "draft-acme",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "draft"
+      ]
+    ],
+    "wrong": [],
+    "draftOk": false,
+    "ms": 584,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "Draft a reply to Bob saying we accept the 12% and will sign by Thursday."
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: Offer\n\nBob,\n\nWe accept the 12% and will sign by Thursday.\n\nRegards,\n\n[Your Name]",
+    "raw": "Subject: Re: Offer\n\nBob,\n\nWe accept the 12% and will sign by Thursday.\n\nRegards,\n\n[Your Name]"
+  },
+  {
+    "kind": "question",
+    "id": "draft-acme",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "draftOk": true,
+    "ms": 4216,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "Bob"
+        },
+        "hits": 2
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a1f3-78c3-b637-a6266ba99325"
+        }
+      },
+      {
+        "name": "draft_reply",
+        "args": {
+          "id": "01a10cd1-a1f3-78c3-b637-a6266ba99325"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The reply has been drafted to Bob in the thread \"Acme renewal\" (\"Acme renewal\").",
+    "raw": "The reply has been drafted to Bob in the thread \"Acme renewal\" (01a10cd1-a1f3-78c3-b637-a6266ba99325)."
+  },
+  {
+    "kind": "question",
+    "id": "H-onboarding-who",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "priya"
+      ],
+      [
+        "dana"
+      ]
+    ],
+    "wrong": [],
+    "ms": 364,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "Who is joining the onboarding on November 2?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No information is available regarding who is joining the onboarding on November 2.",
+    "raw": "No information is available regarding who is joining the onboarding on November 2."
+  },
+  {
+    "kind": "question",
+    "id": "H-onboarding-who",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2829,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "calendar",
+          "query": "onboarding November 2"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a240-7b53-b5e8-826b5ab9ff06"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Priya Nair and Dana Lee are joining the onboarding on November 2, 2026.",
+    "raw": "Priya Nair and Dana Lee are joining the onboarding on November 2, 2026."
+  },
+  {
+    "kind": "question",
+    "id": "H-booking-code",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "qx7p2m"
+      ]
+    ],
+    "wrong": [],
+    "ms": 289,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What's the booking code for my flight?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No booking code was provided in the available sources.",
+    "raw": "No booking code was provided in the available sources."
+  },
+  {
+    "kind": "question",
+    "id": "H-booking-code",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2218,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "flight booking code"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a21f-7922-86de-66f6aef3ca2a"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The booking code for your flight is QX7P2M, as stated in the \"Booking confirmation LH1234\" email.",
+    "raw": "The booking code for your flight is QX7P2M, as stated in the \"Booking confirmation LH1234\" email."
+  },
+  {
+    "kind": "question",
+    "id": "H-return-flight",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "18:40",
+        "6:40"
+      ],
+      [
+        "oct 17",
+        "october 17",
+        "17 oct",
+        "17. oct",
+        "10-17",
+        "17.10"
+      ]
+    ],
+    "wrong": [],
+    "ms": 305,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "When does my return flight leave?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No information is available regarding the return flight departure time.",
+    "raw": "No information is available regarding the return flight departure time."
+  },
+  {
+    "kind": "question",
+    "id": "H-return-flight",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3183,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "calendar",
+          "query": "return flight"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a21f-7922-86de-66f6aef3ca2a"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The return flight leaves on October 17 at 18:40. This is detailed in the \"Booking confirmation LH1234\" mail.",
+    "raw": "The return flight leaves on October 17 at 18:40. This is detailed in the \"Booking confirmation LH1234\" mail."
+  },
+  {
+    "kind": "question",
+    "id": "H-churn",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "3.1"
+      ]
+    ],
+    "wrong": [],
+    "ms": 545,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "What was our churn in Q3?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: Churn in Q3\n\nOur churn in Q3 was 4.5% [Source 1].",
+    "raw": "Subject: Re: Churn in Q3\n\nOur churn in Q3 was 4.5% [Source 1]."
+  },
+  {
+    "kind": "question",
+    "id": "H-churn",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2487,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "files",
+          "query": "churn Q3"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a247-7769-a874-ed318ce16e4f"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The churn in Q3 was 3.1% according to the file \"Q3 numbers.xlsx\".",
+    "raw": "The churn in Q3 was 3.1% according to the file \"Q3 numbers.xlsx\"."
+  },
+  {
+    "kind": "question",
+    "id": "H-dentist-where",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "hauptstr",
+        "weber"
+      ]
+    ],
+    "wrong": [],
+    "ms": 272,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "Where is my dentist appointment?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "No information regarding a dentist appointment was provided.",
+    "raw": "No information regarding a dentist appointment was provided."
+  },
+  {
+    "kind": "question",
+    "id": "H-dentist-where",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3276,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "calendar",
+          "query": "dentist"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a238-71df-90b9-b43a3169eb58"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "The dentist appointment is at Dr. Weber, Hauptstr. 3 on Tue, 6 Oct 2026, from 09:00 to 09:45 in Europe/Berlin.",
+    "raw": "The dentist appointment is at Dr. Weber, Hauptstr. 3 on Tue, 6 Oct 2026, from 09:00 to 09:45 in Europe/Berlin."
+  },
+  {
+    "kind": "question",
+    "id": "H-vacation",
+    "arm": "fixed",
+    "ok": false,
+    "missing": [
+      [
+        "28"
+      ]
+    ],
+    "wrong": [],
+    "ms": 450,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "search(fixed)",
+        "args": {
+          "text": "How many vacation days do we get?"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Subject: Re: Vacation Days\n\nWe get 15 vacation days.\n\n[Source 1]",
+    "raw": "Subject: Re: Vacation Days\n\nWe get 15 vacation days.\n\n[Source 1]"
+  },
+  {
+    "kind": "question",
+    "id": "H-vacation",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 1904,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "files",
+          "query": "vacation days policy"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a249-7b24-a232-a3c4540b2cb4"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "We get 28 vacation days according to the Employee handbook.pdf.",
+    "raw": "We get 28 vacation days according to the Employee handbook.pdf."
+  },
+  {
+    "kind": "brief",
+    "id": "brief-acme",
+    "arm": "fixed",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3424,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "plan(fixed)",
+        "args": {},
+        "hits": 3
+      }
+    ],
+    "invented": [],
+    "answer": "Meeting for Acme renewal discussion.\n\nDecisions:\n- The pilot is extended until the renewal is signed (S3).\n\nCommitments with Owners:\n- Bob Stone to send a pricing proposal (S3).\n- Alex Meyer to check the budget for a 3-year term (S3).\n\nOpen Threads:\n- Bob's final offer is 12% increase for a 3-year term if signed by Thursday, October 8 (S2).\n\nWorth Raising:\n- Bob proposed a 20% increase initially (S2).\n- Alex countered with a request for 10% (S2).\n- The renewal call is scheduled for Thu, 8 Oct 2026, 15:00 (Europe/Berlin) (S1)."
+  },
+  {
+    "kind": "brief",
+    "id": "brief-acme",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 5267,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "Acme renewal call Bob Stone"
+        },
+        "hits": 0
+      },
+      {
+        "name": "search",
+        "args": {
+          "kind": "meetings",
+          "query": "Acme renewal call"
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "kind": "files",
+          "query": "Acme renewal"
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Meeting for Acme renewal discussion.\n\nDecisions:\nThe pilot is extended until the renewal is signed (S3).\n\nCommitments with Owners:\nBob Stone to send a pricing proposal (S3).\nAlex Meyer to check the budget for a 3-year term (S3).\n\nOpen Threads:\nBob's final offer is 12% for a 3-year term if signed by Thursday, October 8; otherwise, the 20% increase stands (S2).\n\nWorth Raising:\nThe proposed renewal call is scheduled for Thursday, October 8, 2026, at 15:00 (Europe/Berlin) (S1)."
+  },
+  {
+    "kind": "brief",
+    "id": "brief-globex",
+    "arm": "fixed",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2996,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "plan(fixed)",
+        "args": {},
+        "hits": 3
+      }
+    ],
+    "invented": [],
+    "answer": "Globex QBR to review adoption, security, and pricing.\n\nDecisions:\nNone.\n\nCommitments with Owners:\nNorthwind to deliver SSO (SAML) by Q4 (S3).\nSarah Chen to share their IdP details (S3).\n\nOpen Threads:\nPricing feedback: Globex team requires a volume discount above 50 seats for the Pro tier (€49 per seat) (S2).\n\nWorth Raising:\n- SSO is a hard requirement for Globex before renewal (S3).\n- The next QBR is scheduled for Mon, 12 Oct 2026 (S1)."
+  },
+  {
+    "kind": "brief",
+    "id": "brief-globex",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 5652,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "Sarah Chen"
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "kind": "meetings",
+          "query": "Globex QBR"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a21d-780e-b0fc-d4eb739f72ea"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Globex QBR to review progress and discuss pricing.\n\nDecisions:\nNone.\n\nCommitments with Owners:\nNone.\n\nOpen Threads:\n- Globex requires a volume discount above 50 seats for the Pro tier at €49 per seat to move forward (S2, S4).\n\nWorth Raising:\n- SSO (SAML) is a hard requirement for Globex before renewal (S3).\n- Northwind committed to delivering SAML SSO by Q4 (S3).\n- Sarah Chen needs to share their IdP details (S3)."
+  },
+  {
+    "kind": "brief",
+    "id": "brief-onboarding",
+    "arm": "fixed",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3039,
+    "path": "fixed",
+    "calls": [
+      {
+        "name": "plan(fixed)",
+        "args": {},
+        "hits": 3
+      }
+    ],
+    "invented": [],
+    "answer": "Meeting to onboard Priya Nair.\n\nDecisions:\nPriya Nair accepted the backend offer and starts on November 2 (S1, S3).\n\nCommitments with Owners:\nDana Lee will set up Priya Nair's onboarding (S1, S3).\n\nOpen Threads:\nHiring for backend role is open (S3).\n\nWorth Raising:\n* Offsite planning details (catering, venue, etc.) are background for discussion, nothing is decided (S2).\n* The offsite has moved from Lisbon to Porto (Nov 18–20) at Hotel Infante Sagres; travel needs rebooking (S2)."
+  },
+  {
+    "kind": "brief",
+    "id": "brief-onboarding",
+    "arm": "agent",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4837,
+    "path": "agent",
+    "calls": [
+      {
+        "name": "search",
+        "args": {
+          "kind": "mail",
+          "query": "Priya Nair Dana Lee"
+        },
+        "hits": 1
+      },
+      {
+        "name": "get",
+        "args": {
+          "id": "01a10cd1-a21a-75f1-97c6-32a44e55dd3d"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Meeting to onboard Priya Nair.\n\nDecisions:\nPriya Nair accepted the backend offer and starts on November 2 (S1, S4).\n\nCommitments with Owners:\nDana Lee will set up Priya Nair's onboarding (S1, S4).\n\nOpen Threads:\nNo open threads.\n\nWorth Raising:\n* Offsite planning details (catering, venue, budget, etc.) are still background discussion points, as the Lisbon venue was cancelled and the offsite moved to Porto (S2).\n* There is an open thread regarding a backend role hiring discussion (S3)."
+  }
+]
