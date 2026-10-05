@@ -246,7 +246,8 @@ describe('LlamaServer launch args', () => {
       spawnFn,
     });
     (srv as any).launch();
-    expect(flagValue(calls[0].args, '-c')).toBe('16384');
+    expect(flagValue(calls[0].args, '-c')).toBe('24576');
+    expect(flagValue(calls[0].args, '--ctx-checkpoints')).toBe('4');
   });
 
   it('lets an explicit contextSize override the default', () => {

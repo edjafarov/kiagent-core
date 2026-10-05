@@ -35,7 +35,12 @@ import {
   type ClientAdapter,
 } from './clients';
 import { makeMcpServer } from './make-server';
-import { attachToolHandlers, createToolRegistry } from './registry';
+import {
+  attachToolHandlers,
+  createToolRegistry,
+  invokeTool,
+  type ToolCallOutcome,
+} from './registry';
 import { attachResourceHandlers } from './resources';
 import { buildBuiltinTools } from './tools';
 import { createRawSqlTools } from './tools/raw-sql';
@@ -106,6 +111,17 @@ export interface McpServerHandle {
     res: http.ServerResponse,
     parsedBody?: unknown,
   ) => Promise<void>;
+  /** One tool call in-process, with the same guarantees as a `tools/call`
+   *  on a `createMcpHandler({ transport: 'agent', allowTools })` session:
+   *  the allow-list fence, the 'agent' transport (core's outbound service
+   *  refuses to send from it; drafts wait in the Outbox), the `mcp.call`
+   *  audit row and the activity record. `client` is the name a draft
+   *  records as the app that drafted it. Returns the tool's raw result. */
+  callTool(
+    name: string,
+    args: Record<string, unknown>,
+    opts: { transport: 'agent'; allowTools: readonly string[]; client: string },
+  ): Promise<ToolCallOutcome>;
 }
 
 /** Activity feed label for the transport a call arrived on. */
@@ -555,6 +571,24 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       return () => {
         if (registry.get(tool.name) === tool) registry.delete(tool.name);
       };
+    },
+
+    callTool(name, args, opts) {
+      return runWithTransport(opts.transport, () =>
+        invokeTool(
+          registry,
+          deps.logSink,
+          name,
+          args,
+          opts.client,
+          (rec) =>
+            deps.onActivity?.({
+              ...rec,
+              transport: activityTransport(currentTransport()),
+            }),
+          new Set(opts.allowTools),
+        ),
+      );
     },
 
     createMcpHandler(opts) {

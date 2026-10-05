@@ -71,6 +71,9 @@ export interface MainProcessApi {
      *  can serve many sessions + reconnects. See
      *  McpServerHandle.createMcpHandler in core/mcp/server.ts. */
     createMcpHandler: McpServerHandle['createMcpHandler'];
+    /** Passthrough to McpServerHandle.callTool: one fenced tool call
+     *  in-process, for a bundled agent that runs kia's tools itself. */
+    callTool: McpServerHandle['callTool'];
   };
   paths: { userData: string; dataDir: string };
   /** Trusted root-grant channel for bundled extensions. Callers must supply
@@ -304,6 +307,7 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
       port: deps.mcp.port,
       registerTool: (tool) => deps.mcp.registerTool(tool),
       createMcpHandler: (opts) => deps.mcp.createMcpHandler(opts),
+      callTool: (name, args, opts) => deps.mcp.callTool(name, args, opts),
     },
     paths: {
       userData: deps.app.getPath('userData'),

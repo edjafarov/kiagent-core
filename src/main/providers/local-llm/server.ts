@@ -13,8 +13,11 @@ const DEFAULTS = {
   /** Total KV-cache tokens shared by every slot (llama-server picks four
    *  slots with a unified cache). Four in-flight background prompts of up to
    *  ~3.5k input + 512 output tokens each need ~16k; 4096 exhausted the cache
-   *  under three concurrent contact-enrichment requests. */
-  contextSize: 16384,
+   *  under three concurrent contact-enrichment requests. 16k in turn failed
+   *  (HTTP 500 "Context size has been exceeded." after 27–60 s) once an
+   *  8k interactive request joined three such prompts; 24k serves all four
+   *  (agentic local Kia spec, L0). */
+  contextSize: 24576,
   startupTimeoutMs: 60_000,
   healthPollMs: 500,
   respawnBaseMs: 250,
@@ -224,6 +227,11 @@ export class LlamaServer implements ServerLike {
       String(this.o.gpuLayers ?? 999),
       '--cache-ram',
       '0',
+      // Prompt-cache checkpoints default to 32 per slot (20–320 MB each on a
+      // 12B model); four keep reuse and cost less at peak than the larger
+      // context above adds.
+      '--ctx-checkpoints',
+      '4',
       ...(this.o.extraArgs ?? []),
     ];
     const spawnFn = this.o.spawnFn ?? defaultSpawn;

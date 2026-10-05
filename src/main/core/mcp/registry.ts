@@ -131,88 +131,100 @@ export function attachToolHandlers(
   }));
 
   mcp.server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const { name } = req.params;
-    const args = (req.params.arguments ?? {}) as Record<string, unknown>;
-    const started = Date.now();
-    const tool = registry.get(name);
-    // Redacted up front, before the call runs: a redaction throw after
-    // tool.call would report a call that already happened (e.g. send_draft)
-    // as failed.
-    const loggedArgs = redactArgsForLog(args);
-    const client = mcp.server.getClientVersion()?.name ?? null;
-
-    const emit = (ok: boolean, result: unknown, error?: string): void => {
-      if (!onActivity) return;
-      try {
-        const { summary, detail } = ok
-          ? summarizeCall(name, args, result)
-          : { summary: `${name} failed`, detail: undefined };
-        onActivity({
-          ts: new Date().toISOString(),
-          client,
-          tool: name,
-          ok,
-          ms: Date.now() - started,
-          summary,
-          ...(detail && detail.length ? { detail } : {}),
-          ...(error !== undefined ? { error } : {}),
-        });
-      } catch {
-        /* the feed is best-effort — never break the call it records */
-      }
-    };
-
-    if (allow && !allow.has(name)) {
-      logSink.log('mcp.call', 'info', name, {
-        args: loggedArgs,
-        ok: false,
-        ms: Date.now() - started,
-        error: 'not allowed',
-      });
-      emit(false, undefined, 'not allowed');
-      return {
-        isError: true,
-        content: [{ type: 'text', text: `tool '${name}' is not available` }],
-      };
-    }
-
-    if (!tool) {
-      logSink.log('mcp.call', 'info', name, {
-        args: loggedArgs,
-        ok: false,
-        ms: Date.now() - started,
-        error: 'unknown tool',
-      });
-      emit(false, undefined, 'unknown tool');
-      return {
-        isError: true,
-        content: [{ type: 'text', text: `unknown tool '${name}'` }],
-      };
-    }
-
-    try {
-      // The tool runs inside the client's name, so what it records (an
-      // outbox draft) can say which app asked.
-      const result = await runWithClient(client, () => tool.call(args));
-      logSink.log('mcp.call', 'info', name, {
-        args: loggedArgs,
-        ok: true,
-        ms: Date.now() - started,
-      });
-      emit(true, result);
-      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logSink.log('mcp.call', 'info', name, {
-        args: loggedArgs,
-        ok: false,
-        ms: Date.now() - started,
-        error: message,
-      });
-      emit(false, undefined, message);
-      // isError (not a thrown protocol error) so the calling LLM sees the
-      // real message instead of a generic JSON-RPC failure.
-      return { isError: true, content: [{ type: 'text', text: message }] };
-    }
+    const out = await invokeTool(
+      registry,
+      logSink,
+      req.params.name,
+      (req.params.arguments ?? {}) as Record<string, unknown>,
+      mcp.server.getClientVersion()?.name ?? null,
+      onActivity,
+      allow,
+    );
+    // isError (not a thrown protocol error) so the calling LLM sees the
+    // real message instead of a generic JSON-RPC failure.
+    return out.ok
+      ? { content: [{ type: 'text', text: JSON.stringify(out.result) }] }
+      : { isError: true, content: [{ type: 'text', text: out.error }] };
   });
+}
+
+/** The result of one tool call, before any transport wraps it. */
+export type ToolCallOutcome =
+  | { ok: true; result: unknown }
+  | { ok: false; error: string };
+
+/**
+ * One tool call with every guarantee `tools/call` gives: the allow-list
+ * fence, the calling client's name around the call (an Outbox draft records
+ * it), the `mcp.call` audit row (win or lose, args redacted) and the
+ * activity record. Shared by the MCP handler and the in-process
+ * `callTool` (server.ts), so the two can't drift. The caller sets the
+ * transport (`runWithTransport`) around it.
+ */
+export async function invokeTool(
+  registry: ToolRegistry,
+  logSink: LogSink,
+  name: string,
+  args: Record<string, unknown>,
+  client: string | null,
+  onActivity?: (rec: Omit<McpActivityRecord, 'transport'>) => void,
+  allow?: ReadonlySet<string>,
+): Promise<ToolCallOutcome> {
+  const started = Date.now();
+  const tool = registry.get(name);
+  // Redacted up front, before the call runs: a redaction throw after
+  // tool.call would report a call that already happened (e.g. send_draft)
+  // as failed.
+  const loggedArgs = redactArgsForLog(args);
+
+  const emit = (ok: boolean, result: unknown, error?: string): void => {
+    if (!onActivity) return;
+    try {
+      const { summary, detail } = ok
+        ? summarizeCall(name, args, result)
+        : { summary: `${name} failed`, detail: undefined };
+      onActivity({
+        ts: new Date().toISOString(),
+        client,
+        tool: name,
+        ok,
+        ms: Date.now() - started,
+        summary,
+        ...(detail && detail.length ? { detail } : {}),
+        ...(error !== undefined ? { error } : {}),
+      });
+    } catch {
+      /* the feed is best-effort — never break the call it records */
+    }
+  };
+  const fail = (logged: string, error: string): ToolCallOutcome => {
+    logSink.log('mcp.call', 'info', name, {
+      args: loggedArgs,
+      ok: false,
+      ms: Date.now() - started,
+      error: logged,
+    });
+    emit(false, undefined, logged);
+    return { ok: false, error };
+  };
+
+  if (allow && !allow.has(name))
+    return fail('not allowed', `tool '${name}' is not available`);
+  if (!tool) return fail('unknown tool', `unknown tool '${name}'`);
+
+  try {
+    // The tool runs inside the client's name, so what it records (an
+    // outbox draft) can say which app asked.
+    const result = await runWithClient(client, () => tool.call(args));
+    logSink.log('mcp.call', 'info', name, {
+      args: loggedArgs,
+      ok: true,
+      ms: Date.now() - started,
+    });
+    emit(true, result);
+    return { ok: true, result };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return fail(message, message);
+  }
 }

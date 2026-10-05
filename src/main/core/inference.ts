@@ -44,6 +44,12 @@ export interface InferencePlane extends Inference {
       /** Caller-owned task id and budget key, threaded to the provider. */
       task?: string;
       budgetKey?: string;
+      /** JSON Schema the reply must match. The local provider constrains
+       *  decoding to it (llama-server `response_format: json_schema`);
+       *  remote providers ignore it. Best effort: llama-server drops a
+       *  schema its grammar converter can't compile (e.g. a `\\d` in a
+       *  `pattern`; use `[0-9]`), so callers still validate the reply. */
+      schema?: Record<string, unknown>;
     },
   ): Promise<string>;
   /** Same request as `complete`, but returns identity + usage alongside the
@@ -58,6 +64,12 @@ export interface InferencePlane extends Inference {
       generation?: number;
       task?: string;
       budgetKey?: string;
+      /** JSON Schema the reply must match. The local provider constrains
+       *  decoding to it (llama-server `response_format: json_schema`);
+       *  remote providers ignore it. Best effort: llama-server drops a
+       *  schema its grammar converter can't compile (e.g. a `\\d` in a
+       *  `pattern`; use `[0-9]`), so callers still validate the reply. */
+      schema?: Record<string, unknown>;
     },
   ): Promise<CompletionMeta>;
   /** `see`, plus the provider and model that described the image. */
@@ -406,6 +418,7 @@ export function createInference(
           expectModelId,
           task: opts?.task,
           budgetKey: opts?.budgetKey,
+          schema: opts?.schema,
         },
         lane,
       });

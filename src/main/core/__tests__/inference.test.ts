@@ -446,6 +446,26 @@ describe('tasks and budget keys on calls', () => {
     expect(seen[1]).toMatchObject({ task: 'task.b', budgetKey: 'k2' });
   });
 
+  it('a schema reaches the provider payload for complete', async () => {
+    const seen: unknown[] = [];
+    const plane = createInference(fakeLogs(), { generationSeed: 1 });
+    plane.register(
+      fakeProvider({
+        id: 'p',
+        supports: ['complete'],
+        handle: async (req) => {
+          seen.push(req.payload);
+          return '{}';
+        },
+      }),
+    );
+    const schema = { type: 'object' };
+    await plane.complete('hi', { schema });
+    await plane.complete('hi');
+    expect(seen[0]).toMatchObject({ schema });
+    expect((seen[1] as { schema?: unknown }).schema).toBeUndefined();
+  });
+
   it("describe with a task doesn't overwrite describe without one", async () => {
     let modelId = 'm1';
     const payloads: Array<Record<string, unknown>> = [];

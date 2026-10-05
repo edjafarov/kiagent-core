@@ -916,6 +916,12 @@ export interface ExtensionInference extends Inference {
       generation?: number;
       task?: string;
       budgetKey?: string;
+      /** JSON Schema the reply must match. The local provider constrains
+       *  decoding to it (llama-server `response_format: json_schema`);
+       *  remote providers ignore it. Best effort: llama-server drops a
+       *  schema its grammar converter can't compile (e.g. a `\\d` in a
+       *  `pattern`; use `[0-9]`), so callers still validate the reply. */
+      schema?: Record<string, unknown>;
     },
   ): Promise<string>;
   /** `complete`, plus who answered — the provider and model that actually
@@ -930,6 +936,12 @@ export interface ExtensionInference extends Inference {
       generation?: number;
       task?: string;
       budgetKey?: string;
+      /** JSON Schema the reply must match. The local provider constrains
+       *  decoding to it (llama-server `response_format: json_schema`);
+       *  remote providers ignore it. Best effort: llama-server drops a
+       *  schema its grammar converter can't compile (e.g. a `\\d` in a
+       *  `pattern`; use `[0-9]`), so callers still validate the reply. */
+      schema?: Record<string, unknown>;
     },
   ): Promise<{ text: string; providerId: string; modelId: string }>;
   /** Resolves the provider that WOULD answer `kind` right now, exactly as
@@ -1053,6 +1065,18 @@ export class ModelChangedError extends Error {
     this.actual = actual;
     this.modelId = modelId;
     this.source = source;
+  }
+}
+
+/** A model request didn't fit the model's context: one request larger than
+ *  the context, or the server's shared KV cache exhausted by concurrent
+ *  requests. Discriminate by `name === 'ContextOverflowError'` (it crosses
+ *  the extension RPC boundary like `ModelChangedError`). A caller can retry
+ *  with a smaller prompt. */
+export class ContextOverflowError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ContextOverflowError';
   }
 }
 

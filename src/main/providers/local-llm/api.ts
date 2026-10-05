@@ -4,6 +4,8 @@
  * attempts ledger.
  */
 
+import { ContextOverflowError } from '@shared/contracts';
+
 const DEFAULT_TIMEOUT_MS = 180_000;
 
 // Low temperature: descriptions feed the FTS index; we want deterministic,
@@ -76,10 +78,43 @@ const profileBody = (
   };
 };
 
+/** llama-server's error for a failed chat request. Both ways a request can
+ *  outgrow the context become `ContextOverflowError`: one request larger
+ *  than the context (HTTP 400, `exceed_context_size_error`, at once) and the
+ *  shared KV cache exhausted by concurrent requests (HTTP 500, "Context size
+ *  has been exceeded.", after the server waited for room). */
+async function chatError(res: Response): Promise<Error> {
+  let error: { type?: unknown; message?: unknown } | undefined;
+  try {
+    error = ((await res.json()) as { error?: typeof error }).error;
+  } catch {
+    error = undefined;
+  }
+  const message = typeof error?.message === 'string' ? error.message : '';
+  if (
+    error?.type === 'exceed_context_size_error' ||
+    /context size has been exceeded/i.test(message)
+  ) {
+    return new ContextOverflowError(
+      `chat request exceeds the model context: ${message || `HTTP ${res.status}`}`,
+    );
+  }
+  return new Error(
+    `chat request failed: HTTP ${res.status}${message ? ` (${message.slice(0, 200)})` : ''}`,
+  );
+}
+
 export async function chatText(
   baseUrl: string,
   prompt: string,
-  opts?: { maxTokens?: number; profile?: ChatProfile; system?: string },
+  opts?: {
+    maxTokens?: number;
+    profile?: ChatProfile;
+    system?: string;
+    /** JSON Schema the reply must match (llama-server compiles it to a
+     *  grammar). Dropped silently by the server when it can't compile it. */
+    schema?: Record<string, unknown>;
+  },
 ): Promise<ChatResult> {
   // Resolved (and, for `deterministic`, validated) BEFORE the AbortController
   // and the request are built — a too-large maxTokens must never reach the
@@ -103,10 +138,18 @@ export async function chatText(
       body: JSON.stringify({
         ...body,
         chat_template_kwargs: CHAT_TEMPLATE_KWARGS,
+        ...(opts?.schema
+          ? {
+              response_format: {
+                type: 'json_schema',
+                json_schema: { name: 'out', schema: opts.schema },
+              },
+            }
+          : {}),
         messages,
       }),
     });
-    if (!res.ok) throw new Error(`chat request failed: HTTP ${res.status}`);
+    if (!res.ok) throw await chatError(res);
     const json = (await res.json()) as {
       choices?: {
         message?: { content?: string };

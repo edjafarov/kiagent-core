@@ -123,6 +123,8 @@ export interface SurfaceDeps {
         generation?: number;
         task?: string;
         budgetKey?: string;
+        /** See `ExtensionInference.complete`. */
+        schema?: Record<string, unknown>;
       },
     ): Promise<string>;
     /** The plane's `completeWithMeta`. Optional so surface fakes that never

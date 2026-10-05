@@ -407,13 +407,19 @@ export function createLocalLlmProvider(deps: {
       const s = await ensureServer(model);
       touchIdle();
       if (req.kind === 'complete') {
-        const { prompt, maxTokens, profile, system } = req.payload as {
+        const { prompt, maxTokens, profile, system, schema } = req.payload as {
           prompt: string;
           maxTokens?: number;
           profile?: 'default' | 'deterministic';
           system?: string;
+          schema?: Record<string, unknown>;
         };
-        return chatText(s.baseUrl(), prompt, { maxTokens, profile, system });
+        return chatText(s.baseUrl(), prompt, {
+          maxTokens,
+          profile,
+          system,
+          schema,
+        });
       }
       if (req.kind === 'see') {
         const { image, prompt, mime, profile } = req.payload as {

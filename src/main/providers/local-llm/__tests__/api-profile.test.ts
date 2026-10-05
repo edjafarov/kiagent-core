@@ -121,4 +121,79 @@ describe('chatText profiles', () => {
   it('exposes the deterministic ceiling as a named constant', () => {
     expect(DETERMINISTIC_MAX_TOKENS).toBe(512);
   });
+
+  it('constrains the reply to a schema with response_format json_schema', async () => {
+    const fetchMock = mockFetch({
+      choices: [{ message: { content: '{"a":1}' }, finish_reason: 'stop' }],
+    });
+    const schema = { type: 'object', properties: { a: { type: 'integer' } } };
+    await chatText('http://x', 'p', { schema });
+    expect(requestBody(fetchMock).response_format).toEqual({
+      type: 'json_schema',
+      json_schema: { name: 'out', schema },
+    });
+  });
+
+  it('sends no response_format without a schema', async () => {
+    const fetchMock = mockFetch({
+      choices: [{ message: { content: 'A' }, finish_reason: 'stop' }],
+    });
+    await chatText('http://x', 'p');
+    expect(requestBody(fetchMock)).not.toHaveProperty('response_format');
+  });
+
+  function mockError(status: number, json: unknown): void {
+    global.fetch = jest.fn(async () => ({
+      ok: false,
+      status,
+      json: async () => json,
+    })) as unknown as typeof fetch;
+  }
+
+  it('maps a request larger than the context to ContextOverflowError', async () => {
+    mockError(400, {
+      error: {
+        code: 400,
+        type: 'exceed_context_size_error',
+        message:
+          'request (30000 tokens) exceeds the available context size (24576 tokens)',
+      },
+    });
+    await expect(chatText('http://x', 'p')).rejects.toMatchObject({
+      name: 'ContextOverflowError',
+    });
+  });
+
+  it('maps an exhausted shared KV cache to ContextOverflowError', async () => {
+    mockError(500, {
+      error: {
+        code: 500,
+        type: 'server_error',
+        message: 'Context size has been exceeded.',
+      },
+    });
+    await expect(chatText('http://x', 'p')).rejects.toMatchObject({
+      name: 'ContextOverflowError',
+    });
+  });
+
+  it("keeps any other failure a plain error, with the server's message", async () => {
+    mockError(500, { error: { type: 'server_error', message: 'boom' } });
+    const err = await chatText('http://x', 'p').catch((e: Error) => e);
+    expect((err as Error).name).toBe('Error');
+    expect((err as Error).message).toBe('chat request failed: HTTP 500 (boom)');
+  });
+
+  it('survives an error body that is not JSON', async () => {
+    global.fetch = jest.fn(async () => ({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new SyntaxError('not json');
+      },
+    })) as unknown as typeof fetch;
+    await expect(chatText('http://x', 'p')).rejects.toThrow(
+      'chat request failed: HTTP 502',
+    );
+  });
 });

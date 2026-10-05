@@ -506,6 +506,57 @@ describe("createMcpHandler({ transport: 'agent' })", () => {
   });
 });
 
+describe('callTool (in-process, agent transport)', () => {
+  const opts = {
+    transport: 'agent' as const,
+    allowTools: ['search', 'draft_reply', 'send_draft'],
+    client: 'Kia (local)',
+  };
+
+  it('drafts as the agent: a review draft, attributed to the given client', async () => {
+    defaultMode = 'chat';
+    const out = await mcp.callTool(
+      'draft_reply',
+      { document_id: docId, body: 'from local Kia' },
+      opts,
+    );
+    defaultMode = 'review';
+    expect(out.ok).toBe(true);
+    const { draft_id: id } = (out as { ok: true; result: { draft_id: string } })
+      .result;
+    const row = await store.outbox.get(id);
+    expect(row?.createdVia).toBe('mcp-agent');
+    expect(row?.confirmMode).toBe('review');
+    expect(row?.createdBy).toBe('Kia (local)');
+    expect(row?.status).toBe('draft');
+  });
+
+  it('can never send, even with send_draft on its allow-list', async () => {
+    const drafted = await mcp.callTool(
+      'draft_reply',
+      { document_id: docId, body: 'try to send me' },
+      opts,
+    );
+    const { draft_id: id } = (
+      drafted as { ok: true; result: { draft_id: string } }
+    ).result;
+    const out = await mcp.callTool('send_draft', { draft_id: id }, opts);
+    expect(out).toEqual({
+      ok: false,
+      error: expect.stringMatching(/can never send/),
+    });
+    expect((await store.outbox.get(id))?.status).toBe('draft');
+  });
+
+  it('refuses a tool outside its allow-list without running it', async () => {
+    const out = await mcp.callTool('query_sql', { sql: 'select 1' }, opts);
+    expect(out).toEqual({
+      ok: false,
+      error: "tool 'query_sql' is not available",
+    });
+  });
+});
+
 // Unit-level: drive createOutboundRoutes directly against a fake
 // OutboundService (no real store/HTTP server) so the honest-error and
 // terminal-status rendering can be pinned down for cases the integration
