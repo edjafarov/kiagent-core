@@ -1,0 +1,2322 @@
+[
+  {
+    "kind": "question",
+    "id": "tomorrow",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3337,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "",
+              "kind": "calendar",
+              "from_date": "2026-10-06",
+              "to_date": "2026-10-06"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "",
+          "kind": "calendar",
+          "from_date": "2026-10-06",
+          "to_date": "2026-10-06"
+        },
+        "hits": 3
+      }
+    ],
+    "invented": [],
+    "answer": "Tomorrow, Tuesday, 6 Oct 2026, there is a Dentist appointment at 09:00, a Deploy window at 01:00, and a Team standup at 10:00.",
+    "raw": "Tomorrow, Tuesday, 6 Oct 2026, there is a Dentist appointment at 09:00, a Deploy window at 01:00, and a Team standup at 10:00."
+  },
+  {
+    "kind": "question",
+    "id": "today",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2750,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "",
+              "kind": "calendar",
+              "from_date": "2026-10-05",
+              "to_date": "2026-10-05"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "",
+          "kind": "calendar",
+          "from_date": "2026-10-05",
+          "to_date": "2026-10-05"
+        },
+        "hits": 2
+      }
+    ],
+    "invented": [],
+    "answer": "Team standup at 10:00 and Yoga at 18:00 (Europe/Berlin) [S2, S1]",
+    "raw": "Team standup at 10:00 and Yoga at 18:00 (Europe/Berlin) [S2, S1]"
+  },
+  {
+    "kind": "question",
+    "id": "acme-call-when",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4078,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Acme renewal call",
+              "kind": "calendar",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Acme renewal",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme renewal call",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme renewal",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 3
+      }
+    ],
+    "invented": [],
+    "answer": "The Acme renewal call is scheduled for Thursday, 8 Oct 2026, at 15:00 (Europe/Berlin) (S1).",
+    "raw": "The Acme renewal call is scheduled for Thursday, 8 Oct 2026, at 15:00 (Europe/Berlin) (S1)."
+  },
+  {
+    "kind": "question",
+    "id": "acme-final-offer",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3253,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Acme price increase",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Acme pricing offer",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme price increase",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme pricing offer",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      }
+    ],
+    "invented": [],
+    "answer": "The final price increase offered by Acme was 12% (S1).",
+    "raw": "The final price increase offered by Acme was 12% (S1)."
+  },
+  {
+    "kind": "question",
+    "id": "acme-deadline",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4060,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Acme sign deadline",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Acme contract deadline",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme sign deadline",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 4
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme contract deadline",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 4
+      }
+    ],
+    "invented": [],
+    "answer": "Alex, the final offer from Bob Stone for the 3-year term renewal is 12% if the agreement is signed by Thursday, October 8 (Source S1).",
+    "raw": "Alex, the final offer from Bob Stone for the 3-year term renewal is 12% if the agreement is signed by Thursday, October 8 (Source S1)."
+  },
+  {
+    "kind": "question",
+    "id": "offsite-where",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4622,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "November offsite location",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "offsite November venue",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "November offsite location",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 4
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "offsite November venue",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "Offsite in Porto, at Hotel Infante Sagres, from November 18–20.\n\nEmail:\nOffsite in Porto, at Hotel Infante Sagres, from November 18–20. (Source S4)",
+    "raw": "Offsite in Porto, at Hotel Infante Sagres, from November 18–20.\n\nEmail:\nOffsite in Porto, at Hotel Infante Sagres, from November 18–20. (Source S4)"
+  },
+  {
+    "kind": "question",
+    "id": "sarah-pricing",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3668,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Sarah pricing",
+              "kind": "chats",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Sarah pricing",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Sarah pricing",
+          "kind": "chats",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Sarah pricing",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "Sarah Chen stated that the Pro tier at €49 per seat is too expensive and that a volume discount above 50 seats would be needed to move forward (Pricing feedback · mail · Tue, 29 Sept 2026, 14:00).",
+    "raw": "Sarah Chen stated that the Pro tier at €49 per seat is too expensive and that a volume discount above 50 seats would be needed to move forward (Pricing feedback · mail · Tue, 29 Sept 2026, 14:00)."
+  },
+  {
+    "kind": "question",
+    "id": "invoice",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3510,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "CloudHost invoice",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "CloudHost invoice",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "CloudHost invoice",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "CloudHost invoice",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "CloudHost invoice INV-2291 is for €1,840.00 and is due on October 15, 2026. (S1)",
+    "raw": "CloudHost invoice INV-2291 is for €1,840.00 and is due on October 15, 2026. (S1)"
+  },
+  {
+    "kind": "question",
+    "id": "school-holidays",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4355,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "school autumn holidays",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "school holidays dates",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "school autumn holidays",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "school holidays dates",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      }
+    ],
+    "invented": [],
+    "answer": "Autumn holidays run from October 19 to October 30, and school resumes on Monday, November 2 (S1).",
+    "raw": "Autumn holidays run from October 19 to October 30, and school resumes on Monday, November 2 (S1)."
+  },
+  {
+    "kind": "question",
+    "id": "priya-start",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3267,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Priya start",
+              "kind": "calendar",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Priya schedule",
+              "kind": "calendar",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Priya start",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Priya schedule",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      }
+    ],
+    "invented": [],
+    "answer": "Priya starts on November 2, 2026, at 09:00 (Europe/Berlin) (S1, S2).",
+    "raw": "Priya starts on November 2, 2026, at 09:00 (Europe/Berlin) (S1, S2)."
+  },
+  {
+    "kind": "question",
+    "id": "product-sync",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 5110,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "product sync decisions",
+              "kind": "meetings",
+              "from_date": "2026-09-28",
+              "to_date": "2026-10-04"
+            },
+            {
+              "keywords": "product sync notes",
+              "kind": "files",
+              "from_date": "2026-09-28",
+              "to_date": "2026-10-04"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "product sync decisions",
+          "kind": "meetings",
+          "from_date": "2026-09-28",
+          "to_date": "2026-10-04"
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "product sync notes",
+          "kind": "files",
+          "from_date": "2026-09-28",
+          "to_date": "2026-10-04"
+        },
+        "hits": 8
+      }
+    ],
+    "invented": [],
+    "answer": "The decision made in the last product sync was that feature X (bulk export) is delayed to Q1 2027. (S1)",
+    "raw": "The decision made in the last product sync was that feature X (bulk export) is delayed to Q1 2027. (S1)"
+  },
+  {
+    "kind": "question",
+    "id": "acme-actions",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4794,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Acme meeting action items",
+              "kind": "meetings",
+              "from_date": "2026-09-28",
+              "to_date": "2026-10-04"
+            },
+            {
+              "keywords": "Acme meeting notes",
+              "kind": "meetings",
+              "from_date": "2026-09-28",
+              "to_date": "2026-10-04"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme meeting action items",
+          "kind": "meetings",
+          "from_date": "2026-09-28",
+          "to_date": "2026-10-04"
+        },
+        "hits": 2
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme meeting notes",
+          "kind": "meetings",
+          "from_date": "2026-09-28",
+          "to_date": "2026-10-04"
+        },
+        "hits": 3
+      }
+    ],
+    "invented": [],
+    "answer": "The action items from the Acme renewal call on Thu, 10 Sept 2026, were: Bob sends a pricing proposal and Alex checks the budget for a 3-year term (Acme renewal call).\n\nAlex Meyer",
+    "raw": "The action items from the Acme renewal call on Thu, 10 Sept 2026, were: Bob sends a pricing proposal and Alex checks the budget for a 3-year term (Acme renewal call).\n\nAlex Meyer"
+  },
+  {
+    "kind": "question",
+    "id": "globex-qbr-ask",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4537,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Globex QBR",
+              "kind": "meetings",
+              "from_date": "2026-09-28",
+              "to_date": "2026-10-04"
+            },
+            {
+              "keywords": "Globex request QBR",
+              "kind": "files",
+              "from_date": "2026-09-28",
+              "to_date": "2026-10-04"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Globex QBR",
+          "kind": "meetings",
+          "from_date": "2026-09-28",
+          "to_date": "2026-10-04"
+        },
+        "hits": 3
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Globex request QBR",
+          "kind": "files",
+          "from_date": "2026-09-28",
+          "to_date": "2026-10-04"
+        },
+        "hits": 4
+      }
+    ],
+    "invented": [],
+    "answer": "Globex asked for SSO (SAML) as a hard requirement before renewal in the last QBR (S1).\n\nAlex Meyer",
+    "raw": "Globex asked for SSO (SAML) as a hard requirement before renewal in the last QBR (S1).\n\nAlex Meyer"
+  },
+  {
+    "kind": "question",
+    "id": "flight",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3437,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "flight Lisbon",
+              "kind": "calendar",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Lisbon travel",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "flight Lisbon",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Lisbon travel",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      }
+    ],
+    "invented": [],
+    "answer": "The flight booking confirmation LH1234 is for a flight from Munich (MUC) to Lisbon (LIS) on October 14, departing at 08:15, with a return flight LH1235 on October 17 at 18:40 (S1).",
+    "raw": "The flight booking confirmation LH1234 is for a flight from Munich (MUC) to Lisbon (LIS) on October 14, departing at 08:15, with a return flight LH1235 on October 17 at 18:40 (S1)."
+  },
+  {
+    "kind": "question",
+    "id": "q3-revenue",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3926,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Q3 revenue",
+              "kind": "files",
+              "from_date": "2026-07-01",
+              "to_date": "2026-09-30"
+            },
+            {
+              "keywords": "quarterly revenue",
+              "kind": "files",
+              "from_date": "2026-07-01",
+              "to_date": "2026-09-30"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Q3 revenue",
+          "kind": "files",
+          "from_date": "2026-07-01",
+          "to_date": "2026-09-30"
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "quarterly revenue",
+          "kind": "files",
+          "from_date": "2026-07-01",
+          "to_date": "2026-09-30"
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "Q3 2026 revenue was €412,000. (Q3 numbers.xlsx)",
+    "raw": "Q3 2026 revenue was €412,000. (Q3 numbers.xlsx)"
+  },
+  {
+    "kind": "question",
+    "id": "my-discount-ask",
+    "arm": "plan",
+    "ok": false,
+    "missing": [
+      [
+        "10%",
+        "10 %",
+        "10 percent"
+      ]
+    ],
+    "wrong": [],
+    "ms": 4092,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Acme discount",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Acme pricing",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme discount",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 5
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme pricing",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      }
+    ],
+    "invented": [],
+    "answer": "The final offer from Bob Stone for the Acme renewal is a 12% price increase if the 3-year term is signed by Thursday, October 8 (S1).",
+    "raw": "The final offer from Bob Stone for the Acme renewal is a 12% price increase if the 3-year term is signed by Thursday, October 8 (S1)."
+  },
+  {
+    "kind": "question",
+    "id": "board-ask",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2806,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Jordan board meeting",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Jordan board meeting",
+              "kind": "meetings",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Jordan board meeting",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Jordan board meeting",
+          "kind": "meetings",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      }
+    ],
+    "invented": [],
+    "answer": "Jordan needs the Q3 numbers by October 7 (S1).",
+    "raw": "Jordan needs the Q3 numbers by October 7 (S1)."
+  },
+  {
+    "kind": "question",
+    "id": "board-when",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3069,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "count",
+          "searches": [
+            {
+              "keywords": "board meeting",
+              "kind": "calendar",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "board meeting",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 5
+      },
+      {
+        "name": "count",
+        "args": {
+          "keywords": "board meeting",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 11
+      }
+    ],
+    "invented": [],
+    "answer": "Board meeting is scheduled for Fri, 9 Oct 2026, 10:00 (Europe/Berlin) (S1).",
+    "raw": "Board meeting is scheduled for Fri, 9 Oct 2026, 10:00 (Europe/Berlin) (S1)."
+  },
+  {
+    "kind": "question",
+    "id": "dinner",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 5519,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "count",
+          "searches": [
+            {
+              "keywords": "dinner plans",
+              "kind": "calendar",
+              "from_date": "2026-10-05",
+              "to_date": "2026-10-11"
+            },
+            {
+              "keywords": "evening plans",
+              "kind": "calendar",
+              "from_date": "2026-10-05",
+              "to_date": "2026-10-11"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "dinner plans",
+          "kind": "calendar",
+          "from_date": "2026-10-05",
+          "to_date": "2026-10-11"
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "evening plans",
+          "kind": "calendar",
+          "from_date": "2026-10-05",
+          "to_date": "2026-10-11"
+        },
+        "hits": 1
+      },
+      {
+        "name": "count",
+        "args": {
+          "keywords": "dinner plans",
+          "kind": "calendar",
+          "from_date": "2026-10-05",
+          "to_date": "2026-10-11"
+        },
+        "hits": 8
+      }
+    ],
+    "invented": [],
+    "answer": "Dinner is planned for Friday at 7pm at Trattoria Roma (S1).",
+    "raw": "Dinner is planned for Friday at 7pm at Trattoria Roma (S1)."
+  },
+  {
+    "kind": "question",
+    "id": "slack-globex",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3485,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Mia Globex",
+              "kind": "chats",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Mia Globex",
+              "kind": "chats",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Mia Globex",
+          "kind": "chats",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Mia Globex",
+          "kind": "chats",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "Mia Wong stated that Globex says SSO is the blocker for their renewal (S1).",
+    "raw": "Mia Wong stated that Globex says SSO is the blocker for their renewal (S1)."
+  },
+  {
+    "kind": "question",
+    "id": "deploy-when",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4101,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "4.2 deploy",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "deployment 4.2",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "4.2 deploy",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "deployment 4.2",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      }
+    ],
+    "invented": [],
+    "answer": "The 4.2 deploy is scheduled for Tuesday, 6 Oct 2026, 01:00 (Europe/Berlin).\n[S2]",
+    "raw": "The 4.2 deploy is scheduled for Tuesday, 6 Oct 2026, 01:00 (Europe/Berlin).\n[S2]"
+  },
+  {
+    "kind": "question",
+    "id": "count-tomorrow",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2683,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "count",
+          "searches": [
+            {
+              "keywords": "",
+              "kind": "calendar",
+              "from_date": "2026-10-06",
+              "to_date": "2026-10-06"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "",
+          "kind": "calendar",
+          "from_date": "2026-10-06",
+          "to_date": "2026-10-06"
+        },
+        "hits": 3
+      },
+      {
+        "name": "count",
+        "args": {
+          "keywords": "",
+          "kind": "calendar",
+          "from_date": "2026-10-06",
+          "to_date": "2026-10-06"
+        },
+        "hits": 3
+      }
+    ],
+    "invented": [],
+    "answer": "3",
+    "raw": "3"
+  },
+  {
+    "kind": "question",
+    "id": "pricing-2027",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3795,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Pro tier price 2027",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "pricing Pro tier 2027",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Pro tier price 2027",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "pricing Pro tier 2027",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "The proposed Pro tier price for 2027 is €55 per seat (Pricing 2027 proposal).",
+    "raw": "The proposed Pro tier price for 2027 is €55 per seat (Pricing 2027 proposal)."
+  },
+  {
+    "kind": "question",
+    "id": "followup-before",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4965,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Bob renewal proposal",
+              "kind": "mail",
+              "from_date": "2026-09-28",
+              "to_date": "2026-10-07"
+            },
+            {
+              "keywords": "Bob Acme renewal",
+              "kind": "mail",
+              "from_date": "2026-09-28",
+              "to_date": "2026-10-07"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Bob renewal proposal",
+          "kind": "mail",
+          "from_date": "2026-09-28",
+          "to_date": "2026-10-07"
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Bob Acme renewal",
+          "kind": "mail",
+          "from_date": "2026-09-28",
+          "to_date": "2026-10-07"
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "Bob initially proposed a 20% price increase on a 3-year term (Acme renewal).",
+    "raw": "Bob initially proposed a 20% price increase on a 3-year term (Acme renewal)."
+  },
+  {
+    "kind": "question",
+    "id": "draft-acme",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "draftOk": true,
+    "ms": 3762,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "draft_reply",
+          "searches": [
+            {
+              "keywords": "Bob",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Bob",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 4
+      },
+      {
+        "name": "draft_reply",
+        "args": {
+          "id": "01a10d85-6d82-7f24-9c8e-e7feb12b2f57"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "I drafted a reply on \"Acme renewal\". It is waiting in your Outbox; nothing was sent.\n\nBob, we accept the 12% and will sign by Thursday.",
+    "raw": "I drafted a reply on \"Acme renewal\". It is waiting in your Outbox; nothing was sent.\n\nBob, we accept the 12% and will sign by Thursday."
+  },
+  {
+    "kind": "question",
+    "id": "H-onboarding-who",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4815,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "onboarding November 2",
+              "kind": "calendar",
+              "from_date": "2026-11-02",
+              "to_date": "2026-11-02"
+            },
+            {
+              "keywords": "new hire onboarding",
+              "kind": "calendar",
+              "from_date": "2026-11-02",
+              "to_date": "2026-11-02"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "onboarding November 2",
+          "kind": "calendar",
+          "from_date": "2026-11-02",
+          "to_date": "2026-11-02"
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "new hire onboarding",
+          "kind": "calendar",
+          "from_date": "2026-11-02",
+          "to_date": "2026-11-02"
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "Priya Nair and Dana Lee are joining the onboarding on November 2, 2026.\n[S1]",
+    "raw": "Priya Nair and Dana Lee are joining the onboarding on November 2, 2026.\n[S1]"
+  },
+  {
+    "kind": "question",
+    "id": "H-booking-code",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2983,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "flight booking code",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "flight reservation code",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "flight booking code",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "flight reservation code",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "The booking code for the flight is QX7P2M. (S1)",
+    "raw": "The booking code for the flight is QX7P2M. (S1)"
+  },
+  {
+    "kind": "question",
+    "id": "H-return-flight",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3248,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "return flight",
+              "kind": "calendar",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "flight departure",
+              "kind": "calendar",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "return flight",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "flight departure",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "The return flight leaves on October 17 at 18:40 (Booking confirmation LH1234)",
+    "raw": "The return flight leaves on October 17 at 18:40 (Booking confirmation LH1234)"
+  },
+  {
+    "kind": "question",
+    "id": "H-churn",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3699,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "churn Q3",
+              "kind": "files",
+              "from_date": "2026-07-01",
+              "to_date": "2026-09-30"
+            },
+            {
+              "keywords": "customer attrition Q3",
+              "kind": "files",
+              "from_date": "2026-07-01",
+              "to_date": "2026-09-30"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "churn Q3",
+          "kind": "files",
+          "from_date": "2026-07-01",
+          "to_date": "2026-09-30"
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "customer attrition Q3",
+          "kind": "files",
+          "from_date": "2026-07-01",
+          "to_date": "2026-09-30"
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "Churn in Q3 was 3.1% (Q3 numbers.xlsx).",
+    "raw": "Churn in Q3 was 3.1% (Q3 numbers.xlsx)."
+  },
+  {
+    "kind": "question",
+    "id": "H-dentist-where",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3354,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "dentist appointment",
+              "kind": "calendar",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "dental appointment",
+              "kind": "calendar",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "dentist appointment",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "dental appointment",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "Your dentist appointment is at Dr. Weber, Hauptstr. 3 on Tue, 6 Oct 2026, at 09:00 (Europe/Berlin) [S1].",
+    "raw": "Your dentist appointment is at Dr. Weber, Hauptstr. 3 on Tue, 6 Oct 2026, at 09:00 (Europe/Berlin) [S1]."
+  },
+  {
+    "kind": "question",
+    "id": "H-vacation",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 2662,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "vacation days policy",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "annual leave entitlement",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "vacation days policy",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "annual leave entitlement",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 0
+      }
+    ],
+    "invented": [],
+    "answer": "We get 28 vacation days. (Employee handbook.pdf)",
+    "raw": "We get 28 vacation days. (Employee handbook.pdf)"
+  },
+  {
+    "kind": "question",
+    "id": "N-remote",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4099,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "work from home policy",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "remote work schedule",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "work from home policy",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "remote work schedule",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      }
+    ],
+    "invented": [],
+    "answer": "You can work from home up to 3 days a week.\nBest,\n\nAlex Meyer",
+    "raw": "You can work from home up to 3 days a week.\nBest,\n\nAlex Meyer"
+  },
+  {
+    "kind": "question",
+    "id": "N-hotel",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4204,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "offsite hotel",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "offsite accommodation",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "offsite hotel",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "offsite accommodation",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      }
+    ],
+    "invented": [],
+    "answer": "The hotel for the offsite is Hotel Infante Sagres in Porto (Carla Diaz <carla@northwind.io> · 2026-10-03 16:30).",
+    "raw": "The hotel for the offsite is Hotel Infante Sagres in Porto (Carla Diaz <carla@northwind.io> · 2026-10-03 16:30)."
+  },
+  {
+    "kind": "question",
+    "id": "N-pilot-seats",
+    "arm": "plan",
+    "ok": false,
+    "missing": [
+      [
+        "40"
+      ]
+    ],
+    "wrong": [],
+    "ms": 5622,
+    "path": "plan+replan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Acme pilot seats",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Acme pilot capacity",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme pilot seats",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 3
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme pilot capacity",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 4
+      },
+      {
+        "name": "plan",
+        "args": {
+          "action": "count",
+          "searches": [
+            {
+              "keywords": "Acme pilot seats",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Acme pilot capacity",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme pilot seats",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 3
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme pilot capacity",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 4
+      }
+    ],
+    "invented": [],
+    "answer": "I couldn't find that in your memory.",
+    "raw": "I couldn't find that in your memory."
+  },
+  {
+    "kind": "question",
+    "id": "N-school-back",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3538,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "kids school return",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "school start date",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "kids school return",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "school start date",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 3
+      }
+    ],
+    "invented": [],
+    "answer": "The school resumes on Monday, November 2 (Source: [S2]).",
+    "raw": "The school resumes on Monday, November 2 (Source: [S2])."
+  },
+  {
+    "kind": "question",
+    "id": "N-team-tier",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3153,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Team tier cost",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "pricing Team",
+              "kind": "files",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Team tier cost",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 5
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "pricing Team",
+          "kind": "files",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 2
+      }
+    ],
+    "invented": [],
+    "answer": "Team tier costs €19 (Pricing 2027 proposal).",
+    "raw": "Team tier costs €19 (Pricing 2027 proposal)."
+  },
+  {
+    "kind": "question",
+    "id": "N-tokyo",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 3107,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "count",
+          "searches": [
+            {
+              "keywords": "Tokyo office call",
+              "kind": "calendar",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Tokyo meeting",
+              "kind": "calendar",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Tokyo office call",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Tokyo meeting",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 1
+      },
+      {
+        "name": "count",
+        "args": {
+          "keywords": "Tokyo office call",
+          "kind": "calendar",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 11
+      }
+    ],
+    "invented": [],
+    "answer": "Wed, 7 Oct 2026, 00:30 – Wed, 7 Oct 2026, 01:30 (Europe/Berlin) [S1]",
+    "raw": "Wed, 7 Oct 2026, 00:30 – Wed, 7 Oct 2026, 01:30 (Europe/Berlin) [S1]"
+  },
+  {
+    "kind": "question",
+    "id": "N-sso-promise",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4191,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "answer",
+          "searches": [
+            {
+              "keywords": "Globex single sign-on",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            },
+            {
+              "keywords": "Globex SSO deadline",
+              "kind": "mail",
+              "from_date": "",
+              "to_date": ""
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Globex single sign-on",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 5
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Globex SSO deadline",
+          "kind": "mail",
+          "from_date": "",
+          "to_date": ""
+        },
+        "hits": 4
+      }
+    ],
+    "invented": [],
+    "answer": "The promise for Globex single sign-on was by Q4 (Source S3).",
+    "raw": "The promise for Globex single sign-on was by Q4 (Source S3)."
+  },
+  {
+    "kind": "question",
+    "id": "N-bring",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 4380,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": {
+          "action": "draft_reply",
+          "searches": [
+            {
+              "keywords": "dinner Friday",
+              "kind": "mail",
+              "from_date": "2026-10-09",
+              "to_date": "2026-10-09"
+            },
+            {
+              "keywords": "dinner Friday",
+              "kind": "chats",
+              "from_date": "2026-10-09",
+              "to_date": "2026-10-09"
+            }
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "dinner Friday",
+          "kind": "mail",
+          "from_date": "2026-10-09",
+          "to_date": "2026-10-09"
+        },
+        "hits": 1
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "dinner Friday",
+          "kind": "chats",
+          "from_date": "2026-10-09",
+          "to_date": "2026-10-09"
+        },
+        "hits": 1
+      },
+      {
+        "name": "draft_reply",
+        "args": {
+          "id": "01a10d85-6da6-7fed-85de-967a8110df00"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "I drafted a reply on \"Dinner Friday?\". It is waiting in your Outbox; nothing was sent.\n\nSounds good. I'll bring Sam.",
+    "raw": "I drafted a reply on \"Dinner Friday?\". It is waiting in your Outbox; nothing was sent.\n\nSounds good. I'll bring Sam."
+  },
+  {
+    "kind": "brief",
+    "id": "brief-acme",
+    "arm": "plan",
+    "ok": false,
+    "missing": [
+      [
+        "proposal",
+        "budget"
+      ]
+    ],
+    "wrong": [],
+    "ms": 5935,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": [
+          {
+            "keywords": "Acme renewal documents",
+            "kind": "meetings",
+            "from_date": "2026-09-01",
+            "to_date": "2026-10-08"
+          },
+          {
+            "keywords": "Acme renewal notes",
+            "kind": "mail",
+            "from_date": "2026-09-01",
+            "to_date": "2026-10-08"
+          }
+        ]
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme renewal documents",
+          "kind": "meetings",
+          "from_date": "2026-09-01",
+          "to_date": "2026-10-08"
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Acme renewal notes",
+          "kind": "mail",
+          "from_date": "2026-09-01",
+          "to_date": "2026-10-08"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Meeting is to discuss the Acme renewal.\n\nDecisions:\nNone.\n\nCommitments with owners:\nNone.\n\nOpen threads:\nBob proposed a 20% price increase for a 3-year term (S1). Alex countered with a request for 10% (S2). Bob's final offer is 12% for a 3-year term if signed by Thursday, October 8 (S2).\n\nWorth raising:\n*   The current renewal discussion centers on a 12% price increase for a 3-year term, contingent on signing by Oct 8 (S2).\n*   The pilot was successful with 40 active seats (S3).\n*   The previous agreement was to extend the pilot until the renewal is signed (S3)."
+  },
+  {
+    "kind": "brief",
+    "id": "brief-globex",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 5066,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": [
+          {
+            "keywords": "Globex QBR documents",
+            "kind": "meetings",
+            "from_date": "2026-07-12",
+            "to_date": "2026-10-12"
+          },
+          {
+            "keywords": "Globex QBR notes",
+            "kind": "meetings",
+            "from_date": "2026-07-12",
+            "to_date": "2026-10-12"
+          }
+        ]
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Globex QBR documents",
+          "kind": "meetings",
+          "from_date": "2026-07-12",
+          "to_date": "2026-10-12"
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Globex QBR notes",
+          "kind": "meetings",
+          "from_date": "2026-07-12",
+          "to_date": "2026-10-12"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Globex QBR to review adoption, security, and pricing.\n\nDecisions:\nNone.\n\nCommitments with Owners:\nNorthwind to deliver SSO (SAML) by Q4 (S3).\nSarah Chen to share their IdP details (S3).\n\nOpen Threads:\nPricing feedback: Globex team requires a volume discount above 50 seats for the Pro tier (€49 per seat) (S2).\n\nWorth Raising:\n- SSO is a hard requirement for Globex before renewal (S3).\n- Review of adoption and security topics (S3)."
+  },
+  {
+    "kind": "brief",
+    "id": "brief-onboarding",
+    "arm": "plan",
+    "ok": true,
+    "missing": [],
+    "wrong": [],
+    "ms": 5780,
+    "path": "plan",
+    "calls": [
+      {
+        "name": "plan",
+        "args": [
+          {
+            "keywords": "Priya Nair onboarding documents",
+            "kind": "meetings",
+            "from_date": "2026-10-01",
+            "to_date": "2026-11-01"
+          },
+          {
+            "keywords": "Priya Nair notes",
+            "kind": "mail",
+            "from_date": "2026-10-01",
+            "to_date": "2026-11-01"
+          }
+        ]
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Priya Nair onboarding documents",
+          "kind": "meetings",
+          "from_date": "2026-10-01",
+          "to_date": "2026-11-01"
+        }
+      },
+      {
+        "name": "search",
+        "args": {
+          "keywords": "Priya Nair notes",
+          "kind": "mail",
+          "from_date": "2026-10-01",
+          "to_date": "2026-11-01"
+        }
+      }
+    ],
+    "invented": [],
+    "answer": "Meeting is to onboard Priya Nair.\n\nDecisions:\nPriya Nair accepted the backend offer and starts on November 2 (S1, S4).\n\nCommitments with Owners:\nDana Lee will set up Priya's onboarding (S4).\n\nOpen Threads:\n*   Hiring for backend role (S3).\n*   Globex SSO blocker for renewal; SAML planned for Q4 (S4).\n\nWorth Raising:\n*   Offsite planning details (catering, venue, budget, etc.) are background for discussion, nothing is decided (S2).\n*   The offsite has moved from Lisbon to Porto (Nov 18–20) at Hotel Infante Sagres; travel needs rebooking (S2)."
+  }
+]

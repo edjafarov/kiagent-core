@@ -9,12 +9,14 @@ import { openDb } from '../../../db/app-db';
 import { openStore, type CoreStore } from '../../store/store';
 import { ACCOUNTS } from './corpus';
 import { agentBrief, agentTurn, fixedBrief, fixedTurn, llamaLlm, score } from './harness';
+import { planBrief, planTurn } from './plan';
 import { BRIEFS, QUESTIONS } from './questions';
 
 const URL = process.env.EVAL_LLAMA_URL;
 const OUT = process.env.EVAL_OUT ?? os.tmpdir();
 const MODEL = process.env.EVAL_MODEL ?? 'model';
 const ONLY = process.env.EVAL_ONLY?.split(',');
+const ARMS = (process.env.EVAL_ARMS ?? 'fixed,agent').split(',') as Array<'fixed' | 'agent' | 'plan'>;
 
 (URL ? describe : describe.skip)('L0 agentic local eval', () => {
   jest.setTimeout(3 * 60 * 60 * 1000);
@@ -50,11 +52,13 @@ const ONLY = process.env.EVAL_ONLY?.split(',');
     const q = store.read;
     const rows: any[] = [];
     for (const item of QUESTIONS.filter((x) => !ONLY || ONLY.includes(x.id))) {
-      for (const arm of ['fixed', 'agent'] as const) {
+      for (const arm of ARMS) {
         const t =
           arm === 'fixed'
             ? await fixedTurn(llm, q, item.q, item.history)
-            : await agentTurn(llm, q, item.q, item.history);
+            : arm === 'plan'
+              ? await planTurn(llm, q, item.q, item.history)
+              : await agentTurn(llm, q, item.q, item.history);
         const s = score(t.answer, item.all, item.none);
         let ok = s.ok;
         let draftOk: boolean | undefined;
@@ -71,8 +75,8 @@ const ONLY = process.env.EVAL_ONLY?.split(',');
     }
     for (const b of BRIEFS.filter((x) => !ONLY || ONLY.includes(x.id))) {
       const ev = await q.document(ext.get(b.event) as any);
-      for (const arm of ['fixed', 'agent'] as const) {
-        const t = arm === 'fixed' ? await fixedBrief(llm, q, ev) : await agentBrief(llm, q, ev);
+      for (const arm of ARMS) {
+        const t = arm === 'fixed' ? await fixedBrief(llm, q, ev) : arm === 'plan' ? await planBrief(llm, q, ev) : await agentBrief(llm, q, ev);
         const s = score(t.answer, b.all, b.none);
         rows.push({ kind: 'brief', id: b.id, arm, ...s, ms: t.ms, path: t.path, calls: t.calls, invented: t.invented, answer: t.answer });
         console.log(`${MODEL} ${arm.padEnd(6)} ${s.ok ? 'PASS' : 'FAIL'} ${b.id} ${t.ms}ms ${t.path}`);

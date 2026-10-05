@@ -174,6 +174,16 @@ export const QUESTIONS: Question[] = [
   { id: 'H-churn', q: 'What was our churn in Q3?', all: [['3.1']] },
   { id: 'H-dentist-where', q: 'Where is my dentist appointment?', all: [['hauptstr', 'weber']] },
   { id: 'H-vacation', q: 'How many vacation days do we get?', all: [['28']] },
+  // Held-out 2 (written before the plan-then-run search ladder was measured;
+  // paraphrases and synonyms on purpose).
+  { id: 'N-remote', q: 'How many days a week can I work from home?', all: [['3', 'three']] },
+  { id: 'N-hotel', q: 'Which hotel are we staying at for the offsite?', all: [['infante sagres']] },
+  { id: 'N-pilot-seats', q: 'How many seats did the Acme pilot have?', all: [['40']] },
+  { id: 'N-school-back', q: 'When do the kids go back to school after the break?', all: [['nov 2', 'november 2', '2 nov', '2. nov', '11-02', '02.11']] },
+  { id: 'N-team-tier', q: 'What does the Team tier cost?', all: [['19']] },
+  { id: 'N-tokyo', q: 'When is my call with the Tokyo office, my time?', all: [['00:30', '0:30', '12:30 am', '12:30am']] },
+  { id: 'N-sso-promise', q: 'By when did we promise Globex single sign-on?', all: [['q4']] },
+  { id: 'N-bring', q: 'Who should I bring to dinner on Friday?', all: [['sam']] },
 ];
 
 /** Pre-meeting brief fixtures: the calendar event to brief, and the facts a
