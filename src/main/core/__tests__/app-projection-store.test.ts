@@ -40,7 +40,16 @@ const extras = {
   prefs: () => DEFAULT_PREFS,
   identity: async () => null,
   mcp: () => ({ port: null, clients: 0 }),
-  processing: async () => ({ pending: 0, done: 0, skipped: 0, failed: 0 }),
+  processing: async () => ({
+    pending: 0,
+    done: 0,
+    skipped: 0,
+    failed: 0,
+    lane: 'open' as const,
+    waiting: null,
+    active: [],
+    download: null,
+  }),
   extensions: () => [],
 };
 

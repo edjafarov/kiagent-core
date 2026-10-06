@@ -15,7 +15,16 @@ const extras = {
   prefs: () => DEFAULT_PREFS,
   identity: async () => null,
   mcp: () => ({ port: 7421, clients: 0 }),
-  processing: async () => ({ pending: 0, done: 0, skipped: 0, failed: 0 }),
+  processing: async () => ({
+    pending: 0,
+    done: 0,
+    skipped: 0,
+    failed: 0,
+    lane: 'open' as const,
+    waiting: null,
+    active: [],
+    download: null,
+  }),
   extensions: () => [],
 };
 
@@ -88,7 +97,16 @@ describe('appProjection.apply', () => {
   const projection = createAppProjection(extras);
   const base = {
     accounts: [{ account: account('a1'), docCount: 0, recent: [] }],
-    processing: { pending: 0, done: 0, skipped: 0, failed: 0 },
+    processing: {
+      pending: 0,
+      done: 0,
+      skipped: 0,
+      failed: 0,
+      lane: 'open' as const,
+      waiting: null,
+      active: [],
+      download: null,
+    },
     mcp: { port: null, clients: 0 },
     identity: null,
     prefs: DEFAULT_PREFS,
@@ -221,7 +239,16 @@ describe('account-cursor-not-projected', () => {
   it('apply strips the cursor on update and on insert', () => {
     const base = {
       accounts: [{ account: account('a1'), docCount: 3, recent: [] }],
-      processing: { pending: 0, done: 0, skipped: 0, failed: 0 },
+      processing: {
+        pending: 0,
+        done: 0,
+        skipped: 0,
+        failed: 0,
+        lane: 'open' as const,
+        waiting: null,
+        active: [],
+        download: null,
+      },
       mcp: { port: null, clients: 0 },
       identity: null,
       prefs: DEFAULT_PREFS,
@@ -251,7 +278,16 @@ describe('appProjection archived → live transitions', () => {
   const projection = createAppProjection(extras);
   const base = {
     accounts: [{ account: account('a1'), docCount: 0, recent: [] }],
-    processing: { pending: 0, done: 0, skipped: 0, failed: 0 },
+    processing: {
+      pending: 0,
+      done: 0,
+      skipped: 0,
+      failed: 0,
+      lane: 'open' as const,
+      waiting: null,
+      active: [],
+      download: null,
+    },
     mcp: { port: null, clients: 0 },
     identity: null,
     prefs: DEFAULT_PREFS,

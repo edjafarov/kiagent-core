@@ -14,12 +14,9 @@ export interface AppStateExtras {
   prefs(): AppPrefs;
   identity(): Promise<Identity | null>;
   mcp(): { port: number | null; clients: number };
-  processing(): Promise<{
-    pending: number;
-    done: number;
-    skipped: number;
-    failed: number;
-  }>;
+  /** Ledger counts plus main's live status fields (lane, waiting, active,
+   *  download) — a re-init must carry those through, not reset them. */
+  processing(): Promise<AppState['processing']>;
   extensions(): ExtensionSnapshot[];
   /** The account's live count and archived ids from one read snapshot
    *  (store-level). When absent, init() counts through `read.count` and starts

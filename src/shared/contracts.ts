@@ -375,6 +375,10 @@ export interface Store {
   read: Query;
   /** OCR/VLM queue + processed counts — drives Settings → Local processing. */
   extractionStats(): Promise<ExtractionStats>;
+  /** Scans/images not yet read: visually eligible, size-gated, and either
+   *  their current change has no terminal outcome or any of their changes is
+   *  still deferred for `consumer` (the vision worker's ledger consumer). */
+  visualWaitingCount(consumer: string): Promise<number>;
   /** Tail the change log from a position. Live: keeps yielding. */
   feed(
     after: Seq,
@@ -1600,6 +1604,15 @@ export interface AppState {
     done: number;
     skipped: number;
     failed: number;
+    /** Why background local work is (not) running right now. */
+    lane: LaneState;
+    /** Scans/images not yet read (`CoreStore.visualWaitingCount`); null
+     *  until the first count lands — never read it as 0. */
+    waiting: number | null;
+    /** Local model calls executing now, in start order. */
+    active: ActiveCall[];
+    /** A local model download in flight, if any. */
+    download: { providerId: string; pct: number } | null;
   };
   mcp: { port: number | null; clients: number };
   identity: Identity | null;
@@ -1670,6 +1683,14 @@ export interface SchedulerEnv {
 /** Why the background inference lane is (or isn't) open right now. Every
  *  non-'open' value is a reason the UI can name — without this, queued work
  *  parked on a closed lane looks like a dead pipeline. */
+/** A local model call kind, as the inference plane names them. */
+export type ActiveCallOp = 'complete' | 'see' | 'read' | 'hear';
+/** One local model call executing now (AppState.processing.active). */
+export interface ActiveCall {
+  op: ActiveCallOp;
+  task: string | null;
+}
+
 export type LaneState =
   | 'open'
   | 'disabled'

@@ -17,7 +17,16 @@ import type { RendererApi } from '@shared/ipc';
 function makeAppState(): AppState {
   return {
     accounts: [],
-    processing: { pending: 0, done: 0, skipped: 0, failed: 0 },
+    processing: {
+      pending: 0,
+      done: 0,
+      skipped: 0,
+      failed: 0,
+      lane: 'open',
+      waiting: null,
+      active: [],
+      download: null,
+    },
     mcp: { port: null, clients: 0 },
     identity: null,
     prefs: {

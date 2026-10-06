@@ -1038,6 +1038,10 @@ app
           done: initialLedger.done,
           skipped: initialLedger.skip,
           failed: initialLedger.failed,
+          lane: backgroundLaneState(p),
+          waiting: null,
+          active: [],
+          download: null,
         },
         mcp: { port: mcp?.port ?? null, clients: 0 },
         identity: await p.store.identity.get(),
@@ -1055,6 +1059,7 @@ app
       processing: async () => {
         const all = await p.store.ledgerCountsAll(p.engine.activeConsumers());
         return {
+          ...lastPush.state.processing,
           pending: all.pending,
           done: all.done,
           skipped: all.skip,
@@ -1316,7 +1321,9 @@ app
           prev.skipped !== processing.skipped ||
           prev.failed !== processing.failed
         ) {
-          patchState({ processing });
+          patchState({
+            processing: { ...lastPush.state.processing, ...processing },
+          });
         }
       } catch (err) {
         log.warn(`processing-counter refresh failed: ${String(err)}`);

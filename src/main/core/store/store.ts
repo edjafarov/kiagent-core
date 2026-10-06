@@ -1034,6 +1034,10 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       )) as Array<{ accountId: AccountId; count: number }>;
     },
 
+    async visualWaitingCount() {
+      throw new Error('visualWaitingCount: not implemented');
+    },
+
     async extractionStats() {
       // pendingOcr is a display-level approximation of the vision worker's
       // classify eligibility (workers/vision/classify.ts) — it ignores size
