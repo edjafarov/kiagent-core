@@ -504,7 +504,7 @@ export interface Invokes {
    *  for the "Some tasks are sent to …" line. */
   'inference:routes': {
     req: void;
-    res: Array<{ task: string; providerName: string }>;
+    res: Array<{ task: string; providerName: string; remote: boolean }>;
   };
   'inference:providers': {
     req: void;
@@ -512,6 +512,8 @@ export interface Invokes {
       id: string;
       supports: Array<'complete' | 'see' | 'read' | 'hear'>;
       status: ProviderStatus;
+      /** Off this computer (the provider's `remote` flag). */
+      remote: boolean;
       /** True only for providers the main process can install on demand
        *  (local-llm, local-asr) — the renderer gates Download/Cancel/Retry on
        *  this, NOT on status (apple-vision reports non-ready statuses but has

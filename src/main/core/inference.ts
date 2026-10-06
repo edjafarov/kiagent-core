@@ -113,7 +113,7 @@ export interface InferencePlane extends Inference {
   setRoute(task: string, providerId: string | null): void;
   /** The current routes, for a user-facing "some tasks leave this
    *  machine" line. */
-  routes(): Array<{ task: string; providerName: string }>;
+  routes(): Array<{ task: string; providerName: string; remote: boolean }>;
   /** Scheduler-controlled: false closes the background lane (battery, user
    *  active, outside the processing window) — background requests then fail
    *  fast with LaneClosedError. Interactive always flows. */
@@ -598,7 +598,11 @@ export function createInference(
     routes: () =>
       [...routeTable].map(([task, id]) => {
         const p = providers.find((x) => x.id === id);
-        return { task, providerName: p?.name ?? id };
+        return {
+          task,
+          providerName: p?.name ?? id,
+          remote: p ? p.remote === true : true,
+        };
       }),
     setBackgroundOpen(open) {
       if (open === backgroundOpen) return;

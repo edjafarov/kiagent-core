@@ -50,6 +50,7 @@ import { createActivityLog, type ActivityLog } from './core/mcp/activity';
 import { startMcp } from './core/mcp/server';
 import type { McpServerHandle } from './core/mcp/server';
 import { markOnboardingOnce } from './core/prefs';
+import { createProcessingStatus } from './core/processing-status';
 import { maybeOfferMoveToApplications } from './move-to-applications';
 import { createGitHubCache } from './marketplace/github-cache';
 import { createGitHubSource } from './marketplace/github-source';
@@ -712,6 +713,7 @@ function registerIpc(
         id: prov.id,
         supports: prov.supports,
         status: prov.status(),
+        remote: prov.remote === true,
         installable: installable.installable(prov.id),
         ...(prov.id === 'local-asr'
           ? { variants: bundled.localAsr.variants() }
@@ -1296,6 +1298,29 @@ app
       applyLoginItemSettings(prefs.launchAtLogin);
     });
     applyLoginItemSettings(p.prefs.get().launchAtLogin);
+    const processingStatus = createProcessingStatus({
+      laneState: () => backgroundLaneState(p),
+      countWaiting: () => p.store.visualWaitingCount(VISION_CONSUMER),
+      providers: () =>
+        p.inference.providers().map((prov) => ({
+          id: prov.id,
+          remote: prov.remote === true,
+          status: prov.status(),
+        })),
+      activeCalls: p.inference.activeCalls,
+      wakeWorkers: async () => {
+        await Promise.allSettled([
+          p.scheduler.trigger('worker:vision'),
+          p.scheduler.trigger('worker:audio'),
+        ]);
+      },
+      patch: (partial) =>
+        patchState({
+          processing: { ...lastPush.state.processing, ...partial },
+        }),
+      warn: (msg) => log.warn(`processing-status: ${msg}`),
+    });
+    processingStatus.start();
     setInterval(async () => {
       // ledgerCountsAll is now an async worker RPC — a transient read failure
       // (e.g. a dead/restarting DB worker) must not escape as an unhandled
@@ -1308,6 +1333,7 @@ app
         // so a 'battery' -> 'disabled' transition (both closed) still
         // emits. refreshLane() itself never throws.
         extensionsPlatform?.refreshLane();
+        processingStatus.tick();
         const all = await p.store.ledgerCountsAll(p.engine.activeConsumers());
         const processing = {
           pending: all.pending,

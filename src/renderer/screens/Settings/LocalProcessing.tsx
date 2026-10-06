@@ -82,25 +82,25 @@ function modelSummary(override: string, catalog: ModelsRes | null): string {
   return chosen ? `${chosen.label}, ${gb(chosen.totalBytes)} GB` : override;
 }
 
-/** Items waiting for local processing. One expression, so a product build
- *  that counts more kinds of waiting work patches exactly this line. */
-function waitingCount(stats: ExtractionStatsRes): number {
-  return stats.pendingOcr;
-}
-
-/** The pane's first line: ready or paused (and why), waiting, done. */
-function statusLine(stats: ExtractionStatsRes): {
+/** The pane's first line: ready or paused (and why), waiting, done.
+ *  `waiting` and `lane` are the pushed app-state values, so this line and
+ *  the sidebar indicator always show the same number (core
+ *  `visualWaitingCount`). */
+function statusLine(
+  stats: ExtractionStatsRes,
+  waiting: number,
+  lane: LaneState,
+): {
   tone: 'ok' | 'work' | 'off';
   text: string;
 } {
-  const waiting = waitingCount(stats);
-  const paused = pausedLine(stats.lane);
+  const paused = pausedLine(lane);
   const counts = `${waiting.toLocaleString()} ${
     waiting === 1 ? 'item' : 'items'
   } waiting · ${stats.processed.toLocaleString()} read or transcribed so far`;
   if (!paused) return { tone: 'ok', text: `Ready · ${counts}` };
   return {
-    tone: stats.lane === 'disabled' ? 'off' : 'work',
+    tone: lane === 'disabled' ? 'off' : 'work',
     text: `${paused.replace(/\.$/, '')} · ${counts}`,
   };
 }
@@ -123,6 +123,7 @@ const PROVIDER_NAMES: Record<string, string> = {
 export function LocalProcessing(): React.ReactElement {
   const processing = useAppState((s) => s.prefs.processing);
   const models = useAppState((s) => s.prefs.models);
+  const live = useAppState((s) => s.processing);
   const [providers, setProviders] = useState<ProviderRow[] | null>(null);
   const [routedTo, setRoutedTo] = useState<string[]>([]);
   const [providersError, setProvidersError] = useState(false);
@@ -214,12 +215,12 @@ export function LocalProcessing(): React.ReactElement {
 
   return (
     <>
-      {stats == null ? (
+      {stats == null || live.waiting == null ? (
         <Busy label="Loading processing status…" />
       ) : (
         <div className="set-status">
-          <Status tone={statusLine(stats).tone}>
-            {statusLine(stats).text}
+          <Status tone={statusLine(stats, live.waiting, live.lane).tone}>
+            {statusLine(stats, live.waiting, live.lane).text}
           </Status>
         </div>
       )}

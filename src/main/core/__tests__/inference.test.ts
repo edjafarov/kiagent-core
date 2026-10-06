@@ -581,11 +581,21 @@ describe('remote providers and per-task routes', () => {
     ).resolves.toBe('local:complete');
   });
 
+  it('routes() reports locality from the provider, and remote for an unknown id', () => {
+    const { plane } = setup(remote({ remote: false, name: 'Mine' }));
+    plane.setRoute('task.a', 'r');
+    plane.setRoute('task.b', 'ghost');
+    expect(plane.routes()).toEqual([
+      { task: 'task.a', providerName: 'Mine', remote: false },
+      { task: 'task.b', providerName: 'ghost', remote: true },
+    ]);
+  });
+
   it('the disposer clears routes naming it', async () => {
     const { plane, off } = setup();
     plane.setRoute('task.a', 'r');
     expect(plane.routes()).toEqual([
-      { task: 'task.a', providerName: 'Remote' },
+      { task: 'task.a', providerName: 'Remote', remote: true },
     ]);
     const g = plane.generation();
     off();

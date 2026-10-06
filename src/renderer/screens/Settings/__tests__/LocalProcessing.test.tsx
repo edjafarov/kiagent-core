@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import type { AppPrefs } from '@shared/contracts';
+import type { AppPrefs, LaneState } from '@shared/contracts';
 import type { Invokes } from '@shared/ipc';
 import { LocalProcessing, pausedLine } from '../LocalProcessing';
 
@@ -61,8 +61,15 @@ const mockPrefs: {
   models: { override: 'auto', autoInstall: true },
 };
 
+/** The pushed app-state processing slice the status line reads. */
+const mockLive: { waiting: number | null; lane: LaneState } = {
+  waiting: 3,
+  lane: 'open',
+};
+
 jest.mock('@renderer/state/app-state', () => ({
-  useAppState: (sel: (s: unknown) => unknown) => sel({ prefs: mockPrefs }),
+  useAppState: (sel: (s: unknown) => unknown) =>
+    sel({ prefs: mockPrefs, processing: mockLive }),
 }));
 
 const invoke = jest.fn();
@@ -71,6 +78,8 @@ beforeEach(() => {
   invoke.mockReset();
   mockPrefs.processing = { enabled: true, window: 'always' };
   mockPrefs.models = { override: 'auto', autoInstall: true };
+  mockLive.waiting = 3;
+  mockLive.lane = 'open';
   (window as unknown as { kiagent: unknown }).kiagent = {
     invoke,
     on: () => () => {},
@@ -79,7 +88,8 @@ beforeEach(() => {
 
 function statsRes(overrides: Partial<StatsRes> = {}): StatsRes {
   return {
-    pendingOcr: 3,
+    pendingOcr: 99, // pulled value: must NOT reach the status line
+    waiting: 99,
     processed: 7,
     recent: [],
     lane: 'open',
@@ -96,6 +106,7 @@ function downloadingProvider(): ProviderRow {
     id: 'local-llm',
     supports: [],
     status: { downloading: { pct: 50 } },
+    remote: false,
     installable: true,
   };
 }
@@ -108,7 +119,7 @@ function mockInvoke(
     providers?: ProviderRow[];
     stats?: StatsRes | Promise<StatsRes>;
     models?: ModelsRes;
-    routes?: Array<{ task: string; providerName: string }>;
+    routes?: Array<{ task: string; providerName: string; remote: boolean }>;
   } = {},
 ): void {
   const providers = opts.providers ?? [];
@@ -139,10 +150,31 @@ describe('LocalProcessing: status line', () => {
     const status = await screen.findByRole('status');
     expect(status).toHaveTextContent('Loading processing status…');
 
-    resolveStats(statsRes({ pendingOcr: 3, processed: 7 }));
+    resolveStats(statsRes({ processed: 7 }));
 
     expect(await screen.findByText(READY_LINE)).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  test('shows the pushed waiting count, not the pulled stats value', async () => {
+    mockLive.waiting = 12;
+    mockInvoke({ stats: statsRes({ waiting: 99, pendingOcr: 99 }) });
+    render(<LocalProcessing />);
+    expect(
+      await screen.findByText(
+        'Ready · 12 items waiting · 7 read or transcribed so far',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  test('a null pushed waiting count keeps the loading treatment', async () => {
+    mockLive.waiting = null;
+    mockInvoke();
+    render(<LocalProcessing />);
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Loading processing status…',
+    );
+    expect(screen.queryByText(/items waiting/)).not.toBeInTheDocument();
   });
 
   test.each([
@@ -151,7 +183,9 @@ describe('LocalProcessing: status line', () => {
   ] as const)(
     'a closed lane (%s) is never Ready, even with nothing waiting',
     async (lane, want) => {
-      mockInvoke({ stats: statsRes({ lane, pendingOcr: 0 }) });
+      mockLive.lane = lane;
+      mockLive.waiting = 0;
+      mockInvoke();
       render(<LocalProcessing />);
       expect(
         await screen.findByText(new RegExp(`^${want}`)),
@@ -161,7 +195,9 @@ describe('LocalProcessing: status line', () => {
   );
 
   test('a closed lane with work waiting says why it is paused', async () => {
-    mockInvoke({ stats: statsRes({ lane: 'until-night', pendingOcr: 1 }) });
+    mockLive.lane = 'until-night';
+    mockLive.waiting = 1;
+    mockInvoke();
     render(<LocalProcessing />);
     expect(
       await screen.findByText(
@@ -256,11 +292,18 @@ describe('LocalProcessing: providers only when one needs the user', () => {
   test('healthy providers are not listed; the footnote says so', async () => {
     mockInvoke({
       providers: [
-        { id: 'local-llm', supports: [], status: 'ready', installable: true },
+        {
+          id: 'local-llm',
+          supports: [],
+          status: 'ready',
+          remote: false,
+          installable: true,
+        },
         {
           id: 'local-asr',
           supports: ['hear'],
           status: 'standby',
+          remote: false,
           installable: true,
         },
       ],
@@ -283,6 +326,7 @@ describe('LocalProcessing: providers only when one needs the user', () => {
           id: 'local-asr',
           supports: ['hear'],
           status: 'standby',
+          remote: false,
           installable: true,
         },
       ],
@@ -307,7 +351,13 @@ describe('LocalProcessing: providers only when one needs the user', () => {
   test('with automatic download on, a standby model can still be fetched from the Model section', async () => {
     mockInvoke({
       providers: [
-        { id: 'local-llm', supports: [], status: 'standby', installable: true },
+        {
+          id: 'local-llm',
+          supports: [],
+          status: 'standby',
+          remote: false,
+          installable: true,
+        },
       ],
     });
     render(<LocalProcessing />);
@@ -332,6 +382,7 @@ describe('LocalProcessing: providers only when one needs the user', () => {
           id: 'apple-vision',
           supports: ['read'],
           status: { error: 'x' },
+          remote: false,
           installable: false,
         },
       ],
@@ -355,6 +406,7 @@ describe('LocalProcessing: providers only when one needs the user', () => {
             error:
               'No text-recognition language is installed. Add a language in Windows Settings → Time & language → Language & region (one with Optical character recognition), then restart KIAgent.',
           },
+          remote: false,
           installable: false,
         },
       ],
@@ -371,6 +423,7 @@ describe('LocalProcessing: providers only when one needs the user', () => {
           id: 'local-asr',
           supports: ['hear'],
           status: { downloading: { pct: 40 } },
+          remote: false,
           installable: true,
         },
       ],
@@ -438,8 +491,8 @@ describe('LocalProcessing: tasks routed off this computer', () => {
   test('a route names its provider and qualifies the promise', async () => {
     mockInvoke({
       routes: [
-        { task: 'task.a', providerName: 'Remote' },
-        { task: 'task.b', providerName: 'Remote' },
+        { task: 'task.a', providerName: 'Remote', remote: true },
+        { task: 'task.b', providerName: 'Remote', remote: true },
       ],
     });
     render(<LocalProcessing />);
