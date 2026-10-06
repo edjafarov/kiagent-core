@@ -12,6 +12,13 @@ import type { ImageDownscaler } from './vision/downscale';
 import { pickRasterizer } from './vision/rasterize';
 import { createVisionWorker } from './vision/vision-worker';
 
+/** The vision worker's ledger consumer ("worker:vision:v1"), derived from the
+ *  same name/version createVisionWorker returns (keep in sync). */
+export const VISION_CONSUMER = workerConsumerName({
+  name: 'vision',
+  version: 1,
+} as Worker);
+
 export function attachBundledWorkers(
   platform: CorePlatform,
   deps: {

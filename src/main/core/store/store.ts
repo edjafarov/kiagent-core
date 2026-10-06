@@ -35,6 +35,7 @@ import {
 import { lastErrorAssignment } from './last-error';
 import { createOutboxStore, type OutboxStore } from './outbox';
 import {
+  ACTIONABLE_VISUAL_SIZE_WHERE,
   EXTRACTED_DOCS_WHERE,
   PENDING_VISUAL_WHERE,
   repopulateSearchIndex,
@@ -57,6 +58,19 @@ import {
 // count falls back to the scan instead of erroring.
 export const PENDING_VISUAL_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_pending_visual WHERE ${PENDING_VISUAL_WHERE}`;
 export const EXTRACTED_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_extracted WHERE ${EXTRACTED_DOCS_WHERE}`;
+/** Current change unresolved: no outcome yet, or deferred. */
+export const VISUAL_WAITING_CURRENT_SQL = `SELECT documents.id FROM documents INDEXED BY docs_pending_visual
+  LEFT JOIN work_ledger l ON l.consumer = ? AND l.seq = documents.seq
+  WHERE ${PENDING_VISUAL_WHERE} AND ${ACTIONABLE_VISUAL_SIZE_WHERE}
+    AND (l.outcome IS NULL OR l.outcome = 'deferred')`;
+/** Any change still deferred — driven from the small partial ledger index,
+ *  never by scanning `changes` (no index on ref_id). The redundant
+ *  `IS NOT 'skip'` lets the planner prove the partial index's WHERE. */
+export const VISUAL_WAITING_DEFERRED_SQL = `SELECT documents.id FROM work_ledger l INDEXED BY work_ledger_active
+  JOIN changes c ON c.seq = l.seq AND c.kind = 'document'
+  JOIN documents ON documents.id = c.ref_id
+  WHERE l.consumer = ? AND l.outcome = 'deferred' AND l.outcome IS NOT 'skip'
+    AND ${PENDING_VISUAL_WHERE} AND ${ACTIONABLE_VISUAL_SIZE_WHERE}`;
 /** Non-skip ledger outcomes, counted through the partial work_ledger_active
  *  index (schema.ts); its WHERE must stay textually identical to the index's. */
 export const LEDGER_ACTIVE_COUNT_SQL = `SELECT outcome, COUNT(*) AS c FROM work_ledger WHERE outcome IS NOT 'skip' GROUP BY outcome`;
@@ -1034,8 +1048,25 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       )) as Array<{ accountId: AccountId; count: number }>;
     },
 
-    async visualWaitingCount() {
-      throw new Error('visualWaitingCount: not implemented');
+    async visualWaitingCount(consumer) {
+      const sql = (pinned: boolean) => {
+        const strip = (q: string) =>
+          pinned
+            ? q
+            : q
+                .replace(' INDEXED BY docs_pending_visual', '')
+                .replace(' INDEXED BY work_ledger_active', '');
+        return `SELECT COUNT(*) AS c FROM (${strip(VISUAL_WAITING_CURRENT_SQL)} UNION ${strip(VISUAL_WAITING_DEFERRED_SQL)})`;
+      };
+      try {
+        return (
+          (await db.all(sql(true), [consumer, consumer]))[0] as { c: number }
+        ).c;
+      } catch {
+        return (
+          (await db.all(sql(false), [consumer, consumer]))[0] as { c: number }
+        ).c;
+      }
     },
 
     async extractionStats() {

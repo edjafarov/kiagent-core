@@ -37,6 +37,17 @@ export const PENDING_VISUAL_WHERE = `json_extract(metadata,'$.extraction') IS NU
              OR lower(json_extract(metadata,'$.ext')) = 'pdf')
             AND json_extract(metadata,'$.conversion.status') IN (${PDF_OCR_AFTER_STATUSES.map((s) => `'${s}'`).join(',')})))))`;
 
+/** The vision classifier skips images under 8 KiB (TINY_IMAGE_BYTES) without
+ *  writing a marker; counting them would keep "waiting" above 0 forever.
+ *  PDFs are exempt (their size says nothing about page images). */
+export const ACTIONABLE_VISUAL_SIZE_WHERE = `(
+  COALESCE(json_extract(metadata,'$.sizeBytes'),json_extract(metadata,'$.size')) IS NULL
+  OR COALESCE(json_extract(metadata,'$.sizeBytes'),json_extract(metadata,'$.size')) >= 8192
+  OR json_extract(metadata,'$.mime') = 'application/pdf'
+  OR lower(json_extract(metadata,'$.ext')) = 'pdf'
+  OR lower(json_extract(metadata,'$.filename')) LIKE '%.pdf'
+  OR lower(title) LIKE '%.pdf')`;
+
 const QUERY_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [
   {
     name: 'docs_extracted',

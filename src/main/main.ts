@@ -118,7 +118,7 @@ import { createTray } from './tray';
 import type { TrayMenuController } from './tray-menu';
 import { installCloseToTray } from './close-to-tray';
 import { resolveHtmlPath } from './util';
-import { attachBundledWorkers } from './workers';
+import { attachBundledWorkers, VISION_CONSUMER } from './workers';
 import { makeNativeImageDownscaler } from './workers/vision/downscale';
 
 let mainWindow: BrowserWindow | null = null;
@@ -739,6 +739,7 @@ function registerIpc(
     },
     'inference:stats': async () => ({
       ...(await p.store.extractionStats()),
+      waiting: await p.store.visualWaitingCount(VISION_CONSUMER),
       lane: backgroundLaneState(p),
     }),
     'inference:models': async () => {
