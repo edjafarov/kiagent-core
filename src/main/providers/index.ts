@@ -106,6 +106,7 @@ export function registerBundledProviders(
     asrModelsDir: path.join(opts.dataDir, 'models', 'asr'),
     prefs: platform.prefs,
     log: log('inference'),
+    activeCalls: platform.inference.activeCalls,
   });
   platform.inference.register(localAsr);
 

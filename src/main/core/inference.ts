@@ -1,10 +1,12 @@
 import {
   ModelChangedError,
+  type ActiveCallOp,
   type Inference,
   type InferenceProvider,
   type Lane,
 } from '@shared/contracts';
 
+import { createActiveCalls, type ActiveCalls } from './active-calls';
 import type { LogSink } from './engine/engine';
 
 /** The two decoding profiles a caller can ask for. `'deterministic'` is for
@@ -29,6 +31,9 @@ export interface CompletionMeta {
 }
 
 export interface InferencePlane extends Inference {
+  /** Local calls executing right now (complete/see/read; `hear` is recorded
+   *  by the local-ASR pump). Remote providers never appear. */
+  readonly activeCalls: ActiveCalls;
   complete(
     prompt: string,
     opts?: {
@@ -216,6 +221,22 @@ export function createInference(
   config?: { generationSeed?: number },
 ): InferencePlane {
   const providers: InferenceProvider[] = [];
+  const activeCalls = createActiveCalls();
+  /** Executing local calls only; remote providers are not this indicator's business. */
+  const tracked = async <T>(
+    p: InferenceProvider,
+    op: ActiveCallOp,
+    task: string | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    if (p.remote) return fn();
+    const leave = activeCalls.enter(op, task ?? null);
+    try {
+      return await fn();
+    } finally {
+      leave();
+    }
+  };
   const routeTable = new Map<string, string>();
   let backgroundOpen = true;
   const laneSubs = new Set<(open: boolean) => void>();
@@ -407,21 +428,23 @@ export function createInference(
             ? recorded.modelId
             : modelId
           : undefined;
-      const raw = await p.handle({
-        kind: 'complete',
-        payload: {
-          prompt,
-          maxTokens: opts?.maxTokens,
-          profile,
-          system: opts?.system,
-          generation: opts?.generation,
-          expectModelId,
-          task: opts?.task,
-          budgetKey: opts?.budgetKey,
-          schema: opts?.schema,
-        },
-        lane,
-      });
+      const raw = await tracked(p, 'complete', task, () =>
+        p.handle({
+          kind: 'complete',
+          payload: {
+            prompt,
+            maxTokens: opts?.maxTokens,
+            profile,
+            system: opts?.system,
+            generation: opts?.generation,
+            expectModelId,
+            task: opts?.task,
+            budgetKey: opts?.budgetKey,
+            schema: opts?.schema,
+          },
+          lane,
+        }),
+      );
       const normalized = normalizeCompletion(raw);
       return {
         text: normalized.text,
@@ -444,19 +467,21 @@ export function createInference(
   ) => {
     const lane = opts?.lane ?? 'interactive';
     gate(lane);
-    return withLocalFallback('see', opts?.task, lane, async (p) => {
+    return withLocalFallback('see', opts?.task, lane, async (p, task) => {
       const modelId = modelIdOf(p, 'see');
-      const out = await p.handle({
-        kind: 'see',
-        payload: {
-          image,
-          prompt,
-          mime: opts?.mime,
-          task: opts?.task,
-          budgetKey: opts?.budgetKey,
-        },
-        lane,
-      });
+      const out = await tracked(p, 'see', task, () =>
+        p.handle({
+          kind: 'see',
+          payload: {
+            image,
+            prompt,
+            mime: opts?.mime,
+            task: opts?.task,
+            budgetKey: opts?.budgetKey,
+          },
+          lane,
+        }),
+      );
       return {
         text: String(out),
         providerId: p.id,
@@ -466,6 +491,7 @@ export function createInference(
   };
 
   return {
+    activeCalls,
     async complete(prompt, opts) {
       const meta = await completeWithMeta(prompt, opts);
       return meta.text;
@@ -501,11 +527,13 @@ export function createInference(
       const lane = opts?.lane ?? 'interactive';
       gate(lane);
       const p = pick('read');
-      const out = await p.handle({
-        kind: 'read',
-        payload: { image, mime: opts?.mime },
-        lane,
-      });
+      const out = await tracked(p, 'read', undefined, () =>
+        p.handle({
+          kind: 'read',
+          payload: { image, mime: opts?.mime },
+          lane,
+        }),
+      );
       return String(out);
     },
     async hear(audio, opts) {

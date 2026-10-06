@@ -9,6 +9,7 @@ import type {
   ProviderStatus,
 } from '@shared/contracts';
 
+import type { ActiveCalls } from '../../core/active-calls';
 import { downloadModel, modelFilesPresent } from '../local-llm/downloader';
 import { modelDir } from '../local-llm/models';
 import type { ModelDescriptor } from '../local-llm/models';
@@ -78,6 +79,8 @@ export function createLocalAsrProvider(deps: {
   /** Vendored Silero VAD model (assets/whisper/…). Absent → no VAD. */
   vadModelPath?: string;
   fileExists?: (p: string) => boolean;
+  /** Records the executing `hear` job for the Local AI indicator. */
+  activeCalls?: Pick<ActiveCalls, 'enter'>;
 }): LocalAsrProvider {
   const download = deps.download ?? downloadModel;
   const filesPresent = deps.filesPresent ?? modelFilesPresent;
@@ -132,7 +135,9 @@ export function createLocalAsrProvider(deps: {
     const job = queue.shift();
     if (!job) return;
     busy = true;
+    const leave = deps.activeCalls?.enter('hear', null);
     const run = job.run().finally(() => {
+      leave?.();
       busy = false;
       if (activeRun === run) activeRun = null;
       pump();
