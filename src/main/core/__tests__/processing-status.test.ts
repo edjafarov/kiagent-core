@@ -151,8 +151,51 @@ test('active is patched only when the (op, task) list changes', () => {
   t.emitCalls([{ op: 'see', task: 'a' }]);
   expect(patchesBefore() - base).toBe(1);
   t.emitCalls([]);
+  jest.advanceTimersByTime(250);
   expect(patchesBefore() - base).toBe(2);
   t.status.stop();
+});
+
+const activePatches = (t: ReturnType<typeof setup>) =>
+  t.patch.mock.calls.filter(([p]) => 'active' in p).map(([p]) => p.active);
+
+test('a call that enters and leaves within 50 ms is shown, and [] only lands after 250 ms', () => {
+  const t = setup();
+  t.status.start();
+  t.patch.mockClear();
+  t.emitCalls([{ op: 'see', task: 'a' }]);
+  jest.advanceTimersByTime(50);
+  t.emitCalls([]);
+  expect(activePatches(t)).toEqual([[{ op: 'see', task: 'a' }]]);
+  jest.advanceTimersByTime(249);
+  expect(activePatches(t)).toHaveLength(1);
+  jest.advanceTimersByTime(1);
+  expect(activePatches(t)).toEqual([[{ op: 'see', task: 'a' }], []]);
+  t.status.stop();
+});
+
+test('a new call entering inside the grace window cancels the pending []', () => {
+  const t = setup();
+  t.status.start();
+  t.emitCalls([{ op: 'see', task: 'a' }]);
+  t.patch.mockClear();
+  t.emitCalls([]);
+  jest.advanceTimersByTime(100);
+  t.emitCalls([{ op: 'see', task: 'b' }]);
+  jest.advanceTimersByTime(1000);
+  expect(activePatches(t)).toEqual([[{ op: 'see', task: 'b' }]]);
+  t.status.stop();
+});
+
+test('stop() clears a pending empty patch', () => {
+  const t = setup();
+  t.status.start();
+  t.emitCalls([{ op: 'see', task: 'a' }]);
+  t.patch.mockClear();
+  t.emitCalls([]);
+  t.status.stop();
+  jest.advanceTimersByTime(1000);
+  expect(activePatches(t)).toEqual([]);
 });
 
 test('a failing count keeps the last value and warns', async () => {

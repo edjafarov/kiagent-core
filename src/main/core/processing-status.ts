@@ -33,6 +33,8 @@ export async function wakeDeferredWorkers(scheduler: {
   ]);
 }
 
+const EMPTY_GRACE_MS = 250;
+
 const activeKey = (list: ActiveCall[]): string =>
   JSON.stringify(list.map((c) => [c.op, c.task]));
 
@@ -54,6 +56,7 @@ export function createProcessingStatus(deps: ProcessingStatusDeps): {
   let inFlight: Promise<void> | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
   let unsub: (() => void) | null = null;
+  let emptyTimer: ReturnType<typeof setTimeout> | null = null;
 
   const refreshWaiting = (): Promise<void> => {
     inFlight ??= deps
@@ -71,11 +74,36 @@ export function createProcessingStatus(deps: ProcessingStatusDeps): {
     return inFlight;
   };
 
+  const clearEmptyTimer = (): void => {
+    if (emptyTimer) clearTimeout(emptyTimer);
+    emptyTimer = null;
+  };
+
+  const patchActive = (list: ActiveCall[]): void => {
+    lastActiveKey = activeKey(list);
+    deps.patch({ active: list.map((c) => ({ op: c.op, task: c.task })) });
+  };
+
+  // The app-state broadcast coalesces for 100 ms, so a call that starts and
+  // ends inside that window would never be seen. A non-empty -> empty
+  // change therefore lands EMPTY_GRACE_MS late; a new call cancels it.
   const pushActive = (list: ActiveCall[]): void => {
     const key = activeKey(list);
+    if (list.length > 0) {
+      clearEmptyTimer();
+      if (key !== lastActiveKey) patchActive(list);
+      return;
+    }
+    if (emptyTimer) return;
     if (key === lastActiveKey) return;
-    lastActiveKey = key;
-    deps.patch({ active: list.map((c) => ({ op: c.op, task: c.task })) });
+    if (lastActiveKey === null) {
+      patchActive(list);
+      return;
+    }
+    emptyTimer = setTimeout(() => {
+      emptyTimer = null;
+      patchActive([]);
+    }, EMPTY_GRACE_MS);
   };
 
   return {
@@ -124,6 +152,7 @@ export function createProcessingStatus(deps: ProcessingStatusDeps): {
     stop() {
       if (timer) clearInterval(timer);
       timer = null;
+      clearEmptyTimer();
       unsub?.();
       unsub = null;
     },

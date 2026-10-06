@@ -90,7 +90,6 @@ function statsRes(overrides: Partial<StatsRes> = {}): StatsRes {
   return {
     processed: 7,
     recent: [],
-    lane: 'open',
     ...overrides,
   };
 }

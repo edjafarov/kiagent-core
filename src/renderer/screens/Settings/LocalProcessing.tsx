@@ -164,14 +164,6 @@ export function LocalProcessing(): React.ReactElement {
       .catch(() => {});
   }, [loadProviders, loadStats]);
 
-  // The lane moves on its own (battery, idle, the clock) and has no push
-  // channel: coming back to the window re-reads it.
-  useEffect(() => {
-    const onFocus = () => loadStats();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [loadStats]);
-
   // No push channel carries download progress, so poll while any provider
   // is mid-download; stop as soon as none are (and on unmount).
   useEffect(() => {

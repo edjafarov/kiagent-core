@@ -128,7 +128,6 @@ let mainWindow: BrowserWindow | null = null;
 let platform: CorePlatform | null = null;
 let mcp: McpServerHandle | null = null;
 let extensionsPlatform: ExtensionPlatform | null = null;
-let processingStatus: ReturnType<typeof createProcessingStatus> | null = null;
 let attentionService: AttentionService | null = null;
 let attentionPush: ReturnType<typeof wireAttentionPush> | null = null;
 const fileRoots = createFileRootRegistry();
@@ -464,6 +463,7 @@ function registerIpc(
   broker: ConnectBroker,
   outbound: OutboundService,
   attention: AttentionService,
+  refreshWaiting: () => Promise<void>,
 ): void {
   // Hoisted above the handler map only because the map needs `updater`;
   // extracting the rest of the updater bootstrap out of registerIpc is #20.
@@ -745,11 +745,8 @@ function registerIpc(
     'inference:stats': async () => {
       // One waiting computation for both surfaces: recompute and push, so
       // opening Settings also refreshes the sidebar row.
-      void processingStatus?.refreshWaiting();
-      return {
-        ...(await p.store.extractionStats()),
-        lane: backgroundLaneState(p),
-      };
+      void refreshWaiting();
+      return p.store.extractionStats();
     },
     'inference:models': async () => {
       const installed = bundled.localLlm.installedModelIds();
@@ -1263,6 +1260,22 @@ app
       source: ghSource,
       snapshot: () => extensionsPlatform!.snapshot(),
     });
+    const processingStatus = createProcessingStatus({
+      countWaiting: () => p.store.visualWaitingCount(VISION_CONSUMER),
+      providers: () =>
+        p.inference.providers().map((prov) => ({
+          id: prov.id,
+          remote: prov.remote === true,
+          status: prov.status(),
+        })),
+      activeCalls: p.inference.activeCalls,
+      wakeWorkers: () => wakeDeferredWorkers(p.scheduler),
+      patch: (partial) =>
+        patchState({
+          processing: { ...lastPush.state.processing, ...partial },
+        }),
+      warn: (msg) => log.warn(`processing-status: ${msg}`),
+    });
     registerIpc(
       p,
       () => lastPush,
@@ -1273,6 +1286,7 @@ app
       broker,
       outbound,
       attention,
+      () => processingStatus.refreshWaiting(),
     );
     p.engine.project(projection, (state: AppState, seq: Seq) => {
       rev += 1;
@@ -1305,23 +1319,7 @@ app
       applyLoginItemSettings(prefs.launchAtLogin);
     });
     applyLoginItemSettings(p.prefs.get().launchAtLogin);
-    processingStatus = createProcessingStatus({
-      countWaiting: () => p.store.visualWaitingCount(VISION_CONSUMER),
-      providers: () =>
-        p.inference.providers().map((prov) => ({
-          id: prov.id,
-          remote: prov.remote === true,
-          status: prov.status(),
-        })),
-      activeCalls: p.inference.activeCalls,
-      wakeWorkers: () => wakeDeferredWorkers(p.scheduler),
-      patch: (partial) =>
-        patchState({
-          processing: { ...lastPush.state.processing, ...partial },
-        }),
-      warn: (msg) => log.warn(`processing-status: ${msg}`),
-    });
-    processingStatus?.start();
+    processingStatus.start();
     setInterval(async () => {
       // ledgerCountsAll is now an async worker RPC — a transient read failure
       // (e.g. a dead/restarting DB worker) must not escape as an unhandled
@@ -1337,7 +1335,7 @@ app
         // so a 'battery' -> 'disabled' transition (both closed) still
         // emits. refreshLane() itself never throws.
         extensionsPlatform?.refreshLane();
-        processingStatus?.tick(lane);
+        processingStatus.tick(lane);
         const all = await p.store.ledgerCountsAll(p.engine.activeConsumers());
         const processing = {
           pending: all.pending,
