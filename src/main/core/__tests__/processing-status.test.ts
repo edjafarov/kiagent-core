@@ -1,4 +1,4 @@
-import type { ActiveCall, ProviderStatus } from '@shared/contracts';
+import type { ActiveCall } from '@shared/contracts';
 
 import {
   createProcessingStatus,
@@ -6,7 +6,7 @@ import {
   type ProcessingStatusDeps,
 } from '../processing-status';
 
-type Prov = { id: string; remote: boolean; status: ProviderStatus };
+type Prov = ReturnType<ProcessingStatusDeps['providers']>[number];
 
 function setup(over: Partial<ProcessingStatusDeps> = {}) {
   let providers: Prov[] = [];
@@ -137,6 +137,32 @@ test('download mirrors the first local downloading provider, including the speec
     download: { providerId: 'local-asr', pct: 42 },
   });
   t.setProviders([{ id: 'local-asr', remote: false, status: 'ready' }]);
+  t.status.tick('open');
+  expect(t.patch).toHaveBeenLastCalledWith({ download: null });
+});
+
+test('an accuracy-variant download shows under its provider while the default model stays ready', () => {
+  const t = setup();
+  t.setProviders([
+    {
+      id: 'local-asr',
+      remote: false,
+      status: 'ready',
+      variants: [{ status: { downloading: { pct: 17 } } }],
+    },
+  ]);
+  t.status.tick('open');
+  expect(t.patch).toHaveBeenCalledWith({
+    download: { providerId: 'local-asr', pct: 17 },
+  });
+  t.setProviders([
+    {
+      id: 'local-asr',
+      remote: false,
+      status: 'ready',
+      variants: [{ status: 'ready' }],
+    },
+  ]);
   t.status.tick('open');
   expect(t.patch).toHaveBeenLastCalledWith({ download: null });
 });

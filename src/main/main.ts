@@ -1267,6 +1267,9 @@ app
           id: prov.id,
           remote: prov.remote === true,
           status: prov.status(),
+          ...(prov.id === 'local-asr'
+            ? { variants: bundled.localAsr.variants() }
+            : {}),
         })),
       activeCalls: p.inference.activeCalls,
       wakeWorkers: () => wakeDeferredWorkers(p.scheduler),

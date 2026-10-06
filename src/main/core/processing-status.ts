@@ -13,6 +13,9 @@ export interface ProcessingStatusDeps {
     id: string;
     remote: boolean;
     status: ProviderStatus;
+    /** Optional extra models (the speech accuracy model) whose download
+     *  never shows in the provider's own status. */
+    variants?: Array<{ status: ProviderStatus }>;
   }>;
   activeCalls: Pick<ActiveCalls, 'list' | 'onChange'>;
   /** Wake the deferred-work re-drive (worker:vision, worker:audio). */
@@ -42,6 +45,10 @@ const activeKey = (list: ActiveCall[]): string =>
  *  downloads, and pushes changes into AppState.processing. Observation
  *  only — except that a closed -> open lane flip wakes the deferred
  *  workers so waiting work resumes without waiting for their cadence. */
+function downloadingPct(s: ProviderStatus): number | null {
+  return typeof s === 'object' && 'downloading' in s ? s.downloading.pct : null;
+}
+
 export function createProcessingStatus(deps: ProcessingStatusDeps): {
   start(): void;
   tick(lane: LaneState): void;
@@ -131,18 +138,17 @@ export function createProcessingStatus(deps: ProcessingStatusDeps): {
             );
         }
       }
-      const dl = deps
-        .providers()
-        .find(
-          (p) =>
-            !p.remote &&
-            typeof p.status === 'object' &&
-            'downloading' in p.status,
-        );
-      const download =
-        dl && typeof dl.status === 'object' && 'downloading' in dl.status
-          ? { providerId: dl.id, pct: dl.status.downloading.pct }
-          : null;
+      let download: AppState['processing']['download'] = null;
+      for (const p of deps.providers()) {
+        if (p.remote) continue;
+        const pct = [p.status, ...(p.variants ?? []).map((v) => v.status)]
+          .map(downloadingPct)
+          .find((v) => v !== null);
+        if (pct !== undefined && pct !== null) {
+          download = { providerId: p.id, pct };
+          break;
+        }
+      }
       const key = JSON.stringify(download);
       if (key !== lastDownloadKey) {
         lastDownloadKey = key;
