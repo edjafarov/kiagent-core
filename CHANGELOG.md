@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.102.0](https://github.com/edjafarov/kiagent-core/compare/v0.101.0...v0.102.0) (2026-10-06)
+
+### Features
+
+* **inference:** ActiveCalls records executing local calls — plane complete/see/read, ASR pump hear ([ebdc22f](https://github.com/edjafarov/kiagent-core/commit/ebdc22f158b70a4919dde47286722edb1726b0a0))
+* **processing:** contract for the Local AI indicator — lane/waiting/active/download on AppState.processing, ActiveCalls registry ([79e7193](https://github.com/edjafarov/kiagent-core/commit/79e7193431cf1e4c0a2236e525dedb7eed9b7d17))
+* **processing:** push lane, waiting, active and download; wake deferred workers when the lane opens ([e147964](https://github.com/edjafarov/kiagent-core/commit/e147964714c5d27a4d6d56dd0e1d915c6bf6075f))
+* **store:** visualWaitingCount — size-gated scans/images not yet read, deferred work never hidden by a later skip ([0892b00](https://github.com/edjafarov/kiagent-core/commit/0892b00f5cd45291b9542c5f82226ebd64f6cba0))
+
+### Bug Fixes
+
+* **processing:** keep short local calls visible; Settings reads pushed lane only ([ae11474](https://github.com/edjafarov/kiagent-core/commit/ae11474c484a65d219345506e92a156386054a73))
+* **processing:** show accuracy-model downloads in the Local AI row ([fd80b45](https://github.com/edjafarov/kiagent-core/commit/fd80b45afd796f6c503eea04ce7507c734e78675))
+* **store:** derive VISION_CONSUMER from a shared vision identity; pin both visualWaitingCount plans ([8526baf](https://github.com/edjafarov/kiagent-core/commit/8526baf2b2cccaeaebe1cf704fb138bcc606be19))
+
 ## [0.101.0](https://github.com/edjafarov/kiagent-core/compare/v0.100.0...v0.101.0) (2026-10-06)
 
 ### Features
