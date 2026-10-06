@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.101.0](https://github.com/edjafarov/kiagent-core/compare/v0.100.0...v0.101.0) (2026-10-06)
+
+### Features
+
+* **contracts:** owner-channel send fields and Source.listAddressedTo ([baa3e4b](https://github.com/edjafarov/kiagent-core/commit/baa3e4b0200c974310ce13ee22cec322fb8ba59a))
+* **gmail-sender:** owner-channel headers and providerThreadId ([b743e46](https://github.com/edjafarov/kiagent-core/commit/b743e46c18bc05a800a219370cdd7d034fdf450a))
+* **gmail:** keep owner-channel mail out of the corpus ([1384ed4](https://github.com/edjafarov/kiagent-core/commit/1384ed4d55da09204f630122dccba380db8a49d3))
+* **gmail:** listAddressedTo — mailbox-wide, sent-flagged, metadata-only for foreign mail ([cc1e937](https://github.com/edjafarov/kiagent-core/commit/cc1e9377705c3d4862387440b0465b933ea47841))
+* **inference,mcp:** schema-constrained complete, ContextOverflowError, mcp.callTool ([febb088](https://github.com/edjafarov/kiagent-core/commit/febb088fcd92290f6894b16ba0957f6cf9b9034f))
+* **mcp:** server-side tool allowlist for product handlers ([5f9ecaa](https://github.com/edjafarov/kiagent-core/commit/5f9ecaace09ec081e13a4de73636231da4051d03))
+* **outbound:** owner mail may carry a display name on From ([74c7cb4](https://github.com/edjafarov/kiagent-core/commit/74c7cb4442bca8730f5a2306d000dc2f1c18e900))
+* **outbound:** owner mail may send as a plus-variant of the owner ([8c0b46d](https://github.com/edjafarov/kiagent-core/commit/8c0b46d2354b9f9f885d52bbb086691d4986aea7))
+* **outbound:** ownerMail — owner-only send route and addressed-mail listing ([f61f036](https://github.com/edjafarov/kiagent-core/commit/f61f0362fee2fc5ef5bc1b158bdd04b959ac12cf))
+* **platform:** listAddressedTo over extension RPC; PLATFORM_API 2.7.0 ([58b2d18](https://github.com/edjafarov/kiagent-core/commit/58b2d180a5e6cdf238076f97cea5c04a357e4302))
+
+### Bug Fixes
+
+* **outbound:** owner mail drops auto-reply markers so phones notify ([25d57d0](https://github.com/edjafarov/kiagent-core/commit/25d57d07c92b22cb1073fc7842aa527d2962b335))
+
 ## [0.100.0](https://github.com/edjafarov/kiagent-core/compare/v0.99.2...v0.100.0) (2026-10-02)
 
 ### Features
