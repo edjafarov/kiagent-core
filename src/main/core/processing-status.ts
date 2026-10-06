@@ -8,7 +8,6 @@ import type {
 import type { ActiveCalls } from './active-calls';
 
 export interface ProcessingStatusDeps {
-  laneState: () => LaneState;
   countWaiting: () => Promise<number>;
   providers: () => Array<{
     id: string;
@@ -23,6 +22,17 @@ export interface ProcessingStatusDeps {
   waitingEveryMs?: number; // default 60_000
 }
 
+/** Re-drive the deferred-work workers now (a closed lane just opened). A
+ *  worker that fails or is unknown must not stop the other. */
+export async function wakeDeferredWorkers(scheduler: {
+  trigger(id: string): Promise<void>;
+}): Promise<void> {
+  await Promise.allSettled([
+    scheduler.trigger('worker:vision'),
+    scheduler.trigger('worker:audio'),
+  ]);
+}
+
 const activeKey = (list: ActiveCall[]): string =>
   JSON.stringify(list.map((c) => [c.op, c.task]));
 
@@ -32,7 +42,9 @@ const activeKey = (list: ActiveCall[]): string =>
  *  workers so waiting work resumes without waiting for their cadence. */
 export function createProcessingStatus(deps: ProcessingStatusDeps): {
   start(): void;
-  tick(): void;
+  tick(lane: LaneState): void;
+  /** Recompute the waiting count now and push it if it changed. */
+  refreshWaiting(): Promise<void>;
   stop(): void;
 } {
   let lastLane: LaneState | null = null;
@@ -77,8 +89,8 @@ export function createProcessingStatus(deps: ProcessingStatusDeps): {
         deps.waitingEveryMs ?? 60_000,
       );
     },
-    tick() {
-      const lane = deps.laneState();
+    refreshWaiting,
+    tick(lane) {
       if (lane !== lastLane) {
         const prev = lastLane;
         lastLane = lane;

@@ -24,7 +24,6 @@ import {
   CORPUS_LANGUAGES_SQL,
   EXTRACTED_COUNT_SQL,
   LEDGER_ACTIVE_COUNT_SQL,
-  PENDING_VISUAL_COUNT_SQL,
 } from '../store';
 
 /** Join EXPLAIN QUERY PLAN's `detail` rows into one string for substring checks. */
@@ -146,13 +145,6 @@ describe('schema: query-performance partial indexes', () => {
     );
     expect(indexSql(db, 'docs_pending_visual')).toBe(
       `CREATE INDEX docs_pending_visual ON documents(id) WHERE ${PENDING_VISUAL_WHERE}`,
-    );
-  });
-
-  it("store's pendingOcr count uses docs_pending_visual on a no-stat1 DB (the production planner mode)", () => {
-    seedMixedDocuments(db);
-    expect(planDetail(db, PENDING_VISUAL_COUNT_SQL)).toContain(
-      'USING INDEX docs_pending_visual',
     );
   });
 

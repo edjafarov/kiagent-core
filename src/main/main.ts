@@ -38,7 +38,6 @@ import { installCrashHandlers, type CrashDeps } from './crash-handlers';
 import type { ConnectBroker } from './auth/connect-broker';
 import { startHeapWatch } from './heap-watch';
 import {
-  backgroundLaneOpen,
   backgroundLaneState,
   bootCore,
   resumeAccounts,
@@ -50,7 +49,10 @@ import { createActivityLog, type ActivityLog } from './core/mcp/activity';
 import { startMcp } from './core/mcp/server';
 import type { McpServerHandle } from './core/mcp/server';
 import { markOnboardingOnce } from './core/prefs';
-import { createProcessingStatus } from './core/processing-status';
+import {
+  createProcessingStatus,
+  wakeDeferredWorkers,
+} from './core/processing-status';
 import { maybeOfferMoveToApplications } from './move-to-applications';
 import { createGitHubCache } from './marketplace/github-cache';
 import { createGitHubSource } from './marketplace/github-source';
@@ -126,6 +128,7 @@ let mainWindow: BrowserWindow | null = null;
 let platform: CorePlatform | null = null;
 let mcp: McpServerHandle | null = null;
 let extensionsPlatform: ExtensionPlatform | null = null;
+let processingStatus: ReturnType<typeof createProcessingStatus> | null = null;
 let attentionService: AttentionService | null = null;
 let attentionPush: ReturnType<typeof wireAttentionPush> | null = null;
 const fileRoots = createFileRootRegistry();
@@ -739,11 +742,15 @@ function registerIpc(
         models: { ...p.prefs.get().models, autoInstall: false },
       });
     },
-    'inference:stats': async () => ({
-      ...(await p.store.extractionStats()),
-      waiting: await p.store.visualWaitingCount(VISION_CONSUMER),
-      lane: backgroundLaneState(p),
-    }),
+    'inference:stats': async () => {
+      // One waiting computation for both surfaces: recompute and push, so
+      // opening Settings also refreshes the sidebar row.
+      void processingStatus?.refreshWaiting();
+      return {
+        ...(await p.store.extractionStats()),
+        lane: backgroundLaneState(p),
+      };
+    },
     'inference:models': async () => {
       const installed = bundled.localLlm.installedModelIds();
       const sel = await bundled.localLlm.selectedModel();
@@ -1298,8 +1305,7 @@ app
       applyLoginItemSettings(prefs.launchAtLogin);
     });
     applyLoginItemSettings(p.prefs.get().launchAtLogin);
-    const processingStatus = createProcessingStatus({
-      laneState: () => backgroundLaneState(p),
+    processingStatus = createProcessingStatus({
       countWaiting: () => p.store.visualWaitingCount(VISION_CONSUMER),
       providers: () =>
         p.inference.providers().map((prov) => ({
@@ -1308,32 +1314,30 @@ app
           status: prov.status(),
         })),
       activeCalls: p.inference.activeCalls,
-      wakeWorkers: async () => {
-        await Promise.allSettled([
-          p.scheduler.trigger('worker:vision'),
-          p.scheduler.trigger('worker:audio'),
-        ]);
-      },
+      wakeWorkers: () => wakeDeferredWorkers(p.scheduler),
       patch: (partial) =>
         patchState({
           processing: { ...lastPush.state.processing, ...partial },
         }),
       warn: (msg) => log.warn(`processing-status: ${msg}`),
     });
-    processingStatus.start();
+    processingStatus?.start();
     setInterval(async () => {
       // ledgerCountsAll is now an async worker RPC — a transient read failure
       // (e.g. a dead/restarting DB worker) must not escape as an unhandled
       // rejection on the timer. Mirrors scheduler.ts's safeTick guard.
       try {
-        p.inference.setBackgroundOpen(backgroundLaneOpen(p));
+        // One lane evaluation per tick, shared by the plane switch and the
+        // status module (push + worker wake).
+        const lane = backgroundLaneState(p);
+        p.inference.setBackgroundOpen(lane === 'open');
         // The only place lane policy is re-evaluated — also the
         // correctness net for platform.lane: it re-resolves LaneState on
         // every tick regardless of whether the boolean above just flipped,
         // so a 'battery' -> 'disabled' transition (both closed) still
         // emits. refreshLane() itself never throws.
         extensionsPlatform?.refreshLane();
-        processingStatus.tick();
+        processingStatus?.tick(lane);
         const all = await p.store.ledgerCountsAll(p.engine.activeConsumers());
         const processing = {
           pending: all.pending,

@@ -366,7 +366,6 @@ export interface RecentExtraction {
 
 /** Vision-pipeline queue counters for Settings → Local processing. */
 export interface ExtractionStats {
-  pendingOcr: number;
   processed: number;
   recent: RecentExtraction[]; // newest first, max 10
 }

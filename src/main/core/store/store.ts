@@ -47,16 +47,15 @@ import {
   type ReconcileCounts,
 } from './write-tx';
 
-// The two stats COUNTs are pinned to their covering partial indexes with
+// The stats COUNT is pinned to its covering partial index with
 // INDEXED BY: production corpora carry no sqlite_stat1 (nothing ever runs
 // ANALYZE), and without stats the planner's default estimates prefer
-// docs_account_recency for both — which re-runs the per-row json_extract
+// docs_account_recency — which re-runs the per-row json_extract
 // scan over the whole corpus (~9s per count at 324k docs) that these
 // indexes exist to kill. The unpinned fallback in extractionStats()
 // preserves ensureQueryIndexes' degrade-don't-fail contract: if the index
 // is missing, INDEXED BY fails to prepare ("no query solution") and the
 // count falls back to the scan instead of erroring.
-export const PENDING_VISUAL_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_pending_visual WHERE ${PENDING_VISUAL_WHERE}`;
 export const EXTRACTED_COUNT_SQL = `SELECT COUNT(*) AS c FROM documents INDEXED BY docs_extracted WHERE ${EXTRACTED_DOCS_WHERE}`;
 /** Current change unresolved: no outcome yet, or deferred. */
 export const VISUAL_WAITING_CURRENT_SQL = `SELECT documents.id FROM documents INDEXED BY docs_pending_visual
@@ -1070,21 +1069,6 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async extractionStats() {
-      // pendingOcr is a display-level approximation of the vision worker's
-      // classify eligibility (workers/vision/classify.ts) — it ignores size
-      // caps and tiny-image rules but mirrors the type gate, the has-real-
-      // text gate, and both candidate shapes: mime-carrying docs (gmail
-      // attachments) and ext-carrying ones (local-folder files, which store
-      // no mime) — and, like classify, it counts a PDF only once the
-      // convert worker gave up on it (text-poor / failed).
-      // The WHERE text is shared verbatim with the
-      // docs_pending_visual / docs_extracted partial indexes (schema.ts) so
-      // the planner can prove they apply — and the counts are pinned to
-      // them besides (see PENDING_VISUAL_COUNT_SQL above for why).
-      const pendingOcr = await countDocs(
-        PENDING_VISUAL_COUNT_SQL,
-        PENDING_VISUAL_WHERE,
-      );
       const processed = await countDocs(
         EXTRACTED_COUNT_SQL,
         EXTRACTED_DOCS_WHERE,
@@ -1104,7 +1088,6 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         updated_at: string;
       }>;
       return {
-        pendingOcr,
         processed,
         recent: rows.map((r) => ({
           id: r.id as DocumentId,

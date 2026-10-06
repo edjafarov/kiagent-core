@@ -613,82 +613,6 @@ describe('store', () => {
     expect(await store.consumerCursor('worker:vision:v1')).toBe(8);
   });
 
-  it('extractionStats: pendingOcr counts ext-shaped candidates and gates on type + markdown', async () => {
-    await store.commit({
-      account: accountId,
-      documents: [
-        // Local-folder image: `ext` metadata, no mime — must count.
-        doc('lf-img', {
-          type: 'file',
-          markdown: null,
-          metadata: { ext: 'jpg', size: 12345, absPath: '/x/a.jpg' },
-        }),
-        // Local-folder scanned PDF the parser found text-poor — counts.
-        doc('lf-pdf', {
-          type: 'file',
-          markdown: null,
-          metadata: {
-            ext: 'pdf',
-            absPath: '/x/b.pdf',
-            conversion: { status: 'text-poor' },
-          },
-        }),
-        // PDFs vision will not take (yet / ever): not parsed yet, or the
-        // source has no bytes — neither is pending OCR.
-        doc('lf-pdf-unparsed', {
-          type: 'file',
-          markdown: null,
-          metadata: { ext: 'pdf', absPath: '/x/e.pdf' },
-        }),
-        doc('lf-pdf-gone', {
-          type: 'file',
-          markdown: null,
-          metadata: {
-            ext: 'pdf',
-            absPath: '/x/f.pdf',
-            conversion: { status: 'unavailable' },
-          },
-        }),
-        // Text-rich PDF: real extracted markdown — the worker skips it, so
-        // the stat must too.
-        doc('lf-pdf-rich', {
-          type: 'file',
-          markdown: 'A long extracted body of text',
-          metadata: { ext: 'pdf', absPath: '/x/c.pdf' },
-        }),
-        // Image mime on a type the vision worker never matches.
-        doc('note-img', { markdown: null, metadata: { mime: 'image/png' } }),
-        // Non-visual local file.
-        doc('lf-txt', {
-          type: 'file',
-          markdown: null,
-          metadata: { ext: 'txt', absPath: '/x/d.txt' },
-        }),
-      ],
-      cursor: 1,
-    });
-    const stats = await store.extractionStats();
-    expect(stats.pendingOcr).toBe(2); // lf-img + lf-pdf only
-  });
-
-  it('PENDING_VISUAL_WHERE counts a needs-ocr doc with text', async () => {
-    await store.commit({
-      account: accountId,
-      documents: [
-        doc('needs-ocr-pdf', {
-          type: 'file',
-          markdown: 'x'.repeat(500),
-          metadata: {
-            mime: 'application/pdf',
-            conversion: { status: 'needs-ocr', pages: [2], quality: 1 },
-          },
-        }),
-      ],
-      cursor: 1,
-    });
-    expect((await store.extractionStats()).pendingOcr).toBe(1);
-  });
-
   it('re-committing an unchanged needs-ocr file keeps contentHash, extraction and ocrProgress', async () => {
     const a = await store.createAccount({ source: 't', identifier: 'h' });
     const input = {
@@ -752,7 +676,6 @@ describe('store', () => {
     raw.close();
 
     const stats = await store.extractionStats();
-    expect(stats.pendingOcr).toBe(1);
     expect(stats.processed).toBe(1);
   });
 
@@ -810,7 +733,6 @@ describe('store', () => {
     });
 
     const stats = await store.extractionStats();
-    expect(stats.pendingOcr).toBe(3); // img-1, img-2, pdf-1 — note-1 and processed docs excluded
     expect(stats.processed).toBe(1); // done-1 only — the archived processed doc excluded
     expect(stats.recent).toHaveLength(1);
     const done = await store.read.byExternalId(accountId, 'done-1', 'note');

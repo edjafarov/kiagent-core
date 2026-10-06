@@ -88,8 +88,6 @@ beforeEach(() => {
 
 function statsRes(overrides: Partial<StatsRes> = {}): StatsRes {
   return {
-    pendingOcr: 99, // pulled value: must NOT reach the status line
-    waiting: 99,
     processed: 7,
     recent: [],
     lane: 'open',
@@ -156,9 +154,9 @@ describe('LocalProcessing: status line', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
-  test('shows the pushed waiting count, not the pulled stats value', async () => {
+  test('shows the pushed waiting count', async () => {
     mockLive.waiting = 12;
-    mockInvoke({ stats: statsRes({ waiting: 99, pendingOcr: 99 }) });
+    mockInvoke({ stats: statsRes() });
     render(<LocalProcessing />);
     expect(
       await screen.findByText(

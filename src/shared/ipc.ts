@@ -542,10 +542,7 @@ export interface Invokes {
   'inference:stats': {
     req: void;
     res: {
-      pendingOcr: number;
       processed: number;
-      /** Scans/images not yet read (size-gated; includes deferred work). */
-      waiting: number;
       recent: RecentExtraction[];
       /** Why background processing is (or isn't) running right now. */
       lane: LaneState;

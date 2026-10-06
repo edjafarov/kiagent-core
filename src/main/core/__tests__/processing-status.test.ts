@@ -1,14 +1,14 @@
-import type { ActiveCall, LaneState, ProviderStatus } from '@shared/contracts';
+import type { ActiveCall, ProviderStatus } from '@shared/contracts';
 
 import {
   createProcessingStatus,
+  wakeDeferredWorkers,
   type ProcessingStatusDeps,
 } from '../processing-status';
 
 type Prov = { id: string; remote: boolean; status: ProviderStatus };
 
 function setup(over: Partial<ProcessingStatusDeps> = {}) {
-  let lane: LaneState = 'open';
   let providers: Prov[] = [];
   let calls: ActiveCall[] = [];
   let sub: ((c: ActiveCall[]) => void) | null = null;
@@ -17,7 +17,6 @@ function setup(over: Partial<ProcessingStatusDeps> = {}) {
   const wakeWorkers = jest.fn(async () => {});
   const countWaiting = jest.fn(async () => 5);
   const deps: ProcessingStatusDeps = {
-    laneState: () => lane,
     countWaiting,
     providers: () => providers,
     activeCalls: {
@@ -41,9 +40,6 @@ function setup(over: Partial<ProcessingStatusDeps> = {}) {
     warn,
     wakeWorkers,
     countWaiting,
-    setLane: (l: LaneState) => {
-      lane = l;
-    },
     setProviders: (p: Prov[]) => {
       providers = p;
     },
@@ -80,12 +76,10 @@ test('first waiting read happens on start, then on the interval, patching only o
 
 test('a closed->open flip wakes the workers once and then re-reads waiting', async () => {
   const t = setup();
-  t.setLane('until-idle');
-  t.status.tick();
+  t.status.tick('until-idle');
   expect(t.wakeWorkers).not.toHaveBeenCalled();
-  t.setLane('open');
-  t.status.tick();
-  t.status.tick();
+  t.status.tick('open');
+  t.status.tick('open');
   expect(t.wakeWorkers).toHaveBeenCalledTimes(1);
   expect(t.countWaiting).not.toHaveBeenCalled();
   await flush();
@@ -94,22 +88,41 @@ test('a closed->open flip wakes the workers once and then re-reads waiting', asy
 
 test('open->closed and open->open do not wake', () => {
   const t = setup();
-  t.status.tick(); // open
-  t.status.tick(); // open
-  t.setLane('battery');
-  t.status.tick();
+  t.status.tick('open');
+  t.status.tick('open');
+  t.status.tick('battery');
   expect(t.wakeWorkers).not.toHaveBeenCalled();
 });
 
 test('lane is patched only when it changes', () => {
   const t = setup();
-  t.status.tick();
-  t.status.tick();
-  t.setLane('disabled');
-  t.status.tick();
+  t.status.tick('open');
+  t.status.tick('open');
+  t.status.tick('disabled');
   expect(t.patch.mock.calls.filter(([p]) => 'lane' in p)).toEqual([
     [{ lane: 'open' }],
     [{ lane: 'disabled' }],
+  ]);
+});
+
+test('refreshWaiting recomputes now and pushes only a changed count', async () => {
+  const t = setup();
+  t.countWaiting.mockResolvedValueOnce(2).mockResolvedValueOnce(2);
+  await t.status.refreshWaiting();
+  await t.status.refreshWaiting();
+  expect(
+    t.patch.mock.calls.filter(([p]) => 'waiting' in p).map(([p]) => p.waiting),
+  ).toEqual([2]);
+});
+
+test('wakeDeferredWorkers triggers the vision and audio workers and survives a failure', async () => {
+  const trigger = jest.fn(async (id: string) => {
+    if (id === 'worker:vision') throw new Error('x');
+  });
+  await wakeDeferredWorkers({ trigger });
+  expect(trigger.mock.calls.map(([id]) => id)).toEqual([
+    'worker:vision',
+    'worker:audio',
   ]);
 });
 
@@ -119,12 +132,12 @@ test('download mirrors the first local downloading provider, including the speec
     { id: 'cloud', remote: true, status: { downloading: { pct: 1 } } },
     { id: 'local-asr', remote: false, status: { downloading: { pct: 42 } } },
   ]);
-  t.status.tick();
+  t.status.tick('open');
   expect(t.patch).toHaveBeenCalledWith({
     download: { providerId: 'local-asr', pct: 42 },
   });
   t.setProviders([{ id: 'local-asr', remote: false, status: 'ready' }]);
-  t.status.tick();
+  t.status.tick('open');
   expect(t.patch).toHaveBeenLastCalledWith({ download: null });
 });
 
