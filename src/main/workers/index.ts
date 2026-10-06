@@ -9,15 +9,12 @@ import type { LocalLlmProvider } from '../providers/local-llm/provider';
 import { createAudioWorker } from './audio/audio-worker';
 import { createConvertWorker } from './convert/convert-worker';
 import type { ImageDownscaler } from './vision/downscale';
+import { VISION_WORKER } from './vision/identity';
 import { pickRasterizer } from './vision/rasterize';
 import { createVisionWorker } from './vision/vision-worker';
 
-/** The vision worker's ledger consumer ("worker:vision:v1"), derived from the
- *  same name/version createVisionWorker returns (keep in sync). */
-export const VISION_CONSUMER = workerConsumerName({
-  name: 'vision',
-  version: 1,
-} as Worker);
+/** The vision worker's ledger consumer ("worker:vision:v1"). */
+export const VISION_CONSUMER = workerConsumerName(VISION_WORKER);
 
 export function attachBundledWorkers(
   platform: CorePlatform,

@@ -5,8 +5,13 @@ import path from 'path';
 import type { AccountId, DocumentInput } from '@shared/contracts';
 
 import { openDb, type AppDb } from '../../../db/app-db';
+import { VISION_WORKER } from '../../../workers/vision/identity';
 import { ensureQueryIndexes } from '../schema';
-import { openStore, VISUAL_WAITING_DEFERRED_SQL } from '../store';
+import {
+  openStore,
+  VISUAL_WAITING_CURRENT_SQL,
+  VISUAL_WAITING_DEFERRED_SQL,
+} from '../store';
 import type { CoreStore } from '../store';
 
 // Test-only literal: the production code derives it (VISION_CONSUMER).
@@ -117,15 +122,50 @@ describe('store.visualWaitingCount', () => {
     expect(await store.visualWaitingCount(C)).toBe(1);
   });
 
+  it('a deferred row with attempts 0 (blocked) counts', async () => {
+    await seed([file('A', IMG(20 * 1024))]);
+    await store.ledgerRecordMany(C, [
+      { seq: await seqOf('A'), attempts: 0, outcome: 'deferred' },
+    ]);
+    expect(await store.visualWaitingCount(C)).toBe(1);
+  });
+
+  const planOf = async (sql: string): Promise<string[]> =>
+    (
+      (await db.all(`EXPLAIN QUERY PLAN ${sql}`, [C])) as Array<{
+        detail: string;
+      }>
+    ).map((r) => r.detail);
+
   it('the deferred branch is driven by work_ledger_active and the PKs', async () => {
-    const plan = (
-      (await db.all(`EXPLAIN QUERY PLAN ${VISUAL_WAITING_DEFERRED_SQL}`, [
-        C,
-      ])) as Array<{ detail: string }>
-    )
-      .map((r) => r.detail)
-      .join('\n');
-    expect(plan).toMatch(/work_ledger_active/);
-    expect(plan).not.toMatch(/SCAN changes/);
+    const plan = await planOf(VISUAL_WAITING_DEFERRED_SQL);
+    expect(plan.some((d) => /work_ledger_active/.test(d))).toBe(true);
+    expect(plan.some((d) => /^SCAN /.test(d))).toBe(false);
+    expect(plan.some((d) => /SEARCH c USING INTEGER PRIMARY KEY/.test(d))).toBe(
+      true,
+    );
+    expect(plan.some((d) => /SEARCH documents /.test(d))).toBe(true);
+  });
+
+  it('the current-seq branch uses docs_pending_visual and the ledger PK', async () => {
+    const plan = await planOf(VISUAL_WAITING_CURRENT_SQL);
+    expect(plan.some((d) => /docs_pending_visual/.test(d))).toBe(true);
+    expect(
+      plan.some((d) =>
+        /SEARCH l USING INDEX sqlite_autoindex_work_ledger_1 \(consumer=\? AND seq=\?\)/.test(
+          d,
+        ),
+      ),
+    ).toBe(true);
+    // The driving table is a full walk of the PARTIAL index (SCAN ... USING
+    // COVERING INDEX docs_pending_visual) — only a SCAN of anything else
+    // would be a corpus walk.
+    expect(
+      plan.filter((d) => /^SCAN /.test(d) && !/docs_pending_visual/.test(d)),
+    ).toEqual([]);
+  });
+
+  it('the vision identity yields the consumer the ledger uses', () => {
+    expect(`worker:${VISION_WORKER.name}:v${VISION_WORKER.version}`).toBe(C);
   });
 });

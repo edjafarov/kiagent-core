@@ -376,8 +376,9 @@ async function reconcilePass(
  *  a caller that hard-codes this string desyncs the moment a worker's
  *  `version` bumps — deferred work then accrues under the new key while the
  *  caller keeps querying the old, now-permanently-empty one. */
-export const workerConsumerName = (w: Worker): string =>
-  `worker:${w.name}:v${w.version}`;
+export const workerConsumerName = (
+  w: Pick<Worker, 'name' | 'version'>,
+): string => `worker:${w.name}:v${w.version}`;
 
 /** The config keys the folder-scope path owns. `roots` and `paths` are R1's
  *  one-train legacy mirrors of `folderRoots`, written by CORE (A-2) in the v3

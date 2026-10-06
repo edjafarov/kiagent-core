@@ -24,6 +24,7 @@ import {
   OCR_WINDOW,
 } from './classify';
 import { passthroughDownscaler, type ImageDownscaler } from './downscale';
+import { VISION_WORKER } from './identity';
 import { INDEXING_PROMPT, mergeExtraction } from './merge';
 import type { PageResult } from './merge';
 import type { Rasterizer } from './rasterize';
@@ -163,8 +164,8 @@ export function createVisionWorker(deps: {
   }
 
   return {
-    name: 'vision',
-    version: 1,
+    name: VISION_WORKER.name,
+    version: VISION_WORKER.version,
     schedule: { every: '30m' }, // deferred re-drive cadence; the live tail always runs
     matches: (change: Change) =>
       change.kind === 'document' &&
