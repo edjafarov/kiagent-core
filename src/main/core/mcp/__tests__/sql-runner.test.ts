@@ -52,6 +52,14 @@ function harness() {
   return { runner, children, spawn, log };
 }
 
+/** Attaches the rejection handler immediately (no unhandled rejection while
+ *  fake timers advance) and resolves with the error, if any. */
+const failure = (p: Promise<unknown>): Promise<Error | undefined> =>
+  p.then(
+    () => undefined,
+    (e: Error) => e,
+  );
+
 const reply = (id: number, rows: unknown[] = []) => ({
   id,
   ok: true,
@@ -96,11 +104,9 @@ describe('createSqlRunner', () => {
     const { runner, children, spawn } = harness();
     const p1 = runner.exec('slow');
     children[0].say({ t: 'ready' });
-    const rejected = await expect(p1).rejects.toThrow(
-      sqlStoppedMessage(10_000),
-    );
+    const rejected = failure(p1);
     await jest.advanceTimersByTimeAsync(10_000);
-    await rejected;
+    expect((await rejected)?.message).toBe(sqlStoppedMessage(10_000));
     expect(sqlStoppedMessage(10_000)).toBe(
       'query_sql stopped after 10 s. Narrow it: filter by account or created_at, avoid LIKE over markdown, or use search.',
     );
@@ -128,9 +134,9 @@ describe('createSqlRunner', () => {
     const { runner, children } = harness();
     const p = runner.exec('slow');
     children[0].say({ t: 'ready' });
-    const rejected = await expect(p).rejects.toThrow(/stopped after/);
+    const rejected = failure(p);
     await jest.advanceTimersByTimeAsync(10_000);
-    await rejected;
+    expect((await rejected)?.message).toMatch(/stopped after/);
     await jest.advanceTimersByTimeAsync(1_999);
     expect(children[0].kills).toEqual(['SIGTERM']);
     await jest.advanceTimersByTimeAsync(1);
@@ -141,9 +147,9 @@ describe('createSqlRunner', () => {
     const { runner, children, spawn, log } = harness();
     const p = runner.exec('slow');
     children[0].say({ t: 'ready' });
-    const rejected = await expect(p).rejects.toThrow(/stopped after/);
+    const rejected = failure(p);
     await jest.advanceTimersByTimeAsync(10_000 + 2_000 + 5_000);
-    await rejected;
+    expect((await rejected)?.message).toMatch(/stopped after/);
     expect(runner.diagnostics().state).toBe('stuck');
     expect(log).toHaveBeenCalledWith(
       'error',
@@ -171,9 +177,9 @@ describe('createSqlRunner', () => {
     expect(children[0].sent.map((s) => s.sql)).toEqual(['a', 'b']);
     await jest.advanceTimersByTimeAsync(9_000); // 18 s since the call, 9 s since b started
     expect(runner.diagnostics().timeouts).toBe(0);
-    const rejected = await expect(p2).rejects.toThrow(/stopped after/);
+    const rejected = failure(p2);
     await jest.advanceTimersByTimeAsync(1_000);
-    await rejected;
+    expect((await rejected)?.message).toMatch(/stopped after/);
     expect(runner.diagnostics().timeouts).toBe(1);
   });
 
@@ -197,9 +203,9 @@ describe('createSqlRunner', () => {
   it('an open-error from the child is unavailable and the child is stopped', async () => {
     const { runner, children } = harness();
     const p = runner.exec('x');
-    const rejected = await expect(p).rejects.toThrow(SQL_UNAVAILABLE);
+    const rejected = failure(p);
     children[0].say({ t: 'open-error', message: 'cannot load better-sqlite3' });
-    await rejected;
+    expect((await rejected)?.message).toBe(SQL_UNAVAILABLE);
     expect(children[0].kills).toEqual(['SIGTERM']);
   });
 
@@ -207,9 +213,9 @@ describe('createSqlRunner', () => {
     const { runner, children, spawn } = harness();
     const p = runner.exec('x');
     children[0].say({ t: 'ready' });
-    const rejected = await expect(p).rejects.toThrow(SQL_UNAVAILABLE);
+    const rejected = failure(p);
     children[0].exit(137); // OOM-killed
-    await rejected;
+    expect((await rejected)?.message).toBe(SQL_UNAVAILABLE);
     expect(runner.diagnostics().state).toBe('none');
     void runner.exec('y').catch(() => {});
     expect(spawn).toHaveBeenCalledTimes(2);
