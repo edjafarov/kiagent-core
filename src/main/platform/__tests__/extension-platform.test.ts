@@ -102,7 +102,10 @@ describe('createLaneGate', () => {
     state = 'until-synced';
     gate.check();
     gate.check();
-    expect(emit.mock.calls.map((c) => c[0])).toEqual(['battery', 'until-synced']);
+    expect(emit.mock.calls.map((c) => c[0])).toEqual([
+      'battery',
+      'until-synced',
+    ]);
   });
 
   it('the same resolved state re-resolved on a later tick emits nothing', () => {
