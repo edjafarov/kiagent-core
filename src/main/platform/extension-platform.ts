@@ -406,9 +406,11 @@ export interface ExtensionPlatform {
    * since the last emission — see `createLaneGate`. Called from main.ts's
    * 5 s publisher tick, which is the only trigger; `createLaneGate` dedups,
    * so reason-only changes (e.g. 'battery' -> 'until-synced') emit exactly
-   * once. Never throws.
+   * once. `wake` (a pending lane wake consumed by the same tick) re-emits
+   * 'open' even when unchanged, so an extension whose background request was
+   * refused between two ticks is told the lane reopened. Never throws.
    */
-  refreshLane(): void;
+  refreshLane(wake?: boolean): void;
   /** B1: dispatches an `ext:invoke` request to whichever extension
    *  incarnation currently owns (extensionId, name) in the ui registry.
    *  ALWAYS resolves an envelope — never rejects, so `ext:invoke`'s own
@@ -442,6 +444,9 @@ export interface ResetAllResult {
  * boolean never flips) still emits, exactly as much as `'disabled' ->
  * 'open'` does. `refreshLane()`, called by main.ts's 5 s publisher, is the
  * only trigger; the single `last` comparison means no duplicate and no skipped transition.
+ * Exception: `check(true)` (a lane wake — background work was refused since
+ * the last tick) re-emits an unchanged 'open', because the extension may have
+ * been refused in between and would otherwise never learn the lane reopened.
  *
  * A throw from `laneState()` or `emit()` is caught and reported to
  * `onError` rather than propagating into the publisher tick.
@@ -453,13 +458,13 @@ export function createLaneGate(
   laneState: () => LaneState,
   emit: (state: LaneState) => void,
   onError: (err: unknown) => void,
-): { check(): void } {
+): { check(wake?: boolean): void } {
   let last: LaneState | null = null;
   return {
-    check() {
+    check(wake = false) {
       try {
         const state = laneState();
-        if (state === last) return;
+        if (state === last && !(wake && state === 'open')) return;
         last = state;
         emit(state);
       } catch (err) {
@@ -1619,8 +1624,8 @@ export function createExtensionPlatform(
       });
     },
 
-    refreshLane() {
-      laneGate.check();
+    refreshLane(wake) {
+      laneGate.check(wake === true);
     },
 
     async callUi(extensionId, name, payload) {

@@ -1337,8 +1337,11 @@ app
         // 'battery' -> 'until-synced' reason change still emits once) and the
         // status module (push + worker wake). refreshLane() never throws.
         const lane = backgroundLaneState(p);
-        extensionsPlatform?.refreshLane();
-        processingStatus.tick(lane, lane === 'open' && takeLaneWake(p));
+        // The wake is consumed ONCE and shared, so extensions and workers
+        // both hear about a reopening that happened between two ticks.
+        const wake = lane === 'open' && takeLaneWake(p);
+        extensionsPlatform?.refreshLane(wake);
+        processingStatus.tick(lane, wake);
         const all = await p.store.ledgerCountsAll(p.engine.activeConsumers());
         const processing = {
           pending: all.pending,

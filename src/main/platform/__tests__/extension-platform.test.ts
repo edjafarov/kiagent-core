@@ -108,6 +108,28 @@ describe('createLaneGate', () => {
     ]);
   });
 
+  it('a wake on an unchanged open lane re-emits open; no wake does not', () => {
+    const woken = jest.fn();
+    const g1 = createLaneGate(() => 'open', woken, jest.fn());
+    g1.check();
+    g1.check(true);
+    expect(woken.mock.calls.map((c) => c[0])).toEqual(['open', 'open']);
+
+    const quiet = jest.fn();
+    const g2 = createLaneGate(() => 'open', quiet, jest.fn());
+    g2.check();
+    g2.check(false);
+    expect(quiet).toHaveBeenCalledTimes(1);
+  });
+
+  it('a wake on a closed lane emits nothing extra', () => {
+    const emit = jest.fn();
+    const gate = createLaneGate(() => 'battery', emit, jest.fn());
+    gate.check();
+    gate.check(true);
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
   it('the same resolved state re-resolved on a later tick emits nothing', () => {
     const emit = jest.fn();
     const gate = createLaneGate(
