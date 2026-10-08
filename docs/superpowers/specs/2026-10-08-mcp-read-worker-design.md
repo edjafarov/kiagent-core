@@ -1,6 +1,6 @@
 # MCP reads stay fast during sync — dedicated read worker
 
-**Status:** APPROVED rev 5 (2026-10-08) — fable SATISFIED + codex astra SATISFIED at rev 5 (minors folded in); review log §8 · **Issue:** #146 · **Base:** core v0.104.0 (c369815d) · **Related:** #145 (helpers yield, released v0.104.0), #147 (converter off main + background admission)
+**Status:** IMPLEMENTED (local, not released; plan 2026-10-08-mcp-read-worker.md; live acceptance OWED) — was APPROVED rev 5 (2026-10-08) — fable SATISFIED + codex astra SATISFIED at rev 5 (minors folded in); review log §8 · **Issue:** #146 · **Base:** core v0.104.0 (c369815d) · **Related:** #145 (helpers yield, released v0.104.0), #147 (converter off main + background admission)
 
 ## 1. Problem
 
