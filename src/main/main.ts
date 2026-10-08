@@ -50,6 +50,7 @@ import { createActivityLog, type ActivityLog } from './core/mcp/activity';
 import { createSqlRunner } from './core/mcp/sql-runner';
 import { utilityRunnerChild } from './core/mcp/sql-runner-spawn';
 import { startMcp } from './core/mcp/server';
+import { startReadDiagnosticsDump } from './core/read-diagnostics';
 import type { McpServerHandle } from './core/mcp/server';
 import { markOnboardingOnce } from './core/prefs';
 import {
@@ -696,6 +697,7 @@ function registerIpc(
         accountCount: accounts.filter((a) => a.source !== 'worker').length,
         dataDir,
         dbDiagnostics: (await p.db.plugin?.({ op: 'diagnostics' })) ?? null,
+        readDiagnostics: await p.readDiagnostics(mcp?.sqlDiagnostics() ?? null),
       };
     },
     'storage:added-24h': () =>
@@ -1031,6 +1033,15 @@ app
       reconcileClientConfigs: true,
       outbound,
     });
+    // Acceptance aid (§6): KIA_READ_DIAG_FILE=/path makes the app rewrite its
+    // read diagnostics every 5 s so the external MCP probe can read them.
+    if (process.env.KIA_READ_DIAG_FILE) {
+      startReadDiagnosticsDump(
+        process.env.KIA_READ_DIAG_FILE,
+        () => p.readDiagnostics(mcp?.sqlDiagnostics() ?? null),
+        5_000,
+      );
+    }
     // Onboarding step 2 reconciliation: a client connected in an earlier
     // run (config file already carries our entry) counts as done.
     void mcp

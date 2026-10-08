@@ -45,6 +45,9 @@ import { openStore } from './store/store';
 import type { CoreStore } from './store/store';
 import type { AppDb } from '../db/app-db';
 
+import { buildReadDiagnostics, type ReadDiagnostics } from './read-diagnostics';
+import type { SqlRunnerDiagnostics } from './mcp/sql-runner';
+
 export interface BootDeps {
   dataDir: string;
   encrypt(plain: string): Buffer;
@@ -126,6 +129,9 @@ export interface SenderRegistry {
 }
 
 export interface CorePlatform {
+  /** Read-plane diagnostics (reads stats, SQL runner state, -wal size). The
+   *  MCP server owns the runner, so the caller passes its diagnostics in. */
+  readDiagnostics(sql?: SqlRunnerDiagnostics | null): Promise<ReadDiagnostics>;
   /** The single worker-backed database service shared by core and plugins. */
   db: AppDb;
   store: CoreStore;
@@ -307,6 +313,12 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     refreshers,
     convert,
     host,
+    readDiagnostics: (sql) =>
+      buildReadDiagnostics({
+        stats: readPlane.stats,
+        walPath: `${dbPath}-wal`,
+        sql,
+      }),
     reads: readPlane.reads,
     readsFor: readPlane.readsFor,
     llmAccel: () => null,
