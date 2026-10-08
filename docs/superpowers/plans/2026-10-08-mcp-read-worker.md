@@ -455,6 +455,7 @@ Spec §3.2: fuzzy pass without corpus-wide ranking, `project: 'full' | 'snippet'
 - Consumes (Task 1): `createCorpusQuery`, `toDocument`, `DocRow`.
 - Produces:
   - `Query.search` arg gains `project?: 'full' | 'snippet' | 'metadata'` and `contextLines?: number`.
+  - `CorpusQuery` gains `fuzzyRuns(): number` — the cumulative number of times THIS instance actually executed the trigram fallback statement (`fuzzyCandidatesSql`). It is the acceptance probe's proof that its fuzzy workload really runs the fuzzy pass (the pass is skipped when the exact page is full, on later pages, or for terms it cannot fuzz). It reaches the probe as: Task 3 returns it in the `read` procedure result (`fuzzyRuns`, next to `execMs`), Task 4 keeps the reader's latest value in `ReadStats`/`ReadStatsSnapshot.fuzzyRuns`, Task 7 puts it in `readDiagnostics().reads.fuzzyRuns`. (Chosen over a separate `stats` procedure: the value rides on a call that already happens, so no extra round trip and no new worker surface.)
   - `fuzzy.ts`: `FUZZY_CANDIDATES = 100`, `fuzzyCandidatesSql(where: string, withBody: boolean): string`, `interface FuzzyCandidate`, `rankFuzzyCandidates<T extends FuzzyCandidate>(cands: readonly T[], positiveFolded: readonly string[]): T[]`, `pickFuzzyWinners(exactIds: ReadonlySet<string>, ranked: readonly { id: string }[], free: number): string[]`. `rrfMerge` is deleted.
   - `line-window.ts`: `DEFAULT_CONTEXT_LINES = 2`, `extractWindowTerms(q: string): string[]`, `buildLineWindow(markdown: string, terms: string[], contextLines: number, headTruncated?: boolean): string`.
 
@@ -607,6 +608,7 @@ describe('corpus query: fuzzy pass and projections', () => {
   let acc: AccountId;
   let sqls: string[];
   let query: ReturnType<typeof createCorpusQuery>['query'];
+  let corpus: ReturnType<typeof createCorpusQuery>;
 
   const commit = (account: AccountId, documents: DocumentInput[]) =>
     store.commit({ account, cursor: null, documents });
@@ -624,7 +626,8 @@ describe('corpus query: fuzzy pass and projections', () => {
         return db.all(sql, params);
       },
     } as AppDb;
-    query = createCorpusQuery(spy).query;
+    corpus = createCorpusQuery(spy);
+    query = corpus.query;
   });
 
   afterEach(async () => {
@@ -675,6 +678,24 @@ describe('corpus query: fuzzy pass and projections', () => {
     for (let i = 50; i < FUZZY_CANDIDATES + 50; i += 1) {
       expect(got.has(`old${String(i).padStart(3, '0')}`)).toBe(true);
     }
+  });
+
+  it('fuzzyRuns counts only real executions of the trigram fallback statement', async () => {
+    await commit(acc, [
+      ...Array.from({ length: 12 }, (_, i) => doc(`inv${i}`, { markdown: `the invoice number ${i}` })),
+      doc('jr', { markdown: 'Jahresrechnung offen' }),
+    ]);
+    expect(corpus.fuzzyRuns()).toBe(0);
+    // a stemmed term whose exact page is FULL never runs the fuzzy pass
+    await query.search({ text: 'invoices', limit: 10 });
+    expect(corpus.fuzzyRuns()).toBe(0);
+    // a later page never runs it either
+    await query.search({ text: 'invoice', limit: 10, offset: 10 });
+    expect(corpus.fuzzyRuns()).toBe(0);
+    // a real misspelling / fragment leaves the page short: the statement runs once
+    const hits = await query.search({ text: 'rechnung', limit: 10 });
+    expect(hits.map((h) => h.externalId)).toEqual(['jr']);
+    expect(corpus.fuzzyRuns()).toBe(1);
   });
 
   it('archived-heavy corpus still returns the live fuzzy hits', async () => {
@@ -1013,6 +1034,28 @@ const DOC_COLUMNS_NO_BODY =
   'd.id, d.account_id, d.external_id, d.type, d.title, d.url, d.metadata, d.created_at, d.parent_id, d.content_hash, d.seq, d.ingest_seq, d.archived_at, d.languages, d.ingested_at, d.updated_at, d.scope_root_id';
 ```
 
+Add the counter to `createCorpusQuery`: declare `let fuzzyRunCount = 0;` right below `let cache: …`, extend the interface and the returned object:
+
+```ts
+export interface CorpusQuery {
+  query: Query;
+  /** Drops the languages cache (explicit mode; harmless in data-version mode). */
+  invalidateLanguages(): void;
+  /** Cumulative executions of the trigram fallback statement on this instance. */
+  fuzzyRuns(): number;
+}
+```
+
+```ts
+  return {
+    query,
+    invalidateLanguages: () => {
+      cache = null;
+    },
+    fuzzyRuns: () => fuzzyRunCount,
+  };
+```
+
 In `search`, replace everything from the line `const where = filters.length ? \`AND ${filters.join(' AND ')}\` : '';` through the end of the method (the line before `async count(q) {`) with:
 
 ```ts
@@ -1073,6 +1116,7 @@ In `search`, replace everything from the line `const where = filters.length ? \`
             : null;
         if (!triMatch) return exact;
 
+        fuzzyRunCount += 1; // the trigram fallback statement is about to run
         const candidates = (await db.all(
           fuzzyCandidatesSql(where, negated.length > 0),
           [triMatch, ...params, FUZZY_CANDIDATES],
@@ -1230,7 +1274,7 @@ Spec §3.1: `openCorpusReadConnection` gains options; `worker-entry.ts` branches
 - Produces:
   - `openCorpusReadConnection(filePath: string, opts?: { cacheKiB?: number; queryOnly?: boolean }): Promise<AppDb>`.
   - `OpenDbInWorkerOptions` gains `role?: 'write' | 'read'` and `cacheKiB?: number`.
-  - Worker `read` procedure: `proc('read', { method: QueryMethod, args: unknown[] }) → Promise<{ value: unknown; execMs: number }>`.
+  - Worker `read` procedure: `proc('read', { method: QueryMethod, args: unknown[] }) → Promise<{ value: unknown; execMs: number; fuzzyRuns: number }>` (`fuzzyRuns` = the worker's cumulative `CorpusQuery.fuzzyRuns()`).
   - Test helper `createWorkerEnv(label): { execArgv: string[]; preloadPath: string; cleanup(): void }`, `WORKER_ENTRY`, `REPO_ROOT` (used by Tasks 3, 5, 6).
 
 - [ ] **Step 1: Write the shared test helper** — `src/main/db/__tests__/worker-test-env.ts`
@@ -1373,9 +1417,10 @@ describe('DB worker read role (real spawn)', () => {
     const res = (await reader.proc!('read', {
       method: 'accounts',
       args: [],
-    })) as { value: Array<{ identifier: string }>; execMs: number };
+    })) as { value: Array<{ identifier: string }>; execMs: number; fuzzyRuns: number };
     expect(res.value.map((a) => a.identifier)).toEqual(['me@example.com']);
     expect(typeof res.execMs).toBe('number');
+    expect(res.fuzzyRuns).toBe(0);
     expect(await reader.all('PRAGMA cache_size')).toEqual([{ cache_size: -4096 }]);
     expect(await reader.all('PRAGMA query_only')).toEqual([{ query_only: 1 }]);
     expect(await reader.all('PRAGMA mmap_size')).toEqual([{ mmap_size: 0 }]);
@@ -1391,6 +1436,21 @@ describe('DB worker read role (real spawn)', () => {
     expect(res.value).toHaveLength(1);
     expect(res.value[0].markdown).toBe('');
     expect(res.value[0].snippet).toContain('<b>invoice</b>');
+  });
+
+  it('returns the worker-side fuzzyRuns counter with every read result', async () => {
+    await seed();
+    reader = await open();
+    const read = async (text: string) =>
+      (await reader!.proc!('read', { method: 'search', args: [{ text }] })) as {
+        fuzzyRuns: number;
+      };
+    expect((await read('invoice')).fuzzyRuns).toBe(1); // page short -> fuzzy statement ran
+    expect((await read('invoice')).fuzzyRuns).toBe(2); // cumulative across calls
+    const acc = (await reader.proc!('read', { method: 'accounts', args: [] })) as {
+      fuzzyRuns: number;
+    };
+    expect(acc.fuzzyRuns).toBe(2); // other methods leave it alone
   });
 
   it('refuses writes (query_only) and registers no write procedure', async () => {
@@ -1511,7 +1571,8 @@ async function runReadRole(): Promise<void> {
     cacheKiB: cacheKiB ?? 2048,
     queryOnly: true,
   });
-  const { query } = createCorpusQuery(db, { languageCache: 'data-version' });
+  const corpus = createCorpusQuery(db, { languageCache: 'data-version' });
+  const { query } = corpus;
   const methods = new Set<string>(QUERY_METHODS);
   const table = query as unknown as Record<
     string,
@@ -1532,7 +1593,11 @@ async function runReadRole(): Promise<void> {
         }
         const started = performance.now();
         const value = await table[method](...callArgs);
-        return { value, execMs: performance.now() - started };
+        return {
+          value,
+          execMs: performance.now() - started,
+          fuzzyRuns: corpus.fuzzyRuns(),
+        };
       },
     },
   );
@@ -1702,8 +1767,8 @@ Spec §3.3 / §3.5 / §3.6. Pure TypeScript over a fake `AppDb`; no worker neede
 - Consumes: `QUERY_METHODS`, `QueryMethod` (Task 1); `DB_WORKER_CRASHED`, `DB_WORKER_DEAD` (`db/worker-client.ts`); the `read` procedure shape from Task 3.
 - Produces:
   - `type ReadCaller = 'mcp' | 'renderer' | 'other'`, `type ReadVia = 'reader' | 'writer'`, `type FallbackReason = 'open-failed' | 'crashed' | 'dead'`, `type ReadMode = 'reader' | 'writer'`.
-  - `interface ReadRecord { caller; method: QueryMethod; via: ReadVia; execMs: number; totalMs: number; at: number }`.
-  - `interface ReadGroupStats { caller; method; via; count; p50Ms; p95Ms; maxMs; execP95Ms; newestAgeMs }`; `interface ReadStatsSnapshot { mode: ReadMode; groups: ReadGroupStats[]; fallbacks: Record<FallbackReason, number> }`.
+  - `interface ReadRecord { caller; method: QueryMethod; via: ReadVia; execMs: number; totalMs: number; at: number; fuzzyRuns?: number }` (`fuzzyRuns` = the reader's cumulative counter as returned by the `read` procedure; absent on writer-path records).
+  - `interface ReadGroupStats { caller; method; via; count; p50Ms; p95Ms; maxMs; execP95Ms; newestAgeMs }`; `interface ReadStatsSnapshot { mode: ReadMode; groups: ReadGroupStats[]; fallbacks: Record<FallbackReason, number>; fuzzyRuns: number }`.
   - `interface ReadStats { record(r): void; fallback(reason): void; setMode(m): void; snapshot(now?: number): ReadStatsSnapshot }`; `createReadStats(window?: number): ReadStats` (default 256).
   - `queryFromInvoker(invoke: (method: QueryMethod, args: unknown[]) => Promise<unknown>): Query`.
   - `createReadProxy(readDb: AppDb, stats: ReadStats, caller: ReadCaller): Query`.
@@ -1733,7 +1798,7 @@ const readerDb = (proc: jest.Mock) => ({ proc }) as unknown as AppDb;
 
 describe('createReadProxy', () => {
   it('forwards method + args to the read procedure and records execMs/totalMs', async () => {
-    const proc = jest.fn(async () => ({ value: ['hit'], execMs: 3 }));
+    const proc = jest.fn(async () => ({ value: ['hit'], execMs: 3, fuzzyRuns: 5 }));
     const stats = createReadStats();
     const q = createReadProxy(readerDb(proc), stats, 'mcp');
     expect(await q.search({ text: 'x' })).toEqual(['hit']);
@@ -1750,6 +1815,7 @@ describe('createReadProxy', () => {
       execP95Ms: 3,
     });
     expect(g.p95Ms).toBeGreaterThanOrEqual(0);
+    expect(stats.snapshot().fuzzyRuns).toBe(5); // the reader's cumulative counter is surfaced
   });
 });
 
@@ -1899,6 +1965,8 @@ export interface ReadRecord {
   /** Request to answer, as main saw it (includes queueing on either side). */
   totalMs: number;
   at: number;
+  /** The reader worker's cumulative fuzzy-pass executions (reader path only). */
+  fuzzyRuns?: number;
 }
 
 export interface ReadGroupStats {
@@ -1917,6 +1985,8 @@ export interface ReadStatsSnapshot {
   mode: ReadMode;
   groups: ReadGroupStats[];
   fallbacks: Record<FallbackReason, number>;
+  /** Latest cumulative fuzzy-pass count reported by the reader (0 until a read ran). */
+  fuzzyRuns: number;
 }
 
 export interface ReadStats {
@@ -1941,8 +2011,10 @@ export function createReadStats(window = STATS_WINDOW): ReadStats {
     dead: 0,
   };
   let mode: ReadMode = 'reader';
+  let fuzzyRuns = 0;
   return {
     record(r) {
+      if (r.fuzzyRuns !== undefined) fuzzyRuns = r.fuzzyRuns;
       ring.push(r);
       if (ring.length > window) ring.shift();
     },
@@ -1976,7 +2048,7 @@ export function createReadStats(window = STATS_WINDOW): ReadStats {
           newestAgeMs: now - newest,
         };
       });
-      return { mode, groups, fallbacks: { ...fallbacks } };
+      return { mode, groups, fallbacks: { ...fallbacks }, fuzzyRuns };
     },
   };
 }
@@ -2002,6 +2074,7 @@ export function createReadProxy(
     const res = (await readDb.proc!('read', { method, args })) as {
       value: unknown;
       execMs: number;
+      fuzzyRuns?: number;
     };
     stats.record({
       caller,
@@ -2010,6 +2083,7 @@ export function createReadProxy(
       execMs: res.execMs,
       totalMs: performance.now() - t0,
       at: Date.now(),
+      fuzzyRuns: res.fuzzyRuns,
     });
     return res.value;
   });
@@ -4230,7 +4304,7 @@ import { createReadStats } from '../store/read-proxy';
 describe('buildReadDiagnostics', () => {
   const stats = () => {
     const s = createReadStats();
-    s.record({ caller: 'mcp', method: 'countBy', via: 'reader', execMs: 40, totalMs: 45, at: 1_000 });
+    s.record({ caller: 'mcp', method: 'countBy', via: 'reader', execMs: 40, totalMs: 45, at: 1_000, fuzzyRuns: 7 });
     return s;
   };
 
@@ -4243,6 +4317,7 @@ describe('buildReadDiagnostics', () => {
       now: 2_000,
     });
     expect(d.walBytes).toBe(4096);
+    expect(d.reads.fuzzyRuns).toBe(7);
     expect(d.sql).toEqual({ state: 'ready', pid: 77, timeouts: 2, recent: [] });
     expect(d.reads.groups[0]).toMatchObject({
       caller: 'mcp',
@@ -4280,6 +4355,7 @@ describe('startReadDiagnosticsDump', () => {
       }
     };
     await waitFor(() => fs.existsSync(file) && JSON.parse(fs.readFileSync(file, 'utf8')).n >= 2);
+    expect(typeof JSON.parse(fs.readFileSync(file, 'utf8')).snapshotAt).toBe('number');
     stop();
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -4307,6 +4383,7 @@ import type { SqlRunnerDiagnostics } from './mcp/sql-runner';
 import type { ReadStats, ReadStatsSnapshot } from './store/read-proxy';
 
 export interface ReadDiagnostics {
+  /** Includes `reads.fuzzyRuns`: the reader's cumulative fuzzy-pass executions. */
   reads: ReadStatsSnapshot;
   sql: SqlRunnerDiagnostics | null;
   walBytes: number | null;
@@ -4334,7 +4411,9 @@ export async function buildReadDiagnostics(deps: {
 }
 
 /** Acceptance aid (KIA_READ_DIAG_FILE): rewrite `file` with a fresh snapshot
- *  every `intervalMs`. Failures are swallowed — diagnostics never break the app. */
+ *  every `intervalMs`. Each file carries `snapshotAt` (ms epoch, taken BEFORE
+ *  the snapshot), so a reader can wait for a snapshot that reflects calls it
+ *  made earlier. Failures are swallowed — diagnostics never break the app. */
 export function startReadDiagnosticsDump(
   file: string,
   snapshot: () => Promise<unknown>,
@@ -4342,7 +4421,9 @@ export function startReadDiagnosticsDump(
 ): () => void {
   const write = async () => {
     try {
-      await fs.promises.writeFile(file, JSON.stringify(await snapshot(), null, 2));
+      const snapshotAt = Date.now();
+      const snap = (await snapshot()) as Record<string, unknown>;
+      await fs.promises.writeFile(file, JSON.stringify({ ...snap, snapshotAt }, null, 2));
     } catch {
       /* best effort */
     }
@@ -4412,8 +4493,8 @@ Spec §6 "Probe". Runs the fixed workload from OUTSIDE the app, as ChatGPT/Claud
 - Create: `scripts/mcp-latency-probe.mjs`, `scripts/mcp-latency-probe-workload.mjs`, `src/main/core/mcp/__tests__/latency-probe.test.ts`, `src/main/core/mcp/__tests__/latency-probe-workload.test.ts`
 
 **Interfaces:**
-- Consumes: the loopback MCP endpoint (`http://127.0.0.1:7421/mcp`); tools `search`, `get`, `count`, `digital_memory_info`, `get_schema`; the Task 7 diagnostics file (`--diag`).
-- Produces: a JSON report on stdout (last line) `{ label, at, cycles, kinds: { search, get, count, info, loop }, fallbacks? }` where every kind is `{ n, p50, p95, max }` in ms; exit code 0 = ran, 1 = a pass criterion failed (p95 > 2x baseline, or any fallback), 2 = `countBy` was never seen on the reader, 3 = the workload itself was invalid (not 10 DISTINCT existing `get` ids, any `get` during measurement returning null/empty, a fuzzy term that is not fuzzy-only on this corpus, any kind with fewer samples than the fixed workload promises, or a `--baseline` report that is itself incomplete: sample counts below its own `cycles`, or search/get p95 not > 0). Flags: `--ids <file>` (the 10 `get` ids: read if the file exists, otherwise established by a setup search BEFORE measurement and written there, so baseline and after runs use identical ids).
+- Consumes: the loopback MCP endpoint (`http://127.0.0.1:7421/mcp`); tools `search`, `get`, `count`, `digital_memory_info`, `get_schema`; the Task 7 diagnostics file (`--diag`: `snapshotAt`, `reads.fuzzyRuns`, `reads.groups`, `reads.fallbacks`).
+- Produces: a JSON report on stdout (last line) `{ label, at, cycles, kinds: { search, get, count, info, loop }, fallbacks? }` where every kind is `{ n, p50, p95, max }` in ms; exit code 0 = ran, 1 = a pass criterion failed (p95 > 2x baseline, or any fallback), 2 = `countBy` was never seen on the reader, 3 = the workload itself was invalid (not 10 DISTINCT existing `get` ids, any `get` during measurement returning null/empty, a fuzzy term that does not increase the app's `reads.fuzzyRuns` counter or returns no hit (needs `--diag`), a baseline-mode run (no `--diag`) without a validated `--ids` file, any kind with fewer samples than the fixed workload promises, or a `--baseline` report that is itself incomplete: sample counts below its own `cycles`, or search/get p95 not > 0). Flags: `--ids <file>` (the validated workload `{ ids, fuzzy }`: the 10 `get` ids plus the fuzzy term; with `--diag` it is (re)validated and written, without `--diag` — the v0.104.0 baseline — it MUST already exist from a validated run and is not re-validated), `--validate-only` (setup + validation only, writes the `--ids` file, exits 0/3).
 
 - [ ] **Step 1: Write the failing test** — `src/main/core/mcp/__tests__/latency-probe.test.ts` (starts a real server in this process; the probe must run as an ASYNC child so the server's event loop stays free)
 
@@ -4428,6 +4509,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { openDb } from '../../../db/app-db';
+import { startReadDiagnosticsDump } from '../../read-diagnostics';
+import { createCorpusQuery } from '../../store/corpus-query';
 import { openStore } from '../../store/store';
 import { startMcp, type McpServerHandle } from '../server';
 import { createInProcessSqlExecutor } from '../tools/raw-sql';
@@ -4440,10 +4523,14 @@ const PROBE = path.resolve(__dirname, '..', '..', '..', '..', '..', 'scripts', '
 describe('scripts/mcp-latency-probe.mjs', () => {
   let dir: string;
   let handle: McpServerHandle;
+  let stopDiag: () => void;
+  let diag: string;
 
   beforeAll(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-probe-'));
-    const store = openStore(await openDb(path.join(dir, 'kiagent.db')), {
+    diag = path.join(dir, 'diag.json');
+    const db = await openDb(path.join(dir, 'kiagent.db'));
+    const store = openStore(db, {
       encrypt: (s: string) => Buffer.from(s, 'utf8'),
       decrypt: (b: Buffer) => b.toString('utf8'),
       detectLanguages: () => ['eng'],
@@ -4461,8 +4548,22 @@ describe('scripts/mcp-latency-probe.mjs', () => {
         createdAt: '2026-01-01T00:00:00Z',
       })),
     });
+    // The server reads through a createCorpusQuery whose fuzzyRuns counter is
+    // dumped like the app's KIA_READ_DIAG_FILE (same field names, 100 ms cadence).
+    const corpus = createCorpusQuery(db, { languageCache: 'data-version' });
+    stopDiag = startReadDiagnosticsDump(
+      diag,
+      async () => ({
+        reads: {
+          fuzzyRuns: corpus.fuzzyRuns(),
+          groups: [{ method: 'countBy', via: 'reader', count: 1 }],
+          fallbacks: {},
+        },
+      }),
+      100,
+    );
     handle = await startMcp({
-      query: store.read,
+      query: corpus.query,
       logSink: { log: () => {} },
       dataDir: dir,
       portCandidates: [0],
@@ -4471,23 +4572,40 @@ describe('scripts/mcp-latency-probe.mjs', () => {
   });
 
   afterAll(async () => {
+    stopDiag();
     await handle.stop();
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('runs one cycle of the fixed workload and reports p50/p95 per kind', async () => {
-    const { stdout } = await run(process.execPath, [
-      PROBE,
-      '--url', `http://127.0.0.1:${handle.port}/mcp`,
-      '--cycles', '1',
-      '--interval', '0',
-      '--label', 'test',
-      '--fuzzy', 'nvoic', // a substring of "Invoice": found by the fuzzy pass only
-      '--ids', path.join(dir, 'ids.json'),
-    ]);
+  /** Common args; a real misspelling by default ("nvoic" occurs inside "Invoice"). */
+  const probeArgs = (...extra: string[]) => [
+    PROBE,
+    '--url', `http://127.0.0.1:${handle.port}/mcp`,
+    '--cycles', '1',
+    '--interval', '0',
+    '--diag', diag,
+    '--fuzzy', 'nvoic',
+    ...extra,
+  ];
+  /** Baseline mode: NO --diag, no --fuzzy (the term comes from the validated file). */
+  const baselineArgs = (...extra: string[]) => [
+    PROBE,
+    '--url', `http://127.0.0.1:${handle.port}/mcp`,
+    '--cycles', '1',
+    '--interval', '0',
+    ...extra,
+  ];
+  const fail3 = (args: string[], stderr: RegExp) =>
+    expect(run(process.execPath, args)).rejects.toMatchObject({ code: 3, stderr: expect.stringMatching(stderr) });
+
+  it('runs one cycle of the fixed workload and reports p50/p95 per kind (real misspelling: counter +1)', async () => {
+    const ids = path.join(dir, 'ids.json');
+    const { stdout } = await run(process.execPath, probeArgs('--label', 'test', '--ids', ids));
     const report = JSON.parse(stdout.trim().split('\n').pop()!);
     expect(report.label).toBe('test');
-    expect(JSON.parse(fs.readFileSync(path.join(dir, 'ids.json'), 'utf8'))).toHaveLength(10);
+    const saved = JSON.parse(fs.readFileSync(ids, 'utf8'));
+    expect(saved.ids).toHaveLength(10);
+    expect(saved.fuzzy).toBe('nvoic');
     expect(report.kinds.search.n).toBe(12); // 10 text searches + 2 recency/filter-only
     expect(report.kinds.get.n).toBe(10);
     expect(report.kinds.count.n).toBe(2); // group_by label + from
@@ -4498,47 +4616,46 @@ describe('scripts/mcp-latency-probe.mjs', () => {
     }
   });
 
-  it('fails the run (exit 3) when the configured fuzzy term returns nothing', async () => {
-    await expect(
-      run(process.execPath, [
-        PROBE,
-        '--url', `http://127.0.0.1:${handle.port}/mcp`,
-        '--cycles', '1',
-        '--interval', '0',
-        '--fuzzy', 'zzqxjk-no-such-substring',
-      ]),
-    ).rejects.toMatchObject({ code: 3, stderr: expect.stringMatching(/fuzzy/i) });
+  it('--validate-only validates, writes the workload file and exits 0 without measuring', async () => {
+    const ids = path.join(dir, 'validated.json');
+    const { stdout } = await run(process.execPath, probeArgs('--validate-only', '--ids', ids));
+    expect(JSON.parse(stdout.trim().split('\n').pop()!)).toMatchObject({ validated: true, fuzzy: 'nvoic' });
+    expect(JSON.parse(fs.readFileSync(ids, 'utf8'))).toMatchObject({ fuzzy: 'nvoic' });
   });
 
-  const probeArgs = (...extra: string[]) => [
-    PROBE,
-    '--url', `http://127.0.0.1:${handle.port}/mcp`,
-    '--cycles', '1',
-    '--interval', '0',
-    '--fuzzy', 'nvoic',
-    ...extra,
-  ];
+  it('baseline mode (no --diag) reuses the validated file, takes its fuzzy term and does not re-validate', async () => {
+    const ids = path.join(dir, 'validated.json'); // written by the previous test
+    const { stdout } = await run(process.execPath, baselineArgs('--ids', ids));
+    const report = JSON.parse(stdout.trim().split('\n').pop()!);
+    expect(report.kinds.get.n).toBe(10);
+    expect(report.kinds.search.n).toBe(12);
+  });
 
-  it('exit 3 when the fuzzy term has exact FTS matches (not fuzzy-only)', async () => {
-    await expect(run(process.execPath, probeArgs('--fuzzy', 'invoice'))).rejects.toMatchObject({
-      code: 3,
-      stderr: expect.stringMatching(/not fuzzy-only/),
-    });
+  it('baseline mode without a validated workload file exits 3', async () => {
+    await fail3(baselineArgs(), /validated run/); // no --ids at all
+    await fail3(baselineArgs('--ids', path.join(dir, 'does-not-exist.json')), /validated run/);
+    const noFuzzy = path.join(dir, 'no-fuzzy.json');
+    fs.writeFileSync(noFuzzy, JSON.stringify({ ids: Array.from({ length: 10 }, (_, i) => `x${i}`) }));
+    await fail3(baselineArgs('--ids', noFuzzy), /validated run/);
+  });
+
+  it('exit 3 for a STEMMED term: the exact page is full, the fuzzy counter does not move', async () => {
+    // 30 "invoice" documents fill the 10-hit page for "invoices": search returns hits,
+    // but the trigram fallback never runs, so this term would skip the fuzzy workload.
+    await fail3(probeArgs('--fuzzy', 'invoices'), /not fuzzy-only/);
+  });
+
+  it('exit 3 when the fuzzy term returns nothing', async () => {
+    await fail3(probeArgs('--fuzzy', 'zzqxjk-no-such-substring'), /not fuzzy-only/);
   });
 
   it('exit 3 when the ids file holds ids that are not documents (null gets) or are not distinct', async () => {
     const fake = path.join(dir, 'fake-ids.json');
-    fs.writeFileSync(fake, JSON.stringify(Array.from({ length: 10 }, (_, i) => `no-such-doc-${i}`)));
-    await expect(run(process.execPath, probeArgs('--ids', fake))).rejects.toMatchObject({
-      code: 3,
-      stderr: expect.stringMatching(/invalid workload/),
-    });
+    fs.writeFileSync(fake, JSON.stringify({ ids: Array.from({ length: 10 }, (_, i) => `no-such-doc-${i}`), fuzzy: 'nvoic' }));
+    await fail3(probeArgs('--ids', fake), /invalid workload/);
     const dup = path.join(dir, 'dup-ids.json');
-    fs.writeFileSync(dup, JSON.stringify(Array.from({ length: 10 }, () => 'same')));
-    await expect(run(process.execPath, probeArgs('--ids', dup))).rejects.toMatchObject({
-      code: 3,
-      stderr: expect.stringMatching(/DISTINCT/),
-    });
+    fs.writeFileSync(dup, JSON.stringify({ ids: Array.from({ length: 10 }, () => 'same'), fuzzy: 'nvoic' }));
+    await fail3(probeArgs('--ids', dup), /DISTINCT/);
   });
 
   it('exit 3 when the --baseline report has no get samples', async () => {
@@ -4552,10 +4669,7 @@ describe('scripts/mcp-latency-probe.mjs', () => {
         kinds: { search: k(24, 5), get: k(0, 0), count: k(4, 5), info: k(2, 1), loop: k(2, 1) },
       }),
     );
-    await expect(run(process.execPath, probeArgs('--baseline', base))).rejects.toMatchObject({
-      code: 3,
-      stderr: expect.stringMatching(/baseline get/),
-    });
+    await fail3(probeArgs('--baseline', base), /baseline get/);
   });
 });
 ```
@@ -4635,20 +4749,29 @@ describe('probe workload', () => {
     expect(out.missing.join(' ')).toMatch(/d3/);
   });
 
-  it('validateFuzzy needs zero exact FTS matches AND at least one search hit', async () => {
+  it('validateFuzzy needs the app fuzzyRuns counter to move AND at least one search hit', async () => {
     const out = await node(`
-      const mk = (n, hits) => async (name) => (name === 'query_sql' ? { rows: [{ n }] } : hits);
+      // readRuns returns the counter; the search itself bumps it by \`bump\`.
+      const mk = (bump, hits) => {
+        let runs = 4;
+        return {
+          call: async () => { runs += bump; return hits; },
+          readRuns: async () => runs,
+        };
+      };
+      const run = async (bump, hits, term) => {
+        const m = mk(bump, hits);
+        return w.validateFuzzy(m.call, term, m.readRuns);
+      };
       console.log(JSON.stringify({
-        fuzzyOnly: await w.validateFuzzy(mk(0, [{ id: 'x' }]), 'nvoic'),
-        exactOnly: await w.validateFuzzy(mk(3, [{ id: 'x' }]), 'invoice'),
-        nothing: await w.validateFuzzy(mk(0, []), 'zzz'),
-        phrase: w.ftsPhraseLiteral("it's " + String.fromCharCode(34) + "x" + String.fromCharCode(34)),
+        misspelling: await run(1, [{ id: 'x' }], 'nvoic'),
+        stemmed: await run(0, [{ id: 'x' }], 'invoices'),
+        nothing: await run(1, [], 'zzz'),
       }));
     `);
-    expect(out.fuzzyOnly).toBeNull();
-    expect(out.exactOnly).toMatch(/not fuzzy-only/);
+    expect(out.misspelling).toBeNull();
+    expect(out.stemmed).toMatch(/not fuzzy-only/);
     expect(out.nothing).toMatch(/not fuzzy-only/);
-    expect(out.phrase).toBe(["'", '"', "it''s ", '""x""', '"', "'"].join(''));
   });
 
   it('checkBaseline rejects a baseline without get samples or with p95 0', async () => {
@@ -4749,20 +4872,18 @@ export async function validateIds(call, ids) {
   return problems;
 }
 
-/** The term as an FTS5 phrase, then as a SQL string literal. */
-export const ftsPhraseLiteral = (term) => `'"${term.replace(/"/g, '""').replace(/'/g, "''")}"'`;
-
-/** The fuzzy term must be fuzzy-ONLY on this corpus: zero exact FTS matches
- *  (via the query_sql tool) AND at least one MCP search hit (the fuzzy pass).
- *  Returns a problem message or null. */
-export async function validateFuzzy(call, term) {
-  const exact = await call('query_sql', {
-    sql: `SELECT count(*) AS n FROM documents_fts WHERE documents_fts MATCH ${ftsPhraseLiteral(term)}`,
-  });
-  const n = exact?.rows?.[0]?.n;
+/** The fuzzy term must really EXECUTE the fuzzy pass on this corpus, and the
+ *  search must return something. The proof is the app's own counter
+ *  (`reads.fuzzyRuns` in the read diagnostics), not a reimplementation of
+ *  stemming here: `readRuns(sinceMs)` resolves the counter from a diagnostics
+ *  snapshot taken at or after `sinceMs`. Returns a problem message or null. */
+export async function validateFuzzy(call, term, readRuns) {
+  const before = await readRuns(Date.now());
   const hits = await call('search', { query: term, limit: 10 });
-  if (n !== 0 || !Array.isArray(hits) || hits.length === 0) {
-    return `fuzzy term "${term}" is not fuzzy-only on this corpus (exact FTS matches: ${n}, search hits: ${Array.isArray(hits) ? hits.length : 'n/a'}); pick a misspelling or word fragment that occurs inside longer words`;
+  const after = await readRuns(Date.now());
+  const n = Array.isArray(hits) ? hits.length : 0;
+  if (!(after > before) || n === 0) {
+    return `fuzzy term "${term}" is not fuzzy-only on this corpus; pick a misspelling (fuzzy runs ${before} -> ${after}, search hits ${n})`;
   }
   return null;
 }
@@ -4813,11 +4934,16 @@ export function checkSamples(kinds, cycles) {
  *   node scripts/mcp-latency-probe.mjs --url http://127.0.0.1:7421/mcp \
  *     --cycles 24 --interval 5000 --label during-sync --out during-sync.json \
  *     --diag /tmp/kia-read-diag.json --baseline idle.json --ids ids.json
+ *   node scripts/mcp-latency-probe.mjs --url … --diag … --ids ids.json --validate-only
  * where --diag is the file the app writes with KIA_READ_DIAG_FILE=/tmp/kia-read-diag.json,
- * --baseline is the --out of an idle run and --ids is the file holding the 10
- * `get` ids (created by the first run, REUSED by every later run so baseline
- * and after numbers measure the same documents). Last stdout line = JSON report.
- * Exit 3 = the workload itself was invalid (see below).
+ * --baseline is the --out of an idle run and --ids is the workload file
+ * `{ ids: [10 get ids], fuzzy: "<validated term>" }`. Order of use:
+ *   1. new build:  --validate-only --diag … --ids ids.json   (validates + writes it)
+ *   2. v0.104.0 baseline: --ids ids.json, NO --diag (that build has no
+ *      diagnostics): it requires the file from step 1 and does not re-validate.
+ *   3. new build measurement: --diag … --ids ids.json (re-validates the fuzzy
+ *      term against the app's fuzzyRuns counter every run).
+ * Last stdout line = JSON report. Exit 3 = the workload itself was invalid.
  */
 import fs from 'node:fs';
 
@@ -4845,12 +4971,17 @@ function parseArgs(argv) {
     diag: '',
     baseline: '',
     ids: '',
+    'validate-only': false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (!a.startsWith('--')) throw new Error(`unexpected argument ${a}`);
     const key = a.slice(2);
     if (!(key in o)) throw new Error(`unknown option ${a}`);
+    if (typeof o[key] === 'boolean') {
+      o[key] = true;
+      continue;
+    }
     i += 1;
     if (argv[i] === undefined) throw new Error(`${a} needs a value`);
     o[key] = typeof o[key] === 'number' ? Number(argv[i]) : argv[i];
@@ -4890,32 +5021,63 @@ async function timed(kind, fn) {
   return r;
 }
 
+/** fuzzyRuns from a diagnostics snapshot written at or after `sinceMs` (the
+ *  app stamps `snapshotAt` before it snapshots, every 5 s). */
+async function readFuzzyRuns(sinceMs, timeoutMs = 20_000) {
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const d = JSON.parse(fs.readFileSync(opts.diag, 'utf8'));
+      if (d.snapshotAt >= sinceMs && typeof d.reads?.fuzzyRuns === 'number') return d.reads.fuzzyRuns;
+    } catch {
+      /* not written yet / mid-write: poll again */
+    }
+    if (Date.now() > end) {
+      invalid(`${opts.diag} was not refreshed with reads.fuzzyRuns within ${timeoutMs} ms (KIA_READ_DIAG_FILE set on a build that has fuzzyRuns?)`);
+    }
+    await sleep(50);
+  }
+}
+
 async function main() {
+  // ── Setup, BEFORE any measurement: the workload must be valid or the numbers
+  // mean nothing (exit 3, never a quietly thinner run).
+  const validateOnly = opts['validate-only'];
+  if (validateOnly && !opts.diag) invalid('--validate-only needs --diag (the fuzzy proof is the app\'s fuzzyRuns counter)');
+  if (validateOnly && !opts.ids) invalid('--validate-only needs --ids <file> to write the validated workload to');
+  let saved = null;
+  if (opts.ids && fs.existsSync(opts.ids)) saved = JSON.parse(fs.readFileSync(opts.ids, 'utf8'));
+  if (!opts.diag) {
+    // Baseline mode (v0.104.0 has no diagnostics): reuse a VALIDATED workload.
+    if (!saved || !Array.isArray(saved.ids) || typeof saved.fuzzy !== 'string' || !saved.fuzzy) {
+      invalid('without --diag the probe needs an --ids file produced by a validated run (--validate-only --diag …); none found or it has no validated fuzzy term');
+    }
+    opts.fuzzy = saved.fuzzy;
+  }
   // The 10 text queries: the configured terms, then the fuzzy-only term last.
   const queries = [...opts.terms.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 9), opts.fuzzy];
   while (queries.length < 10) queries.push(queries[queries.length - 1]);
   const accounts = (await call('digital_memory_info')).accounts ?? [];
   const restrictTo = accounts[0]?.source;
 
-  // ── Setup, BEFORE any measurement: the workload must be valid or the numbers
-  // mean nothing (exit 3, never a quietly thinner run).
   let base = null;
   if (opts.baseline) {
     base = JSON.parse(fs.readFileSync(opts.baseline, 'utf8'));
     const bp = checkBaseline(base);
     if (bp.length > 0) invalid(bp.join('; '));
   }
-  let ids;
-  if (opts.ids && fs.existsSync(opts.ids)) {
-    ids = JSON.parse(fs.readFileSync(opts.ids, 'utf8'));
-  } else {
-    ids = await collectIds(call, queries);
-  }
+  const ids = saved?.ids ?? (await collectIds(call, queries));
   const idProblems = await validateIds(call, ids); // 10 distinct ids, each a real document
   if (idProblems.length > 0) invalid(idProblems.join('; '));
-  if (opts.ids && !fs.existsSync(opts.ids)) fs.writeFileSync(opts.ids, JSON.stringify(ids));
-  const fuzzyProblem = await validateFuzzy(call, opts.fuzzy);
-  if (fuzzyProblem) invalid(fuzzyProblem);
+  if (opts.diag) {
+    const fuzzyProblem = await validateFuzzy(call, opts.fuzzy, readFuzzyRuns);
+    if (fuzzyProblem) invalid(fuzzyProblem);
+    if (opts.ids) fs.writeFileSync(opts.ids, JSON.stringify({ ids, fuzzy: opts.fuzzy }, null, 2));
+  }
+  if (validateOnly) {
+    process.stdout.write(`${JSON.stringify({ label: opts.label, validated: true, ids, fuzzy: opts.fuzzy })}\n`);
+    return 0;
+  }
 
   const badGets = [];
   for (let cycle = 0; cycle < opts.cycles; cycle += 1) {
@@ -5082,9 +5244,11 @@ Needs the founder's machine, the Windows VM and PACKAGED candidate builds. Core 
 
 - [ ] **Packaged candidates (REQUIRED, macOS AND Windows, before any core release).** In alpha-cent build a release candidate whose `core.lock` pins a LOCAL core tag cut from this branch (`KIA_TEST_BUILD=1`, so the feeds are not touched), per `docs/runbooks/release-testing.md`; build one leg at a time (docker leg first, then mac, then smoke mac, then smoke win; never in parallel). Run `node build/release-smoke.mjs --build-root ~/work/ac-prod-build --asr` on both platforms and require the full stage list green (13 stages). The jest suite cannot prove the Electron utility-process boundary or the packaged better-sqlite3; this step does.
 - [ ] **Packaged `query_sql` checks (manual, on the macOS and the Windows candidate, over the packaged app's loopback MCP, with `KIA_READ_DIAG_FILE` set):** (1) `SELECT 1 AS one` returns `[{"one":1}]`; (2) a non-yielding heavy statement (the HEAVY aggregate from `sql-runner-process.test.ts`) is stopped at 10 s with the specified stop message; (3) the diag file then shows `sql.state: 'none'` / `sql.pid: null`, and the former runner pid is gone from the OS process table (`ps` / Task Manager); (4) the next `SELECT 1 AS one` succeeds. Any failure blocks the core release.
-- [ ] **Setup (latency runs):** build a dev app from this branch; start it with `KIA_READ_DIAG_FILE=/tmp/kia-read-diag.json`. For the "before" numbers use the v0.104.0 build on the SAME corpus/cache state (copy the profile data dir; restore it between runs).
-- [ ] **Idle baseline:** `node scripts/mcp-latency-probe.mjs --url http://127.0.0.1:7421/mcp --cycles 24 --interval 5000 --label idle --out idle.json --ids ids.json --diag /tmp/kia-read-diag.json` (the first run writes `ids.json`; EVERY later run, including the v0.104.0 "before" run, passes the same `--ids ids.json`; the v0.104.0 "before" run OMITS `--diag`, because that build has no read diagnostics file; if the probe exits 3 the workload was invalid: fix the corpus/`--fuzzy` term and rerun, never compare such a run).
-- [ ] **During sync, macOS weak path:** start with `KIA_HOST_WEAK=1`, trigger a Gmail + Drive initial sync, run the probe with `--label during-sync --out sync.json --baseline idle.json --ids ids.json --diag /tmp/kia-read-diag.json`.
+- [ ] **Setup (latency runs; order matters: (a) validate on the new build, (b) v0.104.0 baseline with that file, (c) new-build measurement):** build a dev app from this branch; start it with `KIA_READ_DIAG_FILE=/tmp/kia-read-diag.json`. For the "before" numbers use the v0.104.0 build on the SAME corpus/cache state (copy the profile data dir; restore it between runs).
+- [ ] **(a) Validate the workload on the NEW build (first, once):** `node scripts/mcp-latency-probe.mjs --url http://127.0.0.1:7421/mcp --validate-only --diag /tmp/kia-read-diag.json --ids ids.json --fuzzy <misspelling or fragment of a word that occurs in this corpus>`. It checks 10 distinct existing `get` ids and that the fuzzy term really runs the fuzzy pass (the app's `reads.fuzzyRuns` rises and the search returns a hit), then writes `ids.json` (`{ ids, fuzzy }`). Exit 3 = not fuzzy-only on this corpus (a stemmed word whose exact page is full, or no hit at all): pick another term and rerun. Never compare numbers from a run that exited 3.
+- [ ] **(b) v0.104.0 "before" runs (same corpus/cache state):** `node scripts/mcp-latency-probe.mjs --url http://127.0.0.1:7421/mcp --cycles 24 --interval 5000 --label before-idle --out before-idle.json --ids ids.json` (NO `--diag`: that build has no read diagnostics; the probe requires the validated `ids.json` from (a), takes its fuzzy term from it and does not re-validate). Repeat during a Gmail + Drive initial sync with `--label before-sync --out before-sync.json --baseline before-idle.json`.
+- [ ] **(c) New build measurement, idle baseline:** `node scripts/mcp-latency-probe.mjs --url http://127.0.0.1:7421/mcp --cycles 24 --interval 5000 --label idle --out idle.json --ids ids.json --diag /tmp/kia-read-diag.json` (re-validates the fuzzy term against the counter every run).
+- [ ] **During sync, macOS weak path:** start with `KIA_HOST_WEAK=1`, trigger a Gmail + Drive initial sync, run the probe with `--label during-sync --out sync.json --baseline idle.json --ids ids.json --diag /tmp/kia-read-diag.json` (still step (c): same `ids.json` from (a)).
 - [ ] **During sync, Windows VM:** same on the VM (`ssh win`; the diag path and the probe URL via the VM's loopback; see the Windows UTM recipe).
 - [ ] **Pass criteria:** search and get p95 during sync <= ~2x idle p95 (the probe exits 1 otherwise); `fallbacks` all 0; the diag file shows `countBy` executed on the reader (probe exit code 2 otherwise); probe exit code 3 never; `walBytes` does not grow monotonically during the run. If the probe's `loop` kind (get_schema round trip) dominates the remaining latency, record the number and hand it to #147 instead of tuning around it.
 - [ ] **Open items to record:** if get p95 fails because of a slow `count`/`countBy`/broad search on the single reader, that is the trigger for a second reader (spec §7), not for tuning here.
@@ -5109,7 +5273,9 @@ Task 10 proves the packaged boundary by hand BEFORE the release; this task autom
 
 **Rev 2 re-check.** Spec coverage: §3.4 bounds now UTF-8-byte and array-overhead exact (Task 6 tests), required executor (Task 6 Step 11), killable-runner isolation proven against a real read worker (Task 6 Step 9), no-queue incl. a reconcile-stage workload (Task 5), probe validity gates (Task 8), packaged candidates before release (Task 10). Placeholders: none added (every new step shows its code or exact command). Type consistency: `MAX_VALUE_BYTES` replaces `MAX_VALUE_CHARS` everywhere (Interfaces, impl, tests); `McpDeps.sqlExecutor` is required in Interfaces, server code, the three server tests, latency-probe test and main.ts; `runGetsAndCounts`/`collectIds`/`checkSamples`/`EXPECTED_IDS` (workload module) are used by the probe and its tests; `BootDeps` no longer gains `dbWorkerExecArgv` (Task 5 Interfaces and Step 4 agree).
 
-**Rev 3 re-check.** Probe exports used by the probe and its tests are consistent: `isDocument`, `runGetsAndCounts` (returns bad ids), `validateIds`, `ftsPhraseLiteral`, `validateFuzzy`, `checkBaseline`, `checkSamples`, `collectIds`, `EXPECTED_IDS`; exit-3 causes in the Interfaces, the script and the tests agree; Task 5 reconcile test no longer references `BATCHES`/`overlapped`; Task 2 Step 6 imports (`Document`) match Task 1's trimmed head; no placeholders added.
+**Rev 4 re-check (fuzzyRuns chain).** Same name end to end: `CorpusQuery.fuzzyRuns()` (Task 2, incremented right before `fuzzyCandidatesSql` runs) -> read procedure result `{ value, execMs, fuzzyRuns }` (Task 3 worker-entry + read-role test) -> `ReadRecord.fuzzyRuns?` / `ReadStatsSnapshot.fuzzyRuns` (Task 4, proxy passes `res.fuzzyRuns`) -> `ReadDiagnostics.reads.fuzzyRuns` + dump `snapshotAt` (Task 7) -> probe `readFuzzyRuns`/`validateFuzzy(call, term, readRuns)` (Task 8) -> Task 10 order (a) validate, (b) baseline without `--diag`, (c) measure. The query_sql/FTS-phrase check and `ftsPhraseLiteral` are gone. Note: the counter moves whenever the first page is short, not only for "fuzzy-only" words; that is exactly what the probe needs (the fuzzy pass executed) and a stemmed word with a full exact page is rejected.
+
+**Rev 3 re-check.** Probe exports used by the probe and its tests are consistent: `isDocument`, `runGetsAndCounts` (returns bad ids), `validateIds`, `validateFuzzy` (rev 4: counter-based), `checkBaseline`, `checkSamples`, `collectIds`, `EXPECTED_IDS`; exit-3 causes in the Interfaces, the script and the tests agree; Task 5 reconcile test no longer references `BATCHES`/`overlapped`; Task 2 Step 6 imports (`Document`) match Task 1's trimmed head; no placeholders added.
 
 **Plan-level decisions where the spec is silent** (kept minimal, flagged for the reviewer): `createCorpusQuery` returns `{ query, invalidateLanguages }` (spec shows `Query`; the writer needs the explicit invalidation hook); `McpDeps.sqlExecutor` is REQUIRED with no in-process default (the app passes the runner, gate-tested in main.ts; tests and the stdio sibling inject `createInProcessSqlExecutor`); runner `startTimeoutMs` (20 s) guards a child that never becomes ready; queued waiters survive a timeout stop and run on the fresh child, while an unexpected exit fails everything queued; `truncated: true` also covers a 64 KiB (UTF-8 byte) value cut, and the 1 MiB budget counts the serialized rows array including brackets and commas; `metadata` projection skips the fuzzy pass when the query has negated terms (it cannot fold bodies it does not read); `CorePlatform.reads` is attributed to caller `'other'` and `readsFor(caller)` carries MCP/renderer attribution.
 
@@ -5140,3 +5306,6 @@ rev 2 → rev 3:
 - B6: Task 2 Step 6 import instruction adds `Document` to the contracts import.
 - B7: probe sets `process.exitCode` (main() returns the code, client closed in finally) instead of `process.exit`.
 - B8: Task 10 v0.104.0 "before" run omits `--diag`.
+
+rev 3 → rev 4:
+- B2 via in-app fuzzyRuns counter (controller ruling): `CorpusQuery.fuzzyRuns()` (Task 2) -> `read` result (Task 3) -> `ReadStats` snapshot (Task 4) -> `readDiagnostics().reads.fuzzyRuns` with `snapshotAt` (Task 7); probe `validateFuzzy` uses the counter with `--diag`, adds `--validate-only`, baseline mode (no `--diag`) requires a validated `--ids` file and does not re-validate; query_sql/FTS check dropped; B1 rules kept; regression tests (stemmed term exit 3, misspelling passes, baseline without validated file exit 3); Task 10 order (a) validate, (b) v0.104.0 baseline, (c) measure.
