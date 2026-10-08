@@ -1,8 +1,10 @@
 import os from 'node:os';
 
+import type { LlmAccel } from '../../core/host-profile';
+
 /** GPU/CPU acceleration backend the bundled llama-server build targets.
  *  No CUDA (Vulkan covers NVIDIA/AMD/Intel — see the design spec). */
-export type Accel = 'metal' | 'vulkan' | 'cpu';
+export type Accel = LlmAccel;
 
 /** One GPU as reported by `llama-server --list-devices`. */
 export interface VulkanDevice {
