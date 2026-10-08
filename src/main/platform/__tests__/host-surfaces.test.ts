@@ -735,6 +735,39 @@ describe('buildSurfaces', () => {
     });
   });
 
+  it('completeWithMeta passes firstTokens through and drops promptTokens', async () => {
+    const { deps } = makeDeps({
+      inference: {
+        complete: async () => '',
+        completeWithMeta: async () =>
+          ({
+            text: 'yes',
+            providerId: 'local-llm',
+            modelId: 'm',
+            promptTokens: 9,
+            firstTokens: [{ token: 'yes', logprob: -0.1 }],
+          }) as never,
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'open' as const,
+        describe: async () => null,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await expect(
+      surfaces.inference.completeWithMeta('hi', {
+        grammar: 'g',
+        topLogprobs: 20,
+      }),
+    ).resolves.toEqual({
+      text: 'yes',
+      providerId: 'local-llm',
+      modelId: 'm',
+      firstTokens: [{ token: 'yes', logprob: -0.1 }],
+    });
+  });
+
   it('inference.hear delegates to the plane, keeping format and passing the lane through', async () => {
     // CapSurfaces.inference promises the WHOLE Inference plane, so a child
     // granted 'inference' may call hear() — before it was wired here that

@@ -90,3 +90,87 @@ describe('thinking disabled on every request', () => {
     });
   });
 });
+
+describe('grammar and top logprobs', () => {
+  const realFetch = global.fetch;
+  const BASE = 'http://x';
+
+  afterEach(() => {
+    global.fetch = realFetch;
+    jest.restoreAllMocks();
+  });
+
+  async function captureChatBody(
+    response: unknown,
+    opts: Parameters<typeof chatText>[2],
+  ) {
+    const fetchMock = jest.fn(async () => ({
+      ok: true,
+      json: async () => response,
+    })) as unknown as jest.Mock;
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const result = await chatText(BASE, 'prompt', opts);
+    const [, init] = fetchMock.mock.calls[0];
+    return {
+      request: JSON.parse((init as { body: string }).body) as Record<
+        string,
+        unknown
+      >,
+      result,
+    };
+  }
+
+  it('sends grammar and logprobs, and returns the first token alternatives', async () => {
+    const { request, result } = await captureChatBody(
+      {
+        choices: [
+          {
+            message: { content: 'yes' },
+            finish_reason: 'stop',
+            logprobs: {
+              content: [
+                {
+                  token: 'yes',
+                  logprob: -0.01,
+                  top_logprobs: [
+                    { token: 'yes', logprob: -0.01 },
+                    { token: 'no', logprob: -4.6 },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 1 },
+      },
+      {
+        profile: 'deterministic',
+        maxTokens: 4,
+        grammar: 'root ::= "yes" | "no"',
+        topLogprobs: 20,
+      },
+    );
+    expect(request.grammar).toBe('root ::= "yes" | "no"');
+    expect(request.logprobs).toBe(true);
+    expect(request.top_logprobs).toBe(20);
+    expect(request.response_format).toBeUndefined();
+    // Probe (2026-10-08): top_k/top_p shift first-token probabilities by up
+    // to 0.016, so they are dropped when logprobs are requested.
+    expect(request.top_k).toBeUndefined();
+    expect(request.top_p).toBeUndefined();
+    expect(request.temperature).toBe(0);
+    expect(result.firstTokens).toEqual([
+      { token: 'yes', logprob: -0.01 },
+      { token: 'no', logprob: -4.6 },
+    ]);
+  });
+
+  it('rejects grammar together with schema', async () => {
+    await expect(
+      chatText(BASE, 'p', {
+        grammar: 'root ::= "a"',
+        schema: { type: 'string' },
+      }),
+    ).rejects.toThrow('grammar and schema are mutually exclusive');
+  });
+});

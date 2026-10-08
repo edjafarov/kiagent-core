@@ -62,7 +62,7 @@ describe('inference plane', () => {
   });
 
   it('hear routes to a provider supporting hear and passes the audio format', async () => {
-    const plane = createInference(noopLogs);
+    const plane = createInference(fakeLogs());
     let seen: unknown;
     plane.register({
       id: 'asr',
@@ -80,7 +80,7 @@ describe('inference plane', () => {
   });
 
   it('hear forwards vad, language and detectLanguage to the provider payload', async () => {
-    const plane = createInference(noopLogs);
+    const plane = createInference(fakeLogs());
     let seen: unknown;
     plane.register({
       id: 'asr',
@@ -257,6 +257,34 @@ describe('inference plane', () => {
       completionTokens: 2,
       truncated: true,
     });
+  });
+
+  it('threads grammar/topLogprobs to the provider and returns firstTokens', async () => {
+    const plane = createInference(fakeLogs());
+    let seen: Record<string, unknown> = {};
+    plane.register(
+      fakeProvider({
+        id: 'x',
+        supports: ['complete'],
+        modelId: 'm1',
+        handle: async (req) => {
+          seen = req.payload as Record<string, unknown>;
+          return {
+            text: 'yes',
+            promptTokens: 1,
+            completionTokens: 1,
+            truncated: false,
+            firstTokens: [{ token: 'yes', logprob: -0.1 }],
+          };
+        },
+      }),
+    );
+    const out = await plane.completeWithMeta('p', {
+      grammar: 'g',
+      topLogprobs: 20,
+    });
+    expect(out.firstTokens).toEqual([{ token: 'yes', logprob: -0.1 }]);
+    expect(seen).toMatchObject({ grammar: 'g', topLogprobs: 20 });
   });
 
   it('ModelChangedError is discriminable by name, not instanceof, alone', async () => {

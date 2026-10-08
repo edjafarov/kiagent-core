@@ -933,6 +933,12 @@ export interface ExtensionInference extends Inference {
        *  schema its grammar converter can't compile (e.g. a `\\d` in a
        *  `pattern`; use `[0-9]`), so callers still validate the reply. */
       schema?: Record<string, unknown>;
+      /** GBNF grammar constraining local decoding (exclusive with `schema`);
+       *  remote providers ignore it. */
+      grammar?: string;
+      /** Local only: return the top-N alternatives of the first generated
+       *  token as `firstTokens` (completeWithMeta). */
+      topLogprobs?: number;
     },
   ): Promise<string>;
   /** `complete`, plus who answered — the provider and model that actually
@@ -953,8 +959,19 @@ export interface ExtensionInference extends Inference {
        *  schema its grammar converter can't compile (e.g. a `\\d` in a
        *  `pattern`; use `[0-9]`), so callers still validate the reply. */
       schema?: Record<string, unknown>;
+      /** GBNF grammar constraining local decoding (exclusive with `schema`);
+       *  remote providers ignore it. */
+      grammar?: string;
+      /** Local only: return the top-N alternatives of the first generated
+       *  token as `firstTokens` (completeWithMeta). */
+      topLogprobs?: number;
     },
-  ): Promise<{ text: string; providerId: string; modelId: string }>;
+  ): Promise<{
+    text: string;
+    providerId: string;
+    modelId: string;
+    firstTokens?: { token: string; logprob: number }[];
+  }>;
   /** Resolves the provider that WOULD answer `kind` right now, exactly as
    *  the call path's internal `pick(kind)` does, and reports its model
    *  identity plus the plane's current generation token — so an extension

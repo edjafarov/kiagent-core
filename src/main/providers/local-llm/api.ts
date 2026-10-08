@@ -36,6 +36,8 @@ export interface ChatResult {
   promptTokens: number | null;
   completionTokens: number | null;
   truncated: boolean;
+  /** top_logprobs of the first generated token, when requested. */
+  firstTokens?: { token: string; logprob: number }[];
 }
 
 /** Resolves a profile into the request fields that control decoding.
@@ -114,12 +116,26 @@ export async function chatText(
     /** JSON Schema the reply must match (llama-server compiles it to a
      *  grammar). Dropped silently by the server when it can't compile it. */
     schema?: Record<string, unknown>;
+    /** GBNF grammar constraining decoding. Exclusive with `schema`. */
+    grammar?: string;
+    /** Return the top-N alternatives of the first generated token. */
+    topLogprobs?: number;
   },
 ): Promise<ChatResult> {
+  if (opts?.grammar && opts?.schema) {
+    throw new Error('grammar and schema are mutually exclusive');
+  }
   // Resolved (and, for `deterministic`, validated) BEFORE the AbortController
   // and the request are built — a too-large maxTokens must never reach the
   // model.
   const body = profileBody(opts?.profile ?? 'default', opts?.maxTokens);
+  // Probe 2026-10-08 (10 signature fixtures, Gemma 4 E4B b9585): adding
+  // top_k:1/top_p:1 moved first-token probabilities by up to 0.016. Callers
+  // that read confidence from logprobs get the unfiltered distribution.
+  if (opts?.topLogprobs) {
+    delete body.top_k;
+    delete body.top_p;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
   timer.unref?.();
@@ -146,6 +162,10 @@ export async function chatText(
               },
             }
           : {}),
+        ...(opts?.grammar ? { grammar: opts.grammar } : {}),
+        ...(opts?.topLogprobs
+          ? { logprobs: true, top_logprobs: opts.topLogprobs }
+          : {}),
         messages,
       }),
     });
@@ -154,6 +174,11 @@ export async function chatText(
       choices?: {
         message?: { content?: string };
         finish_reason?: string;
+        logprobs?: {
+          content?: {
+            top_logprobs?: { token: string; logprob: number }[];
+          }[];
+        };
       }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
@@ -164,6 +189,13 @@ export async function chatText(
       promptTokens: json.usage?.prompt_tokens ?? null,
       completionTokens: json.usage?.completion_tokens ?? null,
       truncated: json.choices?.[0]?.finish_reason === 'length',
+      ...(opts?.topLogprobs
+        ? {
+            firstTokens: (
+              json.choices?.[0]?.logprobs?.content?.[0]?.top_logprobs ?? []
+            ).map((t) => ({ token: t.token, logprob: t.logprob })),
+          }
+        : {}),
     };
   } finally {
     clearTimeout(timer);

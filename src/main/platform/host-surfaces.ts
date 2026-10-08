@@ -132,7 +132,12 @@ export interface SurfaceDeps {
     completeWithMeta?(
       prompt: string,
       opts?: Record<string, unknown>,
-    ): Promise<{ text: string; providerId: string; modelId: string }>;
+    ): Promise<{
+      text: string;
+      providerId: string;
+      modelId: string;
+      firstTokens?: { token: string; logprob: number }[];
+    }>;
     see(
       image: Uint8Array,
       prompt: string,
@@ -550,7 +555,12 @@ export function buildSurfaces(deps: SurfaceDeps): {
           lane: 'interactive',
           ...(opts as object),
         });
-        return { text: m.text, providerId: m.providerId, modelId: m.modelId };
+        return {
+          text: m.text,
+          providerId: m.providerId,
+          modelId: m.modelId,
+          ...(m.firstTokens ? { firstTokens: m.firstTokens } : {}),
+        };
       },
       see: (image, prompt, opts) =>
         deps.inference.see(image as Uint8Array, String(prompt), {

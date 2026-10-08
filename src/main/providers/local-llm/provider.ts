@@ -438,18 +438,23 @@ export function createLocalLlmProvider(deps: {
       const s = await ensureServer(model);
       touchIdle();
       if (req.kind === 'complete') {
-        const { prompt, maxTokens, profile, system, schema } = req.payload as {
+        const { prompt, maxTokens, profile, system, schema, grammar, topLogprobs } =
+          req.payload as {
           prompt: string;
           maxTokens?: number;
           profile?: 'default' | 'deterministic';
           system?: string;
           schema?: Record<string, unknown>;
+          grammar?: string;
+          topLogprobs?: number;
         };
         return chatText(s.baseUrl(), prompt, {
           maxTokens,
           profile,
           system,
           schema,
+          grammar,
+          topLogprobs,
         });
       }
       if (req.kind === 'see') {

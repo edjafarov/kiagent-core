@@ -28,6 +28,7 @@ export interface CompletionMeta {
   promptTokens: number | null;
   completionTokens: number | null;
   truncated: boolean;
+  firstTokens?: { token: string; logprob: number }[];
 }
 
 export interface InferencePlane extends Inference {
@@ -55,6 +56,12 @@ export interface InferencePlane extends Inference {
        *  schema its grammar converter can't compile (e.g. a `\\d` in a
        *  `pattern`; use `[0-9]`), so callers still validate the reply. */
       schema?: Record<string, unknown>;
+      /** GBNF grammar constraining local decoding (exclusive with `schema`);
+       *  remote providers ignore it. */
+      grammar?: string;
+      /** Local only: return the top-N alternatives of the first generated
+       *  token as `firstTokens` (completeWithMeta). */
+      topLogprobs?: number;
     },
   ): Promise<string>;
   /** Same request as `complete`, but returns identity + usage alongside the
@@ -75,6 +82,12 @@ export interface InferencePlane extends Inference {
        *  schema its grammar converter can't compile (e.g. a `\\d` in a
        *  `pattern`; use `[0-9]`), so callers still validate the reply. */
       schema?: Record<string, unknown>;
+      /** GBNF grammar constraining local decoding (exclusive with `schema`);
+       *  remote providers ignore it. */
+      grammar?: string;
+      /** Local only: return the top-N alternatives of the first generated
+       *  token as `firstTokens` (completeWithMeta). */
+      topLogprobs?: number;
     },
   ): Promise<CompletionMeta>;
   /** `see`, plus the provider and model that described the image. */
@@ -178,6 +191,7 @@ function normalizeCompletion(raw: unknown): {
   promptTokens: number | null;
   completionTokens: number | null;
   truncated: boolean;
+  firstTokens?: { token: string; logprob: number }[];
 } {
   if (typeof raw === 'string') {
     return {
@@ -192,6 +206,7 @@ function normalizeCompletion(raw: unknown): {
     promptTokens?: number | null;
     completionTokens?: number | null;
     truncated?: boolean;
+    firstTokens?: { token: string; logprob: number }[];
   };
   // Preserve the old String(out) coercion as a fallback: a provider that
   // returns a non-string, non-`{text}` shape still yields SOME text rather
@@ -201,6 +216,7 @@ function normalizeCompletion(raw: unknown): {
     promptTokens: r.promptTokens ?? null,
     completionTokens: r.completionTokens ?? null,
     truncated: r.truncated ?? false,
+    ...(r.firstTokens ? { firstTokens: r.firstTokens } : {}),
   };
 }
 
@@ -433,6 +449,8 @@ export function createInference(
             task: opts?.task,
             budgetKey: opts?.budgetKey,
             schema: opts?.schema,
+            grammar: opts?.grammar,
+            topLogprobs: opts?.topLogprobs,
           },
           lane,
         }),
@@ -448,6 +466,9 @@ export function createInference(
         promptTokens: normalized.promptTokens,
         completionTokens: normalized.completionTokens,
         truncated: normalized.truncated,
+        ...(normalized.firstTokens
+          ? { firstTokens: normalized.firstTokens }
+          : {}),
       };
     });
   };
