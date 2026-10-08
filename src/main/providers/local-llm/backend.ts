@@ -1,5 +1,3 @@
-import os from 'node:os';
-
 import type { LlmAccel } from '../../core/host-profile';
 
 /** GPU/CPU acceleration backend the bundled llama-server build targets.
@@ -67,19 +65,19 @@ export function parseVulkanDevices(stdout: string): VulkanDevice[] {
  *
  *  Note: listDevices defaults to returning '' (no Vulkan probe). The bundled
  *  `llama-server --list-devices` spawn wiring is phase C. */
-export async function detectHostBackend(opts?: {
-  platform?: string;
+export async function detectHostBackend(opts: {
+  platform: string;
+  totalMemBytes: number;
   listDevices?(): Promise<string>;
 }): Promise<BackendInfo> {
-  const platform = opts?.platform ?? os.platform();
-  const totalMemBytes = os.totalmem();
+  const { platform, totalMemBytes } = opts;
 
   if (platform === 'darwin') {
     return detectBackend(platform, [], totalMemBytes);
   }
 
   let vulkanOutput = '';
-  if (opts?.listDevices) {
+  if (opts.listDevices) {
     try {
       vulkanOutput = await opts.listDevices();
     } catch {

@@ -202,6 +202,29 @@ describe('LlamaServer launch args', () => {
     return i >= 0 ? args[i + 1] : undefined;
   }
 
+  it('appends extraArgs after the fixed args', () => {
+    const { calls, spawnFn } = capture();
+    const srv = new LlamaServer({
+      binaryPath: 'unused',
+      modelPath: 'm',
+      mmprojPath: 'mm',
+      gpuLayers: 999,
+      log: noopLog,
+      spawnFn,
+      extraArgs: ['-t', '2', '-tb', '2', '--poll', '0'],
+    });
+    (srv as any).launch();
+    expect(calls[0].args.slice(-6)).toEqual([
+      '-t',
+      '2',
+      '-tb',
+      '2',
+      '--poll',
+      '0',
+    ]);
+    expect(calls[0].args).not.toContain('-np');
+  });
+
   it('passes -ngl 999 when gpuLayers is 999 (GPU offload)', () => {
     const { calls, spawnFn } = capture();
     const srv = new LlamaServer({

@@ -90,6 +90,7 @@ export function registerBundledProviders(
     llamaBinaryPath: resolveLlamaBinary(llamaSlugDir), // port `llamaSlug` from ref catalog.ts:35
     modelsDir: path.join(opts.dataDir, 'models'),
     prefs: platform.prefs,
+    host: platform.host,
     log: log('inference'),
   });
   platform.inference.register(localLlm);

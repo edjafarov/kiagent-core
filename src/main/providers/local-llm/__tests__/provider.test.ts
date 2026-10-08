@@ -56,6 +56,12 @@ function makeDeps(over = {} as Record<string, any>) {
       modelsDir: over.modelsDir as string,
       prefs: fakePrefs(prefOverrides),
       log: jest.fn(),
+      host: {
+        platform: 'darwin' as NodeJS.Platform,
+        arch: 'arm64',
+        cores: 10,
+        totalMemBytes: 64 * 1024 ** 3,
+      },
       detect: async () => ({
         accel: 'metal' as const,
         capacityBytes: 64 * 1024 ** 3,
@@ -81,11 +87,6 @@ describe('LocalLlmProvider', () => {
     jest.clearAllMocks();
     // Default: capability is OK
     mockCapability.checkCapability.mockReturnValue({ ok: true });
-    mockCapability.readHostProbes.mockReturnValue({
-      platform: 'darwin',
-      arch: 'arm64',
-      totalMemBytes: 64 * 1024 ** 3,
-    });
   });
 
   afterEach(async () => {
@@ -450,6 +451,52 @@ describe('LocalLlmProvider', () => {
     // Create second provider over the same directory
     const provider2 = createLocalLlmProvider(deps);
     expect(provider2.status()).toBe('ready');
+  });
+
+  async function installModelFiles(dir: string) {
+    const modelDir = path.join(dir, CURATED_MODEL.id);
+    await fsp.mkdir(modelDir, { recursive: true });
+    for (const file of CURATED_MODEL.files) {
+      await fsp.writeFile(path.join(modelDir, file.name), 'mock-content');
+    }
+  }
+
+  it('starts llama-server with -t/-tb = backgroundThreads and --poll 0, never -np', async () => {
+    await installModelFiles(tmpDir);
+    const seen: string[][] = [];
+    const { deps, server } = makeDeps({ modelsDir: tmpDir });
+    const provider = createLocalLlmProvider({
+      ...deps,
+      makeServer: (a: { extraArgs?: string[] }) => {
+        seen.push(a.extraArgs ?? []);
+        return server;
+      },
+    });
+    mockApi.chatText.mockResolvedValue('ok');
+    await provider.handle({
+      kind: 'complete',
+      payload: { prompt: 'a' },
+      lane: 'interactive',
+    });
+    expect(seen[0]).toEqual(['-t', '5', '-tb', '5', '--poll', '0']);
+    expect(seen[0]).not.toContain('-np');
+  });
+
+  it('accel() is null before detection and the detected accel after', async () => {
+    await installModelFiles(tmpDir);
+    const { deps } = makeDeps({
+      modelsDir: tmpDir,
+      detect: async () => ({ accel: 'cpu' as const, capacityBytes: 1 }),
+    });
+    const provider = createLocalLlmProvider(deps);
+    expect(provider.accel()).toBeNull();
+    mockApi.chatText.mockResolvedValue('ok');
+    await provider.handle({
+      kind: 'complete',
+      payload: { prompt: 'a' },
+      lane: 'interactive',
+    });
+    expect(provider.accel()).toBe('cpu');
   });
 
   // Finding 1: two concurrent first-handle() calls must single-flight the

@@ -942,6 +942,7 @@ app
       dataDir,
     });
     bundledProviders = bundled;
+    p.llmAccel = () => bundled.localLlm.accel();
     attachBundledWorkers(p, {
       ...bundled,
       // Built HERE so the worker and its module stay Electron-free (and so
