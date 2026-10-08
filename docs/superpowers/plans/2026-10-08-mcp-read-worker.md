@@ -1004,7 +1004,7 @@ export function pickFuzzyWinners(
     contextLines?: number;
 ```
 
-- [ ] **Step 6: `corpus-query.ts` — new `search` below the filters.** Update the imports (drop `rrfMerge`, add `FUZZY_CANDIDATES, fuzzyCandidatesSql, pickFuzzyWinners, rankFuzzyCandidates` from `./fuzzy`, and `buildLineWindow, DEFAULT_CONTEXT_LINES` from `./line-window`). Above `createCorpusQuery` add:
+- [ ] **Step 6: `corpus-query.ts` — new `search` below the filters.** Update the imports (add `Document` to the `import type { Account, Query } from '@shared/contracts'` line — Task 1 trimmed it to what Task 1 uses; drop `rrfMerge`, add `FUZZY_CANDIDATES, fuzzyCandidatesSql, pickFuzzyWinners, rankFuzzyCandidates` from `./fuzzy`, and `buildLineWindow, DEFAULT_CONTEXT_LINES` from `./line-window`). Above `createCorpusQuery` add:
 
 ```ts
 const RECENCY_HEAD_CHARS = 65536;
@@ -2373,51 +2373,47 @@ describe('reads do not queue behind ingest writes (real writer + reader workers)
     expect(after.length).toBeGreaterThan(0);
   });
 
-  it('serves reads while the writer runs a real reconcile stage workload', async () => {
+  it('serves reads while the writer runs ONE long reconcile-stage transaction; the writer path queues behind it', async () => {
     const [seedHit] = await plane.reads.search({ text: 'alpha', limit: 1 });
     expect(seedHit).toBeDefined();
 
-    // reconcileBegin/Stage are real writer procedures; many large batches keep
-    // the writer thread busy (raise BATCHES if staging ends before the first
-    // reader call below; lower it if the suite nears its timeout).
-    const BATCHES = 60;
-    const BATCH_SIZE = 5_000;
+    // reconcileBegin/Stage are real writer procedures. ONE reconcileStage call
+    // with REFS refs is ONE transaction on the writer thread; size it like the
+    // ingest case: it must run for >= ~300 ms on this machine. If the first
+    // `stageSettled === false` check fails the stage was too fast: raise REFS;
+    // if the suite nears its timeout or the worker runs out of memory, lower it.
+    // Never weaken the assertions.
+    const REFS = 300_000;
     await store.reconcileBegin(account);
-    let stagingDone = false;
-    const stagingP = (async () => {
-      for (let b = 0; b < BATCHES; b += 1) {
-        await store.reconcileStage(
-          account,
-          Array.from({ length: BATCH_SIZE }, (_, i) => ({
-            externalId: `stage-${b}-${i}`,
-            type: 'note',
-          })),
-        );
-      }
-    })().finally(() => {
-      stagingDone = true;
+    const refs = Array.from({ length: REFS }, (_, i) => ({
+      externalId: `stage-${i}`,
+      type: 'note',
+    }));
+    let stageSettled = false;
+    const stageP = store.reconcileStage(account, refs).then(() => {
+      stageSettled = true;
     });
-    await sleep(100); // the writer thread is now inside the stage workload
+    await sleep(300); // the writer thread is now inside the stage transaction
+    expect(stageSettled).toBe(false); // fixture big enough to span the reads
 
-    // Concurrent reader assertions: several rounds, each resolving while the
-    // writer is still staging, none of them paying a writer-sized wait.
-    let overlapped = 0;
-    for (let round = 0; round < 5 && !stagingDone; round += 1) {
-      const t0 = Date.now();
-      const [hits, doc, counts] = await Promise.all([
-        plane.reads.search({ text: 'alpha', limit: 5 }),
-        plane.reads.document(seedHit.id),
-        plane.reads.countBy({ field: 'label' }),
-      ]);
-      expect(hits.length).toBeGreaterThan(0);
-      expect(doc?.id).toBe(seedHit.id);
-      expect(counts[0]).toMatchObject({ key: 'L1' });
-      expect(Date.now() - t0).toBeLessThan(2_000);
-      if (!stagingDone) overlapped += 1;
-    }
-    expect(overlapped).toBeGreaterThan(0); // at least one round truly overlapped staging
+    const t0 = Date.now();
+    const [hits, doc, counts] = await Promise.all([
+      plane.reads.search({ text: 'alpha', limit: 5 }),
+      plane.reads.document(seedHit.id),
+      plane.reads.countBy({ field: 'label' }),
+    ]);
+    const readsMs = Date.now() - t0;
+    expect(hits.length).toBeGreaterThan(0);
+    expect(doc?.id).toBe(seedHit.id);
+    expect(counts[0]).toMatchObject({ key: 'L1' });
+    // The reader calls finished BEFORE the single stage transaction settled...
+    expect(stageSettled).toBe(false);
+    expect(readsMs).toBeLessThan(2_000);
 
-    await stagingP;
+    // ...whereas a read issued on the writer path waits behind it.
+    await store.read.document(seedHit.id);
+    expect(stageSettled).toBe(true);
+    await stageP;
     await store.reconcileEnd(account);
   });
 });
@@ -2605,7 +2601,7 @@ and in `startMcp({ … })`: `query: p.readsFor('mcp'),`. Leave `p.store.read.acc
 - [ ] **Step 6: Run — expect PASS**
 
 Run (one at a time): `npx jest src/main/core/__tests__/reads.test.ts`, then `npx jest src/main/__tests__/read-routing.test.ts`, then `npx jest src/main/core/__tests__/reads-no-queue.test.ts`.
-Expected: all PASS. If the no-queue test's first `expect(commitSettled).toBe(false)` fails, the commit was too fast for this machine: raise `DOCS` (default 8); if it times out or the writer worker runs out of memory, lower `DOCS`. If `overlapped` is 0 in the reconcile test, raise `BATCHES`. Never weaken the assertions.
+Expected: all PASS. If the no-queue test's first `expect(commitSettled).toBe(false)` fails, the commit was too fast for this machine: raise `DOCS` (default 8); if it times out or the writer worker runs out of memory, lower `DOCS`. If the reconcile test's first `stageSettled === false` check fails, raise `REFS`. Never weaken the assertions.
 Then: `npx tsc -p tsconfig.typecheck.json && npx eslint --fix src/main/core/reads.ts src/main/core/boot.ts src/main/main.ts src/main/core/__tests__/reads.test.ts src/main/core/__tests__/reads-no-queue.test.ts src/main/__tests__/read-routing.test.ts`
 
 - [ ] **Step 7: Commit**
@@ -4152,8 +4148,9 @@ describe('query_sql routing', () => {
 Extend `src/main/mcp/__tests__/stdio-entry.test.ts` (spec §5: the stdio executor gets the same bounds) with an `it` that reuses the seeded corpus setup (move the seeding into a `beforeEach`/helper) and drives all three bounds through the stdio client:
 
 ```ts
+    const live: Client = client; // definite local after connect: no `Client | undefined` deref in the closure
     const callSql = async (sql: string) => {
-      const r = (await client.callTool({
+      const r = (await live.callTool({
         name: 'query_sql',
         arguments: { sql },
       })) as { content: Array<{ text: string }> };
@@ -4416,7 +4413,7 @@ Spec §6 "Probe". Runs the fixed workload from OUTSIDE the app, as ChatGPT/Claud
 
 **Interfaces:**
 - Consumes: the loopback MCP endpoint (`http://127.0.0.1:7421/mcp`); tools `search`, `get`, `count`, `digital_memory_info`, `get_schema`; the Task 7 diagnostics file (`--diag`).
-- Produces: a JSON report on stdout (last line) `{ label, at, cycles, kinds: { search, get, count, info, loop }, fallbacks? }` where every kind is `{ n, p50, p95, max }` in ms; exit code 0 = ran, 1 = a pass criterion failed (p95 > 2x baseline, or any fallback), 2 = `countBy` was never seen on the reader, 3 = the workload itself was invalid (fewer than 10 valid `get` ids, the fuzzy term returned nothing, or any kind has fewer samples than the fixed workload promises). Flags: `--ids <file>` (the 10 `get` ids: read if the file exists, otherwise established by a setup search BEFORE measurement and written there, so baseline and after runs use identical ids).
+- Produces: a JSON report on stdout (last line) `{ label, at, cycles, kinds: { search, get, count, info, loop }, fallbacks? }` where every kind is `{ n, p50, p95, max }` in ms; exit code 0 = ran, 1 = a pass criterion failed (p95 > 2x baseline, or any fallback), 2 = `countBy` was never seen on the reader, 3 = the workload itself was invalid (not 10 DISTINCT existing `get` ids, any `get` during measurement returning null/empty, a fuzzy term that is not fuzzy-only on this corpus, any kind with fewer samples than the fixed workload promises, or a `--baseline` report that is itself incomplete: sample counts below its own `cycles`, or search/get p95 not > 0). Flags: `--ids <file>` (the 10 `get` ids: read if the file exists, otherwise established by a setup search BEFORE measurement and written there, so baseline and after runs use identical ids).
 
 - [ ] **Step 1: Write the failing test** — `src/main/core/mcp/__tests__/latency-probe.test.ts` (starts a real server in this process; the probe must run as an ASYNC child so the server's event loop stays free)
 
@@ -4512,6 +4509,54 @@ describe('scripts/mcp-latency-probe.mjs', () => {
       ]),
     ).rejects.toMatchObject({ code: 3, stderr: expect.stringMatching(/fuzzy/i) });
   });
+
+  const probeArgs = (...extra: string[]) => [
+    PROBE,
+    '--url', `http://127.0.0.1:${handle.port}/mcp`,
+    '--cycles', '1',
+    '--interval', '0',
+    '--fuzzy', 'nvoic',
+    ...extra,
+  ];
+
+  it('exit 3 when the fuzzy term has exact FTS matches (not fuzzy-only)', async () => {
+    await expect(run(process.execPath, probeArgs('--fuzzy', 'invoice'))).rejects.toMatchObject({
+      code: 3,
+      stderr: expect.stringMatching(/not fuzzy-only/),
+    });
+  });
+
+  it('exit 3 when the ids file holds ids that are not documents (null gets) or are not distinct', async () => {
+    const fake = path.join(dir, 'fake-ids.json');
+    fs.writeFileSync(fake, JSON.stringify(Array.from({ length: 10 }, (_, i) => `no-such-doc-${i}`)));
+    await expect(run(process.execPath, probeArgs('--ids', fake))).rejects.toMatchObject({
+      code: 3,
+      stderr: expect.stringMatching(/invalid workload/),
+    });
+    const dup = path.join(dir, 'dup-ids.json');
+    fs.writeFileSync(dup, JSON.stringify(Array.from({ length: 10 }, () => 'same')));
+    await expect(run(process.execPath, probeArgs('--ids', dup))).rejects.toMatchObject({
+      code: 3,
+      stderr: expect.stringMatching(/DISTINCT/),
+    });
+  });
+
+  it('exit 3 when the --baseline report has no get samples', async () => {
+    const base = path.join(dir, 'bad-baseline.json');
+    const k = (n: number, p95: number) => ({ n, p50: p95, p95, max: p95 });
+    fs.writeFileSync(
+      base,
+      JSON.stringify({
+        label: 'idle',
+        cycles: 2,
+        kinds: { search: k(24, 5), get: k(0, 0), count: k(4, 5), info: k(2, 1), loop: k(2, 1) },
+      }),
+    );
+    await expect(run(process.execPath, probeArgs('--baseline', base))).rejects.toMatchObject({
+      code: 3,
+      stderr: expect.stringMatching(/baseline get/),
+    });
+  });
 });
 ```
 
@@ -4566,6 +4611,57 @@ describe('probe workload', () => {
     }
   });
 
+  it('a get that returns null / {} is reported as bad, not as a success', async () => {
+    const bad: string[] = await node(`
+      const call = async (name, args) => (name === 'get' ? (args.id === 'a' ? null : args.id === 'b' ? {} : { id: args.id, title: 't' }) : {});
+      const timed = async (kind, fn) => fn();
+      console.log(JSON.stringify(await w.runGetsAndCounts({ call, timed, ids: ['a', 'b', 'c'] })));
+    `);
+    expect(bad).toEqual(['a', 'b']);
+  });
+
+  it('validateIds rejects duplicate ids and ids that are not documents', async () => {
+    const out = await node(`
+      const ids = Array.from({ length: 10 }, (_, i) => 'd' + i);
+      const call = async (name, args) => (args.id === 'd3' ? null : { id: args.id, title: 't' });
+      console.log(JSON.stringify({
+        ok: await w.validateIds(async (n, a) => ({ id: a.id, title: 't' }), ids),
+        dup: await w.validateIds(call, Array(10).fill('d1')),
+        missing: await w.validateIds(call, ids),
+      }));
+    `);
+    expect(out.ok).toEqual([]);
+    expect(out.dup.join(' ')).toMatch(/DISTINCT/);
+    expect(out.missing.join(' ')).toMatch(/d3/);
+  });
+
+  it('validateFuzzy needs zero exact FTS matches AND at least one search hit', async () => {
+    const out = await node(`
+      const mk = (n, hits) => async (name) => (name === 'query_sql' ? { rows: [{ n }] } : hits);
+      console.log(JSON.stringify({
+        fuzzyOnly: await w.validateFuzzy(mk(0, [{ id: 'x' }]), 'nvoic'),
+        exactOnly: await w.validateFuzzy(mk(3, [{ id: 'x' }]), 'invoice'),
+        nothing: await w.validateFuzzy(mk(0, []), 'zzz'),
+        phrase: w.ftsPhraseLiteral("it's " + String.fromCharCode(34) + "x" + String.fromCharCode(34)),
+      }));
+    `);
+    expect(out.fuzzyOnly).toBeNull();
+    expect(out.exactOnly).toMatch(/not fuzzy-only/);
+    expect(out.nothing).toMatch(/not fuzzy-only/);
+    expect(out.phrase).toBe(["'", '"', "it''s ", '""x""', '"', "'"].join(''));
+  });
+
+  it('checkBaseline rejects a baseline without get samples or with p95 0', async () => {
+    const out = await node(`
+      const k = (n, p95) => ({ n, p50: p95, p95, max: p95 });
+      const good = { cycles: 2, kinds: { search: k(24, 5), get: k(20, 4), count: k(4, 5), info: k(2, 1), loop: k(2, 1) } };
+      const noGet = { cycles: 2, kinds: { ...good.kinds, get: k(0, 0) } };
+      console.log(JSON.stringify({ good: w.checkBaseline(good), noGet: w.checkBaseline(noGet) }));
+    `);
+    expect(out.good).toEqual([]);
+    expect(out.noGet.join(' ')).toMatch(/baseline get/);
+  });
+
   it('checkSamples flags missing samples and passes a complete report', async () => {
     const out = await node(`
       const full = { search: { n: 24 }, get: { n: 20 }, count: { n: 4 }, info: { n: 2 }, loop: { n: 2 } };
@@ -4608,17 +4704,79 @@ export async function collectIds(call, queries, want = EXPECTED_IDS) {
   return ids;
 }
 
+/** A `get` result counts as a document only when it is a non-empty object
+ *  without an `error` field (null / {} / error payloads are FAILED samples). */
+export const isDocument = (r) =>
+  r != null && typeof r === 'object' && !Array.isArray(r) && Object.keys(r).length > 0 && !('error' in r);
+
 /** The concurrent part of a cycle. BOTH `count` group_by calls (they reach
  *  Query.countBy over the whole corpus) are STARTED FIRST, then the gets are
  *  issued, so the gets overlap the aggregates. `timed(kind, fn)` records one
- *  sample per call. */
+ *  sample per call. Returns the ids whose `get` did NOT return a document (the
+ *  caller turns any of them into exit 3: a failed get is never a fast success). */
 export async function runGetsAndCounts({ call, timed, ids }) {
+  const bad = [];
   const counts = [
     timed('count', () => call('count', { group_by: 'label' })),
     timed('count', () => call('count', { group_by: 'from' })),
   ];
-  const gets = ids.map((id) => timed('get', () => call('get', { id })));
+  const gets = ids.map((id) =>
+    timed('get', async () => {
+      const r = await call('get', { id });
+      if (!isDocument(r)) bad.push(id);
+      return r;
+    }),
+  );
   await Promise.all([...counts, ...gets]);
+  return bad;
+}
+
+/** Setup validation of the `get` ids: exactly `EXPECTED_IDS` DISTINCT ids, each
+ *  of which returns a document. Returns problem messages (empty = valid). */
+export async function validateIds(call, ids) {
+  const problems = [];
+  if (!Array.isArray(ids) || new Set(ids).size !== EXPECTED_IDS || ids.length !== EXPECTED_IDS) {
+    problems.push(`need exactly ${EXPECTED_IDS} DISTINCT get ids, have ${Array.isArray(ids) ? `${new Set(ids).size} distinct of ${ids.length}` : 0}`);
+    return problems;
+  }
+  for (const id of ids) {
+    try {
+      if (!isDocument(await call('get', { id }))) problems.push(`get ${id} returned no document`);
+    } catch (e) {
+      problems.push(`get ${id} failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return problems;
+}
+
+/** The term as an FTS5 phrase, then as a SQL string literal. */
+export const ftsPhraseLiteral = (term) => `'"${term.replace(/"/g, '""').replace(/'/g, "''")}"'`;
+
+/** The fuzzy term must be fuzzy-ONLY on this corpus: zero exact FTS matches
+ *  (via the query_sql tool) AND at least one MCP search hit (the fuzzy pass).
+ *  Returns a problem message or null. */
+export async function validateFuzzy(call, term) {
+  const exact = await call('query_sql', {
+    sql: `SELECT count(*) AS n FROM documents_fts WHERE documents_fts MATCH ${ftsPhraseLiteral(term)}`,
+  });
+  const n = exact?.rows?.[0]?.n;
+  const hits = await call('search', { query: term, limit: 10 });
+  if (n !== 0 || !Array.isArray(hits) || hits.length === 0) {
+    return `fuzzy term "${term}" is not fuzzy-only on this corpus (exact FTS matches: ${n}, search hits: ${Array.isArray(hits) ? hits.length : 'n/a'}); pick a misspelling or word fragment that occurs inside longer words`;
+  }
+  return null;
+}
+
+/** A baseline report is only comparable if it is itself a complete run. */
+export function checkBaseline(base) {
+  const problems = [];
+  const cycles = Number(base?.cycles ?? 0);
+  if (!(cycles > 0)) return ['baseline report has no cycles'];
+  for (const p of checkSamples(base.kinds ?? {}, cycles)) problems.push(`baseline ${p}`);
+  for (const k of ['search', 'get']) {
+    if (!(base.kinds?.[k]?.p95 > 0)) problems.push(`baseline ${k} p95 is not > 0`);
+  }
+  return problems;
 }
 
 /** Returns one message per kind whose sample count differs from the fixed
@@ -4667,10 +4825,12 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 import {
+  checkBaseline,
   checkSamples,
   collectIds,
-  EXPECTED_IDS,
   runGetsAndCounts,
+  validateFuzzy,
+  validateIds,
 } from './mcp-latency-probe-workload.mjs';
 
 function parseArgs(argv) {
@@ -4710,6 +4870,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const opts = parseArgs(process.argv.slice(2));
 const samples = { search: [], get: [], count: [], info: [], loop: [] };
 
+class InvalidWorkload extends Error {}
+const invalid = (msg) => {
+  throw new InvalidWorkload(msg);
+};
+
 const client = new Client({ name: 'kia-latency-probe', version: '1' });
 await client.connect(new StreamableHTTPClientTransport(new URL(opts.url)));
 
@@ -4725,100 +4890,118 @@ async function timed(kind, fn) {
   return r;
 }
 
-// The 10 text queries: the configured terms, then the fuzzy-only term last.
-const queries = [...opts.terms.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 9), opts.fuzzy];
-while (queries.length < 10) queries.push(queries[queries.length - 1]);
-const accounts = (await call('digital_memory_info')).accounts ?? [];
-const restrictTo = accounts[0]?.source;
+async function main() {
+  // The 10 text queries: the configured terms, then the fuzzy-only term last.
+  const queries = [...opts.terms.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 9), opts.fuzzy];
+  while (queries.length < 10) queries.push(queries[queries.length - 1]);
+  const accounts = (await call('digital_memory_info')).accounts ?? [];
+  const restrictTo = accounts[0]?.source;
 
-// ── Setup, BEFORE any measurement: the workload must be valid or the numbers
-// mean nothing (exit 3, never a quietly thinner run).
-const invalid = (msg) => {
-  process.stderr.write(`FAIL (invalid workload): ${msg}\n`);
-  process.exit(3);
-};
-let ids;
-if (opts.ids && fs.existsSync(opts.ids)) {
-  ids = JSON.parse(fs.readFileSync(opts.ids, 'utf8'));
-} else {
-  ids = await collectIds(call, queries);
-  if (opts.ids && ids.length === EXPECTED_IDS) fs.writeFileSync(opts.ids, JSON.stringify(ids));
-}
-if (!Array.isArray(ids) || ids.length !== EXPECTED_IDS) {
-  invalid(`need exactly ${EXPECTED_IDS} valid get ids, have ${Array.isArray(ids) ? ids.length : 0}`);
-}
-const fuzzyHits = await call('search', { query: opts.fuzzy, limit: 10 });
-if (!Array.isArray(fuzzyHits) || fuzzyHits.length === 0) {
-  invalid(`the fuzzy term "${opts.fuzzy}" returned no results (pass --fuzzy with a substring of a word in this corpus)`);
-}
+  // ── Setup, BEFORE any measurement: the workload must be valid or the numbers
+  // mean nothing (exit 3, never a quietly thinner run).
+  let base = null;
+  if (opts.baseline) {
+    base = JSON.parse(fs.readFileSync(opts.baseline, 'utf8'));
+    const bp = checkBaseline(base);
+    if (bp.length > 0) invalid(bp.join('; '));
+  }
+  let ids;
+  if (opts.ids && fs.existsSync(opts.ids)) {
+    ids = JSON.parse(fs.readFileSync(opts.ids, 'utf8'));
+  } else {
+    ids = await collectIds(call, queries);
+  }
+  const idProblems = await validateIds(call, ids); // 10 distinct ids, each a real document
+  if (idProblems.length > 0) invalid(idProblems.join('; '));
+  if (opts.ids && !fs.existsSync(opts.ids)) fs.writeFileSync(opts.ids, JSON.stringify(ids));
+  const fuzzyProblem = await validateFuzzy(call, opts.fuzzy);
+  if (fuzzyProblem) invalid(fuzzyProblem);
 
-for (let cycle = 0; cycle < opts.cycles; cycle += 1) {
-  const started = performance.now();
-  for (let i = 0; i < 10; i += 1) {
-    const args = { query: queries[i], limit: 10 };
-    if (i === 1 && restrictTo) args.source = restrictTo; // account-restricted
-    await timed('search', () => call('search', args));
+  const badGets = [];
+  for (let cycle = 0; cycle < opts.cycles; cycle += 1) {
+    const started = performance.now();
+    for (let i = 0; i < 10; i += 1) {
+      const args = { query: queries[i], limit: 10 };
+      if (i === 1 && restrictTo) args.source = restrictTo; // account-restricted
+      await timed('search', () => call('search', args));
+    }
+    for (const extra of [{}, { query: 'has:attachment' }]) {
+      await timed('search', () => call('search', { ...extra, limit: 10 })); // recency / filter-only
+    }
+    await timed('info', () => call('digital_memory_info'));
+    badGets.push(...(await runGetsAndCounts({ call, timed, ids }))); // countBy first, gets overlap it
+    await timed('loop', () => call('get_schema'));
+    const rest = opts.interval - (performance.now() - started);
+    if (cycle < opts.cycles - 1 && rest > 0) await sleep(rest);
   }
-  for (const extra of [{}, { query: 'has:attachment' }]) {
-    await timed('search', () => call('search', { ...extra, limit: 10 })); // recency / filter-only
+  if (badGets.length > 0) {
+    invalid(`${badGets.length} get call(s) returned no document (a failed get is not a sample): ${[...new Set(badGets)].join(', ')}`);
   }
-  await timed('info', () => call('digital_memory_info'));
-  await runGetsAndCounts({ call, timed, ids }); // countBy first, gets overlap it
-  await timed('loop', () => call('get_schema'));
-  const rest = opts.interval - (performance.now() - started);
-  if (cycle < opts.cycles - 1 && rest > 0) await sleep(rest);
-}
-await client.close();
 
-const report = {
-  label: opts.label,
-  at: new Date().toISOString(),
-  cycles: opts.cycles,
-  kinds: Object.fromEntries(Object.entries(samples).map(([k, v]) => [k, stat(v)])),
-};
+  const report = {
+    label: opts.label,
+    at: new Date().toISOString(),
+    cycles: opts.cycles,
+    kinds: Object.fromEntries(Object.entries(samples).map(([k, v]) => [k, stat(v)])),
+  };
 
-let exitCode = 0;
-const missing = checkSamples(report.kinds, opts.cycles);
-if (missing.length > 0) {
-  process.stderr.write(`FAIL (invalid workload): missing samples: ${missing.join('; ')}\n`);
-  exitCode = 3;
-}
-if (opts.diag) {
-  const diag = JSON.parse(fs.readFileSync(opts.diag, 'utf8'));
-  const groups = diag.reads?.groups ?? [];
-  const countBy = groups
-    .filter((g) => g.method === 'countBy' && g.via === 'reader')
-    .reduce((n, g) => n + g.count, 0);
-  const fb = diag.reads?.fallbacks ?? {};
-  report.fallbacks = fb;
-  report.readerCountBy = countBy;
-  if (countBy === 0) {
-    process.stderr.write('WARN: readDiagnostics shows no countBy execution on the reader\n');
-    if (exitCode === 0) exitCode = 2;
-  }
-  if (Object.values(fb).some((n) => n > 0)) {
-    process.stderr.write(`FAIL: reader fallbacks fired: ${JSON.stringify(fb)}\n`);
-    if (exitCode !== 3) exitCode = 1;
-  }
-}
-if (opts.baseline) {
-  const base = JSON.parse(fs.readFileSync(opts.baseline, 'utf8'));
-  report.vsBaseline = {};
-  for (const k of ['search', 'get']) {
-    const ratio = base.kinds[k].p95 > 0 ? report.kinds[k].p95 / base.kinds[k].p95 : 0;
-    report.vsBaseline[k] = Math.round(ratio * 100) / 100;
-    if (ratio > 2) {
-      process.stderr.write(`FAIL: ${k} p95 ${report.kinds[k].p95} ms is ${ratio.toFixed(2)}x idle (${base.kinds[k].p95} ms)\n`);
-      if (exitCode !== 3) exitCode = 1;
+  let exitCode = 0;
+  const missing = checkSamples(report.kinds, opts.cycles);
+  if (missing.length > 0) invalid(`missing samples: ${missing.join('; ')}`);
+  if (opts.diag) {
+    const diag = JSON.parse(fs.readFileSync(opts.diag, 'utf8'));
+    const groups = diag.reads?.groups ?? [];
+    const countBy = groups
+      .filter((g) => g.method === 'countBy' && g.via === 'reader')
+      .reduce((n, g) => n + g.count, 0);
+    const fb = diag.reads?.fallbacks ?? {};
+    report.fallbacks = fb;
+    report.readerCountBy = countBy;
+    if (countBy === 0) {
+      process.stderr.write('WARN: readDiagnostics shows no countBy execution on the reader\n');
+      exitCode = 2;
+    }
+    if (Object.values(fb).some((n) => n > 0)) {
+      process.stderr.write(`FAIL: reader fallbacks fired: ${JSON.stringify(fb)}\n`);
+      exitCode = 1;
     }
   }
+  if (base) {
+    report.vsBaseline = {};
+    for (const k of ['search', 'get']) {
+      const ratio = report.kinds[k].p95 / base.kinds[k].p95;
+      report.vsBaseline[k] = Math.round(ratio * 100) / 100;
+      if (ratio > 2) {
+        process.stderr.write(`FAIL: ${k} p95 ${report.kinds[k].p95} ms is ${ratio.toFixed(2)}x idle (${base.kinds[k].p95} ms)\n`);
+        exitCode = 1;
+      }
+    }
+  }
+  for (const [k, v] of Object.entries(report.kinds)) {
+    process.stderr.write(`${k.padEnd(7)} n=${String(v.n).padStart(4)}  p50=${v.p50} ms  p95=${v.p95} ms  max=${v.max} ms\n`);
+  }
+  if (opts.out) fs.writeFileSync(opts.out, JSON.stringify(report, null, 2));
+  process.stdout.write(`${JSON.stringify(report)}\n`);
+  return exitCode;
 }
-for (const [k, v] of Object.entries(report.kinds)) {
-  process.stderr.write(`${k.padEnd(7)} n=${String(v.n).padStart(4)}  p50=${v.p50} ms  p95=${v.p95} ms  max=${v.max} ms\n`);
+
+let code = 0;
+try {
+  code = await main();
+} catch (e) {
+  if (e instanceof InvalidWorkload) {
+    process.stderr.write(`FAIL (invalid workload): ${e.message}\n`);
+    code = 3;
+  } else {
+    process.stderr.write(`FAIL: ${e instanceof Error ? e.stack : String(e)}\n`);
+    code = 1;
+  }
+} finally {
+  await client.close().catch(() => {});
 }
-if (opts.out) fs.writeFileSync(opts.out, JSON.stringify(report, null, 2));
-process.stdout.write(`${JSON.stringify(report)}\n`);
-process.exit(exitCode);
+// Set the exit code and let the process end by itself: a hard process.exit()
+// right after writing to a pipe truncates stdout/stderr on Windows.
+process.exitCode = code;
 ```
 
 - [ ] **Step 4: Run — expect PASS**
@@ -4846,15 +5029,20 @@ git commit -F /tmp/msg-r8 -- scripts/mcp-latency-probe.mjs scripts/mcp-latency-p
 ```bash
 BASE=$TMPDIR/kcore-baseline-v0.104.0
 git -C ~/work/kcore-read worktree add "$BASE" v0.104.0
-# symlink dependencies exactly like the main worktree (see the worktree-gates recipe)
+# symlink dependencies exactly like the main worktree (see the worktree-gates recipe).
+# jest's setup requires release/app/dist/main/main.js and renderer/renderer.js, so
+# release/app/dist and release/app/node_modules are linked too.
 ln -s ~/work/kcore-read/node_modules "$BASE/node_modules"
+mkdir -p "$BASE/release/app"
+ln -s ~/work/kcore-read/release/app/dist "$BASE/release/app/dist"
+ln -s ~/work/kcore-read/release/app/node_modules "$BASE/release/app/node_modules"
 [ -d ~/work/kcore-read/build/.core ] && mkdir -p "$BASE/build" && ln -s ~/work/kcore-read/build/.core "$BASE/build/.core"
 ```
 
 Run `npx jest --json --outputFile=/tmp/jest-baseline.json` there (sequential, alone). When done, UNLINK the symlinks BEFORE removing the worktree (so `worktree remove` cannot follow them into the shared directories):
 
 ```bash
-rm "$BASE/node_modules"; [ -L "$BASE/build/.core" ] && rm "$BASE/build/.core"
+rm "$BASE/node_modules" "$BASE/release/app/dist" "$BASE/release/app/node_modules"; [ -L "$BASE/build/.core" ] && rm "$BASE/build/.core"
 git -C ~/work/kcore-read worktree remove "$BASE"
 ```
 
@@ -4895,7 +5083,7 @@ Needs the founder's machine, the Windows VM and PACKAGED candidate builds. Core 
 - [ ] **Packaged candidates (REQUIRED, macOS AND Windows, before any core release).** In alpha-cent build a release candidate whose `core.lock` pins a LOCAL core tag cut from this branch (`KIA_TEST_BUILD=1`, so the feeds are not touched), per `docs/runbooks/release-testing.md`; build one leg at a time (docker leg first, then mac, then smoke mac, then smoke win; never in parallel). Run `node build/release-smoke.mjs --build-root ~/work/ac-prod-build --asr` on both platforms and require the full stage list green (13 stages). The jest suite cannot prove the Electron utility-process boundary or the packaged better-sqlite3; this step does.
 - [ ] **Packaged `query_sql` checks (manual, on the macOS and the Windows candidate, over the packaged app's loopback MCP, with `KIA_READ_DIAG_FILE` set):** (1) `SELECT 1 AS one` returns `[{"one":1}]`; (2) a non-yielding heavy statement (the HEAVY aggregate from `sql-runner-process.test.ts`) is stopped at 10 s with the specified stop message; (3) the diag file then shows `sql.state: 'none'` / `sql.pid: null`, and the former runner pid is gone from the OS process table (`ps` / Task Manager); (4) the next `SELECT 1 AS one` succeeds. Any failure blocks the core release.
 - [ ] **Setup (latency runs):** build a dev app from this branch; start it with `KIA_READ_DIAG_FILE=/tmp/kia-read-diag.json`. For the "before" numbers use the v0.104.0 build on the SAME corpus/cache state (copy the profile data dir; restore it between runs).
-- [ ] **Idle baseline:** `node scripts/mcp-latency-probe.mjs --url http://127.0.0.1:7421/mcp --cycles 24 --interval 5000 --label idle --out idle.json --ids ids.json --diag /tmp/kia-read-diag.json` (the first run writes `ids.json`; EVERY later run, including the v0.104.0 "before" run, passes the same `--ids ids.json`; if the probe exits 3 the workload was invalid: fix the corpus/`--fuzzy` term and rerun, never compare such a run).
+- [ ] **Idle baseline:** `node scripts/mcp-latency-probe.mjs --url http://127.0.0.1:7421/mcp --cycles 24 --interval 5000 --label idle --out idle.json --ids ids.json --diag /tmp/kia-read-diag.json` (the first run writes `ids.json`; EVERY later run, including the v0.104.0 "before" run, passes the same `--ids ids.json`; the v0.104.0 "before" run OMITS `--diag`, because that build has no read diagnostics file; if the probe exits 3 the workload was invalid: fix the corpus/`--fuzzy` term and rerun, never compare such a run).
 - [ ] **During sync, macOS weak path:** start with `KIA_HOST_WEAK=1`, trigger a Gmail + Drive initial sync, run the probe with `--label during-sync --out sync.json --baseline idle.json --ids ids.json --diag /tmp/kia-read-diag.json`.
 - [ ] **During sync, Windows VM:** same on the VM (`ssh win`; the diag path and the probe URL via the VM's loopback; see the Windows UTM recipe).
 - [ ] **Pass criteria:** search and get p95 during sync <= ~2x idle p95 (the probe exits 1 otherwise); `fallbacks` all 0; the diag file shows `countBy` executed on the reader (probe exit code 2 otherwise); probe exit code 3 never; `walBytes` does not grow monotonically during the run. If the probe's `loop` kind (get_schema round trip) dominates the remaining latency, record the number and hand it to #147 instead of tuning around it.
@@ -4921,6 +5109,8 @@ Task 10 proves the packaged boundary by hand BEFORE the release; this task autom
 
 **Rev 2 re-check.** Spec coverage: §3.4 bounds now UTF-8-byte and array-overhead exact (Task 6 tests), required executor (Task 6 Step 11), killable-runner isolation proven against a real read worker (Task 6 Step 9), no-queue incl. a reconcile-stage workload (Task 5), probe validity gates (Task 8), packaged candidates before release (Task 10). Placeholders: none added (every new step shows its code or exact command). Type consistency: `MAX_VALUE_BYTES` replaces `MAX_VALUE_CHARS` everywhere (Interfaces, impl, tests); `McpDeps.sqlExecutor` is required in Interfaces, server code, the three server tests, latency-probe test and main.ts; `runGetsAndCounts`/`collectIds`/`checkSamples`/`EXPECTED_IDS` (workload module) are used by the probe and its tests; `BootDeps` no longer gains `dbWorkerExecArgv` (Task 5 Interfaces and Step 4 agree).
 
+**Rev 3 re-check.** Probe exports used by the probe and its tests are consistent: `isDocument`, `runGetsAndCounts` (returns bad ids), `validateIds`, `ftsPhraseLiteral`, `validateFuzzy`, `checkBaseline`, `checkSamples`, `collectIds`, `EXPECTED_IDS`; exit-3 causes in the Interfaces, the script and the tests agree; Task 5 reconcile test no longer references `BATCHES`/`overlapped`; Task 2 Step 6 imports (`Document`) match Task 1's trimmed head; no placeholders added.
+
 **Plan-level decisions where the spec is silent** (kept minimal, flagged for the reviewer): `createCorpusQuery` returns `{ query, invalidateLanguages }` (spec shows `Query`; the writer needs the explicit invalidation hook); `McpDeps.sqlExecutor` is REQUIRED with no in-process default (the app passes the runner, gate-tested in main.ts; tests and the stdio sibling inject `createInProcessSqlExecutor`); runner `startTimeoutMs` (20 s) guards a child that never becomes ready; queued waiters survive a timeout stop and run on the fresh child, while an unexpected exit fails everything queued; `truncated: true` also covers a 64 KiB (UTF-8 byte) value cut, and the 1 MiB budget counts the serialized rows array including brackets and commas; `metadata` projection skips the fuzzy pass when the query has negated terms (it cannot fold bodies it does not read); `CorePlatform.reads` is attributed to caller `'other'` and `readsFor(caller)` carries MCP/renderer attribution.
 
 ## Review log
@@ -4940,3 +5130,13 @@ rev 1 → rev 2:
 - F5: Task 2 merges the new names into the existing `../fuzzy` import in fuzzy.test.ts.
 - F6: `sql-runner-entry.ts` exits in the send callback on open error.
 - F7: Task 9 baseline uses a temporary v0.104.0 worktree (symlinked deps, unlinked before removal) when the agent-sessions checkout is not at `c369815d`.
+
+rev 2 → rev 3:
+- B1: probe validates 10 DISTINCT existing get ids before measuring, treats a null/empty get during measurement as a failure, validates the baseline report (sample counts, p95 > 0) before comparing; all exit 3; regression tests (null gets, duplicate/fake ids, baseline without get samples).
+- B2: probe checks the fuzzy term has zero exact FTS matches (query_sql on `documents_fts`) AND at least one search hit, else exit 3 "not fuzzy-only"; rejection tested.
+- B3: Task 5 reconcile test is ONE long `reconcileStage` transaction; reader calls finish before it settles and a writer-path control call waits behind it.
+- B4: Task 9 baseline worktree also symlinks `release/app/dist` and `release/app/node_modules`; all symlinks unlinked before removal.
+- B5: stdio `callSql` uses a definite local `live: Client`.
+- B6: Task 2 Step 6 import instruction adds `Document` to the contracts import.
+- B7: probe sets `process.exitCode` (main() returns the code, client closed in finally) instead of `process.exit`.
+- B8: Task 10 v0.104.0 "before" run omits `--diag`.
