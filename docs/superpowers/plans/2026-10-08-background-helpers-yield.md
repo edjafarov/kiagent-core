@@ -1263,7 +1263,7 @@ Run: `npx jest src/main/providers/local-asr`
 ```
 
 `provider.ts`:
-- deps: replace `probes?: { platform; totalMemBytes }` with `host?: HostFacts;` and the probes default (~89-91) with `const host = deps.host ?? readHostFacts();`; use `host.platform` / `host.totalMemBytes` where `probes.*` was used (~97-104). One host-fact channel. In `provider.test.ts` change `makeDeps`'s `probes: {...}` to `host: { platform: 'darwin' as NodeJS.Platform, arch: 'arm64', cores: 8, totalMemBytes: 32 * 1024 ** 3 }` and every per-test `probes: { platform, totalMemBytes }` override (~85, ~243) to `host: { platform, arch: 'x64', cores: 8, totalMemBytes }`.
+- deps: replace `probes?: { platform; totalMemBytes }` with `host?: HostFacts;` and the probes default (~89-91) with `const host = deps.host ?? readHostFacts();`; use `host.platform` / `host.totalMemBytes` where `probes.*` was used (~97-104). One host-fact channel. In `provider.test.ts` change `makeDeps`'s `probes: {...}` to `host: { platform: 'darwin' as NodeJS.Platform, arch: 'arm64', cores: 8, totalMemBytes: 32 * 1024 ** 3 }` and every per-test `probes: { platform, totalMemBytes }` override to `host: { platform, arch: 'x64', cores: 8, totalMemBytes }` — ALL sites: `provider.test.ts` ~85, ~243, ~920 (`win32`, 64 GiB), ~926 (`darwin`, 8 GiB), and `active-calls.test.ts` ~36 (→ `host: { platform: 'darwin', arch: 'arm64', cores: 8, totalMemBytes: 32 * 1024 ** 3 }`). These fixtures are behind `as any`, so tsc will not find them — verify with `git grep -n "probes" -- src/main/providers/local-asr` → nothing.
 - `interface QueuedJob { cls: 'interactive' | 'background'; run(): Promise<void>; reject(e: Error): void; }`
 - state: `let activeCls: QueuedJob['cls'] | null = null;`
 - `pump`: after `if (!job) return;` (NOT before it) set `activeCls = job.cls;`; in the `finally` set `activeCls = null;`.
@@ -1348,6 +1348,7 @@ it('a helper timeout rejects with HelperTimeoutError', async () => {
 `windows-ocr.test.ts`: add a test through the new `opts.setPriority` seam (the existing tests use a real fake exe and stay unchanged):
 
 ```ts
+  // needs: import os from 'os';
   it('a background OCR run is demoted to PRIORITY_LOW', async () => {
     const setPriority = jest.fn();
     await makeWindowsOcrHelper(FAKE, log, { setPriority }).ocrImage(new Uint8Array([1]), 'image/png', 'background');
@@ -1526,8 +1527,8 @@ Run in a dev app built from this branch (dedicated worktree, never the shared ch
 - [ ] `KIA_HOST_WEAK=1` during a Gmail + Drive first sync: Settings shows "Paused — waits until your accounts finish syncing."; no llama-server process for background work; the lane reopens and deferred OCR/audio start within one tick after the last backfill batch.
 - [ ] A meeting `hear` while a background transcription runs: meeting transcript arrives promptly; the background doc is deferred, not failed, and re-driven later.
 - [ ] Demoted OCR/raster under synthetic load (e.g. `yes > /dev/null` × cores): deadline hits defer, then succeed when idle — no doc ends `failed`.
-- [ ] Record llama-server CPU/RSS during background extraction and interactive local-model latency before/after (Mac; Windows VM if its llama-server launches).
-- [ ] Windows VM: prerequisite — llama-server must launch (`resolveLlamaBinary` vs accel-suffixed vendored dirs); if it doesn't, file it separately and check only Task Manager priorities (Low / Below normal) for OCR and extension hosts.
+- [ ] On BOTH macOS and the Windows VM, before vs after this branch: llama-server CPU/RSS during background extraction, interactive local-model latency, and foreground responsiveness (time to open Settings / run an in-app search while backfill runs).
+- [ ] Windows VM prerequisite: llama-server must launch (`resolveLlamaBinary` vs accel-suffixed vendored dirs). If it does not, fix it as separate work first; this acceptance stays INCOMPLETE (no release) until the Windows CPU measurements above have run. Also check Task Manager priorities (Low / Below normal) for OCR and extension hosts.
 
 ### Task 11 (after the core release — NOT in this branch): overlay copy in alpha-cent
 
