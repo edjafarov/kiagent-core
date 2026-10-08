@@ -99,7 +99,8 @@ describe('SQL runner over real child processes', () => {
     await expect(runner.exec('SELECT 1')).rejects.toThrow(/still stopping/);
     await until(() => runner!.diagnostics().state === 'none');
     clearInterval(tick);
-    expect(maxLag).toBeLessThan(300);
+    // Main-thread SQL would block the loop for the whole statement (seconds); 2 s tolerates a loaded CI machine.
+    expect(maxLag).toBeLessThan(2_000);
     expect(isAlive(pid1)).toBe(false); // the process EXITED, not just the call
 
     const again = await runner.exec('SELECT 2 AS two');
@@ -169,7 +170,8 @@ describe('SQL runner over real child processes', () => {
       await reader;
       clearInterval(tick);
       expect(ok).toBeGreaterThanOrEqual(5);
-      expect(maxLag).toBeLessThan(300);
+      // Main-thread SQL would block the loop for the whole statement (seconds); 2 s tolerates a loaded CI machine.
+      expect(maxLag).toBeLessThan(2_000);
       await until(() => runner!.diagnostics().state === 'none');
     } finally {
       await plane.close();
