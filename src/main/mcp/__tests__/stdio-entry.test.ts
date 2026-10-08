@@ -28,7 +28,8 @@ describe('stdio MCP sibling (real process)', () => {
   });
   afterAll(() => env.cleanup());
 
-  it('serves search and query_sql from a query-only connection', async () => {
+  /** Seeds a one-document corpus and connects a stdio client to the sibling. */
+  async function connectSeeded(): Promise<Client> {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-stdio-'));
     const dbPath = path.join(dir, 'kiagent.db');
     const store = openStore(await openDb(dbPath), {
@@ -69,8 +70,13 @@ describe('stdio MCP sibling (real process)', () => {
         } as Record<string, string>,
       }),
     );
+    return client;
+  }
 
-    const search = (await client.callTool({
+  it('serves search and query_sql from a query-only connection', async () => {
+    const live = await connectSeeded();
+
+    const search = (await live.callTool({
       name: 'search',
       arguments: { query: 'invoice' },
     })) as { content: Array<{ text: string }> };
@@ -81,7 +87,7 @@ describe('stdio MCP sibling (real process)', () => {
     expect(hits.map((h) => h.title)).toEqual(['Quarterly invoice']);
     expect(hits[0].snippet).toContain('invoice');
 
-    const sql = (await client.callTool({
+    const sql = (await live.callTool({
       name: 'query_sql',
       arguments: { sql: 'SELECT title FROM documents' },
     })) as { content: Array<{ text: string }> };
@@ -89,6 +95,47 @@ describe('stdio MCP sibling (real process)', () => {
       { title: 'Quarterly invoice' },
     ]);
   });
-});
 
-// (Task 6 Step 11 extends this file with the bounded-result call.)
+  it('applies the same query_sql bounds as the in-app runner', async () => {
+    const live: Client = await connectSeeded(); // definite local: no `Client | undefined` deref in the closure
+    const callSql = async (sql: string) => {
+      const r = (await live.callTool({
+        name: 'query_sql',
+        arguments: { sql },
+      })) as { content: Array<{ text: string }> };
+      return JSON.parse(r.content[0].text) as {
+        rows: Array<Record<string, unknown>>;
+        truncated: boolean;
+        hint?: string;
+      };
+    };
+    const series = (n: number, cols: string) =>
+      `WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i < ${n}) SELECT ${cols} FROM c`;
+
+    // 1. row cap
+    const rowsCut = await callSql(series(600, 'i'));
+    expect(rowsCut.rows).toHaveLength(500);
+    expect(rowsCut.truncated).toBe(true);
+
+    // 2. oversized text value (> 64 KiB): cut, marked, truncated
+    const valueCut = await callSql(`SELECT hex(randomblob(40000)) AS big`);
+    const big = valueCut.rows[0].big as string;
+    expect(big.endsWith('…[truncated]')).toBe(true);
+    expect(
+      Buffer.byteLength(big.slice(0, -'…[truncated]'.length)),
+    ).toBeLessThanOrEqual(65536);
+    expect(valueCut.truncated).toBe(true);
+
+    // 3. 1 MiB aggregate cap (the whole serialized rows array)
+    const aggCut = await callSql(
+      series(600, 'i, hex(randomblob(100000)) AS big'),
+    );
+    expect(aggCut.truncated).toBe(true);
+    expect(aggCut.rows.length).toBeGreaterThan(0);
+    expect(aggCut.rows.length).toBeLessThan(500);
+    expect(Buffer.byteLength(JSON.stringify(aggCut.rows))).toBeLessThanOrEqual(
+      1024 * 1024,
+    );
+    expect(aggCut.hint).toMatch(/1 MiB/);
+  });
+});

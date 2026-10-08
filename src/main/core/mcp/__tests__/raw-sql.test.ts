@@ -5,7 +5,10 @@ import path from 'path';
 
 import { openDb } from '../../../db/app-db';
 import { openStore } from '../../store/store';
-import { createRawSqlTools } from '../tools/raw-sql';
+import {
+  createInProcessSqlExecutor,
+  createRawSqlTools,
+} from '../tools/raw-sql';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -46,20 +49,22 @@ describe('createRawSqlTools', () => {
   it('exposes query_sql and get_schema, both tier powerful', async () => {
     const dbPath = path.join(dir, 'test.db');
     await seedCorpus(dbPath);
-    const raw = createRawSqlTools(dbPath);
+    const sqlh = createInProcessSqlExecutor(dbPath);
+    const raw = createRawSqlTools(sqlh.exec);
     try {
       const names = raw.tools.map((t) => t.name).sort();
       expect(names).toEqual(['get_schema', 'query_sql']);
       expect(raw.tools.every((t) => t.tier === 'powerful')).toBe(true);
     } finally {
-      await raw.dispose();
+      await sqlh.stop();
     }
   });
 
   it('query_sql reads the corpus; get_schema returns markdown', async () => {
     const dbPath = path.join(dir, 'test.db');
     await seedCorpus(dbPath);
-    const raw = createRawSqlTools(dbPath);
+    const sqlh = createInProcessSqlExecutor(dbPath);
+    const raw = createRawSqlTools(sqlh.exec);
     try {
       const q = raw.tools.find((t) => t.name === 'query_sql')!;
       const result = (await q.call({
@@ -71,7 +76,7 @@ describe('createRawSqlTools', () => {
       const md = (await s.call({})) as string;
       expect(md).toContain('## documents');
     } finally {
-      await raw.dispose();
+      await sqlh.stop();
     }
   });
 
@@ -109,7 +114,8 @@ describe('createRawSqlTools', () => {
     }
     await store.close(); // writer for the ORIGINAL goes away; the copy has none
 
-    const raw = createRawSqlTools(dst);
+    const sqlh = createInProcessSqlExecutor(dst);
+    const raw = createRawSqlTools(sqlh.exec);
     try {
       const q = raw.tools.find((t) => t.name === 'query_sql')!;
       const result = (await q.call({
@@ -119,7 +125,7 @@ describe('createRawSqlTools', () => {
       // recovered the dirty -wal rather than silently reading a stale main db.
       expect(result.rows).toEqual([{ title: 'DirtyWal' }]);
     } finally {
-      await raw.dispose();
+      await sqlh.stop();
     }
   });
 });

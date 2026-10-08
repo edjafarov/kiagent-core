@@ -47,6 +47,8 @@ import {
 } from './core/boot';
 import type { CorePlatform } from './core/boot';
 import { createActivityLog, type ActivityLog } from './core/mcp/activity';
+import { createSqlRunner } from './core/mcp/sql-runner';
+import { utilityRunnerChild } from './core/mcp/sql-runner-spawn';
 import { startMcp } from './core/mcp/server';
 import type { McpServerHandle } from './core/mcp/server';
 import { markOnboardingOnce } from './core/prefs';
@@ -1001,8 +1003,26 @@ app
     // payload — coalesced internally to one push per 50 ms.
     wireOutboxPush(p.store, broadcast);
 
+    // Bundled SQL runner (webpack `sqlRunner` entry): prod `sqlRunner.js`, dev
+    // `sqlRunner.bundle.dev.js`.
+    const sqlRunnerFile =
+      [
+        path.join(__dirname, 'sqlRunner.js'),
+        path.join(__dirname, 'sqlRunner.bundle.dev.js'),
+      ].find((f) => fs.existsSync(f)) ?? path.join(__dirname, 'sqlRunner.js');
     mcp = await startMcp({
       query: p.readsFor('mcp'),
+      sqlExecutor: createSqlRunner({
+        spawn: () =>
+          utilityRunnerChild(
+            sqlRunnerFile,
+            { KIA_SQL_RUNNER_DB: path.join(dataDir, 'kiagent.db') },
+            (line) => p.logSink.log('sql-runner', 'warn', line),
+          ),
+        timeoutMs: 10_000,
+        idleMs: 300_000,
+        log: (level, msg) => p.logSink.log('sql-runner', level, msg),
+      }),
       logSink: p.logSink,
       dataDir,
       onActivity: (rec) => act.append(rec),

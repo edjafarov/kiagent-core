@@ -31,6 +31,7 @@ import type { Query } from '@shared/contracts';
 
 import { openDb } from '../../../db/app-db';
 import { startMcp } from '../server';
+import { createInProcessSqlExecutor } from '../tools/raw-sql';
 import type { McpServerHandle } from '../server';
 
 function fakeQuery(): Query {
@@ -161,6 +162,7 @@ describe('McpServerHandle.createMcpHandler', () => {
     await seedDb.close();
     handle = await startMcp({
       query: fakeQuery(),
+      sqlExecutor: createInProcessSqlExecutor(path.join(dataDir, 'kiagent.db')),
       logSink: { log: () => {} },
       dataDir,
       // Ephemeral (OS-assigned) port — this file doesn't test the candidate

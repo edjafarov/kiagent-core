@@ -3,10 +3,12 @@
  * because they are only useful as a pair (the schema doc exists to help write
  * the SQL) and because query_sql needs a raw SQLite handle that the Query-only
  * buildBuiltinTools does not carry. Both MCP entry points (core/mcp/server.ts,
- * mcp/stdio-entry.ts) concat `...tools` into the shared registry and call
- * `dispose()` on teardown.
+ * mcp/stdio-entry.ts) concat `...tools` into the shared registry.
  *
- * The handle is opened readonly for a driver-level write guard. A strict
+ * The tools take an executor: in the app it is the killable runner process
+ * (core/mcp/sql-runner.ts), which owns the SQLite handle; the stdio sibling
+ * and tests use createInProcessSqlExecutor. The in-process handle is opened
+ * readonly for a driver-level write guard. A strict
  * readonly open can fail WAL recovery (SQLITE_CANTOPEN) when the -wal is dirty
  * and no writer is present, because a readonly connection cannot create the
  * -shm; in that case we fall back to the same read-write-but-treated-readonly
@@ -15,17 +17,20 @@
  * (db worker / stdio store) always opens first, so the readonly path is taken.
  */
 import Database from 'better-sqlite3';
+import type BetterSqlite3 from 'better-sqlite3';
 
 import type { McpTool } from '@shared/contracts';
 
+import type { SqlExecutorHandle } from '../sql-runner';
 import { getSchemaDescription, renderSchema } from './get-schema';
 import {
   querySqlDescription,
   querySqlInputSchema,
   runQuerySql,
+  type QuerySqlExecutor,
 } from './query-sql';
 
-function openReadHandle(dbPath: string): Database.Database {
+function openReadHandle(dbPath: string): BetterSqlite3.Database {
   try {
     return new Database(dbPath, { readonly: true, fileMustExist: true });
   } catch (err) {
@@ -39,12 +44,33 @@ function openReadHandle(dbPath: string): Database.Database {
   }
 }
 
-export function createRawSqlTools(dbPath: string): {
-  tools: McpTool[];
-  dispose: () => Promise<void>;
-} {
-  const conn = openReadHandle(dbPath);
+/** In-process executor: the stdio sibling (its own process, over its own
+ *  connection) and tests that inject one explicitly. The MCP server never
+ *  builds one itself, and the app never uses it — main.ts passes the killable
+ *  runner. A string source is opened lazily and owned (closed by stop()); a
+ *  connection is borrowed. */
+export function createInProcessSqlExecutor(
+  source: string | BetterSqlite3.Database,
+): SqlExecutorHandle {
+  const owned = typeof source === 'string';
+  let conn: BetterSqlite3.Database | null = owned ? null : source;
+  return {
+    exec: async (sql) => {
+      if (!conn) conn = openReadHandle(source as string);
+      return runQuerySql(conn, sql);
+    },
+    stop: async () => {
+      if (owned && conn) {
+        conn.close();
+        conn = null;
+      }
+    },
+  };
+}
 
+export function createRawSqlTools(exec: QuerySqlExecutor): {
+  tools: McpTool[];
+} {
   const tools: McpTool[] = [
     {
       name: 'query_sql',
@@ -52,7 +78,7 @@ export function createRawSqlTools(dbPath: string): {
       inputSchema: querySqlInputSchema,
       tier: 'powerful',
       call: async (args: Record<string, unknown>) =>
-        runQuerySql(conn, String((args as { sql?: unknown }).sql ?? '')),
+        exec(String((args as { sql?: unknown }).sql ?? '')),
     },
     {
       name: 'get_schema',
@@ -62,11 +88,5 @@ export function createRawSqlTools(dbPath: string): {
       call: async () => renderSchema(),
     },
   ];
-
-  return {
-    tools,
-    dispose: async () => {
-      conn.close();
-    },
-  };
+  return { tools };
 }

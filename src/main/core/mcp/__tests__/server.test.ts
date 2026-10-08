@@ -34,6 +34,7 @@ import type {
 
 import { openDb } from '../../../db/app-db';
 import { PORT_CANDIDATES, startMcp } from '../server';
+import { createInProcessSqlExecutor } from '../tools/raw-sql';
 import type { McpServerHandle } from '../server';
 
 // One canned document so the doc://{id} resource read path has a hit.
@@ -120,6 +121,7 @@ describe('startMcp (HTTP transport)', () => {
     logs = [];
     handle = await startMcp({
       query: fakeQuery(),
+      sqlExecutor: createInProcessSqlExecutor(path.join(dataDir, 'kiagent.db')),
       logSink: {
         log: (scope, level, msg, fields) =>
           logs.push({ scope, level, msg, fields }),
@@ -170,6 +172,7 @@ describe('startMcp (HTTP transport)', () => {
     await seedDb.close();
     const real = await startMcp({
       query: fakeQuery(),
+      sqlExecutor: createInProcessSqlExecutor(path.join(candDir, 'kiagent.db')),
       logSink: { log: () => {} },
       dataDir: candDir,
     });
@@ -575,6 +578,7 @@ describe('activity transport (D7)', () => {
     await seedDb.close();
     handle = await startMcp({
       query: fakeQuery(),
+      sqlExecutor: createInProcessSqlExecutor(path.join(dataDir, 'kiagent.db')),
       logSink: { log: () => {} },
       dataDir,
       portCandidates: [0],

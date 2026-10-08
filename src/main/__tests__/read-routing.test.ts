@@ -35,3 +35,11 @@ describe('read routing (spec §3.3)', () => {
     );
   });
 });
+
+describe('query_sql routing', () => {
+  it('the app hands the MCP server the killable runner; the server never opens a handle itself', () => {
+    expect(read('main.ts')).toMatch(/sqlExecutor:\s*createSqlRunner\(/);
+    expect(read('core/mcp/server.ts')).not.toMatch(/new Database\(/);
+    expect(read('core/mcp/server.ts')).not.toMatch(/better-sqlite3/);
+  });
+});

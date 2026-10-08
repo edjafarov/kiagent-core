@@ -30,6 +30,7 @@ import {
 } from '../../../outbound/service';
 import { createOutboundRoutes } from '../../../outbound/routes';
 import { startMcp, type McpServerHandle } from '../server';
+import { createInProcessSqlExecutor } from '../tools/raw-sql';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -109,6 +110,7 @@ beforeAll(async () => {
   });
   mcp = await startMcp({
     query: store.read,
+    sqlExecutor: createInProcessSqlExecutor(path.join(dir, 'kiagent.db')),
     logSink,
     dataDir: dir,
     outbound: service,

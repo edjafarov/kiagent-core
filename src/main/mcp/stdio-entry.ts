@@ -26,7 +26,10 @@ import { makeMcpServer } from '../core/mcp/make-server';
 import { attachToolHandlers, createToolRegistry } from '../core/mcp/registry';
 import { attachResourceHandlers } from '../core/mcp/resources';
 import { buildBuiltinTools } from '../core/mcp/tools';
-import { createRawSqlTools } from '../core/mcp/tools/raw-sql';
+import {
+  createInProcessSqlExecutor,
+  createRawSqlTools,
+} from '../core/mcp/tools/raw-sql';
 import { openCorpusReadConnection } from '../db/app-db';
 import { createCorpusQuery } from '../core/store/corpus-query';
 import type { AppDb } from '../db/app-db';
@@ -110,7 +113,10 @@ async function main(): Promise<void> {
   const activity = createActivityLog(path.dirname(dbPath));
 
   const logSink = stderrLogSink();
-  const rawSql = createRawSqlTools(dbPath);
+  // Its own process over its own query-only connection: no runner needed here.
+  const rawSql = createRawSqlTools(
+    createInProcessSqlExecutor(readDb._conn!).exec,
+  );
   const registry = createToolRegistry([
     ...buildBuiltinTools(query, createOutboundProxy()),
     ...rawSql.tools,
@@ -128,11 +134,6 @@ async function main(): Promise<void> {
     shuttingDown = true;
     try {
       await server.close();
-    } catch {
-      /* ignore */
-    }
-    try {
-      await rawSql.dispose();
     } catch {
       /* ignore */
     }
