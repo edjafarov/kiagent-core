@@ -55,7 +55,11 @@ export function createWindowsOcrProvider(deps: {
         image: Uint8Array;
         mime?: string;
       };
-      return deps.helper.ocrImage(image, mime);
+      return deps.helper.ocrImage(
+        image,
+        mime,
+        req.lane === 'background' ? 'background' : 'interactive',
+      );
     },
   };
 }

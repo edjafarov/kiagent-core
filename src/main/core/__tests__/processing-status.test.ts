@@ -236,3 +236,18 @@ test('a failing count keeps the last value and warns', async () => {
   ).toEqual([4]);
   t.status.stop();
 });
+
+test('an open tick with a pending wake wakes workers even without a closed→open edge', async () => {
+  const t = setup();
+  t.status.tick('open');
+  t.status.tick('open', true);
+  await flush();
+  expect(t.wakeWorkers).toHaveBeenCalledTimes(1);
+});
+
+test('the very first tick wakes when a wake is pending (closure before the first tick)', async () => {
+  const t = setup();
+  t.status.tick('open', true);
+  await flush();
+  expect(t.wakeWorkers).toHaveBeenCalledTimes(1);
+});

@@ -44,12 +44,20 @@ function makePlatform(
   const attached: Worker[] = [];
   const platform = {
     prefs: { get: () => ({ processing: { enabled: true, window: 'always' } }) },
+    host: {
+      platform: 'darwin',
+      arch: 'arm64',
+      cores: 8,
+      totalMemBytes: 16 * 1024 ** 3,
+    },
+    llmAccel: () => null,
     scheduler: {
       env: { onBattery: false, userActive: false },
       register: () => {},
     },
     store: { ledgerDeferred: async () => [] },
     engine: {
+      syncing: () => false,
       attach: (w: Worker) => {
         attached.push(w);
         return { stop: () => {} };
@@ -234,6 +242,7 @@ describe('convert worker wiring', () => {
         },
       },
       inference: { providers: () => [] },
+      host: { totalMemBytes: 16 * 1024 ** 3 },
     };
     attachBundledWorkers(platform as never, {
       visionHelper: null,

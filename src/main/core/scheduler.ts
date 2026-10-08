@@ -32,14 +32,39 @@ export function createScheduler(
 ): CoreScheduler {
   const jobs = new Map<
     string,
-    { cadence: Cadence; run: () => Promise<void>; busy: boolean }
+    {
+      cadence: Cadence;
+      run: () => Promise<void>;
+      busy: boolean;
+      again: boolean;
+    }
   >();
   let timer: NodeJS.Timeout | null = null;
 
   const fire = async (id: string): Promise<void> => {
     const job = jobs.get(id);
-    if (!job || job.busy) return;
+    if (!job) return;
+    if (job.busy) {
+      // Coalesce: a trigger during a pass (e.g. a lane wake) earns exactly one
+      // follow-up run, so work deferred earlier in the pass is not stranded.
+      job.again = true;
+      return;
+    }
     job.busy = true;
+    try {
+      do {
+        job.again = false;
+        await runOnce(id, job);
+      } while (job.again);
+    } finally {
+      job.busy = false;
+    }
+  };
+
+  const runOnce = async (
+    id: string,
+    job: { cadence: Cadence; run: () => Promise<void> },
+  ): Promise<void> => {
     const now = new Date().toISOString();
     await store.scheduleUpsert({
       jobId: id,
@@ -51,8 +76,6 @@ export function createScheduler(
       await job.run();
     } catch (err) {
       logs.log('scheduler', 'error', `job ${id} failed: ${String(err)}`);
-    } finally {
-      job.busy = false;
     }
   };
 
@@ -89,7 +112,7 @@ export function createScheduler(
       return env();
     },
     async register(id, cadence, run) {
-      jobs.set(id, { cadence, run, busy: false });
+      jobs.set(id, { cadence, run, busy: false, again: false });
       const existing = (await store.scheduleAll()).find((r) => r.jobId === id);
       await store.scheduleUpsert({
         jobId: id,

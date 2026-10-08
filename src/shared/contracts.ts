@@ -434,7 +434,11 @@ export interface SourceDescriptor {
   hasReauthenticate?: boolean;
 }
 
-/** 'backfill' = catching up (drives the progress bar); 'live' = current. */
+/** 'backfill' = catching up (drives the progress bar); 'live' = current.
+ *  On weak hosts the `'until-synced'` lane stays closed until each source's
+ *  backfill is followed by a committed `'live'` batch, so a source must commit
+ *  (or signal) `live` right after its last backfill batch rather than blocking
+ *  until the next upstream change. */
 export type PullPhase = 'backfill' | 'live';
 
 export interface Batch<Cursor, Item> {
@@ -1393,7 +1397,7 @@ export interface CapSurfaces {
   /** Real-time model access ('interactive' lane by default) — for commands
    *  and tools. `lane()` is extension-facing ONLY: it is not a member of
    *  `Inference` itself (the plane cannot resolve `LaneState` on its own —
-   *  see `InferencePlane.onLaneChange`), so it lives here, on the surface
+   *  see `InferencePlane.setLanePolicy`), so it lives here, on the surface
    *  the extension boundary hands out, not on the base contract that
    *  `InferencePlane`/`EngineDeps` also implement. */
   inference: { inference: ExtensionInference };
@@ -1690,12 +1694,18 @@ export interface ActiveCall {
   task: string | null;
 }
 
+/** Why background work may or may not run right now. Contract (platform
+ *  2.8.0): ONLY `'open'` permits background admission — every other value,
+ *  including values added in later versions, means closed. */
 export type LaneState =
   | 'open'
   | 'disabled'
   | 'battery'
   | 'until-idle'
-  | 'until-night';
+  | 'until-night'
+  /** Weak host (few cores / ≤8 GiB / local model on CPU) while any account
+   *  is still in its initial backfill. */
+  | 'until-synced';
 
 /** The ONE timing authority — nothing else owns a timer. Durable:
  *  lastRun/nextRun persist; a missed window catches up on boot. */

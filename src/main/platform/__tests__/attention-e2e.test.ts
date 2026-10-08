@@ -82,7 +82,6 @@ function extensionPlatform(
       hear: async () => '',
     },
     laneState: () => 'open',
-    onLaneChange: () => () => {},
     logSink: { log: () => {} },
     notify: () => {},
     transportFactory: () =>

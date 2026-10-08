@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { HelperTimeoutError } from '../../../workers/vision/rasterize';
 import { makeVisionHelper } from '../vision-helper';
 import type { ExecFileFn } from '../vision-helper';
 
@@ -31,6 +32,7 @@ describe('vision-helper driver (execFile protocol)', () => {
     };
     const helper = makeVisionHelper('/opt/kia-vision', noop, {
       execFileFn: exec,
+      taskpolicyExists: () => false,
     });
 
     const text = await helper.ocrImage(new Uint8Array([1, 2, 3]), 'image/png');
@@ -63,6 +65,7 @@ describe('vision-helper driver (execFile protocol)', () => {
     };
     const helper = makeVisionHelper('/opt/kia-vision', noop, {
       execFileFn: exec,
+      taskpolicyExists: () => false,
     });
 
     const r = await helper.rasterizePdf(new Uint8Array([1, 2, 3, 4]), [3, 1]);
@@ -85,6 +88,7 @@ describe('vision-helper driver (execFile protocol)', () => {
     };
     const helper = makeVisionHelper('/opt/kia-vision', noop, {
       execFileFn: exec,
+      taskpolicyExists: () => false,
     });
 
     await expect(
@@ -102,6 +106,7 @@ describe('vision-helper driver (execFile protocol)', () => {
     };
     const helper = makeVisionHelper('/opt/kia-vision', noop, {
       execFileFn: exec,
+      taskpolicyExists: () => false,
       timeoutMs: 5_000,
     });
 
@@ -119,11 +124,56 @@ describe('vision-helper driver (execFile protocol)', () => {
     };
     const helper = makeVisionHelper('/opt/kia-vision', noop, {
       execFileFn: exec,
+      taskpolicyExists: () => false,
     });
 
     await expect(
       helper.rasterizePdf(new Uint8Array([1, 2]), [3]),
     ).rejects.toThrow(/kia-vision rasterize failed: no such helper mode/);
     expect(fs.existsSync(path.dirname(pdfPath!))).toBe(false);
+  });
+
+  it('background OCR and every rasterize exec through taskpolicy -b on darwin', async () => {
+    const files: string[] = [];
+    const execFileFn: ExecFileFn = (file, _args, _o, cb) => {
+      files.push(file);
+      cb(
+        null,
+        JSON.stringify({
+          text: 'x',
+          width: 1,
+          height: 1,
+          confidence: 1,
+          pages: [],
+          pageCount: 0,
+        }),
+        '',
+      );
+    };
+    const h = makeVisionHelper('/v/kia-vision', noop, {
+      execFileFn,
+      platform: 'darwin',
+      taskpolicyExists: () => true,
+    });
+    await h.ocrImage(new Uint8Array([1]), 'image/png', 'background');
+    await h.ocrImage(new Uint8Array([1]), 'image/png');
+    await h.rasterizePdf(new Uint8Array([1]), [1]);
+    expect(files).toEqual([
+      '/usr/sbin/taskpolicy',
+      '/v/kia-vision',
+      '/usr/sbin/taskpolicy',
+    ]);
+  });
+
+  it('a helper timeout rejects with HelperTimeoutError', async () => {
+    const execFileFn: ExecFileFn = (_f, _a, _o, cb) =>
+      cb(Object.assign(new Error('t'), { killed: true }), '', '');
+    const h = makeVisionHelper('/v/kia-vision', noop, {
+      execFileFn,
+      taskpolicyExists: () => false,
+    });
+    await expect(
+      h.rasterizePdf(new Uint8Array([1]), [1]),
+    ).rejects.toBeInstanceOf(HelperTimeoutError);
   });
 });

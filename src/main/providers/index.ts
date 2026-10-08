@@ -90,11 +90,13 @@ export function registerBundledProviders(
     llamaBinaryPath: resolveLlamaBinary(llamaSlugDir), // port `llamaSlug` from ref catalog.ts:35
     modelsDir: path.join(opts.dataDir, 'models'),
     prefs: platform.prefs,
+    host: platform.host,
     log: log('inference'),
   });
   platform.inference.register(localLlm);
 
   const localAsr = createLocalAsrProvider({
+    host: platform.host,
     binaryPath: resolveWhisperBinary(path.join(opts.assetsDir, 'whisper')),
     // One copy for every slug (scripts/whisper-assets.mjs: the model is
     // platform-independent), so it sits beside the slug dirs, not inside one.

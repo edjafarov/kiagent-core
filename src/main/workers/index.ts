@@ -48,6 +48,7 @@ export function attachBundledWorkers(
   // consumer/cursor. Its handle is discarded like vision's — shutdown stops
   // every attached worker via engine.stopAll().
   const audioWorker = createAudioWorker({
+    totalMemBytes: platform.host.totalMemBytes,
     laneOpen: () => backgroundLaneOpen(platform),
     // Demand-driven: every audio candidate asks for the install, so the
     // download runs during the closed processing window (spec §5).

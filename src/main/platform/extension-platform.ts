@@ -289,11 +289,6 @@ export interface ExtensionPlatformDeps {
    *  `platform.scheduler.env`, which this platform never receives), so the
    *  construction site (main.ts) injects it. */
   laneState(): LaneState;
-  /** Subscribes to the inference plane's own open/closed boolean
-   *  (`InferencePlane.onLaneChange`) so the platform can re-resolve
-   *  `laneState()` on every transition and emit `platform.lane` when the
-   *  resolved state actually changes. */
-  onLaneChange(cb: (open: boolean) => void): () => void;
   logSink: LogSink;
   notify(msg: string, level?: LogLevel): void;
   transportFactory(extensionId: string): HostTransport;
@@ -408,16 +403,14 @@ export interface ExtensionPlatform {
   resetAll(): Promise<ResetAllResult>;
   /**
    * Re-resolves `laneState()` and emits `platform.lane` when it changed
-   * since the last emission (from either this call or the plane's
-   * `onLaneChange`) — see `createLaneGate`. Called from main.ts's
-   * processing-counter interval, immediately after
-   * `inference.setBackgroundOpen(...)`: that interval is the only place
-   * lane policy is re-evaluated, so it is the correctness net for a
-   * reason-only transition (e.g. 'battery' -> 'disabled') that never
-   * flips the plane's boolean and would otherwise never trigger
-   * `onLaneChange`. Never throws.
+   * since the last emission — see `createLaneGate`. Called from main.ts's
+   * 5 s publisher tick, which is the only trigger; `createLaneGate` dedups,
+   * so reason-only changes (e.g. 'battery' -> 'until-synced') emit exactly
+   * once. `wake` (a pending lane wake consumed by the same tick) re-emits
+   * 'open' even when unchanged, so an extension whose background request was
+   * refused between two ticks is told the lane reopened. Never throws.
    */
-  refreshLane(): void;
+  refreshLane(wake?: boolean): void;
   /** B1: dispatches an `ext:invoke` request to whichever extension
    *  incarnation currently owns (extensionId, name) in the ui registry.
    *  ALWAYS resolves an envelope — never rejects, so `ext:invoke`'s own
@@ -449,19 +442,14 @@ export interface ResetAllResult {
  * emitted, and calls `emit(state)` only when it changed — so a
  * `'battery' -> 'disabled'` transition (both CLOSED — the plane's own
  * boolean never flips) still emits, exactly as much as `'disabled' ->
- * 'open'` does. `laneState()`/`emit()` are the ONLY things that vary
- * between the two triggers wired in `createExtensionPlatform` below
- * (the plane's `onLaneChange`, fired synchronously and immediately on a
- * boolean flip, and the interval-driven `refreshLane()`, which re-resolves
- * on a fixed clock regardless of whether the boolean flipped) — both fold
- * into this ONE `last` comparison, so neither path can emit a duplicate or
- * skip a real transition.
+ * 'open'` does. `refreshLane()`, called by main.ts's 5 s publisher, is the
+ * only trigger; the single `last` comparison means no duplicate and no skipped transition.
+ * Exception: `check(true)` (a lane wake — background work was refused since
+ * the last tick) re-emits an unchanged 'open', because the extension may have
+ * been refused in between and would otherwise never learn the lane reopened.
  *
  * A throw from `laneState()` or `emit()` is caught and reported to
- * `onError` rather than propagating: `onLaneChange`'s callback runs
- * synchronously inside `InferencePlane.setBackgroundOpen`'s own subscriber
- * loop (no try/catch of its own there), so a gate that could throw would
- * risk breaking that loop's OTHER subscribers, not just this one.
+ * `onError` rather than propagating into the publisher tick.
  *
  * Exported for direct unit testing of the emission/dedup/error-guard
  * behavior without spinning up a full extension host.
@@ -470,13 +458,13 @@ export function createLaneGate(
   laneState: () => LaneState,
   emit: (state: LaneState) => void,
   onError: (err: unknown) => void,
-): { check(): void } {
+): { check(wake?: boolean): void } {
   let last: LaneState | null = null;
   return {
-    check() {
+    check(wake = false) {
       try {
         const state = laneState();
-        if (state === last) return;
+        if (state === last && !(wake && state === 'open')) return;
         last = state;
         emit(state);
       } catch (err) {
@@ -502,14 +490,9 @@ export function createExtensionPlatform(
   // triggers below share this ONE gate instance (see createLaneGate), so
   // `lane()`, this event, and `refreshLane()` can never disagree.
   //
-  // `onLaneChange` is the low-latency trigger for the common case (an
-  // actual open/closed flip fires the instant the plane sees it, same
-  // tick as `setBackgroundOpen`). It is NOT sufficient on its own — a
-  // reason-only change with no boolean flip (e.g. 'battery' -> 'disabled',
-  // both closed) never calls it. `refreshLane()` below is the correctness
-  // net: main.ts's processing-counter interval (the only caller of
-  // `setBackgroundOpen`) calls it on every tick regardless of whether the
-  // boolean flipped, so that transition is still caught within one tick.
+  // `refreshLane()` (called by main.ts's 5 s publisher) is the only trigger;
+  // `createLaneGate` dedups so reason-only changes (e.g. 'battery' ->
+  // 'until-synced') emit exactly once.
   const laneGate = createLaneGate(
     deps.laneState,
     (state) => bus.emit('platform', 'platform.lane', { state }),
@@ -521,7 +504,6 @@ export function createExtensionPlatform(
       ),
   );
   let running = false;
-  let offLane: (() => void) | undefined;
   let offWorker: (() => void) | undefined;
   const onWorkerRespawn = () => {
     if (!running) return;
@@ -571,7 +553,6 @@ export function createExtensionPlatform(
   }
 
   function registerLifecycleListeners(): void {
-    offLane ??= deps.onLaneChange(() => laneGate.check());
     if (!offWorker && deps.db?.onWorkerRespawn)
       offWorker = deps.db.onWorkerRespawn(onWorkerRespawn);
   }
@@ -1293,8 +1274,6 @@ export function createExtensionPlatform(
     async stop() {
       running = false;
       loaded = false;
-      offLane?.();
-      offLane = undefined;
       offWorker?.();
       offWorker = undefined;
       installer.discardAll();
@@ -1645,8 +1624,8 @@ export function createExtensionPlatform(
       });
     },
 
-    refreshLane() {
-      laneGate.check();
+    refreshLane(wake) {
+      laneGate.check(wake === true);
     },
 
     async callUi(extensionId, name, payload) {

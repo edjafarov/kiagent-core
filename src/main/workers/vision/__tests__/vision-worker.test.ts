@@ -7,6 +7,7 @@ import {
   PROSE_LINES,
   shifted,
 } from '@main/core/engine/__tests__/pdf-fixture';
+import { HelperTimeoutError } from '../rasterize';
 import type { Rasterizer } from '../rasterize';
 
 import { MAX_PDF_BYTES } from '../classify';
@@ -1069,4 +1070,20 @@ describe('a read provider still starting (selftest pending) is waited for', () =
     expect(await w.work(listed('d2'), s2)).toBe('done');
     expect(read).toHaveBeenCalled();
   });
+});
+
+it('a raster helper timeout defers; other raster errors still reject', async () => {
+  const mk = (err: Error) =>
+    createVisionWorker({
+      rasterizer: { pdfToPngs: jest.fn(async () => Promise.reject(err)) },
+      laneOpen: () => true,
+    });
+  expect(
+    await mk(
+      new HelperTimeoutError('kia-vision rasterize timed out after 120000ms'),
+    ).work(change({}), fakeSession()),
+  ).toBe('defer');
+  await expect(
+    mk(new Error('corrupt')).work(change({}), fakeSession()),
+  ).rejects.toThrow('corrupt');
 });

@@ -33,7 +33,12 @@ it('hear is recorded when the job starts running, not while queued', async () =>
       onChange: () => () => {},
     } as any,
     log: jest.fn(),
-    probes: { platform: 'darwin', totalMemBytes: 32 * 1024 ** 3 },
+    host: {
+      platform: 'darwin',
+      arch: 'arm64',
+      cores: 8,
+      totalMemBytes: 32 * 1024 ** 3,
+    },
     binaryPresent: () => true,
     filesPresent: (_m: any, dir: string) => dir === modelPath,
     download: jest.fn(async () => {}),

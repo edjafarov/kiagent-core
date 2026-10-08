@@ -43,6 +43,53 @@ const ARGS = {
 };
 
 describe('runWhisperCli', () => {
+  it('a background run execs through taskpolicy with -t (darwin)', async () => {
+    const { spawnFn, child, argv } = fakeSpawn();
+    const p = runWhisperCli({
+      ...ARGS,
+      spawnFn,
+      priority: 'background',
+      threads: 2,
+      platform: 'darwin',
+      taskpolicyExists: () => true,
+    });
+    child.emit('close', 0, null);
+    await p;
+    expect(argv[0].slice(0, 3)).toEqual([
+      '/usr/sbin/taskpolicy',
+      '-b',
+      ARGS.binaryPath,
+    ]);
+    expect(argv[0][argv[0].indexOf('-t') + 1]).toBe('2');
+  });
+
+  it('an interactive run is unchanged (no wrapper, no -t)', async () => {
+    const { spawnFn, child, argv } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn });
+    child.emit('close', 0, null);
+    await p;
+    expect(argv[0][0]).toBe(ARGS.binaryPath);
+    expect(argv[0]).not.toContain('-t');
+  });
+
+  it('taskpolicy exit 66 (binary missing) is a plain Error, not AsrInputRejectedError', async () => {
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({
+      ...ARGS,
+      spawnFn,
+      priority: 'background',
+      platform: 'darwin',
+      taskpolicyExists: () => true,
+    });
+    child.stderr.emit(
+      'data',
+      Buffer.from(
+        'taskpolicy: posix_spawn: /x/whisper-cli: No such file or directory\n',
+      ),
+    );
+    child.emit('close', 66, null);
+    await expect(p).rejects.not.toBeInstanceOf(AsrInputRejectedError);
+  });
   it('builds the exact argv and resolves streamed stdout on exit 0', async () => {
     const { spawnFn, child, argv } = fakeSpawn();
     const p = runWhisperCli({ ...ARGS, spawnFn });

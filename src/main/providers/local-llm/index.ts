@@ -2,7 +2,6 @@
 
 export {
   checkCapability,
-  readHostProbes,
   type HostProbes,
   type CapabilityResult,
   CPU_MIN_RAM_BYTES,

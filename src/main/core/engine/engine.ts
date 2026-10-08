@@ -505,11 +505,15 @@ export function createEngine(deps: EngineDeps): Engine & {
   /** Release the slot IF `flowId` still holds it — a late release from a
    *  settled flow must never free a slot its successor already took. */
   releaseAccountFlow(accountId: AccountId, flowId: string): void;
+  /** True while any ACCOUNT loop is in its initial (or re-)backfill —
+   *  synchronous, no DB read. Worker handles share `running` and are
+   *  excluded by key. */
+  syncing(): boolean;
 } {
   const { store, logs } = deps;
   const running = new Map<
     string,
-    { stop(): Promise<void>; active(): boolean }
+    { stop(): Promise<void>; active(): boolean; syncing?(): boolean }
   >();
   /** Consumer names of attached workers (a subset of `running`'s keys, which
    *  also hold account loops). */
@@ -964,6 +968,11 @@ export function createEngine(deps: EngineDeps): Engine & {
       }
       const abort = new AbortController();
       let status: SyncStatus = 'connecting';
+      /** This run's last SUCCESSFULLY committed batch was a backfill batch.
+       *  The truthful "still syncing" signal: every run starts at
+       *  'connecting', quiet watchers never yield, and `status` flips to
+       *  'live' before its commit lands. Only moves after a commit resolves. */
+      let backfillCommitted = false;
       let done: Promise<void>;
       // One pull loop per account: a re-run (sync-now, cadence) replaces the
       // previous loop, never runs beside it.
@@ -1116,6 +1125,7 @@ export function createEngine(deps: EngineDeps): Engine & {
                   error: null,
                   errorScope,
                 });
+                backfillCommitted = batch.phase === 'backfill';
                 retries = 0;
               }
               // abortable() ends the for-await loop the same way whether the
@@ -1227,11 +1237,17 @@ export function createEngine(deps: EngineDeps): Engine & {
         },
       );
 
-      const handle: Handle & { active(): boolean } = {
+      const handle: Handle & { active(): boolean; syncing(): boolean } = {
         get status() {
           return status;
         },
         active: () => !settled,
+        syncing: () =>
+          !settled &&
+          backfillCommitted &&
+          status !== 'error' &&
+          status !== 'paused' &&
+          status !== 'needsReauth',
         async stats() {
           const account2 = await store.account(account.id);
           const done2 = account2?.progress?.done ?? 0;
@@ -1552,6 +1568,13 @@ export function createEngine(deps: EngineDeps): Engine & {
     releaseAccountFlow(accountId: AccountId, flowId: string): void {
       if (activeByAccount.get(accountId) === flowId)
         activeByAccount.delete(accountId);
+    },
+
+    syncing(): boolean {
+      for (const [key, h] of running) {
+        if (key.startsWith('account:') && h.syncing?.() === true) return true;
+      }
+      return false;
     },
 
     isRunning(accountId: AccountId): boolean {

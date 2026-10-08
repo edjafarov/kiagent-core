@@ -9,6 +9,8 @@ import { fork } from 'child_process';
 import type { ChildToMain } from '@shared/extension-rpc';
 import { wireErrorCode, type WireErrorCode } from '@shared/source-errors';
 
+import { demoteHost } from '../core/child-priority';
+
 export interface WireChannel {
   send(msg: unknown): void;
   onMessage(cb: (msg: unknown) => void): () => void;
@@ -122,6 +124,9 @@ export function utilityProcessTransport(
     serviceName,
     stdio: onOutput ? 'pipe' : 'ignore',
   });
+  // Extension hosts mostly pull in the background but also serve small
+  // interactive calls (send, consent): below-normal, not low.
+  child.once('spawn', () => demoteHost(child.pid));
   if (onOutput) {
     const MAX_LINE = 4096;
     const wire = (

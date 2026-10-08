@@ -79,7 +79,6 @@ describe('extension runtime e2e (real forked child)', () => {
         hear: async () => '',
       },
       laneState: () => 'open',
-      onLaneChange: () => () => {},
       logSink: {
         log: (...a) => process.stderr.write(`${JSON.stringify(a)}\n`),
       },
@@ -259,7 +258,6 @@ describe('extension runtime e2e — host-stamped event identity (real forked chi
         hear: async () => '',
       },
       laneState: () => 'open',
-      onLaneChange: () => () => {},
       logSink: {
         log: (...a) => process.stderr.write(`${JSON.stringify(a)}\n`),
       },
@@ -314,8 +312,16 @@ describe('extension runtime e2e — host-stamped event identity (real forked chi
     let activationsSeen: unknown[] = [];
     // eslint-disable-next-line no-await-in-loop
     while (Date.now() < deadlineActivated) {
+      // The host runs below-normal priority (#145): under load its tools may
+      // register after installCommit resolves — keep polling until they do.
+      const getActivations = tools.get('eventsB.getActivations');
+      if (!getActivations) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 50));
+        continue;
+      }
       // eslint-disable-next-line no-await-in-loop
-      const res = (await tools.get('eventsB.getActivations')!.call({})) as {
+      const res = (await getActivations.call({})) as {
         activations: Array<{ payload: { id: string }; meta: unknown }>;
       };
       activationsSeen = res.activations.filter(
@@ -448,7 +454,6 @@ describe('extension runtime e2e — lane and model-identity errors across the RP
         describe: async () => ({ providerId: 'fake', modelId, generation }),
       } as never,
       laneState: () => 'open',
-      onLaneChange: () => () => {},
       logSink: {
         log: (...a) => process.stderr.write(`${JSON.stringify(a)}\n`),
       },

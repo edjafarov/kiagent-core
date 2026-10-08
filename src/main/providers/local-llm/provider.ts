@@ -9,8 +9,14 @@ import {
   type ProviderStatus,
 } from '@shared/contracts';
 
+import {
+  hostBudget,
+  readHostFacts,
+  type HostFacts,
+  type LlmAccel,
+} from '../../core/host-profile';
 import { chatText, describeImage } from './api';
-import { checkCapability, readHostProbes } from './capability';
+import { checkCapability } from './capability';
 import { detectHostBackend } from './backend';
 import type { BackendInfo } from './backend';
 import { downloadModel, modelFilesPresent } from './downloader';
@@ -32,6 +38,16 @@ export interface LocalLlmProvider extends InferenceProvider {
   dispose(): Promise<void>;
   selectedModel(): Promise<ModelDescriptor>;
   installedModelIds(): string[];
+  /** Detected acceleration; null until the first detect(). */
+  accel(): LlmAccel | null;
+}
+
+/** Leave half the logical cores to the user and stop idle busy-waiting.
+ *  NEVER add -np here: an explicit slot count disables b9585's unified KV
+ *  cache and splits the 24k context (see server.ts contextSize). */
+export function llamaThreadArgs(host: HostFacts, accel: LlmAccel): string[] {
+  const n = String(hostBudget(host, accel).backgroundThreads);
+  return ['-t', n, '-tb', n, '--poll', '0'];
 }
 
 const DEFAULT_IDLE_STOP_MS = 10 * 60_000;
@@ -41,6 +57,7 @@ export function createLocalLlmProvider(deps: {
   modelsDir: string;
   prefs: Prefs;
   log(level: LogLevel, msg: string): void;
+  host?: HostFacts;
   detect?(): Promise<BackendInfo>;
   download?: typeof downloadModel;
   filesPresent?: typeof modelFilesPresent;
@@ -49,11 +66,19 @@ export function createLocalLlmProvider(deps: {
     modelPath: string;
     mmprojPath: string;
     gpuLayers: number;
+    extraArgs?: string[];
     log(level: LogLevel, msg: string): void;
   }): ServerLike;
   idleStopMs?: number;
 }): LocalLlmProvider {
-  const detect = deps.detect ?? (() => detectHostBackend());
+  const host = deps.host ?? readHostFacts();
+  const detect =
+    deps.detect ??
+    (() =>
+      detectHostBackend({
+        platform: host.platform,
+        totalMemBytes: host.totalMemBytes,
+      }));
   const download = deps.download ?? downloadModel;
   const filesPresent = deps.filesPresent ?? modelFilesPresent;
   const makeServer =
@@ -61,7 +86,11 @@ export function createLocalLlmProvider(deps: {
     ((args) => new LlamaServer(args as any) as unknown as ServerLike);
   const idleStopMs = deps.idleStopMs ?? DEFAULT_IDLE_STOP_MS;
 
-  const capability = checkCapability(readHostProbes());
+  const capability = checkCapability({
+    platform: host.platform,
+    arch: host.arch,
+    totalMemBytes: host.totalMemBytes,
+  });
   let backend: BackendInfo | null = null; // detected once, lazily
   let installedModel: ModelDescriptor | null = null; // model whose files are on disk
   let downloadPct: number | null = null;
@@ -287,6 +316,7 @@ export function createLocalLlmProvider(deps: {
         modelPath: path.join(dir, gguf.name),
         mmprojPath: path.join(dir, mmproj.name),
         gpuLayers: backend.accel === 'cpu' ? 0 : 999,
+        extraArgs: llamaThreadArgs(host, backend.accel),
         log: deps.log,
       });
       await s.start();
@@ -332,6 +362,7 @@ export function createLocalLlmProvider(deps: {
     // stays on model descriptors purely as documentation. local-llm is the
     // vision/completion path only.
     supports: ['complete', 'see'],
+    accel: () => backend?.accel ?? null,
     status(): ProviderStatus {
       if (!capability.ok) return 'unsupported';
       if (downloadPct !== null) return { downloading: { pct: downloadPct } };

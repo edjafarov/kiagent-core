@@ -40,8 +40,10 @@ function makeDeps(over: Record<string, any> = {}) {
     asrModelsDir: over.asrModelsDir as string,
     prefs: fakePrefs(prefOverrides),
     log: jest.fn(),
-    probes: {
+    host: {
       platform: 'darwin' as NodeJS.Platform,
+      arch: 'arm64',
+      cores: 8,
       totalMemBytes: 32 * 1024 ** 3,
     },
     binaryPresent: jest.fn(() => true),
@@ -82,7 +84,12 @@ describe('LocalAsrProvider', () => {
   it('is unsupported when the vendored whisper-cli is missing', () => {
     const deps = makeDeps({
       asrModelsDir: tmpDir,
-      probes: { platform: 'win32', totalMemBytes: 16 * 1024 ** 3 },
+      host: {
+        platform: 'win32',
+        arch: 'x64',
+        cores: 8,
+        totalMemBytes: 16 * 1024 ** 3,
+      },
       binaryPresent: jest.fn(() => false),
     });
     const provider = createLocalAsrProvider(deps);
@@ -240,7 +247,12 @@ describe('LocalAsrProvider', () => {
   it('drops to the CPU tier off darwin (no metal-gated large-v3-turbo)', async () => {
     const deps = makeDeps({
       asrModelsDir: tmpDir,
-      probes: { platform: 'linux', totalMemBytes: 32 * 1024 ** 3 },
+      host: {
+        platform: 'linux',
+        arch: 'x64',
+        cores: 8,
+        totalMemBytes: 32 * 1024 ** 3,
+      },
     });
     const provider = createLocalAsrProvider(deps);
 
@@ -917,13 +929,23 @@ describe('LocalAsrProvider', () => {
       expect(ready.variants()[0].status).toBe('ready');
       const cpu = createLocalAsrProvider(
         makeDeps({
-          probes: { platform: 'win32', totalMemBytes: 64 * 1024 ** 3 },
+          host: {
+            platform: 'win32',
+            arch: 'x64',
+            cores: 8,
+            totalMemBytes: 64 * 1024 ** 3,
+          },
         }),
       );
       expect(cpu.variants()[0].status).toBe('unsupported');
       const small = createLocalAsrProvider(
         makeDeps({
-          probes: { platform: 'darwin', totalMemBytes: 8 * 1024 ** 3 },
+          host: {
+            platform: 'darwin',
+            arch: 'x64',
+            cores: 8,
+            totalMemBytes: 8 * 1024 ** 3,
+          },
         }),
       );
       expect(small.variants()[0].status).toBe('unsupported');
@@ -1011,7 +1033,12 @@ describe('LocalAsrProvider', () => {
     it('rejects with AsrModelUnsupportedError on a host with no accuracy tier', async () => {
       const p = createLocalAsrProvider(
         makeDeps({
-          probes: { platform: 'win32', totalMemBytes: 64 * 1024 ** 3 },
+          host: {
+            platform: 'win32',
+            arch: 'x64',
+            cores: 8,
+            totalMemBytes: 64 * 1024 ** 3,
+          },
         }),
       );
       await expect(
@@ -1052,7 +1079,12 @@ describe('LocalAsrProvider', () => {
       const cpu = createLocalAsrProvider(
         makeDeps({
           download,
-          probes: { platform: 'linux', totalMemBytes: 64 * 1024 ** 3 },
+          host: {
+            platform: 'linux',
+            arch: 'x64',
+            cores: 8,
+            totalMemBytes: 64 * 1024 ** 3,
+          },
         }),
       );
       cpu.ensureAccuracyInstalled();
@@ -1118,6 +1150,133 @@ describe('LocalAsrProvider', () => {
       await tick();
       await p.dispose();
       expect(seen?.aborted).toBe(true);
+    });
+  });
+
+  // ── background yield (#145) ────────────────────────────────────────────────
+
+  describe('class by lane', () => {
+    const hearReq = (lane: 'interactive' | 'background') =>
+      ({
+        kind: 'hear',
+        payload: { audio: new Uint8Array(4) },
+        lane,
+      }) as never;
+
+    // Background runs hang until aborted (then reject like a killed child);
+    // interactive runs resolve at once.
+    const blockingRunCli = (order: string[], signals: AbortSignal[]) =>
+      jest.fn((a: any) => {
+        order.push(a.priority);
+        signals.push(a.signal);
+        return new Promise<string>((resolve, reject) => {
+          if (a.priority === 'background')
+            a.signal.addEventListener('abort', () =>
+              reject(new Error('whisper-cli killed by SIGTERM')),
+            );
+          else resolve('meeting text');
+        });
+      });
+
+    it('an interactive hear preempts a running background transcribeFile, which rejects (worker defers)', async () => {
+      const order: string[] = [];
+      const signals: AbortSignal[] = [];
+      const runCli = blockingRunCli(order, signals);
+      const provider = createLocalAsrProvider(
+        makeDeps({ asrModelsDir: tmpDir, filesPresent: () => true, runCli }),
+      );
+      const bg = provider.transcribeFile('/tmp/a.wav', { format: 'wav' });
+      bg.catch(() => {});
+      await tick();
+      const hear = provider.handle(hearReq('interactive'));
+      await expect(bg).rejects.toThrow('SIGTERM');
+      await expect(hear).resolves.toBe('meeting text');
+      expect(order).toEqual(['background', 'interactive']);
+      expect(signals[0].aborted).toBe(true);
+    });
+
+    it('a queued interactive job overtakes queued background jobs', async () => {
+      const order: string[] = [];
+      const signals: AbortSignal[] = [];
+      const runCli = blockingRunCli(order, signals);
+      const provider = createLocalAsrProvider(
+        makeDeps({ asrModelsDir: tmpDir, filesPresent: () => true, runCli }),
+      );
+      const bg1 = provider.transcribeFile('/tmp/a.wav', { format: 'wav' });
+      const bg2 = provider.transcribeFile('/tmp/b.wav', { format: 'wav' });
+      bg1.catch(() => {});
+      bg2.catch(() => {});
+      await tick();
+      const hear = provider.handle(hearReq('interactive'));
+      await expect(bg1).rejects.toThrow('SIGTERM');
+      await expect(hear).resolves.toBe('meeting text');
+      await tick();
+      // bg2 would start right after the interactive job: held off, never launched.
+      expect(order).toEqual(['background', 'interactive']);
+      await expect(bg2).rejects.toThrow('busy with interactive');
+    });
+
+    describe('interactive hold-off', () => {
+      it('a background job queued right after an interactive one is rejected without launching whisper; after 90 s it launches', async () => {
+        let t = 1_000_000;
+        const runCli = jest.fn(async (_a: unknown) => 'text');
+        const provider = createLocalAsrProvider(
+          makeDeps({
+            asrModelsDir: tmpDir,
+            filesPresent: () => true,
+            runCli,
+            now: () => t,
+          }),
+        );
+        await provider.handle(hearReq('interactive'));
+        expect(runCli).toHaveBeenCalledTimes(1);
+        t += 89_000;
+        await expect(
+          provider.transcribeFile('/tmp/a.wav', { format: 'wav' }),
+        ).rejects.toThrow('local ASR busy with interactive work');
+        expect(runCli).toHaveBeenCalledTimes(1);
+        t += 2_000; // 91 s after the interactive job finished
+        await expect(
+          provider.transcribeFile('/tmp/a.wav', { format: 'wav' }),
+        ).resolves.toBe('text');
+        expect(runCli).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('background jobs pass threads = min(4, backgroundThreads)', async () => {
+      const runCli = jest.fn(async (_a: unknown) => 'x');
+      const provider = createLocalAsrProvider(
+        makeDeps({
+          asrModelsDir: tmpDir,
+          filesPresent: () => true,
+          runCli,
+          host: {
+            platform: 'darwin',
+            arch: 'arm64',
+            cores: 16,
+            totalMemBytes: 32 * 1024 ** 3,
+          },
+        }),
+      );
+      await provider.transcribeFile('/tmp/a.wav', { format: 'wav' });
+      expect(runCli.mock.calls[0][0]).toMatchObject({
+        priority: 'background',
+        threads: 4,
+      });
+    });
+
+    it('a background-lane hear runs as background; interactive has no thread cap', async () => {
+      const runCli = jest.fn(async (_a: unknown) => 'x');
+      const provider = createLocalAsrProvider(
+        makeDeps({ asrModelsDir: tmpDir, filesPresent: () => true, runCli }),
+      );
+      await provider.handle(hearReq('background'));
+      await provider.handle(hearReq('interactive'));
+      expect(runCli.mock.calls[0][0]).toMatchObject({ priority: 'background' });
+      expect(runCli.mock.calls[1][0]).toMatchObject({
+        priority: 'interactive',
+        threads: undefined,
+      });
     });
   });
 });

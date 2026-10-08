@@ -3,6 +3,10 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { launch } from '../../core/child-priority';
+
+export const AFCONVERT = '/usr/bin/afconvert';
+
 /** Thrown when the audio can't be turned into wav/mp3 on THIS host — e.g. an
  *  opus voice note on a non-macOS build, where no transcoder is bundled. A
  *  permanent condition for this platform, so the worker skips rather than
@@ -190,10 +194,11 @@ export async function afconvertToWavFile(
 
 function runAfconvert(inPath: string, outPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(
-      'afconvert',
+    const proc = launch(
+      'background',
+      AFCONVERT,
       ['-f', 'WAVE', '-d', 'LEI16@16000', '-c', '1', inPath, outPath],
-      { stdio: ['ignore', 'ignore', 'pipe'] },
+      (c, a) => spawn(c, a, { stdio: ['ignore', 'ignore', 'pipe'] }),
     );
     let stderr = '';
     proc.stderr?.on('data', (c) => {
