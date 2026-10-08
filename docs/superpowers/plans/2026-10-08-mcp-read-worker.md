@@ -15,6 +15,7 @@
 ## Global Constraints
 
 - Repo: kiagent-core worktree `~/work/kcore-read`, branch `design/mcp-read-worker` (core v0.104.0 `c369815d` + spec commits). All paths below are relative to it. `node_modules` is already present; do not run `npm ci`.
+- Pre-flight (before Task 1): jest's setup file (`.erb/scripts/check-build-exists.ts`) aborts without `release/app/dist/main/main.js` and `release/app/dist/renderer/renderer.js`; both exist in this worktree today. Run `npx jest src/main/core/store/__tests__/fuzzy.test.ts` once — it must pass; if the setup file aborts, run the build it names (`npm run build:main` / `npm run build:renderer`) and retry.
 - Run jest as `npx jest <paths>`; typecheck `npx tsc -p tsconfig.typecheck.json`; lint `npx eslint --fix <files>`. One heavy command at a time — never run builds/tests in parallel. Worker/child tests spawn ts-node and take 10-30 s each; set `jest.setTimeout(60_000)` in those files.
 - **Every task's last run step ends with `npx tsc -p tsconfig.typecheck.json` clean and `npx eslint --fix` on the touched files before its commit.** Each task must leave the tree typechecking.
 - Commits: `git commit -F <msgfile> -- <paths>`; messages are conventional, end with `(#146)`, and carry NO Co-Authored-By line. Never `git stash`, `--amend`, rebase, reset, or `--no-verify`. Never dispatch subagents.
@@ -1130,7 +1131,7 @@ In `search`, replace everything from the line `const where = filters.length ? \`
     },
 ```
 
-- [ ] **Step 7: MCP tool callers.** In `src/main/core/mcp/tools/search.ts`: delete the local `SNIPPET_*` constants that are now unused, `extractTerms`, `clampLine` and `buildSnippet` (lines from `const SNIPPET_DEFAULT_CONTEXT_LINES` helper block through the end of `buildSnippet`; keep `DEFAULT_LIMIT`, `MAX_LIMIT`, `SNIPPET_DEFAULT_CONTEXT_LINES`, `SNIPPET_MAX_CONTEXT_LINES`, `resolveLimit`, `resolveContextLines`), import the builder, and ask for the snippet projection:
+- [ ] **Step 7: MCP tool callers.** In `src/main/core/mcp/tools/search.ts`: delete exactly these from the file: the constant `SNIPPET_MAX_LINE_CHARS` and the functions `extractTerms`, `clampLine` and `buildSnippet`; KEEP `DEFAULT_LIMIT`, `MAX_LIMIT`, `SNIPPET_DEFAULT_CONTEXT_LINES`, `SNIPPET_MAX_CONTEXT_LINES`, `resolveLimit` and `resolveContextLines`, import the builder, and ask for the snippet projection:
 
 ```ts
 import { buildLineWindow, extractWindowTerms } from '../../store/line-window';
@@ -1635,6 +1636,8 @@ describe('stdio MCP sibling (real process)', () => {
     expect(JSON.parse(sql.content[0].text).rows).toEqual([{ title: 'Quarterly invoice' }]);
   });
 });
+
+// (Task 6 Step 11 extends this file with the bounded-result call.)
 ```
 
 - [ ] **Step 9: Run — expect PASS**
@@ -2290,7 +2293,9 @@ describe('reads do not queue behind ingest writes (real writer + reader workers)
 
     // A real large ingest: 40 documents x ~2 MB, FTS + trigram + stem views in
     // ONE transaction on the writer thread. If this machine finishes it in
-    // under ~1.5 s, raise DOCS until the first assertion below holds.
+    // under ~1.5 s, raise DOCS until the first assertion below holds; if the
+    // suite exceeds its timeout or the worker runs out of memory, LOWER DOCS
+    // (start at ~10) until the 300 ms `commitSettled === false` check still holds.
     const DOCS = 40;
     const documents = Array.from({ length: DOCS }, (_, i): DocumentInput => ({
       externalId: `big${i}`,
@@ -2527,7 +2532,7 @@ and in `startMcp({ … })`: `query: p.readsFor('mcp'),`. Leave `p.store.read.acc
 - [ ] **Step 6: Run — expect PASS**
 
 Run (one at a time): `npx jest src/main/core/__tests__/reads.test.ts`, then `npx jest src/main/__tests__/read-routing.test.ts`, then `npx jest src/main/core/__tests__/reads-no-queue.test.ts`.
-Expected: all PASS. If the no-queue test's first `expect(commitSettled).toBe(false)` fails, the commit was too fast for this machine: raise `DOCS` (do not weaken the assertions).
+Expected: all PASS. If the no-queue test's first `expect(commitSettled).toBe(false)` fails, the commit was too fast for this machine: raise `DOCS`; if the test times out or the writer worker runs out of memory (40 x ~2 MB through FTS + stem views + trigram plus a ~90 MB structured clone is heavy), lower `DOCS` toward ~10 until the `commitSettled === false` check holds. Never weaken the assertions.
 Then: `npx tsc -p tsconfig.typecheck.json && npx eslint --fix src/main/core/reads.ts src/main/core/boot.ts src/main/main.ts src/main/core/__tests__/reads.test.ts src/main/core/__tests__/reads-no-queue.test.ts src/main/__tests__/read-routing.test.ts`
 
 - [ ] **Step 7: Commit**
@@ -3909,6 +3914,20 @@ describe('query_sql routing', () => {
 });
 ```
 
+Extend `src/main/mcp/__tests__/stdio-entry.test.ts` (spec §5: the stdio executor gets the same bounds) with a second `it` that reuses the seeded corpus setup (move the seeding into a `beforeEach`/helper) and asserts:
+
+```ts
+    const big = (await client.callTool({
+      name: 'query_sql',
+      arguments: {
+        sql: 'WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i < 600) SELECT i FROM c',
+      },
+    })) as { content: Array<{ text: string }> };
+    const payload = JSON.parse(big.content[0].text);
+    expect(payload.rows).toHaveLength(500);
+    expect(payload.truncated).toBe(true);
+```
+
 - [ ] **Step 12: Run — expect PASS, then gate the task**
 
 Run (one at a time): `npx jest src/main/core/mcp`, `npx jest src/main/mcp src/main/__tests__/read-routing.test.ts`.
@@ -4094,7 +4113,7 @@ and in the `platform` literal:
       buildReadDiagnostics({ stats: readPlane.stats, walPath: `${dbPath}-wal`, sql }),
 ```
 
-`main.ts`: in the handler that returns `dbDiagnostics` (`storage:stats`) add the line right below it:
+`main.ts`: in the handler that returns `dbDiagnostics` (`storage:stats`, `main.ts:680`) add the line right below it. `mcp` is the module-level `let mcp: McpServerHandle | null` (`main.ts:130`), hence the `?.`. `src/shared/ipc.ts` types the response as `StorageStats`, which does not list `dbDiagnostics` either — the extra field already compiles for the existing line, so leave the type alone unless `tsc` objects:
 
 ```ts
         readDiagnostics: await p.readDiagnostics(mcp?.sqlDiagnostics() ?? null),
