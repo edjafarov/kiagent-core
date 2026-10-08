@@ -10,7 +10,7 @@
  * prompts keep working.
  */
 import type { Account, AccountId, Document, Query } from '@shared/contracts';
-import { buildLineWindow, extractWindowTerms } from '../../store/line-window';
+import { DEFAULT_CONTEXT_LINES } from '../../store/line-window';
 import { parseOperators } from './search-operators';
 
 export interface SearchArgs {
@@ -89,7 +89,6 @@ export const searchInputSchema = {
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
-const SNIPPET_DEFAULT_CONTEXT_LINES = 2;
 const SNIPPET_MAX_CONTEXT_LINES = 30;
 
 function resolveLimit(raw: unknown): number {
@@ -100,7 +99,7 @@ function resolveLimit(raw: unknown): number {
 
 function resolveContextLines(raw: unknown): number {
   const n = Math.floor(Number(raw));
-  if (!Number.isFinite(n)) return SNIPPET_DEFAULT_CONTEXT_LINES;
+  if (!Number.isFinite(n)) return DEFAULT_CONTEXT_LINES;
   return Math.min(Math.max(0, n), SNIPPET_MAX_CONTEXT_LINES);
 }
 
@@ -170,14 +169,13 @@ export function makeSearchTool(query: Query) {
       docs = docs.slice(0, limit);
     }
 
-    const terms = rawText ? extractWindowTerms(rawText) : [];
     return docs.map((d, i) => ({
       id: d.id,
       title: d.title ?? '',
       source: sourceOf.get(d.accountId) ?? 'unknown',
       type: d.type,
-      snippet:
-        d.snippet ?? buildLineWindow(d.markdown ?? '', terms, contextLines),
+      // 'snippet' projection: the store always sets it.
+      snippet: d.snippet ?? '',
       source_url: d.url ?? '',
       created_at: d.createdAt ?? d.ingestedAt,
       // Query.search doesn't expose its internal bm25 score; approximate a

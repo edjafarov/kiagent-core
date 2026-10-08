@@ -31,7 +31,7 @@ import type { Query } from '@shared/contracts';
 
 import { openDb } from '../../../db/app-db';
 import { startMcp } from '../server';
-import { createInProcessSqlExecutor } from '../tools/raw-sql';
+import { createTestSqlExecutor } from './helpers/sql-executor';
 import type { McpServerHandle } from '../server';
 
 function fakeQuery(): Query {
@@ -154,15 +154,14 @@ describe('McpServerHandle.createMcpHandler', () => {
 
   beforeAll(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-mcp-factory-'));
-    // startMcp now also wires createRawSqlTools(dbPath), which opens
-    // <dataDir>/kiagent.db readonly and requires the file to already exist —
-    // true in the real app (the db worker always opens it first, see
-    // main.ts), so the fixture here needs a real (if empty) db on disk too.
+    // startMcp takes an injected query_sql executor (the app passes the
+    // killable runner; here a test executor opens <dataDir>/kiagent.db lazily
+    // and needs the file to exist), so the fixture seeds a real (if empty) db.
     const seedDb = await openDb(path.join(dataDir, 'kiagent.db'));
     await seedDb.close();
     handle = await startMcp({
       query: fakeQuery(),
-      sqlExecutor: createInProcessSqlExecutor(path.join(dataDir, 'kiagent.db')),
+      sqlExecutor: createTestSqlExecutor(path.join(dataDir, 'kiagent.db')),
       logSink: { log: () => {} },
       dataDir,
       // Ephemeral (OS-assigned) port — this file doesn't test the candidate

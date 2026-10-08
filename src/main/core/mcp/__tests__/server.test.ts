@@ -34,7 +34,7 @@ import type {
 
 import { openDb } from '../../../db/app-db';
 import { PORT_CANDIDATES, startMcp } from '../server';
-import { createInProcessSqlExecutor } from '../tools/raw-sql';
+import { createTestSqlExecutor } from './helpers/sql-executor';
 import type { McpServerHandle } from '../server';
 
 // One canned document so the doc://{id} resource read path has a hit.
@@ -112,16 +112,15 @@ describe('startMcp (HTTP transport)', () => {
 
   beforeAll(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-mcp-http-'));
-    // startMcp now also wires createRawSqlTools(dbPath), which opens
-    // <dataDir>/kiagent.db readonly and requires the file to already exist —
-    // true in the real app (the db worker always opens it first, see
-    // main.ts), so the fixture here needs a real (if empty) db on disk too.
+    // startMcp takes an injected query_sql executor (the app passes the
+    // killable runner; here a test executor opens <dataDir>/kiagent.db lazily
+    // and needs the file to exist), so the fixture seeds a real (if empty) db.
     const seedDb = await openDb(path.join(dataDir, 'kiagent.db'));
     await seedDb.close();
     logs = [];
     handle = await startMcp({
       query: fakeQuery(),
-      sqlExecutor: createInProcessSqlExecutor(path.join(dataDir, 'kiagent.db')),
+      sqlExecutor: createTestSqlExecutor(path.join(dataDir, 'kiagent.db')),
       logSink: {
         log: (scope, level, msg, fields) =>
           logs.push({ scope, level, msg, fields }),
@@ -172,7 +171,7 @@ describe('startMcp (HTTP transport)', () => {
     await seedDb.close();
     const real = await startMcp({
       query: fakeQuery(),
-      sqlExecutor: createInProcessSqlExecutor(path.join(candDir, 'kiagent.db')),
+      sqlExecutor: createTestSqlExecutor(path.join(candDir, 'kiagent.db')),
       logSink: { log: () => {} },
       dataDir: candDir,
     });
@@ -578,7 +577,7 @@ describe('activity transport (D7)', () => {
     await seedDb.close();
     handle = await startMcp({
       query: fakeQuery(),
-      sqlExecutor: createInProcessSqlExecutor(path.join(dataDir, 'kiagent.db')),
+      sqlExecutor: createTestSqlExecutor(path.join(dataDir, 'kiagent.db')),
       logSink: { log: () => {} },
       dataDir,
       portCandidates: [0],

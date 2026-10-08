@@ -25,7 +25,7 @@ export function extractWindowTerms(q: string): string[] {
   return tokens;
 }
 
-export function clampLine(line: string, terms: string[]): string {
+function clampLine(line: string, terms: string[]): string {
   if (line.length <= SNIPPET_MAX_LINE_CHARS) return line;
   const lower = line.toLowerCase();
   let idx = -1;

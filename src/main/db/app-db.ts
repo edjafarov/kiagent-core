@@ -257,7 +257,8 @@ export interface CorpusReadOptions {
  *  - opens read-WRITE (not `readonly:true`) so SQLite can recover/checkpoint a
  *    dirty `-wal` when the GUI app is closed (a strict readonly open fails on
  *    WAL recovery). Treated as read-only by convention: callers issue only
- *    SELECT, and query_sql keeps its own readonly handle.
+ *    SELECT (the stdio sibling also sets `queryOnly`; the app's query_sql runs in
+ *    its own killable runner process).
  * Concurrent with a running GUI app this is just a second WAL reader, which
  * SQLite supports.
  * Optional `cacheKiB`/`queryOnly` are for the read worker and the stdio sibling.

@@ -8,8 +8,8 @@
  * exact same tool registry/dispatch as the HTTP transport
  * (core/mcp/registry.ts) so tools cannot drift between the two.
  *
- * Reads the corpus via `openStore` opened on the same `<userData>/data/
- * kiagent.db` the running app writes to; only `query` (the `Query`
+ * Reads the corpus via `openCorpusReadConnection` + `createCorpusQuery` on the
+ * same `<userData>/data/kiagent.db` the running app writes to; only `query` (the `Query`
  * surface) is ever touched here — this process never commits.
  * Every served call is also appended (transport 'stdio') to
  * `<dataDir>/mcp-activity.jsonl` via core/mcp/activity.ts — the app's

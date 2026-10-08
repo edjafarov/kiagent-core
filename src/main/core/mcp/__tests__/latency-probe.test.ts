@@ -12,7 +12,7 @@ import { startReadDiagnosticsDump } from '../../read-diagnostics';
 import { createCorpusQuery } from '../../store/corpus-query';
 import { openStore } from '../../store/store';
 import { startMcp, type McpServerHandle } from '../server';
-import { createInProcessSqlExecutor } from '../tools/raw-sql';
+import { createTestSqlExecutor } from './helpers/sql-executor';
 
 jest.setTimeout(120_000);
 
@@ -130,7 +130,7 @@ describe('scripts/mcp-latency-probe.mjs', () => {
       logSink: { log: () => {} },
       dataDir: dir,
       portCandidates: [0],
-      sqlExecutor: createInProcessSqlExecutor(path.join(dir, 'kiagent.db')),
+      sqlExecutor: createTestSqlExecutor(path.join(dir, 'kiagent.db')),
     });
   });
 

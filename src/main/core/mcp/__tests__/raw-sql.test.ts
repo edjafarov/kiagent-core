@@ -5,10 +5,8 @@ import path from 'path';
 
 import { openDb } from '../../../db/app-db';
 import { openStore } from '../../store/store';
-import {
-  createInProcessSqlExecutor,
-  createRawSqlTools,
-} from '../tools/raw-sql';
+import { createRawSqlTools } from '../tools/raw-sql';
+import { createTestSqlExecutor } from './helpers/sql-executor';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -49,7 +47,7 @@ describe('createRawSqlTools', () => {
   it('exposes query_sql and get_schema, both tier powerful', async () => {
     const dbPath = path.join(dir, 'test.db');
     await seedCorpus(dbPath);
-    const sqlh = createInProcessSqlExecutor(dbPath);
+    const sqlh = createTestSqlExecutor(dbPath);
     const raw = createRawSqlTools(sqlh.exec);
     try {
       const names = raw.tools.map((t) => t.name).sort();
@@ -63,7 +61,7 @@ describe('createRawSqlTools', () => {
   it('query_sql reads the corpus; get_schema returns markdown', async () => {
     const dbPath = path.join(dir, 'test.db');
     await seedCorpus(dbPath);
-    const sqlh = createInProcessSqlExecutor(dbPath);
+    const sqlh = createTestSqlExecutor(dbPath);
     const raw = createRawSqlTools(sqlh.exec);
     try {
       const q = raw.tools.find((t) => t.name === 'query_sql')!;
@@ -114,7 +112,7 @@ describe('createRawSqlTools', () => {
     }
     await store.close(); // writer for the ORIGINAL goes away; the copy has none
 
-    const sqlh = createInProcessSqlExecutor(dst);
+    const sqlh = createTestSqlExecutor(dst);
     const raw = createRawSqlTools(sqlh.exec);
     try {
       const q = raw.tools.find((t) => t.name === 'query_sql')!;
