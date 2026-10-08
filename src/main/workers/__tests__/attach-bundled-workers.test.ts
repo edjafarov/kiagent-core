@@ -242,6 +242,7 @@ describe('convert worker wiring', () => {
         },
       },
       inference: { providers: () => [] },
+      host: { totalMemBytes: 16 * 1024 ** 3 },
     };
     attachBundledWorkers(platform as never, {
       visionHelper: null,

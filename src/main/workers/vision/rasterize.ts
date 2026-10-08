@@ -20,6 +20,15 @@ export interface RasterResult {
   pages: RasterPage[];
 }
 
+/** A helper ran past its deadline. Under background priority this is load,
+ *  not a broken input: callers defer instead of burning retries. */
+export class HelperTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HelperTimeoutError';
+  }
+}
+
 /** Renders the requested 1-based pages (deduped, ascending); page numbers
  *  outside 1..pageCount are silently skipped. */
 export interface Rasterizer {

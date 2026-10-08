@@ -5,7 +5,11 @@ import path from 'node:path';
 import type { LogLevel } from '@shared/contracts';
 import { dir as createTempDir } from 'tmp-promise';
 
-import type { RasterResult } from '../../workers/vision/rasterize';
+import { launch, type ChildClass } from '../../core/child-priority';
+import {
+  HelperTimeoutError,
+  type RasterResult,
+} from '../../workers/vision/rasterize';
 
 /** Narrow execFile shape used by VisionHelper — avoids coupling to node's overloaded typeof execFile. */
 export type ExecFileFn = (
@@ -17,10 +21,11 @@ export type ExecFileFn = (
     stdout: string | Buffer,
     stderr: string | Buffer,
   ) => void,
-) => void;
+) => { pid?: number } | void;
 
 export interface VisionHelper {
-  ocrImage(bytes: Uint8Array, mime?: string): Promise<string>;
+  /** `cls` follows the request lane; rasterizePdf is always background (vision worker only). */
+  ocrImage(bytes: Uint8Array, mime?: string, cls?: ChildClass): Promise<string>;
   /** Renders the requested 1-based pages; out-of-range numbers are skipped. */
   rasterizePdf(bytes: Uint8Array, pages: number[]): Promise<RasterResult>;
 }
@@ -45,6 +50,8 @@ interface VisionHelperOptions {
   /** Override the child-process executor; injected in tests. */
   execFileFn?: ExecFileFn;
   timeoutMs?: number;
+  platform?: NodeJS.Platform;
+  taskpolicyExists?: (p: string) => boolean;
 }
 
 // Rasterizing a 20-page PDF or OCRing a dense scan are seconds-scale; 120s is
@@ -55,48 +62,48 @@ class VisionHelperImpl implements VisionHelper {
   constructor(private readonly o: VisionHelperOptions) {}
 
   /** Invoke the binary with args, parse stdout as JSON; reject on non-zero exit, timeout, or malformed output. */
-  private runJson<T>(args: string[]): Promise<T> {
+  private runJson<T>(args: string[], cls: ChildClass): Promise<T> {
     const exec = (this.o.execFileFn ?? execFile) as ExecFileFn;
     const timeoutMs = this.o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     return new Promise<T>((resolve, reject) => {
-      exec(
+      const cb: Parameters<ExecFileFn>[3] = (err, stdout, stderr) => {
+        if (err) {
+          if (err.killed) {
+            reject(
+              new HelperTimeoutError(
+                `kia-vision ${args[0]} timed out after ${timeoutMs}ms`,
+              ),
+            );
+          } else {
+            reject(
+              new Error(
+                `kia-vision ${args[0]} failed: ${
+                  stderr?.toString().trim() || err.message
+                }`,
+              ),
+            );
+          }
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout.toString()) as T);
+        } catch {
+          reject(new Error(`kia-vision ${args[0]} returned malformed JSON`));
+        }
+      };
+      launch(
+        cls,
         this.o.binaryPath,
         args,
-        {
-          timeout: timeoutMs,
-          maxBuffer: 32 * 1024 * 1024,
-        },
-        (err, stdout, stderr) => {
-          if (err) {
-            if (err.killed) {
-              reject(
-                new Error(
-                  `kia-vision ${args[0]} timed out after ${timeoutMs}ms`,
-                ),
-              );
-            } else {
-              reject(
-                new Error(
-                  `kia-vision ${args[0]} failed: ${
-                    stderr?.toString().trim() || err.message
-                  }`,
-                ),
-              );
-            }
-            return;
-          }
-          try {
-            resolve(JSON.parse(stdout.toString()) as T);
-          } catch {
-            reject(new Error(`kia-vision ${args[0]} returned malformed JSON`));
-          }
-        },
+        (cmd, a) =>
+          exec(cmd, a, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 }, cb),
+        { platform: this.o.platform, exists: this.o.taskpolicyExists },
       );
     });
   }
 
-  private ocr(imagePath: string): Promise<OcrResult> {
-    return this.runJson<OcrResult>(['ocr', imagePath]);
+  private ocr(imagePath: string, cls: ChildClass): Promise<OcrResult> {
+    return this.runJson<OcrResult>(['ocr', imagePath], cls);
   }
 
   private rasterize(
@@ -107,17 +114,21 @@ class VisionHelperImpl implements VisionHelper {
     const args = ['rasterize', pdfPath, outDir];
     if (opts.pages) args.push('--pages', opts.pages.join(','));
     if (opts.scale !== undefined) args.push('--scale', String(opts.scale));
-    return this.runJson<RasterizeResult>(args);
+    return this.runJson<RasterizeResult>(args, 'background');
   }
 
-  async ocrImage(bytes: Uint8Array, mime?: string): Promise<string> {
+  async ocrImage(
+    bytes: Uint8Array,
+    mime?: string,
+    cls: ChildClass = 'interactive',
+  ): Promise<string> {
     const tmpDir = await createTempDir({ unsafeCleanup: true });
     const ext =
       mime === 'image/png' ? '.png' : mime === 'image/jpeg' ? '.jpg' : '.png';
     const imagePath = path.join(tmpDir.path, `image${ext}`);
     try {
       await fs.promises.writeFile(imagePath, bytes);
-      const result = await this.ocr(imagePath);
+      const result = await this.ocr(imagePath, cls);
       return result.text;
     } finally {
       await tmpDir.cleanup();
@@ -156,7 +167,12 @@ export function makeVisionHelper(
   binaryPath: string,
   log: (level: LogLevel, msg: string) => void,
   /** Test-only seam: override execFile/timeout without touching the driver internals. */
-  opts?: { execFileFn?: ExecFileFn; timeoutMs?: number },
+  opts?: {
+    execFileFn?: ExecFileFn;
+    timeoutMs?: number;
+    platform?: NodeJS.Platform;
+    taskpolicyExists?: (p: string) => boolean;
+  },
 ): VisionHelper {
   return new VisionHelperImpl({ binaryPath, log, ...opts });
 }

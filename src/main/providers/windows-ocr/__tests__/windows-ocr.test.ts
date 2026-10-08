@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import os from 'os';
 import path from 'path';
 
 import { createWindowsOcrProvider, NO_OCR_LANGUAGE } from '../provider';
@@ -27,6 +28,18 @@ describe('windows-ocr helper', () => {
           'image/png',
         ),
       ).toBe('Rechnung Nr. 42'),
+    );
+  });
+  it('a background OCR run is demoted to PRIORITY_LOW', async () => {
+    const setPriority = jest.fn();
+    await makeWindowsOcrHelper(FAKE, log, { setPriority }).ocrImage(
+      new Uint8Array([1]),
+      'image/png',
+      'background',
+    );
+    expect(setPriority).toHaveBeenCalledWith(
+      expect.any(Number),
+      os.constants.priority.PRIORITY_LOW,
     );
   });
   it('a non-zero exit rejects with stderr', async () => {

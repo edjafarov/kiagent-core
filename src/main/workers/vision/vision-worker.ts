@@ -27,7 +27,8 @@ import { passthroughDownscaler, type ImageDownscaler } from './downscale';
 import { VISION_WORKER } from './identity';
 import { INDEXING_PROMPT, mergeExtraction } from './merge';
 import type { PageResult } from './merge';
-import type { Rasterizer } from './rasterize';
+import { HelperTimeoutError } from './rasterize';
+import type { RasterResult, Rasterizer } from './rasterize';
 
 const READ_RETRY_MS = 25 * 60_000;
 
@@ -307,9 +308,17 @@ export function createVisionWorker(deps: {
       .slice(0, OCR_WINDOW);
 
     // Only the listed path can reach an empty window (all listed pages done).
-    const raster = next.length
-      ? await deps.rasterizer.pdfToPngs(bytes, { pages: next })
-      : null;
+    let raster: RasterResult | null = null;
+    if (next.length) {
+      try {
+        raster = await deps.rasterizer.pdfToPngs(bytes, { pages: next });
+      } catch (err) {
+        // A demoted raster helper past its deadline is load, not a bad PDF:
+        // defer (re-driven when idle) instead of exhausting engine retries.
+        if (err instanceof HelperTimeoutError) return 'defer';
+        throw err;
+      }
+    }
     const pageCount = raster?.pageCount ?? prog?.pageCount ?? 0;
     const cap = Math.min(pageCount, MAX_OCR_PAGES);
     // Pass 1 — OCR, one window. ocrRan: false once OCR turned out absent.

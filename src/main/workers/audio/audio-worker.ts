@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 
 import type {
   Change,
@@ -71,7 +70,7 @@ export function createAudioWorker(deps: {
     opts?: { forceWav?: boolean },
   ) => Promise<PreparedAudioFile>;
   mp3Duration?: (bytes: Uint8Array) => number | null;
-  totalMemBytes?: number;
+  totalMemBytes: number;
 }): Worker {
   // The adapter matters: `prepareAudioFile`'s THIRD parameter is `deps`, not
   // `opts` — binding it directly would feed `{forceWav}` into the deps slot,
@@ -79,7 +78,7 @@ export function createAudioWorker(deps: {
   const prepareFile =
     deps.prepareFile ?? ((b, m, o) => prepareAudioFile(b, m, {}, o));
   const probeMp3 = deps.mp3Duration ?? mp3DurationSeconds;
-  const totalMem = deps.totalMemBytes ?? os.totalmem();
+  const totalMem = deps.totalMemBytes;
 
   return {
     name: 'audio',
