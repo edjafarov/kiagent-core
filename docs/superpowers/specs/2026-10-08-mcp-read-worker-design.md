@@ -1,6 +1,6 @@
 # MCP reads stay fast during sync — dedicated read worker
 
-**Status:** DRAFT rev 2 (2026-10-08) — rev 1 reviewed by fable + codex astra (both NOT SATISFIED; all findings folded in, see §8) · **Issue:** #146 · **Base:** core v0.104.0 (c369815d) · **Related:** #145 (helpers yield, released v0.104.0), #147 (converter off main + background admission)
+**Status:** DRAFT rev 3 (2026-10-08) — rev 1 and rev 2 reviewed by fable + codex astra (NOT SATISFIED; all findings folded in, see §8) · **Issue:** #146 · **Base:** core v0.104.0 (c369815d) · **Related:** #145 (helpers yield, released v0.104.0), #147 (converter off main + background admission)
 
 ## 1. Problem
 
@@ -48,9 +48,19 @@ Extract the read surface (`store.read`, 8 methods, `store.ts:704-1013`) into `cr
 
 **Language cache (G3).** `corpusLangsCache` moves into `createCorpusQuery`. On a connection that does not see its own writes (the reader, the stdio sibling) the cache is keyed by `PRAGMA data_version`: before using the cache, read `data_version` (same connection, same thread, one cheap pragma); if it changed since the cache was filled, recompute. Fill and check happen on the one connection in order, so no stale publication race exists and no cross-component invalidation subscription is needed. The writer keeps its explicit invalidation (its own commits do not change its `data_version`).
 
-**Bounded-work fixes** (benefit both connections):
-- Fuzzy (trigram) pass: candidates are capped before ranking — `SELECT rowid FROM documents_tri WHERE documents_tri MATCH ? LIMIT 200` (unordered, stops early), then rank those. Today it ranks all trigram matches before limiting.
-- Negation folding of candidate bodies runs only when the query has negated terms.
+**Fuzzy pass without corpus-wide ranking.** Today the trigram fallback runs `ORDER BY bm25(documents_tri) LIMIT ?`; bm25 gathers corpus-wide phrase statistics, so its cost grows with the match count (measured ~1.2 s at 100k matches) whatever the LIMIT. Replace with ONE statement that keeps every eligibility filter and drops bm25:
+
+```sql
+SELECT d.* FROM documents_tri t JOIN documents d ON d.id = t.doc_id
+ WHERE documents_tri MATCH ? ${where}          -- same filters as today (account, type, dates, people, labels, ext, archived)
+ LIMIT ?                                       -- FUZZY_CANDIDATES = 100, rowid order, stops early
+```
+
+and rank those candidates locally in the query: a candidate whose folded title contains a positive term first, then newest first. No FTS auxiliary function runs. Exact (FTS5) hits keep their bm25 order, and fuzzy still only fills free slots (unchanged RRF rule). Negation folding of candidate bodies runs only when the query has negated terms.
+
+**Search projection.** `SearchQuery` gains `withBody?: boolean` (default `true`, today's behaviour) and `contextLines?: number`. With `withBody: false` the query returns hits whose `markdown` is empty and whose `snippet` is ALWAYS set: built where the query runs (also for recency and filter-only searches, which today get their snippet built by the MCP tool in main, `tools/search.ts:244`). The snippet builder is one shared function used by both. The MCP search tool passes `withBody: false`; full documents still come from `get` / `document`.
+
+**The `data_version` sample is taken BEFORE the language lookup** that fills the cache, and stored with it; a later sample that differs recomputes.
 
 G3 for document data: once the writer's COMMIT returns, any statement starting later on another connection sees it (WAL). Store write promises resolve after COMMIT.
 
@@ -69,11 +79,16 @@ G3 for document data: once the writer's COMMIT returns, any statement starting l
 
 A running SQLite statement cannot be interrupted from JS (better-sqlite3 12.11 has no `sqlite3_interrupt`; `worker.terminate()` waits for the native call — measured: terminate requested at 101 ms resolved at 2,221 ms when the query finished). Only a process kill stops it.
 
-- **SQL runner process** (new entry `core/mcp/sql-runner-entry.ts`, webpack entry `sqlRunner` in prod + dev configs): spawned the same way extension hosts are (`platform/transport.ts`: Electron `utilityProcess` in the app, `node` fork under ts-node in tests). Opens `openCorpusReadConnection(dbPath, { cacheKiB: 2048, queryOnly: true })`, answers `{ id, sql }` with the bounded result.
-- **Executor interface:** `type QuerySqlExecutor = (sql: string) => Promise<QuerySqlResult>`. `createRawSqlTools(exec)` takes it. The app passes `createSqlRunner({ spawn, timeoutMs: 10_000, idleMs: 300_000 })`; the stdio sibling passes an in-process executor over its own connection (its own process; unchanged behaviour).
-- **Runner lifecycle:** spawned lazily on the first call; calls serialized (one statement at a time, a waiting caller's 10 s starts when its statement starts); idle kill after `idleMs`. On timeout: mark the runner dead, `SIGKILL`, await its `exit` (bounded 2 s, logged if exceeded), reject with `query_sql stopped after 10 s. Narrow it: filter by account or created_at, avoid LIKE over markdown, or use search.` Next call spawns a fresh runner. At most one runner exists at a time. The MCP server owns it: `stop()` kills it.
-- **Bounded result, inside the runner before transfer** (also applies to the stdio executor, same `runQuerySql`): rows materialized incrementally with `.iterate()`; each string value cut at 64 KiB with `…[truncated]`; stop at 500 rows or 1 MiB of serialized row data, whichever first; `truncated: true` + hint when cut. Main receives ≤ ~1 MiB.
-- **No fallback** for query_sql: if the runner cannot start, the tool returns `query_sql is unavailable right now.`
+- **SQL runner process:** new entry `core/mcp/sql-runner-entry.ts` (webpack entry `sqlRunner` in prod + dev configs, file resolved next to the main bundle like `dbWorker`). It installs NO signal handlers (so SIGTERM terminates it even inside `sqlite3_step`), opens `openCorpusReadConnection(dbPath, { cacheKiB: 2048, queryOnly: true })`, and answers `{ id, sql }` with the bounded result.
+- **Own spawn adapter, not the extension transport:** `createSqlRunner` takes `spawn(): RunnerChild` where `RunnerChild = { pid, send, onMessage, onExit, kill(signal) }`. The app adapter wraps Electron `utilityProcess.fork` (exposes `pid`; `kill()` = SIGTERM / TerminateProcess) plus `process.kill(pid, 'SIGKILL')` as the force step; the test adapter wraps `child_process.fork` under ts-node. No `demoteHost`: query_sql is interactive work (#145: class follows the request).
+- **Executor interface:** `type QuerySqlExecutor = (sql: string) => Promise<QuerySqlResult>`. `createRawSqlTools(exec)` takes it. The app passes `createSqlRunner({ spawn, timeoutMs: 10_000, idleMs: 300_000 })`; the stdio sibling passes an in-process executor over its own connection (its own process, unchanged behaviour).
+- **Runner states:** `none → starting → ready → stopping → none` (plus `stuck`). At most ONE child exists, owned until its exit is confirmed.
+  - First call spawns (`starting`); calls are serialized; a waiting caller's 10 s starts when its statement starts; idle kill after `idleMs`.
+  - Timeout: state `stopping`; `kill('SIGTERM')`; if no exit within 2 s, `kill('SIGKILL')`; on `exit` → `none`. The timed-out caller gets `query_sql stopped after 10 s. Narrow it: filter by account or created_at, avoid LIKE over markdown, or use search.` Calls arriving while `stopping` get `query_sql is still stopping the previous query. Try again in a few seconds.`
+  - No exit 5 s after SIGKILL → `stuck`: every call gets `query_sql is unavailable right now.` and an error is logged; never a second child.
+  - Spawn failure (e.g. the native module fails to load in the utility process) → `query_sql is unavailable right now.` + logged; the next call may retry the spawn.
+- **Bounded result, inside the runner before transfer** (the stdio executor uses the same `runQuerySql`): rows materialized incrementally with `.iterate()`; each string value cut at 64 KiB with `…[truncated]`; stop at 500 rows or 1 MiB of serialized row data, whichever first; `truncated: true` + hint when cut.
+- **No fallback** to main or the writer for query_sql. The MCP server owns the runner: `stop()` kills it.
 
 ### 3.5 Lifecycle and failure of the read worker
 
@@ -86,7 +101,7 @@ A running SQLite statement cannot be interrupted from JS (better-sqlite3 12.11 h
 - **Crash:** existing supervisor (respawn up to 3 per 60 s, parked requests).
 - **Shutdown:** `platform.shutdown` closes the read worker before `store.close()`; the MCP server kills the SQL runner in `stop()`.
 - **Factory reset / compact:** in place on the writer; the reader sees the result through WAL and recomputes languages via `data_version`.
-- **Checkpoints:** a reader's snapshot lives for one statement; reader work is bounded by the fuzzy candidate cap; the SQL runner's snapshot is released when it is killed. Overlapping reads can still delay checkpoint progress; `readDiagnostics` reports `-wal` size so this is visible (§3.6).
+- **Checkpoints:** a reader's snapshot lives for one statement and the SQL runner's is released when it is killed. Reader statements are NOT all bounded: `count`/`countBy` aggregate over the filtered set and a broad exact search can be slow; one slow statement delays the next reader call and checkpoint progress. #146 does not bound these; `readDiagnostics` (per-method p95, `-wal` size) and the §6 probe (which runs `countBy` concurrently) show whether a second reader is needed (§7).
 
 ### 3.6 Diagnostics (internal, for diagnosis — not acceptance)
 
@@ -105,25 +120,28 @@ A running SQLite statement cannot be interrupted from JS (better-sqlite3 12.11 h
 
 ## 5. Testing
 
-- `createCorpusQuery` extraction: existing store/search suites pass unchanged; new tests for the fuzzy candidate cap (more than 200 trigram matches → bounded work, best exact matches kept) and no folding without negated terms.
+- `createCorpusQuery` extraction: existing store/search suites pass unchanged. Fuzzy: no `bm25(documents_tri)` in the fuzzy statement; account-restricted fuzzy search where another account's matches occupy the lowest rowids still returns the restricted account's hits; archived-heavy corpus returns non-archived hits; local order (title hit, then newest); no folding without negated terms. Projection: `withBody: false` returns empty markdown and a snippet for text, recency and filter-only searches; the MCP search tool output is unchanged for the same corpus.
 - Language cache: reader-side query sees a new language after a writer commit (data_version changed); interleaving test: cache fill started before a commit, search after the commit recomputes.
 - Read role (real worker under ts-node): no migration; `query_only` refuses an INSERT; `cache_size` set; only the `read` procedure registered.
 - **Reads don't queue behind writes:** real writer + reader on one file; run a real large ingest `commit` (FTS + trigram over multi-MB bodies) and a reconcile stage on the writer while issuing `reads.search` + `reads.document` + `reads.countBy`; assert reader calls complete while the writer is mid-transaction and `store.read` calls queue behind it.
 - Fallback: open failure → writer mode with stats; in-flight `DB_WORKER_CRASHED` → writer retry; parked callers during a failed respawn (`DB_WORKER_DEAD`) → writer retry, then sticky.
-- query_sql: main-thread handle gone (`raw-sql-wiring` updated); an expensive non-row-yielding statement (aggregate over a large recursive CTE) is killed at the timeout — assert the runner process EXITED and a new call succeeds on a fresh runner, while `reads` calls during it are unaffected; byte bound (500 rows × 2 MB markdown → ≤ 1 MiB, `truncated: true`); idle kill (fake timers); stdio executor gets the same bounds.
+- query_sql (child_process adapter): main-thread handle gone (`raw-sql-wiring` updated); an expensive non-row-yielding statement (aggregate over a large recursive CTE) is stopped at the timeout — the child process EXITED (pid gone), a call during `stopping` gets the retry message, the next call succeeds on a fresh child, `reads` calls meanwhile are unaffected; SIGTERM ignored → SIGKILL escalation (fixture child that blocks SIGTERM); no exit → `stuck`, never a second child; byte bound (500 rows × 2 MB markdown → ≤ 1 MiB, `truncated: true`); idle kill (fake timers); stdio executor gets the same bounds.
+- Packaged boundary (Electron utility process + packaged better-sqlite3) is verified by the release smoke on macOS and Windows (§6), not by jest.
 - Routing: MCP deps and renderer IPC use `p.reads`; extension slice, engine, outbound, factory reset still use `store.read` (grep gate + unit).
 
 ## 6. Acceptance (live, before release)
 
-- **Probe:** `scripts/mcp-latency-probe.mjs` — an external MCP client against the local server (7421) running a fixed workload (10 search queries incl. one fuzzy-only term, 10 `get` ids) every 5 s; reports p50/p95 for search and get separately, plus main event-loop lag sampled from `readDiagnostics`.
+- **Probe:** `scripts/mcp-latency-probe.mjs` — an external MCP client against the local server (7421) running a fixed workload every 5 s: 10 text searches (one fuzzy-only term, one account-restricted), 2 recency/filter-only searches, 10 `get` ids, and one `count` by type issued concurrently with the gets; reports p50/p95 for search and get separately, plus main event-loop lag.
+- **Packaged smoke (macOS + Windows, release smoke stage):** `query_sql` `SELECT 1` succeeds in the packaged app (utility process loads better-sqlite3); a non-yielding heavy statement is stopped at 10 s, the runner process is gone, and the next call succeeds.
 - **Run:** idle baseline, then during a Gmail + Drive initial sync — on the Mac with `KIA_HOST_WEAK=1`, and on the Windows VM. Same corpus/cache state for before (v0.104.0) and after.
 - **Pass:** search and get p95 during sync ≤ ~2× idle p95; a heavy `query_sql` is stopped at 10 s and the runner process is gone; fallbacks = 0. If the probe shows main event-loop lag (converters, #147) dominating the remaining latency, record it and hand the number to #147 instead of tuning around it.
 
 ## 7. Out of scope, recorded
 
-- Pool of more than one reader: not needed while reader statements are bounded; revisit if `readDiagnostics` shows queueing on the reader.
+- Pool of more than one reader: not in #146. Add a second reader thread (same role, round-robin) only if the §6 probe shows get p95 failing because of slow `count`/search statements on the single reader.
 - Smaller commit transactions / trigram cap: #147 / follow-up.
 
 ## 8. Review log
 
+- rev 2 → rev 3: fuzzy statement keeps all filters and drops bm25 (local ranking: title hit, then newest; 100 candidates) (fable N1, astra 1–2); search projection `withBody: false` with snippets built in the reader for all modes, MCP search stops pulling full bodies (astra 3); own spawn adapter with pid, SIGTERM→SIGKILL escalation, runner states with one child owned until exit confirmed, no signal handlers in the runner, no demotion (astra 4, fable N2–N3); packaged smoke for the utility-process native module on macOS + Windows (fable N4, astra 4); no claim that reader statements are bounded — count/countBy measured concurrently, second reader only if needed (astra 1/6); data_version sampled before fill (astra).
 - rev 1 → rev 2: thread terminate cannot stop SQLite → killable SQL runner process (fable F1, astra 1); query runs in the reader, not split across threads (astra 2); `data_version` cache instead of cross-component invalidation (astra 3); byte bounds in the runner (astra 4); extension slice stays on the writer (astra 5); fuzzy candidate cap + no fold without negations, no false checkpoint bound (astra 6); external MCP probe for acceptance, internal stats keyed by caller × method with execMs + wal size (astra 7, fable F3); fallback covers in-flight and parked callers and open failure (astra 8); `openCorpusReadConnection` extended instead of a sibling, stdio uses `createCorpusQuery` (fable F4); SQL runner owned by the MCP server only (fable F5); reads p95 is not a #147 pressure signal (fable F2).
