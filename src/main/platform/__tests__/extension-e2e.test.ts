@@ -312,8 +312,16 @@ describe('extension runtime e2e — host-stamped event identity (real forked chi
     let activationsSeen: unknown[] = [];
     // eslint-disable-next-line no-await-in-loop
     while (Date.now() < deadlineActivated) {
+      // The host runs below-normal priority (#145): under load its tools may
+      // register after installCommit resolves — keep polling until they do.
+      const getActivations = tools.get('eventsB.getActivations');
+      if (!getActivations) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 50));
+        continue;
+      }
       // eslint-disable-next-line no-await-in-loop
-      const res = (await tools.get('eventsB.getActivations')!.call({})) as {
+      const res = (await getActivations.call({})) as {
         activations: Array<{ payload: { id: string }; meta: unknown }>;
       };
       activationsSeen = res.activations.filter(
