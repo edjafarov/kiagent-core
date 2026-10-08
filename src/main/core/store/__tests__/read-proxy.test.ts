@@ -45,8 +45,8 @@ describe('createReadProxy', () => {
 });
 
 describe('createReadStats totals', () => {
-  it('keeps a monotonic per-group total that survives the 256-call window', () => {
-    const stats = createReadStats(256);
+  it('keeps a monotonic per-group total that survives the per-group window', () => {
+    const stats = createReadStats(20);
     const rec = (method: 'countBy' | 'search', caller: 'mcp' | 'renderer') =>
       stats.record({
         caller,
@@ -77,6 +77,28 @@ describe('createReadStats totals', () => {
 });
 
 describe('createReadStats', () => {
+  it('windows per group: a chatty renderer group does not evict mcp samples', () => {
+    const stats = createReadStats(256);
+    const rec = (caller: 'mcp' | 'renderer', ms: number) =>
+      stats.record({
+        caller,
+        method: 'search',
+        via: 'reader',
+        execMs: ms,
+        totalMs: ms,
+        at: 1,
+      });
+    for (let i = 0; i < 3; i += 1) rec('mcp', 7);
+    for (let i = 0; i < 600; i += 1) rec('renderer', 1);
+    const { groups } = stats.snapshot();
+    expect(groups.find((x) => x.caller === 'mcp')).toMatchObject({
+      count: 3,
+      p50Ms: 7,
+      p95Ms: 7,
+    });
+    expect(groups.find((x) => x.caller === 'renderer')!.count).toBe(256);
+  });
+
   it('computes p50/p95/max per caller x method and keeps only the last 256 calls', () => {
     const stats = createReadStats(256);
     for (let i = 1; i <= 300; i += 1) {
@@ -145,6 +167,29 @@ describe('withWriterFallback', () => {
     expect(await router.for('mcp').document('d1' as never)).toBe('reader');
     expect(router.mode()).toBe('reader');
     expect(stats.snapshot().fallbacks.crashed).toBe(1);
+  });
+
+  it('records end-to-end totalMs for a call that failed on the reader before the writer answered', async () => {
+    const w = writer();
+    const proc = jest.fn(
+      () =>
+        new Promise((_, reject) =>
+          setTimeout(() => reject(codeErr(DB_WORKER_CRASHED)), 60),
+        ),
+    );
+    const stats = createReadStats();
+    const router = withWriterFallback({
+      proxy: (c) => createReadProxy(readerDb(proc), stats, c),
+      writer: w as never,
+      stats,
+      log,
+    });
+    await router.for('mcp').count({});
+    const g = stats
+      .snapshot()
+      .groups.find((x) => x.via === 'writer' && x.method === 'count')!;
+    expect(g.maxMs).toBeGreaterThanOrEqual(55);
+    expect(g.execP95Ms).toBeLessThan(55);
   });
 
   it('DB_WORKER_DEAD (including parked callers) retries on the writer and then sticks', async () => {

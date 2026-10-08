@@ -73,7 +73,7 @@ const percentile = (sorted: number[], p: number): number =>
     : sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)];
 
 export function createReadStats(window = STATS_WINDOW): ReadStats {
-  const ring: ReadRecord[] = [];
+  const rings = new Map<string, ReadRecord[]>();
   const fallbacks: Record<FallbackReason, number> = {
     'open-failed': 0,
     crashed: 0,
@@ -95,8 +95,11 @@ export function createReadStats(window = STATS_WINDOW): ReadStats {
           via: r.via,
           total: 1,
         });
-      ring.push(r);
-      if (ring.length > window) ring.shift();
+      const ring = rings.get(key);
+      if (ring) {
+        ring.push(r);
+        if (ring.length > window) ring.shift();
+      } else rings.set(key, [r]);
     },
     fallback(reason) {
       fallbacks[reason] += 1;
@@ -105,14 +108,7 @@ export function createReadStats(window = STATS_WINDOW): ReadStats {
       mode = m;
     },
     snapshot(now = Date.now()) {
-      const byKey = new Map<string, ReadRecord[]>();
-      for (const r of ring) {
-        const key = `${r.caller}|${r.method}|${r.via}`;
-        const list = byKey.get(key);
-        if (list) list.push(r);
-        else byKey.set(key, [r]);
-      }
-      const groups: ReadGroupStats[] = [...byKey.values()].map((list) => {
+      const groups: ReadGroupStats[] = [...rings.values()].map((list) => {
         const total = list.map((r) => r.totalMs).sort((a, b) => a - b);
         const exec = list.map((r) => r.execMs).sort((a, b) => a - b);
         const newest = Math.max(...list.map((r) => r.at));
@@ -208,6 +204,7 @@ export function withWriterFallback(deps: {
     for(caller) {
       const viaProxy = proxy ? (proxy(caller) as unknown as Invokable) : null;
       return queryFromInvoker(async (method, args) => {
+        const tStart = performance.now();
         if (!sticky && viaProxy) {
           try {
             return await viaProxy[method](...args);
@@ -221,13 +218,13 @@ export function withWriterFallback(deps: {
         }
         const t0 = performance.now();
         const value = await viaWriter[method](...args);
-        const ms = performance.now() - t0;
+        const now = performance.now();
         stats.record({
           caller,
           method,
           via: 'writer',
-          execMs: ms,
-          totalMs: ms,
+          execMs: now - t0,
+          totalMs: now - tStart,
           at: Date.now(),
         });
         return value;
