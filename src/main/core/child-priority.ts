@@ -36,20 +36,40 @@ function note(name: string, cls: string, how: string): void {
   const key = `${name}|${cls}`;
   if (logged.has(key)) return;
   logged.add(key);
-  sink?.(`[priority] ${name} ${cls} via ${how}`);
+  sink?.(`[priority] ${name} ${cls} ${how}`);
 }
 
 function demote(
   pid: number | undefined,
   priority: number,
   deps: PriorityDeps,
-): void {
-  if (pid === undefined) return;
+  onFail?: (code: string) => void,
+): boolean {
+  if (pid === undefined) return false;
   try {
     (deps.setPriority ?? os.setPriority)(pid, priority);
-  } catch {
+    return true;
+  } catch (err) {
     // ESRCH (already exited) / EPERM: demotion is best effort.
+    onFail?.(String((err as { code?: unknown })?.code ?? 'error'));
+    return false;
   }
+}
+
+/** Demote, then log the OUTCOME (once per name|class). */
+function demoteAndNote(
+  name: string,
+  cls: string,
+  pid: number | undefined,
+  priority: number,
+  deps: PriorityDeps,
+): void {
+  if (pid === undefined) return;
+  let code = '';
+  const ok = demote(pid, priority, deps, (c) => {
+    code = c;
+  });
+  note(name, cls, ok ? 'via setPriority' : `setPriority failed: ${code}`);
 }
 
 /** Start a child in its class. `start` does the real spawn/execFile (so test
@@ -68,12 +88,13 @@ export function launch<C extends { pid?: number } | void>(
   if (cls === 'interactive') return start(cmd, args);
   const name = path.basename(cmd);
   if (platform === 'darwin' && (deps.exists ?? fs.existsSync)(TASKPOLICY)) {
-    note(name, cls, 'taskpolicy');
+    note(name, cls, 'via taskpolicy');
     return start(TASKPOLICY, ['-b', cmd, ...args]);
   }
   const child = start(cmd, args);
-  note(name, cls, 'setPriority');
-  demote(
+  demoteAndNote(
+    name,
+    cls,
     (child as { pid?: number } | undefined)?.pid,
     os.constants.priority.PRIORITY_LOW,
     deps,
@@ -88,6 +109,11 @@ export function demoteHost(
   deps: PriorityDeps = {},
 ): void {
   if (pid === undefined) return;
-  note('extension-host', 'below-normal', 'setPriority');
-  demote(pid, os.constants.priority.PRIORITY_BELOW_NORMAL, deps);
+  demoteAndNote(
+    'extension-host',
+    'below-normal',
+    pid,
+    os.constants.priority.PRIORITY_BELOW_NORMAL,
+    deps,
+  );
 }

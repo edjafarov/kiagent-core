@@ -99,3 +99,20 @@ it('logs once per (binary, class)', () => {
   launch('interactive', '/a/whisper-cli', [], h.start, h.deps);
   expect(lines).toEqual(['[priority] whisper-cli background via taskpolicy']);
 });
+
+it('logs the demotion outcome: a failed setPriority is reported with its code', () => {
+  const lines: string[] = [];
+  setChildPriorityLog((m) => lines.push(m));
+  const setPriority = jest.fn(() => {
+    throw Object.assign(new Error('denied'), { code: 'EPERM' });
+  });
+  launch('background', '/a/ocr', [], () => ({ pid: 5 }), {
+    platform: 'win32',
+    setPriority,
+  });
+  demoteHost(6, { setPriority });
+  expect(lines).toEqual([
+    '[priority] ocr background setPriority failed: EPERM',
+    '[priority] extension-host below-normal setPriority failed: EPERM',
+  ]);
+});
