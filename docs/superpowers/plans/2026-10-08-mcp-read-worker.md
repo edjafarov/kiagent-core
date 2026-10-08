@@ -4631,6 +4631,19 @@ describe('scripts/mcp-latency-probe.mjs', () => {
     expect(report.kinds.search.n).toBe(12);
   });
 
+  it('validate → baseline → new build without repeating --fuzzy measures the saved term, not the default', async () => {
+    const ids = path.join(dir, 'chain.json');
+    await run(process.execPath, probeArgs('--validate-only', '--ids', ids)); // saves fuzzy 'nvoic'
+    await run(process.execPath, baselineArgs('--ids', ids));
+    // New-build run: --diag but NO --fuzzy (the default would be 'rechnung').
+    const noFuzzy = probeArgs('--ids', ids, '--label', 'after');
+    const i = noFuzzy.indexOf('--fuzzy');
+    noFuzzy.splice(i, 2);
+    const { stdout } = await run(process.execPath, noFuzzy);
+    expect(JSON.parse(stdout.trim().split('\n').pop()!).label).toBe('after');
+    expect(JSON.parse(fs.readFileSync(ids, 'utf8')).fuzzy).toBe('nvoic'); // not overwritten by the default
+  });
+
   it('baseline mode without a validated workload file exits 3', async () => {
     await fail3(baselineArgs(), /validated run/); // no --ids at all
     await fail3(baselineArgs('--ids', path.join(dir, 'does-not-exist.json')), /validated run/);
@@ -4973,11 +4986,14 @@ function parseArgs(argv) {
     ids: '',
     'validate-only': false,
   };
+  // Options the caller actually passed (a saved validated workload wins over defaults, never over flags).
+  const given = new Set();
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (!a.startsWith('--')) throw new Error(`unexpected argument ${a}`);
     const key = a.slice(2);
     if (!(key in o)) throw new Error(`unknown option ${a}`);
+    given.add(key);
     if (typeof o[key] === 'boolean') {
       o[key] = true;
       continue;
@@ -4986,7 +5002,7 @@ function parseArgs(argv) {
     if (argv[i] === undefined) throw new Error(`${a} needs a value`);
     o[key] = typeof o[key] === 'number' ? Number(argv[i]) : argv[i];
   }
-  return o;
+  return { ...o, given };
 }
 
 const percentile = (sorted, p) =>
@@ -5052,6 +5068,10 @@ async function main() {
     if (!saved || !Array.isArray(saved.ids) || typeof saved.fuzzy !== 'string' || !saved.fuzzy) {
       invalid('without --diag the probe needs an --ids file produced by a validated run (--validate-only --diag …); none found or it has no validated fuzzy term');
     }
+    opts.fuzzy = saved.fuzzy;
+  } else if (saved && typeof saved.fuzzy === 'string' && saved.fuzzy && !opts.given.has('fuzzy')) {
+    // New-build run after --validate-only: measure the SAME validated term as the baseline
+    // (re-validated below); only an explicit --fuzzy replaces it.
     opts.fuzzy = saved.fuzzy;
   }
   // The 10 text queries: the configured terms, then the fuzzy-only term last.
@@ -5308,4 +5328,5 @@ rev 2 → rev 3:
 - B8: Task 10 v0.104.0 "before" run omits `--diag`.
 
 rev 3 → rev 4:
+- rev 4 → rev 5: the saved validated fuzzy term is loaded in BOTH modes unless `--fuzzy` is passed explicitly (`parseArgs` returns `given`); regression test validate → baseline → new build without `--fuzzy` (astra round 4).
 - B2 via in-app fuzzyRuns counter (controller ruling): `CorpusQuery.fuzzyRuns()` (Task 2) -> `read` result (Task 3) -> `ReadStats` snapshot (Task 4) -> `readDiagnostics().reads.fuzzyRuns` with `snapshotAt` (Task 7); probe `validateFuzzy` uses the counter with `--diag`, adds `--validate-only`, baseline mode (no `--diag`) requires a validated `--ids` file and does not re-validate; query_sql/FTS check dropped; B1 rules kept; regression tests (stemmed term exit 3, misspelling passes, baseline without validated file exit 3); Task 10 order (a) validate, (b) v0.104.0 baseline, (c) measure.
