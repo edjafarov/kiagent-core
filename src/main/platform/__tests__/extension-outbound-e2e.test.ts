@@ -46,14 +46,6 @@ import {
 } from '../extension-platform';
 import { nodeForkTransport } from '../transport';
 
-// These suites test extension behaviour, not process priority: keep the real
-// forked hosts at normal priority so a loaded full jest run does not starve
-// them past the suites' sync deadlines (#145 demotes hosts in production).
-jest.mock('../../core/child-priority', () => ({
-  ...jest.requireActual('../../core/child-priority'),
-  demoteHost: jest.fn(),
-}));
-
 jest.setTimeout(240_000);
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
