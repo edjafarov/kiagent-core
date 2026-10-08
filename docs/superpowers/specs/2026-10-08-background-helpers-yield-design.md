@@ -1,6 +1,6 @@
 # Background helpers yield to the user — design
 
-**Status:** APPROVED rev 6 (2026-10-08) — fable SATISFIED rev 4; codex astra round-5 item folded in · **Issue:** #145 · **Related:** #146 (MCP read worker), #147 (converter off main + background-admission policy)
+**Status:** IMPLEMENTED (local, not released) — APPROVED rev 6 (2026-10-08) — fable SATISFIED rev 4; codex astra round-5 item folded in · **Issue:** #145 · **Related:** #146 (MCP read worker), #147 (converter off main + background-admission policy)
 
 Rev 2 folds in fable + codex astra round 1: lane input read synchronously by every consumer; classify children by request lane, not API; foreground ASR must not wait behind a throttled background job; one host model (probes migrated, not promised); one launcher that owns wrapping + demotion + logging; whisper default is already 4 threads; CPU-only hosts count as weak; measurable acceptance; Windows prerequisites stated.
 
