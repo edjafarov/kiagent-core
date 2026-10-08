@@ -1,6 +1,6 @@
 # Background helpers yield to the user — design
 
-**Status:** APPROVED rev 5 (2026-10-08) — fable SATISFIED rev 4; codex astra round-4 item folded in · **Issue:** #145 · **Related:** #146 (MCP read worker), #147 (converter off main + background-admission policy)
+**Status:** APPROVED rev 6 (2026-10-08) — fable SATISFIED rev 4; codex astra round-5 item folded in · **Issue:** #145 · **Related:** #146 (MCP read worker), #147 (converter off main + background-admission policy)
 
 Rev 2 folds in fable + codex astra round 1: lane input read synchronously by every consumer; classify children by request lane, not API; foreground ASR must not wait behind a throttled background job; one host model (probes migrated, not promised); one launcher that owns wrapping + demotion + logging; whisper default is already 4 threads; CPU-only hosts count as weak; measurable acceptance; Windows prerequisites stated.
 
@@ -8,7 +8,9 @@ Rev 3 (round 2): truthful initial-backfill signal (a durable per-account stamp, 
 
 Rev 4 (round 3): the durable stamp is dropped — progress JSON is replaced whole and a multi-root folder can report `live` for one root before backfilling the next, so a one-way stamp lies. The signal is now "this account's last *successfully committed* batch was a backfill batch", held in memory by the engine. `onLaneChange` is removed together with `setBackgroundOpen`; the tick is the single publisher.
 
-Rev 5 (round 4): a closure that opens and closes entirely between two ticks no longer strands deferred work — the plane records a coalesced pending wake on every background refusal, and the tick wakes workers whenever the lane is open and a wake is pending.
+Rev 5 (round 4): a closure that opens and closes entirely between two ticks no longer strands deferred work — the lane policy records a coalesced pending wake on every background refusal, and the tick wakes workers whenever the lane is open and a wake is pending.
+
+Rev 6 (round 5): the pending wake lives in the policy function itself, so worker pre-flight refusals (`laneOpen()` in vision/audio, which never reach `gate()`) set it too.
 
 ## 1. Problem
 
@@ -114,7 +116,7 @@ if (hostBudget(platform.host, platform.llmAccel()).weak && platform.engine.synci
 - `engine.syncing(): boolean` — new, synchronous, no DB read: true when any `running` entry keyed `account:*` (worker handles share the map and are excluded explicitly) is still active, has `backfillCommitted`, and its status is not `'error'`, `'paused'` or `'needsReauth'`. A broken or paused account therefore never holds enrichment.
 - Accepted gap: between a run's start and its first committed backfill batch, enrichment may run — a new account has nothing to enrich yet.
 - **Admission reads the live policy.** `InferencePlane.gate()` today reads a cached boolean (initially `true`) set only by the 5 s tick, so a background request just after sync starts could still load the model. The plane takes a late-bound `setLanePolicy(fn: () => boolean)` (the plane is built before `CorePlatform`; until set, background is closed) and `gate()` calls `fn()`; boot sets it to `() => backgroundLaneOpen(p)`. `setBackgroundOpen`, `onLaneChange`, its `laneSubs` and the `ExtensionPlatformDeps.onLaneChange` wiring are removed: the 5 s tick is the single publisher (`refreshLane()` → `platform.lane`, `processingStatus.tick()` → status + worker wake).
-- **No stranded deferrals.** Today `processingStatus.tick` (`core/processing-status.ts:~128`) wakes workers only when two consecutive samples go closed → open; with direct admission a sync can start, defer documents and finish between ticks (or before the first one), and deferred OCR/audio would wait for their 30-min cadence. The plane sets a coalesced `wakePending` flag whenever `gate()` refuses a background call; `tick()` wakes workers when the lane is `open` and `wakePending` (or on the closed → open edge), then clears it. Still one publisher, no new timer. Tests: admission before the first tick and right after a sync starts.
+- **No stranded deferrals.** Today `processingStatus.tick` (`core/processing-status.ts:~128`) wakes workers only when two consecutive samples go closed → open; with direct admission a sync can start, defer documents and finish between ticks (or before the first one), and deferred OCR/audio would wait for their 30-min cadence. `backgroundLaneOpen(platform)` — the one function both `gate()` and the workers' `laneOpen()` pre-flight call — sets a coalesced `wakePending` flag whenever it answers `false`; `tick()` wakes workers when the lane is `open` and `wakePending` (or on the closed → open edge), then clears it. Still one publisher, no new timer. Tests: admission before the first tick and right after a sync starts.
 - Precedence: `disabled` > `battery` > `until-synced` > window.
 - Transitions: the 5 s tick already re-evaluates and pushes reason-only changes (`extension-platform.ts:~469` emits on reason change too); sync completion therefore reopens the lane within one tick. No new event wiring.
 - `LaneState` gains `'until-synced'` (`shared/contracts.ts:~1693`). `PLATFORM_API_VERSION` 2.7.0 → 2.8.0 with the contract stated in the type's doc comment and the SDK docs: **only `'open'` permits background admission; any other value, including ones added later, means closed.**
@@ -138,7 +140,7 @@ Unit:
 - whisper: background args include `-t min(4,N)` and the wrapper; interactive `hear` unchanged; exit-66 stderr is not `AsrInputRejectedError`.
 - ASR queue: interactive overtakes queued background; running background aborted → audio worker `'defer'`.
 - llama-server args: `-t`, `-tb`, `--poll 0`; no `-np` without `-kvu`.
-- Wake: sync starts, defers documents and completes between two ticks → next tick wakes workers; same before the first tick.
+- Wake: sync starts, defers documents and completes between two ticks → next tick wakes workers; same before the first tick; covered for a `gate()` refusal AND for vision/audio `laneOpen()` pre-flight refusals with no inference call.
 - Sync signal: backfill batch committed → syncing; live batch committed → not; quiet local-folder restart → not; cadence run → not; multi-root resume (live root, then backfill root) → syncing again; rejected commit leaves the flag unchanged; delayed commit keeps the previous value until it resolves; paused/error account → not.
 - Lane: weak+backfilling → `'until-synced'` from all three call sites, `backgroundLaneOpen`, and `gate()` before the first tick; sync completion reopens admission immediately and publication on the next tick; `battery → until-synced` reason-only change emits `platform.lane`; precedence.
 - Migrated probes: capability/backend/ASR/audio tests inject `HostFacts`.
