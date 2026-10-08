@@ -1,6 +1,6 @@
 # MCP reads stay fast during sync — dedicated read worker
 
-**Status:** DRAFT rev 3 (2026-10-08) — rev 1 and rev 2 reviewed by fable + codex astra (NOT SATISFIED; all findings folded in, see §8) · **Issue:** #146 · **Base:** core v0.104.0 (c369815d) · **Related:** #145 (helpers yield, released v0.104.0), #147 (converter off main + background admission)
+**Status:** DRAFT rev 4 (2026-10-08) — rev 1–3 reviewed by fable + codex astra (NOT SATISFIED; all findings folded in, see §8) · **Issue:** #146 · **Base:** core v0.104.0 (c369815d) · **Related:** #145 (helpers yield, released v0.104.0), #147 (converter off main + background admission)
 
 ## 1. Problem
 
@@ -48,17 +48,18 @@ Extract the read surface (`store.read`, 8 methods, `store.ts:704-1013`) into `cr
 
 **Language cache (G3).** `corpusLangsCache` moves into `createCorpusQuery`. On a connection that does not see its own writes (the reader, the stdio sibling) the cache is keyed by `PRAGMA data_version`: before using the cache, read `data_version` (same connection, same thread, one cheap pragma); if it changed since the cache was filled, recompute. Fill and check happen on the one connection in order, so no stale publication race exists and no cross-component invalidation subscription is needed. The writer keeps its explicit invalidation (its own commits do not change its `data_version`).
 
-**Fuzzy pass without corpus-wide ranking.** Today the trigram fallback runs `ORDER BY bm25(documents_tri) LIMIT ?`; bm25 gathers corpus-wide phrase statistics, so its cost grows with the match count (measured ~1.2 s at 100k matches) whatever the LIMIT. Replace with ONE statement that keeps every eligibility filter and drops bm25:
+**Fuzzy pass without corpus-wide ranking.** Today the trigram fallback runs `ORDER BY bm25(documents_tri) LIMIT ?`; bm25 gathers corpus-wide phrase statistics, so its cost grows with the match count (measured ~1.2 s at 100k matches) whatever the LIMIT. Replace with ONE statement that keeps every eligibility filter, drops bm25, takes the NEWEST matches (trigram rowid = `documents.rowid` = insert order; FTS5 consumes `ORDER BY rowid DESC` without sorting) and reads no bodies:
 
 ```sql
-SELECT d.* FROM documents_tri t JOIN documents d ON d.id = t.doc_id
+SELECT d.id, d.title, d.created_at, d.ingested_at /* + d.markdown only when the query has negated terms */
+  FROM documents_tri t JOIN documents d ON d.id = t.doc_id
  WHERE documents_tri MATCH ? ${where}          -- same filters as today (account, type, dates, people, labels, ext, archived)
- LIMIT ?                                       -- FUZZY_CANDIDATES = 100, rowid order, stops early
+ ORDER BY t.rowid DESC LIMIT ?                 -- FUZZY_CANDIDATES = 100
 ```
 
-and rank those candidates locally in the query: a candidate whose folded title contains a positive term first, then newest first. No FTS auxiliary function runs. Exact (FTS5) hits keep their bm25 order, and fuzzy still only fills free slots (unchanged RRF rule). Negation folding of candidate bodies runs only when the query has negated terms.
+Candidates are ranked locally (folded title contains a positive term first, then newest); negation folding of candidate bodies runs only when the query has negated terms. **Merge without RRF:** the exact (FTS5, bm25) list is kept as is; fuzzy candidates already in it are dropped; the rest are appended up to the free slots; full rows are then fetched only for those appended winners (≤ free slots). The existing final date sort for `order:newest` stays.
 
-**Search projection.** `SearchQuery` gains `withBody?: boolean` (default `true`, today's behaviour) and `contextLines?: number`. With `withBody: false` the query returns hits whose `markdown` is empty and whose `snippet` is ALWAYS set: built where the query runs (also for recency and filter-only searches, which today get their snippet built by the MCP tool in main, `tools/search.ts:244`). The snippet builder is one shared function used by both. The MCP search tool passes `withBody: false`; full documents still come from `get` / `document`.
+**Search projection.** `SearchQuery` gains `withBody?: boolean` (default `true`, today's behaviour) and `contextLines?: number`. With `withBody: false` the query returns hits whose `markdown` is empty and whose `snippet` is ALWAYS set where the query runs. Snippet formats do not change: text searches keep FTS5 `snippet()`, fuzzy-filled rows keep the `fuzzy.ts` window, and recency/filter-only searches use the MCP tool's line-window builder (`contextLines`, `**` marks), which moves from `tools/search.ts:244` into the query module (the tool keeps importing it). Callers passing `withBody: false`: the MCP `search` tool, `digital_memory_info` (`query.search({ limit: 500 })`, reads only type/languages/dates), and renderer `search:query` if no renderer consumer reads `markdown` from it (the plan verifies; otherwise it keeps full bodies). Full documents still come from `get` / `document`.
 
 **The `data_version` sample is taken BEFORE the language lookup** that fills the cache, and stored with it; a later sample that differs recomputes.
 
@@ -87,6 +88,9 @@ A running SQLite statement cannot be interrupted from JS (better-sqlite3 12.11 h
   - Timeout: state `stopping`; `kill('SIGTERM')`; if no exit within 2 s, `kill('SIGKILL')`; on `exit` → `none`. The timed-out caller gets `query_sql stopped after 10 s. Narrow it: filter by account or created_at, avoid LIKE over markdown, or use search.` Calls arriving while `stopping` get `query_sql is still stopping the previous query. Try again in a few seconds.`
   - No exit 5 s after SIGKILL → `stuck`: every call gets `query_sql is unavailable right now.` and an error is logged; never a second child.
   - Spawn failure (e.g. the native module fails to load in the utility process) → `query_sql is unavailable right now.` + logged; the next call may retry the spawn.
+  - Unexpected `exit` while `starting`/`ready` (crash, OOM): the in-flight caller gets `query_sql is unavailable right now.`, state → `none`, logged; the next call spawns.
+  - A late `exit` while `stuck` → `none` (recovered).
+  - `readDiagnostics().sql` exposes `{ state, pid }` so the packaged smoke can assert the process is gone.
 - **Bounded result, inside the runner before transfer** (the stdio executor uses the same `runQuerySql`): rows materialized incrementally with `.iterate()`; each string value cut at 64 KiB with `…[truncated]`; stop at 500 rows or 1 MiB of serialized row data, whichever first; `truncated: true` + hint when cut.
 - **No fallback** to main or the writer for query_sql. The MCP server owns the runner: `stop()` kills it.
 
@@ -120,7 +124,7 @@ A running SQLite statement cannot be interrupted from JS (better-sqlite3 12.11 h
 
 ## 5. Testing
 
-- `createCorpusQuery` extraction: existing store/search suites pass unchanged. Fuzzy: no `bm25(documents_tri)` in the fuzzy statement; account-restricted fuzzy search where another account's matches occupy the lowest rowids still returns the restricted account's hits; archived-heavy corpus returns non-archived hits; local order (title hit, then newest); no folding without negated terms. Projection: `withBody: false` returns empty markdown and a snippet for text, recency and filter-only searches; the MCP search tool output is unchanged for the same corpus.
+- `createCorpusQuery` extraction: existing store/search suites pass unchanged. Fuzzy: no `bm25(documents_tri)` and no `markdown` column in the fuzzy statement (unless negated terms); account-restricted fuzzy search where another account's matches occupy the newest rowids still returns the restricted account's hits; archived-heavy corpus returns non-archived hits; candidates are the newest matches; local order (title hit, then newest); exact-hit order preserved when fuzzy candidates overlap it (exact `[A,B,C]` + fuzzy `[C,B,A,F]` → `[A,B,C,F]`); no folding without negated terms. Projection: `withBody: false` returns empty markdown and a snippet for text, recency and filter-only searches, each in its existing format; the MCP search tool and `digital_memory_info` outputs are unchanged for the same corpus; grep gate: MCP tools never call `search` without `withBody: false`.
 - Language cache: reader-side query sees a new language after a writer commit (data_version changed); interleaving test: cache fill started before a commit, search after the commit recomputes.
 - Read role (real worker under ts-node): no migration; `query_only` refuses an INSERT; `cache_size` set; only the `read` procedure registered.
 - **Reads don't queue behind writes:** real writer + reader on one file; run a real large ingest `commit` (FTS + trigram over multi-MB bodies) and a reconcile stage on the writer while issuing `reads.search` + `reads.document` + `reads.countBy`; assert reader calls complete while the writer is mid-transaction and `store.read` calls queue behind it.
@@ -131,7 +135,7 @@ A running SQLite statement cannot be interrupted from JS (better-sqlite3 12.11 h
 
 ## 6. Acceptance (live, before release)
 
-- **Probe:** `scripts/mcp-latency-probe.mjs` — an external MCP client against the local server (7421) running a fixed workload every 5 s: 10 text searches (one fuzzy-only term, one account-restricted), 2 recency/filter-only searches, 10 `get` ids, and one `count` by type issued concurrently with the gets; reports p50/p95 for search and get separately, plus main event-loop lag.
+- **Probe:** `scripts/mcp-latency-probe.mjs` — an external MCP client against the local server (7421) running a fixed workload every 5 s: 10 text searches (one fuzzy-only term, one account-restricted), 2 recency/filter-only searches, one `digital_memory_info`, 10 `get` ids, and `count` with `group_by: 'label'` and `group_by: 'from'` over a large matching set (these reach `Query.countBy`) issued concurrently with the gets — `readDiagnostics` must show the `countBy` executions; reports p50/p95 for search and get separately, plus main event-loop lag.
 - **Packaged smoke (macOS + Windows, release smoke stage):** `query_sql` `SELECT 1` succeeds in the packaged app (utility process loads better-sqlite3); a non-yielding heavy statement is stopped at 10 s, the runner process is gone, and the next call succeeds.
 - **Run:** idle baseline, then during a Gmail + Drive initial sync — on the Mac with `KIA_HOST_WEAK=1`, and on the Windows VM. Same corpus/cache state for before (v0.104.0) and after.
 - **Pass:** search and get p95 during sync ≤ ~2× idle p95; a heavy `query_sql` is stopped at 10 s and the runner process is gone; fallbacks = 0. If the probe shows main event-loop lag (converters, #147) dominating the remaining latency, record it and hand the number to #147 instead of tuning around it.
@@ -143,5 +147,6 @@ A running SQLite statement cannot be interrupted from JS (better-sqlite3 12.11 h
 
 ## 8. Review log
 
+- rev 3 → rev 4: fuzzy candidates are the newest matches, statement reads no bodies, full rows only for appended winners (fable N1); merge keeps exact order and appends fuzzy (no RRF) (astra 2); `digital_memory_info` and renderer search use `withBody: false` (fable N2); snippet formats preserved, tool's line-window builder moves into the query module (fable N3); runner crash and stuck-recovery transitions, `{state,pid}` in diagnostics (fable N4); probe exercises `countBy` via `group_by` label/from plus `digital_memory_info` (astra 1).
 - rev 2 → rev 3: fuzzy statement keeps all filters and drops bm25 (local ranking: title hit, then newest; 100 candidates) (fable N1, astra 1–2); search projection `withBody: false` with snippets built in the reader for all modes, MCP search stops pulling full bodies (astra 3); own spawn adapter with pid, SIGTERM→SIGKILL escalation, runner states with one child owned until exit confirmed, no signal handlers in the runner, no demotion (astra 4, fable N2–N3); packaged smoke for the utility-process native module on macOS + Windows (fable N4, astra 4); no claim that reader statements are bounded — count/countBy measured concurrently, second reader only if needed (astra 1/6); data_version sampled before fill (astra).
 - rev 1 → rev 2: thread terminate cannot stop SQLite → killable SQL runner process (fable F1, astra 1); query runs in the reader, not split across threads (astra 2); `data_version` cache instead of cross-component invalidation (astra 3); byte bounds in the runner (astra 4); extension slice stays on the writer (astra 5); fuzzy candidate cap + no fold without negations, no false checkpoint bound (astra 6); external MCP probe for acceptance, internal stats keyed by caller × method with execMs + wal size (astra 7, fable F3); fallback covers in-flight and parked callers and open failure (astra 8); `openCorpusReadConnection` extended instead of a sibling, stdio uses `createCorpusQuery` (fable F4); SQL runner owned by the MCP server only (fable F5); reads p95 is not a #147 pressure signal (fable F2).
