@@ -33,6 +33,14 @@ describe('scripts/mcp-latency-probe.mjs', () => {
   let handle: McpServerHandle;
   let stopDiag: () => void;
   let diag: string;
+  /** Per-test knobs for what the diagnostics dump and the server report. */
+  const scenario = {
+    renderOnly: false,
+    fallbacks: {} as Record<string, number>,
+    nullGetsAfter: Infinity,
+    gets: 0,
+  };
+  let mcpCountBy = 0;
 
   beforeAll(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-probe-'));
@@ -67,19 +75,47 @@ describe('scripts/mcp-latency-probe.mjs', () => {
       async () => ({
         reads: {
           fuzzyRuns: corpus.fuzzyRuns(),
-          groups: [{ method: 'countBy', via: 'reader', count: 1 }],
-          fallbacks: {},
+          // Every dump shows MORE mcp countBy (the real reader keeps counting).
+          groups: [
+            { caller: 'renderer', method: 'countBy', via: 'reader', count: 5 },
+            ...(scenario.renderOnly
+              ? []
+              : [
+                  {
+                    caller: 'mcp',
+                    method: 'countBy',
+                    via: 'reader',
+                    count: ++mcpCountBy,
+                  },
+                ]),
+          ],
+          fallbacks: scenario.fallbacks,
         },
       }),
       100,
     );
     handle = await startMcp({
-      query: corpus.query,
+      query: {
+        ...corpus.query,
+        document: async (id: Parameters<typeof corpus.query.document>[0]) => {
+          scenario.gets += 1;
+          return scenario.gets > scenario.nullGetsAfter
+            ? null
+            : corpus.query.document(id);
+        },
+      },
       logSink: { log: () => {} },
       dataDir: dir,
       portCandidates: [0],
       sqlExecutor: createInProcessSqlExecutor(path.join(dir, 'kiagent.db')),
     });
+  });
+
+  afterEach(() => {
+    scenario.renderOnly = false;
+    scenario.fallbacks = {};
+    scenario.nullGetsAfter = Infinity;
+    scenario.gets = 0;
   });
 
   afterAll(async () => {
@@ -120,7 +156,7 @@ describe('scripts/mcp-latency-probe.mjs', () => {
       stderr: expect.stringMatching(stderr),
     });
 
-  it('runs one cycle of the fixed workload and reports p50/p95 per kind (real misspelling: counter +1)', async () => {
+  it('runs one cycle of the fixed workload and reports p50/p95 per kind (real misspelling: counter increases)', async () => {
     const ids = path.join(dir, 'ids.json');
     const { stdout } = await run(
       process.execPath,
@@ -243,5 +279,49 @@ describe('scripts/mcp-latency-probe.mjs', () => {
       }),
     );
     await fail3(probeArgs('--baseline', base), /baseline get/);
+  });
+
+  const exits = (args: string[], code: number, stderr: RegExp) =>
+    expect(run(process.execPath, args)).rejects.toMatchObject({
+      code,
+      stderr: expect.stringMatching(stderr),
+    });
+
+  it('exit 2 when only a renderer countBy ran on the reader (no MCP countBy)', async () => {
+    scenario.renderOnly = true;
+    await exits(probeArgs(), 2, /no new MCP countBy/);
+  });
+
+  it('exit 1 when a fallback is reported in the fresh end snapshot', async () => {
+    scenario.fallbacks = { 'reader-error': 1 };
+    await exits(probeArgs(), 1, /reader fallbacks fired/);
+  });
+
+  it('exit 1 when search/get p95 exceeds 2x the baseline', async () => {
+    const base = path.join(dir, 'tight-baseline.json');
+    const k = (n: number) => ({ n, p50: 0.001, p95: 0.001, max: 0.001 });
+    fs.writeFileSync(
+      base,
+      JSON.stringify({
+        label: 'idle',
+        cycles: 1,
+        kinds: {
+          search: k(12),
+          get: k(10),
+          count: k(2),
+          info: k(1),
+          loop: k(1),
+        },
+      }),
+    );
+    await exits(probeArgs('--baseline', base), 1, /x idle/);
+  });
+
+  it('exit 3 when a get returns no document mid-measurement (after setup validated)', async () => {
+    const ids = path.join(dir, 'midrun.json');
+    await run(process.execPath, probeArgs('--validate-only', '--ids', ids));
+    scenario.gets = 0;
+    scenario.nullGetsAfter = 10; // the 10 validation gets pass, the measured ones return null
+    await fail3(probeArgs('--ids', ids), /returned no document/);
   });
 });

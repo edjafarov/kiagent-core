@@ -126,4 +126,17 @@ describe('probe workload', () => {
     expect(out.bad.join(' ')).toMatch(/get/);
     expect(out.bad.join(' ')).toMatch(/search/);
   });
+
+  it('a get that throws is reported as bad; collectIds rejects a non-array search', async () => {
+    const out = await node(`
+      const call = async (name, args) => { if (args.id === 'a') throw new Error('boom'); return { id: args.id, title: 't' }; };
+      const timed = async (kind, fn) => fn();
+      const bad = await w.runGetsAndCounts({ call, timed, ids: ['a', 'b'] });
+      let msg = '';
+      try { await w.collectIds(async () => ({ error: 'x' }), ['q']); } catch (e) { msg = e.message; }
+      console.log(JSON.stringify({ bad, msg }));
+    `);
+    expect(out.bad).toEqual(['a']);
+    expect(out.msg).toMatch(/non-array/);
+  });
 });

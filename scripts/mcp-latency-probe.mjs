@@ -26,6 +26,12 @@
  *   3. new build measurement: --diag … --ids ids.json (re-validates the fuzzy
  *      term against the app's fuzzyRuns counter every run).
  * Last stdout line = JSON report. Exit 3 = the workload itself was invalid.
+ *
+ * Caveats: the fuzzy validation (`fuzzyRuns` increases across one search) can be
+ * satisfied by a CONCURRENT fuzzy run from another client, so validate when no
+ * other client is searching. The countBy check compares the diagnostics
+ * snapshot taken at the start of measurement with a FRESH one taken after the
+ * last cycle, and counts only `caller: 'mcp'` reader `countBy` groups.
  */
 import fs from 'node:fs';
 
@@ -106,14 +112,14 @@ async function timed(kind, fn) {
   return r;
 }
 
-/** fuzzyRuns from a diagnostics snapshot written at or after `sinceMs` (the
- *  app stamps `snapshotAt` before it snapshots, every 5 s). */
-async function readFuzzyRuns(sinceMs, timeoutMs = 20_000) {
+/** The diagnostics snapshot written at or after `sinceMs` (the app stamps
+ *  `snapshotAt` before it snapshots, every 5 s). */
+async function readDiag(sinceMs, timeoutMs = 20_000) {
   const end = Date.now() + timeoutMs;
   for (;;) {
     try {
       const d = JSON.parse(fs.readFileSync(opts.diag, 'utf8'));
-      if (d.snapshotAt >= sinceMs && typeof d.reads?.fuzzyRuns === 'number') return d.reads.fuzzyRuns;
+      if (d.snapshotAt >= sinceMs && typeof d.reads?.fuzzyRuns === 'number') return d;
     } catch {
       /* not written yet / mid-write: poll again */
     }
@@ -123,6 +129,12 @@ async function readFuzzyRuns(sinceMs, timeoutMs = 20_000) {
     await sleep(50);
   }
 }
+const readFuzzyRuns = async (sinceMs) => (await readDiag(sinceMs)).reads.fuzzyRuns;
+/** Reader countBy executions attributed to the MCP caller. */
+const mcpCountBy = (d) =>
+  (d.reads?.groups ?? [])
+    .filter((g) => g.method === 'countBy' && g.via === 'reader' && g.caller === 'mcp')
+    .reduce((n, g) => n + g.count, 0);
 
 async function main() {
   // ── Setup, BEFORE any measurement: the workload must be valid or the numbers
@@ -155,7 +167,14 @@ async function main() {
     const bp = checkBaseline(base);
     if (bp.length > 0) invalid(bp.join('; '));
   }
-  const ids = saved?.ids ?? (await collectIds(call, queries));
+  let ids = saved?.ids;
+  if (!ids) {
+    try {
+      ids = await collectIds(call, queries);
+    } catch (e) {
+      invalid(e instanceof Error ? e.message : String(e));
+    }
+  }
   const idProblems = await validateIds(call, ids); // 10 distinct ids, each a real document
   if (idProblems.length > 0) invalid(idProblems.join('; '));
   if (opts.diag) {
@@ -168,6 +187,7 @@ async function main() {
     return 0;
   }
 
+  const startCountBy = opts.diag ? mcpCountBy(await readDiag(Date.now())) : 0;
   const badGets = [];
   for (let cycle = 0; cycle < opts.cycles; cycle += 1) {
     const started = performance.now();
@@ -185,6 +205,7 @@ async function main() {
     const rest = opts.interval - (performance.now() - started);
     if (cycle < opts.cycles - 1 && rest > 0) await sleep(rest);
   }
+  const measuredUntil = Date.now();
   if (badGets.length > 0) {
     invalid(`${badGets.length} get call(s) returned no document (a failed get is not a sample): ${[...new Set(badGets)].join(', ')}`);
   }
@@ -200,16 +221,13 @@ async function main() {
   const missing = checkSamples(report.kinds, opts.cycles);
   if (missing.length > 0) invalid(`missing samples: ${missing.join('; ')}`);
   if (opts.diag) {
-    const diag = JSON.parse(fs.readFileSync(opts.diag, 'utf8'));
-    const groups = diag.reads?.groups ?? [];
-    const countBy = groups
-      .filter((g) => g.method === 'countBy' && g.via === 'reader')
-      .reduce((n, g) => n + g.count, 0);
+    const diag = await readDiag(measuredUntil); // fresh: includes the last cycle
+    const countBy = mcpCountBy(diag);
     const fb = diag.reads?.fallbacks ?? {};
     report.fallbacks = fb;
     report.readerCountBy = countBy;
-    if (countBy === 0) {
-      process.stderr.write('WARN: readDiagnostics shows no countBy execution on the reader\n');
+    if (!(countBy > startCountBy)) {
+      process.stderr.write(`WARN: readDiagnostics shows no new MCP countBy execution on the reader (${startCountBy} -> ${countBy})\n`);
       exitCode = 2;
     }
     if (Object.values(fb).some((n) => n > 0)) {

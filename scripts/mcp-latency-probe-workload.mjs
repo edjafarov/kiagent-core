@@ -10,6 +10,7 @@ export async function collectIds(call, queries, want = EXPECTED_IDS) {
   const ids = [];
   for (const q of queries) {
     const hits = await call('search', { query: q, limit: 10 });
+    if (!Array.isArray(hits)) throw new Error(`search "${q}" returned a non-array result; cannot collect get ids`);
     for (const h of hits) if (ids.length < want && !ids.includes(h.id)) ids.push(h.id);
     if (ids.length >= want) break;
   }
@@ -34,7 +35,12 @@ export async function runGetsAndCounts({ call, timed, ids }) {
   ];
   const gets = ids.map((id) =>
     timed('get', async () => {
-      const r = await call('get', { id });
+      let r = null;
+      try {
+        r = await call('get', { id });
+      } catch {
+        /* a throwing get is a failed get, same as null */
+      }
       if (!isDocument(r)) bad.push(id);
       return r;
     }),
