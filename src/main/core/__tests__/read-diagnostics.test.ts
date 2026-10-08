@@ -34,6 +34,9 @@ describe('buildReadDiagnostics', () => {
     });
     expect(d.walBytes).toBe(4096);
     expect(d.reads.fuzzyRuns).toBe(7);
+    expect(d.reads.totals).toEqual([
+      { caller: 'mcp', method: 'countBy', via: 'reader', total: 1 },
+    ]);
     expect(d.sql).toEqual({ state: 'ready', pid: 77, timeouts: 2, recent: [] });
     expect(d.reads.groups[0]).toMatchObject({
       caller: 'mcp',

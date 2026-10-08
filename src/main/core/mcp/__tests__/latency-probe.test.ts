@@ -36,6 +36,9 @@ describe('scripts/mcp-latency-probe.mjs', () => {
   /** Per-test knobs for what the diagnostics dump and the server report. */
   const scenario = {
     renderOnly: false,
+    flatTotals: false,
+    searchThrowsAfter: Infinity,
+    searches: 0,
     fallbacks: {} as Record<string, number>,
     nullGetsAfter: Infinity,
     gets: 0,
@@ -75,20 +78,34 @@ describe('scripts/mcp-latency-probe.mjs', () => {
       async () => ({
         reads: {
           fuzzyRuns: corpus.fuzzyRuns(),
-          // Every dump shows MORE mcp countBy (the real reader keeps counting).
+          // Windowed counts stay flat (a wrapped ring); the cumulative totals are what must rise.
           groups: [
             { caller: 'renderer', method: 'countBy', via: 'reader', count: 5 },
-            ...(scenario.renderOnly
-              ? []
-              : [
-                  {
-                    caller: 'mcp',
-                    method: 'countBy',
-                    via: 'reader',
-                    count: ++mcpCountBy,
-                  },
-                ]),
+            { caller: 'mcp', method: 'countBy', via: 'reader', count: 18 },
           ],
+          totals: scenario.renderOnly
+            ? [
+                {
+                  caller: 'renderer',
+                  method: 'countBy',
+                  via: 'reader',
+                  total: ++mcpCountBy,
+                },
+              ]
+            : [
+                {
+                  caller: 'renderer',
+                  method: 'countBy',
+                  via: 'reader',
+                  total: 99,
+                },
+                {
+                  caller: 'mcp',
+                  method: 'countBy',
+                  via: 'reader',
+                  total: scenario.flatTotals ? 7 : ++mcpCountBy,
+                },
+              ],
           fallbacks: scenario.fallbacks,
         },
       }),
@@ -97,6 +114,12 @@ describe('scripts/mcp-latency-probe.mjs', () => {
     handle = await startMcp({
       query: {
         ...corpus.query,
+        search: async (...a: Parameters<typeof corpus.query.search>) => {
+          scenario.searches += 1;
+          if (scenario.searches > scenario.searchThrowsAfter)
+            throw new Error('search boom');
+          return corpus.query.search(...a);
+        },
         document: async (id: Parameters<typeof corpus.query.document>[0]) => {
           scenario.gets += 1;
           return scenario.gets > scenario.nullGetsAfter
@@ -113,6 +136,9 @@ describe('scripts/mcp-latency-probe.mjs', () => {
 
   afterEach(() => {
     scenario.renderOnly = false;
+    scenario.flatTotals = false;
+    scenario.searchThrowsAfter = Infinity;
+    scenario.searches = 0;
     scenario.fallbacks = {};
     scenario.nullGetsAfter = Infinity;
     scenario.gets = 0;
@@ -290,6 +316,23 @@ describe('scripts/mcp-latency-probe.mjs', () => {
   it('exit 2 when only a renderer countBy ran on the reader (no MCP countBy)', async () => {
     scenario.renderOnly = true;
     await exits(probeArgs(), 2, /no new MCP countBy/);
+  });
+
+  it('exit 2 when MCP countBy totals are flat even though windowed counts exist', async () => {
+    scenario.flatTotals = true;
+    await exits(probeArgs(), 2, /no new MCP countBy/);
+  });
+
+  it('exit 3 when a search throws mid-measurement (after setup validated)', async () => {
+    const ids = path.join(dir, 'search-throws.json');
+    await run(process.execPath, probeArgs('--validate-only', '--ids', ids));
+    // Setup issues a fixed number of query.search calls (the one fuzzy validation search);
+    // learn it from a second validation run, then let only those through.
+    scenario.searches = 0;
+    await run(process.execPath, probeArgs('--validate-only', '--ids', ids));
+    scenario.searchThrowsAfter = scenario.searches;
+    scenario.searches = 0;
+    await fail3(probeArgs('--ids', ids), /failed during measurement/);
   });
 
   it('exit 1 when a fallback is reported in the fresh end snapshot', async () => {

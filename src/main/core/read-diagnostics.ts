@@ -51,10 +51,13 @@ export function startReadDiagnosticsDump(
     try {
       const snapshotAt = Date.now();
       const snap = (await snapshot()) as Record<string, unknown>;
+      // tmp + rename: a reader never sees a truncated file mid-write.
+      const tmp = `${file}.tmp`;
       await fs.promises.writeFile(
-        file,
+        tmp,
         JSON.stringify({ ...snap, snapshotAt }, null, 2),
       );
+      await fs.promises.rename(tmp, file);
     } catch {
       /* best effort */
     }

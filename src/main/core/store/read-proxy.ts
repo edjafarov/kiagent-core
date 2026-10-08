@@ -40,9 +40,19 @@ export interface ReadGroupStats {
   newestAgeMs: number;
 }
 
+/** Monotonic per-group call total; unlike `groups[].count` it never drops when
+ *  records leave the 256-call window. */
+export interface ReadGroupTotal {
+  caller: ReadCaller;
+  method: QueryMethod;
+  via: ReadVia;
+  total: number;
+}
+
 export interface ReadStatsSnapshot {
   mode: ReadMode;
   groups: ReadGroupStats[];
+  totals: ReadGroupTotal[];
   fallbacks: Record<FallbackReason, number>;
   /** Latest cumulative fuzzy-pass count reported by the reader (0 until a read ran). */
   fuzzyRuns: number;
@@ -71,9 +81,20 @@ export function createReadStats(window = STATS_WINDOW): ReadStats {
   };
   let mode: ReadMode = 'reader';
   let fuzzyRuns = 0;
+  const totals = new Map<string, ReadGroupTotal>();
   return {
     record(r) {
       if (r.fuzzyRuns !== undefined) fuzzyRuns = r.fuzzyRuns;
+      const key = `${r.caller}|${r.method}|${r.via}`;
+      const t = totals.get(key);
+      if (t) t.total += 1;
+      else
+        totals.set(key, {
+          caller: r.caller,
+          method: r.method,
+          via: r.via,
+          total: 1,
+        });
       ring.push(r);
       if (ring.length > window) ring.shift();
     },
@@ -107,7 +128,13 @@ export function createReadStats(window = STATS_WINDOW): ReadStats {
           newestAgeMs: now - newest,
         };
       });
-      return { mode, groups, fallbacks: { ...fallbacks }, fuzzyRuns };
+      return {
+        mode,
+        groups,
+        totals: [...totals.values()].map((t) => ({ ...t })),
+        fallbacks: { ...fallbacks },
+        fuzzyRuns,
+      };
     },
   };
 }

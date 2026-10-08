@@ -44,6 +44,38 @@ describe('createReadProxy', () => {
   });
 });
 
+describe('createReadStats totals', () => {
+  it('keeps a monotonic per-group total that survives the 256-call window', () => {
+    const stats = createReadStats(256);
+    const rec = (method: 'countBy' | 'search', caller: 'mcp' | 'renderer') =>
+      stats.record({
+        caller,
+        method,
+        via: 'reader',
+        execMs: 1,
+        totalMs: 1,
+        at: 1,
+      });
+    for (let i = 0; i < 5; i += 1) rec('countBy', 'mcp');
+    const total = () =>
+      stats
+        .snapshot()
+        .totals.find((t) => t.caller === 'mcp' && t.method === 'countBy')
+        ?.total;
+    expect(total()).toBe(5);
+    for (let i = 0; i < 400; i += 1)
+      rec(i % 2 ? 'search' : 'countBy', i % 3 ? 'renderer' : 'mcp'); // wraps the ring
+    const g = stats
+      .snapshot()
+      .groups.find((x) => x.caller === 'mcp' && x.method === 'countBy');
+    expect(g!.count).toBeLessThan(total()!); // windowed count dropped records, total did not
+    expect(total()).toBeGreaterThan(5);
+    const before = total()!;
+    rec('countBy', 'mcp');
+    expect(total()).toBe(before + 1);
+  });
+});
+
 describe('createReadStats', () => {
   it('computes p50/p95/max per caller x method and keeps only the last 256 calls', () => {
     const stats = createReadStats(256);

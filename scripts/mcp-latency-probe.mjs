@@ -31,7 +31,8 @@
  * satisfied by a CONCURRENT fuzzy run from another client, so validate when no
  * other client is searching. The countBy check compares the diagnostics
  * snapshot taken at the start of measurement with a FRESH one taken after the
- * last cycle, and counts only `caller: 'mcp'` reader `countBy` groups.
+ * last cycle, and sums the cumulative `reads.totals` (not the windowed
+ * `groups[].count`, which wraps) of `caller: 'mcp'` reader `countBy`.
  */
 import fs from 'node:fs';
 
@@ -105,6 +106,18 @@ async function call(name, args = {}) {
   if (res.isError) throw new Error(`${name}: ${res.content?.[0]?.text}`);
   return JSON.parse(res.content[0].text);
 }
+/** A measured search that throws or returns a non-array is an invalid workload
+ *  (exit 3), never a fast sample. */
+async function searchChecked(args) {
+  let r;
+  try {
+    r = await call('search', args);
+  } catch (e) {
+    invalid(`search ${JSON.stringify(args)} failed during measurement: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!Array.isArray(r)) invalid(`search ${JSON.stringify(args)} returned a non-array result during measurement`);
+  return r;
+}
 async function timed(kind, fn) {
   const t0 = performance.now();
   const r = await fn();
@@ -132,9 +145,9 @@ async function readDiag(sinceMs, timeoutMs = 20_000) {
 const readFuzzyRuns = async (sinceMs) => (await readDiag(sinceMs)).reads.fuzzyRuns;
 /** Reader countBy executions attributed to the MCP caller. */
 const mcpCountBy = (d) =>
-  (d.reads?.groups ?? [])
+  (d.reads?.totals ?? [])
     .filter((g) => g.method === 'countBy' && g.via === 'reader' && g.caller === 'mcp')
-    .reduce((n, g) => n + g.count, 0);
+    .reduce((n, g) => n + g.total, 0);
 
 async function main() {
   // ── Setup, BEFORE any measurement: the workload must be valid or the numbers
@@ -178,7 +191,13 @@ async function main() {
   const idProblems = await validateIds(call, ids); // 10 distinct ids, each a real document
   if (idProblems.length > 0) invalid(idProblems.join('; '));
   if (opts.diag) {
-    const fuzzyProblem = await validateFuzzy(call, opts.fuzzy, readFuzzyRuns);
+    let fuzzyProblem;
+    try {
+      fuzzyProblem = await validateFuzzy(call, opts.fuzzy, readFuzzyRuns);
+    } catch (e) {
+      if (e instanceof InvalidWorkload) throw e;
+      fuzzyProblem = `fuzzy search failed: ${e instanceof Error ? e.message : String(e)}`;
+    }
     if (fuzzyProblem) invalid(fuzzyProblem);
     if (opts.ids) fs.writeFileSync(opts.ids, JSON.stringify({ ids, fuzzy: opts.fuzzy }, null, 2));
   }
@@ -194,10 +213,10 @@ async function main() {
     for (let i = 0; i < 10; i += 1) {
       const args = { query: queries[i], limit: 10 };
       if (i === 1 && restrictTo) args.source = restrictTo; // account-restricted
-      await timed('search', () => call('search', args));
+      await timed('search', () => searchChecked(args));
     }
     for (const extra of [{}, { query: 'has:attachment' }]) {
-      await timed('search', () => call('search', { ...extra, limit: 10 })); // recency / filter-only
+      await timed('search', () => searchChecked({ ...extra, limit: 10 })); // recency / filter-only
     }
     await timed('info', () => call('digital_memory_info'));
     badGets.push(...(await runGetsAndCounts({ call, timed, ids }))); // countBy first, gets overlap it
