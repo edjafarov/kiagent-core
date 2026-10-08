@@ -607,9 +607,9 @@ function registerIpc(
       });
     },
 
-    'search:query': (req) => p.store.read.search(req ?? {}),
-    'docs:get': ({ id }) => p.store.read.document(id),
-    'docs:children': ({ id }) => p.store.read.children(id),
+    'search:query': (req) => p.readsFor('renderer').search(req ?? {}),
+    'docs:get': ({ id }) => p.readsFor('renderer').document(id),
+    'docs:children': ({ id }) => p.readsFor('renderer').children(id),
 
     'attention:list': (req) =>
       attention.list(validateAttentionListRequest(req)),
@@ -1002,7 +1002,7 @@ app
     wireOutboxPush(p.store, broadcast);
 
     mcp = await startMcp({
-      query: p.store.read,
+      query: p.readsFor('mcp'),
       logSink: p.logSink,
       dataDir,
       onActivity: (rec) => act.append(rec),

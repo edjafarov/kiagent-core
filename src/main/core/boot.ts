@@ -10,6 +10,7 @@ import type {
   LaneState,
   LogStore,
   Prefs,
+  Query,
   SchedulerEnv,
   Sender,
   Source,
@@ -38,6 +39,8 @@ import { createLogs } from './logs';
 import { createPrefs } from './prefs';
 import { createScheduler } from './scheduler';
 import type { CoreScheduler } from './scheduler';
+import { openReads } from './reads';
+import type { ReadCaller } from './store/read-proxy';
 import { openStore } from './store/store';
 import type { CoreStore } from './store/store';
 import type { AppDb } from '../db/app-db';
@@ -142,6 +145,11 @@ export interface CorePlatform {
   /** The local model's acceleration once detected; null before. Bound by
    *  main.ts after the bundled providers register. */
   llmAccel: () => LlmAccel | null;
+  /** Foreground read path (MCP, renderer): the read worker with writer fallback.
+   *  Attributed to caller 'other' in read diagnostics. */
+  reads: Query;
+  /** Same path, attributed to `caller` in read diagnostics. */
+  readsFor(caller: ReadCaller): Query;
   createAppProjection(
     extras: AppStateExtras,
   ): ReturnType<typeof createAppProjection>;
@@ -235,15 +243,22 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   // The corpus SQLite connection lives in a worker thread (the store is
   // AppDb-driven, so every read/write and the relocated commit transaction
   // cross the bridge); this is what keeps backfill off the main event loop.
-  const db = await openDbInWorker(
-    path.join(deps.dataDir, 'kiagent.db'),
-    deps.dbWorkerFile,
-  );
+  const dbPath = path.join(deps.dataDir, 'kiagent.db');
+  const db = await openDbInWorker(dbPath, deps.dbWorkerFile);
   const store = openStore(db, {
     encrypt: deps.encrypt,
     decrypt: deps.decrypt,
     detectLanguages,
     profileDir: deps.dataDir,
+  });
+  // Foreground reads (MCP, renderer) run on their own read-only worker so they
+  // never queue behind ingest writes. Opened AFTER the writer migrated.
+  const readPlane = await openReads({
+    dbPath,
+    workerFile: deps.dbWorkerFile,
+    writer: store.read,
+    weak: hostBudget(host, null).weak,
+    log: (level, msg) => sink.log('db', level, msg),
   });
   const inference = createInference(sink);
   const scheduler = createScheduler(store, deps.env, sink);
@@ -292,11 +307,14 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     refreshers,
     convert,
     host,
+    reads: readPlane.reads,
+    readsFor: readPlane.readsFor,
     llmAccel: () => null,
     createAppProjection,
     shutdown: async () => {
       scheduler.stop();
       await engine.stopAll();
+      await readPlane.close();
       await store.close();
     },
   };
