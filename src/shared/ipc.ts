@@ -348,6 +348,16 @@ export interface Invokes {
     };
     res: { flowId: string };
   };
+  /** Connect several sources that share ONE OAuth profile behind a single
+   *  consent (first-run setup). One ordinary flow per source, run in order. */
+  'accounts:add-group': {
+    req: {
+      sourceIds: string[];
+      scopes: string[];
+      oauthClient?: { clientId: string; clientSecret: string };
+    };
+    res: { flowIds: Record<string, string> };
+  };
   /** Re-authenticate an EXISTING account in place; progress arrives via
    *  push:connect and terminates with `reconnected`. `oauthClient` (R2)
    *  carries the gate's restricted/BYO Google client for the same reason
@@ -677,6 +687,7 @@ const INVOKE_CHANNEL_MAP = {
   'sources:count-files': 0,
   'sources:list-folders': 0,
   'accounts:add': 0,
+  'accounts:add-group': 0,
   'accounts:start-reconnect': 0,
   'accounts:start-manage-folders': 0,
   'accounts:prompt-answer': 0,

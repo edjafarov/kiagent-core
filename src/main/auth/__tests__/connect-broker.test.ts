@@ -1005,3 +1005,159 @@ describe('connect broker — startManageFolders', () => {
     expect(h.applyScope).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('connect broker — startGroup', () => {
+  function sourceNamed(id: string, scopes: string[], order: string[]): Source {
+    return {
+      descriptor: { id, name: id, documentTypes: ['t'], auth: 'oauth' },
+      connect: async (auth: AuthChannel) => {
+        await auth.oauth(scopes);
+        order.push(id);
+        return { identifier: `${id}@x` };
+      },
+      // eslint-disable-next-line no-empty-function, @typescript-eslint/no-empty-function
+      async *pull() {},
+      toDocument: () => null,
+    } as never;
+  }
+  function groupBroker(sources: Source[]) {
+    const events: ConnectEvent[] = [];
+    const connected: string[] = [];
+    const platform = {
+      sources: {
+        get: (id: string) => sources.find((s) => s.descriptor.id === id),
+      },
+      engine: {
+        connect: async (s: Source, auth: AuthChannel) => {
+          connected.push(s.descriptor.id);
+          const { identifier } = await s.connect(auth);
+          return {
+            id: `acc-${s.descriptor.id}`,
+            source: s.descriptor.id,
+            identifier,
+          } as never;
+        },
+        remove: jest.fn(async () => {}),
+      },
+    } as unknown as CorePlatform;
+    const broker = createConnectBroker(platform, (e) => events.push(e));
+    const profile = {
+      redirectUri: 'http://127.0.0.1:1/cb',
+      authUrl: jest.fn().mockReturnValue('https://auth'),
+      exchange: jest.fn(),
+    };
+    for (const s of sources)
+      broker.registerOAuthProfile(s.descriptor.id, profile);
+    const terminal = (flowId: string) =>
+      events.find(
+        (e) => e.flowId === flowId && (e.kind === 'done' || e.kind === 'error'),
+      )?.kind;
+    return { broker, events, profile, connected, terminal };
+  }
+  const settle = async () => {
+    for (let i = 0; i < 10; i++) await flush();
+  };
+  beforeEach(() => (runOAuthLoopback as jest.Mock).mockReset());
+
+  it('opens ONE loopback with the union scopes and connects every source in order', async () => {
+    (runOAuthLoopback as jest.Mock).mockResolvedValue('http://cb/?code=c');
+    const order: string[] = [];
+    const { broker, profile, terminal } = groupBroker([
+      sourceNamed('cal', ['s.cal'], order),
+      sourceNamed('mail', ['s.mail'], order),
+      sourceNamed('drive', ['s.drive'], order),
+    ]);
+    profile.exchange.mockResolvedValue({
+      accessToken: 't',
+      scope: 's.cal s.mail s.drive',
+    });
+    const client = { clientId: 'c', clientSecret: 's' };
+    const { flowIds } = broker.startGroup(['cal', 'mail', 'drive'], {
+      scopes: ['s.cal', 's.mail', 's.drive'],
+      oauthClient: client,
+    });
+    await settle();
+    expect(runOAuthLoopback).toHaveBeenCalledTimes(1);
+    expect(profile.authUrl).toHaveBeenCalledWith(
+      ['s.cal', 's.mail', 's.drive'],
+      'http://127.0.0.1:1/cb',
+      client,
+    );
+    expect(order).toEqual(['cal', 'mail', 'drive']);
+    expect([flowIds.cal, flowIds.mail, flowIds.drive].map(terminal)).toEqual([
+      'done',
+      'done',
+      'done',
+    ]);
+  });
+
+  it('a grant missing the FIRST source scope errors that flow only; the rest connect without a second loopback', async () => {
+    (runOAuthLoopback as jest.Mock).mockResolvedValue('http://cb/?code=c');
+    const order: string[] = [];
+    const { broker, profile, terminal } = groupBroker([
+      sourceNamed('cal', ['s.cal'], order),
+      sourceNamed('mail', ['s.mail'], order),
+    ]);
+    profile.exchange.mockResolvedValue({ accessToken: 't', scope: 's.mail' });
+    const { flowIds } = broker.startGroup(['cal', 'mail'], {
+      scopes: ['s.cal', 's.mail'],
+    });
+    await settle();
+    expect(runOAuthLoopback).toHaveBeenCalledTimes(1);
+    expect([terminal(flowIds.cal), terminal(flowIds.mail)]).toEqual([
+      'error',
+      'done',
+    ]);
+    expect(order).toEqual(['mail']);
+  });
+
+  it('a rejected consent: one browser attempt, every flow errors, no account', async () => {
+    (runOAuthLoopback as jest.Mock).mockRejectedValue(
+      new Error('access_denied'),
+    );
+    const order: string[] = [];
+    const { broker, terminal } = groupBroker([
+      sourceNamed('cal', ['s.cal'], order),
+      sourceNamed('mail', ['s.mail'], order),
+      sourceNamed('drive', ['s.drive'], order),
+    ]);
+    const { flowIds } = broker.startGroup(['cal', 'mail', 'drive'], {
+      scopes: ['s.cal', 's.mail', 's.drive'],
+    });
+    await settle();
+    expect(runOAuthLoopback).toHaveBeenCalledTimes(1);
+    expect(Object.values(flowIds).map(terminal)).toEqual([
+      'error',
+      'error',
+      'error',
+    ]);
+    expect(order).toEqual([]);
+  });
+
+  it('a queued flow cancelled before its turn never enters connect()', async () => {
+    let release!: (v: string) => void;
+    (runOAuthLoopback as jest.Mock).mockReturnValue(
+      new Promise<string>((r) => {
+        release = r;
+      }),
+    );
+    const order: string[] = [];
+    const { broker, profile, connected, terminal } = groupBroker([
+      sourceNamed('cal', ['s.cal'], order),
+      sourceNamed('mail', ['s.mail'], order),
+    ]);
+    profile.exchange.mockResolvedValue({
+      accessToken: 't',
+      scope: 's.cal s.mail',
+    });
+    const { flowIds } = broker.startGroup(['cal', 'mail'], {
+      scopes: ['s.cal', 's.mail'],
+    });
+    broker.cancel(flowIds.mail); // `mail` is queued behind `cal`
+    await flush(); // `cal` is now waiting on the consent
+    release('http://cb/?code=c');
+    await settle();
+    expect(connected).toEqual(['cal']);
+    expect(terminal(flowIds.mail)).toBe('error');
+  });
+});

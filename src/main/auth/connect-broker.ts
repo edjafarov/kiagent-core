@@ -25,6 +25,14 @@ import {
   logScopeChanged,
 } from '../core/engine/flow-telemetry';
 
+/** Google reports granted scopes; Microsoft (and an omitted field) is
+ *  "unknown" and passes. */
+function covers(creds: Credentials, requested: string[]): boolean {
+  if (!creds.scope) return true;
+  const granted = new Set(creds.scope.split(/\s+/));
+  return requested.every((s) => granted.has(s));
+}
+
 /**
  * Bridges the Source.connect() AuthChannel to the renderer's AddSource
  * wizard: qr/prompt/status ride push:connect events; OAuth opens the system
@@ -259,6 +267,119 @@ export function createConnectBroker(
     return { flowId };
   }
 
+  type OAuthRun = (
+    scopes: string[],
+    signal: AbortSignal,
+  ) => Promise<Credentials>;
+
+  /** One connect flow: registered in `flows` synchronously (so cancel finds
+   *  it at once), starts after `after` settles, and returns a promise that
+   *  settles when the flow does. */
+  function launch(
+    sourceId: string,
+    flowId: string,
+    oauth: OAuthRun,
+    after: Promise<unknown>,
+  ): Promise<void> {
+    const source = platform.sources.get(sourceId);
+    if (!source) {
+      send({ flowId, kind: 'error', msg: `unknown source: ${sourceId}` });
+      return Promise.resolve();
+    }
+    const flow = { cancelled: false, abort: new AbortController() };
+    flows.set(flowId, flow);
+    const auth: AuthChannel = {
+      async oauth(scopes: string[]): Promise<Credentials> {
+        send({ flowId, kind: 'status', msg: 'Waiting for sign-in…' });
+        return oauth(scopes, flow.abort.signal);
+      },
+      showQr(qr: string): void {
+        send({ flowId, kind: 'qr', qr });
+      },
+      async prompt(schema: unknown): Promise<Record<string, unknown>> {
+        const requestId = newId<'prompt'>();
+        const answers = new Promise<Record<string, unknown>>(
+          (resolve, reject) => {
+            pendingPrompts.set(requestId, { flowId, resolve, reject });
+          },
+        );
+        // Same guard as pickers below: the cancel/settle sweep may reject
+        // a prompt the flow already abandoned — keep that from surfacing
+        // as an unhandled rejection. The real awaiter (the source's
+        // connect(), possibly across the extension-child RPC) still sees
+        // the rejection.
+        answers.catch(() => {});
+        send({ flowId, kind: 'prompt', requestId, schema });
+        return answers;
+      },
+      status(msg: string): void {
+        send({ flowId, kind: 'status', msg });
+      },
+      pickFolders(spec: FolderPickerSpec): Promise<FolderNode[]> {
+        const requestId = newId<'picker'>();
+        const nodes = new Promise<FolderNode[]>((resolve, reject) => {
+          pendingPickers.set(requestId, { flowId, spec, resolve, reject });
+        });
+        // The settle-time sweep may reject a picker the flow already
+        // abandoned (connect() threw without awaiting it) — keep that from
+        // surfacing as an unhandled rejection. The real awaiter, when there
+        // is one, still sees the rejection.
+        nodes.catch(() => {});
+        send({
+          flowId,
+          kind: 'folder-picker',
+          requestId,
+          multiSelect: !!spec.multiSelect,
+          modes: spec.modes,
+          // C-3: this task owns these two lines. The connect path always
+          // starts a NEW account, so `purpose` defaults to 'connect'.
+          // B-2: `FolderPickerSpec.selected` is optional and the wire field
+          // is required, so an omitted selection bridges to [] and becomes
+          // indistinguishable from an explicit empty one — which is why the
+          // modal's empty-selection rule keys off `purpose`, never length.
+          selected: spec.selected ?? [],
+          expand: spec.expand,
+          purpose: spec.purpose ?? 'connect',
+          note: spec.note,
+        });
+        return nodes;
+      },
+    };
+
+    return (async () => {
+      try {
+        await after.catch(() => {});
+        if (flow.cancelled) throw new Error('connect flow cancelled');
+        const account = await platform.engine.connect(source, auth);
+        // A cancel that landed while connect() was mid-flight INSIDE the
+        // source (post-answer credential validation, QR pairing) had no
+        // broker-held promise to reject — connect() completed and
+        // persisted the account anyway. Remove it instead of starting it:
+        // a cancelled wizard must not leave a surprise account syncing.
+        if (flow.cancelled) {
+          await platform.engine.remove(account.id);
+          send({ flowId, kind: 'error', msg: 'connect flow cancelled' });
+          return;
+        }
+        runAccount(platform, account);
+        send({ flowId, kind: 'done', account });
+      } catch (err) {
+        send({
+          flowId,
+          kind: 'error',
+          msg: String(err instanceof Error ? err.message : err),
+        });
+      } finally {
+        flows.delete(flowId);
+        // The flow settled — none of its prompts or pickers can ever be
+        // answered again; an unanswered prompt would otherwise pin the
+        // suspended connect() frame (and its extension-child counterpart)
+        // until app quit.
+        sweepFlow(flowId, 'connect flow ended');
+      }
+    })();
+  }
+
   return {
     registerOAuthProfile(sourceId: string, profile: OAuthProfile): void {
       oauthProfiles.set(sourceId, profile);
@@ -277,111 +398,67 @@ export function createConnectBroker(
       opts?: { oauthClient?: OAuthClientOverride },
     ): { flowId: string } {
       const flowId = newId<'flow'>();
-      const source = platform.sources.get(sourceId);
-      if (!source) {
-        send({ flowId, kind: 'error', msg: `unknown source: ${sourceId}` });
-        return { flowId };
-      }
-      const flow = { cancelled: false, abort: new AbortController() };
-      flows.set(flowId, flow);
-      const auth: AuthChannel = {
-        async oauth(scopes: string[]): Promise<Credentials> {
+      void launch(
+        sourceId,
+        flowId,
+        async (scopes, signal) => {
           const profile = oauthProfiles.get(sourceId);
           if (!profile)
             throw new Error(`no OAuth profile registered for ${sourceId}`);
-          send({ flowId, kind: 'status', msg: 'Waiting for sign-in…' });
           const callbackUrl = await runOAuthLoopback(
             profile.authUrl(scopes, profile.redirectUri, opts?.oauthClient),
             profile.redirectUri,
-            flow.abort.signal,
+            signal,
           );
           return profile.exchange(callbackUrl, profile.redirectUri);
         },
-        showQr(qr: string): void {
-          send({ flowId, kind: 'qr', qr });
-        },
-        async prompt(schema: unknown): Promise<Record<string, unknown>> {
-          const requestId = newId<'prompt'>();
-          const answers = new Promise<Record<string, unknown>>(
-            (resolve, reject) => {
-              pendingPrompts.set(requestId, { flowId, resolve, reject });
-            },
-          );
-          // Same guard as pickers below: the cancel/settle sweep may reject
-          // a prompt the flow already abandoned — keep that from surfacing
-          // as an unhandled rejection. The real awaiter (the source's
-          // connect(), possibly across the extension-child RPC) still sees
-          // the rejection.
-          answers.catch(() => {});
-          send({ flowId, kind: 'prompt', requestId, schema });
-          return answers;
-        },
-        status(msg: string): void {
-          send({ flowId, kind: 'status', msg });
-        },
-        pickFolders(spec: FolderPickerSpec): Promise<FolderNode[]> {
-          const requestId = newId<'picker'>();
-          const nodes = new Promise<FolderNode[]>((resolve, reject) => {
-            pendingPickers.set(requestId, { flowId, spec, resolve, reject });
-          });
-          // The settle-time sweep may reject a picker the flow already
-          // abandoned (connect() threw without awaiting it) — keep that from
-          // surfacing as an unhandled rejection. The real awaiter, when there
-          // is one, still sees the rejection.
-          nodes.catch(() => {});
-          send({
-            flowId,
-            kind: 'folder-picker',
-            requestId,
-            multiSelect: !!spec.multiSelect,
-            modes: spec.modes,
-            // C-3: this task owns these two lines. The connect path always
-            // starts a NEW account, so `purpose` defaults to 'connect'.
-            // B-2: `FolderPickerSpec.selected` is optional and the wire field
-            // is required, so an omitted selection bridges to [] and becomes
-            // indistinguishable from an explicit empty one — which is why the
-            // modal's empty-selection rule keys off `purpose`, never length.
-            selected: spec.selected ?? [],
-            expand: spec.expand,
-            purpose: spec.purpose ?? 'connect',
-            note: spec.note,
-          });
-          return nodes;
-        },
-      };
-
-      void (async () => {
-        try {
-          const account = await platform.engine.connect(source, auth);
-          // A cancel that landed while connect() was mid-flight INSIDE the
-          // source (post-answer credential validation, QR pairing) had no
-          // broker-held promise to reject — connect() completed and
-          // persisted the account anyway. Remove it instead of starting it:
-          // a cancelled wizard must not leave a surprise account syncing.
-          if (flow.cancelled) {
-            await platform.engine.remove(account.id);
-            send({ flowId, kind: 'error', msg: 'connect flow cancelled' });
-            return;
-          }
-          runAccount(platform, account);
-          send({ flowId, kind: 'done', account });
-        } catch (err) {
-          send({
-            flowId,
-            kind: 'error',
-            msg: String(err instanceof Error ? err.message : err),
-          });
-        } finally {
-          flows.delete(flowId);
-          // The flow settled — none of its prompts or pickers can ever be
-          // answered again; an unanswered prompt would otherwise pin the
-          // suspended connect() frame (and its extension-child counterpart)
-          // until app quit.
-          sweepFlow(flowId, 'connect flow ended');
-        }
-      })();
-
+        Promise.resolve(),
+      );
       return { flowId };
+    },
+
+    /** Connect several sources that share ONE OAuth profile behind a single
+     *  consent. One ordinary flow per source, run in array order; the first
+     *  flow to ask opens the loopback and the rest reuse its grant (or its
+     *  rejection), so no second browser ever opens. */
+    startGroup(
+      sourceIds: string[],
+      opts: { scopes: string[]; oauthClient?: OAuthClientOverride },
+    ): { flowIds: Record<string, string> } {
+      const profile = oauthProfiles.get(sourceIds[0] ?? '');
+      if (!profile || sourceIds.some((id) => oauthProfiles.get(id) !== profile))
+        throw new Error(
+          'accounts:add-group: sources must share one OAuth profile',
+        );
+      let consent: Promise<Credentials> | null = null;
+      const grant = (signal: AbortSignal): Promise<Credentials> => {
+        consent ??= runOAuthLoopback(
+          profile.authUrl(opts.scopes, profile.redirectUri, opts.oauthClient),
+          profile.redirectUri,
+          signal,
+        ).then((cb) => profile.exchange(cb, profile.redirectUri));
+        return consent;
+      };
+      const flowIds: Record<string, string> = {};
+      let previous: Promise<unknown> = Promise.resolve();
+      for (const id of sourceIds) {
+        const flowId = newId<'flow'>();
+        flowIds[id] = flowId;
+        previous = launch(
+          id,
+          flowId,
+          async (scopes, signal) => {
+            const creds = await grant(signal);
+            if (!covers(creds, scopes))
+              throw new Error(
+                `Access for ${id} was not allowed on the consent screen`,
+              );
+            return creds;
+          },
+          previous,
+        );
+      }
+      return { flowIds };
     },
 
     /** Re-authenticate ONE existing account. Never calls connect(): that

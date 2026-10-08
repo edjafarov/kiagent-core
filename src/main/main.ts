@@ -534,6 +534,8 @@ function registerIpc(
 
     'accounts:add': ({ sourceId, oauthClient }) =>
       broker.start(sourceId, { oauthClient }),
+    'accounts:add-group': ({ sourceIds, scopes, oauthClient }) =>
+      broker.startGroup(sourceIds, { scopes, oauthClient }),
     'accounts:prompt-answer': ({ requestId, answers }) => {
       broker.answer(requestId, answers);
     },
