@@ -10,6 +10,8 @@ import type {
 } from '@shared/contracts';
 
 import type { ActiveCalls } from '../../core/active-calls';
+import { hostBudget, readHostFacts } from '../../core/host-profile';
+import type { HostFacts } from '../../core/host-profile';
 import { downloadModel, modelFilesPresent } from '../local-llm/downloader';
 import { modelDir } from '../local-llm/models';
 import type { ModelDescriptor } from '../local-llm/models';
@@ -61,6 +63,7 @@ export interface LocalAsrProvider extends InferenceProvider {
 }
 
 interface QueuedJob {
+  cls: 'interactive' | 'background';
   run(): Promise<void>;
   reject(e: Error): void;
 }
@@ -71,7 +74,7 @@ export function createLocalAsrProvider(deps: {
   asrModelsDir: string;
   prefs: Prefs;
   log(level: LogLevel, msg: string): void;
-  probes?: { platform: NodeJS.Platform; totalMemBytes: number };
+  host?: HostFacts;
   download?: typeof downloadModel;
   filesPresent?: typeof modelFilesPresent;
   runCli?: typeof runWhisperCli;
@@ -86,22 +89,19 @@ export function createLocalAsrProvider(deps: {
   const filesPresent = deps.filesPresent ?? modelFilesPresent;
   const runCli = deps.runCli ?? runWhisperCli;
   const fileExists = deps.fileExists ?? existsSync;
-  const probes = deps.probes ?? {
-    platform: process.platform,
-    totalMemBytes: os.totalmem(),
-  };
+  const host = deps.host ?? readHostFacts();
   const capability = checkAsrCapability(deps.binaryPath, deps.binaryPresent);
   // Whisper tiering is fully sync (no async accel detect like llama's):
   // platform decides metal-vs-cpu, RAM decides the tier. Resolved once.
   const defaultModel: ModelDescriptor = selectAsrModel({
-    accel: asrAccel(probes.platform),
-    totalMemBytes: probes.totalMemBytes,
+    accel: asrAccel(host.platform),
+    totalMemBytes: host.totalMemBytes,
   });
   // Opt-in accuracy tier (spec: selective accuracy retry). Null on a host
   // with no supported tier (non-metal, or <16 GiB RAM).
   const accuracyModel: ModelDescriptor | null = selectAccuracyModel({
-    accel: asrAccel(probes.platform),
-    totalMemBytes: probes.totalMemBytes,
+    accel: asrAccel(host.platform),
+    totalMemBytes: host.totalMemBytes,
   });
 
   let downloadPct: number | null = null;
@@ -126,6 +126,7 @@ export function createLocalAsrProvider(deps: {
   const queue: QueuedJob[] = [];
   let busy = false;
   let active: AbortController | null = null;
+  let activeCls: QueuedJob['cls'] | null = null;
   /** The in-flight job's settlement, so dispose() can AWAIT the child it just
    *  signalled instead of racing the wrapper's SIGTERM→SIGKILL escalation. */
   let activeRun: Promise<void> | null = null;
@@ -134,11 +135,13 @@ export function createLocalAsrProvider(deps: {
     if (busy) return;
     const job = queue.shift();
     if (!job) return;
+    activeCls = job.cls;
     busy = true;
     const leave = deps.activeCalls?.enter('hear', null);
     const run = job.run().finally(() => {
       leave?.();
       busy = false;
+      activeCls = null;
       if (activeRun === run) activeRun = null;
       pump();
     });
@@ -187,13 +190,15 @@ export function createLocalAsrProvider(deps: {
     },
     vadModelPath: string | undefined,
     which: ModelDescriptor = defaultModel,
+    cls: QueuedJob['cls'] = 'interactive',
   ): Promise<string> =>
     new Promise<string>((resolve, reject) => {
       if (closing) {
         reject(new Error('local-asr disposed — app quitting'));
         return;
       }
-      queue.push({
+      const job: QueuedJob = {
+        cls,
         reject,
         async run() {
           if (closing) {
@@ -219,6 +224,11 @@ export function createLocalAsrProvider(deps: {
               detectLanguage: opts.detectLanguage === true ? true : undefined,
               vadModelPath,
               signal: abort.signal,
+              priority: cls,
+              threads:
+                cls === 'background'
+                  ? Math.min(4, hostBudget(host, null).backgroundThreads)
+                  : undefined,
             });
             resolve(text);
           } catch (err) {
@@ -229,7 +239,17 @@ export function createLocalAsrProvider(deps: {
             if (active === abort) active = null;
           }
         },
-      });
+      };
+      if (cls === 'interactive') {
+        const i = queue.findIndex((j) => j.cls === 'background');
+        if (i < 0) queue.push(job);
+        else queue.splice(i, 0, job);
+        // Foreground never waits behind a throttled background run: kill it.
+        // It rejects as a plain Error → the audio worker defers and re-drives.
+        if (activeCls === 'background') active?.abort();
+      } else {
+        queue.push(job);
+      }
       pump();
     });
 
@@ -241,7 +261,8 @@ export function createLocalAsrProvider(deps: {
   const transcribeFile = (
     p: string,
     opts: { format: 'wav' | 'mp3'; timestamps?: boolean },
-  ): Promise<string> => runTranscribe(p, opts, undefined);
+  ): Promise<string> =>
+    runTranscribe(p, opts, undefined, defaultModel, 'background');
 
   const ensureInstalled = (): void => {
     if (installing) return;
@@ -451,6 +472,7 @@ export function createLocalAsrProvider(deps: {
           },
           vadRequired ? vadPath : vadModelForHear(),
           which,
+          req.lane === 'background' ? 'background' : 'interactive',
         );
       } finally {
         await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});

@@ -1,5 +1,7 @@
 import { spawn, type SpawnOptions } from 'node:child_process';
 
+import { launch, type ChildClass } from '../../core/child-priority';
+
 /** Deterministic input rejection: whisper-cli could not decode THIS file.
  *  Carries status=400 so the audio worker's existing 4xx branch maps it to a
  *  terminal skip (deferring would loop the same undecodable file forever). */
@@ -168,6 +170,7 @@ const STDERR_CAP_BYTES = 8 * 1024;
 export interface WhisperChildProcess {
   readonly stdout: NodeJS.EventEmitter | null;
   readonly stderr: NodeJS.EventEmitter | null;
+  readonly pid?: number;
   on(event: 'error', listener: (err: Error) => void): this;
   on(
     event: 'close',
@@ -218,6 +221,14 @@ export function runWhisperCli(args: {
   detectLanguage?: boolean;
   signal?: AbortSignal;
   spawnFn?: SpawnFn;
+  /** Background (indexing / background-lane) runs execute demoted
+   *  (child-priority.ts) with a thread cap; interactive runs are untouched. */
+  priority?: ChildClass;
+  /** `-t N`; omitted → whisper's own default (4). */
+  threads?: number;
+  /** Test seams for child-priority on a non-mac CI host. */
+  platform?: NodeJS.Platform;
+  taskpolicyExists?: (p: string) => boolean;
 }): Promise<string> {
   const spawnFn = args.spawnFn ?? spawn;
   return new Promise<string>((resolve, reject) => {
@@ -231,47 +242,51 @@ export function runWhisperCli(args: {
       return;
     }
 
-    const child = spawnFn(
+    const argv = [
+      '-m',
+      args.modelPath,
+      '-f',
+      args.inputPath,
+      '-l',
+      // A detect run must never pass a pinned language: the contract is
+      // that `language` is ignored on a detect run, and if whisper ever
+      // echoed the pin back as a "detection" the app would lock it in.
+      args.detectLanguage === true ? 'auto' : (args.language ?? 'auto'),
+      ...(args.timestamps === true ? [] : ['--no-timestamps']),
+      ...(args.detectLanguage === true ? ['-dl'] : ['--no-prints']),
+      // Whisper hallucinates on silence: given a mostly-silent track it
+      // emits the last real utterance again once per 30s window, with
+      // timestamps stretched across the gap. Per-speaker meeting channels
+      // are mostly silence by construction (each side is quiet while the
+      // other talks), so a 6-minute call came back with 25 phantom repeats
+      // and smeared timings that mis-interleaved the two speakers.
+      // Decoder-side knobs do NOT fix it (-mc 0, -sns, -nth all measured:
+      // no effect); skipping non-speech audio outright does.
+      ...(args.vadModelPath !== undefined
+        ? [
+            '--vad',
+            '-vm',
+            args.vadModelPath,
+            '-vt',
+            String(WHISPER_VAD_PARAMS.threshold),
+            '-vspd',
+            String(WHISPER_VAD_PARAMS.minSpeechMs),
+            '-vsd',
+            String(WHISPER_VAD_PARAMS.minSilenceMs),
+            '-vp',
+            String(WHISPER_VAD_PARAMS.speechPadMs),
+            '-vo',
+            String(WHISPER_VAD_PARAMS.samplesOverlapS),
+          ]
+        : []),
+      ...(args.threads !== undefined ? ['-t', String(args.threads)] : []),
+    ];
+    const child = launch(
+      args.priority ?? 'interactive',
       args.binaryPath,
-      [
-        '-m',
-        args.modelPath,
-        '-f',
-        args.inputPath,
-        '-l',
-        // A detect run must never pass a pinned language: the contract is
-        // that `language` is ignored on a detect run, and if whisper ever
-        // echoed the pin back as a "detection" the app would lock it in.
-        args.detectLanguage === true ? 'auto' : (args.language ?? 'auto'),
-        ...(args.timestamps === true ? [] : ['--no-timestamps']),
-        ...(args.detectLanguage === true ? ['-dl'] : ['--no-prints']),
-        // Whisper hallucinates on silence: given a mostly-silent track it
-        // emits the last real utterance again once per 30s window, with
-        // timestamps stretched across the gap. Per-speaker meeting channels
-        // are mostly silence by construction (each side is quiet while the
-        // other talks), so a 6-minute call came back with 25 phantom repeats
-        // and smeared timings that mis-interleaved the two speakers.
-        // Decoder-side knobs do NOT fix it (-mc 0, -sns, -nth all measured:
-        // no effect); skipping non-speech audio outright does.
-        ...(args.vadModelPath !== undefined
-          ? [
-              '--vad',
-              '-vm',
-              args.vadModelPath,
-              '-vt',
-              String(WHISPER_VAD_PARAMS.threshold),
-              '-vspd',
-              String(WHISPER_VAD_PARAMS.minSpeechMs),
-              '-vsd',
-              String(WHISPER_VAD_PARAMS.minSilenceMs),
-              '-vp',
-              String(WHISPER_VAD_PARAMS.speechPadMs),
-              '-vo',
-              String(WHISPER_VAD_PARAMS.samplesOverlapS),
-            ]
-          : []),
-      ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      argv,
+      (cmd, a) => spawnFn(cmd, a, { stdio: ['ignore', 'pipe', 'pipe'] }),
+      { platform: args.platform, exists: args.taskpolicyExists },
     );
 
     const out: Buffer[] = [];
