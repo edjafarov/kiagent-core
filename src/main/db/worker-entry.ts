@@ -15,7 +15,11 @@ import {
   createWriteTx,
   type FolderScopeInput,
 } from '@main/core/store/write-tx';
-import { openDb } from './app-db';
+import {
+  createCorpusQuery,
+  QUERY_METHODS,
+} from '@main/core/store/corpus-query';
+import { openCorpusReadConnection, openDb } from './app-db';
 import { attachDbHost } from './bridge';
 import { createDbCoordinator } from './coordinator';
 import { openPluginConnection } from './plugin-connections';
@@ -31,9 +35,11 @@ if (!parentPort) {
   throw new Error('db worker-entry must run inside a worker thread');
 }
 
-const { dbPath, pluginSources } = workerData as {
+const { dbPath, pluginSources, role, cacheKiB } = workerData as {
   dbPath: string;
   pluginSources?: Record<string, string>;
+  role?: 'write' | 'read';
+  cacheKiB?: number;
 };
 const trustedPluginSources = new Map(
   Object.entries(pluginSources ?? {}).map(([pluginId, source]) => [
@@ -53,8 +59,49 @@ function trustedLegacyPath(pluginId: string): string {
   return source;
 }
 
+/** Read role: a query-only connection, no migrations, no write procedures, no
+ *  plugin registry, no coordinator (one statement at a time on this thread).
+ *  The whole read surface runs HERE — SQL, stemming, fusion, folding, snippets
+ *  — and main only sees the finished rows. */
+async function runReadRole(): Promise<void> {
+  const db = await openCorpusReadConnection(dbPath, {
+    cacheKiB: cacheKiB ?? 2048,
+    queryOnly: true,
+  });
+  const corpus = createCorpusQuery(db, { languageCache: 'data-version' });
+  const { query } = corpus;
+  const methods = new Set<string>(QUERY_METHODS);
+  const table = query as unknown as Record<
+    string,
+    (...a: unknown[]) => Promise<unknown>
+  >;
+  attachDbHost(parentPort!, db, () => process.exit(0), {
+    read: async (args) => {
+      const { method, args: callArgs } = args as {
+        method: string;
+        args: unknown[];
+      };
+      if (!methods.has(method)) {
+        throw new Error(`unknown read method: ${method}`);
+      }
+      const started = performance.now();
+      const value = await table[method](...callArgs);
+      return {
+        value,
+        execMs: performance.now() - started,
+        fuzzyRuns: corpus.fuzzyRuns(),
+      };
+    },
+  });
+}
+
 (async () => {
   try {
+    if (role === 'read') {
+      await runReadRole();
+      parentPort!.postMessage({ t: 'ready' });
+      return;
+    }
     const db = await openDb(dbPath);
     // The corpus `commit` is procedural with read-your-own-writes, so it runs
     // as a host procedure on the worker's RAW connection — the SAME

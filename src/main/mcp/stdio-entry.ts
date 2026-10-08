@@ -9,7 +9,7 @@
  * (core/mcp/registry.ts) so tools cannot drift between the two.
  *
  * Reads the corpus via `openStore` opened on the same `<userData>/data/
- * kiagent.db` the running app writes to; only `store.read` (the `Query`
+ * kiagent.db` the running app writes to; only `query` (the `Query`
  * surface) is ever touched here — this process never commits.
  * Every served call is also appended (transport 'stdio') to
  * `<dataDir>/mcp-activity.jsonl` via core/mcp/activity.ts — the app's
@@ -19,7 +19,7 @@ import path from 'path';
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
-import type { LogLevel } from '@shared/contracts';
+import type { LogLevel, Query } from '@shared/contracts';
 
 import { createActivityLog } from '../core/mcp/activity';
 import { makeMcpServer } from '../core/mcp/make-server';
@@ -28,7 +28,8 @@ import { attachResourceHandlers } from '../core/mcp/resources';
 import { buildBuiltinTools } from '../core/mcp/tools';
 import { createRawSqlTools } from '../core/mcp/tools/raw-sql';
 import { openCorpusReadConnection } from '../db/app-db';
-import { openStore, type CoreStore } from '../core/store/store';
+import { createCorpusQuery } from '../core/store/corpus-query';
+import type { AppDb } from '../db/app-db';
 import { createOutboundProxy } from './outbound-proxy';
 
 function parseDbArg(argv: string[]): string | null {
@@ -86,18 +87,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  let store: CoreStore;
+  let readDb: AppDb;
+  let query: Query;
   try {
-    // Read-only sibling: openCorpusReadConnection gives an in-process AppDb
-    // (with `_conn`), so the store builds a writeTx that this process never
-    // invokes — only `store.read` is ever touched here.
-    store = openStore(await openCorpusReadConnection(dbPath), {
-      // Vault is unreachable from the Query surface this process serves —
-      // any codec typechecks; these never actually run.
-      encrypt: (s: string) => Buffer.from(s, 'utf8'),
-      decrypt: (b: Buffer) => b.toString('utf8'),
-      detectLanguages: () => [],
-    });
+    // Read-only sibling: no migrations, no journal_mode, read-WRITE open so a
+    // dirty -wal can be recovered, `query_only` so nothing can write. The
+    // language cache is keyed by data_version because the app's commits happen
+    // on another connection.
+    readDb = await openCorpusReadConnection(dbPath, { queryOnly: true });
+    query = createCorpusQuery(readDb, { languageCache: 'data-version' }).query;
   } catch (err) {
     process.stderr.write(
       `[mcp-stdio] failed to open corpus: ${err instanceof Error ? err.message : String(err)}\n`,
@@ -114,14 +112,14 @@ async function main(): Promise<void> {
   const logSink = stderrLogSink();
   const rawSql = createRawSqlTools(dbPath);
   const registry = createToolRegistry([
-    ...buildBuiltinTools(store.read, createOutboundProxy()),
+    ...buildBuiltinTools(query, createOutboundProxy()),
     ...rawSql.tools,
   ]);
   const server = makeMcpServer();
   attachToolHandlers(server, registry, logSink, (rec) =>
     activity.append({ ...rec, transport: 'stdio' }),
   );
-  attachResourceHandlers(server, store.read);
+  attachResourceHandlers(server, query);
 
   const transport = new StdioServerTransport();
   let shuttingDown = false;
@@ -139,7 +137,7 @@ async function main(): Promise<void> {
       /* ignore */
     }
     try {
-      await store.close();
+      await readDb.close();
     } finally {
       process.exit(code);
     }

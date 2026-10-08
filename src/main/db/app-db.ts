@@ -242,6 +242,13 @@ export async function openDb(filePath: string): Promise<AppDb> {
   return wrapConn(conn);
 }
 
+export interface CorpusReadOptions {
+  /** `PRAGMA cache_size = -cacheKiB` and `mmap_size = 0`. Omitted: SQLite defaults. */
+  cacheKiB?: number;
+  /** `PRAGMA query_only = ON`: writes fail inside SQLite, whatever the caller does. */
+  queryOnly?: boolean;
+}
+
 /**
  * Open the corpus for a SECONDARY process (the stdio MCP server) that only
  * ever reads. Deliberately:
@@ -253,9 +260,11 @@ export async function openDb(filePath: string): Promise<AppDb> {
  *    SELECT, and query_sql keeps its own readonly handle.
  * Concurrent with a running GUI app this is just a second WAL reader, which
  * SQLite supports.
+ * Optional `cacheKiB`/`queryOnly` are for the read worker and the stdio sibling.
  */
 export async function openCorpusReadConnection(
   filePath: string,
+  opts: CorpusReadOptions = {},
 ): Promise<AppDb> {
   // Fail fast (and deterministically) if the GUI app never created the corpus.
   // better-sqlite3's `fileMustExist` raises at open, but an explicit check
@@ -266,6 +275,11 @@ export async function openCorpusReadConnection(
   }
   const conn = new Database(filePath, { fileMustExist: true });
   conn.pragma('busy_timeout = 5000');
+  if (opts.queryOnly) conn.pragma('query_only = ON');
+  if (opts.cacheKiB !== undefined) {
+    conn.pragma(`cache_size = -${Math.floor(opts.cacheKiB)}`);
+    conn.pragma('mmap_size = 0');
+  }
   // Integer columns come back as plain `number` — core's store is number-native
   // (matches `openStore`'s bare `new Database`); no seq/rowid approaches 2^53.
   return wrapConn(conn);
