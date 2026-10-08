@@ -62,6 +62,11 @@ export interface LocalAsrProvider extends InferenceProvider {
   variants(): AsrVariant[];
 }
 
+/** A background job will not START within this window of interactive ASR work
+ *  (meeting segments arrive back to back): it would be aborted by the next
+ *  segment, so it would only churn model loads for zero progress. */
+const INTERACTIVE_HOLD_OFF_MS = 90_000;
+
 interface QueuedJob {
   cls: 'interactive' | 'background';
   run(): Promise<void>;
@@ -84,7 +89,12 @@ export function createLocalAsrProvider(deps: {
   fileExists?: (p: string) => boolean;
   /** Records the executing `hear` job for the Local AI indicator. */
   activeCalls?: Pick<ActiveCalls, 'enter'>;
+  /** Clock for the interactive hold-off (tests). Default Date.now. */
+  now?: () => number;
 }): LocalAsrProvider {
+  const now = deps.now ?? Date.now;
+  /** When interactive ASR work last started or finished; null = never. */
+  let lastInteractiveAt: number | null = null;
   const download = deps.download ?? downloadModel;
   const filesPresent = deps.filesPresent ?? modelFilesPresent;
   const runCli = deps.runCli ?? runWhisperCli;
@@ -209,6 +219,19 @@ export function createLocalAsrProvider(deps: {
             reject(new Error('local-asr model not installed'));
             return;
           }
+          if (cls === 'background') {
+            // Plain Error (no `status`): the audio worker defers it and
+            // re-drives on its cadence instead of marking the doc failed.
+            if (
+              lastInteractiveAt !== null &&
+              now() - lastInteractiveAt < INTERACTIVE_HOLD_OFF_MS
+            ) {
+              reject(new Error('local ASR busy with interactive work'));
+              return;
+            }
+          } else {
+            lastInteractiveAt = now();
+          }
           const abort = new AbortController();
           active = abort;
           try {
@@ -236,6 +259,7 @@ export function createLocalAsrProvider(deps: {
             // must stay instanceof for the worker's terminal-skip branch.
             reject(err instanceof Error ? err : new Error(String(err)));
           } finally {
+            if (cls === 'interactive') lastInteractiveAt = now();
             if (active === abort) active = null;
           }
         },

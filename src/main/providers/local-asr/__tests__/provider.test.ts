@@ -1205,15 +1205,42 @@ describe('LocalAsrProvider', () => {
       const bg1 = provider.transcribeFile('/tmp/a.wav', { format: 'wav' });
       const bg2 = provider.transcribeFile('/tmp/b.wav', { format: 'wav' });
       bg1.catch(() => {});
+      bg2.catch(() => {});
       await tick();
       const hear = provider.handle(hearReq('interactive'));
       await expect(bg1).rejects.toThrow('SIGTERM');
       await expect(hear).resolves.toBe('meeting text');
       await tick();
-      // bg2 ran last, after the interactive job; release it.
-      expect(order).toEqual(['background', 'interactive', 'background']);
-      signals[2].dispatchEvent(new Event('abort'));
-      await expect(bg2).rejects.toThrow('SIGTERM');
+      // bg2 would start right after the interactive job: held off, never launched.
+      expect(order).toEqual(['background', 'interactive']);
+      await expect(bg2).rejects.toThrow('busy with interactive');
+    });
+
+    describe('interactive hold-off', () => {
+      it('a background job queued right after an interactive one is rejected without launching whisper; after 90 s it launches', async () => {
+        let t = 1_000_000;
+        const runCli = jest.fn(async (_a: unknown) => 'text');
+        const provider = createLocalAsrProvider(
+          makeDeps({
+            asrModelsDir: tmpDir,
+            filesPresent: () => true,
+            runCli,
+            now: () => t,
+          }),
+        );
+        await provider.handle(hearReq('interactive'));
+        expect(runCli).toHaveBeenCalledTimes(1);
+        t += 89_000;
+        await expect(
+          provider.transcribeFile('/tmp/a.wav', { format: 'wav' }),
+        ).rejects.toThrow('local ASR busy with interactive work');
+        expect(runCli).toHaveBeenCalledTimes(1);
+        t += 2_000; // 91 s after the interactive job finished
+        await expect(
+          provider.transcribeFile('/tmp/a.wav', { format: 'wav' }),
+        ).resolves.toBe('text');
+        expect(runCli).toHaveBeenCalledTimes(2);
+      });
     });
 
     it('background jobs pass threads = min(4, backgroundThreads)', async () => {
