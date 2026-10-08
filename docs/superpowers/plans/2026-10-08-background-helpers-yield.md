@@ -10,11 +10,16 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-08-background-helpers-yield-design.md` (APPROVED rev 6). Issue #145; follow-ups #146, #147.
 
+**Plan rev 2** (fable + codex astra round 1): real fixture names; worker test stubs migrated; every `os` hardware read routed through `host-profile`; `HelperTimeoutError` lives in `workers/vision/rasterize.ts`; `launch` has two classes (`demoteHost` covers hosts, with log-once); OCR/raster tests pinned to a platform; SDK doc + boot-log fields; connected wake tests; typecheck before every commit; live acceptance before release (Task 10).
+
 ## Global Constraints
 
 - Repo: kiagent-core worktree `~/work/kcore-yield`, branch `design/background-yield` (from v0.103.0 `cc78998f`). All paths below are relative to it.
 - Worktree setup (once, before Task 1): `ln -sfn ~/work/kcore-setup3/node_modules node_modules && ln -sfn ~/work/kcore-setup3/release/app/node_modules release/app/node_modules`. Both are gitignored; unlink them before any `git worktree remove`.
 - Run jest as `npx jest <paths>`; typecheck `npx tsc -p tsconfig.typecheck.json`; lint `npx eslint <files>`. One heavy command at a time — never run builds/tests in parallel.
+- **Every task's Step 4 ends with `npx tsc -p tsconfig.typecheck.json` clean before its commit.** Each task must leave the tree typechecking.
+- Tests that exercise `launch('background', …)` must inject `platform`/`exists` (or `taskpolicyExists`) — never depend on the machine running jest.
+- Task order: 1 → 2 → 3 (uses 1, 2) → 4 (uses 3) → 5 (uses 1, 3) → 6 (uses 1, 2) → 7 (uses 2, 3) → 8 (uses 2, 3) → 9 → 10.
 - Commits: `git commit -F <msgfile> -- <paths>`; message ends WITHOUT any Co-Authored-By line. Never `git stash`, `--amend`, rebase, reset, or `--no-verify`.
 - Copy (verbatim): core `pausedLine('until-synced')` = `Paused — waits until your accounts finish syncing.`; overlay title `Waits until your accounts finish syncing`, detail `On this computer, reading starts after the first sync so it doesn't slow you down.`
 - Constants (verbatim): `WEAK_MAX_CORES = 4`, `WEAK_MAX_MEM_BYTES = 8 * 1024 ** 3`, `backgroundThreads = Math.max(1, Math.floor(cores / 2))`, whisper background threads `Math.min(4, backgroundThreads)`, `TASKPOLICY = '/usr/sbin/taskpolicy'`, `PLATFORM_API_VERSION = '2.8.0'`.
@@ -116,8 +121,13 @@ describe('readHostFacts', () => {
   });
 });
 
-it('describeHost renders one boot log line', () => {
-  expect(describeHost(mac())).toBe('cores=8 mem=16.0GB platform=darwin-arm64');
+it('describeHost renders one boot log line with the budget', () => {
+  expect(describeHost(mac(), null, {})).toBe(
+    'cores=8 mem=16.0GB platform=darwin-arm64 accel=unknown weak=false backgroundThreads=4',
+  );
+  expect(describeHost(mac({ platform: 'win32' }), 'cpu', {})).toContain(
+    'accel=cpu weak=true',
+  );
 });
 ```
 
@@ -184,9 +194,15 @@ export function hostBudget(
   return { weak, backgroundThreads: Math.max(1, Math.floor(f.cores / 2)) };
 }
 
-export function describeHost(f: HostFacts): string {
+/** One boot log line. At boot `accel` is unknown (detected lazily). */
+export function describeHost(
+  f: HostFacts,
+  accel: LlmAccel | null,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const gb = (f.totalMemBytes / 1024 ** 3).toFixed(1);
-  return `cores=${f.cores} mem=${gb}GB platform=${f.platform}-${f.arch}`;
+  const b = hostBudget(f, accel, env);
+  return `cores=${f.cores} mem=${gb}GB platform=${f.platform}-${f.arch} accel=${accel ?? 'unknown'} weak=${b.weak} backgroundThreads=${b.backgroundThreads}`;
 }
 ```
 
@@ -219,7 +235,7 @@ git commit -F /tmp/msg-t1 -- src/main/core/host-profile.ts src/main/core/__tests
 - Test: `src/main/core/__tests__/child-priority.test.ts`
 
 **Interfaces:**
-- Produces: `ChildClass = 'interactive' | 'background' | 'host'`, `TASKPOLICY`, `launch(cls, cmd, args, start, deps?)`, `demoteHost(pid, deps?)`, `setChildPriorityLog(fn)`, `__resetChildPriorityLog()` (test-only).
+- Produces: `ChildClass = 'interactive' | 'background'`, `TASKPOLICY`, `launch(cls, cmd, args, start, deps?)`, `demoteHost(pid, deps?)`, `setChildPriorityLog(fn)`, `__resetChildPriorityLog()` (test-only). (Spec §3.2's `host` class is `demoteHost` — utility processes are never started through `launch`.)
 
 - [ ] **Step 1: Write the failing test** — `src/main/core/__tests__/child-priority.test.ts`
 
@@ -279,13 +295,6 @@ it('background on Windows sets PRIORITY_LOW after spawn', () => {
   expect(h.setPriority).toHaveBeenCalledWith(4242, LOW);
 });
 
-it('host class is below-normal, never taskpolicy', () => {
-  const h = harness('darwin');
-  launch('host', '/bin/x', [], h.start, h.deps);
-  expect(h.started[0].cmd).toBe('/bin/x');
-  expect(h.setPriority).toHaveBeenCalledWith(4242, BELOW);
-});
-
 it('a start returning no pid (void execFile fake) is a no-op demotion', () => {
   const setPriority = jest.fn();
   launch('background', '/bin/x', [], () => undefined, {
@@ -307,12 +316,16 @@ it('setPriority errors (child already exited) are swallowed', () => {
   ).not.toThrow();
 });
 
-it('demoteHost sets below-normal and tolerates undefined pid', () => {
+it('demoteHost sets below-normal, tolerates undefined pid, logs once', () => {
+  const lines: string[] = [];
+  setChildPriorityLog((m) => lines.push(m));
   const setPriority = jest.fn();
   demoteHost(undefined, { setPriority });
   demoteHost(7, { setPriority });
-  expect(setPriority).toHaveBeenCalledTimes(1);
+  demoteHost(8, { setPriority });
+  expect(setPriority).toHaveBeenCalledTimes(2);
   expect(setPriority).toHaveBeenCalledWith(7, BELOW);
+  expect(lines).toEqual(['[priority] extension-host below-normal via setPriority']);
 });
 
 it('logs once per (binary, class)', () => {
@@ -338,12 +351,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 /** Who a child works for. `background` = background-lane work (yields CPU and,
- *  on macOS, disk I/O to the user); `host` = an extension host, which mostly
- *  pulls but also serves small interactive calls; `interactive` = untouched.
+ *  on macOS, disk I/O to the user); `interactive` = untouched. Extension hosts
+ *  (Electron utility processes we don't spawn) go through `demoteHost`.
  *  EVERY spawn site that runs background work goes through `launch` — no
  *  other code hand-rolls priority. Thread-level demotion is out of scope
  *  (it needs a native addon and a thread-handle API). */
-export type ChildClass = 'interactive' | 'background' | 'host';
+export type ChildClass = 'interactive' | 'background';
 
 export const TASKPOLICY = '/usr/sbin/taskpolicy';
 
@@ -367,11 +380,11 @@ export function __resetChildPriorityLog(): void {
   logged.clear();
 }
 
-function note(cmd: string, cls: ChildClass, how: string): void {
-  const key = `${path.basename(cmd)}|${cls}`;
+function note(name: string, cls: string, how: string): void {
+  const key = `${name}|${cls}`;
   if (logged.has(key)) return;
   logged.add(key);
-  sink?.(`[priority] ${path.basename(cmd)} ${cls} via ${how}`);
+  sink?.(`[priority] ${name} ${cls} via ${how}`);
 }
 
 function demote(
@@ -401,32 +414,30 @@ export function launch<C extends { pid?: number } | void>(
 ): C {
   const platform = deps.platform ?? process.platform;
   if (cls === 'interactive') return start(cmd, args);
-  if (
-    cls === 'background' &&
-    platform === 'darwin' &&
-    (deps.exists ?? fs.existsSync)(TASKPOLICY)
-  ) {
-    note(cmd, cls, 'taskpolicy');
+  const name = path.basename(cmd);
+  if (platform === 'darwin' && (deps.exists ?? fs.existsSync)(TASKPOLICY)) {
+    note(name, cls, 'taskpolicy');
     return start(TASKPOLICY, ['-b', cmd, ...args]);
   }
   const child = start(cmd, args);
-  const prio =
-    cls === 'host'
-      ? os.constants.priority.PRIORITY_BELOW_NORMAL
-      : os.constants.priority.PRIORITY_LOW;
-  note(cmd, cls, 'setPriority');
-  demote((child as { pid?: number } | undefined)?.pid, prio, deps);
+  note(name, cls, 'setPriority');
+  demote(
+    (child as { pid?: number } | undefined)?.pid,
+    os.constants.priority.PRIORITY_LOW,
+    deps,
+  );
   return child;
 }
 
 /** Extension hosts are Electron utility processes we don't spawn ourselves:
  *  demote on their 'spawn' event. */
 export function demoteHost(pid: number | undefined, deps: PriorityDeps = {}): void {
+  if (pid === undefined) return;
+  note('extension-host', 'below-normal', 'setPriority');
   demote(pid, os.constants.priority.PRIORITY_BELOW_NORMAL, deps);
 }
 ```
 
-Note the log-once test expects no line for the host test (each test resets). The `host` path logs `via setPriority`; that is fine.
 
 - [ ] **Step 4: Run — expect PASS**
 
@@ -449,10 +460,11 @@ git commit -F /tmp/msg-t2 -- src/main/core/child-priority.ts src/main/core/__tes
 - Modify: `src/shared/extension-rpc.ts:29` (`PLATFORM_API_VERSION`)
 - Modify: `src/main/core/engine/engine.ts` (running map type ~510, `run()` ~966 and ~1099-1117, handle ~1229, return-type intersection ~400, engine object)
 - Modify: `src/main/core/boot.ts` (`CorePlatform`, `bootCore`, `backgroundLaneState`, `backgroundLaneOpen`, new `takeLaneWake`)
-- Test: `src/main/core/__tests__/boot-lane.test.ts`, `src/main/core/engine/__tests__/engine.test.ts`
+- Modify: `docs/architecture/extension-platform.md:82` (the `inference` row: lane contract)
+- Test: `src/main/core/__tests__/boot-lane.test.ts`, `src/main/core/engine/__tests__/engine.test.ts`, `src/main/workers/__tests__/redrive.test.ts`, `src/main/workers/__tests__/attach-bundled-workers.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1 `HostFacts`, `LlmAccel`, `hostBudget`, `readHostFacts`, `describeHost`.
+- Consumes: Task 1 `HostFacts`, `LlmAccel`, `hostBudget`, `readHostFacts`, `describeHost`; Task 2 `setChildPriorityLog`.
 - Produces: `LaneState | 'until-synced'`; `engine.syncing(): boolean`; `CorePlatform.host: HostFacts`; `CorePlatform.llmAccel: () => LlmAccel | null` (assignable; main.ts binds it in Task 5); `takeLaneWake(platform): boolean`.
 
 - [ ] **Step 1: Failing tests**
@@ -545,6 +557,9 @@ In `src/main/core/engine/__tests__/engine.test.ts` add a `describe('syncing()')`
 6. Backfill batch committed, then `engine.pause(id)` → `false`.
 7. Stream ends after a backfill batch (loop settles) → `false`.
 8. A delayed commit: hold the store's `commit` promise for a backfill batch; before releasing → `false`; after → `true`.
+9. Backfill batch committed, then a `live` batch committed → `false` (backfill → live clears it).
+10. Backfill batch committed, then a `live` batch whose commit is held → stays `true` until it resolves; if that `live` commit rejects → stays `true` (previous value kept) until the loop's error handling settles it.
+11. Backfill batch committed, then the source throws an `auth`-coded error (→ `'needsReauth'`) → `false`; a non-auth error that exhausts retries (→ `'error'`) → `false`.
 
 - [ ] **Step 2: Run — expect FAIL**
 
@@ -648,7 +663,8 @@ and widen its type annotation to `Handle & { active(): boolean; syncing(): boole
 
 ```ts
   const host = readHostFacts();
-  sink.log('host', 'info', describeHost(host));
+  // accel is detected lazily by the local-llm provider; unknown at boot.
+  sink.log('host', 'info', describeHost(host, null));
   setChildPriorityLog((msg) => sink.log('priority', 'info', msg));
 ```
 
@@ -738,18 +754,26 @@ export function takeLaneWake(platform: CorePlatform): boolean {
 }
 ```
 
-- Any other test fixture that builds a `CorePlatform` and now fails typecheck on missing `host`/`llmAccel`: add `host: readHostFacts({ platform: 'darwin', cores: 8, totalMemBytes: 16 * 1024 ** 3 })` and `llmAccel: () => null` (find them with `npx tsc -p tsconfig.typecheck.json`).
+- **Untyped `CorePlatform` stubs** reach the policy at runtime and are invisible to tsc (cast objects). Add to both `src/main/workers/__tests__/redrive.test.ts` (`makePlatform`, ~13) and `src/main/workers/__tests__/attach-bundled-workers.test.ts` (`makePlatform`, ~39-47):
+
+```ts
+    host: { platform: 'darwin', arch: 'arm64', cores: 8, totalMemBytes: 16 * 1024 ** 3 },
+    llmAccel: () => null,
+```
+and add `syncing: () => false,` to their `engine` object (redrive's stub needs an `engine` key if it lacks `syncing`). Typed fixtures that fail `tsc` on missing `host`/`llmAccel` get the same two fields.
+
+- `docs/architecture/extension-platform.md:82`: in the `inference` row, after "(the background lane's current `LaneState`, …)" add: "**Contract (platform 2.8.0): only `'open'` permits background admission — every other value, including values added later, means closed.** `'until-synced'` (2.8.0) = a weak host while an account is still in its first sync." and change "the first time either of its two triggers runs" to "the first time its trigger runs (main.ts's 5 s publisher)".
 
 - [ ] **Step 4: Run — expect PASS**
 
-Run: `npx jest src/main/core/__tests__/boot-lane.test.ts src/main/core/engine/__tests__/engine.test.ts`
-Then: `npx tsc -p tsconfig.typecheck.json` (renderer `pausedLine` may now be flagged non-exhaustive only if it uses `never` checks — it uses `default:`, so it compiles; Task 8 adds the case).
+Run: `npx jest src/main/core/__tests__/boot-lane.test.ts src/main/core/engine/__tests__/engine.test.ts src/main/workers/__tests__`
+Then: `npx tsc -p tsconfig.typecheck.json` (renderer `pausedLine` uses `default:`, so it compiles; Task 8 adds the case).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 printf 'feat(core): until-synced lane on weak hosts + engine.syncing() (#145)\n' > /tmp/msg-t3
-git commit -F /tmp/msg-t3 -- src/shared/contracts.ts src/shared/extension-rpc.ts src/main/core/engine/engine.ts src/main/core/boot.ts src/main/core/__tests__/boot-lane.test.ts src/main/core/engine/__tests__/engine.test.ts
+git commit -F /tmp/msg-t3 -- src/shared/contracts.ts src/shared/extension-rpc.ts src/main/core/engine/engine.ts src/main/core/boot.ts src/main/core/__tests__/boot-lane.test.ts src/main/core/engine/__tests__/engine.test.ts src/main/workers/__tests__/redrive.test.ts src/main/workers/__tests__/attach-bundled-workers.test.ts docs/architecture/extension-platform.md
 ```
 (plus any fixture files Step 3 touched — list them explicitly.)
 
@@ -774,28 +798,96 @@ git commit -F /tmp/msg-t3 -- src/shared/contracts.ts src/shared/extension-rpc.ts
 
 - [ ] **Step 1: Failing tests**
 
-In `src/main/core/__tests__/inference.test.ts` replace the `setBackgroundOpen`/`onLaneChange` tests (~138-165) with:
+In `src/main/core/__tests__/inference.test.ts` (helpers: `noopLogs`, `provider(id, kinds, tag)`) replace the three tests at ~134-165 ("background lane fails fast…", "interactive lane flows…", "notifies lane subscribers…") with:
 
 ```ts
   it('background calls are refused until a lane policy is bound', async () => {
-    const plane = createInference(sink);
-    plane.register(fakeProvider());           // use the file's existing provider fake
-    await expect(plane.complete('x', { lane: 'background' })).rejects.toBeInstanceOf(LaneClosedError);
-    await expect(plane.complete('x', { lane: 'interactive' })).resolves.toBeDefined();
+    const plane = createInference(noopLogs);
+    plane.register(provider('ocr', ['read'], 'ocr'));
+    await expect(
+      plane.read(new Uint8Array([1]), { lane: 'background' }),
+    ).rejects.toThrow(LaneClosedError);
+    await expect(plane.read(new Uint8Array([1]))).resolves.toBe('ocr:read');
   });
 
   it('gate reads the policy on every call (no cached boolean)', async () => {
-    const plane = createInference(sink);
-    plane.register(fakeProvider());
+    const plane = createInference(noopLogs);
+    plane.register(provider('ocr', ['read'], 'ocr'));
     let open = false;
     plane.setLanePolicy(() => open);
-    await expect(plane.complete('x', { lane: 'background' })).rejects.toBeInstanceOf(LaneClosedError);
+    await expect(
+      plane.read(new Uint8Array([1]), { lane: 'background' }),
+    ).rejects.toThrow(LaneClosedError);
     open = true;
-    await expect(plane.complete('x', { lane: 'background' })).resolves.toBeDefined();
+    await expect(
+      plane.read(new Uint8Array([1]), { lane: 'background' }),
+    ).resolves.toBe('ocr:read');
+  });
+
+  it('interactive calls flow while the policy says closed', async () => {
+    const plane = createInference(noopLogs);
+    plane.register(provider('ocr', ['read'], 'ocr'));
+    plane.setLanePolicy(() => false);
+    await expect(plane.read(new Uint8Array([1]))).resolves.toBe('ocr:read');
   });
 ```
 
-(Use the provider fake and call shape already used in that file; keep the assertions.) Replace every other `plane.setBackgroundOpen(true|false)` in `inference.test.ts` (~738) and `inference-active-calls.test.ts` (~91) with `plane.setLanePolicy(() => true|false)`; where a test exercised background calls relying on the old default-open, add `plane.setLanePolicy(() => true)` after construction.
+In the `setup()` helper (~644) add `plane.setLanePolicy(() => true);` right after `const plane = createInference(fakeLogs(), { generationSeed: 1 });` (it feeds the background `seeWithMeta` test ~738), and replace `planeRef!.setBackgroundOpen(false);` (~738) with `planeRef!.setLanePolicy(() => false);`. In `inference-active-calls.test.ts` (~91) replace `plane.setBackgroundOpen(false)` with `plane.setLanePolicy(() => false)`; if any test there makes a background call expecting success, bind `() => true` first.
+
+Connected wake tests — add to `src/main/core/__tests__/boot-lane.test.ts` (reuse its `platform()` fixture; import `createInference`, `LaneClosedError` from `../inference` and `createProcessingStatus` from `../processing-status`):
+
+```ts
+describe('refusal → pending wake → publisher tick', () => {
+  function status() {
+    const wakeWorkers = jest.fn(async () => {});
+    const s = createProcessingStatus({
+      countWaiting: async () => 0,
+      providers: () => [],
+      activeCalls: { list: () => [], onChange: () => () => {} },
+      wakeWorkers,
+      patch: () => {},
+      warn: () => {},
+    });
+    return { s, wakeWorkers };
+  }
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  it('an inference-admission refusal before the first tick wakes on the first open tick', async () => {
+    let syncing = true;
+    const p = platform({ weak: true });
+    (p as any).engine = { syncing: () => syncing };
+    const plane = createInference({ log: () => {} } as never);
+    plane.register({ id: 'x', supports: ['read'], status: () => 'ready', handle: async () => 't' } as never);
+    plane.setLanePolicy(() => backgroundLaneOpen(p));
+    await expect(plane.read(new Uint8Array([1]), { lane: 'background' })).rejects.toThrow(LaneClosedError);
+    syncing = false; // sync finished before any tick ran
+    const { s, wakeWorkers } = status();
+    const lane = backgroundLaneState(p);
+    s.tick(lane, lane === 'open' && takeLaneWake(p));
+    await flush();
+    expect(wakeWorkers).toHaveBeenCalledTimes(1);
+  });
+
+  it('a worker pre-flight refusal between two open ticks wakes on the next tick', async () => {
+    let syncing = false;
+    const p = platform({ weak: true });
+    (p as any).engine = { syncing: () => syncing };
+    const { s, wakeWorkers } = status();
+    s.tick(backgroundLaneState(p), takeLaneWake(p)); // open, nothing pending
+    syncing = true;
+    expect(backgroundLaneOpen(p)).toBe(false);     // worker laneOpen() refuses
+    syncing = false;                                // …and sync ends before the next tick
+    const lane = backgroundLaneState(p);
+    s.tick(lane, lane === 'open' && takeLaneWake(p));
+    await flush();
+    expect(wakeWorkers).toHaveBeenCalledTimes(1);
+  });
+});
+```
+
+(Adjust the `createInference` logs argument to the `noopLogs` shape exported/used by `inference.test.ts`, and the provider literal to the `InferenceProvider` shape — copy `provider()` from that file.)
 
 In `src/main/core/__tests__/processing-status.test.ts` add:
 
@@ -816,25 +908,24 @@ test('the very first tick wakes when a wake is pending (closure before the first
 });
 ```
 
-In `src/main/platform/__tests__/extension-platform.test.ts` rewrite the test at ~1724 ("re-registers worker and lane lifecycle listeners after stop/start") to drop every `onLaneChange`/`laneListeners` line, keeping the worker-listener assertions. Delete `onLaneChange: () => () => {},` from the deps fixtures in `extension-platform.test.ts` (~200, ~1646, ~1878), `extension-e2e.test.ts` (~82, ~262, ~451), `attention-e2e.test.ts` (~85), `extension-outbound-e2e.test.ts` (~135), `ui-capability-e2e.test.ts` (~87). Add one test using the file's `makePlatform`:
+In `src/main/platform/__tests__/extension-platform.test.ts` rewrite the test at ~1724 ("re-registers worker and lane lifecycle listeners after stop/start") to drop every `onLaneChange`/`laneListeners` line, keeping the worker-listener assertions. Delete `onLaneChange: () => () => {},` from the deps fixtures in `extension-platform.test.ts` (~200, ~1646, ~1878), `extension-e2e.test.ts` (~82, ~262, ~451), `attention-e2e.test.ts` (~85), `extension-outbound-e2e.test.ts` (~135), `ui-capability-e2e.test.ts` (~87). In the existing `describe('createLaneGate')` (~60) add:
 
 ```ts
-  it('refreshLane is the only platform.lane trigger and emits reason-only changes', async () => {
+  it('emits a reason-only change between two closed states exactly once', () => {
     let state: LaneState = 'battery';
-    const p = makePlatform({ laneState: () => state });
-    const seen: LaneState[] = [];
-    // subscribe to platform.lane via the bus the same way the existing lane tests do
-    ...
-    p.refreshLane(); state = 'until-synced'; p.refreshLane(); p.refreshLane();
-    expect(seen).toEqual(['battery', 'until-synced']);
+    const emit = jest.fn();
+    const gate = createLaneGate(() => state, emit, jest.fn());
+    gate.check();
+    state = 'until-synced';
+    gate.check();
+    gate.check();
+    expect(emit.mock.calls.map((c) => c[0])).toEqual(['battery', 'until-synced']);
   });
 ```
 
-(Follow the existing `platform.lane` subscription pattern in that file for the `...` line — search for `'platform.lane'`.)
-
 - [ ] **Step 2: Run — expect FAIL**
 
-Run: `npx jest src/main/core/__tests__/inference.test.ts src/main/core/__tests__/processing-status.test.ts`
+Run: `npx jest src/main/core/__tests__/inference.test.ts src/main/core/__tests__/processing-status.test.ts src/main/core/__tests__/boot-lane.test.ts`
 
 - [ ] **Step 3: Implement**
 
@@ -924,13 +1015,15 @@ and `processingStatus.tick(lane);` with `processingStatus.tick(lane, lane === 'o
 - [ ] **Step 4: Run — expect PASS**
 
 Run: `npx jest src/main/core src/main/platform/__tests__/extension-platform.test.ts src/main/platform/__tests__/extension-e2e.test.ts src/main/platform/__tests__/attention-e2e.test.ts src/main/platform/__tests__/extension-outbound-e2e.test.ts src/main/platform/__tests__/ui-capability-e2e.test.ts`
-Then: `npx tsc -p tsconfig.typecheck.json` and `git grep -n "setBackgroundOpen\|onLaneChange" -- src` → no matches.
+Then: `npx tsc -p tsconfig.typecheck.json` and `git grep -n "setBackgroundOpen\|onLaneChange" -- src docs/architecture` → no matches.
+
+Coverage note: the `bootCore` bind itself has no unit test (bootCore needs a real DB worker); the connected tests above bind the same `() => backgroundLaneOpen(p)` closure by hand.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 printf 'refactor(core): admission reads the lane policy; tick is the single publisher (#145)\n' > /tmp/msg-t4
-git commit -F /tmp/msg-t4 -- <every file listed in this task>
+git commit -F /tmp/msg-t4 -- <every file listed in this task, plus src/main/core/__tests__/boot-lane.test.ts>
 ```
 
 ---
@@ -940,7 +1033,8 @@ git commit -F /tmp/msg-t4 -- <every file listed in this task>
 **Files:**
 - Modify: `src/main/providers/local-llm/provider.ts` (deps ~39-53, `capability` ~64, `makeServer` default ~59, `ensureServer` ~281-291, interface: add `accel()`)
 - Modify: `src/main/providers/local-llm/capability.ts` (delete `readHostProbes`; keep `HostProbes` type + `checkCapability`)
-- Modify: `src/main/providers/local-llm/backend.ts` (`detectHostBackend` takes `totalMemBytes`)
+- Modify: `src/main/providers/local-llm/index.ts:5` (drop the `readHostProbes` re-export)
+- Modify: `src/main/providers/local-llm/backend.ts` (`detectHostBackend` takes required `platform` + `totalMemBytes`; no `os` import)
 - Modify: `src/main/providers/index.ts` (pass `host`)
 - Modify: `src/main/main.ts` (bind `p.llmAccel`)
 - Test: `src/main/providers/local-llm/__tests__/server.test.ts`, the local-llm provider test file (find with `ls src/main/providers/local-llm/__tests__`)
@@ -951,41 +1045,53 @@ git commit -F /tmp/msg-t4 -- <every file listed in this task>
 
 - [ ] **Step 1: Failing tests**
 
-`server.test.ts`, inside `describe('LlamaServer launch args')`:
+`server.test.ts`, inside `describe('LlamaServer launch args')` (existing pattern: `capture()` + `(srv as any).launch()`):
 
 ```ts
   it('appends extraArgs after the fixed args', () => {
-    const { spawnFn, calls } = capture();          // the file's existing spawn capture
-    const s = new LlamaServer({ ...BASE, spawnFn, extraArgs: ['-t', '2', '-tb', '2', '--poll', '0'] });
-    void s.start().catch(() => {});
+    const { calls, spawnFn } = capture();
+    const srv = new LlamaServer({
+      binaryPath: 'unused',
+      modelPath: 'm',
+      mmprojPath: 'mm',
+      gpuLayers: 999,
+      log: noopLog,
+      spawnFn,
+      extraArgs: ['-t', '2', '-tb', '2', '--poll', '0'],
+    });
+    (srv as any).launch();
     expect(calls[0].args.slice(-6)).toEqual(['-t', '2', '-tb', '2', '--poll', '0']);
+    expect(calls[0].args).not.toContain('-np');
   });
 ```
 
-Provider test (`local-llm` provider tests), new cases:
+`local-llm/__tests__/provider.test.ts`: delete the `mockCapability.readHostProbes.mockReturnValue({...})` block in `beforeEach` (~84-88); add to `makeDeps`'s `deps` a default `host: { platform: 'darwin' as NodeJS.Platform, arch: 'arm64', cores: 10, totalMemBytes: 64 * 1024 ** 3 },`. New cases (use the file's existing install-then-handle flow that other tests use to reach `makeServer`, e.g. the test around ~473):
 
 ```ts
 it('starts llama-server with -t/-tb = backgroundThreads and --poll 0, never -np', async () => {
   const seen: string[][] = [];
+  const { deps, server } = makeDeps({ modelsDir: tmpDir });
   const provider = createLocalLlmProvider({
-    ...baseDeps,                                   // the file's existing deps factory
-    host: { platform: 'darwin', arch: 'arm64', cores: 10, totalMemBytes: 32 * 1024 ** 3 },
-    makeServer: (a) => { seen.push(a.extraArgs ?? []); return fakeServer(); },
+    ...deps,
+    makeServer: (a: { extraArgs?: string[] }) => {
+      seen.push(a.extraArgs ?? []);
+      return server;
+    },
   });
-  await provider.handle({ kind: 'complete', payload: { prompt: 'x' }, lane: 'interactive' } as never);
+  /* install + one interactive handle(), exactly as the existing makeServer tests do */
   expect(seen[0]).toEqual(['-t', '5', '-tb', '5', '--poll', '0']);
-  expect(seen[0]).not.toContain('-np');
 });
 
-it('accel() is null before detection and the backend accel after', async () => {
-  const provider = createLocalLlmProvider({ ...baseDeps, detect: async () => ({ accel: 'cpu', capacityBytes: 1 }) });
+it('accel() is null before detection and the detected accel after', async () => {
+  const { deps } = makeDeps({ modelsDir: tmpDir, detect: async () => ({ accel: 'cpu' as const, capacityBytes: 1 }) });
+  const provider = createLocalLlmProvider(deps);
   expect(provider.accel()).toBeNull();
-  await provider.handle({ kind: 'complete', payload: { prompt: 'x' }, lane: 'interactive' } as never);
+  /* install + one handle(), as above */
   expect(provider.accel()).toBe('cpu');
 });
 ```
 
-(Adapt the `handle` payload and fakes to the shapes that file already uses.)
+Write the `/* … */` lines by copying the concrete install/handle sequence from the existing test that asserts `makeServer` was called (~473-508). Update `capability`'s own tests to pass probes explicitly, and any `detectHostBackend` test to pass `{ platform, totalMemBytes }`.
 
 - [ ] **Step 2: Run — expect FAIL**
 
@@ -1013,9 +1119,9 @@ export function llamaThreadArgs(host: HostFacts, accel: LlmAccel): string[] {
 - in `ensureServer`'s `makeServer({...})` add `extraArgs: llamaThreadArgs(host, backend.accel),`.
 - returned object: `accel: () => backend?.accel ?? null,`; interface `LocalLlmProvider`: `/** Detected acceleration; null until the first detect(). */ accel(): LlmAccel | null;`
 
-`backend.ts` `detectHostBackend` opts: add `totalMemBytes?: number;` and use `const totalMemBytes = opts?.totalMemBytes ?? os.totalmem();`.
+`backend.ts`: `detectHostBackend(opts: { platform: string; totalMemBytes: number; listDevices?(): Promise<string> })` — required facts, `os` import removed (host-profile is the only hardware reader).
 
-`capability.ts`: delete `readHostProbes` and make `checkCapability(probes: HostProbes)` take a required argument; remove the now-unused `os` import. Fix its tests to pass probes explicitly.
+`capability.ts`: delete `readHostProbes` and make `checkCapability(probes: HostProbes)` take a required argument; remove the now-unused `os` import. `index.ts`: drop `readHostProbes` from the re-export.
 
 `providers/index.ts`: pass `host: platform.host` to `createLocalLlmProvider`.
 
@@ -1023,7 +1129,7 @@ export function llamaThreadArgs(host: HostFacts, accel: LlmAccel): string[] {
 
 - [ ] **Step 4: Run — expect PASS**
 
-Run: `npx jest src/main/providers/local-llm` then `npx tsc -p tsconfig.typecheck.json`.
+Run: `npx jest src/main/providers/local-llm src/main/core/__tests__/boot-lane.test.ts` then `npx tsc -p tsconfig.typecheck.json`.
 
 - [ ] **Step 5: Commit**
 
@@ -1053,15 +1159,12 @@ git commit -F /tmp/msg-t5 -- src/main/providers/local-llm src/main/providers/ind
 ```ts
   it('a background run execs through taskpolicy with -t (darwin)', async () => {
     const { spawnFn, child, argv } = fakeSpawn();
-    const cmds: string[] = [];
-    const wrapped: SpawnFn = (cmd, a, o) => { cmds.push(cmd); return spawnFn(cmd, a, o); };
-    const p = runWhisperCli({ ...ARGS, spawnFn: wrapped, priority: 'background', threads: 2, platform: 'darwin', taskpolicyExists: () => true });
+    const p = runWhisperCli({ ...ARGS, spawnFn, priority: 'background', threads: 2, platform: 'darwin', taskpolicyExists: () => true });
     child.emit('close', 0, null);
     await p;
-    expect(cmds[0]).toBe('/usr/sbin/taskpolicy');
-    expect(argv[0].slice(0, 2)).toEqual(['-b', ARGS.binaryPath]);
-    const t = argv[0].indexOf('-t');
-    expect(argv[0][t + 1]).toBe('2');
+    // fakeSpawn records [cmd, ...args]
+    expect(argv[0].slice(0, 3)).toEqual(['/usr/sbin/taskpolicy', '-b', ARGS.binaryPath]);
+    expect(argv[0][argv[0].indexOf('-t') + 1]).toBe('2');
   });
 
   it('an interactive run is unchanged (no wrapper, no -t)', async () => {
@@ -1069,8 +1172,8 @@ git commit -F /tmp/msg-t5 -- src/main/providers/local-llm src/main/providers/ind
     const p = runWhisperCli({ ...ARGS, spawnFn });
     child.emit('close', 0, null);
     await p;
+    expect(argv[0][0]).toBe(ARGS.binaryPath);
     expect(argv[0]).not.toContain('-t');
-    expect(argv[0][0]).not.toBe('-b');
   });
 
   it('taskpolicy exit 66 (binary missing) is a plain Error, not AsrInputRejectedError', async () => {
@@ -1101,7 +1204,7 @@ git commit -F /tmp/msg-t5 -- src/main/providers/local-llm src/main/providers/ind
     });
     const provider = createLocalAsrProvider(makeDeps({ asrModelsDir: tmpDir, filesPresent: () => true, runCli }));
     const bg = provider.transcribeFile('/tmp/a.wav', { format: 'wav' });
-    await flushMicrotasks();
+    await tick();
     const hear = provider.handle({ kind: 'hear', payload: { audio: new Uint8Array(4) }, lane: 'interactive' } as never);
     await expect(bg).rejects.toThrow('SIGTERM');
     await expect(hear).resolves.toBe('meeting text');
@@ -1112,7 +1215,7 @@ git commit -F /tmp/msg-t5 -- src/main/providers/local-llm src/main/providers/ind
   it('a queued interactive job overtakes queued background jobs', async () => { /* bg1 running, bg2 queued, then interactive → order bg1(aborted), interactive, bg2 */ });
 
   it('background jobs pass threads = min(4, backgroundThreads)', async () => {
-    const runCli = jest.fn(async () => 'x');
+    const runCli = jest.fn(async (_a: unknown) => 'x');
     const provider = createLocalAsrProvider(makeDeps({
       asrModelsDir: tmpDir, filesPresent: () => true, runCli,
       host: { platform: 'darwin', arch: 'arm64', cores: 16, totalMemBytes: 32 * 1024 ** 3 },
@@ -1160,10 +1263,10 @@ Run: `npx jest src/main/providers/local-asr`
 ```
 
 `provider.ts`:
-- deps: add `host?: HostFacts;`; replace the probes default (`totalMemBytes: os.totalmem()` ~91) with `const host = deps.host ?? readHostFacts(); const probes = deps.probes ?? { platform: host.platform, totalMemBytes: host.totalMemBytes };` (keep `deps.probes` as the test override).
+- deps: replace `probes?: { platform; totalMemBytes }` with `host?: HostFacts;` and the probes default (~89-91) with `const host = deps.host ?? readHostFacts();`; use `host.platform` / `host.totalMemBytes` where `probes.*` was used (~97-104). One host-fact channel. In `provider.test.ts` change `makeDeps`'s `probes: {...}` to `host: { platform: 'darwin' as NodeJS.Platform, arch: 'arm64', cores: 8, totalMemBytes: 32 * 1024 ** 3 }` and every per-test `probes: { platform, totalMemBytes }` override (~85, ~243) to `host: { platform, arch: 'x64', cores: 8, totalMemBytes }`.
 - `interface QueuedJob { cls: 'interactive' | 'background'; run(): Promise<void>; reject(e: Error): void; }`
 - state: `let activeCls: QueuedJob['cls'] | null = null;`
-- `pump`: after `const job = queue.shift();` set `activeCls = job.cls;`; in the `finally` set `activeCls = null;`.
+- `pump`: after `if (!job) return;` (NOT before it) set `activeCls = job.cls;`; in the `finally` set `activeCls = null;`.
 - `runTranscribe(p, opts, vadModelPath, which = defaultModel, cls: QueuedJob['cls'] = 'interactive')`; the queued object gets `cls`; enqueue with
 
 ```ts
@@ -1189,7 +1292,7 @@ Run: `npx jest src/main/providers/local-asr`
 
 - [ ] **Step 4: Run — expect PASS**
 
-Run: `npx jest src/main/providers/local-asr src/main/workers/audio`
+Run: `npx jest src/main/providers/local-asr src/main/workers/audio` then `npx tsc -p tsconfig.typecheck.json`
 
 - [ ] **Step 5: Commit**
 
@@ -1203,7 +1306,9 @@ git commit -F /tmp/msg-t6 -- src/main/providers/local-asr src/main/providers/ind
 ### Task 7: OCR helpers, PDF raster, afconvert, audio worker host facts
 
 **Files:**
-- Modify: `src/main/providers/apple-vision/vision-helper.ts` (`ExecFileFn`, `VisionHelper`, `runJson`, `ocrImage`, `rasterizePdf`; new `HelperTimeoutError`)
+- Modify: `src/main/workers/vision/rasterize.ts` (new `HelperTimeoutError`, beside `Rasterizer`)
+- Modify: `src/main/providers/apple-vision/vision-helper.ts` (`ExecFileFn`, `VisionHelper`, `runJson`, `ocrImage`, `rasterizePdf`)
+- Modify: `src/main/workers/audio/audio-worker.ts` (`totalMemBytes` required, `os` import removed)
 - Modify: `src/main/providers/apple-vision/provider.ts:~36`
 - Modify: `src/main/providers/windows-ocr/windows-ocr-helper.ts` (`run`, `ocrImage`)
 - Modify: `src/main/providers/windows-ocr/provider.ts:~58`
@@ -1214,11 +1319,11 @@ git commit -F /tmp/msg-t6 -- src/main/providers/local-asr src/main/providers/ind
 
 **Interfaces:**
 - Consumes: `launch`, `ChildClass` (Task 2).
-- Produces: `HelperTimeoutError`; `VisionHelper.ocrImage(bytes, mime?, cls?)`; Windows helper `ocrImage(bytes, mime?, cls?)`.
+- Produces: `HelperTimeoutError` (from `workers/vision/rasterize.ts`); `VisionHelper.ocrImage(bytes, mime?, cls?)`; Windows helper `ocrImage(bytes, mime?, cls?)`.
 
 - [ ] **Step 1: Failing tests**
 
-`vision-helper.test.ts` (it injects `execFileFn`): add
+`vision-helper.test.ts` (it injects `execFileFn`): pass `taskpolicyExists: () => false` in every EXISTING `makeVisionHelper(…, { execFileFn: exec })` call (~33, 65, 87, 104, 121) so their `seenArgs[0] === 'rasterize'|'ocr'` assertions stay host-independent. Then add
 
 ```ts
 it('background OCR and every rasterize exec through taskpolicy -b on darwin', async () => {
@@ -1240,9 +1345,18 @@ it('a helper timeout rejects with HelperTimeoutError', async () => {
 
 `vision-worker.test.ts`: a rasterizer whose `pdfToPngs` rejects with `new HelperTimeoutError('kia-vision rasterize timed out after 120000ms')` → `work()` resolves `'defer'`; one rejecting with a plain `Error('corrupt')` → still rejects (unchanged).
 
-`windows-ocr.test.ts`: if it can inject `execFile`, assert a `'background'` call demotes (setPriority called with `PRIORITY_LOW`); otherwise add an injectable `execFileFn` + `setPriority` seam to `makeWindowsOcrHelper(exe, log, opts)` (`opts.execFileFn`, `opts.setPriority`) and test through it.
+`windows-ocr.test.ts`: add a test through the new `opts.setPriority` seam (the existing tests use a real fake exe and stay unchanged):
 
-`transcode.test.ts`: if the default runner is untestable on Linux CI, add only a unit test that `runAfconvert`'s command resolution uses `/usr/bin/afconvert` via an exported `AFCONVERT = '/usr/bin/afconvert'` constant.
+```ts
+  it('a background OCR run is demoted to PRIORITY_LOW', async () => {
+    const setPriority = jest.fn();
+    await makeWindowsOcrHelper(FAKE, log, { setPriority }).ocrImage(new Uint8Array([1]), 'image/png', 'background');
+    expect(setPriority).toHaveBeenCalledWith(expect.any(Number), os.constants.priority.PRIORITY_LOW);
+  });
+```
+(use the same FAKE/arrangement as the existing passing `ocrImage` test).
+
+`audio-worker.test.ts`: every `createAudioWorker`/`setup` call already passes or defaults `totalMemBytes`; make the test default explicit where it relied on `os.totalmem()`.
 
 - [ ] **Step 2: Run — expect FAIL**
 
@@ -1250,7 +1364,7 @@ Run: `npx jest src/main/providers/apple-vision src/main/providers/windows-ocr sr
 
 - [ ] **Step 3: Implement**
 
-`vision-helper.ts`:
+`workers/vision/rasterize.ts` (beside `Rasterizer`; `vision-helper.ts` already imports from here):
 
 ```ts
 /** A helper ran past its deadline. Under background priority this is load,
@@ -1262,6 +1376,8 @@ export class HelperTimeoutError extends Error {
   }
 }
 ```
+
+`vision-helper.ts` (import `HelperTimeoutError` from `../../workers/vision/rasterize`, `launch`/`ChildClass` from `../../core/child-priority`):
 
 - `ExecFileFn` return type `void` → `{ pid?: number } | void`.
 - `VisionHelper.ocrImage(bytes: Uint8Array, mime?: string, cls?: ChildClass): Promise<string>;` (doc: "`cls` follows the request lane; rasterizePdf is always background (vision worker only)").
@@ -1277,12 +1393,12 @@ export class HelperTimeoutError extends Error {
         { platform: this.o.platform, exists: this.o.taskpolicyExists },
       );
 ```
-  (hoist the existing callback into `const cb = (err, stdout, stderr) => {...}`) and the timeout branch throws `new HelperTimeoutError(\`kia-vision ${args[0]} timed out after ${timeoutMs}ms\`)`.
+  hoisting the existing callback into `const cb: Parameters<ExecFileFn>[3] = (err, stdout, stderr) => { … };` inside the `new Promise` executor; the timeout branch becomes `reject(new HelperTimeoutError(\`kia-vision ${args[0]} timed out after ${timeoutMs}ms\`));` (reject, never throw — the callback is asynchronous).
 - `ocr(imagePath, cls)` → `runJson(['ocr', imagePath], cls)`; `rasterize(...)` → `runJson(args, 'background')`; `ocrImage(bytes, mime, cls = 'interactive')` passes `cls`.
 
 `apple-vision/provider.ts` and `windows-ocr/provider.ts` handle: `return deps.helper.ocrImage(image, mime, req.lane === 'background' ? 'background' : 'interactive');`
 
-`windows-ocr-helper.ts`: `opts` add `execFileFn?`, `setPriority?`; `run(args, cls: ChildClass = 'interactive')` wraps its `execFile(exe, args, {...}, cb)` in `launch(cls, exe, args, (c, a) => (opts.execFileFn ?? execFile)(c, a, {...}, cb), { setPriority: opts.setPriority })`; `ocrImage(bytes, mime = 'image/png', cls: ChildClass = 'interactive')` calls `run(['ocr', file], cls)`; `selftest` stays interactive.
+`windows-ocr-helper.ts`: `opts` add `setPriority?: (pid: number, p: number) => void`; `run(args, cls: ChildClass = 'interactive')` wraps its existing `execFile(exe, args, {...}, cb)` as `launch(cls, exe, args, (c, a) => execFile(c, a, {...}, cb), { platform: 'win32', setPriority: opts.setPriority })` — `platform: 'win32'` is fixed because this helper only runs on Windows, which also keeps the test host-independent; `ocrImage(bytes, mime = 'image/png', cls: ChildClass = 'interactive')` calls `run(['ocr', file], cls)`; `selftest` stays interactive.
 
 `vision-worker.ts` (~309) replace
 
@@ -1305,7 +1421,7 @@ with
       }
     }
 ```
-(import `HelperTimeoutError` from `../../providers/apple-vision/vision-helper` and `type RasterResult` from `./rasterize`).
+(import `HelperTimeoutError` and `type RasterResult` from `./rasterize`).
 
 `transcode.ts`: `export const AFCONVERT = '/usr/bin/afconvert';` and `runAfconvert` spawns via
 ```ts
@@ -1314,11 +1430,11 @@ with
     );
 ```
 
-`workers/index.ts`: pass `totalMemBytes: platform.host.totalMemBytes` into `createAudioWorker({...})`.
+`workers/index.ts`: pass `totalMemBytes: platform.host.totalMemBytes` into `createAudioWorker({...})`. `audio-worker.ts`: `totalMemBytes: number` (required) and `const totalMem = deps.totalMemBytes;`; remove `import os`.
 
 - [ ] **Step 4: Run — expect PASS**
 
-Run: `npx jest src/main/providers/apple-vision src/main/providers/windows-ocr src/main/workers`
+Run: `npx jest src/main/providers/apple-vision src/main/providers/windows-ocr src/main/workers` then `npx tsc -p tsconfig.typecheck.json`
 
 - [ ] **Step 5: Commit**
 
@@ -1383,7 +1499,7 @@ Run: `npx jest src/main/platform/__tests__/transport.test.ts src/renderer/screen
       return 'Paused — waits until your accounts finish syncing.';
 ```
 
-- [ ] **Step 4: Run — expect PASS** (same command)
+- [ ] **Step 4: Run — expect PASS** (same command), then `npx tsc -p tsconfig.typecheck.json`
 
 - [ ] **Step 5: Commit**
 
@@ -1399,10 +1515,21 @@ git commit -F /tmp/msg-t8 -- src/main/platform/transport.ts src/main/platform/__
 - [ ] **Step 1:** `npx eslint` on every file changed on the branch (`git diff --name-only cc78998f -- '*.ts' '*.tsx' | xargs npx eslint`). Fix findings.
 - [ ] **Step 2:** `npx tsc -p tsconfig.typecheck.json` — clean.
 - [ ] **Step 3:** Full jest: `npx jest` (sequential, alone). Record failures; compare against the same run on `cc78998f` to separate pre-existing reds (run the baseline in `~/work/kcore-setup3`, which is at `cc78998f`). New reds must be fixed.
-- [ ] **Step 4:** `git grep -n "setBackgroundOpen\|onLaneChange\|readHostProbes" -- src` → nothing. `git grep -n "os.totalmem()\|availableParallelism" -- src/main` → only `core/host-profile.ts` (and `backend.ts`'s default parameter fallback).
+- [ ] **Step 4:** `git grep -n "setBackgroundOpen\|onLaneChange\|readHostProbes" -- src` → nothing. `git grep -n "os.totalmem()\|availableParallelism\|os.cpus()" -- src/main ':!*__tests__*'` → only `src/main/core/host-profile.ts`.
 - [ ] **Step 5:** Set the spec status line to `IMPLEMENTED (local, not released)` and commit `docs(spec): background yield implemented (#145)`.
 
-### Task 10 (after the core release — NOT in this branch): overlay copy in alpha-cent
+### Task 10: Live acceptance (before any core release)
+
+Run in a dev app built from this branch (dedicated worktree, never the shared checkout; one profile — do NOT create fresh profiles, see the cert-mint limit). Record results in the spec §5.
+
+- [ ] macOS: during an audio/OCR backfill, `ps -o pid,pri,nice,command | grep -E 'kia-vision|whisper-cli|afconvert|Helper'` shows taskpolicy'd helpers at PRI 4 and extension hosts at nice 10; the log has the `[priority]` and `[host]` lines.
+- [ ] `KIA_HOST_WEAK=1` during a Gmail + Drive first sync: Settings shows "Paused — waits until your accounts finish syncing."; no llama-server process for background work; the lane reopens and deferred OCR/audio start within one tick after the last backfill batch.
+- [ ] A meeting `hear` while a background transcription runs: meeting transcript arrives promptly; the background doc is deferred, not failed, and re-driven later.
+- [ ] Demoted OCR/raster under synthetic load (e.g. `yes > /dev/null` × cores): deadline hits defer, then succeed when idle — no doc ends `failed`.
+- [ ] Record llama-server CPU/RSS during background extraction and interactive local-model latency before/after (Mac; Windows VM if its llama-server launches).
+- [ ] Windows VM: prerequisite — llama-server must launch (`resolveLlamaBinary` vs accel-suffixed vendored dirs); if it doesn't, file it separately and check only Task Manager priorities (Low / Below normal) for OCR and extension hosts.
+
+### Task 11 (after the core release — NOT in this branch): overlay copy in alpha-cent
 
 Runs only after core is released with this branch and `core.lock` in alpha-cent pins it (the `'until-synced'` literal does not typecheck against older core).
 
@@ -1422,4 +1549,4 @@ Runs only after core is released with this branch and `core.lock` in alpha-cent 
   }
 ```
 - Test in `src/__tests__/local-ai-state.test.ts`: `lane: 'until-synced'` → kind `'synced'`, that title.
-- Live checks from the spec §5 (owed): `ps -o pid,pri,nice,command` during audio/OCR backfill (taskpolicy'd helpers PRI 4, hosts nice 10); `KIA_HOST_WEAK=1` first sync shows the until-synced line and no background llama-server; Windows VM Task Manager priorities; interactive model latency before/after; background whisper during a meeting defers, then re-drives.
+- Typecheck + the overlay test, then commit in alpha-cent with the `core.lock` bump.
