@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.103.0](https://github.com/edjafarov/kiagent-core/compare/v0.102.0...v0.103.0) (2026-10-08)
+
+### Features
+
+* **connect:** accounts:add-group runs several sources behind one consent ([0b9105c](https://github.com/edjafarov/kiagent-core/commit/0b9105c73112d63ec01056f4d360d669d24f1f57))
+
 ## [0.102.0](https://github.com/edjafarov/kiagent-core/compare/v0.101.0...v0.102.0) (2026-10-06)
 
 ### Features
