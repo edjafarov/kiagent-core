@@ -68,6 +68,12 @@ const QUERY_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [
     name: 'docs_account_recency',
     sql: `CREATE INDEX docs_account_recency ON documents(account_id, COALESCE(created_at, ingested_at) DESC) WHERE archived_at IS NULL`,
   },
+  // Backs documentPage({afterSeq}) — change followers (kiagent.people) page
+  // by seq; without it every poll sorts the whole documents table.
+  {
+    name: 'docs_seq',
+    sql: `CREATE INDEX docs_seq ON documents(seq)`,
+  },
   // Backs corpusLanguages() (store.ts): SELECT DISTINCT languages walks this
   // small index instead of scanning every document. The distinct set is tiny
   // (a few dozen JSON arrays), and the cache is recomputed after each commit.

@@ -276,6 +276,10 @@ export interface Query {
   document(id: DocumentId): Promise<Document | null>;
   documentPage?(input: {
     afterId?: DocumentId;
+    /** Change cursor: rows whose seq is greater, oldest change first.
+     *  Archived rows are INCLUDED (check `archivedAt`) so a follower can
+     *  drop what it derived from them. `afterId` is ignored when set. */
+    afterSeq?: number;
     limit: number;
     types: string[];
   }): Promise<Document[]>;

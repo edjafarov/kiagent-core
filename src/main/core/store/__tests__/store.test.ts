@@ -106,6 +106,56 @@ describe('store', () => {
     expect(rest.some((d) => d.id === first[0].id)).toBe(false);
   });
 
+  it('afterSeq pages by seq, ascending, and includes archived rows', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b'), doc('c')],
+      cursor: 1,
+    });
+    await store.commit({
+      account: accountId,
+      documents: [],
+      deletions: [{ externalId: 'b', type: 'note' }],
+      cursor: 2,
+    });
+    const all = await store.read.documentPage!({
+      afterSeq: 0,
+      limit: 100,
+      types: ['note'],
+    });
+    const seqs = all.map((d) => d.seq);
+    expect([...seqs].sort((x, y) => x - y)).toEqual(seqs);
+    const b = all.find((d) => d.externalId === 'b')!;
+    expect(b.archivedAt).not.toBeNull();
+    expect(all[all.length - 1].externalId).toBe('b'); // archived last → highest seq
+    const after = await store.read.documentPage!({
+      afterSeq: all[0].seq,
+      limit: 100,
+      types: ['note'],
+    });
+    expect(after.map((d) => d.externalId)).not.toContain(all[0].externalId);
+  });
+
+  it('afterSeq returns a document again after its content changes', async () => {
+    await store.commit({ account: accountId, documents: [doc('a')], cursor: 1 });
+    const [first] = await store.read.documentPage!({
+      afterSeq: 0,
+      limit: 10,
+      types: ['note'],
+    });
+    await store.commit({
+      account: accountId,
+      documents: [doc('a', { markdown: 'Changed body of a' })],
+      cursor: 2,
+    });
+    const again = await store.read.documentPage!({
+      afterSeq: first.seq,
+      limit: 10,
+      types: ['note'],
+    });
+    expect(again.map((d) => d.externalId)).toEqual(['a']);
+  });
+
   it('commits documents with cursor atomically and feeds them in order', async () => {
     await store.commit({
       account: accountId,

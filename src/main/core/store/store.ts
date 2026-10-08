@@ -711,6 +711,13 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       const limit = Math.max(0, Math.min(100, Math.floor(input.limit)));
       if (limit === 0 || input.types.length === 0) return [];
       const placeholders = input.types.map(() => '?').join(',');
+      if (typeof input.afterSeq === 'number') {
+        const rows = (await db.all(
+          `SELECT * FROM documents WHERE type IN (${placeholders}) AND seq > ? ORDER BY seq LIMIT ?`,
+          [...input.types, input.afterSeq, limit],
+        )) as unknown as DocRow[];
+        return rows.map(toDocument);
+      }
       const params: AppDbParam[] = [...input.types];
       let after = '';
       if (input.afterId) {
