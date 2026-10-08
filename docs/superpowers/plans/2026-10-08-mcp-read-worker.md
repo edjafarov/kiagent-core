@@ -20,7 +20,7 @@
 - **Every task's last run step ends with `npx tsc -p tsconfig.typecheck.json` clean and `npx eslint --fix` on the touched files before its commit.** Each task must leave the tree typechecking.
 - Commits: `git commit -F <msgfile> -- <paths>`; messages are conventional, end with `(#146)`, and carry NO Co-Authored-By line. Never `git stash`, `--amend`, rebase, reset, or `--no-verify`. Never dispatch subagents.
 - Test files that need node start with `/** @jest-environment node */`. Worker-thread / child-process tests run the TS SOURCE under ts-node with `execArgv: ['--no-experimental-strip-types','-r',<preload.js>,'-r','ts-node/register/transpile-only','-r','tsconfig-paths/register']` (the preload redirects `better-sqlite3` to the repo-root copy); Task 3 creates the shared helper `src/main/db/__tests__/worker-test-env.ts`.
-- Constants (verbatim from the spec): `FUZZY_CANDIDATES = 100`; reader `cacheKiB` 8192 normally and 2048 when `hostBudget(host, null).weak`; `PRAGMA query_only = ON`, `busy_timeout = 5000`, `cache_size = -cacheKiB`, `mmap_size = 0`; recency snippet head `substr(d.markdown, 1, 65536)`; `query_sql` values cut at 64 KiB with `…[truncated]`, stop at 500 rows or 1 MiB of serialized row data; runner `createSqlRunner({ spawn, timeoutMs: 10_000, idleMs: 300_000 })`, SIGTERM then SIGKILL after 2 s, `stuck` when no exit 5 s after SIGKILL; stats window = last 256 calls.
+- Constants (verbatim from the spec): `FUZZY_CANDIDATES = 100`; reader `cacheKiB` 8192 normally and 2048 when `hostBudget(host, null).weak`; `PRAGMA query_only = ON`, `busy_timeout = 5000`, `cache_size = -cacheKiB`, `mmap_size = 0`; recency snippet head `substr(d.markdown, 1, 65536)`; `query_sql` values cut at 64 KiB (UTF-8 bytes) with `…[truncated]`, stop at 500 rows or 1 MiB of serialized rows array (brackets and commas included); runner `createSqlRunner({ spawn, timeoutMs: 10_000, idleMs: 300_000 })`, SIGTERM then SIGKILL after 2 s, `stuck` when no exit 5 s after SIGKILL; stats window = last 256 calls.
 - Copy (verbatim): timeout `query_sql stopped after 10 s. Narrow it: filter by account or created_at, avoid LIKE over markdown, or use search.`; during stop `query_sql is still stopping the previous query. Try again in a few seconds.`; otherwise `query_sql is unavailable right now.`; reader open failure log `[db] read worker unavailable: <message> — reads use the writer`.
 - Failure semantics: `DB_WORKER_CRASHED` or `DB_WORKER_DEAD` rejections from the reader are retried ONCE on the writer; `DB_WORKER_DEAD` also makes the router sticky-writer. SQL errors propagate unchanged. `query_sql` NEVER falls back to main or the writer.
 - Writer pragmas and write procedures are untouched. Extension `query` slice, engine, message evidence, outbound send, factory reset, boot/diagnostics keep `store.read`.
@@ -273,7 +273,7 @@ E=$(grep -n '^  // ── public surface' store.ts | cut -d: -f1); E=$((E-2))
 sed -n "${S}p;${E}p" store.ts        # expect: '  const query: Query = {'  then  '  };'
 
 cat > /tmp/cq-head.ts <<'EOF'
-import type { Account, AccountId, Document, Query } from '@shared/contracts';
+import type { Account, Query } from '@shared/contracts';
 
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { stemVariants } from '../stemming';
@@ -493,16 +493,21 @@ describe('extractWindowTerms', () => {
 });
 ```
 
-Add to `src/main/core/store/__tests__/fuzzy.test.ts` (and delete its `rrfMerge` import and the whole `describe('rrfMerge', …)` block):
+Edit `src/main/core/store/__tests__/fuzzy.test.ts`: delete the whole `describe('rrfMerge', …)` block and MERGE the names below into its EXISTING `import { … } from '../fuzzy';` statement (drop `rrfMerge` from it, add the four others; do NOT add a second import from `'../fuzzy'`, eslint `import/no-duplicates` fails). The existing statement ends up as:
 
 ```ts
 import {
+  extractTerms, // …keep whatever the file already imports besides rrfMerge…
   FUZZY_CANDIDATES,
   fuzzyCandidatesSql,
   pickFuzzyWinners,
   rankFuzzyCandidates,
 } from '../fuzzy';
+```
 
+Then append these blocks (no new import line):
+
+```ts
 describe('fuzzyCandidatesSql', () => {
   it('is newest-first, ranks nothing by bm25 and reads no body by default', () => {
     const sql = fuzzyCandidatesSql('AND d.account_id = ?', false);
@@ -641,6 +646,35 @@ describe('corpus query: fuzzy pass and projections', () => {
     );
     const hits = await query.search({ text: 'rechnung', account: acc, limit: 10 });
     expect(hits.map((h) => h.externalId).sort()).toEqual(['a1', 'a2', 'a3']);
+  });
+
+  it('without an account filter the candidate window is the NEWEST 100 matches: the oldest 50 rowids never appear', async () => {
+    await commit(
+      acc,
+      Array.from({ length: FUZZY_CANDIDATES + 50 }, (_, i) =>
+        doc(`old${String(i).padStart(3, '0')}`, { markdown: `Jahresrechnung n${i}` }),
+      ),
+    );
+    const rows = (await db.all(fuzzyCandidatesSql('', false), [
+      '"rechnung"',
+      FUZZY_CANDIDATES,
+    ])) as Array<{ id: string }>;
+    expect(rows).toHaveLength(FUZZY_CANDIDATES);
+    const idToExternal = new Map(
+      (
+        (await db.all(`SELECT id, external_id FROM documents`)) as Array<{
+          id: string;
+          external_id: string;
+        }>
+      ).map((r) => [r.id, r.external_id]),
+    );
+    const got = new Set(rows.map((r) => idToExternal.get(r.id)));
+    for (let i = 0; i < 50; i += 1) {
+      expect(got.has(`old${String(i).padStart(3, '0')}`)).toBe(false);
+    }
+    for (let i = 50; i < FUZZY_CANDIDATES + 50; i += 1) {
+      expect(got.has(`old${String(i).padStart(3, '0')}`)).toBe(true);
+    }
   });
 
   it('archived-heavy corpus still returns the live fuzzy hits', async () => {
@@ -2074,7 +2108,7 @@ Spec §3.3 (routing), §3.5 (open order, shutdown), §5 (no-queue test, routing 
   - `READ_CACHE_KIB = 8192`, `READ_CACHE_KIB_WEAK = 2048`, `readCacheKiB(weak: boolean): number`.
   - `openReads(deps: { dbPath: string; workerFile: string; execArgv?: string[]; writer: Query; weak: boolean; log(level: 'warn' | 'error', msg: string): void }): Promise<Reads>`.
   - `interface Reads { reads: Query; readsFor(caller: ReadCaller): Query; stats: ReadStats; mode(): ReadMode; close(): Promise<void> }`.
-  - `BootDeps.dbWorkerExecArgv?: string[]`; `CorePlatform.reads: Query`, `CorePlatform.readsFor(caller: ReadCaller): Query`.
+  - `CorePlatform.reads: Query`, `CorePlatform.readsFor(caller: ReadCaller): Query`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2221,7 +2255,7 @@ import { openDbInWorker } from '../../db/worker-client';
 import { openReads, type Reads } from '../reads';
 import { openStore, type CoreStore } from '../store/store';
 
-jest.setTimeout(240_000);
+jest.setTimeout(120_000);
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -2291,12 +2325,13 @@ describe('reads do not queue behind ingest writes (real writer + reader workers)
     const [seedHit] = await plane.reads.search({ text: 'alpha', limit: 1 });
     expect(seedHit).toBeDefined();
 
-    // A real large ingest: 40 documents x ~2 MB, FTS + trigram + stem views in
-    // ONE transaction on the writer thread. If this machine finishes it in
-    // under ~1.5 s, raise DOCS until the first assertion below holds; if the
-    // suite exceeds its timeout or the worker runs out of memory, LOWER DOCS
-    // (start at ~10) until the 300 ms `commitSettled === false` check still holds.
-    const DOCS = 40;
+    // A real large ingest: DOCS documents x ~2.3 MB, FTS + trigram + stem views
+    // in ONE transaction on the writer thread. Default 8 (~18 MB: enough to
+    // span the reads on a normal machine without a heavy structured clone). If
+    // this machine finishes it before the 300 ms check, raise DOCS until
+    // `commitSettled === false` holds; if the suite nears its timeout or the
+    // worker runs out of memory, lower it. Never weaken the assertions.
+    const DOCS = 8;
     const documents = Array.from({ length: DOCS }, (_, i): DocumentInput => ({
       externalId: `big${i}`,
       type: 'note',
@@ -2336,6 +2371,54 @@ describe('reads do not queue behind ingest writes (real writer + reader workers)
     // Read-after-write: the resolved commit is visible to the very next reader call.
     const after = await plane.reads.search({ text: 'Big', limit: 5 });
     expect(after.length).toBeGreaterThan(0);
+  });
+
+  it('serves reads while the writer runs a real reconcile stage workload', async () => {
+    const [seedHit] = await plane.reads.search({ text: 'alpha', limit: 1 });
+    expect(seedHit).toBeDefined();
+
+    // reconcileBegin/Stage are real writer procedures; many large batches keep
+    // the writer thread busy (raise BATCHES if staging ends before the first
+    // reader call below; lower it if the suite nears its timeout).
+    const BATCHES = 60;
+    const BATCH_SIZE = 5_000;
+    await store.reconcileBegin(account);
+    let stagingDone = false;
+    const stagingP = (async () => {
+      for (let b = 0; b < BATCHES; b += 1) {
+        await store.reconcileStage(
+          account,
+          Array.from({ length: BATCH_SIZE }, (_, i) => ({
+            externalId: `stage-${b}-${i}`,
+            type: 'note',
+          })),
+        );
+      }
+    })().finally(() => {
+      stagingDone = true;
+    });
+    await sleep(100); // the writer thread is now inside the stage workload
+
+    // Concurrent reader assertions: several rounds, each resolving while the
+    // writer is still staging, none of them paying a writer-sized wait.
+    let overlapped = 0;
+    for (let round = 0; round < 5 && !stagingDone; round += 1) {
+      const t0 = Date.now();
+      const [hits, doc, counts] = await Promise.all([
+        plane.reads.search({ text: 'alpha', limit: 5 }),
+        plane.reads.document(seedHit.id),
+        plane.reads.countBy({ field: 'label' }),
+      ]);
+      expect(hits.length).toBeGreaterThan(0);
+      expect(doc?.id).toBe(seedHit.id);
+      expect(counts[0]).toMatchObject({ key: 'L1' });
+      expect(Date.now() - t0).toBeLessThan(2_000);
+      if (!stagingDone) overlapped += 1;
+    }
+    expect(overlapped).toBeGreaterThan(0); // at least one round truly overlapped staging
+
+    await stagingP;
+    await store.reconcileEnd(account);
   });
 });
 ```
@@ -2466,20 +2549,11 @@ import { openReads } from './reads';
 import type { ReadCaller } from './store/read-proxy';
 ```
 
-In `BootDeps` add:
-
-```ts
-  /** Tests only: execArgv for the DB worker spawns (writer and reader). */
-  dbWorkerExecArgv?: string[];
-```
-
-Change the writer open to pass it, and open the reader right after the store exists:
+`BootDeps` is unchanged (no test boots a worker through it; `openReads` already takes `execArgv` for its own tests). Keep the writer open as it is, and open the reader right after the store exists:
 
 ```ts
   const dbPath = path.join(deps.dataDir, 'kiagent.db');
-  const db = await openDbInWorker(dbPath, deps.dbWorkerFile, {
-    execArgv: deps.dbWorkerExecArgv,
-  });
+  const db = await openDbInWorker(dbPath, deps.dbWorkerFile);
   const store = openStore(db, {
     encrypt: deps.encrypt,
     decrypt: deps.decrypt,
@@ -2491,7 +2565,6 @@ Change the writer open to pass it, and open the reader right after the store exi
   const readPlane = await openReads({
     dbPath,
     workerFile: deps.dbWorkerFile,
-    execArgv: deps.dbWorkerExecArgv,
     writer: store.read,
     weak: hostBudget(host, null).weak,
     log: (level, msg) => sink.log('db', level, msg),
@@ -2532,7 +2605,7 @@ and in `startMcp({ … })`: `query: p.readsFor('mcp'),`. Leave `p.store.read.acc
 - [ ] **Step 6: Run — expect PASS**
 
 Run (one at a time): `npx jest src/main/core/__tests__/reads.test.ts`, then `npx jest src/main/__tests__/read-routing.test.ts`, then `npx jest src/main/core/__tests__/reads-no-queue.test.ts`.
-Expected: all PASS. If the no-queue test's first `expect(commitSettled).toBe(false)` fails, the commit was too fast for this machine: raise `DOCS`; if the test times out or the writer worker runs out of memory (40 x ~2 MB through FTS + stem views + trigram plus a ~90 MB structured clone is heavy), lower `DOCS` toward ~10 until the `commitSettled === false` check holds. Never weaken the assertions.
+Expected: all PASS. If the no-queue test's first `expect(commitSettled).toBe(false)` fails, the commit was too fast for this machine: raise `DOCS` (default 8); if it times out or the writer worker runs out of memory, lower `DOCS`. If `overlapped` is 0 in the reconcile test, raise `BATCHES`. Never weaken the assertions.
 Then: `npx tsc -p tsconfig.typecheck.json && npx eslint --fix src/main/core/reads.ts src/main/core/boot.ts src/main/main.ts src/main/core/__tests__/reads.test.ts src/main/core/__tests__/reads-no-queue.test.ts src/main/__tests__/read-routing.test.ts`
 
 - [ ] **Step 7: Commit**
@@ -2551,16 +2624,16 @@ Spec §3.4. Four deliverables, one task because none is useful alone: bounded re
 
 **Files:**
 - Create: `src/main/core/mcp/sql-runner.ts`, `src/main/core/mcp/sql-runner-spawn.ts`, `src/main/core/mcp/sql-runner-entry.ts`, `src/main/core/mcp/__tests__/query-sql-bounds.test.ts`, `src/main/core/mcp/__tests__/sql-runner.test.ts`, `src/main/core/mcp/__tests__/sql-runner-spawn.test.ts`, `src/main/core/mcp/__tests__/sql-runner-process.test.ts`, `src/main/core/mcp/__tests__/fixtures/sigterm-ignoring-runner.cjs`
-- Modify: `src/main/core/mcp/tools/query-sql.ts`, `src/main/core/mcp/tools/raw-sql.ts`, `src/main/core/mcp/server.ts`, `src/main/mcp/stdio-entry.ts`, `src/main/main.ts`, `.erb/configs/webpack.config.main.prod.ts`, `.erb/configs/webpack.config.main.dev.ts`, `src/main/core/mcp/__tests__/raw-sql.test.ts`, `src/main/core/mcp/__tests__/raw-sql-wiring.test.ts`, `src/main/__tests__/read-routing.test.ts`
+- Modify: `src/main/core/mcp/tools/query-sql.ts`, `src/main/core/mcp/tools/raw-sql.ts`, `src/main/core/mcp/server.ts`, `src/main/mcp/stdio-entry.ts`, `src/main/main.ts`, `.erb/configs/webpack.config.main.prod.ts`, `.erb/configs/webpack.config.main.dev.ts`, `src/main/core/mcp/__tests__/raw-sql.test.ts`, `src/main/core/mcp/__tests__/raw-sql-wiring.test.ts`, `src/main/core/mcp/__tests__/server.test.ts`, `src/main/core/mcp/__tests__/mcp-session-factory.test.ts`, `src/main/core/mcp/__tests__/outbound-routes.test.ts`, `src/main/mcp/__tests__/stdio-entry.test.ts`, `src/main/__tests__/read-routing.test.ts`
 
 **Interfaces:**
 - Consumes: `openCorpusReadConnection(path, { cacheKiB, queryOnly })` (Task 3); `createWorkerEnv`, `REPO_ROOT` (Task 3).
 - Produces:
-  - `query-sql.ts`: `type QuerySqlExecutor = (sql: string) => Promise<QuerySqlResult>`; `MAX_ROWS = 500`, `MAX_VALUE_CHARS = 65536`, `MAX_RESULT_BYTES = 1048576`; `runQuerySqlBounded(conn, sql): { result: QuerySqlResult; bytes: number }`; `runQuerySql(conn, sql): QuerySqlResult` (unchanged signature).
+  - `query-sql.ts`: `type QuerySqlExecutor = (sql: string) => Promise<QuerySqlResult>`; `MAX_ROWS = 500`, `MAX_VALUE_BYTES = 65536` (UTF-8 bytes, never splitting a code point), `MAX_RESULT_BYTES = 1048576`; `runQuerySqlBounded(conn, sql): { result: QuerySqlResult; bytes: number }`; `runQuerySql(conn, sql): QuerySqlResult` (unchanged signature).
   - `sql-runner.ts`: `interface RunnerChild { readonly pid: number | undefined; send(msg: unknown): void; onMessage(cb: (msg: unknown) => void): void; onExit(cb: (code: number | null) => void): void; kill(signal: 'SIGTERM' | 'SIGKILL'): void }`; `type SqlRunnerState = 'none' | 'starting' | 'ready' | 'stopping' | 'stuck'`; `SQL_UNAVAILABLE`, `SQL_STILL_STOPPING`, `sqlStoppedMessage(timeoutMs)`; `interface SqlRunRecord`; `interface SqlRunnerDiagnostics { state; pid: number | null; timeouts: number; recent: SqlRunRecord[] }`; `interface SqlExecutorHandle { exec: QuerySqlExecutor; stop(): Promise<void>; diagnostics?(): SqlRunnerDiagnostics }`; `interface SqlRunner extends SqlExecutorHandle { diagnostics(): SqlRunnerDiagnostics }`; `createSqlRunner(opts: SqlRunnerOptions): SqlRunner`.
   - `sql-runner-spawn.ts`: `forkRunnerChild(modulePath, opts?: { env?, execArgv?, cwd? }): RunnerChild`, `utilityRunnerChild(modulePath, env, onOutput?): RunnerChild`.
   - `raw-sql.ts`: `createRawSqlTools(exec: QuerySqlExecutor): { tools: McpTool[] }`; `createInProcessSqlExecutor(source: string | BetterSqlite3.Database): SqlExecutorHandle`.
-  - `McpDeps.sqlExecutor?: SqlExecutorHandle`; `McpServerHandle.sqlDiagnostics(): SqlRunnerDiagnostics | null`.
+  - `McpDeps.sqlExecutor: SqlExecutorHandle` (REQUIRED — the server has no default and opens no handle itself); `McpServerHandle.sqlDiagnostics(): SqlRunnerDiagnostics | null`.
 
 - [ ] **Step 1: Write the failing bounds test** — `src/main/core/mcp/__tests__/query-sql-bounds.test.ts`
 
@@ -2571,9 +2644,12 @@ import Database from 'better-sqlite3';
 import {
   MAX_RESULT_BYTES,
   MAX_ROWS,
+  MAX_VALUE_BYTES,
   runQuerySql,
+  runQuerySqlBounded,
 } from '../tools/query-sql';
 
+const MARK = '…[truncated]';
 const series = (n: number, cols: string) =>
   `WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i < ${n}) SELECT ${cols} FROM c`;
 
@@ -2593,21 +2669,72 @@ describe('runQuerySql bounds', () => {
   it('cuts every string value at 64 KiB with a marker and says so', () => {
     const r = runQuerySql(conn, `SELECT hex(randomblob(40000)) AS big`);
     const big = r.rows[0].big as string;
-    expect(big.endsWith('…[truncated]')).toBe(true);
-    expect(big.length).toBe(65536 + '…[truncated]'.length);
+    expect(big.endsWith(MARK)).toBe(true);
+    expect(big.length).toBe(65536 + MARK.length); // ASCII: bytes == chars
     expect(r.truncated).toBe(true);
     expect(r.hint).toMatch(/64 KiB/);
   });
 
-  it('stops at 1 MiB of serialized row data, whichever limit comes first', () => {
+  it('cuts non-ASCII values by UTF-8 BYTES, never inside a code point', () => {
+    // 'ü' = 2 bytes, '日本' = 3 bytes each, '😀' = 4 bytes (surrogate pair).
+    for (const unit of ['ü', '日本', '😀', 'aü日😀']) {
+      const text = unit.repeat(Math.ceil(80_000 / Buffer.byteLength(unit)));
+      const r = runQuerySql(conn, `SELECT '${text}' AS v`);
+      const v = r.rows[0].v as string;
+      expect(v.endsWith(MARK)).toBe(true);
+      const body = v.slice(0, -MARK.length);
+      expect(Buffer.byteLength(body)).toBeLessThanOrEqual(MAX_VALUE_BYTES);
+      expect(Buffer.byteLength(body)).toBeGreaterThan(MAX_VALUE_BYTES - 4);
+      expect(body).not.toMatch(/\uFFFD/); // no split code point
+      expect(text.startsWith(body)).toBe(true);
+      expect(r.truncated).toBe(true);
+    }
+  });
+
+  it('does not cut a value of exactly 64 KiB (boundary), cuts one byte more', () => {
+    const exact = runQuerySql(conn, `SELECT '${'a'.repeat(MAX_VALUE_BYTES)}' AS v`);
+    expect(exact.rows[0].v).toBe('a'.repeat(MAX_VALUE_BYTES));
+    expect(exact.truncated).toBe(false);
+    // 2-byte chars landing exactly on the limit are kept whole...
+    const twoByte = 'ü'.repeat(MAX_VALUE_BYTES / 2);
+    const keep = runQuerySql(conn, `SELECT '${twoByte}' AS v`);
+    expect(keep.rows[0].v).toBe(twoByte);
+    expect(keep.truncated).toBe(false);
+    // ...one more byte cuts.
+    const over = runQuerySql(conn, `SELECT '${'a'.repeat(MAX_VALUE_BYTES + 1)}' AS v`);
+    expect((over.rows[0].v as string).endsWith(MARK)).toBe(true);
+    expect(over.truncated).toBe(true);
+  });
+
+  it('stops at 1 MiB of serialized row data (array brackets and commas included), whichever limit comes first', () => {
     const r = runQuerySql(conn, series(600, 'i, hex(randomblob(100000)) AS big'));
     expect(r.truncated).toBe(true);
     expect(r.rows.length).toBeGreaterThan(0);
     expect(r.rows.length).toBeLessThan(MAX_ROWS);
+    // The FULL serialized array, exactly as it is transferred.
     expect(Buffer.byteLength(JSON.stringify(r.rows))).toBeLessThanOrEqual(
       MAX_RESULT_BYTES,
     );
     expect(r.hint).toMatch(/1 MiB/);
+  });
+
+  it('accounts for the array overhead: many tiny rows still serialize within 1 MiB', () => {
+    // Each row serializes to ~14 bytes + a comma; 500 rows is far below 1 MiB,
+    // so make the budget bind with wide-but-legal rows (60 KiB each).
+    const r = runQuerySqlBounded(conn, series(30, `i, hex(randomblob(30000)) AS big`));
+    expect(Buffer.byteLength(JSON.stringify(r.result.rows))).toBeLessThanOrEqual(
+      MAX_RESULT_BYTES,
+    );
+    // `bytes` is the serialized size of the rows array as transferred.
+    expect(r.bytes).toBe(Buffer.byteLength(JSON.stringify(r.result.rows)));
+    expect(r.result.truncated).toBe(true);
+  });
+
+  it('a 500-row cut sets truncated and a hint', () => {
+    const r = runQuerySql(conn, series(600, 'i'));
+    expect(r.rows).toHaveLength(MAX_ROWS);
+    expect(r.truncated).toBe(true);
+    expect(r.hint).toMatch(/500 rows/);
   });
 
   it('returns no rows and says why when ONE row alone exceeds 1 MiB', () => {
@@ -2647,15 +2774,29 @@ export interface QuerySqlResult {
 export type QuerySqlExecutor = (sql: string) => Promise<QuerySqlResult>;
 
 export const MAX_ROWS = 500;
-/** One string value is cut here, with TRUNCATED_MARK appended. */
-export const MAX_VALUE_CHARS = 64 * 1024;
-/** Serialized row data (JSON) is cut here, so a result is bounded in BYTES. */
+/** One string value is cut at this many UTF-8 BYTES (never inside a code
+ *  point), with TRUNCATED_MARK appended. */
+export const MAX_VALUE_BYTES = 64 * 1024;
+/** The serialized rows array (JSON, brackets and commas included) is cut here,
+ *  so a result is bounded in BYTES as it is transferred. */
 export const MAX_RESULT_BYTES = 1024 * 1024;
 const TRUNCATED_MARK = '…[truncated]';
 
 function cutValue(v: unknown): { value: unknown; cut: boolean } {
-  if (typeof v === 'string' && v.length > MAX_VALUE_CHARS) {
-    return { value: `${v.slice(0, MAX_VALUE_CHARS)}${TRUNCATED_MARK}`, cut: true };
+  // A UTF-16 unit is at most 3 UTF-8 bytes (a surrogate pair is 4 bytes for 2
+  // units), so short strings need no byte count at all.
+  if (typeof v === 'string' && v.length * 3 > MAX_VALUE_BYTES) {
+    const buf = Buffer.from(v, 'utf8');
+    if (buf.length > MAX_VALUE_BYTES) {
+      let end = MAX_VALUE_BYTES;
+      // Back up to a code-point boundary: byte `end` must not be a continuation byte.
+      while (end > 0 && (buf[end] & 0xc0) === 0x80) end -= 1;
+      return {
+        value: `${buf.toString('utf8', 0, end)}${TRUNCATED_MARK}`,
+        cut: true,
+      };
+    }
+    return { value: v, cut: false };
   }
   if (Buffer.isBuffer(v)) return { value: `<blob ${v.length} bytes>`, cut: false };
   return { value: v, cut: false };
@@ -2680,7 +2821,9 @@ export function runQuerySqlBounded(
     `SELECT * FROM (${stripped}) LIMIT ${MAX_ROWS + 1}`,
   );
   const rows: Record<string, unknown>[] = [];
-  let bytes = 0;
+  // Serialized size of the rows array as it will be transferred: '[' + ']'
+  // plus a ',' between rows plus each row's own JSON.
+  let bytes = 2;
   let rowCut = false;
   let byteCut = false;
   let valueCut = false;
@@ -2695,7 +2838,7 @@ export function runQuerySqlBounded(
       row[k] = c.value;
       if (c.cut) valueCut = true;
     }
-    const size = Buffer.byteLength(JSON.stringify(row));
+    const size = Buffer.byteLength(JSON.stringify(row)) + (rows.length > 0 ? 1 : 0);
     if (bytes + size > MAX_RESULT_BYTES) {
       byteCut = true;
       break; // leaving the loop resets the statement
@@ -2715,6 +2858,9 @@ export function runQuerySqlBounded(
       'these rows look like documents — include d.url in the SELECT so each one can be cited/linked when presented.',
     );
   }
+  if (rowCut) {
+    hints.push(`result cut at ${MAX_ROWS} rows — add a LIMIT/OFFSET or narrow the WHERE.`);
+  }
   if (byteCut) {
     hints.push(
       rows.length === 0
@@ -2723,7 +2869,7 @@ export function runQuerySqlBounded(
     );
   }
   if (valueCut) {
-    hints.push('long text values were cut at 64 KiB — use substr() to read a part.');
+    hints.push('long text values were cut at 64 KiB (UTF-8 bytes) — use substr() to read a part.');
   }
   return {
     result: {
@@ -3445,9 +3591,17 @@ type ParentPort = {
 // `process.send` / `process.on('message')`.
 const parentPort = (process as unknown as { parentPort?: ParentPort }).parentPort;
 
-const send = (m: unknown): void => {
-  if (parentPort) parentPort.postMessage(m);
-  else process.send?.(m);
+/** `done` runs once the message has left this process, so a following
+ *  `process.exit` cannot drop it. */
+const send = (m: unknown, done?: () => void): void => {
+  if (parentPort) {
+    parentPort.postMessage(m);
+    if (done) setTimeout(done, 100); // utilityProcess has no send callback
+  } else if (process.send) {
+    process.send(m, undefined, undefined, () => done?.());
+  } else {
+    done?.();
+  }
 };
 const onMessage = (cb: (m: unknown) => void): void => {
   if (parentPort) {
@@ -3489,8 +3643,11 @@ process.on('disconnect', () => process.exit(0));
     });
     send({ t: 'ready' });
   } catch (e) {
-    send({ t: 'open-error', message: e instanceof Error ? e.message : String(e) });
-    process.exit(1);
+    // Exit only after the reason has been delivered (never drop it).
+    send(
+      { t: 'open-error', message: e instanceof Error ? e.message : String(e) },
+      () => process.exit(1),
+    );
   }
 })();
 ```
@@ -3573,7 +3730,10 @@ import { openDb } from '../../../db/app-db';
 import {
   createWorkerEnv,
   REPO_ROOT,
+  WORKER_ENTRY,
 } from '../../../db/__tests__/worker-test-env';
+import { openReads } from '../../reads';
+import { openStore } from '../../store/store';
 import { createSqlRunner, type SqlRunner } from '../sql-runner';
 import { forkRunnerChild } from '../sql-runner-spawn';
 
@@ -3665,6 +3825,73 @@ describe('SQL runner over real child processes', () => {
     expect(runner.diagnostics().timeouts).toBe(1);
   });
 
+  it('real read worker keeps answering search + document while a runaway statement runs in the runner', async () => {
+    const writerDb = await openDb(dbPath);
+    const store = openStore(writerDb, {
+      encrypt: (x: string) => Buffer.from(x, 'utf8'),
+      decrypt: (b: Buffer) => b.toString('utf8'),
+      detectLanguages: () => ['eng'],
+    });
+    const acct = (await store.createAccount({ source: 'test', identifier: 'me@x' })).id;
+    await store.commit({
+      account: acct,
+      cursor: 1,
+      documents: [
+        {
+          externalId: 'live1',
+          type: 'note',
+          title: 'Live one',
+          markdown: 'alpha runaway neighbour',
+          metadata: {},
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    const plane = await openReads({
+      dbPath,
+      workerFile: WORKER_ENTRY,
+      execArgv: env.execArgv,
+      writer: store.read,
+      weak: false,
+      log: () => {},
+    });
+    try {
+      const [seed] = await plane.reads.search({ text: 'alpha', limit: 1 });
+      expect(seed).toBeDefined();
+      runner = real(3_000);
+      await runner.exec('SELECT 1'); // child ready before measuring
+      let ok = 0;
+      let stop = false;
+      let maxLag = 0;
+      let last = Date.now();
+      const tick = setInterval(() => {
+        const n = Date.now();
+        maxLag = Math.max(maxLag, n - last - 20);
+        last = n;
+      }, 20);
+      const reader = (async () => {
+        while (!stop) {
+          const hits = await plane.reads.search({ text: 'alpha', limit: 5 });
+          const doc = await plane.reads.document(seed.id);
+          if (hits.length > 0 && doc?.id === seed.id) ok += 1;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      })();
+      // While the runaway SQL burns CPU in the runner process, the read worker
+      // keeps resolving successful search + document calls on the same DB file.
+      await expect(runner.exec(HEAVY)).rejects.toThrow(/stopped after/);
+      stop = true;
+      await reader;
+      clearInterval(tick);
+      expect(ok).toBeGreaterThanOrEqual(5);
+      expect(maxLag).toBeLessThan(300);
+      await until(() => runner!.diagnostics().state === 'none');
+    } finally {
+      await plane.close();
+      await store.close();
+    }
+  });
+
   it('bounds the result in bytes inside the child', async () => {
     runner = real(30_000);
     const r = await runner.exec(
@@ -3746,9 +3973,10 @@ function openReadHandle(dbPath: string): BetterSqlite3.Database {
 }
 
 /** In-process executor: the stdio sibling (its own process, over its own
- *  connection) and tests/embedders that do not pass a runner. The app never
- *  uses it — main.ts passes the killable runner. A string source is opened
- *  lazily and owned (closed by stop()); a connection is borrowed. */
+ *  connection) and tests that inject one explicitly. The MCP server never
+ *  builds one itself, and the app never uses it — main.ts passes the killable
+ *  runner. A string source is opened lazily and owned (closed by stop()); a
+ *  connection is borrowed. */
 export function createInProcessSqlExecutor(
   source: string | BetterSqlite3.Database,
 ): SqlExecutorHandle {
@@ -3792,19 +4020,20 @@ export function createRawSqlTools(exec: QuerySqlExecutor): {
 }
 ```
 
-`src/main/core/mcp/server.ts`: add `import { createInProcessSqlExecutor, createRawSqlTools } from './tools/raw-sql';` and `import type { SqlExecutorHandle, SqlRunnerDiagnostics } from './sql-runner';`; in `McpDeps` add
+`src/main/core/mcp/server.ts`: add `import { createRawSqlTools } from './tools/raw-sql';` and `import type { SqlExecutorHandle, SqlRunnerDiagnostics } from './sql-runner';`; in `McpDeps` add
 
 ```ts
-  /** The killable `query_sql` runner (main.ts passes it). Omitted (tests,
-   *  embedders): query_sql runs in-process over its own lazily-opened handle.
+  /** The `query_sql` executor — REQUIRED, there is no in-process default (the
+   *  server must never open a handle on the main thread). main.ts passes the
+   *  killable runner; tests inject `createInProcessSqlExecutor(dbPath)`.
    *  The server OWNS whatever is passed: `stop()` stops it. */
-  sqlExecutor?: SqlExecutorHandle;
+  sqlExecutor: SqlExecutorHandle;
 ```
 
 in `McpServerHandle` add `sqlDiagnostics(): SqlRunnerDiagnostics | null;`, replace `const rawSql = createRawSqlTools(dbPath);` with
 
 ```ts
-  const sql = deps.sqlExecutor ?? createInProcessSqlExecutor(dbPath);
+  const sql = deps.sqlExecutor;
   const rawSql = createRawSqlTools(sql.exec);
 ```
 
@@ -3854,7 +4083,13 @@ Webpack — in BOTH `.erb/configs/webpack.config.main.prod.ts` and `.dev.ts`, ad
       // …the rest of the existing arguments unchanged…
 ```
 
-Update the existing tests: `raw-sql.test.ts` uses the old `createRawSqlTools(dbPath)`/`dispose()`:
+Every existing test that calls `startMcp` must now inject an executor (the typecheck flags each one): `server.test.ts` (all three `startMcp({` calls), `mcp-session-factory.test.ts`, `outbound-routes.test.ts` (and any other hit of `git grep -n "startMcp(" -- src`). In each, import `createInProcessSqlExecutor` from `../tools/raw-sql` and add to the deps object
+
+```ts
+      sqlExecutor: createInProcessSqlExecutor(path.join(<that test's dataDir expression>, 'kiagent.db')),
+```
+
+(the executor opens lazily, so a path whose file does not exist yet is fine; the server's `stop()` closes it). Then update `raw-sql.test.ts`, which uses the old `createRawSqlTools(dbPath)`/`dispose()`:
 
 ```bash
 perl -0pi -e 's/const raw = createRawSqlTools\((\w+)\);/const sqlh = createInProcessSqlExecutor($1);\n    const raw = createRawSqlTools(sqlh.exec);/g; s/await raw\.dispose\(\);/await sqlh.stop();/g; s/import \{ createRawSqlTools \} from/import { createInProcessSqlExecutor, createRawSqlTools } from/' src/main/core/mcp/__tests__/raw-sql.test.ts
@@ -3914,32 +4149,56 @@ describe('query_sql routing', () => {
 });
 ```
 
-Extend `src/main/mcp/__tests__/stdio-entry.test.ts` (spec §5: the stdio executor gets the same bounds) with a second `it` that reuses the seeded corpus setup (move the seeding into a `beforeEach`/helper) and asserts:
+Extend `src/main/mcp/__tests__/stdio-entry.test.ts` (spec §5: the stdio executor gets the same bounds) with an `it` that reuses the seeded corpus setup (move the seeding into a `beforeEach`/helper) and drives all three bounds through the stdio client:
 
 ```ts
-    const big = (await client.callTool({
-      name: 'query_sql',
-      arguments: {
-        sql: 'WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i < 600) SELECT i FROM c',
-      },
-    })) as { content: Array<{ text: string }> };
-    const payload = JSON.parse(big.content[0].text);
-    expect(payload.rows).toHaveLength(500);
-    expect(payload.truncated).toBe(true);
+    const callSql = async (sql: string) => {
+      const r = (await client.callTool({
+        name: 'query_sql',
+        arguments: { sql },
+      })) as { content: Array<{ text: string }> };
+      return JSON.parse(r.content[0].text) as {
+        rows: Array<Record<string, unknown>>;
+        truncated: boolean;
+        hint?: string;
+      };
+    };
+    const series = (n: number, cols: string) =>
+      `WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i < ${n}) SELECT ${cols} FROM c`;
+
+    // 1. row cap
+    const rowsCut = await callSql(series(600, 'i'));
+    expect(rowsCut.rows).toHaveLength(500);
+    expect(rowsCut.truncated).toBe(true);
+
+    // 2. oversized text value (> 64 KiB): cut, marked, truncated
+    const valueCut = await callSql(`SELECT hex(randomblob(40000)) AS big`);
+    const big = valueCut.rows[0].big as string;
+    expect(big.endsWith('…[truncated]')).toBe(true);
+    expect(Buffer.byteLength(big.slice(0, -'…[truncated]'.length))).toBeLessThanOrEqual(65536);
+    expect(valueCut.truncated).toBe(true);
+
+    // 3. 1 MiB aggregate cap (the whole serialized rows array)
+    const aggCut = await callSql(series(600, 'i, hex(randomblob(100000)) AS big'));
+    expect(aggCut.truncated).toBe(true);
+    expect(aggCut.rows.length).toBeGreaterThan(0);
+    expect(aggCut.rows.length).toBeLessThan(500);
+    expect(Buffer.byteLength(JSON.stringify(aggCut.rows))).toBeLessThanOrEqual(1024 * 1024);
+    expect(aggCut.hint).toMatch(/1 MiB/);
 ```
 
 - [ ] **Step 12: Run — expect PASS, then gate the task**
 
 Run (one at a time): `npx jest src/main/core/mcp`, `npx jest src/main/mcp src/main/__tests__/read-routing.test.ts`.
-Then: `npx tsc -p tsconfig.typecheck.json && npx eslint --fix src/main/core/mcp src/main/mcp/stdio-entry.ts src/main/main.ts .erb/configs/webpack.config.main.prod.ts .erb/configs/webpack.config.main.dev.ts src/main/__tests__/read-routing.test.ts`
-Expected: green. (`server.test.ts`, `mcp-session-factory.test.ts` and `outbound-routes.test.ts` start `startMcp` WITHOUT `sqlExecutor`: they exercise the in-process default and must pass unchanged.)
+Then: `npx tsc -p tsconfig.typecheck.json && npx eslint --fix src/main/core/mcp src/main/mcp/stdio-entry.ts src/main/mcp/__tests__/stdio-entry.test.ts src/main/main.ts .erb/configs/webpack.config.main.prod.ts .erb/configs/webpack.config.main.dev.ts src/main/__tests__/read-routing.test.ts`
+Expected: green. (`server.test.ts`, `mcp-session-factory.test.ts` and `outbound-routes.test.ts` now inject an in-process executor explicitly; their assertions are otherwise unchanged.)
 
 - [ ] **Step 13: Commit**
 
 ```bash
 printf 'feat(mcp): query_sql runs in a killable runner process with byte-bounded results (#146)\n' > /tmp/msg-r6
 git add src/main/core/mcp/sql-runner.ts src/main/core/mcp/sql-runner-spawn.ts src/main/core/mcp/sql-runner-entry.ts src/main/core/mcp/__tests__/query-sql-bounds.test.ts src/main/core/mcp/__tests__/sql-runner.test.ts src/main/core/mcp/__tests__/sql-runner-spawn.test.ts src/main/core/mcp/__tests__/sql-runner-process.test.ts src/main/core/mcp/__tests__/fixtures/sigterm-ignoring-runner.cjs
-git commit -F /tmp/msg-r6 -- src/main/core/mcp src/main/mcp/stdio-entry.ts src/main/main.ts .erb/configs/webpack.config.main.prod.ts .erb/configs/webpack.config.main.dev.ts src/main/__tests__/read-routing.test.ts
+git commit -F /tmp/msg-r6 -- src/main/core/mcp src/main/mcp/stdio-entry.ts src/main/mcp/__tests__/stdio-entry.test.ts src/main/main.ts .erb/configs/webpack.config.main.prod.ts .erb/configs/webpack.config.main.dev.ts src/main/__tests__/read-routing.test.ts
 ```
 
 ---
@@ -4153,11 +4412,11 @@ git commit -F /tmp/msg-r7 -- src/main/core/read-diagnostics.ts src/main/core/__t
 Spec §6 "Probe". Runs the fixed workload from OUTSIDE the app, as ChatGPT/Claude would.
 
 **Files:**
-- Create: `scripts/mcp-latency-probe.mjs`, `src/main/core/mcp/__tests__/latency-probe.test.ts`
+- Create: `scripts/mcp-latency-probe.mjs`, `scripts/mcp-latency-probe-workload.mjs`, `src/main/core/mcp/__tests__/latency-probe.test.ts`, `src/main/core/mcp/__tests__/latency-probe-workload.test.ts`
 
 **Interfaces:**
 - Consumes: the loopback MCP endpoint (`http://127.0.0.1:7421/mcp`); tools `search`, `get`, `count`, `digital_memory_info`, `get_schema`; the Task 7 diagnostics file (`--diag`).
-- Produces: a JSON report on stdout (last line) `{ label, at, cycles, kinds: { search, get, count, info, loop }, fallbacks? }` where every kind is `{ n, p50, p95, max }` in ms; exit code 0 = ran, 1 = a pass criterion failed (p95 > 2x baseline, or any fallback), 2 = `countBy` was never seen on the reader.
+- Produces: a JSON report on stdout (last line) `{ label, at, cycles, kinds: { search, get, count, info, loop }, fallbacks? }` where every kind is `{ n, p50, p95, max }` in ms; exit code 0 = ran, 1 = a pass criterion failed (p95 > 2x baseline, or any fallback), 2 = `countBy` was never seen on the reader, 3 = the workload itself was invalid (fewer than 10 valid `get` ids, the fuzzy term returned nothing, or any kind has fewer samples than the fixed workload promises). Flags: `--ids <file>` (the 10 `get` ids: read if the file exists, otherwise established by a setup search BEFORE measurement and written there, so baseline and after runs use identical ids).
 
 - [ ] **Step 1: Write the failing test** — `src/main/core/mcp/__tests__/latency-probe.test.ts` (starts a real server in this process; the probe must run as an ASYNC child so the server's event loop stays free)
 
@@ -4174,6 +4433,7 @@ import { promisify } from 'node:util';
 import { openDb } from '../../../db/app-db';
 import { openStore } from '../../store/store';
 import { startMcp, type McpServerHandle } from '../server';
+import { createInProcessSqlExecutor } from '../tools/raw-sql';
 
 jest.setTimeout(120_000);
 
@@ -4209,6 +4469,7 @@ describe('scripts/mcp-latency-probe.mjs', () => {
       logSink: { log: () => {} },
       dataDir: dir,
       portCandidates: [0],
+      sqlExecutor: createInProcessSqlExecutor(path.join(dir, 'kiagent.db')),
     });
   });
 
@@ -4224,9 +4485,12 @@ describe('scripts/mcp-latency-probe.mjs', () => {
       '--cycles', '1',
       '--interval', '0',
       '--label', 'test',
+      '--fuzzy', 'nvoic', // a substring of "Invoice": found by the fuzzy pass only
+      '--ids', path.join(dir, 'ids.json'),
     ]);
     const report = JSON.parse(stdout.trim().split('\n').pop()!);
     expect(report.label).toBe('test');
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'ids.json'), 'utf8'))).toHaveLength(10);
     expect(report.kinds.search.n).toBe(12); // 10 text searches + 2 recency/filter-only
     expect(report.kinds.get.n).toBe(10);
     expect(report.kinds.count.n).toBe(2); // group_by label + from
@@ -4236,6 +4500,83 @@ describe('scripts/mcp-latency-probe.mjs', () => {
       expect(report.kinds[k].p95).toBeGreaterThanOrEqual(report.kinds[k].p50);
     }
   });
+
+  it('fails the run (exit 3) when the configured fuzzy term returns nothing', async () => {
+    await expect(
+      run(process.execPath, [
+        PROBE,
+        '--url', `http://127.0.0.1:${handle.port}/mcp`,
+        '--cycles', '1',
+        '--interval', '0',
+        '--fuzzy', 'zzqxjk-no-such-substring',
+      ]),
+    ).rejects.toMatchObject({ code: 3, stderr: expect.stringMatching(/fuzzy/i) });
+  });
+});
+```
+
+`src/main/core/mcp/__tests__/latency-probe-workload.test.ts` (the workload helpers are plain ESM, so the test drives them in a child `node` with a scripted fake MCP `call`):
+
+```ts
+/** @jest-environment node */
+import { execFile } from 'node:child_process';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
+
+const run = promisify(execFile);
+const WORKLOAD = pathToFileURL(
+  path.resolve(__dirname, '..', '..', '..', '..', '..', 'scripts', 'mcp-latency-probe-workload.mjs'),
+).href;
+
+const node = async (body: string) => {
+  const { stdout } = await run(process.execPath, [
+    '--input-type=module',
+    '-e',
+    `import * as w from ${JSON.stringify(WORKLOAD)};\n${body}`,
+  ]);
+  return JSON.parse(stdout.trim().split('\n').pop()!);
+};
+
+describe('probe workload', () => {
+  it('starts BOTH countBy calls before issuing the gets, so the gets overlap the aggregate', async () => {
+    const events: string[] = await node(`
+      const events = [];
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const call = async (name, args) => {
+        const tag = name + ':' + (args.group_by ?? args.id);
+        events.push('start:' + tag);
+        if (name === 'count') await sleep(300); // a slow countBy
+        events.push('end:' + tag);
+        return {};
+      };
+      const timed = async (kind, fn) => fn();
+      await w.runGetsAndCounts({ call, timed, ids: ['a', 'b', 'c'] });
+      console.log(JSON.stringify(events));
+    `);
+    const at = (e: string) => events.indexOf(e);
+    // both aggregates started first...
+    expect(at('start:count:label')).toBeLessThan(at('start:get:a'));
+    expect(at('start:count:from')).toBeLessThan(at('start:get:a'));
+    // ...and every get was issued AND finished while they were still in flight
+    for (const id of ['a', 'b', 'c']) {
+      expect(at(`start:get:${id}`)).toBeLessThan(at('end:count:label'));
+      expect(at(`end:get:${id}`)).toBeLessThan(at('end:count:label'));
+      expect(at(`end:get:${id}`)).toBeLessThan(at('end:count:from'));
+    }
+  });
+
+  it('checkSamples flags missing samples and passes a complete report', async () => {
+    const out = await node(`
+      const full = { search: { n: 24 }, get: { n: 20 }, count: { n: 4 }, info: { n: 2 }, loop: { n: 2 } };
+      const short = { ...full, get: { n: 19 }, search: { n: 0 } };
+      console.log(JSON.stringify({ ok: w.checkSamples(full, 2), bad: w.checkSamples(short, 2) }));
+    `);
+    expect(out.ok).toEqual([]);
+    expect(out.bad).toHaveLength(2);
+    expect(out.bad.join(' ')).toMatch(/get/);
+    expect(out.bad.join(' ')).toMatch(/search/);
+  });
 });
 ```
 
@@ -4244,7 +4585,56 @@ describe('scripts/mcp-latency-probe.mjs', () => {
 Run: `npx jest src/main/core/mcp/__tests__/latency-probe.test.ts`
 Expected: FAIL — probe script missing.
 
-- [ ] **Step 3: Write the probe** — `scripts/mcp-latency-probe.mjs`
+- [ ] **Step 3: Write the workload helpers and the probe**
+
+`scripts/mcp-latency-probe-workload.mjs` (plain ESM, importable by tests):
+
+```js
+/** Workload helpers for scripts/mcp-latency-probe.mjs (#146). */
+export const EXPECTED_IDS = 10;
+
+/** Per-cycle sample counts the fixed workload promises. */
+const PER_CYCLE = { search: 12, get: 10, count: 2, info: 1, loop: 1 };
+
+/** Setup (BEFORE any measurement): up to `want` distinct valid document ids
+ *  from the text queries. */
+export async function collectIds(call, queries, want = EXPECTED_IDS) {
+  const ids = [];
+  for (const q of queries) {
+    const hits = await call('search', { query: q, limit: 10 });
+    for (const h of hits) if (ids.length < want && !ids.includes(h.id)) ids.push(h.id);
+    if (ids.length >= want) break;
+  }
+  return ids;
+}
+
+/** The concurrent part of a cycle. BOTH `count` group_by calls (they reach
+ *  Query.countBy over the whole corpus) are STARTED FIRST, then the gets are
+ *  issued, so the gets overlap the aggregates. `timed(kind, fn)` records one
+ *  sample per call. */
+export async function runGetsAndCounts({ call, timed, ids }) {
+  const counts = [
+    timed('count', () => call('count', { group_by: 'label' })),
+    timed('count', () => call('count', { group_by: 'from' })),
+  ];
+  const gets = ids.map((id) => timed('get', () => call('get', { id })));
+  await Promise.all([...counts, ...gets]);
+}
+
+/** Returns one message per kind whose sample count differs from the fixed
+ *  workload (an empty array = complete). `kinds` is `{ [kind]: { n } }`. */
+export function checkSamples(kinds, cycles) {
+  const problems = [];
+  for (const [kind, per] of Object.entries(PER_CYCLE)) {
+    const want = per * cycles;
+    const got = kinds[kind]?.n ?? 0;
+    if (got !== want) problems.push(`${kind}: ${got} samples, expected ${want}`);
+  }
+  return problems;
+}
+```
+
+`scripts/mcp-latency-probe.mjs`:
 
 ```js
 #!/usr/bin/env node
@@ -4255,22 +4645,33 @@ Expected: FAIL — probe script missing.
  *   - 10 text searches (one fuzzy-only term, one account-restricted),
  *   - 2 recency / filter-only searches,
  *   - 1 digital_memory_info,
- *   - 10 `get` ids ISSUED CONCURRENTLY with `count` group_by label and from
- *     (those reach Query.countBy over the whole corpus),
+ *   - the 10 `get` ids (fixed per --ids file) issued CONCURRENTLY with `count`
+ *     group_by label and from, which are STARTED FIRST so the gets overlap
+ *     Query.countBy over the whole corpus,
  *   - 1 get_schema: static text, no database — its round trip is the proxy for
  *     main-process event-loop lag (converters, #147).
  *
  * Reports p50/p95 for search and get SEPARATELY. Usage:
  *   node scripts/mcp-latency-probe.mjs --url http://127.0.0.1:7421/mcp \
  *     --cycles 24 --interval 5000 --label during-sync --out during-sync.json \
- *     --diag /tmp/kia-read-diag.json --baseline idle.json
- * where --diag is the file the app writes with KIA_READ_DIAG_FILE=/tmp/kia-read-diag.json
- * and --baseline is the --out of an idle run. Last stdout line = JSON report.
+ *     --diag /tmp/kia-read-diag.json --baseline idle.json --ids ids.json
+ * where --diag is the file the app writes with KIA_READ_DIAG_FILE=/tmp/kia-read-diag.json,
+ * --baseline is the --out of an idle run and --ids is the file holding the 10
+ * `get` ids (created by the first run, REUSED by every later run so baseline
+ * and after numbers measure the same documents). Last stdout line = JSON report.
+ * Exit 3 = the workload itself was invalid (see below).
  */
 import fs from 'node:fs';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
+import {
+  checkSamples,
+  collectIds,
+  EXPECTED_IDS,
+  runGetsAndCounts,
+} from './mcp-latency-probe-workload.mjs';
 
 function parseArgs(argv) {
   const o = {
@@ -4283,6 +4684,7 @@ function parseArgs(argv) {
     out: '',
     diag: '',
     baseline: '',
+    ids: '',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -4329,24 +4731,39 @@ while (queries.length < 10) queries.push(queries[queries.length - 1]);
 const accounts = (await call('digital_memory_info')).accounts ?? [];
 const restrictTo = accounts[0]?.source;
 
+// ── Setup, BEFORE any measurement: the workload must be valid or the numbers
+// mean nothing (exit 3, never a quietly thinner run).
+const invalid = (msg) => {
+  process.stderr.write(`FAIL (invalid workload): ${msg}\n`);
+  process.exit(3);
+};
+let ids;
+if (opts.ids && fs.existsSync(opts.ids)) {
+  ids = JSON.parse(fs.readFileSync(opts.ids, 'utf8'));
+} else {
+  ids = await collectIds(call, queries);
+  if (opts.ids && ids.length === EXPECTED_IDS) fs.writeFileSync(opts.ids, JSON.stringify(ids));
+}
+if (!Array.isArray(ids) || ids.length !== EXPECTED_IDS) {
+  invalid(`need exactly ${EXPECTED_IDS} valid get ids, have ${Array.isArray(ids) ? ids.length : 0}`);
+}
+const fuzzyHits = await call('search', { query: opts.fuzzy, limit: 10 });
+if (!Array.isArray(fuzzyHits) || fuzzyHits.length === 0) {
+  invalid(`the fuzzy term "${opts.fuzzy}" returned no results (pass --fuzzy with a substring of a word in this corpus)`);
+}
+
 for (let cycle = 0; cycle < opts.cycles; cycle += 1) {
   const started = performance.now();
-  const ids = [];
   for (let i = 0; i < 10; i += 1) {
     const args = { query: queries[i], limit: 10 };
     if (i === 1 && restrictTo) args.source = restrictTo; // account-restricted
-    const hits = await timed('search', () => call('search', args));
-    for (const h of hits) if (ids.length < 10 && !ids.includes(h.id)) ids.push(h.id);
+    await timed('search', () => call('search', args));
   }
   for (const extra of [{}, { query: 'has:attachment' }]) {
     await timed('search', () => call('search', { ...extra, limit: 10 })); // recency / filter-only
   }
   await timed('info', () => call('digital_memory_info'));
-  await Promise.all([
-    ...ids.map((id) => timed('get', () => call('get', { id }))),
-    timed('count', () => call('count', { group_by: 'label' })),
-    timed('count', () => call('count', { group_by: 'from' })),
-  ]);
+  await runGetsAndCounts({ call, timed, ids }); // countBy first, gets overlap it
   await timed('loop', () => call('get_schema'));
   const rest = opts.interval - (performance.now() - started);
   if (cycle < opts.cycles - 1 && rest > 0) await sleep(rest);
@@ -4361,6 +4778,11 @@ const report = {
 };
 
 let exitCode = 0;
+const missing = checkSamples(report.kinds, opts.cycles);
+if (missing.length > 0) {
+  process.stderr.write(`FAIL (invalid workload): missing samples: ${missing.join('; ')}\n`);
+  exitCode = 3;
+}
 if (opts.diag) {
   const diag = JSON.parse(fs.readFileSync(opts.diag, 'utf8'));
   const groups = diag.reads?.groups ?? [];
@@ -4372,11 +4794,11 @@ if (opts.diag) {
   report.readerCountBy = countBy;
   if (countBy === 0) {
     process.stderr.write('WARN: readDiagnostics shows no countBy execution on the reader\n');
-    exitCode = 2;
+    if (exitCode === 0) exitCode = 2;
   }
   if (Object.values(fb).some((n) => n > 0)) {
     process.stderr.write(`FAIL: reader fallbacks fired: ${JSON.stringify(fb)}\n`);
-    exitCode = 1;
+    if (exitCode !== 3) exitCode = 1;
   }
 }
 if (opts.baseline) {
@@ -4387,7 +4809,7 @@ if (opts.baseline) {
     report.vsBaseline[k] = Math.round(ratio * 100) / 100;
     if (ratio > 2) {
       process.stderr.write(`FAIL: ${k} p95 ${report.kinds[k].p95} ms is ${ratio.toFixed(2)}x idle (${base.kinds[k].p95} ms)\n`);
-      exitCode = 1;
+      if (exitCode !== 3) exitCode = 1;
     }
   }
 }
@@ -4401,16 +4823,16 @@ process.exit(exitCode);
 
 - [ ] **Step 4: Run — expect PASS**
 
-Run: `npx jest src/main/core/mcp/__tests__/latency-probe.test.ts`
-Then: `npx eslint --fix src/main/core/mcp/__tests__/latency-probe.test.ts` (the `.mjs` script is outside the eslint glob; run `node --check scripts/mcp-latency-probe.mjs`).
+Run: `npx jest src/main/core/mcp/__tests__/latency-probe.test.ts`, then `npx jest src/main/core/mcp/__tests__/latency-probe-workload.test.ts`
+Then: `npx eslint --fix src/main/core/mcp/__tests__/latency-probe.test.ts src/main/core/mcp/__tests__/latency-probe-workload.test.ts` (the `.mjs` scripts are outside the eslint glob; run `node --check scripts/mcp-latency-probe.mjs scripts/mcp-latency-probe-workload.mjs`).
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 printf 'feat(scripts): external MCP latency probe for read acceptance (#146)\n' > /tmp/msg-r8
-git add scripts/mcp-latency-probe.mjs src/main/core/mcp/__tests__/latency-probe.test.ts
-git commit -F /tmp/msg-r8 -- scripts/mcp-latency-probe.mjs src/main/core/mcp/__tests__/latency-probe.test.ts
+git add scripts/mcp-latency-probe.mjs scripts/mcp-latency-probe-workload.mjs src/main/core/mcp/__tests__/latency-probe.test.ts src/main/core/mcp/__tests__/latency-probe-workload.test.ts
+git commit -F /tmp/msg-r8 -- scripts/mcp-latency-probe.mjs scripts/mcp-latency-probe-workload.mjs src/main/core/mcp/__tests__/latency-probe.test.ts src/main/core/mcp/__tests__/latency-probe-workload.test.ts
 ```
 
 ---
@@ -4419,7 +4841,24 @@ git commit -F /tmp/msg-r8 -- scripts/mcp-latency-probe.mjs src/main/core/mcp/__t
 
 - [ ] **Step 1:** Lint every changed TS file: `git diff --name-only c369815d -- '*.ts' '*.tsx' | xargs npx eslint`. Fix findings.
 - [ ] **Step 2:** `npx tsc -p tsconfig.typecheck.json` — clean.
-- [ ] **Step 3:** Baseline. In `~/work/kiagent-core-agent-sessions` (checkout at v0.104.0 `c369815d`): `npx jest --json --outputFile=/tmp/jest-baseline.json` (sequential, alone). Then in `~/work/kcore-read`: `npx jest --json --outputFile=/tmp/jest-branch.json`. Compare the FAILED suites:
+- [ ] **Step 3:** Baseline at v0.104.0 (`c369815d`). Check `git -C ~/work/kiagent-core-agent-sessions rev-parse HEAD`; if it prints `c369815d…`, run the baseline there. If it does NOT, create a temporary worktree at the tag instead and run it there:
+
+```bash
+BASE=$TMPDIR/kcore-baseline-v0.104.0
+git -C ~/work/kcore-read worktree add "$BASE" v0.104.0
+# symlink dependencies exactly like the main worktree (see the worktree-gates recipe)
+ln -s ~/work/kcore-read/node_modules "$BASE/node_modules"
+[ -d ~/work/kcore-read/build/.core ] && mkdir -p "$BASE/build" && ln -s ~/work/kcore-read/build/.core "$BASE/build/.core"
+```
+
+Run `npx jest --json --outputFile=/tmp/jest-baseline.json` there (sequential, alone). When done, UNLINK the symlinks BEFORE removing the worktree (so `worktree remove` cannot follow them into the shared directories):
+
+```bash
+rm "$BASE/node_modules"; [ -L "$BASE/build/.core" ] && rm "$BASE/build/.core"
+git -C ~/work/kcore-read worktree remove "$BASE"
+```
+
+Then in `~/work/kcore-read`: `npx jest --json --outputFile=/tmp/jest-branch.json`. Compare the FAILED suites:
 
 ```bash
 for f in baseline branch; do
@@ -4437,6 +4876,7 @@ git grep -n "corpusLangsCache" -- src                           # nothing
 git grep -n "createRawSqlTools(" -- src ':!*__tests__*'         # raw-sql.ts definition, server.ts, stdio-entry.ts - all with an executor
 git grep -n "new Database(" -- src/main/core/mcp ':!*__tests__*' # only tools/raw-sql.ts (in-process executor)
 git grep -n "sqlExecutor" -- src/main/main.ts                   # exactly the createSqlRunner wiring
+git grep -n "createInProcessSqlExecutor" -- src/main/core/mcp/server.ts   # nothing (the server has no in-process default)
 git grep -n "p\.store\.read\.\(search\|document\|children\)" -- src/main/main.ts   # nothing
 git grep -nE "query\.search\(" -- src/main/core/mcp/tools       # each file also contains project: 'snippet' | 'metadata'
 ```
@@ -4450,19 +4890,20 @@ git commit -F /tmp/msg-r9 -- docs/superpowers/specs/2026-10-08-mcp-read-worker-d
 
 ### Task 10: Live acceptance (before any core release; NOT executed by the implementing agent)
 
-Needs the founder's machine, the Windows VM and a packaged build. Dedicated worktree dev app only (never the shared checkout; one profile — do NOT create fresh profiles, see the cert-mint limit). Record results in the spec §6 and the issue.
+Needs the founder's machine, the Windows VM and PACKAGED candidate builds. Core is NOT released until every box below passes. Dedicated worktree dev app only for the latency runs (never the shared checkout; one profile — do NOT create fresh profiles, see the cert-mint limit). Record results in the spec §6 and the issue.
 
-- [ ] **Setup:** build a dev app from this branch; start it with `KIA_READ_DIAG_FILE=/tmp/kia-read-diag.json`. For the "before" numbers use the v0.104.0 build on the SAME corpus/cache state (copy the profile data dir; restore it between runs).
-- [ ] **Idle baseline:** `node scripts/mcp-latency-probe.mjs --url http://127.0.0.1:7421/mcp --cycles 24 --interval 5000 --label idle --out idle.json --diag /tmp/kia-read-diag.json`.
-- [ ] **During sync, macOS weak path:** start with `KIA_HOST_WEAK=1`, trigger a Gmail + Drive initial sync, run the probe with `--label during-sync --out sync.json --baseline idle.json --diag /tmp/kia-read-diag.json`.
+- [ ] **Packaged candidates (REQUIRED, macOS AND Windows, before any core release).** In alpha-cent build a release candidate whose `core.lock` pins a LOCAL core tag cut from this branch (`KIA_TEST_BUILD=1`, so the feeds are not touched), per `docs/runbooks/release-testing.md`; build one leg at a time (docker leg first, then mac, then smoke mac, then smoke win; never in parallel). Run `node build/release-smoke.mjs --build-root ~/work/ac-prod-build --asr` on both platforms and require the full stage list green (13 stages). The jest suite cannot prove the Electron utility-process boundary or the packaged better-sqlite3; this step does.
+- [ ] **Packaged `query_sql` checks (manual, on the macOS and the Windows candidate, over the packaged app's loopback MCP, with `KIA_READ_DIAG_FILE` set):** (1) `SELECT 1 AS one` returns `[{"one":1}]`; (2) a non-yielding heavy statement (the HEAVY aggregate from `sql-runner-process.test.ts`) is stopped at 10 s with the specified stop message; (3) the diag file then shows `sql.state: 'none'` / `sql.pid: null`, and the former runner pid is gone from the OS process table (`ps` / Task Manager); (4) the next `SELECT 1 AS one` succeeds. Any failure blocks the core release.
+- [ ] **Setup (latency runs):** build a dev app from this branch; start it with `KIA_READ_DIAG_FILE=/tmp/kia-read-diag.json`. For the "before" numbers use the v0.104.0 build on the SAME corpus/cache state (copy the profile data dir; restore it between runs).
+- [ ] **Idle baseline:** `node scripts/mcp-latency-probe.mjs --url http://127.0.0.1:7421/mcp --cycles 24 --interval 5000 --label idle --out idle.json --ids ids.json --diag /tmp/kia-read-diag.json` (the first run writes `ids.json`; EVERY later run, including the v0.104.0 "before" run, passes the same `--ids ids.json`; if the probe exits 3 the workload was invalid: fix the corpus/`--fuzzy` term and rerun, never compare such a run).
+- [ ] **During sync, macOS weak path:** start with `KIA_HOST_WEAK=1`, trigger a Gmail + Drive initial sync, run the probe with `--label during-sync --out sync.json --baseline idle.json --ids ids.json --diag /tmp/kia-read-diag.json`.
 - [ ] **During sync, Windows VM:** same on the VM (`ssh win`; the diag path and the probe URL via the VM's loopback; see the Windows UTM recipe).
-- [ ] **Pass criteria:** search and get p95 during sync ≤ ~2x idle p95 (the probe exits 1 otherwise); `fallbacks` all 0; the diag file shows `countBy` executed on the reader (probe exit code 2 otherwise); `walBytes` does not grow monotonically during the run. If the probe's `loop` kind (get_schema round trip) dominates the remaining latency, record the number and hand it to #147 instead of tuning around it.
-- [ ] **Heavy `query_sql`:** through an MCP client run the HEAVY statement from `sql-runner-process.test.ts`; the call returns the specified stop message at 10 s; the diag file shows `sql.state` `none` and `sql.pid` null afterwards; `ps`/Task Manager shows no leftover runner process; the next `SELECT 1` succeeds.
+- [ ] **Pass criteria:** search and get p95 during sync <= ~2x idle p95 (the probe exits 1 otherwise); `fallbacks` all 0; the diag file shows `countBy` executed on the reader (probe exit code 2 otherwise); probe exit code 3 never; `walBytes` does not grow monotonically during the run. If the probe's `loop` kind (get_schema round trip) dominates the remaining latency, record the number and hand it to #147 instead of tuning around it.
 - [ ] **Open items to record:** if get p95 fails because of a slow `count`/`countBy`/broad search on the single reader, that is the trigger for a second reader (spec §7), not for tuning here.
 
 ### Task 11 (after the core release — NOT in this branch): packaged smoke stage in alpha-cent
 
-The packaged boundary (Electron utility process + packaged better-sqlite3) cannot be proven by jest. After core is released with this branch and alpha-cent's `core.lock` pins it, add a stage to the release smoke (`~/work/alpha-cent/build/release-smoke.mjs`, runbook `docs/runbooks/release-testing.md`), run on macOS AND Windows:
+Task 10 proves the packaged boundary by hand BEFORE the release; this task automates the same `query_sql` checks as a permanent smoke stage so every later release keeps proving it. After core is released with this branch and alpha-cent's `core.lock` pins it, add a stage to the release smoke (`~/work/alpha-cent/build/release-smoke.mjs`, runbook `docs/runbooks/release-testing.md`), run on macOS AND Windows:
 
 - [ ] Over the packaged app's loopback MCP: `query_sql` `SELECT 1 AS one` returns `[{"one":1}]` (the utility process loaded better-sqlite3).
 - [ ] A non-yielding heavy statement (the HEAVY aggregate above) returns the 10 s stop message; then (with `KIA_READ_DIAG_FILE` set for the smoke run) the diag file shows `sql.state: 'none'`, and the former `sql.pid` is gone from the OS process table; the next `SELECT 1 AS one` succeeds.
@@ -4478,4 +4919,24 @@ The packaged boundary (Electron utility process + packaged better-sqlite3) canno
 
 **Type consistency.** `QUERY_METHODS`/`QueryMethod` (Task 1) used by Tasks 3, 4; `createReadStats/createReadProxy/withWriterFallback` (Task 4) used by `openReads` (Task 5); `Reads.stats` used by `buildReadDiagnostics` (Task 7); `SqlRunnerDiagnostics` (Task 6) used by Task 7; `SqlExecutorHandle` (Task 6) used by `McpDeps.sqlExecutor`; `createWorkerEnv`/`WORKER_ENTRY`/`REPO_ROOT` (Task 3) used by Tasks 5, 6, 8.
 
-**Plan-level decisions where the spec is silent** (kept minimal, flagged for the reviewer): `createCorpusQuery` returns `{ query, invalidateLanguages }` (spec shows `Query`; the writer needs the explicit invalidation hook); `McpDeps.sqlExecutor` is optional and defaults to an in-process executor for tests/embedders (the app always passes the runner; gate-tested in main.ts); runner `startTimeoutMs` (20 s) guards a child that never becomes ready; queued waiters survive a timeout stop and run on the fresh child, while an unexpected exit fails everything queued; `truncated: true` also covers a 64 KiB value cut; `metadata` projection skips the fuzzy pass when the query has negated terms (it cannot fold bodies it does not read); `CorePlatform.reads` is attributed to caller `'other'` and `readsFor(caller)` carries MCP/renderer attribution.
+**Rev 2 re-check.** Spec coverage: §3.4 bounds now UTF-8-byte and array-overhead exact (Task 6 tests), required executor (Task 6 Step 11), killable-runner isolation proven against a real read worker (Task 6 Step 9), no-queue incl. a reconcile-stage workload (Task 5), probe validity gates (Task 8), packaged candidates before release (Task 10). Placeholders: none added (every new step shows its code or exact command). Type consistency: `MAX_VALUE_BYTES` replaces `MAX_VALUE_CHARS` everywhere (Interfaces, impl, tests); `McpDeps.sqlExecutor` is required in Interfaces, server code, the three server tests, latency-probe test and main.ts; `runGetsAndCounts`/`collectIds`/`checkSamples`/`EXPECTED_IDS` (workload module) are used by the probe and its tests; `BootDeps` no longer gains `dbWorkerExecArgv` (Task 5 Interfaces and Step 4 agree).
+
+**Plan-level decisions where the spec is silent** (kept minimal, flagged for the reviewer): `createCorpusQuery` returns `{ query, invalidateLanguages }` (spec shows `Query`; the writer needs the explicit invalidation hook); `McpDeps.sqlExecutor` is REQUIRED with no in-process default (the app passes the runner, gate-tested in main.ts; tests and the stdio sibling inject `createInProcessSqlExecutor`); runner `startTimeoutMs` (20 s) guards a child that never becomes ready; queued waiters survive a timeout stop and run on the fresh child, while an unexpected exit fails everything queued; `truncated: true` also covers a 64 KiB (UTF-8 byte) value cut, and the 1 MiB budget counts the serialized rows array including brackets and commas; `metadata` projection skips the fuzzy pass when the query has negated terms (it cannot fold bodies it does not read); `CorePlatform.reads` is attributed to caller `'other'` and `readsFor(caller)` carries MCP/renderer attribution.
+
+## Review log
+
+rev 1 → rev 2:
+- A1: Task 6 `cutValue()` cuts by UTF-8 bytes at a code-point boundary; 1 MiB budget counts the serialized rows array (brackets, commas); row cut sets a hint; tests for non-ASCII, exact boundary, budget, row-cut hint.
+- A2: `McpDeps.sqlExecutor` is required, no in-process default in the server; server/session-factory/outbound-routes/latency-probe tests inject one; only stdio-entry builds an in-process executor.
+- A3: probe starts both `countBy` calls before the gets (`runGetsAndCounts`); unit test with a controlled slow countBy proves the overlap.
+- A4: probe establishes exactly 10 get ids before measurement, persists/reuses them via `--ids`, exits 3 on missing samples, fewer than 10 ids, or a fuzzy term with no results.
+- A5: Task 5 adds a real reconcile begin/stage workload test with concurrent reader assertions; Task 6 Step 9 adds a real read worker search/document test while the runaway SQL runs (lag assertion kept).
+- A6: stdio bounds test covers the row cap, an oversized (>64 KiB) value and the 1 MiB aggregate through stdio; stdio-entry test in Task 6 lint and commit paths.
+- A7: Task 10 requires packaged macOS and Windows candidates (`KIA_TEST_BUILD=1`, local core tag, `release-smoke.mjs --asr`) plus manual `query_sql` checks before any core release; Task 11 is the later automation.
+- F1: reads-no-queue default fixture is 8 documents, 120 s timeout, the 300 ms mid-transaction check kept.
+- F2: Task 1 `cq-head.ts` imports only `Account, Query` from contracts.
+- F3: `BootDeps.dbWorkerExecArgv` dropped.
+- F4: Task 2 test: 150 matches, no filter, the oldest 50 rowids never appear among candidates.
+- F5: Task 2 merges the new names into the existing `../fuzzy` import in fuzzy.test.ts.
+- F6: `sql-runner-entry.ts` exits in the send callback on open error.
+- F7: Task 9 baseline uses a temporary v0.104.0 worktree (symlinked deps, unlinked before removal) when the agent-sessions checkout is not at `c369815d`.
