@@ -51,7 +51,9 @@ function downloadingPct(s: ProviderStatus): number | null {
 
 export function createProcessingStatus(deps: ProcessingStatusDeps): {
   start(): void;
-  tick(lane: LaneState): void;
+  /** `wakePending`: a background refusal happened since the last wake
+   *  (boot.ts `takeLaneWake`). */
+  tick(lane: LaneState, wakePending?: boolean): void;
   /** Recompute the waiting count now and push it if it changed. */
   refreshWaiting(): Promise<void>;
   stop(): void;
@@ -125,18 +127,19 @@ export function createProcessingStatus(deps: ProcessingStatusDeps): {
       );
     },
     refreshWaiting,
-    tick(lane) {
+    tick(lane, wakePending = false) {
+      const prev = lastLane;
       if (lane !== lastLane) {
-        const prev = lastLane;
         lastLane = lane;
         deps.patch({ lane });
-        if (prev !== null && prev !== 'open' && lane === 'open') {
-          void deps
-            .wakeWorkers()
-            .then(refreshWaiting, (e) =>
-              deps.warn(`worker wake failed: ${String(e)}`),
-            );
-        }
+      }
+      const edge = prev !== null && prev !== 'open' && lane === 'open';
+      if (edge || (lane === 'open' && wakePending)) {
+        void deps
+          .wakeWorkers()
+          .then(refreshWaiting, (e) =>
+            deps.warn(`worker wake failed: ${String(e)}`),
+          );
       }
       let download: AppState['processing']['download'] = null;
       for (const p of deps.providers()) {

@@ -88,7 +88,7 @@ describe('plane activeCalls', () => {
 
     const seen: number[] = [];
     plane.activeCalls.onChange((c) => seen.push(c.length));
-    plane.setBackgroundOpen(false);
+    plane.setLanePolicy(() => false);
     await expect(
       plane.complete('hi', { lane: 'background' }),
     ).rejects.toBeInstanceOf(LaneClosedError);

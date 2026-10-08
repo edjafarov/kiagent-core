@@ -114,17 +114,10 @@ export interface InferencePlane extends Inference {
   /** The current routes, for a user-facing "some tasks leave this
    *  machine" line. */
   routes(): Array<{ task: string; providerName: string; remote: boolean }>;
-  /** Scheduler-controlled: false closes the background lane (battery, user
-   *  active, outside the processing window) — background requests then fail
-   *  fast with LaneClosedError. Interactive always flows. */
-  setBackgroundOpen(open: boolean): void;
-  /** Fires on every REAL flip of the boolean the plane owns (never on a
-   *  no-op setBackgroundOpen call with the same value). The plane knows
-   *  nothing about prefs, so it reports only its own boolean — resolving
-   *  that into a `LaneState` (and telling 'battery' from 'disabled' from
-   *  'until-night' etc.) happens above it, in the extension platform, via
-   *  the injected `laneState()` resolver. */
-  onLaneChange(cb: (open: boolean) => void): () => void;
+  /** Bind the ONE background-lane policy (boot.ts `backgroundLaneOpen`).
+   *  `gate()` calls it on every background request — no cached boolean, so
+   *  admission is never staler than the policy's inputs. Unbound = closed. */
+  setLanePolicy(fn: () => boolean): void;
 }
 
 /** Thrown by the routing layer when NO ready provider supports a kind — as
@@ -213,8 +206,8 @@ function normalizeCompletion(raw: unknown): {
 
 /**
  * ONE front door to models. Requests route to the first ready provider that
- * supports the kind; background requests flow only while the scheduler holds
- * the lane open, and throw LaneClosedError otherwise.
+ * supports the kind; background requests flow only while the bound lane
+ * policy answers open, and throw LaneClosedError otherwise.
  */
 export function createInference(
   logs: LogSink,
@@ -238,8 +231,7 @@ export function createInference(
     }
   };
   const routeTable = new Map<string, string>();
-  let backgroundOpen = true;
-  const laneSubs = new Set<(open: boolean) => void>();
+  let lanePolicy: () => boolean = () => false;
 
   // Random start so a process restart is a new generation by construction —
   // nothing persists it across boots. Seed is injectable so tests are
@@ -299,7 +291,7 @@ export function createInference(
   };
 
   const gate = (lane: Lane): void => {
-    if (lane !== 'interactive' && !backgroundOpen) throw new LaneClosedError();
+    if (lane !== 'interactive' && !lanePolicy()) throw new LaneClosedError();
   };
 
   /** A task with a route goes to its provider when that provider serves
@@ -604,16 +596,8 @@ export function createInference(
           remote: p ? p.remote === true : true,
         };
       }),
-    setBackgroundOpen(open) {
-      if (open === backgroundOpen) return;
-      backgroundOpen = open;
-      laneSubs.forEach((cb) => cb(open));
-    },
-    onLaneChange(cb) {
-      laneSubs.add(cb);
-      return () => {
-        laneSubs.delete(cb);
-      };
+    setLanePolicy(fn) {
+      lanePolicy = fn;
     },
   };
 }

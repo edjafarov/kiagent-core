@@ -132,37 +132,34 @@ describe('inference plane', () => {
     );
   });
 
-  it('background lane fails fast with LaneClosedError while closed', async () => {
+  it('background calls are refused until a lane policy is bound', async () => {
     const plane = createInference(noopLogs);
     plane.register(provider('ocr', ['read'], 'ocr'));
-    plane.setBackgroundOpen(false);
     await expect(
       plane.read(new Uint8Array([1]), { lane: 'background' }),
     ).rejects.toThrow(LaneClosedError);
-    plane.setBackgroundOpen(true);
+    await expect(plane.read(new Uint8Array([1]))).resolves.toBe('ocr:read');
+  });
+
+  it('gate reads the policy on every call (no cached boolean)', async () => {
+    const plane = createInference(noopLogs);
+    plane.register(provider('ocr', ['read'], 'ocr'));
+    let open = false;
+    plane.setLanePolicy(() => open);
+    await expect(
+      plane.read(new Uint8Array([1]), { lane: 'background' }),
+    ).rejects.toThrow(LaneClosedError);
+    open = true;
     await expect(
       plane.read(new Uint8Array([1]), { lane: 'background' }),
     ).resolves.toBe('ocr:read');
   });
 
-  it('interactive lane flows while the background lane is closed', async () => {
+  it('interactive calls flow while the policy says closed', async () => {
     const plane = createInference(noopLogs);
     plane.register(provider('ocr', ['read'], 'ocr'));
-    plane.setBackgroundOpen(false);
+    plane.setLanePolicy(() => false);
     await expect(plane.read(new Uint8Array([1]))).resolves.toBe('ocr:read');
-  });
-
-  it('notifies lane subscribers only on a real transition', () => {
-    const plane = createInference(noopLogs);
-    const seen: boolean[] = [];
-    const off = plane.onLaneChange((open) => seen.push(open));
-    plane.setBackgroundOpen(true); // already true — no event
-    plane.setBackgroundOpen(false);
-    plane.setBackgroundOpen(false); // no change — no event
-    plane.setBackgroundOpen(true);
-    off();
-    plane.setBackgroundOpen(false); // unsubscribed
-    expect(seen).toEqual([false, true]);
   });
 
   it('bumps the generation on register, unregister and provider change', () => {
@@ -642,6 +639,7 @@ describe('remote → local fallback', () => {
   ) {
     const calls: Array<{ id: string; payload: Record<string, unknown> }> = [];
     const plane = createInference(fakeLogs(), { generationSeed: 1 });
+    plane.setLanePolicy(() => true);
     const track =
       (
         id: string,
@@ -735,7 +733,7 @@ describe('remote → local fallback', () => {
     let planeRef: ReturnType<typeof createInference> | null = null;
     const { plane, calls } = setup({
       remoteHandle: async () => {
-        planeRef!.setBackgroundOpen(false);
+        planeRef!.setLanePolicy(() => false);
         throw unavailable();
       },
     });

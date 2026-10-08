@@ -1393,7 +1393,7 @@ export interface CapSurfaces {
   /** Real-time model access ('interactive' lane by default) — for commands
    *  and tools. `lane()` is extension-facing ONLY: it is not a member of
    *  `Inference` itself (the plane cannot resolve `LaneState` on its own —
-   *  see `InferencePlane.onLaneChange`), so it lives here, on the surface
+   *  see `InferencePlane.setLanePolicy`), so it lives here, on the surface
    *  the extension boundary hands out, not on the base contract that
    *  `InferencePlane`/`EngineDeps` also implement. */
   inference: { inference: ExtensionInference };

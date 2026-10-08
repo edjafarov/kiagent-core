@@ -40,6 +40,7 @@ import { startHeapWatch } from './heap-watch';
 import {
   backgroundLaneState,
   bootCore,
+  takeLaneWake,
   resumeAccounts,
   runAccount,
   setAccountCadence,
@@ -1215,7 +1216,6 @@ app
       // can never disagree about why the background lane is (or isn't)
       // open right now.
       laneState: () => backgroundLaneState(p),
-      onLaneChange: (cb) => p.inference.onLaneChange(cb),
       logSink: p.logSink,
       notify: (msg) => {
         new Notification({ title: product.productName, body: msg }).show();
@@ -1330,17 +1330,14 @@ app
       // (e.g. a dead/restarting DB worker) must not escape as an unhandled
       // rejection on the timer. Mirrors scheduler.ts's safeTick guard.
       try {
-        // One lane evaluation per tick, shared by the plane switch and the
-        // status module (push + worker wake).
+        // Publication only: admission reads the policy directly (setLanePolicy).
+        // This tick is the single publisher: one lane evaluation, shared by
+        // platform.lane (refreshLane re-resolves LaneState every tick, so a
+        // 'battery' -> 'until-synced' reason change still emits once) and the
+        // status module (push + worker wake). refreshLane() never throws.
         const lane = backgroundLaneState(p);
-        p.inference.setBackgroundOpen(lane === 'open');
-        // The only place lane policy is re-evaluated — also the
-        // correctness net for platform.lane: it re-resolves LaneState on
-        // every tick regardless of whether the boolean above just flipped,
-        // so a 'battery' -> 'disabled' transition (both closed) still
-        // emits. refreshLane() itself never throws.
         extensionsPlatform?.refreshLane();
-        processingStatus.tick(lane);
+        processingStatus.tick(lane, lane === 'open' && takeLaneWake(p));
         const all = await p.store.ledgerCountsAll(p.engine.activeConsumers());
         const processing = {
           pending: all.pending,

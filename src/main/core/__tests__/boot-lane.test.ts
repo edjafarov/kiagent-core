@@ -1,5 +1,7 @@
 import { backgroundLaneOpen, backgroundLaneState, takeLaneWake } from '../boot';
 import type { CorePlatform } from '../boot';
+import { createInference, LaneClosedError } from '../inference';
+import { createProcessingStatus } from '../processing-status';
 
 const GiB = 1024 ** 3;
 
@@ -113,5 +115,61 @@ describe('pending wake', () => {
     const p = platform({});
     expect(backgroundLaneOpen(p)).toBe(true);
     expect(takeLaneWake(p)).toBe(false);
+  });
+});
+
+describe('refusal → pending wake → publisher tick', () => {
+  function status() {
+    const wakeWorkers = jest.fn(async () => {});
+    const s = createProcessingStatus({
+      countWaiting: async () => 0,
+      providers: () => [],
+      activeCalls: { list: () => [], onChange: () => () => {} },
+      wakeWorkers,
+      patch: () => {},
+      warn: () => {},
+    } as never);
+    return { s, wakeWorkers };
+  }
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  it('an inference-admission refusal before the first tick wakes on the first open tick', async () => {
+    let syncing = true;
+    const p = platform({ weak: true });
+    (p as any).engine = { syncing: () => syncing };
+    const plane = createInference({ log: () => {} } as never);
+    plane.register({
+      id: 'x',
+      supports: ['read'],
+      status: () => 'ready',
+      handle: async () => 't',
+    } as never);
+    plane.setLanePolicy(() => backgroundLaneOpen(p));
+    await expect(
+      plane.read(new Uint8Array([1]), { lane: 'background' }),
+    ).rejects.toThrow(LaneClosedError);
+    syncing = false; // sync finished before any tick ran
+    const { s, wakeWorkers } = status();
+    const lane = backgroundLaneState(p);
+    s.tick(lane, lane === 'open' && takeLaneWake(p));
+    await flush();
+    expect(wakeWorkers).toHaveBeenCalledTimes(1);
+  });
+
+  it('a worker pre-flight refusal between two open ticks wakes on the next tick', async () => {
+    let syncing = false;
+    const p = platform({ weak: true });
+    (p as any).engine = { syncing: () => syncing };
+    const { s, wakeWorkers } = status();
+    s.tick(backgroundLaneState(p), takeLaneWake(p)); // open, nothing pending
+    syncing = true;
+    expect(backgroundLaneOpen(p)).toBe(false); // worker laneOpen() refuses
+    syncing = false; // …and sync ends before the next tick
+    const lane = backgroundLaneState(p);
+    s.tick(lane, lane === 'open' && takeLaneWake(p));
+    await flush();
+    expect(wakeWorkers).toHaveBeenCalledTimes(1);
   });
 });

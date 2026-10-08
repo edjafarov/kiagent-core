@@ -300,6 +300,9 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
       await store.close();
     },
   };
+  // Bound synchronously before anything can call: production never sees the
+  // plane's closed default.
+  inference.setLanePolicy(() => backgroundLaneOpen(platform));
   return platform;
 }
 

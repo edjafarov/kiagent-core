@@ -94,6 +94,17 @@ describe('createLaneGate', () => {
     expect(emit).toHaveBeenCalledWith('disabled');
   });
 
+  it('emits a reason-only change between two closed states exactly once', () => {
+    let state: LaneState = 'battery';
+    const emit = jest.fn();
+    const gate = createLaneGate(() => state, emit, jest.fn());
+    gate.check();
+    state = 'until-synced';
+    gate.check();
+    gate.check();
+    expect(emit.mock.calls.map((c) => c[0])).toEqual(['battery', 'until-synced']);
+  });
+
   it('the same resolved state re-resolved on a later tick emits nothing', () => {
     const emit = jest.fn();
     const gate = createLaneGate(
@@ -197,7 +208,6 @@ describe('createExtensionPlatform', () => {
         describe: async () => null,
       },
       laneState: () => 'open',
-      onLaneChange: () => () => {},
       logSink: {
         log: (scope: string, level: string, msg: string) =>
           logs.push({ scope, level, msg }),
@@ -1643,7 +1653,6 @@ describe('createExtensionPlatform', () => {
         describe: async () => null,
       },
       laneState: () => 'open',
-      onLaneChange: () => () => {},
       logSink: { log: jest.fn() },
       notify: jest.fn(),
       transportFactory: () => {
@@ -1721,20 +1730,14 @@ describe('createExtensionPlatform', () => {
     expect(offWorker).toHaveBeenCalledTimes(1);
   });
 
-  it('re-registers worker and lane lifecycle listeners after stop/start', async () => {
+  it('re-registers the worker lifecycle listener after stop/start', async () => {
     const workerListeners = new Set<() => void>();
-    const laneListeners = new Set<(open: boolean) => void>();
     const onWorkerRespawn = jest.fn((listener: () => void) => {
       workerListeners.add(listener);
       return () => workerListeners.delete(listener);
     });
-    const onLaneChange = jest.fn((listener: (open: boolean) => void) => {
-      laneListeners.add(listener);
-      return () => laneListeners.delete(listener);
-    });
     const workerPlatform = makePlatform({
       db: { onWorkerRespawn } as never,
-      onLaneChange,
     });
     await workerPlatform.start();
     const preview = await workerPlatform.installPreview(FIXTURE);
@@ -1748,13 +1751,10 @@ describe('createExtensionPlatform', () => {
 
     await workerPlatform.stop();
     expect(workerListeners.size).toBe(0);
-    expect(laneListeners.size).toBe(0);
 
     await workerPlatform.start();
     expect(onWorkerRespawn).toHaveBeenCalledTimes(2);
-    expect(onLaneChange).toHaveBeenCalledTimes(2);
     expect(workerListeners.size).toBe(1);
-    expect(laneListeners.size).toBe(1);
 
     for (const listener of workerListeners) listener();
     await new Promise<void>((resolve, reject) => {
@@ -1875,7 +1875,6 @@ describe('createExtensionPlatform', () => {
         describe: async () => null,
       },
       laneState: () => 'open',
-      onLaneChange: () => () => {},
       logSink: { log: jest.fn() },
       notify: jest.fn(),
       transportFactory: () => {
