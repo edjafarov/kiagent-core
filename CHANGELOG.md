@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.104.0](https://github.com/edjafarov/kiagent-core/compare/v0.103.0...v0.104.0) (2026-10-08)
+
+### Features
+
+* **core:** host model — HostFacts + hostBudget ([#145](https://github.com/edjafarov/kiagent-core/issues/145)) ([d151888](https://github.com/edjafarov/kiagent-core/commit/d15188881ab891cccd37e21595079fb4e83d70b1))
+* **core:** one child launcher with background/host priority ([#145](https://github.com/edjafarov/kiagent-core/issues/145)) ([8ed3425](https://github.com/edjafarov/kiagent-core/commit/8ed34256a6321ce5eccd2347d36a04a5fa64216e))
+* **core:** until-synced lane on weak hosts + engine.syncing() ([#145](https://github.com/edjafarov/kiagent-core/issues/145)) ([219fafe](https://github.com/edjafarov/kiagent-core/commit/219fafe23359f248f9c8eefbbada5db827a0e0b2))
+* **local-asr:** demoted thread-capped background whisper; interactive preempts ([#145](https://github.com/edjafarov/kiagent-core/issues/145)) ([3d7289a](https://github.com/edjafarov/kiagent-core/commit/3d7289afc82195a5174e3ffe5d9a3527dc291e2a))
+* **local-llm:** thread-capped llama-server, host model, accel() ([#145](https://github.com/edjafarov/kiagent-core/issues/145)) ([978bd78](https://github.com/edjafarov/kiagent-core/commit/978bd78624ab0d2a7429a28211347bcda5b008ed))
+* **platform:** extension hosts below-normal; until-synced copy ([#145](https://github.com/edjafarov/kiagent-core/issues/145)) ([a1cf8bd](https://github.com/edjafarov/kiagent-core/commit/a1cf8bd0408331af583c3b8a9cba0678c884d68c))
+* **vision,audio:** demoted OCR/raster/afconvert by lane; raster timeout defers ([#145](https://github.com/edjafarov/kiagent-core/issues/145)) ([52f9479](https://github.com/edjafarov/kiagent-core/commit/52f9479c1df2b8b2d88bce9d2413a0d6b671e5f1))
+
+### Bug Fixes
+
+* **local-asr:** hold background ASR off for 90 s after interactive work ([#145](https://github.com/edjafarov/kiagent-core/issues/145)) ([c24e51a](https://github.com/edjafarov/kiagent-core/commit/c24e51ab9a40c68415fbb22b4d844917d9bcada8))
+* **platform:** re-emit platform.lane open on a lane wake ([#145](https://github.com/edjafarov/kiagent-core/issues/145)) ([236f79e](https://github.com/edjafarov/kiagent-core/commit/236f79e0ae55d0eeaf3e6b865e8df3c61744a947))
+* **priority:** log demotion after its outcome; document until-synced live-batch assumption ([#145](https://github.com/edjafarov/kiagent-core/issues/145)) ([f4168e0](https://github.com/edjafarov/kiagent-core/commit/f4168e01c6f27aa84e673e434546a35237171a4b))
+* **scheduler:** coalesce triggers while a job runs ([#145](https://github.com/edjafarov/kiagent-core/issues/145)) ([85322db](https://github.com/edjafarov/kiagent-core/commit/85322db3cbb5580319d2ff6b8ec30e63566e140b))
+
+### Reverts
+
+* Revert "test(platform): fork e2e suites keep hosts at normal priority" ([ef05ab0](https://github.com/edjafarov/kiagent-core/commit/ef05ab0ad8125ded9d69aad2e7f196a99cdd3bab))
+
 ## [0.103.0](https://github.com/edjafarov/kiagent-core/compare/v0.102.0...v0.103.0) (2026-10-08)
 
 ### Features
