@@ -26,6 +26,14 @@ import type { LogSink } from './engine/engine';
 import { createInference } from './inference';
 import type { InferencePlane } from './inference';
 import { detectLanguages } from './language';
+import { setChildPriorityLog } from './child-priority';
+import {
+  describeHost,
+  hostBudget,
+  readHostFacts,
+  type HostFacts,
+  type LlmAccel,
+} from './host-profile';
 import { createLogs } from './logs';
 import { createPrefs } from './prefs';
 import { createScheduler } from './scheduler';
@@ -129,6 +137,11 @@ export interface CorePlatform {
   /** Per-source OAuth refreshers; source families add theirs at registration. */
   refreshers: Map<string, (creds: Credentials) => Promise<Credentials | null>>;
   convert(input: DocumentInput): Promise<DocumentInput>;
+  /** Hardware facts, read once at boot (host-profile.ts). */
+  host: HostFacts;
+  /** The local model's acceleration once detected; null before. Bound by
+   *  main.ts after the bundled providers register. */
+  llmAccel: () => LlmAccel | null;
   createAppProjection(
     extras: AppStateExtras,
   ): ReturnType<typeof createAppProjection>;
@@ -214,6 +227,10 @@ export function registerArchiveSweep(deps: {
  */
 export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const { store: logStore, sink } = createLogs(path.join(deps.dataDir, 'logs'));
+  const host = readHostFacts();
+  // accel is detected lazily by the local-llm provider; unknown at boot.
+  sink.log('host', 'info', describeHost(host, null));
+  setChildPriorityLog((msg) => sink.log('priority', 'info', msg));
   const prefs = createPrefs(deps.dataDir);
   // The corpus SQLite connection lives in a worker thread (the store is
   // AppDb-driven, so every read/write and the relocated commit transaction
@@ -261,7 +278,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
 
   registerArchiveSweep({ store, scheduler, logs: sink });
 
-  return {
+  const platform: CorePlatform = {
     db,
     store,
     engine,
@@ -274,6 +291,8 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     senders,
     refreshers,
     convert,
+    host,
+    llmAccel: () => null,
     createAppProjection,
     shutdown: async () => {
       scheduler.stop();
@@ -281,6 +300,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
       await store.close();
     },
   };
+  return platform;
 }
 
 /** Start (or restart) one account's sync and keep its cadence job registered.
@@ -387,7 +407,11 @@ export function attachWorker(platform: CorePlatform, worker: Worker): Handle {
   return handle;
 }
 
-/** Evaluate the processing window and say WHY it's closed when it is. */
+/** Evaluate the processing window and say WHY it's closed when it is. The ONE
+ *  lane decision: inference admission, worker pre-flight, the extension
+ *  `lane()` resolver and the 5 s publisher all read it. #147 grows this into
+ *  a kind-aware owner (enrichment vs ingest); ingest must never be closed by
+ *  'until-synced'. */
 export function backgroundLaneState(
   platform: CorePlatform,
   now = new Date(),
@@ -396,6 +420,11 @@ export function backgroundLaneState(
   if (!p.enabled) return 'disabled';
   const { env } = platform.scheduler;
   if (env.onBattery) return 'battery';
+  if (
+    hostBudget(platform.host, platform.llmAccel()).weak &&
+    platform.engine.syncing()
+  )
+    return 'until-synced';
   switch (p.window) {
     case 'always':
       return 'open';
@@ -409,10 +438,25 @@ export function backgroundLaneState(
   }
 }
 
-/** Evaluate the processing window: is the background inference lane open? */
+/** Platforms that refused background work since the publisher last woke the
+ *  deferred workers. Coalesced: one wake covers any number of refusals. */
+const pendingWake = new WeakSet<CorePlatform>();
+
+/** Is the background lane open? A `false` answer records a pending wake, so
+ *  a closure that opens and closes between two publisher ticks still wakes
+ *  the deferred workers on the next tick (instead of their 30-min cadence). */
 export function backgroundLaneOpen(
   platform: CorePlatform,
   now = new Date(),
 ): boolean {
-  return backgroundLaneState(platform, now) === 'open';
+  const open = backgroundLaneState(platform, now) === 'open';
+  if (!open) pendingWake.add(platform);
+  return open;
+}
+
+/** Consume the pending wake (the 5 s publisher calls this only while open). */
+export function takeLaneWake(platform: CorePlatform): boolean {
+  const had = pendingWake.has(platform);
+  pendingWake.delete(platform);
+  return had;
 }

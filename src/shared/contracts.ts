@@ -1690,12 +1690,18 @@ export interface ActiveCall {
   task: string | null;
 }
 
+/** Why background work may or may not run right now. Contract (platform
+ *  2.8.0): ONLY `'open'` permits background admission — every other value,
+ *  including values added in later versions, means closed. */
 export type LaneState =
   | 'open'
   | 'disabled'
   | 'battery'
   | 'until-idle'
-  | 'until-night';
+  | 'until-night'
+  /** Weak host (few cores / ≤8 GiB / local model on CPU) while any account
+   *  is still in its initial backfill. */
+  | 'until-synced';
 
 /** The ONE timing authority — nothing else owns a timer. Durable:
  *  lastRun/nextRun persist; a missed window catches up on boot. */

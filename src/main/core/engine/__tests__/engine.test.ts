@@ -3094,3 +3094,263 @@ async function waitFor(cond: () => Promise<boolean>, ms = 2000): Promise<void> {
     await new Promise((r) => setTimeout(r, 25));
   }
 }
+
+describe('syncing()', () => {
+  let dir: string;
+  let store: CoreStore;
+  let hook: ((cursor: unknown) => Promise<void> | void) | undefined;
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-syncing-'));
+    store = await makeStore(dir);
+    hook = undefined;
+  });
+  afterEach(async () => {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  type Step = Batch<number, DocumentInput> | Error | 'block';
+  const bf = (cursor: number): Batch<number, DocumentInput> => ({
+    phase: 'backfill',
+    items: [doc(`bf${cursor}`)],
+    cursor,
+  });
+  const lv = (cursor: number): Batch<number, DocumentInput> => ({
+    phase: 'live',
+    items: [doc(`lv${cursor}`)],
+    cursor,
+  });
+  const coded = (code: 'auth' | 'permanent'): Error =>
+    Object.assign(new Error(`${code} failure`), { code });
+
+  /** Plays `steps` on the FIRST pull only; later pulls (retries) block. */
+  function setup(steps: Step[]) {
+    let pulls = 0;
+    const source: Source<number, DocumentInput> = {
+      descriptor: {
+        id: 'fake',
+        name: 'Fake',
+        documentTypes: ['note'],
+        auth: 'none',
+      },
+      async connect() {
+        return { identifier: 'fake@test' };
+      },
+      async *pull() {
+        pulls += 1;
+        const mine = pulls === 1 ? steps : (['block'] as Step[]);
+        for (const s of mine) {
+          if (s === 'block') await new Promise<void>(() => {});
+          else if (s instanceof Error) throw s;
+          else yield s;
+        }
+      },
+      toDocument: (item) => item,
+    };
+    // Same store, with commit routed through the test's hook first.
+    const gated = new Proxy(store, {
+      get(t, p, r) {
+        if (p === 'commit') {
+          return async (args: { cursor?: unknown }) => {
+            await hook?.(args.cursor);
+            return t.commit(args as never);
+          };
+        }
+        const v = Reflect.get(t, p, r);
+        return typeof v === 'function' ? v.bind(t) : v;
+      },
+    }) as CoreStore;
+    const engine = createEngine({
+      store: gated,
+      sources: { get: (id) => (id === 'fake' ? source : undefined) },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+      },
+      convert: async (input) => input,
+      logs: noopLogs,
+    });
+    return Object.assign(engine, { __source: source });
+  }
+  const ctx = {
+    oauth: async () => ({}),
+    showQr: () => {},
+    prompt: async () => ({}),
+    status: () => {},
+    pickFolders: async () => [],
+  };
+  const tick = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+  const cursorIs = (n: number) => async () =>
+    (await store.account(accountId))?.cursor === n;
+  let accountId: string;
+  async function start(steps: Step[]) {
+    const engine = setup(steps);
+    const account = await engine.connect(engine.__source, ctx);
+    accountId = account.id;
+    return { engine, account };
+  }
+
+  it('1. backfill batch committed, source then blocks → true', async () => {
+    const { engine, account } = await start([bf(1), 'block']);
+    const h = engine.run(account);
+    await waitFor(cursorIs(1));
+    await tick();
+    expect(engine.syncing()).toBe(true);
+    await h.stop();
+  });
+
+  it('2. live batch → false', async () => {
+    const { engine, account } = await start([lv(1), 'block']);
+    const h = engine.run(account);
+    await waitFor(cursorIs(1));
+    await tick();
+    expect(engine.syncing()).toBe(false);
+    await h.stop();
+  });
+
+  it('3. quiet watcher (yields nothing, blocks) → false', async () => {
+    const { engine, account } = await start(['block']);
+    const h = engine.run(account);
+    await tick(300);
+    expect(engine.syncing()).toBe(false);
+    await h.stop();
+  });
+
+  it('4. live then backfill (multi-root resume) → true after the second commit', async () => {
+    const { engine, account } = await start([lv(1), bf(2), 'block']);
+    const h = engine.run(account);
+    await waitFor(cursorIs(2));
+    await tick();
+    expect(engine.syncing()).toBe(true);
+    await h.stop();
+  });
+
+  it('5. backfill commit rejects → stays false', async () => {
+    let rejected = false;
+    const { engine, account } = await start([bf(1), 'block']);
+    hook = () => {
+      if (!rejected) {
+        rejected = true;
+        throw new Error('disk full');
+      }
+    };
+    const h = engine.run(account);
+    await waitFor(async () => rejected);
+    await tick();
+    expect(engine.syncing()).toBe(false);
+    await h.stop();
+  });
+
+  it('6. backfill committed, then pause → false', async () => {
+    const { engine, account } = await start([bf(1), 'block']);
+    const h = engine.run(account);
+    await waitFor(cursorIs(1));
+    await tick();
+    expect(engine.syncing()).toBe(true);
+    await engine.pause(account.id);
+    expect(engine.syncing()).toBe(false);
+    await h.stop();
+  });
+
+  it('7. stream ends after a backfill batch (loop settles) → false', async () => {
+    const { engine, account } = await start([bf(1)]);
+    const h = engine.run(account);
+    await waitFor(async () => !engine.isRunning(account.id));
+    expect(engine.syncing()).toBe(false);
+    await h.stop();
+  });
+
+  it('8. delayed backfill commit: false until it lands, then true', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { engine, account } = await start([bf(1), 'block']);
+    let entered = false;
+    hook = async () => {
+      entered = true;
+      await gate;
+    };
+    const h = engine.run(account);
+    await waitFor(async () => entered);
+    await tick();
+    expect(engine.syncing()).toBe(false);
+    release();
+    await waitFor(cursorIs(1));
+    await tick();
+    expect(engine.syncing()).toBe(true);
+    await h.stop();
+  });
+
+  it('9. backfill then live committed → false', async () => {
+    const { engine, account } = await start([bf(1), lv(2), 'block']);
+    const h = engine.run(account);
+    await waitFor(cursorIs(2));
+    await tick();
+    expect(engine.syncing()).toBe(false);
+    await h.stop();
+  });
+
+  it('10a. live commit held after backfill → stays true until it resolves', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let heldLive = false;
+    const { engine, account } = await start([bf(1), lv(2), 'block']);
+    hook = async (cursor) => {
+      if (cursor === 2) {
+        heldLive = true;
+        await gate;
+      }
+    };
+    const h = engine.run(account);
+    await waitFor(async () => heldLive);
+    await tick();
+    expect(engine.syncing()).toBe(true);
+    release();
+    await waitFor(cursorIs(2));
+    await tick();
+    expect(engine.syncing()).toBe(false);
+    await h.stop();
+  });
+
+  it('10b. live commit rejects after backfill → previous value kept (true)', async () => {
+    let rejected = false;
+    const { engine, account } = await start([bf(1), lv(2), 'block']);
+    hook = (cursor) => {
+      if (cursor === 2) {
+        rejected = true;
+        throw new Error('disk full');
+      }
+    };
+    const h = engine.run(account);
+    await waitFor(async () => rejected);
+    await tick();
+    expect(engine.syncing()).toBe(true);
+    await h.stop();
+    expect(engine.syncing()).toBe(false);
+  });
+
+  it('11a. auth error after backfill → needsReauth → false', async () => {
+    const { engine, account } = await start([bf(1), coded('auth')]);
+    const h = engine.run(account);
+    await waitFor(async () => !engine.isRunning(account.id));
+    expect(engine.syncing()).toBe(false);
+    await h.stop();
+  });
+
+  // The un-coded retry-exhaustion path takes ~30 s of real backoff; a
+  // permanent-coded error reaches the same terminal status ('error')
+  // through the same catch block immediately.
+  it('11b. terminal error status after backfill → false', async () => {
+    const { engine, account } = await start([bf(1), coded('permanent')]);
+    const h = engine.run(account);
+    await waitFor(async () => !engine.isRunning(account.id));
+    expect(engine.syncing()).toBe(false);
+    await h.stop();
+  });
+});

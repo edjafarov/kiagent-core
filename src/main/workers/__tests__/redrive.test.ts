@@ -12,6 +12,13 @@ function makePlatform(deferred: string[]) {
   const reruns: string[] = [];
   const platform = {
     prefs: { get: () => ({ processing: { enabled: true, window: 'always' } }) },
+    host: {
+      platform: 'darwin',
+      arch: 'arm64',
+      cores: 8,
+      totalMemBytes: 16 * 1024 ** 3,
+    },
+    llmAccel: () => null,
     scheduler: {
       env: { onBattery: false, userActive: false },
       register: (id: string, _s: unknown, cb: () => Promise<void>) => {
@@ -34,6 +41,7 @@ function makePlatform(deferred: string[]) {
       },
     },
     engine: {
+      syncing: () => false,
       rerunDeferred: async (w: Worker) => {
         reruns.push(w.name);
       },
