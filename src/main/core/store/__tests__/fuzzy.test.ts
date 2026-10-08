@@ -2,7 +2,10 @@ import {
   buildSnippet,
   extractTerms,
   foldForNegation,
-  rrfMerge,
+  FUZZY_CANDIDATES,
+  fuzzyCandidatesSql,
+  pickFuzzyWinners,
+  rankFuzzyCandidates,
   toTrigramMatch,
 } from '../fuzzy';
 
@@ -58,25 +61,6 @@ describe('toTrigramMatch', () => {
   });
 });
 
-describe('rrfMerge', () => {
-  const row = (id: string) => ({ id });
-  it('sums reciprocal ranks for rows in both lists (k=60)', () => {
-    const merged = rrfMerge(
-      [row('a'), row('b')],
-      [row('b'), row('c')],
-      (r) => r.id,
-      10,
-    );
-    // b: 1/62 + 1/61 > a: 1/61 > c: 1/62
-    expect(merged.map((r) => r.id)).toEqual(['b', 'a', 'c']);
-  });
-
-  it('caps at limit', () => {
-    const merged = rrfMerge([row('a'), row('b')], [row('c')], (r) => r.id, 2);
-    expect(merged).toHaveLength(2);
-  });
-});
-
 describe('buildSnippet', () => {
   it('anchors a window at the earliest term and bolds hits', () => {
     const md = `${'x'.repeat(300)} the Jahresrechnung is attached ${'y'.repeat(300)}`;
@@ -93,5 +77,65 @@ describe('buildSnippet', () => {
 
   it('returns empty for empty markdown', () => {
     expect(buildSnippet('', ['a'])).toBe('');
+  });
+});
+
+describe('fuzzyCandidatesSql', () => {
+  it('is newest-first, ranks nothing by bm25 and reads no body by default', () => {
+    const sql = fuzzyCandidatesSql('AND d.account_id = ?', false);
+    expect(sql).toMatch(/ORDER BY t\.rowid DESC LIMIT \?/);
+    expect(sql).not.toMatch(/bm25/);
+    expect(sql).not.toMatch(/markdown/);
+    expect(sql).toMatch(/AND d\.account_id = \?/);
+  });
+
+  it('selects the body only when negated terms need folding', () => {
+    expect(fuzzyCandidatesSql('', true)).toMatch(/d\.markdown/);
+  });
+
+  it('caps candidates at 100', () => {
+    expect(FUZZY_CANDIDATES).toBe(100);
+  });
+});
+
+describe('rankFuzzyCandidates / pickFuzzyWinners', () => {
+  const c = (id: string, title: string, at: string) => ({
+    id,
+    title,
+    created_at: at,
+    ingested_at: at,
+  });
+
+  it('ranks a folded title hit first, then newest', () => {
+    const ranked = rankFuzzyCandidates(
+      [
+        c('old', 'misc', '2026-01-01'),
+        c('new', 'misc', '2026-03-01'),
+        c('title', 'Jahresrechnung 2024', '2026-02-01'),
+      ],
+      ['rechnung'],
+    );
+    expect(ranked.map((r) => r.id)).toEqual(['title', 'new', 'old']);
+  });
+
+  it('keeps exact-hit order and appends only the new fuzzy hits', () => {
+    // exact [A,B,C] + fuzzy [C,B,A,F] with one free slot -> [A,B,C,F]
+    const exact = ['A', 'B', 'C'];
+    const winners = pickFuzzyWinners(
+      new Set(exact),
+      ['C', 'B', 'A', 'F'].map((id) => ({ id })),
+      1,
+    );
+    expect([...exact, ...winners]).toEqual(['A', 'B', 'C', 'F']);
+  });
+
+  it('never exceeds the free slots', () => {
+    expect(
+      pickFuzzyWinners(
+        new Set(),
+        ['x', 'y', 'z'].map((id) => ({ id })),
+        2,
+      ),
+    ).toEqual(['x', 'y']);
   });
 });

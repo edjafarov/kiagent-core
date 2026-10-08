@@ -317,6 +317,13 @@ export interface Query {
     filename?: string[];
     ext?: string[];
     orderBy?: 'newest' | 'relevance';
+    /** What each row carries. `'full'` (default) = today's rows incl. the whole
+     *  markdown. `'snippet'` = `markdown` is '' and `snippet` is always set.
+     *  `'metadata'` = `markdown` is '' and there is no snippet work at all. */
+    project?: 'full' | 'snippet' | 'metadata';
+    /** Context lines for recency / filter-only line-window snippets
+     *  (`'snippet'` projection; default 2). */
+    contextLines?: number;
   }): Promise<Array<Document & { snippet?: string }>>;
   count(q: {
     type?: string;

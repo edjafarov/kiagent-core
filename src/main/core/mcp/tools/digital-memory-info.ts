@@ -69,7 +69,10 @@ export function makeDigitalMemoryInfoTool(query: Query) {
       bySource.set(a.source, (bySource.get(a.source) ?? 0) + c);
     }
 
-    const sample = await query.search({ limit: SAMPLE_SIZE });
+    const sample = await query.search({
+      limit: SAMPLE_SIZE,
+      project: 'metadata',
+    });
     const typesSeen = new Set<string>();
     const byLanguageSample = new Map<string, number>();
     let oldest: string | null = null;

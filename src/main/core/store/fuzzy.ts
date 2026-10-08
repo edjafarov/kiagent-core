@@ -72,35 +72,6 @@ export function toTrigramMatch(terms: string[]): string | null {
   return usable.map((t) => `"${t.replace(/"/g, '""')}"`).join(' AND ');
 }
 
-const RRF_K = 60;
-
-/** Reciprocal Rank Fusion: merge two ranked lists by rank position (bm25
- *  scores from different tables aren't comparable). Rows present in both
- *  lists sum their contributions; higher fused score = better. */
-export function rrfMerge<T>(
-  primary: T[],
-  fallback: T[],
-  idOf: (row: T) => string,
-  limit: number,
-): T[] {
-  const byId = new Map<string, { row: T; score: number }>();
-  const add = (list: T[]): void => {
-    list.forEach((row, i) => {
-      const key = idOf(row);
-      const inc = 1 / (RRF_K + i + 1);
-      const existing = byId.get(key);
-      if (existing) existing.score += inc;
-      else byId.set(key, { row, score: inc });
-    });
-  };
-  add(primary);
-  add(fallback);
-  return [...byId.values()]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((e) => e.row);
-}
-
 /**
  * JS snippet for trigram-only hits (FTS5's snippet() only covers rows the
  * primary MATCH found): a ~240-char window anchored at the earliest literal
@@ -137,4 +108,60 @@ export function buildSnippet(markdown: string, terms: string[]): string {
     window = window.replace(new RegExp(escaped, 'gi'), '<b>$&</b>');
   }
   return window.replace(/\s+/g, ' ').trim();
+}
+
+/** Newest trigram matches considered per fuzzy pass (spec §3.2). */
+export const FUZZY_CANDIDATES = 100;
+
+/** The ONE fuzzy statement: keeps every eligibility filter (`where` is
+ *  `AND …` or empty), drops bm25 (its cost grows with the match count), takes
+ *  the NEWEST matches (trigram rowid = documents.rowid = insert order; FTS5
+ *  serves `ORDER BY rowid DESC` without sorting) and reads no body unless
+ *  negated terms need folding. */
+export function fuzzyCandidatesSql(where: string, withBody: boolean): string {
+  return `SELECT d.id, d.title, d.created_at, d.ingested_at${withBody ? ', d.markdown' : ''}
+            FROM documents_tri t JOIN documents d ON d.id = t.doc_id
+           WHERE documents_tri MATCH ? ${where}
+           ORDER BY t.rowid DESC LIMIT ?`;
+}
+
+export interface FuzzyCandidate {
+  id: string;
+  title: string | null;
+  created_at: string | null;
+  ingested_at: string;
+  markdown?: string | null;
+}
+
+/** Local ranking: a folded title that contains a positive term first, then
+ *  newest by origin date (stable, so ties keep newest-rowid order). */
+export function rankFuzzyCandidates<T extends FuzzyCandidate>(
+  cands: readonly T[],
+  positiveFolded: readonly string[],
+): T[] {
+  const dateOf = (c: T) => c.created_at ?? c.ingested_at;
+  const titleHit = (c: T) => {
+    const t = foldForNegation(c.title ?? '');
+    return positiveFolded.some((p) => t.includes(p)) ? 1 : 0;
+  };
+  return [...cands].sort(
+    (a, b) =>
+      titleHit(b) - titleHit(a) ||
+      (dateOf(a) < dateOf(b) ? 1 : dateOf(a) > dateOf(b) ? -1 : 0),
+  );
+}
+
+/** Fuzzy may only FILL the page's free slots: ids already in the exact list
+ *  are skipped, the rest are taken in ranked order up to `free`. */
+export function pickFuzzyWinners(
+  exactIds: ReadonlySet<string>,
+  ranked: readonly { id: string }[],
+  free: number,
+): string[] {
+  const out: string[] = [];
+  for (const c of ranked) {
+    if (out.length >= free) break;
+    if (!exactIds.has(c.id)) out.push(c.id);
+  }
+  return out;
 }

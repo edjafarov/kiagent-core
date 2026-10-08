@@ -1,4 +1,4 @@
-import type { Account, Query } from '@shared/contracts';
+import type { Account, Document, Query } from '@shared/contracts';
 
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { stemVariants } from '../stemming';
@@ -7,9 +7,13 @@ import {
   buildSnippet,
   extractTerms,
   foldForNegation,
-  rrfMerge,
+  FUZZY_CANDIDATES,
+  fuzzyCandidatesSql,
+  pickFuzzyWinners,
+  rankFuzzyCandidates,
   toTrigramMatch,
 } from './fuzzy';
+import { buildLineWindow, DEFAULT_CONTEXT_LINES } from './line-window';
 import { toAccount, toDocument, type AccountRow, type DocRow } from './rows';
 
 /** Walks the docs_languages index (schema.ts), not the documents table. */
@@ -40,6 +44,11 @@ export const QUERY_METHODS = [
 ] as const;
 export type QueryMethod = (typeof QUERY_METHODS)[number];
 
+const RECENCY_HEAD_CHARS = 65536;
+/** Every documents column except the body — what 'snippet'/'metadata' select. */
+const DOC_COLUMNS_NO_BODY =
+  'd.id, d.account_id, d.external_id, d.type, d.title, d.url, d.metadata, d.created_at, d.parent_id, d.content_hash, d.seq, d.ingest_seq, d.archived_at, d.languages, d.ingested_at, d.updated_at, d.scope_root_id';
+
 export interface CorpusQueryOptions {
   /** `'explicit'` (default, the writer): the distinct-languages cache is
    *  dropped by `invalidateLanguages()` — the writer's own commits do not
@@ -53,6 +62,8 @@ export interface CorpusQuery {
   query: Query;
   /** Drops the languages cache (explicit mode; harmless in data-version mode). */
   invalidateLanguages(): void;
+  /** Cumulative executions of the trigram fallback statement on this instance. */
+  fuzzyRuns(): number;
 }
 
 export async function accountsFrom(reader: AppDb): Promise<Account[]> {
@@ -68,6 +79,7 @@ export function createCorpusQuery(
 ): CorpusQuery {
   const mode = opts.languageCache ?? 'explicit';
   let cache: { langs: string[]; version: number | null } | null = null;
+  let fuzzyRunCount = 0;
 
   const loadLanguages = async (): Promise<string[]> => {
     const rows = (await db.all(CORPUS_LANGUAGES_SQL)) as unknown as Array<{
@@ -233,14 +245,31 @@ export function createCorpusQuery(
         }
       }
       const where = filters.length ? `AND ${filters.join(' AND ')}` : '';
+      const project = q.project ?? 'full';
+      const contextLines = q.contextLines ?? DEFAULT_CONTEXT_LINES;
+      const cols = project === 'full' ? 'd.*' : DOC_COLUMNS_NO_BODY;
+      // A non-full projection never returns a body, whatever the statement read.
+      const toHit = (
+        r: DocRow,
+        snippet?: string,
+      ): Document & { snippet?: string } => {
+        const d = toDocument(project === 'full' ? r : { ...r, markdown: '' });
+        return snippet === undefined ? d : { ...d, snippet };
+      };
+      const dateOf = (d: Document) => d.createdAt ?? d.ingestedAt;
+
       if (q.text?.trim()) {
         const langs = await corpusLanguages();
         const orderSql =
           q.orderBy === 'newest'
             ? `ORDER BY COALESCE(d.created_at, d.ingested_at) DESC, d.id DESC`
             : `ORDER BY bm25(documents_fts, 0, 4.0, 1.0, 2.0, 0.5)`;
+        const snippetSql =
+          project === 'metadata'
+            ? 'NULL'
+            : `snippet(documents_fts, 2, '<b>', '</b>', '…', 24)`;
         const rows = (await db.all(
-          `SELECT d.*, snippet(documents_fts, 2, '<b>', '</b>', '…', 24) AS _snippet
+          `SELECT ${cols}, ${snippetSql} AS _snippet
              FROM documents_fts f JOIN documents d ON d.id = f.doc_id
              WHERE documents_fts MATCH ? ${where}
              ${orderSql}
@@ -251,83 +280,117 @@ export function createCorpusQuery(
             limit,
             offset,
           ],
-        )) as unknown as Array<DocRow & { _snippet: string }>;
+        )) as unknown as Array<DocRow & { _snippet: string | null }>;
+        const exact = rows.map((r) =>
+          toHit(r, project === 'metadata' ? undefined : (r._snippet ?? '')),
+        );
 
-        // Fuzzy fallback (trigram substring recall + RRF, spec 2026-07-11):
-        // only when the exact+stemmed pass left the FIRST page short — good
-        // queries never pay for a second index scan, near-misses (compound
-        // words, truncations) get rescued.
-        if (offset === 0 && rows.length < limit) {
-          const { positive, negated } = extractTerms(q.text);
-          // Cannot-represent-it ⇒ don't-fuzz: (a) every positive term must
-          // survive into the trigram AND group — a silently dropped <3-char
-          // term would smuggle partial matches past the implicit-AND
-          // grammar; (b) grouped negation (NOT (a b)) has no flat-term
-          // representation, so its exclusions can't be re-applied to fuzzy
-          // hits. Such queries get no fuzzy pass.
-          const triMatch =
-            positive.every((t) => t.length >= 3) && !/\bNOT\s*\(/.test(q.text)
-              ? toTrigramMatch(positive)
-              : null;
-          if (triMatch) {
-            const triRows = (await db.all(
-              `SELECT d.* FROM documents_tri t JOIN documents d ON d.id = t.doc_id
-                 WHERE documents_tri MATCH ? ${where}
-                 ORDER BY bm25(documents_tri) LIMIT ?`,
-              [triMatch, ...params, limit],
-            )) as unknown as DocRow[];
-            // A NOT-excluded document must never resurface via fuzzy: drop
-            // hits containing any negated term (substring match, Unicode
-            // lowercase — deliberately broader than FTS token semantics).
-            // Both sides are folded the same way the primary index folds
-            // tokens (NFKC, ё→е, lowercase, diacritics stripped), so this
-            // filter can never be WEAKER than the grammar's own negation
-            // (e.g. -uber must still drop a hit containing über).
-            const negatedFolded = negated.map((n) => foldForNegation(n));
-            const safe = triRows.filter((r) => {
+        // Fuzzy fallback (trigram substring recall): only when the exact pass
+        // left the FIRST page short — good queries never pay for a second scan.
+        if (offset > 0 || rows.length >= limit) return exact;
+        const { positive, negated } = extractTerms(q.text);
+        // Cannot-represent-it ⇒ don't-fuzz: (a) every positive term must
+        // survive into the trigram AND group; (b) grouped negation has no
+        // flat-term form; (c) metadata mode selects no body, so it cannot
+        // re-apply negated terms to fuzzy hits.
+        const triMatch =
+          positive.every((t) => t.length >= 3) &&
+          !/\bNOT\s*\(/.test(q.text) &&
+          !(project === 'metadata' && negated.length > 0)
+            ? toTrigramMatch(positive)
+            : null;
+        if (!triMatch) return exact;
+
+        fuzzyRunCount += 1; // the trigram fallback statement is about to run
+        const candidates = (await db.all(
+          fuzzyCandidatesSql(where, negated.length > 0),
+          [triMatch, ...params, FUZZY_CANDIDATES],
+        )) as unknown as Array<{
+          id: string;
+          title: string | null;
+          created_at: string | null;
+          ingested_at: string;
+          markdown?: string | null;
+        }>;
+        // A NOT-excluded document must never resurface via fuzzy: drop hits
+        // containing any negated term (folded substring, deliberately broader
+        // than FTS token semantics). Runs only when the query has negations.
+        const negatedFolded = negated.map((n) => foldForNegation(n));
+        const safe = negatedFolded.length
+          ? candidates.filter((c) => {
               const haystack = foldForNegation(
-                `${r.title ?? ''}\n${r.markdown ?? ''}`,
+                `${c.title ?? ''}\n${c.markdown ?? ''}`,
               );
               return !negatedFolded.some((n) => haystack.includes(n));
-            });
-            const snippets = new Map(rows.map((r) => [r.id, r._snippet]));
-            // Fuzzy may only FILL the page's remaining slots, never displace
-            // an exact match: rows already in the primary list pass through
-            // (they merge, adding rank signal without growing the union),
-            // new rows are capped to the free slots.
-            const seen = new Set(rows.map((r) => r.id));
-            let free = limit - rows.length;
-            const capped: DocRow[] = [];
-            for (const r of safe) {
-              if (seen.has(r.id)) capped.push(r);
-              else if (free > 0) {
-                capped.push(r);
-                free -= 1;
-              }
-            }
-            const fused = rrfMerge<DocRow>(rows, capped, (r) => r.id, limit);
-            if (q.orderBy === 'newest') {
-              const dateOf = (r: DocRow) => r.created_at ?? r.ingested_at;
-              fused.sort((a, b) =>
-                dateOf(a) < dateOf(b) ? 1 : dateOf(a) > dateOf(b) ? -1 : 0,
-              );
-            }
-            return fused.map((r) => ({
-              ...toDocument(r),
-              snippet:
-                snippets.get(r.id) ?? buildSnippet(r.markdown ?? '', positive),
-            }));
-          }
+            })
+          : candidates;
+        const ranked = rankFuzzyCandidates(
+          safe,
+          positive.map((t) => foldForNegation(t)),
+        );
+        const winnerIds = pickFuzzyWinners(
+          new Set(rows.map((r) => r.id)),
+          ranked,
+          limit - rows.length,
+        );
+        if (winnerIds.length === 0) return exact;
+
+        // Full rows only for the (at most free-slot) appended winners; a
+        // snippet needs the body to build the fuzzy window, metadata does not.
+        const winnerRows = (await db.all(
+          `SELECT ${project === 'metadata' ? DOC_COLUMNS_NO_BODY : 'd.*'}
+             FROM documents d WHERE d.id IN (${winnerIds.map(() => '?').join(',')})`,
+          winnerIds,
+        )) as unknown as DocRow[];
+        const byId = new Map(winnerRows.map((r) => [r.id, r]));
+        const fuzzyHits = winnerIds
+          .map((id) => byId.get(id))
+          .filter((r): r is DocRow => r !== undefined)
+          .map((r) =>
+            toHit(
+              r,
+              project === 'metadata'
+                ? undefined
+                : buildSnippet(r.markdown ?? '', positive),
+            ),
+          );
+        // The exact (bm25) order is kept as is; fuzzy hits are appended.
+        const hits = [...exact, ...fuzzyHits];
+        if (q.orderBy === 'newest') {
+          hits.sort((a, b) =>
+            dateOf(a) < dateOf(b) ? 1 : dateOf(a) > dateOf(b) ? -1 : 0,
+          );
         }
-        return rows.map((r) => ({ ...toDocument(r), snippet: r._snippet }));
+        return hits;
       }
-      const rows = (await db.all(
-        `SELECT d.* FROM documents d WHERE 1=1 ${where}
+
+      // Recency / filter-only listing. 'snippet' needs only the head of the
+      // body for its line window (and says so with a trailing ellipsis).
+      const recencyCols =
+        project === 'full'
+          ? 'd.*'
+          : project === 'snippet'
+            ? `${DOC_COLUMNS_NO_BODY}, substr(d.markdown, 1, ${RECENCY_HEAD_CHARS}) AS markdown`
+            : DOC_COLUMNS_NO_BODY;
+      const recency = (await db.all(
+        `SELECT ${recencyCols} FROM documents d WHERE 1=1 ${where}
            ORDER BY COALESCE(d.created_at, d.ingested_at) DESC, d.id DESC
            LIMIT ? OFFSET ?`,
         [...params, limit, offset],
       )) as unknown as DocRow[];
-      return rows.map(toDocument);
+      return recency.map((r) =>
+        project === 'snippet'
+          ? toHit(
+              r,
+              buildLineWindow(
+                r.markdown ?? '',
+                [],
+                contextLines,
+                (r.markdown?.length ?? 0) >= RECENCY_HEAD_CHARS,
+              ),
+            )
+          : toHit(r),
+      );
     },
     async count(q) {
       const filters: string[] = [];
@@ -402,5 +465,6 @@ export function createCorpusQuery(
     invalidateLanguages: () => {
       cache = null;
     },
+    fuzzyRuns: () => fuzzyRunCount,
   };
 }
