@@ -47,6 +47,8 @@ export function pausedLine(lane: LaneState): string | null {
       return 'Paused — on battery power.';
     case 'until-night':
       return 'Paused — runs overnight (22:00–07:00).';
+    case 'until-synced':
+      return 'Paused — waits until your accounts finish syncing.';
     case 'until-idle':
     default:
       return `Paused — waiting for this ${computerNoun()} to be idle.`;

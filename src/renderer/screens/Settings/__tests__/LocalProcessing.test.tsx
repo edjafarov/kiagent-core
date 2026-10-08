@@ -500,3 +500,9 @@ describe('LocalProcessing: tasks routed off this computer', () => {
     ).toBeInTheDocument();
   });
 });
+
+it('explains the until-synced pause', () => {
+  expect(pausedLine('until-synced')).toBe(
+    'Paused — waits until your accounts finish syncing.',
+  );
+});

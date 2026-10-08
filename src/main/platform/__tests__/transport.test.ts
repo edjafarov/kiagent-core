@@ -15,6 +15,12 @@ import {
   nodeForkTransport,
   utilityProcessTransport,
 } from '../transport';
+import { demoteHost } from '../../core/child-priority';
+
+jest.mock('../../core/child-priority', () => ({
+  ...jest.requireActual('../../core/child-priority'),
+  demoteHost: jest.fn(),
+}));
 
 jest.mock('electron', () => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
@@ -22,6 +28,8 @@ jest.mock('electron', () => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
   const { PassThrough } = require('stream');
   class FakeChild extends EventEmitter {
+    pid = 9001;
+
     postMessage = jest.fn();
 
     kill = jest.fn();
@@ -387,6 +395,14 @@ describe('createRpcEndpoint over the in-memory pair', () => {
 });
 
 describe('utilityProcessTransport (mocked electron)', () => {
+  it('demotes the utility process to below-normal once it spawns', () => {
+    utilityProcessTransport('/x.js', 'svc');
+    const child = (jest.requireMock('electron') as any).__children.at(-1);
+    expect(demoteHost).not.toHaveBeenCalled();
+    child.emit('spawn');
+    expect(demoteHost).toHaveBeenCalledWith(9001);
+  });
+
   it('delivers child messages raw — UtilityProcess "message" passes the message, not a MessageEvent', () => {
     const t = utilityProcessTransport('/fake/extensionHost.js', 'kia-ext:test');
     // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
