@@ -1,8 +1,10 @@
 # Background helpers yield to the user — design
 
-**Status:** DRAFT rev 2 (2026-10-08) · **Issue:** #145 · **Related:** #146 (MCP read worker), #147 (converter off main + background-admission policy)
+**Status:** DRAFT rev 3 (2026-10-08) · **Issue:** #145 · **Related:** #146 (MCP read worker), #147 (converter off main + background-admission policy)
 
 Rev 2 folds in fable + codex astra round 1: lane input read synchronously by every consumer; classify children by request lane, not API; foreground ASR must not wait behind a throttled background job; one host model (probes migrated, not promised); one launcher that owns wrapping + demotion + logging; whisper default is already 4 threads; CPU-only hosts count as weak; measurable acceptance; Windows prerequisites stated.
+
+Rev 3 (round 2): truthful initial-backfill signal (a durable per-account stamp, not the in-memory `connecting` status every run starts with); inference admission reads the live lane function instead of a cached boolean; PDF rasterization classified and its timeout deferred; `-np` left at auto (pinning it disables the unified KV cache); #147 rail made kind-aware.
 
 ## 1. Problem
 
@@ -80,17 +82,18 @@ Providers already receive `lane` on `handle()` (`core/inference.ts` `read`/`hear
 | Child | Class |
 |---|---|
 | OCR helper for a `read` request | `request.lane === 'background' ? 'background' : 'interactive'` |
+| PDF rasterization helper (`workers/vision/rasterize.ts` `pickRasterizer`) | `background` |
 | `afconvert` (audio worker) | `background` |
 | `whisper-cli` for `transcribeFile` | `background`, `-t min(4, backgroundThreads)` |
 | `whisper-cli` for `hear` | by request lane; interactive keeps default threads |
 | extension hosts | `host` |
 | `llama-server` | `interactive` (shared process) + args below |
 
-**llama-server args** (via the existing `extraArgs` seam): `-t N -tb N` with `N = backgroundThreads`, `--poll 0`, and `-np 4` pinned explicitly (the 24k/4-slot sizing comment is load-bearing and b9585 defaults `-np` to auto). `--poll 0` trades some per-op latency on CPU hosts for no busy-waiting — measured (§5). No process-wide demotion and no `--prio`, since interactive answers share the process.
+**llama-server args** (via the existing `extraArgs` seam): `-t N -tb N` with `N = backgroundThreads`, and `--poll 0`. `-np` stays at auto: in b9585 an explicit `-np` turns off the unified KV cache (`--kv-unified` defaults on only with auto slots), which would split `-c 24576` into 4 × 6k and break the 8k interactive request the `contextSize` comment is sized for. A test asserts no `-np` is passed without `-kvu`. `--poll 0` trades some per-op latency on CPU hosts for no busy-waiting — measured (§5). No process-wide demotion and no `--prio`, since interactive answers share the process.
 
 **ASR FIFO — foreground never waits behind background.** The provider runs one whisper at a time (memory bound kept). Jobs carry their class. Queue order: interactive before background. When an interactive job is enqueued while a background job is running, the running background job is aborted (its existing `AbortController`); the audio worker sees an abort-classified error and returns `'defer'` (re-driven later from the start — files are re-transcribed, never half-committed). Test: background `transcribeFile` running + interactive `hear` arrives → hear starts within one process-kill, background job deferred, not failed.
 
-**OCR deadlines.** A demoted OCR helper can exceed its 60/120 s deadline under user load. A deadline hit on a `background` request must classify as retryable (`'defer'`), not a terminal skip — verify the vision worker's handling and add a test.
+**Deadlines.** A demoted helper can exceed its 60/120 s deadline under user load. OCR `read` timeouts already defer (`vision-worker.ts:~265/325`). The first-pass PDF rasterization await (`vision-worker.ts:~309`) is not guarded: a timeout there must also return `'defer'` (not consume engine retries into terminal `failed`). Tests for both.
 
 ### 3.4 Weak machines: enrichment waits for initial sync — one lane function
 
@@ -103,7 +106,9 @@ if (hostBudget(platform.host, platform.llmAccel()).weak && platform.engine.synci
 // window check unchanged
 ```
 
-- `engine.syncing(): boolean` — new, synchronous, from the engine's in-memory `running` handles: true when any account handle's `status` is `'connecting'` or `'backfilling'`. `'error'`, `'paused'`, `'needsReauth'`, `'live'` don't count, so a broken account cannot hold enrichment forever. No DB read.
+- **Truthful initial-backfill signal.** Every `engine.run()` starts its handle at `'connecting'`, including resumed and cadence runs, and a quiet local-folder account can sit in its watcher without ever yielding a batch — so in-memory status cannot say "first sync". Instead the engine stamps `progress.backfilledAt` (ISO time; `AccountProgress` is engine-written JSON via `commit`, no schema migration) on the first commit of a batch with `phase: 'live'`. Legacy accounts with no stamp whose persisted `status` is `'live'` when `run()` loads them count as backfilled (and get stamped on their next commit).
+- `engine.syncing(): boolean` — new, synchronous, no DB read: true when any `running` entry keyed `account:*` (worker handles share the map and are excluded explicitly) has no backfill stamp and an in-memory status of `'connecting'` or `'backfilling'`. `'error'`, `'paused'`, `'needsReauth'` don't count, so a broken account cannot hold enrichment forever.
+- **Admission reads the live policy.** `InferencePlane.gate()` today reads a cached boolean (initially `true`) set only by the 5 s tick, so a background request just after sync starts could still load the model. The plane takes an injected `backgroundOpen: () => boolean` (= `backgroundLaneOpen(platform)`) and `gate()` calls it; `setBackgroundOpen` is removed and the tick only publishes (`onLaneChange`, `platform.lane`, status). Tests: admission before the first tick and right after a sync starts.
 - Precedence: `disabled` > `battery` > `until-synced` > window.
 - Transitions: the 5 s tick already re-evaluates and pushes reason-only changes (`extension-platform.ts:~469` emits on reason change too); sync completion therefore reopens the lane within one tick. No new event wiring.
 - `LaneState` gains `'until-synced'` (`shared/contracts.ts:~1693`). `PLATFORM_API_VERSION` 2.7.0 → 2.8.0 with the contract stated in the type's doc comment and the SDK docs: **only `'open'` permits background admission; any other value, including ones added later, means closed.**
@@ -115,7 +120,7 @@ if (hostBudget(platform.host, platform.llmAccel()).weak && platform.engine.synci
 
 ## 4. Future rails
 
-- **One policy owner (#147).** `backgroundLaneState` is the pure core of #147's admission policy; `host`, `llmAccel()`, `engine.syncing()` are already its inputs. #147 replaces the boolean plane switch + per-worker `laneOpen()` with one admission call and adds MCP-in-flight and user activity as inputs here — not in a second function.
+- **One policy owner (#147), kind-aware.** After this change there is one synchronous policy function that inference admission calls directly. #147 grows it into one owner that answers per work kind — `enrichment` (today's `LaneState`, kept as the enrichment-facing projection), and `ingest` (pull/convert/reconcile) — with its own rules: ingest is never closed by `until-synced` (that would deadlock first sync) nor by the idle/night window; user activity slows it, MCP-in-flight pauses admission. Inputs (`host`, `llmAccel()`, `engine.syncing()`, env) are shared; no second policy subsystem.
 - **One child launcher.** #147's converter process and any future helper use `child-priority.ts`. Thread-level demotion is out of scope; it would need a native addon and a different (thread-handle) API.
 - **One host model.** `HostFacts` is the only place that reads `os` for hardware; `hostBudget` is where #146 sizes the read connection's cache and #147 sizes its admission limit.
 
@@ -126,8 +131,9 @@ Unit:
 - `child-priority.test.ts`: macOS background wraps with taskpolicy; fallback when absent; Windows background → `setPriority(PRIORITY_LOW)`; host → below-normal; interactive untouched; errors swallowed; log-once.
 - whisper: background args include `-t min(4,N)` and the wrapper; interactive `hear` unchanged; exit-66 stderr is not `AsrInputRejectedError`.
 - ASR queue: interactive overtakes queued background; running background aborted → audio worker `'defer'`.
-- llama-server args: `-t`, `-tb`, `--poll 0`, `-np 4`.
-- Lane: weak+backfilling → `'until-synced'` from all three call sites and `backgroundLaneOpen`; sync completion reopens on next tick; `battery → until-synced` reason-only change emits `platform.lane`; precedence.
+- llama-server args: `-t`, `-tb`, `--poll 0`; no `-np` without `-kvu`.
+- Backfill stamp: new account backfill → syncing until first live commit; quiet restart of a backfilled local folder → not syncing; incremental/cadence run → not syncing; legacy `'live'` account without stamp → not syncing.
+- Lane: weak+backfilling → `'until-synced'` from all three call sites, `backgroundLaneOpen`, and `gate()` before the first tick; sync completion reopens admission immediately and publication on the next tick; `battery → until-synced` reason-only change emits `platform.lane`; precedence.
 - Migrated probes: capability/backend/ASR/audio tests inject `HostFacts`.
 
 Live (owed, measured, not guaranteed):
@@ -136,6 +142,7 @@ Live (owed, measured, not guaranteed):
 - Weak profile (`KIA_HOST_WEAK=1`) during a Gmail + Drive initial sync: lane shows "Waits until your accounts finish syncing"; no llama-server process for background work; reopens after sync.
 - Interactive local-model latency and foreground responsiveness before/after on the Windows VM (CPU) and a Mac; record CPU/RSS of llama-server under background extraction.
 - A demoted OCR job under synthetic user load: deadline hits defer, then succeed when idle.
+- Background whisper during a meeting: deferred, not failed, and re-driven later.
 
 **Windows prerequisite:** `resolveLlamaBinary` (`providers/index.ts:~20`) resolves an accel-less `win32-<arch>` slug while vendoring uses accel-suffixed directories, and production has no Vulkan probe. The Windows live check needs a working llama-server launch first; if it is broken today, fix it as a separate prerequisite (out of scope here).
 
