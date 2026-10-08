@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.105.0](https://github.com/edjafarov/kiagent-core/compare/v0.104.0...v0.105.0) (2026-10-08)
+
+### Features
+
+* **inference:** grammar and first-token logprobs for local completions ([9ff091a](https://github.com/edjafarov/kiagent-core/commit/9ff091ad9f0529afef17502323b3130306482777))
+* **platform:** API 2.9.0 — documentPage afterSeq, grammar, topLogprobs ([b83f6e6](https://github.com/edjafarov/kiagent-core/commit/b83f6e6d90548b990f820fdb82d5dd52015a5115))
+* **query:** documentPage afterSeq change cursor ([b1d01c8](https://github.com/edjafarov/kiagent-core/commit/b1d01c809f852979bd1930c36954f7e8a5adb5f4))
+
 ## [0.104.0](https://github.com/edjafarov/kiagent-core/compare/v0.103.0...v0.104.0) (2026-10-08)
 
 ### Features
