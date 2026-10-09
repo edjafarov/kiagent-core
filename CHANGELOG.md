@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.106.0](https://github.com/edjafarov/kiagent-core/compare/v0.105.0...v0.106.0) (2026-10-09)
+
+### Features
+
+* **db:** read role of the DB worker; stdio sibling on createCorpusQuery ([#146](https://github.com/edjafarov/kiagent-core/issues/146)) ([407c0ed](https://github.com/edjafarov/kiagent-core/commit/407c0edbf52af0b4986e1773bd5a212f5323bcc0))
+* **mcp:** query_sql runs in a killable runner process with byte-bounded results ([#146](https://github.com/edjafarov/kiagent-core/issues/146)) ([e6501f8](https://github.com/edjafarov/kiagent-core/commit/e6501f8e356cf284ae15b9eb3b7b752d7da968c3))
+* **reads:** read proxy, writer fallback and per-caller read stats ([#146](https://github.com/edjafarov/kiagent-core/issues/146)) ([8322278](https://github.com/edjafarov/kiagent-core/commit/8322278ebe5ad6932d55223ae0366e73dec7a58a))
+* **reads:** read worker plane wired into boot; MCP and renderer reads routed to it ([#146](https://github.com/edjafarov/kiagent-core/issues/146)) ([718c6f7](https://github.com/edjafarov/kiagent-core/commit/718c6f7cc8ab67811716437b78f0628496c3da6e))
+* **reads:** readDiagnostics next to dbDiagnostics, plus KIA_READ_DIAG_FILE dump ([#146](https://github.com/edjafarov/kiagent-core/issues/146)) ([b964ea5](https://github.com/edjafarov/kiagent-core/commit/b964ea554fa3b3c49fa6a2edecb3fef2f7ac8233))
+* **scripts:** external MCP latency probe for read acceptance ([#146](https://github.com/edjafarov/kiagent-core/issues/146)) ([845b883](https://github.com/edjafarov/kiagent-core/commit/845b8833009569f49ea7074601dc2bfd89de4d77))
+* **search:** bm25-free newest-first fuzzy pass and snippet/metadata projections ([#146](https://github.com/edjafarov/kiagent-core/issues/146)) ([5b692ae](https://github.com/edjafarov/kiagent-core/commit/5b692ae41ac07b6255d6dbd6151d0eb550de3c11))
+
+### Bug Fixes
+
+* **reads:** cumulative per-group totals for the probe countBy check; measured searches exit 3 ([#146](https://github.com/edjafarov/kiagent-core/issues/146)) ([13f3846](https://github.com/edjafarov/kiagent-core/commit/13f3846d376a4299034b7d41dd2597aa82712777))
+* **reads:** per-group stats window; end-to-end totalMs across reader fallback ([#146](https://github.com/edjafarov/kiagent-core/issues/146)) ([9dfaa27](https://github.com/edjafarov/kiagent-core/commit/9dfaa27c10caa6d0a147683520ddfe3d056d6332))
+* **scripts:** latency probe reads a fresh end snapshot, counts MCP countBy only, failed gets exit 3 ([#146](https://github.com/edjafarov/kiagent-core/issues/146)) ([bd890f7](https://github.com/edjafarov/kiagent-core/commit/bd890f767df6c4e9604b2d40c27f4a63f2bc75ea))
+
 ## [0.105.0](https://github.com/edjafarov/kiagent-core/compare/v0.104.0...v0.105.0) (2026-10-08)
 
 ### Features
