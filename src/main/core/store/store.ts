@@ -304,6 +304,20 @@ export interface CoreStore extends Store {
   endSeed(consumer: string): Promise<void>;
   /** `meta.changesFloor`, or null when no prune ever published one. */
   changesFloor(): Promise<Seq | null>;
+  /** First change seq whose `at` is at/after `since` (ISO), by bisecting
+   *  the primary key; `MAX(seq) + 1` when every change is older. */
+  firstChangeSeqAt(since: string): Promise<Seq>;
+  /** MIN(cursor) over these consumers' rows; null when none has a row. */
+  consumerFloor(consumers: readonly string[]): Promise<Seq | null>;
+  /** Oldest retained change seq; null when the log is empty. */
+  minChangeSeq(): Promise<Seq | null>;
+  /** Raise `meta.changesFloor` to `limit` (never lowers it). */
+  publishChangesFloor(limit: Seq): Promise<void>;
+  /** Delete `changes` rows with `from <= seq < to` — one primary-key range,
+   *  one writer call. Returns the number deleted. */
+  deleteChangesRange(from: Seq, to: Seq): Promise<number>;
+  /** `PRAGMA wal_checkpoint(PASSIVE)`. */
+  walCheckpoint(): Promise<void>;
   ledgerRecord(
     consumer: string,
     seq: Seq,
@@ -450,6 +464,51 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     return rows[0] as unknown as AccountRow | undefined;
   };
 
+  /** First change at/after `since`. The log is append-only and stamped as it
+   *  is written, so `at` rises with `seq`: bisect the primary key (no index
+   *  on `at`) over the RETAINED range [MIN(seq), MAX(seq)] — pruning removes
+   *  a prefix, so a search from 1 could land on a deleted number. The answer
+   *  is always an existing qualifying row, or the `MAX(seq) + 1` sentinel
+   *  when every change is older (1 on an empty log). */
+  const firstSeqAtOrAfter = async (since: string): Promise<Seq> => {
+    // Two SEPARATE single-aggregate statements: SQLite's min/max endpoint
+    // optimization applies only to a query with exactly one MIN or MAX — a
+    // combined `SELECT MIN(seq), MAX(seq)` scans the whole log.
+    const min = (
+      (await db.all(`SELECT MIN(seq) AS m FROM changes`))[0] as {
+        m: number | null;
+      }
+    ).m;
+    if (min === null) return 1;
+    const max = (
+      (await db.all(`SELECT MAX(seq) AS m FROM changes`))[0] as { m: number }
+    ).m;
+    // Invariant: every retained row below `lo` is older than `since`; the
+    // first retained row at/after `hi` (if any) is not.
+    let lo = min;
+    let hi = max + 1;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      // eslint-disable-next-line no-await-in-loop
+      const row = (
+        await db.all(
+          `SELECT seq, at FROM changes WHERE seq >= ? ORDER BY seq LIMIT 1`,
+          [mid],
+        )
+      )[0] as { seq: number; at: string } | undefined;
+      if (!row || row.at >= since) hi = mid;
+      else lo = row.seq + 1;
+    }
+    // Resolve the numeric bound to the existing row it stands for.
+    const hit = (
+      await db.all(
+        `SELECT seq FROM changes WHERE seq >= ? ORDER BY seq LIMIT 1`,
+        [lo],
+      )
+    )[0] as { seq: number } | undefined;
+    return hit ? hit.seq : max + 1;
+  };
+
   // ── feed materialization ──────────────────────────────────────────────────
 
   const materializeRow = async (
@@ -543,30 +602,9 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     read: query,
 
     async addedSince(since) {
-      // The change log is append-only and stamped as it is written, so
-      // `at` rises with `seq`: find the first change at/after `since` by
-      // bisecting the primary key (no index on `at`), then join the
-      // document changes from there to the documents they inserted.
-      const max =
-        (
-          (await db.all(`SELECT MAX(seq) AS m FROM changes`))[0] as {
-            m: number | null;
-          }
-        ).m ?? 0;
-      let lo = 1;
-      let hi = max + 1;
-      while (lo < hi) {
-        const mid = Math.floor((lo + hi) / 2);
-        const row = (
-          await db.all(
-            `SELECT seq, at FROM changes WHERE seq >= ? ORDER BY seq LIMIT 1`,
-            [mid],
-          )
-        )[0] as { seq: number; at: string } | undefined;
-        if (!row || row.at >= since) hi = mid;
-        else lo = row.seq + 1;
-      }
-      if (lo > max) return [];
+      // Join the document changes from the first change at/after `since` to
+      // the documents they inserted (none when every change is older).
+      const lo = await firstSeqAtOrAfter(since);
       return (await db.all(
         `SELECT d.account_id AS accountId, COUNT(*) AS count
            FROM changes c
@@ -1056,6 +1094,53 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         ])
       )[0] as { value: string } | undefined;
       return r ? Number(r.value) : null;
+    },
+
+    firstChangeSeqAt: (since) => firstSeqAtOrAfter(since),
+
+    async consumerFloor(consumers) {
+      if (consumers.length === 0) return null;
+      return (
+        (
+          await db.all(
+            `SELECT MIN(cursor) AS m FROM consumers
+              WHERE name IN (${consumers.map(() => '?').join(', ')})`,
+            [...consumers],
+          )
+        )[0] as { m: number | null }
+      ).m;
+    },
+
+    async minChangeSeq() {
+      return (
+        (await db.all(`SELECT MIN(seq) AS m FROM changes`))[0] as {
+          m: number | null;
+        }
+      ).m;
+    },
+
+    async publishChangesFloor(limit) {
+      await db.run(
+        `INSERT INTO meta(key, value) VALUES(?, ?)
+         ON CONFLICT(key) DO UPDATE SET value =
+           CAST(MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER)) AS TEXT)`,
+        [META_CHANGES_FLOOR, String(limit)],
+      );
+    },
+
+    async deleteChangesRange(from, to) {
+      if (to <= from) return 0;
+      const [r] = await db.batch([
+        {
+          sql: `DELETE FROM changes WHERE seq >= ? AND seq < ?`,
+          params: [from, to],
+        },
+      ]);
+      return r.changes;
+    },
+
+    async walCheckpoint() {
+      await db.exec(`PRAGMA wal_checkpoint(PASSIVE)`);
     },
 
     async ledgerRecord(consumer, seq, attempts, outcome) {
