@@ -164,3 +164,28 @@ describe('createSourceRegistry — hasReauthenticate is CORE-derived (C-9)', () 
     expect(sources.list()).toEqual([]);
   });
 });
+
+describe('createSourceRegistry — onRegister (#140)', () => {
+  it('tells each listener the id of every registration, until it unsubscribes', () => {
+    const sources = createSourceRegistry();
+    const seen: string[] = [];
+    const off = sources.onRegister((id) => seen.push(id));
+    sources.register(src('gmail'));
+    sources.register(src('gmail')); // a crash respawn re-registers: told again
+    off();
+    sources.register(src('imap'));
+    expect(seen).toEqual(['gmail', 'gmail']);
+  });
+
+  it('a throwing listener never breaks registration or the other listeners', () => {
+    const sources = createSourceRegistry();
+    const seen: string[] = [];
+    sources.onRegister(() => {
+      throw new Error('boom');
+    });
+    sources.onRegister((id) => seen.push(id));
+    sources.register(src('gmail'));
+    expect(sources.get('gmail')).toBeDefined();
+    expect(seen).toEqual(['gmail']);
+  });
+});

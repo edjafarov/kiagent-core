@@ -62,6 +62,27 @@ const HANDSHAKE_RETRY_FIRST_MS = 10_000;
 const HANDSHAKE_RETRY_FACTOR = 3;
 const HANDSHAKE_RETRY_MAX_MS = 30 * 60_000;
 
+/** #137: a wake gives up (callers get 'extension is not running') after this. */
+const WAKE_TIMEOUT_MS = 60_000;
+/** #137: child→main calls that pin the incarnation (it must keep running). */
+const PIN_CALLS: ReadonlySet<string> = new Set(['events.on', 'files.watch']);
+
+/** Order-insensitive deep compare of two wire Contributions payloads (plain
+ *  JSON data: descriptors, flags, tool schemas, sender ids). */
+export function sameContributions(a: Contributions, b: Contributions): boolean {
+  const stable = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(stable)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.keys(v as Record<string, unknown>)
+              .sort()
+              .map((k) => [k, stable((v as Record<string, unknown>)[k])]),
+          )
+        : v;
+  return JSON.stringify(stable(a)) === JSON.stringify(stable(b));
+}
+
 /** Delay before respawn attempt `attempt` (1-based) after a handshake
  *  timeout: 10s, 30s, 90s, … tripling, capped at 30 minutes. */
 export function handshakeRetryDelayMs(attempt: number): number {
@@ -114,6 +135,10 @@ export interface HostDeps {
   readyTimeoutMs?: number;
   activateTimeoutMs?: number;
   handshakeRetryDelayMs?(attempt: number): number;
+  /** #137: idle soft stop. Absent → the host never goes dormant. */
+  dormancy?: { idleMs: number; wakeTimeoutMs?: number };
+  /** #137: true after a soft stop; false on wake or hard stop of a dormant host. */
+  onDormant?(dormant: boolean): void;
 }
 
 interface Incarnation {
@@ -145,6 +170,9 @@ export function createExtensionHost(deps: HostDeps): {
     intent: SendIntent,
     ctx: SenderContext,
   ): Promise<SendResult>;
+  /** #137: resolves once the host is live, waking a dormant one; rejects
+   *  'extension is not running' when stopped or after the wake bound. */
+  ensureLive(): Promise<void>;
 } {
   const now = deps.now ?? Date.now;
   const killAfterMs = deps.killAfterMs ?? 2000;
@@ -159,6 +187,170 @@ export function createExtensionHost(deps: HostDeps): {
   // pending backoff respawn they scheduled.
   let handshakeTimeouts = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // #137 dormancy. `phase` is only about dormancy: a stopped or crashed host
+  // is 'live' with `current` null.
+  type Phase = 'live' | 'sleeping' | 'dormant' | 'waking';
+  let phase: Phase = 'live';
+  let inFlight = 0;
+  let pinned = false;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The live registrations, kept across a soft stop and a wake. */
+  let registration: {
+    contributions: Contributions;
+    dispose: () => void;
+  } | null = null;
+  const wakeWaiters = new Set<{
+    resolve(): void;
+    reject(e: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  const notRunning = () => new Error('extension is not running');
+
+  function disposeRegistration(): void {
+    const r = registration;
+    registration = null;
+    r?.dispose();
+  }
+
+  function clearIdle(): void {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+
+  function armIdle(): void {
+    clearIdle();
+    if (!deps.dormancy || pinned || phase !== 'live' || inFlight > 0) return;
+    if (!current || stopping || stopped) return;
+    idleTimer = setTimeout(() => {
+      idleTimer = null;
+      void sleep();
+    }, deps.dormancy.idleMs);
+    idleTimer.unref?.();
+  }
+
+  /** Marks one operation in flight; the returned function ends it. */
+  function begin(): () => void {
+    inFlight += 1;
+    clearIdle();
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      inFlight -= 1;
+      if (inFlight === 0) armIdle();
+    };
+  }
+
+  function pin(reason: string): void {
+    if (pinned) return;
+    pinned = true;
+    clearIdle();
+    if (deps.dormancy)
+      deps.logSink.log(scope, 'info', 'extension host pinned (stays running)', {
+        reason,
+      });
+  }
+
+  function settleWake(error: Error | null): void {
+    for (const w of wakeWaiters) {
+      clearTimeout(w.timer);
+      if (error) w.reject(error);
+      else w.resolve();
+    }
+    wakeWaiters.clear();
+  }
+
+  /** A wake that will not complete (error, crash loop): back to plain state. */
+  function failWake(): void {
+    if (phase === 'waking') {
+      phase = 'live';
+      deps.onDormant?.(false);
+    }
+    settleWake(notRunning());
+  }
+
+  /** Soft stop: the child goes, every registration stays. */
+  async function sleep(): Promise<void> {
+    const inc = current;
+    if (!deps.dormancy || !inc || phase !== 'live' || pinned || inFlight > 0)
+      return;
+    if (stopping || stopped) return;
+    phase = 'sleeping';
+    const exited = new Promise<void>((resolve) => {
+      inc.transport.onExit(() => resolve());
+    });
+    inc.endpoint.post({ kind: 'deactivate' } satisfies MainToChild);
+    const timer = setTimeout(() => {
+      deps.logSink.log(scope, 'warn', 'deactivate-overran-kill-backstop', {
+        killAfterMs,
+      });
+      inc.transport.kill();
+    }, killAfterMs);
+    await exited;
+    await inc.cleanupDone;
+    clearTimeout(timer);
+    if (phase !== 'sleeping') return; // stop() took over
+    phase = 'dormant';
+    deps.logSink.log(scope, 'info', 'extension host is dormant');
+    deps.onDormant?.(true);
+    // A call that arrived mid-teardown is waiting: wake straight away.
+    if (wakeWaiters.size > 0) beginWake();
+  }
+
+  // ONE proxy set for the host's lifetime (#137): sources registered by an
+  // earlier incarnation keep working across a soft stop and a wake.
+  const proxySet = createSourceProxySet({
+    ensureLive: () => ensureLive(),
+    endpoint: () => {
+      if (!current) throw notRunning();
+      return current.endpoint;
+    },
+    begin,
+  });
+
+  function beginWake(): void {
+    phase = 'waking';
+    stopping = false;
+    stopped = false;
+    crashes.length = 0;
+    handshakeTimeouts = 0;
+    deps.logSink.log(scope, 'info', 'waking dormant extension host');
+    launchSpawn();
+  }
+
+  /** #137: live → now; dormant → spawn and wait for 'activated' (shared,
+   *  bounded); sleeping → after the stop finishes; stopped → reject. */
+  function ensureLive(): Promise<void> {
+    if (phase === 'live')
+      return current ? Promise.resolve() : Promise.reject(notRunning());
+    return new Promise<void>((resolve, reject) => {
+      const w = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          wakeWaiters.delete(w);
+          reject(notRunning());
+        }, deps.dormancy?.wakeTimeoutMs ?? WAKE_TIMEOUT_MS),
+      };
+      w.timer.unref?.();
+      wakeWaiters.add(w);
+      if (phase === 'dormant') beginWake();
+      // 'sleeping': sleep() wakes on its way out; 'waking': joins this spawn.
+    });
+  }
+
+  async function callLive<T>(fn: (inc: Incarnation) => Promise<T>): Promise<T> {
+    const end = begin();
+    try {
+      await ensureLive();
+      const inc = current;
+      if (!inc) throw notRunning();
+      return await fn(inc);
+    } finally {
+      end();
+    }
+  }
 
   // First-settle-wins gate for the in-flight start() call. ANY incarnation
   // (initial or crash-respawned) resolves it by activating. Breaker
@@ -219,7 +411,9 @@ export function createExtensionHost(deps: HostDeps): {
   }
 
   async function spawn(): Promise<void> {
-    deps.onStatus('activating');
+    // A wake keeps the snapshot 'activated' + dormant until live again (#137).
+    if (phase !== 'waking') deps.onStatus('activating');
+    pinned = false;
     // Hoisted so the catch block (and the crash-handler closure below) can
     // reach them with appropriate null-safety even if setup itself threw
     // before some/all of them were assigned — see the try/catch note above:
@@ -227,9 +421,7 @@ export function createExtensionHost(deps: HostDeps): {
     // unhandled rejection (spawn() must never reject).
     let transport: HostTransport | undefined;
     let endpoint: ReturnType<typeof createRpcEndpoint> | undefined;
-    let unregister: (() => void) | null = null;
     let offExit: (() => void) | null = null;
-    let proxySet: ReturnType<typeof createSourceProxySet> | null = null;
     let surfacesHandle: {
       surfaces: Surfaces;
       close(): void | Promise<void>;
@@ -254,7 +446,7 @@ export function createExtensionHost(deps: HostDeps): {
     try {
       transport = deps.transportFactory();
       endpoint = createRpcEndpoint(transport);
-      proxySet = createSourceProxySet(endpoint);
+      proxySet.bind(endpoint);
       let cleanupPromise: Promise<void> | undefined;
       cleanup = () => {
         cleanupPromise ??= (async () => {
@@ -262,8 +454,8 @@ export function createExtensionHost(deps: HostDeps): {
             ? stopError()
             : new Error('extension process exited');
           lifecycle.abort();
-          proxySet?.abortAll(teardownError);
-          proxySet?.dispose();
+          proxySet.abortAll(teardownError);
+          if (endpoint) proxySet.unbind(endpoint);
           // Unregister BEFORE the first await, so it runs synchronously
           // inside the exit handler, ahead of the crash respawn it launches.
           // Left behind a slow surfaces close, it would run after the
@@ -275,8 +467,9 @@ export function createExtensionHost(deps: HostDeps): {
           // source/sender/OAuth/tool registries and the bus (which isolates
           // subscriber throws); the surfaces close below depends on none of
           // them.
-          unregister?.();
-          unregister = null;
+          // #137: kept across a soft stop and across a wake's handshake
+          // retries — only a live incarnation's exit disposes.
+          if (phase === 'live') disposeRegistration();
           await surfacesHandle?.close();
           endpoint?.dispose(teardownError);
           offExit?.();
@@ -295,7 +488,7 @@ export function createExtensionHost(deps: HostDeps): {
         const disposed = cleanup?.() ?? Promise.resolve();
         if (incarnation) incarnation.cleanupDone = disposed;
         if (current === incarnation) current = null;
-        if (stopping || stopped) return;
+        if (stopping || stopped || phase === 'sleeping') return;
         crashes.push(now());
         while (crashes.length > 0 && now() - crashes[0] > CRASH_LOOP_WINDOW_MS)
           crashes.shift();
@@ -310,6 +503,8 @@ export function createExtensionHost(deps: HostDeps): {
           const msg = `crash loop: ${CRASH_LOOP_MAX} crashes in ${CRASH_LOOP_WINDOW_MS / 1000}s`;
           deps.onStatus('errored', msg);
           rejectStart(new Error(msg));
+          failWake();
+          disposeRegistration();
           return;
         }
         launchSpawn();
@@ -341,11 +536,15 @@ export function createExtensionHost(deps: HostDeps): {
         surfaces: surfacesHandle!.surfaces,
         logSink: deps.logSink,
       });
-      endpoint.onCall((ns, method, args, context) =>
-        ns === 'auth' || ns === 'session'
-          ? proxySet!.handleCall(ns, method, args)
-          : router.dispatch(ns, method, args, context),
-      );
+      endpoint.onCall((ns, method, args, context) => {
+        // #137 runtime pins: a host that subscribes to events, publishes
+        // attention or watches files must keep running.
+        if (ns === 'attention' || PIN_CALLS.has(`${ns}.${method}`))
+          pin(`${ns}.${method}`);
+        return ns === 'auth' || ns === 'session'
+          ? proxySet.handleCall(ns, method, args)
+          : router.dispatch(ns, method, args, context);
+      });
 
       incarnation = { endpoint, transport, cleanup, owner };
       current = incarnation;
@@ -390,13 +589,30 @@ export function createExtensionHost(deps: HostDeps): {
         return;
       }
       const contributions = outcome.contributions as Contributions;
-      unregister = deps.registerContributions(
-        contributions,
-        proxySet!.makeSource,
-      );
+      if (
+        !registration ||
+        !sameContributions(registration.contributions, contributions)
+      ) {
+        disposeRegistration();
+        registration = {
+          contributions,
+          dispose: deps.registerContributions(
+            contributions,
+            proxySet.makeSource,
+          ),
+        };
+      }
       handshakeTimeouts = 0;
-      deps.onStatus('activated');
+      if (phase === 'waking') {
+        phase = 'live';
+        deps.logSink.log(scope, 'info', 'dormant extension host is live again');
+        deps.onDormant?.(false);
+        settleWake(null);
+      } else {
+        deps.onStatus('activated');
+      }
       resolveStart();
+      armIdle();
     } catch (e) {
       if (exited) {
         // transport.onExit already fired for this incarnation and owns its
@@ -431,10 +647,11 @@ export function createExtensionHost(deps: HostDeps): {
           attempt: handshakeTimeouts,
           retryInMs: delay,
         });
-        deps.onStatus(
-          'activating',
-          `${e.message}; retrying in ${Math.round(delay / 1000)}s`,
-        );
+        if (phase !== 'waking')
+          deps.onStatus(
+            'activating',
+            `${e.message}; retrying in ${Math.round(delay / 1000)}s`,
+          );
         retryTimer = setTimeout(() => {
           retryTimer = null;
           if (!stopped && !stopping) launchSpawn();
@@ -444,6 +661,8 @@ export function createExtensionHost(deps: HostDeps): {
       }
       stopped = true;
       deps.onStatus('errored', errMsg(e));
+      failWake();
+      disposeRegistration();
       rejectStart(e instanceof Error ? e : new Error(errMsg(e)));
     } finally {
       if (pendingSpawnAbort === abortSpawn) pendingSpawnAbort = null;
@@ -475,8 +694,16 @@ export function createExtensionHost(deps: HostDeps): {
         clearTimeout(retryTimer);
         retryTimer = null;
       }
+      clearIdle();
+      const wasAsleep = phase !== 'live';
+      // stop() owns the outcome from here: a sleep in progress must not
+      // finish into 'dormant', a wake must not finish into 'live'.
+      phase = 'live';
+      settleWake(notRunning());
+      if (wasAsleep) deps.onDormant?.(false);
       if (stopped && !current) {
         stopping = false;
+        disposeRegistration();
         deps.onStatus('disabled');
         return;
       }
@@ -517,30 +744,31 @@ export function createExtensionHost(deps: HostDeps): {
       }
       const pending = pendingSpawn;
       if (pending) await pending;
+      disposeRegistration();
       stopping = false;
       deps.onStatus('disabled');
     },
     callTool(name, args) {
-      if (!current)
-        return Promise.reject(new Error('extension is not running'));
-      return current.endpoint.call('tool', name, [args]);
+      return callLive((inc) => inc.endpoint.call('tool', name, [args]));
     },
     callUi(name, payload, options) {
-      if (!current)
-        return Promise.reject(new Error('extension is not running'));
-      return current.endpoint.call('ui', name, [payload], options);
+      return callLive((inc) =>
+        inc.endpoint.call('ui', name, [payload], options),
+      );
     },
     // Reachable only from the send pipeline, i.e. only past a confirmation
     // gate. A child that has no sender for `sourceId` — including a pre-1.2
     // child with no 'send' namespace at all — rejects cleanly; callers must
     // read that as "no sender", never crash on it.
     callSender(sourceId, intent, ctx) {
-      if (!current)
-        return Promise.reject(new Error('extension is not running'));
-      return current.endpoint.call('send', sourceId, [
-        intent,
-        ctx,
-      ]) as Promise<SendResult>;
+      return callLive(
+        (inc) =>
+          inc.endpoint.call('send', sourceId, [
+            intent,
+            ctx,
+          ]) as Promise<SendResult>,
+      );
     },
+    ensureLive,
   };
 }

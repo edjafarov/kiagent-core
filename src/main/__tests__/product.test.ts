@@ -113,4 +113,30 @@ describe('loadProductConfig', () => {
     );
     expect(logs.length).toBe(1);
   });
+
+  it('carries dormantExtensions and keeps every other key (#137)', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'product.json'),
+      JSON.stringify({
+        productName: 'Acme',
+        macUpdatesEnabled: true,
+        bundledExtensionsDir: 'bx',
+        dormantExtensions: ['kia.notion', 'kia.hubspot'],
+      }),
+    );
+    expect(loadProductConfig([tmp])).toEqual({
+      productName: 'Acme',
+      macUpdatesEnabled: true,
+      bundledExtensionsDir: 'bx',
+      dormantExtensions: ['kia.notion', 'kia.hubspot'],
+    });
+  });
+
+  it('leaves dormantExtensions absent when the config omits it', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'product.json'),
+      JSON.stringify({ productName: 'Acme' }),
+    );
+    expect(loadProductConfig([tmp]).dormantExtensions).toBeUndefined();
+  });
 });

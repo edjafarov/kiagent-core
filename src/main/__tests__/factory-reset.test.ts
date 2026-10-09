@@ -11,7 +11,7 @@ import path from 'path';
 import type { FactoryResetOutcome } from '@shared/ipc';
 import { openDb } from '../db/app-db';
 import { openStore } from '../core/store/store';
-import { runFactoryReset, startAfterInterruptedReset } from '../factory-reset';
+import { runFactoryReset, finishInterruptedReset } from '../factory-reset';
 
 import type { FactoryResetDeps } from '../factory-reset';
 
@@ -422,7 +422,7 @@ describe('the reset journal', () => {
   });
 });
 
-describe('startAfterInterruptedReset', () => {
+describe('finishInterruptedReset', () => {
   const finished: FactoryResetOutcome = {
     ok: true,
     coreWiped: true,
@@ -446,9 +446,6 @@ describe('startAfterInterruptedReset', () => {
       loadExtensions: jest.fn(async () => {
         calls.push('load');
       }),
-      startExtensions: jest.fn(async () => {
-        calls.push('start');
-      }),
       reset: jest.fn(async () => {
         calls.push('reset');
         return finished;
@@ -457,47 +454,58 @@ describe('startAfterInterruptedReset', () => {
     return { d, calls };
   }
 
-  it('starts extensions as usual when no reset was left unfinished', async () => {
+  it('does nothing when no reset was left unfinished', async () => {
     const { d, calls } = boot(false, true);
-    await expect(startAfterInterruptedReset(d)).resolves.toBeNull();
-    expect(calls).toEqual(['start']);
+    await expect(finishInterruptedReset(d)).resolves.toBeNull();
+    expect(calls).toEqual([]);
   });
 
-  it('finishes an unfinished reset on the user’s word, before any extension activates', async () => {
+  it('finishes an unfinished reset on the user’s word, with extensions loaded and none started', async () => {
     const { d, calls } = boot(true, true);
-    await expect(startAfterInterruptedReset(d)).resolves.toBe(finished);
-    expect(calls).toEqual(['ask', 'load', 'reset', 'start']);
+    await expect(finishInterruptedReset(d)).resolves.toBe(finished);
+    expect(calls).toEqual(['ask', 'load', 'reset']);
+  });
+
+  it('the reset completes before the caller’s next step', async () => {
+    const { d, calls } = boot(true, true);
+    d.reset.mockImplementationOnce(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      calls.push('reset');
+      return finished;
+    });
+    await finishInterruptedReset(d).then(() => calls.push('start extensions'));
+    expect(calls).toEqual(['ask', 'load', 'reset', 'start extensions']);
   });
 
   it('keeps what is left when the user says so, and does not ask again', async () => {
     const { d, calls } = boot(true, false);
-    await expect(startAfterInterruptedReset(d)).resolves.toBeNull();
-    expect(calls).toEqual(['ask', 'journal.end', 'start']);
+    await expect(finishInterruptedReset(d)).resolves.toBeNull();
+    expect(calls).toEqual(['ask', 'journal.end']);
     expect(d.reset).not.toHaveBeenCalled();
   });
 
-  it('a reset that throws is reported, and extensions still start', async () => {
+  it('a reset that throws is reported', async () => {
     const { d, calls } = boot(true, true);
     d.reset.mockRejectedValueOnce(new Error('EACCES: permission denied'));
-    await expect(startAfterInterruptedReset(d)).resolves.toEqual({
+    await expect(finishInterruptedReset(d)).resolves.toEqual({
       ok: false,
       coreWiped: false,
       failed: [],
       error: 'EACCES: permission denied',
     });
-    expect(calls).toEqual(['ask', 'load', 'start']);
+    expect(calls).toEqual(['ask', 'load']);
   });
 
   it('extensions that cannot be found stop the finish: nothing is reset and the record stays', async () => {
     const { d, calls } = boot(true, true);
     d.loadExtensions.mockRejectedValueOnce(new Error('ENOTDIR: extensions'));
-    await expect(startAfterInterruptedReset(d)).resolves.toEqual({
+    await expect(finishInterruptedReset(d)).resolves.toEqual({
       ok: false,
       coreWiped: false,
       failed: [],
       error: 'ENOTDIR: extensions',
     });
-    expect(calls).toEqual(['ask', 'start']);
+    expect(calls).toEqual(['ask']);
     expect(d.reset).not.toHaveBeenCalled();
     expect(d.journal.end).not.toHaveBeenCalled();
   });
@@ -507,7 +515,7 @@ describe('startAfterInterruptedReset', () => {
     d.journal.end.mockImplementationOnce(() => {
       throw new Error('EPERM');
     });
-    await expect(startAfterInterruptedReset(d)).resolves.toBeNull();
-    expect(calls).toEqual(['ask', 'start']);
+    await expect(finishInterruptedReset(d)).resolves.toBeNull();
+    expect(calls).toEqual(['ask']);
   });
 });

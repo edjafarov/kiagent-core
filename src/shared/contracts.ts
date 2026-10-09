@@ -1534,6 +1534,10 @@ export interface ExtensionSnapshot {
   /** Main's stamp of the latest entry into 'activated' — the renderer's
    *  reload key for contributed pages. */
   activatedAt?: string;
+  /** #137: the host is soft-stopped (no process) while every contribution
+   *  stays registered; the next call wakes it. Status stays 'activated'.
+   *  Present only when true. */
+  dormant?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
