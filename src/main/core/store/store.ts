@@ -308,6 +308,15 @@ export interface CoreStore extends Store {
   ledgerCountsAll(
     consumers?: readonly string[],
   ): Promise<LedgerCounts & { pending: number }>;
+  /** #139: in-memory generation, bumped by every write that can move
+   *  `ledgerCountsAll` or `visualWaitingCount` — commits (consumer cursors
+   *  move `pending`), feed nudges, ledger and consumers writes. Synchronous:
+   *  never a DB call. The 5 s count tick and the 60 s waiting count skip
+   *  their queries while it has not moved. */
+  ledgerGen(): number;
+  /** Bump `ledgerGen` for a ledger write made outside the store's own
+   *  methods (alpha-cent's `ledgerRetry` patch calls this). */
+  markLedgerChanged(): void;
   /** The account's live-document count and its archived (not yet purged)
    *  document ids, read by ONE statement so both come from the same
    *  snapshot — seeds the app projection, whose archived index lets a
@@ -374,6 +383,16 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   const resetListeners = new Set<() => void>();
   let closed = false;
   let rekeyed = false;
+  // #139: see CoreStore.ledgerGen.
+  let gen = 0;
+  const bumpGen = (): void => {
+    gen += 1;
+  };
+  /** Every feed nudge also moves the generation. */
+  const emitCommit = (): void => {
+    bumpGen();
+    nudge.emit('commit');
+  };
 
   // The procedural, read-your-own-writes commit transaction runs on the RAW
   // connection. In-process (tests, stdio, DB worker host) the AppDb exposes
@@ -593,12 +612,13 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       const { seq, logged } = writeTx
         ? writeTx.commit(batch)
         : ((await db.proc!('commit', batch)) as CommitResult);
+      bumpGen();
       // #135: wake feeds only when the commit appended a change row. A
       // cursor-only consumer commit, or an account commit inside its sync
       // tick, has nothing for a feed to read.
       if (logged) {
         corpus.invalidateLanguages();
-        nudge.emit('commit');
+        emitCommit();
       }
       // The cascade runs entirely in SQL (schema.ts:561's ON DELETE CASCADE)
       // and never calls outbox.ts, so it can't fire onChange itself — and
@@ -835,7 +855,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         await db.exec('VACUUM');
         await db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
         corpus.invalidateLanguages();
-        nudge.emit('commit');
+        emitCommit();
         // `DELETE FROM accounts` above cascades in SQL to `outbox` (ON
         // DELETE CASCADE, schema.ts:561) the same way commit()'s
         // removeAccount branch does — outbox.ts never observes either
@@ -849,7 +869,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
     async createAccount(a) {
       const { id } = await accountWrite({ op: 'create', ...a });
-      nudge.emit('commit');
+      emitCommit();
       return toAccount((await getAccountRow(id))!);
     },
 
@@ -859,7 +879,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         source,
         identifier,
       });
-      if (logged) nudge.emit('commit');
+      if (logged) emitCommit();
       return toAccount((await getAccountRow(id))!);
     },
 
@@ -870,12 +890,12 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
     async setAccountCadence(id, cadence) {
       const { logged } = await accountWrite({ op: 'cadence', id, cadence });
-      if (logged) nudge.emit('commit');
+      if (logged) emitCommit();
     },
 
     async setAccountConfig(id, config) {
       const { logged } = await accountWrite({ op: 'config', id, config });
-      if (logged) nudge.emit('commit');
+      if (logged) emitCommit();
     },
 
     async setAccountStatus(id, patch) {
@@ -883,7 +903,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       // account already has. Write, log a change and wake every feed only
       // when the status or last_error actually differs (write-tx accountWrite).
       const { logged } = await accountWrite({ op: 'status', id, ...patch });
-      if (logged) nudge.emit('commit');
+      if (logged) emitCommit();
     },
 
     async liveRefs(accountId, after, limit) {
@@ -945,7 +965,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           })) as number);
       if (archived > 0) {
         corpus.invalidateLanguages();
-        nudge.emit('commit');
+        emitCommit();
       }
       return archived;
     },
@@ -962,7 +982,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       if (result.archived > 0) corpus.invalidateLanguages();
       // Search index and renderer both refresh off this: the feed iterators
       // in feed() block on 'commit', and the account row itself changed.
-      if (!result.stale) nudge.emit('commit');
+      if (!result.stale) emitCommit();
       return result;
     },
 
@@ -982,6 +1002,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
                updated_at = excluded.updated_at`,
         [consumer, seq, attempts, outcome, now()],
       );
+      bumpGen();
     },
 
     async bumpAttempt(consumer, docId, key) {
@@ -1038,6 +1059,14 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         live: row.live,
         archived: JSON.parse(row.archived) as DocumentId[],
       };
+    },
+
+    ledgerGen() {
+      return gen;
+    },
+
+    markLedgerChanged() {
+      bumpGen();
     },
 
     async ledgerCountsAll(consumers) {
@@ -1123,6 +1152,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           params,
         );
       }
+      bumpGen();
     },
 
     async changesAt(seqs) {
@@ -1164,6 +1194,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       const r = writeTx
         ? writeTx.rekeyLedgerPage(limit)
         : ((await db.proc!('rekeyLedgerPage', { limit })) as RekeyPageResult);
+      bumpGen();
       if (r.done) rekeyed = true;
       return r;
     },
