@@ -161,14 +161,3 @@ export async function finishInterruptedReset(
   }
   return null;
 }
-
-/** @deprecated #140 compatibility for main.ts until bootTail lands (Task A7
- *  deletes this). Today's behaviour: finish (or keep), then start every
- *  extension. */
-export async function startAfterInterruptedReset(
-  deps: InterruptedResetDeps & { startExtensions(): Promise<void> },
-): Promise<FactoryResetOutcome | null> {
-  const outcome = await finishInterruptedReset(deps);
-  await deps.startExtensions();
-  return outcome;
-}

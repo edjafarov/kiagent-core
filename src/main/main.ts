@@ -19,7 +19,13 @@ import type { Tray } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log/main';
 
-import type { AppState, SchedulerEnv, Seq } from '@shared/contracts';
+import type {
+  Account,
+  AppState,
+  AccountId,
+  SchedulerEnv,
+  Seq,
+} from '@shared/contracts';
 import type {
   AppStatePush,
   ConnectEvent,
@@ -82,7 +88,7 @@ import { subscribeUpdaterState, updaterInvokeHandlers } from './updater/ipc';
 import { createExtensionPlatform } from './platform/extension-platform';
 import {
   runFactoryReset,
-  startAfterInterruptedReset,
+  finishInterruptedReset,
   type FactoryResetDeps,
 } from './factory-reset';
 import { createResetJournal } from './reset-journal';
@@ -94,7 +100,17 @@ import {
   markProfileStorageVersion,
   PROFILE_STORAGE_VERSION,
 } from './platform/profile-storage-version';
-import { utilityProcessTransport } from './platform/transport';
+import {
+  createHungTransport,
+  utilityProcessTransport,
+} from './platform/transport';
+import {
+  createBootQueue,
+  startBackground,
+  type BootQueue,
+} from './core/boot-background';
+import { createBootTimer } from './core/boot-timing';
+import { bootTail } from './boot-tail';
 import {
   createFileRootRegistry,
   createFileRootsPersistence,
@@ -147,6 +163,10 @@ let trayMenu: TrayMenuController | null = null;
 // Set the moment a quit starts (before-quit, below): close-to-tray reads it
 // so the teardown's own app.quit() closes the window instead of hiding it.
 let quitting = false;
+// #140: the boot queue (sync-now/Resume run-or-queue) and the post-window chain's stop.
+let bootQueue: BootQueue | null = null;
+let bootChain: { stop(): void } | null = null;
+const bootTimer = createBootTimer((line) => log.info(line));
 
 // Test/dev escape hatch: point ALL app storage somewhere disposable.
 if (process.env.KIAGENT_USER_DATA) {
@@ -356,6 +376,7 @@ async function createWindow(): Promise<void> {
     if (shown || !mainWindow || mainWindow.isDestroyed()) return;
     shown = true;
     mainWindow.show();
+    bootTimer.mark('window shown');
   };
   let showFallback: NodeJS.Timeout | undefined;
   mainWindow.on('ready-to-show', showOnce);
@@ -426,6 +447,7 @@ function factoryResetDeps(
     // nothing restarts them until relaunch, and the emptied work ledger
     // idles them out on its own.
     pauseSources: async () => {
+      bootChain?.stop(); // an interactive Reset all halts the boot chain first (#140)
       const accounts = await p.store.read.accounts();
       for (const account of accounts) {
         if (account.source === 'worker') continue;
@@ -455,6 +477,12 @@ function factoryResetDeps(
       patchState({ identity: null, accounts: [] });
     },
   };
+}
+
+/** sync-now and Resume (#140): run now, or queue behind a boot-pending extension source. */
+function startAccount(p: CorePlatform, account: Account): void {
+  if (bootQueue) bootQueue.runOrQueue(account, 'explicit');
+  else runAccount(p, account);
 }
 
 function registerIpc(
@@ -577,7 +605,7 @@ function registerIpc(
       // paused/pausing accounts, and an explicit user resume is the one door
       // back in.
       const account = await p.engine.resume(accountId);
-      if (account) runAccount(p, account);
+      if (account) startAccount(p, account);
     },
     'accounts:sync-now': async ({ accountId }) => {
       const account = await p.store.account(accountId);
@@ -586,7 +614,7 @@ function registerIpc(
       // being registered for it. engine.run re-checks the pause intent and the
       // committed status, so a pause landing between this read and the run is
       // still refused.
-      if (account && account.status !== 'paused') runAccount(p, account);
+      if (account && account.status !== 'paused') startAccount(p, account);
     },
     'accounts:set-cadence': ({ accountId, cadence }) =>
       // Delegates to core/boot so the resting-state rule ('paused' AND
@@ -926,6 +954,7 @@ app
       env: schedulerEnv,
       dbWorkerFile,
     });
+    bootTimer.mark('bootCore');
     await markProfileStorageVersion(
       app.getPath('userData'),
       PROFILE_STORAGE_VERSION,
@@ -1033,6 +1062,7 @@ app
       reconcileClientConfigs: true,
       outbound,
     });
+    bootTimer.mark('mcp');
     // Acceptance aid (§6): KIA_READ_DIAG_FILE=/path makes the app rewrite its
     // read diagnostics every 5 s so the external MCP probe can read them.
     if (process.env.KIA_READ_DIAG_FILE) {
@@ -1068,9 +1098,10 @@ app
     // Ownership split: the projection owns the FEED-derived slice (accounts);
     // identity/prefs/processing/mcp live here and change via patchState —
     // seeded from their real sources so the first diff can't regress them.
-    const initialLedger = await p.store.ledgerCountsAll(
-      p.engine.activeConsumers(),
-    );
+    const [initialLedger, initialIdentity] = await Promise.all([
+      p.store.ledgerCountsAll(p.engine.activeConsumers()),
+      p.store.identity.get(),
+    ]);
     let rev = 0;
     let lastPush: AppStatePush = {
       state: {
@@ -1086,7 +1117,7 @@ app
           download: null,
         },
         mcp: { port: mcp?.port ?? null, clients: 0 },
-        identity: await p.store.identity.get(),
+        identity: initialIdentity,
         prefs: p.prefs.get(),
         extensions: [],
         ready: false,
@@ -1187,6 +1218,8 @@ app
                 .filter((j) => j.id.startsWith('source:'))
                 .map((j) => p.scheduler.trigger(j.id)),
             );
+            // #140 (spec: tray Sync now is explicit): boot-pending accounts have no cadence job yet.
+            bootQueue?.syncPending(await p.store.read.accounts());
           })();
         },
         quit: () => app.quit(),
@@ -1253,21 +1286,25 @@ app
         new Notification({ title: product.productName, body: msg }).show();
       },
       transportFactory: (id) =>
-        utilityProcessTransport(
-          extensionHostScript ?? path.join(__dirname, 'extensionHost.js'),
-          `kia-ext:${id}`,
-          // Child console + crash traces into the app log — a crashing host
-          // writes '[ext-host] uncaught: …' to stderr as its only trace.
-          (stream, line) =>
-            p.logSink.log(
-              `extension:${id}`,
-              stream === 'stderr' ? 'warn' : 'info',
-              line,
+        !app.isPackaged && process.env.KIA_TEST_HANG_EXT === id
+          ? createHungTransport()
+          : utilityProcessTransport(
+              extensionHostScript ?? path.join(__dirname, 'extensionHost.js'),
+              `kia-ext:${id}`,
+              // Child console + crash traces into the app log — a crashing host
+              // writes '[ext-host] uncaught: …' to stderr as its only trace.
+              (stream, line) =>
+                p.logSink.log(
+                  `extension:${id}`,
+                  stream === 'stderr' ? 'warn' : 'info',
+                  line,
+                ),
             ),
-        ),
       onChange: (extensions) => {
         patchState({ extensions });
         attention.setExtensions(extensions);
+        bootTimer.observe(extensions);
+        bootQueue?.onSnapshot(extensions);
       },
       download: async (ref) => {
         if (ref.startsWith('github:')) {
@@ -1325,6 +1362,7 @@ app
       attention,
       () => processingStatus.refreshWaiting(),
     );
+    bootTimer.mark('ipc');
     p.engine.project(projection, (state: AppState, seq: Seq) => {
       rev += 1;
       // Onboarding step 1: any account that has ever reached 'live'. Also
@@ -1403,46 +1441,92 @@ app
       }
     })();
 
-    // A broken extensions dir (e.g. `extensions` exists as a plain file, so
-    // mkdirSync throws) must be fully inert — never abort boot, or
-    // resumeAccounts/scheduler.start/createWindow all get skipped and no
-    // window ever opens.
-    const inert = (step: () => Promise<void>) => async () => {
-      try {
-        await step();
-      } catch (err) {
+    // #140 window-first boot: the order lives in boot-tail.ts; this block only
+    // wires it. Utility-process extensions start AFTER the window.
+    const extensions = extensionsPlatform;
+    const journal = createResetJournal(dataDir);
+    const queue = createBootQueue({
+      readAccount: (id: AccountId) => p.store.account(id),
+      isRegistered: (sourceId) => p.sources.get(sourceId) !== undefined,
+      onRegister: (cb) => p.sources.onRegister(cb),
+      runAccount: (account) => {
+        runAccount(p, account);
+      },
+      log: (level, msg) => p.logSink.log('engine', level, msg),
+    });
+    const background = new AbortController();
+    bootQueue = queue;
+    bootChain = {
+      stop: () => {
+        background.abort();
+        queue.stop();
+      },
+    };
+    const finishedReset = await bootTail({
+      journalPending: () => journal.pending(),
+      finishInterruptedReset: () =>
+        finishInterruptedReset({
+          journal,
+          confirmFinish: async () =>
+            (
+              await dialog.showMessageBox({
+                type: 'warning',
+                message: 'Reset all did not finish',
+                detail:
+                  'The last Reset all stopped before it was done, so some of ' +
+                  'your data may be deleted already and some not. Finish it now ' +
+                  'to delete the rest, or keep what is left.',
+                buttons: ['Finish reset', 'Keep what is left'],
+                defaultId: 0,
+                cancelId: 1,
+              })
+            ).response === 0,
+          loadExtensions: () => extensions.load(),
+          reset: () => runFactoryReset(factoryResetDeps(p, patchState)),
+        }),
+      loadExtensions: () => extensions.load(),
+      armQueue: () => queue.arm(extensions.snapshot()),
+      startInProcess: () => extensions.startInProcess(),
+      startAllExtensions: () => extensions.start(),
+      resumeAll: async () => {
+        await resumeAccounts(p);
+      },
+      startScheduler: () => p.scheduler.start(),
+      registerActivate: () => {
+        app.on('activate', () => {
+          showMainWindow();
+        });
+      },
+      createWindow,
+      startBackground: () =>
+        startBackground({
+          resumeReady: async (signal) => {
+            await resumeAccounts(p, { defer: (a) => queue.defer(a), signal });
+          },
+          startScheduler: () => p.scheduler.start(),
+          startUtilityExtensions: async () => {
+            // The boot signal: quit / Reset all cancels pending activations
+            // before any further utility host spawns (#140).
+            await extensions.startUtility(background.signal);
+            // 'all settled' comes from statuses, not from startUtility()
+            // returning (a handshake retry resolves start early).
+            bootTimer.armSettled(extensions.snapshot());
+          },
+          mark: (step, detail) => bootTimer.mark(step, detail),
+          log: (level, msg) => p.logSink.log('platform', level, msg),
+          signal: background.signal,
+        }),
+      mark: (step, detail) => bootTimer.mark(step, detail),
+      logError: (err) =>
         p.logSink.log(
           'platform',
           'error',
           'extension platform failed to start',
-          { error: err instanceof Error ? err.message : String(err) },
-        );
-      }
-    };
-    const extensions = extensionsPlatform;
-    const finishedReset = await startAfterInterruptedReset({
-      journal: createResetJournal(dataDir),
-      confirmFinish: async () =>
-        (
-          await dialog.showMessageBox({
-            type: 'warning',
-            message: 'Reset all did not finish',
-            detail:
-              'The last Reset all stopped before it was done, so some of ' +
-              'your data may be deleted already and some not. Finish it now ' +
-              'to delete the rest, or keep what is left.',
-            buttons: ['Finish reset', 'Keep what is left'],
-            defaultId: 0,
-            cancelId: 1,
-          })
-        ).response === 0,
-      loadExtensions: () => extensions.load(),
-      startExtensions: inert(() => extensions.start()),
-      reset: () => runFactoryReset(factoryResetDeps(p, patchState)),
+          {
+            error: err instanceof Error ? err.message : String(err),
+          },
+        ),
     });
-    await resumeAccounts(p);
-    p.scheduler.start();
-    await createWindow();
     if (finishedReset) {
       const nameOf = (id: string) =>
         extensions.snapshot().find((e) => e.id === id)?.name ?? id;
@@ -1454,10 +1538,6 @@ app
         detail: describeResetOutcome(finishedReset, nameOf),
       });
     }
-
-    app.on('activate', () => {
-      showMainWindow();
-    });
   })
   .catch((err) =>
     handleBootFailure(
@@ -1500,6 +1580,7 @@ app.on('before-quit', (event) => {
   if (quitting) return;
   event.preventDefault();
   quitting = true;
+  bootChain?.stop(); // #140: nothing further resumes or starts once quitting
   void (async () => {
     tray?.destroy();
     tray = null;
