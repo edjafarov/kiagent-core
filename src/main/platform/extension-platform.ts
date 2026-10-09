@@ -1149,12 +1149,30 @@ export function createExtensionPlatform(
         );
         return;
       }
-      await host.start().catch(() => {
-        // status already 'errored' via onStatus; reset host reservation
-        // so a retry via setEnabled(true) can attempt activation again
-        // instead of silently no-opping on the idempotency guard.
-        e.host = null;
-      });
+      // #140 A2: an abort while the handshake is in flight stops the host
+      // right here — it kills the child, rejects start() and blocks any
+      // late 'activated' from registering contributions. Awaited below
+      // inside this exclusive op, so a queued deactivate still runs after
+      // the teardown has finished.
+      let abortStop: Promise<void> | null = null;
+      const stopOnAbort = () => {
+        abortStop ??= host.stop();
+      };
+      activation.signal.addEventListener('abort', stopOnAbort, { once: true });
+      try {
+        await host.start().catch(() => {
+          // status already 'errored' via onStatus; reset host reservation
+          // so a retry via setEnabled(true) can attempt activation again
+          // instead of silently no-opping on the idempotency guard.
+          e.host = null;
+        });
+      } finally {
+        activation.signal.removeEventListener('abort', stopOnAbort);
+      }
+      if (abortStop) {
+        await abortStop;
+        if (e.host === host) e.host = null;
+      }
       e.activation = undefined;
     } finally {
       bootSignal?.removeEventListener('abort', onBootAbort);
