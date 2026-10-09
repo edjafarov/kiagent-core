@@ -1183,6 +1183,15 @@ export interface WorkerSession {
   /** Could a local provider of `kind` still become ready without user
    *  action (downloading, or will auto-install)? False when nothing can. */
   mayBecomeReady(kind: 'see' | 'read'): boolean;
+  /** Is a provider of `kind` ready right now? Cheap and synchronous. The
+   *  vision worker renders VLM-only rasters at the VLM's edge when no `read`
+   *  provider exists (#136-C). Absent = unknown: callers assume one exists. */
+  hasProvider?(kind: 'see' | 'read'): boolean;
+  /** Bundled workers only (#147 §2): wait for a background admission slot
+   *  for ONE CPU-heavy step and resolve to its `release()`. Call it after
+   *  the step's input is in hand — never across `fetchBytes`, a network
+   *  wait or a retry backoff — and release in a `finally`. Absent = none. */
+  admit?(): Promise<() => void>;
   /** Emitted docs are committed by the ENGINE (under the worker's synthetic
    *  account) in the SAME transaction as this worker's cursor. */
   emit(doc: DocumentInput): void;

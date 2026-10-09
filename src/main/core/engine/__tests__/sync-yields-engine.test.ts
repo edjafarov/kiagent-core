@@ -6,15 +6,17 @@ import path from 'path';
 import type {
   Account,
   Batch,
+  Change,
   CommitBatch,
   DocumentInput,
   Source,
+  Worker,
 } from '@shared/contracts';
 
 import { openDb } from '../../../db/app-db';
 import { createAdmission, type Admission } from '../../admission';
 import { openStore, type CoreStore } from '../../store/store';
-import { createEngine, type EngineDeps } from '../engine';
+import { createEngine, workerConsumerName, type EngineDeps } from '../engine';
 
 jest.setTimeout(60_000);
 
@@ -407,5 +409,422 @@ describe('pull loop sub-commits (#147 §3/§4)', () => {
     await engine.pause(account.id);
     expect(Date.now() - t0).toBeLessThan(1_000);
     expect(await store.read.count({ account: account.id })).toBe(0);
+  });
+});
+
+describe('consumer flushes (#147 §4)', () => {
+  let dir: string;
+  let store: CoreStore;
+  let consumerCommits: Array<Extract<CommitBatch, { consumer: string }>>;
+  const MiB = 1024 * 1024;
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-flush-'));
+    store = openStore(await openDb(path.join(dir, 'test.db')), {
+      encrypt: (s: string) => Buffer.from(s, 'utf8'),
+      decrypt: (b: Buffer) => b.toString('utf8'),
+      detectLanguages: () => [],
+    });
+    consumerCommits = [];
+    const real = store.commit.bind(store);
+    jest.spyOn(store, 'commit').mockImplementation(async (batch) => {
+      if ('consumer' in batch) consumerCommits.push(batch);
+      return real(batch);
+    });
+  });
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const engineWith = (admission: Pick<Admission, 'acquire'>) =>
+    createEngine({
+      store,
+      sources: { get: () => undefined },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+      },
+      convert: async (i) => i,
+      logs: noopLogs,
+      admission,
+    });
+
+  async function seed(
+    ids: string[],
+    metadata: Record<string, unknown> = { todo: true },
+  ) {
+    const acc = await store.createAccount({
+      source: 'seed',
+      identifier: 'seed',
+    });
+    await store.commit({
+      account: acc.id,
+      cursor: 1,
+      documents: ids.map((x) => doc(x, { metadata })),
+    });
+    return acc;
+  }
+  const todo = (c: Change) =>
+    c.kind === 'document' &&
+    (c.document.metadata as { todo?: boolean }).todo === true;
+  const enrichWorker = (body: string, over: Partial<Worker> = {}): Worker => ({
+    name: 'bulk',
+    version: 1,
+    matches: todo,
+    async work(change, session) {
+      if (change.kind !== 'document') return 'skip';
+      session.enrich({
+        documentId: change.document.id,
+        markdown: body,
+        metadata: { todo: false },
+      });
+      return 'done';
+    },
+    ...over,
+  });
+
+  it('attach: flushes are bounded and admitted; an intermediate flush leaves the cursor unchanged', async () => {
+    await seed(['d1', 'd2', 'd3', 'd4']);
+    const acquire = jest.fn<
+      ReturnType<Admission['acquire']>,
+      Parameters<Admission['acquire']>
+    >(async () => () => {});
+    const engine = engineWith({ acquire });
+    const worker = enrichWorker('x'.repeat(3 * MiB));
+    const consumer = workerConsumerName(worker);
+    const convertAcquires = () =>
+      acquire.mock.calls.filter(([k]) => k === 'convert').length;
+    const h = engine.attach(worker);
+    // The enrich commits create new document changes; the feed consumes them
+    // next, they no longer match, and their batch ends in a cursor-only flush.
+    // Wait for that follow-up flush AND for the books to balance (no flush
+    // in flight between its acquire and its commit).
+    await waitFor(
+      () =>
+        consumerCommits.some(
+          (c) =>
+            c.cursor !== undefined &&
+            !c.enrich &&
+            !c.documents &&
+            !c.clearAttempts,
+        ) && convertAcquires() === consumerCommits.length,
+    );
+    const flushes = [...consumerCommits];
+    const acquired = convertAcquires();
+    await h.stop();
+    // Exactly two flushes carry output…
+    const withOutput = flushes.filter((c) => (c.enrich?.length ?? 0) > 0);
+    expect(withOutput.map((c) => [c.enrich!.length, 'cursor' in c])).toEqual([
+      [3, false], // 9 MiB staged ≥ 8 MiB → intermediate flush, no cursor
+      [1, true], // final flush writes the cursor
+    ]);
+    // …and EVERY observed flush, the cursor-only follow-up included, was admitted.
+    expect(flushes.length).toBeGreaterThanOrEqual(3);
+    expect(acquired).toBe(flushes.length);
+    expect(await store.consumerCursor(consumer)).toBeGreaterThan(0);
+  });
+
+  it('attach: the flush bound counts UTF-8 bytes of non-ASCII enrich markdown', async () => {
+    await seed(['d1', 'd2', 'd3', 'd4']);
+    const acquire = jest.fn<
+      ReturnType<Admission['acquire']>,
+      Parameters<Admission['acquire']>
+    >(async () => () => {});
+    // 1 Mi 'あ' = 1 Mi code units but 3 MiB of UTF-8.
+    const worker = enrichWorker('あ'.repeat(MiB));
+    const h = engineWith({ acquire }).attach(worker);
+    await waitFor(() =>
+      consumerCommits.some(
+        (c) => c.cursor !== undefined && (c.enrich?.length ?? 0) > 0,
+      ),
+    );
+    await h.stop();
+    expect(
+      consumerCommits
+        .filter((c) => (c.enrich?.length ?? 0) > 0)
+        .map((c) => c.enrich!.length),
+    ).toEqual([3, 1]);
+  });
+
+  it('attach: a batch with no output still admits its final cursor commit', async () => {
+    await seed(['d1', 'd2']);
+    const acquire = jest.fn<
+      ReturnType<Admission['acquire']>,
+      Parameters<Admission['acquire']>
+    >(async () => () => {});
+    const worker: Worker = {
+      name: 'nothing',
+      version: 1,
+      matches: () => false,
+      work: async () => 'skip',
+    };
+    const consumer = workerConsumerName(worker);
+    const convertAcquires = () =>
+      acquire.mock.calls.filter(([k]) => k === 'convert').length;
+    const h = engineWith({ acquire }).attach(worker);
+    await waitFor(
+      async () =>
+        (await store.consumerCursor(consumer)) > 0 &&
+        convertAcquires() === consumerCommits.length,
+    );
+    await h.stop();
+    const cursorCommits = consumerCommits.filter((c) => c.cursor !== undefined);
+    expect(cursorCommits.length).toBeGreaterThan(0);
+    for (const c of cursorCommits)
+      expect(c.documents ?? c.enrich ?? c.clearAttempts).toBeUndefined();
+    expect(acquire.mock.calls.filter(([k]) => k === 'convert')).toHaveLength(
+      cursorCommits.length,
+    );
+  });
+
+  it('attach: the final cursor commit waits while foreground is busy', async () => {
+    await seed(['d1']);
+    const admission = cap1();
+    const leave = admission.foreground();
+    const worker: Worker = {
+      name: 'nothing2',
+      version: 1,
+      matches: () => false,
+      work: async () => 'skip',
+    };
+    const consumer = workerConsumerName(worker);
+    const h = engineWith(admission).attach(worker);
+    await new Promise((r) => setTimeout(r, 500));
+    expect(await store.consumerCursor(consumer)).toBe(0);
+    leave();
+    await waitFor(async () => (await store.consumerCursor(consumer)) > 0);
+    await h.stop();
+  });
+
+  it('stopAll aborts and drains a re-drive blocked on admission; nothing commits after it', async () => {
+    const acc = await seed(['d1']);
+    const worker = enrichWorker('late');
+    const consumer = workerConsumerName(worker);
+    const d = await store.read.byExternalId(acc.id, 'd1', 'note');
+    await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+    const admission = cap1();
+    admission.foreground(); // never leaves: the flush waits for a slot
+    const engine = engineWith(admission);
+    const redrive = engine.rerunDeferred(worker);
+    await waitFor(() => admission.snapshot().waiting.redrive === 1);
+    const t0 = Date.now();
+    await engine.stopAll();
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    await expect(redrive).resolves.toBeUndefined();
+    expect(admission.snapshot().waiting.redrive).toBe(0);
+    expect(
+      (await store.read.byExternalId(acc.id, 'd1', 'note'))?.markdown,
+    ).toBe('body d1');
+    expect((await store.ledgerCounts(consumer)).deferred).toBe(1);
+  });
+
+  it('a re-drive requested after stopAll began never starts', async () => {
+    const acc = await seed(['d1']);
+    const worker = enrichWorker('late');
+    const consumer = workerConsumerName(worker);
+    const d = await store.read.byExternalId(acc.id, 'd1', 'note');
+    await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+    const engine = engineWith(cap1());
+    const probe = jest.spyOn(store, 'ledgerDeferred');
+    const stopping = engine.stopAll(); // the scheduler's probe finishes after this
+    await engine.rerunDeferred(worker);
+    await stopping;
+    expect(probe).not.toHaveBeenCalled();
+    expect((await store.ledgerCounts(consumer)).deferred).toBe(1);
+  });
+
+  it('stopAll cancels a re-drive over a no-output backlog before it writes the ledger', async () => {
+    const acc = await seed(['n1', 'n2', 'n3']);
+    // Matches nothing: every entry resolves as 'skip' without any admission.
+    const worker: Worker = {
+      name: 'none',
+      version: 1,
+      matches: () => false,
+      work: async () => 'skip',
+    };
+    const consumer = workerConsumerName(worker);
+    for (const id of ['n1', 'n2', 'n3']) {
+      // eslint-disable-next-line no-await-in-loop
+      const d = await store.read.byExternalId(acc.id, id, 'note');
+      // eslint-disable-next-line no-await-in-loop
+      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+    }
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const real = store.changesAt.bind(store);
+    const changesAt = jest
+      .spyOn(store, 'changesAt')
+      .mockImplementation(async (seqs) => {
+        await gate; // the page is in flight when shutdown starts
+        return real(seqs);
+      });
+    const writes = jest.spyOn(store, 'ledgerRecordMany');
+    const engine = engineWith(cap1());
+    const redrive = engine.rerunDeferred(worker);
+    await waitFor(() => changesAt.mock.calls.length === 1);
+    const stopped = engine.stopAll();
+    release();
+    await stopped;
+    await expect(redrive).resolves.toBeUndefined();
+    expect(writes).not.toHaveBeenCalled();
+    expect((await store.ledgerCounts(consumer)).deferred).toBe(3);
+  });
+
+  it('rerunDeferred never writes the cursor: a live tail advancing 100 → 200 mid-flush ends at 200', async () => {
+    await seed(['d1', 'd2']);
+    const worker = enrichWorker('redriven');
+    const consumer = workerConsumerName(worker);
+    await store.commit({ consumer, cursor: 100 });
+    for (const id of ['d1', 'd2']) {
+      // eslint-disable-next-line no-await-in-loop
+      const d = (await store.read.search({ text: id }))[0];
+      // eslint-disable-next-line no-await-in-loop
+      await store.ledgerRecord(consumer, d.seq, 1, 'deferred');
+    }
+    const engine = engineWith({
+      acquire: async (kind) => {
+        // The live tail commits its cursor while the re-drive waits for its flush.
+        if (kind === 'redrive') await store.commit({ consumer, cursor: 200 });
+        return () => {};
+      },
+    });
+    await engine.rerunDeferred(worker);
+    expect(await store.consumerCursor(consumer)).toBe(200);
+    const redrive = consumerCommits.filter((c) => (c.enrich?.length ?? 0) > 0);
+    expect(redrive.length).toBeGreaterThan(0);
+    for (const c of redrive) expect('cursor' in c).toBe(false);
+  });
+
+  it('a flush waits for admission while foreground is busy', async () => {
+    const acc = await seed(['d1']);
+    const admission = cap1();
+    const leave = admission.foreground();
+    const h = engineWith(admission).attach(enrichWorker('converted body'));
+    const d1 = () => store.read.byExternalId(acc.id, 'd1', 'note');
+    await new Promise((r) => setTimeout(r, 500));
+    expect((await d1())?.markdown).toBe('body d1');
+    leave();
+    await waitFor(async () => (await d1())?.markdown === 'converted body');
+    await h.stop();
+  });
+
+  it('re-drive at cap 1 does not deadlock (the worker’s own admit and the flush are sequential units)', async () => {
+    await seed(['d1', 'd2', 'd3']);
+    const admission = cap1();
+    const worker = enrichWorker('ok', {
+      async work(change, session) {
+        if (change.kind !== 'document') return 'skip';
+        const release = await session.admit!();
+        try {
+          session.enrich({
+            documentId: change.document.id,
+            markdown: 'ok',
+            metadata: { todo: false },
+          });
+        } finally {
+          release();
+        }
+        return 'done';
+      },
+    });
+    const consumer = workerConsumerName(worker);
+    for (const id of ['d1', 'd2', 'd3']) {
+      // eslint-disable-next-line no-await-in-loop
+      const d = (await store.read.search({ text: id }))[0];
+      // eslint-disable-next-line no-await-in-loop
+      await store.ledgerRecord(consumer, d.seq, 1, 'deferred');
+    }
+    await Promise.race([
+      engineWith(admission).rerunDeferred(worker),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('deadlock')), 5_000),
+      ),
+    ]);
+    expect(admission.snapshot().running).toBe(0);
+  });
+
+  it('convert makes progress while two accounts backfill at cap 1', async () => {
+    const acc = await seed(['c1'], { convertMe: true });
+    const admission = cap1();
+    const endless = (id: string): Source<string, DocumentInput> => ({
+      descriptor: { id, name: id, documentTypes: ['note'], auth: 'none' },
+      async connect() {
+        return { identifier: `${id}@test` };
+      },
+      async *pull(session) {
+        for (let i = 0; !session.signal.aborted; i += 1) {
+          yield {
+            phase: 'backfill',
+            items: [doc(`${id}${i}`)],
+            cursor: `${id}${i}`,
+          };
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 10));
+        }
+      },
+      toDocument: (item) => item,
+    });
+    const a = endless('a');
+    const b = endless('b');
+    const engine = createEngine({
+      store,
+      sources: {
+        get: (id) =>
+          (id === 'a' ? a : id === 'b' ? b : undefined) as Source | undefined,
+      },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+      },
+      convert: async (i) => i,
+      logs: noopLogs,
+      admission,
+    });
+    const conn = (s: Source) =>
+      engine.connect(s, {
+        oauth: async () => ({}),
+        showQr: () => {},
+        prompt: async () => ({}),
+        status: () => {},
+        pickFolders: async () => [],
+      });
+    const hA = engine.run(await conn(a as Source));
+    const hB = engine.run(await conn(b as Source));
+    const hW = engine.attach({
+      name: 'conv',
+      version: 1,
+      matches: (c) =>
+        c.kind === 'document' &&
+        (c.document.metadata as { convertMe?: boolean }).convertMe === true,
+      async work(change, session) {
+        if (change.kind !== 'document') return 'skip';
+        const release = await session.admit!();
+        try {
+          session.enrich({
+            documentId: change.document.id,
+            markdown: 'converted',
+            metadata: { convertMe: false },
+          });
+        } finally {
+          release();
+        }
+        return 'done';
+      },
+    });
+    await waitFor(
+      async () =>
+        (await store.read.byExternalId(acc.id, 'c1', 'note'))?.markdown ===
+        'converted',
+      25_000,
+    );
+    await Promise.all([hA.stop(), hB.stop(), hW.stop()]);
   });
 });

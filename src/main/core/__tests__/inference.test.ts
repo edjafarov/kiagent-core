@@ -539,6 +539,13 @@ describe('inference plane', () => {
     ).rejects.toThrow(LaneClosedError);
     expect(wait).not.toHaveBeenCalled();
   });
+  it('hasProvider answers from ready local providers', () => {
+    const plane = createInference(noopLogs);
+    expect(plane.hasProvider('read')).toBe(false);
+    plane.register(provider('ocr', ['read'], 'ocr'));
+    expect(plane.hasProvider('read')).toBe(true);
+    expect(plane.hasProvider('see')).toBe(false);
+  });
 });
 
 describe('tasks and budget keys on calls', () => {

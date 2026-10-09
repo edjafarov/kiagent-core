@@ -70,6 +70,7 @@ export interface EngineDeps {
     ): Promise<{ text: string; providerId: string; modelId: string }>;
     /** Optional so engine fakes keep compiling; absent = nothing may. */
     mayBecomeReady?(kind: 'see' | 'read'): boolean;
+    hasProvider?(kind: 'see' | 'read'): boolean;
   };
   /** The commit-path conversion stage: binary in, markdown out. Deterministic
    *  parsers only — text-poor results are left for a vision worker ('defer').
@@ -538,6 +539,15 @@ export function createEngine(deps: EngineDeps): Engine & {
     string,
     { stop(): Promise<void>; active(): boolean; syncing?(): boolean }
   >();
+  /** Re-drives in flight: `stopAll` aborts and drains them (#147 §4). */
+  const activeRedrives = new Set<{
+    abort: AbortController;
+    done: Promise<void>;
+  }>();
+  /** Set by `stopAll` before anything else: a scheduler callback that
+   *  finished its deferred-work probe after shutdown began must not launch
+   *  an untracked re-drive. Never cleared — `stopAll` is shutdown. */
+  let stopping = false;
   /** Consumer names of attached workers (a subset of `running`'s keys, which
    *  also hold account loops). */
   const attachedWorkers = new Set<string>();
@@ -683,6 +693,8 @@ export function createEngine(deps: EngineDeps): Engine & {
     worker: Worker,
     change: Change,
     signal: AbortSignal,
+    /** The unit kind a worker's `session.admit()` acquires here. */
+    admitKind: 'convert' | 'redrive',
   ): Promise<{
     docs: DocumentInput[];
     enrich: EnrichInput[];
@@ -788,6 +800,8 @@ export function createEngine(deps: EngineDeps): Engine & {
         },
         mayBecomeReady: (kind) =>
           deps.inference.mayBecomeReady?.(kind) ?? false,
+        hasProvider: (kind) => deps.inference.hasProvider?.(kind) ?? true,
+        admit: () => admission.acquire(admitKind, signal),
         emit(doc) {
           emitted.push(doc);
         },
@@ -1856,7 +1870,8 @@ export function createEngine(deps: EngineDeps): Engine & {
               if (abort.signal.aborted) return;
               let emitted: DocumentInput[] = [];
               let enrich: EnrichInput[] = [];
-              const clear: string[] = [];
+              let clear: string[] = [];
+              let staged = 0;
               // One doc, one work() per batch: the feed materializes every
               // change row as the doc's CURRENT row, so a replay hands the
               // worker identical copies. Working each would repeat the cost
@@ -1879,6 +1894,42 @@ export function createEngine(deps: EngineDeps): Engine & {
                       })
                       .catch(() => {})
                   : undefined;
+              /** One bounded consumer write (#147 §4), always an admitted
+               *  `convert` unit — acquired right before the commit, released
+               *  right after it — including the batch's final commit when it
+               *  carries only the cursor (spec §4: every flush is admitted).
+               *  `cursorAfter` only on that final commit: an intermediate
+               *  flush leaves consumers.cursor untouched (CommitBatch
+               *  contract). */
+              const flush = async (cursorAfter?: Seq): Promise<void> => {
+                const hasOutput =
+                  emitted.length > 0 || enrich.length > 0 || clear.length > 0;
+                if (!hasOutput && cursorAfter === undefined) return;
+                let release: () => void;
+                try {
+                  release = await admission.acquire('convert', abort.signal);
+                } catch (err) {
+                  if (abort.signal.aborted) await dropBatch();
+                  throw err;
+                }
+                try {
+                  await store.commit({
+                    consumer,
+                    ...(cursorAfter !== undefined
+                      ? { cursor: cursorAfter }
+                      : {}),
+                    documents: emitted.length ? emitted : undefined,
+                    enrich: enrich.length ? enrich : undefined,
+                    clearAttempts: clear.length ? clear : undefined,
+                  });
+                } finally {
+                  release();
+                }
+                emitted = [];
+                enrich = [];
+                clear = [];
+                staged = 0;
+              };
               for (const change of changes) {
                 if (abort.signal.aborted) {
                   await dropBatch();
@@ -1908,7 +1959,12 @@ export function createEngine(deps: EngineDeps): Engine & {
                   seen.add(change.document.id);
                 }
                 if (matched) {
-                  const r = await workOne(worker, change, abort.signal);
+                  const r = await workOne(
+                    worker,
+                    change,
+                    abort.signal,
+                    'convert',
+                  );
                   if (change.kind === 'document')
                     worked.push(change.document.id);
                   await store.ledgerRecord(
@@ -1921,16 +1977,14 @@ export function createEngine(deps: EngineDeps): Engine & {
                   enrich = enrich.concat(r.enrich);
                   if (r.outcome === 'done' && change.kind === 'document')
                     clear.push(change.document.id);
+                  staged +=
+                    r.docs.reduce((n, d) => n + textBytes(d), 0) +
+                    r.enrich.reduce((n, e) => n + textBytes(e), 0);
+                  if (staged >= SUB_COMMIT_BYTES) await flush();
                 }
                 cursor = change.seq;
               }
-              await store.commit({
-                consumer,
-                cursor,
-                documents: emitted.length ? emitted : undefined,
-                enrich: enrich.length ? enrich : undefined,
-                clearAttempts: clear.length ? clear : undefined,
-              });
+              await flush(cursor);
               retries = 0; // durable progress — a later crash starts fresh
             }
             return; // feed ended: only abortable() exhausting on abort
@@ -2012,100 +2066,144 @@ export function createEngine(deps: EngineDeps): Engine & {
     },
 
     async rerunDeferred(worker: Worker): Promise<void> {
+      if (stopping) return;
       const consumer = workerConsumerName(worker);
       const abort = new AbortController();
-      // Keyset paging over the backlog, NOT a snapshot of it.
-      //
-      // This loop used to read every deferred seq at once and hand the whole
-      // list to changesAt(), which materializes one full Document per entry.
-      // A vision backlog of 2,136,099 deferred entries made that array ~2 GB
-      // of live main heap, held for the entire loop — the app went from 6% to
-      // 93% heap at the first 30m re-drive tick and died there. Both the seq
-      // list and the materialized page are now bounded by REDRIVE_PAGE, so
-      // peak footprint is a function of the page size and never of the
-      // backlog size.
-      //
-      // `after` advances monotonically, which is also what terminates the
-      // loop: an entry that defers AGAIN stays 'deferred' but sits below the
-      // watermark, so this run will not re-select it and spin forever. It is
-      // simply picked up by the next scheduled re-drive.
-      let after: Seq = 0;
-      for (;;) {
-        // eslint-disable-next-line no-await-in-loop
-        const seqs = await store.ledgerDeferred(consumer, after, REDRIVE_PAGE);
-        if (seqs.length === 0) return;
-        after = seqs[seqs.length - 1];
-        // eslint-disable-next-line no-await-in-loop
-        const changes = await store.changesAt(seqs);
+      let finished!: () => void;
+      const entry = {
+        abort,
+        done: new Promise<void>((r) => {
+          finished = r;
+        }),
+      };
+      activeRedrives.add(entry);
+      try {
+        // Keyset paging over the backlog, NOT a snapshot of it.
+        //
+        // This loop used to read every deferred seq at once and hand the whole
+        // list to changesAt(), which materializes one full Document per entry.
+        // A vision backlog of 2,136,099 deferred entries made that array ~2 GB
+        // of live main heap, held for the entire loop — the app went from 6% to
+        // 93% heap at the first 30m re-drive tick and died there. Both the seq
+        // list and the materialized page are now bounded by REDRIVE_PAGE, so
+        // peak footprint is a function of the page size and never of the
+        // backlog size.
+        //
+        // `after` advances monotonically, which is also what terminates the
+        // loop: an entry that defers AGAIN stays 'deferred' but sits below the
+        // watermark, so this run will not re-select it and spin forever. It is
+        // simply picked up by the next scheduled re-drive.
+        let after: Seq = 0;
+        for (;;) {
+          if (abort.signal.aborted) return; // between pages
+          // eslint-disable-next-line no-await-in-loop
+          const seqs = await store.ledgerDeferred(
+            consumer,
+            after,
+            REDRIVE_PAGE,
+          );
+          if (seqs.length === 0) return;
+          after = seqs[seqs.length - 1];
+          // eslint-disable-next-line no-await-in-loop
+          const changes = await store.changesAt(seqs);
 
-        const emitted: DocumentInput[] = [];
-        const enrich: EnrichInput[] = [];
-        const ledger: LedgerEntry[] = [];
-        const clear: string[] = [];
-        // Same per-batch coalescing as the live tail: changesAt materializes
-        // the CURRENT doc for every seq, so a doc with several deferred rows
-        // is worked once; its duplicates resolve like a skip.
-        const seen = new Set<string>();
-        for (const change of changes) {
-          // changesAt materializes the CURRENT document, so a doc that gained
-          // real markdown between defer and re-drive no longer matches, and an
-          // ARCHIVED doc stops matching too (both bundled classifiers return
-          // 'skip' on archivedAt). Re-check matches() — running workOne anyway
-          // would re-OCR and OVERWRITE that fresh content. A non-matching
-          // deferred change no longer needs this worker at all, so resolve its
-          // ledger entry terminally ('skip', mirroring how a 'done' outcome
-          // clears the 'deferred' row via the upsert) instead of re-selecting
-          // it every cadence.
-          if (!worker.matches(change)) {
-            ledger.push({ seq: change.seq, attempts: 0, outcome: 'skip' });
-            continue;
-          }
-          if (change.kind === 'document') {
-            if (seen.has(change.document.id)) {
+          let emitted: DocumentInput[] = [];
+          let enrich: EnrichInput[] = [];
+          const ledger: LedgerEntry[] = [];
+          let clear: string[] = [];
+          let staged = 0;
+          /** Re-drive output, one admitted `redrive` unit per flush. NEVER a
+           *  cursor: re-drive has none of its own, and writing the consumer's
+           *  could rewind a live tail that advanced meanwhile (#147 §4). */
+          const flush = async (): Promise<void> => {
+            if (!emitted.length && !enrich.length && !clear.length) return;
+            const release = await admission.acquire('redrive', abort.signal);
+            try {
+              await store.commit({
+                consumer,
+                documents: emitted.length ? emitted : undefined,
+                enrich: enrich.length ? enrich : undefined,
+                clearAttempts: clear.length ? clear : undefined,
+              });
+            } finally {
+              release();
+            }
+            emitted = [];
+            enrich = [];
+            clear = [];
+            staged = 0;
+          };
+          // Same per-batch coalescing as the live tail: changesAt materializes
+          // the CURRENT doc for every seq, so a doc with several deferred rows
+          // is worked once; its duplicates resolve like a skip.
+          const seen = new Set<string>();
+          for (const change of changes) {
+            if (abort.signal.aborted) return; // between changes: no more work
+            // changesAt materializes the CURRENT document, so a doc that gained
+            // real markdown between defer and re-drive no longer matches, and an
+            // ARCHIVED doc stops matching too (both bundled classifiers return
+            // 'skip' on archivedAt). Re-check matches() — running workOne anyway
+            // would re-OCR and OVERWRITE that fresh content. A non-matching
+            // deferred change no longer needs this worker at all, so resolve its
+            // ledger entry terminally ('skip', mirroring how a 'done' outcome
+            // clears the 'deferred' row via the upsert) instead of re-selecting
+            // it every cadence.
+            if (!worker.matches(change)) {
               ledger.push({ seq: change.seq, attempts: 0, outcome: 'skip' });
               continue;
             }
-            seen.add(change.document.id);
-          }
-          // eslint-disable-next-line no-await-in-loop
-          const r = await workOne(worker, change, abort.signal);
-          emitted.push(...r.docs);
-          enrich.push(...r.enrich);
-          if (r.outcome === 'done' && change.kind === 'document')
-            clear.push(change.document.id);
-          ledger.push({
-            seq: change.seq,
-            attempts: r.attempts,
-            outcome: r.outcome,
-          });
-        }
-
-        // Commit per page rather than accumulating across the whole backlog:
-        // the old cross-loop `concat` accumulators grew without bound (and
-        // reallocated on every iteration).
-        if (emitted.length || enrich.length || clear.length) {
-          // eslint-disable-next-line no-await-in-loop
-          await store.commit({
-            consumer,
+            if (change.kind === 'document') {
+              if (seen.has(change.document.id)) {
+                ledger.push({ seq: change.seq, attempts: 0, outcome: 'skip' });
+                continue;
+              }
+              seen.add(change.document.id);
+            }
             // eslint-disable-next-line no-await-in-loop
-            cursor: await store.consumerCursor(consumer),
-            documents: emitted.length ? emitted : undefined,
-            enrich: enrich.length ? enrich : undefined,
-            clearAttempts: clear.length ? clear : undefined,
-          });
-        }
-        // Only now resolve the page's ledger entries — its skips and worked
-        // outcomes in ONE statement (one round trip per entry was 2.1M of
-        // them through the DB worker bridge). The re-drive has no cursor: the
-        // ledger row is its only driver, so writing 'done' before the commit
-        // lost the output of any entry a quit or crash caught in between.
-        // A crash between the commit and this write leaves the entries
-        // 'deferred' and the next re-drive re-works them: at-least-once, by
-        // design. A workOne throw (abort) mid-page records nothing either.
-        if (ledger.length) {
+            const r = await workOne(worker, change, abort.signal, 'redrive');
+            emitted.push(...r.docs);
+            enrich.push(...r.enrich);
+            if (r.outcome === 'done' && change.kind === 'document')
+              clear.push(change.document.id);
+            ledger.push({
+              seq: change.seq,
+              attempts: r.attempts,
+              outcome: r.outcome,
+            });
+            staged +=
+              r.docs.reduce((n, d) => n + textBytes(d), 0) +
+              r.enrich.reduce((n, e) => n + textBytes(e), 0);
+            // eslint-disable-next-line no-await-in-loop
+            if (staged >= SUB_COMMIT_BYTES) await flush();
+          }
+
+          // Commit per page rather than accumulating across the whole backlog:
+          // the old cross-loop `concat` accumulators grew without bound (and
+          // reallocated on every iteration).
           // eslint-disable-next-line no-await-in-loop
-          await store.ledgerRecordMany(consumer, ledger);
+          await flush();
+          if (abort.signal.aborted) return; // before the ledger write
+          // Only now resolve the page's ledger entries — its skips and worked
+          // outcomes in ONE statement (one round trip per entry was 2.1M of
+          // them through the DB worker bridge). The re-drive has no cursor: the
+          // ledger row is its only driver, so writing 'done' before the commit
+          // lost the output of any entry a quit or crash caught in between.
+          // A crash between the commit and this write leaves the entries
+          // 'deferred' and the next re-drive re-works them: at-least-once, by
+          // design. A workOne throw (abort) mid-page records nothing either.
+          if (ledger.length) {
+            // eslint-disable-next-line no-await-in-loop
+            await store.ledgerRecordMany(consumer, ledger);
+          }
         }
+      } catch (err) {
+        // Stopped mid-page: nothing of this page was recorded in the ledger,
+        // so its entries stay 'deferred' for the next run.
+        if (abort.signal.aborted) return;
+        throw err;
+      } finally {
+        activeRedrives.delete(entry);
+        finished();
       }
     },
 
@@ -2190,10 +2288,14 @@ export function createEngine(deps: EngineDeps): Engine & {
     },
 
     async stopAll(): Promise<void> {
+      stopping = true; // first: no re-drive may register from here on
       abortEvidenceReads();
-      await Promise.all(
-        [...running.values()].map((h) => h.stop().catch(() => {})),
-      );
+      const redrives = [...activeRedrives];
+      for (const r of redrives) r.abort.abort();
+      await Promise.all([
+        ...[...running.values()].map((h) => h.stop().catch(() => {})),
+        ...redrives.map((r) => r.done),
+      ]);
     },
   };
 

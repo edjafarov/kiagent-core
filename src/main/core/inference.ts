@@ -137,6 +137,9 @@ export interface InferencePlane extends Inference {
   /** A local provider of `kind` is downloading or says it may become ready
    *  on its own (`InferenceProvider.mayBecomeReady`). Remote ones never count. */
   mayBecomeReady(kind: 'complete' | 'see' | 'read' | 'hear'): boolean;
+  /** A ready LOCAL provider of `kind` exists (what `pick(kind)` without a
+   *  task would find). Never throws. */
+  hasProvider(kind: 'complete' | 'see' | 'read' | 'hear'): boolean;
   /** Route a caller-owned task to a registered provider (typically a
    *  remote one), or clear it with `null`. In memory only; the owner
    *  re-applies routes after a restart. Never bumps the generation. A
@@ -629,6 +632,11 @@ export function createInference(
         lane,
       });
       return String(out);
+    },
+    hasProvider(kind) {
+      return providers.some(
+        (p) => !p.remote && p.supports.includes(kind) && p.status() === 'ready',
+      );
     },
     mayBecomeReady(kind) {
       return providers.some((p) => {
