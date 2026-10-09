@@ -2365,7 +2365,7 @@ describe('engine', () => {
       const diff = jest
         .spyOn(store, 'reconcileDiff')
         .mockResolvedValue({ listedCount: 0, liveCount: 3, deletionCount: 3 });
-      const archive = jest.spyOn(store, 'reconcileArchive');
+      const archive = jest.spyOn(store, 'reconcileArchiveChunk');
 
       const handle = engine.run(account);
       await waitFor(async () => {
@@ -2406,7 +2406,7 @@ describe('engine', () => {
         .mockRejectedValue(
           new Error(`reconcile staging lost for ${account.id} — restarted`),
         );
-      const archive = jest.spyOn(store, 'reconcileArchive');
+      const archive = jest.spyOn(store, 'reconcileArchiveChunk');
       const handle = engine.run(account);
       await waitFor(async () => !!(await store.account(account.id))?.lastError);
       await handle.stop();
@@ -2432,7 +2432,7 @@ describe('engine', () => {
         .mockRejectedValue(
           new Error(`reconcile staging lost for ${account.id} — restarted`),
         );
-      const archive = jest.spyOn(store, 'reconcileArchive');
+      const archive = jest.spyOn(store, 'reconcileArchiveChunk');
       const handle = engine.run(account);
       await waitFor(async () => !!(await store.account(account.id))?.lastError);
       await handle.stop();

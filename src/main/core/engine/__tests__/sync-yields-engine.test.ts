@@ -410,6 +410,72 @@ describe('pull loop sub-commits (#147 §3/§4)', () => {
     expect(Date.now() - t0).toBeLessThan(1_000);
     expect(await store.read.count({ account: account.id })).toBe(0);
   });
+  it('reconcile archives one admitted chunk per RPC and stops when done', async () => {
+    const source: Source<string, DocumentInput> = {
+      descriptor: {
+        id: 'rec',
+        name: 'rec',
+        documentTypes: ['note'],
+        auth: 'none',
+      },
+      async connect() {
+        return { identifier: 'rec@test' };
+      },
+      async *pull() {
+        /* nothing new upstream */
+      },
+      async *reconcile() {
+        yield [{ externalId: 'a', type: 'note' }];
+      },
+      toDocument: (item) => item,
+    };
+    const acc = await store.createAccount({
+      source: 'rec',
+      identifier: 'rec@test',
+    });
+    await store.commit({
+      account: acc.id,
+      cursor: null,
+      documents: ['a', 'b', 'c'].map((x) => doc(x)),
+    });
+    const kinds: string[] = [];
+    const real = store.reconcileArchiveChunk.bind(store);
+    let fake = 2;
+    const chunk = jest
+      .spyOn(store, 'reconcileArchiveChunk')
+      .mockImplementation(async (id, seq, limit) => {
+        if (fake > 0) {
+          fake -= 1;
+          return { archived: 0, done: false };
+        }
+        return real(id, seq, limit);
+      });
+    const engine = makeEngine([source as never], {
+      admission: {
+        acquire: async (kind) => {
+          kinds.push(kind);
+          return () => {};
+        },
+      },
+    });
+    // Every run cycle of a source with reconcile() starts a pass (engine.ts
+    // ~:1061); 2 of 3 missing is under MASS_ARCHIVE_MIN_DOCS, so no refusal.
+    const h = engine.run((await store.account(acc.id))!);
+    await waitFor(
+      async () =>
+        (await store.read.byExternalId(acc.id, 'b', 'note'))?.archivedAt !=
+        null,
+    );
+    await h.stop();
+    expect(chunk).toHaveBeenCalledTimes(3);
+    expect(kinds.filter((k) => k === 'reconcile')).toHaveLength(3);
+    expect(
+      (await store.read.byExternalId(acc.id, 'b', 'note'))?.archivedAt,
+    ).not.toBeNull();
+    expect(
+      (await store.read.byExternalId(acc.id, 'a', 'note'))?.archivedAt,
+    ).toBeNull();
+  });
 });
 
 describe('consumer flushes (#147 §4)', () => {

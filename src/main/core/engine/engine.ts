@@ -294,6 +294,7 @@ async function reconcilePass(
   logs: LogSink,
   scope: string,
   allowance: AllowanceKind | undefined,
+  admission: Pick<Admission, 'acquire'>,
 ): Promise<void> {
   if (!source.reconcile) return;
   const startSeq = await store.headSeq();
@@ -383,7 +384,24 @@ async function reconcilePass(
 
     // Archives (and clears the staged listing) inside the store — the ids
     // never come back here either.
-    await store.reconcileArchive(account.id, startSeq);
+    // One bounded archive transaction per RPC, each an admitted `reconcile`
+    // unit (#147 §4): the DB worker serves requests in order, so a single
+    // multi-chunk RPC would block every other writer until the whole cleanup
+    // ended. The store ends the pass on the chunk that reports `done`; a DB
+    // worker respawn mid-pass surfaces as "reconcile staging lost" (caught
+    // below), never as a partial archive of a re-created staging table.
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const release = await admission.acquire('reconcile', signal);
+      let done: boolean;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        ({ done } = await store.reconcileArchiveChunk(account.id, startSeq));
+      } finally {
+        release();
+      }
+      if (done) break;
+    }
     await finish(null);
   } catch (err) {
     await store.reconcileEnd(account.id).catch(() => {});
@@ -1124,6 +1142,7 @@ export function createEngine(deps: EngineDeps): Engine & {
                   // The pass right after a config change may legitimately
                   // mass-archive (root removal, re-scope).
                   allowance,
+                  admission,
                 ).catch((err) => {
                   // reconcilePass handles its own errors internally and
                   // should never throw — this is a defensive backstop so a
