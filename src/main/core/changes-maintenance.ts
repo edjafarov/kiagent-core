@@ -30,16 +30,18 @@ function ledgerRekeyRetryDelayMs(attempt: number): number {
 }
 
 /** Register the paged re-key repair as a MANUAL job (the 30 s tick never
- *  fires it; main.ts triggers it once after `scheduler.start()`). Each run
- *  is a no-op once `ledgerRekeyed()` is true, so a re-trigger is free. On
- *  completion `onDone` fires — production arms the lane wake, so the
- *  re-drive the gate held back runs on the next open publisher tick.
+ *  fires it). The returned `kick` starts an attempt — main.ts kicks once
+ *  after `scheduler.start()`. Each run is a no-op once `ledgerRekeyed()` is
+ *  true, so a re-trigger is free. On completion `onDone` fires — production
+ *  arms the lane wake, so the re-drive the gate held back runs on the next
+ *  open publisher tick.
  *
- *  A page that rejects (a DB-worker crash mid-page, or any other transient
- *  writer failure) re-triggers the job after a bounded backoff; the next run
- *  resumes from the durable `meta.ledgerRekeyCursor`. Backoff rather than the
- *  worker's respawn hook: it covers every transient rejection, and requests
- *  sent during a respawn are parked until the worker is back. */
+ *  An attempt that fails anywhere — the scheduler's run-row write, the
+ *  completion check, or a page (a DB-worker crash mid-page) — schedules the
+ *  next attempt after a bounded backoff; it resumes from the durable
+ *  `meta.ledgerRekeyCursor`. Backoff rather than the worker's respawn hook:
+ *  it covers every transient rejection, and requests sent during a respawn
+ *  are parked until the worker is back. */
 export async function registerLedgerRekey(deps: {
   store: Pick<CoreStore, 'ledgerRekeyed' | 'ledgerRekeyPage'>;
   scheduler: Pick<CoreScheduler, 'register' | 'trigger'>;
@@ -49,7 +51,7 @@ export async function registerLedgerRekey(deps: {
   yieldTurn?: () => Promise<void>;
   /** Retry timer; default an unref'd `setTimeout`. */
   setTimer?: (fn: () => void, ms: number) => void;
-}): Promise<void> {
+}): Promise<{ kick(): void }> {
   const yieldTurn = deps.yieldTurn ?? (() => nextEventLoopTurn());
   const setTimer =
     deps.setTimer ??
@@ -57,7 +59,13 @@ export async function registerLedgerRekey(deps: {
       setTimeout(fn, ms).unref?.();
     });
   let failures = 0;
-  const retryLater = (err: unknown): void => {
+  // One attempt through the scheduler (which coalesces with a run already in
+  // progress). The job body reports its own failures and resolves; a
+  // rejection here is the scheduler's run-row write failing before the body.
+  const kick = (): void => {
+    deps.scheduler.trigger(LEDGER_REKEY_JOB_ID).catch(retryLater);
+  };
+  function retryLater(err: unknown): void {
     failures += 1;
     if (failures > LEDGER_REKEY_MAX_RETRIES) {
       deps.logs.log(
@@ -71,36 +79,18 @@ export async function registerLedgerRekey(deps: {
     deps.logs.log(
       'maintenance',
       'warn',
-      `ledger re-key page failed (retry ${failures} in ${delay} ms): ${String(err)}`,
+      `ledger re-key attempt failed (retry ${failures} in ${delay} ms): ${String(err)}`,
     );
-    setTimer(() => {
-      // The scheduler persists the run row before running the job, so a
-      // dead store rejects here too: log it, never an unhandled rejection.
-      deps.scheduler
-        .trigger(LEDGER_REKEY_JOB_ID)
-        .catch((e: unknown) =>
-          deps.logs.log(
-            'maintenance',
-            'warn',
-            `ledger re-key retry trigger failed: ${String(e)}`,
-          ),
-        );
-    }, delay);
-  };
-  await deps.scheduler.register(LEDGER_REKEY_JOB_ID, 'manual', async () => {
+    setTimer(kick, delay);
+  }
+  const attempt = async (): Promise<void> => {
     if (await deps.store.ledgerRekeyed()) return;
     deps.logs.log('maintenance', 'info', 'ledger re-key repair started');
     let pages = 0;
     let scanned = 0;
     for (;;) {
-      let r: Awaited<ReturnType<typeof deps.store.ledgerRekeyPage>>;
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        r = await deps.store.ledgerRekeyPage();
-      } catch (err) {
-        retryLater(err);
-        return;
-      }
+      // eslint-disable-next-line no-await-in-loop
+      const r = await deps.store.ledgerRekeyPage();
       failures = 0;
       pages += 1;
       scanned += r.scanned;
@@ -114,7 +104,11 @@ export async function registerLedgerRekey(deps: {
       `ledger re-key repair done: ${scanned} deferred rows in ${pages} pages`,
     );
     deps.onDone();
-  });
+  };
+  await deps.scheduler.register(LEDGER_REKEY_JOB_ID, 'manual', () =>
+    attempt().catch(retryLater),
+  );
+  return { kick };
 }
 
 export const CHANGES_PRUNE_JOB_ID = 'maintenance:prune-changes';

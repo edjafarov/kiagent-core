@@ -205,6 +205,9 @@ export interface CorePlatform {
     extras: AppStateExtras,
   ): ReturnType<typeof createAppProjection>;
   shutdown(): Promise<void>;
+  /** #59 §0: start the one-shot ledger re-key repair (main.ts, once, after
+   *  `scheduler.start()`). Retries itself with a bounded backoff. */
+  startLedgerRekey(): void;
 }
 
 /** How long an archived document stays recoverable before it is destroyed.
@@ -401,7 +404,27 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     ),
   );
 
+  // #59 §0: registered here (needs `platform` for the wake), started once
+  // by main.ts's startScheduler (boot-background's scheduler step, after
+  // scheduler.start()) so it never competes with the window.
+  const ledgerRekey = registerLedgerRekey({
+    store,
+    scheduler,
+    logs: sink,
+    onDone: () => requestLaneWake(platform),
+  }).catch((err) => {
+    sink.log(
+      'maintenance',
+      'error',
+      `ledger re-key registration failed: ${String(err)}`,
+    );
+    return null;
+  });
+
   platform = {
+    startLedgerRekey: () => {
+      void ledgerRekey.then((r) => r?.kick());
+    },
     db,
     store,
     engine,
@@ -442,21 +465,6 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   // Bound synchronously before anything can call: production never sees the
   // plane's closed default.
   inference.setLanePolicy(() => backgroundLaneOpen(platform));
-  // #59 §0: registered here (needs `platform` for the wake), triggered once
-  // by main.ts's startScheduler (boot-background's scheduler step, after
-  // scheduler.start()) so it never competes with the window.
-  void registerLedgerRekey({
-    store,
-    scheduler,
-    logs: sink,
-    onDone: () => requestLaneWake(platform),
-  }).catch((err) =>
-    sink.log(
-      'maintenance',
-      'error',
-      `ledger re-key registration failed: ${String(err)}`,
-    ),
-  );
   return platform;
 }
 

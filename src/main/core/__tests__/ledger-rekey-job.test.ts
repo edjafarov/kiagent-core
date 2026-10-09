@@ -134,19 +134,44 @@ describe('ledger re-key job (#59 §0)', () => {
     expect(h.onDone).toHaveBeenCalledTimes(1);
   });
 
-  it('with the real scheduler: page two fails once, the repair still completes and wakes the lane', async () => {
+  /** The real scheduler over a fake schedule table. Page two fails; then
+   *  `failOnce` (if any) fails exactly once more — the boot kick's or the
+   *  retry's schedule write, or the retry's completion check. */
+  async function realSchedulerRun(
+    failOnce:
+      | 'none'
+      | 'retry-schedule-write'
+      | 'boot-schedule-write'
+      | 'completion-check',
+  ) {
     const rows = new Map<string, unknown>();
+    let upserts = 0;
+    let armed = failOnce;
     const scheduler = createScheduler(
       {
         scheduleAll: async () => [...rows.values()],
-        scheduleUpsert: async (r: { jobId: string }) =>
-          void rows.set(r.jobId, r),
+        scheduleUpsert: async (r: { jobId: string }) => {
+          upserts += 1;
+          // upsert 1 = register(); 2 = the boot kick's run; 3 = the retry's.
+          if (
+            (armed === 'boot-schedule-write' && upserts === 2) ||
+            (armed === 'retry-schedule-write' && upserts === 3)
+          ) {
+            armed = 'none';
+            throw new Error('db worker crashed');
+          }
+          rows.set(r.jobId, r);
+        },
       } as unknown as CoreStore,
       () => ({ onBattery: false, thermal: 'nominal' }) as never,
       { log: () => {} },
     );
-    const pages: Array<boolean | Error> = [false, new Error('crash'), true];
+    const pages: Array<boolean | Error> =
+      failOnce === 'boot-schedule-write'
+        ? [false, true]
+        : [false, new Error('crash'), true];
     let flag = false;
+    let checks = 0;
     const ledgerRekeyPage = jest.fn(async () => {
       const next = pages.shift() ?? true;
       if (next instanceof Error) throw next;
@@ -155,30 +180,62 @@ describe('ledger re-key job (#59 §0)', () => {
     });
     const timers: Array<() => void> = [];
     const onDone = jest.fn();
-    await registerLedgerRekey({
-      store: { ledgerRekeyed: async () => flag, ledgerRekeyPage },
+    const { kick } = await registerLedgerRekey({
+      store: {
+        ledgerRekeyed: async () => {
+          checks += 1;
+          // check 1 = the boot run; check 2 = the first retry.
+          if (armed === 'completion-check' && checks === 2) {
+            armed = 'none';
+            throw new Error('db worker crashed');
+          }
+          return flag;
+        },
+        ledgerRekeyPage,
+      },
       scheduler,
       logs: { log: () => {} },
       onDone,
       yieldTurn: async () => {},
       setTimer: (fn) => void timers.push(fn),
     });
-    await scheduler.trigger(LEDGER_REKEY_JOB_ID); // the one boot trigger
-    expect(onDone).not.toHaveBeenCalled();
-    expect(timers).toHaveLength(1);
-    timers.shift()!();
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
-    expect(ledgerRekeyPage).toHaveBeenCalledTimes(3);
-    expect(flag).toBe(true);
-    expect(onDone).toHaveBeenCalledTimes(1);
-  });
+    const flush = async () => {
+      for (let i = 0; i < 10; i += 1)
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setImmediate(r));
+    };
+    kick(); // the one boot trigger
+    await flush();
+    for (let i = 0; timers.length > 0 && i < 20; i += 1) {
+      timers.shift()!();
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+    }
+    return { flag, onDone, timers };
+  }
 
-  it('a retry trigger that rejects (store gone) is logged, never an unhandled rejection', async () => {
-    const logs: string[] = [];
+  it.each([
+    'none',
+    'retry-schedule-write',
+    'boot-schedule-write',
+    'completion-check',
+  ] as const)(
+    'with the real scheduler: page two fails, then a transient %s failure — the repair still completes and wakes the lane once',
+    async (failOnce) => {
+      const r = await realSchedulerRun(failOnce);
+      expect(r.flag).toBe(true);
+      expect(r.onDone).toHaveBeenCalledTimes(1);
+      expect(r.timers).toHaveLength(0);
+    },
+  );
+
+  it('a retry trigger that keeps rejecting (store gone) backs off boundedly, never an unhandled rejection', async () => {
     const timers: Array<() => void> = [];
     let job: (() => Promise<void>) | null = null;
-    await registerLedgerRekey({
+    const trigger = jest.fn(async () => {
+      throw new Error('corpus DB is permanently unavailable');
+    });
+    const { kick } = await registerLedgerRekey({
       store: {
         ledgerRekeyed: async () => false,
         ledgerRekeyPage: async () => {
@@ -189,26 +246,29 @@ describe('ledger re-key job (#59 §0)', () => {
         register: async (_id, _c, run) => {
           job = run;
         },
-        trigger: async () => {
-          throw new Error('corpus DB is permanently unavailable');
-        },
+        trigger,
       },
-      logs: { log: (_s, _l, msg) => void logs.push(msg) },
+      logs: { log: () => {} },
       onDone: () => {},
       yieldTurn: async () => {},
       setTimer: (fn) => void timers.push(fn),
     });
-    await job!();
+    expect(job).not.toBeNull();
     const unhandled = jest.fn();
     process.on('unhandledRejection', unhandled);
     try {
-      timers.shift()!();
-      await new Promise((r) => setImmediate(r));
+      kick();
+      for (let i = 0; i < 50; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setImmediate(r));
+        timers.shift()?.();
+      }
       await new Promise((r) => setImmediate(r));
     } finally {
       process.off('unhandledRejection', unhandled);
     }
     expect(unhandled).not.toHaveBeenCalled();
-    expect(logs.some((m) => /retry trigger failed/.test(m))).toBe(true);
+    expect(trigger).toHaveBeenCalledTimes(LEDGER_REKEY_MAX_RETRIES + 1);
+    expect(timers).toHaveLength(0);
   });
 });
