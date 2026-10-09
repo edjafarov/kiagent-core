@@ -49,6 +49,11 @@ export interface OpenDbInWorkerOptions {
    *  worker entry (or a test fixture) under ts-node, mirroring the spawn in
    *  db-worker.test.ts. */
   execArgv?: string[];
+  /** `'read'`: the worker opens a query-only connection and serves only the
+   *  `read` procedure (worker-entry.ts); no migrations. Default `'write'`. */
+  role?: 'write' | 'read';
+  /** Page cache for the read role, in KiB. */
+  cacheKiB?: number;
   /** Host-validated legacy sources keyed by immutable plugin id. This map is
    * worker startup data; plugin requests select an id only and cannot provide
    * filesystem paths. */
@@ -65,7 +70,12 @@ function spawnWorker(
   opts: OpenDbInWorkerOptions,
 ): { worker: Worker; ready: Promise<void> } {
   const worker = new Worker(workerFile, {
-    workerData: { dbPath, pluginSources: opts.pluginSources },
+    workerData: {
+      dbPath,
+      pluginSources: opts.pluginSources,
+      role: opts.role,
+      cacheKiB: opts.cacheKiB,
+    },
     execArgv: opts.execArgv,
   });
 

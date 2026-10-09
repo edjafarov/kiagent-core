@@ -29,6 +29,10 @@ const configuration: webpack.Configuration = {
     preload: path.join(webpackPaths.srcMainPath, 'preload.ts'),
     worker: path.join(webpackPaths.srcMainPath, 'converter/worker.ts'),
     dbWorker: path.join(webpackPaths.srcMainPath, 'db/worker-entry.ts'),
+    sqlRunner: path.join(
+      webpackPaths.srcMainPath,
+      'core/mcp/sql-runner-entry.ts',
+    ),
     mcpStdio: path.join(webpackPaths.srcMainPath, 'mcp/stdio-entry.ts'),
     extensionHost: path.join(
       webpackPaths.srcMainPath,

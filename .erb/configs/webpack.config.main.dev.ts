@@ -30,6 +30,10 @@ const configuration: webpack.Configuration = {
     preload: path.join(webpackPaths.srcMainPath, 'preload.ts'),
     worker: path.join(webpackPaths.srcMainPath, 'converter/worker.ts'),
     dbWorker: path.join(webpackPaths.srcMainPath, 'db/worker-entry.ts'),
+    sqlRunner: path.join(
+      webpackPaths.srcMainPath,
+      'core/mcp/sql-runner-entry.ts',
+    ),
     // Also built in dev: the Connection screen registers this script's path
     // into MCP client configs (Claude Desktop, Codex), so it must exist for
     // dev runs too — otherwise the registered command crashes with

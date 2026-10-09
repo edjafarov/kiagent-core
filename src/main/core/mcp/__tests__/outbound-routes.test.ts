@@ -30,6 +30,7 @@ import {
 } from '../../../outbound/service';
 import { createOutboundRoutes } from '../../../outbound/routes';
 import { startMcp, type McpServerHandle } from '../server';
+import { createTestSqlExecutor } from './helpers/sql-executor';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -71,11 +72,10 @@ const IMAP_CFG = {
 
 beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-outroutes-'));
-  // startMcp wires createRawSqlTools(dbPath), which opens <dataDir>/kiagent.db
-  // readonly and requires the file to already exist (see server.test.ts's
-  // same fixture note) — name the real store's db file to match so the raw-
-  // sql tools and the outbound store/service share the SAME on-disk db
-  // rather than needing a second throwaway seed file.
+  // startMcp's injected query_sql executor (a test executor here) reads
+  // <dataDir>/kiagent.db, which must already exist — name the real store's db
+  // file to match so query_sql and the outbound store/service share the SAME
+  // on-disk db rather than needing a second throwaway seed file.
   store = openStore(await openDb(path.join(dir, 'kiagent.db')), deps);
   const account = await store.createAccount({
     source: 'imap',
@@ -109,6 +109,7 @@ beforeAll(async () => {
   });
   mcp = await startMcp({
     query: store.read,
+    sqlExecutor: createTestSqlExecutor(path.join(dir, 'kiagent.db')),
     logSink,
     dataDir: dir,
     outbound: service,

@@ -5,7 +5,13 @@ import path from 'path';
 
 import { openDb } from '../../../db/app-db';
 import { openStore } from '../../store/store';
+import {
+  createWorkerEnv,
+  REPO_ROOT,
+} from '../../../db/__tests__/worker-test-env';
 import { startMcp } from '../server';
+import { createSqlRunner } from '../sql-runner';
+import { forkRunnerChild } from '../sql-runner-spawn';
 import type { McpServerHandle } from '../server';
 
 const deps = {
@@ -39,7 +45,11 @@ async function rpc(
   };
 }
 
+jest.setTimeout(90_000);
+
 describe('raw-sql tools over the HTTP transport', () => {
+  const wenv = createWorkerEnv('wiring');
+  let runner: ReturnType<typeof createSqlRunner>;
   let dir: string;
   let handle: McpServerHandle;
 
@@ -67,8 +77,20 @@ describe('raw-sql tools over the HTTP transport', () => {
     });
     await store.close();
 
+    runner = createSqlRunner({
+      spawn: () =>
+        forkRunnerChild(path.join(__dirname, '..', 'sql-runner-entry.ts'), {
+          env: { KIA_SQL_RUNNER_DB: dbPath },
+          execArgv: wenv.execArgv,
+          cwd: REPO_ROOT,
+        }),
+      timeoutMs: 10_000,
+      idleMs: 60_000,
+      startTimeoutMs: 90_000,
+    });
     handle = await startMcp({
       query: store.read,
+      sqlExecutor: runner,
       logSink,
       dataDir: dir,
       // Ephemeral (OS-assigned) port — this file doesn't test the candidate
@@ -79,7 +101,8 @@ describe('raw-sql tools over the HTTP transport', () => {
   });
 
   afterAll(async () => {
-    await handle.stop();
+    await handle.stop().catch(() => {});
+    wenv.cleanup();
   });
 
   it('lists query_sql and get_schema and runs query_sql', async () => {
@@ -124,5 +147,14 @@ describe('raw-sql tools over the HTTP transport', () => {
     );
     const payload = JSON.parse(call.json.result.content[0].text);
     expect(payload.rows).toEqual([{ title: 'Wired' }]);
+
+    // query_sql ran in a separate process; the server owns it and stops it.
+    const pid = runner.diagnostics().pid!;
+    expect(pid).not.toBe(process.pid);
+    expect(handle.sqlDiagnostics()?.state).toBe('ready');
+    await handle.stop();
+    expect(runner.diagnostics().state).toBe('none');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(() => process.kill(pid, 0)).toThrow(); // gone
   });
 });

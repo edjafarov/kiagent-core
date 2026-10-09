@@ -1,50 +1,44 @@
 /**
  * The "powerful" raw-SQL tool pair — query_sql + get_schema — bundled together
  * because they are only useful as a pair (the schema doc exists to help write
- * the SQL) and because query_sql needs a raw SQLite handle that the Query-only
+ * the SQL) and because query_sql needs an executor that the Query-only
  * buildBuiltinTools does not carry. Both MCP entry points (core/mcp/server.ts,
- * mcp/stdio-entry.ts) concat `...tools` into the shared registry and call
- * `dispose()` on teardown.
+ * mcp/stdio-entry.ts) concat `...tools` into the shared registry.
  *
- * The handle is opened readonly for a driver-level write guard. A strict
- * readonly open can fail WAL recovery (SQLITE_CANTOPEN) when the -wal is dirty
- * and no writer is present, because a readonly connection cannot create the
- * -shm; in that case we fall back to the same read-write-but-treated-readonly
- * open openCorpusReadConnection uses (app-db.ts). On that fallback the textual
- * SELECT/WITH gate in runQuerySql remains the write guard. In practice a writer
- * (db worker / stdio store) always opens first, so the readonly path is taken.
+ * The tools take an injected executor: in the app it is the killable runner
+ * process (core/mcp/sql-runner.ts), which owns its own SQLite handle; the
+ * stdio sibling wraps its query-only corpus connection with
+ * createInProcessSqlExecutor. The textual SELECT/WITH gate in runQuerySql is
+ * the write guard on top of the connection's own query-only/readonly mode.
  */
-import Database from 'better-sqlite3';
+import type BetterSqlite3 from 'better-sqlite3';
 
 import type { McpTool } from '@shared/contracts';
 
+import type { SqlExecutorHandle } from '../sql-runner';
 import { getSchemaDescription, renderSchema } from './get-schema';
 import {
   querySqlDescription,
   querySqlInputSchema,
   runQuerySql,
+  type QuerySqlExecutor,
 } from './query-sql';
 
-function openReadHandle(dbPath: string): Database.Database {
-  try {
-    return new Database(dbPath, { readonly: true, fileMustExist: true });
-  } catch (err) {
-    const code = (err as { code?: string })?.code ?? '';
-    if (code === 'SQLITE_CANTOPEN') {
-      // Readonly WAL recovery failed — reopen read-write (treated read-only by
-      // convention; the textual gate still blocks non-SELECT).
-      return new Database(dbPath, { fileMustExist: true });
-    }
-    throw err;
-  }
+/** In-process executor over a BORROWED connection (the caller owns and closes
+ *  it): the stdio sibling, which has its own process and query-only connection.
+ *  The app never uses it — main.ts passes the killable runner. */
+export function createInProcessSqlExecutor(
+  conn: BetterSqlite3.Database,
+): SqlExecutorHandle {
+  return {
+    exec: async (sql) => runQuerySql(conn, sql),
+    stop: async () => {},
+  };
 }
 
-export function createRawSqlTools(dbPath: string): {
+export function createRawSqlTools(exec: QuerySqlExecutor): {
   tools: McpTool[];
-  dispose: () => Promise<void>;
 } {
-  const conn = openReadHandle(dbPath);
-
   const tools: McpTool[] = [
     {
       name: 'query_sql',
@@ -52,7 +46,7 @@ export function createRawSqlTools(dbPath: string): {
       inputSchema: querySqlInputSchema,
       tier: 'powerful',
       call: async (args: Record<string, unknown>) =>
-        runQuerySql(conn, String((args as { sql?: unknown }).sql ?? '')),
+        exec(String((args as { sql?: unknown }).sql ?? '')),
     },
     {
       name: 'get_schema',
@@ -62,11 +56,5 @@ export function createRawSqlTools(dbPath: string): {
       call: async () => renderSchema(),
     },
   ];
-
-  return {
-    tools,
-    dispose: async () => {
-      conn.close();
-    },
-  };
+  return { tools };
 }

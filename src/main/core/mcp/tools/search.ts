@@ -10,6 +10,7 @@
  * prompts keep working.
  */
 import type { Account, AccountId, Document, Query } from '@shared/contracts';
+import { DEFAULT_CONTEXT_LINES } from '../../store/line-window';
 import { parseOperators } from './search-operators';
 
 export interface SearchArgs {
@@ -88,9 +89,7 @@ export const searchInputSchema = {
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
-const SNIPPET_DEFAULT_CONTEXT_LINES = 2;
 const SNIPPET_MAX_CONTEXT_LINES = 30;
-const SNIPPET_MAX_LINE_CHARS = 400;
 
 function resolveLimit(raw: unknown): number {
   const n = Math.floor(Number(raw));
@@ -100,83 +99,8 @@ function resolveLimit(raw: unknown): number {
 
 function resolveContextLines(raw: unknown): number {
   const n = Math.floor(Number(raw));
-  if (!Number.isFinite(n)) return SNIPPET_DEFAULT_CONTEXT_LINES;
+  if (!Number.isFinite(n)) return DEFAULT_CONTEXT_LINES;
   return Math.min(Math.max(0, n), SNIPPET_MAX_CONTEXT_LINES);
-}
-
-// Pull searchable terms out of a free-text query so a client-built snippet can
-// anchor near a real match. Handles "quoted phrases"; strips query syntax
-// (`-` negation, `*` prefix, parens, boolean operators).
-function extractTerms(q: string): string[] {
-  const tokens: string[] = [];
-  const re = /"([^"]+)"|(\S+)/g;
-  let m: RegExpExecArray | null;
-  // eslint-disable-next-line no-cond-assign
-  while ((m = re.exec(q)) !== null) {
-    const raw = (m[1] ?? m[2])
-      .replace(/^[-(]+/, '')
-      .replace(/[)*]+$/, '')
-      .toLowerCase();
-    if (raw && raw !== 'and' && raw !== 'or' && raw !== 'not') tokens.push(raw);
-  }
-  return tokens;
-}
-
-function clampLine(line: string, terms: string[]): string {
-  if (line.length <= SNIPPET_MAX_LINE_CHARS) return line;
-  const lower = line.toLowerCase();
-  let idx = -1;
-  for (const t of terms) {
-    const i = lower.indexOf(t);
-    if (i >= 0 && (idx < 0 || i < idx)) idx = i;
-  }
-  if (idx < 0) return `${line.slice(0, SNIPPET_MAX_LINE_CHARS)}…`;
-  const radius = Math.floor(SNIPPET_MAX_LINE_CHARS / 2);
-  const start = Math.max(0, idx - radius);
-  const end = Math.min(line.length, idx + radius);
-  let w = line.slice(start, end);
-  if (start > 0) w = `…${w}`;
-  if (end < line.length) w += '…';
-  return w;
-}
-
-/** Client-side fallback snippet builder (grep -C style), used when the store
- *  didn't already attach one (e.g. a recency listing with no text match). */
-function buildSnippet(
-  markdown: string,
-  terms: string[],
-  contextLines: number,
-): string {
-  if (!markdown) return '';
-  const lines = markdown.split(/\r?\n/);
-  let matchLine = -1;
-  for (let i = 0; i < lines.length && matchLine < 0; i += 1) {
-    const lower = lines[i].toLowerCase();
-    if (terms.some((t) => lower.includes(t))) matchLine = i;
-  }
-  let start: number;
-  let end: number;
-  if (matchLine < 0) {
-    start = 0;
-    end = Math.min(lines.length, contextLines * 2 + 1);
-  } else {
-    start = Math.max(0, matchLine - contextLines);
-    end = Math.min(lines.length, matchLine + contextLines + 1);
-  }
-  let window = lines
-    .slice(start, end)
-    .map((l) => clampLine(l, terms))
-    .join('\n');
-  if (start > 0) window = `…\n${window}`;
-  if (end < lines.length) window = `${window}\n…`;
-  for (const t of terms) {
-    const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    window = window.replace(new RegExp(escaped, 'gi'), '**$&**');
-  }
-  return window
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 export function makeSearchTool(query: Query) {
@@ -222,6 +146,10 @@ export function makeSearchTool(query: Query) {
       filename: parsed.filename.length ? parsed.filename : undefined,
       ext: parsed.ext.length ? parsed.ext : undefined,
       orderBy: parsed.order,
+      // The store builds the snippet where the rows are read; the tool never
+      // needs a body (get(id) fetches it).
+      project: 'snippet' as const,
+      contextLines,
     };
 
     let docs: Array<Document & { snippet?: string }>;
@@ -241,13 +169,13 @@ export function makeSearchTool(query: Query) {
       docs = docs.slice(0, limit);
     }
 
-    const terms = rawText ? extractTerms(rawText) : [];
     return docs.map((d, i) => ({
       id: d.id,
       title: d.title ?? '',
       source: sourceOf.get(d.accountId) ?? 'unknown',
       type: d.type,
-      snippet: d.snippet ?? buildSnippet(d.markdown ?? '', terms, contextLines),
+      // 'snippet' projection: the store always sets it.
+      snippet: d.snippet ?? '',
       source_url: d.url ?? '',
       created_at: d.createdAt ?? d.ingestedAt,
       // Query.search doesn't expose its internal bm25 score; approximate a

@@ -14,13 +14,6 @@ function stubQuery(captured: unknown[]): Query {
   } as unknown as Query;
 }
 
-function stubQueryReturning(doc: Record<string, unknown>): Query {
-  return {
-    accounts: async () => [{ id: 'acc-g', source: 'gmail' }],
-    search: async () => [doc],
-  } as unknown as Query;
-}
-
 describe('search tool operator wiring', () => {
   it('translates operators into Query.search structured fields', async () => {
     const calls: any[] = [];
@@ -61,36 +54,35 @@ describe('search tool operator wiring', () => {
     expect(calls[0].type).toBe('email.thread');
   });
 
-  it('client-built snippet extraction sees only the post-operator remainder, not the operator token', async () => {
-    // The operator token `from:x@y.com` looks like it could leak into
-    // extractTerms() if the tool ever fed the raw args.query instead of the
-    // parsed remainder — five blank lines separate it from the real term so
-    // the client-built snippet window can only include one or the other.
-    const markdown = [
-      'Reach out via from:x@y.com if this bounces.',
-      '',
-      '',
-      '',
-      '',
-      'This line has the common word we actually want.',
-    ].join('\n');
-    const search = makeSearchTool(
-      stubQueryReturning({
-        id: 'doc-1',
-        title: 'Doc',
-        accountId: 'acc-g',
-        type: 'email.thread',
-        markdown,
-        url: '',
-        createdAt: '2026-08-01T00:00:00Z',
-        ingestedAt: '2026-08-01T00:00:00Z',
-      }),
-    );
+  it('passes only the post-operator remainder as text and returns the store-built snippet as-is', async () => {
+    // The store builds the snippet ('snippet' projection) from the text it is
+    // given, so the operator token must never reach it; the tool just relays
+    // the store's snippet.
+    const calls: any[] = [];
+    const search = makeSearchTool({
+      accounts: async () => [{ id: 'acc-g', source: 'gmail' }],
+      search: async (q: unknown) => {
+        calls.push(q);
+        return [
+          {
+            id: 'doc-1',
+            title: 'Doc',
+            accountId: 'acc-g',
+            type: 'email.thread',
+            markdown: '',
+            snippet: 'This line has the **common** word we actually want.',
+            url: '',
+            createdAt: '2026-08-01T00:00:00Z',
+            ingestedAt: '2026-08-01T00:00:00Z',
+          },
+        ];
+      },
+    } as unknown as Query);
     const hits = (await search({ query: 'from:x@y.com common' })) as any[];
-    expect(hits[0].snippet).toContain('**common**');
-    expect(hits[0].snippet).toContain('actually want');
-    expect(hits[0].snippet).not.toContain('from:x@y.com');
-    expect(hits[0].snippet).not.toContain('bounces');
+    expect(calls[0]).toMatchObject({ text: 'common', project: 'snippet' });
+    expect(hits[0].snippet).toBe(
+      'This line has the **common** word we actually want.',
+    );
   });
 
   it('operators work per-entry in batch mode', async () => {

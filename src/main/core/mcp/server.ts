@@ -43,6 +43,7 @@ import {
 } from './registry';
 import { attachResourceHandlers } from './resources';
 import { buildBuiltinTools } from './tools';
+import type { SqlExecutorHandle, SqlRunnerDiagnostics } from './sql-runner';
 import { createRawSqlTools } from './tools/raw-sql';
 import { currentTransport, runWithTransport } from './transport-context';
 
@@ -74,6 +75,11 @@ export interface McpDeps {
    *  pass this — the mirrored pattern lives in
    *  `../../mcp/outbound-proxy.ts`'s `ports` param (commit fd4dbfb). */
   portCandidates?: readonly number[];
+  /** The `query_sql` executor — REQUIRED, there is no in-process default (the
+   *  server must never open a handle on the main thread). main.ts passes the
+   *  killable runner; tests inject `createInProcessSqlExecutor(dbPath)`.
+   *  The server OWNS whatever is passed: `stop()` stops it. */
+  sqlExecutor: SqlExecutorHandle;
 }
 
 export interface McpServerHandle {
@@ -88,6 +94,8 @@ export interface McpServerHandle {
   connectClient(id: string): Promise<void>;
   disconnectClient(id: string): Promise<void>;
   stop(): Promise<void>;
+  /** Runner state for diagnostics; null when the executor has none. */
+  sqlDiagnostics(): SqlRunnerDiagnostics | null;
   /** Returns a MULTIPLEXING request handler bound to the SAME live
    *  ToolRegistry/resources/activity the loopback listener uses (no second,
    *  independent registry), for a product build to serve MCP over its own
@@ -282,7 +290,8 @@ function listenOnFirstFree(
 
 export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   const dbPath = path.join(deps.dataDir, 'kiagent.db');
-  const rawSql = createRawSqlTools(dbPath);
+  const sql = deps.sqlExecutor;
+  const rawSql = createRawSqlTools(sql.exec);
   const registry = createToolRegistry([
     ...buildBuiltinTools(deps.query, deps.outbound),
     ...rawSql.tools,
@@ -676,6 +685,8 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       });
     },
 
+    sqlDiagnostics: () => sql.diagnostics?.() ?? null,
+
     async stop() {
       // Tear down both dispatchers' sweep timers + open sessions (loopback
       // always exists; product dispatchers only if createMcpHandler() ran).
@@ -684,7 +695,7 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
         dispatcher.dispose();
       }
       try {
-        await rawSql.dispose();
+        await sql.stop();
       } catch {
         /* ignore */
       }
