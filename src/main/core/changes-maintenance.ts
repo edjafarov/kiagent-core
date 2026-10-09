@@ -36,8 +36,8 @@ function ledgerRekeyRetryDelayMs(attempt: number): number {
  *  arms the lane wake, so the re-drive the gate held back runs on the next
  *  open publisher tick.
  *
- *  An attempt that fails anywhere — the scheduler's run-row write, the
- *  completion check, or a page (a DB-worker crash mid-page) — schedules the
+ *  An attempt that fails anywhere — the job's registration, the scheduler's
+ *  run-row write, the completion check, or a page (a DB-worker crash mid-page) — schedules the
  *  next attempt after a bounded backoff; it resumes from the durable
  *  `meta.ledgerRekeyCursor`. Backoff rather than the worker's respawn hook:
  *  it covers every transient rejection, and requests sent during a respawn
@@ -62,8 +62,19 @@ export async function registerLedgerRekey(deps: {
   // One attempt through the scheduler (which coalesces with a run already in
   // progress). The job body reports its own failures and resolves; a
   // rejection here is the scheduler's run-row write failing before the body.
+  // Registration is part of the attempt: until a register() has succeeded,
+  // every kick registers first, so a failed registration write retries too.
+  let registered = false;
+  const register = async (): Promise<void> => {
+    await deps.scheduler.register(LEDGER_REKEY_JOB_ID, 'manual', () =>
+      attempt().catch(retryLater),
+    );
+    registered = true;
+  };
   const kick = (): void => {
-    deps.scheduler.trigger(LEDGER_REKEY_JOB_ID).catch(retryLater);
+    (registered ? Promise.resolve() : register())
+      .then(() => deps.scheduler.trigger(LEDGER_REKEY_JOB_ID))
+      .catch(retryLater);
   };
   function retryLater(err: unknown): void {
     failures += 1;
@@ -105,8 +116,14 @@ export async function registerLedgerRekey(deps: {
     );
     deps.onDone();
   };
-  await deps.scheduler.register(LEDGER_REKEY_JOB_ID, 'manual', () =>
-    attempt().catch(retryLater),
+  // Registered eagerly so the job is listed from boot; a failure here is
+  // retried by the first kick, never fatal.
+  await register().catch((err: unknown) =>
+    deps.logs.log(
+      'maintenance',
+      'warn',
+      `ledger re-key registration failed (retried on start): ${String(err)}`,
+    ),
   );
   return { kick };
 }

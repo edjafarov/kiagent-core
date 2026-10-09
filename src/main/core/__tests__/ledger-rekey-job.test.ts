@@ -42,7 +42,12 @@ function harness(pages: Array<boolean | Error>) {
   const fireTimer = async () => {
     const t = timers.shift();
     if (!t) throw new Error('no retry timer scheduled');
+    const before = trigger.mock.calls.length;
     t.fn();
+    // kick() triggers one microtask later (after the registered check).
+    for (let i = 0; i < 10 && trigger.mock.calls.length === before; i += 1)
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.resolve();
     await trigger.mock.results.at(-1)!.value;
   };
   return {
@@ -269,6 +274,53 @@ describe('ledger re-key job (#59 §0)', () => {
     }
     expect(unhandled).not.toHaveBeenCalled();
     expect(trigger).toHaveBeenCalledTimes(LEDGER_REKEY_MAX_RETRIES + 1);
+    expect(timers).toHaveLength(0);
+  });
+
+  it('a registration that keeps failing is retried by each kick on the same backoff, then completes', async () => {
+    let registerFailures = 2; // the eager boot registration + the first kick
+    let job: (() => Promise<void>) | null = null;
+    let flag = false;
+    const timers: Array<() => void> = [];
+    const onDone = jest.fn();
+    const { kick } = await registerLedgerRekey({
+      store: {
+        ledgerRekeyed: async () => flag,
+        ledgerRekeyPage: async () => {
+          flag = true;
+          return { done: true, scanned: 0 };
+        },
+      },
+      scheduler: {
+        register: async (_id, _c, run) => {
+          if (registerFailures > 0) {
+            registerFailures -= 1;
+            throw new Error('db worker crashed');
+          }
+          job = run;
+        },
+        trigger: async () => {
+          if (!job) throw new Error('not registered');
+          await job();
+        },
+      },
+      logs: { log: () => {} },
+      onDone,
+      yieldTurn: async () => {},
+      setTimer: (fn) => void timers.push(fn),
+    });
+    const flush = async () => {
+      for (let i = 0; i < 10; i += 1)
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setImmediate(r));
+    };
+    kick();
+    await flush();
+    expect(timers).toHaveLength(1); // the kick's registration failed
+    timers.shift()!();
+    await flush();
+    expect(flag).toBe(true);
+    expect(onDone).toHaveBeenCalledTimes(1);
     expect(timers).toHaveLength(0);
   });
 });

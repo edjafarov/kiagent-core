@@ -412,18 +412,11 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     scheduler,
     logs: sink,
     onDone: () => requestLaneWake(platform),
-  }).catch((err) => {
-    sink.log(
-      'maintenance',
-      'error',
-      `ledger re-key registration failed: ${String(err)}`,
-    );
-    return null;
   });
 
   platform = {
     startLedgerRekey: () => {
-      void ledgerRekey.then((r) => r?.kick());
+      void ledgerRekey.then((r) => r.kick());
     },
     db,
     store,
