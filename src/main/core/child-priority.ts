@@ -102,15 +102,17 @@ export function launch<C extends { pid?: number } | void>(
   return child;
 }
 
-/** Extension hosts are Electron utility processes we don't spawn ourselves:
- *  demote on their 'spawn' event. */
+/** Extension hosts and the converter are Electron utility processes we don't
+ *  spawn through `launch`: demote on their 'spawn' event, to BELOW_NORMAL
+ *  (never LOW — Windows IDLE-class children starve under load). */
 export function demoteHost(
   pid: number | undefined,
   deps: PriorityDeps = {},
+  name = 'extension-host',
 ): void {
   if (pid === undefined) return;
   demoteAndNote(
-    'extension-host',
+    name,
     'below-normal',
     pid,
     os.constants.priority.PRIORITY_BELOW_NORMAL,
