@@ -249,6 +249,13 @@ export interface CoreStore extends Store {
   reconcileDiff(accountId: AccountId, startSeq: Seq): Promise<ReconcileCounts>;
   /** Archives every eligible-but-unlisted document; returns the count. */
   reconcileArchive(accountId: AccountId, startSeq: Seq): Promise<number>;
+  /** One bounded archive chunk per call (one worker RPC, one transaction).
+   *  The engine loops it, admitting each chunk (#147 §4). */
+  reconcileArchiveChunk(
+    accountId: AccountId,
+    startSeq: Seq,
+    limit?: number,
+  ): Promise<{ archived: number; done: boolean }>;
   reconcileEnd(accountId: AccountId): Promise<void>;
   /** ONE transaction: config + cursor + archive-the-roots-the-source-named +
    *  one `changes` row per archived document. Returns COUNTS ONLY — never row
@@ -460,6 +467,25 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       ).c;
     }
   }
+
+  const reconcileArchiveChunk = async (
+    accountId: AccountId,
+    startSeq: Seq,
+    limit?: number,
+  ): Promise<{ archived: number; done: boolean }> => {
+    const r = writeTx
+      ? writeTx.reconcileArchiveChunk(accountId, startSeq, limit)
+      : ((await db.proc!('reconcileArchiveChunk', {
+          accountId,
+          startSeq,
+          limit,
+        })) as { archived: number; done: boolean });
+    if (r.archived > 0) {
+      corpus.invalidateLanguages();
+      nudge.emit('commit');
+    }
+    return r;
+  };
 
   const store: CoreStore = {
     read: query,
@@ -979,18 +1005,18 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           })) as ReconcileCounts);
     },
 
+    reconcileArchiveChunk,
+
+    /** Main-side loop of bounded chunk RPCs (tests, maintenance). The engine
+     *  loops reconcileArchiveChunk itself so it can admit every chunk. */
     async reconcileArchive(accountId, startSeq) {
-      const archived = writeTx
-        ? writeTx.reconcileArchive(accountId, startSeq)
-        : ((await db.proc!('reconcileArchive', {
-            accountId,
-            startSeq,
-          })) as number);
-      if (archived > 0) {
-        corpus.invalidateLanguages();
-        nudge.emit('commit');
+      let archived = 0;
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        const r = await reconcileArchiveChunk(accountId, startSeq);
+        archived += r.archived;
+        if (r.done) return archived;
       }
-      return archived;
     },
 
     async reconcileEnd(accountId) {

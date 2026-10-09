@@ -246,9 +246,11 @@ Module._resolveFilename = function (request, ...rest) {
       await client!.proc!('reconcileDiff', { accountId, startSeq }),
     ).toEqual({ listedCount: 2, liveCount: 3, deletionCount: 1 });
 
+    // One chunk archives the single deletion and, being short of the limit,
+    // reports done and ends the pass (the refusal below still holds).
     expect(
-      await client!.proc!('reconcileArchive', { accountId, startSeq }),
-    ).toBe(1);
+      await client!.proc!('reconcileArchiveChunk', { accountId, startSeq }),
+    ).toEqual({ archived: 1, done: true });
 
     const rows = (await client!.all(
       `SELECT external_id, archived_at FROM documents ORDER BY external_id`,

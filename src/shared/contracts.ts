@@ -247,6 +247,11 @@ export type CommitBatch =
       error?: string | null;
       /** With `error: null`: clear only an error of this origin. */
       errorScope?: ErrorScope;
+      /** Parent links to (re)resolve in this transaction (#147 §4): every
+       *  `{child, parent}` of the SOURCE batch, carried by its last
+       *  sub-commit, so a child an earlier sub-commit landed before its
+       *  parent still gets linked. Any order inside a batch stays fine. */
+      relink?: Array<{ child: ExternalRef; parent: ExternalRef }>;
     }
   | {
       consumer: string;

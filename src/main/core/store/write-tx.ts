@@ -201,9 +201,14 @@ export interface WriteTx {
   reconcileStage(accountId: string, refs: ExternalRef[]): void;
   /** Count the anti-join. Returns scalars — never the refs themselves. */
   reconcileDiff(accountId: string, startSeq: Seq): ReconcileCounts;
-  /** Archive every staged-as-missing document, in worker-side batches.
-   *  Returns how many were archived, and ends the pass. */
-  reconcileArchive(accountId: string, startSeq: Seq): number;
+  /** ONE bounded archive transaction (#147 §4). `done` when it archived
+   *  fewer than `limit` — the pass is then ended. A DB-worker respawn
+   *  mid-pass surfaces as ReconcileStagingLost, never a partial archive. */
+  reconcileArchiveChunk(
+    accountId: string,
+    startSeq: Seq,
+    limit?: number,
+  ): { archived: number; done: boolean };
   /** End a pass without archiving (refused, aborted, or nothing to do). */
   reconcileEnd(accountId: string): void;
   /** ONE transaction: config + cursor + archival of the roots the SOURCE
@@ -395,29 +400,18 @@ export function createWriteTx(
     return seq;
   };
 
-  /** Second pass over a batch, run AFTER every document in it has been
-   *  upserted: `upsertDocument`'s parent resolution only sees rows already
-   *  written earlier IN THIS TRANSACTION, so a child that arrives before its
-   *  parent within the same batch resolves to parentId=null. And a doc whose
-   *  content didn't change is skipped by upsertDocument entirely — its
-   *  content_hash deliberately excludes parent (see contentHash), so a
-   *  reparent with no other edits would otherwise never be seen. Re-resolving
-   *  here against the batch's own DocumentInput.parent refs fixes both,
-   *  without touching content_hash. */
-  const reconcileParents = (
+  /** Re-resolve each child's parent_id from refs, appending a change only
+   *  when it moves (content_hash excludes parent). Shared by the batch's own
+   *  DocumentInput.parent refs and by an account commit's `relink` pairs. */
+  const relinkPairs = (
     accountId: string,
-    documents: DocumentInput[],
+    pairs: Array<{ child: ExternalRef; parent: ExternalRef }>,
   ): Seq | null => {
     let last: Seq | null = null;
-    for (const input of documents) {
-      if (!input.parent) continue;
-      const child = findDocRow(accountId, input.externalId, input.type);
+    for (const { child: c, parent: p } of pairs) {
+      const child = findDocRow(accountId, c.externalId, c.type);
       if (!child) continue; // upserted above; absence means a prior step rejected it
-      const parent = findDocRow(
-        accountId,
-        input.parent.externalId,
-        input.parent.type,
-      );
+      const parent = findDocRow(accountId, p.externalId, p.type);
       const parentId = parent?.id ?? null;
       if (child.parent_id !== parentId) {
         const seq = appendChange('document', child.id);
@@ -431,6 +425,33 @@ export function createWriteTx(
     }
     return last;
   };
+
+  /** Second pass over a batch, run AFTER every document in it has been
+   *  upserted: `upsertDocument`'s parent resolution only sees rows already
+   *  written earlier IN THIS TRANSACTION, so a child that arrives before its
+   *  parent within the same batch resolves to parentId=null. And a doc whose
+   *  content didn't change is skipped by upsertDocument entirely — its
+   *  content_hash deliberately excludes parent (see contentHash), so a
+   *  reparent with no other edits would otherwise never be seen. Re-resolving
+   *  here against the batch's own DocumentInput.parent refs fixes both,
+   *  without touching content_hash. */
+  const reconcileParents = (
+    accountId: string,
+    documents: DocumentInput[],
+  ): Seq | null =>
+    relinkPairs(
+      accountId,
+      documents.flatMap((d) =>
+        d.parent
+          ? [
+              {
+                child: { externalId: d.externalId, type: d.type },
+                parent: d.parent,
+              },
+            ]
+          : [],
+      ),
+    );
 
   const archiveByRef = (accountId: string, ref: ExternalRef): Seq | null => {
     const row = findDocRow(accountId, ref.externalId, ref.type);
@@ -640,6 +661,10 @@ export function createWriteTx(
     }
     const reconciled = reconcileParents(acc.id, batch.documents);
     if (reconciled !== null) last = reconciled;
+    if (batch.relink?.length) {
+      const relinked = relinkPairs(acc.id, batch.relink);
+      if (relinked !== null) last = relinked;
+    }
     for (const ref of batch.deletions ?? []) {
       const seq = archiveByRef(acc.id, ref);
       if (seq !== null) last = seq;
@@ -798,14 +823,14 @@ export function createWriteTx(
   };
 
   const archiveBatchTx = conn.transaction(
-    (accountId: string, startSeq: Seq): number => {
+    (accountId: string, startSeq: Seq, limit: number): number => {
       const rows = conn
         .prepare(
           `SELECT id FROM documents
             WHERE ${ELIGIBLE} AND ${unlisted(startSeq)}
             LIMIT ?`,
         )
-        .all(accountId, startSeq, RECONCILE_ARCHIVE_BATCH) as Array<{
+        .all(accountId, startSeq, limit) as Array<{
         id: string;
       }>;
       const upd = conn.prepare(
@@ -1047,19 +1072,16 @@ export function createWriteTx(
       };
     },
 
-    reconcileArchive: (accountId, startSeq) => {
+    reconcileArchiveChunk: (
+      accountId,
+      startSeq,
+      limit = RECONCILE_ARCHIVE_BATCH,
+    ) => {
       requirePass(accountId);
-      // Batched so one cleanup of a poisoned multi-million-document account
-      // is a series of bounded transactions rather than a single one holding
-      // a write lock (and its rollback journal) over the whole corpus.
-      let archived = 0;
-      for (;;) {
-        const n = archiveBatchTx(accountId, startSeq);
-        archived += n;
-        if (n < RECONCILE_ARCHIVE_BATCH) break;
-      }
-      endPass(accountId);
-      return archived;
+      const archived = archiveBatchTx(accountId, startSeq, limit);
+      const done = archived < limit;
+      if (done) endPass(accountId);
+      return { archived, done };
     },
 
     reconcileEnd: (accountId) => endPass(accountId),
