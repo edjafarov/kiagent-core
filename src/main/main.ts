@@ -50,6 +50,7 @@ import { createActivityLog, type ActivityLog } from './core/mcp/activity';
 import { createSqlRunner } from './core/mcp/sql-runner';
 import { utilityRunnerChild } from './core/mcp/sql-runner-spawn';
 import { demoteHost } from './core/child-priority';
+import { inForeground } from './core/admission';
 import { startMcp } from './core/mcp/server';
 import { startReadDiagnosticsDump } from './core/read-diagnostics';
 import type { McpServerHandle } from './core/mcp/server';
@@ -611,9 +612,13 @@ function registerIpc(
       });
     },
 
-    'search:query': (req) => p.readsFor('renderer').search(req ?? {}),
-    'docs:get': ({ id }) => p.readsFor('renderer').document(id),
-    'docs:children': ({ id }) => p.readsFor('renderer').children(id),
+    // Renderer reads are foreground (#147 §2): sync units wait meanwhile.
+    'search:query': (req) =>
+      inForeground(p.admission, () => p.readsFor('renderer').search(req ?? {})),
+    'docs:get': ({ id }) =>
+      inForeground(p.admission, () => p.readsFor('renderer').document(id)),
+    'docs:children': ({ id }) =>
+      inForeground(p.admission, () => p.readsFor('renderer').children(id)),
 
     'attention:list': (req) =>
       attention.list(validateAttentionListRequest(req)),
@@ -1052,6 +1057,7 @@ app
       // no longer hold (candidate-port fallback). Tests never set this.
       reconcileClientConfigs: true,
       outbound,
+      admission: p.admission,
     });
     // Acceptance aid (§6): KIA_READ_DIAG_FILE=/path makes the app rewrite its
     // read diagnostics every 5 s so the external MCP probe can read them.

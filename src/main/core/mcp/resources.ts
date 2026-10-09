@@ -20,7 +20,13 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import type { DocumentId, Query } from '@shared/contracts';
 
-export function attachResourceHandlers(mcp: McpServer, query: Query): void {
+import type { Foreground } from './registry';
+
+export function attachResourceHandlers(
+  mcp: McpServer,
+  query: Query,
+  foreground?: Foreground,
+): void {
   // No enumerable resources — the corpus is far too large to list; clients
   // discover ids via the `search` tool and read through the template.
   mcp.server.setRequestHandler(ListResourcesRequestSchema, async () => ({
@@ -44,7 +50,8 @@ export function attachResourceHandlers(mcp: McpServer, query: Query): void {
     const { uri } = req.params;
     const m = /^doc:\/\/(.+)$/.exec(uri);
     if (!m) throw new Error(`bad resource uri: ${uri}`);
-    const doc = await query.document(m[1] as DocumentId);
+    const read = () => query.document(m[1] as DocumentId);
+    const doc = await (foreground ? foreground(read) : read());
     if (!doc) throw new Error(`not found: ${uri}`);
     return {
       contents: [{ uri, mimeType: 'text/markdown', text: doc.markdown ?? '' }],

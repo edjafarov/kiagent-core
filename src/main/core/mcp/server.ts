@@ -26,6 +26,7 @@ import type { McpActivityRecord, McpTool, Query } from '@shared/contracts';
 import type { OutboundService } from '@main/outbound/service';
 import { createOutboundRoutes } from '@main/outbound/routes';
 
+import { inForeground, type Admission } from '../admission';
 import type { LogSink } from '../engine/engine';
 import {
   applyConfigChange,
@@ -39,6 +40,7 @@ import {
   attachToolHandlers,
   createToolRegistry,
   invokeTool,
+  type Foreground,
   type ToolCallOutcome,
 } from './registry';
 import { attachResourceHandlers } from './resources';
@@ -49,6 +51,10 @@ import { currentTransport, runWithTransport } from './transport-context';
 
 export interface McpDeps {
   query: Query;
+  /** The app's admission owner (#147 §2): every tools/call, resources/read
+   *  and in-process callTool runs as foreground work. Absent in tests and
+   *  hosts without one. */
+  admission?: Pick<Admission, 'foreground'>;
   logSink: LogSink;
   dataDir: string;
   /** Receives one enriched activity record per tools/call served in-process
@@ -292,6 +298,7 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   const dbPath = path.join(deps.dataDir, 'kiagent.db');
   const sql = deps.sqlExecutor;
   const rawSql = createRawSqlTools(sql.exec);
+  const foreground: Foreground = (fn) => inForeground(deps.admission, fn);
   const registry = createToolRegistry([
     ...buildBuiltinTools(deps.query, deps.outbound),
     ...rawSql.tools,
@@ -335,8 +342,9 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
             transport: activityTransport(currentTransport()),
           }),
         allow,
+        foreground,
       );
-      attachResourceHandlers(server, deps.query);
+      attachResourceHandlers(server, deps.query, foreground);
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
@@ -584,18 +592,20 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
 
     callTool(name, args, opts) {
       return runWithTransport(opts.transport, () =>
-        invokeTool(
-          registry,
-          deps.logSink,
-          name,
-          args,
-          opts.client,
-          (rec) =>
-            deps.onActivity?.({
-              ...rec,
-              transport: activityTransport(currentTransport()),
-            }),
-          new Set(opts.allowTools),
+        foreground(() =>
+          invokeTool(
+            registry,
+            deps.logSink,
+            name,
+            args,
+            opts.client,
+            (rec) =>
+              deps.onActivity?.({
+                ...rec,
+                transport: activityTransport(currentTransport()),
+              }),
+            new Set(opts.allowTools),
+          ),
         ),
       );
     },

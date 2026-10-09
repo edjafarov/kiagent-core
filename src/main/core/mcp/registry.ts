@@ -115,6 +115,11 @@ function toolToWire(tool: McpTool): Record<string, unknown> {
  * contract: a throwing callback or summarizer must never fail the call it
  * records.
  */
+/** Runs `fn` as foreground work (#147 §2): background units wait while any
+ *  is in flight. Bound to the app's admission by startMcp; absent in the
+ *  stdio sibling, which has none. */
+export type Foreground = <T>(fn: () => Promise<T>) => Promise<T>;
+
 export function attachToolHandlers(
   mcp: McpServer,
   registry: ToolRegistry,
@@ -123,6 +128,7 @@ export function attachToolHandlers(
   /** When set, only these tools are listed or callable on this session —
    *  a server-side fence for hosted agents, independent of the client. */
   allow?: ReadonlySet<string>,
+  foreground?: Foreground,
 ): void {
   mcp.server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [...registry.values()]
@@ -131,15 +137,17 @@ export function attachToolHandlers(
   }));
 
   mcp.server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const out = await invokeTool(
-      registry,
-      logSink,
-      req.params.name,
-      (req.params.arguments ?? {}) as Record<string, unknown>,
-      mcp.server.getClientVersion()?.name ?? null,
-      onActivity,
-      allow,
-    );
+    const call = () =>
+      invokeTool(
+        registry,
+        logSink,
+        req.params.name,
+        (req.params.arguments ?? {}) as Record<string, unknown>,
+        mcp.server.getClientVersion()?.name ?? null,
+        onActivity,
+        allow,
+      );
+    const out = await (foreground ? foreground(call) : call());
     // isError (not a thrown protocol error) so the calling LLM sees the
     // real message instead of a generic JSON-RPC failure.
     return out.ok
