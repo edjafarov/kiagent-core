@@ -1112,9 +1112,13 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async ledgerDeferred(consumer, after, limit) {
+      // #139: the redundant `IS NOT 'skip'` lets the planner range-seek the
+      // partial work_ledger_active index instead of walking the consumer's
+      // millions of skip rows. alpha-cent's vision patch anchors on this text.
       const rows = (await db.all(
         `SELECT seq FROM work_ledger
           WHERE consumer = ? AND outcome = 'deferred' AND seq > ?
+            AND outcome IS NOT 'skip'
           ORDER BY seq LIMIT ?`,
         [consumer, after, limit],
       )) as Array<{ seq: number }>;
@@ -1123,7 +1127,8 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
     async ledgerHasDeferred(consumer) {
       const rows = await db.all(
-        `SELECT 1 FROM work_ledger WHERE consumer = ? AND outcome = 'deferred' LIMIT 1`,
+        `SELECT 1 FROM work_ledger WHERE consumer = ? AND outcome = 'deferred'
+          AND outcome IS NOT 'skip' LIMIT 1`,
         [consumer],
       );
       return rows.length > 0;
