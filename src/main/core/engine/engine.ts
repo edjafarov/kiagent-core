@@ -17,6 +17,7 @@ import type {
   Lane,
   LogLevel,
   Projection,
+  Query,
   Seq,
   Session,
   Source,
@@ -37,6 +38,7 @@ import {
 import { isDbWorkerTransientError } from '../../db/worker-client';
 
 import { RECONCILE_ERROR_PREFIX } from '../store/last-error';
+import { seedConsumerName } from '../store/maintenance-keys';
 import type { CoreStore } from '../store/store';
 import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
 import { FetchDeferredError } from './fetch-deferred';
@@ -53,6 +55,12 @@ export interface LogSink {
 
 export interface EngineDeps {
   store: CoreStore;
+  /** #59 §3a: where a new consumer's seed pages are read. Production passes
+   *  the read worker (`readsFor('other')`) so paging never queues behind
+   *  ingest; defaults to `store.read`. */
+  reads?: Query;
+  /** Seed page size — tests only (default SEED_PAGE). */
+  seedPageSize?: number;
   sources: { get(id: string): Source | undefined };
   /** The plane. `seeWithMeta` is optional so engine fakes that never call
    *  it keep compiling; a session's `seeWithMeta` throws when absent. */
@@ -192,6 +200,8 @@ export const RECONCILE_STAGE_BATCH = 10_000;
  *  Documents on the main heap and killed the process (2026-08-24). Matched to
  *  FEED_BATCH, the live tail's equivalent bound. */
 export const REDRIVE_PAGE = 500;
+/** #59 §3a: live documents per seed page (one read-worker call each). */
+export const SEED_PAGE = 500;
 
 /** What one worked change records in its work_ledger row — the store's own
  *  outcome union, which `workOne` hands back for its caller to record. */
@@ -813,6 +823,115 @@ export function createEngine(deps: EngineDeps): Engine & {
     // within on a success, on the final failed attempt, or on abort). No
     // attempt ran, so nothing was worked: record it as failed.
     return { docs: [], enrich: [], attempts: 0, outcome: 'failed' };
+  };
+
+  /** #59 §3a: seed `consumer` from `documents` instead of replaying the whole
+   *  change log. Runs when the consumer has no row, a half-done seed
+   *  (`seed:<consumer>` exists), or a cursor below the published prune
+   *  floor. The real row sits at `h0` (head at seed start) from the first
+   *  moment, so `pending` and the prune floor are right while seeding; a
+   *  document that changes meanwhile comes again through feed(h0), which is
+   *  idempotent (emissions key on (consumer, seq)). Returns false when
+   *  stopped mid-seed — the seed row keeps the last committed page.
+   *  A half-done seed resumes ONLY while its snapshot is still feedable: the
+   *  real row exists and h0 >= the published floor. Otherwise (the retired
+   *  sweep dropped the real row, or pruning passed h0 while the consumer was
+   *  away) feed(h0) would start inside a deleted interval, so the seed
+   *  restarts at the current head. */
+  const seedConsumer = async (
+    worker: Worker,
+    consumer: string,
+    signal: AbortSignal,
+  ): Promise<boolean> => {
+    const cursor = await store.consumerRow(consumer);
+    const floor = (await store.changesFloor()) ?? 0;
+    const seed = await store.consumerRow(seedConsumerName(consumer));
+    const feedable = cursor !== null && cursor >= floor;
+    if (feedable && seed === null) return true; // nothing to seed
+    let after: Seq = seed ?? 0;
+    if (!feedable) {
+      // beginSeed resets seed:<consumer> to 0 with the new h0.
+      await store.beginSeed(consumer, await store.headSeq());
+      after = 0;
+    }
+    const h0 = await store.consumerCursor(consumer);
+    const reads = deps.reads ?? store.read;
+    const pageSize = deps.seedPageSize ?? SEED_PAGE;
+    for (;;) {
+      if (signal.aborted) return false;
+      // eslint-disable-next-line no-await-in-loop
+      const page = await reads.seedPage!({
+        afterSeq: after,
+        throughSeq: h0,
+        limit: pageSize,
+      });
+      if (page.length === 0) break;
+      const emitted: DocumentInput[] = [];
+      const enrich: EnrichInput[] = [];
+      const clear: string[] = [];
+      const worked: string[] = [];
+      const ledger: LedgerEntry[] = [];
+      for (const document of page) {
+        if (signal.aborted) {
+          // As attach's dropBatch: nothing crashed, so clear the session.bump
+          // counters of what returned. The seed cursor stays put and the
+          // page's ledger entries are discarded with its outputs.
+          if (worked.length)
+            // eslint-disable-next-line no-await-in-loop
+            await store
+              .commit({ consumer, cursor: h0, clearAttempts: worked })
+              .catch(() => {});
+          return false;
+        }
+        const change: Change = {
+          seq: document.seq,
+          kind: 'document',
+          document,
+        };
+        let matched = false;
+        try {
+          matched = worker.matches(change);
+        } catch (err) {
+          logs.log(
+            `worker:${worker.name}`,
+            'warn',
+            `matches() threw on seq ${change.seq} — treated as non-match: ${String(err)}`,
+          );
+        }
+        if (!matched) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const r = await workOne(worker, change, signal);
+        worked.push(document.id);
+        ledger.push({
+          seq: change.seq,
+          attempts: r.attempts,
+          outcome: r.outcome,
+        });
+        emitted.push(...r.docs);
+        enrich.push(...r.enrich);
+        if (r.outcome === 'done') clear.push(document.id);
+      }
+      after = page[page.length - 1].seq;
+      // ONE transaction per page: outputs under the REAL consumer (its
+      // synthetic worker account), the page's ledger outcomes, and the seed
+      // progress. The consumer cursor stays at h0. A crash before it loses
+      // the whole page (re-worked on resume); after it, every deferral
+      // behind the seed cursor already has its retry row. When the sync
+      // workstream makes `cursor` optional on consumer commits, this call
+      // omits it.
+      // eslint-disable-next-line no-await-in-loop
+      await store.commit({
+        consumer,
+        cursor: h0,
+        seedCursor: after,
+        ledger: ledger.length ? ledger : undefined,
+        documents: emitted.length ? emitted : undefined,
+        enrich: enrich.length ? enrich : undefined,
+        clearAttempts: clear.length ? clear : undefined,
+      });
+    }
+    await store.endSeed(consumer);
+    return true;
   };
 
   const engine = {
@@ -1739,6 +1858,9 @@ export function createEngine(deps: EngineDeps): Engine & {
         let retries = 0;
         for (;;) {
           try {
+            // #59 §3a: a consumer with no row, a half-done seed, or a cursor
+            // below the pruned floor is seeded from `documents` first.
+            if (!(await seedConsumer(worker, consumer, abort.signal))) return;
             const start = await store.consumerCursor(consumer);
             for await (const changes of abortable(
               store.feed(start),

@@ -296,6 +296,8 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     convert,
     logs: sink,
     refreshers,
+    // #59 §3a: seed pages run on the read worker, never behind ingest.
+    reads: readPlane.readsFor('other'),
   });
 
   registerArchiveSweep({ store, scheduler, logs: sink });
