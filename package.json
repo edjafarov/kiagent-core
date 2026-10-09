@@ -303,7 +303,8 @@
     "files": [
       "dist",
       "node_modules",
-      "package.json"
+      "package.json",
+      "!**/*.map"
     ],
     "mac": {
       "notarize": false,

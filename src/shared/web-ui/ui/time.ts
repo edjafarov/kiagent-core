@@ -53,12 +53,71 @@ export function shortDay(ms: number, now: number): string {
   return dayMonth(ms);
 }
 
-/** A clock for relative times, ticking every `ms`. */
+const isHidden = (): boolean =>
+  typeof document !== 'undefined' && document.visibilityState === 'hidden';
+
+/** Runs `fn` every `ms` while the window is visible. Hidden, it stops (a
+ *  hidden window has nothing to repaint); on becoming visible again it runs
+ *  `fn` at once, to catch up, and resumes. Returns the stop function. */
+export function everyWhileVisible(fn: () => void, ms: number): () => void {
+  let timer: number | undefined;
+  const start = (): void => {
+    if (timer === undefined) timer = window.setInterval(fn, ms);
+  };
+  const stop = (): void => {
+    if (timer === undefined) return;
+    window.clearInterval(timer);
+    timer = undefined;
+  };
+  const onVisibility = (): void => {
+    if (isHidden()) stop();
+    else if (timer === undefined) {
+      fn();
+      start();
+    }
+  };
+  if (!isHidden()) start();
+  document.addEventListener('visibilitychange', onVisibility);
+  return () => {
+    stop();
+    document.removeEventListener('visibilitychange', onVisibility);
+  };
+}
+
+/** One ticker per interval, however many clocks read it. */
+const nowTickers = new Map<
+  number,
+  { subscribers: Set<(now: number) => void>; stop: () => void }
+>();
+
+function subscribeNow(
+  ms: number,
+  subscriber: (now: number) => void,
+): () => void {
+  let ticker = nowTickers.get(ms);
+  if (!ticker) {
+    const subscribers = new Set<(now: number) => void>();
+    const stop = everyWhileVisible(() => {
+      const now = Date.now();
+      subscribers.forEach((notify) => notify(now));
+    }, ms);
+    ticker = { subscribers, stop };
+    nowTickers.set(ms, ticker);
+  }
+  const own = ticker;
+  own.subscribers.add(subscriber);
+  return () => {
+    own.subscribers.delete(subscriber);
+    if (own.subscribers.size > 0) return;
+    own.stop();
+    if (nowTickers.get(ms) === own) nowTickers.delete(ms);
+  };
+}
+
+/** A clock for relative times, ticking every `ms` while the window is
+ *  visible; it catches up the moment the window is shown again. */
 export function useNow(ms = 10_000): number {
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), ms);
-    return () => window.clearInterval(timer);
-  }, [ms]);
+  useEffect(() => subscribeNow(ms, setNow), [ms]);
   return now;
 }

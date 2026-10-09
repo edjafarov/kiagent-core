@@ -10,6 +10,7 @@ jest.mock('@renderer/state/app-state', () => ({
   subscribeAppState: () => () => {},
   getAppState: () => mockState,
   useAppState: (sel: (s: unknown) => unknown) => sel(mockState),
+  useAppGate: (sel: (s: unknown) => unknown) => sel(mockState),
 }));
 
 // Screens are IPC-heavy; the shell contract is which one mounts, not what

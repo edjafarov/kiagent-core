@@ -38,6 +38,7 @@ export {
   dayMonth,
   shortDay,
   useNow,
+  everyWhileVisible,
 } from './time';
 export type { DayGroupName } from './time';
 export type { Crumb, TopBarProps } from './layout';

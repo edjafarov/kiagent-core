@@ -1,3 +1,4 @@
+import { deserialize, serialize } from 'node:v8';
 import type { AppState } from '@shared/contracts';
 import type { RendererApi } from '@shared/ipc';
 
@@ -175,6 +176,94 @@ describe('app-state: app:get-state rejection retry', () => {
 
       expect(bridge.invoke).toHaveBeenCalledTimes(1); // no retry invoke fired
       expect(getAppState()).toBeNull();
+    });
+  });
+});
+
+describe('app-state: structural sharing across cloned pushes', () => {
+  const clone = <T>(v: T): T => deserialize(serialize(v)) as T;
+
+  function richState(): AppState {
+    const s = makeAppState();
+    return {
+      ...s,
+      identity: { name: 'Alice', emails: ['a@example.com'], phones: [] },
+      extensions: [
+        { id: 'ext.a', name: 'A', status: 'activated', enabled: true },
+      ] as unknown as AppState['extensions'],
+      accounts: [
+        {
+          account: { id: 'a', source: 'gmail', status: 'live' },
+          docCount: 1,
+          recent: [{ id: 'x', title: null, ts: '2026-10-01T00:00:00Z' }],
+        },
+        {
+          account: { id: 'b', source: 'slack', status: 'backfilling' },
+          docCount: 2,
+          recent: [],
+        },
+      ] as unknown as AppState['accounts'],
+    };
+  }
+
+  test('fresh clones keep unchanged sub-trees; an equal push notifies no one; rev still advances', async () => {
+    await jest.isolateModulesAsync(async () => {
+      const bridge = makeBridge();
+      let onPush: ((p: unknown) => void) | undefined;
+      bridge.on.mockImplementation(
+        (channel: string, fn: (p: unknown) => void) => {
+          if (channel === 'push:app-state') onPush = fn;
+          return () => {};
+        },
+      );
+      const base = richState();
+      bridge.invoke.mockResolvedValueOnce({
+        state: clone(base),
+        seq: 0,
+        rev: 1,
+      });
+      (window as unknown as { kiagent: Bridge }).kiagent = bridge;
+
+      // eslint-disable-next-line global-require
+      const { subscribeAppState, getAppState } = require('../app-state');
+      const listener = jest.fn();
+      const unsubscribe = subscribeAppState(listener);
+      await Promise.resolve();
+      await Promise.resolve();
+      const first = getAppState() as AppState;
+      expect(first).toEqual(base);
+      listener.mockClear();
+
+      const next = clone(base);
+      next.accounts[1].docCount = 3;
+      onPush!({ state: clone(next), seq: 1, rev: 2 });
+      const second = getAppState() as AppState;
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(second.accounts).not.toBe(first.accounts);
+      expect(second.accounts[0]).toBe(first.accounts[0]);
+      expect(second.accounts[1]).not.toBe(first.accounts[1]);
+      expect(second.accounts[1].account).toBe(first.accounts[1].account);
+      expect(second.identity).toBe(first.identity);
+      expect(second.extensions).toBe(first.extensions);
+      expect(second.prefs).toBe(first.prefs);
+      expect(second.processing).toBe(first.processing);
+
+      // Structurally equal push: no notify, same snapshot.
+      onPush!({ state: clone(next), seq: 1, rev: 3 });
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(getAppState()).toBe(second);
+
+      // The equal push advanced the rev: a replay of rev 3 is stale.
+      const replay = clone(next);
+      replay.accounts[0].docCount = 999;
+      onPush!({ state: replay, seq: 1, rev: 3 });
+      expect(getAppState()).toBe(second);
+      // A late, lower rev carrying a real change is dropped too.
+      onPush!({ state: clone(replay), seq: 1, rev: 2 });
+      expect(getAppState()).toBe(second);
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      unsubscribe();
     });
   });
 });
