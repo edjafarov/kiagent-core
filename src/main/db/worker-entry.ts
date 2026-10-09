@@ -155,9 +155,17 @@ async function runReadRole(): Promise<void> {
           const a = args as { accountId: string; startSeq: Seq };
           return writeTx.reconcileDiff(a.accountId, a.startSeq);
         },
-        reconcileArchive: (args) => {
-          const a = args as { accountId: string; startSeq: Seq };
-          return writeTx.reconcileArchive(a.accountId, a.startSeq);
+        reconcileArchiveChunk: (args) => {
+          const a = args as {
+            accountId: string;
+            startSeq: Seq;
+            limit?: number;
+          };
+          return writeTx.reconcileArchiveChunk(
+            a.accountId,
+            a.startSeq,
+            a.limit,
+          );
         },
         reconcileEnd: (args) => {
           writeTx.reconcileEnd((args as { accountId: string }).accountId);

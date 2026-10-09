@@ -58,6 +58,32 @@ describe('buildReadDiagnostics', () => {
     expect(d.walBytes).toBeNull();
     expect(d.sql).toBeNull();
   });
+  it('carries the event-loop window, the admission snapshot and converter stats (null when absent)', async () => {
+    const eventLoop = { p50Ms: 1, p99Ms: 2, maxMs: 3, samples: 4, at: 5 };
+    const admission = { slots: 1, running: 0 } as never;
+    const converter = { mode: 'child', jobs: 3 } as never;
+    const d = await buildReadDiagnostics({
+      stats: stats(),
+      walPath: '/x',
+      statFile: async () => ({ size: 0 }),
+      eventLoop: () => eventLoop,
+      admission: () => admission,
+      converter: () => converter,
+    });
+    expect(d.eventLoop).toBe(eventLoop);
+    expect(d.admission).toBe(admission);
+    expect(d.converter).toBe(converter);
+    const bare = await buildReadDiagnostics({
+      stats: stats(),
+      walPath: '/x',
+      statFile: async () => ({ size: 0 }),
+    });
+    expect([bare.eventLoop, bare.admission, bare.converter]).toEqual([
+      null,
+      null,
+      null,
+    ]);
+  });
 });
 
 describe('startReadDiagnosticsDump', () => {

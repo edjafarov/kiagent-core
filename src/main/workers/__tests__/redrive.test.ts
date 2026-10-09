@@ -1,5 +1,7 @@
 import type { Worker } from '@shared/contracts';
 
+import { createAdmission } from '../../core/admission';
+import { enrichmentInputsFor } from '../../core/boot';
 import { workerConsumerName } from '../../core/engine/engine';
 import { registerRedrive } from '../index';
 
@@ -47,6 +49,11 @@ function makePlatform(deferred: string[]) {
       },
     },
   };
+  (platform as Record<string, unknown>).admission = createAdmission({
+    slots: 1,
+    userActive: () => false,
+    enrichment: enrichmentInputsFor(() => platform as never),
+  });
   return { platform: platform as never, registered, ledgerQueries, reruns };
 }
 

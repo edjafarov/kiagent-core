@@ -6,6 +6,7 @@ import {
   type Lane,
 } from '@shared/contracts';
 
+import { abortError } from './abort';
 import { createActiveCalls, type ActiveCalls } from './active-calls';
 import type { LogSink } from './engine/engine';
 
@@ -62,6 +63,10 @@ export interface InferencePlane extends Inference {
       /** Local only: return the top-N alternatives of the first generated
        *  token as `firstTokens` (completeWithMeta). */
       topLogprobs?: number;
+      /** Background lane only: cancels the call while it waits at the gate
+       *  (rejects AbortError; the provider is never invoked). Not forwarded
+       *  to providers. */
+      signal?: AbortSignal;
     },
   ): Promise<string>;
   /** Same request as `complete`, but returns identity + usage alongside the
@@ -88,13 +93,26 @@ export interface InferencePlane extends Inference {
       /** Local only: return the top-N alternatives of the first generated
        *  token as `firstTokens` (completeWithMeta). */
       topLogprobs?: number;
+      /** Background lane only: cancels the call while it waits at the gate
+       *  (rejects AbortError; the provider is never invoked). Not forwarded
+       *  to providers. */
+      signal?: AbortSignal;
     },
   ): Promise<CompletionMeta>;
   /** `see`, plus the provider and model that described the image. */
   seeWithMeta(
     image: Uint8Array,
     prompt: string,
-    opts?: { mime?: string; lane?: Lane; task?: string; budgetKey?: string },
+    opts?: {
+      mime?: string;
+      lane?: Lane;
+      task?: string;
+      budgetKey?: string;
+      /** Background lane only: cancels the call while it waits at the gate
+       *  (rejects AbortError; the provider is never invoked). Not forwarded
+       *  to providers. */
+      signal?: AbortSignal;
+    },
   ): Promise<{ text: string; providerId: string; modelId: string }>;
   /** Resolves the provider that WOULD answer `kind` right now, exactly as
    *  the call path's `pick(kind)` does, and reports its model identity plus
@@ -119,6 +137,9 @@ export interface InferencePlane extends Inference {
   /** A local provider of `kind` is downloading or says it may become ready
    *  on its own (`InferenceProvider.mayBecomeReady`). Remote ones never count. */
   mayBecomeReady(kind: 'complete' | 'see' | 'read' | 'hear'): boolean;
+  /** A ready LOCAL provider of `kind` exists (what `pick(kind)` without a
+   *  task would find). Never throws. */
+  hasProvider(kind: 'complete' | 'see' | 'read' | 'hear'): boolean;
   /** Route a caller-owned task to a registered provider (typically a
    *  remote one), or clear it with `null`. In memory only; the owner
    *  re-applies routes after a restart. Never bumps the generation. A
@@ -131,6 +152,12 @@ export interface InferencePlane extends Inference {
    *  `gate()` calls it on every background request — no cached boolean, so
    *  admission is never staler than the policy's inputs. Unbound = closed. */
   setLanePolicy(fn: () => boolean): void;
+  /** Bind the foreground wait (#147 §2 rule 1): every background request
+   *  awaits it after the lane check — a bounded WAIT (admission caps it at
+   *  MAX_FOREGROUND_WAIT_MS), never a throw, so a foreground burst never
+   *  discards an already-done fetch/raster/OCR. The caller's `signal` ends
+   *  the wait (AbortError). Unbound = no wait. */
+  setForegroundIdle(fn: (signal?: AbortSignal) => Promise<void>): void;
 }
 
 /** Thrown by the routing layer when NO ready provider supports a kind — as
@@ -248,6 +275,8 @@ export function createInference(
   };
   const routeTable = new Map<string, string>();
   let lanePolicy: () => boolean = () => false;
+  let foregroundIdle: (signal?: AbortSignal) => Promise<void> = () =>
+    Promise.resolve();
 
   // Random start so a process restart is a new generation by construction —
   // nothing persists it across boots. Seed is injectable so tests are
@@ -306,8 +335,25 @@ export function createInference(
     describedAt.clear();
   };
 
-  const gate = (lane: Lane): void => {
-    if (lane !== 'interactive' && !lanePolicy()) throw new LaneClosedError();
+  /** Interactive: returns synchronously — no suspension, so an interactive
+   *  call registers in `activeCalls` in the same tick as before (the
+   *  inference-active-calls suite pins that). Background: lane check, the
+   *  bounded and cancellable foreground wait, then the lane and the signal
+   *  re-checked, since either may have changed during the (≤ 10 s) wait. */
+  const gate = (
+    lane: Lane,
+    signal?: AbortSignal,
+  ): Promise<void> | undefined => {
+    if (lane === 'interactive') return undefined;
+    // Lane first: a closed lane fails fast (LaneClosedError's memory
+    // rationale above) and never waits.
+    if (!lanePolicy()) throw new LaneClosedError();
+    if (signal?.aborted) throw abortError();
+    return (async () => {
+      await foregroundIdle(signal);
+      if (signal?.aborted) throw abortError();
+      if (!lanePolicy()) throw new LaneClosedError();
+    })();
   };
 
   /** A task with a route goes to its provider when that provider serves
@@ -381,6 +427,7 @@ export function createInference(
     task: string | undefined,
     lane: Lane,
     attempt: (p: InferenceProvider, task: string | undefined) => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> => {
     const p = pick(kind, task);
     try {
@@ -390,11 +437,13 @@ export function createInference(
       if (
         !p.remote ||
         name === 'ModelChangedError' ||
-        name === 'LaneClosedError'
+        name === 'LaneClosedError' ||
+        name === 'AbortError'
       ) {
         throw err;
       }
-      gate(lane);
+      const waited = gate(lane, signal);
+      if (waited) await waited;
       logs.log(
         'inference',
         'info',
@@ -409,68 +458,75 @@ export function createInference(
     opts,
   ) => {
     const lane = opts?.lane ?? 'interactive';
-    gate(lane);
+    const waited = gate(lane, opts?.signal);
+    if (waited) await waited;
     const profile: CompletionProfile = opts?.profile ?? 'default';
-    return withLocalFallback('complete', opts?.task, lane, async (p, task) => {
-      checkGeneration(p, 'complete', opts?.generation);
-      const modelId = modelIdOf(p, 'complete');
-      // `expectModelId`: when the caller passed a `generation`, prefer the
-      // FIRST-WRITE-WINS value some `describe('complete')` call recorded for
-      // the current generation (`describedAt`) over the fresh `modelId` just
-      // computed above — as long as a record actually exists and its
-      // generation still matches the one the caller passed (it always will
-      // once `checkGeneration` has passed AND an entry exists, per
-      // `describedAt`'s clear-on-bump invariant; the fallback only matters
-      // when a caller passes a `generation` nothing ever recorded, e.g. one
-      // it never actually got from `describe()`). Recomputing fresh here
-      // would make this field always equal what `handle()` itself resolves
-      // moments later (see `describedAt`'s comment) — forwarding the
-      // RECORDED value is what keeps the provider's own re-check meaningful.
-      const recorded = describedAt.get(describedKey('complete', task));
-      // Only a record made for THIS provider: a routed task that ends up
-      // local never carries the remote's model id into the local check.
-      const expectModelId =
-        opts?.generation !== undefined
-          ? recorded?.generation === opts.generation &&
-            recorded.providerId === p.id
-            ? recorded.modelId
-            : modelId
-          : undefined;
-      const raw = await tracked(p, 'complete', task, () =>
-        p.handle({
-          kind: 'complete',
-          payload: {
-            prompt,
-            maxTokens: opts?.maxTokens,
-            profile,
-            system: opts?.system,
-            generation: opts?.generation,
-            expectModelId,
-            task: opts?.task,
-            budgetKey: opts?.budgetKey,
-            schema: opts?.schema,
-            grammar: opts?.grammar,
-            topLogprobs: opts?.topLogprobs,
-          },
-          lane,
-        }),
-      );
-      const normalized = normalizeCompletion(raw);
-      return {
-        text: normalized.text,
-        providerId: p.id,
-        // A remote provider learns its model from the call itself.
-        modelId: p.remote ? modelIdOf(p, 'complete') : modelId,
-        generation,
-        profile,
-        promptTokens: normalized.promptTokens,
-        completionTokens: normalized.completionTokens,
-        truncated: normalized.truncated,
-        ...(normalized.firstTokens
-          ? { firstTokens: normalized.firstTokens }
-          : {}),
-      };
-    });
+    return withLocalFallback(
+      'complete',
+      opts?.task,
+      lane,
+      async (p, task) => {
+        checkGeneration(p, 'complete', opts?.generation);
+        const modelId = modelIdOf(p, 'complete');
+        // `expectModelId`: when the caller passed a `generation`, prefer the
+        // FIRST-WRITE-WINS value some `describe('complete')` call recorded for
+        // the current generation (`describedAt`) over the fresh `modelId` just
+        // computed above — as long as a record actually exists and its
+        // generation still matches the one the caller passed (it always will
+        // once `checkGeneration` has passed AND an entry exists, per
+        // `describedAt`'s clear-on-bump invariant; the fallback only matters
+        // when a caller passes a `generation` nothing ever recorded, e.g. one
+        // it never actually got from `describe()`). Recomputing fresh here
+        // would make this field always equal what `handle()` itself resolves
+        // moments later (see `describedAt`'s comment) — forwarding the
+        // RECORDED value is what keeps the provider's own re-check meaningful.
+        const recorded = describedAt.get(describedKey('complete', task));
+        // Only a record made for THIS provider: a routed task that ends up
+        // local never carries the remote's model id into the local check.
+        const expectModelId =
+          opts?.generation !== undefined
+            ? recorded?.generation === opts.generation &&
+              recorded.providerId === p.id
+              ? recorded.modelId
+              : modelId
+            : undefined;
+        const raw = await tracked(p, 'complete', task, () =>
+          p.handle({
+            kind: 'complete',
+            payload: {
+              prompt,
+              maxTokens: opts?.maxTokens,
+              profile,
+              system: opts?.system,
+              generation: opts?.generation,
+              expectModelId,
+              task: opts?.task,
+              budgetKey: opts?.budgetKey,
+              schema: opts?.schema,
+              grammar: opts?.grammar,
+              topLogprobs: opts?.topLogprobs,
+            },
+            lane,
+          }),
+        );
+        const normalized = normalizeCompletion(raw);
+        return {
+          text: normalized.text,
+          providerId: p.id,
+          // A remote provider learns its model from the call itself.
+          modelId: p.remote ? modelIdOf(p, 'complete') : modelId,
+          generation,
+          profile,
+          promptTokens: normalized.promptTokens,
+          completionTokens: normalized.completionTokens,
+          truncated: normalized.truncated,
+          ...(normalized.firstTokens
+            ? { firstTokens: normalized.firstTokens }
+            : {}),
+        };
+      },
+      opts?.signal,
+    );
   };
 
   const seeWithMeta: InferencePlane['seeWithMeta'] = async (
@@ -479,28 +535,35 @@ export function createInference(
     opts,
   ) => {
     const lane = opts?.lane ?? 'interactive';
-    gate(lane);
-    return withLocalFallback('see', opts?.task, lane, async (p, task) => {
-      const modelId = modelIdOf(p, 'see');
-      const out = await tracked(p, 'see', task, () =>
-        p.handle({
-          kind: 'see',
-          payload: {
-            image,
-            prompt,
-            mime: opts?.mime,
-            task: opts?.task,
-            budgetKey: opts?.budgetKey,
-          },
-          lane,
-        }),
-      );
-      return {
-        text: String(out),
-        providerId: p.id,
-        modelId: p.remote ? modelIdOf(p, 'see') : modelId,
-      };
-    });
+    const waited = gate(lane, opts?.signal);
+    if (waited) await waited;
+    return withLocalFallback(
+      'see',
+      opts?.task,
+      lane,
+      async (p, task) => {
+        const modelId = modelIdOf(p, 'see');
+        const out = await tracked(p, 'see', task, () =>
+          p.handle({
+            kind: 'see',
+            payload: {
+              image,
+              prompt,
+              mime: opts?.mime,
+              task: opts?.task,
+              budgetKey: opts?.budgetKey,
+            },
+            lane,
+          }),
+        );
+        return {
+          text: String(out),
+          providerId: p.id,
+          modelId: p.remote ? modelIdOf(p, 'see') : modelId,
+        };
+      },
+      opts?.signal,
+    );
   };
 
   return {
@@ -538,7 +601,8 @@ export function createInference(
     seeWithMeta,
     async read(image, opts) {
       const lane = opts?.lane ?? 'interactive';
-      gate(lane);
+      const waited = gate(lane, opts?.signal);
+      if (waited) await waited;
       const p = pick('read');
       const out = await tracked(p, 'read', undefined, () =>
         p.handle({
@@ -551,7 +615,8 @@ export function createInference(
     },
     async hear(audio, opts) {
       const lane = opts?.lane ?? 'interactive';
-      gate(lane);
+      const waited = gate(lane, opts?.signal);
+      if (waited) await waited;
       const p = pick('hear');
       const out = await p.handle({
         kind: 'hear',
@@ -567,6 +632,11 @@ export function createInference(
         lane,
       });
       return String(out);
+    },
+    hasProvider(kind) {
+      return providers.some(
+        (p) => !p.remote && p.supports.includes(kind) && p.status() === 'ready',
+      );
     },
     mayBecomeReady(kind) {
       return providers.some((p) => {
@@ -619,6 +689,9 @@ export function createInference(
       }),
     setLanePolicy(fn) {
       lanePolicy = fn;
+    },
+    setForegroundIdle(fn) {
+      foregroundIdle = fn;
     },
   };
 }

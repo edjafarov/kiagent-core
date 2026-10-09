@@ -4,6 +4,12 @@ import JSZip from 'jszip';
 import type { Change, Document, WorkerSession } from '@shared/contracts';
 import { convertibleKind, MAX_MARKDOWN_CHARS } from '@main/core/engine/convert';
 import { FetchDeferredError } from '@main/core/engine/fetch-deferred';
+import {
+  ConverterCrashedError,
+  ConverterTimeoutError,
+  ConverterUnavailableError,
+} from '@main/core/converter/converter';
+import { abortError } from '@main/core/abort';
 
 import {
   MAX_CLOUD_BINARY_BYTES,
@@ -394,47 +400,102 @@ describe('large files (fetch cap, re-admission, crash fence, output cap)', () =>
       isConvertCandidate({ ...d, metadata: { ...d.metadata, conversion } }),
     ).toBe(false);
   });
-  it('fence: the third attempt on an over-eager-cap doc records failed WITHOUT parsing', async () => {
-    // Declared 40 MiB; the fence keys on max(declared, actual), so a tiny
-    // fixture is enough. The parse spy proves the third attempt never parses.
-    const parse = jest.fn(async () => ({ markdown: 'never' }));
-    const s = fakeSession(async () => tinyPdf('x'.repeat(40)), {
-      bump: async () => 3,
-    });
-    await createConvertWorker({ parse }).work(change(pdfDoc(40 * MiB)), s);
-    expect(s.enriched[0].metadata.conversion.status).toBe('failed');
-    expect(parse).not.toHaveBeenCalled();
-  });
-  it('fence: a small .msg is fenced too (an in-process parse of mail can kill main at any size)', async () => {
-    const parse = jest.fn(async () => ({ markdown: 'never' }));
-    const s = fakeSession(async () => new Uint8Array(2048), {
-      bump: async () => 3,
-    });
-    await createConvertWorker({ parse }).work(
-      change(
-        doc({
-          type: 'attachment',
-          title: 'fwd.msg',
-          metadata: {
-            mime: 'application/vnd.ms-outlook',
-            filename: 'fwd.msg',
-            sizeBytes: 2048,
-          },
-        }),
-      ),
-      s,
-    );
-    expect(s.enriched[0].metadata.conversion.status).toBe('failed');
-    expect(parse).not.toHaveBeenCalled();
-  });
-  it('fence: the second attempt still parses', async () => {
+  it('no crash fence any more: a large PDF parses on every attempt', async () => {
     const parse = jest.fn(async () => ({
       markdown: 'parsed text from the large pdf',
     }));
-    const s = fakeSession(async () => tinyPdf('x'), { bump: async () => 2 });
+    const s = fakeSession(async () => tinyPdf('x'), { bump: async () => 9 });
     await createConvertWorker({ parse }).work(change(pdfDoc(40 * MiB)), s);
     expect(parse).toHaveBeenCalledTimes(1);
     expect(s.enriched[0].metadata.conversion.status).toBe('ok');
+  });
+  it.each([
+    [new ConverterCrashedError('x'), 'converter crashed'],
+    [new ConverterTimeoutError('x'), 'converter timed out'],
+  ])(
+    'a converter %p records failed with a fixed reason',
+    async (err, reason) => {
+      const s = fakeSession(async () => tinyPdf('x'));
+      const out = await createConvertWorker({
+        parse: async () => {
+          throw err;
+        },
+      }).work(change(pdfDoc(1024)), s);
+      expect(out).toBe('done');
+      expect(s.enriched[0].metadata.conversion).toMatchObject({
+        status: 'failed',
+        error: reason,
+      });
+    },
+  );
+  it.each([[new ConverterUnavailableError('x')], [abortError()]])(
+    '%p defers and writes nothing',
+    async (err) => {
+      const s = fakeSession(async () => tinyPdf('x'));
+      const out = await createConvertWorker({
+        parse: async () => {
+          throw err;
+        },
+      }).work(change(pdfDoc(1024)), s);
+      expect(out).toBe('defer');
+      expect(s.enriched).toHaveLength(0);
+    },
+  );
+  it('admits only once the bytes are in hand, releases after the parse, and passes the signal', async () => {
+    const events: string[] = [];
+    let fetched!: (b: Uint8Array) => void;
+    const ac = new AbortController();
+    const s = fakeSession(
+      () => {
+        events.push('fetch');
+        return new Promise<Uint8Array>((r) => {
+          fetched = r;
+        });
+      },
+      {
+        signal: ac.signal,
+        admit: async () => {
+          events.push('admit');
+          return () => events.push('release');
+        },
+      },
+    );
+    let seen: AbortSignal | undefined;
+    const run = createConvertWorker({
+      parse: async (_b, _m, _n, signal) => {
+        seen = signal;
+        events.push('parse');
+        return { markdown: 'text' };
+      },
+    }).work(change(pdfDoc(1024)), s);
+    await new Promise((r) => setTimeout(r, 50)); // a slow fetch holds no slot
+    expect(events).toEqual(['fetch']);
+    fetched(tinyPdf('x'));
+    await run;
+    expect(events).toEqual(['fetch', 'admit', 'parse', 'release']);
+    expect(seen).toBe(ac.signal);
+  });
+  it('releases the slot when the parse throws', async () => {
+    const release = jest.fn();
+    const s = fakeSession(async () => tinyPdf('x'), {
+      admit: async () => release,
+    });
+    await createConvertWorker({
+      parse: async () => {
+        throw new ConverterCrashedError('x');
+      },
+    }).work(change(pdfDoc(1024)), s);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+  it('uses deps.converter when no parse seam is given', async () => {
+    const parseDetailed = jest.fn(async () => ({ markdown: 'from the child' }));
+    const s = fakeSession(async () => tinyPdf('x'));
+    await createConvertWorker({ converter: { parseDetailed } }).work(
+      change(pdfDoc(1024)),
+      s,
+    );
+    expect(parseDetailed).toHaveBeenCalledTimes(1);
+    expect(s.enriched[0].markdown).toBe('from the child');
   });
   it('a large parse logs the memory probe line; an eager-size one does not', async () => {
     const parse = jest.fn(async () => ({

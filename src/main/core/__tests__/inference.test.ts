@@ -1,5 +1,7 @@
 import type { InferenceProvider } from '@shared/contracts';
 
+import { abortError } from '../abort';
+
 import {
   createInference,
   LaneClosedError,
@@ -445,6 +447,104 @@ describe('inference plane', () => {
     expect((seenPayload as { expectModelId?: string }).expectModelId).toBe(
       'm1',
     );
+  });
+  it('a background call waits for the foreground wait, then proceeds (no LaneClosedError)', async () => {
+    const plane = createInference(noopLogs);
+    plane.register(provider('ocr', ['read'], 'ocr'));
+    plane.setLanePolicy(() => true);
+    let release!: () => void;
+    plane.setForegroundIdle(
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+        }),
+    );
+    let done = false;
+    const p = plane
+      .read(new Uint8Array([1]), { lane: 'background' })
+      .then((v) => {
+        done = true;
+        return v;
+      });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(done).toBe(false);
+    release();
+    await expect(p).resolves.toBe('ocr:read');
+  });
+
+  it('cancelling a background call during the foreground wait rejects AbortError and never invokes the provider', async () => {
+    const plane = createInference(noopLogs);
+    const handle = jest.fn(async () => 'never');
+    plane.register({
+      id: 'ocr',
+      supports: ['read'],
+      status: () => 'ready',
+      handle,
+    });
+    plane.setLanePolicy(() => true);
+    plane.setForegroundIdle(
+      (signal) =>
+        new Promise<void>((_, reject) => {
+          signal?.addEventListener('abort', () => reject(abortError()), {
+            once: true,
+          });
+        }),
+    );
+    const ac = new AbortController();
+    const p = plane.read(new Uint8Array([1]), {
+      lane: 'background',
+      signal: ac.signal,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    ac.abort();
+    await expect(p).rejects.toHaveProperty('name', 'AbortError');
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  it('an abort that lands as the wait resolves still never invokes the provider', async () => {
+    const plane = createInference(noopLogs);
+    const handle = jest.fn(async () => 'never');
+    plane.register({
+      id: 'ocr',
+      supports: ['complete'],
+      status: () => 'ready',
+      handle,
+    });
+    plane.setLanePolicy(() => true);
+    const ac = new AbortController();
+    plane.setForegroundIdle(async () => {
+      ac.abort(); // the wait ends normally, but the caller is gone
+    });
+    await expect(
+      plane.complete('hi', { lane: 'background', signal: ac.signal }),
+    ).rejects.toHaveProperty('name', 'AbortError');
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  it('interactive calls never wait for the foreground', async () => {
+    const plane = createInference(noopLogs);
+    plane.register(provider('ocr', ['read'], 'ocr'));
+    plane.setForegroundIdle(() => new Promise<void>(() => {}));
+    await expect(plane.read(new Uint8Array([1]))).resolves.toBe('ocr:read');
+  });
+
+  it('a closed lane still fails fast, before any wait', async () => {
+    const plane = createInference(noopLogs);
+    plane.register(provider('ocr', ['read'], 'ocr'));
+    plane.setLanePolicy(() => false);
+    const wait = jest.fn(() => new Promise<void>(() => {}));
+    plane.setForegroundIdle(wait);
+    await expect(
+      plane.read(new Uint8Array([1]), { lane: 'background' }),
+    ).rejects.toThrow(LaneClosedError);
+    expect(wait).not.toHaveBeenCalled();
+  });
+  it('hasProvider answers from ready local providers', () => {
+    const plane = createInference(noopLogs);
+    expect(plane.hasProvider('read')).toBe(false);
+    plane.register(provider('ocr', ['read'], 'ocr'));
+    expect(plane.hasProvider('read')).toBe(true);
+    expect(plane.hasProvider('see')).toBe(false);
   });
 });
 

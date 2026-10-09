@@ -412,11 +412,14 @@ describe('engine', () => {
     await waitFor(async () => got !== null, 5000);
     await handle.stop();
     expect(got).toEqual({ text: 'd', providerId: 'p', modelId: 'm' });
-    expect(opts[0]).toEqual({
+    // #147: the work's signal rides along so a stop cancels the gate wait.
+    const { signal, ...rest } = opts[0] as { signal?: unknown };
+    expect(rest).toEqual({
       mime: 'image/png',
       task: 'task.a',
       lane: 'background',
     });
+    expect(signal).toBeInstanceOf(AbortSignal);
   });
 
   describe('attempt counter (session.bump) and per-batch coalescing', () => {
@@ -2362,7 +2365,7 @@ describe('engine', () => {
       const diff = jest
         .spyOn(store, 'reconcileDiff')
         .mockResolvedValue({ listedCount: 0, liveCount: 3, deletionCount: 3 });
-      const archive = jest.spyOn(store, 'reconcileArchive');
+      const archive = jest.spyOn(store, 'reconcileArchiveChunk');
 
       const handle = engine.run(account);
       await waitFor(async () => {
@@ -2403,7 +2406,7 @@ describe('engine', () => {
         .mockRejectedValue(
           new Error(`reconcile staging lost for ${account.id} — restarted`),
         );
-      const archive = jest.spyOn(store, 'reconcileArchive');
+      const archive = jest.spyOn(store, 'reconcileArchiveChunk');
       const handle = engine.run(account);
       await waitFor(async () => !!(await store.account(account.id))?.lastError);
       await handle.stop();
@@ -2429,7 +2432,7 @@ describe('engine', () => {
         .mockRejectedValue(
           new Error(`reconcile staging lost for ${account.id} — restarted`),
         );
-      const archive = jest.spyOn(store, 'reconcileArchive');
+      const archive = jest.spyOn(store, 'reconcileArchiveChunk');
       const handle = engine.run(account);
       await waitFor(async () => !!(await store.account(account.id))?.lastError);
       await handle.stop();

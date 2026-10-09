@@ -39,6 +39,9 @@ export interface ConversionOutcome {
   pages?: number[];
   /** PDFs: the text-quality rules version that assessed this outcome. */
   quality?: 1;
+  /** failed only: the converter child died on this document (#136). Written
+   *  by the commit path, deterministically (no `at`). */
+  reason?: 'crash';
 }
 
 /** Outcomes after which a PDF is handed to OCR. `unavailable` is absent on

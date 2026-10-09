@@ -15,12 +15,14 @@ export function forkRunnerChild(
     env?: NodeJS.ProcessEnv;
     execArgv?: string[];
     cwd?: string;
+    serialization?: 'json' | 'advanced';
   } = {},
 ): RunnerChild {
   const cp = fork(modulePath, [], {
     execArgv: opts.execArgv ?? [],
     env: { ...process.env, ...opts.env },
     cwd: opts.cwd,
+    serialization: opts.serialization ?? 'json',
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
   });
   cp.on('error', () => {
@@ -60,15 +62,21 @@ export function utilityRunnerChild(
   modulePath: string,
   env: Record<string, string>,
   onOutput?: (line: string) => void,
+  opts: {
+    serviceName?: string;
+    /** utilityProcess `pid` is only valid after 'spawn' (transport.ts:129). */
+    onSpawn?: (pid: number | undefined) => void;
+  } = {},
 ): RunnerChild {
   // Lazy-required so importing this module under jest (no electron) is safe.
   // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
   const { utilityProcess } = require('electron') as typeof import('electron');
   const child = utilityProcess.fork(modulePath, [], {
-    serviceName: 'kia-sql-runner',
+    serviceName: opts.serviceName ?? 'kia-sql-runner',
     stdio: 'pipe',
     env: { ...process.env, ...env } as Record<string, string>,
   });
+  if (opts.onSpawn) child.once('spawn', () => opts.onSpawn!(child.pid));
   for (const stream of [child.stdout, child.stderr]) {
     stream?.on('data', (b: Buffer | string) => {
       const line = b.toString().trimEnd();

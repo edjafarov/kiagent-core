@@ -168,6 +168,11 @@ export type SyncStatus =
 export interface AccountProgress {
   done: number;
   totalEstimate?: number;
+  /** Set only by an intermediate sub-commit (#147 §4): `done` at the last
+   *  cursor advance. A resume replays the half-committed batch from that
+   *  cursor and counts up from `base`, never from `done`. Absent = `done`
+   *  is aligned with the stored cursor. UI ignores it. */
+  base?: number;
 }
 
 export interface Account {
@@ -247,10 +252,19 @@ export type CommitBatch =
       error?: string | null;
       /** With `error: null`: clear only an error of this origin. */
       errorScope?: ErrorScope;
+      /** Parent links to (re)resolve in this transaction (#147 §4): every
+       *  `{child, parent}` of the SOURCE batch, carried by its last
+       *  sub-commit, so a child an earlier sub-commit landed before its
+       *  parent still gets linked. Any order inside a batch stays fine. */
+      relink?: Array<{ child: ExternalRef; parent: ExternalRef }>;
     }
   | {
       consumer: string;
-      cursor: Seq;
+      /** Omitted = leave `consumers.cursor` exactly as stored: the commit
+       *  runs no statement against `consumers` at all. Only a worker's live
+       *  tail (`engine.attach`) advances its own cursor; bounded mid-batch
+       *  flushes and the deferred re-drive omit it (#147 §4). */
+      cursor?: Seq;
       documents?: DocumentInput[];
       enrich?: EnrichInput[];
       /** Doc ids whose work_attempts rows (this consumer) are deleted in this
@@ -855,6 +869,10 @@ export interface Inference {
       task?: string;
       /** Groups calls of one caller-defined run for a provider's budget. */
       budgetKey?: string;
+      /** Background lane only: cancels the call while it waits at the gate
+       *  (rejects AbortError; the provider is never invoked). Not forwarded
+       *  to providers. */
+      signal?: AbortSignal;
     },
   ): Promise<string>;
   /** Vision: OCR, layout, "what is in this image". */
@@ -866,6 +884,10 @@ export interface Inference {
       lane?: Lane;
       task?: string;
       budgetKey?: string;
+      /** Background lane only: cancels the call while it waits at the gate
+       *  (rejects AbortError; the provider is never invoked). Not forwarded
+       *  to providers. */
+      signal?: AbortSignal;
     },
   ): Promise<string>;
   /** OCR only: image/page in, plain text out. Distinct from `see` because
@@ -873,7 +895,14 @@ export interface Inference {
    *  the two-pass pipeline addresses them by kind. */
   read(
     image: Uint8Array,
-    opts?: { mime?: string; lane?: Lane },
+    opts?: {
+      mime?: string;
+      lane?: Lane;
+      /** Background lane only: cancels the call while it waits at the gate
+       *  (rejects AbortError; the provider is never invoked). Not forwarded
+       *  to providers. */
+      signal?: AbortSignal;
+    },
   ): Promise<string>;
   /** ASR: spoken audio in, transcript text out. Distinct from `see`/`read`
    *  (vision) — routed to a provider whose model carries an audio encoder.
@@ -902,6 +931,10 @@ export interface Inference {
        *  (never NoProviderError) when it cannot; never triggers a download. */
       model?: 'accuracy';
       lane?: Lane;
+      /** Background lane only: cancels the call while it waits at the gate
+       *  (rejects AbortError; the provider is never invoked). Not forwarded
+       *  to providers. */
+      signal?: AbortSignal;
     },
   ): Promise<string>;
 }
@@ -1150,6 +1183,15 @@ export interface WorkerSession {
   /** Could a local provider of `kind` still become ready without user
    *  action (downloading, or will auto-install)? False when nothing can. */
   mayBecomeReady(kind: 'see' | 'read'): boolean;
+  /** Is a provider of `kind` ready right now? Cheap and synchronous. The
+   *  vision worker renders VLM-only rasters at the VLM's edge when no `read`
+   *  provider exists (#136-C). Absent = unknown: callers assume one exists. */
+  hasProvider?(kind: 'see' | 'read'): boolean;
+  /** Bundled workers only (#147 §2): wait for a background admission slot
+   *  for ONE CPU-heavy step and resolve to its `release()`. Call it after
+   *  the step's input is in hand — never across `fetchBytes`, a network
+   *  wait or a retry backoff — and release in a `finally`. Absent = none. */
+  admit?(): Promise<() => void>;
   /** Emitted docs are committed by the ENGINE (under the worker's synthetic
    *  account) in the SAME transaction as this worker's cursor. */
   emit(doc: DocumentInput): void;

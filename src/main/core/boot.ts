@@ -19,9 +19,21 @@ import type {
 } from '@shared/contracts';
 
 import { openDbInWorker } from '../db/worker-client';
+import {
+  createAdmission,
+  type Admission,
+  type EnrichmentInputs,
+} from './admission';
 import { createAppProjection } from './app-projection';
 import type { AppStateExtras } from './app-projection';
 import { createConverter } from './engine/convert';
+import type { Converter } from './converter/converter';
+import { createInlineConverter } from './converter/converter';
+import {
+  CONVERTER_TIMEOUT_MS,
+  createConverterRunner,
+} from './converter/runner';
+import type { RunnerChild, SqlRunnerDiagnostics } from './mcp/sql-runner';
 import { createEngine } from './engine/engine';
 import type { LogSink } from './engine/engine';
 import { createInference } from './inference';
@@ -46,7 +58,7 @@ import type { CoreStore } from './store/store';
 import type { AppDb } from '../db/app-db';
 
 import { buildReadDiagnostics, type ReadDiagnostics } from './read-diagnostics';
-import type { SqlRunnerDiagnostics } from './mcp/sql-runner';
+import { startEventLoopMonitor } from './event-loop-monitor';
 
 export interface BootDeps {
   dataDir: string;
@@ -56,6 +68,9 @@ export interface BootDeps {
   /** Bundled `dbWorker` entry file — the corpus SQLite connection is hosted in
    *  this worker thread so its synchronous calls never block the main loop. */
   dbWorkerFile: string;
+  /** Spawns the bundled `kia-converter` child (webpack `worker` entry).
+   *  Absent (tests, stdio) or KIA_CONVERTER_INLINE=1 ⇒ parsers run inline. */
+  converterSpawn?: () => RunnerChild;
 }
 
 export interface SourceRegistry {
@@ -166,7 +181,12 @@ export interface CorePlatform {
   senders: SenderRegistry;
   /** Per-source OAuth refreshers; source families add theirs at registration. */
   refreshers: Map<string, (creds: Credentials) => Promise<Credentials | null>>;
-  convert(input: DocumentInput): Promise<DocumentInput>;
+  /** The crash-isolated converter (#136): parsers + WASM rasteriser. */
+  converter: Converter;
+  convert(input: DocumentInput, signal?: AbortSignal): Promise<DocumentInput>;
+  /** The ONE background-work owner (#147): unit admission, foreground
+   *  first, and the enrichment lane `backgroundLaneState` projects. */
+  admission: Admission;
   /** Hardware facts, read once at boot (host-profile.ts). */
   host: HostFacts;
   /** The local model's acceleration once detected; null before. Bound by
@@ -260,12 +280,33 @@ export function registerArchiveSweep(deps: {
  * Construction happens once, here. Everything downstream reads the platform —
  * no DI styles, no lazy getters, no module globals.
  */
+/** The enrichment lane's live inputs, read through `get()` on every call so
+ *  `llmAccel` (bound by main.ts later) and `engine.syncing()` are never
+ *  stale and never read before they exist. */
+export function enrichmentInputsFor(
+  get: () => Pick<
+    CorePlatform,
+    'prefs' | 'scheduler' | 'host' | 'llmAccel' | 'engine'
+  >,
+): EnrichmentInputs {
+  return {
+    processing: () => get().prefs.get().processing,
+    env: () => get().scheduler.env,
+    weak: () => hostBudget(get().host, get().llmAccel()).weak,
+    syncing: () => get().engine.syncing(),
+  };
+}
+
 export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const { store: logStore, sink } = createLogs(path.join(deps.dataDir, 'logs'));
+  let platform!: CorePlatform;
   const host = readHostFacts();
   // accel is detected lazily by the local-llm provider; unknown at boot.
   sink.log('host', 'info', describeHost(host, null));
   setChildPriorityLog((msg) => sink.log('priority', 'info', msg));
+  const eventLoop = startEventLoopMonitor({
+    log: (level, msg) => sink.log('event-loop', level, msg),
+  });
   const prefs = createPrefs(deps.dataDir);
   // The corpus SQLite connection lives in a worker thread (the store is
   // AppDb-driven, so every read/write and the relocated commit transaction
@@ -278,18 +319,37 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     detectLanguages,
     profileDir: deps.dataDir,
   });
+  const budget = hostBudget(host, null);
   // Foreground reads (MCP, renderer) run on their own read-only worker so they
   // never queue behind ingest writes. Opened AFTER the writer migrated.
   const readPlane = await openReads({
     dbPath,
     workerFile: deps.dbWorkerFile,
     writer: store.read,
-    weak: hostBudget(host, null).weak,
+    weak: budget.weak,
     log: (level, msg) => sink.log('db', level, msg),
   });
   const inference = createInference(sink);
   const scheduler = createScheduler(store, deps.env, sink);
-  const convert = createConverter(sink);
+  // Lazy reads through `platform`: nothing evaluates the lane before
+  // `platform` is assigned below.
+  const admission = createAdmission({
+    slots: budget.ingestSlots,
+    userActive: () => scheduler.env.userActive,
+    enrichment: enrichmentInputsFor(() => platform),
+  });
+  inference.setForegroundIdle((signal) => admission.foregroundIdle(signal));
+  const converter: Converter =
+    deps.converterSpawn && process.env.KIA_CONVERTER_INLINE !== '1'
+      ? createConverterRunner({
+          spawn: deps.converterSpawn,
+          // Doubled on 1-slot hosts: a demoted child on a weak machine is
+          // slow, not stuck (spec §1).
+          timeoutMs: CONVERTER_TIMEOUT_MS * (budget.ingestSlots === 1 ? 2 : 1),
+          log: (level, msg) => sink.log('converter', level, msg),
+        })
+      : createInlineConverter();
+  const convert = createConverter(sink, converter);
 
   const sources = createSourceRegistry();
 
@@ -316,11 +376,12 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     convert,
     logs: sink,
     refreshers,
+    admission,
   });
 
   registerArchiveSweep({ store, scheduler, logs: sink });
 
-  const platform: CorePlatform = {
+  platform = {
     db,
     store,
     engine,
@@ -333,20 +394,27 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     senders,
     refreshers,
     convert,
+    converter,
+    admission,
     host,
     readDiagnostics: (sql) =>
       buildReadDiagnostics({
         stats: readPlane.stats,
         walPath: `${dbPath}-wal`,
         sql,
+        eventLoop: () => eventLoop.last(),
+        admission: () => admission.snapshot(),
+        converter: () => converter.stats(),
       }),
     reads: readPlane.reads,
     readsFor: readPlane.readsFor,
     llmAccel: () => null,
     createAppProjection,
     shutdown: async () => {
+      eventLoop.stop();
       scheduler.stop();
       await engine.stopAll();
+      await converter.stop();
       await readPlane.close();
       await store.close();
     },
@@ -469,35 +537,16 @@ export function attachWorker(platform: CorePlatform, worker: Worker): Handle {
   return handle;
 }
 
-/** Evaluate the processing window and say WHY it's closed when it is. The ONE
- *  lane decision: inference admission, worker pre-flight, the extension
- *  `lane()` resolver and the 5 s publisher all read it. #147 grows this into
- *  a kind-aware owner (enrichment vs ingest); ingest must never be closed by
- *  'until-synced'. */
+/** The enrichment lane, projected from the admission owner (#147 §5): same
+ *  result and LaneState values as before. Inference admission, the worker
+ *  pre-flights, the extension `lane()` resolver and the 5 s publisher all
+ *  read it. Ingest/convert/reconcile/redrive units are admitted by
+ *  `platform.admission.acquire` and are never closed by a lane state. */
 export function backgroundLaneState(
   platform: CorePlatform,
   now = new Date(),
 ): LaneState {
-  const p = platform.prefs.get().processing;
-  if (!p.enabled) return 'disabled';
-  const { env } = platform.scheduler;
-  if (env.onBattery) return 'battery';
-  if (
-    hostBudget(platform.host, platform.llmAccel()).weak &&
-    platform.engine.syncing()
-  )
-    return 'until-synced';
-  switch (p.window) {
-    case 'always':
-      return 'open';
-    case 'night': {
-      const h = now.getHours();
-      return h >= 22 || h < 7 ? 'open' : 'until-night';
-    }
-    case 'idle':
-    default:
-      return env.userActive ? 'until-idle' : 'open';
-  }
+  return platform.admission.enrichmentLane(now);
 }
 
 /** Platforms that refused background work since the publisher last woke the
