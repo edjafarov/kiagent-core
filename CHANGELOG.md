@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.107.0](https://github.com/edjafarov/kiagent-core/compare/v0.106.0...v0.107.0) (2026-10-09)
+
+### Features
+
+* **admission:** boot owns admission; lane is its projection ([#147](https://github.com/edjafarov/kiagent-core/issues/147)) ([09d0570](https://github.com/edjafarov/kiagent-core/commit/09d0570992995dc7a9ea5dae8b59416cdbeb1e60))
+* **admission:** one background-work owner ([#147](https://github.com/edjafarov/kiagent-core/issues/147)) ([70faf68](https://github.com/edjafarov/kiagent-core/commit/70faf68475954bfd0a214fda8e048979a1f2e16a))
+* **boot:** bootTail order + [boot] timing lines ([#140](https://github.com/edjafarov/kiagent-core/issues/140)) ([a46733b](https://github.com/edjafarov/kiagent-core/commit/a46733bbd26a6a58aa1f7283f3d2d2a58011782e))
+* **boot:** window-first boot — window no longer waits for utility extensions ([#140](https://github.com/edjafarov/kiagent-core/issues/140)) ([77e5319](https://github.com/edjafarov/kiagent-core/commit/77e53197363f7c5aed51aa9e95494bc22fe6ebbf))
+* **converter:** commit path converts in the kia-converter child ([#136](https://github.com/edjafarov/kiagent-core/issues/136)) ([c16ffb4](https://github.com/edjafarov/kiagent-core/commit/c16ffb4234ce2dc3619dfe9fcaccd8271bcca43f))
+* **converter:** kia-converter child + supervisor ([#136](https://github.com/edjafarov/kiagent-core/issues/136)) ([b4bfd40](https://github.com/edjafarov/kiagent-core/commit/b4bfd407c0653bb33dce17e202a5638350ae9a11))
+* **core:** boot queue + post-window background chain ([#140](https://github.com/edjafarov/kiagent-core/issues/140)) ([fdfdaef](https://github.com/edjafarov/kiagent-core/commit/fdfdaef2491b8b6a701726efaabf4a18bfda6390))
+* **core:** source registry onRegister + resumeAccounts defer hook ([#140](https://github.com/edjafarov/kiagent-core/issues/140)) ([88d7529](https://github.com/edjafarov/kiagent-core/commit/88d752951a62d3998a48f16c98530e931a749a19))
+* **diagnostics:** event-loop delay, admission and converter in readDiagnostics ([#147](https://github.com/edjafarov/kiagent-core/issues/147)) ([a3809e7](https://github.com/edjafarov/kiagent-core/commit/a3809e7263e510edc7210a81900b14ad514884be))
+* **engine:** bounded, admitted consumer flushes ([#147](https://github.com/edjafarov/kiagent-core/issues/147)) ([87b77f9](https://github.com/edjafarov/kiagent-core/commit/87b77f95b56337818b5e91ba42b22acfc151d334))
+* **engine:** pull loop commits in admitted, bounded sub-commits ([#147](https://github.com/edjafarov/kiagent-core/issues/147)) ([ccc4977](https://github.com/edjafarov/kiagent-core/commit/ccc49772973a636920b93f5957877649f650ef7a))
+* **engine:** reconcile archives in admitted one-transaction chunks ([#147](https://github.com/edjafarov/kiagent-core/issues/147)) ([82073d5](https://github.com/edjafarov/kiagent-core/commit/82073d5e74f66edd2d9fe5ddf9cc8165bdd86fd6))
+* **engine:** seed a new or below-floor consumer from documents instead of replaying changes ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([602ce45](https://github.com/edjafarov/kiagent-core/commit/602ce4509ef3ab25b1c8df65629e8e0b18a2b4c4))
+* **host:** ingestSlots for background admission ([#147](https://github.com/edjafarov/kiagent-core/issues/147)) ([5d30f73](https://github.com/edjafarov/kiagent-core/commit/5d30f73a9fdd66994d952816d688893798157fef))
+* **ledger:** background re-key repair job; completion wakes the re-drive ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([fe76d3f](https://github.com/edjafarov/kiagent-core/commit/fe76d3f2c9d1a9d31707c93e512585e9dda65771))
+* **ledger:** paged re-key repair of pre-upgrade deferred rows ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([5a84e7f](https://github.com/edjafarov/kiagent-core/commit/5a84e7f04594838ad47cb8f97714728c36e4fad9))
+* **ledger:** re-drive gated on meta.ledgerRekeyed ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([9672985](https://github.com/edjafarov/kiagent-core/commit/967298537b06233a1e7c4db90f7f8a1adabc8425))
+* **maintenance:** prune the changes log below min(active floor, 48h, head) every 6h ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([861c7a1](https://github.com/edjafarov/kiagent-core/commit/861c7a1d1e6862ae4fa602b6fd9ecc8a0a7f68a8))
+* **mcp:** tool calls, resource reads and renderer reads are foreground ([#147](https://github.com/edjafarov/kiagent-core/issues/147)) ([15dbbd7](https://github.com/edjafarov/kiagent-core/commit/15dbbd7011a42a143569397f0fe04b88364efcae))
+* **platform:** dev-only hung transport for boot measurements ([#140](https://github.com/edjafarov/kiagent-core/issues/140)) ([9078eb1](https://github.com/edjafarov/kiagent-core/commit/9078eb1a904a9a0db0e349b5bb4e6cefb2097257))
+* **platform:** dormant utility hosts behind the product allowlist ([#137](https://github.com/edjafarov/kiagent-core/issues/137)) ([bf0d363](https://github.com/edjafarov/kiagent-core/commit/bf0d363d4d6551b343e484b2b7fa14c4a1070fdc))
+* **platform:** host-lifetime proxies, in-flight tracking, pins and idle soft stop ([#137](https://github.com/edjafarov/kiagent-core/issues/137)) ([27dc6ec](https://github.com/edjafarov/kiagent-core/commit/27dc6ec9898a6d811eba45963fe631285149d9d5))
+* **platform:** in-process start bounded at 5 s, utility start split, starting status at discovery ([#140](https://github.com/edjafarov/kiagent-core/issues/140)) ([4da454a](https://github.com/edjafarov/kiagent-core/commit/4da454a7c3ff5de870a268c2626e5e7c564714b1))
+* **platform:** wake dormant hosts on demand, keep equal registrations ([#137](https://github.com/edjafarov/kiagent-core/issues/137)) ([f001bff](https://github.com/edjafarov/kiagent-core/commit/f001bff125c180335089cf3974f686edd7dcf1ff))
+* **product:** dormantExtensions allowlist in product config ([#137](https://github.com/edjafarov/kiagent-core/issues/137)) ([db3dc60](https://github.com/edjafarov/kiagent-core/commit/db3dc60b4847861665fff0f72e12d7d26ab0a779))
+* **store:** changes prune primitives; addedSince shares the seq bisection ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([8193653](https://github.com/edjafarov/kiagent-core/commit/819365346af7d4f4d8280e5546d209d8d6bb827d))
+* **store:** consumer cursor optional on commits ([#147](https://github.com/edjafarov/kiagent-core/issues/147)) ([efe107c](https://github.com/edjafarov/kiagent-core/commit/efe107cff73650657d29adee686872624f593c1f))
+* **store:** in-memory ledgerGen generation counter ([#139](https://github.com/edjafarov/kiagent-core/issues/139)) ([1383a76](https://github.com/edjafarov/kiagent-core/commit/1383a765ccac21a3aa99bd2c611298791e6c5f6f))
+* **store:** relink pairs + one-transaction reconcile archive chunks ([#147](https://github.com/edjafarov/kiagent-core/issues/147)) ([16f9aa9](https://github.com/edjafarov/kiagent-core/commit/16f9aa9f715f28374b746955b0c6e0bc1eaf729c))
+* **store:** seeding primitives: seedPage on the read plane, seed:<consumer> rows, seedCursor + ledger on the commit ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([19c15f9](https://github.com/edjafarov/kiagent-core/commit/19c15f9d240fddbde74845156b2e15ef0d812927))
+* **workers:** convert + vision go through the converter child ([#136](https://github.com/edjafarov/kiagent-core/issues/136)) ([3c4bf40](https://github.com/edjafarov/kiagent-core/commit/3c4bf4016da90ec8276b97857c27b111f03a1b08))
+
+### Bug Fixes
+
+* **extensions:** a boot abort cuts an in-flight handshake short ([#140](https://github.com/edjafarov/kiagent-core/issues/140)) ([2bb9b70](https://github.com/edjafarov/kiagent-core/commit/2bb9b708c5330d27c82530be6964b178a1e1bfdd))
+* **extensions:** handshake cancel stops utility hosts only ([#140](https://github.com/edjafarov/kiagent-core/issues/140)) ([1a22ebc](https://github.com/edjafarov/kiagent-core/commit/1a22ebc39d074f872cead0ee86a6401a10f3fdea))
+* **feed:** a document is fed only under its current seq; changesAt resolves through documents ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([586bdcd](https://github.com/edjafarov/kiagent-core/commit/586bdcd6496651482bda4bc762c3a570d62d52b0))
+* **feed:** the app projection still reads every document change ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([3b7f9bc](https://github.com/edjafarov/kiagent-core/commit/3b7f9bc9426a96e1ca3b4423a5b6389c7314aa0c))
+* **maintenance:** a failed ledger re-key retry trigger is logged ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([4933bd2](https://github.com/edjafarov/kiagent-core/commit/4933bd287f0ec2c8b669cf430153d21d6c18ef2a))
+* **maintenance:** every failed ledger re-key attempt schedules the next ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([25e47f3](https://github.com/edjafarov/kiagent-core/commit/25e47f35d4dc6cd6f741dadaebc635ec46bc8049))
+* **maintenance:** ledger re-key registration is part of the retried attempt ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([a9dad48](https://github.com/edjafarov/kiagent-core/commit/a9dad480746addbb394a86d0eb00750c355beac9))
+* **maintenance:** ledger re-key repair resumes after a failed page ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([b2380f9](https://github.com/edjafarov/kiagent-core/commit/b2380f97e45926dc55f6ccbfe18803e797edf04e))
+
+### Performance Improvements
+
+* **processing:** count the ledger and the waiting set only after a write ([#139](https://github.com/edjafarov/kiagent-core/issues/139)) ([5e3b119](https://github.com/edjafarov/kiagent-core/commit/5e3b119910788bcbe6869e47e0a48fbca9df199a))
+* **renderer:** App shell selects only what it gates on ([4a0d8ed](https://github.com/edjafarov/kiagent-core/commit/4a0d8ed0e5e58dae84b47f2384a0aee263df70a9)), closes [#142](https://github.com/edjafarov/kiagent-core/issues/142)
+* **renderer:** reconcile app-state pushes for structural sharing ([e326825](https://github.com/edjafarov/kiagent-core/commit/e326825b5087061d5b67e2e2bb644dd38101817c)), closes [#142](https://github.com/edjafarov/kiagent-core/issues/142)
+* **store:** account commits publish status/error at once, sync progress once a minute ([#135](https://github.com/edjafarov/kiagent-core/issues/135)) ([18fa9bb](https://github.com/edjafarov/kiagent-core/commit/18fa9bbe3f59b79962eb7c9a050c76874de6c8e0))
+* **store:** cadence/config no-ops write nothing; getOrCreateAccount nudges only on create ([#135](https://github.com/edjafarov/kiagent-core/issues/135)) ([7a2091f](https://github.com/edjafarov/kiagent-core/commit/7a2091f08654ed8965b07a8c6539547f34d2f8aa))
+* **store:** commit reports {seq, logged}; feeds wake only on logged commits ([#135](https://github.com/edjafarov/kiagent-core/issues/135)) ([7d856a9](https://github.com/edjafarov/kiagent-core/commit/7d856a9c01ad04be4a6976cfb85c0bff7662f7c0))
+* **store:** deferred lookups restate outcome IS NOT 'skip' to seek work_ledger_active ([#139](https://github.com/edjafarov/kiagent-core/issues/139)) ([dfb6cc9](https://github.com/edjafarov/kiagent-core/commit/dfb6cc962bf88a98f7bdc6b1b8c8df161d3870af))
+* **store:** sweep retired consumers ledger rows and cursors at boot ([#139](https://github.com/edjafarov/kiagent-core/issues/139)) ([90226ce](https://github.com/edjafarov/kiagent-core/commit/90226ce99671a3a30453c9f9df143ffab70ce6b9))
+* **store:** visualWaitingCount drops the deferred branch once the ledger is re-keyed ([#59](https://github.com/edjafarov/kiagent-core/issues/59)) ([91646f9](https://github.com/edjafarov/kiagent-core/commit/91646f9f57e8a293537a0a80ea97ec0709f79d9c))
+* **ui:** useNow pauses while hidden and shares one ticker ([0ab440d](https://github.com/edjafarov/kiagent-core/commit/0ab440d531d844dd6e58039743380c797450ad81)), closes [#142](https://github.com/edjafarov/kiagent-core/issues/142)
+
 ## [0.106.0](https://github.com/edjafarov/kiagent-core/compare/v0.105.0...v0.106.0) (2026-10-09)
 
 ### Features
