@@ -242,6 +242,9 @@ const IN_PROCESS_KILL_AFTER_MS = 30_000;
  *  entries to report 'activated'. Activation keeps going past it. */
 export const IN_PROCESS_READY_MS = 5_000;
 
+/** #137: idle time before an allowlisted utility host soft-stops. */
+export const DORMANT_AFTER_MS = 5 * 60_000;
+
 export interface InProcessStartReport {
   /** ms from startInProcess() to 'activated', per entry that made it. */
   activatedMs: Record<string, number>;
@@ -315,6 +318,13 @@ export interface ExtensionPlatformDeps {
     /** Backoff before handshake-retry `attempt` (test seam; default 10 s ×3). */
     handshakeRetryDelayMs?(attempt: number): number;
   };
+  /** #137: utility extensions that may go dormant when idle — the product's
+   *  audited allowlist (product.json `dormantExtensions`). Absent/empty: none.
+   *  `KIA_DORMANT_HOSTS=0` disables dormancy regardless. Never applies to
+   *  bundled or `unsafe.mainProcess` entries. */
+  dormantExtensions?: readonly string[];
+  /** Test seam for DORMANT_AFTER_MS. */
+  dormantAfterMs?: number;
   download?: InstallerDeps['download'];
   /** OAuth plumbing for `contributes.sources: [{ id, oauth: 'google' }]`:
    *  register/unregister mirror the connect broker's profile map, and
@@ -351,6 +361,8 @@ interface Entry {
   activatedAt?: string;
   /** When the current activation began — for the "activated in" log line. */
   activationStartedAt?: number;
+  /** #137: soft-stopped host, registrations kept (snapshot `dormant`). */
+  dormant?: boolean;
 }
 
 function descriptorForEntry(e: Entry): PluginDatabaseDescriptor | undefined {
@@ -615,6 +627,7 @@ export function createExtensionPlatform(
       // [], never undefined (uiContributions' own contract).
       ui: uiContributions(e.manifest),
       activatedAt: e.activatedAt,
+      ...(e.dormant ? { dormant: true } : {}),
     }));
 
   const changed = () => deps.onChange(snapshot());
@@ -663,6 +676,7 @@ export function createExtensionPlatform(
   }
 
   const setStatus = (e: Entry, status: ExtensionStatus, error?: string) => {
+    if (status !== 'activated') e.dormant = false;
     if (status === 'activated' && e.status !== 'activated') {
       e.activatedAt = new Date().toISOString();
       if (e.activationStartedAt !== undefined)
@@ -906,6 +920,13 @@ export function createExtensionPlatform(
     // therefore checked AFTER reserving `e.host`, not before.
     if (e.host) return;
     const inProcess = e.manifest.caps.includes('unsafe.mainProcess');
+    const dormancy =
+      !inProcess &&
+      e.origin !== 'bundled' &&
+      process.env.KIA_DORMANT_HOSTS !== '0' &&
+      (deps.dormantExtensions ?? []).includes(e.manifest.id)
+        ? { idleMs: deps.dormantAfterMs ?? DORMANT_AFTER_MS }
+        : undefined;
     const host = createExtensionHost({
       extensionId: e.manifest.id,
       entryAbsPath: e.entryAbsPath,
@@ -1055,6 +1076,12 @@ export function createExtensionPlatform(
       // ipcMain.handle throws on a duplicate. So give first-party in-process
       // teardown room to finish. A forked child keeps the 2 s default, where
       // the backstop genuinely reclaims a process.
+      ...(dormancy ? { dormancy } : {}),
+      onDormant: (dormant) => {
+        if (e.host !== host) return; // a replaced host's late signal
+        e.dormant = dormant;
+        changed();
+      },
       ...(inProcess ? { killAfterMs: IN_PROCESS_KILL_AFTER_MS } : {}),
       // Explicit product configuration still wins for either tier.
       ...deps.hostTimeouts,

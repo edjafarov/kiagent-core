@@ -1238,6 +1238,7 @@ app
     extensionsPlatform = createExtensionPlatform({
       extDir: path.join(app.getPath('userData'), 'extensions'),
       bundledDir: bundledExtensionsDir,
+      dormantExtensions: product.dormantExtensions,
       bundledDataDir: path.join(
         app.getPath('userData'),
         'bundled-extensions-data',
