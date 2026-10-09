@@ -251,3 +251,38 @@ test('the very first tick wakes when a wake is pending (closure before the first
   await flush();
   expect(t.wakeWorkers).toHaveBeenCalledTimes(1);
 });
+
+describe('waiting count gated on the ledger generation (#139)', () => {
+  it('skips the 60 s count while the generation has not moved', async () => {
+    let g = 7;
+    const s = setup({ gen: () => g, waitingEveryMs: 60_000 });
+    s.status.start();
+    await flush();
+    expect(s.countWaiting).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(180_000);
+    await flush();
+    expect(s.countWaiting).toHaveBeenCalledTimes(1);
+    g += 1;
+    jest.advanceTimersByTime(60_000);
+    await flush();
+    expect(s.countWaiting).toHaveBeenCalledTimes(2);
+    s.status.stop();
+  });
+
+  it('a failed count is retried even when the generation did not move', async () => {
+    const g = 1;
+    let calls = 0;
+    const countWaiting = jest.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('x');
+      return 3;
+    });
+    const s = setup({ gen: () => g, countWaiting, waitingEveryMs: 60_000 });
+    s.status.start();
+    await flush();
+    jest.advanceTimersByTime(60_000);
+    await flush();
+    expect(countWaiting).toHaveBeenCalledTimes(2);
+    s.status.stop();
+  });
+});

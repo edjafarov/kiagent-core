@@ -54,6 +54,7 @@ import { startReadDiagnosticsDump } from './core/read-diagnostics';
 import type { McpServerHandle } from './core/mcp/server';
 import { markOnboardingOnce } from './core/prefs';
 import { LEDGER_REKEY_JOB_ID } from './core/changes-maintenance';
+import { createLedgerCounter } from './core/processing-counter';
 import {
   createProcessingStatus,
   wakeDeferredWorkers,
@@ -1069,9 +1070,13 @@ app
     // Ownership split: the projection owns the FEED-derived slice (accounts);
     // identity/prefs/processing/mcp live here and change via patchState —
     // seeded from their real sources so the first diff can't regress them.
-    const initialLedger = await p.store.ledgerCountsAll(
-      p.engine.activeConsumers(),
-    );
+    // #139: the 5 s tick below counts only when the ledger generation (or
+    // the active consumer set) moved; this boot read primes it.
+    const ledgerCounter = createLedgerCounter({
+      store: p.store,
+      activeConsumers: () => p.engine.activeConsumers(),
+    });
+    const initialLedger = await ledgerCounter.count();
     let rev = 0;
     let lastPush: AppStatePush = {
       state: {
@@ -1297,6 +1302,7 @@ app
     });
     const processingStatus = createProcessingStatus({
       countWaiting: () => p.store.visualWaitingCount(VISION_CONSUMER),
+      gen: () => p.store.ledgerGen(),
       providers: () =>
         p.inference.providers().map((prov) => ({
           id: prov.id,
@@ -1374,7 +1380,9 @@ app
         const wake = lane === 'open' && takeLaneWake(p);
         extensionsPlatform?.refreshLane(wake);
         processingStatus.tick(lane, wake);
-        const all = await p.store.ledgerCountsAll(p.engine.activeConsumers());
+        // #139: no ledger read at idle — only after something moved it.
+        const all = await ledgerCounter.countIfChanged();
+        if (!all) return;
         const processing = {
           pending: all.pending,
           done: all.done,
