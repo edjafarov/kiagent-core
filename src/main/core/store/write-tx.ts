@@ -197,6 +197,14 @@ export function withLegacyMirror(
   return config; // no legacy reader on this source — nothing to mirror
 }
 
+/** What one commit did. `logged`: the transaction appended at least one
+ *  `changes` row (documents, archives, account, purge, accountRemoved). The
+ *  store wakes feeds only then (#135). */
+export interface CommitResult {
+  seq: Seq;
+  logged: boolean;
+}
+
 /** Spec §0: keyset pages of this many deferred rows, one writer call each. */
 export const LEDGER_REKEY_PAGE = 5_000;
 
@@ -207,7 +215,7 @@ export interface RekeyPageResult {
 }
 
 export interface WriteTx {
-  commit(batch: CommitBatch): Seq;
+  commit(batch: CommitBatch): CommitResult;
   /** Start a pass: drop whatever the previous one staged for this account. */
   reconcileBegin(accountId: string): void;
   /** Stage one bounded slice of the connector's listing. */
@@ -248,10 +256,13 @@ export function createWriteTx(
 ): WriteTx {
   // ── low-level helpers (all run inside the caller's transaction) ──────────
 
+  // Rows appended by the commit in flight; reset by `commit` below (#135).
+  let appended = 0;
   const appendChange = (kind: Change['kind'], refId: string): Seq => {
     const r = conn
       .prepare(`INSERT INTO changes(kind, ref_id, at) VALUES(?, ?, ?)`)
       .run(kind, refId, deps.now());
+    appended += 1;
     return Number(r.lastInsertRowid);
   };
 
@@ -1144,7 +1155,11 @@ export function createWriteTx(
   );
 
   return {
-    commit: (batch: CommitBatch): Seq => commitTx(batch),
+    commit: (batch: CommitBatch): CommitResult => {
+      appended = 0;
+      const seq = commitTx(batch);
+      return { seq, logged: appended > 0 };
+    },
 
     reconcileBegin: (accountId) => beginPass(accountId),
 

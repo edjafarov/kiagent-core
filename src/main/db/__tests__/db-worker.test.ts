@@ -157,7 +157,7 @@ Module._resolveFilename = function (request, ...rest) {
   it('runs the relocated commit procedure inside the worker (proc round-trip)', async () => {
     await spawnAndReady();
 
-    const seq = await client!.proc!('commit', {
+    const result = (await client!.proc!('commit', {
       consumer: 'worker:test:v1',
       cursor: 0,
       documents: [
@@ -170,9 +170,9 @@ Module._resolveFilename = function (request, ...rest) {
           createdAt: '2026-01-01T00:00:00Z',
         },
       ],
-    });
-    expect(typeof seq).toBe('number');
-    expect(seq as number).toBeGreaterThan(0);
+    })) as { seq: number; logged: boolean };
+    expect(result.logged).toBe(true);
+    expect(result.seq).toBeGreaterThan(0);
 
     const docs = await client!.all(
       `SELECT external_id, title, languages FROM documents`,

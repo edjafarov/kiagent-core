@@ -36,6 +36,7 @@ import { toAccount, toDocument, type AccountRow, type DocRow } from './rows';
 import {
   createWriteTx,
   LEDGER_REKEY_PAGE,
+  type CommitResult,
   type FolderScopeInput,
   type FolderScopeResult,
   type ReconcileCounts,
@@ -576,11 +577,16 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async commit(batch) {
-      const seq = writeTx
+      const { seq, logged } = writeTx
         ? writeTx.commit(batch)
-        : ((await db.proc!('commit', batch)) as Seq);
-      corpus.invalidateLanguages();
-      nudge.emit('commit');
+        : ((await db.proc!('commit', batch)) as CommitResult);
+      // #135: wake feeds only when the commit appended a change row. A
+      // cursor-only consumer commit, or an account commit inside its sync
+      // tick, has nothing for a feed to read.
+      if (logged) {
+        corpus.invalidateLanguages();
+        nudge.emit('commit');
+      }
       // The cascade runs entirely in SQL (schema.ts:561's ON DELETE CASCADE)
       // and never calls outbox.ts, so it can't fire onChange itself — and
       // whether it actually took outbox rows with it isn't observable from
