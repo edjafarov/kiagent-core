@@ -238,6 +238,17 @@ function recoveryRequiredError(
  *  comment at the `killAfterMs` spread in createExtensionHost below. */
 const IN_PROCESS_KILL_AFTER_MS = 30_000;
 
+/** #140: the most the window waits for in-process (`unsafe.mainProcess`)
+ *  entries to report 'activated'. Activation keeps going past it. */
+export const IN_PROCESS_READY_MS = 5_000;
+
+export interface InProcessStartReport {
+  /** ms from startInProcess() to 'activated', per entry that made it. */
+  activatedMs: Record<string, number>;
+  /** Entries still 'activating' at the bound. */
+  pending: string[];
+}
+
 export interface ExtensionPlatformDeps {
   extDir: string;
   /** Second discovery root for extensions shipped inside the app package
@@ -301,6 +312,8 @@ export interface ExtensionPlatformDeps {
      *  IN_PROCESS_KILL_AFTER_MS instead (see transportFactory). Overriding
      *  here wins for BOTH tiers. */
     killAfterMs?: number;
+    /** Backoff before handshake-retry `attempt` (test seam; default 10 s ×3). */
+    handshakeRetryDelayMs?(attempt: number): number;
   };
   download?: InstallerDeps['download'];
   /** OAuth plumbing for `contributes.sources: [{ id, oauth: 'google' }]`:
@@ -336,6 +349,8 @@ interface Entry {
   iconDataUrl?: string;
   /** Stamp of the latest entry into 'activated' (see ExtensionSnapshot). */
   activatedAt?: string;
+  /** When the current activation began — for the "activated in" log line. */
+  activationStartedAt?: number;
 }
 
 function descriptorForEntry(e: Entry): PluginDatabaseDescriptor | undefined {
@@ -371,6 +386,16 @@ export interface ExtensionPlatform {
    *  loads them itself when this has not run. */
   load(): Promise<void>;
   start(): Promise<void>;
+  /** #140: starts the enabled in-process (`unsafe.mainProcess`) entries and
+   *  resolves once each has left 'activating' — or at `boundMs` (default
+   *  IN_PROCESS_READY_MS), logging the ones still pending. Never awaits a
+   *  handshake retry; activation continues in the background. */
+  startInProcess(opts?: { boundMs?: number }): Promise<InProcessStartReport>;
+  /** #140: starts every enabled utility-process entry (all but in-process).
+   *  Resolves when each activate() returned. `signal` (the boot chain's):
+   *  once aborted, nothing further spawns — queued activations are skipped
+   *  and pending ones cancelled before host.start(). */
+  startUtility(signal?: AbortSignal): Promise<void>;
   stop(): Promise<void>;
   snapshot(): ExtensionSnapshot[];
   installPreview(
@@ -594,6 +619,29 @@ export function createExtensionPlatform(
 
   const changed = () => deps.onChange(snapshot());
 
+  /** Re-checked on every status change: the waiters behind whenSettled. */
+  const statusWatchers = new Set<() => void>();
+
+  /** Resolves true once entry `id` is gone or no longer 'activating';
+   *  false at `timeoutMs`. */
+  function whenSettled(id: string, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const done = (settled: boolean) => {
+        if (timer) clearTimeout(timer);
+        statusWatchers.delete(check);
+        resolve(settled);
+      };
+      function check(): void {
+        if (entries.get(id)?.status !== 'activating') done(true);
+      }
+      statusWatchers.add(check);
+      timer = setTimeout(() => done(false), timeoutMs);
+      timer.unref?.();
+      check();
+    });
+  }
+
   /** THE one path that changes an external extension's declared-root grants:
    *  its consented declarations while consent covers it, [] otherwise
    *  (lapsed consent, uninstall). Bundled extensions own their grants via
@@ -615,8 +663,15 @@ export function createExtensionPlatform(
   }
 
   const setStatus = (e: Entry, status: ExtensionStatus, error?: string) => {
-    if (status === 'activated' && e.status !== 'activated')
+    if (status === 'activated' && e.status !== 'activated') {
       e.activatedAt = new Date().toISOString();
+      if (e.activationStartedAt !== undefined)
+        deps.logSink.log(
+          `extension:${e.manifest.id}`,
+          'info',
+          `activated in ${Date.now() - e.activationStartedAt} ms`,
+        );
+    }
     // The status is otherwise only visible to the renderer; a failed
     // activation must leave a trace in the log.
     if (status === 'errored' && (e.status !== 'errored' || e.error !== error))
@@ -628,6 +683,7 @@ export function createExtensionPlatform(
     e.status = status;
     e.error = error;
     changed();
+    for (const check of [...statusWatchers]) check();
   };
 
   async function consentCovers(manifest: Manifest): Promise<boolean> {
@@ -839,7 +895,7 @@ export function createExtensionPlatform(
     }
   }
 
-  async function activate(e: Entry): Promise<void> {
+  async function activate(e: Entry, bootSignal?: AbortSignal): Promise<void> {
     // Idempotency guard: a live/in-flight host already owns this entry — a
     // redundant setEnabled(true) (double-click, concurrent IPC, or any other
     // re-entrant call) is a no-op. This check, the host construction, and
@@ -1004,62 +1060,78 @@ export function createExtensionPlatform(
       ...deps.hostTimeouts,
     });
     e.host = host;
+    e.activationStartedAt = Date.now();
     const activation = new AbortController();
     e.activation = activation;
+    // #140: quit / interactive Reset all during consent or preparation must
+    // never be followed by a spawn. Aborting this activation's controller
+    // cancels `prepare`, and the pre-spawn check below (no await between it
+    // and host.start()) stops the reserved host instead of starting it.
+    const onBootAbort = () => activation.abort();
+    if (bootSignal?.aborted) activation.abort();
+    else bootSignal?.addEventListener('abort', onBootAbort, { once: true });
     try {
-      if (e.origin !== 'bundled' && !(await consentCovers(e.manifest))) {
-        // Never started — createExtensionHost() itself has no side effects
-        // (no process, no transport) until .start() is called, so releasing
-        // the reservation here orphans nothing.
+      try {
+        if (e.origin !== 'bundled' && !(await consentCovers(e.manifest))) {
+          // Never started — createExtensionHost() itself has no side effects
+          // (no process, no transport) until .start() is called, so releasing
+          // the reservation here orphans nothing.
+          e.host = null;
+          await syncDeclaredRoots(e, []);
+          setStatus(e, 'needs-consent');
+          e.activation = undefined;
+          return;
+        }
+        await syncDeclaredRoots(e, e.manifest.fileRoots);
+        const descriptor = descriptorForEntry(e);
+        if (descriptor) {
+          if (!deps.db?.plugin || !deps.db.registerPluginSource)
+            throw new Error('shared plugin database service is not wired');
+          const legacyPath = path.join(computeDataDir(e, deps), 'private.db');
+          await deps.db.registerPluginSource(
+            e.manifest.id,
+            legacyPath,
+            descriptor,
+          );
+          await deps.db.plugin(
+            { op: 'prepare', pluginId: e.manifest.id, descriptor },
+            { signal: activation.signal },
+          );
+        }
+        if (activation.signal.aborted || e.host !== host || !e.enabled) {
+          await host.stop();
+          e.host = null;
+          e.activation = undefined;
+          return;
+        }
+      } catch (err) {
+        // Activation setup threw (for example descriptor registration or
+        // preparation rejected) rather than completing. Without this catch, the
+        // exception would propagate out of activate() with `e.host` left
+        // pointing at a reserved-but-never-started host forever — every
+        // future activate() call would then see `e.host` truthy and no-op on
+        // the idempotency guard, permanently wedging the entry. Reset the
+        // reservation (nothing was started, so nothing to tear down) and
+        // park the entry in 'errored' — recoverable by a later activate().
         e.host = null;
-        await syncDeclaredRoots(e, []);
-        setStatus(e, 'needs-consent');
         e.activation = undefined;
+        setStatus(
+          e,
+          'errored',
+          err instanceof Error ? err.message : String(err),
+        );
         return;
       }
-      await syncDeclaredRoots(e, e.manifest.fileRoots);
-      const descriptor = descriptorForEntry(e);
-      if (descriptor) {
-        if (!deps.db?.plugin || !deps.db.registerPluginSource)
-          throw new Error('shared plugin database service is not wired');
-        const legacyPath = path.join(computeDataDir(e, deps), 'private.db');
-        await deps.db.registerPluginSource(
-          e.manifest.id,
-          legacyPath,
-          descriptor,
-        );
-        await deps.db.plugin(
-          { op: 'prepare', pluginId: e.manifest.id, descriptor },
-          { signal: activation.signal },
-        );
-      }
-      if (activation.signal.aborted || e.host !== host || !e.enabled) {
-        await host.stop();
+      await host.start().catch(() => {
+        // status already 'errored' via onStatus; reset host reservation
+        // so a retry via setEnabled(true) can attempt activation again
+        // instead of silently no-opping on the idempotency guard.
         e.host = null;
-        e.activation = undefined;
-        return;
-      }
-    } catch (err) {
-      // Activation setup threw (for example descriptor registration or
-      // preparation rejected) rather than completing. Without this catch, the
-      // exception would propagate out of activate() with `e.host` left
-      // pointing at a reserved-but-never-started host forever — every
-      // future activate() call would then see `e.host` truthy and no-op on
-      // the idempotency guard, permanently wedging the entry. Reset the
-      // reservation (nothing was started, so nothing to tear down) and
-      // park the entry in 'errored' — recoverable by a later activate().
-      e.host = null;
+      });
       e.activation = undefined;
-      setStatus(e, 'errored', err instanceof Error ? err.message : String(err));
-      return;
+    } finally {
+      bootSignal?.removeEventListener('abort', onBootAbort);
     }
-    await host.start().catch(() => {
-      // status already 'errored' via onStatus; reset host reservation
-      // so a retry via setEnabled(true) can attempt activation again
-      // instead of silently no-opping on the idempotency guard.
-      e.host = null;
-    });
-    e.activation = undefined;
   }
 
   async function deactivate(e: Entry): Promise<void> {
@@ -1091,7 +1163,6 @@ export function createExtensionPlatform(
   function loadEntries(): void {
     if (loaded) return;
     registerLifecycleListeners();
-    running = true;
     fs.mkdirSync(deps.extDir, { recursive: true });
     const state = readEnabledState(deps.extDir);
     const records = readInstalled(deps.extDir);
@@ -1105,14 +1176,17 @@ export function createExtensionPlatform(
         continue;
       }
       const record = records.find((r) => r.id === found.manifest!.id);
+      const enabled = state[found.manifest.id]?.enabled ?? true;
       entries.set(found.manifest.id, {
         manifest: found.manifest,
         dir: found.dir,
         entryAbsPath: found.entryAbsPath,
         record,
         origin: clampRecordOrigin(record),
-        enabled: state[found.manifest.id]?.enabled ?? true,
-        status: 'disabled',
+        enabled,
+        // #140: the window opens before most activations — an enabled entry
+        // reads as "starting" from discovery on (ContributedUnavailable).
+        status: enabled ? 'activating' : 'disabled',
         error: undefined,
         host: null,
         sourceIds: [],
@@ -1138,14 +1212,16 @@ export function createExtensionPlatform(
             `bundled extension ${found.manifest.id} shadows an installed copy — bundled wins — the installed copy remains on disk and is ignored`,
           );
         }
+        const enabled = state[found.manifest.id]?.enabled ?? true;
         entries.set(found.manifest.id, {
           manifest: found.manifest,
           dir: found.dir,
           entryAbsPath: found.entryAbsPath,
           record: undefined,
           origin: 'bundled',
-          enabled: state[found.manifest.id]?.enabled ?? true,
-          status: 'disabled',
+          enabled,
+          // #140: an enabled entry reads as "starting" from discovery on.
+          status: enabled ? 'activating' : 'disabled',
           error: undefined,
           host: null,
           sourceIds: [],
@@ -1229,13 +1305,53 @@ export function createExtensionPlatform(
     return e;
   }
 
+  const inProcessEntry = (e: Entry): boolean =>
+    e.manifest.caps.includes('unsafe.mainProcess');
+
+  /** start()'s per-id body for the entries `pick` selects. Discovery first
+   *  (a no-op once loaded); `running` from here on gates the worker-respawn
+   *  re-activation. Parallel across extensions, serialized per id. */
+  function startEntries(
+    pick: (e: Entry) => boolean,
+    bootSignal?: AbortSignal,
+  ): Promise<void> {
+    loadEntries();
+    running = true;
+    const ids = [...entries.values()].filter(pick).map((e) => e.manifest.id);
+    return Promise.all(
+      ids.map((id) =>
+        runExclusive(id, async () => {
+          const e = entries.get(id);
+          if (!e || !e.enabled) return;
+          // #140: a queued activation whose turn comes after quit / Reset all.
+          if (bootSignal?.aborted) return;
+          // Already failed in this process — a reset at boot that could
+          // not reset its data. Its marker is for the next start, which
+          // rearms it; consuming it here would activate nothing and
+          // lose the marker.
+          if (e.status === 'errored') return;
+          if (fs.existsSync(recoveryMarkerPath(deps.extDir, id))) {
+            try {
+              await rearmPlugin(e);
+              clearRecoveryMarker(deps.extDir, id);
+            } catch (error) {
+              const recoveryError = recoveryRequiredError(id, error);
+              setStatus(e, 'errored', recoveryError.message);
+              return;
+            }
+          }
+          await activate(e, bootSignal);
+        }),
+      ),
+    ).then(() => undefined);
+  }
+
   return {
     async load() {
       loadEntries();
     },
 
     async start() {
-      loadEntries();
       // Activated in PARALLEL across extensions — a hung extension's
       // handshake timeout no longer stacks in front of every other
       // extension's boot activation (and, in turn, in front of
@@ -1245,30 +1361,48 @@ export function createExtensionPlatform(
       // — and each is re-fetched by id (not a closed-over `e`) inside the
       // callback so it always acts on whichever Entry is current by the
       // time its turn in that id's queue arrives.
-      await Promise.all(
-        [...entries.keys()].map((id) =>
-          runExclusive(id, async () => {
-            const e = entries.get(id);
-            if (!e || !e.enabled) return;
-            // Already failed in this process — a reset at boot that could
-            // not reset its data. Its marker is for the next start, which
-            // rearms it; consuming it here would activate nothing and
-            // lose the marker.
-            if (e.status === 'errored') return;
-            if (fs.existsSync(recoveryMarkerPath(deps.extDir, id))) {
-              try {
-                await rearmPlugin(e);
-                clearRecoveryMarker(deps.extDir, id);
-              } catch (error) {
-                const recoveryError = recoveryRequiredError(id, error);
-                setStatus(e, 'errored', recoveryError.message);
-                return;
-              }
-            }
-            await activate(e);
-          }),
+      await startEntries(() => true);
+    },
+
+    async startInProcess(opts = {}) {
+      const boundMs = opts.boundMs ?? IN_PROCESS_READY_MS;
+      const t0 = Date.now();
+      loadEntries();
+      const ids = [...entries.values()]
+        .filter((e) => e.enabled && inProcessEntry(e))
+        .map((e) => e.manifest.id);
+      startEntries(inProcessEntry).catch((error) =>
+        deps.logSink.log(
+          'extensions',
+          'error',
+          `in-process extensions failed to start: ${String(error)}`,
         ),
       );
+      const activatedMs: Record<string, number> = {};
+      await Promise.all(
+        ids.map(async (id) => {
+          const left = Math.max(0, boundMs - (Date.now() - t0));
+          if (
+            (await whenSettled(id, left)) &&
+            entries.get(id)?.status === 'activated'
+          )
+            activatedMs[id] = Date.now() - t0;
+        }),
+      );
+      const pending = ids.filter(
+        (id) => entries.get(id)?.status === 'activating',
+      );
+      if (pending.length > 0)
+        deps.logSink.log(
+          'extensions',
+          'warn',
+          `in-process extensions still activating after ${boundMs} ms: ${pending.join(', ')} — opening the window anyway`,
+        );
+      return { activatedMs, pending };
+    },
+
+    async startUtility(signal) {
+      await startEntries((e) => !inProcessEntry(e), signal);
     },
 
     async stop() {
