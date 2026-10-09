@@ -173,4 +173,42 @@ describe('ledger re-key job (#59 §0)', () => {
     expect(flag).toBe(true);
     expect(onDone).toHaveBeenCalledTimes(1);
   });
+
+  it('a retry trigger that rejects (store gone) is logged, never an unhandled rejection', async () => {
+    const logs: string[] = [];
+    const timers: Array<() => void> = [];
+    let job: (() => Promise<void>) | null = null;
+    await registerLedgerRekey({
+      store: {
+        ledgerRekeyed: async () => false,
+        ledgerRekeyPage: async () => {
+          throw new Error('db worker crashed');
+        },
+      },
+      scheduler: {
+        register: async (_id, _c, run) => {
+          job = run;
+        },
+        trigger: async () => {
+          throw new Error('corpus DB is permanently unavailable');
+        },
+      },
+      logs: { log: (_s, _l, msg) => void logs.push(msg) },
+      onDone: () => {},
+      yieldTurn: async () => {},
+      setTimer: (fn) => void timers.push(fn),
+    });
+    await job!();
+    const unhandled = jest.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      timers.shift()!();
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+    expect(unhandled).not.toHaveBeenCalled();
+    expect(logs.some((m) => /retry trigger failed/.test(m))).toBe(true);
+  });
 });

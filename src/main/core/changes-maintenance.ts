@@ -74,7 +74,17 @@ export async function registerLedgerRekey(deps: {
       `ledger re-key page failed (retry ${failures} in ${delay} ms): ${String(err)}`,
     );
     setTimer(() => {
-      void deps.scheduler.trigger(LEDGER_REKEY_JOB_ID);
+      // The scheduler persists the run row before running the job, so a
+      // dead store rejects here too: log it, never an unhandled rejection.
+      deps.scheduler
+        .trigger(LEDGER_REKEY_JOB_ID)
+        .catch((e: unknown) =>
+          deps.logs.log(
+            'maintenance',
+            'warn',
+            `ledger re-key retry trigger failed: ${String(e)}`,
+          ),
+        );
     }, delay);
   };
   await deps.scheduler.register(LEDGER_REKEY_JOB_ID, 'manual', async () => {
