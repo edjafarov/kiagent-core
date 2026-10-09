@@ -256,6 +256,18 @@ export type CommitBatch =
       /** Doc ids whose work_attempts rows (this consumer) are deleted in this
        *  same transaction — the commit that persists their `done` outcome. */
       clearAttempts?: string[];
+      /** #59 §3a seeding only: `seed:<consumer>` is set to this seq in the
+       *  same transaction (UPDATE only — a finished seed row stays gone). */
+      seedCursor?: Seq;
+      /** #59 §3a seeding only: this page's ledger outcomes, upserted in the
+       *  SAME transaction as its outputs and `seedCursor`. A crash can then
+       *  never leave a deferral behind the seed cursor without its retry
+       *  row (feed(h0) would never see it again). */
+      ledger?: Array<{
+        seq: Seq;
+        attempts: number;
+        outcome: 'done' | 'skip' | 'failed' | 'deferred' | null;
+      }>;
     }
   /** ONE cascade: purge documents (tombstones into the feed), delete cursor,
    *  config, credentials. */
@@ -282,6 +294,14 @@ export interface Query {
     afterSeq?: number;
     limit: number;
     types: string[];
+  }): Promise<Document[]>;
+  /** Engine-internal (#59 §3a seeding); never exposed to extensions (not in
+   *  host-surfaces / extension-host-entry). Live documents with
+   *  `afterSeq < seq <= throughSeq`, oldest first, at most `limit` (≤ 500). */
+  seedPage?(input: {
+    afterSeq: number;
+    throughSeq: number;
+    limit: number;
   }): Promise<Document[]>;
   children(id: DocumentId): Promise<Document[]>;
   byExternalId(

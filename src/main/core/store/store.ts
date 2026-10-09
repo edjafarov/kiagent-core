@@ -22,7 +22,12 @@ import type {
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { resetCoreStoreTables } from '../../db/repositories/core-maintenance';
 import { accountsFrom, createCorpusQuery } from './corpus-query';
-import { META_LEDGER_REKEYED, SEED_CONSUMER_PREFIX } from './maintenance-keys';
+import {
+  META_CHANGES_FLOOR,
+  META_LEDGER_REKEYED,
+  SEED_CONSUMER_PREFIX,
+  seedConsumerName,
+} from './maintenance-keys';
 import { createOutboxStore, type OutboxStore } from './outbox';
 import {
   ACTIONABLE_VISUAL_SIZE_WHERE,
@@ -289,6 +294,16 @@ export interface CoreStore extends Store {
    *  the bug this contract exists to prevent. */
   applyFolderScope(input: FolderScopeInput): Promise<FolderScopeResult>;
   consumerCursor(name: string): Promise<Seq>;
+  /** The consumer's cursor, or null when it has no row (`consumerCursor`
+   *  reads a missing row as 0). */
+  consumerRow(name: string): Promise<Seq | null>;
+  /** #59 §3a, ONE transaction: the real row at `h0` (head at seed start) and
+   *  the `seed:<consumer>` progress row at 0. */
+  beginSeed(consumer: string, h0: Seq): Promise<void>;
+  /** Seeding finished: drop `seed:<consumer>`. */
+  endSeed(consumer: string): Promise<void>;
+  /** `meta.changesFloor`, or null when no prune ever published one. */
+  changesFloor(): Promise<Seq | null>;
   ledgerRecord(
     consumer: string,
     seq: Seq,
@@ -1004,6 +1019,45 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       return r?.cursor ?? 0;
     },
 
+    async consumerRow(name) {
+      const r = (
+        await db.all(`SELECT cursor FROM consumers WHERE name = ?`, [name])
+      )[0] as { cursor: number } | undefined;
+      return r ? r.cursor : null;
+    },
+
+    async beginSeed(consumer, h0) {
+      await db.batch([
+        {
+          sql: `INSERT INTO consumers(name, cursor) VALUES(?, ?)
+                ON CONFLICT(name) DO UPDATE SET cursor = excluded.cursor`,
+          params: [consumer, h0],
+        },
+        {
+          sql: `INSERT INTO consumers(name, cursor) VALUES(?, 0)
+                ON CONFLICT(name) DO UPDATE SET cursor = 0`,
+          params: [seedConsumerName(consumer)],
+        },
+      ]);
+      bumpGen();
+    },
+
+    async endSeed(consumer) {
+      await db.run(`DELETE FROM consumers WHERE name = ?`, [
+        seedConsumerName(consumer),
+      ]);
+      bumpGen();
+    },
+
+    async changesFloor() {
+      const r = (
+        await db.all(`SELECT value FROM meta WHERE key = ?`, [
+          META_CHANGES_FLOOR,
+        ])
+      )[0] as { value: string } | undefined;
+      return r ? Number(r.value) : null;
+    },
+
     async ledgerRecord(consumer, seq, attempts, outcome) {
       await db.run(
         `INSERT INTO work_ledger(consumer, seq, attempts, outcome, updated_at)
@@ -1146,7 +1200,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           }
         ).s ?? 0;
       const lags = (await db.all(
-        `SELECT name, cursor FROM consumers`,
+        `SELECT name, cursor FROM consumers WHERE name NOT LIKE '${SEED_CONSUMER_PREFIX}%'`,
       )) as Array<{
         name: string;
         cursor: number;

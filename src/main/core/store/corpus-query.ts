@@ -35,6 +35,7 @@ const PARTICIPANT_METADATA_PATHS = [
 export const QUERY_METHODS = [
   'document',
   'documentPage',
+  'seedPage',
   'children',
   'byExternalId',
   'search',
@@ -45,6 +46,8 @@ export const QUERY_METHODS = [
 export type QueryMethod = (typeof QUERY_METHODS)[number];
 
 const RECENCY_HEAD_CHARS = 65536;
+/** #59 §3a: largest seed page the reader serves in one call. */
+const SEED_PAGE_MAX = 500;
 /** Every documents column except the body — what 'snippet'/'metadata' select. */
 const DOC_COLUMNS_NO_BODY =
   'd.id, d.account_id, d.external_id, d.type, d.title, d.url, d.metadata, d.created_at, d.parent_id, d.content_hash, d.seq, d.ingest_seq, d.archived_at, d.languages, d.ingested_at, d.updated_at, d.scope_root_id';
@@ -148,6 +151,21 @@ export function createCorpusQuery(
       const rows = (await db.all(
         `SELECT * FROM documents WHERE archived_at IS NULL AND type IN (${placeholders})${after} ORDER BY id LIMIT ?`,
         params,
+      )) as unknown as DocRow[];
+      return rows.map(toDocument);
+    },
+    async seedPage(input) {
+      const limit = Math.max(
+        0,
+        Math.min(SEED_PAGE_MAX, Math.floor(input.limit)),
+      );
+      if (limit === 0) return [];
+      // docs_seq range; archived rows are filtered, not indexed.
+      const rows = (await db.all(
+        `SELECT * FROM documents
+          WHERE seq > ? AND seq <= ? AND archived_at IS NULL
+          ORDER BY seq LIMIT ?`,
+        [input.afterSeq, input.throughSeq, limit],
       )) as unknown as DocRow[];
       return rows.map(toDocument);
     },

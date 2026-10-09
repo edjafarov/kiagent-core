@@ -20,6 +20,7 @@ import { lastErrorAssignment } from './last-error';
 import {
   META_LEDGER_REKEY_CURSOR,
   META_LEDGER_REKEYED,
+  seedConsumerName,
 } from './maintenance-keys';
 import type { AccountRow, DocRow } from './store';
 
@@ -681,6 +682,27 @@ export function createWriteTx(
          ON CONFLICT(name) DO UPDATE SET cursor = excluded.cursor`,
         )
         .run(batch.consumer, batch.cursor);
+      // #59 §3a: seeding progress, atomically with the page's outputs. Its own
+      // statement on its own row — never the consumer cursor upsert above.
+      // UPDATE only: a finished (deleted) seed row is never revived.
+      if (batch.seedCursor !== undefined)
+        conn
+          .prepare(`UPDATE consumers SET cursor = ? WHERE name = ?`)
+          .run(batch.seedCursor, seedConsumerName(batch.consumer));
+      // #59 §3a: the page's ledger outcomes, in the same transaction as its
+      // outputs and seed progress (same upsert as store.ledgerRecordMany).
+      if (batch.ledger?.length) {
+        const ts = deps.now();
+        const upsert = conn.prepare(
+          `INSERT INTO work_ledger(consumer, seq, attempts, outcome, updated_at)
+           VALUES(?, ?, ?, ?, ?)
+           ON CONFLICT(consumer, seq) DO UPDATE
+             SET attempts = excluded.attempts, outcome = excluded.outcome,
+                 updated_at = excluded.updated_at`,
+        );
+        for (const e of batch.ledger)
+          upsert.run(batch.consumer, e.seq, e.attempts, e.outcome, ts);
+      }
       if (batch.clearAttempts?.length) {
         const del = conn.prepare(
           `DELETE FROM work_attempts WHERE consumer = ? AND doc_id = ?`,
