@@ -22,7 +22,7 @@ import type {
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { resetCoreStoreTables } from '../../db/repositories/core-maintenance';
 import { accountsFrom, createCorpusQuery } from './corpus-query';
-import { META_LEDGER_REKEYED } from './maintenance-keys';
+import { META_LEDGER_REKEYED, SEED_CONSUMER_PREFIX } from './maintenance-keys';
 import { createOutboxStore, type OutboxStore } from './outbox';
 import {
   ACTIONABLE_VISUAL_SIZE_WHERE,
@@ -302,6 +302,14 @@ export interface CoreStore extends Store {
   /** Drop attempt rows of consumers no longer attached (retired worker
    *  versions). No-op when `active` is empty. */
   pruneAttempts(active: readonly string[]): Promise<void>;
+  /** #139: `pruneAttempts`' contract applied to `consumers` + `work_ledger`.
+   *  Every consumers row that is neither active nor a `seed:` progress row is
+   *  retired: its ledger rows go in (consumer, seq) windows, then the row
+   *  itself (last, so an interrupted sweep resumes). No-op when `active` is
+   *  empty; with nothing retired it issues no work_ledger statement. */
+  sweepRetiredConsumers(
+    active: readonly string[],
+  ): Promise<{ consumers: number; rows: number }>;
   /** Across every consumer — drives the app-wide processing panel. `pending`
    *  is the largest feed lag among `consumers` (default: every consumer row);
    *  pass the live workers so a retired consumer's stale cursor is ignored. */
@@ -366,6 +374,9 @@ export interface CoreStore extends Store {
 }
 
 const FEED_BATCH = 500;
+/** #139: a retired consumer's ledger rows go in primary-key windows of this
+ *  many seqs, one writer call each. */
+const RETIRED_SWEEP_WINDOW = 50_000;
 /** `changesAt` resolves its seqs in IN-lists of this size (one statement per
  *  chunk; well under SQLite's bound-variable ceiling). */
 const CHANGES_AT_CHUNK = 500;
@@ -1025,6 +1036,42 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           .join(', ')})`,
         [...active],
       );
+    },
+
+    async sweepRetiredConsumers(active) {
+      if (active.length === 0) return { consumers: 0, rows: 0 };
+      const names = (await db.all(
+        `SELECT name FROM consumers
+          WHERE name NOT IN (${active.map(() => '?').join(', ')})
+            AND name NOT LIKE '${SEED_CONSUMER_PREFIX}%'`,
+        [...active],
+      )) as Array<{ name: string }>;
+      let rows = 0;
+      for (const { name } of names) {
+        // eslint-disable-next-line no-await-in-loop
+        const span = (
+          await db.all(
+            `SELECT MIN(seq) AS lo, MAX(seq) AS hi FROM work_ledger WHERE consumer = ?`,
+            [name],
+          )
+        )[0] as { lo: number | null; hi: number | null };
+        if (span.lo !== null && span.hi !== null) {
+          for (let { lo } = span; lo <= span.hi; lo += RETIRED_SWEEP_WINDOW) {
+            // eslint-disable-next-line no-await-in-loop
+            const [r] = await db.batch([
+              {
+                sql: `DELETE FROM work_ledger WHERE consumer = ? AND seq >= ? AND seq < ?`,
+                params: [name, lo, lo + RETIRED_SWEEP_WINDOW],
+              },
+            ]);
+            rows += r.changes;
+          }
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await db.run(`DELETE FROM consumers WHERE name = ?`, [name]);
+      }
+      if (names.length > 0) bumpGen();
+      return { consumers: names.length, rows };
     },
 
     async ledgerCounts(consumer) {

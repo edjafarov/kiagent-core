@@ -959,6 +959,18 @@ app
     // once the bundled workers are attached. Best-effort: a stale row only
     // costs one extra counted attempt for a worker that comes back.
     p.store.pruneAttempts(p.engine.activeConsumers()).catch(() => {});
+    // #139: the same contract for consumers + work_ledger (retired worker
+    // versions such as worker:audio:v1). No work_ledger statement when
+    // nothing is retired.
+    p.store
+      .sweepRetiredConsumers(p.engine.activeConsumers())
+      .catch((err) =>
+        p.logSink.log(
+          'store',
+          'warn',
+          `retired consumer sweep failed: ${String(err)}`,
+        ),
+      );
 
     // Bundled transports SHADOW extension senders on a colliding source
     // id, and both sides are read live on every send — so an extension
