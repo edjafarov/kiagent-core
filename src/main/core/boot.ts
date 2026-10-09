@@ -65,17 +65,38 @@ export interface SourceRegistry {
   unregister(id: string): void;
 }
 
+/** #140: told the id of every `register()` call — including a crash
+ *  respawn's re-registration of the same id. The window-first boot queue
+ *  starts boot-pending accounts from here. Returns the unsubscribe. */
+export interface SourceRegistrations {
+  onRegister(cb: (sourceId: string) => void): () => void;
+}
+
 /** The one in-process source registry: bundled sources register here at boot,
  *  extension sources through `extension-platform.ts:338`
  *  (`deps.sources.register(makeSource(s))`). Lifted out of `bootCore` so
  *  `list()`'s derivation below is unit-testable — `bootCore` cannot run
  *  without a DB worker thread and nothing in the repo boots it in a test. The
  *  body is byte-identical to the literal it replaces, apart from `list()`. */
-export function createSourceRegistry(): SourceRegistry {
+export function createSourceRegistry(): SourceRegistry & SourceRegistrations {
   const registry = new Map<string, Source>();
+  const listeners = new Set<(sourceId: string) => void>();
   return {
     register(source) {
       registry.set(source.descriptor.id, source);
+      for (const cb of [...listeners]) {
+        try {
+          cb(source.descriptor.id);
+        } catch {
+          // A listener never breaks a registration (or the next listener).
+        }
+      }
+    },
+    onRegister(cb) {
+      listeners.add(cb);
+      return () => {
+        listeners.delete(cb);
+      };
     },
     get: (id) => registry.get(id),
     /** C-9. `hasReauthenticate` is CORE-DERIVED, here and nowhere else: this
@@ -141,7 +162,7 @@ export interface CorePlatform {
   prefs: Prefs;
   logs: LogStore;
   logSink: LogSink;
-  sources: SourceRegistry;
+  sources: SourceRegistry & SourceRegistrations;
   senders: SenderRegistry;
   /** Per-source OAuth refreshers; source families add theirs at registration. */
   refreshers: Map<string, (creds: Credentials) => Promise<Credentials | null>>;
@@ -399,19 +420,27 @@ export async function setAccountCadence(
   runAccount(platform, account);
 }
 
-/** Resume sync for every non-paused account and register cadence jobs. */
+/** Resume sync for every non-paused account and register cadence jobs.
+ *  `defer` (#140): offered each account whose source is NOT registered yet;
+ *  returning true means the caller queued it for that source's registration,
+ *  so it is skipped without today's "not registered — skipping" line.
+ *  `signal` (#140): once aborted (quit, interactive Reset all) nothing more
+ *  starts — checked after the read and before every dispatch. */
 export async function resumeAccounts(
   platform: CorePlatform,
+  opts: { defer?(account: Account): boolean; signal?: AbortSignal } = {},
 ): Promise<Map<string, Handle>> {
   const handles = new Map<string, Handle>();
   const accounts = await platform.store.read.accounts();
   for (const account of accounts) {
+    if (opts.signal?.aborted) break;
     if (account.source === 'worker') continue; // synthetic accounts don't sync
     if (account.status === 'paused') continue;
     // Same resting-state rule as the cadence tick: a needsReauth account
     // must not resume hammering a revoked credential at every boot.
     if (account.status === 'needsReauth') continue;
     if (!platform.sources.get(account.source)) {
+      if (opts.defer?.(account)) continue;
       platform.logSink.log(
         'engine',
         'warn',
