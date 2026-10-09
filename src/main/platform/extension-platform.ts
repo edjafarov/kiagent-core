@@ -1149,16 +1149,23 @@ export function createExtensionPlatform(
         );
         return;
       }
-      // #140 A2: an abort while the handshake is in flight stops the host
-      // right here — it kills the child, rejects start() and blocks any
-      // late 'activated' from registering contributions. Awaited below
-      // inside this exclusive op, so a queued deactivate still runs after
-      // the teardown has finished.
+      // #140 A2: an abort while a utility host's handshake is in flight
+      // stops the host right here — it kills the child, rejects start() and
+      // blocks any late 'activated' from registering contributions. Awaited
+      // below inside this exclusive op, so a queued deactivate still runs
+      // after the teardown has finished. Never for the in-process tier: its
+      // kill() only simulates an exit and reclaims nothing, so cutting the
+      // activation short would skip the extension's own deactivate() and
+      // leave its main-process resources behind. It finishes activating and
+      // the queued deactivate tears it down gracefully.
       let abortStop: Promise<void> | null = null;
       const stopOnAbort = () => {
         abortStop ??= host.stop();
       };
-      activation.signal.addEventListener('abort', stopOnAbort, { once: true });
+      if (!inProcess)
+        activation.signal.addEventListener('abort', stopOnAbort, {
+          once: true,
+        });
       try {
         await host.start().catch(() => {
           // status already 'errored' via onStatus; reset host reservation

@@ -100,4 +100,39 @@ describe('extension platform boot cancellation mid-handshake (#140)', () => {
       expect(h.counts.registerTool).toBe(0);
     }, 10_000);
   }
+
+  it('in-process (unsafe.mainProcess): disable during async activation waits for it, then deactivates once; re-enable succeeds', async () => {
+    let release!: () => void;
+    const resource = {
+      gate: new Promise<void>((r) => {
+        release = r;
+      }),
+      held: false,
+      activations: 0,
+      deactivations: 0,
+    };
+    const id = 'test.bundled-resource';
+    platform = h.make({
+      bundledDir: h.copyBundled('ext-bundled-resource'),
+      mainApi: { resource },
+    });
+    await platform.load();
+    await platform.startInProcess({ boundMs: 20 }); // still activating
+    const status = () => platform!.snapshot().find((e) => e.id === id)?.status;
+    expect(status()).toBe('activating');
+
+    const disabled = platform.setEnabled(id, false);
+    await new Promise((r) => setTimeout(r, 30));
+    release(); // the activation completes while the disable is queued
+    await disabled;
+    expect(resource.activations).toBe(1);
+    expect(resource.deactivations).toBe(1);
+    expect(resource.held).toBe(false);
+    expect(status()).toBe('disabled');
+
+    await platform.setEnabled(id, true);
+    await waitFor(() => status() === 'activated');
+    expect(resource.activations).toBe(2);
+    expect(resource.held).toBe(true);
+  });
 });

@@ -1,0 +1,9 @@
+{
+  "id": "test.bundled-resource",
+  "name": "Bundled Resource Test Extension",
+  "version": "1.0.0",
+  "engine": "^2.0.0",
+  "entry": "index.js",
+  "caps": ["unsafe.mainProcess"],
+  "contributes": { "tools": ["resource.probe"], "senders": [] }
+}
