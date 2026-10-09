@@ -418,3 +418,76 @@ describe('account change coalescing (#135)', () => {
     },
   );
 });
+describe('cadence, config and getOrCreateAccount log only real changes (#135)', () => {
+  let dir: string;
+  let db: AppDb;
+  let store: CoreStore;
+  let accountId: AccountId;
+  const deps = {
+    encrypt: (s: string) => Buffer.from(s, 'utf8'),
+    decrypt: (b: Buffer) => b.toString('utf8'),
+    detectLanguages: () => ['eng'],
+  };
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-acc2-'));
+    db = await openDb(path.join(dir, 'test.db'));
+    store = openStore(db, deps);
+    accountId = (
+      await store.createAccount({ source: 'test', identifier: 'me' })
+    ).id;
+  });
+
+  afterEach(async () => {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const rows = async () =>
+    (
+      (await db.all(
+        `SELECT COUNT(*) AS c FROM changes WHERE kind = 'account'`,
+      )) as Array<{
+        c: number;
+      }>
+    )[0].c;
+
+  it('setAccountCadence: a change logs once, the same value again logs nothing', async () => {
+    const r0 = await rows();
+    await store.setAccountCadence(accountId, { every: '15m' });
+    expect(await rows()).toBe(r0 + 1);
+    await store.setAccountCadence(accountId, { every: '15m' });
+    expect(await rows()).toBe(r0 + 1);
+    await store.setAccountCadence(accountId, null);
+    await store.setAccountCadence(accountId, null);
+    expect(await rows()).toBe(r0 + 2);
+  });
+
+  it('setAccountConfig: a change logs once, the same config again logs nothing', async () => {
+    const r0 = await rows();
+    await store.setAccountConfig(accountId, { a: 1 });
+    await store.setAccountConfig(accountId, { a: 1 });
+    expect(await rows()).toBe(r0 + 1);
+    expect((await store.account(accountId))?.config).toEqual({ a: 1 });
+  });
+
+  it('getOrCreateAccount: found appends nothing and wakes no feed; created appends one', async () => {
+    const r0 = await rows();
+    const it = store.feed(await store.headSeq())[Symbol.asyncIterator]();
+    const next = it.next();
+    await settle();
+    const spy = jest.spyOn(db, 'all');
+    await store.getOrCreateAccount('test', 'me');
+    await settle();
+    expect(await rows()).toBe(r0);
+    expect(
+      spy.mock.calls.filter(([sql]) =>
+        /FROM changes WHERE seq > \?/.test(sql as string),
+      ),
+    ).toHaveLength(0);
+    await store.getOrCreateAccount('test', 'new');
+    expect(await rows()).toBe(r0 + 1);
+    await next;
+    await it.return?.();
+  });
+});

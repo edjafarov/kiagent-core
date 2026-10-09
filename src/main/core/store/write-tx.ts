@@ -609,16 +609,27 @@ export function createWriteTx(
           return { id, logged: true };
         }
         case 'cadence': {
-          conn
-            .prepare(`UPDATE accounts SET cadence = ? WHERE id = ?`)
-            .run(w.cadence ? JSON.stringify(w.cadence) : null, w.id);
+          // #135: log only when the stored value changes; the UPDATE has no
+          // unconditional column, so `changes` is exact.
+          const value = w.cadence ? JSON.stringify(w.cadence) : null;
+          const r = conn
+            .prepare(
+              `UPDATE accounts SET cadence = ? WHERE id = ? AND cadence IS NOT ?`,
+            )
+            .run(value, w.id, value);
+          if (r.changes === 0) return { id: w.id, logged: false };
           appendChange('account', w.id);
           return { id: w.id, logged: true };
         }
         case 'config': {
-          conn
-            .prepare(`UPDATE accounts SET config = ? WHERE id = ?`)
-            .run(JSON.stringify(w.config), w.id);
+          // #135: same idiom as cadence.
+          const value = JSON.stringify(w.config);
+          const r = conn
+            .prepare(
+              `UPDATE accounts SET config = ? WHERE id = ? AND config IS NOT ?`,
+            )
+            .run(value, w.id, value);
+          if (r.changes === 0) return { id: w.id, logged: false };
           appendChange('account', w.id);
           return { id: w.id, logged: true };
         }

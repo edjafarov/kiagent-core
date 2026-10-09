@@ -854,12 +854,12 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async getOrCreateAccount(source, identifier) {
-      const { id } = await accountWrite({
+      const { id, logged } = await accountWrite({
         op: 'getOrCreate',
         source,
         identifier,
       });
-      nudge.emit('commit');
+      if (logged) nudge.emit('commit');
       return toAccount((await getAccountRow(id))!);
     },
 
@@ -869,13 +869,13 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async setAccountCadence(id, cadence) {
-      await accountWrite({ op: 'cadence', id, cadence });
-      nudge.emit('commit');
+      const { logged } = await accountWrite({ op: 'cadence', id, cadence });
+      if (logged) nudge.emit('commit');
     },
 
     async setAccountConfig(id, config) {
-      await accountWrite({ op: 'config', id, config });
-      nudge.emit('commit');
+      const { logged } = await accountWrite({ op: 'config', id, config });
+      if (logged) nudge.emit('commit');
     },
 
     async setAccountStatus(id, patch) {
