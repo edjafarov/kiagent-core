@@ -1,5 +1,6 @@
 import { useCallback, useRef, useSyncExternalStore } from 'react';
 import type { AppState } from '@shared/contracts';
+import { reconcile } from './reconcile';
 
 /**
  * Subscription store for the single `push:app-state` projection channel.
@@ -41,8 +42,15 @@ function apply(nextState: AppState, rev: number): void {
   // Guard on the broadcast counter, NOT the feed seq: non-feed slices
   // (identity, prefs, processing) re-push with the same seq but a higher rev.
   if (lastRev !== null && rev <= lastRev) return; // stale/out-of-order push
-  state = nextState;
   lastRev = rev;
+  // IPC structured-clones every push, so nothing in `nextState` is
+  // reference-equal to the current snapshot even where nothing changed.
+  // Reconciling restores sharing: unchanged sub-trees keep their previous
+  // reference (shallow-equal selectors bail out), and a push equal to the
+  // current snapshot is a no-op that notifies no one.
+  const reconciled = reconcile(state, nextState);
+  if (reconciled === state) return;
+  state = reconciled;
   notify();
 }
 
