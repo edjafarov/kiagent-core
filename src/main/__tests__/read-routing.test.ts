@@ -5,17 +5,18 @@ const read = (rel: string) =>
   fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
 describe('read routing (spec §3.3)', () => {
+  // #147: the renderer reads also run as foreground work (inForeground).
   it('MCP and the renderer foreground IPC use the read plane', () => {
     const main = read('main.ts');
     expect(main).toMatch(/query:\s*p\.readsFor\('mcp'\)/);
     expect(main).toMatch(
-      /'search:query':\s*\(req\)\s*=>\s*p\.readsFor\('renderer'\)\.search\(/,
+      /'search:query':\s*\(req\)\s*=>\s*inForeground\(\s*p\.admission,\s*\(\)\s*=>\s*p\.readsFor\('renderer'\)\.search\(/,
     );
     expect(main).toMatch(
-      /'docs:get':\s*\(\{ id \}\)\s*=>\s*p\.readsFor\('renderer'\)\.document\(/,
+      /'docs:get':\s*\(\{ id \}\)\s*=>\s*inForeground\(\s*p\.admission,\s*\(\)\s*=>\s*p\.readsFor\('renderer'\)\.document\(/,
     );
     expect(main).toMatch(
-      /'docs:children':\s*\(\{ id \}\)\s*=>\s*p\.readsFor\('renderer'\)\.children\(/,
+      /'docs:children':\s*\(\{ id \}\)\s*=>\s*inForeground\(\s*p\.admission,\s*\(\)\s*=>\s*p\.readsFor\('renderer'\)\.children\(/,
     );
     expect(main).not.toMatch(/p\.store\.read\.(search|document|children)\b/);
   });

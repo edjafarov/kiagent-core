@@ -303,9 +303,11 @@ describe('foregroundIdle (enrichment waits, never throws)', () => {
     const ac = new AbortController();
     // Assertion attached BEFORE the abort: a rejection left unhandled across
     // an event-loop turn is recorded by jest-circus as a test error.
-    const rejected = await expect(
-      a.foregroundIdle(ac.signal),
-    ).rejects.toHaveProperty('name', 'AbortError');
+    // eslint-disable-next-line jest/valid-expect
+    const rejected = expect(a.foregroundIdle(ac.signal)).rejects.toHaveProperty(
+      'name',
+      'AbortError',
+    );
     ac.abort();
     await clock.flush();
     await rejected;
