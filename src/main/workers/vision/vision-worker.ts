@@ -68,6 +68,8 @@ type VlmImage = { page: number; bytes: Uint8Array; mime: string };
 export function createVisionWorker(deps: {
   rasterizer: Rasterizer;
   laneOpen(): boolean;
+  /** #147: wait (bounded) while the user's foreground calls are in flight. */
+  foregroundIdle?(signal: AbortSignal): Promise<void>;
   /** Clamps a page to the VLM's usable resolution before pass 2 encodes it.
    *  Optional so non-Electron hosts and tests get the identity function. */
   downscale?: ImageDownscaler;
@@ -194,6 +196,7 @@ export function createVisionWorker(deps: {
     const doc = change.document;
     // Outside the processing window: park instead of blocking on the lane
     // gate — a parked ledger row is free, a blocked work() stalls the tail.
+    await deps.foregroundIdle?.(session.signal);
     if (!deps.laneOpen()) return 'defer';
 
     const pdf = isPdfDoc(doc);

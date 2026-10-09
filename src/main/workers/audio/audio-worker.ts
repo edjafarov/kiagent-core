@@ -55,6 +55,8 @@ export function maxDecodedBytes(totalMemBytes: number): number {
  */
 export function createAudioWorker(deps: {
   laneOpen(): boolean;
+  /** #147: wait (bounded) while the user's foreground calls are in flight. */
+  foregroundIdle?(signal: AbortSignal): Promise<void>;
   /** Demand the ASR install — no-op if installed/downloading/opted-out. */
   requestAsr(): void;
   /** Is a hear provider ready right now? Cheap pre-fetch gate. */
@@ -104,6 +106,7 @@ export function createAudioWorker(deps: {
       // backstop.
       if (!deps.hearReady()) return 'defer';
       // Outside the processing window: park cheaply (mirrors the vision worker).
+      await deps.foregroundIdle?.(session.signal);
       if (!deps.laneOpen()) return 'defer';
 
       // A fetch that fails right now (source still registering, offline)

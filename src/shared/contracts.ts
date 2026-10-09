@@ -859,6 +859,10 @@ export interface Inference {
       task?: string;
       /** Groups calls of one caller-defined run for a provider's budget. */
       budgetKey?: string;
+      /** Background lane only: cancels the call while it waits at the gate
+       *  (rejects AbortError; the provider is never invoked). Not forwarded
+       *  to providers. */
+      signal?: AbortSignal;
     },
   ): Promise<string>;
   /** Vision: OCR, layout, "what is in this image". */
@@ -870,6 +874,10 @@ export interface Inference {
       lane?: Lane;
       task?: string;
       budgetKey?: string;
+      /** Background lane only: cancels the call while it waits at the gate
+       *  (rejects AbortError; the provider is never invoked). Not forwarded
+       *  to providers. */
+      signal?: AbortSignal;
     },
   ): Promise<string>;
   /** OCR only: image/page in, plain text out. Distinct from `see` because
@@ -877,7 +885,14 @@ export interface Inference {
    *  the two-pass pipeline addresses them by kind. */
   read(
     image: Uint8Array,
-    opts?: { mime?: string; lane?: Lane },
+    opts?: {
+      mime?: string;
+      lane?: Lane;
+      /** Background lane only: cancels the call while it waits at the gate
+       *  (rejects AbortError; the provider is never invoked). Not forwarded
+       *  to providers. */
+      signal?: AbortSignal;
+    },
   ): Promise<string>;
   /** ASR: spoken audio in, transcript text out. Distinct from `see`/`read`
    *  (vision) — routed to a provider whose model carries an audio encoder.
@@ -906,6 +921,10 @@ export interface Inference {
        *  (never NoProviderError) when it cannot; never triggers a download. */
       model?: 'accuracy';
       lane?: Lane;
+      /** Background lane only: cancels the call while it waits at the gate
+       *  (rejects AbortError; the provider is never invoked). Not forwarded
+       *  to providers. */
+      signal?: AbortSignal;
     },
   ): Promise<string>;
 }

@@ -37,6 +37,7 @@ import {
 import { isDbWorkerTransientError } from '../../db/worker-client';
 
 import { RECONCILE_ERROR_PREFIX } from '../store/last-error';
+import type { Admission } from '../admission';
 import type { CoreStore } from '../store/store';
 import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
 import { FetchDeferredError } from './fetch-deferred';
@@ -60,7 +61,12 @@ export interface EngineDeps {
     seeWithMeta?(
       image: Uint8Array,
       prompt: string,
-      opts?: { mime?: string; lane?: Lane; task?: string },
+      opts?: {
+        mime?: string;
+        lane?: Lane;
+        task?: string;
+        signal?: AbortSignal;
+      },
     ): Promise<{ text: string; providerId: string; modelId: string }>;
     /** Optional so engine fakes keep compiling; absent = nothing may. */
     mayBecomeReady?(kind: 'see' | 'read'): boolean;
@@ -69,7 +75,8 @@ export interface EngineDeps {
    *  parsers only — text-poor results are left for a vision worker ('defer').
    *  `signal` cancels a queued or running converter job (pause/stop). */
   convert(input: DocumentInput, signal?: AbortSignal): Promise<DocumentInput>;
-
+  /** #147 background admission. Optional: absent = admit at once. */
+  admission?: Pick<Admission, 'acquire'>;
   logs: LogSink;
   /** Per-source OAuth refreshers. The PLATFORM refreshes tokens before a
    *  session hands them out — no refresh logic in any source. */
@@ -689,12 +696,14 @@ export function createEngine(deps: EngineDeps): Engine & {
           return deps.inference.complete(prompt, {
             ...opts,
             lane: 'background',
+            signal,
           });
         },
         see(image, prompt, opts) {
           return deps.inference.see(image, prompt, {
             ...opts,
             lane: 'background',
+            signal,
           });
         },
         seeWithMeta(image, prompt, opts) {
@@ -704,13 +713,22 @@ export function createEngine(deps: EngineDeps): Engine & {
           return deps.inference.seeWithMeta(image, prompt, {
             ...opts,
             lane: 'background',
+            signal,
           });
         },
         read(image, opts) {
-          return deps.inference.read(image, { ...opts, lane: 'background' });
+          return deps.inference.read(image, {
+            ...opts,
+            lane: 'background',
+            signal,
+          });
         },
         hear(audio, opts) {
-          return deps.inference.hear(audio, { ...opts, lane: 'background' });
+          return deps.inference.hear(audio, {
+            ...opts,
+            lane: 'background',
+            signal,
+          });
         },
         async fetchBytes(doc: Document) {
           const account = await store.account(doc.accountId);

@@ -36,6 +36,7 @@ export function attachBundledWorkers(
   const worker = createVisionWorker({
     rasterizer: pickRasterizer(deps.visionHelper),
     laneOpen: () => backgroundLaneOpen(platform),
+    foregroundIdle: (signal) => platform.admission.foregroundIdle(signal),
     downscale: deps.downscale,
   });
   const handle = platform.engine.attach(worker);
@@ -50,6 +51,7 @@ export function attachBundledWorkers(
   const audioWorker = createAudioWorker({
     totalMemBytes: platform.host.totalMemBytes,
     laneOpen: () => backgroundLaneOpen(platform),
+    foregroundIdle: (signal) => platform.admission.foregroundIdle(signal),
     // Demand-driven: every audio candidate asks for the install, so the
     // download runs during the closed processing window (spec §5).
     requestAsr: () => deps.localAsr.ensureInstalled(),

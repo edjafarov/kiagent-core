@@ -8,6 +8,8 @@ import type {
   Worker,
   WorkerSession,
 } from '@shared/contracts';
+import { enrichmentInputsFor } from '../../core/boot';
+import { createAdmission } from '../../core/admission';
 
 import { attachBundledWorkers } from '../index';
 
@@ -66,6 +68,11 @@ function makePlatform(
     },
     inference: { providers: () => providers },
   };
+  (platform as Record<string, unknown>).admission = createAdmission({
+    slots: 1,
+    userActive: () => false,
+    enrichment: enrichmentInputsFor(() => platform as never),
+  });
   return { platform: platform as never, attached };
 }
 
@@ -244,6 +251,11 @@ describe('convert worker wiring', () => {
       inference: { providers: () => [] },
       host: { totalMemBytes: 16 * 1024 ** 3 },
     };
+    (platform as Record<string, unknown>).admission = createAdmission({
+      slots: 1,
+      userActive: () => false,
+      enrichment: enrichmentInputsFor(() => platform as never),
+    });
     attachBundledWorkers(platform as never, {
       visionHelper: null,
       localLlm: fakeProvider() as never,

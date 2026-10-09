@@ -1087,3 +1087,21 @@ it('a raster helper timeout defers; other raster errors still reject', async () 
     mk(new Error('corrupt')).work(change({}), fakeSession()),
   ).rejects.toThrow('corrupt');
 });
+
+it('pre-flight: waits for the foreground before the lane check and any fetch', async () => {
+  let release!: () => void;
+  const fetchBytes = jest.fn(async () => new Uint8Array(100_000));
+  const worker = createVisionWorker({
+    rasterizer: { pdfToPngs: jest.fn(async () => raster(new Uint8Array([1]))) },
+    laneOpen: () => true,
+    foregroundIdle: () =>
+      new Promise<void>((r) => {
+        release = r;
+      }),
+  });
+  const p = worker.work(change({}), fakeSession({ fetchBytes }));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(fetchBytes).not.toHaveBeenCalled();
+  release();
+  await expect(p).resolves.toBe('done');
+});

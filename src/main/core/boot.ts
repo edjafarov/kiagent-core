@@ -19,6 +19,11 @@ import type {
 } from '@shared/contracts';
 
 import { openDbInWorker } from '../db/worker-client';
+import {
+  createAdmission,
+  type Admission,
+  type EnrichmentInputs,
+} from './admission';
 import { createAppProjection } from './app-projection';
 import type { AppStateExtras } from './app-projection';
 import { createConverter } from './engine/convert';
@@ -157,6 +162,9 @@ export interface CorePlatform {
   /** The crash-isolated converter (#136): parsers + WASM rasteriser. */
   converter: Converter;
   convert(input: DocumentInput, signal?: AbortSignal): Promise<DocumentInput>;
+  /** The ONE background-work owner (#147): unit admission, foreground
+   *  first, and the enrichment lane `backgroundLaneState` projects. */
+  admission: Admission;
   /** Hardware facts, read once at boot (host-profile.ts). */
   host: HostFacts;
   /** The local model's acceleration once detected; null before. Bound by
@@ -250,8 +258,26 @@ export function registerArchiveSweep(deps: {
  * Construction happens once, here. Everything downstream reads the platform —
  * no DI styles, no lazy getters, no module globals.
  */
+/** The enrichment lane's live inputs, read through `get()` on every call so
+ *  `llmAccel` (bound by main.ts later) and `engine.syncing()` are never
+ *  stale and never read before they exist. */
+export function enrichmentInputsFor(
+  get: () => Pick<
+    CorePlatform,
+    'prefs' | 'scheduler' | 'host' | 'llmAccel' | 'engine'
+  >,
+): EnrichmentInputs {
+  return {
+    processing: () => get().prefs.get().processing,
+    env: () => get().scheduler.env,
+    weak: () => hostBudget(get().host, get().llmAccel()).weak,
+    syncing: () => get().engine.syncing(),
+  };
+}
+
 export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const { store: logStore, sink } = createLogs(path.join(deps.dataDir, 'logs'));
+  let platform!: CorePlatform;
   const host = readHostFacts();
   // accel is detected lazily by the local-llm provider; unknown at boot.
   sink.log('host', 'info', describeHost(host, null));
@@ -280,6 +306,14 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   });
   const inference = createInference(sink);
   const scheduler = createScheduler(store, deps.env, sink);
+  // Lazy reads through `platform`: nothing evaluates the lane before
+  // `platform` is assigned below.
+  const admission = createAdmission({
+    slots: budget.ingestSlots,
+    userActive: () => scheduler.env.userActive,
+    enrichment: enrichmentInputsFor(() => platform),
+  });
+  inference.setForegroundIdle((signal) => admission.foregroundIdle(signal));
   const converter: Converter =
     deps.converterSpawn && process.env.KIA_CONVERTER_INLINE !== '1'
       ? createConverterRunner({
@@ -317,11 +351,12 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     convert,
     logs: sink,
     refreshers,
+    admission,
   });
 
   registerArchiveSweep({ store, scheduler, logs: sink });
 
-  const platform: CorePlatform = {
+  platform = {
     db,
     store,
     engine,
@@ -335,6 +370,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     refreshers,
     convert,
     converter,
+    admission,
     host,
     readDiagnostics: (sql) =>
       buildReadDiagnostics({
@@ -464,35 +500,16 @@ export function attachWorker(platform: CorePlatform, worker: Worker): Handle {
   return handle;
 }
 
-/** Evaluate the processing window and say WHY it's closed when it is. The ONE
- *  lane decision: inference admission, worker pre-flight, the extension
- *  `lane()` resolver and the 5 s publisher all read it. #147 grows this into
- *  a kind-aware owner (enrichment vs ingest); ingest must never be closed by
- *  'until-synced'. */
+/** The enrichment lane, projected from the admission owner (#147 §5): same
+ *  result and LaneState values as before. Inference admission, the worker
+ *  pre-flights, the extension `lane()` resolver and the 5 s publisher all
+ *  read it. Ingest/convert/reconcile/redrive units are admitted by
+ *  `platform.admission.acquire` and are never closed by a lane state. */
 export function backgroundLaneState(
   platform: CorePlatform,
   now = new Date(),
 ): LaneState {
-  const p = platform.prefs.get().processing;
-  if (!p.enabled) return 'disabled';
-  const { env } = platform.scheduler;
-  if (env.onBattery) return 'battery';
-  if (
-    hostBudget(platform.host, platform.llmAccel()).weak &&
-    platform.engine.syncing()
-  )
-    return 'until-synced';
-  switch (p.window) {
-    case 'always':
-      return 'open';
-    case 'night': {
-      const h = now.getHours();
-      return h >= 22 || h < 7 ? 'open' : 'until-night';
-    }
-    case 'idle':
-    default:
-      return env.userActive ? 'until-idle' : 'open';
-  }
+  return platform.admission.enrichmentLane(now);
 }
 
 /** Platforms that refused background work since the publisher last woke the

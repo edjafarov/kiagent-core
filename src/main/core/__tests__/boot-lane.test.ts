@@ -1,4 +1,10 @@
-import { backgroundLaneOpen, backgroundLaneState, takeLaneWake } from '../boot';
+import { createAdmission } from '../admission';
+import {
+  backgroundLaneOpen,
+  backgroundLaneState,
+  enrichmentInputsFor,
+  takeLaneWake,
+} from '../boot';
 import type { CorePlatform } from '../boot';
 import { createInference, LaneClosedError } from '../inference';
 import { createProcessingStatus } from '../processing-status';
@@ -13,7 +19,7 @@ function platform(over: {
   weak?: boolean;
   syncing?: boolean;
 }): CorePlatform {
-  return {
+  const p = {
     prefs: {
       get: () => ({
         processing: {
@@ -41,6 +47,12 @@ function platform(over: {
     llmAccel: () => 'metal',
     engine: { syncing: () => over.syncing ?? false },
   } as unknown as CorePlatform;
+  (p as { admission: CorePlatform['admission'] }).admission = createAdmission({
+    slots: 1,
+    userActive: () => p.scheduler.env.userActive,
+    enrichment: enrichmentInputsFor(() => p),
+  });
+  return p;
 }
 
 const NOON = new Date('2026-01-01T12:00:00');
@@ -172,4 +184,11 @@ describe('refusal → pending wake → publisher tick', () => {
     await flush();
     expect(wakeWorkers).toHaveBeenCalledTimes(1);
   });
+});
+
+it('backgroundLaneState is the admission owner’s enrichment projection', () => {
+  const p = platform({ window: 'idle', userActive: true });
+  const spy = jest.spyOn(p.admission, 'enrichmentLane');
+  expect(backgroundLaneState(p, NOON)).toBe('until-idle');
+  expect(spy).toHaveBeenCalledWith(NOON);
 });
