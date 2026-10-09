@@ -24,6 +24,7 @@ import { resetCoreStoreTables } from '../../db/repositories/core-maintenance';
 import { newId } from '../ids';
 import { accountsFrom, createCorpusQuery } from './corpus-query';
 import { lastErrorAssignment } from './last-error';
+import { META_LEDGER_REKEYED } from './maintenance-keys';
 import { createOutboxStore, type OutboxStore } from './outbox';
 import {
   ACTIONABLE_VISUAL_SIZE_WHERE,
@@ -334,6 +335,11 @@ export interface CoreStore extends Store {
     }>,
   ): Promise<void>;
   changesAt(seqs: Seq[]): Promise<Change[]>;
+  /** #59 §0: every deferred ledger row is keyed on its document's current
+   *  seq. False on a profile upgraded from an older build until the paged
+   *  re-key repair finishes; every re-drive entry point is a no-op until
+   *  then. Cached in memory once true. */
+  ledgerRekeyed(): Promise<boolean>;
   headSeq(): Promise<Seq>;
   scheduleAll(): Promise<ScheduleRow[]>;
   scheduleUpsert(row: ScheduleRow): Promise<void>;
@@ -361,6 +367,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   outboxChanged.setMaxListeners(0);
   const resetListeners = new Set<() => void>();
   let closed = false;
+  let rekeyed = false;
 
   // The procedural, read-your-own-writes commit transaction runs on the RAW
   // connection. In-process (tests, stdio, DB worker host) the AppDb exposes
@@ -1197,6 +1204,17 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         if (r) out.push({ seq, kind: 'document', document: toDocument(r) });
       }
       return out;
+    },
+
+    async ledgerRekeyed() {
+      if (rekeyed) return true;
+      rekeyed =
+        (
+          await db.all(`SELECT 1 FROM meta WHERE key = ?`, [
+            META_LEDGER_REKEYED,
+          ])
+        ).length > 0;
+      return rekeyed;
     },
 
     async headSeq() {

@@ -1,3 +1,4 @@
+import { META_LEDGER_REKEYED } from '../../core/store/maintenance-keys';
 import type { AppDb } from '../app-db';
 
 /** Core-owned tables are cleared through this repository so maintenance code
@@ -22,6 +23,12 @@ export async function resetCoreStoreTables(
       'attention_revisions',
     ].map((table) => ({ sql: `DELETE FROM ${table}` })),
     { sql: `DELETE FROM meta WHERE key != 'schemaVersion'` },
+    // The wiped ledger is empty, so it is trivially re-keyed (#59 §0) —
+    // without this, re-drive would stay gated until the next app start.
+    {
+      sql: `INSERT INTO meta(key, value) VALUES(?, '1')`,
+      params: [META_LEDGER_REKEYED],
+    },
     ...accounts.map((account) => ({
       sql: `INSERT INTO changes(kind, ref_id, at) VALUES('accountRemoved', ?, ?)`,
       params: [account.id, now()],

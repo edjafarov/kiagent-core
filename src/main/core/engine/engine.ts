@@ -397,13 +397,18 @@ function pickScopeKeys(
   return out;
 }
 
+/** What a deferred-work re-drive did. `{ skipped: 'rekey-pending' }`: the
+ *  one-shot ledger re-key repair (#59 §0) has not finished, so nothing ran
+ *  and nothing was recorded; the repair's completion wakes the re-drive. */
+export type RedriveResult = { skipped: 'rekey-pending' } | undefined;
+
 export function createEngine(deps: EngineDeps): Engine & {
   /** Feed-consumer names of the currently attached workers. The consumers
    *  table also keeps rows of retired workers (e.g. an old version), whose
    *  frozen cursors must not count as pending work. */
   activeConsumers(): string[];
   /** Re-drive a worker's deferred changes (scheduler calls this on cadence). */
-  rerunDeferred(worker: Worker): Promise<void>;
+  rerunDeferred(worker: Worker): Promise<RedriveResult>;
   /** Stop every running handle (app shutdown). */
   stopAll(): Promise<void>;
   /** Persist an account's config; restarts its sync loop if one is running
@@ -1897,7 +1902,11 @@ export function createEngine(deps: EngineDeps): Engine & {
       return [...attachedWorkers];
     },
 
-    async rerunDeferred(worker: Worker): Promise<void> {
+    async rerunDeferred(worker: Worker): Promise<RedriveResult> {
+      // #59 §0: until every deferred row is keyed on its document's current
+      // seq, a re-drive could resolve a stale seq to nothing and skip it for
+      // good, or race the repair. No-op; the repair's completion wakes us.
+      if (!(await store.ledgerRekeyed())) return { skipped: 'rekey-pending' };
       const consumer = workerConsumerName(worker);
       const abort = new AbortController();
       // Keyset paging over the backlog, NOT a snapshot of it.

@@ -14,6 +14,7 @@ import {
 
 import { buildStemView } from '../stemming';
 import { corpusTooNewMessage } from './corpus-refusal';
+import { META_LEDGER_REKEYED } from './maintenance-keys';
 
 /** WHERE text shared VERBATIM by the stats queries in store.ts and the partial
  *  indexes below — SQLite only uses a partial index when the query's WHERE
@@ -1268,6 +1269,7 @@ export function migrate(db: BetterSqlite3.Database): void {
   if (version > MIGRATIONS.length) {
     throw new Error(corpusTooNewMessage(version, MIGRATIONS.length));
   }
+  const fresh = version === 0;
   for (let i = version; i < MIGRATIONS.length; i += 1) {
     db.transaction(() => {
       const m = MIGRATIONS[i];
@@ -1279,5 +1281,11 @@ export function migrate(db: BetterSqlite3.Database): void {
       ).run(String(i + 1));
     })();
   }
+  // #59 §0: a corpus this build creates has no ledger rows keyed by the old
+  // feed materializer, so the one-shot re-key repair has nothing to do.
+  if (fresh)
+    db.prepare(`INSERT OR IGNORE INTO meta(key, value) VALUES(?, '1')`).run(
+      META_LEDGER_REKEYED,
+    );
   ensureQueryIndexes(db);
 }

@@ -121,4 +121,89 @@ describe('re-drive works the current seq (#59 §0)', () => {
       ),
     ).toEqual([{ seq: current, outcome: 'done' }]);
   });
+
+  const preUpgrade = async () => {
+    // A profile written by an older build: no marker. Must run before the
+    // store's first ledgerRekeyed() call (the flag is cached once true).
+    await db.run(`DELETE FROM meta WHERE key = 'ledgerRekeyed'`);
+  };
+
+  it('a fresh corpus is born re-keyed', async () => {
+    expect(
+      await db.all(`SELECT value FROM meta WHERE key = 'ledgerRekeyed'`),
+    ).toEqual([{ value: '1' }]);
+    expect(await store.ledgerRekeyed()).toBe(true);
+  });
+
+  it('before the repair, rerunDeferred is a no-op that reports rekey-pending', async () => {
+    await preUpgrade();
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 't',
+    });
+    await store.commit({
+      account: account.id,
+      documents: [doc('a')],
+      cursor: 1,
+    });
+    const s = await currentSeq('a');
+    await store.ledgerRecord('worker:gate:v1', s, 0, 'deferred');
+    const work = jest.fn(async () => 'done' as const);
+    const worker: Worker = {
+      name: 'gate',
+      version: 1,
+      matches: () => true,
+      work,
+    };
+    expect(await makeEngine().rerunDeferred(worker)).toEqual({
+      skipped: 'rekey-pending',
+    });
+    expect(work).not.toHaveBeenCalled();
+    expect(
+      await db.all(
+        `SELECT seq, outcome FROM work_ledger WHERE consumer = 'worker:gate:v1'`,
+      ),
+    ).toEqual([{ seq: s, outcome: 'deferred' }]);
+  });
+
+  it('Reset all keeps the marker: an empty ledger is trivially re-keyed', async () => {
+    await store.maintenance.resetAll();
+    expect(
+      await db.all(`SELECT value FROM meta WHERE key = 'ledgerRekeyed'`),
+    ).toEqual([{ value: '1' }]);
+  });
+
+  it('a deferred seq that resolves to nothing becomes a terminal skip', async () => {
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 't',
+    });
+    await store.commit({
+      account: account.id,
+      documents: [doc('a')],
+      cursor: 1,
+    });
+    const s = await currentSeq('a');
+    await store.ledgerRecord('worker:gone:v1', s, 0, 'deferred');
+    // Archive, then purge: the document is gone for good.
+    await store.commit({
+      account: account.id,
+      documents: [],
+      deletions: [{ externalId: 'a', type: 'note' }],
+      cursor: 2,
+    });
+    await store.commit({ purgeArchived: { before: '9999-01-01T00:00:00Z' } });
+    const worker: Worker = {
+      name: 'gone',
+      version: 1,
+      matches: () => true,
+      work: async () => 'done',
+    };
+    await makeEngine().rerunDeferred(worker);
+    expect(
+      await db.all(
+        `SELECT seq, outcome FROM work_ledger WHERE consumer = 'worker:gone:v1'`,
+      ),
+    ).toEqual([{ seq: s, outcome: 'skip' }]);
+  });
 });
