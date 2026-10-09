@@ -493,3 +493,51 @@ test('a send from the browser updates the list and the open review together', as
   expect(within(sheet()).queryByRole('button', { name: 'Send' })).toBeNull();
   expect(sheet()).toHaveTextContent('Sent');
 });
+
+test('the relative-time clock does not tick while the window is hidden', async () => {
+  // The file's beforeEach fakes Date too; the catch-up commit depends on it.
+  const setVisibility = (state: 'visible' | 'hidden') => {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => state,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
+  const nav = {
+    view: 'outbox',
+    params: {},
+    navigate,
+    back: () => {},
+    openSettings: () => {},
+    replaceParams,
+  } as unknown as ViewContextValue;
+  let commits = 0;
+  try {
+    render(
+      <React.Profiler
+        id="outbox"
+        onRender={() => {
+          commits += 1;
+        }}
+      >
+        <ViewContext.Provider value={nav}>
+          <SourceDescriptorsProvider>
+            <Outbox />
+          </SourceDescriptorsProvider>
+        </ViewContext.Provider>
+      </React.Profiler>,
+    );
+    await act(async () => {});
+    act(() => setVisibility('hidden'));
+    commits = 0;
+    await act(async () => {
+      jest.advanceTimersByTime(5 * 60_000);
+    });
+    expect(commits).toBe(0);
+    act(() => setVisibility('visible'));
+    expect(commits).toBe(1);
+  } finally {
+    delete (document as unknown as { visibilityState?: unknown })
+      .visibilityState;
+  }
+});
