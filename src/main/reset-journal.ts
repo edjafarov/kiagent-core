@@ -6,7 +6,7 @@
  * part-way — it failed, or the app quit or crashed during it — leaving some
  * data deleted and some not. Boot asks the user whether to finish it before
  * any extension runs on that half-deleted data (see factory-reset.ts
- * `startAfterInterruptedReset`).
+ * `finishInterruptedReset`).
  *
  * One flag is enough because every step of the reset is safe to repeat: an
  * extension namespace that is already empty resets again to empty, and so

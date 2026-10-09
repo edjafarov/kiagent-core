@@ -120,48 +120,55 @@ export interface InterruptedResetDeps {
   /** Finds the extensions without activating any. A rejection means the
    *  reset is not run. */
   loadExtensions(): Promise<void>;
-  /** Activates them (loading first if needed); already active ones stay. */
-  startExtensions(): Promise<void>;
   /** The same reset "Reset all" runs. */
   reset(): Promise<FactoryResetOutcome>;
 }
 
 /**
- * Boot: start extensions — but first, when the last Reset all never
- * finished, let the user decide, because some data is deleted and some is
- * not. Finish: the reset runs with the extensions loaded and none active,
- * so none runs on the half-deleted data. Keep: the record is dropped and
- * boot goes on as usual. Nothing is deleted without that answer. Resolves
- * with the finished reset's outcome, or null.
+ * Boot, when the last Reset all never finished: let the user decide, because
+ * some data is deleted and some is not. Finish: the reset runs with the
+ * extensions loaded and none active, so none runs on the half-deleted data.
+ * Keep: the record is dropped. Nothing is deleted without that answer.
+ * Resolves with the finished reset's outcome, or null.
+ *
+ * Starting extensions is the CALLER's next step (boot-tail.ts) — it runs only
+ * after this resolves, so "nothing syncs before the reset finishes" holds.
  */
-export async function startAfterInterruptedReset(
+export async function finishInterruptedReset(
   deps: InterruptedResetDeps,
 ): Promise<FactoryResetOutcome | null> {
-  let outcome: FactoryResetOutcome | null = null;
-  if (deps.journal.pending()) {
-    if (await deps.confirmFinish()) {
-      // Not finding the extensions stops the finish before it starts: the
-      // reset would otherwise wipe core, skip every extension's data, and
-      // drop the record. The record stays, so the question comes back.
-      outcome = await deps
-        .loadExtensions()
-        .then(() => deps.reset())
-        .catch(
-          (err): FactoryResetOutcome => ({
-            ok: false,
-            coreWiped: false,
-            failed: [],
-            error: message(err),
-          }),
-        );
-    } else {
-      try {
-        deps.journal.end();
-      } catch {
-        // Then the question comes back at the next start.
-      }
-    }
+  if (!deps.journal.pending()) return null;
+  if (await deps.confirmFinish()) {
+    // Not finding the extensions stops the finish before it starts: the
+    // reset would otherwise wipe core, skip every extension's data, and
+    // drop the record. The record stays, so the question comes back.
+    return deps
+      .loadExtensions()
+      .then(() => deps.reset())
+      .catch(
+        (err): FactoryResetOutcome => ({
+          ok: false,
+          coreWiped: false,
+          failed: [],
+          error: message(err),
+        }),
+      );
   }
+  try {
+    deps.journal.end();
+  } catch {
+    // Then the question comes back at the next start.
+  }
+  return null;
+}
+
+/** @deprecated #140 compatibility for main.ts until bootTail lands (Task A7
+ *  deletes this). Today's behaviour: finish (or keep), then start every
+ *  extension. */
+export async function startAfterInterruptedReset(
+  deps: InterruptedResetDeps & { startExtensions(): Promise<void> },
+): Promise<FactoryResetOutcome | null> {
+  const outcome = await finishInterruptedReset(deps);
   await deps.startExtensions();
   return outcome;
 }
