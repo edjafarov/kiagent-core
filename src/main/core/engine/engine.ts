@@ -1928,7 +1928,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       for (;;) {
         // eslint-disable-next-line no-await-in-loop
         const seqs = await store.ledgerDeferred(consumer, after, REDRIVE_PAGE);
-        if (seqs.length === 0) return;
+        if (seqs.length === 0) return undefined;
         after = seqs[seqs.length - 1];
         // eslint-disable-next-line no-await-in-loop
         const changes = await store.changesAt(seqs);
