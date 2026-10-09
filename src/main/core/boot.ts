@@ -20,7 +20,10 @@ import type {
 
 import { openDbInWorker } from '../db/worker-client';
 import { createAppProjection } from './app-projection';
-import { registerLedgerRekey } from './changes-maintenance';
+import {
+  registerChangesPrune,
+  registerLedgerRekey,
+} from './changes-maintenance';
 import type { AppStateExtras } from './app-projection';
 import { createConverter } from './engine/convert';
 import { createEngine } from './engine/engine';
@@ -301,6 +304,20 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   });
 
   registerArchiveSweep({ store, scheduler, logs: sink });
+  // #59 §3b: prune `changes` to a bounded tail. Never at boot; first-ever
+  // run 10 minutes in; a no-op until the ledger re-key repair is done.
+  void registerChangesPrune({
+    store,
+    scheduler,
+    logs: sink,
+    activeConsumers: () => engine.activeConsumers(),
+  }).catch((err) =>
+    sink.log(
+      'maintenance',
+      'error',
+      `changes prune registration failed: ${String(err)}`,
+    ),
+  );
 
   const platform: CorePlatform = {
     db,
