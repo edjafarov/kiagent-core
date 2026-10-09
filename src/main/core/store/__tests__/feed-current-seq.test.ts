@@ -83,6 +83,30 @@ describe('ledger seqs are current document seqs (#59 §0)', () => {
     expect(docs[0].document.seq).toBe(current);
   });
 
+  it('feed({ everySeq }) still yields every change of a document (read-only projections)', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 1,
+    });
+    await store.commit({
+      account: accountId,
+      documents: [doc('a', 'edited')],
+      cursor: 2,
+    });
+    const { current, all } = await seqsOf('a');
+    const it = store.feed(0, { everySeq: true })[Symbol.asyncIterator]();
+    const first = await it.next();
+    const docs = (first.value as Change[]).filter(
+      (c): c is Extract<Change, { kind: 'document' }> => c.kind === 'document',
+    );
+    expect(docs.map((c) => c.seq)).toEqual(all);
+    // Each change carries the CURRENT document (the insert row's ingestSeq
+    // rule in app-projection reads it).
+    expect(docs.every((c) => c.document.seq === current)).toBe(true);
+    await it.return?.();
+  });
+
   it('changesAt resolves through documents; a stale or unknown seq resolves to nothing', async () => {
     await store.commit({
       account: accountId,

@@ -407,11 +407,14 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
   // ── feed materialization ──────────────────────────────────────────────────
 
-  const materializeRow = async (r: {
-    seq: number;
-    kind: Change['kind'];
-    ref_id: string;
-  }): Promise<Change | null> => {
+  const materializeRow = async (
+    r: {
+      seq: number;
+      kind: Change['kind'];
+      ref_id: string;
+    },
+    everySeq = false,
+  ): Promise<Change | null> => {
     if (r.kind === 'document') {
       const doc = (
         await db.all(`SELECT * FROM documents WHERE id = ?`, [r.ref_id])
@@ -420,8 +423,9 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       // #59 §0: a document is fed only under its CURRENT seq. An older change
       // of the same document materializes to nothing: the newer change is
       // later in the log and feeds it, so every ledger row a feed consumer
-      // writes is keyed on documents.seq.
-      return doc && doc.seq === r.seq
+      // writes is keyed on documents.seq. `everySeq` (read-only projections
+      // only) keeps the older rows, each paired with the current document.
+      return doc && (everySeq || doc.seq === r.seq)
         ? { seq: r.seq, kind: 'document', document: toDocument(doc) }
         : null;
     }
@@ -446,6 +450,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   const materialize = async (
     after: Seq,
     kinds?: Change['kind'][],
+    everySeq = false,
   ): Promise<{ changes: Change[]; high: Seq }> => {
     const kindFilter = kinds?.length
       ? ` AND kind IN (${kinds.map(() => '?').join(',')})`
@@ -461,7 +466,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     }>;
     const changes: Change[] = [];
     for (const r of rows) {
-      const c = await materializeRow(r);
+      const c = await materializeRow(r, everySeq);
       if (c) changes.push(c);
     }
     return { changes, high: rows.length ? rows[rows.length - 1].seq : after };
@@ -628,6 +633,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
                   const { changes, high } = await materialize(
                     cursor,
                     opts?.kinds,
+                    opts?.everySeq,
                   );
                   if (changes.length > 0) {
                     cursor = high;

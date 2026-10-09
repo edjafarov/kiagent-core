@@ -272,4 +272,42 @@ describe('re-drive works the current seq (#59 §0)', () => {
       ),
     ).toEqual([{ seq: cur, outcome: 'done' }]);
   });
+
+  it('engine.project still sees a document insert row after a same-batch re-stamp (read-only projection)', async () => {
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 'p',
+    });
+    const inserts: string[] = [];
+    const engine = makeEngine();
+    let ready = false;
+    const handle = engine.project<number>(
+      {
+        init: async () => 0,
+        apply: (n, changes) => {
+          for (const c of changes)
+            if (c.kind === 'document' && c.seq === c.document.ingestSeq)
+              inserts.push(c.document.externalId);
+          return n + changes.length;
+        },
+      },
+      () => {
+        ready = true;
+      },
+    );
+    await waitFor(async () => ready);
+    // Child before its parent: the child's insert row and its re-stamp are
+    // two changes of one transaction.
+    await store.commit({
+      account: account.id,
+      documents: [
+        { ...doc('child'), parent: { externalId: 'p', type: 'note' } },
+        doc('p'),
+      ],
+      cursor: 1,
+    });
+    await waitFor(async () => inserts.length === 2);
+    await handle.stop();
+    expect(inserts.sort()).toEqual(['child', 'p']);
+  });
 });

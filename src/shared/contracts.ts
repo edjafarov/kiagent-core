@@ -392,7 +392,15 @@ export interface Store {
   /** Tail the change log from a position. Live: keeps yielding. */
   feed(
     after: Seq,
-    opts?: { kinds?: Change['kind'][] },
+    opts?: {
+      kinds?: Change['kind'][];
+      /** #59 §0: by default a document is fed only under its CURRENT seq,
+       *  so a ledger-writing consumer always keys on documents.seq. A
+       *  read-only projection that counts insert rows (seq === ingestSeq)
+       *  sets this to receive every document change, each paired with the
+       *  current document. Never for a consumer that writes the ledger. */
+      everySeq?: boolean;
+    },
   ): AsyncIterable<Change[]>;
   /** Engine-only in practice — no extension ever holds this. */
   commit(batch: CommitBatch): Promise<Seq>;

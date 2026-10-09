@@ -2042,7 +2042,10 @@ export function createEngine(deps: EngineDeps): Engine & {
             let state: S = state0;
             onDiff(state, seq);
             for await (const changes of abortable(
-              store.feed(seq),
+              // #59 §0: a projection writes no ledger, and app-projection
+              // counts a document's insert row (seq === ingestSeq) even when
+              // the reader only reaches it after a later update.
+              store.feed(seq, { everySeq: true }),
               abort.signal,
             )) {
               if (abort.signal.aborted) return;
