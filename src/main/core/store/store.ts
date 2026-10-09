@@ -21,9 +21,7 @@ import type {
 
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { resetCoreStoreTables } from '../../db/repositories/core-maintenance';
-import { newId } from '../ids';
 import { accountsFrom, createCorpusQuery } from './corpus-query';
-import { lastErrorAssignment } from './last-error';
 import { META_LEDGER_REKEYED } from './maintenance-keys';
 import { createOutboxStore, type OutboxStore } from './outbox';
 import {
@@ -36,6 +34,8 @@ import { toAccount, toDocument, type AccountRow, type DocRow } from './rows';
 import {
   createWriteTx,
   LEDGER_REKEY_PAGE,
+  type AccountWriteOp,
+  type AccountWriteResult,
   type CommitResult,
   type FolderScopeInput,
   type FolderScopeResult,
@@ -383,6 +383,14 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   const writeTx = db._conn
     ? createWriteTx(db._conn, { detectLanguages: deps.detectLanguages, now })
     : null;
+  // #135: account writers run on the writer connection (see write-tx.ts
+  // accountWrite) so the last-published mark is taken with the COMMIT.
+  const accountWrite = async (
+    w: AccountWriteOp,
+  ): Promise<AccountWriteResult> =>
+    writeTx
+      ? writeTx.accountWrite(w)
+      : ((await db.proc!('accountWrite', w)) as AccountWriteResult);
 
   // The read surface lives in corpus-query.ts so the read worker and the stdio
   // sibling share the exact implementation. The writer keeps explicit cache
@@ -834,61 +842,17 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     // ── engine-only surface ──────────────────────────────────────────────────
 
     async createAccount(a) {
-      const id = newId<'account'>();
-      // One batch = one atomic transaction: the account UPSERT (RETURNING id
-      // so a conflicting row's EXISTING id feeds the change) plus its feed
-      // change row land together or not at all.
-      const results = await db.batch([
-        {
-          sql: `INSERT INTO accounts(id, source, identifier, config, status, cadence, created_at)
-             VALUES(?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(source, identifier) DO UPDATE SET
-               config = excluded.config,
-               status = excluded.status
-             RETURNING id`,
-          params: [
-            id,
-            a.source,
-            a.identifier,
-            JSON.stringify(a.config ?? {}),
-            a.status ?? 'connecting',
-            a.cadence ? JSON.stringify(a.cadence) : null,
-            now(),
-          ],
-        },
-        {
-          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
-          params: [{ $fromStep: 0, column: 'id' }, now()],
-        },
-      ]);
-      const accId = (results[0].row as { id: string }).id;
+      const { id } = await accountWrite({ op: 'create', ...a });
       nudge.emit('commit');
-      return toAccount((await getAccountRow(accId))!);
+      return toAccount((await getAccountRow(id))!);
     },
 
     async getOrCreateAccount(source, identifier) {
-      const found = (
-        await db.all(
-          `SELECT * FROM accounts WHERE source = ? AND identifier = ?`,
-          [source, identifier],
-        )
-      )[0] as unknown as AccountRow | undefined;
-      if (found) {
-        nudge.emit('commit');
-        return toAccount(found);
-      }
-      const id = newId<'account'>();
-      await db.batch([
-        {
-          sql: `INSERT INTO accounts(id, source, identifier, config, status, created_at)
-             VALUES(?, ?, ?, '{}', 'live', ?)`,
-          params: [id, source, identifier, now()],
-        },
-        {
-          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
-          params: [id, now()],
-        },
-      ]);
+      const { id } = await accountWrite({
+        op: 'getOrCreate',
+        source,
+        identifier,
+      });
       nudge.emit('commit');
       return toAccount((await getAccountRow(id))!);
     },
@@ -899,63 +863,21 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async setAccountCadence(id, cadence) {
-      await db.batch([
-        {
-          sql: `UPDATE accounts SET cadence = ? WHERE id = ?`,
-          params: [cadence ? JSON.stringify(cadence) : null, id],
-        },
-        {
-          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
-          params: [id, now()],
-        },
-      ]);
+      await accountWrite({ op: 'cadence', id, cadence });
       nudge.emit('commit');
     },
 
     async setAccountConfig(id, config) {
-      await db.batch([
-        {
-          sql: `UPDATE accounts SET config = ? WHERE id = ?`,
-          params: [JSON.stringify(config), id],
-        },
-        {
-          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
-          params: [id, now()],
-        },
-      ]);
+      await accountWrite({ op: 'config', id, config });
       nudge.emit('commit');
     },
 
     async setAccountStatus(id, patch) {
       // Reconcile passes and reconnects call this, mostly with the status the
-      // account already has. Write — and log a change, and wake every feed —
-      // only when the status or last_error actually differs. changes() in
-      // the INSERT reads the UPDATE's row count: batch() runs both steps on
-      // one connection inside one transaction.
-      const lastError = lastErrorAssignment(patch.error, patch.errorScope);
-      const status = patch.status ?? null;
-      const [, logged] = await db.batch([
-        {
-          sql: `UPDATE accounts SET status = COALESCE(?, status),
-                  ${lastError.sql}
-                WHERE id = ?
-                  AND (COALESCE(?, status) IS NOT status
-                    OR (${lastError.expr}) IS NOT last_error)`,
-          params: [
-            status,
-            ...lastError.params,
-            id,
-            status,
-            ...lastError.params,
-          ],
-        },
-        {
-          sql: `INSERT INTO changes(kind, ref_id, at)
-                  SELECT 'account', ?, ? WHERE changes() > 0`,
-          params: [id, now()],
-        },
-      ]);
-      if (logged.changes > 0) nudge.emit('commit');
+      // account already has. Write, log a change and wake every feed only
+      // when the status or last_error actually differs (write-tx accountWrite).
+      const { logged } = await accountWrite({ op: 'status', id, ...patch });
+      if (logged) nudge.emit('commit');
     },
 
     async liveRefs(accountId, after, limit) {

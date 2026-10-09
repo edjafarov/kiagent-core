@@ -4,11 +4,14 @@ import type BetterSqlite3 from 'better-sqlite3';
 
 import type {
   AccountId,
+  Cadence,
   Change,
   CommitBatch,
   DocumentInput,
+  ErrorScope,
   ExternalRef,
   Seq,
+  SyncStatus,
 } from '@shared/contracts';
 
 import { newId } from '../ids';
@@ -41,6 +44,11 @@ function contentHash(d: DocumentInput): string {
     )
     .digest('hex');
 }
+
+/** #135: a sync-progress-only `account` change (progress / last_sync_at,
+ *  which moves on every commit) is published at most once per this window
+ *  per account. Status and last_error changes publish at once. */
+export const ACCOUNT_SYNC_TICK_MS = 60_000;
 
 /** DECISIONS R5: is this account folder-scoped? Read off the CANONICAL marker
  *  every folder-scoped source writes — `config.folderRoots` (contracts'
@@ -197,6 +205,35 @@ export function withLegacyMirror(
   return config; // no legacy reader on this source — nothing to mirror
 }
 
+/** #135: the store's account writers, run as ONE synchronous transaction on
+ *  the writer connection so the last-published mark lands in the same JS
+ *  turn as the COMMIT. */
+export type AccountWriteOp =
+  | {
+      op: 'create';
+      source: string;
+      identifier: string;
+      config?: Record<string, unknown>;
+      status?: SyncStatus;
+      cadence?: Cadence;
+    }
+  | { op: 'getOrCreate'; source: string; identifier: string }
+  | { op: 'cadence'; id: AccountId; cadence: Cadence | null }
+  | { op: 'config'; id: AccountId; config: Record<string, unknown> }
+  | {
+      op: 'status';
+      id: AccountId;
+      status?: SyncStatus;
+      error?: string | null;
+      errorScope?: ErrorScope;
+    };
+
+/** `logged`: the transaction appended an `account` change. */
+export interface AccountWriteResult {
+  id: AccountId;
+  logged: boolean;
+}
+
 /** What one commit did. `logged`: the transaction appended at least one
  *  `changes` row (documents, archives, account, purge, accountRemoved). The
  *  store wakes feeds only then (#135). */
@@ -216,6 +253,7 @@ export interface RekeyPageResult {
 
 export interface WriteTx {
   commit(batch: CommitBatch): CommitResult;
+  accountWrite(op: AccountWriteOp): AccountWriteResult;
   /** Start a pass: drop whatever the previous one staged for this account. */
   reconcileBegin(accountId: string): void;
   /** Stage one bounded slice of the connector's listing. */
@@ -256,15 +294,44 @@ export function createWriteTx(
 ): WriteTx {
   // ── low-level helpers (all run inside the caller's transaction) ──────────
 
+  // #135: when each account's last `account` change COMMITTED (ms on the
+  // deps.now() clock). In memory on purpose: `changes` has no (kind, ref_id)
+  // index, so asking it would scan the whole log. A missing entry (cold
+  // start, DB-worker respawn) reads as "long ago".
+  const accountPublishedAt = new Map<string, number>();
+  const markPublished = (accountId: string, at: string): void => {
+    accountPublishedAt.set(accountId, Date.parse(at));
+  };
+  // `account` appends of the transaction in flight; marked only after it
+  // returned (see `publishing`).
+  const accountAppends: Array<[string, string]> = [];
   // Rows appended by the commit in flight; reset by `commit` below (#135).
   let appended = 0;
   const appendChange = (kind: Change['kind'], refId: string): Seq => {
+    const at = deps.now();
     const r = conn
       .prepare(`INSERT INTO changes(kind, ref_id, at) VALUES(?, ?, ?)`)
-      .run(kind, refId, deps.now());
+      .run(kind, refId, at);
     appended += 1;
+    if (kind === 'account') accountAppends.push([refId, at]);
     return Number(r.lastInsertRowid);
   };
+  /** Wrap a SYNCHRONOUS transaction function: mark what it appended right
+   *  after it returned, in the same JS turn as its COMMIT. A rollback throws
+   *  first, so nothing is marked; with no await in between, no other call
+   *  can interleave. */
+  const publishing =
+    <A extends unknown[], R>(fn: (...args: A) => R) =>
+    (...args: A): R => {
+      accountAppends.length = 0;
+      try {
+        const r = fn(...args);
+        for (const [id, at] of accountAppends) markPublished(id, at);
+        return r;
+      } finally {
+        accountAppends.length = 0;
+      }
+    };
 
   const getAccountRow = (id: string): AccountRow | undefined =>
     conn.prepare(`SELECT * FROM accounts WHERE id = ?`).get(id) as
@@ -497,6 +564,96 @@ export function createWriteTx(
 
   // ── the write primitive ───────────────────────────────────────────────────
 
+  // #135: the store's account writers (formerly db.batch in store.ts). Same
+  // SQL as before; `appendChange` records the account append for `publishing`.
+  const accountWriteTx = conn.transaction(
+    (w: AccountWriteOp): AccountWriteResult => {
+      switch (w.op) {
+        case 'create': {
+          const row = conn
+            .prepare(
+              `INSERT INTO accounts(id, source, identifier, config, status, cadence, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source, identifier) DO UPDATE SET
+                 config = excluded.config,
+                 status = excluded.status
+               RETURNING id`,
+            )
+            .get(
+              newId<'account'>(),
+              w.source,
+              w.identifier,
+              JSON.stringify(w.config ?? {}),
+              w.status ?? 'connecting',
+              w.cadence ? JSON.stringify(w.cadence) : null,
+              deps.now(),
+            ) as { id: AccountId };
+          appendChange('account', row.id);
+          return { id: row.id, logged: true };
+        }
+        case 'getOrCreate': {
+          const found = conn
+            .prepare(
+              `SELECT id FROM accounts WHERE source = ? AND identifier = ?`,
+            )
+            .get(w.source, w.identifier) as { id: AccountId } | undefined;
+          if (found) return { id: found.id, logged: false };
+          const id = newId<'account'>();
+          conn
+            .prepare(
+              `INSERT INTO accounts(id, source, identifier, config, status, created_at)
+               VALUES(?, ?, ?, '{}', 'live', ?)`,
+            )
+            .run(id, w.source, w.identifier, deps.now());
+          appendChange('account', id);
+          return { id, logged: true };
+        }
+        case 'cadence': {
+          conn
+            .prepare(`UPDATE accounts SET cadence = ? WHERE id = ?`)
+            .run(w.cadence ? JSON.stringify(w.cadence) : null, w.id);
+          appendChange('account', w.id);
+          return { id: w.id, logged: true };
+        }
+        case 'config': {
+          conn
+            .prepare(`UPDATE accounts SET config = ? WHERE id = ?`)
+            .run(JSON.stringify(w.config), w.id);
+          appendChange('account', w.id);
+          return { id: w.id, logged: true };
+        }
+        case 'status': {
+          // Write and log only when status or last_error actually differs
+          // (unchanged semantics of the former setAccountStatus batch).
+          const lastError = lastErrorAssignment(w.error, w.errorScope);
+          const status = w.status ?? null;
+          const r = conn
+            .prepare(
+              `UPDATE accounts SET status = COALESCE(?, status),
+                 ${lastError.sql}
+               WHERE id = ?
+                 AND (COALESCE(?, status) IS NOT status
+                   OR (${lastError.expr}) IS NOT last_error)`,
+            )
+            .run(
+              status,
+              ...lastError.params,
+              w.id,
+              status,
+              ...lastError.params,
+            );
+          if (r.changes === 0) return { id: w.id, logged: false };
+          appendChange('account', w.id);
+          return { id: w.id, logged: true };
+        }
+        default:
+          throw new Error(
+            `unknown account write: ${String((w as { op: unknown }).op)}`,
+          );
+      }
+    },
+  );
+
   const commitTx = conn.transaction((batch: CommitBatch): Seq => {
     let last: Seq = Number(
       (
@@ -670,8 +827,27 @@ export function createWriteTx(
       const seq = archiveByRef(acc.id, ref);
       if (seq !== null) last = seq;
     }
-    last = appendChange('account', acc.id);
     const lastError = lastErrorAssignment(batch.error, batch.errorScope);
+    // #135: append an `account` change only when a feed reader can see
+    // something new — status or last_error at once; sync progress (progress
+    // and last_sync_at, which moves on every commit) at most once per
+    // ACCOUNT_SYNC_TICK_MS. The account row itself is written below on every
+    // commit. (This variant carries no config: config publishes through
+    // setAccountConfig / applyFolderScope.)
+    const nextError = (
+      conn
+        .prepare(`SELECT ${lastError.expr} AS e FROM accounts WHERE id = ?`)
+        .get(...lastError.params, acc.id) as { e: string | null }
+    ).e;
+    const visible =
+      (batch.status !== undefined && batch.status !== acc.status) ||
+      nextError !== acc.last_error;
+    const ts = deps.now();
+    const publishedAt = accountPublishedAt.get(acc.id);
+    const tickDue =
+      publishedAt === undefined ||
+      Date.parse(ts) - publishedAt >= ACCOUNT_SYNC_TICK_MS;
+    if (visible || tickDue) last = appendChange('account', acc.id);
     conn
       .prepare(
         `UPDATE accounts SET cursor = ?, status = COALESCE(?, status),
@@ -685,7 +861,7 @@ export function createWriteTx(
         batch.status ?? null,
         batch.progress ? JSON.stringify(batch.progress) : null,
         ...lastError.params,
-        deps.now(),
+        ts,
         acc.id,
       );
     return last;
@@ -1155,11 +1331,13 @@ export function createWriteTx(
   );
 
   return {
-    commit: (batch: CommitBatch): CommitResult => {
+    commit: publishing((batch: CommitBatch): CommitResult => {
       appended = 0;
       const seq = commitTx(batch);
       return { seq, logged: appended > 0 };
-    },
+    }),
+
+    accountWrite: publishing((w: AccountWriteOp) => accountWriteTx(w)),
 
     reconcileBegin: (accountId) => beginPass(accountId),
 
@@ -1211,7 +1389,9 @@ export function createWriteTx(
 
     reconcileEnd: (accountId) => endPass(accountId),
 
-    applyFolderScope: (input) => applyFolderScopeTx(input),
+    applyFolderScope: publishing((input: FolderScopeInput) =>
+      applyFolderScopeTx(input),
+    ),
     rekeyLedgerPage: (limit) => rekeyLedgerPageTx(limit),
   };
 }

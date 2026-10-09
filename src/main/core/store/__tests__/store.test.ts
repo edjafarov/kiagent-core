@@ -137,7 +137,11 @@ describe('store', () => {
   });
 
   it('afterSeq returns a document again after its content changes', async () => {
-    await store.commit({ account: accountId, documents: [doc('a')], cursor: 1 });
+    await store.commit({
+      account: accountId,
+      documents: [doc('a')],
+      cursor: 1,
+    });
     const [first] = await store.read.documentPage!({
       afterSeq: 0,
       limit: 10,
@@ -251,8 +255,9 @@ describe('store', () => {
       cursor: 2,
     });
     const head2 = await store.headSeq();
-    // Only the account-cursor change row lands; the document row does not.
-    expect(head2 - head1).toBe(1);
+    // #135: nothing lands — the document is unchanged and the account's
+    // sync tick (60 s) has not elapsed, so no account change row either.
+    expect(head2 - head1).toBe(0);
   });
 
   it('archives upstream deletions and hides them from default queries', async () => {
@@ -1218,7 +1223,8 @@ describe('store', () => {
     });
     const doc2 = await store.read.byExternalId(accountId, 'a', 'note');
     expect(doc2?.seq).toBe(doc1?.seq); // document row untouched
-    expect((await store.headSeq()) - head1).toBe(1); // only the cursor change
+    // #135: no account change inside the 60 s sync tick either.
+    expect((await store.headSeq()) - head1).toBe(0);
   });
 
   // ── reconcile: the whole diff stays inside the DB ────────────────────────
