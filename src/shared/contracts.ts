@@ -168,6 +168,11 @@ export type SyncStatus =
 export interface AccountProgress {
   done: number;
   totalEstimate?: number;
+  /** Set only by an intermediate sub-commit (#147 §4): `done` at the last
+   *  cursor advance. A resume replays the half-committed batch from that
+   *  cursor and counts up from `base`, never from `done`. Absent = `done`
+   *  is aligned with the stored cursor. UI ignores it. */
+  base?: number;
 }
 
 export interface Account {

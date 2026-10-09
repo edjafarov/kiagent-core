@@ -37,7 +37,7 @@ import {
 import { isDbWorkerTransientError } from '../../db/worker-client';
 
 import { RECONCILE_ERROR_PREFIX } from '../store/last-error';
-import type { Admission } from '../admission';
+import { NOOP_ADMISSION, type Admission } from '../admission';
 import type { CoreStore } from '../store/store';
 import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
 import { FetchDeferredError } from './fetch-deferred';
@@ -201,6 +201,19 @@ export const RECONCILE_STAGE_BATCH = 10_000;
  *  Documents on the main heap and killed the process (2026-08-24). Matched to
  *  FEED_BATCH, the live tail's equivalent bound. */
 export const REDRIVE_PAGE = 500;
+
+/** #147 §4 bounded writer units: a sub-commit (or a consumer flush) closes
+ *  once it holds this much markdown/text … */
+export const SUB_COMMIT_BYTES = 8 * 1024 * 1024;
+/** … or this many documents — whichever comes first, and only ever at a
+ *  source-item boundary. */
+export const SUB_COMMIT_DOCS = 50;
+
+/** UTF-8 bytes of the markdown a document carries into a writer unit — a
+ *  real byte count: `.length` counts UTF-16 code units, which lets CJK text
+ *  reach ~3× the bound before a flush. */
+const textBytes = (d: { markdown?: string | null }): number =>
+  Buffer.byteLength(d.markdown ?? '', 'utf8');
 
 /** What one worked change records in its work_ledger row — the store's own
  *  outcome union, which `workOne` hands back for its caller to record. */
@@ -520,6 +533,7 @@ export function createEngine(deps: EngineDeps): Engine & {
   syncing(): boolean;
 } {
   const { store, logs } = deps;
+  const admission = deps.admission ?? NOOP_ADMISSION;
   const running = new Map<
     string,
     { stop(): Promise<void>; active(): boolean; syncing?(): boolean }
@@ -1053,10 +1067,17 @@ export function createEngine(deps: EngineDeps): Engine & {
               // committed by a build that didn't accumulate the counter.
               let progressDone = 0;
               if (fresh.cursor !== null) {
-                progressDone = Math.max(
-                  fresh.progress?.done ?? 0,
-                  await store.read.count({ account: account.id }),
-                );
+                // An intermediate sub-commit (#147) left `base` = the count at
+                // the stored cursor: the half-committed batch replays from
+                // that cursor, so count up from base — `done` and the
+                // document count both include items about to be replayed.
+                // No base: today's legacy seed, unchanged.
+                progressDone =
+                  fresh.progress?.base ??
+                  Math.max(
+                    fresh.progress?.done ?? 0,
+                    await store.read.count({ account: account.id }),
+                  );
               }
               // §5.3: a folder-scoped account that declares no scope (a
               // legacy account before its first Save) enumerates the
@@ -1100,6 +1121,11 @@ export function createEngine(deps: EngineDeps): Engine & {
                   );
                 });
               }
+              // The last cursor this account durably committed: what an
+              // intermediate sub-commit writes back, so a crash between
+              // sub-commits re-pulls the batch from where it began
+              // (unchanged content_hash makes the replay a no-op).
+              let committedCursor: unknown = fresh.cursor ?? null;
               for await (const batch of abortable(
                 src.pull(session, fresh.cursor ?? null),
                 abort.signal,
@@ -1108,43 +1134,111 @@ export function createEngine(deps: EngineDeps): Engine & {
                   await reconciling;
                   return;
                 }
-                const documents: DocumentInput[] = [];
-                for (const item of batch.items) {
-                  const out = src.toDocument(item);
-                  if (!out) continue;
-                  const inputs = Array.isArray(out) ? out : [out];
-                  for (const input of inputs) {
-                    documents.push(await deps.convert(input));
-                  }
-                  // Real event-loop turn between items: converters parse
-                  // PDFs/spreadsheets in-process (CPU-bound), and awaits on
-                  // already-settled promises never leave the microtask
-                  // queue — without this hop a backfill starves IPC (the
-                  // whole UI) and every other account's loop until the
-                  // batch ends. (Imported from timers/promises: jsdom-based
-                  // tests have no setImmediate global.)
-                  await nextEventLoopTurn();
-                }
                 status = batch.phase === 'backfill' ? 'backfilling' : 'live';
-                if (batch.estimateTotal !== undefined) {
-                  progressDone += batch.items.length;
+                const { items } = batch;
+                // `base` only on intermediate progress (see AccountProgress).
+                const progressAt = (consumed: number, intermediate: boolean) =>
+                  batch.estimateTotal !== undefined
+                    ? {
+                        done: progressDone + consumed,
+                        totalEstimate: batch.estimateTotal,
+                        ...(intermediate ? { base: progressDone } : {}),
+                      }
+                    : undefined;
+                const relink: Array<{
+                  child: ExternalRef;
+                  parent: ExternalRef;
+                }> = [];
+                let next = 0;
+                // One admitted unit per sub-commit (#147 §3): the batch is in
+                // hand, so the slot covers toDocument + convert + ONE bounded
+                // write and nothing else — never the wait for the next batch.
+                do {
+                  // eslint-disable-next-line no-await-in-loop
+                  const release = await admission.acquire(
+                    'ingest',
+                    abort.signal,
+                  );
+                  try {
+                    const documents: DocumentInput[] = [];
+                    let bytes = 0;
+                    while (
+                      next < items.length &&
+                      documents.length < SUB_COMMIT_DOCS &&
+                      bytes < SUB_COMMIT_BYTES
+                    ) {
+                      if (abort.signal.aborted) break;
+                      const out = src.toDocument(items[next]);
+                      next += 1;
+                      for (const input of out
+                        ? Array.isArray(out)
+                          ? out
+                          : [out]
+                        : []) {
+                        // eslint-disable-next-line no-await-in-loop
+                        const converted = await deps.convert(
+                          input,
+                          abort.signal,
+                        );
+                        documents.push(converted);
+                        bytes += textBytes(converted);
+                        if (converted.parent)
+                          relink.push({
+                            child: {
+                              externalId: converted.externalId,
+                              type: converted.type,
+                            },
+                            parent: converted.parent,
+                          });
+                      }
+                      // Real event-loop turn between items: toDocument is CPU
+                      // work on this thread, and awaits on settled promises
+                      // never leave the microtask queue. (timers/promises:
+                      // jsdom-based tests have no setImmediate global.)
+                      // eslint-disable-next-line no-await-in-loop
+                      await nextEventLoopTurn();
+                    }
+                    if (abort.signal.aborted) break;
+                    const last = next >= items.length;
+                    // Boundaries fall only between items, so one item's
+                    // parent and attachments never split. Only the LAST
+                    // sub-commit moves the cursor and applies deletions; it
+                    // also re-links children earlier sub-commits landed.
+                    // eslint-disable-next-line no-await-in-loop
+                    await store.commit(
+                      last
+                        ? {
+                            account: account.id,
+                            documents,
+                            deletions: batch.deletions,
+                            cursor: batch.cursor,
+                            status,
+                            progress: progressAt(items.length, false),
+                            error: null,
+                            errorScope,
+                            relink: relink.length ? relink : undefined,
+                          }
+                        : {
+                            account: account.id,
+                            documents,
+                            cursor: committedCursor,
+                            status,
+                            progress: progressAt(next, true),
+                            error: null,
+                            errorScope,
+                          },
+                    );
+                  } finally {
+                    release();
+                  }
+                } while (next < items.length);
+                if (abort.signal.aborted) {
+                  await reconciling;
+                  return;
                 }
-                await store.commit({
-                  account: account.id,
-                  documents,
-                  deletions: batch.deletions,
-                  cursor: batch.cursor,
-                  status,
-                  progress:
-                    batch.estimateTotal !== undefined
-                      ? {
-                          done: progressDone,
-                          totalEstimate: batch.estimateTotal,
-                        }
-                      : undefined,
-                  error: null,
-                  errorScope,
-                });
+                committedCursor = batch.cursor;
+                if (batch.estimateTotal !== undefined)
+                  progressDone += items.length;
                 backfillCommitted = batch.phase === 'backfill';
                 retries = 0;
               }
