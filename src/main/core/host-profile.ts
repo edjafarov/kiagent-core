@@ -18,6 +18,11 @@ export interface HostFacts {
 export interface HostBudget {
   weak: boolean;
   backgroundThreads: number;
+  /** #147 admission cap: background units (ingest/convert/reconcile/redrive)
+   *  that may run at once. Sized by cores and memory ONLY — the `onCpu` term
+   *  that makes every non-Mac "weak" for enrichment must not cut a 16-core
+   *  Windows desktop's sync throughput in half. */
+  ingestSlots: 1 | 2;
 }
 
 export const WEAK_MAX_CORES = 4;
@@ -47,11 +52,22 @@ export function hostBudget(
   env: NodeJS.ProcessEnv = process.env,
 ): HostBudget {
   const onCpu = accel === 'cpu' || (accel === null && f.platform !== 'darwin');
-  let weak =
-    f.cores <= WEAK_MAX_CORES || f.totalMemBytes <= WEAK_MAX_MEM_BYTES || onCpu;
-  if (env.KIA_HOST_WEAK === '1') weak = true;
-  else if (env.KIA_HOST_WEAK === '0') weak = false;
-  return { weak, backgroundThreads: Math.max(1, Math.floor(f.cores / 2)) };
+  const small =
+    f.cores <= WEAK_MAX_CORES || f.totalMemBytes <= WEAK_MAX_MEM_BYTES;
+  let weak = small || onCpu;
+  let ingestSlots: 1 | 2 = small ? 1 : 2;
+  if (env.KIA_HOST_WEAK === '1') {
+    weak = true;
+    ingestSlots = 1;
+  } else if (env.KIA_HOST_WEAK === '0') {
+    weak = false;
+    ingestSlots = 2;
+  }
+  return {
+    weak,
+    backgroundThreads: Math.max(1, Math.floor(f.cores / 2)),
+    ingestSlots,
+  };
 }
 
 /** One boot log line. At boot `accel` is unknown (detected lazily). */
@@ -62,5 +78,5 @@ export function describeHost(
 ): string {
   const gb = (f.totalMemBytes / 1024 ** 3).toFixed(1);
   const b = hostBudget(f, accel, env);
-  return `cores=${f.cores} mem=${gb}GB platform=${f.platform}-${f.arch} accel=${accel ?? 'unknown'} weak=${b.weak} backgroundThreads=${b.backgroundThreads}`;
+  return `cores=${f.cores} mem=${gb}GB platform=${f.platform}-${f.arch} accel=${accel ?? 'unknown'} weak=${b.weak} backgroundThreads=${b.backgroundThreads} ingestSlots=${b.ingestSlots}`;
 }

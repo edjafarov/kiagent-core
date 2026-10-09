@@ -20,6 +20,7 @@ describe('hostBudget', () => {
     expect(hostBudget(mac(), 'metal', {})).toEqual({
       weak: false,
       backgroundThreads: 4,
+      ingestSlots: 2,
     });
   });
   it('4 logical cores is weak', () => {
@@ -77,9 +78,46 @@ describe('readHostFacts', () => {
 
 it('describeHost renders one boot log line with the budget', () => {
   expect(describeHost(mac(), null, {})).toBe(
-    'cores=8 mem=16.0GB platform=darwin-arm64 accel=unknown weak=false backgroundThreads=4',
+    'cores=8 mem=16.0GB platform=darwin-arm64 accel=unknown weak=false backgroundThreads=4 ingestSlots=2',
   );
   expect(describeHost(mac({ platform: 'win32' }), 'cpu', {})).toContain(
     'accel=cpu weak=true',
   );
+});
+
+describe('ingestSlots', () => {
+  it.each([
+    ['strong Mac', mac(), 2],
+    ['4 logical cores', mac({ cores: 4 }), 1],
+    ['exactly 8 GiB', mac({ totalMemBytes: WEAK_MAX_MEM_BYTES }), 1],
+    [
+      '16-core Windows desktop (CPU accel would make it weak for enrichment)',
+      mac({
+        platform: 'win32',
+        arch: 'x64',
+        cores: 16,
+        totalMemBytes: 32 * GiB,
+      }),
+      2,
+    ],
+  ])('%s → %d', (_name, facts, slots) => {
+    expect(hostBudget(facts, 'cpu', {}).ingestSlots).toBe(slots);
+  });
+
+  it('ignores the onCpu term that makes every non-Mac weak for enrichment', () => {
+    const win = mac({ platform: 'win32', cores: 16, totalMemBytes: 32 * GiB });
+    const b = hostBudget(win, null, {});
+    expect(b.weak).toBe(true);
+    expect(b.ingestSlots).toBe(2);
+  });
+
+  it('KIA_HOST_WEAK overrides it both ways', () => {
+    expect(hostBudget(mac(), 'metal', { KIA_HOST_WEAK: '1' }).ingestSlots).toBe(
+      1,
+    );
+    expect(
+      hostBudget(mac({ cores: 2 }), 'metal', { KIA_HOST_WEAK: '0' })
+        .ingestSlots,
+    ).toBe(2);
+  });
 });
