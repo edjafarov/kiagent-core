@@ -4,7 +4,7 @@ import type { Contributions } from '@shared/extension-rpc';
 
 import { runExtensionHost } from '../extension-host-entry';
 import { createExtensionHost } from '../host-process';
-import { createInMemoryHostPair } from '../transport';
+import { createHungTransport, createInMemoryHostPair } from '../transport';
 
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const IDLE = 40;
@@ -227,4 +227,236 @@ describe('host soft stop (#137)', () => {
       await h.host.stop();
     },
   );
+});
+
+async function dormantHost(
+  mod: unknown,
+  overrides: Record<string, unknown> = {},
+) {
+  const h = makeDormantHost(mod, overrides);
+  await h.host.start();
+  await sleepMs(IDLE * 4);
+  expect(h.dormant).toEqual([true]);
+  return h;
+}
+
+const senderModule = {
+  async activate() {
+    return {
+      sources: [],
+      tools: [],
+      senders: {
+        fixsrc: { send: async () => ({ externalMessageId: 'sent' }) },
+      },
+    };
+  },
+};
+const sourceModule = {
+  async activate() {
+    return {
+      sources: [
+        {
+          descriptor: {
+            id: 'src',
+            name: 'Src',
+            documentTypes: ['x'],
+            auth: 'none',
+          },
+          async connect() {
+            return { identifier: 'me' };
+          },
+          async *pull() {},
+          toDocument: (i: unknown) => i,
+        },
+      ],
+      tools: [],
+    };
+  },
+};
+
+describe('host wake (#137)', () => {
+  it('a tool call wakes a dormant host and returns the right result', async () => {
+    const h = await dormantHost(toolModule);
+    await expect(h.host.callTool('t', { x: 1 })).resolves.toEqual({
+      echoed: { x: 1 },
+    });
+    expect(h.spawns()).toBe(2);
+    expect(h.dormant).toEqual([true, false]);
+    expect(h.statuses).toEqual(['activating', 'activated']); // no 'activating' on wake
+    await h.host.stop();
+  });
+
+  it('a sender call wakes it', async () => {
+    const h = await dormantHost(senderModule);
+    await expect(
+      h.host.callSender(
+        'fixsrc',
+        {
+          accountId: 'a',
+          kind: 'reply',
+          outboundRef: {},
+          bodyMarkdown: 'x',
+        } as never,
+        { credentials: null },
+      ),
+    ).resolves.toEqual({ externalMessageId: 'sent' });
+    await h.host.stop();
+  });
+
+  it('a source verb wakes it', async () => {
+    const h = await dormantHost(sourceModule);
+    const src = h.source()(h.registered[0].sources[0]);
+    await expect(src.connect({} as never)).resolves.toEqual({
+      identifier: 'me',
+    });
+    expect(h.spawns()).toBe(2);
+    await h.host.stop();
+  });
+
+  it('concurrent wakes share one spawn', async () => {
+    const h = await dormantHost(toolModule);
+    await Promise.all([
+      h.host.callTool('t', { n: 1 }),
+      h.host.callTool('t', { n: 2 }),
+    ]);
+    expect(h.spawns()).toBe(2);
+    await h.host.stop();
+  });
+
+  it('equal contributions skip registration on wake', async () => {
+    const h = await dormantHost(toolModule);
+    await h.host.callTool('t', { n: 1 });
+    expect(h.registered).toHaveLength(1);
+    expect(h.unregistered).toEqual([]);
+    await h.host.stop();
+  });
+
+  it('different contributions re-register on wake (old disposer first)', async () => {
+    let n = 0;
+    const mod = {
+      async activate() {
+        n += 1;
+        return {
+          sources: [],
+          tools: [
+            {
+              name: n === 1 ? 't' : 't2',
+              description: '',
+              inputSchema: {},
+              call: async () => n,
+            },
+          ],
+        };
+      },
+    };
+    const h = await dormantHost(mod);
+    await h.host.ensureLive();
+    expect(h.unregistered).toEqual([1]);
+    expect(h.registered.map((c) => c.tools[0].name)).toEqual(['t', 't2']);
+    await h.host.stop();
+  });
+
+  it('ensureLive waits for activated across a handshake retry', async () => {
+    let spawn = 0;
+    const h = await dormantHost(toolModule, {
+      readyTimeoutMs: 50,
+      handshakeRetryDelayMs: () => 20,
+      transportFactory: () => {
+        spawn += 1;
+        if (spawn === 2) return createHungTransport(); // the wake's first try
+        const pair = createInMemoryHostPair();
+        runExtensionHost(pair.child, {
+          requireModule: () => toolModule,
+          exit: (c) => pair.simulateExit(c),
+        });
+        return pair.main;
+      },
+    });
+    await expect(h.host.callTool('t', { n: 7 })).resolves.toEqual({
+      echoed: { n: 7 },
+    });
+    expect(spawn).toBe(3);
+    expect(h.statuses).not.toContain('errored');
+    await h.host.stop();
+  });
+
+  it('the wake is bounded', async () => {
+    let spawn = 0;
+    const h = await dormantHost(toolModule, {
+      dormancy: { idleMs: IDLE, wakeTimeoutMs: 100 },
+      readyTimeoutMs: 5_000,
+      transportFactory: () => {
+        spawn += 1;
+        if (spawn > 1) return createHungTransport();
+        const pair = createInMemoryHostPair();
+        runExtensionHost(pair.child, {
+          requireModule: () => toolModule,
+          exit: (c) => pair.simulateExit(c),
+        });
+        return pair.main;
+      },
+    });
+    const t0 = Date.now();
+    await expect(h.host.callTool('t', { n: 1 })).rejects.toThrow(
+      'extension is not running',
+    );
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    await h.host.stop();
+  });
+
+  it('disable cancels a wake in flight', async () => {
+    let spawn = 0;
+    const h = await dormantHost(toolModule, {
+      readyTimeoutMs: 5_000,
+      transportFactory: () => {
+        spawn += 1;
+        if (spawn > 1) return createHungTransport();
+        const pair = createInMemoryHostPair();
+        runExtensionHost(pair.child, {
+          requireModule: () => toolModule,
+          exit: (c) => pair.simulateExit(c),
+        });
+        return pair.main;
+      },
+    });
+    const call = h.host.callTool('t', { n: 1 });
+    await sleepMs(10);
+    await h.host.stop();
+    await expect(call).rejects.toThrow('extension is not running');
+    expect(h.unregistered).toEqual([1]); // kept registration disposed exactly once
+    expect(h.statuses[h.statuses.length - 1]).toBe('disabled');
+  });
+
+  it('hard stop of a dormant host disposes the kept registration and reports disabled', async () => {
+    const h = await dormantHost(toolModule);
+    await h.host.stop();
+    expect(h.unregistered).toEqual([1]);
+    expect(h.dormant).toEqual([true, false]);
+    expect(h.statuses[h.statuses.length - 1]).toBe('disabled');
+    await expect(h.host.callTool('t', { n: 1 })).rejects.toThrow(
+      'extension is not running',
+    );
+  });
+
+  it('a call during the soft stop waits and then wakes', async () => {
+    let deactivating!: () => void;
+    const started = new Promise<void>((r) => {
+      deactivating = r;
+    });
+    const mod = {
+      ...toolModule,
+      async deactivate() {
+        deactivating();
+        await sleepMs(30);
+      },
+    };
+    const h = makeDormantHost(mod);
+    await h.host.start();
+    await started; // the idle soft stop is mid-teardown
+    await expect(h.host.callTool('t', { n: 'late' })).resolves.toEqual({
+      echoed: { n: 'late' },
+    });
+    expect(h.spawns()).toBe(2);
+    await h.host.stop();
+  });
 });

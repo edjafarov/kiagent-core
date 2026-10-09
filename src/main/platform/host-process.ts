@@ -62,6 +62,8 @@ const HANDSHAKE_RETRY_FIRST_MS = 10_000;
 const HANDSHAKE_RETRY_FACTOR = 3;
 const HANDSHAKE_RETRY_MAX_MS = 30 * 60_000;
 
+/** #137: a wake gives up (callers get 'extension is not running') after this. */
+const WAKE_TIMEOUT_MS = 60_000;
 /** #137: child→main calls that pin the incarnation (it must keep running). */
 const PIN_CALLS: ReadonlySet<string> = new Set(['events.on', 'files.watch']);
 
@@ -292,6 +294,8 @@ export function createExtensionHost(deps: HostDeps): {
     phase = 'dormant';
     deps.logSink.log(scope, 'info', 'extension host is dormant');
     deps.onDormant?.(true);
+    // A call that arrived mid-teardown is waiting: wake straight away.
+    if (wakeWaiters.size > 0) beginWake();
   }
 
   // ONE proxy set for the host's lifetime (#137): sources registered by an
@@ -305,10 +309,35 @@ export function createExtensionHost(deps: HostDeps): {
     begin,
   });
 
-  /** Placeholder until B4: a dormant host cannot be woken yet. */
+  function beginWake(): void {
+    phase = 'waking';
+    stopping = false;
+    stopped = false;
+    crashes.length = 0;
+    handshakeTimeouts = 0;
+    deps.logSink.log(scope, 'info', 'waking dormant extension host');
+    launchSpawn();
+  }
+
+  /** #137: live → now; dormant → spawn and wait for 'activated' (shared,
+   *  bounded); sleeping → after the stop finishes; stopped → reject. */
   function ensureLive(): Promise<void> {
-    if (phase === 'live' && current) return Promise.resolve();
-    return Promise.reject(notRunning());
+    if (phase === 'live')
+      return current ? Promise.resolve() : Promise.reject(notRunning());
+    return new Promise<void>((resolve, reject) => {
+      const w = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          wakeWaiters.delete(w);
+          reject(notRunning());
+        }, deps.dormancy?.wakeTimeoutMs ?? WAKE_TIMEOUT_MS),
+      };
+      w.timer.unref?.();
+      wakeWaiters.add(w);
+      if (phase === 'dormant') beginWake();
+      // 'sleeping': sleep() wakes on its way out; 'waking': joins this spawn.
+    });
   }
 
   async function callLive<T>(fn: (inc: Incarnation) => Promise<T>): Promise<T> {
