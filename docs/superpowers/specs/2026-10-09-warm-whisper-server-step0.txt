@@ -1,0 +1,16 @@
+== /Users/edjafarov/Library/Application Support/KIAgent-dev/data/models/asr/whisper-large-v3-turbo-q5_0/ggml-large-v3-turbo-q5_0.bin
+run 0: 8.02 s (warm-up, discarded)
+run 1: 0.24 s
+run 2: 0.24 s
+run 3: 0.22 s
+run 4: 0.22 s
+run 5: 0.22 s
+== /private/tmp/claude-501/-Users-edjafarov-work-alpha-cent/4c50a2e2-79f9-4098-aef4-8a2c75761c3a/scratchpad/opt/step0/ggml-small-q5_1.bin
+run 0: 0.13 s (warm-up, discarded)
+run 1: 0.14 s
+run 2: 0.13 s
+run 3: 0.14 s
+run 4: 0.13 s
+run 5: 0.14 s
+whisper_print_timings:     load time =   157.32 ms
+whisper_print_timings:    total time =   169.27 ms

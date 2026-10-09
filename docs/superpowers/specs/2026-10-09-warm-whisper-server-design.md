@@ -1,6 +1,25 @@
 # Warm whisper server for interactive transcription (#143)
 
-Status: APPROVED rev 4 (2026-10-09). Astra r4 and fable r3 SATISFIED.
+Status: APPROVED rev 4 (2026-10-09), astra and fable both satisfied. **Step 0 result: NO-GO.**
+
+**Step 0 measurement (2026-10-09, founder Mac, Apple Silicon).** Production
+`hear` argv, 1 s of silence, VAD on, `whisper-cli` v1.9.2. Median of runs
+1–5:
+
+| Model | Median per call | Runs 1–5 | Discarded first run |
+|---|---|---|---|
+| large-v3-turbo-q5_0 | **0.22 s** | 0.24, 0.24, 0.22, 0.22, 0.22 | 8.02 s (cold) |
+| small-q5_1 | 0.13 s | — | — |
+
+whisper's own timing reports `load time = 157 ms`.
+
+Turbo is below the 0.5 s threshold, so the warm server would save about 1.3 s
+on a plain 30-minute meeting (6 calls). Per the decision rule, the rest of this
+spec is **not built**.
+
+The 8 s first run is a cold load (page cache and Metal pipeline compile). A
+warm server pays that same cost on its own first start, so it does not change
+the decision.
 
 - **Issue:** kiagent-core #143. Tracking: #138.
 - **Base:** core v0.106.0.
