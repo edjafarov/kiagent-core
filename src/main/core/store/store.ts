@@ -519,6 +519,11 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async visualWaitingCount(consumer) {
+      // #59 §0: once every deferred row is keyed on its document's current
+      // seq, the deferred branch is a strict subset of the current one (a
+      // stale deferred seq becomes a terminal skip). Until the re-key repair
+      // finishes it stays, so the count never dips while the repair runs.
+      const rekeyedNow = await store.ledgerRekeyed();
       const sql = (pinned: boolean) => {
         const strip = (q: string) =>
           pinned
@@ -526,16 +531,15 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
             : q
                 .replace(' INDEXED BY docs_pending_visual', '')
                 .replace(' INDEXED BY work_ledger_active', '');
-        return `SELECT COUNT(*) AS c FROM (${strip(VISUAL_WAITING_CURRENT_SQL)} UNION ${strip(VISUAL_WAITING_DEFERRED_SQL)})`;
+        return rekeyedNow
+          ? `SELECT COUNT(*) AS c FROM (${strip(VISUAL_WAITING_CURRENT_SQL)})`
+          : `SELECT COUNT(*) AS c FROM (${strip(VISUAL_WAITING_CURRENT_SQL)} UNION ${strip(VISUAL_WAITING_DEFERRED_SQL)})`;
       };
+      const params = rekeyedNow ? [consumer] : [consumer, consumer];
       try {
-        return (
-          (await db.all(sql(true), [consumer, consumer]))[0] as { c: number }
-        ).c;
+        return ((await db.all(sql(true), params))[0] as { c: number }).c;
       } catch {
-        return (
-          (await db.all(sql(false), [consumer, consumer]))[0] as { c: number }
-        ).c;
+        return ((await db.all(sql(false), params))[0] as { c: number }).c;
       }
     },
 

@@ -107,7 +107,8 @@ describe('store.visualWaitingCount', () => {
     expect(await store.visualWaitingCount(C)).toBe(0);
   });
 
-  it('a later skip change never hides an earlier deferred change (spec §7)', async () => {
+  it('pre-repair: a later skip change never hides an earlier deferred change (UNION plan)', async () => {
+    await db.run(`DELETE FROM meta WHERE key = 'ledgerRekeyed'`);
     await seed([file('E', IMG(20 * 1024))]);
     const first = await seqOf('E');
     await store.ledgerRecordMany(C, [
@@ -120,6 +121,41 @@ describe('store.visualWaitingCount', () => {
       { seq: second, attempts: 0, outcome: 'skip' },
     ]);
     expect(await store.visualWaitingCount(C)).toBe(1);
+    // The repair turns it into (second, deferred): still exactly 1, now
+    // counted by the current-only plan.
+    while (!(await store.ledgerRekeyPage()).done) {
+      // page until done
+    }
+    expect(await store.visualWaitingCount(C)).toBe(1);
+  });
+
+  it('re-keyed: the count runs the current-seq plan only (no changes join)', async () => {
+    await seed([file('A', IMG(20 * 1024))]);
+    const spy = jest.spyOn(db, 'all');
+    await store.visualWaitingCount(C);
+    const counts = spy.mock.calls
+      .map(([sql]) => sql as string)
+      .filter((sql) => /COUNT\(\*\)/.test(sql));
+    expect(counts).toHaveLength(1);
+    expect(counts[0]).not.toMatch(/\bJOIN changes\b/);
+  });
+
+  it('on fixtures without stale rows both plans give the same total', async () => {
+    await seed([
+      file('A', IMG(20 * 1024)),
+      file('B', IMG(4 * 1024)),
+      file('C', { conversion: { status: 'needs-ocr' } }),
+      file('D', { ...IMG(20 * 1024), extraction: { engine: 'x' } }),
+    ]);
+    await store.ledgerRecordMany(C, [
+      { seq: await seqOf('A'), attempts: 1, outcome: 'deferred' },
+      { seq: await seqOf('C'), attempts: 3, outcome: 'failed' },
+    ]);
+    const current = await store.visualWaitingCount(C);
+    // A second store on the same file, pre-repair view (flag not cached yet).
+    await db.run(`DELETE FROM meta WHERE key = 'ledgerRekeyed'`);
+    const legacy = openStore(db, deps);
+    expect(await legacy.visualWaitingCount(C)).toBe(current);
   });
 
   it('a deferred row with attempts 0 (blocked) counts', async () => {
