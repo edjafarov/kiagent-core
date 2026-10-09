@@ -1,5 +1,5 @@
-import React, { useSyncExternalStore } from 'react';
-import { subscribeAppState, getAppState } from '@renderer/state/app-state';
+import React from 'react';
+import { useAppGate } from '@renderer/state/app-state';
 import { useNavigation } from '@renderer/state/navigation';
 import {
   ROUTE_META,
@@ -50,16 +50,26 @@ const GATE_STYLE: React.CSSProperties = {
   minHeight: 0,
 };
 
+const NO_EXTENSIONS: AppState['extensions'] = [];
+
+/** What the shell renders on. A feed push that changes only counts or
+ *  recent items leaves every field equal (pushes are reconciled, so
+ *  `extensions` keeps its reference), and the shell does not re-render. */
+function selectShellGate(s: AppState | null) {
+  return {
+    loaded: s !== null,
+    signedIn: s !== null && s.identity !== null,
+    extensions: s?.extensions ?? NO_EXTENSIONS,
+  };
+}
+
 export default function App(): React.ReactElement {
-  // Raw store access (not the `useAppState` selector hook): the gate below
-  // must observe the `null` not-yet-loaded moment, which `useAppState`
-  // deliberately can't express (see state/app-state.ts).
-  const state = useSyncExternalStore(subscribeAppState, getAppState);
+  const gate = useAppGate(selectShellGate);
 
   const nav = useNavigation<View, ViewParams>('sources', resolveInitialView);
 
   // Gate 1: nothing loaded yet.
-  if (state === null) {
+  if (!gate.loaded) {
     return (
       <>
         <TitleBar />
@@ -71,7 +81,7 @@ export default function App(): React.ReactElement {
   }
 
   // Gate 2: no identity — full-window sign-in, no sidebar.
-  if (state.identity === null) {
+  if (!gate.signedIn) {
     return (
       <>
         <TitleBar />
@@ -84,9 +94,9 @@ export default function App(): React.ReactElement {
   }
 
   const { view, params, navigate, resolved } = nav;
-  const screen = screenRegistry.get(view, params, navigate, state.extensions);
+  const screen = screenRegistry.get(view, params, navigate, gate.extensions);
   const frame = screenRegistry.frame(view);
-  const title = viewTitle(view, state.extensions);
+  const title = viewTitle(view, gate.extensions);
 
   return (
     <ViewContext.Provider value={nav}>

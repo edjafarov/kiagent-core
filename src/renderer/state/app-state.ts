@@ -131,10 +131,10 @@ function detach(): void {
 }
 
 /**
- * Raw subscription primitives — used only by the App shell's loading /
- * sign-in gate, which must observe the `state === null` (not-yet-loaded)
- * moment directly. Every other consumer should use `useAppState` below,
- * which assumes that gate has already passed.
+ * Raw subscription primitives, for non-React callers and tests. React code
+ * uses `useAppState` (inside the loaded tree) or `useAppGate` (the App
+ * shells' loading/sign-in gates, which must see the `null` not-yet-loaded
+ * moment).
  */
 export function subscribeAppState(listener: () => void): () => void {
   attach();
@@ -174,21 +174,10 @@ function shallowEqual(a: unknown, b: unknown): boolean {
   return true;
 }
 
-/**
- * The primary consumption API. Selectors run against the loaded `AppState`
- * — components using this hook must only ever mount inside the tree gated
- * on `state !== null` (App.tsx's loading/sign-in gates use the lower-level
- * `subscribeAppState`/`getAppState` pair precisely because they run
- * *before* that invariant holds; every screen and shared component below
- * that gate can rely on it).
- *
- * Re-renders are skipped when the selected value is shallow-equal to the
- * previous one, so returning a fresh object each call (e.g.
- * `s => ({ live: s.accounts.length })`) is safe and still cheap — this is
- * the mechanism that stops (say) a Logs-only backend push from repainting
- * the Sidebar.
- */
-export function useAppState<T>(selector: (s: AppState) => T): T {
+// The cache is load-bearing: useSyncExternalStore calls getSnapshot more
+// than once per render and React 19 throws ("The result of getSnapshot
+// should be cached") if a fresh-but-equal object comes back.
+function useSelected<T>(selector: (s: AppState | null) => T): T {
   const selectorRef = useRef(selector);
   selectorRef.current = selector;
   const cacheRef = useRef<{ has: boolean; value: T }>({
@@ -196,12 +185,40 @@ export function useAppState<T>(selector: (s: AppState) => T): T {
     value: undefined as unknown as T,
   });
   const getSnapshot = useCallback((): T => {
-    // Safe per the invariant documented above.
-    const next = selectorRef.current(state as AppState);
+    const next = selectorRef.current(state);
     const cache = cacheRef.current;
     if (cache.has && shallowEqual(cache.value, next)) return cache.value;
     cacheRef.current = { has: true, value: next };
     return next;
   }, []);
   return useSyncExternalStore(subscribeAppState, getSnapshot);
+}
+
+/**
+ * The primary consumption API. Selectors run against the loaded `AppState`
+ * — components using this hook must only ever mount inside the tree gated
+ * on `state !== null` by the App shell (`useAppGate`).
+ *
+ * Re-renders are skipped when the selected value is shallow-equal to the
+ * previous one, so returning a fresh object each call (e.g.
+ * `s => ({ live: s.accounts.length })`) is safe and still cheap. Pushes are
+ * reconciled against the previous snapshot (see `apply`), so an unchanged
+ * sub-tree such as `s.identity`, `s.extensions` or an untouched account
+ * keeps its reference across pushes and selecting it directly bails out too.
+ * Never select a value built of fresh arrays/objects nested below the top
+ * level: the one-level cache misses on every call.
+ */
+export function useAppState<T>(selector: (s: AppState) => T): T {
+  // Safe per the invariant documented above.
+  return useSelected(selector as (s: AppState | null) => T);
+}
+
+/**
+ * The App shells' gate selector: like `useAppState`, but the selector also
+ * sees the `null` not-yet-loaded state. Select only what the shell renders
+ * on (loaded, signed in, the extension list), so a feed push that changes
+ * none of it does not re-render the shell.
+ */
+export function useAppGate<T>(select: (s: AppState | null) => T): T {
+  return useSelected(select);
 }
