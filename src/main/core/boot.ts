@@ -22,6 +22,13 @@ import { openDbInWorker } from '../db/worker-client';
 import { createAppProjection } from './app-projection';
 import type { AppStateExtras } from './app-projection';
 import { createConverter } from './engine/convert';
+import type { Converter } from './converter/converter';
+import { createInlineConverter } from './converter/converter';
+import {
+  CONVERTER_TIMEOUT_MS,
+  createConverterRunner,
+} from './converter/runner';
+import type { RunnerChild, SqlRunnerDiagnostics } from './mcp/sql-runner';
 import { createEngine } from './engine/engine';
 import type { LogSink } from './engine/engine';
 import { createInference } from './inference';
@@ -46,7 +53,6 @@ import type { CoreStore } from './store/store';
 import type { AppDb } from '../db/app-db';
 
 import { buildReadDiagnostics, type ReadDiagnostics } from './read-diagnostics';
-import type { SqlRunnerDiagnostics } from './mcp/sql-runner';
 
 export interface BootDeps {
   dataDir: string;
@@ -56,6 +62,9 @@ export interface BootDeps {
   /** Bundled `dbWorker` entry file — the corpus SQLite connection is hosted in
    *  this worker thread so its synchronous calls never block the main loop. */
   dbWorkerFile: string;
+  /** Spawns the bundled `kia-converter` child (webpack `worker` entry).
+   *  Absent (tests, stdio) or KIA_CONVERTER_INLINE=1 ⇒ parsers run inline. */
+  converterSpawn?: () => RunnerChild;
 }
 
 export interface SourceRegistry {
@@ -145,7 +154,9 @@ export interface CorePlatform {
   senders: SenderRegistry;
   /** Per-source OAuth refreshers; source families add theirs at registration. */
   refreshers: Map<string, (creds: Credentials) => Promise<Credentials | null>>;
-  convert(input: DocumentInput): Promise<DocumentInput>;
+  /** The crash-isolated converter (#136): parsers + WASM rasteriser. */
+  converter: Converter;
+  convert(input: DocumentInput, signal?: AbortSignal): Promise<DocumentInput>;
   /** Hardware facts, read once at boot (host-profile.ts). */
   host: HostFacts;
   /** The local model's acceleration once detected; null before. Bound by
@@ -257,18 +268,29 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     detectLanguages,
     profileDir: deps.dataDir,
   });
+  const budget = hostBudget(host, null);
   // Foreground reads (MCP, renderer) run on their own read-only worker so they
   // never queue behind ingest writes. Opened AFTER the writer migrated.
   const readPlane = await openReads({
     dbPath,
     workerFile: deps.dbWorkerFile,
     writer: store.read,
-    weak: hostBudget(host, null).weak,
+    weak: budget.weak,
     log: (level, msg) => sink.log('db', level, msg),
   });
   const inference = createInference(sink);
   const scheduler = createScheduler(store, deps.env, sink);
-  const convert = createConverter(sink);
+  const converter: Converter =
+    deps.converterSpawn && process.env.KIA_CONVERTER_INLINE !== '1'
+      ? createConverterRunner({
+          spawn: deps.converterSpawn,
+          // Doubled on 1-slot hosts: a demoted child on a weak machine is
+          // slow, not stuck (spec §1).
+          timeoutMs: CONVERTER_TIMEOUT_MS * (budget.ingestSlots === 1 ? 2 : 1),
+          log: (level, msg) => sink.log('converter', level, msg),
+        })
+      : createInlineConverter();
+  const convert = createConverter(sink, converter);
 
   const sources = createSourceRegistry();
 
@@ -312,6 +334,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     senders,
     refreshers,
     convert,
+    converter,
     host,
     readDiagnostics: (sql) =>
       buildReadDiagnostics({
@@ -326,6 +349,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     shutdown: async () => {
       scheduler.stop();
       await engine.stopAll();
+      await converter.stop();
       await readPlane.close();
       await store.close();
     },

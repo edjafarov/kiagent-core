@@ -66,8 +66,10 @@ export interface EngineDeps {
     mayBecomeReady?(kind: 'see' | 'read'): boolean;
   };
   /** The commit-path conversion stage: binary in, markdown out. Deterministic
-   *  parsers only — text-poor results are left for a vision worker ('defer'). */
-  convert(input: DocumentInput): Promise<DocumentInput>;
+   *  parsers only — text-poor results are left for a vision worker ('defer').
+   *  `signal` cancels a queued or running converter job (pause/stop). */
+  convert(input: DocumentInput, signal?: AbortSignal): Promise<DocumentInput>;
+
   logs: LogSink;
   /** Per-source OAuth refreshers. The PLATFORM refreshes tokens before a
    *  session hands them out — no refresh logic in any source. */

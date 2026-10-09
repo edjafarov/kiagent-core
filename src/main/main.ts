@@ -49,6 +49,7 @@ import type { CorePlatform } from './core/boot';
 import { createActivityLog, type ActivityLog } from './core/mcp/activity';
 import { createSqlRunner } from './core/mcp/sql-runner';
 import { utilityRunnerChild } from './core/mcp/sql-runner-spawn';
+import { demoteHost } from './core/child-priority';
 import { startMcp } from './core/mcp/server';
 import { startReadDiagnosticsDump } from './core/read-diagnostics';
 import type { McpServerHandle } from './core/mcp/server';
@@ -920,11 +921,30 @@ app
         path.join(__dirname, 'dbWorker.js'),
         path.join(__dirname, 'dbWorker.bundle.dev.js'),
       ].find((f) => fs.existsSync(f)) ?? path.join(__dirname, 'dbWorker.js');
+    // Bundled converter child (webpack `worker` entry, #136): prod
+    // `worker.js`, dev `worker.bundle.dev.js`. Demoted to BELOW_NORMAL on
+    // spawn — never LOW: Windows IDLE-class children starve under load.
+    const converterFile =
+      [
+        path.join(__dirname, 'worker.js'),
+        path.join(__dirname, 'worker.bundle.dev.js'),
+      ].find((f) => fs.existsSync(f)) ?? path.join(__dirname, 'worker.js');
+
     platform = await bootCore({
       dataDir,
       ...enc,
       env: schedulerEnv,
       dbWorkerFile,
+      converterSpawn: () =>
+        utilityRunnerChild(
+          converterFile,
+          {},
+          (line) => platform?.logSink.log('converter', 'warn', line),
+          {
+            serviceName: 'kia-converter',
+            onSpawn: (pid) => demoteHost(pid, {}, 'kia-converter'),
+          },
+        ),
     });
     await markProfileStorageVersion(
       app.getPath('userData'),
