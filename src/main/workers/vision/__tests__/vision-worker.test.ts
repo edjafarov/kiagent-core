@@ -7,6 +7,12 @@ import {
   PROSE_LINES,
   shifted,
 } from '@main/core/engine/__tests__/pdf-fixture';
+import {
+  ConverterCrashedError,
+  ConverterTimeoutError,
+  ConverterUnavailableError,
+} from '@main/core/converter/converter';
+import { VLM_MAX_EDGE } from '../downscale';
 import { HelperTimeoutError } from '../rasterize';
 import type { Rasterizer } from '../rasterize';
 
@@ -1104,4 +1110,126 @@ it('pre-flight: waits for the foreground before the lane check and any fetch', a
   expect(fetchBytes).not.toHaveBeenCalled();
   release();
   await expect(p).resolves.toBe('done');
+});
+
+describe('converter failures (#136 §1)', () => {
+  const needsOcrDoc = () =>
+    change({
+      markdown: 'layer text that must survive',
+      metadata: {
+        ...baseDoc.metadata,
+        conversion: { status: 'needs-ocr', pages: [2], quality: 1 },
+        ocrProgress: { pageCount: 3, pages: { '1': 'partial' } },
+      },
+    });
+  const failing = (err: Error): Rasterizer => ({
+    pdfToPngs: jest.fn(async () => {
+      throw err;
+    }),
+  });
+
+  it.each([[new ConverterCrashedError('x')], [new ConverterTimeoutError('x')]])(
+    'raster %p: first attempt defers, the second writes a metadata-only marker',
+    async (err) => {
+      let n = 0;
+      const worker = createVisionWorker({
+        rasterizer: failing(err),
+        laneOpen: () => true,
+      });
+      const s1 = fakeSession({
+        bump: async () => {
+          n += 1;
+          return n;
+        },
+      });
+      expect(await worker.work(needsOcrDoc(), s1)).toBe('defer');
+      expect(s1.enriched).toHaveLength(0);
+      const s2 = fakeSession({
+        bump: async () => {
+          n += 1;
+          return n;
+        },
+      });
+      expect(await worker.work(needsOcrDoc(), s2)).toBe('done');
+      expect(s2.enriched).toHaveLength(1);
+      const e = s2.enriched[0];
+      expect('markdown' in e).toBe(false);
+      expect(e.metadata.extraction.raster).toBe('failed');
+      expect(
+        'ocrProgress' in e.metadata && e.metadata.ocrProgress === undefined,
+      ).toBe(true);
+    },
+  );
+  it('a text-layer parse crash takes the same path', async () => {
+    const rasterizer: Rasterizer = {
+      pdfToPngs: async (_b, { pages }) => ({
+        pageCount: 3,
+        pages: pages.map((p) => ({ page: p, png: new Uint8Array([p]) })),
+      }),
+    };
+    const worker = createVisionWorker({
+      rasterizer,
+      laneOpen: () => true,
+      parsePdfPages: async () => {
+        throw new ConverterCrashedError('x');
+      },
+    });
+    const s = fakeSession({ bump: async () => 2 });
+    expect(await worker.work(needsOcrDoc(), s)).toBe('done');
+    expect(s.enriched[0].metadata.extraction.raster).toBe('failed');
+    expect('markdown' in s.enriched[0]).toBe(false);
+  });
+  it('converter unavailable defers without counting', async () => {
+    const bump = jest.fn(async () => 5);
+    const worker = createVisionWorker({
+      rasterizer: failing(new ConverterUnavailableError('x')),
+      laneOpen: () => true,
+    });
+    const s = fakeSession({ bump });
+    expect(await worker.work(needsOcrDoc(), s)).toBe('defer');
+    expect(bump).not.toHaveBeenCalled();
+    expect(s.enriched).toHaveLength(0);
+  });
+  it('no read provider: rasters render at the VLM edge (window and VLM images)', async () => {
+    const calls: Array<{ pages: number[]; maxEdge?: number }> = [];
+    const rasterizer: Rasterizer = {
+      pdfToPngs: async (_b, { pages, maxEdge }) => {
+        calls.push({ pages, maxEdge });
+        return {
+          pageCount: 2,
+          pages: pages.map((p) => ({ page: p, png: new Uint8Array([p]) })),
+        };
+      },
+    };
+    const s = fakeSession({
+      hasProvider: (kind) => kind !== 'read',
+      read: async () => {
+        throw new NoProviderError('read');
+      },
+    });
+    await createVisionWorker({ rasterizer, laneOpen: () => true }).work(
+      change({}),
+      s,
+    );
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const c of calls) expect(c.maxEdge).toBe(VLM_MAX_EDGE);
+  });
+  it('with a read provider the OCR window renders full size (no maxEdge)', async () => {
+    const calls: Array<number | undefined> = [];
+    const rasterizer: Rasterizer = {
+      pdfToPngs: async (_b, { pages, maxEdge }) => {
+        calls.push(maxEdge);
+        return {
+          pageCount: 1,
+          pages: pages.map((p) => ({ page: p, png: new Uint8Array([p]) })),
+        };
+      },
+    };
+    const s = fakeSession({ hasProvider: () => true });
+    await createVisionWorker({ rasterizer, laneOpen: () => true }).work(
+      change({}),
+      s,
+    );
+    expect(calls[0]).toBeUndefined();
+  });
 });

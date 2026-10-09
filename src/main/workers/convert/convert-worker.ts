@@ -11,12 +11,20 @@ import {
   MAX_LOCAL_BINARY_BYTES,
 } from '@shared/file-indexability';
 
+import { isAbortError } from '@main/core/abort';
+import {
+  ConverterCrashedError,
+  ConverterTimeoutError,
+  ConverterUnavailableError,
+  createInlineConverter,
+  type Converter,
+  type ParseResult,
+} from '@main/core/converter/converter';
 import { assessPage } from '@main/core/engine/text-quality';
 import {
   capMarkdown,
   convertibleKind,
   needsOcrMarker,
-  parseDetailed as realParse,
   type ConvertibleKind,
 } from '@main/core/engine/convert';
 
@@ -120,12 +128,28 @@ function needsReassessment(
 export function createConvertWorker(
   deps: {
     now?: () => Date;
-    /** Test seam only; defaults to the real parser. */
-    parse?: typeof realParse;
+    /** The crash-isolated converter (CorePlatform.converter). Absent =
+     *  in-process parsers (tests, KIA_CONVERTER_INLINE hosts that pass none). */
+    converter?: Pick<Converter, 'parseDetailed'>;
+    /** Test seam only; wins over `converter`. */
+    parse?: (
+      bytes: Uint8Array,
+      mime: string,
+      filename?: string,
+      signal?: AbortSignal,
+    ) => Promise<ParseResult>;
   } = {},
 ): Worker {
   const now = deps.now ?? (() => new Date());
-  const parse = deps.parse ?? realParse;
+  const converter = deps.converter ?? createInlineConverter();
+  const parse =
+    deps.parse ??
+    ((
+      bytes: Uint8Array,
+      mime: string,
+      filename?: string,
+      signal?: AbortSignal,
+    ) => converter.parseDetailed(bytes, mime, filename, signal));
   return {
     name: 'convert',
     // bump = one full feed replay: re-admits too-large rows (large-file),
@@ -201,28 +225,30 @@ export function createConvertWorker(
       if (!bytes) return record('unavailable');
       if (bytes.length > capBytes)
         return record('too-large', { bytes: bytes.length });
-      // Crash fence AFTER the bytes arrive, BEFORE the parse: only a parse
-      // can kill main; counting deferred fetches would fail docs on an
-      // outage. Keyed on max(declared, actual): size makes a parse risky.
       const large =
         Math.max(declared ?? 0, bytes.length) > MAX_LOCAL_BINARY_BYTES;
-      // Mail (.msg, .eml…) is fenced at any size: it arrives from anyone as
-      // an attachment, and a hostile one need not be large to kill the
-      // in-process parser.
-      if ((large || kind === 'email') && (await session.bump('parse')) > 2)
-        return record('failed', {
-          error: 'parser crashed twice on this document',
-        });
-
-      let res: { markdown: string | null; ocrPages?: number[] };
+      // No crash fence: the parse runs in the kia-converter child (#136), so
+      // a hostile file can no longer take main down. The slot is taken only
+      // now — the bytes are in hand — and covers the parse alone.
+      let res: ParseResult;
+      const release = (await session.admit?.()) ?? (() => {});
       try {
-        res = await parse(bytes, str(meta.mime) ?? '', name);
+        res = await parse(bytes, str(meta.mime) ?? '', name, session.signal);
       } catch (err) {
+        // Transient: the child could not start, or this run was cancelled.
+        if (err instanceof ConverterUnavailableError || isAbortError(err))
+          return 'defer';
+        if (err instanceof ConverterCrashedError)
+          return record('failed', { error: 'converter crashed' });
+        if (err instanceof ConverterTimeoutError)
+          return record('failed', { error: 'converter timed out' });
         session.log(
           'warn',
           `parse failed for ${name ?? doc.id}: ${String(err)}`,
         );
         return record('failed', { error: String(err) });
+      } finally {
+        release();
       }
       if (large) logPeak(session, name ?? doc.id, bytes.length, rssBefore); // the memory probe
       // A doc that arrived WITH text is only re-assessed (§5): its markdown

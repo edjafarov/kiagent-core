@@ -15,8 +15,11 @@ import type {
 
 import { openDb } from '../../../db/app-db';
 import { createAdmission, type Admission } from '../../admission';
+import { ConverterCrashedError } from '../../converter/converter';
+import { createVisionWorker } from '../../../workers/vision/vision-worker';
 import { openStore, type CoreStore } from '../../store/store';
 import { createEngine, workerConsumerName, type EngineDeps } from '../engine';
+import { multiPagePdf, PROSE_LINES } from './pdf-fixture';
 
 jest.setTimeout(60_000);
 
@@ -475,6 +478,71 @@ describe('pull loop sub-commits (#147 §3/§4)', () => {
     expect(
       (await store.read.byExternalId(acc.id, 'a', 'note'))?.archivedAt,
     ).toBeNull();
+  });
+  it('a needs-ocr PDF whose raster keeps crashing stays searchable by its text layer', async () => {
+    const pdfBytes = multiPagePdf([{ text: PROSE_LINES }, { scan: true }]);
+    const source: Source<string, DocumentInput> = {
+      descriptor: {
+        id: 'files',
+        name: 'files',
+        documentTypes: ['attachment'],
+        auth: 'none',
+      },
+      async connect() {
+        return { identifier: 'files@test' };
+      },
+      async *pull() {},
+      toDocument: (i) => i,
+      fetchBytes: async () => pdfBytes,
+    };
+    const engine = makeEngine([source as never]);
+    const acc = await store.createAccount({
+      source: 'files',
+      identifier: 'files@test',
+    });
+    await store.commit({
+      account: acc.id,
+      cursor: null,
+      documents: [
+        {
+          externalId: 'scan.pdf',
+          type: 'attachment',
+          title: 'scan.pdf',
+          markdown: 'zebracorn layer text',
+          metadata: {
+            mime: 'application/pdf',
+            filename: 'scan.pdf',
+            sizeBytes: pdfBytes.length,
+            conversion: { status: 'needs-ocr', pages: [2], quality: 1 },
+          },
+          createdAt: null,
+        },
+      ],
+    });
+    const worker = createVisionWorker({
+      rasterizer: {
+        pdfToPngs: async () => {
+          throw new ConverterCrashedError('pdfium died');
+        },
+      },
+      laneOpen: () => true,
+    });
+    const h = engine.attach(worker);
+    await waitFor(
+      async () =>
+        (await store.ledgerCounts(workerConsumerName(worker))).deferred === 1,
+    );
+    await h.stop();
+    await engine.rerunDeferred(worker);
+    const d = await store.read.byExternalId(acc.id, 'scan.pdf', 'attachment');
+    expect(d?.markdown).toBe('zebracorn layer text');
+    expect(
+      (d?.metadata as { extraction?: { raster?: string } }).extraction?.raster,
+    ).toBe('failed');
+    expect('ocrProgress' in (d?.metadata ?? {})).toBe(false);
+    expect(
+      (await store.read.search({ text: 'zebracorn' })).map((x) => x.id),
+    ).toEqual([d!.id]);
   });
 });
 

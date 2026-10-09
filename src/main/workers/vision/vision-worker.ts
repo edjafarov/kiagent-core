@@ -6,10 +6,24 @@ import type {
   WorkOutcome,
 } from '@shared/contracts';
 
-import { capMarkdown, parsePdfPages } from '@main/core/engine/convert';
+import {
+  capMarkdown,
+  parsePdfPages as inlinePdfPages,
+} from '@main/core/engine/convert';
 import { LaneClosedError, NoProviderError } from '@main/core/inference';
 import { MAX_LOCAL_BINARY_BYTES } from '@shared/file-indexability';
 
+import { isAbortError } from '@main/core/abort';
+import {
+  ConverterCrashedError,
+  ConverterTimeoutError,
+  ConverterUnavailableError,
+} from '@main/core/converter/converter';
+import {
+  passthroughDownscaler,
+  VLM_MAX_EDGE,
+  type ImageDownscaler,
+} from './downscale';
 import { logPeak } from '../mem-probe';
 
 import {
@@ -23,7 +37,6 @@ import {
   OCR_SUFFICIENT_CHARS,
   OCR_WINDOW,
 } from './classify';
-import { passthroughDownscaler, type ImageDownscaler } from './downscale';
 import { VISION_WORKER } from './identity';
 import { INDEXING_PROMPT, mergeExtraction } from './merge';
 import type { PageResult } from './merge';
@@ -73,6 +86,12 @@ export function createVisionWorker(deps: {
   /** Clamps a page to the VLM's usable resolution before pass 2 encodes it.
    *  Optional so non-Electron hosts and tests get the identity function. */
   downscale?: ImageDownscaler;
+  /** The text-layer parse of a needs-ocr PDF. Production passes the
+   *  converter child's; default = in-process (tests). */
+  parsePdfPages?: (
+    bytes: Uint8Array,
+    signal?: AbortSignal,
+  ) => Promise<string[]>;
 }): Worker {
   const downscale = deps.downscale ?? passthroughDownscaler;
   // One doc's bytes, kept across its consecutive windows (the enrich of window
@@ -92,6 +111,40 @@ export function createVisionWorker(deps: {
   let readUnavailableUntil = 0;
   const keyOf = (d: Document) => `${d.id}:${d.contentHash}`;
 
+  const parsePdfPages =
+    deps.parsePdfPages ?? ((b: Uint8Array) => inlinePdfPages(b));
+
+  /** The converter failed on this doc's PDF (#136 §1). Transient failures
+   *  (child unavailable, cancelled) defer and never count. A crash or a
+   *  timeout counts; from the second one the doc gets a metadata-only
+   *  marker: its existing markdown (a needs-ocr text layer) and its index
+   *  survive, partial OCR is dropped, and the run is `done` — never a throw,
+   *  so the engine does not re-run fetch + raster three more times.
+   *  `null` = not a converter failure; the caller keeps its own handling. */
+  async function rasterFailure(
+    session: WorkerSession,
+    documentId: string,
+    err: unknown,
+  ): Promise<WorkOutcome | null> {
+    if (err instanceof ConverterUnavailableError || isAbortError(err))
+      return 'defer';
+    if (
+      !(err instanceof ConverterCrashedError) &&
+      !(err instanceof ConverterTimeoutError)
+    )
+      return null;
+    if ((await session.bump('raster')) <= 1) return 'defer';
+    cache = null;
+    session.enrich({
+      documentId,
+      metadata: {
+        ocrProgress: undefined,
+        extraction: { raster: 'failed', at: new Date().toISOString() },
+      },
+    });
+    return 'done';
+  }
+
   /** Pass 2 — VLM describe over prepared images (PNG pages of a PDF, or the
    *  image itself). Descriptions land on the matching `pages` entries, so
    *  pages without an image keep their OCR text. A real VLM failure counts
@@ -99,6 +152,7 @@ export function createVisionWorker(deps: {
    *  completes OCR-only instead of re-driving forever. */
   async function vlmPass(
     session: WorkerSession,
+    documentId: string,
     pages: PageResult[],
     images: () => Promise<VlmImage[]>,
     complete: (
@@ -112,8 +166,8 @@ export function createVisionWorker(deps: {
     let pageImages: VlmImage[];
     try {
       pageImages = await images();
-    } catch {
-      return 'defer';
+    } catch (err) {
+      return (await rasterFailure(session, documentId, err)) ?? 'defer';
     }
     try {
       // Who described each page: a routed task may be answered remotely
@@ -216,6 +270,11 @@ export function createVisionWorker(deps: {
           ].sort((a, b) => a - b)
         : null;
     const listed = listedAll?.slice(0, MAX_OCR_PAGES) ?? null;
+    // #136-C: when no OCR provider exists the rasters feed the VLM alone, so
+    // pdfium renders straight at the VLM's edge (no 2× render + downscale).
+    // OCR keeps full-size pages. Absent probe = assume OCR exists.
+    const vlmOnly = !listed && session.hasProvider?.('read') === false;
+    const maxEdge = vlmOnly ? VLM_MAX_EDGE : undefined;
     if (listed && Date.now() < readUnavailableUntil) return 'defer';
     const key = keyOf(doc);
     let bytes = cache?.key === key ? cache.bytes : null;
@@ -289,6 +348,7 @@ export function createVisionWorker(deps: {
       const image = bytes;
       return vlmPass(
         session,
+        doc.id,
         pages,
         async () => [{ page: 1, bytes: image, mime: mime ?? 'image/png' }],
         complete,
@@ -314,8 +374,14 @@ export function createVisionWorker(deps: {
     let raster: RasterResult | null = null;
     if (next.length) {
       try {
-        raster = await deps.rasterizer.pdfToPngs(bytes, { pages: next });
+        raster = await deps.rasterizer.pdfToPngs(bytes, {
+          pages: next,
+          maxEdge,
+          signal: session.signal,
+        });
       } catch (err) {
+        const failed = await rasterFailure(session, doc.id, err);
+        if (failed) return failed;
         // A demoted raster helper past its deadline is load, not a bad PDF:
         // defer (re-driven when idle) instead of exhausting engine retries.
         if (err instanceof HelperTimeoutError) return 'defer';
@@ -367,9 +433,9 @@ export function createVisionWorker(deps: {
       // read something.
       let layer: string[];
       try {
-        layer = cache?.layer ?? (await parsePdfPages(bytes));
-      } catch {
-        return 'defer';
+        layer = cache?.layer ?? (await parsePdfPages(bytes, session.signal));
+      } catch (err) {
+        return (await rasterFailure(session, doc.id, err)) ?? 'defer';
       }
       if (layer.length === 0) return 'defer'; // never render from nothing
       if (cache) cache.layer = layer;
@@ -434,9 +500,13 @@ export function createVisionWorker(deps: {
     );
     const pdfBytes = bytes;
     const images = async (): Promise<VlmImage[]> =>
-      (await deps.rasterizer.pdfToPngs(pdfBytes, { pages: first })).pages.map(
-        (p) => ({ page: p.page, bytes: p.png, mime: 'image/png' }),
-      );
-    return vlmPass(session, pagesOut(), images, finish, ocrRan);
+      (
+        await deps.rasterizer.pdfToPngs(pdfBytes, {
+          pages: first,
+          maxEdge,
+          signal: session.signal,
+        })
+      ).pages.map((p) => ({ page: p.page, bytes: p.png, mime: 'image/png' }));
+    return vlmPass(session, doc.id, pagesOut(), images, finish, ocrRan);
   }
 }

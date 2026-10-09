@@ -1,3 +1,4 @@
+import type { Converter } from '@main/core/converter/converter';
 import {
   rasterizePdf,
   type RasterPage,
@@ -41,14 +42,26 @@ export function wasmRasterizer(): Rasterizer {
   };
 }
 
+/** macOS with the native helper: the helper (unchanged). Everywhere else:
+ *  the kia-converter child when one is given (#136-C), so the pdfium render,
+ *  BGRA swap and PNG encode run off main; the in-process WASM path only for
+ *  tests and hosts that pass none. */
 export function pickRasterizer(
   helper: VisionHelper | null,
+  // Positional for the existing (helper, platform) call sites and tests.
+  // eslint-disable-next-line default-param-last
   platform = process.platform,
+  converter?: Pick<Converter, 'rasterizePdf'>,
 ): Rasterizer {
   if (platform === 'darwin' && helper) {
     return {
       pdfToPngs: (bytes, { pages }) => helper.rasterizePdf(bytes, pages),
     };
   }
+  if (converter)
+    return {
+      pdfToPngs: (bytes, { pages, maxEdge, signal }) =>
+        converter.rasterizePdf(bytes, pages, { maxEdge, signal }),
+    };
   return wasmRasterizer();
 }

@@ -31,13 +31,22 @@ export function attachBundledWorkers(
   // local files get at commit time. Plain attachWorker — its re-drive only
   // retries docs whose source was still registering, and parsing needs no
   // inference, so it is not held to the processing window.
-  attachWorker(platform, createConvertWorker());
+  attachWorker(
+    platform,
+    createConvertWorker({ converter: platform.converter }),
+  );
 
   const worker = createVisionWorker({
-    rasterizer: pickRasterizer(deps.visionHelper),
+    rasterizer: pickRasterizer(
+      deps.visionHelper,
+      process.platform,
+      platform.converter,
+    ),
     laneOpen: () => backgroundLaneOpen(platform),
-    foregroundIdle: (signal) => platform.admission.foregroundIdle(signal),
     downscale: deps.downscale,
+    parsePdfPages: (bytes, signal) =>
+      platform.converter.parsePdfPages(bytes, signal),
+    foregroundIdle: (signal) => platform.admission.foregroundIdle(signal),
   });
   const handle = platform.engine.attach(worker);
   // NOT boot.attachWorker: the re-drive job additionally (1) skips outside

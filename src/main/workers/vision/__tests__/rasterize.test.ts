@@ -52,6 +52,36 @@ describe('rasterizer', () => {
   });
 
   describe('pickRasterizer', () => {
+    it('off darwin, a converter rasterises (with maxEdge and signal)', async () => {
+      const result = { pageCount: 1, pages: [] };
+      const converter = { rasterizePdf: jest.fn(async () => result) };
+      const { signal } = new AbortController();
+      const r = await pickRasterizer(null, 'win32', converter).pdfToPngs(
+        new Uint8Array([1]),
+        {
+          pages: [1],
+          maxEdge: 896,
+          signal,
+        },
+      );
+      expect(r).toBe(result);
+      expect(converter.rasterizePdf).toHaveBeenCalledWith(
+        new Uint8Array([1]),
+        [1],
+        { maxEdge: 896, signal },
+      );
+    });
+    it('darwin with the native helper ignores the converter', async () => {
+      const helper: VisionHelper = {
+        rasterizePdf: jest.fn(async () => ({ pageCount: 1, pages: [] })),
+      };
+      const converter = { rasterizePdf: jest.fn() };
+      await pickRasterizer(helper, 'darwin', converter).pdfToPngs(
+        new Uint8Array([1]),
+        { pages: [1] },
+      );
+      expect(converter.rasterizePdf).not.toHaveBeenCalled();
+    });
     it('delegates to helper.rasterizePdf on darwin with helper', async () => {
       const helperResult = {
         pageCount: 5,
