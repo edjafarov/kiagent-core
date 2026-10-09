@@ -257,6 +257,7 @@ describe('re-drive works the current seq (#59 §0)', () => {
         register: async (id, _c, r) => {
           if (id === LEDGER_REKEY_JOB_ID) run = r;
         },
+        trigger: async () => {},
       },
       logs: { log: () => {} },
       onDone,
