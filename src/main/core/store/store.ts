@@ -35,9 +35,11 @@ import {
 import { toAccount, toDocument, type AccountRow, type DocRow } from './rows';
 import {
   createWriteTx,
+  LEDGER_REKEY_PAGE,
   type FolderScopeInput,
   type FolderScopeResult,
   type ReconcileCounts,
+  type RekeyPageResult,
 } from './write-tx';
 
 export type { AccountRow, DocRow } from './rows';
@@ -340,6 +342,9 @@ export interface CoreStore extends Store {
    *  re-key repair finishes; every re-drive entry point is a no-op until
    *  then. Cached in memory once true. */
   ledgerRekeyed(): Promise<boolean>;
+  /** ONE page of the re-key repair (one writer call). Callers loop until
+   *  `done`, yielding between pages; progress survives a quit. */
+  ledgerRekeyPage(limit?: number): Promise<RekeyPageResult>;
   headSeq(): Promise<Seq>;
   scheduleAll(): Promise<ScheduleRow[]>;
   scheduleUpsert(row: ScheduleRow): Promise<void>;
@@ -1215,6 +1220,14 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           ])
         ).length > 0;
       return rekeyed;
+    },
+
+    async ledgerRekeyPage(limit = LEDGER_REKEY_PAGE) {
+      const r = writeTx
+        ? writeTx.rekeyLedgerPage(limit)
+        : ((await db.proc!('rekeyLedgerPage', { limit })) as RekeyPageResult);
+      if (r.done) rekeyed = true;
+      return r;
     },
 
     async headSeq() {

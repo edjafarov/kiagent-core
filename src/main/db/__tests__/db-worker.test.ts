@@ -472,6 +472,15 @@ Module._resolveFilename = function (request, ...rest) {
   // first blanked both search tables — so the assertion only passes if the
   // rebuild actually did the repopulating work, not because the prior commit
   // already left rows behind.
+  it('runs the re-key repair page procedure inside the worker', async () => {
+    await spawnAndReady();
+    const r = (await client!.proc!('rekeyLedgerPage', { limit: 10 })) as {
+      done: boolean;
+      scanned: number;
+    };
+    expect(r).toEqual({ done: true, scanned: 0 });
+  });
+
   it('runs the rebuildSearchIndex procedure inside the worker (proc round-trip)', async () => {
     await spawnAndReady();
 

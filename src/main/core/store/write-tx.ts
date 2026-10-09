@@ -14,6 +14,10 @@ import type {
 import { newId } from '../ids';
 import { buildStemView } from '../stemming';
 import { lastErrorAssignment } from './last-error';
+import {
+  META_LEDGER_REKEY_CURSOR,
+  META_LEDGER_REKEYED,
+} from './maintenance-keys';
 import type { AccountRow, DocRow } from './store';
 
 /** Injected so the write path stays testable and Electron-free. Mirrors the
@@ -193,6 +197,15 @@ export function withLegacyMirror(
   return config; // no legacy reader on this source — nothing to mirror
 }
 
+/** Spec §0: keyset pages of this many deferred rows, one writer call each. */
+export const LEDGER_REKEY_PAGE = 5_000;
+
+/** One page of the re-key repair. `done` ⇒ `meta.ledgerRekeyed` is set. */
+export interface RekeyPageResult {
+  done: boolean;
+  scanned: number;
+}
+
 export interface WriteTx {
   commit(batch: CommitBatch): Seq;
   /** Start a pass: drop whatever the previous one staged for this account. */
@@ -210,6 +223,12 @@ export interface WriteTx {
    *  reported as leaving scope + one `changes` row per archived document.
    *  Returns COUNTS ONLY — never row sets. */
   applyFolderScope(input: FolderScopeInput): FolderScopeResult;
+  /** #59 §0 — ONE page of the re-key repair, in ONE transaction: every
+   *  `deferred` row of the current consumer past `meta.ledgerRekeyCursor`
+   *  whose seq no document carries is re-keyed to the document's current
+   *  seq (or dropped), then the cursor is persisted. The last page sets
+   *  `meta.ledgerRekeyed`. */
+  rekeyLedgerPage(limit: number): RekeyPageResult;
 }
 
 /**
@@ -1007,6 +1026,123 @@ export function createWriteTx(
     },
   );
 
+  // ── #59 §0: the paged re-key repair ──────────────────────────────────────
+  //
+  // Before 0.10x the feed materializer paired a historical document change
+  // seq with the CURRENT document, so a deferral could be keyed on a seq no
+  // document carries. Each such row is resolved through its `changes` row:
+  //  · document gone (or no document change)  → drop it;
+  //  · consumer row at the current seq: none  → move the deferral there
+  //    (attempts kept — it is the same deferral);
+  //  · done                                    → drop the stale row;
+  //  · anything else (skip/deferred/failed/NULL) → that row becomes
+  //    'deferred' with attempts 0, the stale row goes. A 'skip' there is no
+  //    evidence the document was handled: the old re-drive coalescer wrote
+  //    duplicates as skip even when the first occurrence deferred again.
+  // The page walks ONE consumer's deferred rows by seq through
+  // work_ledger_active (the `IS NOT 'skip'` term lets the planner use it);
+  // the next consumer is a primary-key seek.
+  const rekeyLedgerPageTx = conn.transaction(
+    (limit: number): RekeyPageResult => {
+      const getMeta = conn.prepare(`SELECT value FROM meta WHERE key = ?`);
+      const setMeta = conn.prepare(
+        `INSERT INTO meta(key, value) VALUES(?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      );
+      const nextConsumer = conn.prepare(
+        `SELECT MIN(consumer) AS c FROM work_ledger WHERE consumer > ?`,
+      );
+      const finish = (scanned: number): RekeyPageResult => {
+        setMeta.run(META_LEDGER_REKEYED, '1');
+        conn
+          .prepare(`DELETE FROM meta WHERE key = ?`)
+          .run(META_LEDGER_REKEY_CURSOR);
+        return { done: true, scanned };
+      };
+
+      const raw = (
+        getMeta.get(META_LEDGER_REKEY_CURSOR) as { value: string } | undefined
+      )?.value;
+      let pos = raw
+        ? (JSON.parse(raw) as { consumer: string; seq: number })
+        : null;
+      if (!pos) {
+        const first = nextConsumer.get('') as { c: string | null };
+        if (first.c === null) return finish(0);
+        pos = { consumer: first.c, seq: 0 };
+      }
+
+      const rows = conn
+        .prepare(
+          `SELECT seq, attempts FROM work_ledger
+            WHERE consumer = ? AND outcome = 'deferred' AND outcome IS NOT 'skip'
+              AND seq > ?
+            ORDER BY seq LIMIT ?`,
+        )
+        .all(pos.consumer, pos.seq, limit) as Array<{
+        seq: number;
+        attempts: number;
+      }>;
+
+      const isCurrent = conn.prepare(`SELECT 1 FROM documents WHERE seq = ?`);
+      const changeAt = conn.prepare(
+        `SELECT kind, ref_id FROM changes WHERE seq = ?`,
+      );
+      const docSeq = conn.prepare(`SELECT seq FROM documents WHERE id = ?`);
+      const rowAt = conn.prepare(
+        `SELECT outcome FROM work_ledger WHERE consumer = ? AND seq = ?`,
+      );
+      const del = conn.prepare(
+        `DELETE FROM work_ledger WHERE consumer = ? AND seq = ?`,
+      );
+      const insert = conn.prepare(
+        `INSERT INTO work_ledger(consumer, seq, attempts, outcome, updated_at)
+         VALUES(?, ?, ?, 'deferred', ?)`,
+      );
+      const retry = conn.prepare(
+        `UPDATE work_ledger SET outcome = 'deferred', attempts = 0, updated_at = ?
+          WHERE consumer = ? AND seq = ?`,
+      );
+
+      const { consumer } = pos;
+      for (const r of rows) {
+        if (isCurrent.get(r.seq)) continue; // already keyed on a current seq
+        const change = changeAt.get(r.seq) as
+          | { kind: string; ref_id: string }
+          | undefined;
+        const current =
+          change && change.kind === 'document'
+            ? (docSeq.get(change.ref_id) as { seq: number } | undefined)
+            : undefined;
+        if (current) {
+          const there = rowAt.get(consumer, current.seq) as
+            | { outcome: string | null }
+            | undefined;
+          if (!there) insert.run(consumer, current.seq, r.attempts, deps.now());
+          else if (there.outcome !== 'done')
+            retry.run(deps.now(), consumer, current.seq);
+        }
+        del.run(consumer, r.seq);
+      }
+
+      if (rows.length === limit) {
+        setMeta.run(
+          META_LEDGER_REKEY_CURSOR,
+          JSON.stringify({ consumer, seq: rows[rows.length - 1].seq }),
+        );
+        return { done: false, scanned: rows.length };
+      }
+      // This consumer is exhausted: move to the next one, or finish.
+      const next = nextConsumer.get(consumer) as { c: string | null };
+      if (next.c === null) return finish(rows.length);
+      setMeta.run(
+        META_LEDGER_REKEY_CURSOR,
+        JSON.stringify({ consumer: next.c, seq: 0 }),
+      );
+      return { done: false, scanned: rows.length };
+    },
+  );
+
   return {
     commit: (batch: CommitBatch): Seq => commitTx(batch),
 
@@ -1061,5 +1197,6 @@ export function createWriteTx(
     reconcileEnd: (accountId) => endPass(accountId),
 
     applyFolderScope: (input) => applyFolderScopeTx(input),
+    rekeyLedgerPage: (limit) => rekeyLedgerPageTx(limit),
   };
 }

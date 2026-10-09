@@ -167,6 +167,9 @@ async function runReadRole(): Promise<void> {
         // the whole point of hosting it here (see core/store/write-tx.ts).
         applyFolderScope: (args) =>
           writeTx.applyFolderScope(args as FolderScopeInput),
+        // #59 §0: one page of the re-key repair = one transaction here.
+        rekeyLedgerPage: (args) =>
+          writeTx.rekeyLedgerPage((args as { limit: number }).limit),
         rebuildSearchIndex: () => {
           repopulateSearchIndex(db._conn!);
           return null;
