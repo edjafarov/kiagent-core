@@ -17,6 +17,7 @@ const schema = z
     updateFeedUrl: z.string().url().optional(),
     bundledExtensionsDir: z.string().min(1).optional(),
     macUpdatesEnabled: z.boolean().optional(),
+    dormantExtensions: z.array(z.string().min(1)).optional(),
   })
   .strict();
 
@@ -33,6 +34,12 @@ export interface ProductConfig {
    * ignore this entirely.
    */
   macUpdatesEnabled?: boolean;
+  /**
+   * #137: utility (marketplace) extensions allowed to go dormant when idle —
+   * the product's audited allowlist (no timers, sockets or file watchers
+   * outside pulls). Absent/empty: none; core alone changes nothing.
+   */
+  dormantExtensions?: string[];
 }
 
 export const DEFAULT_PRODUCT: ProductConfig = {
