@@ -1,4 +1,9 @@
-import { backgroundLaneOpen, backgroundLaneState, takeLaneWake } from '../boot';
+import {
+  backgroundLaneOpen,
+  backgroundLaneState,
+  requestLaneWake,
+  takeLaneWake,
+} from '../boot';
 import type { CorePlatform } from '../boot';
 import { createInference, LaneClosedError } from '../inference';
 import { createProcessingStatus } from '../processing-status';
@@ -172,4 +177,11 @@ describe('refusal → pending wake → publisher tick', () => {
     await flush();
     expect(wakeWorkers).toHaveBeenCalledTimes(1);
   });
+});
+
+it('requestLaneWake arms exactly one pending wake (#59 §0 repair completion)', () => {
+  const target = {} as Parameters<typeof requestLaneWake>[0];
+  requestLaneWake(target);
+  expect(takeLaneWake(target)).toBe(true);
+  expect(takeLaneWake(target)).toBe(false);
 });

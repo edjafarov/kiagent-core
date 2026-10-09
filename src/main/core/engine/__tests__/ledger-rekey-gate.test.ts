@@ -206,4 +206,70 @@ describe('re-drive works the current seq (#59 §0)', () => {
       ),
     ).toEqual([{ seq: s, outcome: 'skip' }]);
   });
+
+  it('upgrade: an overdue re-drive before the repair is a no-op; after it, (old, deferred), (cur, skip) is retried once at cur', async () => {
+    await preUpgrade();
+    const account = await store.createAccount({
+      source: 'test',
+      identifier: 't',
+    });
+    await store.commit({
+      account: account.id,
+      documents: [doc('a')],
+      cursor: 1,
+    });
+    const old = await currentSeq('a');
+    await store.commit({
+      account: account.id,
+      documents: [doc('a', 'edited')],
+      cursor: 2,
+    });
+    const cur = await currentSeq('a');
+    await store.ledgerRecordMany('worker:up:v1', [
+      { seq: old, attempts: 1, outcome: 'deferred' },
+      { seq: cur, attempts: 0, outcome: 'skip' },
+    ]);
+    const seen: number[] = [];
+    const worker: Worker = {
+      name: 'up',
+      version: 1,
+      matches: () => true,
+      async work(c) {
+        seen.push(c.seq);
+        return 'done';
+      },
+    };
+    const engine = makeEngine();
+    // Scheduler catch-up at 2 s, before the repair has run:
+    expect(await engine.rerunDeferred(worker)).toEqual({
+      skipped: 'rekey-pending',
+    });
+    expect(seen).toEqual([]);
+
+    const { registerLedgerRekey, LEDGER_REKEY_JOB_ID } = await import(
+      '../../changes-maintenance'
+    );
+    let run: (() => Promise<void>) | null = null;
+    const onDone = jest.fn();
+    await registerLedgerRekey({
+      store,
+      scheduler: {
+        register: async (id, _c, r) => {
+          if (id === LEDGER_REKEY_JOB_ID) run = r;
+        },
+      },
+      logs: { log: () => {} },
+      onDone,
+    });
+    await run!();
+    expect(onDone).toHaveBeenCalledTimes(1); // → requestLaneWake in production
+
+    expect(await engine.rerunDeferred(worker)).toBeUndefined();
+    expect(seen).toEqual([cur]);
+    expect(
+      await db.all(
+        `SELECT seq, outcome FROM work_ledger WHERE consumer = 'worker:up:v1'`,
+      ),
+    ).toEqual([{ seq: cur, outcome: 'done' }]);
+  });
 });

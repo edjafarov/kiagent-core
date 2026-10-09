@@ -53,6 +53,7 @@ import { startMcp } from './core/mcp/server';
 import { startReadDiagnosticsDump } from './core/read-diagnostics';
 import type { McpServerHandle } from './core/mcp/server';
 import { markOnboardingOnce } from './core/prefs';
+import { LEDGER_REKEY_JOB_ID } from './core/changes-maintenance';
 import {
   createProcessingStatus,
   wakeDeferredWorkers,
@@ -1442,6 +1443,9 @@ app
     });
     await resumeAccounts(p);
     p.scheduler.start();
+    // #59 §0: one-shot, paged, in the background. Re-drive stays gated until
+    // it finishes; its completion arms the lane wake.
+    void p.scheduler.trigger(LEDGER_REKEY_JOB_ID);
     await createWindow();
     if (finishedReset) {
       const nameOf = (id: string) =>
