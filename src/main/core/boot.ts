@@ -58,6 +58,7 @@ import type { CoreStore } from './store/store';
 import type { AppDb } from '../db/app-db';
 
 import { buildReadDiagnostics, type ReadDiagnostics } from './read-diagnostics';
+import { startEventLoopMonitor } from './event-loop-monitor';
 
 export interface BootDeps {
   dataDir: string;
@@ -282,6 +283,9 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   // accel is detected lazily by the local-llm provider; unknown at boot.
   sink.log('host', 'info', describeHost(host, null));
   setChildPriorityLog((msg) => sink.log('priority', 'info', msg));
+  const eventLoop = startEventLoopMonitor({
+    log: (level, msg) => sink.log('event-loop', level, msg),
+  });
   const prefs = createPrefs(deps.dataDir);
   // The corpus SQLite connection lives in a worker thread (the store is
   // AppDb-driven, so every read/write and the relocated commit transaction
@@ -377,12 +381,16 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
         stats: readPlane.stats,
         walPath: `${dbPath}-wal`,
         sql,
+        eventLoop: () => eventLoop.last(),
+        admission: () => admission.snapshot(),
+        converter: () => converter.stats(),
       }),
     reads: readPlane.reads,
     readsFor: readPlane.readsFor,
     llmAccel: () => null,
     createAppProjection,
     shutdown: async () => {
+      eventLoop.stop();
       scheduler.stop();
       await engine.stopAll();
       await converter.stop();

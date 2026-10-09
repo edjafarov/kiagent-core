@@ -9,12 +9,21 @@ import fs from 'node:fs';
 
 import type { SqlRunnerDiagnostics } from './mcp/sql-runner';
 import type { ReadStats, ReadStatsSnapshot } from './store/read-proxy';
+import type { AdmissionSnapshot } from './admission';
+import type { ConverterStats } from './converter/converter';
+import type { EventLoopWindow } from './event-loop-monitor';
 
 export interface ReadDiagnostics {
   /** Includes `reads.fuzzyRuns`: the reader's cumulative fuzzy-pass executions. */
   reads: ReadStatsSnapshot;
   sql: SqlRunnerDiagnostics | null;
   walBytes: number | null;
+  /** Last closed 60 s window of main-thread event-loop delay (#147 §6). */
+  eventLoop: EventLoopWindow | null;
+  /** Foreground in flight, waiting/running units, waits, escapes, holds. */
+  admission: AdmissionSnapshot | null;
+  /** kia-converter jobs, crashes, timeouts, cancels, p95. */
+  converter: ConverterStats | null;
 }
 
 export async function buildReadDiagnostics(deps: {
@@ -23,6 +32,9 @@ export async function buildReadDiagnostics(deps: {
   sql?: SqlRunnerDiagnostics | null;
   statFile?: (p: string) => Promise<{ size: number }>;
   now?: number;
+  eventLoop?: () => EventLoopWindow | null;
+  admission?: () => AdmissionSnapshot;
+  converter?: () => ConverterStats;
 }): Promise<ReadDiagnostics> {
   const statFile = deps.statFile ?? ((p: string) => fs.promises.stat(p));
   let walBytes: number | null = null;
@@ -35,6 +47,9 @@ export async function buildReadDiagnostics(deps: {
     reads: deps.stats.snapshot(deps.now),
     sql: deps.sql ?? null,
     walBytes,
+    eventLoop: deps.eventLoop?.() ?? null,
+    admission: deps.admission?.() ?? null,
+    converter: deps.converter?.() ?? null,
   };
 }
 
