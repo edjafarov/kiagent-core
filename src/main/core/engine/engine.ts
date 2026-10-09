@@ -56,7 +56,7 @@ export interface LogSink {
 export interface EngineDeps {
   store: CoreStore;
   /** #59 §3a: where a new consumer's seed pages are read. Production passes
-   *  the read worker (`readsFor('other')`) so paging never queues behind
+   *  the read worker (boot's 'other' read plane) so paging never queues behind
    *  ingest; defaults to `store.read`. */
   reads?: Query;
   /** Seed page size — tests only (default SEED_PAGE). */
