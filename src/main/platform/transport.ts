@@ -566,3 +566,29 @@ export function createRpcEndpoint(channel: WireChannel): RpcEndpoint {
     },
   };
 }
+
+/** Dev-only (#140 measurement, `KIA_TEST_HANG_EXT=<id>`): a utility transport
+ *  whose child never answers. The host sees a handshake timeout and retries
+ *  — exactly a starved process — so time-to-window can be measured with one
+ *  connector stuck. `kill()`/`close()` fire the exit callbacks once. */
+export function createHungTransport(): HostTransport {
+  const exits = new Set<(code: number | null) => void>();
+  let exited = false;
+  const exit = (code: number | null) => {
+    if (exited) return;
+    exited = true;
+    exits.forEach((cb) => cb(code));
+  };
+  return {
+    send: () => {},
+    onMessage: () => () => {},
+    onExit: (cb) => {
+      exits.add(cb);
+      return () => {
+        exits.delete(cb);
+      };
+    },
+    kill: () => exit(null),
+    close: () => exit(0),
+  };
+}
