@@ -477,12 +477,16 @@ export function createWriteTx(
     );
 
     if ('consumer' in batch) {
-      conn
-        .prepare(
-          `INSERT INTO consumers(name, cursor) VALUES(?, ?)
+      // Consumer-cursor contract (#147 §4): no cursor ⇒ no statement against
+      // `consumers`. A bounded mid-batch flush or a re-drive must never
+      // rewrite (and so possibly rewind) a cursor the live tail advanced.
+      if (batch.cursor !== undefined)
+        conn
+          .prepare(
+            `INSERT INTO consumers(name, cursor) VALUES(?, ?)
          ON CONFLICT(name) DO UPDATE SET cursor = excluded.cursor`,
-        )
-        .run(batch.consumer, batch.cursor);
+          )
+          .run(batch.consumer, batch.cursor);
       if (batch.clearAttempts?.length) {
         const del = conn.prepare(
           `DELETE FROM work_attempts WHERE consumer = ? AND doc_id = ?`,

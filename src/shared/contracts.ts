@@ -250,7 +250,11 @@ export type CommitBatch =
     }
   | {
       consumer: string;
-      cursor: Seq;
+      /** Omitted = leave `consumers.cursor` exactly as stored: the commit
+       *  runs no statement against `consumers` at all. Only a worker's live
+       *  tail (`engine.attach`) advances its own cursor; bounded mid-batch
+       *  flushes and the deferred re-drive omit it (#147 §4). */
+      cursor?: Seq;
       documents?: DocumentInput[];
       enrich?: EnrichInput[];
       /** Doc ids whose work_attempts rows (this consumer) are deleted in this
