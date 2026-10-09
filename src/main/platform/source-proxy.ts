@@ -91,14 +91,41 @@ interface WirePickerSpec {
   note: string | null;
 }
 
+/** #137: how a host-lifetime proxy set reaches whichever incarnation is live.
+ *  `begin()` marks one operation in flight (the returned function ends it,
+ *  idempotent); `ensureLive()` wakes a dormant host and resolves once it is
+ *  activated; `endpoint()` is the current incarnation's endpoint. */
+export interface ProxyBinding {
+  ensureLive(): Promise<void>;
+  endpoint(): RpcEndpoint;
+  begin(): () => void;
+}
+
 export interface SourceProxySet {
   handleCall(ns: string, method: string, args: unknown[]): Promise<unknown>;
   makeSource(entry: Contributions['sources'][number]): Source;
   abortAll(reason: string | Error): void;
+  /** Attach to a new incarnation: fresh stream table, notify subscription. */
+  bind(endpoint: RpcEndpoint): void;
+  /** Detach from `endpoint` (no-op if another one is bound). */
+  unbind(endpoint: RpcEndpoint): void;
   dispose(): void;
 }
 
-export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
+export function createSourceProxySet(
+  target: RpcEndpoint | ProxyBinding,
+): SourceProxySet {
+  // A bare endpoint (today's per-incarnation use, and the tests) is bound at
+  // construction and never sleeps; a ProxyBinding (#137) follows the host.
+  const fixedEndpoint: RpcEndpoint | null = 'call' in target ? target : null;
+  const binding: ProxyBinding =
+    'call' in target
+      ? {
+          ensureLive: async () => {},
+          endpoint: () => target,
+          begin: () => () => {},
+        }
+      : target;
   let nextId = 1;
   // One entry per live connect / reauthenticate / manage-folders flow. The
   // per-entry `verbs` set is what keeps a manage flow off oauth and prompt.
@@ -126,7 +153,7 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
     s.wake = null;
   };
 
-  const offNotify = endpoint.onNotify((raw) => {
+  const onNotify = (raw: { kind: string } & Record<string, unknown>) => {
     const m = raw as {
       kind: string;
       pullId?: number;
@@ -148,7 +175,37 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
         // the two known codes and drops anything else.
         code: sourceErrorCode({ code: m.code }),
       });
-  });
+  };
+  let bound: RpcEndpoint | null = null;
+  let offNotify: (() => void) | null = null;
+  function unbind(endpoint: RpcEndpoint): void {
+    if (endpoint !== bound) return;
+    offNotify?.();
+    offNotify = null;
+    bound = null;
+  }
+  function bind(endpoint: RpcEndpoint): void {
+    if (bound) unbind(bound);
+    streams.clear();
+    bound = endpoint;
+    offNotify = endpoint.onNotify(onNotify);
+  }
+  /** One main→child operation: in flight from before the wake to the end.
+   *  `fn` runs only once the host is live, so the auth/session map entry it
+   *  registers can never be wiped by a soft stop's abortAll (#137). */
+  async function live<T>(
+    fn: (endpoint: RpcEndpoint) => Promise<T>,
+  ): Promise<T> {
+    const end = binding.begin();
+    try {
+      // A bare endpoint can never be dormant: skip the await so the flow's
+      // map entry is registered synchronously, exactly as before #137.
+      if (!fixedEndpoint) await binding.ensureLive();
+      return await fn(binding.endpoint());
+    } finally {
+      end();
+    }
+  }
 
   /** Shared demand-driven stream loop for pull (batches) and reconcile (refs). */
   async function* stream(
@@ -157,6 +214,17 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
     session: Session,
     pullId: number,
   ): AsyncGenerator<Inbox> {
+    // In flight from open until the stream ends, errors or aborts (#137): a
+    // live pull never ends, so its host never idles.
+    const end = binding.begin();
+    let endpoint: RpcEndpoint;
+    try {
+      await binding.ensureLive();
+      endpoint = binding.endpoint();
+    } catch (err) {
+      end();
+      throw err;
+    }
     const state: StreamState = { inbox: [], wake: null };
     streams.set(pullId, state);
     sessions.set(pullId, {
@@ -177,6 +245,7 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
       streams.delete(pullId);
       sessions.delete(pullId);
       session.signal.removeEventListener('abort', onAbort);
+      end();
     };
     session.signal.addEventListener('abort', onAbort, { once: true });
     try {
@@ -210,10 +279,11 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
       streams.delete(pullId);
       sessions.delete(pullId);
       session.signal.removeEventListener('abort', onAbort);
+      end();
     }
   }
 
-  return {
+  const set: SourceProxySet = {
     async handleCall(ns, method, args) {
       if (ns === 'auth') {
         const [id, ...rest] = args as [number, ...unknown[]];
@@ -229,7 +299,7 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
           // is suspended).
           const [wire] = rest as [WirePickerSpec];
           const treeCall = <T>(verb: string, a: unknown[]) =>
-            endpoint.call('source', verb, [id, ...a]) as Promise<T>;
+            binding.endpoint().call('source', verb, [id, ...a]) as Promise<T>;
           const spec: FolderPickerSpec = {
             modes: wire.modes,
             multiSelect: wire.multiSelect,
@@ -278,12 +348,11 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
         async connect(auth) {
           const id = nextId;
           nextId += 1;
-          auths.set(id, { channel: auth, verbs: AUTH_VERBS });
           try {
-            return (await endpoint.call('source', 'connect', [
-              id,
-              descriptor.id,
-            ])) as {
+            return (await live((endpoint) => {
+              auths.set(id, { channel: auth, verbs: AUTH_VERBS });
+              return endpoint.call('source', 'connect', [id, descriptor.id]);
+            })) as {
               identifier: string;
               config?: Record<string, unknown>;
             };
@@ -312,17 +381,19 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
         source.fetchBytes = async (session: Session, doc: Document) => {
           const id = nextId;
           nextId += 1;
-          sessions.set(id, {
-            credentials: () => session.credentials(),
-            log: (l, m) => session.log(l, m),
-          });
           try {
-            const v = await endpoint.call('source', 'fetch-bytes', [
-              id,
-              descriptor.id,
-              session.account,
-              doc,
-            ]);
+            const v = await live((endpoint) => {
+              sessions.set(id, {
+                credentials: () => session.credentials(),
+                log: (l, m) => session.log(l, m),
+              });
+              return endpoint.call('source', 'fetch-bytes', [
+                id,
+                descriptor.id,
+                session.account,
+                doc,
+              ]);
+            });
             return v == null ? null : (v as Uint8Array);
           } finally {
             sessions.delete(id);
@@ -336,17 +407,19 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
         ): Promise<AddressedMail[]> => {
           const id = nextId;
           nextId += 1;
-          sessions.set(id, {
-            credentials: () => session.credentials(),
-            log: (l, m) => session.log(l, m),
-          });
           try {
-            const rows = await endpoint.call('source', 'list-addressed-to', [
-              id,
-              descriptor.id,
-              session.account,
-              q,
-            ]);
+            const rows = await live((endpoint) => {
+              sessions.set(id, {
+                credentials: () => session.credentials(),
+                log: (l, m) => session.log(l, m),
+              });
+              return endpoint.call('source', 'list-addressed-to', [
+                id,
+                descriptor.id,
+                session.account,
+                q,
+              ]);
+            });
             // Untrusted connector output: the channel gates on `sent`, so a
             // row without a real boolean there must never pass through.
             if (
@@ -390,19 +463,21 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
           // sees is the one main registered under a main-allocated id, so
           // the child can never redirect the scope write to another account
           // the way connect()'s child-chosen `identifier` can.
-          auths.set(id, { channel, verbs: FOLDER_VERBS });
-          sessions.set(id, {
-            credentials: () => session.credentials(),
-            log: (l, m) => session.log(l, m),
-          });
           try {
             // Forwarded whole and uninspected — including R8's
             // archiveScopeRootIds, which only the source can compute.
-            return (await endpoint.call('source', 'manage-folders', [
-              id,
-              descriptor.id,
-              session.account,
-            ])) as FolderScopeUpdate;
+            return (await live((endpoint) => {
+              auths.set(id, { channel, verbs: FOLDER_VERBS });
+              sessions.set(id, {
+                credentials: () => session.credentials(),
+                log: (l, m) => session.log(l, m),
+              });
+              return endpoint.call('source', 'manage-folders', [
+                id,
+                descriptor.id,
+                session.account,
+              ]);
+            })) as FolderScopeUpdate;
           } finally {
             auths.delete(id);
             sessions.delete(id);
@@ -416,13 +491,15 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
           // Full AuthChannel: reconnect is exactly the flow that DOES
           // authenticate. It returns no config — reconnect never changes
           // scope — so nothing crosses back but the settle.
-          auths.set(id, { channel: auth, verbs: AUTH_VERBS });
           try {
-            await endpoint.call('source', 'reauthenticate', [
-              id,
-              descriptor.id,
-              account,
-            ]);
+            await live((endpoint) => {
+              auths.set(id, { channel: auth, verbs: AUTH_VERBS });
+              return endpoint.call('source', 'reauthenticate', [
+                id,
+                descriptor.id,
+                account,
+              ]);
+            });
           } finally {
             auths.delete(id);
           }
@@ -444,8 +521,12 @@ export function createSourceProxySet(endpoint: RpcEndpoint): SourceProxySet {
       auths.clear();
     },
 
+    bind,
+    unbind,
     dispose() {
-      offNotify();
+      if (bound) unbind(bound);
     },
   };
+  if (fixedEndpoint) bind(fixedEndpoint);
+  return set;
 }
