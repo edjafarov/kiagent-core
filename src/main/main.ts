@@ -61,6 +61,8 @@ import { startMcp } from './core/mcp/server';
 import { startReadDiagnosticsDump } from './core/read-diagnostics';
 import type { McpServerHandle } from './core/mcp/server';
 import { markOnboardingOnce } from './core/prefs';
+import { LEDGER_REKEY_JOB_ID } from './core/changes-maintenance';
+import { createLedgerCounter } from './core/processing-counter';
 import {
   createProcessingStatus,
   wakeDeferredWorkers,
@@ -1011,6 +1013,18 @@ app
     // once the bundled workers are attached. Best-effort: a stale row only
     // costs one extra counted attempt for a worker that comes back.
     p.store.pruneAttempts(p.engine.activeConsumers()).catch(() => {});
+    // #139: the same contract for consumers + work_ledger (retired worker
+    // versions such as worker:audio:v1). No work_ledger statement when
+    // nothing is retired.
+    p.store
+      .sweepRetiredConsumers(p.engine.activeConsumers())
+      .catch((err) =>
+        p.logSink.log(
+          'store',
+          'warn',
+          `retired consumer sweep failed: ${String(err)}`,
+        ),
+      );
 
     // Bundled transports SHADOW extension senders on a colliding source
     // id, and both sides are read live on every send — so an extension
@@ -1124,8 +1138,14 @@ app
     // Ownership split: the projection owns the FEED-derived slice (accounts);
     // identity/prefs/processing/mcp live here and change via patchState —
     // seeded from their real sources so the first diff can't regress them.
+    // #139: the 5 s tick below counts only when the ledger generation (or
+    // the active consumer set) moved; this boot read primes it.
+    const ledgerCounter = createLedgerCounter({
+      store: p.store,
+      activeConsumers: () => p.engine.activeConsumers(),
+    });
     const [initialLedger, initialIdentity] = await Promise.all([
-      p.store.ledgerCountsAll(p.engine.activeConsumers()),
+      ledgerCounter.count(),
       p.store.identity.get(),
     ]);
     let rev = 0;
@@ -1360,6 +1380,7 @@ app
     });
     const processingStatus = createProcessingStatus({
       countWaiting: () => p.store.visualWaitingCount(VISION_CONSUMER),
+      gen: () => p.store.ledgerGen(),
       providers: () =>
         p.inference.providers().map((prov) => ({
           id: prov.id,
@@ -1438,7 +1459,9 @@ app
         const wake = lane === 'open' && takeLaneWake(p);
         extensionsPlatform?.refreshLane(wake);
         processingStatus.tick(lane, wake);
-        const all = await p.store.ledgerCountsAll(p.engine.activeConsumers());
+        // #139: no ledger read at idle — only after something moved it.
+        const all = await ledgerCounter.countIfChanged();
+        if (!all) return;
         const processing = {
           pending: all.pending,
           done: all.done,
@@ -1489,6 +1512,14 @@ app
         queue.stop();
       },
     };
+    // The ONE scheduler start, for both boot paths (bootTail's interrupted-
+    // reset branch and startBackground's step).
+    const startScheduler = (): void => {
+      p.scheduler.start();
+      // #59 §0: one-shot, paged, in the background. Re-drive stays gated
+      // until it finishes; its completion arms the lane wake.
+      void p.scheduler.trigger(LEDGER_REKEY_JOB_ID);
+    };
     const finishedReset = await bootTail({
       journalPending: () => journal.pending(),
       finishInterruptedReset: () =>
@@ -1518,7 +1549,7 @@ app
       resumeAll: async () => {
         await resumeAccounts(p);
       },
-      startScheduler: () => p.scheduler.start(),
+      startScheduler,
       registerActivate: () => {
         app.on('activate', () => {
           showMainWindow();
@@ -1530,7 +1561,7 @@ app
           resumeReady: async (signal) => {
             await resumeAccounts(p, { defer: (a) => queue.defer(a), signal });
           },
-          startScheduler: () => p.scheduler.start(),
+          startScheduler,
           startUtilityExtensions: async () => {
             // The boot signal: quit / Reset all cancels pending activations
             // before any further utility host spawns (#140).

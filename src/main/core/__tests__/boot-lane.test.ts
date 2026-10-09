@@ -3,6 +3,7 @@ import {
   backgroundLaneOpen,
   backgroundLaneState,
   enrichmentInputsFor,
+  requestLaneWake,
   takeLaneWake,
 } from '../boot';
 import type { CorePlatform } from '../boot';
@@ -191,4 +192,11 @@ it('backgroundLaneState is the admission owner’s enrichment projection', () =>
   const spy = jest.spyOn(p.admission, 'enrichmentLane');
   expect(backgroundLaneState(p, NOON)).toBe('until-idle');
   expect(spy).toHaveBeenCalledWith(NOON);
+});
+
+it('requestLaneWake arms exactly one pending wake (#59 §0 repair completion)', () => {
+  const target = {} as Parameters<typeof requestLaneWake>[0];
+  requestLaneWake(target);
+  expect(takeLaneWake(target)).toBe(true);
+  expect(takeLaneWake(target)).toBe(false);
 });

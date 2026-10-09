@@ -25,6 +25,10 @@ import {
   type EnrichmentInputs,
 } from './admission';
 import { createAppProjection } from './app-projection';
+import {
+  registerChangesPrune,
+  registerLedgerRekey,
+} from './changes-maintenance';
 import type { AppStateExtras } from './app-projection';
 import { createConverter } from './engine/convert';
 import type { Converter } from './converter/converter';
@@ -377,9 +381,25 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     logs: sink,
     refreshers,
     admission,
+    // #59 §3a: seed pages run on the read worker, never behind ingest.
+    reads: readPlane.readsFor('other'),
   });
 
   registerArchiveSweep({ store, scheduler, logs: sink });
+  // #59 §3b: prune `changes` to a bounded tail. Never at boot; first-ever
+  // run 10 minutes in; a no-op until the ledger re-key repair is done.
+  void registerChangesPrune({
+    store,
+    scheduler,
+    logs: sink,
+    activeConsumers: () => engine.activeConsumers(),
+  }).catch((err) =>
+    sink.log(
+      'maintenance',
+      'error',
+      `changes prune registration failed: ${String(err)}`,
+    ),
+  );
 
   platform = {
     db,
@@ -422,6 +442,21 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   // Bound synchronously before anything can call: production never sees the
   // plane's closed default.
   inference.setLanePolicy(() => backgroundLaneOpen(platform));
+  // #59 §0: registered here (needs `platform` for the wake), triggered once
+  // by main.ts's startScheduler (boot-background's scheduler step, after
+  // scheduler.start()) so it never competes with the window.
+  void registerLedgerRekey({
+    store,
+    scheduler,
+    logs: sink,
+    onDone: () => requestLaneWake(platform),
+  }).catch((err) =>
+    sink.log(
+      'maintenance',
+      'error',
+      `ledger re-key registration failed: ${String(err)}`,
+    ),
+  );
   return platform;
 }
 
@@ -570,4 +605,11 @@ export function takeLaneWake(platform: CorePlatform): boolean {
   const had = pendingWake.has(platform);
   pendingWake.delete(platform);
   return had;
+}
+
+/** Arm one lane wake from outside the lane check. The ledger re-key repair
+ *  (#59 §0) calls this when it finishes, so the deferred re-drive it held
+ *  back runs on the next open publisher tick instead of on its cadence. */
+export function requestLaneWake(platform: CorePlatform): void {
+  pendingWake.add(platform);
 }

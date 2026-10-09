@@ -14,6 +14,7 @@ import {
 
 import { buildStemView } from '../stemming';
 import { corpusTooNewMessage } from './corpus-refusal';
+import { META_LEDGER_REKEYED } from './maintenance-keys';
 
 /** WHERE text shared VERBATIM by the stats queries in store.ts and the partial
  *  indexes below — SQLite only uses a partial index when the query's WHERE
@@ -85,8 +86,8 @@ const QUERY_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [
   // runs every 5 s. Almost every ledger row is a terminal 'skip', so the
   // index holds only the rest (NULL outcomes included). A query uses it only
   // if it repeats `outcome IS NOT 'skip'` (the planner must prove this
-  // partial WHERE). ledgerDeferred/ledgerHasDeferred don't yet: alpha-cent's
-  // vision patch anchors on their exact SQL and adds the term itself.
+  // partial WHERE). ledgerDeferred/ledgerHasDeferred repeat it too (#139);
+  // alpha-cent's vision patch anchors on their exact SQL text.
   {
     name: 'work_ledger_active',
     sql: `CREATE INDEX work_ledger_active ON work_ledger(consumer, outcome, seq) WHERE outcome IS NOT 'skip'`,
@@ -1268,6 +1269,7 @@ export function migrate(db: BetterSqlite3.Database): void {
   if (version > MIGRATIONS.length) {
     throw new Error(corpusTooNewMessage(version, MIGRATIONS.length));
   }
+  const fresh = version === 0;
   for (let i = version; i < MIGRATIONS.length; i += 1) {
     db.transaction(() => {
       const m = MIGRATIONS[i];
@@ -1279,5 +1281,11 @@ export function migrate(db: BetterSqlite3.Database): void {
       ).run(String(i + 1));
     })();
   }
+  // #59 §0: a corpus this build creates has no ledger rows keyed by the old
+  // feed materializer, so the one-shot re-key repair has nothing to do.
+  if (fresh)
+    db.prepare(`INSERT OR IGNORE INTO meta(key, value) VALUES(?, '1')`).run(
+      META_LEDGER_REKEYED,
+    );
   ensureQueryIndexes(db);
 }

@@ -17,6 +17,7 @@ import type {
   Lane,
   LogLevel,
   Projection,
+  Query,
   Seq,
   Session,
   Source,
@@ -38,6 +39,7 @@ import { isDbWorkerTransientError } from '../../db/worker-client';
 
 import { RECONCILE_ERROR_PREFIX } from '../store/last-error';
 import { NOOP_ADMISSION, type Admission } from '../admission';
+import { seedConsumerName } from '../store/maintenance-keys';
 import type { CoreStore } from '../store/store';
 import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
 import { FetchDeferredError } from './fetch-deferred';
@@ -54,6 +56,12 @@ export interface LogSink {
 
 export interface EngineDeps {
   store: CoreStore;
+  /** #59 §3a: where a new consumer's seed pages are read. Production passes
+   *  the read worker (boot's 'other' read plane) so paging never queues behind
+   *  ingest; defaults to `store.read`. */
+  reads?: Query;
+  /** Seed page size — tests only (default SEED_PAGE). */
+  seedPageSize?: number;
   sources: { get(id: string): Source | undefined };
   /** The plane. `seeWithMeta` is optional so engine fakes that never call
    *  it keep compiling; a session's `seeWithMeta` throws when absent. */
@@ -202,6 +210,8 @@ export const RECONCILE_STAGE_BATCH = 10_000;
  *  Documents on the main heap and killed the process (2026-08-24). Matched to
  *  FEED_BATCH, the live tail's equivalent bound. */
 export const REDRIVE_PAGE = 500;
+/** #59 §3a: live documents per seed page (one read-worker call each). */
+export const SEED_PAGE = 500;
 
 /** #147 §4 bounded writer units: a sub-commit (or a consumer flush) closes
  *  once it holds this much markdown/text … */
@@ -438,13 +448,18 @@ function pickScopeKeys(
   return out;
 }
 
+/** What a deferred-work re-drive did. `{ skipped: 'rekey-pending' }`: the
+ *  one-shot ledger re-key repair (#59 §0) has not finished, so nothing ran
+ *  and nothing was recorded; the repair's completion wakes the re-drive. */
+export type RedriveResult = { skipped: 'rekey-pending' } | undefined;
+
 export function createEngine(deps: EngineDeps): Engine & {
   /** Feed-consumer names of the currently attached workers. The consumers
    *  table also keeps rows of retired workers (e.g. an old version), whose
    *  frozen cursors must not count as pending work. */
   activeConsumers(): string[];
   /** Re-drive a worker's deferred changes (scheduler calls this on cadence). */
-  rerunDeferred(worker: Worker): Promise<void>;
+  rerunDeferred(worker: Worker): Promise<RedriveResult>;
   /** Stop every running handle (app shutdown). */
   stopAll(): Promise<void>;
   /** Persist an account's config; restarts its sync loop if one is running
@@ -874,6 +889,152 @@ export function createEngine(deps: EngineDeps): Engine & {
     // within on a success, on the final failed attempt, or on abort). No
     // attempt ran, so nothing was worked: record it as failed.
     return { docs: [], enrich: [], attempts: 0, outcome: 'failed' };
+  };
+
+  /** #59 §3a: seed `consumer` from `documents` instead of replaying the whole
+   *  change log. Runs when the consumer has no row, a half-done seed
+   *  (`seed:<consumer>` exists), or a cursor below the published prune
+   *  floor. The real row sits at `h0` (head at seed start) from the first
+   *  moment, so `pending` and the prune floor are right while seeding; a
+   *  document that changes meanwhile comes again through feed(h0), which is
+   *  idempotent (emissions key on (consumer, seq)). Returns false when
+   *  stopped mid-seed — the seed row keeps the last committed page.
+   *  A half-done seed resumes ONLY while its snapshot is still feedable: the
+   *  real row exists and h0 >= the published floor. Otherwise (the retired
+   *  sweep dropped the real row, or pruning passed h0 while the consumer was
+   *  away) feed(h0) would start inside a deleted interval, so the seed
+   *  restarts at the current head. */
+  const seedConsumer = async (
+    worker: Worker,
+    consumer: string,
+    signal: AbortSignal,
+  ): Promise<boolean> => {
+    const cursor = await store.consumerRow(consumer);
+    const floor = (await store.changesFloor()) ?? 0;
+    const seed = await store.consumerRow(seedConsumerName(consumer));
+    const feedable = cursor !== null && cursor >= floor;
+    if (feedable && seed === null) return true; // nothing to seed
+    let after: Seq = seed ?? 0;
+    if (!feedable) {
+      // beginSeed resets seed:<consumer> to 0 with the new h0.
+      await store.beginSeed(consumer, await store.headSeq());
+      after = 0;
+    }
+    const h0 = await store.consumerCursor(consumer);
+    const reads = deps.reads ?? store.read;
+    const pageSize = deps.seedPageSize ?? SEED_PAGE;
+    for (;;) {
+      if (signal.aborted) return false;
+      // eslint-disable-next-line no-await-in-loop
+      const page = await reads.seedPage!({
+        afterSeq: after,
+        throughSeq: h0,
+        limit: pageSize,
+      });
+      if (page.length === 0) break;
+      let emitted: DocumentInput[] = [];
+      let enrich: EnrichInput[] = [];
+      let clear: string[] = [];
+      let ledger: LedgerEntry[] = [];
+      let staged = 0;
+      const worked: string[] = [];
+      // As attach's dropBatch: nothing crashed, so clear the session.bump
+      // counters of what returned. The seed cursor stays put and the
+      // unflushed ledger entries are discarded with their outputs. No
+      // consumer cursor: the real row stays at h0 (#147 §4 contract).
+      const dropPage = () =>
+        worked.length
+          ? store.commit({ consumer, clearAttempts: worked }).catch(() => {})
+          : undefined;
+      /** One bounded seed write: an admitted `convert` unit like every
+       *  consumer flush (#147 §4). It carries the outputs and the ledger
+       *  outcomes worked so far in ONE transaction, under the REAL consumer
+       *  (its synthetic worker account), and never a consumer `cursor` — the
+       *  real row stays at h0 (#59 §3a). Only the page's last flush carries
+       *  `seedCursor`: a crash after an intermediate flush re-works the page
+       *  from the old seed cursor (idempotent: emissions key on
+       *  (consumer, seq), the ledger upserts). */
+      const flush = async (seedCursor?: Seq): Promise<void> => {
+        const hasOutput =
+          emitted.length > 0 ||
+          enrich.length > 0 ||
+          clear.length > 0 ||
+          ledger.length > 0;
+        if (!hasOutput && seedCursor === undefined) return;
+        let release: () => void;
+        try {
+          release = await admission.acquire('convert', signal);
+        } catch (err) {
+          if (signal.aborted) await dropPage();
+          throw err;
+        }
+        try {
+          await store.commit({
+            consumer,
+            ...(seedCursor !== undefined ? { seedCursor } : {}),
+            ledger: ledger.length ? ledger : undefined,
+            documents: emitted.length ? emitted : undefined,
+            enrich: enrich.length ? enrich : undefined,
+            clearAttempts: clear.length ? clear : undefined,
+          });
+        } finally {
+          release();
+        }
+        emitted = [];
+        enrich = [];
+        clear = [];
+        ledger = [];
+        staged = 0;
+      };
+      for (const document of page) {
+        if (signal.aborted) {
+          // eslint-disable-next-line no-await-in-loop
+          await dropPage();
+          return false;
+        }
+        const change: Change = {
+          seq: document.seq,
+          kind: 'document',
+          document,
+        };
+        let matched = false;
+        try {
+          matched = worker.matches(change);
+        } catch (err) {
+          logs.log(
+            `worker:${worker.name}`,
+            'warn',
+            `matches() threw on seq ${change.seq} — treated as non-match: ${String(err)}`,
+          );
+        }
+        if (!matched) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const r = await workOne(worker, change, signal, 'convert');
+        worked.push(document.id);
+        ledger.push({
+          seq: change.seq,
+          attempts: r.attempts,
+          outcome: r.outcome,
+        });
+        emitted.push(...r.docs);
+        enrich.push(...r.enrich);
+        if (r.outcome === 'done') clear.push(document.id);
+        staged +=
+          r.docs.reduce((n, d) => n + textBytes(d), 0) +
+          r.enrich.reduce((n, e) => n + textBytes(e), 0);
+        // eslint-disable-next-line no-await-in-loop
+        if (staged >= SUB_COMMIT_BYTES) await flush();
+      }
+      after = page[page.length - 1].seq;
+      // The page's last flush: its remaining outputs and ledger outcomes
+      // plus the seed progress, in one transaction. A crash before it
+      // re-works the page from the old seed cursor; after it, every deferral
+      // behind the seed cursor already has its retry row.
+      // eslint-disable-next-line no-await-in-loop
+      await flush(after);
+    }
+    await store.endSeed(consumer);
+    return true;
   };
 
   const engine = {
@@ -1881,6 +2042,9 @@ export function createEngine(deps: EngineDeps): Engine & {
         let retries = 0;
         for (;;) {
           try {
+            // #59 §3a: a consumer with no row, a half-done seed, or a cursor
+            // below the pruned floor is seeded from `documents` first.
+            if (!(await seedConsumer(worker, consumer, abort.signal))) return;
             const start = await store.consumerCursor(consumer);
             for await (const changes of abortable(
               store.feed(start),
@@ -2084,8 +2248,15 @@ export function createEngine(deps: EngineDeps): Engine & {
       return [...attachedWorkers];
     },
 
-    async rerunDeferred(worker: Worker): Promise<void> {
-      if (stopping) return;
+    async rerunDeferred(worker: Worker): Promise<RedriveResult> {
+      if (stopping) return undefined;
+      // #59 §0: until every deferred row is keyed on its document's current
+      // seq, a re-drive could resolve a stale seq to nothing and skip it for
+      // good, or race the repair. No-op — before any probe, admission or
+      // materialisation; the repair's completion wakes us.
+      if (!(await store.ledgerRekeyed())) return { skipped: 'rekey-pending' };
+      // The gate awaited the store: stopAll() may have begun meanwhile.
+      if (stopping) return undefined;
       const consumer = workerConsumerName(worker);
       const abort = new AbortController();
       let finished!: () => void;
@@ -2114,21 +2285,29 @@ export function createEngine(deps: EngineDeps): Engine & {
         // simply picked up by the next scheduled re-drive.
         let after: Seq = 0;
         for (;;) {
-          if (abort.signal.aborted) return; // between pages
+          if (abort.signal.aborted) return undefined; // between pages
           // eslint-disable-next-line no-await-in-loop
           const seqs = await store.ledgerDeferred(
             consumer,
             after,
             REDRIVE_PAGE,
           );
-          if (seqs.length === 0) return;
+          if (seqs.length === 0) return undefined;
           after = seqs[seqs.length - 1];
           // eslint-disable-next-line no-await-in-loop
           const changes = await store.changesAt(seqs);
+          // #59 §0: a deferred seq no document carries any more resolves to
+          // nothing. With the repair done that only means the document was
+          // purged (or changed and was fed again under its new seq): resolve
+          // the row terminally so it stops being re-selected forever.
+          const resolved = new Set(changes.map((c) => c.seq));
+          const unresolved: LedgerEntry[] = seqs
+            .filter((s) => !resolved.has(s))
+            .map((s) => ({ seq: s, attempts: 0, outcome: 'skip' }));
 
           let emitted: DocumentInput[] = [];
           let enrich: EnrichInput[] = [];
-          const ledger: LedgerEntry[] = [];
+          const ledger: LedgerEntry[] = [...unresolved];
           let clear: string[] = [];
           let staged = 0;
           /** Re-drive output, one admitted `redrive` unit per flush. NEVER a
@@ -2157,7 +2336,7 @@ export function createEngine(deps: EngineDeps): Engine & {
           // is worked once; its duplicates resolve like a skip.
           const seen = new Set<string>();
           for (const change of changes) {
-            if (abort.signal.aborted) return; // between changes: no more work
+            if (abort.signal.aborted) return undefined; // between changes
             // changesAt materializes the CURRENT document, so a doc that gained
             // real markdown between defer and re-drive no longer matches, and an
             // ARCHIVED doc stops matching too (both bundled classifiers return
@@ -2201,7 +2380,7 @@ export function createEngine(deps: EngineDeps): Engine & {
           // reallocated on every iteration).
           // eslint-disable-next-line no-await-in-loop
           await flush();
-          if (abort.signal.aborted) return; // before the ledger write
+          if (abort.signal.aborted) return undefined; // before the ledger write
           // Only now resolve the page's ledger entries — its skips and worked
           // outcomes in ONE statement (one round trip per entry was 2.1M of
           // them through the DB worker bridge). The re-drive has no cursor: the
@@ -2218,7 +2397,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       } catch (err) {
         // Stopped mid-page: nothing of this page was recorded in the ledger,
         // so its entries stay 'deferred' for the next run.
-        if (abort.signal.aborted) return;
+        if (abort.signal.aborted) return undefined;
         throw err;
       } finally {
         activeRedrives.delete(entry);
@@ -2256,7 +2435,10 @@ export function createEngine(deps: EngineDeps): Engine & {
             let state: S = state0;
             onDiff(state, seq);
             for await (const changes of abortable(
-              store.feed(seq),
+              // #59 §0: a projection writes no ledger, and app-projection
+              // counts a document's insert row (seq === ingestSeq) even when
+              // the reader only reaches it after a later update.
+              store.feed(seq, { everySeq: true }),
               abort.signal,
             )) {
               if (abort.signal.aborted) return;

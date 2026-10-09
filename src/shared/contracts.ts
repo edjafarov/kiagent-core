@@ -263,13 +263,26 @@ export type CommitBatch =
       /** Omitted = leave `consumers.cursor` exactly as stored: the commit
        *  runs no statement against `consumers` at all. Only a worker's live
        *  tail (`engine.attach`) advances its own cursor; bounded mid-batch
-       *  flushes and the deferred re-drive omit it (#147 §4). */
+       *  flushes, the deferred re-drive (#147 §4) and seed pages (#59 §3a —
+       *  the real row stays at h0) omit it. */
       cursor?: Seq;
       documents?: DocumentInput[];
       enrich?: EnrichInput[];
       /** Doc ids whose work_attempts rows (this consumer) are deleted in this
        *  same transaction — the commit that persists their `done` outcome. */
       clearAttempts?: string[];
+      /** #59 §3a seeding only: `seed:<consumer>` is set to this seq in the
+       *  same transaction (UPDATE only — a finished seed row stays gone). */
+      seedCursor?: Seq;
+      /** #59 §3a seeding only: this page's ledger outcomes, upserted in the
+       *  SAME transaction as its outputs and `seedCursor`. A crash can then
+       *  never leave a deferral behind the seed cursor without its retry
+       *  row (feed(h0) would never see it again). */
+      ledger?: Array<{
+        seq: Seq;
+        attempts: number;
+        outcome: 'done' | 'skip' | 'failed' | 'deferred' | null;
+      }>;
     }
   /** ONE cascade: purge documents (tombstones into the feed), delete cursor,
    *  config, credentials. */
@@ -296,6 +309,14 @@ export interface Query {
     afterSeq?: number;
     limit: number;
     types: string[];
+  }): Promise<Document[]>;
+  /** Engine-internal (#59 §3a seeding); never exposed to extensions (not in
+   *  host-surfaces / extension-host-entry). Live documents with
+   *  `afterSeq < seq <= throughSeq`, oldest first, at most `limit` (≤ 500). */
+  seedPage?(input: {
+    afterSeq: number;
+    throughSeq: number;
+    limit: number;
   }): Promise<Document[]>;
   children(id: DocumentId): Promise<Document[]>;
   byExternalId(
@@ -406,7 +427,15 @@ export interface Store {
   /** Tail the change log from a position. Live: keeps yielding. */
   feed(
     after: Seq,
-    opts?: { kinds?: Change['kind'][] },
+    opts?: {
+      kinds?: Change['kind'][];
+      /** #59 §0: by default a document is fed only under its CURRENT seq,
+       *  so a ledger-writing consumer always keys on documents.seq. A
+       *  read-only projection that counts insert rows (seq === ingestSeq)
+       *  sets this to receive every document change, each paired with the
+       *  current document. Never for a consumer that writes the ledger. */
+      everySeq?: boolean;
+    },
   ): AsyncIterable<Change[]>;
   /** Engine-only in practice — no extension ever holds this. */
   commit(batch: CommitBatch): Promise<Seq>;

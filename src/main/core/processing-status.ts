@@ -9,6 +9,9 @@ import type { ActiveCalls } from './active-calls';
 
 export interface ProcessingStatusDeps {
   countWaiting: () => Promise<number>;
+  /** #139: `CoreStore.ledgerGen`. When given, `refreshWaiting` skips the
+   *  count while the generation has not moved since the last successful one. */
+  gen?: () => number;
   providers: () => Array<{
     id: string;
     remote: boolean;
@@ -67,10 +70,17 @@ export function createProcessingStatus(deps: ProcessingStatusDeps): {
   let unsub: (() => void) | null = null;
   let emptyTimer: ReturnType<typeof setTimeout> | null = null;
 
+  let lastWaitingGen: number | null = null;
+
   const refreshWaiting = (): Promise<void> => {
-    inFlight ??= deps
+    if (inFlight) return inFlight;
+    // Read BEFORE the query: a write landing during it is counted next time.
+    const gen = deps.gen?.() ?? null;
+    if (gen !== null && gen === lastWaitingGen) return Promise.resolve();
+    inFlight = deps
       .countWaiting()
       .then((n) => {
+        lastWaitingGen = gen;
         if (n !== lastWaiting) {
           lastWaiting = n;
           deps.patch({ waiting: n });

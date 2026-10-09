@@ -602,6 +602,13 @@ describe('consumer flushes (#147 §4)', () => {
     });
     return acc;
   }
+  /** These cases pin the LIVE TAIL's flushes: give the consumer a real row
+   *  at 0 so attach feeds from 0 instead of seeding from `documents`
+   *  (#59 §3a seeds a consumer with no row). */
+  async function tailFromZero(worker: Worker) {
+    await store.commit({ consumer: workerConsumerName(worker), cursor: 0 });
+    consumerCommits.length = 0;
+  }
   const todo = (c: Change) =>
     c.kind === 'document' &&
     (c.document.metadata as { todo?: boolean }).todo === true;
@@ -632,6 +639,7 @@ describe('consumer flushes (#147 §4)', () => {
     const consumer = workerConsumerName(worker);
     const convertAcquires = () =>
       acquire.mock.calls.filter(([k]) => k === 'convert').length;
+    await tailFromZero(worker);
     const h = engine.attach(worker);
     // The enrich commits create new document changes; the feed consumes them
     // next, they no longer match, and their batch ends in a cursor-only flush.
@@ -670,6 +678,7 @@ describe('consumer flushes (#147 §4)', () => {
     >(async () => () => {});
     // 1 Mi 'あ' = 1 Mi code units but 3 MiB of UTF-8.
     const worker = enrichWorker('あ'.repeat(MiB));
+    await tailFromZero(worker);
     const h = engineWith({ acquire }).attach(worker);
     await waitFor(() =>
       consumerCommits.some(
@@ -699,6 +708,7 @@ describe('consumer flushes (#147 §4)', () => {
     const consumer = workerConsumerName(worker);
     const convertAcquires = () =>
       acquire.mock.calls.filter(([k]) => k === 'convert').length;
+    await tailFromZero(worker);
     const h = engineWith({ acquire }).attach(worker);
     await waitFor(
       async () =>
@@ -726,12 +736,49 @@ describe('consumer flushes (#147 §4)', () => {
       work: async () => 'skip',
     };
     const consumer = workerConsumerName(worker);
+    await tailFromZero(worker);
     const h = engineWith(admission).attach(worker);
     await new Promise((r) => setTimeout(r, 500));
     expect(await store.consumerCursor(consumer)).toBe(0);
     leave();
     await waitFor(async () => (await store.consumerCursor(consumer)) > 0);
     await h.stop();
+  });
+
+  it('seed (#59 §3a): pages flush bounded and admitted, never with a consumer cursor; seedCursor only on the last flush', async () => {
+    await seed(['d1', 'd2', 'd3', 'd4']);
+    const acquire = jest.fn<
+      ReturnType<Admission['acquire']>,
+      Parameters<Admission['acquire']>
+    >(async () => () => {});
+    const worker = enrichWorker('x'.repeat(3 * MiB));
+    const consumer = workerConsumerName(worker);
+    const h = engineWith({ acquire }).attach(worker);
+    // Seeding ends (seed row deleted), then the feed from h0 delivers the
+    // enrich changes, which no longer match: a cursor-only live-tail flush.
+    await waitFor(
+      async () =>
+        (await store.consumerRow(`seed:${consumer}`)) === null &&
+        consumerCommits.some((c) => c.cursor !== undefined),
+    );
+    await h.stop();
+    const seedFlushes = consumerCommits.filter(
+      (c) => c.seedCursor !== undefined || (c.enrich?.length ?? 0) > 0,
+    );
+    expect(
+      seedFlushes.map((c) => [
+        c.enrich?.length ?? 0,
+        c.ledger?.length ?? 0,
+        c.seedCursor !== undefined,
+        'cursor' in c,
+      ]),
+    ).toEqual([
+      [3, 3, false, false], // 9 MiB staged ≥ 8 MiB → intermediate flush
+      [1, 1, true, false], // the page's last flush carries the seed progress
+    ]);
+    expect(
+      acquire.mock.calls.filter(([k]) => k === 'convert').length,
+    ).toBeGreaterThanOrEqual(consumerCommits.length);
   });
 
   it('stopAll aborts and drains a re-drive blocked on admission; nothing commits after it', async () => {

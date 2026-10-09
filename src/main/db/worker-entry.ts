@@ -13,6 +13,7 @@ import { ATTENTION_ACTION_POLICY } from '@main/attention/action-policy';
 import { createAttentionTx } from '@main/attention/attention-tx';
 import {
   createWriteTx,
+  type AccountWriteOp,
   type FolderScopeInput,
 } from '@main/core/store/write-tx';
 import {
@@ -138,6 +139,7 @@ async function runReadRole(): Promise<void> {
       () => process.exit(0),
       {
         commit: (args) => writeTx.commit(args as CommitBatch),
+        accountWrite: (args) => writeTx.accountWrite(args as AccountWriteOp),
         // The reconcile pass runs entirely on this connection: its staging
         // table is TEMP (connection-scoped), and the point of the whole
         // procedure set is that neither the listing nor the deletion set ever
@@ -175,6 +177,9 @@ async function runReadRole(): Promise<void> {
         // the whole point of hosting it here (see core/store/write-tx.ts).
         applyFolderScope: (args) =>
           writeTx.applyFolderScope(args as FolderScopeInput),
+        // #59 §0: one page of the re-key repair = one transaction here.
+        rekeyLedgerPage: (args) =>
+          writeTx.rekeyLedgerPage((args as { limit: number }).limit),
         rebuildSearchIndex: () => {
           repopulateSearchIndex(db._conn!);
           return null;

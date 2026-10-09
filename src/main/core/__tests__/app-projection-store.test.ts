@@ -75,7 +75,8 @@ describe('app projection docCount vs the store (#180)', () => {
     const head = await store.headSeq();
     if (head <= seq) return;
     const changes: Change[] = [];
-    for await (const batch of store.feed(seq)) {
+    // Same feed options as engine.project (#59 §0: every seq).
+    for await (const batch of store.feed(seq, { everySeq: true })) {
       changes.push(...batch);
       if (batch.length && batch[batch.length - 1].seq >= head) break;
     }

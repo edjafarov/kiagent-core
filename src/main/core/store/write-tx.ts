@@ -4,16 +4,24 @@ import type BetterSqlite3 from 'better-sqlite3';
 
 import type {
   AccountId,
+  Cadence,
   Change,
   CommitBatch,
   DocumentInput,
+  ErrorScope,
   ExternalRef,
   Seq,
+  SyncStatus,
 } from '@shared/contracts';
 
 import { newId } from '../ids';
 import { buildStemView } from '../stemming';
 import { lastErrorAssignment } from './last-error';
+import {
+  META_LEDGER_REKEY_CURSOR,
+  META_LEDGER_REKEYED,
+  seedConsumerName,
+} from './maintenance-keys';
 import type { AccountRow, DocRow } from './store';
 
 /** Injected so the write path stays testable and Electron-free. Mirrors the
@@ -37,6 +45,11 @@ function contentHash(d: DocumentInput): string {
     )
     .digest('hex');
 }
+
+/** #135: a sync-progress-only `account` change (progress / last_sync_at,
+ *  which moves on every commit) is published at most once per this window
+ *  per account. Status and last_error changes publish at once. */
+export const ACCOUNT_SYNC_TICK_MS = 60_000;
 
 /** DECISIONS R5: is this account folder-scoped? Read off the CANONICAL marker
  *  every folder-scoped source writes — `config.folderRoots` (contracts'
@@ -193,8 +206,55 @@ export function withLegacyMirror(
   return config; // no legacy reader on this source — nothing to mirror
 }
 
+/** #135: the store's account writers, run as ONE synchronous transaction on
+ *  the writer connection so the last-published mark lands in the same JS
+ *  turn as the COMMIT. */
+export type AccountWriteOp =
+  | {
+      op: 'create';
+      source: string;
+      identifier: string;
+      config?: Record<string, unknown>;
+      status?: SyncStatus;
+      cadence?: Cadence;
+    }
+  | { op: 'getOrCreate'; source: string; identifier: string }
+  | { op: 'cadence'; id: AccountId; cadence: Cadence | null }
+  | { op: 'config'; id: AccountId; config: Record<string, unknown> }
+  | {
+      op: 'status';
+      id: AccountId;
+      status?: SyncStatus;
+      error?: string | null;
+      errorScope?: ErrorScope;
+    };
+
+/** `logged`: the transaction appended an `account` change. */
+export interface AccountWriteResult {
+  id: AccountId;
+  logged: boolean;
+}
+
+/** What one commit did. `logged`: the transaction appended at least one
+ *  `changes` row (documents, archives, account, purge, accountRemoved). The
+ *  store wakes feeds only then (#135). */
+export interface CommitResult {
+  seq: Seq;
+  logged: boolean;
+}
+
+/** Spec §0: keyset pages of this many deferred rows, one writer call each. */
+export const LEDGER_REKEY_PAGE = 5_000;
+
+/** One page of the re-key repair. `done` ⇒ `meta.ledgerRekeyed` is set. */
+export interface RekeyPageResult {
+  done: boolean;
+  scanned: number;
+}
+
 export interface WriteTx {
-  commit(batch: CommitBatch): Seq;
+  commit(batch: CommitBatch): CommitResult;
+  accountWrite(op: AccountWriteOp): AccountWriteResult;
   /** Start a pass: drop whatever the previous one staged for this account. */
   reconcileBegin(accountId: string): void;
   /** Stage one bounded slice of the connector's listing. */
@@ -215,6 +275,12 @@ export interface WriteTx {
    *  reported as leaving scope + one `changes` row per archived document.
    *  Returns COUNTS ONLY — never row sets. */
   applyFolderScope(input: FolderScopeInput): FolderScopeResult;
+  /** #59 §0 — ONE page of the re-key repair, in ONE transaction: every
+   *  `deferred` row of the current consumer past `meta.ledgerRekeyCursor`
+   *  whose seq no document carries is re-keyed to the document's current
+   *  seq (or dropped), then the cursor is persisted. The last page sets
+   *  `meta.ledgerRekeyed`. */
+  rekeyLedgerPage(limit: number): RekeyPageResult;
 }
 
 /**
@@ -234,12 +300,44 @@ export function createWriteTx(
 ): WriteTx {
   // ── low-level helpers (all run inside the caller's transaction) ──────────
 
+  // #135: when each account's last `account` change COMMITTED (ms on the
+  // deps.now() clock). In memory on purpose: `changes` has no (kind, ref_id)
+  // index, so asking it would scan the whole log. A missing entry (cold
+  // start, DB-worker respawn) reads as "long ago".
+  const accountPublishedAt = new Map<string, number>();
+  const markPublished = (accountId: string, at: string): void => {
+    accountPublishedAt.set(accountId, Date.parse(at));
+  };
+  // `account` appends of the transaction in flight; marked only after it
+  // returned (see `publishing`).
+  const accountAppends: Array<[string, string]> = [];
+  // Rows appended by the commit in flight; reset by `commit` below (#135).
+  let appended = 0;
   const appendChange = (kind: Change['kind'], refId: string): Seq => {
+    const at = deps.now();
     const r = conn
       .prepare(`INSERT INTO changes(kind, ref_id, at) VALUES(?, ?, ?)`)
-      .run(kind, refId, deps.now());
+      .run(kind, refId, at);
+    appended += 1;
+    if (kind === 'account') accountAppends.push([refId, at]);
     return Number(r.lastInsertRowid);
   };
+  /** Wrap a SYNCHRONOUS transaction function: mark what it appended right
+   *  after it returned, in the same JS turn as its COMMIT. A rollback throws
+   *  first, so nothing is marked; with no await in between, no other call
+   *  can interleave. */
+  const publishing =
+    <A extends unknown[], R>(fn: (...args: A) => R) =>
+    (...args: A): R => {
+      accountAppends.length = 0;
+      try {
+        const r = fn(...args);
+        for (const [id, at] of accountAppends) markPublished(id, at);
+        return r;
+      } finally {
+        accountAppends.length = 0;
+      }
+    };
 
   const getAccountRow = (id: string): AccountRow | undefined =>
     conn.prepare(`SELECT * FROM accounts WHERE id = ?`).get(id) as
@@ -488,6 +586,107 @@ export function createWriteTx(
 
   // ── the write primitive ───────────────────────────────────────────────────
 
+  // #135: the store's account writers (formerly db.batch in store.ts). Same
+  // SQL as before; `appendChange` records the account append for `publishing`.
+  const accountWriteTx = conn.transaction(
+    (w: AccountWriteOp): AccountWriteResult => {
+      switch (w.op) {
+        case 'create': {
+          const row = conn
+            .prepare(
+              `INSERT INTO accounts(id, source, identifier, config, status, cadence, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source, identifier) DO UPDATE SET
+                 config = excluded.config,
+                 status = excluded.status
+               RETURNING id`,
+            )
+            .get(
+              newId<'account'>(),
+              w.source,
+              w.identifier,
+              JSON.stringify(w.config ?? {}),
+              w.status ?? 'connecting',
+              w.cadence ? JSON.stringify(w.cadence) : null,
+              deps.now(),
+            ) as { id: AccountId };
+          appendChange('account', row.id);
+          return { id: row.id, logged: true };
+        }
+        case 'getOrCreate': {
+          const found = conn
+            .prepare(
+              `SELECT id FROM accounts WHERE source = ? AND identifier = ?`,
+            )
+            .get(w.source, w.identifier) as { id: AccountId } | undefined;
+          if (found) return { id: found.id, logged: false };
+          const id = newId<'account'>();
+          conn
+            .prepare(
+              `INSERT INTO accounts(id, source, identifier, config, status, created_at)
+               VALUES(?, ?, ?, '{}', 'live', ?)`,
+            )
+            .run(id, w.source, w.identifier, deps.now());
+          appendChange('account', id);
+          return { id, logged: true };
+        }
+        case 'cadence': {
+          // #135: log only when the stored value changes; the UPDATE has no
+          // unconditional column, so `changes` is exact.
+          const value = w.cadence ? JSON.stringify(w.cadence) : null;
+          const r = conn
+            .prepare(
+              `UPDATE accounts SET cadence = ? WHERE id = ? AND cadence IS NOT ?`,
+            )
+            .run(value, w.id, value);
+          if (r.changes === 0) return { id: w.id, logged: false };
+          appendChange('account', w.id);
+          return { id: w.id, logged: true };
+        }
+        case 'config': {
+          // #135: same idiom as cadence.
+          const value = JSON.stringify(w.config);
+          const r = conn
+            .prepare(
+              `UPDATE accounts SET config = ? WHERE id = ? AND config IS NOT ?`,
+            )
+            .run(value, w.id, value);
+          if (r.changes === 0) return { id: w.id, logged: false };
+          appendChange('account', w.id);
+          return { id: w.id, logged: true };
+        }
+        case 'status': {
+          // Write and log only when status or last_error actually differs
+          // (unchanged semantics of the former setAccountStatus batch).
+          const lastError = lastErrorAssignment(w.error, w.errorScope);
+          const status = w.status ?? null;
+          const r = conn
+            .prepare(
+              `UPDATE accounts SET status = COALESCE(?, status),
+                 ${lastError.sql}
+               WHERE id = ?
+                 AND (COALESCE(?, status) IS NOT status
+                   OR (${lastError.expr}) IS NOT last_error)`,
+            )
+            .run(
+              status,
+              ...lastError.params,
+              w.id,
+              status,
+              ...lastError.params,
+            );
+          if (r.changes === 0) return { id: w.id, logged: false };
+          appendChange('account', w.id);
+          return { id: w.id, logged: true };
+        }
+        default:
+          throw new Error(
+            `unknown account write: ${String((w as { op: unknown }).op)}`,
+          );
+      }
+    },
+  );
+
   const commitTx = conn.transaction((batch: CommitBatch): Seq => {
     let last: Seq = Number(
       (
@@ -508,6 +707,27 @@ export function createWriteTx(
          ON CONFLICT(name) DO UPDATE SET cursor = excluded.cursor`,
           )
           .run(batch.consumer, batch.cursor);
+      // #59 §3a: seeding progress, atomically with the page's outputs. Its own
+      // statement on its own row — never the consumer cursor upsert above.
+      // UPDATE only: a finished (deleted) seed row is never revived.
+      if (batch.seedCursor !== undefined)
+        conn
+          .prepare(`UPDATE consumers SET cursor = ? WHERE name = ?`)
+          .run(batch.seedCursor, seedConsumerName(batch.consumer));
+      // #59 §3a: the page's ledger outcomes, in the same transaction as its
+      // outputs and seed progress (same upsert as store.ledgerRecordMany).
+      if (batch.ledger?.length) {
+        const ts = deps.now();
+        const upsert = conn.prepare(
+          `INSERT INTO work_ledger(consumer, seq, attempts, outcome, updated_at)
+           VALUES(?, ?, ?, ?, ?)
+           ON CONFLICT(consumer, seq) DO UPDATE
+             SET attempts = excluded.attempts, outcome = excluded.outcome,
+                 updated_at = excluded.updated_at`,
+        );
+        for (const e of batch.ledger)
+          upsert.run(batch.consumer, e.seq, e.attempts, e.outcome, ts);
+      }
       if (batch.clearAttempts?.length) {
         const del = conn.prepare(
           `DELETE FROM work_attempts WHERE consumer = ? AND doc_id = ?`,
@@ -669,8 +889,27 @@ export function createWriteTx(
       const seq = archiveByRef(acc.id, ref);
       if (seq !== null) last = seq;
     }
-    last = appendChange('account', acc.id);
     const lastError = lastErrorAssignment(batch.error, batch.errorScope);
+    // #135: append an `account` change only when a feed reader can see
+    // something new — status or last_error at once; sync progress (progress
+    // and last_sync_at, which moves on every commit) at most once per
+    // ACCOUNT_SYNC_TICK_MS. The account row itself is written below on every
+    // commit. (This variant carries no config: config publishes through
+    // setAccountConfig / applyFolderScope.)
+    const nextError = (
+      conn
+        .prepare(`SELECT ${lastError.expr} AS e FROM accounts WHERE id = ?`)
+        .get(...lastError.params, acc.id) as { e: string | null }
+    ).e;
+    const visible =
+      (batch.status !== undefined && batch.status !== acc.status) ||
+      nextError !== acc.last_error;
+    const ts = deps.now();
+    const publishedAt = accountPublishedAt.get(acc.id);
+    const tickDue =
+      publishedAt === undefined ||
+      Date.parse(ts) - publishedAt >= ACCOUNT_SYNC_TICK_MS;
+    if (visible || tickDue) last = appendChange('account', acc.id);
     conn
       .prepare(
         `UPDATE accounts SET cursor = ?, status = COALESCE(?, status),
@@ -684,7 +923,7 @@ export function createWriteTx(
         batch.status ?? null,
         batch.progress ? JSON.stringify(batch.progress) : null,
         ...lastError.params,
-        deps.now(),
+        ts,
         acc.id,
       );
     return last;
@@ -1036,8 +1275,131 @@ export function createWriteTx(
     },
   );
 
+  // ── #59 §0: the paged re-key repair ──────────────────────────────────────
+  //
+  // Before 0.10x the feed materializer paired a historical document change
+  // seq with the CURRENT document, so a deferral could be keyed on a seq no
+  // document carries. Each such row is resolved through its `changes` row:
+  //  · document gone (or no document change)  → drop it;
+  //  · consumer row at the current seq: none  → move the deferral there
+  //    (attempts kept — it is the same deferral);
+  //  · done                                    → drop the stale row;
+  //  · anything else (skip/deferred/failed/NULL) → that row becomes
+  //    'deferred' with attempts 0, the stale row goes. A 'skip' there is no
+  //    evidence the document was handled: the old re-drive coalescer wrote
+  //    duplicates as skip even when the first occurrence deferred again.
+  // The page walks ONE consumer's deferred rows by seq through
+  // work_ledger_active (the `IS NOT 'skip'` term lets the planner use it);
+  // the next consumer is a primary-key seek.
+  const rekeyLedgerPageTx = conn.transaction(
+    (limit: number): RekeyPageResult => {
+      const getMeta = conn.prepare(`SELECT value FROM meta WHERE key = ?`);
+      const setMeta = conn.prepare(
+        `INSERT INTO meta(key, value) VALUES(?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      );
+      const nextConsumer = conn.prepare(
+        `SELECT MIN(consumer) AS c FROM work_ledger WHERE consumer > ?`,
+      );
+      const finish = (scanned: number): RekeyPageResult => {
+        setMeta.run(META_LEDGER_REKEYED, '1');
+        conn
+          .prepare(`DELETE FROM meta WHERE key = ?`)
+          .run(META_LEDGER_REKEY_CURSOR);
+        return { done: true, scanned };
+      };
+
+      const raw = (
+        getMeta.get(META_LEDGER_REKEY_CURSOR) as { value: string } | undefined
+      )?.value;
+      let pos = raw
+        ? (JSON.parse(raw) as { consumer: string; seq: number })
+        : null;
+      if (!pos) {
+        const first = nextConsumer.get('') as { c: string | null };
+        if (first.c === null) return finish(0);
+        pos = { consumer: first.c, seq: 0 };
+      }
+
+      const rows = conn
+        .prepare(
+          `SELECT seq, attempts FROM work_ledger
+            WHERE consumer = ? AND outcome = 'deferred' AND outcome IS NOT 'skip'
+              AND seq > ?
+            ORDER BY seq LIMIT ?`,
+        )
+        .all(pos.consumer, pos.seq, limit) as Array<{
+        seq: number;
+        attempts: number;
+      }>;
+
+      const isCurrent = conn.prepare(`SELECT 1 FROM documents WHERE seq = ?`);
+      const changeAt = conn.prepare(
+        `SELECT kind, ref_id FROM changes WHERE seq = ?`,
+      );
+      const docSeq = conn.prepare(`SELECT seq FROM documents WHERE id = ?`);
+      const rowAt = conn.prepare(
+        `SELECT outcome FROM work_ledger WHERE consumer = ? AND seq = ?`,
+      );
+      const del = conn.prepare(
+        `DELETE FROM work_ledger WHERE consumer = ? AND seq = ?`,
+      );
+      const insert = conn.prepare(
+        `INSERT INTO work_ledger(consumer, seq, attempts, outcome, updated_at)
+         VALUES(?, ?, ?, 'deferred', ?)`,
+      );
+      const retry = conn.prepare(
+        `UPDATE work_ledger SET outcome = 'deferred', attempts = 0, updated_at = ?
+          WHERE consumer = ? AND seq = ?`,
+      );
+
+      const { consumer } = pos;
+      for (const r of rows) {
+        if (isCurrent.get(r.seq)) continue; // already keyed on a current seq
+        const change = changeAt.get(r.seq) as
+          | { kind: string; ref_id: string }
+          | undefined;
+        const current =
+          change && change.kind === 'document'
+            ? (docSeq.get(change.ref_id) as { seq: number } | undefined)
+            : undefined;
+        if (current) {
+          const there = rowAt.get(consumer, current.seq) as
+            | { outcome: string | null }
+            | undefined;
+          if (!there) insert.run(consumer, current.seq, r.attempts, deps.now());
+          else if (there.outcome !== 'done')
+            retry.run(deps.now(), consumer, current.seq);
+        }
+        del.run(consumer, r.seq);
+      }
+
+      if (rows.length === limit) {
+        setMeta.run(
+          META_LEDGER_REKEY_CURSOR,
+          JSON.stringify({ consumer, seq: rows[rows.length - 1].seq }),
+        );
+        return { done: false, scanned: rows.length };
+      }
+      // This consumer is exhausted: move to the next one, or finish.
+      const next = nextConsumer.get(consumer) as { c: string | null };
+      if (next.c === null) return finish(rows.length);
+      setMeta.run(
+        META_LEDGER_REKEY_CURSOR,
+        JSON.stringify({ consumer: next.c, seq: 0 }),
+      );
+      return { done: false, scanned: rows.length };
+    },
+  );
+
   return {
-    commit: (batch: CommitBatch): Seq => commitTx(batch),
+    commit: publishing((batch: CommitBatch): CommitResult => {
+      appended = 0;
+      const seq = commitTx(batch);
+      return { seq, logged: appended > 0 };
+    }),
+
+    accountWrite: publishing((w: AccountWriteOp) => accountWriteTx(w)),
 
     reconcileBegin: (accountId) => beginPass(accountId),
 
@@ -1086,6 +1448,9 @@ export function createWriteTx(
 
     reconcileEnd: (accountId) => endPass(accountId),
 
-    applyFolderScope: (input) => applyFolderScopeTx(input),
+    applyFolderScope: publishing((input: FolderScopeInput) =>
+      applyFolderScopeTx(input),
+    ),
+    rekeyLedgerPage: (limit) => rekeyLedgerPageTx(limit),
   };
 }

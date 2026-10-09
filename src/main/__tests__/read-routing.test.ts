@@ -24,13 +24,20 @@ describe('read routing (spec §3.3)', () => {
   it('the extension slice, engine, evidence, outbound and factory reset stay on the writer', () => {
     for (const rel of [
       'platform/extension-platform.ts',
-      'core/engine/engine.ts',
       'core/engine/message-evidence.ts',
       'outbound/service.ts',
       'factory-reset.ts',
     ]) {
       expect(read(rel)).not.toMatch(/\breadsFor\b|\.reads\b/);
     }
+    // #59 §3a: the ONE engine read off the writer is a new consumer's seed
+    // paging (spec: on the read worker, never behind ingest). Everything
+    // else in the engine stays on the writer.
+    const engine = read('core/engine/engine.ts');
+    expect(engine).not.toMatch(/\breadsFor\b/);
+    expect(engine.match(/\.reads\b/g)).toEqual(['.reads']);
+    expect(engine).toMatch(/const reads = deps\.reads \?\? store\.read;/);
+    expect(engine.match(/\breads\.\w+/g)).toEqual(['reads.seedPage']);
     expect(read('platform/extension-platform.ts')).toMatch(
       /withAccountTypes\(deps\.store\.read/,
     );

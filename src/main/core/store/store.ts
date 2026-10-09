@@ -21,9 +21,13 @@ import type {
 
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { resetCoreStoreTables } from '../../db/repositories/core-maintenance';
-import { newId } from '../ids';
 import { accountsFrom, createCorpusQuery } from './corpus-query';
-import { lastErrorAssignment } from './last-error';
+import {
+  META_CHANGES_FLOOR,
+  META_LEDGER_REKEYED,
+  SEED_CONSUMER_PREFIX,
+  seedConsumerName,
+} from './maintenance-keys';
 import { createOutboxStore, type OutboxStore } from './outbox';
 import {
   ACTIONABLE_VISUAL_SIZE_WHERE,
@@ -34,9 +38,14 @@ import {
 import { toAccount, toDocument, type AccountRow, type DocRow } from './rows';
 import {
   createWriteTx,
+  LEDGER_REKEY_PAGE,
+  type AccountWriteOp,
+  type AccountWriteResult,
+  type CommitResult,
   type FolderScopeInput,
   type FolderScopeResult,
   type ReconcileCounts,
+  type RekeyPageResult,
 } from './write-tx';
 
 export type { AccountRow, DocRow } from './rows';
@@ -292,6 +301,30 @@ export interface CoreStore extends Store {
    *  the bug this contract exists to prevent. */
   applyFolderScope(input: FolderScopeInput): Promise<FolderScopeResult>;
   consumerCursor(name: string): Promise<Seq>;
+  /** The consumer's cursor, or null when it has no row (`consumerCursor`
+   *  reads a missing row as 0). */
+  consumerRow(name: string): Promise<Seq | null>;
+  /** #59 §3a, ONE transaction: the real row at `h0` (head at seed start) and
+   *  the `seed:<consumer>` progress row at 0. */
+  beginSeed(consumer: string, h0: Seq): Promise<void>;
+  /** Seeding finished: drop `seed:<consumer>`. */
+  endSeed(consumer: string): Promise<void>;
+  /** `meta.changesFloor`, or null when no prune ever published one. */
+  changesFloor(): Promise<Seq | null>;
+  /** First change seq whose `at` is at/after `since` (ISO), by bisecting
+   *  the primary key; `MAX(seq) + 1` when every change is older. */
+  firstChangeSeqAt(since: string): Promise<Seq>;
+  /** MIN(cursor) over these consumers' rows; null when none has a row. */
+  consumerFloor(consumers: readonly string[]): Promise<Seq | null>;
+  /** Oldest retained change seq; null when the log is empty. */
+  minChangeSeq(): Promise<Seq | null>;
+  /** Raise `meta.changesFloor` to `limit` (never lowers it). */
+  publishChangesFloor(limit: Seq): Promise<void>;
+  /** Delete `changes` rows with `from <= seq < to` — one primary-key range,
+   *  one writer call. Returns the number deleted. */
+  deleteChangesRange(from: Seq, to: Seq): Promise<number>;
+  /** `PRAGMA wal_checkpoint(PASSIVE)`. */
+  walCheckpoint(): Promise<void>;
   ledgerRecord(
     consumer: string,
     seq: Seq,
@@ -305,12 +338,29 @@ export interface CoreStore extends Store {
   /** Drop attempt rows of consumers no longer attached (retired worker
    *  versions). No-op when `active` is empty. */
   pruneAttempts(active: readonly string[]): Promise<void>;
+  /** #139: `pruneAttempts`' contract applied to `consumers` + `work_ledger`.
+   *  Every consumers row that is neither active nor a `seed:` progress row is
+   *  retired: its ledger rows go in (consumer, seq) windows, then the row
+   *  itself (last, so an interrupted sweep resumes). No-op when `active` is
+   *  empty; with nothing retired it issues no work_ledger statement. */
+  sweepRetiredConsumers(
+    active: readonly string[],
+  ): Promise<{ consumers: number; rows: number }>;
   /** Across every consumer — drives the app-wide processing panel. `pending`
    *  is the largest feed lag among `consumers` (default: every consumer row);
    *  pass the live workers so a retired consumer's stale cursor is ignored. */
   ledgerCountsAll(
     consumers?: readonly string[],
   ): Promise<LedgerCounts & { pending: number }>;
+  /** #139: in-memory generation, bumped by every write that can move
+   *  `ledgerCountsAll` or `visualWaitingCount` — commits (consumer cursors
+   *  move `pending`), feed nudges, ledger and consumers writes. Synchronous:
+   *  never a DB call. The 5 s count tick and the 60 s waiting count skip
+   *  their queries while it has not moved. */
+  ledgerGen(): number;
+  /** Bump `ledgerGen` for a ledger write made outside the store's own
+   *  methods (alpha-cent's `ledgerRetry` patch calls this). */
+  markLedgerChanged(): void;
   /** The account's live-document count and its archived (not yet purged)
    *  document ids, read by ONE statement so both come from the same
    *  snapshot — seeds the app projection, whose archived index lets a
@@ -341,6 +391,14 @@ export interface CoreStore extends Store {
     }>,
   ): Promise<void>;
   changesAt(seqs: Seq[]): Promise<Change[]>;
+  /** #59 §0: every deferred ledger row is keyed on its document's current
+   *  seq. False on a profile upgraded from an older build until the paged
+   *  re-key repair finishes; every re-drive entry point is a no-op until
+   *  then. Cached in memory once true. */
+  ledgerRekeyed(): Promise<boolean>;
+  /** ONE page of the re-key repair (one writer call). Callers loop until
+   *  `done`, yielding between pages; progress survives a quit. */
+  ledgerRekeyPage(limit?: number): Promise<RekeyPageResult>;
   headSeq(): Promise<Seq>;
   scheduleAll(): Promise<ScheduleRow[]>;
   scheduleUpsert(row: ScheduleRow): Promise<void>;
@@ -352,6 +410,12 @@ export interface CoreStore extends Store {
 }
 
 const FEED_BATCH = 500;
+/** #139: a retired consumer's ledger rows go in primary-key windows of this
+ *  many seqs, one writer call each. */
+const RETIRED_SWEEP_WINDOW = 50_000;
+/** `changesAt` resolves its seqs in IN-lists of this size (one statement per
+ *  chunk; well under SQLite's bound-variable ceiling). */
+const CHANGES_AT_CHUNK = 500;
 
 export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   const now = deps.now ?? (() => new Date().toISOString());
@@ -365,6 +429,17 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   outboxChanged.setMaxListeners(0);
   const resetListeners = new Set<() => void>();
   let closed = false;
+  let rekeyed = false;
+  // #139: see CoreStore.ledgerGen.
+  let gen = 0;
+  const bumpGen = (): void => {
+    gen += 1;
+  };
+  /** Every feed nudge also moves the generation. */
+  const emitCommit = (): void => {
+    bumpGen();
+    nudge.emit('commit');
+  };
 
   // The procedural, read-your-own-writes commit transaction runs on the RAW
   // connection. In-process (tests, stdio, DB worker host) the AppDb exposes
@@ -374,6 +449,14 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   const writeTx = db._conn
     ? createWriteTx(db._conn, { detectLanguages: deps.detectLanguages, now })
     : null;
+  // #135: account writers run on the writer connection (see write-tx.ts
+  // accountWrite) so the last-published mark is taken with the COMMIT.
+  const accountWrite = async (
+    w: AccountWriteOp,
+  ): Promise<AccountWriteResult> =>
+    writeTx
+      ? writeTx.accountWrite(w)
+      : ((await db.proc!('accountWrite', w)) as AccountWriteResult);
 
   // The read surface lives in corpus-query.ts so the read worker and the stdio
   // sibling share the exact implementation. The writer keeps explicit cache
@@ -388,19 +471,72 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     return rows[0] as unknown as AccountRow | undefined;
   };
 
+  /** First change at/after `since`. The log is append-only and stamped as it
+   *  is written, so `at` rises with `seq`: bisect the primary key (no index
+   *  on `at`) over the RETAINED range [MIN(seq), MAX(seq)] — pruning removes
+   *  a prefix, so a search from 1 could land on a deleted number. The answer
+   *  is always an existing qualifying row, or the `MAX(seq) + 1` sentinel
+   *  when every change is older (1 on an empty log). */
+  const firstSeqAtOrAfter = async (since: string): Promise<Seq> => {
+    // Two SEPARATE single-aggregate statements: SQLite's min/max endpoint
+    // optimization applies only to a query with exactly one MIN or MAX — a
+    // combined `SELECT MIN(seq), MAX(seq)` scans the whole log.
+    const min = (
+      (await db.all(`SELECT MIN(seq) AS m FROM changes`))[0] as {
+        m: number | null;
+      }
+    ).m;
+    if (min === null) return 1;
+    const max = (
+      (await db.all(`SELECT MAX(seq) AS m FROM changes`))[0] as { m: number }
+    ).m;
+    // Invariant: every retained row below `lo` is older than `since`; the
+    // first retained row at/after `hi` (if any) is not.
+    let lo = min;
+    let hi = max + 1;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      // eslint-disable-next-line no-await-in-loop
+      const row = (
+        await db.all(
+          `SELECT seq, at FROM changes WHERE seq >= ? ORDER BY seq LIMIT 1`,
+          [mid],
+        )
+      )[0] as { seq: number; at: string } | undefined;
+      if (!row || row.at >= since) hi = mid;
+      else lo = row.seq + 1;
+    }
+    // Resolve the numeric bound to the existing row it stands for.
+    const hit = (
+      await db.all(
+        `SELECT seq FROM changes WHERE seq >= ? ORDER BY seq LIMIT 1`,
+        [lo],
+      )
+    )[0] as { seq: number } | undefined;
+    return hit ? hit.seq : max + 1;
+  };
+
   // ── feed materialization ──────────────────────────────────────────────────
 
-  const materializeRow = async (r: {
-    seq: number;
-    kind: Change['kind'];
-    ref_id: string;
-  }): Promise<Change | null> => {
+  const materializeRow = async (
+    r: {
+      seq: number;
+      kind: Change['kind'];
+      ref_id: string;
+    },
+    everySeq = false,
+  ): Promise<Change | null> => {
     if (r.kind === 'document') {
       const doc = (
         await db.all(`SELECT * FROM documents WHERE id = ?`, [r.ref_id])
       )[0] as unknown as DocRow | undefined;
       // Row already purged — the tombstone further down the feed informs.
-      return doc
+      // #59 §0: a document is fed only under its CURRENT seq. An older change
+      // of the same document materializes to nothing: the newer change is
+      // later in the log and feeds it, so every ledger row a feed consumer
+      // writes is keyed on documents.seq. `everySeq` (read-only projections
+      // only) keeps the older rows, each paired with the current document.
+      return doc && (everySeq || doc.seq === r.seq)
         ? { seq: r.seq, kind: 'document', document: toDocument(doc) }
         : null;
     }
@@ -425,6 +561,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   const materialize = async (
     after: Seq,
     kinds?: Change['kind'][],
+    everySeq = false,
   ): Promise<{ changes: Change[]; high: Seq }> => {
     const kindFilter = kinds?.length
       ? ` AND kind IN (${kinds.map(() => '?').join(',')})`
@@ -440,7 +577,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     }>;
     const changes: Change[] = [];
     for (const r of rows) {
-      const c = await materializeRow(r);
+      const c = await materializeRow(r, everySeq);
       if (c) changes.push(c);
     }
     return { changes, high: rows.length ? rows[rows.length - 1].seq : after };
@@ -482,7 +619,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         })) as { archived: number; done: boolean });
     if (r.archived > 0) {
       corpus.invalidateLanguages();
-      nudge.emit('commit');
+      emitCommit();
     }
     return r;
   };
@@ -491,30 +628,9 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     read: query,
 
     async addedSince(since) {
-      // The change log is append-only and stamped as it is written, so
-      // `at` rises with `seq`: find the first change at/after `since` by
-      // bisecting the primary key (no index on `at`), then join the
-      // document changes from there to the documents they inserted.
-      const max =
-        (
-          (await db.all(`SELECT MAX(seq) AS m FROM changes`))[0] as {
-            m: number | null;
-          }
-        ).m ?? 0;
-      let lo = 1;
-      let hi = max + 1;
-      while (lo < hi) {
-        const mid = Math.floor((lo + hi) / 2);
-        const row = (
-          await db.all(
-            `SELECT seq, at FROM changes WHERE seq >= ? ORDER BY seq LIMIT 1`,
-            [mid],
-          )
-        )[0] as { seq: number; at: string } | undefined;
-        if (!row || row.at >= since) hi = mid;
-        else lo = row.seq + 1;
-      }
-      if (lo > max) return [];
+      // Join the document changes from the first change at/after `since` to
+      // the documents they inserted (none when every change is older).
+      const lo = await firstSeqAtOrAfter(since);
       return (await db.all(
         `SELECT d.account_id AS accountId, COUNT(*) AS count
            FROM changes c
@@ -526,6 +642,11 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async visualWaitingCount(consumer) {
+      // #59 §0: once every deferred row is keyed on its document's current
+      // seq, the deferred branch is a strict subset of the current one (a
+      // stale deferred seq becomes a terminal skip). Until the re-key repair
+      // finishes it stays, so the count never dips while the repair runs.
+      const rekeyedNow = await store.ledgerRekeyed();
       const sql = (pinned: boolean) => {
         const strip = (q: string) =>
           pinned
@@ -533,16 +654,15 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
             : q
                 .replace(' INDEXED BY docs_pending_visual', '')
                 .replace(' INDEXED BY work_ledger_active', '');
-        return `SELECT COUNT(*) AS c FROM (${strip(VISUAL_WAITING_CURRENT_SQL)} UNION ${strip(VISUAL_WAITING_DEFERRED_SQL)})`;
+        return rekeyedNow
+          ? `SELECT COUNT(*) AS c FROM (${strip(VISUAL_WAITING_CURRENT_SQL)})`
+          : `SELECT COUNT(*) AS c FROM (${strip(VISUAL_WAITING_CURRENT_SQL)} UNION ${strip(VISUAL_WAITING_DEFERRED_SQL)})`;
       };
+      const params = rekeyedNow ? [consumer] : [consumer, consumer];
       try {
-        return (
-          (await db.all(sql(true), [consumer, consumer]))[0] as { c: number }
-        ).c;
+        return ((await db.all(sql(true), params))[0] as { c: number }).c;
       } catch {
-        return (
-          (await db.all(sql(false), [consumer, consumer]))[0] as { c: number }
-        ).c;
+        return ((await db.all(sql(false), params))[0] as { c: number }).c;
       }
     },
 
@@ -579,11 +699,17 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async commit(batch) {
-      const seq = writeTx
+      const { seq, logged } = writeTx
         ? writeTx.commit(batch)
-        : ((await db.proc!('commit', batch)) as Seq);
-      corpus.invalidateLanguages();
-      nudge.emit('commit');
+        : ((await db.proc!('commit', batch)) as CommitResult);
+      bumpGen();
+      // #135: wake feeds only when the commit appended a change row. A
+      // cursor-only consumer commit, or an account commit inside its sync
+      // tick, has nothing for a feed to read.
+      if (logged) {
+        corpus.invalidateLanguages();
+        emitCommit();
+      }
       // The cascade runs entirely in SQL (schema.ts:561's ON DELETE CASCADE)
       // and never calls outbox.ts, so it can't fire onChange itself — and
       // whether it actually took outbox rows with it isn't observable from
@@ -617,6 +743,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
                   const { changes, high } = await materialize(
                     cursor,
                     opts?.kinds,
+                    opts?.everySeq,
                   );
                   if (changes.length > 0) {
                     cursor = high;
@@ -818,7 +945,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         await db.exec('VACUUM');
         await db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
         corpus.invalidateLanguages();
-        nudge.emit('commit');
+        emitCommit();
         // `DELETE FROM accounts` above cascades in SQL to `outbox` (ON
         // DELETE CASCADE, schema.ts:561) the same way commit()'s
         // removeAccount branch does — outbox.ts never observes either
@@ -831,62 +958,18 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     // ── engine-only surface ──────────────────────────────────────────────────
 
     async createAccount(a) {
-      const id = newId<'account'>();
-      // One batch = one atomic transaction: the account UPSERT (RETURNING id
-      // so a conflicting row's EXISTING id feeds the change) plus its feed
-      // change row land together or not at all.
-      const results = await db.batch([
-        {
-          sql: `INSERT INTO accounts(id, source, identifier, config, status, cadence, created_at)
-             VALUES(?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(source, identifier) DO UPDATE SET
-               config = excluded.config,
-               status = excluded.status
-             RETURNING id`,
-          params: [
-            id,
-            a.source,
-            a.identifier,
-            JSON.stringify(a.config ?? {}),
-            a.status ?? 'connecting',
-            a.cadence ? JSON.stringify(a.cadence) : null,
-            now(),
-          ],
-        },
-        {
-          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
-          params: [{ $fromStep: 0, column: 'id' }, now()],
-        },
-      ]);
-      const accId = (results[0].row as { id: string }).id;
-      nudge.emit('commit');
-      return toAccount((await getAccountRow(accId))!);
+      const { id } = await accountWrite({ op: 'create', ...a });
+      emitCommit();
+      return toAccount((await getAccountRow(id))!);
     },
 
     async getOrCreateAccount(source, identifier) {
-      const found = (
-        await db.all(
-          `SELECT * FROM accounts WHERE source = ? AND identifier = ?`,
-          [source, identifier],
-        )
-      )[0] as unknown as AccountRow | undefined;
-      if (found) {
-        nudge.emit('commit');
-        return toAccount(found);
-      }
-      const id = newId<'account'>();
-      await db.batch([
-        {
-          sql: `INSERT INTO accounts(id, source, identifier, config, status, created_at)
-             VALUES(?, ?, ?, '{}', 'live', ?)`,
-          params: [id, source, identifier, now()],
-        },
-        {
-          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
-          params: [id, now()],
-        },
-      ]);
-      nudge.emit('commit');
+      const { id, logged } = await accountWrite({
+        op: 'getOrCreate',
+        source,
+        identifier,
+      });
+      if (logged) emitCommit();
       return toAccount((await getAccountRow(id))!);
     },
 
@@ -896,63 +979,21 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async setAccountCadence(id, cadence) {
-      await db.batch([
-        {
-          sql: `UPDATE accounts SET cadence = ? WHERE id = ?`,
-          params: [cadence ? JSON.stringify(cadence) : null, id],
-        },
-        {
-          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
-          params: [id, now()],
-        },
-      ]);
-      nudge.emit('commit');
+      const { logged } = await accountWrite({ op: 'cadence', id, cadence });
+      if (logged) emitCommit();
     },
 
     async setAccountConfig(id, config) {
-      await db.batch([
-        {
-          sql: `UPDATE accounts SET config = ? WHERE id = ?`,
-          params: [JSON.stringify(config), id],
-        },
-        {
-          sql: `INSERT INTO changes(kind, ref_id, at) VALUES('account', ?, ?)`,
-          params: [id, now()],
-        },
-      ]);
-      nudge.emit('commit');
+      const { logged } = await accountWrite({ op: 'config', id, config });
+      if (logged) emitCommit();
     },
 
     async setAccountStatus(id, patch) {
       // Reconcile passes and reconnects call this, mostly with the status the
-      // account already has. Write — and log a change, and wake every feed —
-      // only when the status or last_error actually differs. changes() in
-      // the INSERT reads the UPDATE's row count: batch() runs both steps on
-      // one connection inside one transaction.
-      const lastError = lastErrorAssignment(patch.error, patch.errorScope);
-      const status = patch.status ?? null;
-      const [, logged] = await db.batch([
-        {
-          sql: `UPDATE accounts SET status = COALESCE(?, status),
-                  ${lastError.sql}
-                WHERE id = ?
-                  AND (COALESCE(?, status) IS NOT status
-                    OR (${lastError.expr}) IS NOT last_error)`,
-          params: [
-            status,
-            ...lastError.params,
-            id,
-            status,
-            ...lastError.params,
-          ],
-        },
-        {
-          sql: `INSERT INTO changes(kind, ref_id, at)
-                  SELECT 'account', ?, ? WHERE changes() > 0`,
-          params: [id, now()],
-        },
-      ]);
-      if (logged.changes > 0) nudge.emit('commit');
+      // account already has. Write, log a change and wake every feed only
+      // when the status or last_error actually differs (write-tx accountWrite).
+      const { logged } = await accountWrite({ op: 'status', id, ...patch });
+      if (logged) emitCommit();
     },
 
     async liveRefs(accountId, after, limit) {
@@ -1031,7 +1072,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       if (result.archived > 0) corpus.invalidateLanguages();
       // Search index and renderer both refresh off this: the feed iterators
       // in feed() block on 'commit', and the account row itself changed.
-      if (!result.stale) nudge.emit('commit');
+      if (!result.stale) emitCommit();
       return result;
     },
 
@@ -1040,6 +1081,92 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         await db.all(`SELECT cursor FROM consumers WHERE name = ?`, [name])
       )[0] as { cursor: number } | undefined;
       return r?.cursor ?? 0;
+    },
+
+    async consumerRow(name) {
+      const r = (
+        await db.all(`SELECT cursor FROM consumers WHERE name = ?`, [name])
+      )[0] as { cursor: number } | undefined;
+      return r ? r.cursor : null;
+    },
+
+    async beginSeed(consumer, h0) {
+      await db.batch([
+        {
+          sql: `INSERT INTO consumers(name, cursor) VALUES(?, ?)
+                ON CONFLICT(name) DO UPDATE SET cursor = excluded.cursor`,
+          params: [consumer, h0],
+        },
+        {
+          sql: `INSERT INTO consumers(name, cursor) VALUES(?, 0)
+                ON CONFLICT(name) DO UPDATE SET cursor = 0`,
+          params: [seedConsumerName(consumer)],
+        },
+      ]);
+      bumpGen();
+    },
+
+    async endSeed(consumer) {
+      await db.run(`DELETE FROM consumers WHERE name = ?`, [
+        seedConsumerName(consumer),
+      ]);
+      bumpGen();
+    },
+
+    async changesFloor() {
+      const r = (
+        await db.all(`SELECT value FROM meta WHERE key = ?`, [
+          META_CHANGES_FLOOR,
+        ])
+      )[0] as { value: string } | undefined;
+      return r ? Number(r.value) : null;
+    },
+
+    firstChangeSeqAt: (since) => firstSeqAtOrAfter(since),
+
+    async consumerFloor(consumers) {
+      if (consumers.length === 0) return null;
+      return (
+        (
+          await db.all(
+            `SELECT MIN(cursor) AS m FROM consumers
+              WHERE name IN (${consumers.map(() => '?').join(', ')})`,
+            [...consumers],
+          )
+        )[0] as { m: number | null }
+      ).m;
+    },
+
+    async minChangeSeq() {
+      return (
+        (await db.all(`SELECT MIN(seq) AS m FROM changes`))[0] as {
+          m: number | null;
+        }
+      ).m;
+    },
+
+    async publishChangesFloor(limit) {
+      await db.run(
+        `INSERT INTO meta(key, value) VALUES(?, ?)
+         ON CONFLICT(key) DO UPDATE SET value =
+           CAST(MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER)) AS TEXT)`,
+        [META_CHANGES_FLOOR, String(limit)],
+      );
+    },
+
+    async deleteChangesRange(from, to) {
+      if (to <= from) return 0;
+      const [r] = await db.batch([
+        {
+          sql: `DELETE FROM changes WHERE seq >= ? AND seq < ?`,
+          params: [from, to],
+        },
+      ]);
+      return r.changes;
+    },
+
+    async walCheckpoint() {
+      await db.exec(`PRAGMA wal_checkpoint(PASSIVE)`);
     },
 
     async ledgerRecord(consumer, seq, attempts, outcome) {
@@ -1051,6 +1178,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
                updated_at = excluded.updated_at`,
         [consumer, seq, attempts, outcome, now()],
       );
+      bumpGen();
     },
 
     async bumpAttempt(consumer, docId, key) {
@@ -1073,6 +1201,42 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           .join(', ')})`,
         [...active],
       );
+    },
+
+    async sweepRetiredConsumers(active) {
+      if (active.length === 0) return { consumers: 0, rows: 0 };
+      const names = (await db.all(
+        `SELECT name FROM consumers
+          WHERE name NOT IN (${active.map(() => '?').join(', ')})
+            AND name NOT LIKE '${SEED_CONSUMER_PREFIX}%'`,
+        [...active],
+      )) as Array<{ name: string }>;
+      let rows = 0;
+      for (const { name } of names) {
+        // eslint-disable-next-line no-await-in-loop
+        const span = (
+          await db.all(
+            `SELECT MIN(seq) AS lo, MAX(seq) AS hi FROM work_ledger WHERE consumer = ?`,
+            [name],
+          )
+        )[0] as { lo: number | null; hi: number | null };
+        if (span.lo !== null && span.hi !== null) {
+          for (let { lo } = span; lo <= span.hi; lo += RETIRED_SWEEP_WINDOW) {
+            // eslint-disable-next-line no-await-in-loop
+            const [r] = await db.batch([
+              {
+                sql: `DELETE FROM work_ledger WHERE consumer = ? AND seq >= ? AND seq < ?`,
+                params: [name, lo, lo + RETIRED_SWEEP_WINDOW],
+              },
+            ]);
+            rows += r.changes;
+          }
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await db.run(`DELETE FROM consumers WHERE name = ?`, [name]);
+      }
+      if (names.length > 0) bumpGen();
+      return { consumers: names.length, rows };
     },
 
     async ledgerCounts(consumer) {
@@ -1109,6 +1273,14 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       };
     },
 
+    ledgerGen() {
+      return gen;
+    },
+
+    markLedgerChanged() {
+      bumpGen();
+    },
+
     async ledgerCountsAll(consumers) {
       // Runs every 5 s. Counting 'skip' rows directly means scanning the whole
       // ledger (millions of rows, ~230 ms); instead count the rest through the
@@ -1139,7 +1311,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           }
         ).s ?? 0;
       const lags = (await db.all(
-        `SELECT name, cursor FROM consumers`,
+        `SELECT name, cursor FROM consumers WHERE name NOT LIKE '${SEED_CONSUMER_PREFIX}%'`,
       )) as Array<{
         name: string;
         cursor: number;
@@ -1152,9 +1324,13 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async ledgerDeferred(consumer, after, limit) {
+      // #139: the redundant `IS NOT 'skip'` lets the planner range-seek the
+      // partial work_ledger_active index instead of walking the consumer's
+      // millions of skip rows. alpha-cent's vision patch anchors on this text.
       const rows = (await db.all(
         `SELECT seq FROM work_ledger
           WHERE consumer = ? AND outcome = 'deferred' AND seq > ?
+            AND outcome IS NOT 'skip'
           ORDER BY seq LIMIT ?`,
         [consumer, after, limit],
       )) as Array<{ seq: number }>;
@@ -1163,7 +1339,8 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
     async ledgerHasDeferred(consumer) {
       const rows = await db.all(
-        `SELECT 1 FROM work_ledger WHERE consumer = ? AND outcome = 'deferred' LIMIT 1`,
+        `SELECT 1 FROM work_ledger WHERE consumer = ? AND outcome = 'deferred'
+          AND outcome IS NOT 'skip' LIMIT 1`,
         [consumer],
       );
       return rows.length > 0;
@@ -1192,23 +1369,51 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           params,
         );
       }
+      bumpGen();
     },
 
     async changesAt(seqs) {
+      // #59 §0: a ledger seq is always its document's CURRENT seq, so it
+      // resolves through `documents` (docs_seq), never through `changes`,
+      // which pruning removes. A seq no document carries any more (changed
+      // since and re-fed under its new seq, or purged) resolves to nothing.
+      if (seqs.length === 0) return [];
+      const bySeq = new Map<number, DocRow>();
+      for (let i = 0; i < seqs.length; i += CHANGES_AT_CHUNK) {
+        const slice = seqs.slice(i, i + CHANGES_AT_CHUNK);
+        // eslint-disable-next-line no-await-in-loop
+        const rows = (await db.all(
+          `SELECT * FROM documents WHERE seq IN (${slice.map(() => '?').join(',')})`,
+          slice,
+        )) as unknown as DocRow[];
+        for (const r of rows) bySeq.set(r.seq, r);
+      }
       const out: Change[] = [];
       for (const seq of seqs) {
-        const row = (
-          await db.all(`SELECT seq, kind, ref_id FROM changes WHERE seq = ?`, [
-            seq,
-          ])
-        )[0] as
-          | { seq: number; kind: Change['kind']; ref_id: string }
-          | undefined;
-        if (!row) continue;
-        const c = await materializeRow(row);
-        if (c) out.push(c);
+        const r = bySeq.get(seq);
+        if (r) out.push({ seq, kind: 'document', document: toDocument(r) });
       }
       return out;
+    },
+
+    async ledgerRekeyed() {
+      if (rekeyed) return true;
+      rekeyed =
+        (
+          await db.all(`SELECT 1 FROM meta WHERE key = ?`, [
+            META_LEDGER_REKEYED,
+          ])
+        ).length > 0;
+      return rekeyed;
+    },
+
+    async ledgerRekeyPage(limit = LEDGER_REKEY_PAGE) {
+      const r = writeTx
+        ? writeTx.rekeyLedgerPage(limit)
+        : ((await db.proc!('rekeyLedgerPage', { limit })) as RekeyPageResult);
+      bumpGen();
+      if (r.done) rekeyed = true;
+      return r;
     },
 
     async headSeq() {
