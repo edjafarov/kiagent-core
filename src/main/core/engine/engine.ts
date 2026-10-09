@@ -1923,10 +1923,18 @@ export function createEngine(deps: EngineDeps): Engine & {
         after = seqs[seqs.length - 1];
         // eslint-disable-next-line no-await-in-loop
         const changes = await store.changesAt(seqs);
+        // #59 §0: a deferred seq no document carries any more resolves to
+        // nothing. With the repair done that only means the document was
+        // purged (or changed and was fed again under its new seq): resolve the
+        // row terminally so it stops being re-selected forever.
+        const resolved = new Set(changes.map((c) => c.seq));
+        const unresolved: LedgerEntry[] = seqs
+          .filter((s) => !resolved.has(s))
+          .map((s) => ({ seq: s, attempts: 0, outcome: 'skip' }));
 
         const emitted: DocumentInput[] = [];
         const enrich: EnrichInput[] = [];
-        const ledger: LedgerEntry[] = [];
+        const ledger: LedgerEntry[] = [...unresolved];
         const clear: string[] = [];
         // Same per-batch coalescing as the live tail: changesAt materializes
         // the CURRENT doc for every seq, so a doc with several deferred rows

@@ -345,6 +345,9 @@ export interface CoreStore extends Store {
 }
 
 const FEED_BATCH = 500;
+/** `changesAt` resolves its seqs in IN-lists of this size (one statement per
+ *  chunk; well under SQLite's bound-variable ceiling). */
+const CHANGES_AT_CHUNK = 500;
 
 export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   const now = deps.now ?? (() => new Date().toISOString());
@@ -393,7 +396,11 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         await db.all(`SELECT * FROM documents WHERE id = ?`, [r.ref_id])
       )[0] as unknown as DocRow | undefined;
       // Row already purged — the tombstone further down the feed informs.
-      return doc
+      // #59 §0: a document is fed only under its CURRENT seq. An older change
+      // of the same document materializes to nothing: the newer change is
+      // later in the log and feeds it, so every ledger row a feed consumer
+      // writes is keyed on documents.seq.
+      return doc && doc.seq === r.seq
         ? { seq: r.seq, kind: 'document', document: toDocument(doc) }
         : null;
     }
@@ -1169,18 +1176,25 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async changesAt(seqs) {
+      // #59 §0: a ledger seq is always its document's CURRENT seq, so it
+      // resolves through `documents` (docs_seq), never through `changes`,
+      // which pruning removes. A seq no document carries any more (changed
+      // since and re-fed under its new seq, or purged) resolves to nothing.
+      if (seqs.length === 0) return [];
+      const bySeq = new Map<number, DocRow>();
+      for (let i = 0; i < seqs.length; i += CHANGES_AT_CHUNK) {
+        const slice = seqs.slice(i, i + CHANGES_AT_CHUNK);
+        // eslint-disable-next-line no-await-in-loop
+        const rows = (await db.all(
+          `SELECT * FROM documents WHERE seq IN (${slice.map(() => '?').join(',')})`,
+          slice,
+        )) as unknown as DocRow[];
+        for (const r of rows) bySeq.set(r.seq, r);
+      }
       const out: Change[] = [];
       for (const seq of seqs) {
-        const row = (
-          await db.all(`SELECT seq, kind, ref_id FROM changes WHERE seq = ?`, [
-            seq,
-          ])
-        )[0] as
-          | { seq: number; kind: Change['kind']; ref_id: string }
-          | undefined;
-        if (!row) continue;
-        const c = await materializeRow(row);
-        if (c) out.push(c);
+        const r = bySeq.get(seq);
+        if (r) out.push({ seq, kind: 'document', document: toDocument(r) });
       }
       return out;
     },
