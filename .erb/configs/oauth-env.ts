@@ -8,8 +8,8 @@
  * win over any stray .env.
  *
  * Unset variables inline as '' rather than failing the build — the runtime
- * getters in src/main/sources/{gmail,microsoft}/client-credentials.ts throw
- * a descriptive error the moment a Google/Microsoft sign-in is attempted, so
+ * getters in src/main/sources/{gmail,microsoft,github}/client-credentials.ts throw
+ * a descriptive error the moment a Google/Microsoft/GitHub sign-in is attempted, so
  * contributors without credentials can still build and run everything else.
  */
 import path from 'path';
@@ -22,6 +22,8 @@ const OAUTH_ENV_VARS = [
   'GOOGLE_OAUTH_CLIENT_ID',
   'GOOGLE_OAUTH_CLIENT_SECRET',
   'MICROSOFT_OAUTH_CLIENT_ID',
+  'GITHUB_OAUTH_CLIENT_ID',
+  'GITHUB_OAUTH_CLIENT_SECRET',
 ] as const;
 
 export default function oauthEnvDefines(): Record<string, string> {

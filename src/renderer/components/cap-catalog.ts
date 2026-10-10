@@ -106,6 +106,7 @@ export const OAUTH_PROVIDER_INFO: Record<
 > = {
   google: { label: 'Google', icon: 'link' },
   microsoft: { label: 'Microsoft', icon: 'link' },
+  github: { label: 'GitHub', icon: 'link' },
 };
 
 /** One consent row per provider, listing the source ids that use it. */

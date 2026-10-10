@@ -164,6 +164,17 @@ describe('source contributions (string | { id, oauth })', () => {
     ]);
   });
 
+  it('accepts the object form with oauth: "github"', () => {
+    const m = parseManifest({
+      ...GOOD,
+      contributes: {
+        sources: [{ id: 'github', oauth: 'github' }],
+        senders: [],
+      },
+    });
+    expect(m.contributes.sources).toEqual([{ id: 'github', oauth: 'github' }]);
+  });
+
   it('accepts mixed string and object entries', () => {
     const m = parseManifest({
       ...GOOD,
@@ -183,7 +194,7 @@ describe('source contributions (string | { id, oauth })', () => {
       parseManifest({
         ...GOOD,
         contributes: {
-          sources: [{ id: 'gh-docs', oauth: 'github' }],
+          sources: [{ id: 'gl-docs', oauth: 'gitlab' }],
           senders: [],
         },
       }),
@@ -192,11 +203,11 @@ describe('source contributions (string | { id, oauth })', () => {
       parseManifest({
         ...GOOD,
         contributes: {
-          sources: [{ id: 'gh-docs', oauth: 'github' }],
+          sources: [{ id: 'gl-docs', oauth: 'gitlab' }],
           senders: [],
         },
       }),
-    ).toThrow(/oauth must be one of: google, microsoft/);
+    ).toThrow(/oauth must be one of: google, microsoft, github/);
   });
 
   it('rejects the object form without an id, with a user-facing message', () => {

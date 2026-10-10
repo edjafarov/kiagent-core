@@ -1303,7 +1303,7 @@ export type Cap =
  *  (`oauth-providers.ts`, via `Record<OAuthProviderId, …>`) and the manifest
  *  validator (`manifest.ts`) both derive from this array, so neither can
  *  drift from `OAuthProviderId` or from each other. */
-export const OAUTH_PROVIDER_IDS = ['google', 'microsoft'] as const;
+export const OAUTH_PROVIDER_IDS = ['google', 'microsoft', 'github'] as const;
 export type OAuthProviderId = (typeof OAUTH_PROVIDER_IDS)[number];
 
 /** A `contributes.sources` entry: a bare source id, or an id plus an OAuth

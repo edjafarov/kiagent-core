@@ -10,6 +10,10 @@ import type { Credentials, OAuthProviderId } from '@shared/contracts';
 import type { OAuthProfile } from '@main/auth/oauth-window';
 import { googleOAuthProfile, googleRefresher } from '@main/sources/gmail/oauth';
 import {
+  githubOAuthProfile,
+  githubRefresher,
+} from '@main/sources/github/oauth';
+import {
   microsoftOAuthProfile,
   microsoftRefresher,
 } from '@main/sources/microsoft/oauth';
@@ -24,4 +28,5 @@ export interface OAuthProviderBinding {
 export const oauthProviders: Record<OAuthProviderId, OAuthProviderBinding> = {
   google: { profile: googleOAuthProfile, refresher: googleRefresher },
   microsoft: { profile: microsoftOAuthProfile, refresher: microsoftRefresher },
+  github: { profile: githubOAuthProfile, refresher: githubRefresher },
 };
