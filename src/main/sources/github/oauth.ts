@@ -112,7 +112,12 @@ export const githubOAuthProfile: OAuthProfile = {
         `github oauth token request failed: ${body.error ?? res.status}${body.error_description ? ` — ${body.error_description}` : ''}`,
       );
     }
-    return { accessToken: body.access_token, clientId, scope: body.scope };
+    // GitHub reports scopes comma-separated; Credentials.scope is space-separated.
+    return {
+      accessToken: body.access_token,
+      clientId,
+      scope: body.scope?.split(',').filter(Boolean).join(' '),
+    };
   },
 };
 

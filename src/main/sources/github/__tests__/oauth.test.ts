@@ -69,7 +69,7 @@ describe('github oauth profile', () => {
     expect(creds).toEqual({
       accessToken: 'gho_x',
       clientId: 'gh-test-client',
-      scope: 'repo,read:org',
+      scope: 'repo read:org',
     });
   });
 
