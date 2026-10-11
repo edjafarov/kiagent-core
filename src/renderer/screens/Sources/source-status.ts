@@ -75,15 +75,16 @@ export function sourceStatus(
     case 'backfilling': {
       const total = a.progress?.totalEstimate;
       const done = a.progress?.done ?? 0;
+      const known = total != null && total > 0;
       return {
-        label: null,
+        // With no known total there is no bar, so the words say it instead.
+        label: known ? null : 'Importing…',
         tone: 'work',
         fixes: [],
         problem: null,
-        importPercent:
-          total != null && total > 0
-            ? Math.max(0, Math.min(100, Math.round((done / total) * 100)))
-            : null,
+        importPercent: known
+          ? Math.max(0, Math.min(100, Math.round((done / total) * 100)))
+          : null,
       };
     }
     case 'live':

@@ -40,6 +40,20 @@ test('a first import reports its share only with a known total', () => {
   expect(sourceStatus({ status: 'backfilling' }).importPercent).toBeNull();
 });
 
+test('a first import with no known total says so in words', () => {
+  expect(sourceStatus({ status: 'backfilling' })).toMatchObject({
+    label: 'Importing…',
+    tone: 'work',
+    fixes: [],
+  });
+  expect(
+    sourceStatus({
+      status: 'backfilling',
+      progress: { done: 64, totalEstimate: 100 },
+    } as never).label,
+  ).toBeNull();
+});
+
 test('needs you: signed out or failing', () => {
   expect(needsYou({ status: 'needsReauth' })).toBe(true);
   expect(needsYou({ status: 'error' })).toBe(true);
