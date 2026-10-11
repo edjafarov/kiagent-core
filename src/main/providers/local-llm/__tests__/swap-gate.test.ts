@@ -82,6 +82,14 @@ describe('swap gate', () => {
     batch();
   });
 
+  it('a hold idle for hours is an idle release, not a cap cooldown', async () => {
+    const c = clock();
+    const g = createSwapGate(c);
+    (await g.enter('embed', 'background'))();
+    c.add(3 * HOLD_CAP_MS);
+    (await g.enter('embed', 'background'))();
+  });
+
   it('the 60-min cap ends the hold and refuses embed for 10 min', async () => {
     const c = clock();
     const g = createSwapGate(c);

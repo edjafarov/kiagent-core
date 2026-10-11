@@ -50,18 +50,22 @@ export function createSwapGate(opts?: { now?: () => number }): SwapGate {
   let lastInteractive = -Infinity;
   const waiters: Waiter[] = [];
 
+  /** Ends the hold at whichever deadline came FIRST: idle (no embed in
+   *  flight or waiting, 2 min since the last) or the 60-min cap (which
+   *  starts the cooldown, counted from the cap). Evaluated lazily, so a hold
+   *  that went idle hours ago is an idle release, not a cap release. */
   const expire = (): void => {
     if (!held) return;
     const t = now();
-    if (t - heldSince >= HOLD_CAP_MS) {
+    const capAt = heldSince + HOLD_CAP_MS;
+    const idle =
+      inflight.embed === 0 && !waiters.some((w) => w.model === 'embed');
+    const idleAt = idle ? lastEmbed + HOLD_IDLE_MS : Infinity;
+    if (idleAt <= capAt && t >= idleAt) {
       held = false;
-      cooldownUntil = t + CAP_COOLDOWN_MS;
-    } else if (
-      inflight.embed === 0 &&
-      !waiters.some((w) => w.model === 'embed') &&
-      t - lastEmbed >= HOLD_IDLE_MS
-    ) {
+    } else if (t >= capAt) {
       held = false;
+      cooldownUntil = capAt + CAP_COOLDOWN_MS;
     }
   };
 

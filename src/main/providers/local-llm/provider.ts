@@ -228,10 +228,23 @@ export function createLocalLlmProvider(deps: {
         .catch((err) => deps.log('warn', `llama stop: ${String(err)}`));
   };
 
+  /** The last idle/shutdown stop; a fresh start waits for it, so a request
+   *  arriving mid-stop never runs a second child beside the stopping one. */
+  let stopping: Promise<void> = Promise.resolve();
+  /** Set by dispose(): nothing starts a server or a download after it. */
+  let disposed = false;
+
   /** Idle release / shutdown: forget the memo, then stop the child. */
-  const stopServer = async (): Promise<void> => {
+  const stopServer = (): Promise<void> => {
     serverStarting = null;
-    await stopChild();
+    // Starts at once (the child is detached from `server` synchronously);
+    // a later start waits for every stop still running.
+    const p = stopChild();
+    stopping = Promise.all([stopping, p]).then(
+      () => {},
+      () => {},
+    );
+    return p;
   };
 
   const touchIdle = (): void => {
@@ -281,7 +294,8 @@ export function createLocalLlmProvider(deps: {
             },
           });
         }
-        done(model);
+        // A run cancelled or disposed while downloading never "finishes".
+        if (t.abort === abort && !abort.signal.aborted) done(model);
         deps.log('info', `${model.id} ready`);
       } catch (err) {
         if (!abort.signal.aborted && t.abort === abort) {
@@ -301,7 +315,7 @@ export function createLocalLlmProvider(deps: {
     filesPresent(EMBEDDING_MODEL, modelDir(deps.modelsDir, EMBEDDING_MODEL.id));
 
   const ensureEmbedInstalled = (): void => {
-    if (embedT.abort || !capability.ok) return;
+    if (disposed || embedT.abort || !capability.ok) return;
     if (!deps.prefs.get().models.autoInstall || embedPresent()) return;
     // Never touches installedModel: the embedding model is not a chat model.
     install(
@@ -351,6 +365,8 @@ export function createLocalLlmProvider(deps: {
         await previous.catch(() => {});
         await stopChild();
       }
+      await stopping;
+      if (disposed) throw new Error('local-llm is shut down');
       const dir = modelDir(deps.modelsDir, model.id);
       const gguf = model.files.find((f) => !f.name.startsWith('mmproj'))!;
       const mmproj = model.files.find((f) => f.name.startsWith('mmproj'));
@@ -583,6 +599,7 @@ export function createLocalLlmProvider(deps: {
       }
     },
     async dispose() {
+      disposed = true;
       // App shutdown: abort any in-flight install and stop the llama-server
       // child so it doesn't outlive the app (up to the 10-min idle window).
       // Deliberately does NOT touch prefs.autoInstall — quitting is not the

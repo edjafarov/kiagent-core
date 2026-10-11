@@ -193,6 +193,58 @@ describe('local-embed provider', () => {
     expect(made).toHaveLength(2); // exactly one chat server for both callers
   });
 
+  it('an idle stop in progress delays the next start (never two children)', async () => {
+    jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+    try {
+      const { provider, made, stopHold } = setup({
+        tmp,
+        chat: true,
+        embed: true,
+      });
+      const stopped = deferred<void>();
+      stopHold.next = stopped.promise;
+      await provider.embedProvider.handle(embed); // server 0 (embed), idle armed
+      await jest.advanceTimersByTimeAsync(60_000); // idle stop starts, hangs
+      expect(made[0].server.stop).toHaveBeenCalled();
+      const next = provider.embedProvider.handle(embed);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(made).toHaveLength(1);
+      stopped.resolve();
+      await next;
+      expect(made).toHaveLength(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('after dispose nothing starts: a queued embed is refused, no server', async () => {
+    const { provider, made } = setup({ tmp, chat: true, embed: true });
+    const answer = deferred<{ text: string }>();
+    mockApi.chatText.mockReturnValueOnce(answer.promise);
+    const chat = provider.handle(complete('background'));
+    await flush();
+    const emb = provider.embedProvider.handle(embed); // waits behind chat
+    const disposing = provider.dispose();
+    answer.resolve({ text: 'ok' });
+    await chat;
+    await expect(emb).rejects.toThrow(/shut down/);
+    await disposing;
+    expect(made).toHaveLength(1);
+  });
+
+  it('a chat download cancelled mid-way does not start the embedding download', async () => {
+    const { provider, download } = setup({ tmp });
+    const gate = deferred<void>();
+    download.mockImplementationOnce(async () => gate.promise);
+    provider.ensureInstalled();
+    await flush();
+    await provider.cancelInstall();
+    gate.resolve();
+    await flush();
+    await flush();
+    expect(download.mock.calls.map((c) => c[0].id)).toEqual([E4B_MODEL.id]);
+  });
+
   it('downloads the embedding model when the chat model is already installed', async () => {
     const { provider, download } = setup({ tmp, chat: true });
     expect(provider.embedProvider.status()).toBe('standby');
