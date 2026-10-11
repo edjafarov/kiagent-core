@@ -94,6 +94,12 @@ export function registerBundledProviders(
     log: log('inference'),
   });
   platform.inference.register(localLlm);
+  // Right after local-llm, before any caller can describe(): every later
+  // registration bumps the plane's generation.
+  platform.inference.register(localLlm.embedProvider);
+  // With the chat model installed nothing else asks for the embedding
+  // model; this no-ops when Local AI may not install models.
+  localLlm.ensureEmbedInstalled();
 
   const localAsr = createLocalAsrProvider({
     host: platform.host,

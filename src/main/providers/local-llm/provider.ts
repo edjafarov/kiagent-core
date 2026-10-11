@@ -15,14 +15,20 @@ import {
   type HostFacts,
   type LlmAccel,
 } from '../../core/host-profile';
-import { chatText, describeImage } from './api';
+import { chatText, describeImage, embedTexts } from './api';
 import { checkCapability } from './capability';
 import { detectHostBackend } from './backend';
 import type { BackendInfo } from './backend';
 import { downloadModel, modelFilesPresent } from './downloader';
-import { modelDir, resolveModelOverride, selectCuratedModel } from './models';
+import {
+  EMBEDDING_MODEL,
+  modelDir,
+  resolveModelOverride,
+  selectCuratedModel,
+} from './models';
 import type { ModelDescriptor } from './models';
 import { LlamaServer } from './server';
+import { createSwapGate } from './swap-gate';
 
 export interface ServerLike {
   start(): Promise<void>;
@@ -38,6 +44,12 @@ export interface LocalLlmProvider extends InferenceProvider {
   dispose(): Promise<void>;
   selectedModel(): Promise<ModelDescriptor>;
   installedModelIds(): string[];
+  /** The `local-embed` provider: the embedding model on the same server
+   *  (register it right after this one). */
+  embedProvider: InferenceProvider;
+  /** Download the embedding model when Local AI may install models. Boot
+   *  calls it once: with the chat model installed nothing else would. */
+  ensureEmbedInstalled(): void;
   /** Detected acceleration; null until the first detect(). */
   accel(): LlmAccel | null;
 }
@@ -64,8 +76,9 @@ export function createLocalLlmProvider(deps: {
   makeServer?(args: {
     binaryPath: string;
     modelPath: string;
-    mmprojPath: string;
+    mmprojPath?: string;
     gpuLayers: number;
+    embeddings?: boolean;
     extraArgs?: string[];
     log(level: LogLevel, msg: string): void;
   }): ServerLike;
@@ -93,9 +106,16 @@ export function createLocalLlmProvider(deps: {
   });
   let backend: BackendInfo | null = null; // detected once, lazily
   let installedModel: ModelDescriptor | null = null; // model whose files are on disk
-  let downloadPct: number | null = null;
-  let lastError: string | null = null;
-  let installing: AbortController | null = null;
+  /** One download's state; the chat model and the embedding model each
+   *  have their own, so neither download changes the other's status. */
+  interface Tracker {
+    pct: number | null;
+    error: string | null;
+    abort: AbortController | null;
+  }
+  const chatT: Tracker = { pct: null, error: null, abort: null };
+  const embedT: Tracker = { pct: null, error: null, abort: null };
+  const gate = createSwapGate();
   let server: ServerLike | null = null;
   let serverStarting: Promise<ServerLike> | null = null;
   /** The model id the memoized start was created for — set synchronously
@@ -194,51 +214,58 @@ export function createLocalLlmProvider(deps: {
     changeSubs.forEach((cb) => cb());
   };
 
-  // Callable after a start has SETTLED: from touchIdle's timer (armed only
-  // after a successful start) and from ensureServer's model-switch path
-  // (which awaits the in-flight start first, dispose()-style). Never call it
-  // with a start still pending — it would clear the memo but leave the
-  // spawning child alive to later assign itself to `server` and leak.
-  const stopServer = async (): Promise<void> => {
+  /** Stop the running child. Callable only after the start that created it
+   *  has SETTLED (a still-spawning child would later assign itself to
+   *  `server` and leak). Leaves the memo alone: the caller owns it. */
+  const stopChild = async (): Promise<void> => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = null;
     const s = server;
     server = null;
-    serverStarting = null;
     if (s)
       await s
         .stop()
         .catch((err) => deps.log('warn', `llama stop: ${String(err)}`));
   };
 
+  /** Idle release / shutdown: forget the memo, then stop the child. */
+  const stopServer = async (): Promise<void> => {
+    serverStarting = null;
+    await stopChild();
+  };
+
   const touchIdle = (): void => {
     if (idleTimer) clearTimeout(idleTimer);
+    // Only the memo current now may be idle-stopped: a model switch that
+    // replaced it owns the stop itself.
+    const memo = serverStarting;
     idleTimer = setTimeout(() => {
+      if (serverStarting !== memo) return;
       deps.log('info', 'local-llm idle — releasing model RAM');
       void stopServer();
     }, idleStopMs);
     (idleTimer as any).unref?.();
   };
 
-  const ensureInstalled = (): void => {
-    if (installing) return;
-    if (!capability.ok) return;
-    if (!deps.prefs.get().models.autoInstall) return;
-    // Override-aware: only skip when the SELECTED model is already installed.
-    // A different installed model must not suppress the selected download.
-    if (selectedInstalled()) return;
+  /** Download `resolve()`'s model into its dir under `t`'s state, then
+   *  `done(model)`. Only this run's own finally resets `t` — an aborted run
+   *  settling late (after cancelInstall() and a fresh install) must not
+   *  clobber the newer run's in-flight state. */
+  const install = (
+    t: Tracker,
+    resolve: () => Promise<ModelDescriptor>,
+    done: (model: ModelDescriptor) => void,
+  ): void => {
     const abort = new AbortController();
-    installing = abort;
-    // Publish the downloading state SYNCHRONOUSLY, before the first await, so
-    // a renderer that refreshes immediately after clicking Install sees
-    // `{downloading}` and starts its poll loop rather than catching a
-    // transient `standby` while selectedModel()/detect() resolves. We're
-    // committed to a download here — the selected model isn't installed.
-    downloadPct = 0;
-    lastError = null;
+    t.abort = abort;
+    // Published SYNCHRONOUSLY, before the first await, so a renderer that
+    // refreshes right after clicking Install sees `{downloading}` and starts
+    // its poll loop rather than a transient `standby`.
+    t.pct = 0;
+    t.error = null;
     void (async () => {
       try {
-        const model = await selectedModel();
+        const model = await resolve();
         const dest = modelDir(deps.modelsDir, model.id);
         if (!filesPresent(model, dest)) {
           deps.log(
@@ -248,65 +275,85 @@ export function createLocalLlmProvider(deps: {
           await download(model, dest, {
             signal: abort.signal,
             onProgress: (received, total) => {
-              if (installing === abort) {
-                downloadPct = total > 0 ? (received / total) * 100 : 0;
+              if (t.abort === abort) {
+                t.pct = total > 0 ? (received / total) * 100 : 0;
               }
             },
           });
         }
-        installedModel = model;
-        checkModelChange();
+        done(model);
         deps.log('info', `${model.id} ready`);
       } catch (err) {
-        if (!abort.signal.aborted && installing === abort) {
-          lastError = String(err instanceof Error ? err.message : err);
-          deps.log('warn', `model install failed: ${lastError}`);
+        if (!abort.signal.aborted && t.abort === abort) {
+          t.error = String(err instanceof Error ? err.message : err);
+          deps.log('warn', `model install failed: ${t.error}`);
         }
       } finally {
-        // Only this run's own finally may reset the shared install state —
-        // otherwise an aborted run settling late (after cancelInstall() and
-        // a fresh ensureInstalled()) clobbers the newer run's in-flight state.
-        if (installing === abort) {
-          downloadPct = null;
-          installing = null;
+        if (t.abort === abort) {
+          t.pct = null;
+          t.abort = null;
         }
       }
     })();
   };
 
-  // Single-flight: the memoized promise is assigned SYNCHRONOUSLY (no `await`
-  // between the loop's final memo check and the assignment) so two concurrent
-  // first calls can't both slip past a null check and each build+start their
-  // own llama-server (the second overwriting `server` and orphaning the first
-  // as a leaked multi-GB process). Kept (not cleared) once resolved so later
-  // sequential calls reuse it too; stopServer() is the only place that clears
-  // it, for a clean restart. On rejection (detect() or s.start() throws), the
-  // ownership-guarded catch clears the memo so a retry can attempt a fresh
-  // start.
-  //
-  // Model switch: the memo records which model it was started for
-  // (startingModelId). On mismatch — override flipped between two installed
-  // models, or an override download completing while the old model serves —
-  // settle the in-flight start exactly as dispose() does (so we stop the real
-  // child, never race a spawning one into an orphan), then stop it and start
-  // fresh. The loop re-checks after every await: a concurrent caller may have
-  // already restarted onto the target model (return its memo) or a stop may
-  // have cleared the memo entirely (fall through to a fresh start). Any
-  // in-flight request on the old server dies with it — the architecture
-  // already treats provider crashes as transient DEFER-and-retry faults.
-  const ensureServer = async (model: ModelDescriptor): Promise<ServerLike> => {
-    for (;;) {
-      if (serverStarting && startingModelId === model.id) return serverStarting;
-      if (!serverStarting) break;
-      const starting = serverStarting;
-      await starting.catch(() => {});
-      if (serverStarting === starting) await stopServer();
+  const embedPresent = (): boolean =>
+    filesPresent(EMBEDDING_MODEL, modelDir(deps.modelsDir, EMBEDDING_MODEL.id));
+
+  const ensureEmbedInstalled = (): void => {
+    if (embedT.abort || !capability.ok) return;
+    if (!deps.prefs.get().models.autoInstall || embedPresent()) return;
+    // Never touches installedModel: the embedding model is not a chat model.
+    install(
+      embedT,
+      async () => EMBEDDING_MODEL,
+      () => {},
+    );
+  };
+
+  const ensureInstalled = (): void => {
+    if (chatT.abort) return;
+    if (!capability.ok) return;
+    if (!deps.prefs.get().models.autoInstall) return;
+    // Override-aware: only skip when the SELECTED model is already installed.
+    // A different installed model must not suppress the selected download.
+    if (selectedInstalled()) {
+      ensureEmbedInstalled();
+      return;
     }
+    install(chatT, selectedModel, (model) => {
+      installedModel = model;
+      checkModelChange();
+      ensureEmbedInstalled();
+    });
+  };
+
+  // Single-flight over the WHOLE switch: the memo is replaced
+  // synchronously by a promise that first settles and stops the previous
+  // server, then starts `model` — so every concurrent caller awaits the same
+  // promise and two llama-server children never overlap (each holds GBs).
+  // Kept once resolved so later calls reuse it; cleared on rejection so a
+  // retry can start fresh, and by stopServer() (idle release / dispose).
+  //
+  // A switch (chat ↔ embed, or an override flip) stops the old child. The
+  // swap gate guarantees chat and embed are never in flight together, so a
+  // chat ↔ embed switch never kills a request; an override flip under load
+  // still does, as before (a transient, deferred-and-retried fault).
+  const ensureServer = (
+    model: ModelDescriptor,
+    embeddings = false,
+  ): Promise<ServerLike> => {
+    if (serverStarting && startingModelId === model.id) return serverStarting;
+    const previous = serverStarting;
     startingModelId = model.id;
     const starting = (async (): Promise<ServerLike> => {
+      if (previous) {
+        await previous.catch(() => {});
+        await stopChild();
+      }
       const dir = modelDir(deps.modelsDir, model.id);
       const gguf = model.files.find((f) => !f.name.startsWith('mmproj'))!;
-      const mmproj = model.files.find((f) => f.name.startsWith('mmproj'))!;
+      const mmproj = model.files.find((f) => f.name.startsWith('mmproj'));
       if (!backend) {
         backend = await detect();
         checkModelChange();
@@ -314,8 +361,9 @@ export function createLocalLlmProvider(deps: {
       const s = makeServer({
         binaryPath: deps.llamaBinaryPath,
         modelPath: path.join(dir, gguf.name),
-        mmprojPath: path.join(dir, mmproj.name),
+        ...(mmproj ? { mmprojPath: path.join(dir, mmproj.name) } : {}),
         gpuLayers: backend.accel === 'cpu' ? 0 : 999,
+        ...(embeddings ? { embeddings: true } : {}),
         extraArgs: llamaThreadArgs(host, backend.accel),
         log: deps.log,
       });
@@ -355,6 +403,40 @@ export function createLocalLlmProvider(deps: {
   // owns.
   const offPrefsChange = deps.prefs.onChange(() => checkModelChange());
 
+  const embedProvider: InferenceProvider = {
+    id: 'local-embed',
+    supports: ['embed'],
+    status(): ProviderStatus {
+      if (!capability.ok) return 'unsupported';
+      if (embedT.pct !== null) return { downloading: { pct: embedT.pct } };
+      if (embedT.error) return { error: embedT.error };
+      return embedPresent() ? 'ready' : 'standby';
+    },
+    mayBecomeReady() {
+      if (!capability.ok || embedPresent()) return false;
+      return (
+        embedT.pct !== null ||
+        (embedT.error === null && deps.prefs.get().models.autoInstall)
+      );
+    },
+    describe: () => (embedPresent() ? { modelId: EMBEDDING_MODEL.id } : null),
+    async handle(req) {
+      if (req.kind !== 'embed')
+        throw new Error(`local-embed does not support '${req.kind}'`);
+      const release = await gate.enter('embed', req.lane);
+      try {
+        const s = await ensureServer(EMBEDDING_MODEL, true);
+        touchIdle();
+        return await embedTexts(
+          s.baseUrl(),
+          (req.payload as { texts: string[] }).texts,
+        );
+      } finally {
+        release();
+      }
+    },
+  };
+
   return {
     id: 'local-llm',
     // 'hear' moved to the dedicated `local-asr` provider (whisper.cpp): the
@@ -365,8 +447,8 @@ export function createLocalLlmProvider(deps: {
     accel: () => backend?.accel ?? null,
     status(): ProviderStatus {
       if (!capability.ok) return 'unsupported';
-      if (downloadPct !== null) return { downloading: { pct: downloadPct } };
-      if (lastError) return { error: lastError };
+      if (chatT.pct !== null) return { downloading: { pct: chatT.pct } };
+      if (chatT.error) return { error: chatT.error };
       // Ready iff the SELECTED model is installed. When the selected model
       // isn't installed we report `standby` (which lets ensureInstalled
       // trigger its download) even though a previously-installed fallback
@@ -378,8 +460,8 @@ export function createLocalLlmProvider(deps: {
     mayBecomeReady() {
       if (!capability.ok || selectedInstalled()) return false;
       return (
-        downloadPct !== null ||
-        (lastError === null && deps.prefs.get().models.autoInstall)
+        chatT.pct !== null ||
+        (chatT.error === null && deps.prefs.get().models.autoInstall)
       );
     },
     describe() {
@@ -435,59 +517,70 @@ export function createLocalLlmProvider(deps: {
           'model-drift',
         );
       }
-      const s = await ensureServer(model);
-      touchIdle();
-      if (req.kind === 'complete') {
-        const {
-          prompt,
-          maxTokens,
-          profile,
-          system,
-          schema,
-          grammar,
-          topLogprobs,
-        } = req.payload as {
-          prompt: string;
-          maxTokens?: number;
-          profile?: 'default' | 'deterministic';
-          system?: string;
-          schema?: Record<string, unknown>;
-          grammar?: string;
-          topLogprobs?: number;
-        };
-        return chatText(s.baseUrl(), prompt, {
-          maxTokens,
-          profile,
-          system,
-          schema,
-          grammar,
-          topLogprobs,
-        });
-      }
-      if (req.kind === 'see') {
-        const { image, prompt, mime, profile } = req.payload as {
-          image: Uint8Array;
-          prompt: string;
-          mime?: string;
-          profile?: 'default' | 'deterministic';
-        };
-        // `see` has no decoding profile of its own — accept it, ignore it,
-        // never throw (issue #107: "every other provider ignores `profile`
-        // explicitly").
-        if (profile !== undefined && !seeProfileIgnoredLogged) {
-          seeProfileIgnoredLogged = true;
-          deps.log('info', "local-llm: 'see' ignores the 'profile' option");
+      // Held until the request SETTLES (hence `return await` below): the
+      // gate is what keeps an embed swap from killing this request.
+      const release = await gate.enter('chat', req.lane);
+      try {
+        const s = await ensureServer(model);
+        touchIdle();
+        if (req.kind === 'complete') {
+          const {
+            prompt,
+            maxTokens,
+            profile,
+            system,
+            schema,
+            grammar,
+            topLogprobs,
+          } = req.payload as {
+            prompt: string;
+            maxTokens?: number;
+            profile?: 'default' | 'deterministic';
+            system?: string;
+            schema?: Record<string, unknown>;
+            grammar?: string;
+            topLogprobs?: number;
+          };
+          return await chatText(s.baseUrl(), prompt, {
+            maxTokens,
+            profile,
+            system,
+            schema,
+            grammar,
+            topLogprobs,
+          });
         }
-        return describeImage(s.baseUrl(), image, prompt, { mime });
+        if (req.kind === 'see') {
+          const { image, prompt, mime, profile } = req.payload as {
+            image: Uint8Array;
+            prompt: string;
+            mime?: string;
+            profile?: 'default' | 'deterministic';
+          };
+          // `see` has no decoding profile of its own — accept it, ignore it,
+          // never throw (issue #107: "every other provider ignores `profile`
+          // explicitly").
+          if (profile !== undefined && !seeProfileIgnoredLogged) {
+            seeProfileIgnoredLogged = true;
+            deps.log('info', "local-llm: 'see' ignores the 'profile' option");
+          }
+          return await describeImage(s.baseUrl(), image, prompt, { mime });
+        }
+        throw new Error(`local-llm does not support '${req.kind}'`);
+      } finally {
+        release();
       }
-      throw new Error(`local-llm does not support '${req.kind}'`);
     },
     ensureInstalled,
+    ensureEmbedInstalled,
+    embedProvider,
     async cancelInstall() {
-      installing?.abort();
-      installing = null;
-      downloadPct = null;
-      lastError = null;
+      for (const t of [chatT, embedT]) {
+        t.abort?.abort();
+        t.abort = null;
+        t.pct = null;
+        t.error = null;
+      }
     },
     async dispose() {
       // App shutdown: abort any in-flight install and stop the llama-server
@@ -496,9 +589,11 @@ export function createLocalLlmProvider(deps: {
       // user disabling auto-install (that flip lives in the Settings 'Cancel'
       // IPC handler), so a pending download resumes on next launch. Reuses the
       // ownership-token reset that cancelInstall relies on.
-      installing?.abort();
-      installing = null;
-      downloadPct = null;
+      for (const t of [chatT, embedT]) {
+        t.abort?.abort();
+        t.abort = null;
+        t.pct = null;
+      }
       offPrefsChange();
       // Let any in-flight server start settle first, so we stop the real child
       // rather than racing it into an orphan (the start's IIFE assigns

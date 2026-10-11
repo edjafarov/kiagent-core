@@ -6,7 +6,7 @@ import type { Prefs } from '@shared/contracts';
 import { createLocalLlmProvider } from '../provider';
 import type { ServerLike } from '../provider';
 import type { ModelDescriptor } from '../models';
-import { CURATED_MODEL, E4B_MODEL } from '../models';
+import { CURATED_MODEL, E4B_MODEL, EMBEDDING_MODEL } from '../models';
 
 jest.mock('../api');
 jest.mock('../capability');
@@ -699,8 +699,10 @@ describe('LocalLlmProvider', () => {
     provider.ensureInstalled();
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(deps.download).toHaveBeenCalledTimes(1);
-    expect((deps.download as jest.Mock).mock.calls[0][0].id).toBe(E4B_MODEL.id);
+    // The chat model first, then the embedding model it unlocks.
+    expect(
+      (deps.download as jest.Mock).mock.calls.map((c) => c[0].id),
+    ).toEqual([E4B_MODEL.id, EMBEDDING_MODEL.id]);
   });
 
   // Finding 2: handle must PREFER the selected model when it's installed,
