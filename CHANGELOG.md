@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.108.1](https://github.com/edjafarov/kiagent-core/compare/v0.108.0...v0.108.1) (2026-10-11)
+
+### Bug Fixes
+
+* **sources:** a first import with no known total says Importing… on Sources ([ddd062d](https://github.com/edjafarov/kiagent-core/commit/ddd062d3df941adc7d5f3840fd2ee4395478fe3f))
+
 ## [0.108.0](https://github.com/edjafarov/kiagent-core/compare/v0.107.0...v0.108.0) (2026-10-11)
 
 ### Features
