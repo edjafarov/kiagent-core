@@ -150,29 +150,10 @@ export class LlamaServer implements ServerLike {
 
   private respawnTimer: NodeJS.Timeout | null = null;
 
-  private readonly o: Required<
-    Omit<
-      LlamaServerOptions,
-      | 'port'
-      | 'extraArgs'
-      | 'spawnFn'
-      | 'isHealthyAt'
-      | 'mmprojPath'
-      | 'embeddings'
-    >
-  > &
-    Pick<
-      LlamaServerOptions,
-      | 'port'
-      | 'extraArgs'
-      | 'spawnFn'
-      | 'isHealthyAt'
-      | 'mmprojPath'
-      | 'embeddings'
-    >;
+  private readonly o: LlamaServerOptions & typeof DEFAULTS;
 
   constructor(options: LlamaServerOptions) {
-    this.o = { ...DEFAULTS, ...options } as typeof this.o;
+    this.o = { ...DEFAULTS, ...options };
   }
 
   baseUrl(): string {
@@ -233,10 +214,20 @@ export class LlamaServer implements ServerLike {
 
   private launch(): void {
     const mode = this.o.embeddings
-      ? // One slot (an explicit -np is fine here: there is no chat context
-        // to split) and a physical batch as large as the context, so one
-        // 64-text request is one pass.
-        ['--embeddings', '--pooling', 'mean', '-c', '2048', '-ub', '2048', '-np', '1']
+      ? // An embedding input is non-causal, so it must fit in ONE ubatch
+        // (-ub = -c); one slot is enough (each input is its own task) and an
+        // explicit -np is harmless here — there is no chat context to split.
+        [
+          '--embeddings',
+          '--pooling',
+          'mean',
+          '-c',
+          '2048',
+          '-ub',
+          '2048',
+          '-np',
+          '1',
+        ]
       : [
           '-c',
           String(this.o.contextSize),

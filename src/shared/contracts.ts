@@ -890,7 +890,8 @@ export type Lane = 'interactive' | 'background';
  *  background-only (platform 2.11.0). */
 export type InferenceKind = 'complete' | 'see' | 'read' | 'hear' | 'embed';
 
-/** `Inference.embed` result: one vector per input text, in input order. */
+/** `embed` result (InferencePlane / ExtensionInference): one vector per
+ *  input text, in input order. */
 export interface EmbedResult {
   vectors: Float32Array[];
   modelId: string;
@@ -1182,6 +1183,13 @@ export class ModelChangedError extends Error {
  *  requests. Discriminate by `name === 'ContextOverflowError'` (it crosses
  *  the extension RPC boundary like `ModelChangedError`). A caller can retry
  *  with a smaller prompt. */
+export class ContextOverflowError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ContextOverflowError';
+  }
+}
+
 /** Thrown to background-lane callers while the lane is closed (or while
  *  the local model is held for another kind). Fail-fast on purpose:
  *  parking the request as a pending promise would pin the caller's entire
@@ -1195,13 +1203,6 @@ export class LaneClosedError extends Error {
   ) {
     super(message);
     this.name = 'LaneClosedError';
-  }
-}
-
-export class ContextOverflowError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ContextOverflowError';
   }
 }
 

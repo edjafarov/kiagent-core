@@ -5,13 +5,11 @@ afterEach(() => {
   global.fetch = realFetch;
 });
 const respond = (status: number, body: unknown) => {
-  global.fetch = jest.fn(
-    async () => ({
-      ok: status >= 200 && status < 300,
-      status,
-      json: async () => body,
-    }),
-  ) as any;
+  global.fetch = jest.fn(async () => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  })) as any;
 };
 
 describe('embedTexts', () => {
@@ -42,6 +40,20 @@ describe('embedTexts', () => {
     await expect(embedTexts('http://h', ['x'])).rejects.toMatchObject({
       name: 'ContextOverflowError',
     });
+  });
+
+  it('a server error that only mentions "context" is NOT an overflow', async () => {
+    respond(500, { error: { message: 'failed to create context' } });
+    await expect(embedTexts('http://h', ['x'])).rejects.toMatchObject({
+      name: 'Error',
+    });
+  });
+
+  it('a short response throws instead of returning holes', async () => {
+    respond(200, { data: [{ index: 0, embedding: [1] }] });
+    await expect(embedTexts('http://h', ['a', 'b'])).rejects.toThrow(
+      /1 vectors for 2 inputs/,
+    );
   });
 
   it('other failures are plain errors', async () => {

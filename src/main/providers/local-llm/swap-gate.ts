@@ -56,7 +56,11 @@ export function createSwapGate(opts?: { now?: () => number }): SwapGate {
     if (t - heldSince >= HOLD_CAP_MS) {
       held = false;
       cooldownUntil = t + CAP_COOLDOWN_MS;
-    } else if (inflight.embed === 0 && t - lastEmbed >= HOLD_IDLE_MS) {
+    } else if (
+      inflight.embed === 0 &&
+      !waiters.some((w) => w.model === 'embed') &&
+      t - lastEmbed >= HOLD_IDLE_MS
+    ) {
       held = false;
     }
   };
@@ -76,22 +80,17 @@ export function createSwapGate(opts?: { now?: () => number }): SwapGate {
   /** Admit waiters whose model may run now, in arrival order. */
   const pump = (): void => {
     expire();
-    for (const w of [...waiters]) {
+    // admit/refuse only settle promises (no synchronous re-entry), so the
+    // queue can be rebuilt in one pass.
+    for (const w of waiters.splice(0)) {
       if (w.model === 'embed') {
-        if (!held) {
-          waiters.splice(waiters.indexOf(w), 1);
-          w.refuse('the embed hold ended');
-        } else if (inflight.chat === 0) {
-          waiters.splice(waiters.indexOf(w), 1);
-          w.admit();
-        }
+        if (!held) w.refuse('the embed hold ended');
+        else if (inflight.chat === 0) w.admit();
+        else waiters.push(w);
       } else if (!w.interactive && held) {
-        waiters.splice(waiters.indexOf(w), 1);
         w.refuse('local model is held for embeddings');
-      } else if (inflight.embed === 0) {
-        waiters.splice(waiters.indexOf(w), 1);
-        w.admit();
-      }
+      } else if (inflight.embed === 0) w.admit();
+      else waiters.push(w);
     }
   };
 

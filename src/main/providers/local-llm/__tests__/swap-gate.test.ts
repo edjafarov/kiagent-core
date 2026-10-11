@@ -63,6 +63,16 @@ describe('swap gate', () => {
     expect(g.held()).toBe(false);
   });
 
+  it('an embed queued behind slow chat is admitted, not timed out as idle', async () => {
+    const c = clock();
+    const g = createSwapGate(c);
+    const chat = await g.enter('chat', 'background');
+    const e = g.enter('embed', 'background');
+    c.add(HOLD_IDLE_MS + 1);
+    chat();
+    (await e)();
+  });
+
   it('a long in-flight batch does not count as idle', async () => {
     const c = clock();
     const g = createSwapGate(c);

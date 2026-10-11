@@ -187,9 +187,9 @@ export class NoProviderError extends Error {
   }
 }
 
-// `ModelChangedError` itself now lives in `@shared/contracts.ts` — a
+// `ModelChangedError` and `LaneClosedError` live in `@shared/contracts.ts` — a
 // provider (e.g. `src/main/providers/local-llm/provider.ts`) throws the
-// SAME class from its own `handle()`, and a provider must not depend on
+// SAME classes from its own `handle()`, and a provider must not depend on
 // this module (the plane), so the one shared shape lives at the layer
 // both already import from. Re-exported here so existing importers of
 // `'../inference'` keep compiling unchanged.

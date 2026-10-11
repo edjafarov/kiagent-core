@@ -700,9 +700,9 @@ describe('LocalLlmProvider', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     // The chat model first, then the embedding model it unlocks.
-    expect(
-      (deps.download as jest.Mock).mock.calls.map((c) => c[0].id),
-    ).toEqual([E4B_MODEL.id, EMBEDDING_MODEL.id]);
+    expect((deps.download as jest.Mock).mock.calls.map((c) => c[0].id)).toEqual(
+      [E4B_MODEL.id, EMBEDDING_MODEL.id],
+    );
   });
 
   // Finding 2: handle must PREFER the selected model when it's installed,

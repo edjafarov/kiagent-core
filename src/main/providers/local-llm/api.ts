@@ -133,7 +133,7 @@ export async function embedTexts(
       } catch {
         message = '';
       }
-      if (/too large|exceed|context/i.test(message)) {
+      if (/too large to process|exceed/i.test(message)) {
         throw new ContextOverflowError(`embedding input too large: ${message}`);
       }
       throw new Error(
@@ -143,6 +143,11 @@ export async function embedTexts(
     const body = (await res.json()) as {
       data: { index: number; embedding: number[] }[];
     };
+    if (body.data?.length !== texts.length) {
+      throw new Error(
+        `embedding response has ${body.data?.length ?? 0} vectors for ${texts.length} inputs`,
+      );
+    }
     const out: Float32Array[] = new Array(texts.length);
     for (const d of body.data) out[d.index] = Float32Array.from(d.embedding);
     return out;

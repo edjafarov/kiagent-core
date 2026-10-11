@@ -26,7 +26,11 @@ function prefs(autoInstall = true): Prefs {
     processing: { enabled: true, window: 'always' },
     models: { override: E4B_MODEL.id, autoInstall },
   } as any;
-  return { get: () => current, patch: async () => {}, onChange: () => () => {} };
+  return {
+    get: () => current,
+    patch: async () => {},
+    onChange: () => () => {},
+  };
 }
 
 interface Made {
@@ -34,9 +38,16 @@ interface Made {
   server: ServerLike & { stop: jest.Mock };
 }
 
-function setup(opts: { chat?: boolean; embed?: boolean; autoInstall?: boolean; tmp: string }) {
-  if (opts.chat) fs.mkdirSync(path.join(opts.tmp, E4B_MODEL.id), { recursive: true });
-  if (opts.embed) fs.mkdirSync(path.join(opts.tmp, EMBEDDING_MODEL.id), { recursive: true });
+function setup(opts: {
+  chat?: boolean;
+  embed?: boolean;
+  autoInstall?: boolean;
+  tmp: string;
+}) {
+  if (opts.chat)
+    fs.mkdirSync(path.join(opts.tmp, E4B_MODEL.id), { recursive: true });
+  if (opts.embed)
+    fs.mkdirSync(path.join(opts.tmp, EMBEDDING_MODEL.id), { recursive: true });
   const made: Made[] = [];
   const stopHold: { next: Promise<void> | null } = { next: null };
   const download = jest.fn(async (m: { id: string }, dest: string) => {
@@ -47,8 +58,16 @@ function setup(opts: { chat?: boolean; embed?: boolean; autoInstall?: boolean; t
     modelsDir: opts.tmp,
     prefs: prefs(opts.autoInstall ?? true),
     log: () => {},
-    host: { platform: 'darwin', arch: 'arm64', cores: 10, totalMemBytes: 64 * 1024 ** 3 } as any,
-    detect: async () => ({ accel: 'metal' as const, capacityBytes: 64 * 1024 ** 3 }),
+    host: {
+      platform: 'darwin',
+      arch: 'arm64',
+      cores: 10,
+      totalMemBytes: 64 * 1024 ** 3,
+    } as any,
+    detect: async () => ({
+      accel: 'metal' as const,
+      capacityBytes: 64 * 1024 ** 3,
+    }),
     download: download as any,
     filesPresent: (_m, dir) => fs.existsSync(dir),
     makeServer: (args) => {
@@ -74,7 +93,11 @@ const complete = (lane: 'interactive' | 'background') => ({
   payload: { prompt: 'hi' },
   lane,
 });
-const embed = { kind: 'embed' as const, payload: { texts: ['a'] }, lane: 'background' as const };
+const embed = {
+  kind: 'embed' as const,
+  payload: { texts: ['a'] },
+  lane: 'background' as const,
+};
 
 describe('local-embed provider', () => {
   let tmp: string;
@@ -109,9 +132,11 @@ describe('local-embed provider', () => {
     expect(made[0].args).toMatchObject({ embeddings: true });
     expect(made[0].args.mmprojPath).toBeUndefined();
     expect(made[0].args.modelPath).toContain(EMBEDDING_MODEL.files[0].name);
-    await expect(provider.handle(complete('background'))).rejects.toMatchObject({
-      name: 'LaneClosedError',
-    });
+    await expect(provider.handle(complete('background'))).rejects.toMatchObject(
+      {
+        name: 'LaneClosedError',
+      },
+    );
   });
 
   it('an interactive call swaps back to the chat model', async () => {
@@ -151,7 +176,11 @@ describe('local-embed provider', () => {
   });
 
   it('never starts the chat server while the embed server is still stopping', async () => {
-    const { provider, made, stopHold } = setup({ tmp, chat: true, embed: true });
+    const { provider, made, stopHold } = setup({
+      tmp,
+      chat: true,
+      embed: true,
+    });
     const stopped = deferred<void>();
     stopHold.next = stopped.promise; // the embed server's stop() hangs
     await provider.embedProvider.handle(embed);
@@ -169,16 +198,24 @@ describe('local-embed provider', () => {
     expect(provider.embedProvider.status()).toBe('standby');
     expect(provider.embedProvider.mayBecomeReady?.()).toBe(true);
     provider.ensureEmbedInstalled();
-    expect(provider.embedProvider.status()).toEqual({ downloading: { pct: 0 } });
+    expect(provider.embedProvider.status()).toEqual({
+      downloading: { pct: 0 },
+    });
     expect(provider.status()).toBe('ready'); // chat unaffected
     await flush();
     await flush();
-    expect(download.mock.calls.map((c) => c[0].id)).toEqual([EMBEDDING_MODEL.id]);
+    expect(download.mock.calls.map((c) => c[0].id)).toEqual([
+      EMBEDDING_MODEL.id,
+    ]);
     expect(provider.embedProvider.status()).toBe('ready');
   });
 
   it('downloads nothing when Local AI may not install models', async () => {
-    const { provider, download } = setup({ tmp, chat: true, autoInstall: false });
+    const { provider, download } = setup({
+      tmp,
+      chat: true,
+      autoInstall: false,
+    });
     provider.ensureEmbedInstalled();
     provider.ensureInstalled();
     await flush();
