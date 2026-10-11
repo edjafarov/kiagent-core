@@ -232,6 +232,37 @@ describe('local-embed provider', () => {
     expect(made).toHaveLength(1);
   });
 
+  it('dispose waits for an idle stop still in progress', async () => {
+    jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+    try {
+      const { provider, stopHold } = setup({ tmp, chat: true, embed: true });
+      const stopped = deferred<void>();
+      stopHold.next = stopped.promise;
+      await provider.embedProvider.handle(embed);
+      await jest.advanceTimersByTimeAsync(60_000); // idle stop hangs
+      let done = false;
+      const d = provider.dispose().then(() => {
+        done = true;
+      });
+      await jest.advanceTimersByTimeAsync(0);
+      expect(done).toBe(false);
+      stopped.resolve();
+      await d;
+      expect(done).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('nothing downloads after dispose', async () => {
+    const { provider, download } = setup({ tmp });
+    await provider.dispose();
+    provider.ensureInstalled();
+    provider.ensureEmbedInstalled();
+    await flush();
+    expect(download).not.toHaveBeenCalled();
+  });
+
   it('a chat download cancelled mid-way does not start the embedding download', async () => {
     const { provider, download } = setup({ tmp });
     const gate = deferred<void>();

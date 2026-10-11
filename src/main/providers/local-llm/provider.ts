@@ -244,7 +244,9 @@ export function createLocalLlmProvider(deps: {
       () => {},
       () => {},
     );
-    return p;
+    // Settles only when EVERY stop has (dispose must not return while an
+    // earlier idle stop is still shutting a child down).
+    return stopping;
   };
 
   const touchIdle = (): void => {
@@ -326,7 +328,7 @@ export function createLocalLlmProvider(deps: {
   };
 
   const ensureInstalled = (): void => {
-    if (chatT.abort) return;
+    if (disposed || chatT.abort) return;
     if (!capability.ok) return;
     if (!deps.prefs.get().models.autoInstall) return;
     // Override-aware: only skip when the SELECTED model is already installed.
