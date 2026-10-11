@@ -15,6 +15,7 @@ import type {
   LogRecord,
   McpActivityRecord,
   OAuthSourceBinding,
+  InferenceKind,
   OutboxStatus,
   ProviderStatus,
   Query,
@@ -519,7 +520,7 @@ export interface Invokes {
     req: void;
     res: Array<{
       id: string;
-      supports: Array<'complete' | 'see' | 'read' | 'hear'>;
+      supports: InferenceKind[];
       status: ProviderStatus;
       /** Off this computer (the provider's `remote` flag). */
       remote: boolean;

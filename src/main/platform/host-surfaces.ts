@@ -4,7 +4,14 @@
  * host incarnation. files and commands are implemented here; only commands
  * outside the public capability surface are rejected by the router.
  */
-import type { EventMeta, LaneState, LogLevel, Query } from '@shared/contracts';
+import type {
+  EmbedResult,
+  EventMeta,
+  InferenceKind,
+  LaneState,
+  LogLevel,
+  Query,
+} from '@shared/contracts';
 import type { PluginDb, PluginDbParams, PluginDbStep } from '@shared/plugin-db';
 import type { FileChange, ScopedFiles } from '@shared/plugin-files';
 import type { AppDb } from '@main/db/app-db';
@@ -189,7 +196,10 @@ export interface SurfaceDeps {
      *  report the background lane as OPEN, an affirmative false claim
      *  that could mask a real wiring bug — that is why `laneState` stayed
      *  required and this does not. */
-    describe?(kind: 'complete' | 'see' | 'read' | 'hear'): Promise<{
+    /** Optional like `describe`: production injects the plane's `embed`;
+     *  a surface built without it rejects every call. */
+    embed?(texts: string[], opts?: { task?: string }): Promise<EmbedResult>;
+    describe?(kind: InferenceKind): Promise<{
       providerId: string;
       modelId: string;
       generation: number;
@@ -579,7 +589,16 @@ export function buildSurfaces(deps: SurfaceDeps): {
         }),
       lane: () => deps.inference.lane(),
       describe: (kind) =>
-        describeInference(kind as 'complete' | 'see' | 'read' | 'hear'),
+        describeInference(kind as InferenceKind),
+      // Background only: an extension cannot embed on the interactive lane.
+      embed: async (texts, opts) => {
+        if (!deps.inference.embed) {
+          throw new Error('inference.embed is not wired');
+        }
+        return deps.inference.embed((texts as unknown[]).map(String), {
+          task: (opts as { task?: string } | undefined)?.task,
+        });
+      },
     },
     events: {
       on(event) {

@@ -89,6 +89,7 @@ export const NS_METHODS: Record<string, string[]> = {
     'see',
     'read',
     'hear',
+    'embed',
     'lane',
     'describe',
   ],

@@ -1,5 +1,8 @@
 import {
+  LaneClosedError,
   ModelChangedError,
+  type EmbedResult,
+  type InferenceKind,
   type ActiveCallOp,
   type Inference,
   type InferenceProvider,
@@ -114,6 +117,12 @@ export interface InferencePlane extends Inference {
       signal?: AbortSignal;
     },
   ): Promise<{ text: string; providerId: string; modelId: string }>;
+  /** Text → vectors. Always the background lane: the lane policy applies,
+   *  and `task` names the call for the active-call indicator. */
+  embed(
+    texts: string[],
+    opts?: { task?: string; signal?: AbortSignal },
+  ): Promise<EmbedResult>;
   /** Resolves the provider that WOULD answer `kind` right now, exactly as
    *  the call path's `pick(kind)` does, and reports its model identity plus
    *  the plane's current generation — so a caller can compute a cache key
@@ -121,7 +130,7 @@ export interface InferencePlane extends Inference {
    *  `completeWithMeta` to be rejected if the model changed underneath it.
    *  `null` when no ready provider supports the kind; never throws. */
   describe(
-    kind: 'complete' | 'see' | 'read' | 'hear',
+    kind: InferenceKind,
     task?: string,
   ): Promise<{
     providerId: string;
@@ -136,10 +145,10 @@ export interface InferencePlane extends Inference {
   providers(): InferenceProvider[];
   /** A local provider of `kind` is downloading or says it may become ready
    *  on its own (`InferenceProvider.mayBecomeReady`). Remote ones never count. */
-  mayBecomeReady(kind: 'complete' | 'see' | 'read' | 'hear'): boolean;
+  mayBecomeReady(kind: InferenceKind): boolean;
   /** A ready LOCAL provider of `kind` exists (what `pick(kind)` without a
    *  task would find). Never throws. */
-  hasProvider(kind: 'complete' | 'see' | 'read' | 'hear'): boolean;
+  hasProvider(kind: InferenceKind): boolean;
   /** Route a caller-owned task to a registered provider (typically a
    *  remote one), or clear it with `null`. In memory only; the owner
    *  re-applies routes after a restart. Never bumps the generation. A
@@ -167,28 +176,14 @@ export interface InferencePlane extends Inference {
  *  pass), whereas a crash is a transient fault to DEFER and retry so a doc
  *  isn't left permanently un-extracted. */
 export class NoProviderError extends Error {
-  readonly kind: 'complete' | 'see' | 'read' | 'hear';
+  readonly kind: InferenceKind;
 
-  constructor(kind: 'complete' | 'see' | 'read' | 'hear') {
+  constructor(kind: InferenceKind) {
     super(
       `no inference provider available for '${kind}' — install or enable one in Settings`,
     );
     this.name = 'NoProviderError';
     this.kind = kind;
-  }
-}
-
-/** Thrown to background-lane callers while the lane is closed. Fail-fast on
- *  purpose: parking the request as a pending promise would pin the caller's
- *  entire async chain — including batches of loaded documents — in memory
- *  until the lane reopens (observed as ~1.5 GB held for a full daytime
- *  window). Workers catch this and DEFER the change to the ledger instead. */
-export class LaneClosedError extends Error {
-  constructor() {
-    super(
-      'background inference lane is closed — outside the processing window',
-    );
-    this.name = 'LaneClosedError';
   }
 }
 
@@ -198,7 +193,7 @@ export class LaneClosedError extends Error {
 // this module (the plane), so the one shared shape lives at the layer
 // both already import from. Re-exported here so existing importers of
 // `'../inference'` keep compiling unchanged.
-export { ModelChangedError };
+export { LaneClosedError, ModelChangedError };
 
 /** What a remote provider throws when it can't serve a call right now
  *  (disconnected, over budget, busy). The plane answers the call locally
@@ -361,7 +356,7 @@ export function createInference(
    *  routed task whose provider can't — goes to the first ready LOCAL
    *  provider: a remote one is never chosen by kind alone. */
   const pick = (
-    kind: 'complete' | 'see' | 'read' | 'hear',
+    kind: InferenceKind,
     task?: string,
   ): InferenceProvider => {
     const routedId = task === undefined ? undefined : routeTable.get(task);
@@ -387,7 +382,7 @@ export function createInference(
 
   const modelIdOf = (
     p: InferenceProvider,
-    kind: 'complete' | 'see' | 'read' | 'hear',
+    kind: InferenceKind,
   ): string => p.describe?.(kind)?.modelId ?? p.id;
 
   /** Throws BEFORE `p.handle(...)` when the caller passed a `generation`
@@ -403,7 +398,7 @@ export function createInference(
    *  for how that backstop is kept reachable. */
   const checkGeneration = (
     p: InferenceProvider,
-    kind: 'complete' | 'see' | 'read' | 'hear',
+    kind: InferenceKind,
     expected: number | undefined,
   ): void => {
     if (expected === undefined || expected === generation) return;
@@ -612,6 +607,15 @@ export function createInference(
         }),
       );
       return String(out);
+    },
+    async embed(texts, opts) {
+      const waited = gate('background', opts?.signal);
+      if (waited) await waited;
+      const p = pick('embed');
+      const out = await tracked(p, 'embed', opts?.task, () =>
+        p.handle({ kind: 'embed', payload: { texts }, lane: 'background' }),
+      );
+      return { vectors: out as Float32Array[], modelId: modelIdOf(p, 'embed') };
     },
     async hear(audio, opts) {
       const lane = opts?.lane ?? 'interactive';

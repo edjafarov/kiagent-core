@@ -886,6 +886,16 @@ export interface Sender {
  *  idle / night / maintenance windows. */
 export type Lane = 'interactive' | 'background';
 
+/** Every inference kind a provider can serve. `embed` (text → vectors) is
+ *  background-only (platform 2.11.0). */
+export type InferenceKind = 'complete' | 'see' | 'read' | 'hear' | 'embed';
+
+/** `Inference.embed` result: one vector per input text, in input order. */
+export interface EmbedResult {
+  vectors: Float32Array[];
+  modelId: string;
+}
+
 /** ONE front door to models. Nobody loads a model or owns a GPU queue. */
 export interface Inference {
   complete(
@@ -1047,7 +1057,9 @@ export interface ExtensionInference extends Inference {
    *  can compute a cache key BEFORE calling and later pass the generation
    *  back to `complete()` to be rejected if the model changed underneath
    *  it. `null` when no ready provider supports the kind; never throws. */
-  describe(kind: 'complete' | 'see' | 'read' | 'hear'): Promise<{
+  /** Text → vectors on the background lane (never interactive). */
+  embed(texts: string[], opts?: { task?: string }): Promise<EmbedResult>;
+  describe(kind: InferenceKind): Promise<{
     providerId: string;
     modelId: string;
     generation: number;
@@ -1071,12 +1083,12 @@ export interface InferenceProvider {
    *  has an explicit route to it (`InferencePlane.setRoute`), never by
    *  kind alone. */
   readonly remote?: boolean;
-  readonly supports: Array<'complete' | 'see' | 'read' | 'hear'>;
+  readonly supports: InferenceKind[];
   /** `task` is set when the plane asks on behalf of a routed task; a
    *  remote provider answers whether it can serve THAT task now. */
   status(task?: string): ProviderStatus;
   handle(req: {
-    kind: 'complete' | 'see' | 'read' | 'hear';
+    kind: InferenceKind;
     payload: unknown;
     lane: Lane;
   }): Promise<unknown>;
@@ -1085,7 +1097,7 @@ export interface InferenceProvider {
    *  of which implement it yet) keeps compiling unchanged; a provider that
    *  omits it is reported by the plane as `{ modelId: provider.id }`. Never
    *  throws; `null` when the provider cannot resolve a model right now. */
-  describe?(kind: 'complete' | 'see' | 'read' | 'hear'): {
+  describe?(kind: InferenceKind): {
     modelId: string;
   } | null;
   /** Subscribe to "the model this provider would serve just changed" —
@@ -1170,6 +1182,22 @@ export class ModelChangedError extends Error {
  *  requests. Discriminate by `name === 'ContextOverflowError'` (it crosses
  *  the extension RPC boundary like `ModelChangedError`). A caller can retry
  *  with a smaller prompt. */
+/** Thrown to background-lane callers while the lane is closed (or while
+ *  the local model is held for another kind). Fail-fast on purpose:
+ *  parking the request as a pending promise would pin the caller's entire
+ *  async chain — including batches of loaded documents — in memory until
+ *  the lane reopens (observed as ~1.5 GB held for a full daytime window).
+ *  Workers catch this and DEFER the change to the ledger instead. Lives
+ *  here (not in the plane) so a provider can throw the same class. */
+export class LaneClosedError extends Error {
+  constructor(
+    message = 'background inference lane is closed — outside the processing window',
+  ) {
+    super(message);
+    this.name = 'LaneClosedError';
+  }
+}
+
 export class ContextOverflowError extends Error {
   constructor(message: string) {
     super(message);
@@ -1790,7 +1818,7 @@ export interface SchedulerEnv {
  *  non-'open' value is a reason the UI can name — without this, queued work
  *  parked on a closed lane looks like a dead pipeline. */
 /** A local model call kind, as the inference plane names them. */
-export type ActiveCallOp = 'complete' | 'see' | 'read' | 'hear';
+export type ActiveCallOp = InferenceKind;
 /** One local model call executing now (AppState.processing.active). */
 export interface ActiveCall {
   op: ActiveCallOp;
