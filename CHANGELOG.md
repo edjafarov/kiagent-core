@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.109.0](https://github.com/edjafarov/kiagent-core/compare/v0.108.1...v0.109.0) (2026-10-11)
+
+### Features
+
+* **inference:** embed kind on the background lane; LaneClosedError in contracts; platform 2.11.0 ([f0baa9e](https://github.com/edjafarov/kiagent-core/commit/f0baa9efcd75e9e04bd73369cc8563f63bbc3af7))
+* **local-llm:** EmbeddingGemma descriptor, embeddings server mode, /v1/embeddings client ([6584cca](https://github.com/edjafarov/kiagent-core/commit/6584cca26f62b52c9acc254121bf10166032ba8d))
+* **local-llm:** local-embed provider on the shared server, gated swaps, own download ([8c6b8d1](https://github.com/edjafarov/kiagent-core/commit/8c6b8d14dce9ecb6ef75fa0e285dd519b190c3bc))
+* **local-llm:** swap gate — embed hold with idle/cap release, interactive break ([655e75c](https://github.com/edjafarov/kiagent-core/commit/655e75cc297b7722260dcf2a400cc62423413b0b))
+
+### Bug Fixes
+
+* **local-llm:** checkpoint-2 review fixes ([72546be](https://github.com/edjafarov/kiagent-core/commit/72546be6feb3637881f4af70380c72ec2dd4b6c5))
+* **local-llm:** dispose awaits every stop; no chat download after dispose ([b5ecc7c](https://github.com/edjafarov/kiagent-core/commit/b5ecc7cfef7255870191f1d262ec70a42d1e1dae))
+
 ## [0.108.1](https://github.com/edjafarov/kiagent-core/compare/v0.108.0...v0.108.1) (2026-10-11)
 
 ### Bug Fixes
