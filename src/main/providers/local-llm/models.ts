@@ -162,6 +162,26 @@ export const GLM_OCR_MODEL: ModelDescriptor = {
   ],
 };
 
+const EMBED_REPO = 'ggml-org/embeddinggemma-300m-qat-q8_0-GGUF';
+const EMBED_REV = '66f974f8cd48cc3b9c41c516b95508e75b4bee64'; // verified head commit (2026-10-11)
+
+/** EmbeddingGemma 300M (QAT, Q8_0): the `local-embed` provider's model —
+ *  768-d mean-pooled text vectors for message classification. NOT a chat
+ *  tier — never in CURATED_TIERS, so it can never become the chat model. */
+export const EMBEDDING_MODEL: ModelDescriptor = {
+  id: 'embeddinggemma-300m-qat-Q8_0',
+  label: 'EmbeddingGemma 300M',
+  files: [
+    {
+      name: 'embeddinggemma-300m-qat-Q8_0.gguf',
+      url: `https://huggingface.co/${EMBED_REPO}/resolve/${EMBED_REV}/embeddinggemma-300m-qat-Q8_0.gguf`,
+      sha256:
+        '6fa0c02a9c302be6f977521d399b4de3a46310a4f2621ee0063747881b673f67',
+      sizeBytes: 328577056,
+    },
+  ],
+};
+
 export interface CuratedTier {
   /** Inclusive lower bound of TOTAL system RAM for this tier. */
   minRamBytes: number;

@@ -106,9 +106,13 @@ function defaultSpawn(
 export interface LlamaServerOptions {
   binaryPath: string;
   modelPath: string;
-  mmprojPath: string;
+  /** Vision projector; absent for a text-only model (the embedding model). */
+  mmprojPath?: string;
   gpuLayers: number;
   log(level: LogLevel, msg: string): void;
+  /** Serve `/v1/embeddings` (mean pooling, one slot, a 2k context) instead
+   *  of chat. */
+  embeddings?: boolean;
   host?: string;
   port?: number;
   contextSize?: number;
@@ -147,9 +151,25 @@ export class LlamaServer implements ServerLike {
   private respawnTimer: NodeJS.Timeout | null = null;
 
   private readonly o: Required<
-    Omit<LlamaServerOptions, 'port' | 'extraArgs' | 'spawnFn' | 'isHealthyAt'>
+    Omit<
+      LlamaServerOptions,
+      | 'port'
+      | 'extraArgs'
+      | 'spawnFn'
+      | 'isHealthyAt'
+      | 'mmprojPath'
+      | 'embeddings'
+    >
   > &
-    Pick<LlamaServerOptions, 'port' | 'extraArgs' | 'spawnFn' | 'isHealthyAt'>;
+    Pick<
+      LlamaServerOptions,
+      | 'port'
+      | 'extraArgs'
+      | 'spawnFn'
+      | 'isHealthyAt'
+      | 'mmprojPath'
+      | 'embeddings'
+    >;
 
   constructor(options: LlamaServerOptions) {
     this.o = { ...DEFAULTS, ...options } as typeof this.o;
@@ -212,26 +232,33 @@ export class LlamaServer implements ServerLike {
   }
 
   private launch(): void {
+    const mode = this.o.embeddings
+      ? // One slot (an explicit -np is fine here: there is no chat context
+        // to split) and a physical batch as large as the context, so one
+        // 64-text request is one pass.
+        ['--embeddings', '--pooling', 'mean', '-c', '2048', '-ub', '2048', '-np', '1']
+      : [
+          '-c',
+          String(this.o.contextSize),
+          '--cache-ram',
+          '0',
+          // Prompt-cache checkpoints default to 32 per slot (20–320 MB each
+          // on a 12B model); four keep reuse and cost less at peak than the
+          // larger context above adds.
+          '--ctx-checkpoints',
+          '4',
+        ];
     const args = [
       '-m',
       this.o.modelPath,
-      '--mmproj',
-      this.o.mmprojPath,
+      ...(this.o.mmprojPath ? ['--mmproj', this.o.mmprojPath] : []),
       '--host',
       this.o.host,
       '--port',
       String(this.port),
-      '-c',
-      String(this.o.contextSize),
       '-ngl',
       String(this.o.gpuLayers ?? 999),
-      '--cache-ram',
-      '0',
-      // Prompt-cache checkpoints default to 32 per slot (20–320 MB each on a
-      // 12B model); four keep reuse and cost less at peak than the larger
-      // context above adds.
-      '--ctx-checkpoints',
-      '4',
+      ...mode,
       ...(this.o.extraArgs ?? []),
     ];
     const spawnFn = this.o.spawnFn ?? defaultSpawn;

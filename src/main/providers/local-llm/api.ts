@@ -106,6 +106,51 @@ async function chatError(res: Response): Promise<Error> {
   );
 }
 
+/** OpenAI-style embeddings, one vector per input in input order. An input
+ *  the server cannot fit is `ContextOverflowError` (`chatError` is
+ *  chat-only); anything else is a plain Error. */
+export async function embedTexts(
+  baseUrl: string,
+  texts: string[],
+): Promise<Float32Array[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  timer.unref?.();
+  try {
+    const res = await fetch(`${baseUrl}/v1/embeddings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({ input: texts }),
+    });
+    if (!res.ok) {
+      let message = '';
+      try {
+        message = String(
+          ((await res.json()) as { error?: { message?: unknown } }).error
+            ?.message ?? '',
+        );
+      } catch {
+        message = '';
+      }
+      if (/too large|exceed|context/i.test(message)) {
+        throw new ContextOverflowError(`embedding input too large: ${message}`);
+      }
+      throw new Error(
+        `embedding request failed: HTTP ${res.status}${message ? ` (${message.slice(0, 200)})` : ''}`,
+      );
+    }
+    const body = (await res.json()) as {
+      data: { index: number; embedding: number[] }[];
+    };
+    const out: Float32Array[] = new Array(texts.length);
+    for (const d of body.data) out[d.index] = Float32Array.from(d.embedding);
+    return out;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function chatText(
   baseUrl: string,
   prompt: string,

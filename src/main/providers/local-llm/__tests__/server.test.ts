@@ -225,6 +225,40 @@ describe('LlamaServer launch args', () => {
     expect(calls[0].args).not.toContain('-np');
   });
 
+  it('embeddings mode: no mmproj, embedding flags, one slot, no chat cache flags', () => {
+    const { calls, spawnFn } = capture();
+    const srv = new LlamaServer({
+      binaryPath: 'unused',
+      modelPath: 'e.gguf',
+      gpuLayers: 999,
+      embeddings: true,
+      log: noopLog,
+      spawnFn,
+    });
+    (srv as any).launch();
+    const a = calls[0].args;
+    expect(a).not.toContain('--mmproj');
+    expect(a).not.toContain('--cache-ram');
+    expect(a).not.toContain('--ctx-checkpoints');
+    expect(a.join(' ')).toContain(
+      '--embeddings --pooling mean -c 2048 -ub 2048 -np 1',
+    );
+  });
+
+  it('chat mode without an mmproj omits --mmproj', () => {
+    const { calls, spawnFn } = capture();
+    const srv = new LlamaServer({
+      binaryPath: 'unused',
+      modelPath: 'm',
+      gpuLayers: 999,
+      log: noopLog,
+      spawnFn,
+    });
+    (srv as any).launch();
+    expect(calls[0].args).not.toContain('--mmproj');
+    expect(calls[0].args).toContain('--cache-ram');
+  });
+
   it('passes -ngl 999 when gpuLayers is 999 (GPU offload)', () => {
     const { calls, spawnFn } = capture();
     const srv = new LlamaServer({
