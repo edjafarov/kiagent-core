@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.108.0](https://github.com/edjafarov/kiagent-core/compare/v0.107.0...v0.108.0) (2026-10-11)
+
+### Features
+
+* **oauth:** github OAuth provider for extension sources (platform API 2.10.0) ([02a732b](https://github.com/edjafarov/kiagent-core/commit/02a732b988fa32d2be313027da4dbdd70b3f0a00))
+
+### Bug Fixes
+
+* **oauth:** normalise github scope list to space-separated ([f07c99e](https://github.com/edjafarov/kiagent-core/commit/f07c99eab5ea9a0a4c651ede1ded34928926984f))
+
 ## [0.107.0](https://github.com/edjafarov/kiagent-core/compare/v0.106.0...v0.107.0) (2026-10-09)
 
 ### Features
