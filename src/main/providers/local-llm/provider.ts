@@ -43,7 +43,7 @@ export interface LocalLlmProvider extends InferenceProvider {
 }
 
 /** Leave half the logical cores to the user and stop idle busy-waiting.
- *  NEVER add -np here: an explicit slot count disables b9585's unified KV
+ *  NEVER add -np here: an explicit slot count disables llama-server's unified KV
  *  cache and splits the 24k context (see server.ts contextSize). */
 export function llamaThreadArgs(host: HostFacts, accel: LlmAccel): string[] {
   const n = String(hostBudget(host, accel).backgroundThreads);
