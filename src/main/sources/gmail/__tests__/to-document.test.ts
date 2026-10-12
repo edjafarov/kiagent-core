@@ -428,3 +428,20 @@ describe('owner-channel mail stays out of the corpus', () => {
     expect(text).not.toContain('body a');
   });
 });
+
+describe('toDocument with an unreadable message', () => {
+  it('indexes the rest of the thread instead of failing the sync', () => {
+    const item = itemFromFixture();
+    const broken = { id: 'broken', threadId: item.id } as GmailApiMessage;
+    const out = toDocument({ ...item, messages: [...item.messages, broken] });
+    const d = (Array.isArray(out) ? out[0] : out) as DocumentInput;
+    expect(d.externalId).toBe(item.id);
+    expect(d.title).toBe('Sync time tomorrow?');
+  });
+
+  it('a thread with no readable message is skipped', () => {
+    const item = itemFromFixture();
+    const broken = { id: 'broken', threadId: item.id } as GmailApiMessage;
+    expect(toDocument({ ...item, messages: [broken] })).toBeNull();
+  });
+});

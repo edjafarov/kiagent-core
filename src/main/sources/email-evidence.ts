@@ -45,11 +45,46 @@ export function extractMessageEvidence(input: {
   };
 }
 
+/** Never throws: one unreadable message must not stall a whole mail sync.
+ *  Turndown throws on HTML it cannot root (a `<frameset>` page — old
+ *  newsletters and bank mail); those fall back to the page's bare text. */
 export function htmlToText(html: string): string {
-  return new TurndownService({ headingStyle: 'atx', bulletListMarker: '-' })
-    .turndown(html)
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  let text: string;
+  try {
+    text = new TurndownService({
+      headingStyle: 'atx',
+      bulletListMarker: '-',
+    }).turndown(html);
+  } catch {
+    text = bareText(html);
+  }
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+const ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+
+function bareText(html: string): string {
+  return html
+    .replace(/<(script|style|head|title)\b[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<\/?(p|div|br|tr|li|h[1-6]|table|noframes)\b[^>]*>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
+      if (e[0] !== '#') return ENTITIES[e.toLowerCase()] ?? m;
+      const n =
+        e[1] === 'x' || e[1] === 'X'
+          ? parseInt(e.slice(2), 16)
+          : parseInt(e.slice(1), 10);
+      return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : m;
+    })
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ *\n */g, '\n');
 }
 
 function removeQuoted(text: string): string {

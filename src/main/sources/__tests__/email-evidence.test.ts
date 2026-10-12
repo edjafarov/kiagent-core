@@ -1,4 +1,4 @@
-import { extractMessageEvidence } from '../email-evidence';
+import { extractMessageEvidence, htmlToText } from '../email-evidence';
 
 describe('extractMessageEvidence', () => {
   it('retains the author signature while normal body remains cleaned', () => {
@@ -125,5 +125,24 @@ describe('extractMessageEvidence', () => {
     expect(a.excerpt.length).toBeLessThanOrEqual(800);
     expect(a.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(a.fingerprint).toBe(b.fingerprint);
+  });
+});
+
+describe('htmlToText', () => {
+  it('reads a frameset page instead of throwing (Turndown cannot root one)', () => {
+    const html =
+      '<html><head><title>Old</title></head><frameset cols="*"><frame src="a.html"><noframes><p>Your statement is ready.</p></noframes></frameset></html>';
+    expect(htmlToText(html)).toContain('Your statement is ready.');
+  });
+
+  it('a frameset-only message gives evidence, not a crash', () => {
+    const evidence = extractMessageEvidence({
+      messageKey: 'm-frames',
+      author: 'bank@example.com',
+      at: null,
+      plain: '',
+      html: '<frameset><frame src="x"></frameset>',
+    });
+    expect(evidence.excerpt).toBe('');
   });
 });

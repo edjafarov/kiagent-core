@@ -76,7 +76,16 @@ export function toDocument(
   const scopeBucket = threadBucket(item.messages);
   if (!item.selectedBuckets.includes(scopeBucket)) return null;
 
-  const parsed = item.messages.map(parseGmailMessage);
+  // A message that cannot be read is left out, never thrown: a throw here
+  // fails the whole page, and the retry hits the same message forever.
+  const parsed = item.messages.flatMap((m) => {
+    try {
+      return [parseGmailMessage(m)];
+    } catch {
+      return [];
+    }
+  });
+  if (parsed.length === 0) return null;
   const first = parsed[0];
   const last = parsed[parsed.length - 1];
 
