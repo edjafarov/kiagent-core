@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.110.2](https://github.com/edjafarov/kiagent-core/compare/v0.110.1...v0.110.2) (2026-10-12)
+
+### Bug Fixes
+
+* **mail:** one unreadable email no longer stalls a mail sync ([eecd97d](https://github.com/edjafarov/kiagent-core/commit/eecd97d1d2d91f929d1260cf505766de11cfea64))
+
 ## [0.110.1](https://github.com/edjafarov/kiagent-core/compare/v0.110.0...v0.110.1) (2026-10-12)
 
 ### Bug Fixes
