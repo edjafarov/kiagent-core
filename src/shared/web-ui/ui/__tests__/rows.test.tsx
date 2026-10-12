@@ -1,4 +1,6 @@
 import '@testing-library/jest-dom';
+import fs from 'node:fs';
+import path from 'node:path';
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { Rows, Row, DayGroup } from '..';
@@ -22,6 +24,23 @@ function renderRow(extra: Partial<React.ComponentProps<typeof Row>> = {}) {
 }
 
 describe('Row', () => {
+  it('a row with a second line grows to fit both lines; one without keeps its fixed height', () => {
+    const { item } = renderRow();
+    expect(item).toHaveClass('has-sub');
+    render(
+      <Rows aria-label="Plain">
+        <Row title="Single line" />
+      </Rows>,
+    );
+    expect(screen.getByText('Single line').closest('li')).not.toHaveClass(
+      'has-sub',
+    );
+    const css = fs.readFileSync(path.resolve(__dirname, '../../ui.css'), 'utf8');
+    const rule = css.match(/\.ui-row\.has-sub\s*\{([^}]*)\}/);
+    expect(rule?.[1]).toMatch(/height:\s*auto/);
+    expect(rule?.[1]).toMatch(/min-height:\s*var\(--h\)/);
+  });
+
   it('renders title, second line, time and the day label', () => {
     renderRow();
     expect(screen.getByRole('list', { name: 'Today' })).toBeInTheDocument();

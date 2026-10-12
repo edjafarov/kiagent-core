@@ -52,6 +52,7 @@ export function Row(props: {
         size !== 30 && `is-${size}`,
         props.selected && 'is-sel',
         props.faint && 'is-faint',
+        props.sub != null && 'has-sub',
         props.detail != null && 'has-detail',
       )}
       data-testid={props['data-testid']}

@@ -236,8 +236,11 @@
 .ui-row.is-38 { --h: var(--row-h-mid); }
 .ui-row.is-42 { --h: var(--row-h-tall); }
 .ui-row.is-48 { --h: var(--row-h-xl); }
+/* A second line never fits the fixed heights: the row grows to fit both. */
+.ui-row.has-sub { height: auto; min-height: var(--h); padding-top: 5px; padding-bottom: 5px; }
 .ui-row.has-detail { height: auto; flex-wrap: wrap; row-gap: 0; padding-bottom: 8px; }
 .ui-row.has-detail > .ui-row-main { height: var(--h); }
+.ui-row.has-detail.has-sub > .ui-row-main { height: auto; min-height: var(--h); }
 .ui-row.has-detail > .ui-row-acts { bottom: auto; height: var(--h); }
 .ui-row:hover, .ui-row:focus-within { background: var(--row-hover); }
 .ui-row.is-sel { background: var(--row-sel); }
