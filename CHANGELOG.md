@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.110.1](https://github.com/edjafarov/kiagent-core/compare/v0.110.0...v0.110.1) (2026-10-12)
+
+### Bug Fixes
+
+* **ui:** a row with a second line grows to fit it ([d8fd09b](https://github.com/edjafarov/kiagent-core/commit/d8fd09beacfa189ca841c3bec56932056a77c72d))
+
 ## [0.110.0](https://github.com/edjafarov/kiagent-core/compare/v0.109.0...v0.110.0) (2026-10-12)
 
 ### Features
