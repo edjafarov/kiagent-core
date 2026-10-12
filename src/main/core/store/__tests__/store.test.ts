@@ -160,6 +160,25 @@ describe('store', () => {
     expect(again.map((d) => d.externalId)).toEqual(['a']);
   });
 
+  it('topLevel pages only documents without a parent, in both modes', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b', { parent: { externalId: 'a', type: 'note' } })],
+      cursor: 1,
+    });
+    const bySeq = await store.read.documentPage!({
+      afterSeq: 0,
+      limit: 100,
+      types: ['note'],
+      topLevel: true,
+    });
+    expect(bySeq.map((d) => d.externalId)).toEqual(['a']);
+    const byId = await store.read.documentPage!({ limit: 100, types: ['note'], topLevel: true });
+    expect(byId.map((d) => d.externalId)).toEqual(['a']);
+    const all = await store.read.documentPage!({ afterSeq: 0, limit: 100, types: ['note'] });
+    expect(all).toHaveLength(2);
+  });
+
   it('commits documents with cursor atomically and feeds them in order', async () => {
     await store.commit({
       account: accountId,

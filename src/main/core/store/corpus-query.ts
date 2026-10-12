@@ -134,9 +134,10 @@ export function createCorpusQuery(
       const limit = Math.max(0, Math.min(100, Math.floor(input.limit)));
       if (limit === 0 || input.types.length === 0) return [];
       const placeholders = input.types.map(() => '?').join(',');
+      const top = input.topLevel ? ' AND parent_id IS NULL' : '';
       if (typeof input.afterSeq === 'number') {
         const rows = (await db.all(
-          `SELECT * FROM documents WHERE type IN (${placeholders}) AND seq > ? ORDER BY seq LIMIT ?`,
+          `SELECT * FROM documents WHERE type IN (${placeholders})${top} AND seq > ? ORDER BY seq LIMIT ?`,
           [...input.types, input.afterSeq, limit],
         )) as unknown as DocRow[];
         return rows.map(toDocument);
@@ -149,7 +150,7 @@ export function createCorpusQuery(
       }
       params.push(limit);
       const rows = (await db.all(
-        `SELECT * FROM documents WHERE archived_at IS NULL AND type IN (${placeholders})${after} ORDER BY id LIMIT ?`,
+        `SELECT * FROM documents WHERE archived_at IS NULL AND type IN (${placeholders})${top}${after} ORDER BY id LIMIT ?`,
         params,
       )) as unknown as DocRow[];
       return rows.map(toDocument);

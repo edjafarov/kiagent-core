@@ -309,6 +309,9 @@ export interface Query {
     afterSeq?: number;
     limit: number;
     types: string[];
+    /** Only documents without a parent (attachments, chat files and
+     *  sub-agent sessions are skipped before paging). */
+    topLevel?: boolean;
   }): Promise<Document[]>;
   /** Engine-internal (#59 §3a seeding); never exposed to extensions (not in
    *  host-surfaces / extension-host-entry). Live documents with
