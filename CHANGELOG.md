@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.110.0](https://github.com/edjafarov/kiagent-core/compare/v0.109.0...v0.110.0) (2026-10-12)
+
+### Features
+
+* **query:** documentPage topLevel skips child documents ([2addf0f](https://github.com/edjafarov/kiagent-core/commit/2addf0f0fdb48a289196a6e2b82fcd7a8c523024))
+
 ## [0.109.0](https://github.com/edjafarov/kiagent-core/compare/v0.108.1...v0.109.0) (2026-10-11)
 
 ### Features
