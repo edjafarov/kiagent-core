@@ -188,6 +188,10 @@ async function parseOther(
       const out = await mammoth.convertToMarkdown({ buffer: buf });
       return out.value;
     }
+    case 'presentation': {
+      const { pptxToMarkdown } = await import('./formats/pptx');
+      return pptxToMarkdown(bytes);
+    }
     case 'html':
       return htmlToMarkdown(buf.toString('utf8'));
     case 'csv':
