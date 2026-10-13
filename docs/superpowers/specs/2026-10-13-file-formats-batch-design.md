@@ -1,6 +1,6 @@
 # File formats batch: Office, e-books, transcripts, mail archives, ZIP, PST
 
-Status: r4 (fable + codex-astra rounds 1–3 folded in) · 2026-10-13
+Status: APPROVED r5 (fable + codex-astra SATISFIED after 4 rounds) · 2026-10-13
 Scope came from the format coverage review (value ≥ 3 and difficulty ≤ 2,
 plus PST). Deferred formats are filed as `priority:low` issues #148–#164.
 
@@ -170,7 +170,9 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
   repo included); `inline-text` decodes it with the same NUL sniff as
   `buildItem` (Takeout/Slack/WhatsApp `.json`/`.txt`/`.csv`/`.html`);
   `converter` runs `parseDetailed` (all kinds, A included); `vision`/
-  `audio` → name-only child; `container` → nested expansion (below).
+  `audio` → name-only child; `container` → nested expansion (below) for
+  mbox/vCard/ENEX members; `.zip` and `.pst` members are name-only
+  children in every phase.
   Ordinary members over 20 MiB uncompressed are name-only. 100:1 ratio
   and 100k-children guards.
 - **Mailboxes/vCards/ENEX inside a ZIP** (phase **2b**; until then such
@@ -209,7 +211,9 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
   left as they are for the cloud profile). Step 2 gains one exception:
   `mime === 'application/mbox'`. In `convertibleKind`, `subtitles` is
   matched before the `text/*` fallback.
-  The `.msf` sibling check lives in **`decideLocalFile`/`isIngestible`**
+  The `.msf` sibling check (the `.msf` → `application/mbox` override)
+  lives in **`decideLocalFile`** (`ingestible.ts`), which `isIngestible`
+  and `buildItem` already call
   (one `existsSync` per extensionless file), the single gate that
   `walkPaths`, `reconcile`, `countFiles` and the watcher filter use.
   `incrementalRescanRoot` builds its `newlyAdmitted` candidate through the
@@ -238,7 +242,7 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
         notBefore?: number }
     | { state: 'done'; size: number; mtimeMs: number; end?: number;
         v: number }
-    | { state: 'failed'; size: number; mtimeMs: number };
+    | { state: 'failed'; size: number; mtimeMs: number; v: number };
   ```
 
   Only `pending` records are scheduled. `done` and `failed` are compact
@@ -357,7 +361,8 @@ containers.
 2. **Phase 2 (core):** section B for mbox (incl. Thunderbird), ZIP
    (plain members), vCard, ENEX + version 4 + the reconcile-ratio change.
    **Phase 2b:** mailbox/vCard/ENEX members inside a ZIP via the temp-file
-   path. No policy bump: `done` records carry the expander version `v`
+   path. No policy bump: `done` and `failed` records carry the expander
+   version `v`
    per container kind; a record whose `v` is older than the running
    expander's is treated as changed (full path), so 2b raising the ZIP
    expander version re-expands existing ZIPs once.
