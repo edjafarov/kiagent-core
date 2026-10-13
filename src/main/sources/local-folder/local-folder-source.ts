@@ -32,6 +32,8 @@ import {
   nextDue,
   nextPending,
   noteContainer,
+  replaceRecord,
+  sweepScratch,
 } from './expansion';
 import {
   folderScopedConfig,
@@ -217,6 +219,7 @@ async function buildBatch(
   entries: readonly ScannedEntry[],
   scopeRootId: string,
   exps: Record<string, Expansion>,
+  scratchDir?: string,
 ): Promise<{ items: LocalFolderItem[]; deletions: ExternalRef[] }> {
   const built = await Promise.all(
     entries.map((e) => buildItem(e.absPath, e.stats)),
@@ -228,10 +231,15 @@ async function buildBatch(
     const externalId = toAbsPosix(absPath);
     // A container is never an item here: the expander writes its row.
     if (item && 'container' in item)
-      exps[externalId] = noteContainer(exps[externalId], item.container, {
-        size: stats.size,
-        mtimeMs: stats.mtimeMs,
-      });
+      replaceRecord(
+        exps,
+        externalId,
+        noteContainer(exps[externalId], item.container, {
+          size: stats.size,
+          mtimeMs: stats.mtimeMs,
+        }),
+        scratchDir,
+      );
     else if (item) items.push({ ...item, scopeRootId });
     else deletions.push({ externalId, type: 'file' });
   });
@@ -260,6 +268,7 @@ function dropUnvisited(
   visited: ReadonlySet<string>,
   exps: Record<string, Expansion>,
   trouble: WalkTrouble,
+  scratchDir?: string,
 ): ExternalRef[] {
   // A directory the walk could not read (a NAS hiccup, a privacy prompt)
   // hides its containers; dropping them would archive every child. The
@@ -268,7 +277,7 @@ function dropUnvisited(
   const gone: ExternalRef[] = [];
   for (const id of Object.keys(exps))
     if (!visited.has(id) && isUnder(id, root)) {
-      delete exps[id];
+      replaceRecord(exps, id, null, scratchDir);
       gone.push({ externalId: id, type: 'file' });
     }
   return gone;
@@ -315,6 +324,7 @@ async function* backfillRoot(
   estimateTotal: number,
   working: LocalFolderCursor,
   exps: Record<string, Expansion>,
+  scratchDir?: string,
 ): AsyncGenerator<
   Batch<LocalFolderCursor, LocalFolderItem>,
   LocalFolderCursor
@@ -331,9 +341,12 @@ async function* backfillRoot(
     }
   }
   for await (const { value: entries, last } of batchesOf(seen())) {
-    const built = await buildBatch(entries, root, exps);
+    const built = await buildBatch(entries, root, exps, scratchDir);
     const deletions = last
-      ? [...built.deletions, ...dropUnvisited(root, visited, exps, trouble)]
+      ? [
+          ...built.deletions,
+          ...dropUnvisited(root, visited, exps, trouble, scratchDir),
+        ]
       : built.deletions;
     if (last) cursor = advanceCursor(cursor, root, scanStartIso);
     yield {
@@ -346,7 +359,7 @@ async function* backfillRoot(
     yielded = true;
   }
   if (!yielded) {
-    const deletions = dropUnvisited(root, visited, exps, trouble);
+    const deletions = dropUnvisited(root, visited, exps, trouble, scratchDir);
     cursor = advanceCursor(cursor, root, scanStartIso);
     yield {
       phase: 'backfill',
@@ -388,6 +401,7 @@ async function* incrementalRescanRoot(
   working: LocalFolderCursor,
   fromVersion: number,
   exps: Record<string, Expansion>,
+  scratchDir?: string,
 ): AsyncGenerator<
   Batch<LocalFolderCursor, LocalFolderItem>,
   LocalFolderCursor
@@ -424,9 +438,12 @@ async function* incrementalRescanRoot(
   let cursor = working;
   let yielded = false;
   for await (const { value: entries, last } of batchesOf(changed())) {
-    const built = await buildBatch(entries, root, exps);
+    const built = await buildBatch(entries, root, exps, scratchDir);
     const deletions = last
-      ? [...built.deletions, ...dropUnvisited(root, visited, exps, trouble)]
+      ? [
+          ...built.deletions,
+          ...dropUnvisited(root, visited, exps, trouble, scratchDir),
+        ]
       : built.deletions;
     if (last) cursor = advanceCursor(working, root, rescanStartIso);
     yield {
@@ -438,7 +455,7 @@ async function* incrementalRescanRoot(
     yielded = true;
   }
   if (!yielded) {
-    const deletions = dropUnvisited(root, visited, exps, trouble);
+    const deletions = dropUnvisited(root, visited, exps, trouble, scratchDir);
     if (deletions.length > 0)
       yield {
         phase: 'live',
@@ -454,6 +471,10 @@ export interface LocalFolderDeps {
   /** The platform converter; containers are expanded through its paged
    *  `expandPage` op (in the crash-isolated child in the app). */
   converter: Pick<Converter, 'expandPage'>;
+  /** Where a ZIP's nested mailbox/vCard/ENEX member is extracted while it
+   *  expands (the app passes `<userData>/expand-tmp`). Without it nested
+   *  members are listed by name only. */
+  scratchDir?: string;
 }
 
 let inlineDeps: LocalFolderDeps | null = null;
@@ -477,6 +498,12 @@ export async function* pull(
   /** Container expansion records — mutated by the scan, the events and the
    *  expansion steps, stamped onto every yielded cursor. */
   const exps: Record<string, Expansion> = { ...(working?.expansions ?? {}) };
+  const { scratchDir } = deps;
+  if (scratchDir) {
+    // Leftovers of a crash or of records dropped by the prune above.
+    await fs.promises.mkdir(scratchDir, { recursive: true });
+    await sweepScratch(scratchDir, exps);
+  }
   // Started BEFORE any scan or expansion work (see startWatcher).
   const watcher =
     isWatchEnabled(session.account) && !session.signal.aborted
@@ -543,6 +570,7 @@ export async function* pull(
           estimateTotal,
           working,
           exps,
+          scratchDir,
         );
       } else {
         working = yield* incrementalRescanRoot(
@@ -552,6 +580,7 @@ export async function* pull(
           working,
           fromVersion,
           exps,
+          scratchDir,
         );
       }
     }
@@ -585,7 +614,7 @@ export async function* pull(
       if (ev) {
         progressed = true;
         // eslint-disable-next-line no-await-in-loop
-        const batch = await eventBatch(ev, rootOf, working, exps);
+        const batch = await eventBatch(ev, rootOf, working, exps, scratchDir);
         if (batch) {
           working = batch.cursor;
           yield { ...batch, cursor: withExpansions(working, exps) };
@@ -602,10 +631,10 @@ export async function* pull(
           converter: deps.converter,
           signal: session.signal,
           now: Date.now(),
+          scratchDir,
         });
         if (session.signal.aborted) return;
-        if (out.rec) exps[id] = out.rec;
-        else delete exps[id];
+        replaceRecord(exps, id, out.rec ?? null, scratchDir);
         yield {
           phase: 'live',
           items: out.items,
@@ -639,6 +668,7 @@ async function eventBatch(
   rootOf: (absPath: string) => string | undefined,
   cursor: LocalFolderCursor,
   exps: Record<string, Expansion>,
+  scratchDir?: string,
 ): Promise<
   | (Batch<LocalFolderCursor, LocalFolderItem> & { cursor: LocalFolderCursor })
   | null
@@ -649,7 +679,7 @@ async function eventBatch(
     ? advanceCursor(cursor, root, new Date().toISOString())
     : cursor;
   if (ev.kind === 'unlink') {
-    delete exps[externalId];
+    replaceRecord(exps, externalId, null, scratchDir);
     return {
       phase: 'live',
       items: [],
@@ -670,10 +700,15 @@ async function eventBatch(
   if (item && 'container' in item) {
     // Outside every root (R5's stray event): nothing to expand into.
     if (!root) return null;
-    exps[externalId] = noteContainer(exps[externalId], item.container, {
-      size: stats.size,
-      mtimeMs: stats.mtimeMs,
-    });
+    replaceRecord(
+      exps,
+      externalId,
+      noteContainer(exps[externalId], item.container, {
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+      }),
+      scratchDir,
+    );
     return null;
   }
   // `buildItem` is null when the policy check it recomputes from the fresh
@@ -689,7 +724,7 @@ async function eventBatch(
   // (DECISIONS R5). Never a throw, and no warn here: the engine emits the
   // single warn at store time.
   if (!item) {
-    delete exps[externalId];
+    replaceRecord(exps, externalId, null, scratchDir);
     return {
       phase: 'live',
       items: [],

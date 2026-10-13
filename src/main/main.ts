@@ -1241,6 +1241,7 @@ app
       (s) => p.sources.register(s),
       broker,
       p.converter,
+      path.join(app.getPath('userData'), 'expand-tmp'),
     );
     for (const [sourceId, refresher] of bundledRefreshers)
       p.refreshers.set(sourceId, refresher);

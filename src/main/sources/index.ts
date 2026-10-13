@@ -18,8 +18,9 @@ export function registerBundledSources(
   register: (source: Source) => void,
   broker: ConnectBroker,
   converter: Pick<Converter, 'expandPage'>,
+  scratchDir?: string,
 ): Map<string, (creds: Credentials) => Promise<Credentials | null>> {
-  register(createLocalFolderSource({ converter }));
+  register(createLocalFolderSource({ converter, scratchDir }));
   register(createImapSource());
   register(gmailSource);
   broker.registerOAuthProfile('gmail', googleOAuthProfile);

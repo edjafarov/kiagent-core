@@ -17,6 +17,12 @@ import {
   type Converter,
 } from '../../core/converter/converter';
 import {
+  extractMember,
+  scratchName,
+  type NestedState,
+  type ZipResume,
+} from '../../core/converter/containers/zip';
+import {
   DEFAULT_EXPAND_BUDGET,
   EXPANDER_VERSION,
   type ChildItem,
@@ -179,6 +185,8 @@ export interface StepInput {
   signal?: AbortSignal;
   now: number;
   budget?: ExpandBudget;
+  /** Where nested ZIP members are extracted; absent = never (name-only). */
+  scratchDir?: string;
 }
 
 export interface StepOutput {
@@ -192,6 +200,137 @@ export interface StepOutput {
 function settled(rec: PendingExpansion): PendingExpansion {
   const { notBefore: _due, ...rest } = rec;
   return { ...rest, attempts: 0 };
+}
+
+function changedSince(rec: PendingExpansion, stats: fs.Stats): boolean {
+  // A mailbox may grow while it is read (the pager reads to the current
+  // end); it may not shrink.
+  if (rec.kind === 'mbox') return stats.size < rec.size;
+  return stats.size !== rec.size || stats.mtimeMs !== rec.mtimeMs;
+}
+
+/** The full path again, for the file as it is now. */
+const restamped = (
+  rec: PendingExpansion,
+  stats: fs.Stats,
+): PendingExpansion => ({
+  ...settled(rec),
+  size: stats.size,
+  mtimeMs: stats.mtimeMs,
+  resume: null,
+  cleared: false,
+});
+
+/** The nested ZIP member a pending record is on, if any. */
+export function nestedOf(rec: Expansion | undefined): NestedState | null {
+  if (!rec || rec.state !== 'pending' || rec.kind !== 'zip') return null;
+  const r = rec.resume as ZipResume | null;
+  return r?.nested ?? null;
+}
+
+const withNested = (
+  rec: PendingExpansion,
+  patch: Partial<NestedState>,
+): ZipResume => {
+  const r = rec.resume as ZipResume;
+  return { ...r, nested: { ...(r.nested as NestedState), ...patch } };
+};
+
+/**
+ * Extracts a nested member, or says what to do instead. Null = extracted,
+ * page it now. Before any of the member's items were emitted, a member that
+ * cannot be extracted becomes name-only; after, the record waits (no room)
+ * or restarts (the copy no longer matches), so committed children are never
+ * left beside a silently missing remainder.
+ */
+async function extractStep(
+  input: StepInput,
+  n: NestedState,
+  file: string | null,
+  stats: fs.Stats,
+): Promise<StepOutput | null> {
+  const { rec, now, signal, absPath } = input;
+  const progressed = n.inner !== null || n.items > 0;
+  const keep = (r: PendingExpansion): StepOutput => ({
+    items: [],
+    deletions: [],
+    rec: r,
+  });
+  const skip = () =>
+    keep({ ...settled(rec), resume: withNested(rec, { skip: true }) });
+  const later = () => keep({ ...rec, notBefore: now + EXPANSION_RETRY_MS });
+  if (!file) return skip();
+  let outcome;
+  try {
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    outcome = await extractMember(absPath, n, file, { signal });
+  } catch {
+    if (signal?.aborted) return keep(rec);
+    return later(); // I/O: never an attempt, never name-only
+  }
+  // The copy took a while: the container may have changed meanwhile.
+  const now2 = await fs.promises.lstat(absPath).catch(() => null);
+  if (!now2 || changedSince(rec, now2)) {
+    await removeScratch(file);
+    return keep(restamped(rec, now2 ?? stats));
+  }
+  if (outcome === 'ok') return null;
+  if (outcome === 'mismatch') return keep(restamped(rec, stats));
+  if (!progressed) return skip();
+  return outcome === 'nospace' ? later() : keep(restamped(rec, stats));
+}
+
+export async function removeScratch(file: string): Promise<void> {
+  await Promise.all([
+    fs.promises.rm(file, { force: true }),
+    fs.promises.rm(`${file}.part`, { force: true }),
+  ]);
+}
+
+/**
+ * The one write path for expansion records. When a record stops being
+ * pending on a nested member (done, failed, dropped, restarted, or moved on
+ * to another member), that member's scratch copy is deleted at once.
+ */
+export function replaceRecord(
+  exps: Record<string, Expansion>,
+  id: string,
+  next: Expansion | null,
+  scratchDir?: string,
+): void {
+  const before = nestedOf(exps[id]);
+  if (next) exps[id] = next;
+  else delete exps[id];
+  if (!before || !scratchDir) return;
+  const after = nestedOf(next ?? undefined);
+  const name = scratchName(id, before);
+  if (after && scratchName(id, after) === name) return;
+  void removeScratch(path.join(scratchDir, name));
+}
+
+/** Deletes every scratch file no pending record is on — the crash backstop
+ *  (a quit mid-copy leaves a `.part`; a crash before a record moved on
+ *  leaves a copy). */
+export async function sweepScratch(
+  scratchDir: string,
+  exps: Record<string, Expansion>,
+): Promise<void> {
+  const keep = new Set<string>();
+  for (const [id, rec] of Object.entries(exps)) {
+    const n = nestedOf(rec);
+    if (n) keep.add(scratchName(id, n));
+  }
+  let names: string[];
+  try {
+    names = await fs.promises.readdir(scratchDir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    names
+      .filter((f) => !keep.has(f))
+      .map((f) => fs.promises.rm(path.join(scratchDir, f), { force: true })),
+  );
 }
 
 const placeholder = (absPath: string) =>
@@ -220,18 +359,38 @@ export async function expansionStep(input: StepInput): Promise<StepOutput> {
     };
   }
   if (!stats.isFile()) return { items: [], deletions: [deletion], rec: null };
+  // The file changed since the record was noted (its watcher event may still
+  // be queued): never page a stale resume — or a scratch copy — against it.
+  if (changedSince(rec, stats))
+    return { items: [], deletions: [], rec: restamped(rec, stats) };
   // Full path, step one: archive the container and every child it had
   // (the parent cascade). Its own batch — deletions apply after documents
   // within one commit, so they cannot share one with the re-emission.
   if (!rec.cleared && rec.resume === null)
     return { items: [], deletions: [deletion], rec: { ...rec, cleared: true } };
 
+  // A nested ZIP member: extract it (here, in main — see extractMember)
+  // before the pager can page it.
+  let { resume } = rec;
+  const nested = nestedOf(rec);
+  if (nested && !nested.skip) {
+    const file = input.scratchDir
+      ? path.join(input.scratchDir, scratchName(containerId, nested))
+      : null;
+    if (file && fs.existsSync(file)) resume = withNested(rec, { file });
+    else {
+      const out = await extractStep(input, nested, file, stats);
+      if (out) return out;
+      resume = withNested(rec, { file: file as string });
+    }
+  }
+
   let result;
   try {
     result = await converter.expandPage(
       absPath,
       rec.kind,
-      rec.resume,
+      resume,
       input.budget ?? DEFAULT_EXPAND_BUDGET,
       signal,
     );
