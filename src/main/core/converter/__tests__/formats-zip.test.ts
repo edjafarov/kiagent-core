@@ -1,7 +1,11 @@
 /** @jest-environment node */
 import JSZip from 'jszip';
 
-import { MAX_ZIP_PART_BYTES, openZipParts } from '../formats/zip-parts';
+import {
+  assertZipInflatesWithin,
+  MAX_ZIP_PART_BYTES,
+  openZipParts,
+} from '../formats/zip-parts';
 import { byLocalName, parseXml, textContent } from '../formats/xml';
 import { convertibleKind } from '../parsers';
 
@@ -36,6 +40,36 @@ describe('openZipParts', () => {
     await parts.text('1.xml');
     await parts.text('2.xml');
     await expect(parts.text('3.xml')).rejects.toThrow(
+      'zip inflate budget exceeded',
+    );
+  });
+
+  it('a part whose zip directory lies about its size is still capped', async () => {
+    const zip = new JSZip();
+    zip.file('bomb.xml', 'a'.repeat(MAX_ZIP_PART_BYTES + 1));
+    const bytes = Buffer.from(
+      await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }),
+    );
+    // Forge "10 bytes" into the local header and the central directory.
+    for (let i = 0; i + 4 <= bytes.length; i++) {
+      const sig = bytes.readUInt32LE(i);
+      if (sig === 0x04034b50) bytes.writeUInt32LE(10, i + 22);
+      if (sig === 0x02014b50) bytes.writeUInt32LE(10, i + 24);
+    }
+    const parts = await openZipParts(new Uint8Array(bytes));
+    await expect(parts.text('bomb.xml')).rejects.toThrow('zip part too large');
+  });
+
+  it('assertZipInflatesWithin counts every member', async () => {
+    const zip = new JSZip();
+    zip.file('a.xml', 'a'.repeat(600));
+    zip.file('media/b.png', 'b'.repeat(600));
+    const bytes = await zip.generateAsync({
+      type: 'uint8array',
+      compression: 'DEFLATE',
+    });
+    await expect(assertZipInflatesWithin(bytes, 2000)).resolves.toBeUndefined();
+    await expect(assertZipInflatesWithin(bytes, 1000)).rejects.toThrow(
       'zip inflate budget exceeded',
     );
   });

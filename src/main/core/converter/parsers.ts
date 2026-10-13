@@ -197,6 +197,12 @@ async function parseOther(
     case 'csv':
       return csvToMarkdown(buf.toString('utf8'));
     case 'spreadsheet': {
+      // .xlsx/.ods are zips SheetJS inflates whole: bound them first.
+      if (buf[0] === 0x50 && buf[1] === 0x4b) {
+        const { assertZipInflatesWithin, MAX_SPREADSHEET_INFLATE_BYTES } =
+          await import('./formats/zip-parts');
+        await assertZipInflatesWithin(bytes, MAX_SPREADSHEET_INFLATE_BYTES);
+      }
       const XLSX = await import('xlsx');
       const wb = XLSX.read(buf, { type: 'buffer' });
       const parts: string[] = [];
