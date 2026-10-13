@@ -44,7 +44,7 @@ const isFromLine = (line: Buffer, prevBlank: boolean): boolean => {
 };
 
 /** The header block as unfolded `[name, value]` pairs (latin1, raw). */
-function headerFields(head: string): Array<[string, string]> {
+export function headerFields(head: string): Array<[string, string]> {
   const out: Array<[string, string]> = [];
   for (const line of head.split(/\r?\n/)) {
     if (/^[ \t]/.test(line) && out.length > 0) {

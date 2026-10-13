@@ -2,6 +2,7 @@
  *  read by path. Pure (converter child). */
 import { expandEnex, type EnexResume } from './enex';
 import { expandMbox, type MboxResume } from './mbox';
+import { expandPst, type PstResume } from './pst';
 import { expandVcard, type VcardResume } from './vcard';
 import { expandZip, type ZipResume } from './zip';
 import type { ContainerKind, ExpandBudget, ExpandResult } from './types';
@@ -21,6 +22,8 @@ export async function expandPage(
       return expandEnex(path, resume as EnexResume | null, budget);
     case 'zip':
       return expandZip(path, resume as ZipResume | null, budget);
+    case 'pst':
+      return expandPst(path, resume as PstResume | null, budget);
     default:
       throw new Error(`expander not implemented: ${kind} (${path})`);
   }

@@ -1,7 +1,7 @@
 /** Container expansion (spec section B): a mailbox, archive, address book
  *  or note export read BY PATH, page by page, in the converter child. */
 
-export type ContainerKind = 'mbox' | 'zip' | 'vcard' | 'enex';
+export type ContainerKind = 'mbox' | 'zip' | 'vcard' | 'enex' | 'pst';
 
 /** Bumped when a pager's output changes enough that expanded containers of
  *  that kind must be expanded again (a `done` record with an older `v` is
@@ -12,12 +12,24 @@ export const EXPANDER_VERSION: Record<ContainerKind, number> = {
   zip: 2,
   vcard: 1,
   enex: 1,
+  pst: 1,
 };
+
+/** The container is held open by another program (Outlook's lock on a PST,
+ *  on Windows): try again later, without counting an attempt. Matched by
+ *  `name` across the converter child boundary. */
+export class ContainerBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ContainerBusyError';
+  }
+}
 
 /** One child document, before the source adds its container prefix,
  *  parent, scope and markers. */
 export interface ChildItem {
-  /** `msg:<sha1>` | `zip:<member>` | `vcf:<id>` | `enex:<sha1>` — the
+  /** `msg:<sha1>` | `zip:<member>` | `vcf:<id>` | `enex:<sha1>` |
+   *  `pst:<NID>` — the
    *  externalId is `<container externalId>#<key>`. */
   key: string;
   type: 'email.message' | 'file' | 'contact.card' | 'note';
@@ -67,5 +79,6 @@ export function containerKindOf(
   if (ext === 'zip') return 'zip';
   if (ext === 'vcf') return 'vcard';
   if (ext === 'enex') return 'enex';
+  if (ext === 'pst') return 'pst';
   return null;
 }
