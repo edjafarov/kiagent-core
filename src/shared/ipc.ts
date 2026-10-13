@@ -433,6 +433,12 @@ export interface Invokes {
     req: { accountId: AccountId; outbound: Record<string, unknown> };
     res: void;
   };
+  /** One declared boolean source option (`config.options.<key>`) — spec
+   *  source-options §3.4. Restarts a running loop; no reconcile allowance. */
+  'accounts:set-option': {
+    req: { accountId: AccountId; key: string; value: boolean };
+    res: void;
+  };
 
   'search:query': {
     req: SearchRequest;
@@ -705,6 +711,7 @@ const INVOKE_CHANNEL_MAP = {
   'accounts:set-cadence': 0,
   'accounts:update-config': 0,
   'accounts:update-outbound': 0,
+  'accounts:set-option': 0,
   'search:query': 0,
   'docs:get': 0,
   'docs:children': 0,

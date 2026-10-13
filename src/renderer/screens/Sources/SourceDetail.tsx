@@ -32,6 +32,7 @@ import { TrackedContent } from './sections/TrackedContent';
 import { Cadence } from './sections/Cadence';
 import { ConnectorConfig } from './sections/ConnectorConfig';
 import { Outbound } from './sections/Outbound';
+import { Options } from './sections/Options';
 import { RecentActivity } from './sections/RecentActivity';
 import './SourceDetail.css';
 
@@ -188,6 +189,9 @@ export function SourceDetail(props: {
                 <TrackedFolders account={a} />
               )}
               <Cadence account={a} />
+              {descriptor?.options?.length ? (
+                <Options account={a} descriptor={descriptor} />
+              ) : null}
               {a.source === 'imap' && <Outbound account={a} />}
               <div>
                 <TextButton onClick={() => setView('items')}>
