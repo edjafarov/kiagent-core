@@ -58,7 +58,7 @@ export const MAX_CLOUD_IMAGE_BYTES = 20 * 1024 * 1024; // vision would skip anyt
 export const MAX_FETCH_BYTES = 100 * 1024 * 1024;
 /** Bumped whenever a policy change makes previously IGNORED files
  *  indexable; each file source re-enumerates once on a mismatch. */
-export const FILE_POLICY_VERSION = 4;
+export const FILE_POLICY_VERSION = 5;
 /** Extensions first admitted at a given policy version (eager files the
  *  old policy ignored by TYPE, not size), plus any whose parser changed
  *  enough that already-indexed local files must be re-read once. */
@@ -79,10 +79,11 @@ export const ADMITTED_SINCE: Record<number, ReadonlySet<string>> = {
   // Local containers (bytes:'none' rows re-emit on any bump anyway; listed
   // so the version that admitted them is on record).
   4: new Set(['mbox', 'zip', 'vcf', 'enex']),
+  5: new Set(['pst']),
 };
 
 /** Local files the local-folder source expands into child documents. */
-const CONTAINER_EXTENSIONS = new Set(['mbox', 'zip', 'vcf', 'enex']);
+const CONTAINER_EXTENSIONS = new Set(['mbox', 'zip', 'vcf', 'enex', 'pst']);
 
 // Verbatim from local-folder/ingestible.ts:22-23 and :31. `ingestible.ts`
 // re-exports the first as INGESTIBLE_DENY_RE, the name its test imports.

@@ -80,6 +80,10 @@ export type Expansion =
       mtimeMs: number;
       /** The pager's continuation if the file grows by appending (mbox). */
       tail?: unknown;
+      /** Not a container after all (a `.pst` without the PST magic — Logic
+       *  presets use the extension): no row, nothing to page, until the
+       *  file changes. */
+      rejected?: true;
     }
   | {
       state: 'failed';

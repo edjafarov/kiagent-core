@@ -45,16 +45,28 @@ export interface FileStamp {
   mtimeMs: number;
 }
 
-const fullPath = (kind: ContainerKind, at: FileStamp): PendingExpansion => ({
-  state: 'pending',
-  kind,
-  v: EXPANDER_VERSION[kind],
-  size: at.size,
-  mtimeMs: at.mtimeMs,
-  resume: null,
-  cleared: false,
-  attempts: 0,
-});
+/** Outlook rewrites a PST it has open continuously: a changed PST is not
+ *  read until it has been quiet this long (its old children stay live). */
+export const PST_QUIET_MS = 10 * 60_000;
+/** Retry delay while another program holds the container (Outlook). */
+export const PST_BUSY_MS = 5 * 60_000;
+
+const quiet = (rec: PendingExpansion, now = Date.now()): PendingExpansion =>
+  rec.kind === 'pst' && now - rec.mtimeMs < PST_QUIET_MS
+    ? { ...rec, notBefore: Math.min(rec.mtimeMs, now) + PST_QUIET_MS }
+    : rec;
+
+const fullPath = (kind: ContainerKind, at: FileStamp): PendingExpansion =>
+  quiet({
+    state: 'pending',
+    kind,
+    v: EXPANDER_VERSION[kind],
+    size: at.size,
+    mtimeMs: at.mtimeMs,
+    resume: null,
+    cleared: false,
+    attempts: 0,
+  });
 
 /**
  * The record for a container the scan path (backfill, rescan, watcher
@@ -210,16 +222,14 @@ function changedSince(rec: PendingExpansion, stats: fs.Stats): boolean {
 }
 
 /** The full path again, for the file as it is now. */
-const restamped = (
-  rec: PendingExpansion,
-  stats: fs.Stats,
-): PendingExpansion => ({
-  ...settled(rec),
-  size: stats.size,
-  mtimeMs: stats.mtimeMs,
-  resume: null,
-  cleared: false,
-});
+const restamped = (rec: PendingExpansion, stats: fs.Stats): PendingExpansion =>
+  quiet({
+    ...settled(rec),
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    resume: null,
+    cleared: false,
+  });
 
 /** The nested ZIP member a pending record is on, if any. */
 export function nestedOf(rec: Expansion | undefined): NestedState | null {
@@ -278,6 +288,40 @@ async function extractStep(
   if (outcome === 'mismatch') return keep(restamped(rec, stats));
   if (!progressed) return skip();
   return outcome === 'nospace' ? later() : keep(restamped(rec, stats));
+}
+
+/** The full-path record for a container whose stamp moved since `rec`, or
+ *  null (unchanged, or gone — the next step sees that). */
+async function movedSince(
+  rec: PendingExpansion,
+  absPath: string,
+): Promise<PendingExpansion | null> {
+  const st = await fs.promises.lstat(absPath).catch(() => null);
+  return st && changedSince(rec, st) ? restamped(rec, st) : null;
+}
+
+const PST_MAGIC = '!BDN';
+
+/** Whether a `.pst` can be read now and is a PST at all. */
+async function probePst(
+  absPath: string,
+): Promise<'ok' | 'invalid' | 'busy' | 'error'> {
+  let fh: fs.promises.FileHandle | null = null;
+  try {
+    fh = await fs.promises.open(absPath, 'r');
+    const head = Buffer.alloc(4);
+    const { bytesRead } = await fh.read(head, 0, 4, 0);
+    return bytesRead === 4 && head.toString('latin1') === PST_MAGIC
+      ? 'ok'
+      : 'invalid';
+  } catch (e) {
+    const { code } = e as NodeJS.ErrnoException;
+    return code === 'EBUSY' || code === 'EPERM' || code === 'EACCES'
+      ? 'busy'
+      : 'error';
+  } finally {
+    await fh?.close();
+  }
 }
 
 export async function removeScratch(file: string): Promise<void> {
@@ -363,6 +407,35 @@ export async function expansionStep(input: StepInput): Promise<StepOutput> {
   // be queued): never page a stale resume — or a scratch copy — against it.
   if (changedSince(rec, stats))
     return { items: [], deletions: [], rec: restamped(rec, stats) };
+  // A PST is admitted here, once per (re)start and before anything is
+  // archived: a busy file keeps its old children live, and a `.pst` that is
+  // no PST (Logic presets) never gets a row.
+  if (rec.kind === 'pst' && rec.resume === null) {
+    const probe = await probePst(absPath);
+    if (probe !== 'ok')
+      return probe === 'invalid'
+        ? {
+            items: [],
+            deletions: [deletion],
+            rec: {
+              state: 'done',
+              kind: rec.kind,
+              v: rec.v,
+              size: rec.size,
+              mtimeMs: rec.mtimeMs,
+              rejected: true,
+            },
+          }
+        : {
+            items: [],
+            deletions: [],
+            rec: {
+              ...rec,
+              notBefore:
+                now + (probe === 'busy' ? PST_BUSY_MS : EXPANSION_RETRY_MS),
+            },
+          };
+  }
   // Full path, step one: archive the container and every child it had
   // (the parent cascade). Its own batch — deletions apply after documents
   // within one commit, so they cannot share one with the re-emission.
@@ -396,6 +469,16 @@ export async function expansionStep(input: StepInput): Promise<StepOutput> {
     );
   } catch (e) {
     if (signal?.aborted) return { items: [], deletions: [], rec };
+    // Written while the page ran (Outlook): the error says nothing about
+    // the file — start over on the new stamp, no attempt.
+    const moved = await movedSince(rec, absPath);
+    if (moved) return { items: [], deletions: [], rec: moved };
+    if ((e as Error).name === 'ContainerBusyError')
+      return {
+        items: [],
+        deletions: [],
+        rec: { ...rec, notBefore: now + PST_BUSY_MS },
+      };
     if (e instanceof ConverterUnavailableError)
       return {
         items: [],
@@ -429,6 +512,11 @@ export async function expansionStep(input: StepInput): Promise<StepOutput> {
       },
     };
   }
+  // Written while the page ran: these children may mix two versions of the
+  // file. Drop them and start over on the new stamp (the last page included
+  // — a `done` record would never look again).
+  const moved = await movedSince(rec, absPath);
+  if (moved) return { items: [], deletions: [], rec: moved };
   if (result.restart)
     return {
       items: [],

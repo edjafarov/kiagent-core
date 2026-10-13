@@ -944,10 +944,49 @@ describe('policy v4: local containers', () => {
     ).toEqual({ kind: 'ignore', reason: 'no-extension' });
   });
 
-  it('the version is 4; a v3 cursor re-emits local containers once', () => {
-    expect(FILE_POLICY_VERSION).toBe(4);
+  it('a v3 cursor re-emits local containers once', () => {
     expect(newlyAdmitted(local('a.mbox', 'application/mbox'), 3)).toBe(true);
     expect(newlyAdmitted(local('a.vcf', 'text/vcard'), 3)).toBe(true);
-    expect(newlyAdmitted(local('a.mbox', 'application/mbox'), 4)).toBe(false);
+    expect(newlyAdmitted(local('a.mbox', 'application/mbox'), 5)).toBe(false);
+  });
+});
+
+describe('policy v5: Outlook PST', () => {
+  const local = (sizeBytes: number, mime = 'application/vnd.ms-outlook') => ({
+    profile: 'local-folder' as const,
+    filename: 'archive.pst',
+    mime,
+    sizeBytes,
+    path: '/r/archive.pst',
+  });
+
+  it('a local .pst is a container at any size', () => {
+    for (const size of [1000, 20 * 1024 ** 3])
+      for (const mime of [
+        'application/vnd.ms-outlook',
+        'application/octet-stream',
+      ])
+        expect(decideFileIndexing(local(size, mime))).toEqual({
+          kind: 'index',
+          pipeline: 'container',
+          bytes: 'none',
+        });
+  });
+
+  it('the cloud never expands a .pst (its routing is unchanged)', () => {
+    expect(
+      decideFileIndexing({
+        profile: 'cloud-drive',
+        filename: 'archive.pst',
+        mime: 'application/vnd.ms-outlook',
+        sizeBytes: 1000,
+      }),
+    ).not.toMatchObject({ pipeline: 'container' });
+  });
+
+  it('the version is 5; a v4 cursor re-emits local PSTs once', () => {
+    expect(FILE_POLICY_VERSION).toBe(5);
+    expect(newlyAdmitted(local(1000), 4)).toBe(true);
+    expect(newlyAdmitted(local(1000), 5)).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import type { DocumentInput } from '@shared/contracts';
 
 import { ConverterUnavailableError } from '../../../core/converter/converter';
 import {
+  ContainerBusyError,
   EXPANDER_VERSION,
   type ChildItem,
   type ExpandResult,
@@ -17,6 +18,8 @@ import {
   nextDue,
   nextPending,
   noteContainer,
+  PST_BUSY_MS,
+  PST_QUIET_MS,
 } from '../expansion';
 import { toAbsPosix } from '../scanner';
 import type { LocalFolderItem } from '../to-document';
@@ -443,4 +446,164 @@ describe('expansionStep', () => {
       }),
     ]);
   });
+});
+
+describe('PST records', () => {
+  let dir: string;
+  let file: string;
+  let id: string;
+  const PST_HEAD = Buffer.concat([Buffer.from('!BDN'), Buffer.alloc(508)]);
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-pst-'));
+    file = path.join(dir, 'archive.pst');
+    fs.writeFileSync(file, PST_HEAD);
+    id = toAbsPosix(file);
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const stamp = () => {
+    const st = fs.statSync(file);
+    return { size: st.size, mtimeMs: st.mtimeMs };
+  };
+  const pending = (
+    extra: Partial<PendingExpansion> = {},
+  ): PendingExpansion => ({
+    state: 'pending',
+    kind: 'pst',
+    v: EXPANDER_VERSION.pst,
+    ...stamp(),
+    resume: null,
+    cleared: false,
+    attempts: 0,
+    ...extra,
+  });
+  const conv = (impl: () => Promise<ExpandResult>) => ({
+    expandPage: jest.fn(impl),
+  });
+
+  it('a changed PST waits until it has been quiet for 10 minutes', () => {
+    const now = Date.now();
+    const fresh = noteContainer(undefined, 'pst', { size: 9, mtimeMs: now });
+    expect(fresh).toMatchObject({
+      state: 'pending',
+      notBefore: now + PST_QUIET_MS,
+    });
+    const old = noteContainer(undefined, 'pst', {
+      size: 9,
+      mtimeMs: now - PST_QUIET_MS - 1,
+    });
+    expect((old as PendingExpansion).notBefore).toBeUndefined();
+    // A bogus future mtime waits from now, not from the future.
+    const future = noteContainer(undefined, 'pst', {
+      size: 9,
+      mtimeMs: now + 86_400_000,
+    }) as PendingExpansion;
+    expect(future.notBefore).toBeGreaterThanOrEqual(now + PST_QUIET_MS);
+    expect(future.notBefore).toBeLessThan(now + PST_QUIET_MS + 1000);
+    // Other kinds never wait.
+    expect(
+      (
+        noteContainer(undefined, 'zip', {
+          size: 9,
+          mtimeMs: now,
+        }) as PendingExpansion
+      ).notBefore,
+    ).toBeUndefined();
+  });
+
+  it('a .pst that is no PST is rejected before anything else: no row, no page', async () => {
+    fs.writeFileSync(file, Buffer.from('LogicPresetData-xxxxxxxx'));
+    const converter = conv(async () => ({ items: [], resume: null }));
+    const out = await expansionStep({
+      absPath: file,
+      rec: pending(),
+      converter,
+      now: 0,
+    });
+    expect(out.items).toEqual([]);
+    expect(out.deletions).toEqual([{ externalId: id, type: 'file' }]);
+    expect(out.rec).toEqual({
+      state: 'done',
+      kind: 'pst',
+      v: EXPANDER_VERSION.pst,
+      ...stamp(),
+      rejected: true,
+    });
+    expect(converter.expandPage).not.toHaveBeenCalled();
+    // Same stamp later: nothing to do.
+    expect(noteContainer(out.rec as Expansion, 'pst', stamp())).toBe(out.rec);
+  });
+
+  it('a locked PST keeps its children live: no deletion, deferred 5 min, no attempt', async () => {
+    jest
+      .spyOn(fs.promises, 'open')
+      .mockRejectedValue(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+    const converter = conv(async () => ({ items: [], resume: null }));
+    const out = await expansionStep({
+      absPath: file,
+      rec: pending(),
+      converter,
+      now: 1_000,
+    });
+    expect(out.deletions).toEqual([]);
+    expect(out.rec).toMatchObject({
+      cleared: false,
+      attempts: 0,
+      notBefore: 1_000 + PST_BUSY_MS,
+    });
+    expect(converter.expandPage).not.toHaveBeenCalled();
+  });
+
+  it('busy mid-expansion (ContainerBusyError from the child) defers without an attempt', async () => {
+    const converter = conv(async () => {
+      throw new ContainerBusyError('pst: EBUSY');
+    });
+    const resume = { fi: 1, nid: 2, child: 3 };
+    const out = await expansionStep({
+      absPath: file,
+      rec: pending({ cleared: true, resume, attempts: 1 }),
+      converter,
+      now: 1_000,
+    });
+    expect(out.rec).toMatchObject({
+      resume,
+      attempts: 1,
+      notBefore: 1_000 + PST_BUSY_MS,
+    });
+  });
+
+  it.each([
+    ['returns', false],
+    ['throws', true],
+  ])(
+    'a file written while the page ran (converter %s) restarts on the new stamp, no attempt',
+    async (_label, throws) => {
+      const converter = conv(async () => {
+        fs.appendFileSync(file, 'more');
+        if (throws) throw new Error('pst: mixed file');
+        return { items: [], resume: null, summary: '# done' };
+      });
+      const out = await expansionStep({
+        absPath: file,
+        rec: pending({ cleared: true, resume: { fi: 0, nid: 1, child: 5 } }),
+        converter,
+        now: Date.now(),
+      });
+      expect(out.items).toEqual([]);
+      expect(out.rec).toMatchObject({
+        state: 'pending',
+        resume: null,
+        cleared: false,
+        attempts: 0,
+        ...stamp(),
+      });
+      // Fresh mtime: the restart waits out the quiet period.
+      expect((out.rec as PendingExpansion).notBefore).toBeGreaterThan(
+        Date.now(),
+      );
+    },
+  );
 });
