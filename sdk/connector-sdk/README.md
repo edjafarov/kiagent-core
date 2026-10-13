@@ -249,7 +249,7 @@ reloads the page.
 
 ## Versioning
 
-Current release: **1.9.0** (platform API **2.12.0**; `kiagentCore` set at release).
+Current release: **1.9.0**, `kiagentCore: 0.111.0` (platform API **2.12.0**).
 The SDK version, core version and manifest `engine` range are independent.
 Newer core contracts do not retroactively appear in a published SDK tarball.
 Running `build` here regenerates from the *current checkout*, so a locally
