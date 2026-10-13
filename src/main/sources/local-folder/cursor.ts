@@ -1,3 +1,5 @@
+import type { ContainerKind } from '@main/core/converter/containers/types';
+
 /**
  * Local-folder's persisted Cursor shape.
  *
@@ -43,11 +45,51 @@
  */
 export type LocalFolderCursor = {
   roots: Record<string, { completedAt: string }>;
+  /** Containers (mailboxes, ZIPs, address books, note exports) keyed by
+   *  their externalId: where each expansion stands. See expansion.ts. */
+  expansions?: Record<string, Expansion>;
   /** FILE_POLICY_VERSION the roots were last enumerated under; absent = 1.
    *  A lower value makes the incremental rescan also emit files the old
    *  policy ignored (see `newlyAdmitted`), once, before `pull()` stamps it. */
   policyVersion?: number;
 } | null;
+
+/** A container's expansion state. `pending` is scheduled one page at a
+ *  time; `done`/`failed` are compact and kept until the file changes (or
+ *  `v`, the expander version for its kind, moves on). `cleared` records
+ *  that the full path's deletion batch committed, so a restart between it
+ *  and the re-emission does not delete again. */
+export type Expansion =
+  | {
+      state: 'pending';
+      kind: ContainerKind;
+      v: number;
+      size: number;
+      mtimeMs: number;
+      resume: unknown | null;
+      cleared: boolean;
+      attempts: number;
+      /** Epoch ms before which the step is not retried. */
+      notBefore?: number;
+    }
+  | {
+      state: 'done';
+      kind: ContainerKind;
+      v: number;
+      size: number;
+      mtimeMs: number;
+      /** The pager's continuation if the file grows by appending (mbox). */
+      tail?: unknown;
+    }
+  | {
+      state: 'failed';
+      kind: ContainerKind;
+      v: number;
+      size: number;
+      mtimeMs: number;
+    };
+
+export type PendingExpansion = Extract<Expansion, { state: 'pending' }>;
 
 /**
  * Return a new cursor with one root's entry replaced — every OTHER root's

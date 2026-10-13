@@ -5,4 +5,4 @@
 export { localFolderSource } from './local-folder-source';
 export { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
 export type { LocalFolderCursor } from './cursor';
-export type { LocalFolderItem } from './to-document';
+export type { LocalFileItem, LocalFolderItem } from './to-document';

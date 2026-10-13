@@ -4,7 +4,7 @@ import path from 'node:path';
 import { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
 import { decideLocalFile, isIngestible } from './ingestible';
 import { resolvePathMime } from './mime';
-import type { LocalFolderItem } from './to-document';
+import type { LocalFileItem } from './to-document';
 
 /** ~50 files per yielded Batch — matches the porting brief's chunk size. */
 export const BATCH_SIZE = 50;
@@ -301,7 +301,7 @@ export function toAbsPosix(absPath: string): string {
 export async function buildItem(
   absPath: string,
   stats: fs.Stats,
-): Promise<LocalFolderItem | null> {
+): Promise<LocalFileItem | null> {
   const decision = decideLocalFile(absPath, stats.size);
   if (decision.kind === 'ignore') return null;
 
@@ -317,7 +317,7 @@ export async function buildItem(
   ).toISOString();
 
   let markdownText: string | null = null;
-  let binary: LocalFolderItem['binary'] = null;
+  let binary: LocalFileItem['binary'] = null;
 
   try {
     if (decision.bytes === 'eager' && decision.pipeline === 'inline-text') {

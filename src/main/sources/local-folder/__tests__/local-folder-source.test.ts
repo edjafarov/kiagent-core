@@ -33,7 +33,7 @@ import {
   reconcile,
 } from '../local-folder-source';
 import type { LocalFolderCursor } from '../cursor';
-import type { LocalFolderItem } from '../to-document';
+import type { LocalFileItem, LocalFolderItem } from '../to-document';
 
 const NO_ROOTS_ERROR =
   'Local-folder account has no tracked folders — remove this source and re-add its folder.';
@@ -118,6 +118,11 @@ function makeSessionWithConfig(
     log: () => {},
   };
 }
+
+/** A batch's ordinary file items (container rows and children are
+ *  prebuilt documents, tested in local-folder-containers.test.ts). */
+const fileItems = (b: { items: LocalFolderItem[] }): LocalFileItem[] =>
+  b.items.filter((i): i is LocalFileItem => !('prebuilt' in i));
 
 async function collect<T>(iter: AsyncIterable<T>): Promise<T[]> {
   const out: T[] = [];
@@ -250,7 +255,7 @@ describe('pull — backfill (cursor === null)', () => {
         .every((b) => b.phase === 'backfill'),
     ).toBe(true);
 
-    const allItems = batches.flatMap((b) => b.items);
+    const allItems = batches.flatMap(fileItems);
     const externalIds = allItems.map((i) => i.externalId).sort();
 
     // 58 bulk + readme + notes + report + photo + subdir/inner = 63
@@ -292,7 +297,7 @@ describe('pull — backfill (cursor === null)', () => {
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, false);
     const batches = await collect(pull(session, null));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
     const byAbs = new Map(items.map((i) => [i.absPath, i]));
 
     const textItem = byAbs.get(path.join(dir, 'readme.txt'))!;
@@ -430,7 +435,7 @@ describe('pull — multi-root backfill', () => {
     const controller = new AbortController();
     const session = makeSession([dirA, dirB], controller.signal, false);
     const batches = await collect(pull(session, null));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items).toHaveLength(2);
     const externalIds = items.map((i) => i.externalId).sort();
@@ -510,7 +515,7 @@ describe('pull — per-root incremental rescan', () => {
     fs.writeFileSync(path.join(dirB, 'b.txt'), 'b updated');
 
     const rescanBatches = await collect(pull(session, cursorAfterBackfill));
-    const items = rescanBatches.flatMap((b) => b.items);
+    const items = rescanBatches.flatMap(fileItems);
     expect(items).toHaveLength(1);
     expect(items[0].externalId).toBe(toExternalId(path.join(dirB, 'b.txt')));
     expect(rescanBatches.every((b) => b.phase === 'live')).toBe(true);
@@ -535,7 +540,7 @@ describe('pull — per-root incremental rescan', () => {
     const controllerAB = new AbortController();
     const sessionAB = makeSession([dirA, dirB], controllerAB.signal, false);
     const batches = await collect(pull(sessionAB, cursorAfterA));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items).toHaveLength(1);
     expect(items[0].externalId).toBe(toExternalId(path.join(dirB, 'b.txt')));
@@ -621,7 +626,7 @@ describe('pull — per-root incremental rescan', () => {
     const controllerReadd = new AbortController();
     const sessionAB = makeSession([dirA, dirB], controllerReadd.signal, false);
     const readdBatches = await collect(pull(sessionAB, cursorAfterRemoval));
-    const items = readdBatches.flatMap((b) => b.items);
+    const items = readdBatches.flatMap(fileItems);
     expect(items.map((i) => i.externalId)).toContain(
       toExternalId(path.join(dirB, 'b.txt')),
     );
@@ -657,7 +662,7 @@ describe('pull — per-root incremental rescan', () => {
     const session = makeSession([dir], controller.signal, false);
     const batches = await collect(pull(session, since));
 
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
     expect(items.map((i) => i.externalId)).toEqual([
       toExternalId(path.join(dir, 'new.txt')),
     ]);
@@ -690,7 +695,7 @@ describe('pull — per-root incremental rescan', () => {
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, false);
     const batches = await collect(pull(session, since));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items.map((i) => i.externalId)).toEqual([toExternalId(movedPath)]);
     expect(batches.every((b) => b.phase === 'live')).toBe(true);
@@ -710,7 +715,7 @@ describe('pull — per-root incremental rescan', () => {
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, false);
     const batches = await collect(pull(session, since));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items.map((i) => i.externalId)).toEqual([toExternalId(renamedPath)]);
   });
@@ -736,7 +741,7 @@ describe('pull — strict indexability policy', () => {
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, false);
     const batches = await collect(pull(session, null));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
     const names = items.map((i) => path.basename(i.absPath)).sort();
 
     expect(names).toEqual(
@@ -975,7 +980,7 @@ describe('canonical folderRoots config', () => {
       { folderRoots: [{ id: dir, name: path.basename(dir) }], watch: false },
       controller.signal,
     );
-    const items = (await collect(pull(session, null))).flatMap((b) => b.items);
+    const items = (await collect(pull(session, null))).flatMap(fileItems);
     expect(items.map((i) => i.externalId)).toEqual([
       toExternalId(path.join(dir, 'a.txt')),
     ]);
@@ -990,7 +995,7 @@ describe('canonical folderRoots config', () => {
       { paths: [dir], watch: false },
       controller.signal,
     );
-    const items = (await collect(pull(session, null))).flatMap((b) => b.items);
+    const items = (await collect(pull(session, null))).flatMap(fileItems);
     expect(items).toHaveLength(1);
   });
 });
@@ -1248,7 +1253,7 @@ describe('ingestion allowlist parity (scanner vs watcher)', () => {
     const seen: string[] = [];
     const pump = (async () => {
       for await (const batch of watchLoop([live], session, { roots: {} })) {
-        for (const item of batch.items)
+        for (const item of fileItems(batch))
           seen.push(item.externalId.slice(live.length));
       }
     })();
@@ -1452,7 +1457,7 @@ describe('manageFolders', () => {
     const batches = await collect(
       pull(after, update.cursor as LocalFolderCursor),
     );
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items.map((i) => i.externalId)).toEqual([
       toExternalId(path.join(dirC, 'c.txt')),
@@ -1488,7 +1493,7 @@ describe('manageFolders', () => {
     const after = makeSessionWithConfig(update.config, controller.signal);
     const items = (
       await collect(pull(after, update.cursor as LocalFolderCursor))
-    ).flatMap((b) => b.items);
+    ).flatMap(fileItems);
 
     expect(items.map((i) => i.externalId)).toEqual([
       toExternalId(path.join(dirC, 'notes.txt')),
@@ -1528,7 +1533,7 @@ describe('scopeRootId attribution', () => {
     const controller = new AbortController();
     const session = makeSession([dirA, dirB], controller.signal, false);
 
-    const items = (await collect(pull(session, null))).flatMap((b) => b.items);
+    const items = (await collect(pull(session, null))).flatMap(fileItems);
     const byName = new Map(items.map((i) => [path.basename(i.absPath), i]));
 
     expect(byName.get('a.txt')!.scopeRootId).toBe(dirA);
@@ -1556,7 +1561,7 @@ describe('scopeRootId attribution', () => {
     fs.writeFileSync(abs, 'a updated');
 
     const batches = await collect(pull(session, cursor));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items).toHaveLength(1);
     expect(items[0].scopeRootId).toBe(dir);
@@ -1731,7 +1736,7 @@ describe('policy recovery (FILE_POLICY_VERSION in the cursor)', () => {
   // A watermark in the future: the mtime/ctime filter alone finds nothing.
   const future = () => new Date(Date.now() + 60_000).toISOString();
   const names = (batches: Array<{ items: LocalFolderItem[] }>) =>
-    batches.flatMap((b) => b.items.map((i) => path.basename(i.absPath)));
+    batches.flatMap((b) => fileItems(b).map((i) => path.basename(i.absPath)));
   const versionOf = (c: unknown) =>
     (c as { policyVersion?: number } | null)?.policyVersion;
 
@@ -1750,7 +1755,7 @@ describe('policy recovery (FILE_POLICY_VERSION in the cursor)', () => {
     const batches = await collect(
       pull(makeSession([root], new AbortController().signal, false), old),
     );
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
     expect(items.map((i) => path.basename(i.absPath))).toEqual(['mail.msg']);
     expect(items[0].binary).not.toBeNull(); // eager bytes, converted at commit
   });
@@ -1804,7 +1809,7 @@ describe('policy recovery (FILE_POLICY_VERSION in the cursor)', () => {
     const batches = await collect(
       pull(makeSession([root], new AbortController().signal, false), cur),
     );
-    expect(batches.flatMap((b) => b.items)).toEqual([]);
+    expect(batches.flatMap(fileItems)).toEqual([]);
   });
 
   it('a fresh backfill stamps policyVersion', async () => {

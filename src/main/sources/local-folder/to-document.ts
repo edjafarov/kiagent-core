@@ -8,7 +8,7 @@ import type { DocumentInput } from '@shared/contracts';
  * access only ever happens inside `pull()`) so `toDocument` can stay PURE and
  * synchronous, per the Source contract.
  */
-export interface LocalFolderItem {
+export interface LocalFileItem {
   /** Absolute path on disk. */
   absPath: string;
   /** ABSOLUTE posix-style path (`absPath.split(path.sep).join('/')`) — this
@@ -42,11 +42,20 @@ export interface LocalFolderItem {
   scopeRootId?: string;
 }
 
+/** A document the expansion step built whole (a container row or one of
+ *  its children); `toDocument` passes it through. */
+export interface PrebuiltItem {
+  prebuilt: DocumentInput;
+}
+
+export type LocalFolderItem = LocalFileItem | PrebuiltItem;
+
 /**
  * PURE item → DocumentInput mapping (no fs access — everything the doc needs
  * was already read by `pull()`/`buildItem`).
  */
 export function toDocument(item: LocalFolderItem): DocumentInput | null {
+  if ('prebuilt' in item) return item.prebuilt;
   return {
     externalId: item.externalId,
     type: 'file',
