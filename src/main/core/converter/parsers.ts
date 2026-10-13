@@ -256,7 +256,7 @@ function csvToMarkdown(csv: string): string {
  *  the markdown a single row carries. */
 const MBOX_MAX_MESSAGES = 500;
 
-interface MailParts {
+export interface MailParts {
   subject?: string;
   from?: string;
   to?: string;
@@ -268,7 +268,7 @@ interface MailParts {
 
 /** The ONE email layout, for .eml/.emlx/.mbox (mailparser) and .msg
  *  (msgreader) alike, so search sees the same shape whatever the format. */
-function renderMail(m: MailParts): string {
+export function renderMail(m: MailParts): string {
   const head: string[] = [];
   if (m.subject) head.push(`# ${m.subject}`);
   if (m.from) head.push(`**From:** ${m.from}`);

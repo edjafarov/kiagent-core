@@ -47,9 +47,12 @@ export interface ExpandResult {
   resume: unknown | null;
   /** The container row's markdown, on the last page. */
   summary?: string;
-  /** mbox: byte offset just past the last message read (the append fast
-   *  path resumes here). */
-  end?: number;
+  /** Last page only: the state to resume from if the file later grows by
+   *  appending (mbox). The source keeps it on the `done` record. */
+  tail?: unknown;
+  /** The given `resume` no longer fits the file (an appended mailbox whose
+   *  old end is not a message boundary): expand again from scratch. */
+  restart?: true;
 }
 
 export function containerKindOf(
