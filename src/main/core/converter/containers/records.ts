@@ -62,17 +62,17 @@ export async function* readRecords(
       rec = null;
       return out;
     };
-    const append = (line: Buffer) => {
+    const append = (buf: Buffer) => {
       if (!rec) return;
-      if (rec.size + line.length > rules.maxRecordBytes) {
+      if (rec.size + buf.length > rules.maxRecordBytes) {
         rec.truncated = true;
         return;
       }
-      rec.parts.push(line);
-      rec.size += line.length;
+      rec.parts.push(buf);
+      rec.size += buf.length;
     };
     /** One line (or line fragment) at absolute offset `at`. */
-    function* line(
+    const onLine = function* onLine(
       buf: Buffer,
       at: number,
       head: boolean,
@@ -90,7 +90,7 @@ export async function* readRecords(
         if (done) yield done;
       }
       if (head) prevBlank = isBlank(buf);
-    }
+    };
 
     const chunk = Buffer.alloc(CHUNK);
     for (;;) {
