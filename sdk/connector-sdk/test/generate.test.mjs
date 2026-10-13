@@ -28,6 +28,7 @@ const GENERATED_SHARED = [
   'plugin-net.ts',
   'plugin-sql.ts',
   'attention.ts',
+  'source-options.ts',
 ];
 
 for (const f of GENERATED_SHARED) {
@@ -192,4 +193,16 @@ void exercise;
   } finally {
     rmSync(project, { recursive: true, force: true });
   }
+});
+
+test('compiled entrypoint exposes optionValue', async () => {
+  const sdk = await import(join(sdkRoot, 'dist', 'index.js'));
+  assert.equal(
+    sdk.optionValue(
+      { options: [{ key: 'k', label: 'K', type: 'boolean', default: true }] },
+      {},
+      'k',
+    ),
+    true,
+  );
 });
