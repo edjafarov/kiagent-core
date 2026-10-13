@@ -11,19 +11,7 @@ import { HAS_TEXT_CHARS } from '@main/workers/convert/outcome';
 import { guardCfbReader } from '../engine/msg-guard';
 import { assessPage, QUALITY_VERSION } from '../engine/text-quality';
 
-/** Upper bound on one document's markdown, whichever path parsed it. */
-export const MAX_MARKDOWN_CHARS = 2 * 1024 * 1024;
-export function capMarkdown(md: string): {
-  markdown: string;
-  truncated: boolean;
-} {
-  return md.length > MAX_MARKDOWN_CHARS
-    ? {
-        markdown: `${md.slice(0, MAX_MARKDOWN_CHARS)}\n\n[truncated]`,
-        truncated: true,
-      }
-    : { markdown: md, truncated: false };
-}
+export { capMarkdown, MAX_MARKDOWN_CHARS } from './formats/limits';
 
 /** What the converter can parse. `parse()` dispatches on this and the
  *  convert worker (workers/convert) matches on it, so "which documents get
@@ -192,6 +180,14 @@ async function parseOther(
       const { pptxToMarkdown } = await import('./formats/pptx');
       return pptxToMarkdown(bytes);
     }
+    case 'odf-text': {
+      const { odtToMarkdown } = await import('./formats/odt');
+      return odtToMarkdown(bytes);
+    }
+    case 'epub': {
+      const { epubToMarkdown } = await import('./formats/epub');
+      return epubToMarkdown(bytes, htmlToMarkdown);
+    }
     case 'html':
       return htmlToMarkdown(buf.toString('utf8'));
     case 'csv':
@@ -216,12 +212,15 @@ async function parseOther(
   }
 }
 
-async function htmlToMarkdown(html: string): Promise<string> {
+export async function htmlToMarkdown(html: string): Promise<string> {
   const { default: TurndownService } = await import('turndown');
   const td = new TurndownService({
     headingStyle: 'atx',
     codeBlockStyle: 'fenced',
   });
+  // Full documents (saved pages, EPUB chapters) carry <head> metadata and
+  // CSS/JS whose text is not content.
+  td.remove(['head', 'title', 'style', 'script', 'noscript']);
   return td.turndown(html);
 }
 
