@@ -29,6 +29,9 @@ const HEAD_NAMES = 50;
 export interface ZipResume {
   /** Central-directory index of the next entry. */
   index: number;
+  /** Byte offset of that entry's central-directory header: a resumed page
+   *  starts there instead of re-reading every earlier header. */
+  cd?: number;
   count: number;
   /** First member names, for the summary. */
   head: string[];
@@ -45,6 +48,31 @@ const open = (file: string): Promise<yauzl.ZipFile> =>
         err || !zf ? reject(err ?? new Error('zip: open failed')) : resolve(zf),
     ),
   );
+
+/** yauzl 2.10 keeps its central-directory walk in two instance fields
+ *  (`readEntryCursor`, `entriesRead`) that only `_readEntry` consumes. Not
+ *  public API: pinned by a test, with the skip scan as the fallback. */
+interface WalkFields {
+  readEntryCursor?: unknown;
+  entriesRead?: unknown;
+}
+
+function seekTo(zf: yauzl.ZipFile, cd: number, index: number): boolean {
+  const w = zf as unknown as WalkFields;
+  if (
+    typeof w.readEntryCursor !== 'number' ||
+    typeof w.entriesRead !== 'number'
+  )
+    return false;
+  w.readEntryCursor = cd;
+  w.entriesRead = index;
+  return true;
+}
+
+const cursorOf = (zf: yauzl.ZipFile): number | undefined => {
+  const c = (zf as unknown as WalkFields).readEntryCursor;
+  return typeof c === 'number' ? c : undefined;
+};
 
 const nextEntry = (zf: yauzl.ZipFile): Promise<yauzl.Entry | null> =>
   new Promise((resolve, reject) => {
@@ -186,19 +214,31 @@ export async function expandZip(
   budget: ExpandBudget,
 ): Promise<ExpandResult> {
   const state: ZipResume = resume
-    ? { index: resume.index, count: resume.count, head: [...resume.head] }
+    ? {
+        index: resume.index,
+        count: resume.count,
+        head: [...resume.head],
+        ...(resume.cd !== undefined ? { cd: resume.cd } : {}),
+      }
     : { index: 0, count: 0, head: [] };
   const zf = await open(file);
+  const start =
+    state.cd !== undefined && seekTo(zf, state.cd, state.index)
+      ? state.index
+      : 0;
   try {
     const t0 = Date.now();
     const items: ChildItem[] = [];
     let bytes = 0;
-    for (let i = 0; ; i++) {
+    for (let i = start; ; i++) {
       // eslint-disable-next-line no-await-in-loop -- one entry at a time by design
       const e = await nextEntry(zf);
       if (!e) break;
-      if (i < state.index || e.fileName.endsWith('/')) continue;
+      if (i < state.index) continue; // the fallback skip scan
       state.index = i + 1;
+      const cd = cursorOf(zf);
+      if (cd !== undefined) state.cd = cd;
+      if (e.fileName.endsWith('/')) continue;
       // eslint-disable-next-line no-await-in-loop
       const child = await memberChild(zf, e);
       if (child) {

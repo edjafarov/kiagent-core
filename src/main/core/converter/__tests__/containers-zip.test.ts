@@ -151,3 +151,77 @@ describe('expandZip', () => {
     await expect(expandZip(p, null, DEFAULT_EXPAND_BUDGET)).rejects.toThrow();
   });
 });
+
+describe('central-directory resume', () => {
+  it('a resumed page reads only its own entries, same keys as one pass', async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 300; i++)
+      files[`f${String(i).padStart(3, '0')}.txt`] = `n${i}`;
+    const p = await writeZip('many.zip', files);
+    const one = await expandZip(p, null, {
+      ...DEFAULT_EXPAND_BUDGET,
+      items: 1000,
+    });
+    expect(one.items).toHaveLength(300);
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const yauzl = require('yauzl') as {
+      ZipFile: { prototype: { readEntry(): void } };
+    };
+    const spy = jest.spyOn(yauzl.ZipFile.prototype, 'readEntry');
+    const keys: string[] = [];
+    let resume: ZipResume | null = null;
+    let pages = 0;
+    try {
+      do {
+        spy.mockClear();
+        // eslint-disable-next-line no-await-in-loop
+        const page = await expandZip(p, resume, {
+          ...DEFAULT_EXPAND_BUDGET,
+          items: 50,
+        });
+        keys.push(...page.items.map((c) => c.key));
+        // 50 entries plus the one read that finds the end (last page).
+        expect(spy.mock.calls.length).toBeLessThanOrEqual(51);
+        resume = page.resume as ZipResume | null;
+        pages += 1;
+      } while (resume);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(pages).toBe(7); // six full pages, then the one that finds the end
+    expect(keys).toEqual(one.items.map((c) => c.key));
+  });
+
+  it('pins the yauzl walk fields the resume relies on', async () => {
+    const p = await writeZip('pin.zip', { 'a.txt': 'a' });
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const yauzl = require('yauzl') as typeof import('yauzl');
+    const zf = await new Promise<import('yauzl').ZipFile>((res, rej) =>
+      yauzl.open(p, { lazyEntries: true }, (e, z) =>
+        e || !z ? rej(e) : res(z),
+      ),
+    );
+    const w = zf as unknown as {
+      readEntryCursor: unknown;
+      entriesRead: unknown;
+    };
+    expect(typeof w.readEntryCursor).toBe('number');
+    expect(typeof w.entriesRead).toBe('number');
+    zf.close();
+  });
+
+  it('falls back to the skip scan for a resume without an offset', async () => {
+    const p = await writeZip('old.zip', {
+      'a.txt': 'a',
+      'b.txt': 'b',
+      'c.txt': 'c',
+    });
+    const r = await expandZip(
+      p,
+      { index: 2, count: 2, head: ['a.txt', 'b.txt'] },
+      DEFAULT_EXPAND_BUDGET,
+    );
+    expect(r.items.map((c) => c.title)).toEqual(['c.txt']);
+  });
+});
