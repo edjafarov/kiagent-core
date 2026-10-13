@@ -24,6 +24,7 @@ import { openStore } from '../../../core/store/store';
 import type { CoreStore } from '../../../core/store/store';
 import { classifyDocument } from '../../vision/classify';
 import { createConvertWorker } from '../convert-worker';
+import { pptxBytes } from '../../../core/converter/__tests__/office-fixtures';
 
 const DOCX_MIME =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -176,6 +177,39 @@ describe('convert pipeline (real store + engine)', () => {
     expect((d.metadata as any).filename).toBe('offer.docx'); // merged, not replaced
     const hits = await store.read.search({ text: 'liability capped' } as never);
     expect(JSON.stringify(hits)).toContain(d.id);
+    await handle.stop();
+  });
+
+  it('a bytes-less pptx attachment gets slide text and an ok outcome', async () => {
+    const bytes = await pptxBytes([
+      { title: 'Pricing', body: ['Enterprise tier is 40 EUR per seat'] },
+    ]);
+    const sources = new Map([['mail', bytesOnlySource(bytes)]]);
+    const engine = engineWith(sources);
+    const account = await store.createAccount({
+      source: 'mail',
+      identifier: 'x',
+    });
+    const handle = engine.attach(createConvertWorker());
+
+    await store.commit({
+      account: account.id,
+      documents: [
+        attachment('m1/3', {
+          mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          filename: 'pricing.pptx',
+        }),
+      ],
+      cursor: 1,
+    });
+
+    await waitFor(
+      async () => (await read(account.id, 'm1/3'))?.markdown != null,
+    );
+    const d = await read(account.id, 'm1/3');
+    expect(d.markdown).toContain('## Slide 1 — Pricing');
+    expect(d.markdown).toContain('Enterprise tier is 40 EUR per seat');
+    expect((d.metadata as any).conversion.status).toBe('ok');
     await handle.stop();
   });
 
