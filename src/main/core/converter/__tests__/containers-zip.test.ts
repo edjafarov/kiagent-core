@@ -545,6 +545,53 @@ describe('nested containers inside a zip', () => {
     expect(fs.existsSync(dest)).toBe(false);
   });
 
+  it('partial writes are completed, and a write that makes no progress is nospace', async () => {
+    const data = Buffer.from(mboxOf('A', 'B'));
+    const p = rawZip('short.zip', [{ name: 'm.mbox', data, deflate: true }]);
+    const n = (
+      (await expandZip(p, null, DEFAULT_EXPAND_BUDGET)).resume as ZipResume
+    ).nested!;
+    const realOpen = fs.promises.open;
+    let stall = false;
+    jest.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      const fh = await realOpen(...args);
+      if (args[1] !== 'w') return fh;
+      const write = fh.write.bind(fh) as (
+        b: Buffer,
+        o: number,
+        l: number,
+      ) => Promise<{ bytesWritten: number }>;
+      // At most 7 bytes land per call; none at all once stalled.
+      (fh as { write: unknown }).write = (b: Buffer, o: number, l: number) =>
+        stall
+          ? Promise.resolve({ bytesWritten: 0, buffer: b })
+          : write(b, o, Math.min(l, 7));
+      return fh;
+    }) as typeof fs.promises.open);
+    const dest = path.join(dir, 'short.mbox');
+    expect(await extractMember(p, n, dest)).toBe('ok');
+    expect(Buffer.compare(fs.readFileSync(dest), data)).toBe(0);
+    stall = true;
+    const dest2 = path.join(dir, 'stall.mbox');
+    expect(await extractMember(p, n, dest2)).toBe('nospace');
+    expect(fs.existsSync(`${dest2}.part`)).toBe(false);
+  });
+
+  it('a damaged local header is corrupt, not an endless retry', async () => {
+    const p = rawZip('hdr.zip', [
+      { name: 'm.mbox', data: Buffer.from(mboxOf('A')), deflate: true },
+    ]);
+    const n = (
+      (await expandZip(p, null, DEFAULT_EXPAND_BUDGET)).resume as ZipResume
+    ).nested!;
+    const bytes = fs.readFileSync(p);
+    bytes.writeUInt32LE(0xdeadbeef, 0); // the only member's local header
+    fs.writeFileSync(p, bytes);
+    expect(await extractMember(p, n, path.join(dir, 'h.mbox'))).toBe('corrupt');
+  });
+
   it('too little free disk is nospace', async () => {
     const p = await writeZip('big.zip', { 'm.mbox': mboxOf('A') });
     const n = (

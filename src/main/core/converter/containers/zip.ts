@@ -463,10 +463,11 @@ export type ExtractOutcome = 'ok' | 'nospace' | 'corrupt' | 'mismatch';
 /** The member's raw (still compressed) bytes, read straight from the file:
  *  yauzl's own streams do not settle on destroy, so the copy owns every
  *  stream in its pipeline. */
+/** Null when the local header is damaged. */
 async function rawRange(
   zipPath: string,
   e: yauzl.Entry,
-): Promise<{ start: number; length: number }> {
+): Promise<{ start: number; length: number } | null> {
   const fh = await fs.promises.open(zipPath, 'r');
   try {
     const h = Buffer.alloc(30);
@@ -476,8 +477,7 @@ async function rawRange(
       30,
       e.relativeOffsetOfLocalHeader,
     );
-    if (bytesRead !== 30 || h.readUInt32LE(0) !== 0x04034b50)
-      throw new Error('zip: bad local file header');
+    if (bytesRead !== 30 || h.readUInt32LE(0) !== 0x04034b50) return null;
     const start =
       e.relativeOffsetOfLocalHeader +
       30 +
@@ -530,7 +530,21 @@ async function copyRange(
         return false;
       }
       crc = zlib.crc32(chunk, crc);
-      await out.write(chunk, 0, chunk.length);
+      // A write may be partial (a filling disk): never count bytes that
+      // did not land.
+      for (let off = 0; off < chunk.length; ) {
+        // eslint-disable-next-line no-await-in-loop
+        const { bytesWritten } = await out.write(
+          chunk,
+          off,
+          chunk.length - off,
+        );
+        if (bytesWritten === 0)
+          throw Object.assign(new Error('zip: short write'), {
+            code: 'ENOSPC',
+          });
+        off += bytesWritten;
+      }
       return true;
     };
     const drained = inflater
@@ -606,7 +620,10 @@ export async function extractMember(
         e = await nextEntry(zf);
         if (!e) break;
       }
-  } catch {
+  } catch (err) {
+    // A format error (the CD moved) is a mismatch; an I/O error is not —
+    // the caller defers it instead of restarting the whole ZIP.
+    if ((err as NodeJS.ErrnoException).code) throw err;
     e = null;
   } finally {
     zf.close();
@@ -624,7 +641,9 @@ export async function extractMember(
   // Sound only because the copy is capped at exactly the declared size.
   if (fsStat.bavail * fsStat.bsize < 2 * n.size) return 'nospace';
 
-  const { start, length } = await rawRange(zipPath, e);
+  const range = await rawRange(zipPath, e);
+  if (!range) return 'corrupt';
+  const { start, length } = range;
   const part = `${dest}.part`;
   let count = 0;
   let crc = 0;
