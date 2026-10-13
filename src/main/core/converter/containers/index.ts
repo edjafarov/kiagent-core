@@ -3,6 +3,7 @@
 import { expandEnex, type EnexResume } from './enex';
 import { expandMbox, type MboxResume } from './mbox';
 import { expandVcard, type VcardResume } from './vcard';
+import { expandZip, type ZipResume } from './zip';
 import type { ContainerKind, ExpandBudget, ExpandResult } from './types';
 
 export async function expandPage(
@@ -18,6 +19,8 @@ export async function expandPage(
       return expandVcard(path, resume as VcardResume | null, budget);
     case 'enex':
       return expandEnex(path, resume as EnexResume | null, budget);
+    case 'zip':
+      return expandZip(path, resume as ZipResume | null, budget);
     default:
       throw new Error(`expander not implemented: ${kind} (${path})`);
   }
