@@ -37,3 +37,8 @@ export class FolderScopeStaleError extends Error {
  *  scope-change contract (stop → transform cursor → archive the source's
  *  removed roots in one transaction), or carried a scope that violates it. */
 export class FolderScopeConfigError extends Error {}
+
+/** A per-account option write named an undeclared key, a non-boolean value,
+ *  or arrived through a door that does not own `config.options`
+ *  (spec source-options §3.3–3.4). */
+export class OptionConfigError extends Error {}

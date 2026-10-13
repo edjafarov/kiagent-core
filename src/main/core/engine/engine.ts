@@ -28,11 +28,13 @@ import type {
 } from '@shared/contracts';
 
 import { sourceErrorCode } from '@shared/source-errors';
+import { optionValue } from '@shared/source-options';
 
 import {
   AccountFlowBusyError,
   FolderScopeConfigError,
   FolderScopeStaleError,
+  OptionConfigError,
 } from './flow-errors';
 
 import { isDbWorkerTransientError } from '../../db/worker-client';
@@ -468,6 +470,9 @@ export function createEngine(deps: EngineDeps): Engine & {
     accountId: AccountId,
     config: Record<string, unknown>,
   ): Promise<void>;
+  /** Set one declared boolean option (`config.options.<key>`); restarts a
+   *  running loop like updateConfig, but grants no reconcile allowance. */
+  setOption(accountId: AccountId, key: string, value: boolean): Promise<void>;
   /** True while the account's pull loop is still executing; false once it
    *  settled (finished, gave up after retries, or was stopped). Cadence
    *  ticks consult this so they only START a pull, never replace one that
@@ -1990,6 +1995,10 @@ export function createEngine(deps: EngineDeps): Engine & {
         throw new FolderScopeConfigError(
           'folderRoots cannot be written through accounts:update-config — use accounts:start-manage-folders',
         );
+      if (Object.prototype.hasOwnProperty.call(config, 'options'))
+        throw new OptionConfigError(
+          'options cannot be written through accounts:update-config — use accounts:set-option',
+        );
       const existing = await store.account(accountId);
       const next =
         existing &&
@@ -2020,6 +2029,37 @@ export function createEngine(deps: EngineDeps): Engine & {
       // would silently resume an explicitly paused account or re-hammer a
       // revoked credential (mirror the status gates in boot's cadence job and
       // resumeAccounts).
+      if (!running.has(`account:${accountId}`)) return;
+      const fresh = await store.account(accountId);
+      if (fresh && fresh.status !== 'paused' && fresh.status !== 'needsReauth')
+        engine.run(fresh);
+    },
+
+    async setOption(
+      accountId: AccountId,
+      key: string,
+      value: boolean,
+    ): Promise<void> {
+      // Same contention guards as updateConfig (C-28.1).
+      const heldBy = activeByAccount.get(accountId);
+      if (heldBy !== undefined) throw new AccountFlowBusyError(heldBy);
+      if (transitionIntents.has(accountId))
+        throw new AccountFlowBusyError('account-transition');
+      const existing = await store.account(accountId);
+      if (!existing)
+        throw new OptionConfigError(`unknown account ${accountId}`);
+      const descriptor = deps.sources.get(existing.source)?.descriptor;
+      const current = optionValue(descriptor, existing.config, key);
+      if (current === undefined)
+        throw new OptionConfigError(
+          `'${key}' is not an option of ${existing.source}`,
+        );
+      if (typeof value !== 'boolean')
+        throw new OptionConfigError(`option '${key}' takes true or false`);
+      if (current === value) return;
+      await store.setAccountOption(accountId, key, value);
+      // No grantAllowance: an option is not a scope change (spec §3.4).
+      // Restart gate mirrors updateConfig's.
       if (!running.has(`account:${accountId}`)) return;
       const fresh = await store.account(accountId);
       if (fresh && fresh.status !== 'paused' && fresh.status !== 'needsReauth')
