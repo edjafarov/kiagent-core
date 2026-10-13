@@ -11,7 +11,8 @@ import type { Account, Batch, DocumentInput, Session } from '@shared/contracts';
 
 import type { ExpandResult } from '../../../core/converter/containers/types';
 import type { Expansion, LocalFolderCursor } from '../cursor';
-import { pull } from '../local-folder-source';
+import { pull, reconcile } from '../local-folder-source';
+import { walkRoot, type WalkTrouble } from '../scanner';
 import type { LocalFolderItem } from '../to-document';
 
 type B = Batch<LocalFolderCursor, LocalFolderItem>;
@@ -113,6 +114,8 @@ describe('local-folder containers', () => {
   });
 
   it('an unchanged container costs nothing on the next pull', async () => {
+    // Past the files' ctime: the watermark is millisecond-precise.
+    await sleep(20);
     const first = await run(null);
     const second = await run(lastCursor(first));
     expect(second.flatMap((b) => b.items)).toEqual([]);
@@ -194,6 +197,66 @@ describe('local-folder containers', () => {
       expect(deletions(second)).toEqual([]);
     } finally {
       fs.chmodSync(sub, 0o755);
+    }
+  });
+
+  it('reconcile keeps listing containers a walk could not reach', async () => {
+    const sub = path.join(dir, 'mail');
+    fs.mkdirSync(sub);
+    const inner = path.join(sub, 'old.mbox');
+    fs.writeFileSync(inner, msg('Old', 14));
+    const first = await run(null);
+    const s = session([dir], new AbortController().signal);
+    s.account.cursor = lastCursor(first);
+    fs.chmodSync(sub, 0o000);
+    try {
+      const listed: string[] = [];
+      for await (const page of reconcile(s))
+        listed.push(...page.map((r) => r.externalId));
+      expect(listed).toContain(id(inner));
+      expect(listed).toContain(id(mbox));
+    } finally {
+      fs.chmodSync(sub, 0o755);
+    }
+  });
+
+  it('a file that cannot be stat-ed (EACCES) marks the walk incomplete', async () => {
+    const hidden = path.join(dir, 'x.mbox');
+    fs.writeFileSync(hidden, msg('Hidden', 13));
+    const real = fs.promises.lstat;
+    const spy = jest
+      .spyOn(fs.promises, 'lstat')
+      .mockImplementation(((p: fs.PathLike) =>
+        String(p) === hidden
+          ? Promise.reject(
+              Object.assign(new Error('EACCES'), { code: 'EACCES' }),
+            )
+          : real(p)) as typeof fs.promises.lstat);
+    try {
+      const trouble: WalkTrouble = { incomplete: false };
+      const seen: string[] = [];
+      for await (const e of walkRoot(dir, trouble)) seen.push(e.absPath);
+      expect(seen).not.toContain(hidden);
+      expect(trouble.incomplete).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+    // A file that merely vanished (ENOENT) is not trouble.
+    const gone: WalkTrouble = { incomplete: false };
+    const spy2 = jest
+      .spyOn(fs.promises, 'lstat')
+      .mockImplementation(((p: fs.PathLike) =>
+        String(p) === hidden
+          ? Promise.reject(
+              Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
+            )
+          : real(p)) as typeof fs.promises.lstat);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _e of walkRoot(dir, gone));
+      expect(gone.incomplete).toBe(false);
+    } finally {
+      spy2.mockRestore();
     }
   });
 

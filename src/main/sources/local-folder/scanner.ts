@@ -43,6 +43,11 @@ export interface WalkTrouble {
   incomplete: boolean;
 }
 
+function noteTrouble(trouble: WalkTrouble | undefined, e: unknown): void {
+  if (trouble && (e as NodeJS.ErrnoException)?.code !== 'ENOENT')
+    trouble.incomplete = true;
+}
+
 export interface ScannedEntry {
   absPath: string;
   stats: fs.Stats;
@@ -211,9 +216,10 @@ export async function* walkPaths(
       let isFile = dirent.isFile();
       if (typeUnknown(dirent)) {
         // eslint-disable-next-line no-await-in-loop
-        const st = await fs.promises.lstat(absPath).catch(() => {
-          // Possibly a directory: its subtree is unseen.
-          if (trouble) trouble.incomplete = true;
+        const st = await fs.promises.lstat(absPath).catch((e) => {
+          // Not gone but unstat-able (EACCES…): possibly a directory whose
+          // subtree is unseen.
+          noteTrouble(trouble, e);
           return null;
         });
         isDir = st?.isDirectory() ?? false;
@@ -256,8 +262,11 @@ export async function* walkRoot(
     try {
       // eslint-disable-next-line no-await-in-loop
       stats = await fs.promises.lstat(absPath);
-    } catch {
-      continue; // vanished since the directory was read
+    } catch (e) {
+      // Vanished since the directory was read — or unstat-able (a directory
+      // listable but not searchable), which hides the file.
+      noteTrouble(trouble, e);
+      continue;
     }
     if (stats.isFile() && decideLocalFile(absPath, stats.size).kind === 'index')
       yield { absPath, stats };

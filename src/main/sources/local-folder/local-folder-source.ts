@@ -755,10 +755,13 @@ export async function* reconcile(
   const rootPaths = getRootPaths(session.account);
   await assertRootsAvailable(rootPaths);
 
+  const expansions =
+    (session.account.cursor as LocalFolderCursor)?.expansions ?? {};
   for (const root of rootPaths) {
+    const trouble: WalkTrouble = { incomplete: false };
     // eslint-disable-next-line no-await-in-loop
     for await (const page of chunkBySize(
-      walkRoot(root),
+      walkRoot(root, trouble),
       500,
       Infinity,
       () => 0,
@@ -770,6 +773,15 @@ export async function* reconcile(
           type: 'file',
         }),
       );
+    }
+    // A directory the walk could not read hides its containers; archiving
+    // one would take every child with it and its unchanged expansion record
+    // would never re-emit them. Listing the known containers keeps them
+    // (and, through the parent, their children) until a complete walk.
+    if (trouble.incomplete) {
+      const known = Object.keys(expansions).filter((id) => isUnder(id, root));
+      if (known.length > 0)
+        yield known.map((externalId) => ({ externalId, type: 'file' }));
     }
   }
 }
