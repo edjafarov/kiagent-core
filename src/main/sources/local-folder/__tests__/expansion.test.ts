@@ -37,7 +37,12 @@ describe('noteContainer', () => {
   });
 
   it('keeps a done zip until size or mtime moves', () => {
-    const done: Expansion = { state: 'done', kind: 'zip', v: 1, ...at };
+    const done: Expansion = {
+      state: 'done',
+      kind: 'zip',
+      v: EXPANDER_VERSION.zip,
+      ...at,
+    };
     expect(noteContainer(done, 'zip', at)).toBe(done);
     expect(noteContainer(done, 'zip', { ...at, mtimeMs: 2_000 })).toMatchObject(
       { state: 'pending', resume: null, cleared: false },
@@ -153,7 +158,7 @@ describe('nextPending / nextDue', () => {
   });
   it('picks the oldest due pending record', () => {
     const exps: Record<string, Expansion> = {
-      a: { state: 'done', kind: 'zip', v: 1, ...at },
+      a: { state: 'done', kind: 'zip', v: EXPANDER_VERSION.zip, ...at },
       b: p({ notBefore: 500 }),
       c: p(),
     };
