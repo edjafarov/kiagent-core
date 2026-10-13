@@ -1,6 +1,6 @@
 # File formats batch: Office, e-books, transcripts, mail archives, ZIP, PST
 
-Status: r2 (fable + codex-astra round 1 folded in) · 2026-10-13
+Status: r3 (fable + codex-astra rounds 1–2 folded in) · 2026-10-13
 Scope came from the format coverage review (value ≥ 3 and difficulty ≤ 2,
 plus PST). Deferred formats are filed as `priority:low` issues #148–#164.
 
@@ -111,10 +111,14 @@ Rules shared by all of A:
 | vCard | `.vcf` (always, even one card) | `contact.card` | `<absPath>#vcf:<UID or sha1(FN+first EMAIL)>` | `# Name`, org, title, emails, phones, address, note; PHOTO/LOGO/SOUND dropped |
 | Evernote | `.enex` | `note` | `<absPath>#enex:<sha1(title+created)>` | ENML → turndown; tags, created/updated, source URL; resource filenames listed |
 
-- `email.message` children write metadata **exactly as IMAP does**
-  (`from: string`, `to: string[]`, `cc: string[]`, `date`, `subject`,
-  `messageId`), so People's mention scan picks up mbox/PST correspondents
-  with no People change.
+- `email.message` children are built like IMAP items: metadata `from:
+  string`, `to: string[]`, `cc: string[]`, `replyTo`, `references`,
+  `date`, `subject`, `messageId`; `contactEvidence` from the shared
+  `extractMessageEvidence` (`sources/email-evidence.ts`); automated mail
+  dropped by `isAutomatedMessage` (`imap/filter.ts`), as IMAP does. Both
+  helpers are pure and run in the converter child. People's mention and
+  signature scans then pick up mbox/PST correspondents with no People
+  change.
 - Every child inherits the container's `scopeRootId`, so folder
   deselection archives children with the container (scope handling in
   `write-tx` archives by `scope_root_id`, not by parent).
@@ -152,9 +156,16 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
   attachments or ENEX `<resource>` data) is discarded unparsed, with a
   "truncated" note. ENEX is split on `<note>`/`</note>` boundaries by a
   line scanner; `sax` is not shipped and is not added.
-- ZIP: `yauzl` random access, one member at a time; ordinary members
-  ≤ 20 MiB uncompressed are rendered with the A parsers, larger ones are
-  name-only; 100:1 ratio and 100k-children guards.
+- ZIP: `yauzl` random access, one member at a time. Each member is
+  routed by the **same policy** as a local file:
+  `decideFileIndexing({profile:'local-folder', filename: member,
+  sizeBytes})` → `ignore` skips it (sensitive basenames inside a zipped
+  repo included); `inline-text` decodes it with the same NUL sniff as
+  `buildItem` (Takeout/Slack/WhatsApp `.json`/`.txt`/`.csv`/`.html`);
+  `converter` runs `parseDetailed` (all kinds, A included); `vision`/
+  `audio` → name-only child; `container` → nested expansion (below).
+  Ordinary members over 20 MiB uncompressed are name-only. 100:1 ratio
+  and 100k-children guards.
 - **Mailboxes/vCards/ENEX inside a ZIP** (Takeout's `All mail Including
   Spam and Trash.mbox`): the member is streamed to a managed temp file
   (`<userData>/expand-tmp/<sha1(absPath+member)>`) and then paged by the
@@ -177,73 +188,126 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
   `createLocalFolderSource({ converter })` (the `createImapSource()`
   pattern); `registerBundledSources` receives the platform converter from
   `main.ts`. No `Session`, SDK or public Source contract change.
-- **Admission.** `decideFileIndexing` gains `pipeline: 'container'` for
-  `.mbox`, `.pst`, `.zip`, `.vcf`, `.enex` on the **local** profile only
-  (`zip` leaves `ARCHIVE_EXTENSIONS` for local) with `bytes: 'none'` and
-  no size cap: containers are read by path, never buffered. Step 2
-  (`no-extension`) gains one exception: `mime === 'application/mbox'`.
+
+- **Admission (branch order is part of the spec).** In
+  `decideFileIndexing`, a new **container branch sits right after step 2
+  (`no-extension`)**, before the archive, text and converter steps, on the
+  `local-folder` profile only: `.mbox`, `.pst`, `.zip`, `.vcf`, `.enex`,
+  or `mime === 'application/mbox'` → `{kind:'index', pipeline:'container',
+  bytes:'none'}`, no size cap (containers are read by path, never
+  buffered). Placing it first is what keeps local `.zip` out of the
+  `ARCHIVE_MIMES` check, `.vcf` out of `LOCAL_TEXT_EXTENSIONS` and
+  `application/mbox` out of `LOCAL_CONVERTER_MIMES` (all three lists are
+  left as they are for the cloud profile). Step 2 gains one exception:
+  `mime === 'application/mbox'`. In `convertibleKind`, `subtitles` is
+  matched before the `text/*` fallback.
   The `.msf` sibling check lives in **`decideLocalFile`/`isIngestible`**
   (one `existsSync` per extensionless file), the single gate that
-  `walkPaths`, `reconcile`, `countFiles` and the watcher filter all use,
-  so they cannot disagree. If both the mbox and its `.msf` vanish, the
-  unlink event may be filtered; reconcile is the backstop.
-- **Cursor.** The local-folder cursor gains
-  `expansions: { [absPath]: { stamp, resume, attempts } }` where
-  `stamp = size + mtimeMs`. Each page's children are yielded as one batch
-  whose cursor carries the advanced `resume`, so progress commits with the
+  `walkPaths`, `reconcile`, `countFiles` and the watcher filter use.
+  `incrementalRescanRoot` builds its `newlyAdmitted` candidate through the
+  same adapter (today it calls `resolvePathMime` directly), so an
+  unchanged Thunderbird folder is re-admitted on the version-4 upgrade.
+  If both the mbox and its `.msf` vanish, the watcher may filter the
+  unlink; reconcile is the backstop.
+
+- **One writer for the container row.** The scan path (backfill, rescan,
+  watcher `add`/`change`, policy re-emission) never emits a container
+  document and never turns a container into a deletion: `buildItem`
+  returns a `{ container: absPath, stat }` marker that `buildBatch`
+  routes into the cursor's `expansions` record. The **expander** is the
+  only writer of the container row: a placeholder (`# <name>` + "Reading…",
+  `conversion: ok`) in the first page's batch, the summary in the last
+  page's batch. A real unlink still emits the deletion (watcher `unlink`,
+  reconcile), which archives the container and its children.
+
+- **Cursor record.** The local-folder cursor gains
+  `expansions: { [absPath]: Expansion }`:
+
+  ```ts
+  type Expansion =
+    | { state: 'pending'; size: number; mtimeMs: number;
+        resume: unknown | null; cleared: boolean; attempts: number }
+    | { state: 'done'; size: number; mtimeMs: number; end?: number }
+    | { state: 'failed'; size: number; mtimeMs: number };
+  ```
+
+  Only `pending` records are scheduled. `done` and `failed` are compact
+  and kept until the file changes or leaves scope (an address book of many
+  single-card `.vcf` files costs one small record each). `end` is the mbox
+  byte offset after the last message read. `cleared` records that the
+  full-path deletion batch has committed (below), so a restart between
+  the deletion and the re-emission resumes the re-emission instead of
+  deleting again. Each page's children are yielded as one batch whose
+  cursor carries the advanced record, so progress commits with the
   children and survives restarts.
-- **Driving.** Ordering stays files-first:
-  1. Backfill and incremental rescan run as today, recording containers
-     that need expansion in `expansions`.
-  2. **Before entering `watchLoop`**, drain pending expansions one page
-     per batch.
-  3. Inside `watchLoop`, when `expansions` is non-empty, alternate: one
-     pending fs event batch, then one expansion page; block on the watcher
-     only when nothing is pending. A container `change` event updates its
-     entry and is processed in the same loop.
-  4. A page that throws or times out bumps `attempts`; after 3 the
-     container's summary records "Could not read this file" and its entry
-     is dropped until the stamp changes. Ordinary indexing never waits on
-     a failing container.
-- **Change detection, without an engine sweep.**
-  - Stamp unchanged → nothing.
-  - **mbox append fast path:** the file only grew and sha1 of its first
-    64 KiB is unchanged → resume from the previous end offset; only new
-    messages are written (Thunderbird appends; compaction rewrites and
-    takes the full path).
-  - Otherwise (**full re-expansion**): yield a deletions-only batch for
-    the container (`Batch.deletions` → `archiveByRef` → `archiveChildren`
-    archives it and all its children), then re-emit the container row and
-    the pages from `resume: null`. `upsertDocument` un-archives every
+
+- **Change detection.**
+  - **mbox (incl. Thunderbird):** size only, never mtime. Thunderbird
+    rewrites `X-Mozilla-Status` flags in place on every read/flag change
+    (mtime moves, size does not).
+    - Size unchanged → nothing (flag changes are picked up at the next
+      compaction, which shrinks the file).
+    - Size grew and the bytes at `end` start a `From ` line (or `end` is
+      the old EOF) → **append fast path**: resume from `end`; only new
+      messages are written.
+    - Otherwise (shrank, or `end` no longer lands on a message boundary)
+      → full path.
+    - The fallback child id `sha1(raw headers)` excludes `X-Mozilla-*`
+      and `Status`/`X-Status` headers, so flag flips never mint new ids.
+  - **PST, ZIP, vCard, ENEX:** `size` or `mtimeMs` changed → full path,
+    except that a PST is only re-expanded once its mtime has been stable
+    for 10 minutes (Outlook writes an open PST continuously).
+  - **Full path:** yield a deletions-only batch for the container
+    (`Batch.deletions` → `archiveByRef` → `archiveChildren` archives it
+    and all its children) with `cleared: true` in its cursor, then the
+    pages from `resume: null`. `upsertDocument` un-archives every
     re-emitted child; whatever is not re-emitted stays archived. The two
-    must be separate batches (deletions apply after documents within one
-    commit). Accepted costs: a full re-expansion rewrites every child, and
-    the container's items are missing from search while it runs. Full
-    re-expansions are rare (compaction, PST rewrite, new ZIP).
+    are separate batches because deletions apply after documents within
+    one commit. Accepted costs: a full re-expansion rewrites every child,
+    and the container's items are missing from search while it runs.
+
+- **Driving.** One loop, watcher first:
+  1. The watcher is created **before** any expansion work (today it is
+     created inside `watchLoop` with `ignoreInitial: true`, so starting
+     it after a long expansion would miss changes made meanwhile).
+  2. Backfill and incremental rescan run as today, recording containers
+     as `pending`.
+  3. The loop then alternates: one pending fs-event batch, then one page
+     of the oldest `pending` expansion; it blocks on the watcher only when
+     no expansion is pending. The initial drain and steady state are the
+     same path.
+  4. A page that throws or times out bumps `attempts`; at 3 the record
+     becomes `failed` (the container's summary row says "Could not read
+     this file") until its size or mtime changes. Ordinary indexing never
+     waits on a failing container.
+
 - **Deletion and scope.** Deleting or un-admitting a container archives
   it and its children via the existing parent cascade; deselecting its
-  folder archives them via `scopeRootId`; both drop the `expansions`
-  entry (and any temp file), so re-adding re-expands.
+  folder archives them via the inherited `scopeRootId`. Both drop the
+  `expansions` record (and any temp file), so re-adding re-expands.
+
 - **Reconcile guard.** `reconcile` keeps listing files only (children of
-  a listed parent are exempt in `unlisted()`). The engine's
-  mass-archive ratio counts only **top-level** rows
-  (`parent_id IS NULL`) toward the shrink ratio, so deleting a 100k-message
-  PST while the app was closed does not trip "the listing shrank
-  suspiciously". Children still archive with their parent. This is the
-  one engine change.
+  a listed parent are exempt in `unlisted()`). The store's
+  `reconcileDiff` counts only **top-level** rows (`parent_id IS NULL` in
+  both its live and gone counts), so deleting a 100k-message PST while
+  the app was closed does not trip "the listing shrank suspiciously".
+  `archiveBatchTx` is unchanged and still cascades to children. This is
+  the one store change.
 
 ### B4. PST
 
 - Library: `pst-extractor` (MIT, pure JS port of java-libpst, 1.12.0,
   2026-01), opened on the file path. **Phase 3 starts with a spike** on a
-  real multi-GB PST: converter child RSS < 400 MB through the whole file,
-  resume by NID, bodies available as text/HTML, RTF-only bodies through
-  the A-section RTF path. If the spike fails the memory bar, PST drops to
-  an issue and phases 1–2 are unaffected.
+  real multi-GB PST: converter child RSS < 400 MB through the whole file;
+  resume by NID; cost of re-opening a multi-GB file per page (if high,
+  the child keeps the open handle between pages of the same container);
+  bodies as text/HTML, RTF-only bodies through the A-section RTF path;
+  behaviour on a PST Outlook has open. If the spike fails the memory bar,
+  PST drops to an issue and phases 1–2 are unaffected.
 - Children: messages only (no calendar/contacts/tasks items in v1),
   `metadata.folder` set, attachment names in the markdown.
-- A PST open in Outlook may be locked on Windows: open with shared read;
-  on `EBUSY` keep `resume`, count it as a non-attempt, retry next pass.
+- A locked PST (Windows, `EBUSY`): keep `resume`, do not count an
+  attempt, retry next pass.
 
 ## Re-enumeration (per phase)
 
@@ -297,6 +361,16 @@ containers.
   - Workers: container and children never get a `conversion` marker
     other than `ok`, and vision/convert do not fetch them.
   - Reconcile with a deleted 1k-child container does not trip the guard.
+  - An ordinary file changed during a long initial expansion is indexed
+    (watcher started first).
+  - Thunderbird flag rewrite (same size, new mtime) writes nothing;
+    restart after the full-path deletion batch re-emits without a second
+    deletion; a `failed` container stays quiet across restart until it
+    changes.
+  - The scan path never overwrites the container summary (watch `change`
+    and policy re-emission).
+  - Upgrade: an extensionless Thunderbird mbox older than the root
+    watermark is admitted on the version-4 re-enumeration.
 - Thunderbird: extensionless + `.msf` admitted by scan AND watcher;
   without `.msf` ignored; expunged message skipped.
 - Memory gate (phases 2–3): a 2 GB mbox and the PST spike file keep the
