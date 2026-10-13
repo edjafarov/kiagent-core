@@ -468,6 +468,19 @@ export interface Store {
 // 3. SOURCE — cursor over the outside world
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** A per-account boolean setting a connector declares on its RUNTIME
+ *  descriptor. Core renders it as a toggle on the account page and stores the
+ *  value at `accounts.config.options.<key>`; the connector reads it in `pull`
+ *  via `optionValue`. Validated at extension registration
+ *  (`validateSourceOptions`). */
+export interface SourceOption {
+  key: string;
+  label: string;
+  description?: string;
+  type: 'boolean';
+  default: boolean;
+}
+
 export interface SourceDescriptor {
   id: string; // 'gmail'
   name: string;
@@ -485,6 +498,8 @@ export interface SourceDescriptor {
    *  source's Sender sends as the account's own mailbox, so core asks for
    *  no From address. Without it an extension source is reply-only. */
   compose?: 'email';
+  /** Per-account toggles (≤ 8). Values live in `account.config.options`. */
+  options?: SourceOption[];
   /** Populated by CORE at registry-list time, never authored by a connector —
    *  a value set in a manifest or a connector's own descriptor is ignored.
    *  Lets the renderer route Reconnect without guessing. */

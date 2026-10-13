@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.111.0](https://github.com/edjafarov/kiagent-core/compare/v0.110.2...v0.111.0) (2026-10-13)
+
+### Features
+
+* **contracts:** SourceOption + optionValue/validateSourceOptions ([7bf3201](https://github.com/edjafarov/kiagent-core/commit/7bf3201564a2c345a504f673f2700066da81895f))
+* **engine:** setOption; updateConfig refuses options ([451641d](https://github.com/edjafarov/kiagent-core/commit/451641d522e4cb5a305acb3cc08a2e8ff9f68e33))
+* **platform:** validate source options at registration; platform API 2.12.0 ([a14349b](https://github.com/edjafarov/kiagent-core/commit/a14349b7891d722c468ad411b481747fedd438b4))
+* **sdk:** 1.9.0 — optionValue, SourceOption ([b9ca413](https://github.com/edjafarov/kiagent-core/commit/b9ca413d800db9cc31d3c29408c95aa8c1882d0c))
+* **sources:** accounts:set-option + Options card ([0392672](https://github.com/edjafarov/kiagent-core/commit/0392672dbae8bcb3b900706cedc24c63fbcd7de4))
+* **store:** config.options owned by setAccountOption; wholesale writes keep it ([1b5d577](https://github.com/edjafarov/kiagent-core/commit/1b5d577dfc0e3c3027ae03c904b09c996a3026a1))
+
+### Bug Fixes
+
+* **sources:** Options card holds a saved value until the account push catches up ([1cec076](https://github.com/edjafarov/kiagent-core/commit/1cec076f6bd58c91ade1b67182edd8227ca65720))
+
 ## [0.110.2](https://github.com/edjafarov/kiagent-core/compare/v0.110.1...v0.110.2) (2026-10-12)
 
 ### Bug Fixes

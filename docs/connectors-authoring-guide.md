@@ -603,6 +603,21 @@ and return no config (reconnect preserves scope). Do not author
 Use SDK 1.2.0's `fakeFolderSelectionChannel` to test management without
 accidentally granting OAuth or prompt access in the test harness.
 
+### Per-account options (platform 2.12.0)
+
+A source can declare up to 8 boolean toggles on its **runtime** descriptor:
+`descriptor.options = [{ key, label, description?, type: 'boolean', default }]`.
+The keys are `/^[a-z][A-Za-z0-9]{0,39}$/`. Core shows them in an **Options** card on the
+account page and stores the values at `account.config.options.<key>`. A
+source whose options fail validation is not registered, and a warning is logged.
+
+Read a value in `pull` with `optionValue(descriptor, session.account.config, key)`
+from the SDK; it falls back to the declared default. Changing a toggle restarts
+a running loop, so the next `pull` sees the new value. Options are owned by
+core: `connect()` and `manageFolders` cannot set or reset them, and re-adding
+an account keeps them. If an option changes what is indexed, emit
+`deletions` for documents it no longer covers; core does not infer them.
+
 ### pull()
 
 ```ts

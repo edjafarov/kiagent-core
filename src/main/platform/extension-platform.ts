@@ -28,6 +28,7 @@ import type {
 import type { ExtensionPreview, ExtInvokeEnvelope } from '@shared/ipc';
 import type { Contributions } from '@shared/extension-rpc';
 import { sourceErrorCode, wireErrorCode } from '@shared/source-errors';
+import { validateSourceOptions } from '@shared/source-options';
 import type { AppDb } from '@main/db/app-db';
 import type { DbOwner } from '@main/db/coordinator';
 import type { AttentionService } from '@main/attention/service';
@@ -769,6 +770,15 @@ export function createExtensionPlatform(
           `extension:${e.manifest.id}`,
           'warn',
           `source id '${s.descriptor.id}' already registered — skipping`,
+        );
+        continue;
+      }
+      const badOptions = validateSourceOptions(s.descriptor.options);
+      if (badOptions !== null) {
+        deps.logSink.log(
+          `extension:${e.manifest.id}`,
+          'warn',
+          `source '${s.descriptor.id}' has invalid options (${badOptions}) — skipping`,
         );
         continue;
       }

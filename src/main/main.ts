@@ -626,6 +626,8 @@ function registerIpc(
       setAccountCadence(p, accountId, cadence),
     'accounts:update-config': ({ accountId, config }) =>
       p.engine.updateConfig(accountId, config),
+    'accounts:set-option': ({ accountId, key, value }) =>
+      p.engine.setOption(accountId, key, value),
     'accounts:update-outbound': async ({
       accountId,
       outbound: outboundCfg,

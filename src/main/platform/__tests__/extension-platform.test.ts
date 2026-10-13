@@ -32,6 +32,7 @@ import {
 } from '../file-roots';
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'ext-basic');
+const FIXTURE_OPTIONS = path.join(__dirname, 'fixtures', 'ext-options');
 const FIXTURE_UNDECLARED = path.join(
   __dirname,
   'fixtures',
@@ -1830,6 +1831,32 @@ describe('createExtensionPlatform', () => {
     ]);
 
     await expect(platform.uninstall('test.undeclared')).resolves.toEqual({
+      ok: true,
+    });
+  });
+
+  it('registerContributions skips a source whose options fail validation; a valid options list reaches the registry', async () => {
+    await platform.start();
+    const preview = await platform.installPreview(FIXTURE_OPTIONS);
+    if (!('token' in preview))
+      throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+    await expect(platform.installCommit(preview.token)).resolves.toEqual({
+      ok: true,
+      id: 'test.options',
+    });
+    expect(registry.has('goodopts')).toBe(true);
+    expect(registry.has('badopts')).toBe(false);
+    expect(registry.get('goodopts')?.descriptor.options).toEqual([
+      { key: 'skipThings', label: 'Skip things', type: 'boolean', default: true },
+    ]);
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        scope: 'extension:test.options',
+        level: 'warn',
+        msg: expect.stringContaining("source 'badopts' has invalid options"),
+      }),
+    );
+    await expect(platform.uninstall('test.options')).resolves.toEqual({
       ok: true,
     });
   });

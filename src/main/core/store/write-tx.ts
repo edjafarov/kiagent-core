@@ -13,6 +13,7 @@ import type {
   Seq,
   SyncStatus,
 } from '@shared/contracts';
+import { isPlainObject } from '@shared/source-options';
 
 import { newId } from '../ids';
 import { buildStemView } from '../stemming';
@@ -221,6 +222,7 @@ export type AccountWriteOp =
   | { op: 'getOrCreate'; source: string; identifier: string }
   | { op: 'cadence'; id: AccountId; cadence: Cadence | null }
   | { op: 'config'; id: AccountId; config: Record<string, unknown> }
+  | { op: 'option'; id: AccountId; key: string; value: boolean }
   | {
       op: 'status';
       id: AccountId;
@@ -588,10 +590,42 @@ export function createWriteTx(
 
   // #135: the store's account writers (formerly db.batch in store.ts). Same
   // SQL as before; `appendChange` records the account append for `publishing`.
+  // Spec §3.3: `config.options` belongs to the `option` op alone. Every
+  // wholesale config write keeps the row's current options (read in THIS
+  // transaction) and drops whatever `options` the caller sent, so neither a
+  // connector's connect/manageFolders result nor an engine caller can set or
+  // reset them. A non-object stored value counts as none.
+  const keepOptions = (
+    rowConfigJson: string | undefined,
+    next: Record<string, unknown>,
+  ): Record<string, unknown> => {
+    const { options: _dropped, ...rest } = next;
+    let row: unknown;
+    try {
+      row = rowConfigJson
+        ? (JSON.parse(rowConfigJson) as Record<string, unknown>).options
+        : undefined;
+    } catch {
+      row = undefined;
+    }
+    return isPlainObject(row) ? { ...rest, options: row } : rest;
+  };
+  const configById = (id: AccountId): string | undefined =>
+    (
+      conn.prepare(`SELECT config FROM accounts WHERE id = ?`).get(id) as
+        | { config: string }
+        | undefined
+    )?.config;
+
   const accountWriteTx = conn.transaction(
     (w: AccountWriteOp): AccountWriteResult => {
       switch (w.op) {
         case 'create': {
+          const prior = conn
+            .prepare(
+              `SELECT config FROM accounts WHERE source = ? AND identifier = ?`,
+            )
+            .get(w.source, w.identifier) as { config: string } | undefined;
           const row = conn
             .prepare(
               `INSERT INTO accounts(id, source, identifier, config, status, cadence, created_at)
@@ -605,7 +639,7 @@ export function createWriteTx(
               newId<'account'>(),
               w.source,
               w.identifier,
-              JSON.stringify(w.config ?? {}),
+              JSON.stringify(keepOptions(prior?.config, w.config ?? {})),
               w.status ?? 'connecting',
               w.cadence ? JSON.stringify(w.cadence) : null,
               deps.now(),
@@ -645,7 +679,27 @@ export function createWriteTx(
         }
         case 'config': {
           // #135: same idiom as cadence.
-          const value = JSON.stringify(w.config);
+          const value = JSON.stringify(keepOptions(configById(w.id), w.config));
+          const r = conn
+            .prepare(
+              `UPDATE accounts SET config = ? WHERE id = ? AND config IS NOT ?`,
+            )
+            .run(value, w.id, value);
+          if (r.changes === 0) return { id: w.id, logged: false };
+          appendChange('account', w.id);
+          return { id: w.id, logged: true };
+        }
+        case 'option': {
+          // Read-modify-write inside the account transaction: atomic against
+          // every other account write (one DB worker, one tx at a time).
+          const raw = configById(w.id);
+          if (raw === undefined) return { id: w.id, logged: false };
+          const cfg = JSON.parse(raw) as Record<string, unknown>;
+          const options = isPlainObject(cfg.options) ? cfg.options : {};
+          const value = JSON.stringify({
+            ...cfg,
+            options: { ...options, [w.key]: w.value },
+          });
           const r = conn
             .prepare(
               `UPDATE accounts SET config = ? WHERE id = ? AND config IS NOT ?`,
@@ -1210,7 +1264,9 @@ export function createWriteTx(
       conn
         .prepare(`UPDATE accounts SET config = ?, cursor = ? WHERE id = ?`)
         .run(
-          JSON.stringify(withLegacyMirror(acc.source, input.config)),
+          JSON.stringify(
+            withLegacyMirror(acc.source, keepOptions(acc.config, input.config)),
+          ),
           JSON.stringify(input.cursor ?? null),
           acc.id,
         );

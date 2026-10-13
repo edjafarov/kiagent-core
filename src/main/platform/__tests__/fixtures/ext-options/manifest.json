@@ -1,0 +1,9 @@
+{
+  "id": "test.options",
+  "name": "Options Test Extension",
+  "version": "1.0.0",
+  "engine": "^2.0.0",
+  "entry": "index.js",
+  "caps": ["net"],
+  "contributes": { "sources": ["goodopts", "badopts"], "senders": [] }
+}

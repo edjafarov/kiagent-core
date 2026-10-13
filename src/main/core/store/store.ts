@@ -214,6 +214,9 @@ export interface CoreStore extends Store {
     id: AccountId,
     config: Record<string, unknown>,
   ): Promise<void>;
+  /** Spec source-options §3.3: the ONLY writer of `config.options.<key>`;
+   *  logs only on a real change. */
+  setAccountOption(id: AccountId, key: string, value: boolean): Promise<void>;
   /** Status-only account write: `status` and `last_error`, nothing else.
    *
    *  It exists because `store.commit` is otherwise the ONLY door to a status
@@ -985,6 +988,11 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
 
     async setAccountConfig(id, config) {
       const { logged } = await accountWrite({ op: 'config', id, config });
+      if (logged) emitCommit();
+    },
+
+    async setAccountOption(id, key, value) {
+      const { logged } = await accountWrite({ op: 'option', id, key, value });
       if (logged) emitCommit();
     },
 
