@@ -197,3 +197,33 @@ The scratch name is derived (`scratchName(zipPath, member, kind)`), never persis
 - [ ] Memory and time gate: a 2 GB mbox stored (not deflated) in a zip, plus a 200 MB deflated variant. Record the extraction time in a plain Node process; the child's peak RSS must stay under 400 MB while paging.
 - [ ] Run the full `npx jest` (note load-only flakes separately), `npm run typecheck`, and eslint + prettier on touched files.
 - [ ] Final fable + astra review of the 2b diff.
+
+---
+
+## Amendments after the astra design review (r3, 2026-10-13)
+
+These override the tasks above where they disagree. Task 1 is implemented (`19a24a41`).
+
+1. **Stamp check in the step.** Before extraction and before paging, `expansionStep` compares the lstat `size`/`mtimeMs` with the record. A non-mbox kind with a different stamp, or an mbox whose size shrank, gets a full-path record (`resume: null, cleared: false`) carrying the new stamp, and its scratch file is deleted through `replaceRecord`. The check runs again after extraction returns. Test: change the ZIP between steps without delivering a watcher event.
+2. **Owned decompression.** yauzl 2.10 overrides the inflate stream's `destroy()` without emitting `close`, so a `pipeline(…, {signal})` over it never settles on abort. `extractMember` therefore:
+
+   - opens the entry with `openReadStream(entry, {decompress: false})`, the raw bytes bounded by `compressedSize`;
+   - pipes through its own `zlib.createInflateRaw()` (method 8; method 0 is copied as-is; other methods → `'skip'`), a counting + `zlib.crc32` transform, and an `fs.createWriteStream(part)`, all inside `stream.promises.pipeline(…, {signal})`;
+   - closes the zipfile in `finally`, and unlinks `.part` only after the pipeline has settled.
+
+   Tests use a real deflated member, with bounded settlement (each awaited within 2 s): abort mid-copy, oversize (inflated past the declared size), and write failure (a destination dir removed mid-copy).
+
+3. **Integrity = size AND CRC32.** The copy computes `zlib.crc32` incrementally. Before the rename it requires `count === size && crc === entry.crc32`; otherwise `'corrupt'`. Test: a stored member whose central-directory sizes were reduced while the payload and CRC were kept (raw zip bytes built by hand) → `'corrupt'`. Stated limit: an internally consistent, deliberately shortened archive cannot be detected.
+4. **Progress-aware failure.** `extractMember` returns `'ok' | 'nospace' | 'corrupt' | 'mismatch'` and throws on I/O errors and aborts.
+   - Before any inner progress (`nested.inner === null && nested.items === 0`): `'nospace'` and `'corrupt'` set `skip` (the member becomes name-only).
+   - After progress: `'nospace'` and I/O errors keep the record and set `notBefore = now + 60 s`, counting no attempt; `'corrupt'` and `'mismatch'` restart the full path (which archives the partial children).
+   - An abort never changes the record.
+   - Test: scratch deleted after inner progress, with a failing disk guard → deferred, not name-only.
+5. **Scratch identity includes the entry.** `scratchName = sha1(zipPath + '\0' + member + '\0' + cd + '\0' + crc32) + '.' + kind`. `replaceRecord` compares the full `{member, cd, crc32}`, so a second entry with the same name never pages the first one's file. The test fixture is a hand-built zip with two `mail.mbox` entries (JSZip overwrites duplicates).
+6. **Outer budget rules.**
+   - The inner `items` is `min(budget.items - items.length, MAX_ZIP_CHILDREN - children)`, and inner `bytes` and `ms` are the remainders.
+   - After an inner call (completed or not), the page returns as soon as any budget is exhausted. It never calls another pager, and never processes another ordinary member, with an exhausted budget.
+   - Reaching `MAX_ZIP_CHILDREN` ends the walk with the "first …" summary.
+   - Tests: a nested→ordinary transition on a full page; the global cap reached mid-member.
+7. **Bounded summary history.** `nestedLines` holds at most 50 entries. Beyond that the pager only counts them, as `nestedOmitted`, and the summary appends `…and N more` (the same shape as `HEAD_NAMES`).
+8. **Measurement.** The Task 4 gate also measures main-side extraction: RSS, `perf_hooks.monitorEventLoopDelay` p99, and abort latency during a 2 GB deflated copy, under Electron-as-node (`ELECTRON_RUN_AS_NODE=1`).
