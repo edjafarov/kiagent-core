@@ -211,7 +211,11 @@ export async function* walkPaths(
       let isFile = dirent.isFile();
       if (typeUnknown(dirent)) {
         // eslint-disable-next-line no-await-in-loop
-        const st = await fs.promises.lstat(absPath).catch(() => null);
+        const st = await fs.promises.lstat(absPath).catch(() => {
+          // Possibly a directory: its subtree is unseen.
+          if (trouble) trouble.incomplete = true;
+          return null;
+        });
         isDir = st?.isDirectory() ?? false;
         isFile = st?.isFile() ?? false;
       }
