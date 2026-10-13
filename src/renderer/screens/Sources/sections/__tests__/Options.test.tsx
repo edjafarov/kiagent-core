@@ -96,3 +96,32 @@ test('an error reverts the toggle and shows the message', async () => {
     'Finishing the current sync step — try again in a moment',
   );
 });
+
+test('a successful write keeps the new value until the account prop catches up, then follows the prop', async () => {
+  const { rerender } = render(
+    <Options account={account()} descriptor={descriptor} />,
+  );
+  const sw = screen.getByRole('switch', { name: 'Skip subagent sessions' });
+  await act(async () => {
+    fireEvent.click(sw);
+  });
+  // Saved, but the throttled account push has not arrived: no snap-back.
+  expect(sw).not.toBeDisabled();
+  expect(sw).toHaveAttribute('aria-checked', 'false');
+  // The push arrives with the saved value.
+  rerender(
+    <Options
+      account={account({ options: { skipSubagents: false } })}
+      descriptor={descriptor}
+    />,
+  );
+  expect(sw).toHaveAttribute('aria-checked', 'false');
+  // Later the stored value changes elsewhere: the card follows the prop.
+  rerender(
+    <Options
+      account={account({ options: { skipSubagents: true } })}
+      descriptor={descriptor}
+    />,
+  );
+  expect(sw).toHaveAttribute('aria-checked', 'true');
+});
