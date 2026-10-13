@@ -1240,6 +1240,7 @@ app
     const bundledRefreshers = registerBundledSources(
       (s) => p.sources.register(s),
       broker,
+      p.converter,
     );
     for (const [sourceId, refresher] of bundledRefreshers)
       p.refreshers.set(sourceId, refresher);

@@ -1,10 +1,31 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { decideFileIndexing } from '@shared/file-indexability';
+
 import { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
-import { decideLocalFile, isIngestible } from './ingestible';
+import {
+  containerKindOf,
+  type ContainerKind,
+} from '../../core/converter/containers/types';
+import { decideLocalFile, isIngestible, localCandidate } from './ingestible';
 import { resolvePathMime } from './mime';
 import type { LocalFileItem } from './to-document';
+
+/** The container kind of a local path the policy routes to `container`,
+ *  else null. */
+export function containerOf(absPath: string): ContainerKind | null {
+  const candidate = localCandidate(absPath);
+  const d = decideFileIndexing(candidate);
+  if (d.kind !== 'index' || d.pipeline !== 'container') return null;
+  return containerKindOf(candidate.filename, candidate.mime ?? '');
+}
+
+/** `buildItem`'s answer for a container file: no document and no read —
+ *  the source records it for expansion instead. */
+export interface ContainerMarker {
+  container: ContainerKind;
+}
 
 /** ~50 files per yielded Batch — matches the porting brief's chunk size. */
 export const BATCH_SIZE = 50;
@@ -268,6 +289,7 @@ export function toAbsPosix(absPath: string): string {
  * Routes on `decideLocalFile`'s pipeline (size-aware — the same decision
  * `walkRoot` already applied at enumeration, recomputed here because a
  * watcher event calls this directly without going through `walkRoot`):
+ *  - `container` → a `ContainerMarker` (see expansion.ts); nothing read.
  *  - `ignore` → `null`. `unsupported` and `too-large` are no longer document
  *    outcomes — a file this policy rejects produces no row at all, not a
  *    metadata-only one.
@@ -301,9 +323,13 @@ export function toAbsPosix(absPath: string): string {
 export async function buildItem(
   absPath: string,
   stats: fs.Stats,
-): Promise<LocalFileItem | null> {
+): Promise<LocalFileItem | ContainerMarker | null> {
   const decision = decideLocalFile(absPath, stats.size);
   if (decision.kind === 'ignore') return null;
+  if (decision.pipeline === 'container') {
+    const kind = containerOf(absPath);
+    return kind ? { container: kind } : null;
+  }
 
   const externalId = toAbsPosix(absPath);
   const ext = path.extname(absPath).slice(1).toLowerCase();

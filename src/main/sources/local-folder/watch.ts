@@ -2,16 +2,10 @@ import fs from 'node:fs';
 
 import chokidar from 'chokidar';
 
-import type { Batch, ExternalRef, Session } from '@shared/contracts';
-import { isUnder } from '@shared/folder-paths';
-
 import { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
 import { isIngestible } from './ingestible';
-import { buildItem, toAbsPosix } from './scanner';
-import { advanceCursor, type LocalFolderCursor } from './cursor';
-import type { LocalFolderItem } from './to-document';
 
-type FsEvent =
+export type FsEvent =
   | { kind: 'add' | 'change'; absPath: string }
   | { kind: 'unlink'; absPath: string };
 
@@ -49,7 +43,7 @@ export function isSymlink(absPath: string): boolean {
 /** The watcher's enumeration rules. Exported so the parity test can drive a
  *  real chokidar with the SAME object this ships — a test that restated the
  *  options would pass while the shipped ones drifted. `ignoreInitial` is NOT
- *  here: it is a watchLoop concern, and the parity check needs the initial
+ *  here: it is a startWatcher concern, and the parity check needs the initial
  *  walk it suppresses. */
 export const WATCH_ENUMERATION_OPTIONS: chokidar.WatchOptions = {
   ignored: [...DEFAULT_EXCLUDE_GLOBS, isSymlink],
@@ -61,47 +55,38 @@ export const WATCH_ENUMERATION_OPTIONS: chokidar.WatchOptions = {
 /**
  * The ongoing "delta" for local-folder: kiagent-ref has
  * `supportsDelta: false` and relies entirely on a chokidar watcher for live
- * updates (kiagent-ref instance.ts:86-105); this translates the same
- * add/change/unlink events into per-event Batches. Runs until
- * `session.signal` aborts, at which point the watcher is closed and the
- * generator returns cleanly — the engine drives this via its `abortable()`
- * wrapper, which calls the generator's `return()` the moment the signal
- * fires (src/main/core/engine/engine.ts).
+ * updates (kiagent-ref instance.ts:86-105). One watcher covers every
+ * configured root (chokidar takes an array of paths natively).
  *
- * One watcher instance covers every configured root — chokidar accepts an
- * array of paths natively, so multi-root add/change/unlink is a single
- * subscription rather than N.
- *
- * `startCursor` is the fully-caught-up snapshot handed off by `pull()` once
- * every root's backfill/incremental pass has completed. Each live event
- * advances ONLY the entry for the root the changed path falls under (via
- * `advanceCursor`) — every other root's watermark is carried over untouched,
- * so a restart mid-watch resumes each root from its own last-known-good
- * point instead of re-backfilling everything (which a naive `cursor: null`
- * here would force, by erasing every root's state at once).
+ * The watcher only QUEUES events; `pull()` drains them (see its driving
+ * loop) one at a time, alternating with container expansion steps. It is
+ * started BEFORE the backfill/rescan: it runs with `ignoreInitial`, so one
+ * started after a long expansion would miss everything changed meanwhile.
+ * Events that arrive during the scan re-emit a file the scan may already
+ * have emitted — harmless, the store's same-hash short-circuit absorbs it.
  */
-export async function* watchLoop(
+export interface Watcher {
+  /** The oldest queued event, or undefined. */
+  take(): FsEvent | undefined;
+  /** Resolves on the next event, after `ms` (when given), or on abort. */
+  wait(ms?: number): Promise<void>;
+  close(): Promise<void>;
+}
+
+export function startWatcher(
   rootPaths: string[],
-  session: Session,
-  startCursor: LocalFolderCursor,
-): AsyncGenerator<Batch<LocalFolderCursor, LocalFolderItem>> {
+  signal: AbortSignal,
+): Watcher {
   const watcher = chokidar.watch(rootPaths, {
     ...WATCH_ENUMERATION_OPTIONS,
     ignoreInitial: true,
   });
-  let cursor = startCursor;
-  const rootOf = (absPath: string): string | undefined =>
-    rootPaths.find((root) => isUnder(absPath, root));
-
   const queue: FsEvent[] = [];
   let wake: (() => void) | null = null;
-  const enqueue = (e: FsEvent): void => {
-    queue.push(e);
-    if (wake) {
-      const w = wake;
-      wake = null;
-      w();
-    }
+  const fire = (): void => {
+    const w = wake;
+    wake = null;
+    w?.();
   };
   // The type allowlist is applied HERE, at the event, not in chokidar's
   // `ignored`: `ignored` is consulted for directories too, and a directory has
@@ -115,89 +100,31 @@ export async function* watchLoop(
   // to the scanner's (`walkPaths`), which is the invariant reconcile depends on.
   const onEvent = (kind: FsEvent['kind']) => (p: string) => {
     if (!isIngestible(p)) return;
-    enqueue({ kind, absPath: p } as FsEvent);
+    queue.push({ kind, absPath: p });
+    fire();
   };
   watcher.on('add', onEvent('add'));
   watcher.on('change', onEvent('change'));
   watcher.on('unlink', onEvent('unlink'));
+  signal.addEventListener('abort', fire, { once: true });
 
-  const aborted = new Promise<void>((resolve) => {
-    if (session.signal.aborted) resolve();
-    else
-      session.signal.addEventListener('abort', () => resolve(), { once: true });
-  });
-
-  try {
-    for (;;) {
-      if (session.signal.aborted) return;
-      if (queue.length === 0) {
-        // eslint-disable-next-line no-await-in-loop
-        await Promise.race([
-          new Promise<void>((resolve) => {
-            wake = resolve;
-          }),
-          aborted,
-        ]);
-        if (session.signal.aborted) return;
-        continue;
-      }
-      const ev = queue.shift();
-      if (!ev) continue;
-
-      if (ev.kind === 'unlink') {
-        const deletions: ExternalRef[] = [
-          { externalId: toAbsPosix(ev.absPath), type: 'file' },
-        ];
-        const root = rootOf(ev.absPath);
-        if (root)
-          cursor = advanceCursor(cursor, root, new Date().toISOString());
-        yield {
-          phase: 'live',
-          items: [],
-          deletions,
-          cursor,
-        };
-        continue;
-      }
-
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const stats = await fs.promises.stat(ev.absPath);
-        // eslint-disable-next-line no-await-in-loop
-        const item = await buildItem(ev.absPath, stats);
-        const root = rootOf(ev.absPath);
-        if (root)
-          cursor = advanceCursor(cursor, root, new Date().toISOString());
-        // `buildItem` is null when the policy check it recomputes from the
-        // fresh stat — including size, which `onEvent`'s path-only pre-filter
-        // above could not see — now says `ignore` (or the read/sniff failed).
-        // A file that passed the coarse pre-filter but fails here must
-        // archive any older row at this path rather than leave it stale.
-        //
-        // `root` is `undefined` when the path falls under no configured root
-        // (an event arriving after a root left the config, a resolution
-        // landing outside every root). That item is STILL yielded — unchanged
-        // behaviour — now simply without `scopeRootId`, which the store
-        // records as `scope_root_id = NULL` (DECISIONS R5). Never a throw,
-        // and no warn here: the engine emits the single warn at store time.
-        yield item
-          ? {
-              phase: 'live',
-              items: [root ? { ...item, scopeRootId: root } : item],
-              cursor,
-            }
-          : {
-              phase: 'live',
-              items: [],
-              deletions: [{ externalId: toAbsPosix(ev.absPath), type: 'file' }],
-              cursor,
+  return {
+    take: () => queue.shift(),
+    wait: (ms) =>
+      queue.length > 0 || signal.aborted
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            const timer =
+              ms === undefined ? undefined : setTimeout(fire, Math.max(0, ms));
+            wake = () => {
+              if (timer) clearTimeout(timer);
+              resolve();
             };
-      } catch {
-        // File vanished between the fs event and the stat — a matching
-        // unlink event will follow if it was really removed; skip for now.
-      }
-    }
-  } finally {
-    await watcher.close();
-  }
+          }),
+    close: async () => {
+      signal.removeEventListener('abort', fire);
+      fire();
+      await watcher.close();
+    },
+  };
 }

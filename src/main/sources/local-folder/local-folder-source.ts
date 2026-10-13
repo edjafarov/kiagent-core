@@ -16,7 +16,23 @@ import type {
 import { isUnder } from '@shared/folder-paths';
 
 import { FILE_POLICY_VERSION, newlyAdmitted } from '@shared/file-indexability';
-import { advanceCursor, type LocalFolderCursor } from './cursor';
+
+import {
+  createInlineConverter,
+  type Converter,
+} from '../../core/converter/converter';
+import {
+  advanceCursor,
+  type Expansion,
+  type LocalFolderCursor,
+  type PendingExpansion,
+} from './cursor';
+import {
+  expansionStep,
+  nextDue,
+  nextPending,
+  noteContainer,
+} from './expansion';
 import {
   folderScopedConfig,
   readFolderRoots,
@@ -24,13 +40,13 @@ import {
   validateFolderRoots,
 } from './folder-roots';
 import { folderPickerSpec, selectionNodes } from './picker';
-import { decideLocalFile } from './ingestible';
-import { resolvePathMime } from './mime';
+import { decideLocalFile, localCandidate } from './ingestible';
 import {
   BATCH_SIZE,
   MAX_BATCH_READ_BYTES,
   buildItem,
   chunkBySize,
+  containerOf,
   entryReadCost,
   toAbsPosix,
   walkPaths,
@@ -38,7 +54,7 @@ import {
   type ScannedEntry,
 } from './scanner';
 import { toDocument, type LocalFolderItem } from './to-document';
-import { watchLoop } from './watch';
+import { startWatcher, type FsEvent } from './watch';
 
 export const descriptor: SourceDescriptor = {
   id: 'local-folder',
@@ -46,7 +62,9 @@ export const descriptor: SourceDescriptor = {
   // files' (kiagent-ref index.ts:106) — kept verbatim per the porting brief's
   // "adjust name to match legacy naming if different".
   name: 'Local files',
-  documentTypes: ['file'],
+  // Container children (spec B): mbox messages, vCards, Evernote notes;
+  // ZIP members are `file`.
+  documentTypes: ['file', 'email.message', 'contact.card', 'note'],
   auth: 'none',
   multiAccount: true,
   cadence: { every: '30m' },
@@ -162,7 +180,13 @@ function pruneToConfiguredRoots(
   for (const [root, entry] of Object.entries(cursor.roots)) {
     if (configured.has(root)) roots[root] = entry;
   }
-  return { ...cursor, roots };
+  if (!cursor.expansions) return { ...cursor, roots };
+  // A container under no configured root is out of scope: its documents are
+  // archived through `scopeRootId`; re-adding the folder re-expands it.
+  const expansions: Record<string, Expansion> = {};
+  for (const [id, rec] of Object.entries(cursor.expansions))
+    if (rootPaths.some((root) => isUnder(id, root))) expansions[id] = rec;
+  return withExpansions({ ...cursor, roots }, expansions);
 }
 
 /** Whether `pruneToConfiguredRoots` actually dropped one or more entries
@@ -174,7 +198,9 @@ function prunedSomething(
   after: LocalFolderCursor,
 ): boolean {
   if (before === null || after === null) return false;
-  return Object.keys(after.roots).length < Object.keys(before.roots).length;
+  const count = (c: NonNullable<LocalFolderCursor>) =>
+    Object.keys(c.roots).length + Object.keys(c.expansions ?? {}).length;
+  return count(after) < count(before);
 }
 
 /**
@@ -189,6 +215,7 @@ function prunedSomething(
 async function buildBatch(
   entries: readonly ScannedEntry[],
   scopeRootId: string,
+  exps: Record<string, Expansion>,
 ): Promise<{ items: LocalFolderItem[]; deletions: ExternalRef[] }> {
   const built = await Promise.all(
     entries.map((e) => buildItem(e.absPath, e.stats)),
@@ -196,14 +223,49 @@ async function buildBatch(
   const items: LocalFolderItem[] = [];
   const deletions: ExternalRef[] = [];
   built.forEach((item, index) => {
-    if (item) items.push({ ...item, scopeRootId });
-    else
-      deletions.push({
-        externalId: toAbsPosix(entries[index].absPath),
-        type: 'file',
+    const { absPath, stats } = entries[index];
+    const externalId = toAbsPosix(absPath);
+    // A container is never an item here: the expander writes its row.
+    if (item && 'container' in item)
+      exps[externalId] = noteContainer(exps[externalId], item.container, {
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
       });
+    else if (item) items.push({ ...item, scopeRootId });
+    else deletions.push({ externalId, type: 'file' });
   });
   return { items, deletions };
+}
+
+/** Every batch's cursor carries the expansion records as they stand when
+ *  it is yielded (the Source contract: each cursor is a full snapshot). */
+function withExpansions(
+  cursor: LocalFolderCursor,
+  exps: Record<string, Expansion>,
+): LocalFolderCursor {
+  if (Object.keys(exps).length > 0)
+    return { roots: {}, ...cursor, expansions: { ...exps } };
+  // No containers: the cursor keeps its pre-container shape.
+  if (cursor === null || !('expansions' in cursor)) return cursor;
+  const { expansions: _none, ...rest } = cursor;
+  return rest;
+}
+
+/** Records under `root` the walk that just finished did not visit: the
+ *  container left (deleted, renamed, or no longer admitted). Dropped, and
+ *  its row deleted — which archives its children too. */
+function dropUnvisited(
+  root: string,
+  visited: ReadonlySet<string>,
+  exps: Record<string, Expansion>,
+): ExternalRef[] {
+  const gone: ExternalRef[] = [];
+  for (const id of Object.keys(exps))
+    if (!visited.has(id) && isUnder(id, root)) {
+      delete exps[id];
+      gone.push({ externalId: id, type: 'file' });
+    }
+  return gone;
 }
 
 /** Each item paired with whether it is the last one, pulling ONE item
@@ -246,21 +308,45 @@ async function* backfillRoot(
   scanStartIso: string,
   estimateTotal: number,
   working: LocalFolderCursor,
+  exps: Record<string, Expansion>,
 ): AsyncGenerator<
   Batch<LocalFolderCursor, LocalFolderItem>,
   LocalFolderCursor
 > {
   let cursor = working;
   let yielded = false;
-  for await (const { value: entries, last } of batchesOf(walkRoot(root))) {
-    const { items, deletions } = await buildBatch(entries, root);
+  const visited = new Set<string>();
+  async function* seen(): AsyncGenerator<ScannedEntry> {
+    for await (const e of walkRoot(root)) {
+      visited.add(toAbsPosix(e.absPath));
+      yield e;
+    }
+  }
+  for await (const { value: entries, last } of batchesOf(seen())) {
+    const built = await buildBatch(entries, root, exps);
+    const deletions = last
+      ? [...built.deletions, ...dropUnvisited(root, visited, exps)]
+      : built.deletions;
     if (last) cursor = advanceCursor(cursor, root, scanStartIso);
-    yield { phase: 'backfill', items, deletions, cursor, estimateTotal };
+    yield {
+      phase: 'backfill',
+      items: built.items,
+      deletions,
+      cursor: withExpansions(cursor, exps),
+      estimateTotal,
+    };
     yielded = true;
   }
   if (!yielded) {
+    const deletions = dropUnvisited(root, visited, exps);
     cursor = advanceCursor(cursor, root, scanStartIso);
-    yield { phase: 'backfill', items: [], cursor, estimateTotal };
+    yield {
+      phase: 'backfill',
+      items: [],
+      ...(deletions.length > 0 ? { deletions } : {}),
+      cursor: withExpansions(cursor, exps),
+      estimateTotal,
+    };
   }
   return cursor;
 }
@@ -293,13 +379,26 @@ async function* incrementalRescanRoot(
   rescanStartIso: string,
   working: LocalFolderCursor,
   fromVersion: number,
+  exps: Record<string, Expansion>,
 ): AsyncGenerator<
   Batch<LocalFolderCursor, LocalFolderItem>,
   LocalFolderCursor
 > {
   const sinceMs = Date.parse(since.completedAt);
+  const visited = new Set<string>();
   async function* changed(): AsyncGenerator<ScannedEntry> {
     for await (const e of walkRoot(root)) {
+      // Containers are inspected on every rescan, watermark or not: the
+      // record decides (an mbox's mtime moves on every flag change, and an
+      // outdated expander version re-expands). Unchanged → not yielded.
+      const kind = containerOf(e.absPath);
+      if (kind) {
+        const id = toAbsPosix(e.absPath);
+        visited.add(id);
+        const at = { size: e.stats.size, mtimeMs: e.stats.mtimeMs };
+        if (noteContainer(exps[id], kind, at) !== exps[id]) yield e;
+        continue;
+      }
       const touched =
         Math.max(e.stats.mtime.getTime(), e.stats.ctime.getTime()) > sinceMs;
       // After a FILE_POLICY_VERSION bump, also files the previous policy
@@ -308,32 +407,57 @@ async function* incrementalRescanRoot(
       // re-parse them in main.
       if (
         touched ||
-        newlyAdmitted(
-          {
-            profile: 'local-folder',
-            filename: path.basename(e.absPath),
-            mime: resolvePathMime(e.absPath),
-            sizeBytes: e.stats.size,
-            path: e.absPath,
-          },
-          fromVersion,
-        )
+        newlyAdmitted(localCandidate(e.absPath, e.stats.size), fromVersion)
       )
         yield e;
     }
   }
   let cursor = working;
+  let yielded = false;
   for await (const { value: entries, last } of batchesOf(changed())) {
-    const { items, deletions } = await buildBatch(entries, root);
+    const built = await buildBatch(entries, root, exps);
+    const deletions = last
+      ? [...built.deletions, ...dropUnvisited(root, visited, exps)]
+      : built.deletions;
     if (last) cursor = advanceCursor(working, root, rescanStartIso);
-    yield { phase: 'live', items, deletions, cursor };
+    yield {
+      phase: 'live',
+      items: built.items,
+      deletions,
+      cursor: withExpansions(cursor, exps),
+    };
+    yielded = true;
+  }
+  if (!yielded) {
+    const deletions = dropUnvisited(root, visited, exps);
+    if (deletions.length > 0)
+      yield {
+        phase: 'live',
+        items: [],
+        deletions,
+        cursor: withExpansions(cursor, exps),
+      };
   }
   return cursor;
+}
+
+export interface LocalFolderDeps {
+  /** The platform converter; containers are expanded through its paged
+   *  `expandPage` op (in the crash-isolated child in the app). */
+  converter: Pick<Converter, 'expandPage'>;
+}
+
+let inlineDeps: LocalFolderDeps | null = null;
+/** For `localFolderSource` (tests, tools): the in-process converter. */
+function defaultDeps(): LocalFolderDeps {
+  inlineDeps ??= { converter: createInlineConverter() };
+  return inlineDeps;
 }
 
 export async function* pull(
   session: Session,
   cursor: LocalFolderCursor | null,
+  deps: LocalFolderDeps = defaultDeps(),
 ): AsyncIterable<Batch<LocalFolderCursor, LocalFolderItem>> {
   const rootPaths = getRootPaths(session.account);
   // Both branches of the per-root loop need this guard, not just backfill:
@@ -341,83 +465,234 @@ export async function* pull(
   // not silently no-op (see assertRootsAvailable).
   await assertRootsAvailable(rootPaths);
   let working = pruneToConfiguredRoots(cursor, rootPaths);
-
-  // If a root was just dropped from config, the prune above only lives in
-  // this in-memory `working` cursor until SOME batch commits it. The
-  // per-root loop below yields nothing at all when every surviving root is
-  // quiet (an incremental rescan with no changes returns without yielding) —
-  // so without this, the prune would silently vanish for the whole cycle,
-  // the on-disk cursor would keep the removed root's stale `{ completedAt }`
-  // entry, and re-adding that root later would wrongly take the incremental
-  // path against that stale watermark instead of backfilling (see the
-  // engine's reconcilePass, which even re-persists that stale cursor
-  // verbatim once it archives the removed root's now-unlisted documents).
-  // Yielding an immediate cursor-only batch — same phase as an ordinary
-  // steady-state rescan, no items, no estimateTotal — guarantees the prune
-  // commits in THIS cycle regardless of what the per-root loop does.
-  if (prunedSomething(cursor, working)) {
-    yield { phase: 'live', items: [], cursor: working };
+  /** Container expansion records — mutated by the scan, the events and the
+   *  expansion steps, stamped onto every yielded cursor. */
+  const exps: Record<string, Expansion> = { ...(working?.expansions ?? {}) };
+  // Started BEFORE any scan or expansion work (see startWatcher).
+  const watcher =
+    isWatchEnabled(session.account) && !session.signal.aborted
+      ? startWatcher(rootPaths, session.signal)
+      : null;
+  try {
+    yield* scanThenDrive();
+  } finally {
+    await watcher?.close();
   }
 
-  // Backfill batches report the whole-account file count as
-  // `estimateTotal`: the engine accumulates `done` across every root (seeded
-  // with the documents already indexed), so against a per-root estimate the
-  // progress line read "242 / ~107 (100%)" as soon as a second root started.
-  // A count-only walk of every root comes first — paths only, no stat and
-  // nothing kept, so it costs one readdir pass and over-counts only files a
-  // size cap will drop — and only when some root backfills; nothing else
-  // reads the estimate. The timestamp is captured BEFORE any walk so a
-  // root's eventual `{ completedAt }` stamp can never postdate its own scan.
-  const scanStartIso = new Date().toISOString();
-  let estimateTotal = 0;
-  if (rootPaths.some((root) => !working?.roots?.[root])) {
-    for (const root of rootPaths) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-await-in-loop
-      for await (const _path of walkPaths(root)) {
-        if (session.signal.aborted) return;
-        estimateTotal += 1;
+  async function* scanThenDrive(): AsyncGenerator<
+    Batch<LocalFolderCursor, LocalFolderItem>
+  > {
+    // If a root was just dropped from config, the prune above only lives in
+    // this in-memory `working` cursor until SOME batch commits it. The
+    // per-root loop below yields nothing at all when every surviving root is
+    // quiet (an incremental rescan with no changes returns without yielding) —
+    // so without this, the prune would silently vanish for the whole cycle,
+    // the on-disk cursor would keep the removed root's stale `{ completedAt }`
+    // entry, and re-adding that root later would wrongly take the incremental
+    // path against that stale watermark instead of backfilling (see the
+    // engine's reconcilePass, which even re-persists that stale cursor
+    // verbatim once it archives the removed root's now-unlisted documents).
+    // Yielding an immediate cursor-only batch — same phase as an ordinary
+    // steady-state rescan, no items, no estimateTotal — guarantees the prune
+    // commits in THIS cycle regardless of what the per-root loop does.
+    if (prunedSomething(cursor, working)) {
+      yield { phase: 'live', items: [], cursor: working };
+    }
+
+    // Backfill batches report the whole-account file count as
+    // `estimateTotal`: the engine accumulates `done` across every root (seeded
+    // with the documents already indexed), so against a per-root estimate the
+    // progress line read "242 / ~107 (100%)" as soon as a second root started.
+    // A count-only walk of every root comes first — paths only, no stat and
+    // nothing kept, so it costs one readdir pass and over-counts only files a
+    // size cap will drop — and only when some root backfills; nothing else
+    // reads the estimate. The timestamp is captured BEFORE any walk so a
+    // root's eventual `{ completedAt }` stamp can never postdate its own scan.
+    const scanStartIso = new Date().toISOString();
+    let estimateTotal = 0;
+    if (rootPaths.some((root) => !working?.roots?.[root])) {
+      for (const root of rootPaths) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-await-in-loop
+        for await (const _path of walkPaths(root)) {
+          if (session.signal.aborted) return;
+          estimateTotal += 1;
+        }
       }
     }
-  }
 
-  // Policy recovery rides the per-root rescan below; the stamp is applied
-  // only after EVERY root finished, so no intermediate batch persists it.
-  const fromVersion = working?.policyVersion ?? 1;
-  let didBackfill = false;
-  for (const root of rootPaths) {
-    const since = working?.roots?.[root];
-    if (!since) {
-      didBackfill = true;
-      working = yield* backfillRoot(root, scanStartIso, estimateTotal, working);
-    } else {
-      working = yield* incrementalRescanRoot(
-        root,
-        since,
-        scanStartIso,
-        working,
-        fromVersion,
-      );
+    // Policy recovery rides the per-root rescan below; the stamp is applied
+    // only after EVERY root finished, so no intermediate batch persists it.
+    const fromVersion = working?.policyVersion ?? 1;
+    let didBackfill = false;
+    for (const root of rootPaths) {
+      const since = working?.roots?.[root];
+      if (!since) {
+        didBackfill = true;
+        working = yield* backfillRoot(
+          root,
+          scanStartIso,
+          estimateTotal,
+          working,
+          exps,
+        );
+      } else {
+        working = yield* incrementalRescanRoot(
+          root,
+          since,
+          scanStartIso,
+          working,
+          fromVersion,
+          exps,
+        );
+      }
+    }
+
+    // A backfill's final batch is phase 'backfill' (→ status 'backfilling'),
+    // and the watch loop below commits nothing until a file actually changes —
+    // without this cursor-only live batch the account would sit on
+    // "Backfilling … (100%)" indefinitely after the walk finished. Gated on
+    // didBackfill so quiet steady-state cycles stay zero-commit. The same
+    // batch commits the FILE_POLICY_VERSION stamp after a policy recovery; a
+    // crash before it just repeats the cheap newly-admitted emission.
+    const stamp = didBackfill || fromVersion < FILE_POLICY_VERSION;
+    if (stamp) {
+      working = {
+        ...(working ?? { roots: {} }),
+        policyVersion: FILE_POLICY_VERSION,
+      };
+      yield { phase: 'live', items: [], cursor: withExpansions(working, exps) };
+    }
+
+    // The drive loop, steady state and initial drain alike: at most one
+    // watcher event, then at most one due expansion step; it waits only when
+    // neither can run. Ordinary indexing never queues behind a big container
+    // for more than one page.
+    const rootOf = (absPath: string): string | undefined =>
+      rootPaths.find((root) => isUnder(absPath, root));
+    for (;;) {
+      if (session.signal.aborted) return;
+      let progressed = false;
+      const ev = watcher?.take();
+      if (ev) {
+        progressed = true;
+        // eslint-disable-next-line no-await-in-loop
+        const batch = await eventBatch(ev, rootOf, working, exps);
+        if (batch) {
+          working = batch.cursor;
+          yield { ...batch, cursor: withExpansions(working, exps) };
+        }
+      }
+      const id = nextPending(exps, Date.now());
+      if (id) {
+        progressed = true;
+        // eslint-disable-next-line no-await-in-loop
+        const out = await expansionStep({
+          absPath: id,
+          rec: exps[id] as PendingExpansion,
+          scopeRootId: rootOf(id),
+          converter: deps.converter,
+          signal: session.signal,
+          now: Date.now(),
+        });
+        if (session.signal.aborted) return;
+        if (out.rec) exps[id] = out.rec;
+        else delete exps[id];
+        yield {
+          phase: 'live',
+          items: out.items,
+          ...(out.deletions.length > 0 ? { deletions: out.deletions } : {}),
+          cursor: withExpansions(working, exps),
+        };
+      }
+      if (progressed) continue;
+      // Nothing runnable. Without a watcher (tests, `watch: false`) the pull
+      // ends; deferred expansions resume next cycle.
+      if (!watcher) return;
+      const due = nextDue(exps);
+      // eslint-disable-next-line no-await-in-loop
+      await watcher.wait(due === null ? undefined : due - Date.now());
     }
   }
+}
 
-  // A backfill's final batch is phase 'backfill' (→ status 'backfilling'),
-  // and the watch loop below commits nothing until a file actually changes —
-  // without this cursor-only live batch the account would sit on
-  // "Backfilling … (100%)" indefinitely after the walk finished. Gated on
-  // didBackfill so quiet steady-state cycles stay zero-commit. The same
-  // batch commits the FILE_POLICY_VERSION stamp after a policy recovery; a
-  // crash before it just repeats the cheap newly-admitted emission.
-  const stamp = didBackfill || fromVersion < FILE_POLICY_VERSION;
-  if (stamp) {
-    working = {
-      ...(working ?? { roots: {} }),
-      policyVersion: FILE_POLICY_VERSION,
+/**
+ * One watcher event as a batch, or null when it commits nothing. Each live
+ * event advances ONLY the entry for the root the changed path falls under
+ * — every other root's watermark is carried over untouched, so a restart
+ * mid-watch resumes each root from its own last-known-good point.
+ *
+ * A container event updates its expansion record instead of building an
+ * item (the drive loop's next step writes it); a container unlink drops the
+ * record and deletes the row, which archives the children.
+ */
+async function eventBatch(
+  ev: FsEvent,
+  rootOf: (absPath: string) => string | undefined,
+  cursor: LocalFolderCursor,
+  exps: Record<string, Expansion>,
+): Promise<
+  | (Batch<LocalFolderCursor, LocalFolderItem> & { cursor: LocalFolderCursor })
+  | null
+> {
+  const externalId = toAbsPosix(ev.absPath);
+  const root = rootOf(ev.absPath);
+  const advanced = root
+    ? advanceCursor(cursor, root, new Date().toISOString())
+    : cursor;
+  if (ev.kind === 'unlink') {
+    delete exps[externalId];
+    return {
+      phase: 'live',
+      items: [],
+      deletions: [{ externalId, type: 'file' }],
+      cursor: advanced,
     };
-    yield { phase: 'live', items: [], cursor: working };
   }
-
-  if (session.signal.aborted || !isWatchEnabled(session.account)) return;
-  yield* watchLoop(rootPaths, session, working);
+  let item: Awaited<ReturnType<typeof buildItem>>;
+  let stats: fs.Stats;
+  try {
+    stats = await fs.promises.stat(ev.absPath);
+    item = await buildItem(ev.absPath, stats);
+  } catch {
+    // File vanished between the fs event and the stat — a matching unlink
+    // event will follow if it was really removed; skip for now.
+    return null;
+  }
+  if (item && 'container' in item) {
+    // Outside every root (R5's stray event): nothing to expand into.
+    if (!root) return null;
+    exps[externalId] = noteContainer(exps[externalId], item.container, {
+      size: stats.size,
+      mtimeMs: stats.mtimeMs,
+    });
+    return null;
+  }
+  // `buildItem` is null when the policy check it recomputes from the fresh
+  // stat — including size, which the watcher's path-only pre-filter could
+  // not see — now says `ignore` (or the read/sniff failed). A file that
+  // passed the coarse pre-filter but fails here must archive any older row
+  // at this path rather than leave it stale.
+  //
+  // `root` is `undefined` when the path falls under no configured root (an
+  // event arriving after a root left the config, a resolution landing
+  // outside every root). That item is STILL yielded — now simply without
+  // `scopeRootId`, which the store records as `scope_root_id = NULL`
+  // (DECISIONS R5). Never a throw, and no warn here: the engine emits the
+  // single warn at store time.
+  if (!item) {
+    delete exps[externalId];
+    return {
+      phase: 'live',
+      items: [],
+      deletions: [{ externalId, type: 'file' }],
+      cursor: advanced,
+    };
+  }
+  return {
+    phase: 'live',
+    items: [root ? { ...item, scopeRootId: root } : item],
+    cursor: advanced,
+  };
 }
 
 /** Guard: only ever read bytes for a path resolving inside ONE of the
@@ -561,10 +836,26 @@ export async function manageFolders(
   };
 }
 
+export function createLocalFolderSource(
+  deps: LocalFolderDeps,
+): Source<LocalFolderCursor, LocalFolderItem> {
+  return {
+    descriptor,
+    connect,
+    pull: (session, cursor) => pull(session, cursor, deps),
+    toDocument,
+    fetchBytes,
+    reconcile,
+    manageFolders,
+  };
+}
+
+/** Built with the in-process converter — tests and tools. The app
+ *  registers `createLocalFolderSource({ converter })` (sources/index.ts). */
 export const localFolderSource: Source<LocalFolderCursor, LocalFolderItem> = {
   descriptor,
   connect,
-  pull,
+  pull: (session, cursor) => pull(session, cursor),
   toDocument,
   fetchBytes,
   reconcile,

@@ -16,6 +16,7 @@ import path from 'node:path';
 
 import { DEFAULT_EXCLUDE_GLOBS } from '../exclude-globs';
 import { isIngestible } from '../ingestible';
+import type { LocalFileItem } from '../to-document';
 import {
   BATCH_SIZE,
   MAX_BATCH_READ_BYTES,
@@ -101,7 +102,7 @@ describe('the local PDF ladder — eager, deferred, name-only', () => {
     const entries = await listEntries(dir);
     expect(entries.map((e) => e.absPath)).toEqual([p]);
 
-    const item = await buildItem(p, entry.stats);
+    const item = (await buildItem(p, entry.stats)) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.binary).not.toBeNull();
   });
@@ -116,7 +117,7 @@ describe('the local PDF ladder — eager, deferred, name-only', () => {
     const entries = await listEntries(dir);
     expect(entries.map((e) => e.absPath)).toEqual([p]);
 
-    const item = await buildItem(p, entry.stats);
+    const item = (await buildItem(p, entry.stats)) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.markdownText).toBeNull();
     expect(item!.binary).toBeNull();
@@ -132,7 +133,7 @@ describe('the local PDF ladder — eager, deferred, name-only', () => {
     const entries = await listEntries(dir);
     expect(entries.map((e) => e.absPath)).toEqual([p]);
 
-    const item = await buildItem(p, entry.stats);
+    const item = (await buildItem(p, entry.stats)) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.binary).toBeNull();
     expect(item!.markdownText).toBeNull();
@@ -144,7 +145,7 @@ describe('buildItem honours bytes', () => {
   it('a 30 MiB pdf is metadata-only (no eager read)', async () => {
     const dir = mkTmpDir();
     const p = sparseFile(dir, 'big.pdf', 30 * 1024 * 1024);
-    const item = await buildItem(p, fs.statSync(p));
+    const item = (await buildItem(p, fs.statSync(p))) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.binary).toBeNull();
     expect(item!.markdownText).toBeNull();
@@ -153,14 +154,14 @@ describe('buildItem honours bytes', () => {
   it('a 150 MiB pdf still yields a row', async () => {
     const dir = mkTmpDir();
     const p = sparseFile(dir, 'huge.pdf', 150 * 1024 * 1024);
-    const item = await buildItem(p, fs.statSync(p));
+    const item = (await buildItem(p, fs.statSync(p))) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.binary).toBeNull();
   });
   it('a text file over the inline cap is a name-only row, never read', async () => {
     const dir = mkTmpDir();
     const p = sparseFile(dir, 'big.log', 3 * 1024 * 1024);
-    const item = await buildItem(p, fs.statSync(p));
+    const item = (await buildItem(p, fs.statSync(p))) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.markdownText).toBeNull();
   });

@@ -471,7 +471,12 @@ describe('archives are denied on both profiles, at every extension and mime', ()
             sizeBytes: 1,
             path: `/d/payload.${ext}`,
           }),
-        ).toEqual({ kind: 'ignore', reason: 'archive' });
+        ).toEqual(
+          // A local ZIP is a container (policy v4), expanded by the source.
+          profile === 'local-folder' && ext === 'zip'
+            ? { kind: 'index', pipeline: 'container', bytes: 'none' }
+            : { kind: 'ignore', reason: 'archive' },
+        );
       });
     }
     for (const mime of ARCHIVE_MIMES) {
@@ -666,7 +671,7 @@ describe('newlyAdmitted', () => {
     expect(newlyAdmitted(local('notes.txt', 10), 1)).toBe(false);
   });
   it('never re-emits ignored files', () => {
-    expect(newlyAdmitted(local('a.zip', 10), 1)).toBe(false);
+    expect(newlyAdmitted(local('a.7z', 10), 1)).toBe(false);
   });
   it('is false once the cursor is current', () => {
     expect(
@@ -866,8 +871,7 @@ describe('policy v3: new single-file formats', () => {
     });
   });
 
-  it('the version is 3; a v2 cursor re-emits eager files of every newly admitted extension', () => {
-    expect(FILE_POLICY_VERSION).toBe(3);
+  it('a v2 cursor re-emits eager files of every extension admitted in v3', () => {
     for (const [name, mime] of NEW_LOCAL)
       expect(newlyAdmitted(local(name, mime), 2)).toBe(true);
     // RTF-only bodies parse since v3: local .msg files are re-read once.
@@ -886,5 +890,64 @@ describe('policy v3: new single-file formats', () => {
     expect(newlyAdmitted(local('m.msg', 'application/vnd.ms-outlook'), 1)).toBe(
       true,
     );
+  });
+});
+
+describe('policy v4: local containers', () => {
+  const container = { kind: 'index', pipeline: 'container', bytes: 'none' };
+  const local = (filename: string, mime: string, sizeBytes = 1000) => ({
+    profile: 'local-folder' as const,
+    filename,
+    mime,
+    sizeBytes,
+    path: `/r/${filename}`,
+  });
+  const cloud = (filename: string, mime: string) => ({
+    profile: 'cloud-drive' as const,
+    filename,
+    mime,
+    sizeBytes: 1000,
+  });
+
+  it.each([
+    ['a.mbox', 'application/mbox'],
+    ['a.mbox', 'application/octet-stream'],
+    ['a.zip', 'application/zip'],
+    ['a.vcf', 'text/vcard'],
+    ['a.enex', 'application/xml'],
+    ['Inbox', 'application/mbox'],
+  ])('local %s (%s) is a container at any size', (name, mime) => {
+    expect(decideFileIndexing(local(name, mime))).toEqual(container);
+    expect(decideFileIndexing(local(name, mime, 5 * 1024 ** 3))).toEqual(
+      container,
+    );
+  });
+
+  it('cloud keeps its pre-container routing', () => {
+    expect(decideFileIndexing(cloud('a.zip', 'application/zip'))).toEqual({
+      kind: 'ignore',
+      reason: 'archive',
+    });
+    for (const [name, mime] of [
+      ['a.vcf', 'text/vcard'],
+      ['a.mbox', 'application/mbox'],
+      ['a.enex', 'application/xml'],
+    ])
+      expect(decideFileIndexing(cloud(name, mime))).not.toMatchObject({
+        pipeline: 'container',
+      });
+  });
+
+  it('an extensionless local file without the mbox mime stays ignored', () => {
+    expect(
+      decideFileIndexing(local('Inbox', 'application/octet-stream')),
+    ).toEqual({ kind: 'ignore', reason: 'no-extension' });
+  });
+
+  it('the version is 4; a v3 cursor re-emits local containers once', () => {
+    expect(FILE_POLICY_VERSION).toBe(4);
+    expect(newlyAdmitted(local('a.mbox', 'application/mbox'), 3)).toBe(true);
+    expect(newlyAdmitted(local('a.vcf', 'text/vcard'), 3)).toBe(true);
+    expect(newlyAdmitted(local('a.mbox', 'application/mbox'), 4)).toBe(false);
   });
 });

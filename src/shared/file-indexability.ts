@@ -19,7 +19,14 @@
  */
 
 export type FileSourceProfile = 'local-folder' | 'cloud-drive';
-export type FilePipeline = 'inline-text' | 'converter' | 'vision' | 'audio';
+export type FilePipeline =
+  | 'inline-text'
+  | 'converter'
+  | 'vision'
+  | 'audio'
+  /** Local mailbox/archive/address-book/notebook files, expanded into child
+   *  documents by the local-folder source; read by path, never buffered. */
+  | 'container';
 export type FileIgnoreReason =
   | 'sensitive'
   | 'no-extension'
@@ -51,7 +58,7 @@ export const MAX_CLOUD_IMAGE_BYTES = 20 * 1024 * 1024; // vision would skip anyt
 export const MAX_FETCH_BYTES = 100 * 1024 * 1024;
 /** Bumped whenever a policy change makes previously IGNORED files
  *  indexable; each file source re-enumerates once on a mismatch. */
-export const FILE_POLICY_VERSION = 3;
+export const FILE_POLICY_VERSION = 4;
 /** Extensions first admitted at a given policy version (eager files the
  *  old policy ignored by TYPE, not size), plus any whose parser changed
  *  enough that already-indexed local files must be re-read once. */
@@ -69,7 +76,13 @@ export const ADMITTED_SINCE: Record<number, ReadonlySet<string>> = {
     // Not new, but re-read once: RTF-only Outlook bodies parse since v3.
     'msg',
   ]),
+  // Local containers (bytes:'none' rows re-emit on any bump anyway; listed
+  // so the version that admitted them is on record).
+  4: new Set(['mbox', 'zip', 'vcf', 'enex']),
 };
+
+/** Local files the local-folder source expands into child documents. */
+const CONTAINER_EXTENSIONS = new Set(['mbox', 'zip', 'vcf', 'enex']);
 
 // Verbatim from local-folder/ingestible.ts:22-23 and :31. `ingestible.ts`
 // re-exports the first as INGESTIBLE_DENY_RE, the name its test imports.
@@ -327,7 +340,15 @@ export function decideFileIndexing(c: FileIndexCandidate): FileIndexDecision {
   }
   // 2. Extensionless local files: sniffing content would defeat a gate whose
   //    whole point is being cheap at enumeration time.
-  if (local && !ext) return { kind: 'ignore', reason: 'no-extension' };
+  //    A Thunderbird mailbox (extensionless, `.msf` sibling) arrives with
+  //    `application/mbox` from the local adapter.
+  if (local && !ext && mime !== 'application/mbox')
+    return { kind: 'ignore', reason: 'no-extension' };
+  // 2b. Local containers, before the archive/text/converter steps would
+  //     claim `.zip`, `.vcf` and `application/mbox`. No size cap: they are
+  //     read by path, a page at a time.
+  if (local && (CONTAINER_EXTENSIONS.has(ext) || mime === 'application/mbox'))
+    return { kind: 'index', pipeline: 'container', bytes: 'none' };
   // 3. Archives, at every size, on both profiles. The extension test is the
   //    backstop for a generic or missing provider MIME.
   if (ARCHIVE_EXTENSIONS.has(ext) || ARCHIVE_MIMES.has(mime)) {

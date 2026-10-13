@@ -124,6 +124,21 @@ function makeSessionWithConfig(
 const fileItems = (b: { items: LocalFolderItem[] }): LocalFileItem[] =>
   b.items.filter((i): i is LocalFileItem => !('prebuilt' in i));
 
+/** `pullFn(session, null)` advanced past the scan of an empty root (its
+ *  backfill batch and the policy stamp), so the next `next()` waits on the
+ *  live watcher. */
+async function pastScan<B extends { cursor: unknown }>(
+  iter: AsyncIterable<B>,
+): Promise<AsyncIterator<B>> {
+  const it = iter[Symbol.asyncIterator]();
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await it.next();
+    if (r.done) throw new Error('pull ended during the scan');
+    if ((r.value.cursor as { policyVersion?: number }).policyVersion) return it;
+  }
+}
+
 async function collect<T>(iter: AsyncIterable<T>): Promise<T[]> {
   const out: T[] = [];
   for await (const v of iter) out.push(v);
@@ -728,10 +743,10 @@ describe('pull — strict indexability policy', () => {
     writeFile(dir, 'report.pdf', '%PDF-1.4 fixture');
     writeFile(dir, 'meeting.mp3', '0123456789');
     writeFile(dir, 'movie.mp4', '0123456789');
-    writeFile(dir, 'backup.zip', '0123456789');
+    writeFile(dir, 'backup.7z', '0123456789');
     // 26 MiB sparse file — an archive is ignored at every size, so this must
     // never be read regardless of the byte-budget chunker's caps.
-    const hugeZip = path.join(dir, 'huge.zip');
+    const hugeZip = path.join(dir, 'huge.7z');
     const fd = fs.openSync(hugeZip, 'w');
     fs.ftruncateSync(fd, 26 * 1024 * 1024);
     fs.closeSync(fd);
@@ -749,8 +764,8 @@ describe('pull — strict indexability policy', () => {
     );
 
     const readPaths = readFileSpy.mock.calls.map((c) => String(c[0]));
-    expect(readPaths.some((p) => p.endsWith('backup.zip'))).toBe(false);
-    expect(readPaths.some((p) => p.endsWith('huge.zip'))).toBe(false);
+    expect(readPaths.some((p) => p.endsWith('backup.7z'))).toBe(false);
+    expect(readPaths.some((p) => p.endsWith('huge.7z'))).toBe(false);
     expect(readPaths.some((p) => p.endsWith('unknown.scache'))).toBe(false);
 
     readFileSpy.mockRestore();
@@ -767,7 +782,7 @@ describe('buildItem — over-cap documents are name-only rows (nothing read)', (
       birthtime: new Date(),
     } as fs.Stats;
     const readFileSpy = jest.spyOn(fs.promises, 'readFile');
-    const item = await buildItem(abs, oversizedStats);
+    const item = (await buildItem(abs, oversizedStats)) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.markdownText).toBeNull();
     expect(item!.binary).toBeNull();
@@ -784,7 +799,7 @@ describe('buildItem — over-cap documents are name-only rows (nothing read)', (
       birthtime: new Date(),
     } as fs.Stats;
     const readFileSpy = jest.spyOn(fs.promises, 'readFile');
-    const item = await buildItem(abs, oversizedStats);
+    const item = (await buildItem(abs, oversizedStats)) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.markdownText).toBeNull();
     expect(item!.binary).toBeNull();
@@ -914,7 +929,7 @@ describe('reconcile', () => {
   it('excludes archives and unknown extensions from the ref set — no second gate, the walk alone decides this', async () => {
     const dir = mkTmpDir();
     writeFile(dir, 'notes.txt', 'kept');
-    writeFile(dir, 'backup.zip', 'excluded');
+    writeFile(dir, 'backup.7z', 'excluded');
     writeFile(dir, 'unknown.scache', 'excluded');
 
     const controller = new AbortController();
@@ -1007,7 +1022,7 @@ describe('chunk (scanner helper)', () => {
   });
 });
 
-describe('watchLoop', () => {
+describe('live watcher (pull after the scan)', () => {
   it('emits add/change/unlink as live batches with absolute externalIds, advancing the per-root cursor, and closes the watcher on abort', async () => {
     class FakeWatcher extends EventEmitter {
       closed = false;
@@ -1021,13 +1036,14 @@ describe('watchLoop', () => {
     jest.resetModules();
     jest.doMock('chokidar', () => ({ watch: jest.fn(() => fakeWatcher) }));
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { watchLoop } = require('../watch') as typeof import('../watch');
+    const { pull: livePull } =
+      require('../local-folder-source') as typeof import('../local-folder-source');
 
     const dir = mkTmpDir();
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, true);
 
-    const it = watchLoop([dir], session, null);
+    const it = await pastScan(livePull(session, null));
 
     const addPath = writeFile(dir, 'added.txt', 'hello');
     const expectedExternalId = toExternalId(addPath);
@@ -1072,13 +1088,13 @@ describe('watchLoop', () => {
   });
 });
 
-describe('watchLoop — a change event that fails the post-stat policy check', () => {
+describe('live watcher — a change event that fails the post-stat policy check', () => {
   it('indexes photo.jpg, then a change event on a file grown past the image cap archives it instead of leaving a stale row', async () => {
     // NOTE ON THE BRIEF: it describes this scenario as "rename/change [the
     // file] to an ignored archive candidate". That literal case is
-    // unreachable through watchLoop: onEvent's isIngestible(path) pre-filter
+    // unreachable through the watcher: onEvent's isIngestible(path) pre-filter
     // (watch.ts) denies archive EXTENSIONS unconditionally, for every event
-    // kind including 'add'/'change', so a renamed-to-.zip path never even
+    // kind including 'add'/'change', so a renamed-to-.7z path never even
     // reaches buildItem — emitting it would just hang this test. The
     // reachable equivalent — and the actual new code path this task adds —
     // is a file whose EXTENSION still passes that coarse pre-filter but
@@ -1098,7 +1114,8 @@ describe('watchLoop — a change event that fails the post-stat policy check', (
     jest.resetModules();
     jest.doMock('chokidar', () => ({ watch: jest.fn(() => fakeWatcher) }));
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { watchLoop } = require('../watch') as typeof import('../watch');
+    const { pull: livePull } =
+      require('../local-folder-source') as typeof import('../local-folder-source');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { MAX_LOCAL_IMAGE_BYTES } =
       require('@shared/file-indexability') as typeof import('@shared/file-indexability');
@@ -1106,7 +1123,7 @@ describe('watchLoop — a change event that fails the post-stat policy check', (
     const dir = mkTmpDir();
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, true);
-    const it = watchLoop([dir], session, null);
+    const it = await pastScan(livePull(session, null));
 
     const p = writeFile(dir, 'photo.jpg', 'hello');
     const expectedExternalId = toExternalId(p);
@@ -1207,7 +1224,7 @@ describe('ingestion allowlist parity (scanner vs watcher)', () => {
       'shadercache/000.bin',
       'Horos.noindex/scan.jpg',
       'save.eu5',
-      'archive.zip',
+      'archive.7z',
       '.env',
     ]) {
       fs.writeFileSync(path.join(dir, f), 'x');
@@ -1242,20 +1259,23 @@ describe('ingestion allowlist parity (scanner vs watcher)', () => {
 
   it('the watcher emits for exactly the files the scanner lists', async () => {
     const { walkRoot } = require('../scanner') as typeof import('../scanner');
-    const { watchLoop } = require('../watch') as typeof import('../watch');
+    const { startWatcher } = require('../watch') as typeof import('../watch');
     const { dir, ingestible } = mkMixedFixture();
 
-    // watchLoop runs with ignoreInitial, so drive it with LIVE events: start
-    // the loop over an empty dir, then create the same mix underneath it.
+    // The watcher runs with ignoreInitial, so drive it with LIVE events:
+    // start it over an empty dir, then create the same mix underneath it.
     const live = mkTmpDir();
     const ctl = new AbortController();
-    const session = { signal: ctl.signal } as unknown as Session;
+    const watcher = startWatcher([live], ctl.signal);
     const seen: string[] = [];
     const pump = (async () => {
-      for await (const batch of watchLoop([live], session, { roots: {} })) {
-        for (const item of fileItems(batch))
-          seen.push(item.externalId.slice(live.length));
+      while (!ctl.signal.aborted) {
+        for (let ev = watcher.take(); ev; ev = watcher.take())
+          seen.push(toExternalId(ev.absPath).slice(live.length));
+        // eslint-disable-next-line no-await-in-loop
+        await watcher.wait();
       }
+      await watcher.close();
     })();
 
     await sleep(600); // chokidar's initial walk of an empty dir
@@ -1271,7 +1291,7 @@ describe('ingestion allowlist parity (scanner vs watcher)', () => {
       'shadercache/000.bin',
       'Horos.noindex/scan.jpg',
       'save.eu5',
-      'archive.zip',
+      'archive.7z',
       '.env',
     ]) {
       fs.writeFileSync(path.join(live, f), 'x');
@@ -1469,13 +1489,13 @@ describe('manageFolders', () => {
     // Spec invariant 15 (DECISIONS A-10). Adding a folder widens SCOPE; it
     // never widens what is ingestible. The junk types mirror the proven
     // fixture in `pull — strict indexability policy`
-    // (local-folder-source.test.ts:645-677): .zip is ignored at every size,
+    // (local-folder-source.test.ts:645-677): .7z is ignored at every size,
     // .scache has no pipeline at all.
     const dirA = mkTmpDir();
     const dirC = mkTmpDir();
     writeFile(dirA, 'a.txt', 'a');
     writeFile(dirC, 'notes.txt', 'indexable');
-    writeFile(dirC, 'backup.zip', '0123456789');
+    writeFile(dirC, 'backup.7z', '0123456789');
     writeFile(dirC, 'unknown.scache', '0123456789');
     await sleep(20);
 
@@ -1587,7 +1607,7 @@ describe('scopeRootId attribution', () => {
   });
 });
 
-describe('watchLoop — scope attribution', () => {
+describe('live watcher — scope attribution', () => {
   it('stamps the covering root, and tolerates an event under NO root by yielding a NULL-scoped item', async () => {
     class FakeWatcher extends EventEmitter {
       closed = false;
@@ -1601,7 +1621,8 @@ describe('watchLoop — scope attribution', () => {
     jest.resetModules();
     jest.doMock('chokidar', () => ({ watch: jest.fn(() => fakeWatcher) }));
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { watchLoop } = require('../watch') as typeof import('../watch');
+    const { pull: livePull } =
+      require('../local-folder-source') as typeof import('../local-folder-source');
 
     const dir = mkTmpDir();
     const outside = mkTmpDir();
@@ -1611,7 +1632,7 @@ describe('watchLoop — scope attribution', () => {
       ...makeSession([dir], controller.signal, true),
       log,
     };
-    const it = watchLoop([dir], session, null);
+    const it = await pastScan(livePull(session, null));
 
     const inside = writeFile(dir, 'inside.txt', 'in');
     const p1 = it.next();

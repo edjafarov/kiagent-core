@@ -57,7 +57,7 @@ describe('folderPickerSpec', () => {
   it('counts only files the scanner would index, and returns null for a non-directory', async () => {
     const dir = mkTmpDir();
     fs.writeFileSync(path.join(dir, 'notes.txt'), 'hi');
-    fs.writeFileSync(path.join(dir, 'backup.zip'), 'x');
+    fs.writeFileSync(path.join(dir, 'backup.7z'), 'x');
     const spec = folderPickerSpec({ selected: [], purpose: 'connect' });
     expect(await spec.count!(dir)).toEqual({ count: 1, capped: false });
     expect(await spec.count!(path.join(dir, 'notes.txt'))).toBeNull();

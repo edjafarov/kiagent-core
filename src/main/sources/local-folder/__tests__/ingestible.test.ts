@@ -17,6 +17,7 @@ import {
 } from '../ingestible';
 import { classifyPath, resolvePathMime } from '../mime';
 import { buildItem } from '../scanner';
+import type { LocalFileItem } from '../to-document';
 
 describe('isIngestible', () => {
   it('accepts every format a pipeline can actually read', () => {
@@ -100,7 +101,7 @@ describe('isIngestible', () => {
       '/d/save games/autosave_2bb6f912.eu5',
       '/d/x.sav',
       '/d/x.tar',
-      '/d/x.zip',
+      '/d/x.7z',
       '/d/x.dmg',
       '/d/x.exe',
       '/d/flags/TZA.svgz',
@@ -285,7 +286,7 @@ describe('text-extension files that are secretly binary', () => {
     expect(resolvePathMime('/d/a.jpg')).toBe('image/jpeg');
 
     const p = write('mod.ts', Buffer.from('export const x = 1;\n', 'utf8'));
-    const item = await buildItem(p, fs.statSync(p));
+    const item = (await buildItem(p, fs.statSync(p))) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.mime).toBe('text/plain');
     expect(item!.markdownText).toContain('export const x = 1;');
@@ -299,7 +300,7 @@ describe('text-extension files that are secretly binary', () => {
     const ts = Buffer.alloc(4096);
     ts.writeUInt8(0x47, 0); // MPEG-TS sync byte
     const p = write('stream.ts', ts);
-    const item = await buildItem(p, fs.statSync(p));
+    const item = (await buildItem(p, fs.statSync(p))) as LocalFileItem | null;
     expect(item).toBeNull();
   });
 
@@ -308,7 +309,7 @@ describe('text-extension files that are secretly binary', () => {
       'notes.md',
       Buffer.from('héllo — em dash, no NULs', 'utf8'),
     );
-    const item = await buildItem(p, fs.statSync(p));
+    const item = (await buildItem(p, fs.statSync(p))) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.markdownText).toContain('héllo');
   });
