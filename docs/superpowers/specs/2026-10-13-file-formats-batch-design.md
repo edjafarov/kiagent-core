@@ -236,7 +236,8 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
     | { state: 'pending'; size: number; mtimeMs: number;
         resume: unknown | null; cleared: boolean; attempts: number;
         notBefore?: number }
-    | { state: 'done'; size: number; mtimeMs: number; end?: number }
+    | { state: 'done'; size: number; mtimeMs: number; end?: number;
+        v: number }
     | { state: 'failed'; size: number; mtimeMs: number };
   ```
 
@@ -356,8 +357,10 @@ containers.
 2. **Phase 2 (core):** section B for mbox (incl. Thunderbird), ZIP
    (plain members), vCard, ENEX + version 4 + the reconcile-ratio change.
    **Phase 2b:** mailbox/vCard/ENEX members inside a ZIP via the temp-file
-   path (no policy bump: the ZIP's own re-expansion picks them up; 2b
-   bumps the container summary format so existing ZIPs re-expand once).
+   path. No policy bump: `done` records carry the expander version `v`
+   per container kind; a record whose `v` is older than the running
+   expander's is treated as changed (full path), so 2b raising the ZIP
+   expander version re-expands existing ZIPs once.
 3. **Phase 3 (core):** PST behind the spike + version 5.
 4. **Cloud:** regenerate `@kiagent/connector-sdk` with the phase-1
    policy, release it, bump OneDrive and Google Docs connectors (they pin
