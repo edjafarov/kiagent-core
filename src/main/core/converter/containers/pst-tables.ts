@@ -73,8 +73,15 @@ function loadMessage(pst: PSTFile, nid: number): PSTMessage | null {
 /** Rows a folder's contents table can hold: the larger of the table's row
  *  count and PR_CONTENT_COUNT (either may understate). */
 export function rowLimit(folder: PSTFolder): number {
-  const t = internals(folder).emailsTable;
-  return Math.max(folder.contentCount, t?.rowCount ?? 0);
+  const f = internals(folder);
+  try {
+    // A freshly loaded folder has no table yet; without this the resume
+    // check and `childAt` would disagree (a restart every page).
+    f.initEmailsTable();
+  } catch {
+    // contentCount alone
+  }
+  return Math.max(folder.contentCount, f.emailsTable?.rowCount ?? 0);
 }
 
 export type ChildAt =
@@ -171,7 +178,12 @@ export function attachmentNamesOf(m: PSTMessage, max: number): string[] {
   const table = (m as unknown as { attachmentTable: Table | null })
     .attachmentTable;
   if (!table || n === 0) return [];
-  const rows = table.getItems(0, Math.min(n, max));
+  let rows: Array<Map<number, RowItem>>;
+  try {
+    rows = table.getItems(0, Math.min(n, max));
+  } catch {
+    return []; // a damaged attachment table: the message still counts
+  }
   table.getItems = () => rows;
   const names: string[] = [];
   for (let i = 0; i < rows.length; i++) {

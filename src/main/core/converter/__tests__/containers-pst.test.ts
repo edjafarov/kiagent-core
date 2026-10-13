@@ -225,6 +225,17 @@ describe('expandPst', () => {
     }
   });
 
+  it('rowLimit sees the table on a freshly loaded folder (resume check == walk)', () => {
+    const folder: Record<string, unknown> = {
+      contentCount: 1,
+      emailsTable: null,
+    };
+    folder.initEmailsTable = () => {
+      folder.emailsTable = { rowCount: 3, getItems: () => [] };
+    };
+    expect(tables.rowLimit(folder as unknown as PSTFolder)).toBe(3);
+  });
+
   it('a damaged body leaves the message headers-only, never drops it', async () => {
     jest.spyOn(tables, 'propSize').mockImplementation(() => {
       throw new Error('getOffsetIndexNode: not found');
