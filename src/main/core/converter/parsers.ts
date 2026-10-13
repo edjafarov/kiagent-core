@@ -31,6 +31,12 @@ export function capMarkdown(md: string): {
 export type ConvertibleKind =
   | 'pdf'
   | 'docx'
+  | 'presentation'
+  | 'odf-text'
+  | 'epub'
+  | 'word97'
+  | 'rtf'
+  | 'subtitles'
   | 'html'
   | 'csv'
   | 'spreadsheet'
@@ -53,11 +59,32 @@ export function convertibleKind(
     ext === 'docx'
   )
     return 'docx';
+  if (
+    m ===
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+    ext === 'pptx'
+  )
+    return 'presentation';
+  if (m === 'application/vnd.oasis.opendocument.text' || ext === 'odt')
+    return 'odf-text';
+  if (m === 'application/epub+zip' || ext === 'epub') return 'epub';
+  if (m === 'application/msword' || ext === 'doc') return 'word97';
+  if (m === 'application/rtf' || m === 'text/rtf' || ext === 'rtf')
+    return 'rtf';
+  if (
+    m === 'application/x-subrip' ||
+    m === 'text/vtt' ||
+    ext === 'srt' ||
+    ext === 'vtt'
+  )
+    return 'subtitles';
   if (m === 'text/html' || ext === 'html' || ext === 'htm') return 'html';
   if (m === 'text/csv' || ext === 'csv') return 'csv';
   if (
     m === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    m === 'application/vnd.oasis.opendocument.spreadsheet' ||
     ext === 'xlsx' ||
+    ext === 'ods' ||
     ext === 'xls'
   )
     return 'spreadsheet';

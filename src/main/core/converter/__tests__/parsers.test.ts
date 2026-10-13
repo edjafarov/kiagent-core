@@ -4,11 +4,20 @@ import path from 'path';
 
 import { DEFAULT_SCALE, rasterScale } from '../parsers';
 
-it('parsers.ts imports nothing from electron, the store, the engine or the log sink', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'parsers.ts'), 'utf8');
-  const imports = [...src.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
-  for (const spec of imports)
-    expect(spec).not.toMatch(/electron|\/store\/|\/logs|engine\/engine/);
+it('parsers.ts and formats/* import nothing from electron, the store, the engine or the log sink', () => {
+  const dir = path.join(__dirname, '..');
+  const files = [
+    path.join(dir, 'parsers.ts'),
+    ...fs
+      .readdirSync(path.join(dir, 'formats'))
+      .map((f) => path.join(dir, 'formats', f)),
+  ];
+  for (const file of files) {
+    const src = fs.readFileSync(file, 'utf8');
+    const imports = [...src.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
+    for (const spec of imports)
+      expect(spec).not.toMatch(/electron|\/store\/|\/logs|engine\/engine/);
+  }
 });
 
 describe('rasterScale', () => {
