@@ -34,6 +34,16 @@ describe('rtfToText', () => {
     expect(rtfToText(rtf)).toBe('Привет Мир');
   });
 
+  it('literal non-ASCII bytes decode in the declared codepage', () => {
+    // "Привет" as raw cp1251 bytes, read as latin1 like the converter does.
+    const raw = Buffer.concat([
+      Buffer.from('{\\rtf1\\ansi\\ansicpg1251 ', 'latin1'),
+      Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]),
+      Buffer.from('}', 'latin1'),
+    ]).toString('latin1');
+    expect(rtfToText(raw)).toBe('Привет');
+  });
+
   it("an \\'hh fallback after \\uN is skipped, and \\uc2 skips two", () => {
     expect(rtfToText("{\\rtf1 a\\u252\\'fcb\\uc2\\u223??c}")).toBe('aübßc');
   });

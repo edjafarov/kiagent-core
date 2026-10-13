@@ -1,9 +1,10 @@
 import JSZip from 'jszip';
 
 const XML = '<?xml version="1.0" encoding="UTF-8"?>';
-const P = 'http://schemas.openxmlformats.org/presentationml/2006/main';
-const A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
-const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const P_T = 'http://schemas.openxmlformats.org/presentationml/2006/main';
+const A_T = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+const R_T =
+  'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const REL = 'http://schemas.openxmlformats.org/package/2006/relationships';
 
 export interface SlideSpec {
@@ -21,9 +22,21 @@ const sp = (paras: string[], ph?: string) =>
 
 export async function pptxBytes(
   slides: SlideSpec[],
-  opts: { title?: string; author?: string; dropSlide?: number } = {},
+  opts: {
+    title?: string;
+    author?: string;
+    dropSlide?: number;
+    strict?: boolean;
+  } = {},
 ): Promise<Uint8Array> {
   const zip = new JSZip();
+  const [P, A, R] = opts.strict
+    ? [
+        'http://purl.oclc.org/ooxml/presentationml/main',
+        'http://purl.oclc.org/ooxml/drawingml/main',
+        'http://purl.oclc.org/ooxml/officeDocument/relationships',
+      ]
+    : [P_T, A_T, R_T];
   zip.file(
     'ppt/presentation.xml',
     `${XML}<p:presentation xmlns:p="${P}" xmlns:r="${R}"><p:sldIdLst>${slides

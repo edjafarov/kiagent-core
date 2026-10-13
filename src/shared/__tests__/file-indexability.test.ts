@@ -870,6 +870,10 @@ describe('policy v3: new single-file formats', () => {
     expect(FILE_POLICY_VERSION).toBe(3);
     for (const [name, mime] of NEW_LOCAL)
       expect(newlyAdmitted(local(name, mime), 2)).toBe(true);
+    // RTF-only bodies parse since v3: local .msg files are re-read once.
+    expect(newlyAdmitted(local('m.msg', 'application/vnd.ms-outlook'), 2)).toBe(
+      true,
+    );
     // Already indexed locally before v3: never re-read on the upgrade.
     for (const [name, mime] of [
       ['g.csv', 'text/csv'],

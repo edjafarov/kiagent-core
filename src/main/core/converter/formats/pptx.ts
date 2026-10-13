@@ -7,9 +7,25 @@ import { byLocalName, childByLocalName, parseXml, textContent } from './xml';
 
 const TITLE_TYPES = new Set(['title', 'ctrTitle']);
 const NOTES_SKIP = new Set(['sldNum', 'sldImg', 'hdr', 'ftr', 'dt']);
-const DRAWINGML = 'http://schemas.openxmlformats.org/drawingml/2006/main';
-const RELS_NS =
-  'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+// Transitional and Strict (ISO 29500 strict) spellings of each namespace.
+const DRAWINGML = new Set([
+  'http://schemas.openxmlformats.org/drawingml/2006/main',
+  'http://purl.oclc.org/ooxml/drawingml/main',
+]);
+const RELS_NS = new Set([
+  'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+  'http://purl.oclc.org/ooxml/officeDocument/relationships',
+]);
+
+/** The `r:id` of a `p:sldId`, whichever relationships namespace it uses. */
+const relId = (el: Element): string => {
+  for (let i = 0; i < el.attributes.length; i++) {
+    const a = el.attributes.item(i);
+    if (a && a.localName === 'id' && RELS_NS.has(a.namespaceURI ?? ''))
+      return a.value;
+  }
+  return '';
+};
 
 const phType = (sp: Element): string | null => {
   const nv = childByLocalName(sp, 'nvSpPr');
@@ -20,7 +36,7 @@ const phType = (sp: Element): string | null => {
 
 const paragraphs = (el: Element): string[] =>
   byLocalName(el, 'p')
-    .filter((p) => p.namespaceURI === DRAWINGML)
+    .filter((p) => DRAWINGML.has(p.namespaceURI ?? ''))
     .map((p) => textContent(p).trim())
     .filter(Boolean);
 
@@ -74,7 +90,7 @@ export async function pptxToMarkdown(bytes: Uint8Array): Promise<string> {
 
   const ids = byLocalName(parseXml(pres), 'sldId');
   for (let i = 0; i < ids.length; i++) {
-    const rid = ids[i].getAttributeNS(RELS_NS, 'id') ?? '';
+    const rid = relId(ids[i]);
     const part = presRels.get(rid)?.target;
     const xml = part ? await parts.text(part) : null;
     if (!part || !xml) continue;

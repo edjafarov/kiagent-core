@@ -53,10 +53,22 @@ export const MAX_FETCH_BYTES = 100 * 1024 * 1024;
  *  indexable; each file source re-enumerates once on a mismatch. */
 export const FILE_POLICY_VERSION = 3;
 /** Extensions first admitted at a given policy version (eager files the
- *  old policy ignored by TYPE, not size). */
+ *  old policy ignored by TYPE, not size), plus any whose parser changed
+ *  enough that already-indexed local files must be re-read once. */
 export const ADMITTED_SINCE: Record<number, ReadonlySet<string>> = {
   2: new Set(['msg']),
-  3: new Set(['pptx', 'odt', 'ods', 'epub', 'doc', 'rtf', 'srt', 'vtt']),
+  3: new Set([
+    'pptx',
+    'odt',
+    'ods',
+    'epub',
+    'doc',
+    'rtf',
+    'srt',
+    'vtt',
+    // Not new, but re-read once: RTF-only Outlook bodies parse since v3.
+    'msg',
+  ]),
 };
 
 // Verbatim from local-folder/ingestible.ts:22-23 and :31. `ingestible.ts`

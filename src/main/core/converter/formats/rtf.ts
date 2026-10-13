@@ -64,7 +64,9 @@ interface Group {
 /** `src` is the RTF read as latin1 (one char per byte). */
 export function rtfToText(src: string): string {
   let out = '';
-  let pending: number[] = []; // \'hh bytes awaiting decode as one run
+  // Document bytes (literal and \'hh) awaiting decode as one run in the
+  // active codepage: a cp1251 file may carry Cyrillic as raw bytes.
+  let pending: number[] = [];
   let decoder = decoderFor(1252);
   const stack: Group[] = [];
   let g: Group = { skip: false, uc: 1 };
@@ -76,6 +78,13 @@ export function rtfToText(src: string): string {
       out += decoder.decode(new Uint8Array(pending));
       pending = [];
     }
+  };
+  const byte = (b: number) => {
+    if (skipChars > 0) {
+      skipChars--;
+      return;
+    }
+    if (!g.skip) pending.push(b);
   };
   const emit = (s: string) => {
     if (skipChars > 0) {
@@ -111,22 +120,22 @@ export function rtfToText(src: string): string {
       continue;
     }
     if (ch !== '\\') {
-      emit(ch);
+      byte(src.charCodeAt(i) & 0xff);
       i++;
       continue;
     }
     const next = src[i + 1];
     if (next === undefined) break;
     if (next === '\\' || next === '{' || next === '}') {
-      emit(next);
+      byte(next.charCodeAt(0));
       i += 2;
       continue;
     }
     if (next === "'") {
-      const byte = parseInt(src.slice(i + 2, i + 4), 16);
+      const hex = parseInt(src.slice(i + 2, i + 4), 16);
       i += 4;
-      if (skipChars > 0) skipChars--;
-      else if (!g.skip && Number.isFinite(byte)) pending.push(byte);
+      if (Number.isFinite(hex)) byte(hex);
+      else if (skipChars > 0) skipChars--;
       continue;
     }
     if (next === '\r' || next === '\n') {

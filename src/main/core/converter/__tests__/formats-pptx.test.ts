@@ -72,6 +72,17 @@ describe('pptx', () => {
     ).rejects.toThrow('xml');
   });
 
+  it('a Strict OOXML presentation (purl.oclc.org namespaces) renders the same', async () => {
+    const md = await parse(
+      await pptxBytes([{ title: 'Strict', body: ['ISO 29500 body'] }], {
+        strict: true,
+      }),
+      MIME,
+      'deck.pptx',
+    );
+    expect(md).toBe('## Slide 1 — Strict\n\nISO 29500 body');
+  });
+
   it('bytes that are not a zip throw', async () => {
     await expect(
       parse(new TextEncoder().encode('hello'), MIME, 'deck.pptx'),
