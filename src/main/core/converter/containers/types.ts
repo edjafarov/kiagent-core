@@ -8,7 +8,8 @@ export type ContainerKind = 'mbox' | 'zip' | 'vcard' | 'enex';
  *  treated as changed). */
 export const EXPANDER_VERSION: Record<ContainerKind, number> = {
   mbox: 1,
-  zip: 1,
+  // 2: mailboxes, vCards and ENEX inside a ZIP are expanded (phase 2b).
+  zip: 2,
   vcard: 1,
   enex: 1,
 };

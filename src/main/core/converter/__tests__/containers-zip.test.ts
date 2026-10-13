@@ -4,8 +4,20 @@ import os from 'os';
 import path from 'path';
 import JSZip from 'jszip';
 
+import crypto from 'crypto';
+import zlib from 'zlib';
 import { DEFAULT_EXPAND_BUDGET } from '../containers/types';
-import { expandZip, type ZipResume } from '../containers/zip';
+
+import {
+  MAX_ZIP_CHILDREN,
+  ZIP_LIMITS,
+  expandZip,
+  extractMember,
+  scratchName,
+  type ExtractOutcome,
+  type ZipResume,
+} from '../containers/zip';
+import type { ChildItem, ExpandBudget } from '../containers/types';
 
 let dir: string;
 beforeEach(() => {
@@ -47,6 +59,48 @@ async function writeZip(
   return p;
 }
 
+/** Pages a zip to the end, playing the source's part for nested members:
+ *  'skip' marks them name-only; 'extract' copies them into `scratch`. */
+async function drain(
+  p: string,
+  mode: 'skip' | 'extract',
+  budget: ExpandBudget = DEFAULT_EXPAND_BUDGET,
+  outcomes: ExtractOutcome[] = [],
+): Promise<{
+  items: ChildItem[];
+  summary?: string;
+  resume: null;
+  pages: number;
+}> {
+  const scratch = path.join(dir, 'scratch');
+  fs.mkdirSync(scratch, { recursive: true });
+  const items: ChildItem[] = [];
+  let resume: ZipResume | null = null;
+  for (let pages = 1; pages < 1000; pages++) {
+    const n = resume?.nested;
+    if (n && !n.skip) {
+      if (mode === 'skip') n.skip = true;
+      else {
+        const dest = path.join(scratch, scratchName(p, n));
+        if (!fs.existsSync(dest)) {
+          // eslint-disable-next-line no-await-in-loop
+          const out = await extractMember(p, n, dest);
+          outcomes.push(out);
+          if (out !== 'ok') n.skip = true;
+        }
+        if (!n.skip) n.file = dest;
+      }
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const r = await expandZip(p, resume, budget);
+    items.push(...r.items);
+    if (r.resume === null)
+      return { items, summary: r.summary, resume: null, pages };
+    resume = r.resume as ZipResume;
+  }
+  throw new Error('zip never finished');
+}
+
 describe('expandZip', () => {
   it('routes each member by the local file policy', async () => {
     const p = await writeZip('export.zip', {
@@ -60,7 +114,8 @@ describe('expandZip', () => {
       'Takeout/.env': 'SECRET=1',
       'Takeout/dir/': '',
     });
-    const r = await expandZip(p, null, DEFAULT_EXPAND_BUDGET);
+    // Without extraction (the source skips), the mailbox is name-only.
+    const r = await drain(p, 'skip');
     const by = Object.fromEntries(r.items.map((i) => [i.key, i]));
     expect(Object.keys(by).sort()).toEqual(
       [
@@ -223,5 +278,278 @@ describe('central-directory resume', () => {
       DEFAULT_EXPAND_BUDGET,
     );
     expect(r.items.map((c) => c.title)).toEqual(['c.txt']);
+  });
+});
+
+/** A hand-built zip (JSZip overwrites duplicate names and computes honest
+ *  sizes): each entry may lie about its sizes. */
+function rawZip(
+  name: string,
+  entries: Array<{
+    name: string;
+    data: Buffer;
+    deflate?: boolean;
+    declaredSize?: number;
+    declaredCompressed?: number;
+    crc?: number;
+  }>,
+): string {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const e of entries) {
+    const body = e.deflate ? zlib.deflateRawSync(e.data) : e.data;
+    const crc = e.crc ?? zlib.crc32(e.data);
+    const usize = e.declaredSize ?? e.data.length;
+    const csize = e.declaredCompressed ?? body.length;
+    const fname = Buffer.from(e.name);
+    const method = e.deflate ? 8 : 0;
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0);
+    lh.writeUInt16LE(20, 4);
+    lh.writeUInt16LE(method, 8);
+    lh.writeUInt32LE(crc >>> 0, 14);
+    lh.writeUInt32LE(csize, 18);
+    lh.writeUInt32LE(usize, 22);
+    lh.writeUInt16LE(fname.length, 26);
+    const local = Buffer.concat([lh, fname, body]);
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0);
+    ch.writeUInt16LE(20, 4);
+    ch.writeUInt16LE(20, 6);
+    ch.writeUInt16LE(method, 10);
+    ch.writeUInt16LE(0x21, 14); // 1980-01-01
+    ch.writeUInt32LE(crc >>> 0, 16);
+    ch.writeUInt32LE(csize, 20);
+    ch.writeUInt32LE(usize, 24);
+    ch.writeUInt16LE(fname.length, 28);
+    ch.writeUInt32LE(offset, 42);
+    centrals.push(Buffer.concat([ch, fname]));
+    locals.push(local);
+    offset += local.length;
+  }
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cd.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  const p = path.join(dir, name);
+  fs.writeFileSync(p, Buffer.concat([...locals, cd, eocd]));
+  return p;
+}
+
+const mboxOf = (...subjects: string[]) =>
+  subjects
+    .map(
+      (s, i) =>
+        `From - Mon, ${i + 1} Jan 2024 10:00:00 +0000\nFrom: a@x.de\nSubject: ${s}\n` +
+        `Date: Mon, ${i + 1} Jan 2024 10:00:00 +0000\nMessage-ID: <${s}@x.de>\n\nbody ${s}\n\n`,
+    )
+    .join('');
+
+describe('nested containers inside a zip', () => {
+  afterEach(() => {
+    ZIP_LIMITS.children = MAX_ZIP_CHILDREN;
+    jest.restoreAllMocks();
+  });
+
+  it('expands a Takeout mailbox member into flat message children', async () => {
+    const p = await writeZip('takeout.zip', {
+      'Takeout/a.txt': 'hello',
+      'Takeout/Mail/All mail.mbox': mboxOf('One', 'Two', 'Three'),
+    });
+    const outcomes: ExtractOutcome[] = [];
+    const r = await drain(p, 'extract', DEFAULT_EXPAND_BUDGET, outcomes);
+    expect(outcomes).toEqual(['ok']);
+    const msgs = r.items.filter((c) => c.type === 'email.message');
+    expect(msgs.map((c) => c.title)).toEqual(['One', 'Two', 'Three']);
+    for (const c of msgs)
+      expect(c.key).toMatch(/^zip:Takeout\/Mail\/All mail\.mbox#msg:/);
+    expect(r.items.find((c) => c.key === 'zip:Takeout/a.txt')).toBeDefined();
+    expect(r.summary).toContain('# takeout.zip — 2 files');
+    expect(r.summary).toContain('- Takeout/Mail/All mail.mbox — 3 messages');
+  });
+
+  it('pages inside the member with the same keys as one pass', async () => {
+    const p = await writeZip('paged.zip', {
+      'a.txt': 'a',
+      'm.mbox': mboxOf('A', 'B', 'C', 'D', 'E'),
+      'z.txt': 'z',
+    });
+    const one = await drain(p, 'extract', {
+      ...DEFAULT_EXPAND_BUDGET,
+      items: 1000,
+    });
+    const paged = await drain(p, 'extract', {
+      ...DEFAULT_EXPAND_BUDGET,
+      items: 2,
+    });
+    expect(paged.items.map((c) => c.key)).toEqual(one.items.map((c) => c.key));
+    expect(paged.items).toHaveLength(7);
+  });
+
+  it('never exceeds the page budget across the nested → ordinary transition', async () => {
+    const p = await writeZip('edge.zip', {
+      'm.mbox': mboxOf('A', 'B'),
+      'z.txt': 'z',
+    });
+    const scratch = path.join(dir, 'scratch');
+    fs.mkdirSync(scratch, { recursive: true });
+    const first = await expandZip(p, null, {
+      ...DEFAULT_EXPAND_BUDGET,
+      items: 2,
+    });
+    const n = (first.resume as ZipResume).nested!;
+    const dest = path.join(scratch, scratchName(p, n));
+    expect(await extractMember(p, n, dest)).toBe('ok');
+    n.file = dest;
+    const second = await expandZip(p, first.resume as ZipResume, {
+      ...DEFAULT_EXPAND_BUDGET,
+      items: 2,
+    });
+    expect(second.items.map((c) => c.title)).toEqual(['A', 'B']);
+    expect(second.resume).not.toBeNull(); // z.txt waits for the next page
+  });
+
+  it('waits (same resume, no items) while the scratch copy is missing', async () => {
+    const p = await writeZip('wait.zip', { 'm.mbox': mboxOf('A') });
+    const first = await expandZip(p, null, DEFAULT_EXPAND_BUDGET);
+    const resume = first.resume as ZipResume;
+    resume.nested!.file = path.join(dir, 'missing.mbox');
+    const again = await expandZip(p, resume, DEFAULT_EXPAND_BUDGET);
+    expect(again.items).toEqual([]);
+    expect((again.resume as ZipResume).nested).toMatchObject({
+      member: 'm.mbox',
+      inner: null,
+    });
+    expect((again.resume as ZipResume).nested!.file).toBeUndefined();
+  });
+
+  it('expands vCard and ENEX members; a nested zip stays name-only', async () => {
+    const p = await writeZip('mixed.zip', {
+      'c.vcf': 'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Ada Lovelace\r\nEND:VCARD\r\n',
+      'n.enex':
+        '<en-export><note><title>Trip</title><content><![CDATA[<en-note>go</en-note>]]></content></note></en-export>',
+      'inner.zip': `PK\u0005\u0006${'\u0000'.repeat(18)}`,
+    });
+    const r = await drain(p, 'extract');
+    expect(r.items.find((c) => c.type === 'contact.card')?.title).toBe(
+      'Ada Lovelace',
+    );
+    expect(r.items.find((c) => c.type === 'note')?.title).toBe('Trip');
+    expect(r.items.find((c) => c.key === 'zip:inner.zip')?.markdown).toBeNull();
+    expect(r.summary).toContain('- c.vcf — 1 card');
+    expect(r.summary).toContain('- n.enex — 1 note');
+  });
+
+  it('two members with the same name get distinct scratch copies', async () => {
+    const p = rawZip('dup.zip', [
+      { name: 'mail.mbox', data: Buffer.from(mboxOf('First')) },
+      { name: 'mail.mbox', data: Buffer.from(mboxOf('Second')) },
+    ]);
+    const r = await drain(p, 'extract');
+    expect(r.items.map((c) => c.title)).toEqual(['First', 'Second']);
+  });
+
+  it('a forged smaller size (stored, CRC of the full payload) is corrupt, not truncated', async () => {
+    const data = Buffer.from(mboxOf('A', 'B'));
+    const p = rawZip('forged.zip', [
+      {
+        name: 'm.mbox',
+        data,
+        declaredSize: 40,
+        declaredCompressed: 40,
+      },
+    ]);
+    const outcomes: ExtractOutcome[] = [];
+    const r = await drain(p, 'extract', DEFAULT_EXPAND_BUDGET, outcomes);
+    expect(outcomes).toEqual(['corrupt']);
+    expect(r.items.map((c) => c.key)).toEqual(['zip:m.mbox']); // name-only
+    expect(fs.readdirSync(path.join(dir, 'scratch'))).toEqual([]);
+  });
+
+  it('a member that inflates past its declared size is corrupt, and the copy stops at the cap', async () => {
+    const data = Buffer.from(mboxOf('A', 'B', 'C'))
+      .toString()
+      .repeat(2000);
+    const p = rawZip('over.zip', [
+      {
+        name: 'm.mbox',
+        data: Buffer.from(data),
+        deflate: true,
+        declaredSize: 50,
+      },
+    ]);
+    const real = fs.createWriteStream;
+    let written = 0;
+    jest.spyOn(fs, 'createWriteStream').mockImplementation(((
+      ...args: Parameters<typeof fs.createWriteStream>
+    ) => {
+      const ws = real(...args);
+      const write = ws.write.bind(ws);
+      ws.write = ((chunk: Buffer, ...rest: unknown[]) => {
+        written += chunk.length;
+        return (write as (...a: unknown[]) => boolean)(chunk, ...rest);
+      }) as typeof ws.write;
+      return ws;
+    }) as typeof fs.createWriteStream);
+    const outcomes: ExtractOutcome[] = [];
+    await drain(p, 'extract', DEFAULT_EXPAND_BUDGET, outcomes);
+    expect(outcomes).toEqual(['corrupt']);
+    expect(written).toBeLessThanOrEqual(50);
+    expect(fs.readdirSync(path.join(dir, 'scratch'))).toEqual([]);
+  });
+
+  it('a different zip at the same path is a mismatch', async () => {
+    const p = await writeZip('swap.zip', { 'm.mbox': mboxOf('A') });
+    const n = (
+      (await expandZip(p, null, DEFAULT_EXPAND_BUDGET)).resume as ZipResume
+    ).nested!;
+    await writeZip('swap.zip', { 'm.mbox': mboxOf('Other') });
+    expect(await extractMember(p, n, path.join(dir, 'x.mbox'))).toBe(
+      'mismatch',
+    );
+  });
+
+  it('too little free disk is nospace', async () => {
+    const p = await writeZip('big.zip', { 'm.mbox': mboxOf('A') });
+    const n = (
+      (await expandZip(p, null, DEFAULT_EXPAND_BUDGET)).resume as ZipResume
+    ).nested!;
+    jest
+      .spyOn(fs.promises, 'statfs')
+      .mockResolvedValue({ bavail: 1, bsize: 1 } as never);
+    expect(await extractMember(p, n, path.join(dir, 'x.mbox'))).toBe('nospace');
+  });
+
+  it('an abort mid-copy settles promptly and leaves no .part', async () => {
+    // Incompressible: a compressible payload would trip the ratio guard.
+    const data = Buffer.concat([
+      Buffer.from(mboxOf('A')),
+      crypto.randomBytes(40 * 1024 * 1024),
+    ]);
+    const p = rawZip('abort.zip', [{ name: 'm.mbox', data, deflate: true }]);
+    const n = (
+      (await expandZip(p, null, DEFAULT_EXPAND_BUDGET)).resume as ZipResume
+    ).nested!;
+    const dest = path.join(dir, 'abort.mbox');
+    const ac = new AbortController();
+    const run = extractMember(p, n, dest, { signal: ac.signal });
+    setTimeout(() => ac.abort(), 5);
+    const t0 = Date.now();
+    await expect(run).rejects.toThrow();
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(fs.existsSync(`${dest}.part`)).toBe(false);
+    expect(fs.existsSync(dest)).toBe(false);
+  }, 20_000);
+
+  it('the children cap counts nested items', async () => {
+    ZIP_LIMITS.children = 2;
+    const p = await writeZip('cap.zip', { 'm.mbox': mboxOf('A', 'B', 'C') });
+    const r = await drain(p, 'extract');
+    expect(r.items).toHaveLength(2);
+    expect(r.summary).toMatch(/^# cap\.zip — first /);
   });
 });
