@@ -308,3 +308,24 @@ it('a parser error rejects with the child’s name and message; the child stays 
   expect(children[0].killed).toEqual([]);
   await runner.stop();
 });
+
+it('an expandPage job is path-based: queued with 0 bytes, its reply resolved', async () => {
+  const { runner, children } = setup();
+  const p = runner.expandPage('/r/inbox.mbox', 'mbox', null, {
+    items: 5,
+    bytes: 1024,
+    ms: 1000,
+  });
+  await until(() => children[0]?.sent.length === 1);
+  expect(runner.stats().queuedBytes).toBe(0);
+  const sent = children[0].sent[0] as unknown as Record<string, unknown>;
+  expect(sent).toMatchObject({
+    op: 'expandPage',
+    path: '/r/inbox.mbox',
+    kind: 'mbox',
+    resume: null,
+  });
+  children[0].reply(sent.id as number, { items: [], resume: null });
+  await expect(p).resolves.toEqual({ items: [], resume: null });
+  await runner.stop();
+});

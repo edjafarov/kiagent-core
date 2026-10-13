@@ -4,13 +4,13 @@ import path from 'path';
 
 import { DEFAULT_SCALE, rasterScale } from '../parsers';
 
-it('parsers.ts and formats/* import nothing from electron, the store, the engine or the log sink', () => {
+it('parsers.ts, formats/* and containers/* import nothing from electron, the store, the engine or the log sink', () => {
   const dir = path.join(__dirname, '..');
   const files = [
     path.join(dir, 'parsers.ts'),
-    ...fs
-      .readdirSync(path.join(dir, 'formats'))
-      .map((f) => path.join(dir, 'formats', f)),
+    ...['formats', 'containers'].flatMap((sub) =>
+      fs.readdirSync(path.join(dir, sub)).map((f) => path.join(dir, sub, f)),
+    ),
   ];
   for (const file of files) {
     const src = fs.readFileSync(file, 'utf8');
