@@ -1,6 +1,6 @@
 # File formats batch: Office, e-books, transcripts, mail archives, ZIP, PST
 
-Status: r3 (fable + codex-astra rounds 1–2 folded in) · 2026-10-13
+Status: r4 (fable + codex-astra rounds 1–3 folded in) · 2026-10-13
 Scope came from the format coverage review (value ≥ 3 and difficulty ≤ 2,
 plus PST). Deferred formats are filed as `priority:low` issues #148–#164.
 
@@ -119,6 +119,8 @@ Rules shared by all of A:
   helpers are pure and run in the converter child. People's mention and
   signature scans then pick up mbox/PST correspondents with no People
   change.
+- Child externalIds start with the container's externalId exactly as
+  the scanner spells it (`toAbsPosix`), so `parent` resolves on Windows.
 - Every child inherits the container's `scopeRootId`, so folder
   deselection archives children with the container (scope handling in
   `write-tx` archives by `scope_root_id`, not by parent).
@@ -141,12 +143,15 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
 ```ts
 { op: 'expandPage'; path: string; kind: ContainerKind;
   resume: unknown | null;            // opaque, from the previous page
-  budget: { items: number; bytes: number } }
+  budget: { items: number; bytes: number; ms: number } }
 → { items: ChildItem[]; resume: unknown | null; summary?: string }
 ```
 
-- Returns up to `budget.items` children (default 200) or `budget.bytes`
-  of rendered markdown (default 16 MiB). `resume: null` means done.
+- Returns up to `budget.items` children (default 200), `budget.bytes`
+  of rendered markdown (default 16 MiB) or after `budget.ms` (default
+  20 s, checked after each item), whichever comes first, so a page always
+  ends well inside the runner's whole-job timeout (120 s, which kills the
+  child). `resume: null` means done.
   `resume` is per kind and tiny: byte offset (mbox), NID cursor (PST),
   `{member, inner}` (ZIP), card/note index (vCard/ENEX).
 - **Input bounds, not just output bounds.** mbox and ENEX stream and
@@ -159,14 +164,17 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
 - ZIP: `yauzl` random access, one member at a time. Each member is
   routed by the **same policy** as a local file:
   `decideFileIndexing({profile:'local-folder', filename: member,
-  sizeBytes})` → `ignore` skips it (sensitive basenames inside a zipped
+  path: member, mime: resolvePathMime(member), sizeBytes})` (the same
+  pure resolver local files use, so `.txt`/`.md`/CSV/HTML/Office members
+  are admitted exactly as on disk) → `ignore` skips it (sensitive basenames inside a zipped
   repo included); `inline-text` decodes it with the same NUL sniff as
   `buildItem` (Takeout/Slack/WhatsApp `.json`/`.txt`/`.csv`/`.html`);
   `converter` runs `parseDetailed` (all kinds, A included); `vision`/
   `audio` → name-only child; `container` → nested expansion (below).
   Ordinary members over 20 MiB uncompressed are name-only. 100:1 ratio
   and 100k-children guards.
-- **Mailboxes/vCards/ENEX inside a ZIP** (Takeout's `All mail Including
+- **Mailboxes/vCards/ENEX inside a ZIP** (phase **2b**; until then such
+  members are name-only children) (Takeout's `All mail Including
   Spam and Trash.mbox`): the member is streamed to a managed temp file
   (`<userData>/expand-tmp/<sha1(absPath+member)>`) and then paged by the
   same path-based pager; `resume = {member, inner}`. The temp file is
@@ -226,7 +234,8 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
   ```ts
   type Expansion =
     | { state: 'pending'; size: number; mtimeMs: number;
-        resume: unknown | null; cleared: boolean; attempts: number }
+        resume: unknown | null; cleared: boolean; attempts: number;
+        notBefore?: number }
     | { state: 'done'; size: number; mtimeMs: number; end?: number }
     | { state: 'failed'; size: number; mtimeMs: number };
   ```
@@ -255,8 +264,10 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
     - The fallback child id `sha1(raw headers)` excludes `X-Mozilla-*`
       and `Status`/`X-Status` headers, so flag flips never mint new ids.
   - **PST, ZIP, vCard, ENEX:** `size` or `mtimeMs` changed → full path,
-    except that a PST is only re-expanded once its mtime has been stable
-    for 10 minutes (Outlook writes an open PST continuously).
+    except that a PST waits until `now − mtimeMs ≥ 10 min` (Outlook writes
+    an open PST continuously): its record gets `notBefore = mtimeMs +
+    10 min` and stays scheduled by deadline; its existing children stay
+    live until the full path actually starts.
   - **Full path:** yield a deletions-only batch for the container
     (`Batch.deletions` → `archiveByRef` → `archiveChildren` archives it
     and all its children) with `cleared: true` in its cursor, then the
@@ -273,10 +284,16 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
   2. Backfill and incremental rescan run as today, recording containers
      as `pending`.
   3. The loop then alternates: one pending fs-event batch, then one page
-     of the oldest `pending` expansion; it blocks on the watcher only when
-     no expansion is pending. The initial drain and steady state are the
-     same path.
-  4. A page that throws or times out bumps `attempts`; at 3 the record
+     of the oldest **eligible** `pending` record (`notBefore` absent or
+     past); otherwise it waits for a watcher event, cancellation, or the
+     earliest `notBefore`. Each page re-stats the file first. The initial
+     drain and steady state are the same path.
+  4. A watcher `change` on a container whose record shows no relevant
+     change (size for mbox; size/mtime for the rest) yields **no batch**
+     (no cursor-only commit per Thunderbird flag flip).
+  5. A parser throw, child crash or page timeout bumps `attempts`
+     (`ConverterUnavailableError` and abort do not, as in the convert
+     worker); at 3 the record
      becomes `failed` (the container's summary row says "Could not read
      this file") until its size or mtime changes. Ordinary indexing never
      waits on a failing container.
@@ -285,6 +302,10 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
   it and its children via the existing parent cascade; deselecting its
   folder archives them via the inherited `scopeRootId`. Both drop the
   `expansions` record (and any temp file), so re-adding re-expands.
+  Records are pruned in two named places: `incrementalRescanRoot` drops
+  keys under its root that the walk did not visit (catches deletions
+  while the app was closed), and `pruneToConfiguredRoots` drops keys
+  under removed roots.
 
 - **Reconcile guard.** `reconcile` keeps listing files only (children of
   a listed parent are exempt in `unlisted()`). The store's
@@ -307,7 +328,10 @@ One new child op, paged and **path-based** (no bytes cross the boundary):
 - Children: messages only (no calendar/contacts/tasks items in v1),
   `metadata.folder` set, attachment names in the markdown.
 - A locked PST (Windows, `EBUSY`): keep `resume`, do not count an
-  attempt, retry next pass.
+  attempt, set `notBefore = now + 5 min`.
+- An open PST handle kept between pages is only a cache; the NID
+  `resume` in the cursor is the truth (a timed-out page resumes in a
+  fresh child).
 
 ## Re-enumeration (per phase)
 
@@ -329,8 +353,11 @@ containers.
 ## Rollout
 
 1. **Phase 1 (core):** section A + version 3.
-2. **Phase 2 (core):** section B for mbox (incl. Thunderbird), ZIP,
-   vCard, ENEX + version 4 + the reconcile-ratio change.
+2. **Phase 2 (core):** section B for mbox (incl. Thunderbird), ZIP
+   (plain members), vCard, ENEX + version 4 + the reconcile-ratio change.
+   **Phase 2b:** mailbox/vCard/ENEX members inside a ZIP via the temp-file
+   path (no policy bump: the ZIP's own re-expansion picks them up; 2b
+   bumps the container summary format so existing ZIPs re-expand once).
 3. **Phase 3 (core):** PST behind the spike + version 5.
 4. **Cloud:** regenerate `@kiagent/connector-sdk` with the phase-1
    policy, release it, bump OneDrive and Google Docs connectors (they pin
@@ -356,8 +383,11 @@ containers.
   - A quiet root (no file events) still drains a pending expansion.
   - One oversized message (30 MB attachment) keeps child RSS bounded and
     yields a truncated child.
-  - Takeout-shaped ZIP with a nested `.mbox` → flat children under the
-    ZIP; temp file removed after.
+  - ZIP with TXT, CSV, HTML and DOCX members → all four rendered.
+  - (2b) Takeout-shaped ZIP with a nested `.mbox` → flat children under
+    the ZIP; temp file removed after.
+  - A deferred/locked PST does not spin: the loop waits until
+    `notBefore`.
   - Workers: container and children never get a `conversion` marker
     other than `ok`, and vision/convert do not fetch them.
   - Reconcile with a deleted 1k-child container does not trip the guard.
