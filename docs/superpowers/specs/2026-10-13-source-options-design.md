@@ -1,6 +1,6 @@
 # Source options + "Skip subagent sessions" — design
 
-Rev 3 · 2026-10-13 · core `feat/source-options` (off origin/dev v0.110.2) + `kia-plugins/agent-sessions-kia-connector`
+Rev 4 · 2026-10-13 · SATISFIED (fable r3, codex astra r3) · core `feat/source-options` (off origin/dev v0.110.2) + `kia-plugins/agent-sessions-kia-connector`
 
 ## 1. Problem
 
@@ -73,8 +73,8 @@ Five places write `accounts.config` wholesale:
 
 Each engine-side read-merge-write leaves a window in which a concurrent writer is lost. So **ownership lives in the store, inside each write's own transaction**:
 
-- **`keepOptions(rowConfig, nextConfig)`:** in write-tx, every wholesale config write (the `config` op, the create upsert, `applyFolderScope`) replaces `nextConfig.options` with the row's current `options`. If the row has none, any incoming `options` key is removed. The value is read in the same transaction as the write, because the DB worker runs one transaction at a time. Connectors and engine callers therefore never set or reset options, and a connector's `connect`/`manageFolders` result cannot touch them either.
-- **New op `option`:** `store.setAccountOption(id, key, value)` → `UPDATE accounts SET config = json_set(config, '$.options.' || ?, json(?)) WHERE id = ?`, with the value bound as `JSON.stringify(value)` so SQLite stores a JSON boolean. It is one statement, so two toggles on different keys cannot lose each other, and it is logged through `accountWrite` so a commit is emitted.
+- **`keepOptions(rowConfig, nextConfig)`:** in write-tx, every wholesale config write (the `config` op, the create upsert, `applyFolderScope`) replaces `nextConfig.options` with the row's current `options`. If the row's `options` is not a plain object (absent, null, an array, …), the result has no `options` key, so only "absent" or "object" is ever stored. This includes the fresh-insert arm of the upsert, so a connector's `connect` result can never seed `options`. It is one helper with three call sites. The value is read in the same transaction as the write, because the DB worker runs one transaction at a time. Connectors and engine callers therefore never set or reset options, and a connector's `connect`/`manageFolders` result cannot touch them either.
+- **New op `option`:** `store.setAccountOption(id, key, value)` → `UPDATE accounts SET config = json_set(config, '$.options.' || ?, json(?)) WHERE id = ?`, with the value bound as `JSON.stringify(value)` so SQLite stores a JSON boolean, and with `AND config IS NOT json_set(…)` added to the `WHERE` (the file's existing idiom), so that `changes === 0` means `logged: false`. It is one statement, so two toggles on different keys cannot lose each other, and it is logged through `accountWrite` so a commit is emitted.
 - **Re-add:** the upsert runs `keepOptions` against the existing row, so Add-source on an already-connected identifier keeps the options. No engine lookup is needed. Remove deletes the row (`write-tx.ts:813`), so a later Add starts from defaults.
 - **`updateConfig`:** refuses an `options` key with `OptionConfigError`, the same way it refuses `folderRoots`, so an explicit attempt fails loudly instead of being silently dropped.
 
