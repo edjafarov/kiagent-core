@@ -196,6 +196,10 @@ async function parseOther(
       const { rtfBytesToMarkdown } = await import('./formats/rtf');
       return rtfBytesToMarkdown(bytes);
     }
+    case 'subtitles': {
+      const { subtitlesToMarkdown } = await import('./formats/subtitles');
+      return subtitlesToMarkdown(buf.toString('utf8'));
+    }
     case 'html':
       return htmlToMarkdown(buf.toString('utf8'));
     case 'csv':
