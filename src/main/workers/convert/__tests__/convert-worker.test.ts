@@ -142,7 +142,7 @@ describe('convertibleKind', () => {
     ['text/csv', 'a.csv', 'csv'],
     ['text/calendar', 'invite.ics', 'text'],
     ['image/png', 'a.png', null],
-    ['application/msword', 'old.doc', null],
+    ['application/msword', 'old.doc', 'word97'],
     ['application/zip', 'a.zip', null],
   ])('%s %s → %s', (mime, name, kind) => {
     expect(convertibleKind(mime, name)).toBe(kind);
