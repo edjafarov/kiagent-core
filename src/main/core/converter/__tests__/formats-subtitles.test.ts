@@ -5,7 +5,7 @@ import { parse } from '../parsers';
 describe('subtitles', () => {
   it('srt with BOM and CRLF: cue numbers and timings dropped, minute markers kept', () => {
     const srt =
-      '﻿1\r\n00:00:01,000 --> 00:00:03,000\r\nWelcome to the call.\r\n\r\n' +
+      '\uFEFF1\r\n00:00:01,000 --> 00:00:03,000\r\nWelcome to the call.\r\n\r\n' +
       '2\r\n00:00:04,000 --> 00:00:06,500\r\nLet us start.\r\n\r\n' +
       '3\r\n00:01:02,000 --> 00:01:04,000\r\nBudget first.\r\n';
     expect(subtitlesToMarkdown(srt)).toBe(

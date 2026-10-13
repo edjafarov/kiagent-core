@@ -135,7 +135,7 @@ export function rtfToText(src: string): string {
       continue;
     }
     if (next === '~') {
-      emit(' ');
+      emit('\u00a0');
       i += 2;
       continue;
     }
