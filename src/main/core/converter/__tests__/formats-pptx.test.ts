@@ -83,6 +83,15 @@ describe('pptx', () => {
     expect(md).toBe('## Slide 1 — Strict\n\nISO 29500 body');
   });
 
+  it('footer, date and slide-number placeholders are not slide text', async () => {
+    const md = await parse(
+      await pptxBytes([{ title: 'Q', body: ['Real'], chrome: true }]),
+      MIME,
+      'deck.pptx',
+    );
+    expect(md).toBe('## Slide 1 — Q\n\nReal');
+  });
+
   it('bytes that are not a zip throw', async () => {
     await expect(
       parse(new TextEncoder().encode('hello'), MIME, 'deck.pptx'),

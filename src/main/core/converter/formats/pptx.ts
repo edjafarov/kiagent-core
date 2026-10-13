@@ -6,7 +6,9 @@ import { openZipParts, type ZipParts } from './zip-parts';
 import { byLocalName, childByLocalName, parseXml, textContent } from './xml';
 
 const TITLE_TYPES = new Set(['title', 'ctrTitle']);
-const NOTES_SKIP = new Set(['sldNum', 'sldImg', 'hdr', 'ftr', 'dt']);
+/** Header/footer, date, slide-number and slide-image placeholders repeat
+ *  on every slide and note: chrome, not content. */
+const CHROME = new Set(['sldNum', 'sldImg', 'hdr', 'ftr', 'dt']);
 // Transitional and Strict (ISO 29500 strict) spellings of each namespace.
 const DRAWINGML = new Set([
   'http://schemas.openxmlformats.org/drawingml/2006/main',
@@ -98,7 +100,9 @@ export async function pptxToMarkdown(bytes: Uint8Array): Promise<string> {
     const shapes = byLocalName(slide, 'sp');
     const titleSp = shapes.find((s) => TITLE_TYPES.has(phType(s) ?? ''));
     const title = titleSp ? paragraphs(titleSp).join(' ') : '';
-    const body = shapes.filter((s) => s !== titleSp).flatMap(paragraphs);
+    const body = shapes
+      .filter((s) => s !== titleSp && !CHROME.has(phType(s) ?? ''))
+      .flatMap(paragraphs);
     // Tables live in graphicFrames, not shapes: take their rows too.
     for (const tr of byLocalName(slide, 'tr')) {
       const row = byLocalName(tr, 'tc')
@@ -115,7 +119,7 @@ export async function pptxToMarkdown(bytes: Uint8Array): Promise<string> {
     const notesXml = notesRel ? await parts.text(notesRel.target) : null;
     if (notesXml) {
       const notes = byLocalName(parseXml(notesXml), 'sp')
-        .filter((s) => !NOTES_SKIP.has(phType(s) ?? ''))
+        .filter((s) => !CHROME.has(phType(s) ?? ''))
         .flatMap(paragraphs);
       if (notes.length) out.push('### Notes', notes.join('\n'));
     }

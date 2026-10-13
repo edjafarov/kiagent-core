@@ -20,6 +20,25 @@ describe('doc (Word 97)', () => {
     expect(md).toContain('Grüße aus München.');
     expect(md).toContain('Second paragraph.');
   });
+  it('a .doc that is really RTF or HTML is read as such', async () => {
+    expect(
+      await parse(
+        new TextEncoder().encode('{\\rtf1\\ansi Saved as Word\\par}'),
+        'application/msword',
+        'r.doc',
+      ),
+    ).toBe('Saved as Word');
+    expect(
+      await parse(
+        new TextEncoder().encode(
+          '\uFEFF<html><body><p>Exported page</p></body></html>',
+        ),
+        'application/msword',
+        'r.doc',
+      ),
+    ).toBe('Exported page');
+  });
+
   it('a corrupt file throws an Error', async () => {
     await expect(
       parse(

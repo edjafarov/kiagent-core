@@ -33,7 +33,12 @@ function block(el: Element): string | null {
         byLocalName(el, 'table-row')
           .map((row) =>
             byLocalName(row, 'table-cell')
-              .map((c) => textContent(c).trim())
+              .map((c) =>
+                [...byLocalName(c, 'p'), ...byLocalName(c, 'h')]
+                  .map((p) => textContent(p).trim())
+                  .filter(Boolean)
+                  .join(' '),
+              )
               .join(' | '),
           )
           .filter((r) => r.replace(/[|\s]/g, ''))

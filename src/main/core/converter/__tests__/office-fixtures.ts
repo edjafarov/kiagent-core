@@ -11,6 +11,8 @@ export interface SlideSpec {
   title?: string;
   body?: string[];
   notes?: string[];
+  /** Footer, date and slide-number placeholders, as Header & Footer adds. */
+  chrome?: boolean;
 }
 
 const sp = (paras: string[], ph?: string) =>
@@ -59,7 +61,13 @@ export async function pptxBytes(
       `ppt/slides/slide${n}.xml`,
       `${XML}<p:sld xmlns:p="${P}" xmlns:a="${A}"><p:cSld><p:spTree>${
         s.title ? sp([s.title], 'title') : ''
-      }${s.body ? sp(s.body) : ''}</p:spTree></p:cSld></p:sld>`,
+      }${s.body ? sp(s.body) : ''}${
+        s.chrome
+          ? sp([String(n)], 'sldNum') +
+            sp(['Confidential'], 'ftr') +
+            sp(['13.10.2026'], 'dt')
+          : ''
+      }</p:spTree></p:cSld></p:sld>`,
     );
     if (s.notes) {
       zip.file(

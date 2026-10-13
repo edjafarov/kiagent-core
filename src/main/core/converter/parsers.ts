@@ -192,12 +192,20 @@ async function parseOther(
       return odtToMarkdown(bytes);
     case 'epub':
       return epubToMarkdown(bytes, htmlToMarkdown);
-    case 'word97':
+    case 'word97': {
+      // Many ".doc" files are RTF or HTML saved under the Word name.
+      const head = buf
+        .toString('latin1', 0, 64)
+        .replace(/^\uFEFF|^\xEF\xBB\xBF/, '')
+        .trimStart();
+      if (head.startsWith('{\\rtf')) return rtfBytesToMarkdown(bytes);
+      if (head.startsWith('<')) return htmlToMarkdown(buf.toString('utf8'));
       return docToMarkdown(bytes);
+    }
     case 'rtf':
       return rtfBytesToMarkdown(bytes);
     case 'subtitles':
-      return subtitlesToMarkdown(buf.toString('utf8'));
+      return subtitlesToMarkdown(decodeText(buf));
     case 'html':
       return htmlToMarkdown(buf.toString('utf8'));
     case 'csv':
@@ -226,6 +234,15 @@ async function parseOther(
   }
 }
 
+/** UTF-8, else Windows-1252: most downloaded subtitle files are cp1252. */
+function decodeText(buf: Buffer): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return new TextDecoder('windows-1252').decode(buf);
+  }
+}
+
 export async function htmlToMarkdown(html: string): Promise<string> {
   const { default: TurndownService } = await import('turndown');
   const td = new TurndownService({
@@ -235,7 +252,7 @@ export async function htmlToMarkdown(html: string): Promise<string> {
   // Full documents (saved pages, EPUB chapters) carry <head> metadata and
   // CSS/JS whose text is not content.
   td.remove(['head', 'title', 'style', 'script', 'noscript']);
-  return td.turndown(html);
+  return td.turndown(html.replace(/^\uFEFF/, ''));
 }
 
 function csvToMarkdown(csv: string): string {

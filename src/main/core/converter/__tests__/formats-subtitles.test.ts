@@ -32,6 +32,19 @@ describe('subtitles', () => {
     ).toBe('[01:00] Tom & Jerry');
   });
 
+  it('a cp1252 .srt decodes its umlauts', async () => {
+    const bytes = Buffer.concat([
+      Buffer.from('1\n00:00:01,000 --> 00:00:02,000\nGr', 'latin1'),
+      Buffer.from([0xfc, 0xdf]),
+      Buffer.from('e aus M', 'latin1'),
+      Buffer.from([0xfc]),
+      Buffer.from('nchen\n', 'latin1'),
+    ]);
+    expect(
+      await parse(new Uint8Array(bytes), 'application/x-subrip', 'a.srt'),
+    ).toBe('[00:00] Grüße aus München');
+  });
+
   it('parse() dispatches .srt and .vtt', async () => {
     const bytes = new TextEncoder().encode(
       '1\n00:00:01,000 --> 00:00:02,000\nHi\n',

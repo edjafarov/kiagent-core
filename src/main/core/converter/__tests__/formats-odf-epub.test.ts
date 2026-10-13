@@ -26,6 +26,17 @@ describe('odt', () => {
   });
 });
 
+it('odt table cells with several paragraphs keep a space between them', async () => {
+  const md = await parse(
+    await odtBytes(
+      '<table:table><table:table-row><table:table-cell><text:p>First para</text:p><text:p>Second para</text:p></table:table-cell></table:table-row></table:table>',
+    ),
+    'application/vnd.oasis.opendocument.text',
+    'a.odt',
+  );
+  expect(md).toBe('First para Second para');
+});
+
 describe('ods', () => {
   it('goes through the spreadsheet path', async () => {
     const md = await parse(
