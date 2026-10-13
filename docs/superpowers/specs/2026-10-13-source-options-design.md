@@ -1,6 +1,6 @@
 # Source options + "Skip subagent sessions" — design
 
-Rev 2 · 2026-10-13 · core `feat/source-options` (off origin/dev v0.110.2) + `kia-plugins/agent-sessions-kia-connector`
+Rev 3 · 2026-10-13 · core `feat/source-options` (off origin/dev v0.110.2) + `kia-plugins/agent-sessions-kia-connector`
 
 ## 1. Problem
 
@@ -44,7 +44,7 @@ export interface SourceOption {
 export interface SourceDescriptor { …; options?: SourceOption[] }   // ≤ 8 entries, unique keys
 ```
 
-**Storage:** values live in their own namespace, `accounts.config.options.<key>`. They never sit next to `outbound`, `folderRoots`, `roots`, `paths` or a connector's own fields, so no option key can collide with a field core or a connector already uses. Only `setOption` writes the namespace (§3.3), and every other config writer keeps it (§3.4).
+**Storage:** values live in their own namespace, `accounts.config.options.<key>`. They never sit next to `outbound`, `folderRoots`, `roots`, `paths` or a connector's own fields, so no option key can collide with a field core or a connector already uses. Only `setAccountOption` writes the namespace, and every other config write keeps it in-transaction (§3.3).
 
 **Effective value:** `optionValue(descriptor, config, key)`. It returns `config.options[key]` when that is a boolean, otherwise `option.default`. It lives in `src/shared/` for the renderer and is exported from the SDK for connectors.
 
@@ -63,28 +63,33 @@ Core validates no runtime descriptor today: `extension-platform.ts:756-775` regi
 
 Bundled in-process sources don't declare options, so they need no gate.
 
-### 3.3 Writing an option: `accounts:set-option`
+### 3.3 One store rule owns `options`
+
+Five places write `accounts.config` wholesale:
+- the `config` op behind `setAccountConfig`, used by `updateConfig` (`engine.ts:1999`) and `accounts:update-outbound` (`main.ts:633`);
+- the connect upsert (`write-tx.ts:599`, `config = excluded.config`);
+- `applyFolderScope` (`write-tx.ts:~1140`, from `manageFolders`' "complete canonical config", `engine.ts:1770`);
+- and, after this change, the option write itself.
+
+Each engine-side read-merge-write leaves a window in which a concurrent writer is lost. So **ownership lives in the store, inside each write's own transaction**:
+
+- **`keepOptions(rowConfig, nextConfig)`:** in write-tx, every wholesale config write (the `config` op, the create upsert, `applyFolderScope`) replaces `nextConfig.options` with the row's current `options`. If the row has none, any incoming `options` key is removed. The value is read in the same transaction as the write, because the DB worker runs one transaction at a time. Connectors and engine callers therefore never set or reset options, and a connector's `connect`/`manageFolders` result cannot touch them either.
+- **New op `option`:** `store.setAccountOption(id, key, value)` → `UPDATE accounts SET config = json_set(config, '$.options.' || ?, json(?)) WHERE id = ?`. It is one statement, so two toggles on different keys cannot lose each other, and it is logged through `accountWrite` so a commit is emitted.
+- **Re-add:** the upsert runs `keepOptions` against the existing row, so Add-source on an already-connected identifier keeps the options. No engine lookup is needed. Remove deletes the row (`write-tx.ts:813`), so a later Add starts from defaults.
+- **`updateConfig`:** refuses an `options` key with `OptionConfigError`, the same way it refuses `folderRoots`, so an explicit attempt fails loudly instead of being silently dropped.
+
+### 3.4 Writing an option: `accounts:set-option`
 
 `{accountId, key, value: boolean} → void` is a new invoke channel. It goes into `Invokes` and `INVOKE_CHANNEL_MAP` (`shared/ipc.ts`) and gets a `main.ts` handler next to `accounts:update-config` (`:629`).
 
-`engine.setOption(accountId, key, value)` mirrors `updateConfig` (`engine.ts:~1985-2025`) and adds nothing to store or write-tx:
+`engine.setOption(accountId, key, value)`:
 1. **Validation:** the account exists, its source's descriptor declares `key`, and `value` is a boolean. Otherwise it throws `OptionConfigError`.
-2. **Busy guards:** `activeByAccount` / `transitionIntents` throw `AccountFlowBusyError`, exactly as in `updateConfig`.
-3. **No-op:** if `optionValue(...) === value`, it returns.
-4. **Write:** `store.setAccountConfig(id, {...existing.config, options: {...existing.config.options, [key]: value}})`.
-5. **Restart:** it uses the same `running.has` / not-paused / not-needsReauth gate as `updateConfig`. It grants **no** reconcile allowance, because an option is not a scope change.
+2. **Busy guards:** the same `activeByAccount` / `transitionIntents` guards as `updateConfig` (`engine.ts:1985-1988`) throw `AccountFlowBusyError`.
+3. **No-op:** if the effective value already equals `value`, it returns.
+4. **Write:** `store.setAccountOption(id, key, value)`.
+5. **Restart:** the same `running.has` / not-paused / not-needsReauth restart gate as `updateConfig` (`engine.ts:2028-2031`). It grants **no** reconcile allowance.
 
 A loop that isn't running picks up the value at its next cadence tick. Nothing promises immediacy.
-
-### 3.4 Other config writers keep `options`
-
-- **`updateConfig`** refuses an `options` key, the same way it refuses `folderRoots`, and carries `existing.config.options` into what it writes.
-- **`accounts:update-outbound`** already spreads the current row (`main.ts:633`), so `options` survives. It is imap-only (`SourceDetail.tsx:189`), so it never shares an account with a declared option.
-- **Connect upsert:**
-  - core drops any `options` key from `connected.config`, because connectors don't write options;
-  - core then copies `prior.config.options` from an existing account with the same source and identifier;
-  - this lookup is **not** gated on `folderScope`, unlike the scope carry-over at `engine.ts:1112`;
-  - the only path it covers is Add-source on an already-connected identifier (Remove deletes the row, `write-tx.ts:813`).
 
 ### 3.5 UI: the Options card
 
@@ -164,21 +169,26 @@ options: [{ key: 'skipSubagents', type: 'boolean', default: true,
 **Core:**
 - **`validateSourceOptions`:** accepts a valid set; rejects a duplicate key, a bad key pattern, a non-boolean default, a too-long label, and more than 8 entries. An invalid extension source is not registered and a warning is logged.
 - **`setOption`:**
-  - writes `options.<key>` and keeps every other config key;
+  - writes `options.<key>` through `setAccountOption` and keeps every other config key;
   - an undeclared key throws, and so does a non-boolean;
   - busy throws;
   - a no-op neither writes nor restarts;
   - a change restarts a running loop and leaves a paused one paused;
   - no allowance is granted.
-- **`updateConfig`:** refuses `options` and keeps the existing `options`.
-- **Connect upsert:** keeps the prior `options` for a non-folderScope source, and drops a connector-written `options`.
+- **`updateConfig`:** refuses `options`.
+- **write-tx `keepOptions`:**
+  - the `config` op, the create upsert (re-add) and `applyFolderScope` each keep the row's `options`;
+  - each drops an incoming `options` when the row has none.
+- **`setAccountOption`:**
+  - two keys written back to back are both present;
+  - a whole-config write in between keeps both.
 - **IPC map** includes `accounts:set-option`.
 - **Options card:** shows the effective default, toggles, is disabled while pending, and reverts with a message on error.
 
 **Connector:**
 - **Skip on, previously indexed:** the deletion-only batches carry exactly the subagent refs, with no task or main refs, and a second pull emits nothing.
 - **More than 500 deletions:** split into several batches. The first batch's cursor still holds the `fps` entries of the later chunks, so a crash after batch 1 is followed by a replay that deletes the remainder.
-- **Skip on, fresh account:** no subagent doc is ever emitted.
+- **Skip on, fresh account:** no subagent with a parsed header is ever emitted.
 - **Skip off after on:** subagents are re-emitted, and main sessions and tasks are not re-rendered.
 - **Nested Codex subagent:** deleted.
 - **Claude task unit** with `parentH`: not a subagent.
