@@ -19,9 +19,11 @@ import {
   childAt,
   loadFolder,
   PSTFile as PstFileClass,
+  attachmentNamesOf,
   propSize,
   rawProp,
   recipientsOf,
+  rowLimit,
   subfolderNids,
 } from './pst-tables';
 import {
@@ -147,6 +149,8 @@ export async function fromOf(m: PSTMessage): Promise<string> {
 
 /** Recipients kept per message (a memo to a whole company lists hundreds). */
 const MAX_RECIPIENTS = 200;
+/** Attachment names listed per message. */
+const MAX_ATTACHMENTS = 100;
 
 function recipients(
   pst: PSTFile,
@@ -154,7 +158,13 @@ function recipients(
 ): { to: string[]; cc: string[] } {
   const to: string[] = [];
   const cc: string[] = [];
-  for (const r of recipientsOf(pst, m, MAX_RECIPIENTS)) {
+  let rows: ReturnType<typeof recipientsOf>;
+  try {
+    rows = recipientsOf(pst, m, MAX_RECIPIENTS);
+  } catch {
+    return { to, cc }; // a damaged recipient table: the message still counts
+  }
+  for (const r of rows) {
     const addr = [r.smtpAddress, r.emailAddress].find(isAddr);
     const name = (r.displayName ?? '').trim();
     const v = addr ? withName(name, addr.trim()) : name;
@@ -167,10 +177,20 @@ function recipients(
 
 const isMail = (cls: string) => /^ipm\.(note|schedule\.meeting)/i.test(cls);
 
+type Body = { text: string; html: string | null; truncated: boolean };
+
+/** The body; a damaged one (bad block ref, bad LZFu) leaves the message
+ *  headers-only rather than dropping it. */
+async function bodyOf(m: PSTMessage): Promise<Body> {
+  try {
+    return await readBody(m);
+  } catch {
+    return { text: '', html: null, truncated: false };
+  }
+}
+
 /** The body as markdown, never reading a property past its size cap. */
-async function bodyOf(
-  m: PSTMessage,
-): Promise<{ text: string; html: string | null; truncated: boolean }> {
+async function readBody(m: PSTMessage): Promise<Body> {
   const cut = (s: string) => s.slice(0, MAX_MESSAGE_BYTES);
   const plain = propSize(m, PR_BODY);
   if (plain > 0 && plain <= MAX_MESSAGE_BYTES && m.body.trim())
@@ -215,16 +235,7 @@ async function messageChild(
   const { to, cc } = recipients(pst, m);
   const subject = (m.subject ?? '').trim();
   const body = await bodyOf(m);
-  const attachments: string[] = [];
-  for (let i = 0; i < m.numberOfAttachments; i++) {
-    try {
-      const a = m.getAttachment(i);
-      const name = a.longFilename || a.filename;
-      if (name) attachments.push(name);
-    } catch {
-      // an unreadable attachment row: the message still counts
-    }
-  }
+  const attachments = attachmentNamesOf(m, MAX_ATTACHMENTS);
   let markdown = renderMail({
     subject: subject || undefined,
     from: from || undefined,
@@ -338,7 +349,7 @@ export async function expandPst(
       }
       if (!folder) return { items: [], resume: null, restart: true };
       // Fewer rows than the saved position: the folder changed in place.
-      if (state.child > folder.contentCount)
+      if (state.child > rowLimit(folder))
         return { items: [], resume: null, restart: true };
       for (;;) {
         const at = childAt(pst, folder, state.child);

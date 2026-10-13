@@ -7,7 +7,8 @@
  *  fallback path does not catch at all, `getSubFolders()` loads every child
  *  folder at once, the body getters read a whole property before anyone
  *  can look at its size, and `getRecipient(i)` re-reads the whole recipient
- *  table per call (quadratic: a 400-recipient Enron memo took seconds). */
+ *  table per call (quadratic: a 400-recipient Enron memo took seconds);
+ *  `getAttachment(i)` does the same with the attachment table. */
 import Long from 'long';
 // Only the package root: a deep `pst-extractor/dist/...` import would be
 // bundled beside the external package (webpack matches externals by exact
@@ -69,6 +70,13 @@ function loadMessage(pst: PSTFile, nid: number): PSTMessage | null {
   return new PSTMessage(pst, nodeOf(pst, nid));
 }
 
+/** Rows a folder's contents table can hold: the larger of the table's row
+ *  count and PR_CONTENT_COUNT (either may understate). */
+export function rowLimit(folder: PSTFolder): number {
+  const t = internals(folder).emailsTable;
+  return Math.max(folder.contentCount, t?.rowCount ?? 0);
+}
+
 export type ChildAt =
   | { end: true }
   | { end: false; message: PSTMessage | null; skipped: boolean };
@@ -88,7 +96,7 @@ export function childAt(pst: PSTFile, folder: PSTFolder, i: number): ChildAt {
   }
   let nid: number | null = null;
   if (f.emailsTable) {
-    if (i >= folder.contentCount) return { end: true };
+    if (i >= rowLimit(folder)) return { end: true };
     let row: RowItem | undefined;
     try {
       row = f.emailsTable.getItems(i, 1)[0]?.get(ROW_NID);
@@ -115,11 +123,17 @@ export function subfolderNids(
   from: number,
   n: number,
 ): number[] {
-  if (!folder.hasSubfolders) return [];
+  // No `hasSubfolders` short-cut: third-party writers leave it stale. A
+  // damaged hierarchy table hides that subtree, never the whole PST.
   const f = internals(folder);
-  f.initSubfoldersTable();
-  if (!f.subfoldersTable) return [];
-  const rows = f.subfoldersTable.getItems(from, n);
+  let rows: Array<Map<number, RowItem>>;
+  try {
+    f.initSubfoldersTable();
+    if (!f.subfoldersTable) return [];
+    rows = f.subfoldersTable.getItems(from, n);
+  } catch {
+    return [];
+  }
   const out: number[] = [];
   for (const r of rows) {
     const item = r.get(ROW_NID);
@@ -147,6 +161,29 @@ export function recipientsOf(
           row as unknown as ConstructorParameters<typeof PSTRecipient>[1],
         ),
     );
+}
+
+/** The names of the first `max` attachments. The rows are read ONCE and
+ *  handed back to the library's own unbounded `getItems()` calls, so each
+ *  `getAttachment(i)` costs its own details table only. */
+export function attachmentNamesOf(m: PSTMessage, max: number): string[] {
+  const n = m.numberOfAttachments; // builds the table
+  const table = (m as unknown as { attachmentTable: Table | null })
+    .attachmentTable;
+  if (!table || n === 0) return [];
+  const rows = table.getItems(0, Math.min(n, max));
+  table.getItems = () => rows;
+  const names: string[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    try {
+      const a = m.getAttachment(i);
+      const name = a.longFilename || a.filename;
+      if (name) names.push(name);
+    } catch {
+      // an unreadable attachment row: the message still counts
+    }
+  }
+  return names;
 }
 
 /** A property's stored size, read without materialising it (an external

@@ -156,6 +156,84 @@ describe('expandPst', () => {
     expect(sent?.metadata.to).toEqual(['epfromer@gmail.com']);
   });
 
+  it('reads the attachment table once per message, names intact', async () => {
+    const real = tables.attachmentNamesOf;
+    const reads: number[] = [];
+    jest.spyOn(tables, 'attachmentNamesOf').mockImplementation((m, max) => {
+      const t = m as unknown as {
+        attachmentTable: { getItems: unknown } | null;
+      };
+      void m.numberOfAttachments;
+      let calls = 0;
+      if (t.attachmentTable) {
+        const tbl = t.attachmentTable as {
+          getItems: (...a: number[]) => unknown;
+        };
+        const orig = tbl.getItems.bind(tbl);
+        tbl.getItems = (...a: number[]) => {
+          calls += 1;
+          return orig(...a);
+        };
+      }
+      const out = real(m, max);
+      if (out.length > 0) reads.push(calls);
+      return out;
+    });
+    const r = await expandPst(file, null, ALL);
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every((n) => n === 1)).toBe(true);
+    const three = r.items.find((c) => c.title === 'text, jpg, pdf attachments');
+    expect(three?.markdown).toMatch(/\*\*Attachments:\*\* .*text\.txt/);
+  });
+
+  it('a damaged hierarchy table hides only its subtree; a stale flag hides nothing', () => {
+    const row = new Map([[0x67f2, { entryValueReference: 42, itemIndex: 0 }]]);
+    const stale = {
+      hasSubfolders: false,
+      initSubfoldersTable: () => {},
+      subfoldersTable: { getItems: () => [row] },
+    } as unknown as PSTFolder;
+    expect(tables.subfolderNids(stale, 0, 10)).toEqual([42]);
+    const broken = {
+      hasSubfolders: true,
+      initSubfoldersTable: () => {
+        throw new Error('Descriptor not found');
+      },
+    } as unknown as PSTFolder;
+    expect(tables.subfolderNids(broken, 0, 10)).toEqual([]);
+  });
+
+  it('rows past an understated PR_CONTENT_COUNT are still read', () => {
+    const pst = new PSTFile(file);
+    try {
+      jest.spyOn(pst, 'getDescriptorIndexNode').mockImplementation(() => {
+        throw new Error('Descriptor not found');
+      });
+      const row = new Map([
+        [0x67f2, { entryValueReference: 0x200004, itemIndex: 0 }],
+      ]);
+      const folder = {
+        contentCount: 1,
+        initEmailsTable: () => {},
+        emailsTable: { rowCount: 3, getItems: () => [row] },
+        fallbackEmailsTable: null,
+      } as unknown as PSTFolder;
+      expect(tables.childAt(pst, folder, 2)).toMatchObject({ end: false });
+      expect(tables.childAt(pst, folder, 3)).toEqual({ end: true });
+    } finally {
+      pst.close();
+    }
+  });
+
+  it('a damaged body leaves the message headers-only, never drops it', async () => {
+    jest.spyOn(tables, 'propSize').mockImplementation(() => {
+      throw new Error('getOffsetIndexNode: not found');
+    });
+    const r = await expandPst(file, null, ALL);
+    expect(r.items.length).toBe(11);
+    expect(r.items.every((c) => c.title.length > 0)).toBe(true);
+  });
+
   it('stops walking at the folder cap and says so', async () => {
     PST_LIMITS.folders = 3;
     const r = await expandPst(file, null, ALL);
