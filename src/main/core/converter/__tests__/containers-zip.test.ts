@@ -101,6 +101,26 @@ async function drain(
   throw new Error('zip never finished');
 }
 
+/** Wraps every write-mode FileHandle's `write`; `onWrite` may throw. */
+function spyOnWrites(onWrite: (chunk: Buffer) => void): void {
+  const realOpen = fs.promises.open;
+  jest.spyOn(fs.promises, 'open').mockImplementation((async (
+    ...args: Parameters<typeof fs.promises.open>
+  ) => {
+    const fh = await realOpen(...args);
+    if (args[1] !== 'w') return fh;
+    const write = fh.write.bind(fh) as (...a: unknown[]) => Promise<unknown>;
+    (fh as { write: unknown }).write = async (
+      chunk: Buffer,
+      ...rest: unknown[]
+    ) => {
+      onWrite(chunk.subarray(0, (rest[1] as number) ?? chunk.length));
+      return write(chunk, ...rest);
+    };
+    return fh;
+  }) as typeof fs.promises.open);
+}
+
 describe('expandZip', () => {
   it('routes each member by the local file policy', async () => {
     const p = await writeZip('export.zip', {
@@ -482,19 +502,10 @@ describe('nested containers inside a zip', () => {
         declaredSize: 50,
       },
     ]);
-    const real = fs.createWriteStream;
     let written = 0;
-    jest.spyOn(fs, 'createWriteStream').mockImplementation(((
-      ...args: Parameters<typeof fs.createWriteStream>
-    ) => {
-      const ws = real(...args);
-      const write = ws.write.bind(ws);
-      ws.write = ((chunk: Buffer, ...rest: unknown[]) => {
-        written += chunk.length;
-        return (write as (...a: unknown[]) => boolean)(chunk, ...rest);
-      }) as typeof ws.write;
-      return ws;
-    }) as typeof fs.createWriteStream);
+    spyOnWrites((chunk) => {
+      written += chunk.length;
+    });
     const outcomes: ExtractOutcome[] = [];
     await drain(p, 'extract', DEFAULT_EXPAND_BUDGET, outcomes);
     expect(outcomes).toEqual(['corrupt']);
@@ -511,6 +522,27 @@ describe('nested containers inside a zip', () => {
     expect(await extractMember(p, n, path.join(dir, 'x.mbox'))).toBe(
       'mismatch',
     );
+  });
+
+  it('a disk that fills mid-copy is nospace and leaves no .part', async () => {
+    const data = Buffer.concat([
+      Buffer.from(mboxOf('A')),
+      crypto.randomBytes(4 * 1024 * 1024),
+    ]);
+    const p = rawZip('full.zip', [{ name: 'm.mbox', data, deflate: true }]);
+    const n = (
+      (await expandZip(p, null, DEFAULT_EXPAND_BUDGET)).resume as ZipResume
+    ).nested!;
+    let writes = 0;
+    spyOnWrites(() => {
+      writes += 1;
+      if (writes === 2)
+        throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+    });
+    const dest = path.join(dir, 'full.mbox');
+    expect(await extractMember(p, n, dest)).toBe('nospace');
+    expect(fs.existsSync(`${dest}.part`)).toBe(false);
+    expect(fs.existsSync(dest)).toBe(false);
   });
 
   it('too little free disk is nospace', async () => {

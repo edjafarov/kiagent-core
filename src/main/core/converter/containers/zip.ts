@@ -7,8 +7,6 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { Readable, Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import zlib from 'node:zlib';
 
 import yauzl from 'yauzl';
@@ -497,6 +495,101 @@ async function rawRange(
  * child. Integrity is the declared size AND CRC-32 — a forged size never
  * yields a silently truncated mailbox. Throws on abort and I/O errors.
  */
+const COPY_CHUNK = 1024 * 1024;
+
+/**
+ * Copies `length` raw bytes at `start` to `dest`, inflating when asked, and
+ * stops past `cap` output bytes (`over`). One fixed read buffer and file
+ * handles, never fs streams: under Electron a multi-GB copy through
+ * ReadStream/WriteStream allocated hundreds of MB of chunks and stalled the
+ * main event loop for seconds (measured, 2 GB member); this loop stays flat.
+ */
+async function copyRange(
+  src: string,
+  dest: string,
+  start: number,
+  length: number,
+  deflated: boolean,
+  cap: number,
+  signal?: AbortSignal,
+): Promise<{ count: number; crc: number; over: boolean }> {
+  let count = 0;
+  let crc = 0;
+  let over = false;
+  const input = await fs.promises.open(src, 'r');
+  let output: fs.promises.FileHandle | null = null;
+  const inflater = deflated ? zlib.createInflateRaw() : null;
+  try {
+    output = await fs.promises.open(dest, 'w');
+    const out = output;
+    /** Appends output bytes; false once past the cap. */
+    const emit = async (chunk: Buffer): Promise<boolean> => {
+      count += chunk.length;
+      if (count > cap) {
+        over = true;
+        return false;
+      }
+      crc = zlib.crc32(chunk, crc);
+      await out.write(chunk, 0, chunk.length);
+      return true;
+    };
+    const drained = inflater
+      ? (async () => {
+          for await (const chunk of inflater) {
+            signal?.throwIfAborted();
+            if (!(await emit(chunk as Buffer))) {
+              inflater.destroy();
+              return;
+            }
+          }
+        })()
+      : null;
+    // A rejection before it is awaited must not surface as unhandled.
+    drained?.catch(() => {});
+    const buf = Buffer.allocUnsafe(COPY_CHUNK);
+    let pos = start;
+    const end = start + length;
+    while (pos < end && !over) {
+      signal?.throwIfAborted();
+      // eslint-disable-next-line no-await-in-loop
+      const { bytesRead } = await input.read(
+        buf,
+        0,
+        Math.min(buf.length, end - pos),
+        pos,
+      );
+      if (bytesRead === 0) break;
+      pos += bytesRead;
+      if (!inflater) {
+        // eslint-disable-next-line no-await-in-loop
+        if (!(await emit(buf.subarray(0, bytesRead)))) break;
+      } else if (inflater.destroyed) {
+        break; // past the cap, or a zlib error `drained` rethrows
+      } else {
+        // A copy: the inflater may still hold its input when `buf` refills.
+        const more = inflater.write(Buffer.from(buf.subarray(0, bytesRead)));
+        if (!more)
+          // eslint-disable-next-line no-await-in-loop
+          await Promise.race([
+            new Promise((resolve) => {
+              inflater.once('drain', resolve);
+            }),
+            drained,
+          ]);
+      }
+    }
+    signal?.throwIfAborted();
+    if (inflater && !inflater.destroyed) inflater.end();
+    await drained;
+    signal?.throwIfAborted();
+  } finally {
+    inflater?.destroy();
+    await input.close();
+    await output?.close();
+  }
+  return { count, crc, over };
+}
+
 export async function extractMember(
   zipPath: string,
   n: NestedState,
@@ -536,40 +629,29 @@ export async function extractMember(
   let count = 0;
   let crc = 0;
   let over = false;
-  const counter = new Transform({
-    transform(chunk: Buffer, _enc, cb) {
-      count += chunk.length;
-      if (count > n.size) {
-        over = true;
-        cb(new Error('zip: member inflates past its declared size'));
-        return;
-      }
-      crc = zlib.crc32(chunk, crc);
-      cb(null, chunk);
-    },
-  });
-  const source =
-    length > 0
-      ? fs.createReadStream(zipPath, { start, end: start + length - 1 })
-      : Readable.from([]);
   try {
-    await pipeline(
-      [
-        source,
-        ...(e.compressionMethod === 8 ? [zlib.createInflateRaw()] : []),
-        counter,
-        fs.createWriteStream(part),
-      ],
-      { signal: opts.signal },
+    const copied = await copyRange(
+      zipPath,
+      part,
+      start,
+      length,
+      e.compressionMethod === 8,
+      n.size,
+      opts.signal,
     );
+    ({ count, crc } = copied);
+    over = copied.over;
   } catch (err) {
     await fs.promises.rm(part, { force: true });
     if (opts.signal?.aborted) throw err;
-    if (over) return 'corrupt';
     if ((err as NodeJS.ErrnoException).code === 'ENOSPC') return 'nospace';
     if (String((err as NodeJS.ErrnoException).code ?? '').startsWith('Z_'))
       return 'corrupt';
     throw err;
+  }
+  if (over) {
+    await fs.promises.rm(part, { force: true });
+    return 'corrupt';
   }
   if (count !== n.size || crc >>> 0 !== n.crc32 >>> 0) {
     await fs.promises.rm(part, { force: true });
