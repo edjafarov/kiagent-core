@@ -1,6 +1,8 @@
 /** `expandPage` dispatch: one bounded page of children from a container
  *  read by path. Pure (converter child). */
+import { expandEnex, type EnexResume } from './enex';
 import { expandMbox, type MboxResume } from './mbox';
+import { expandVcard, type VcardResume } from './vcard';
 import type { ContainerKind, ExpandBudget, ExpandResult } from './types';
 
 export async function expandPage(
@@ -12,6 +14,10 @@ export async function expandPage(
   switch (kind) {
     case 'mbox':
       return expandMbox(path, resume as MboxResume | null, budget);
+    case 'vcard':
+      return expandVcard(path, resume as VcardResume | null, budget);
+    case 'enex':
+      return expandEnex(path, resume as EnexResume | null, budget);
     default:
       throw new Error(`expander not implemented: ${kind} (${path})`);
   }
