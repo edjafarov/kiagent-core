@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@chainsafe/libp2p-yamux": "^7.0.4",
+    "@kenjiuno/decompressrtf": "^0.1.4",
     "@kenjiuno/msgreader": "1.28.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@xmldom/xmldom": "^0.8.13",

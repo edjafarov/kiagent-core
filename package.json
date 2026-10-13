@@ -127,6 +127,7 @@
     "@electron/notarize": "^3.1.0",
     "@hyzyla/pdfium": "^2.1.13",
     "@iarna/toml": "^2.2.5",
+    "@kenjiuno/decompressrtf": "^0.1.4",
     "@kenjiuno/msgreader": "1.28.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@xmldom/xmldom": "^0.8.13",

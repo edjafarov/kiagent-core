@@ -192,6 +192,10 @@ async function parseOther(
       const { docToMarkdown } = await import('./formats/doc');
       return docToMarkdown(bytes);
     }
+    case 'rtf': {
+      const { rtfBytesToMarkdown } = await import('./formats/rtf');
+      return rtfBytesToMarkdown(bytes);
+    }
     case 'html':
       return htmlToMarkdown(buf.toString('utf8'));
     case 'csv':
@@ -277,10 +281,51 @@ function renderMail(m: MailParts): string {
   return [head.join('\n\n'), m.body.trim()].filter(Boolean).join('\n\n');
 }
 
-/** Outlook .msg → the same markdown as .eml. Body: plain text, else the HTML
- *  body (string or, from "new Outlook", raw UTF-8 bytes). RTF-only messages
- *  index headers + attachment names (deliberate spec deviation, see the
- *  outlook-msg plan). */
+/** Compressed RTF above this is not decompressed: the LZFu output (a JS
+ *  number array) can be ~8× the input. */
+const MAX_COMPRESSED_RTF_BYTES = 4 * 1024 * 1024;
+
+/** The text body of a parsed .msg: plain text, else the HTML body (string
+ *  or, from "new Outlook", raw UTF-8 bytes), else the compressed RTF body,
+ *  decompressed and stripped. */
+export async function msgBody(d: {
+  body?: string;
+  bodyHtml?: string;
+  html?: Uint8Array;
+  compressedRtf?: Uint8Array;
+}): Promise<string> {
+  if (d.body?.trim()) return d.body;
+  // `html` bytes are decoded as UTF-8 (new Outlook writes UTF-8). Classic
+  // Outlook messages with codepage HTML always carry a plain `body`, so they
+  // never reach this branch.
+  const html =
+    d.bodyHtml ?? (d.html ? new TextDecoder().decode(d.html) : undefined);
+  if (html) return htmlToMarkdown(html);
+  const rtf = d.compressedRtf;
+  if (!rtf || rtf.length < 16 || rtf.length > MAX_COMPRESSED_RTF_BYTES)
+    return '';
+  // The header's size field drives the decompressor's loop: a corrupt one
+  // would spin far past the input, so require it to match.
+  const declared = Buffer.from(
+    rtf.buffer,
+    rtf.byteOffset,
+    rtf.byteLength,
+  ).readUInt32LE(0);
+  if (declared + 4 > rtf.length) return '';
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { decompressRTF } =
+    require('@kenjiuno/decompressrtf') as typeof import('@kenjiuno/decompressrtf');
+  const { rtfToText } = await import('./formats/rtf');
+  try {
+    return rtfToText(
+      Buffer.from(decompressRTF(Array.from(rtf))).toString('latin1'),
+    );
+  } catch {
+    return ''; // an unreadable RTF body still indexes headers + attachments
+  }
+}
+
+/** Outlook .msg → the same markdown as .eml; body per `msgBody`. */
 async function msgToMarkdown(buf: Buffer): Promise<string> {
   // A typed lazy require, NOT `await import()`: under module node16 a dynamic
   // import of this CJS package yields the class at `.default.default` (TS2351
@@ -309,12 +354,7 @@ async function msgToMarkdown(buf: Buffer): Promise<string> {
       .map((r) => who(r.name, r.smtpAddress ?? r.email))
       .filter(Boolean)
       .join(', ');
-  // `html` bytes are decoded as UTF-8 (new Outlook writes UTF-8). Classic
-  // Outlook messages with codepage HTML always carry a plain `body`, so they
-  // never reach this branch.
-  const html =
-    d.bodyHtml ?? (d.html ? new TextDecoder().decode(d.html) : undefined);
-  const body = d.body?.trim() ? d.body : html ? await htmlToMarkdown(html) : '';
+  const body = await msgBody(d);
   const when = d.messageDeliveryTime ?? d.clientSubmitTime;
   return renderMail({
     subject: d.subject,
