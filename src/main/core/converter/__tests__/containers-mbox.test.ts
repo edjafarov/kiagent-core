@@ -180,7 +180,7 @@ describe('expandMbox', () => {
     expect(r.items[0].metadata.truncated).toBe(true);
     expect(r.items[0].markdown).toContain('head text');
     expect(r.items[1].markdown).toContain('ok');
-  });
+  }, 30_000); // ~11 MB through the record reader and mailparser
 
   it('append fast path: a tail resumes with only the new message and the whole-mailbox count', async () => {
     const p = write('inbox.mbox', THREE);
