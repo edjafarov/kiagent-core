@@ -19,6 +19,15 @@ const write = (name: string, content: string) => {
 };
 
 describe('expandVcard', () => {
+  it('keeps phone-only cards apart', async () => {
+    const card = (tel: string) =>
+      `BEGIN:VCARD\r\nVERSION:3.0\r\nTEL:${tel}\r\nEND:VCARD\r\n`;
+    const p = write('phones.vcf', card('+49 30 1111') + card('+49 30 2222'));
+    const r = await expandVcard(p, null, DEFAULT_EXPAND_BUDGET);
+    expect(r.items).toHaveLength(2);
+    expect(new Set(r.items.map((c) => c.key)).size).toBe(2);
+  });
+
   const VCF = [
     'BEGIN:VCARD',
     'VERSION:3.0',
@@ -97,6 +106,30 @@ describe('expandVcard', () => {
 });
 
 describe('expandEnex', () => {
+  it('splits notes that share a line (compact export)', async () => {
+    const note = (t: string, body: string) =>
+      `<note><title>${t}</title><content><![CDATA[<en-note><div>${body}</div></en-note>]]></content><created>20240115T100000Z</created></note>`;
+    const p = write(
+      'compact.enex',
+      `<?xml version="1.0" encoding="UTF-8"?><en-export>${note('A', 'alpha')}${note('B', 'beta')}${note('C', 'gamma')}</en-export>`,
+    );
+    const r = await expandEnex(p, null, DEFAULT_EXPAND_BUDGET);
+    expect(r.items.map((n) => n.title)).toEqual(['A', 'B', 'C']);
+    // Paged one at a time, the byte offsets resume between notes on the line.
+    const titles: string[] = [];
+    let resume = null as unknown;
+    do {
+      // eslint-disable-next-line no-await-in-loop
+      const page = await expandEnex(p, resume as never, {
+        ...DEFAULT_EXPAND_BUDGET,
+        items: 1,
+      });
+      titles.push(...page.items.map((n) => n.title));
+      resume = page.resume;
+    } while (resume);
+    expect(titles).toEqual(['A', 'B', 'C']);
+  });
+
   const note = (title: string, created: string, extra = '') =>
     `<note><title>${title}</title><content><![CDATA[<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd"><en-note><div>Body of ${title}</div><en-todo checked="true"/>done item<en-media hash="abc" type="image/png"/></en-note>]]></content><created>${created}</created><updated>20240116T090000Z</updated><tag>work</tag><tag>ideas</tag><note-attributes><source-url>https://example.com/x</source-url><author>Anna</author></note-attributes>${extra}</note>\n`;
   const ENEX = (body: string) =>

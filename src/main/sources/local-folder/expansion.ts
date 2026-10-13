@@ -61,7 +61,10 @@ export function noteContainer(
   kind: ContainerKind,
   at: FileStamp,
 ): Expansion {
-  if (!prev || prev.kind !== kind) return fullPath(kind, at);
+  // A new expander version restarts even a pending record: its `resume` has
+  // the old pager's shape.
+  if (!prev || prev.kind !== kind || prev.v !== EXPANDER_VERSION[kind])
+    return fullPath(kind, at);
   const mbox = kind === 'mbox';
   const same = mbox
     ? at.size === prev.size
@@ -73,7 +76,6 @@ export function noteContainer(
     if (mbox && at.size > prev.size) return { ...prev, ...at };
     return fullPath(kind, at);
   }
-  if (prev.v !== EXPANDER_VERSION[kind]) return fullPath(kind, at);
   if (same) return prev;
   if (mbox && prev.state === 'done' && prev.tail && at.size > prev.size)
     return {
@@ -205,7 +207,9 @@ export async function expansionStep(input: StepInput): Promise<StepOutput> {
   const deletion: ExternalRef = { externalId: containerId, type: 'file' };
   let stats: fs.Stats;
   try {
-    stats = await fs.promises.stat(absPath);
+    // lstat, like the scanner: a container swapped for a symlink (or
+    // anything but a regular file) is gone, never followed.
+    stats = await fs.promises.lstat(absPath);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT')
       return { items: [], deletions: [deletion], rec: null };
@@ -215,6 +219,7 @@ export async function expansionStep(input: StepInput): Promise<StepOutput> {
       rec: { ...rec, notBefore: now + EXPANSION_RETRY_MS },
     };
   }
+  if (!stats.isFile()) return { items: [], deletions: [deletion], rec: null };
   // Full path, step one: archive the container and every child it had
   // (the parent cascade). Its own batch — deletions apply after documents
   // within one commit, so they cannot share one with the re-emission.

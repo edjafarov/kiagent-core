@@ -134,7 +134,9 @@ function cardChild(raw: Buffer): ChildItem | null {
   for (const a of addresses) md.push(`**Address:** ${a}`);
   if (note) md.push(note);
   return {
-    key: `vcf:${sha1(uid || `${name}\n${emails[0] ?? ''}`)}`,
+    // Without a UID: name, first email and first phone — phone-only cards
+    // and same-named people without email stay distinct.
+    key: `vcf:${sha1(uid || `${name}\n${emails[0] ?? ''}\n${phones[0] ?? ''}`)}`,
     type: 'contact.card',
     title: name || phones[0],
     markdown: md.join('\n\n'),

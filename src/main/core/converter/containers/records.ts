@@ -127,3 +127,98 @@ export async function* readRecords(
     await fh.close();
   }
 }
+
+/**
+ * Streams `open … close` elements by byte search, independent of line
+ * breaks — an ENEX export may hold every note on one line. Bytes between
+ * elements are skipped; an element past `maxRecordBytes` keeps its head
+ * and is marked truncated (the rest is read and discarded); one left open
+ * at EOF is yielded truncated. Same offset contract as `readRecords`.
+ */
+export async function* readElements(
+  path: string,
+  offset: number,
+  open: string,
+  close: string,
+  maxRecordBytes: number,
+): AsyncGenerator<RawRecord> {
+  const O = Buffer.from(open);
+  const C = Buffer.from(close);
+  const fh = await fs.promises.open(path, 'r');
+  try {
+    const chunk = Buffer.alloc(CHUNK);
+    let pos = offset;
+    let buf = Buffer.alloc(0);
+    let bufStart = offset; // absolute offset of buf[0]
+    let rec: {
+      start: number;
+      parts: Buffer[];
+      size: number;
+      truncated: boolean;
+    } | null = null;
+    const keep = (b: Buffer) => {
+      if (!rec || b.length === 0) return;
+      const room = maxRecordBytes - rec.size;
+      if (b.length > room) rec.truncated = true;
+      const take = b.subarray(0, Math.max(0, room));
+      if (take.length > 0) {
+        rec.parts.push(Buffer.from(take));
+        rec.size += take.length;
+      }
+    };
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const { bytesRead } = await fh.read(chunk, 0, CHUNK, pos);
+      const eof = bytesRead === 0;
+      if (!eof) {
+        buf = Buffer.concat([buf, chunk.subarray(0, bytesRead)]);
+        pos += bytesRead;
+      }
+      let i = 0;
+      for (;;) {
+        if (!rec) {
+          const s = buf.indexOf(O, i);
+          if (s < 0) {
+            i = Math.max(i, buf.length - (O.length - 1));
+            break;
+          }
+          rec = { start: bufStart + s, parts: [], size: 0, truncated: false };
+          i = s;
+        }
+        const e = buf.indexOf(C, i);
+        if (e < 0) {
+          const upto = Math.max(i, buf.length - (C.length - 1));
+          keep(buf.subarray(i, upto));
+          i = upto;
+          break;
+        }
+        keep(buf.subarray(i, e + C.length));
+        const done: RawRecord = {
+          raw: Buffer.concat(rec.parts),
+          start: rec.start,
+          end: bufStart + e + C.length,
+          truncated: rec.truncated,
+        };
+        rec = null;
+        i = e + C.length;
+        yield done;
+      }
+      buf = Buffer.from(buf.subarray(i));
+      bufStart += i;
+      if (eof) {
+        if (rec) {
+          keep(buf);
+          yield {
+            raw: Buffer.concat(rec.parts),
+            start: rec.start,
+            end: bufStart + buf.length,
+            truncated: true,
+          };
+        }
+        return;
+      }
+    }
+  } finally {
+    await fh.close();
+  }
+}

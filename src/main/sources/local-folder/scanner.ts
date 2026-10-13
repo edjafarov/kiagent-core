@@ -37,6 +37,12 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   return out;
 }
 
+/** Set by a walk that skipped a directory it could not read (or that
+ *  vanished mid-read): its listing is not proof that something is gone. */
+export interface WalkTrouble {
+  incomplete: boolean;
+}
+
 export interface ScannedEntry {
   absPath: string;
   stats: fs.Stats;
@@ -169,13 +175,17 @@ function typeUnknown(d: fs.Dirent): boolean {
  * Only the cheap PATH gate (`isIngestible`) applies here; `walkRoot` adds the
  * size-aware one.
  */
-export async function* walkPaths(rootPath: string): AsyncGenerator<string> {
+export async function* walkPaths(
+  rootPath: string,
+  trouble?: WalkTrouble,
+): AsyncGenerator<string> {
   const open: fs.Dir[] = [];
   const descend = async (dir: string): Promise<void> => {
     try {
       open.push(await fs.promises.opendir(dir));
     } catch {
       // unreadable or vanished — skipped, as suppressErrors did
+      if (trouble) trouble.incomplete = true;
     }
   };
   await descend(path.resolve(rootPath));
@@ -188,6 +198,7 @@ export async function* walkPaths(rootPath: string): AsyncGenerator<string> {
         dirent = await dir.read();
       } catch {
         dirent = null; // the directory went away mid-read
+        if (trouble) trouble.incomplete = true;
       }
       if (dirent === null) {
         open.pop();
@@ -234,8 +245,9 @@ export async function* walkPaths(rootPath: string): AsyncGenerator<string> {
  */
 export async function* walkRoot(
   rootPath: string,
+  trouble?: WalkTrouble,
 ): AsyncGenerator<ScannedEntry> {
-  for await (const absPath of walkPaths(rootPath)) {
+  for await (const absPath of walkPaths(rootPath, trouble)) {
     let stats: fs.Stats;
     try {
       // eslint-disable-next-line no-await-in-loop

@@ -1,3 +1,4 @@
+/** @jest-environment node */
 /**
  * Container expansion through the source (spec B3): real temp dirs, the
  * in-process converter (or a scripted one where timing matters).
@@ -180,6 +181,22 @@ describe('local-folder containers', () => {
     expect(lastCursor(second).expansions).toBeUndefined();
   });
 
+  it('an unreadable subfolder does not drop the containers it hides', async () => {
+    const sub = path.join(dir, 'mail');
+    fs.mkdirSync(sub);
+    const inner = path.join(sub, 'old.mbox');
+    fs.writeFileSync(inner, msg('Old', 14));
+    const first = await run(null);
+    expect(lastCursor(first).expansions?.[id(inner)]?.state).toBe('done');
+    fs.chmodSync(sub, 0o000);
+    try {
+      const second = await run(lastCursor(first));
+      expect(deletions(second)).toEqual([]);
+    } finally {
+      fs.chmodSync(sub, 0o755);
+    }
+  });
+
   it('records under a root that left the config are pruned', async () => {
     const first = await run(null);
     const other = tmp();
@@ -204,6 +221,8 @@ describe('local-folder containers', () => {
 
   it('drains a pending expansion on a quiet watched root, without any fs event', async () => {
     const ac = new AbortController();
+    // A regression fails the expectation below instead of hanging jest.
+    setTimeout(() => ac.abort(), 15_000).unref();
     const seen: B[] = [];
     for await (const b of pull(session([dir], ac.signal, true), null)) {
       seen.push(b);
@@ -242,6 +261,8 @@ describe('local-folder containers', () => {
       },
     };
     const ac = new AbortController();
+    // A regression fails the expectation below instead of hanging jest.
+    setTimeout(() => ac.abort(), 15_000).unref();
     const late = path.join(dir, 'late.txt');
     let lateAtPage: number | null = null;
     const pump = (async () => {
@@ -260,8 +281,33 @@ describe('local-folder containers', () => {
     expect(lateAtPage!).toBeLessThan(pages);
   }, 30_000);
 
+  it('a Thunderbird mailbox written before its .msf is admitted by the .msf', async () => {
+    const ac = new AbortController();
+    // A regression fails the expectation below instead of hanging jest.
+    setTimeout(() => ac.abort(), 15_000).unref();
+    const tb = path.join(dir, 'Sent');
+    let started = false;
+    let kids: DocumentInput[] = [];
+    for await (const b of pull(session([dir], ac.signal, true), null)) {
+      if (!started && b.cursor?.policyVersion) {
+        started = true;
+        await sleep(600);
+        fs.writeFileSync(tb, msg('Early', 21));
+        await sleep(400); // the mailbox's own event is filtered (no .msf yet)
+        fs.writeFileSync(`${tb}.msf`, '// mork');
+      }
+      kids = kids.concat(
+        docs([b]).filter((d) => d.parent?.externalId === id(tb)),
+      );
+      if (kids.length > 0) ac.abort();
+    }
+    expect(kids.map((d) => d.title)).toEqual(['Early']);
+  }, 20_000);
+
   it('a Thunderbird mailbox created under a watched root is expanded', async () => {
     const ac = new AbortController();
+    // A regression fails the expectation below instead of hanging jest.
+    setTimeout(() => ac.abort(), 15_000).unref();
     const tb = path.join(dir, 'Archive');
     let started = false;
     let kids: DocumentInput[] = [];

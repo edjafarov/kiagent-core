@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
 import chokidar from 'chokidar';
 
@@ -99,8 +100,19 @@ export function startWatcher(
   // exist. Filtering all three keeps the watcher's view of the tree identical
   // to the scanner's (`walkPaths`), which is the invariant reconcile depends on.
   const onEvent = (kind: FsEvent['kind']) => (p: string) => {
-    if (!isIngestible(p)) return;
-    queue.push({ kind, absPath: p });
+    // A Thunderbird mailbox is admitted by its `.msf` sibling. If the
+    // mailbox was written first, its own event was filtered; the index's
+    // arrival is what admits it.
+    if (kind === 'add' && p.endsWith('.msf')) {
+      const mailbox = p.slice(0, -'.msf'.length);
+      if (
+        !path.extname(mailbox) &&
+        fs.existsSync(mailbox) &&
+        isIngestible(mailbox)
+      )
+        queue.push({ kind: 'add', absPath: mailbox });
+    }
+    if (isIngestible(p)) queue.push({ kind, absPath: p });
     fire();
   };
   watcher.on('add', onEvent('add'));

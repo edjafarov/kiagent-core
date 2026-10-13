@@ -203,6 +203,29 @@ describe('expandMbox', () => {
     expect(r.summary).toBe('# inbox.mbox — 4 messages, 2024–2026');
   });
 
+  it('a tail at EOF (read past the noted size) is a no-op, not a restart', async () => {
+    const p = write('inbox.mbox', THREE);
+    const first = await expandMbox(p, null, DEFAULT_EXPAND_BUDGET);
+    const r = await expandMbox(
+      p,
+      first.tail as MboxResume,
+      DEFAULT_EXPAND_BUDGET,
+    );
+    expect(r.restart).toBeUndefined();
+    expect(r.items).toEqual([]);
+    expect(r.resume).toBeNull();
+    expect(r.summary).toBe(first.summary);
+    expect(r.tail).toEqual(first.tail);
+    // A tail past EOF (the file shrank) still restarts.
+    fs.truncateSync(p, 10);
+    const s = await expandMbox(
+      p,
+      first.tail as MboxResume,
+      DEFAULT_EXPAND_BUDGET,
+    );
+    expect(s.restart).toBe(true);
+  });
+
   it('a tail that no longer lands on a message boundary asks for a restart', async () => {
     const p = write('inbox.mbox', THREE);
     const first = await expandMbox(p, null, DEFAULT_EXPAND_BUDGET);

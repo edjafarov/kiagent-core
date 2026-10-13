@@ -194,8 +194,20 @@ export async function expandMbox(
         last: resume.last,
       }
     : { offset: 0, count: 0, first: null, last: null };
-  if (resume?.append && !(await startsWithFrom(file, resume.offset)))
-    return { items: [], resume: null, restart: true };
+  if (resume?.append) {
+    // A tail read past the size the source noted (the file grew while it
+    // was read) lands on EOF: nothing new, not a broken boundary.
+    const { size } = await fs.promises.stat(file);
+    if (resume.offset === size)
+      return {
+        items: [],
+        resume: null,
+        summary: summary(file, state),
+        tail: { ...state, append: true },
+      };
+    if (resume.offset > size || !(await startsWithFrom(file, resume.offset)))
+      return { items: [], resume: null, restart: true };
+  }
 
   const t0 = Date.now();
   const items: ChildItem[] = [];

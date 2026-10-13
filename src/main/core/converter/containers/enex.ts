@@ -1,6 +1,6 @@
 /** Evernote export (.enex) → one `note` child per `<note>`: ENML body via
  *  the shared HTML→markdown converter, tags, dates, source URL and the
- *  attachment (resource) file names. Notes are split by a line scanner and
+ *  attachment (resource) file names. Notes are split by a byte scanner (line breaks are optional) and
  *  parsed one at a time; resource data beyond the per-note cap is dropped
  *  unparsed. Pure (converter child). */
 import { createHash } from 'node:crypto';
@@ -8,7 +8,7 @@ import path from 'node:path';
 
 import { byLocalName, parseXml, textContent } from '../formats/xml';
 import { htmlToMarkdown } from '../parsers';
-import { readRecords } from './records';
+import { readElements } from './records';
 import type { ChildItem, ExpandBudget, ExpandResult } from './types';
 
 const MAX_NOTE_BYTES = 8 * 1024 * 1024;
@@ -104,11 +104,13 @@ export async function expandEnex(
   const t0 = Date.now();
   const items: ChildItem[] = [];
   let bytes = 0;
-  for await (const rec of readRecords(file, state.offset, {
-    isStart: (l) => l.includes('<note>'),
-    isEnd: (l) => l.includes('</note>'),
-    maxRecordBytes: MAX_NOTE_BYTES,
-  })) {
+  for await (const rec of readElements(
+    file,
+    state.offset,
+    '<note>',
+    '</note>',
+    MAX_NOTE_BYTES,
+  )) {
     state.offset = rec.end;
     let child: ChildItem | null = null;
     try {

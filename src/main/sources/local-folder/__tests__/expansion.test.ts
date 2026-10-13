@@ -117,6 +117,23 @@ describe('noteContainer', () => {
     });
   });
 
+  it('restarts a pending record left by an older expander version', () => {
+    const old: PendingExpansion = {
+      state: 'pending',
+      kind: 'zip',
+      v: 0,
+      ...at,
+      resume: { index: 7 },
+      cleared: true,
+      attempts: 0,
+    };
+    expect(noteContainer(old, 'zip', at)).toMatchObject({
+      resume: null,
+      cleared: false,
+      v: EXPANDER_VERSION.zip,
+    });
+  });
+
   it('keeps a failed record until the file changes', () => {
     const failed: Expansion = { state: 'failed', kind: 'enex', v: 1, ...at };
     expect(noteContainer(failed, 'enex', at)).toBe(failed);
@@ -187,6 +204,25 @@ describe('expansionStep', () => {
 
   it('drops the record and deletes the container when the file is gone', async () => {
     fs.rmSync(file);
+    const converter = conv(async () => ({ items: [], resume: null }));
+    const out = await expansionStep({
+      absPath: file,
+      rec: rec(),
+      converter,
+      now: 0,
+    });
+    expect(out).toEqual({
+      items: [],
+      deletions: [{ externalId: id, type: 'file' }],
+      rec: null,
+    });
+    expect(converter.expandPage).not.toHaveBeenCalled();
+  });
+
+  it('treats a container swapped for a symlink as gone, never followed', async () => {
+    const target = path.join(dir, 'elsewhere.mbox');
+    fs.renameSync(file, target);
+    fs.symlinkSync(target, file);
     const converter = conv(async () => ({ items: [], resume: null }));
     const out = await expansionStep({
       absPath: file,

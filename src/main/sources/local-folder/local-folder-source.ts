@@ -52,6 +52,7 @@ import {
   walkPaths,
   walkRoot,
   type ScannedEntry,
+  type WalkTrouble,
 } from './scanner';
 import { toDocument, type LocalFolderItem } from './to-document';
 import { startWatcher, type FsEvent } from './watch';
@@ -258,7 +259,12 @@ function dropUnvisited(
   root: string,
   visited: ReadonlySet<string>,
   exps: Record<string, Expansion>,
+  trouble: WalkTrouble,
 ): ExternalRef[] {
+  // A directory the walk could not read (a NAS hiccup, a privacy prompt)
+  // hides its containers; dropping them would archive every child. The
+  // guarded reconcile, or the next complete walk, decides instead.
+  if (trouble.incomplete) return [];
   const gone: ExternalRef[] = [];
   for (const id of Object.keys(exps))
     if (!visited.has(id) && isUnder(id, root)) {
@@ -316,16 +322,18 @@ async function* backfillRoot(
   let cursor = working;
   let yielded = false;
   const visited = new Set<string>();
+  const trouble: WalkTrouble = { incomplete: false };
   async function* seen(): AsyncGenerator<ScannedEntry> {
-    for await (const e of walkRoot(root)) {
-      visited.add(toAbsPosix(e.absPath));
+    for await (const e of walkRoot(root, trouble)) {
+      // Containers only: the walk must not hold one string per file.
+      if (containerOf(e.absPath)) visited.add(toAbsPosix(e.absPath));
       yield e;
     }
   }
   for await (const { value: entries, last } of batchesOf(seen())) {
     const built = await buildBatch(entries, root, exps);
     const deletions = last
-      ? [...built.deletions, ...dropUnvisited(root, visited, exps)]
+      ? [...built.deletions, ...dropUnvisited(root, visited, exps, trouble)]
       : built.deletions;
     if (last) cursor = advanceCursor(cursor, root, scanStartIso);
     yield {
@@ -338,7 +346,7 @@ async function* backfillRoot(
     yielded = true;
   }
   if (!yielded) {
-    const deletions = dropUnvisited(root, visited, exps);
+    const deletions = dropUnvisited(root, visited, exps, trouble);
     cursor = advanceCursor(cursor, root, scanStartIso);
     yield {
       phase: 'backfill',
@@ -386,8 +394,9 @@ async function* incrementalRescanRoot(
 > {
   const sinceMs = Date.parse(since.completedAt);
   const visited = new Set<string>();
+  const trouble: WalkTrouble = { incomplete: false };
   async function* changed(): AsyncGenerator<ScannedEntry> {
-    for await (const e of walkRoot(root)) {
+    for await (const e of walkRoot(root, trouble)) {
       // Containers are inspected on every rescan, watermark or not: the
       // record decides (an mbox's mtime moves on every flag change, and an
       // outdated expander version re-expands). Unchanged → not yielded.
@@ -417,7 +426,7 @@ async function* incrementalRescanRoot(
   for await (const { value: entries, last } of batchesOf(changed())) {
     const built = await buildBatch(entries, root, exps);
     const deletions = last
-      ? [...built.deletions, ...dropUnvisited(root, visited, exps)]
+      ? [...built.deletions, ...dropUnvisited(root, visited, exps, trouble)]
       : built.deletions;
     if (last) cursor = advanceCursor(working, root, rescanStartIso);
     yield {
@@ -429,7 +438,7 @@ async function* incrementalRescanRoot(
     yielded = true;
   }
   if (!yielded) {
-    const deletions = dropUnvisited(root, visited, exps);
+    const deletions = dropUnvisited(root, visited, exps, trouble);
     if (deletions.length > 0)
       yield {
         phase: 'live',
@@ -850,14 +859,12 @@ export function createLocalFolderSource(
   };
 }
 
-/** Built with the in-process converter — tests and tools. The app
- *  registers `createLocalFolderSource({ converter })` (sources/index.ts). */
-export const localFolderSource: Source<LocalFolderCursor, LocalFolderItem> = {
-  descriptor,
-  connect,
-  pull: (session, cursor) => pull(session, cursor),
-  toDocument,
-  fetchBytes,
-  reconcile,
-  manageFolders,
-};
+/** Built with the in-process converter (created on first pull) — tests and
+ *  tools. The app registers `createLocalFolderSource({ converter })`
+ *  (sources/index.ts). */
+export const localFolderSource: Source<LocalFolderCursor, LocalFolderItem> =
+  createLocalFolderSource({
+    converter: {
+      expandPage: (...args) => defaultDeps().converter.expandPage(...args),
+    },
+  });
