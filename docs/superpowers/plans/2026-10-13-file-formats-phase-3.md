@@ -168,3 +168,21 @@ Steps: write the failing tests → implement → run the three suites → commit
 8. **Quiet period clamp:** `notBefore = min(mtimeMs, now) + 10 min`.
 9. **Deps:** `pst-extractor` **exact** `1.12.0` and `long` in the root `package.json` and `release/app/package.json`. The gate checks that the worker resolves both from `release/app/node_modules`.
 10. **Gate addition:** the 2 GB run prints every folder where walked < `contentCount`. Any *mail* folder short of its count is investigated (the library's fallback table) before release.
+
+## Design revision r3 (astra r2 re-review) — a thin table adapter, OVERRIDES r2 §2, §3, §5, §6
+
+All reach-ins live in one file, `containers/pst-tables.ts`, pinned to `pst-extractor` exact `1.12.0`. A test asserts every private member it touches exists.
+
+- **Items by row, our own index.**
+  - `childAt(folder, i)`: `folder.initEmailsTable()`. Then, for `emailsTable`: `getItems(i, 1)[0].get(0x67f2)`; a missing row or `itemIndex === -1` → end. For `fallbackEmailsTable`: `[i]`, where past the length → end.
+  - Descriptor lookup + `PSTUtil.detectAndLoadPSTObject` run inside **our** try/catch, and a throw → `{ skipped: true }`.
+  - The index is ours (`child = i + 1` always), so both library paths are isolated and no cursor is read back.
+  - Replaces r2 §2 (no `currentEmailIndex`). Tests: a throwing load on the 7C path and on the fallback path, page size 1 → no duplicates, one skip each.
+- **Subfolders lazily.**
+  - `subfolderNids(folder, from, n)`: `folder.initSubfoldersTable()`, then `subfoldersTable.getItems(from, n)` → the row NIDs (0x67f2). No folder objects are built.
+  - The DFS loads one folder at a time from its NID and stops at `MAX_PST_FOLDERS = 2000` folders *visited* (empty ones included). It reads rows in chunks of 256, so a 100k-wide folder costs only the rows it reaches.
+  - Test: a mocked folder with 5,000 children → the walk stops at the cap, and the summary says so.
+- **Property sizes before data.**
+  - `propSize(obj, id)`: an inline item → `item.data.length`; an external item → `localDescriptorItems.get(ref).dataSize` (`getLeafSize` reads at most 8 bytes); absent → 0.
+  - `body` (0x1000), `bodyHTML` (0x1013) and the compressed RTF (0x1009) are read only when `propSize ≤ MAX_MESSAGE_BYTES` (8 MB). Otherwise the child is headers-only, with `truncated: true`. The actual payload size is therefore checked for RTF too.
+  - Test: mock `propSize` over the cap → the getter is never called.
