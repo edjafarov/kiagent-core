@@ -1,12 +1,21 @@
 /** Namespace-agnostic XML helpers over @xmldom/xmldom. Pure. */
 import { DOMParser } from '@xmldom/xmldom';
 
+/** Recoverable markup errors are tolerated silently (real-world Office files
+ *  carry them); a fatal error or a part with no root element throws, so a
+ *  garbage part fails the conversion instead of rendering as empty. */
 export function parseXml(src: string): Document {
-  // Recoverable markup errors are tolerated (real-world Office files carry
-  // them); xmldom still throws on a document it cannot parse at all.
-  return new DOMParser({
-    onError: () => {},
-  } as never).parseFromString(src, 'text/xml') as unknown as Document;
+  const doc = new DOMParser({
+    errorHandler: {
+      warning: () => {},
+      error: () => {},
+      fatalError: (m: string) => {
+        throw new Error(`xml: ${m}`);
+      },
+    },
+  }).parseFromString(src, 'text/xml') as unknown as Document;
+  if (!doc.documentElement) throw new Error('xml: not a document');
+  return doc;
 }
 
 /** Descendant elements with this local name, in document order. */

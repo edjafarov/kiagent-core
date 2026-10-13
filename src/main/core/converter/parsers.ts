@@ -10,6 +10,16 @@ import { HAS_TEXT_CHARS } from '@main/workers/convert/outcome';
 
 import { guardCfbReader } from '../engine/msg-guard';
 import { assessPage, QUALITY_VERSION } from '../engine/text-quality';
+import { docToMarkdown } from './formats/doc';
+import { epubToMarkdown } from './formats/epub';
+import { odtToMarkdown } from './formats/odt';
+import { pptxToMarkdown } from './formats/pptx';
+import { rtfBytesToMarkdown, rtfToText } from './formats/rtf';
+import { subtitlesToMarkdown } from './formats/subtitles';
+import {
+  assertZipInflatesWithin,
+  MAX_SPREADSHEET_INFLATE_BYTES,
+} from './formats/zip-parts';
 
 export { capMarkdown, MAX_MARKDOWN_CHARS } from './formats/limits';
 
@@ -176,30 +186,18 @@ async function parseOther(
       const out = await mammoth.convertToMarkdown({ buffer: buf });
       return out.value;
     }
-    case 'presentation': {
-      const { pptxToMarkdown } = await import('./formats/pptx');
+    case 'presentation':
       return pptxToMarkdown(bytes);
-    }
-    case 'odf-text': {
-      const { odtToMarkdown } = await import('./formats/odt');
+    case 'odf-text':
       return odtToMarkdown(bytes);
-    }
-    case 'epub': {
-      const { epubToMarkdown } = await import('./formats/epub');
+    case 'epub':
       return epubToMarkdown(bytes, htmlToMarkdown);
-    }
-    case 'word97': {
-      const { docToMarkdown } = await import('./formats/doc');
+    case 'word97':
       return docToMarkdown(bytes);
-    }
-    case 'rtf': {
-      const { rtfBytesToMarkdown } = await import('./formats/rtf');
+    case 'rtf':
       return rtfBytesToMarkdown(bytes);
-    }
-    case 'subtitles': {
-      const { subtitlesToMarkdown } = await import('./formats/subtitles');
+    case 'subtitles':
       return subtitlesToMarkdown(buf.toString('utf8'));
-    }
     case 'html':
       return htmlToMarkdown(buf.toString('utf8'));
     case 'csv':
@@ -207,8 +205,6 @@ async function parseOther(
     case 'spreadsheet': {
       // .xlsx/.ods are zips SheetJS inflates whole: bound them first.
       if (buf[0] === 0x50 && buf[1] === 0x4b) {
-        const { assertZipInflatesWithin, MAX_SPREADSHEET_INFLATE_BYTES } =
-          await import('./formats/zip-parts');
         await assertZipInflatesWithin(bytes, MAX_SPREADSHEET_INFLATE_BYTES);
       }
       const XLSX = await import('xlsx');
@@ -319,7 +315,6 @@ export async function msgBody(d: {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { decompressRTF } =
     require('@kenjiuno/decompressrtf') as typeof import('@kenjiuno/decompressrtf');
-  const { rtfToText } = await import('./formats/rtf');
   try {
     return rtfToText(
       Buffer.from(decompressRTF(Array.from(rtf))).toString('latin1'),

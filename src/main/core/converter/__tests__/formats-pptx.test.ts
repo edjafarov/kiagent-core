@@ -63,6 +63,15 @@ describe('pptx', () => {
     expect(md).not.toMatch(/Notes\n\n1\b/);
   });
 
+  it('a zip whose presentation.xml is not XML throws instead of rendering empty', async () => {
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    zip.file('ppt/presentation.xml', 'garbage, not xml');
+    await expect(
+      parse(await zip.generateAsync({ type: 'uint8array' }), MIME, 'deck.pptx'),
+    ).rejects.toThrow('xml');
+  });
+
   it('bytes that are not a zip throw', async () => {
     await expect(
       parse(new TextEncoder().encode('hello'), MIME, 'deck.pptx'),

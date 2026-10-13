@@ -79,7 +79,7 @@ the reconcile guard (B3).
 Rules shared by all of A:
 
 - **Markdown shape.** First line `# <title>` (document title from
-  properties, else filename). PPTX: `## Slide N — <slide title>`, body,
+  properties, else none — the row title already shows the filename). PPTX: `## Slide N — <slide title>`, body,
   then `### Notes`. EPUB: chapter headings in spine order. Output stays
   capped by `MAX_MARKDOWN_CHARS` (2 MiB).
 - **Zip safety (OOXML/ODF/EPUB).** Read only the parts named above;
@@ -345,7 +345,7 @@ every newly admitted extension, local and cloud:
 
 | Phase | Version | `ADMITTED_SINCE[v]` |
 |---|---|---|
-| 1 | 3 | `pptx, odt, ods, epub, doc, rtf, srt, vtt, csv, xls, html` (the last three for cloud rescue) |
+| 1 | 3 | `pptx, odt, ods, epub, doc, rtf, srt, vtt` (local csv/xls/html were already indexed; `ADMITTED_SINCE` is local-only, the cloud rescue needs no entry) |
 | 2 | 4 | `mbox, zip, vcf, enex` (+ extensionless mbox via the `.msf` rule, re-checked by the rescan) |
 | 3 | 5 | `pst` |
 

@@ -860,17 +860,23 @@ describe('policy v3: new single-file formats', () => {
       kind: 'ignore',
       reason: 'unsupported',
     });
+    expect(decideFileIndexing(cloud('e.srt', 'text/plain'))).toEqual({
+      kind: 'ignore',
+      reason: 'unsupported',
+    });
   });
 
   it('the version is 3; a v2 cursor re-emits eager files of every newly admitted extension', () => {
     expect(FILE_POLICY_VERSION).toBe(3);
+    for (const [name, mime] of NEW_LOCAL)
+      expect(newlyAdmitted(local(name, mime), 2)).toBe(true);
+    // Already indexed locally before v3: never re-read on the upgrade.
     for (const [name, mime] of [
-      ...NEW_LOCAL,
       ['g.csv', 'text/csv'],
       ['h.xls', 'application/vnd.ms-excel'],
       ['i.html', 'text/html'],
     ])
-      expect(newlyAdmitted(local(name, mime), 2)).toBe(true);
+      expect(newlyAdmitted(local(name, mime), 2)).toBe(false);
     expect(newlyAdmitted(local('notes.txt', 'text/plain'), 2)).toBe(false);
     expect(newlyAdmitted(local('deck.pptx', PPTX), 3)).toBe(false);
     expect(newlyAdmitted(local('m.msg', 'application/vnd.ms-outlook'), 1)).toBe(

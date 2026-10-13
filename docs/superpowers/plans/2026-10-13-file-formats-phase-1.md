@@ -18,7 +18,7 @@
 - First markdown line is `# <title>` (document title from properties, else none — the row's title already shows the filename).
 - A parser throw records `conversion.status = 'failed'` exactly like DOCX today (no new failure path).
 - Size caps and the `docCap` ladder are unchanged.
-- `FILE_POLICY_VERSION = 3`; `ADMITTED_SINCE[3] = pptx, odt, ods, epub, doc, rtf, srt, vtt, csv, xls, html`.
+- `FILE_POLICY_VERSION = 3`; `ADMITTED_SINCE[3] = pptx, odt, ods, epub, doc, rtf, srt, vtt` (amended after the staged review: csv/xls/html were already indexed locally).
 - Run builds/tests sequentially, never in parallel. Jest needs `npm run build:main && npm run build:renderer` to have run once in the worktree.
 - Commits: no `Co-Authored-By` line; use `git commit -F <file>` when the message has backticks.
 

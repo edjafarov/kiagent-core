@@ -56,21 +56,7 @@ export const FILE_POLICY_VERSION = 3;
  *  old policy ignored by TYPE, not size). */
 export const ADMITTED_SINCE: Record<number, ReadonlySet<string>> = {
   2: new Set(['msg']),
-  3: new Set([
-    'pptx',
-    'odt',
-    'ods',
-    'epub',
-    'doc',
-    'rtf',
-    'srt',
-    'vtt',
-    // Admitted in the cloud by the v3 extension rescue; a local re-emission
-    // of these is an unchanged-hash no-op.
-    'csv',
-    'xls',
-    'html',
-  ]),
+  3: new Set(['pptx', 'odt', 'ods', 'epub', 'doc', 'rtf', 'srt', 'vtt']),
 };
 
 // Verbatim from local-folder/ingestible.ts:22-23 and :31. `ingestible.ts`
@@ -257,6 +243,8 @@ const CLOUD_CONVERTER_MIMES = new Set([
   'application/msword',
   'application/rtf',
 ]);
+/** No cloud subtitles in v1, whatever text/* MIME the drive reports. */
+const CLOUD_SUBTITLE_EXTENSIONS = new Set(['srt', 'vtt']);
 /** Extensions Graph/Drive commonly report with no or a generic MIME; the
  *  converter dispatches on the extension, so they are safe to admit. */
 const CLOUD_EXT_RESCUE = new Set([
@@ -400,7 +388,9 @@ export function decideFileIndexing(c: FileIndexCandidate): FileIndexDecision {
   const generic = mime === '' || mime === 'application/octet-stream';
   const converter = local
     ? LOCAL_CONVERTER_MIMES.has(mime)
-    : (mime.startsWith('text/') && mime !== 'text/vtt') ||
+    : (mime.startsWith('text/') &&
+        mime !== 'text/vtt' &&
+        !CLOUD_SUBTITLE_EXTENSIONS.has(ext)) ||
       CLOUD_CONVERTER_MIMES.has(mime) ||
       (generic && CLOUD_EXT_RESCUE.has(ext));
   if (converter) {
