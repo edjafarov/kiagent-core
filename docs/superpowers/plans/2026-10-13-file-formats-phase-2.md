@@ -314,3 +314,18 @@
 - [ ] **Step 3: Memory gate (manual):** generate a 2 GB mbox (repeat a 50 KB message with a 1 MB attachment every 20th message) in the scratchpad, run the inline pager page-by-page in a fresh `node --expose-gc` process via a scratch script, record peak RSS (bar: < 400 MB).
 - [ ] **Step 4: Full gates (sequential):** `npm run build:main`, `npx jest`, `npm run typecheck`, eslint on touched dirs, prettier check on touched files, bundled-child smoke (fork `release/app/dist/main/worker.js`, `expandPage` on a 3-message mbox).
 - [ ] **Step 5: Commit** `test(local-folder): containers end to end`.
+
+---
+
+## Amendments after the design review (astra, 2026-10-13)
+
+These override the tasks above where they disagree.
+
+1. **Every rescan inspects container records**, independent of the mtime/ctime watermark: `incrementalRescanRoot` calls `noteContainer` for every walked container (unchanged ones are a no-op unless their `v` is outdated), and when a root's walk completes, records under that root that the walk did not visit are dropped with a container deletion in the same batch.
+2. **The driver alternates**: each loop iteration takes at most one watcher event and then at most one due expansion step; it waits only when neither can run.
+3. **`tail` instead of `end`**: the last page of an mbox returns `tail = {offset, count, first, last, append: true}`; the `done` record keeps it; a grown mbox resumes with that `tail` (so the summary counts the whole mailbox). The pager validates the boundary itself and answers `{items: [], resume: null, restart: true}` when the bytes at `offset` are not `From ` — the source then takes the full path. `ExpandResult.end` is replaced by `tail?: unknown` and `restart?: true`.
+4. **Long lines**: the record reader fragments any line longer than 64 KiB (already implemented in Task 2, tested with a 3 MiB single line).
+5. **A missing container file** (ENOENT at step time) yields its deletion and drops the record in the same batch.
+6. **Policy activation moves into Task 8**: Task 6's container branch and the v4 bump land in the same commit as the source integration, so no intermediate commit can stamp v4 without expansion.
+7. **Cancellation**: `expansionStep` takes `signal` (the session's) and passes it to `converter.expandPage`; an abort neither counts an attempt nor changes the record.
+8. Task 1 was implemented before this review (`2a3dff8a`).
