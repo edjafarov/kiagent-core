@@ -62,7 +62,7 @@ test('a 30 MiB local pdf is a deferred converter row', () => {
 });
 
 test('exports the bytes-aware policy', () => {
-  assert.equal(sdk.FILE_POLICY_VERSION, 4);
+  assert.equal(sdk.FILE_POLICY_VERSION, 5);
   assert.equal(sdk.MAX_FETCH_BYTES, 100 * 1024 * 1024);
   assert.deepEqual(
     sdk.decideFileIndexing({
@@ -73,4 +73,51 @@ test('exports the bytes-aware policy', () => {
     }),
     { kind: 'index', pipeline: 'converter', bytes: 'deferred' },
   );
+});
+
+test('cloud converts Office, e-book and RTF files', () => {
+  for (const [filename, mime] of [
+    ['deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+    ['notes.odt', 'application/vnd.oasis.opendocument.text'],
+    ['sheet.ods', 'application/vnd.oasis.opendocument.spreadsheet'],
+    ['book.epub', 'application/epub+zip'],
+    ['old.doc', 'application/msword'],
+    ['memo.rtf', 'application/rtf'],
+    ['old.xls', 'application/vnd.ms-excel'],
+  ]) {
+    assert.deepEqual(
+      decideFileIndexing({ profile: 'cloud-drive', filename, mime, sizeBytes: 1000 }),
+      { kind: 'index', pipeline: 'converter', bytes: 'eager' },
+      filename,
+    );
+  }
+});
+
+test('cloud rescues the new formats by extension under a generic MIME', () => {
+  for (const filename of ['deck.pptx', 'notes.odt', 'sheet.ods', 'book.epub', 'old.doc', 'memo.rtf']) {
+    assert.deepEqual(
+      decideFileIndexing({
+        profile: 'cloud-drive',
+        filename,
+        mime: 'application/octet-stream',
+        sizeBytes: 1000,
+      }),
+      { kind: 'index', pipeline: 'converter', bytes: 'eager' },
+      filename,
+    );
+  }
+});
+
+test('subtitles and mail archives stay local-only', () => {
+  for (const [filename, mime] of [
+    ['talk.srt', 'application/x-subrip'],
+    ['talk.vtt', 'text/vtt'],
+    ['mail.mbox', 'application/mbox'],
+  ]) {
+    assert.equal(
+      decideFileIndexing({ profile: 'cloud-drive', filename, mime, sizeBytes: 1000 }).kind,
+      'ignore',
+      filename,
+    );
+  }
 });
