@@ -382,14 +382,14 @@ const cases: Case[] = [
     { kind: 'index', pipeline: 'converter', bytes: 'eager' },
   ],
   [
-    'cloud xls',
+    'cloud xls (admitted since policy v3)',
     {
       profile: 'cloud-drive',
       filename: 'b.xls',
       mime: 'application/vnd.ms-excel',
       sizeBytes: 100,
     },
-    { kind: 'ignore', reason: 'unsupported' },
+    { kind: 'index', pipeline: 'converter', bytes: 'eager' },
   ],
   [
     'cloud docx',
@@ -764,4 +764,117 @@ it('newlyAdmitted re-emits an eager local .msg for a version-1 cursor only', () 
       1,
     ),
   ).toBe(false);
+});
+
+const PPTX =
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const ODT = 'application/vnd.oasis.opendocument.text';
+const ODS = 'application/vnd.oasis.opendocument.spreadsheet';
+
+describe('policy v3: new single-file formats', () => {
+  const local = (filename: string, mime: string, sizeBytes = 1000) => ({
+    profile: 'local-folder' as const,
+    filename,
+    mime,
+    sizeBytes,
+    path: `/r/${filename}`,
+  });
+  const cloud = (filename: string, mime: string, sizeBytes = 1000) => ({
+    profile: 'cloud-drive' as const,
+    filename,
+    mime,
+    sizeBytes,
+  });
+  const conv = { kind: 'index', pipeline: 'converter', bytes: 'eager' };
+  const NEW_LOCAL: Array<[string, string]> = [
+    ['deck.pptx', PPTX],
+    ['a.odt', ODT],
+    ['a.ods', ODS],
+    ['b.epub', 'application/epub+zip'],
+    ['c.doc', 'application/msword'],
+    ['d.rtf', 'application/rtf'],
+    ['e.srt', 'application/x-subrip'],
+    ['f.vtt', 'text/vtt'],
+  ];
+
+  it.each(NEW_LOCAL)('local %s is a converter file', (name, mime) => {
+    expect(decideFileIndexing(local(name, mime))).toEqual(conv);
+  });
+
+  it('a local new-format file over the binary cap is name-only, like docx', () => {
+    expect(
+      decideFileIndexing(local('deck.pptx', PPTX, MAX_LOCAL_BINARY_BYTES + 1)),
+    ).toEqual(
+      decideFileIndexing(
+        local(
+          'a.docx',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          MAX_LOCAL_BINARY_BYTES + 1,
+        ),
+      ),
+    );
+  });
+
+  it.each([
+    ['deck.pptx', PPTX],
+    ['a.odt', ODT],
+    ['a.ods', ODS],
+    ['b.epub', 'application/epub+zip'],
+    ['c.doc', 'application/msword'],
+    ['d.rtf', 'application/rtf'],
+    ['d.rtf', 'text/rtf'],
+    ['g.xls', 'application/vnd.ms-excel'],
+  ])('cloud %s (%s) is a converter file', (name, mime) => {
+    expect(decideFileIndexing(cloud(name, mime))).toEqual(conv);
+  });
+
+  it.each([
+    'deck.pptx',
+    'a.odt',
+    'a.ods',
+    'b.epub',
+    'c.doc',
+    'd.rtf',
+    'e.csv',
+    'g.xls',
+    'h.html',
+    'm.msg',
+    'm.eml',
+  ])('cloud %s with a generic MIME is rescued by extension', (name) => {
+    expect(decideFileIndexing(cloud(name, 'application/octet-stream'))).toEqual(
+      conv,
+    );
+    expect(decideFileIndexing(cloud(name, ''))).toEqual(conv);
+  });
+
+  it('cloud subtitles are not admitted (no cloud subtitles in v1)', () => {
+    expect(decideFileIndexing(cloud('e.srt', 'application/x-subrip'))).toEqual({
+      kind: 'ignore',
+      reason: 'unsupported',
+    });
+    expect(decideFileIndexing(cloud('f.vtt', 'text/vtt'))).toEqual({
+      kind: 'ignore',
+      reason: 'unsupported',
+    });
+    expect(decideFileIndexing(cloud('e.srt', ''))).toEqual({
+      kind: 'ignore',
+      reason: 'unsupported',
+    });
+  });
+
+  it('the version is 3; a v2 cursor re-emits eager files of every newly admitted extension', () => {
+    expect(FILE_POLICY_VERSION).toBe(3);
+    for (const [name, mime] of [
+      ...NEW_LOCAL,
+      ['g.csv', 'text/csv'],
+      ['h.xls', 'application/vnd.ms-excel'],
+      ['i.html', 'text/html'],
+    ])
+      expect(newlyAdmitted(local(name, mime), 2)).toBe(true);
+    expect(newlyAdmitted(local('notes.txt', 'text/plain'), 2)).toBe(false);
+    expect(newlyAdmitted(local('deck.pptx', PPTX), 3)).toBe(false);
+    expect(newlyAdmitted(local('m.msg', 'application/vnd.ms-outlook'), 1)).toBe(
+      true,
+    );
+  });
 });

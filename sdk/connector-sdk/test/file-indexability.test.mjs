@@ -62,7 +62,7 @@ test('a 30 MiB local pdf is a deferred converter row', () => {
 });
 
 test('exports the bytes-aware policy', () => {
-  assert.equal(sdk.FILE_POLICY_VERSION, 2);
+  assert.equal(sdk.FILE_POLICY_VERSION, 3);
   assert.equal(sdk.MAX_FETCH_BYTES, 100 * 1024 * 1024);
   assert.deepEqual(
     sdk.decideFileIndexing({
