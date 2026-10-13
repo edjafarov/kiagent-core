@@ -126,3 +126,45 @@ Steps: write the failing tests → implement → run the three suites → commit
 - `.ost` (Outlook 2013+ offline cache). pst-extractor read the sample, but modern OSTs are often 4K-page or compressed, and Outlook keeps them locked. This becomes a follow-up issue.
 - Calendar, contacts and tasks inside a PST (spec B4: messages only in v1).
 - PSTs in the cloud, or inside a ZIP (a nested `.pst` member stays name-only).
+
+---
+
+## Design revision r2 (fable + astra design review, 2026-10-13) — OVERRIDES the tasks above
+
+1. **No source-side sniff.**
+   - `.pst` is a container by extension (policy), like the other kinds. Delete `containerAt`.
+   - The **one** admission check lives in `expansionStep`. For `kind === 'pst'` and `rec.resume === null` (before the deletion batch of a full path, i.e. also on every restart), `probePst(absPath)` opens the file in main and reads 4 bytes:
+     - `EBUSY`/`EPERM`/`EACCES` → `{...rec, notBefore: now + 5 min}`. No attempt, `cleared` untouched, so the existing children stay live for the whole Outlook session.
+     - Read OK but not `!BDN` → **rejected**: the record becomes `{state:'done', kind:'pst', v, size, mtimeMs, rejected: true}`, and the step yields a deletion of the container ref (it archives any older row and children). It emits no row. A stamp change re-probes it through `noteContainer`'s full path.
+     - Other I/O errors → the existing retry (`notBefore + EXPANSION_RETRY_MS`, no attempt).
+   - Mid-expansion busy: the pager's `ContainerBusyError` gives the same 5-minute deferral, with no attempt and the resume kept.
+   - Tests:
+     - EBUSY at the probe on a pending full-path record → deferred, no deletion, `cleared` false.
+     - Random bytes → no row and a `rejected` done record. The next pull with the same stamp does nothing.
+     - A persisted pending PST replaced by a Logic preset while stopped → rejected, no "Could not read" row.
+     - A watcher `change` on a locked, already-noted PST → record kept, no deletion.
+2. **Library cursor, not a count.**
+   - After every `getNextChild()`, `child = folder.currentEmailIndex`. This reaches into a private field, pinned like the yauzl walk fields: `pst-extractor` exact `1.12.0`, and a test asserts the field exists and moves.
+   - Test: stub `PSTUtil.detectAndLoadPSTObject` to throw for one row index, drain with page size 1 → no duplicate keys, and `count` = the one-shot count.
+3. **Per-item isolation.**
+   - `messageChild` is wrapped per item in try/catch, which counts `skipped` (the library does the same for its own load failures). One corrupt message never fails the archive.
+   - A page-level throw (open, folder lookup) still goes through attempts.
+4. **Re-stat after the page, success or failure (all kinds).**
+   - In `expansionStep`, after `expandPage` returns or throws, `lstat` again. If `changedSince(rec, stats2)`, discard the result or error and return `restamped(rec, stats2)`, with no attempt counted. This covers Outlook writing during a page, including the last one.
+   - Test: a converter mock that rewrites the file inside the call, on a middle page and on the final page.
+5. **Resume = position, re-walked.**
+   - Every page re-walks the folder DFS (measured ~10 ms for 58 folders on the 2 GB file; capped at `MAX_PST_FOLDERS = 2000`, past which the summary says "first 2,000 folders").
+   - `PstResume = { fi: number; nid: number; child: number; count: number; skipped: number; first: string|null; last: string|null; byFolder: number[] }` (`byFolder` indexed by `fi`).
+   - Same-stamp drift is detected and restarts (`{restart: true}`): `folders[fi].nid !== resume.nid`, the folder lookup throws, or `child > folder.contentCount` on resume. Arbitrary same-stamp edits beyond that are outside the contract; size/mtime + quiet period is the change signal, as for the other kinds.
+   - Tests: an emptied folder and a missing NID → restart.
+6. **Bounded bodies.**
+   - `body`/`bodyHTML` are sliced to `MAX_MESSAGE_BYTES` (8 MB, as mbox) before `htmlToMarkdown`/evidence, marked `truncated`.
+   - RTF: read the raw compressed property (`PR_RTF_COMPRESSED` 0x1009) and check the LZFu header's raw size (bytes 4–7) ≤ 8 MB before decompressing. Past that the RTF body is skipped (headers-only child).
+   - Folder discovery is counted in the page's `ms` budget (`started` set before the walk).
+7. **Addresses.**
+   - `isAddr(s) = /^[^\s@<>]+@[^\s@<>]+$/` after trimming. The transport `From:` is unfolded and decoded (mailparser `simpleParser` on the header block only), then used only if its address passes `isAddr`. Otherwise use `sentRepresentingEmailAddress`, then `senderEmailAddress` (each through `isAddr`), else the display name only.
+   - Recipients: `smtpAddress`, else `emailAddress`, through `isAddr`. Otherwise keep `displayName` (internal Exchange recipients stay visible in `to`/`cc`).
+   - Test: an EX-DN transport header with a valid SMTP property → the property wins; `All Enron Worldwide@ENRON` is not an address.
+8. **Quiet period clamp:** `notBefore = min(mtimeMs, now) + 10 min`.
+9. **Deps:** `pst-extractor` **exact** `1.12.0` and `long` in the root `package.json` and `release/app/package.json`. The gate checks that the worker resolves both from `release/app/node_modules`.
+10. **Gate addition:** the 2 GB run prints every folder where walked < `contentCount`. Any *mail* folder short of its count is investigated (the library's fallback table) before release.
