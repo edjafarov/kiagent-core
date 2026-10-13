@@ -188,6 +188,10 @@ async function parseOther(
       const { epubToMarkdown } = await import('./formats/epub');
       return epubToMarkdown(bytes, htmlToMarkdown);
     }
+    case 'word97': {
+      const { docToMarkdown } = await import('./formats/doc');
+      return docToMarkdown(bytes);
+    }
     case 'html':
       return htmlToMarkdown(buf.toString('utf8'));
     case 'csv':

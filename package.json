@@ -155,6 +155,7 @@
     "tar": "^7.5.21",
     "turndown": "^7.2.4",
     "undici": "7.30.0",
+    "word-extractor": "1.0.4",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.0.0"
   },

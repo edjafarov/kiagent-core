@@ -38,6 +38,7 @@
     "semver": "^7.6.0",
     "tar": "^7.4.3",
     "turndown": "^7.2.4",
+    "word-extractor": "1.0.4",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   }
 }
