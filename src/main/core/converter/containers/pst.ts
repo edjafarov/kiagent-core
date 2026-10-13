@@ -21,6 +21,7 @@ import {
   PSTFile as PstFileClass,
   propSize,
   rawProp,
+  recipientsOf,
   subfolderNids,
 } from './pst-tables';
 import {
@@ -144,12 +145,16 @@ export async function fromOf(m: PSTMessage): Promise<string> {
   return name;
 }
 
-function recipients(m: PSTMessage): { to: string[]; cc: string[] } {
+/** Recipients kept per message (a memo to a whole company lists hundreds). */
+const MAX_RECIPIENTS = 200;
+
+function recipients(
+  pst: PSTFile,
+  m: PSTMessage,
+): { to: string[]; cc: string[] } {
   const to: string[] = [];
   const cc: string[] = [];
-  for (let i = 0; i < m.numberOfRecipients; i++) {
-    const r = m.getRecipient(i);
-    if (!r) continue;
+  for (const r of recipientsOf(pst, m, MAX_RECIPIENTS)) {
     const addr = [r.smtpAddress, r.emailAddress].find(isAddr);
     const name = (r.displayName ?? '').trim();
     const v = addr ? withName(name, addr.trim()) : name;
@@ -194,6 +199,7 @@ const iso = (d: Date | null) =>
   d && !Number.isNaN(d.getTime()) ? d.toISOString() : null;
 
 async function messageChild(
+  pst: PSTFile,
   m: PSTMessage,
   folder: string,
 ): Promise<ChildItem | null> {
@@ -206,7 +212,7 @@ async function messageChild(
 
   const nid = m.descriptorNodeId.toNumber();
   const date = iso(m.clientSubmitTime) ?? iso(m.messageDeliveryTime);
-  const { to, cc } = recipients(m);
+  const { to, cc } = recipients(pst, m);
   const subject = (m.subject ?? '').trim();
   const body = await bodyOf(m);
   const attachments: string[] = [];
@@ -343,7 +349,7 @@ export async function expandPst(
         else if (at.message && isMail(at.message.messageClass ?? ''))
           try {
             // eslint-disable-next-line no-await-in-loop
-            child = await messageChild(at.message, ref.label);
+            child = await messageChild(pst, at.message, ref.label);
           } catch {
             state.skipped += 1; // one bad message never fails the archive
           }

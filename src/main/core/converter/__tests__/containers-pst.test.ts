@@ -148,6 +148,14 @@ describe('expandPst', () => {
     }
   });
 
+  it('reads recipients from one table read, never getRecipient (quadratic)', async () => {
+    const per = jest.spyOn(PSTMessage.prototype, 'getRecipient');
+    const r = await expandPst(file, null, ALL);
+    expect(per).not.toHaveBeenCalled();
+    const sent = r.items.find((c) => c.title === 'Accepted: meeting from Ed');
+    expect(sent?.metadata.to).toEqual(['epfromer@gmail.com']);
+  });
+
   it('stops walking at the folder cap and says so', async () => {
     PST_LIMITS.folders = 3;
     const r = await expandPst(file, null, ALL);
@@ -246,6 +254,21 @@ describe('pst-extractor internals (pinned 1.12.0)', () => {
       expect(root).toHaveProperty('subfoldersTable');
       expect(root.pstTableItems).toBeInstanceOf(Map);
       expect(root).toHaveProperty('localDescriptorItems');
+      // A real message, reached the way the pager reaches one.
+      const stack = [pst.getRootFolder()];
+      let m: PSTMessage | null = null;
+      while (!m && stack.length > 0) {
+        const f = stack.pop() as PSTFolder;
+        const at = f.contentCount > 0 ? tables.childAt(pst, f, 0) : null;
+        if (at && !at.end) m = at.message;
+        for (const nid of tables.subfolderNids(f, 0, 100)) {
+          const sub = tables.loadFolder(pst, nid);
+          if (sub) stack.push(sub);
+        }
+      }
+      expect(m).not.toBeNull();
+      void m!.numberOfRecipients;
+      expect(m).toHaveProperty('recipientTable');
       expect(
         JSON.parse(
           fs.readFileSync(

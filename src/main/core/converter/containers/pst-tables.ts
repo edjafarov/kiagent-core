@@ -5,13 +5,14 @@
  *  Why not the public API: `getNextChild()` skips a failing row inside the
  *  library and advances a private cursor (a counted resume drifts), its
  *  fallback path does not catch at all, `getSubFolders()` loads every child
- *  folder at once, and the body getters read a whole property before anyone
- *  can look at its size. */
+ *  folder at once, the body getters read a whole property before anyone
+ *  can look at its size, and `getRecipient(i)` re-reads the whole recipient
+ *  table per call (quadratic: a 400-recipient Enron memo took seconds). */
 import Long from 'long';
 // Only the package root: a deep `pst-extractor/dist/...` import would be
 // bundled beside the external package (webpack matches externals by exact
 // request), and `instanceof` across the two copies fails.
-import { PSTFile, PSTFolder, PSTMessage } from 'pst-extractor';
+import { PSTFile, PSTFolder, PSTMessage, PSTRecipient } from 'pst-extractor';
 
 type PSTObject = PSTFolder | PSTMessage;
 
@@ -125,6 +126,27 @@ export function subfolderNids(
     if (item && item.itemIndex !== -1) out.push(item.entryValueReference);
   }
   return out;
+}
+
+/** The first `max` recipients, from ONE read of the recipient table. */
+export function recipientsOf(
+  pst: PSTFile,
+  m: PSTMessage,
+  max: number,
+): PSTRecipient[] {
+  const n = m.numberOfRecipients; // builds the table
+  const table = (m as unknown as { recipientTable: Table | null })
+    .recipientTable;
+  if (!table || n === 0) return [];
+  return table
+    .getItems(0, Math.min(n, max))
+    .map(
+      (row) =>
+        new PSTRecipient(
+          pst,
+          row as unknown as ConstructorParameters<typeof PSTRecipient>[1],
+        ),
+    );
 }
 
 /** A property's stored size, read without materialising it (an external
