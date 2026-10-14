@@ -4,6 +4,7 @@ import {
   AsrInputRejectedError,
   INPUT_REJECTED_DIAGNOSTIC,
   runWhisperCli,
+  SPEECH_SEGMENTS_DIAGNOSTIC,
   WHISPER_LANGUAGES,
   WHISPER_VAD_PARAMS,
 } from '../whisper-cli';
@@ -96,7 +97,7 @@ describe('runWhisperCli', () => {
     child.stdout.emit('data', Buffer.from('hello '));
     child.stdout.emit('data', Buffer.from('world'));
     child.emit('close', 0, null);
-    await expect(p).resolves.toBe('hello world');
+    await expect(p.then((r) => r.text)).resolves.toBe('hello world');
     expect(argv[0]).toEqual([
       ARGS.binaryPath,
       '-m',
@@ -116,7 +117,7 @@ describe('runWhisperCli', () => {
     const chunk = Buffer.alloc(1024 * 1024, 0x61); // 1 MiB of 'a'
     for (let i = 0; i < 5; i += 1) child.stdout.emit('data', chunk);
     child.emit('close', 0, null);
-    await expect(p).resolves.toHaveLength(5 * 1024 * 1024);
+    await expect(p.then((r) => r.text)).resolves.toHaveLength(5 * 1024 * 1024);
   });
 
   it('the stderr diagnostic rejects as AsrInputRejectedError EVEN at exit 0', async () => {
@@ -167,7 +168,7 @@ describe('runWhisperCli', () => {
     const { spawnFn, child } = fakeSpawn();
     const p = runWhisperCli({ ...ARGS, spawnFn });
     child.emit('close', 0, null);
-    await expect(p).resolves.toBe('');
+    await expect(p.then((r) => r.text)).resolves.toBe('');
   });
 
   it('abort kills the child with SIGTERM', async () => {
@@ -283,7 +284,7 @@ describe('runWhisperCli', () => {
       ),
     );
     child.emit('close', 0, null);
-    await expect(p).resolves.toBe(
+    await expect(p.then((r) => r.text)).resolves.toBe(
       JSON.stringify({ language: 'uk', probability: 0.46361 }),
     );
     expect(argv[0]).toContain('-dl');
@@ -295,7 +296,9 @@ describe('runWhisperCli', () => {
     const p = runWhisperCli({ ...ARGS, spawnFn, detectLanguage: true });
     child.stderr.emit('data', Buffer.from('whisper_vad: VAD is enabled\n'));
     child.emit('close', 0, null);
-    await expect(p).resolves.toBe(JSON.stringify({ language: null }));
+    await expect(p.then((r) => r.text)).resolves.toBe(
+      JSON.stringify({ language: null }),
+    );
   });
 
   it('the detection line survives the stderr tail cap (sticky capture)', async () => {
@@ -310,7 +313,7 @@ describe('runWhisperCli', () => {
     for (let i = 0; i < 20; i += 1)
       child.stderr.emit('data', Buffer.alloc(1024, 0x62));
     child.emit('close', 0, null);
-    await expect(p).resolves.toBe(
+    await expect(p.then((r) => r.text)).resolves.toBe(
       JSON.stringify({ language: 'de', probability: 0.91 }),
     );
   });
@@ -325,7 +328,9 @@ describe('runWhisperCli', () => {
       ),
     );
     child.emit('close', 0, null);
-    await expect(p).resolves.toBe(JSON.stringify({ language: null }));
+    await expect(p.then((r) => r.text)).resolves.toBe(
+      JSON.stringify({ language: null }),
+    );
   });
 
   it('a detection line split across two stderr chunks still resolves the parsed JSON', async () => {
@@ -339,7 +344,7 @@ describe('runWhisperCli', () => {
     );
     child.stderr.emit('data', Buffer.from('63610)\n'));
     child.emit('close', 0, null);
-    await expect(p).resolves.toBe(
+    await expect(p.then((r) => r.text)).resolves.toBe(
       JSON.stringify({ language: 'uk', probability: 0.46361 }),
     );
   });
@@ -355,7 +360,7 @@ describe('runWhisperCli', () => {
       ),
     );
     child.emit('close', 0, null);
-    await expect(p).resolves.toBe('hello world');
+    await expect(p.then((r) => r.text)).resolves.toBe('hello world');
   });
 
   it('an unknown-language diagnostic rejects with a plain Error even at exit 0', async () => {
@@ -427,5 +432,78 @@ describe('runWhisperCli VAD', () => {
     await p;
     expect(argv[0]).not.toContain('--vad');
     expect(argv[0]).not.toContain('-vm');
+  });
+});
+
+describe('runWhisperCli — file route (spec 2026-10-14)', () => {
+  const VAD_LINE = `whisper_vad_segments_from_probs: ${SPEECH_SEGMENTS_DIAGNOSTIC} 1372\n`;
+
+  it('noContext + verboseLog: adds -mc 0 and drops --no-prints', async () => {
+    const { spawnFn, child, argv } = fakeSpawn();
+    const p = runWhisperCli({
+      ...ARGS,
+      spawnFn,
+      vadModelPath: '/vad.bin',
+      noContext: true,
+      verboseLog: true,
+    });
+    child.emit('close', 0, null);
+    await p;
+    const a = argv[0];
+    expect(a[a.indexOf('-mc') + 1]).toBe('0');
+    expect(a).toContain('--vad');
+    expect(a).not.toContain('--no-prints');
+  });
+
+  it('without the new flags the argv keeps --no-prints and has no -mc', async () => {
+    const { spawnFn, child, argv } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn });
+    child.emit('close', 0, null);
+    await p;
+    expect(argv[0]).toContain('--no-prints');
+    expect(argv[0]).not.toContain('-mc');
+  });
+
+  it('parses speechSegments from a line split across stderr chunks', async () => {
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn, verboseLog: true });
+    child.stderr.emit('data', Buffer.from(VAD_LINE.slice(0, 40)));
+    child.stderr.emit('data', Buffer.from(VAD_LINE.slice(40)));
+    child.stdout.emit('data', Buffer.from(' Hallo.'));
+    child.emit('close', 0, null);
+    await expect(p).resolves.toEqual({ text: ' Hallo.', speechSegments: 1372 });
+  });
+
+  it('a chunk split inside the number never locks in a partial count', async () => {
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn, verboseLog: true });
+    const cut = VAD_LINE.indexOf('1372') + 2; // "…: 13" | "72\n"
+    child.stderr.emit('data', Buffer.from(VAD_LINE.slice(0, cut)));
+    child.stderr.emit('data', Buffer.from(VAD_LINE.slice(cut)));
+    child.emit('close', 0, null);
+    await expect(p).resolves.toEqual({ text: '', speechSegments: 1372 });
+  });
+
+  it('speechSegments stays sticky after the stderr tail cap trims the line out', async () => {
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn, verboseLog: true });
+    child.stderr.emit(
+      'data',
+      Buffer.from(
+        `whisper_vad_segments_from_probs: ${SPEECH_SEGMENTS_DIAGNOSTIC} 0\n`,
+      ),
+    );
+    for (let i = 0; i < 20; i += 1)
+      child.stderr.emit('data', Buffer.alloc(1024, 0x63));
+    child.emit('close', 0, null);
+    await expect(p).resolves.toEqual({ text: '', speechSegments: 0 });
+  });
+
+  it('speechSegments is null when the line never appears', async () => {
+    const { spawnFn, child } = fakeSpawn();
+    const p = runWhisperCli({ ...ARGS, spawnFn });
+    child.stdout.emit('data', Buffer.from('x'));
+    child.emit('close', 0, null);
+    await expect(p).resolves.toEqual({ text: 'x', speechSegments: null });
   });
 });

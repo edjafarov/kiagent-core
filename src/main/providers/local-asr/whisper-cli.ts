@@ -161,6 +161,25 @@ export const WHISPER_VAD_PARAMS = {
 
 const STDERR_CAP_BYTES = 8 * 1024;
 
+/** whisper.cpp v1.9.2 `whisper_vad_segments_from_probs` log line. It reaches
+ *  stderr only WITHOUT --no-prints, and counts speech in the WHOLE input —
+ *  VAD ignores -ot/-d (measured 2026-10-14). ⚠️ Re-verify on every
+ *  WHISPER_TAG bump. */
+export const SPEECH_SEGMENTS_DIAGNOSTIC =
+  'Final speech segments after filtering:';
+// Anchored on the line ending: a stderr chunk can split INSIDE the number
+// ("…: 13" | "72\n"), and the sticky first match would lock in 13.
+const SPEECH_SEGMENTS_RE = /Final speech segments after filtering: (\d+)\r?\n/;
+
+export interface WhisperResult {
+  /** stdout transcript, or the detection JSON on a `-dl` run. */
+  text: string;
+  /** VAD's whole-input speech-segment count; null = never reported (no VAD,
+   *  --no-prints, or a whisper that stopped logging it). Null is UNKNOWN,
+   *  never "no speech". */
+  speechSegments: number | null;
+}
+
 /** The minimal child-process shape this wrapper actually touches. Narrow on
  *  purpose: `typeof spawn` is a heavily overloaded signature that no
  *  hand-rolled test fake can satisfy without an `as unknown as` cast that
@@ -198,7 +217,8 @@ export type SpawnFn = (
  *
  * Classification (spec §2, in order): spawn error / exit-by-signal → plain
  * Error (transient, worker defers); stderr carries the diagnostic →
- * AsrInputRejectedError regardless of exit code; exit 0 → resolve stdout
+ * AsrInputRejectedError regardless of exit code; exit 0 → resolve
+ * `{ text: stdout, speechSegments }`
  * (empty string feeds the worker's own empty-transcript throw); non-zero →
  * plain Error carrying the bounded stderr (host fault, worker defers).
  * Detect runs resolve the parsed stderr line as JSON; an `unknown language`
@@ -219,6 +239,12 @@ export function runWhisperCli(args: {
   /** `-dl`: detect and exit. Resolves to JSON `{language, probability}` or
    *  `{language: null}`; stdout is empty by construction. */
   detectLanguage?: boolean;
+  /** `-mc 0`: no previous-text conditioning across 30 s windows — stops a
+   *  long-form loop from running to the end of the file (file route). */
+  noContext?: boolean;
+  /** Omit `--no-prints` so whisper's log (the VAD speech count) reaches
+   *  stderr. Ignored on a detect run, which never passes it anyway. */
+  verboseLog?: boolean;
   signal?: AbortSignal;
   spawnFn?: SpawnFn;
   /** Background (indexing / background-lane) runs execute demoted
@@ -229,9 +255,9 @@ export function runWhisperCli(args: {
   /** Test seams for child-priority on a non-mac CI host. */
   platform?: NodeJS.Platform;
   taskpolicyExists?: (p: string) => boolean;
-}): Promise<string> {
+}): Promise<WhisperResult> {
   const spawnFn = args.spawnFn ?? spawn;
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<WhisperResult>((resolve, reject) => {
     // A signal handed to us already aborted (e.g. the caller's dispose() ran
     // before this job was scheduled) must never launch the child — otherwise
     // a cancelled job silently runs a full CPU-tier transcription (hours) to
@@ -253,15 +279,22 @@ export function runWhisperCli(args: {
       // echoed the pin back as a "detection" the app would lock it in.
       args.detectLanguage === true ? 'auto' : (args.language ?? 'auto'),
       ...(args.timestamps === true ? [] : ['--no-timestamps']),
-      ...(args.detectLanguage === true ? ['-dl'] : ['--no-prints']),
+      ...(args.detectLanguage === true
+        ? ['-dl']
+        : args.verboseLog === true
+          ? []
+          : ['--no-prints']),
+      ...(args.noContext === true ? ['-mc', '0'] : []),
       // Whisper hallucinates on silence: given a mostly-silent track it
       // emits the last real utterance again once per 30s window, with
       // timestamps stretched across the gap. Per-speaker meeting channels
       // are mostly silence by construction (each side is quiet while the
       // other talks), so a 6-minute call came back with 25 phantom repeats
       // and smeared timings that mis-interleaved the two speakers.
-      // Decoder-side knobs do NOT fix it (-mc 0, -sns, -nth all measured:
-      // no effect); skipping non-speech audio outright does.
+      // Decoder-side knobs do NOT fix these *silence* repeats (-mc 0, -sns,
+      // -nth all measured: no effect); skipping non-speech audio outright
+      // does. (-mc 0 DOES stop long-form loops on speech — the file route
+      // passes it via `noContext`; spec 2026-10-14.)
       ...(args.vadModelPath !== undefined
         ? [
             '--vad',
@@ -297,6 +330,7 @@ export function runWhisperCli(args: {
     let sawDiagnostic = false;
     let sawUnknownLanguage = false;
     let detected: { language: string; probability: number } | null = null;
+    let speechSegments: number | null = null;
     child.stdout?.on('data', (c: Buffer) => out.push(c));
     // An EPIPE/ECONNRESET on a stdio stream emits 'error' on the Readable,
     // not on the ChildProcess — unhandled, that's an uncaught exception and
@@ -316,6 +350,13 @@ export function runWhisperCli(args: {
             ? { language: m[1], probability }
             : null;
         }
+      }
+      if (
+        speechSegments === null &&
+        text.includes(SPEECH_SEGMENTS_DIAGNOSTIC)
+      ) {
+        const m = SPEECH_SEGMENTS_RE.exec(text);
+        if (m) speechSegments = Number(m[1]);
       }
       if (err.length > STDERR_CAP_BYTES) err = err.subarray(-STDERR_CAP_BYTES);
     });
@@ -367,12 +408,15 @@ export function runWhisperCli(args: {
         return;
       }
       if (args.detectLanguage === true) {
-        resolve(
-          JSON.stringify(detected === null ? { language: null } : detected),
-        );
+        resolve({
+          text: JSON.stringify(
+            detected === null ? { language: null } : detected,
+          ),
+          speechSegments,
+        });
         return;
       }
-      resolve(Buffer.concat(out).toString('utf8'));
+      resolve({ text: Buffer.concat(out).toString('utf8'), speechSegments });
     });
   });
 }
