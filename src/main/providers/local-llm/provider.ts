@@ -122,6 +122,20 @@ export function createLocalLlmProvider(deps: {
   const binaryFor = (accel: LlmAccel): string =>
     (accel === 'cpu' ? cpuBinary : null) ?? deps.llamaBinaryPath!;
   let backend: BackendInfo | null = null; // detected once, lazily
+  let detecting: Promise<BackendInfo> | null = null;
+  /** One probe per provider; its result never replaces a backend already
+   *  set (the cpu fallback after a failed vulkan start stays put). */
+  const detectOnce = (): Promise<BackendInfo> => {
+    if (backend) return Promise.resolve(backend);
+    detecting ??= detect().then(
+      (b) => (backend ??= b),
+      (err) => {
+        detecting = null;
+        throw err;
+      },
+    );
+    return detecting;
+  };
   let installedModel: ModelDescriptor | null = null; // model whose files are on disk
   /** One download's state; the chat model and the embedding model each
    *  have their own, so neither download changes the other's status. */
@@ -166,9 +180,9 @@ export function createLocalLlmProvider(deps: {
   const selectedModel = async (): Promise<ModelDescriptor> => {
     const override = resolveModelOverride(deps.prefs.get().models.override);
     if (override) return override;
-    if (!backend) backend = await detect();
+    const b = await detectOnce();
     checkModelChange();
-    return selectCuratedModel(backend);
+    return selectCuratedModel(b);
   };
 
   const modelPresent = (m: ModelDescriptor): boolean =>
@@ -389,10 +403,9 @@ export function createLocalLlmProvider(deps: {
       const dir = modelDir(deps.modelsDir, model.id);
       const gguf = model.files.find((f) => !f.name.startsWith('mmproj'))!;
       const mmproj = model.files.find((f) => f.name.startsWith('mmproj'));
-      if (!backend) {
-        backend = await detect();
-        checkModelChange();
-      }
+      const firstDetect = !backend;
+      const { accel } = await detectOnce();
+      if (firstDetect) checkModelChange();
       const launch = (accel: LlmAccel): ServerLike =>
         makeServer({
           binaryPath: binaryFor(accel),
@@ -403,14 +416,14 @@ export function createLocalLlmProvider(deps: {
           extraArgs: llamaThreadArgs(host, accel),
           log: deps.log,
         });
-      let s = launch(backend.accel);
+      let s = launch(accel);
       try {
         await s.start();
       } catch (err) {
         // A Vulkan build that can't start (no driver, a broken GPU) must not
         // take local AI down when a CPU build is vendored: run on cpu from
         // now on. darwin has no separate cpu build.
-        if (backend.accel !== 'vulkan' || !cpuBinary || disposed) throw err;
+        if (accel !== 'vulkan' || !cpuBinary || disposed) throw err;
         deps.log(
           'warn',
           `[local-llm] vulkan llama-server failed to start (${String(

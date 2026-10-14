@@ -612,6 +612,57 @@ describe('LocalLlmProvider', () => {
       expect(provider.accel()).toBe('cpu');
     });
 
+    it('after the cpu fallback a restart (idle stop) runs cpu, and a late probe cannot undo it', async () => {
+      await installModelFiles(tmpDir);
+      const seen: string[] = [];
+      let probes = 0;
+      let releaseLateProbe!: () => void;
+      const lateProbe = new Promise<void>((r) => {
+        releaseLateProbe = r;
+      });
+      const { deps } = makeDeps({
+        modelsDir: tmpDir,
+        host: winHost,
+        idleStopMs: 20,
+        llamaBinaryPath: 'C:/llama/win32-x64-vulkan/llama-server.exe',
+        cpuBinaryPath: 'C:/llama/win32-x64-cpu/llama-server.exe',
+        detect: async () => {
+          probes += 1;
+          if (probes > 1) await lateProbe;
+          return { accel: 'vulkan' as const, capacityBytes: 8 * 1024 ** 3 };
+        },
+      });
+      const provider = createLocalLlmProvider({
+        ...deps,
+        makeServer: (a: { binaryPath: string }) => {
+          seen.push(a.binaryPath);
+          const vulkan = a.binaryPath.includes('vulkan');
+          return {
+            start: jest.fn(async () => {
+              if (vulkan) throw new Error('vk init failed');
+            }),
+            stop: jest.fn(async () => {}),
+            baseUrl: () => 'http://x',
+          };
+        },
+      });
+      mockApi.chatText.mockResolvedValue('ok');
+      // A second caller asks for the model while the first starts.
+      const selecting = provider.selectedModel();
+      await complete(provider);
+      releaseLateProbe();
+      await selecting;
+      expect(probes).toBe(1);
+      expect(provider.accel()).toBe('cpu');
+      await new Promise((r) => setTimeout(r, 60)); // idle stop
+      await complete(provider);
+      expect(seen).toEqual([
+        'C:/llama/win32-x64-vulkan/llama-server.exe',
+        'C:/llama/win32-x64-cpu/llama-server.exe',
+        'C:/llama/win32-x64-cpu/llama-server.exe',
+      ]);
+    });
+
     it('without a cpu build a vulkan start failure surfaces', async () => {
       await installModelFiles(tmpDir);
       const { deps } = makeDeps({
