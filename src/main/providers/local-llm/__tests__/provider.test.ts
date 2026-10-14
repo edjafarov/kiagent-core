@@ -499,6 +499,145 @@ describe('LocalLlmProvider', () => {
     expect(provider.accel()).toBe('cpu');
   });
 
+  describe('llama-server build choice (core#127)', () => {
+    const winHost = {
+      platform: 'win32' as NodeJS.Platform,
+      arch: 'x64',
+      cores: 8,
+      totalMemBytes: 16 * 1024 ** 3,
+    };
+    const complete = (provider: ReturnType<typeof createLocalLlmProvider>) =>
+      provider.handle({
+        kind: 'complete',
+        payload: { prompt: 'a' },
+        lane: 'interactive',
+      });
+
+    it('no build for this host → unsupported, never installs', () => {
+      const { deps } = makeDeps({ modelsDir: tmpDir, llamaBinaryPath: null });
+      const provider = createLocalLlmProvider(deps);
+      expect(provider.status()).toBe('unsupported');
+      expect(provider.mayBecomeReady?.()).toBe(false);
+      provider.ensureInstalled();
+      expect(deps.download).not.toHaveBeenCalled();
+    });
+
+    it('cpu host runs the cpu build with -ngl 0', async () => {
+      await installModelFiles(tmpDir);
+      const seen: { binaryPath: string; gpuLayers: number }[] = [];
+      const { deps, server } = makeDeps({
+        modelsDir: tmpDir,
+        host: winHost,
+        llamaBinaryPath: 'C:/llama/win32-x64-vulkan/llama-server.exe',
+        cpuBinaryPath: 'C:/llama/win32-x64-cpu/llama-server.exe',
+        detect: async () => ({ accel: 'cpu' as const, capacityBytes: 1 }),
+      });
+      const provider = createLocalLlmProvider({
+        ...deps,
+        makeServer: (a: { binaryPath: string; gpuLayers: number }) => {
+          seen.push({ binaryPath: a.binaryPath, gpuLayers: a.gpuLayers });
+          return server;
+        },
+      });
+      mockApi.chatText.mockResolvedValue('ok');
+      await complete(provider);
+      expect(seen).toEqual([
+        { binaryPath: 'C:/llama/win32-x64-cpu/llama-server.exe', gpuLayers: 0 },
+      ]);
+    });
+
+    it('vulkan host runs the vulkan build, offloaded', async () => {
+      await installModelFiles(tmpDir);
+      const seen: { binaryPath: string; gpuLayers: number }[] = [];
+      const { deps, server } = makeDeps({
+        modelsDir: tmpDir,
+        host: winHost,
+        llamaBinaryPath: 'C:/llama/win32-x64-vulkan/llama-server.exe',
+        cpuBinaryPath: 'C:/llama/win32-x64-cpu/llama-server.exe',
+        detect: async () => ({
+          accel: 'vulkan' as const,
+          capacityBytes: 8 * 1024 ** 3,
+        }),
+      });
+      const provider = createLocalLlmProvider({
+        ...deps,
+        makeServer: (a: { binaryPath: string; gpuLayers: number }) => {
+          seen.push({ binaryPath: a.binaryPath, gpuLayers: a.gpuLayers });
+          return server;
+        },
+      });
+      mockApi.chatText.mockResolvedValue('ok');
+      await complete(provider);
+      expect(seen).toEqual([
+        {
+          binaryPath: 'C:/llama/win32-x64-vulkan/llama-server.exe',
+          gpuLayers: 999,
+        },
+      ]);
+    });
+
+    it('a vulkan build that fails to start falls back to the cpu build for good', async () => {
+      await installModelFiles(tmpDir);
+      const seen: string[] = [];
+      const { deps } = makeDeps({
+        modelsDir: tmpDir,
+        host: winHost,
+        llamaBinaryPath: 'C:/llama/win32-x64-vulkan/llama-server.exe',
+        cpuBinaryPath: 'C:/llama/win32-x64-cpu/llama-server.exe',
+        detect: async () => ({
+          accel: 'vulkan' as const,
+          capacityBytes: 8 * 1024 ** 3,
+        }),
+      });
+      const provider = createLocalLlmProvider({
+        ...deps,
+        makeServer: (a: { binaryPath: string; gpuLayers: number }) => {
+          seen.push(`${a.binaryPath} -ngl ${a.gpuLayers}`);
+          const vulkan = a.binaryPath.includes('vulkan');
+          return {
+            start: jest.fn(async () => {
+              if (vulkan) throw new Error('vk init failed');
+            }),
+            stop: jest.fn(async () => {}),
+            baseUrl: () => 'http://x',
+          };
+        },
+      });
+      mockApi.chatText.mockResolvedValue('ok');
+      await expect(complete(provider)).resolves.toBeDefined();
+      expect(seen).toEqual([
+        'C:/llama/win32-x64-vulkan/llama-server.exe -ngl 999',
+        'C:/llama/win32-x64-cpu/llama-server.exe -ngl 0',
+      ]);
+      expect(provider.accel()).toBe('cpu');
+    });
+
+    it('without a cpu build a vulkan start failure surfaces', async () => {
+      await installModelFiles(tmpDir);
+      const { deps } = makeDeps({
+        modelsDir: tmpDir,
+        host: winHost,
+        llamaBinaryPath: 'C:/llama/win32-x64-vulkan/llama-server.exe',
+        cpuBinaryPath: null,
+        detect: async () => ({
+          accel: 'vulkan' as const,
+          capacityBytes: 8 * 1024 ** 3,
+        }),
+        makeServer: () => ({
+          start: jest.fn(async () => {
+            throw new Error('vk init failed');
+          }),
+          stop: jest.fn(async () => {}),
+          baseUrl: () => 'http://x',
+        }),
+      });
+      mockApi.chatText.mockResolvedValue('ok');
+      await expect(complete(createLocalLlmProvider(deps))).rejects.toThrow(
+        'vk init failed',
+      );
+    });
+  });
+
   // Finding 1: two concurrent first-handle() calls must single-flight the
   // server start — only one server may ever be constructed, and both calls
   // resolve against it. Before the fix, `serverStarting` was assigned only

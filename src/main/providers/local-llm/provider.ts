@@ -16,7 +16,7 @@ import {
   type LlmAccel,
 } from '../../core/host-profile';
 import { chatText, describeImage, embedTexts } from './api';
-import { checkCapability } from './capability';
+import { checkCapability, type CapabilityResult } from './capability';
 import { detectHostBackend } from './backend';
 import type { BackendInfo } from './backend';
 import { downloadModel, modelFilesPresent } from './downloader';
@@ -65,7 +65,14 @@ export function llamaThreadArgs(host: HostFacts, accel: LlmAccel): string[] {
 const DEFAULT_IDLE_STOP_MS = 10 * 60_000;
 
 export function createLocalLlmProvider(deps: {
-  llamaBinaryPath: string;
+  /** The build to run: the GPU build when vendored, else the CPU build.
+   *  null = no llama-server for this host → the provider is unsupported. */
+  llamaBinaryPath: string | null;
+  /** The CPU-only build (win32/linux), used when detection says cpu and as
+   *  the fallback when the GPU build fails to start. */
+  cpuBinaryPath?: string | null;
+  /** `llama-server --list-devices` probe for Vulkan detection (non-darwin). */
+  listDevices?(): Promise<string>;
   modelsDir: string;
   prefs: Prefs;
   log(level: LogLevel, msg: string): void;
@@ -91,6 +98,7 @@ export function createLocalLlmProvider(deps: {
       detectHostBackend({
         platform: host.platform,
         totalMemBytes: host.totalMemBytes,
+        ...(deps.listDevices ? { listDevices: deps.listDevices } : {}),
       }));
   const download = deps.download ?? downloadModel;
   const filesPresent = deps.filesPresent ?? modelFilesPresent;
@@ -99,11 +107,20 @@ export function createLocalLlmProvider(deps: {
     ((args) => new LlamaServer(args as any) as unknown as ServerLike);
   const idleStopMs = deps.idleStopMs ?? DEFAULT_IDLE_STOP_MS;
 
-  const capability = checkCapability({
-    platform: host.platform,
-    arch: host.arch,
-    totalMemBytes: host.totalMemBytes,
-  });
+  const capability: CapabilityResult = deps.llamaBinaryPath
+    ? checkCapability({
+        platform: host.platform,
+        arch: host.arch,
+        totalMemBytes: host.totalMemBytes,
+      })
+    : { ok: false, reason: 'no_binary' };
+  if (!deps.llamaBinaryPath)
+    deps.log('warn', '[local-llm] no llama-server build for this host');
+  const cpuBinary = deps.cpuBinaryPath ?? null;
+  /** The cpu build when detection says cpu (a vulkan build with -ngl 0
+   *  would still init Vulkan), else the primary build. */
+  const binaryFor = (accel: LlmAccel): string =>
+    (accel === 'cpu' ? cpuBinary : null) ?? deps.llamaBinaryPath!;
   let backend: BackendInfo | null = null; // detected once, lazily
   let installedModel: ModelDescriptor | null = null; // model whose files are on disk
   /** One download's state; the chat model and the embedding model each
@@ -376,16 +393,35 @@ export function createLocalLlmProvider(deps: {
         backend = await detect();
         checkModelChange();
       }
-      const s = makeServer({
-        binaryPath: deps.llamaBinaryPath,
-        modelPath: path.join(dir, gguf.name),
-        ...(mmproj ? { mmprojPath: path.join(dir, mmproj.name) } : {}),
-        gpuLayers: backend.accel === 'cpu' ? 0 : 999,
-        ...(embeddings ? { embeddings: true } : {}),
-        extraArgs: llamaThreadArgs(host, backend.accel),
-        log: deps.log,
-      });
-      await s.start();
+      const launch = (accel: LlmAccel): ServerLike =>
+        makeServer({
+          binaryPath: binaryFor(accel),
+          modelPath: path.join(dir, gguf.name),
+          ...(mmproj ? { mmprojPath: path.join(dir, mmproj.name) } : {}),
+          gpuLayers: accel === 'cpu' ? 0 : 999,
+          ...(embeddings ? { embeddings: true } : {}),
+          extraArgs: llamaThreadArgs(host, accel),
+          log: deps.log,
+        });
+      let s = launch(backend.accel);
+      try {
+        await s.start();
+      } catch (err) {
+        // A Vulkan build that can't start (no driver, a broken GPU) must not
+        // take local AI down when a CPU build is vendored: run on cpu from
+        // now on. darwin has no separate cpu build.
+        if (backend.accel !== 'vulkan' || !cpuBinary || disposed) throw err;
+        deps.log(
+          'warn',
+          `[local-llm] vulkan llama-server failed to start (${String(
+            (err as Error)?.message ?? err,
+          )}); using the cpu build`,
+        );
+        backend = { accel: 'cpu', capacityBytes: host.totalMemBytes };
+        checkModelChange();
+        s = launch('cpu');
+        await s.start();
+      }
       server = s;
       return s;
     })();

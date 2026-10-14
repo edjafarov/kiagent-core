@@ -1,6 +1,7 @@
 // scripts/llama-assets.mjs
-// Single source of truth for the vendored llama.cpp binaries. The slug keys
-// MUST match catalog.ts's llamaSlug() output — pinned by
+// Single source of truth for the vendored llama.cpp binaries. Every slug
+// slugsForHost() vendors MUST be one the runtime resolver
+// (src/main/providers/local-llm/binaries.ts) looks for — pinned by
 // src/__tests__/llama-slug-contract.test.ts. Bump LLAMA_TAG deliberately and
 // re-run `node scripts/fetch-llama-server.mjs --print-sha` to refresh shas.
 export const LLAMA_TAG = 'b11555';

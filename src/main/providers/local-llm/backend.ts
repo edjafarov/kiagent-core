@@ -63,8 +63,8 @@ export function parseVulkanDevices(stdout: string): VulkanDevice[] {
  *  immediately; otherwise try to probe for Vulkan devices via optional listDevices.
  *  Degrades to cpu on any failure.
  *
- *  Note: listDevices defaults to returning '' (no Vulkan probe). The bundled
- *  `llama-server --list-devices` spawn wiring is phase C. */
+ *  providers/index.ts passes `llama-server --list-devices` of the vendored
+ *  Vulkan build (local-llm/binaries.ts); without it the host reads as cpu. */
 export async function detectHostBackend(opts: {
   platform: string;
   totalMemBytes: number;

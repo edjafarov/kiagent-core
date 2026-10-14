@@ -7,28 +7,17 @@ import { makeVisionHelper } from './apple-vision/vision-helper';
 import type { VisionHelper } from './apple-vision/vision-helper';
 import { createLocalAsrProvider } from './local-asr';
 import type { LocalAsrProvider } from './local-asr';
+import { listLlamaDevices, resolveLlamaBinaries } from './local-llm/binaries';
 import { createLocalLlmProvider } from './local-llm/provider';
 import type { LocalLlmProvider } from './local-llm/provider';
 import { createWindowsOcrProvider } from './windows-ocr/provider';
 import { makeWindowsOcrHelper } from './windows-ocr/windows-ocr-helper';
 
-/** darwin is Metal-implicit (no accel in the slug); other platforms would
- *  carry the accel (see ref catalog.ts llamaSlug), but accel is only known
- *  after detectHostBackend() runs — which for non-darwin needs the binary
- *  itself (--list-devices). Until that's wired, resolve platform-arch only;
- *  darwin (today's only shipped target) needs nothing more. */
-function resolveLlamaBinary(llamaDir: string): string {
-  const slug = `${process.platform}-${process.arch}`;
-  const binName =
-    process.platform === 'win32' ? 'llama-server.exe' : 'llama-server';
-  return path.join(llamaDir, slug, binName);
-}
-
 /** Whisper slugs are accel-less BY DESIGN (scripts/whisper-assets.mjs), so
- *  platform-arch resolution is exact on every platform — the llama accel
- *  mismatch above cannot recur here. A missing dir (a platform-arch with no
- *  vendored build) simply fails the capability check → provider reports
- *  unsupported. */
+ *  platform-arch resolution is exact on every platform (llama's are
+ *  accel-suffixed off darwin; see local-llm/binaries.ts). A missing dir (a
+ *  platform-arch with no vendored build) simply fails the capability check →
+ *  provider reports unsupported. */
 function resolveWhisperBinary(whisperDir: string): string {
   const slug = `${process.platform}-${process.arch}`;
   const binName =
@@ -85,9 +74,14 @@ export function registerBundledProviders(
     );
   }
 
-  const llamaSlugDir = path.join(opts.assetsDir, 'llama'); // per-platform slug resolved inside
+  const llama = resolveLlamaBinaries(path.join(opts.assetsDir, 'llama'));
+  const vulkanBinary = process.platform === 'darwin' ? null : llama.gpu;
   const localLlm = createLocalLlmProvider({
-    llamaBinaryPath: resolveLlamaBinary(llamaSlugDir), // port `llamaSlug` from ref catalog.ts:35
+    llamaBinaryPath: llama.gpu ?? llama.cpu,
+    cpuBinaryPath: llama.cpu,
+    ...(vulkanBinary
+      ? { listDevices: () => listLlamaDevices(vulkanBinary) }
+      : {}),
     modelsDir: path.join(opts.dataDir, 'models'),
     prefs: platform.prefs,
     host: platform.host,
