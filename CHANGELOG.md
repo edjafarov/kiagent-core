@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.112.0](https://github.com/edjafarov/kiagent-core/compare/v0.111.0...v0.112.0) (2026-10-14)
+
+### Features
+
+* **converter:** bounded zip parts, xml helpers and the new format kinds ([0901d57](https://github.com/edjafarov/kiagent-core/commit/0901d5795a15d80edf1b1a00922fb57a5350eff7))
+* **converter:** expandPage op and the container record reader ([51a46b2](https://github.com/edjafarov/kiagent-core/commit/51a46b2d588ad648443fe8a64ed9d1d4d263de7e))
+* **converter:** legacy Word .doc via word-extractor ([eb5512c](https://github.com/edjafarov/kiagent-core/commit/eb5512c3489c63f6ff40dd7941fa93ad289bf01b))
+* **converter:** mailboxes, vCards and ENEX inside a ZIP ([4904e56](https://github.com/edjafarov/kiagent-core/commit/4904e565e968ccf2ecff619d17ab4d0cc72083ba))
+* **converter:** mbox pager — one child per message, Thunderbird-aware ([a842130](https://github.com/edjafarov/kiagent-core/commit/a842130fb8739bd21dd9463eec1bfa713fde7aee))
+* **converter:** OpenDocument text/spreadsheet and EPUB; HTML drops head/style/script text ([edd1a7b](https://github.com/edjafarov/kiagent-core/commit/edd1a7b9150a988c1909f8a77203d1de9985699b))
+* **converter:** Outlook PST pager — messages by folder and row, resumable in a fresh child ([2f1a22c](https://github.com/edjafarov/kiagent-core/commit/2f1a22c02e96af5c6172956de714256c5d476ec3))
+* **converter:** PowerPoint .pptx — slides, titles, notes, tables, core properties ([6a4fccd](https://github.com/edjafarov/kiagent-core/commit/6a4fccd81f4b0ea0d10198f75db921571ad8202f))
+* **converter:** RTF files and RTF-only Outlook .msg bodies ([cfe5a74](https://github.com/edjafarov/kiagent-core/commit/cfe5a74f043c29d6dcd7713e8f52deaaa587d7d7))
+* **converter:** subtitle files become minute-stamped transcripts ([2854674](https://github.com/edjafarov/kiagent-core/commit/2854674e53b1db19fb99d4cc0d83fccca75b18f9))
+* **converter:** vCard and Evernote ENEX pagers ([b393de2](https://github.com/edjafarov/kiagent-core/commit/b393de244505110edf0fd6a77b93580349f0a466))
+* **converter:** ZIP pager — members indexed by the local file policy ([0093858](https://github.com/edjafarov/kiagent-core/commit/00938586797ed34524867c83bf52858822a86925))
+* **local-folder:** expand containers into child documents — file policy v4 ([2657f2c](https://github.com/edjafarov/kiagent-core/commit/2657f2c14598eb1fcf751275d780828b479ac69e))
+* **local-folder:** expansion records and page batches ([7c75124](https://github.com/edjafarov/kiagent-core/commit/7c751247cc5cb7959067be3af1073e56d261c01d))
+* **local-folder:** extract nested containers to a scratch directory ([4a3894e](https://github.com/edjafarov/kiagent-core/commit/4a3894ee3101d0a3e3d26e79659c60f0b7f6c2be))
+* **local-folder:** Outlook PST containers — file policy v5 ([9e9b5ed](https://github.com/edjafarov/kiagent-core/commit/9e9b5ed3e65f8d6eec5b1eaff98895a06fe276ad))
+* **platform:** platform API 2.13.0 — file policy v5 formats ([81083d2](https://github.com/edjafarov/kiagent-core/commit/81083d2a5e75cfb386e3da78663063046d37e4e2))
+* **policy:** admit the new formats locally and in the cloud (file policy v3) ([94c722a](https://github.com/edjafarov/kiagent-core/commit/94c722a9b92e496bda4728057baffce6823977b4))
+* **sdk:** 1.10.0 — file policy v5 (cloud Office, e-book and RTF conversion) ([6eaa707](https://github.com/edjafarov/kiagent-core/commit/6eaa707844bada8a0db11d4fd465775faf5ac8ed))
+
+### Bug Fixes
+
+* **containers:** phase-2 review — one-line ENEX, phone-only vCards, mbox tail at EOF, safe drops ([bd7f74e](https://github.com/edjafarov/kiagent-core/commit/bd7f74e62331f0780ccd2dad07de75cb54da09d6))
+* **converter:** count zip inflation as it streams; bound .xlsx/.ods before SheetJS ([77da502](https://github.com/edjafarov/kiagent-core/commit/77da5026a64ead84b44cd5463b953f3252a63337))
+* **converter:** no slide chrome in PPTX bodies, spaced ODT cells, RTF/HTML saved as .doc, cp1252 subtitles ([ce7061e](https://github.com/edjafarov/kiagent-core/commit/ce7061ebdffbd344fdd20f1193ceb4aeb74df13a))
+* **converter:** phase-2b review — partial writes, damaged headers, CD read errors ([415861b](https://github.com/edjafarov/kiagent-core/commit/415861b97858d07d8f999b473594f9275805d310))
+* **converter:** phase-3 review — attachments, damaged tables and bodies ([ce6ea34](https://github.com/edjafarov/kiagent-core/commit/ce6ea34ddb6be8dc0736d0f2dde928da08a61005))
+* **converter:** rowLimit initialises the contents table (no restart loop) ([2351a81](https://github.com/edjafarov/kiagent-core/commit/2351a8159cf2fee38dca5efece9d43c2ed411097))
+* **converter:** Strict OOXML decks, literal RTF bytes in the codepage, re-read local .msg once on v3 ([584ffd6](https://github.com/edjafarov/kiagent-core/commit/584ffd6cbc0075c50d695d6ab389f5560cbfeb11))
+* **converter:** strict XML parts, static format imports, v3 re-scan only new extensions, no cloud subtitles under text/* ([cd77db7](https://github.com/edjafarov/kiagent-core/commit/cd77db7a11f8d33f803413432e4bc2e9ba5545aa))
+* **local-folder:** an incomplete walk keeps containers — reconcile lists them, EACCES stats count as trouble ([04474af](https://github.com/edjafarov/kiagent-core/commit/04474af1af0a8191584879e88146b1a84aa276ef))
+* **local-folder:** an unstat-able DT_UNKNOWN entry marks the walk incomplete ([30f646b](https://github.com/edjafarov/kiagent-core/commit/30f646b7df4537eb99acc9e7069e38bb2426bb6c))
+* **store:** reconcile's mass-archive guard counts top-level rows only ([2a3dff8](https://github.com/edjafarov/kiagent-core/commit/2a3dff8a6aa5aa930193286aa32e1777c96d3e3e))
+
+### Performance Improvements
+
+* **converter:** copy nested members with one fixed buffer, not fs streams ([d743fa0](https://github.com/edjafarov/kiagent-core/commit/d743fa048bf3c0cbace699d7ecbed75a325aebbb))
+* **converter:** PST recipients from one table read ([6f4bd80](https://github.com/edjafarov/kiagent-core/commit/6f4bd80b10265be209e8d38e449c87157ec46193))
+* **converter:** ZIP pages resume at the central-directory offset ([19a24a4](https://github.com/edjafarov/kiagent-core/commit/19a24a41552881a5e38f8c24a964a9f56bf59801))
+
 ## [0.111.0](https://github.com/edjafarov/kiagent-core/compare/v0.110.2...v0.111.0) (2026-10-13)
 
 ### Features
