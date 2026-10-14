@@ -74,9 +74,18 @@ export interface Watcher {
   close(): Promise<void>;
 }
 
+/** Re-check cadence for a file Windows reported busy (see the 'error'
+ *  handler): every `ms` until two stats agree, at most `max` times. */
+export interface BusyRecheck {
+  ms: number;
+  max: number;
+}
+const BUSY_RECHECK: BusyRecheck = { ms: 2000, max: 30 };
+
 export function startWatcher(
   rootPaths: string[],
   signal: AbortSignal,
+  busy: BusyRecheck = BUSY_RECHECK,
 ): Watcher {
   const watcher = chokidar.watch(rootPaths, {
     ...WATCH_ENUMERATION_OPTIONS,
@@ -118,6 +127,42 @@ export function startWatcher(
   watcher.on('add', onEvent('add'));
   watcher.on('change', onEvent('change'));
   watcher.on('unlink', onEvent('unlink'));
+  // Windows refuses fs.watch on a file another program still has open
+  // (EBUSY; EPERM for some locks) — a copy, a download, an scp in flight.
+  // chokidar reports that as an 'error' event; with no listener the emit
+  // THROWS out of its add path, so the file's 'add' was never emitted and
+  // the throw surfaced as an unhandled rejection. Listening lets chokidar go
+  // on and emit 'add' (possibly while the write is still running), and the
+  // re-check below queues a 'change' once the size stops moving, so the
+  // finished file replaces a partial read. Other errors (ENOSPC, …) have
+  // nothing to retry; the next rescan reconciles.
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const recheck = (p: string, lastSize: number, n: number): void => {
+    const t = setTimeout(() => {
+      timers.delete(t);
+      if (signal.aborted) return;
+      let size: number;
+      try {
+        size = fs.statSync(p).size;
+      } catch {
+        return; // gone (an unlink event covers it) or unreadable
+      }
+      if (size === lastSize) {
+        queue.push({ kind: 'change', absPath: p });
+        fire();
+      } else if (n + 1 < busy.max) recheck(p, size, n + 1);
+    }, busy.ms);
+    timers.add(t);
+  };
+  watcher.on('error', (err: unknown) => {
+    const e = err as NodeJS.ErrnoException;
+    if (
+      (e?.code === 'EBUSY' || e?.code === 'EPERM') &&
+      typeof e.path === 'string' &&
+      isIngestible(e.path)
+    )
+      recheck(e.path, -1, 0);
+  });
   signal.addEventListener('abort', fire, { once: true });
 
   return {
@@ -135,6 +180,8 @@ export function startWatcher(
           }),
     close: async () => {
       signal.removeEventListener('abort', fire);
+      timers.forEach(clearTimeout);
+      timers.clear();
       fire();
       await watcher.close();
     },
