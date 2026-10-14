@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.113.0](https://github.com/edjafarov/kiagent-core/compare/v0.112.0...v0.113.0) (2026-10-14)
+
+### Features
+
+* **asr:** shared loop detector in core + sentence-level removeLoops ([8fd7fe7](https://github.com/edjafarov/kiagent-core/commit/8fd7fe7ec0064b66c21c637088c6a505792d9df1))
+* **audio:** v3 — loop cleanup, terminal no-speech/degenerate, legacy junk repair, VAD readiness gate ([b1dc50e](https://github.com/edjafarov/kiagent-core/commit/b1dc50e8b3dc0cec322d32f45e68c1ba501a1526))
+* **local-asr:** file route requires VAD, runs -mc 0, reports speech; vadAvailable() ([fd46c88](https://github.com/edjafarov/kiagent-core/commit/fd46c8860f50e2d7ce3cfa6f67fb59a2d13364aa))
+* **local-asr:** whisper-cli resolves {text, speechSegments}; -mc 0 + verbose-log opts ([962aa2b](https://github.com/edjafarov/kiagent-core/commit/962aa2bd9b6a0ebe2eaf9041394214f3f86ddb45))
+
+### Bug Fixes
+
+* **asr:** review round — CJK sentence split, chunk-tail fixture, one VAD check, degenerate repair clears the body ([98f524b](https://github.com/edjafarov/kiagent-core/commit/98f524b55553e41fa9df33cdf854261be7231a03))
+
 ## [0.112.0](https://github.com/edjafarov/kiagent-core/compare/v0.111.0...v0.112.0) (2026-10-14)
 
 ### Features
