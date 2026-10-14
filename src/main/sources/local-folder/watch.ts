@@ -75,24 +75,31 @@ export interface Watcher {
 }
 
 /** Recovery cadence for a file Windows reported busy (see the 'error'
- *  handler): probe every `ms`, give up after `max` probes. */
+ *  handler): probe every `ms`, at most `max` probes per path over the
+ *  watcher's life. The seams are for tests. */
 export interface BusyRecheck {
   ms: number;
   max: number;
-  /** true while another program still holds the file. Default: opening it
-   *  for writing fails with EBUSY (Windows' sharing violation) — a reader
-   *  can open a file mid-copy, a second writer cannot. */
+  /** false only when the file is observably free (default:
+   *  heldByAnotherProgram). */
   locked?(absPath: string): boolean;
+  stat?(absPath: string): { size: number };
 }
 const BUSY_RECHECK: BusyRecheck = { ms: 2000, max: 90 };
 
+/** A sharing-conflict probe: opening for writing fails with EBUSY while a
+ *  writer that denies write-sharing (Explorer's copy, most downloaders)
+ *  holds the file. It cannot see a writer that shares writes, so callers
+ *  also wait for the size to hold still. Any failure (EBUSY, a read-only
+ *  file's EPERM/EACCES) is "not known to be free". Opening r+ writes
+ *  nothing. */
 export function heldByAnotherProgram(absPath: string): boolean {
   let fd: number | undefined;
   try {
     fd = fs.openSync(absPath, 'r+');
     return false;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EBUSY';
+  } catch {
+    return true;
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
@@ -151,14 +158,20 @@ export function startWatcher(
   // on and emit 'add' (the file may still be mid-write), but it leaves the
   // file without a native watch, so later edits would go unseen.
   //
-  // Recovery, one per path: probe until the writer lets go (and the size
-  // holds still), then re-watch the file (unwatch + add rebuilds chokidar's
-  // fs.watch) and queue one 'change' so the finished content replaces a
-  // partial read. A file held forever (Outlook keeps its .pst open) gets the
-  // same re-watch + 'change' once, at the probe limit. Other errors (ENOSPC,
-  // …) have nothing to retry; the next rescan reconciles.
+  // Recovery, one chain per path: probe until two successful stats agree
+  // and the file is observably free, then re-watch it (unwatch + add
+  // rebuilds chokidar's fs.watch) and queue one 'change' so the finished
+  // content replaces a partial read. If the re-watch hits EBUSY again (the
+  // writer reopened it) a new chain starts, but the probe budget is per path
+  // for the watcher's life: once spent, the file gets one last re-watch +
+  // 'change' and its later busy errors are ignored — a file held forever
+  // (Outlook keeps its .pst open) cannot loop. A vanished file ends its
+  // chain; a failed stat is "unknown", never "stable". Other errors
+  // (ENOSPC, …) have nothing to retry; the next rescan reconciles.
   const locked = busy.locked ?? heldByAnotherProgram;
+  const statOf = busy.stat ?? ((p: string) => fs.statSync(p));
   const recovering = new Map<string, ReturnType<typeof setTimeout>>();
+  const spent = new Map<string, number>(); // probes used, per path
   const settle = (p: string): void => {
     recovering.delete(p);
     watcher.unwatch(p);
@@ -166,23 +179,25 @@ export function startWatcher(
     queue.push({ kind: 'change', absPath: p });
     fire();
   };
-  const probe = (p: string, lastSize: number, n: number): void => {
+  const probe = (p: string, lastSize: number): void => {
     recovering.set(
       p,
       setTimeout(() => {
         if (signal.aborted) return;
-        let size = lastSize;
+        const used = (spent.get(p) ?? 0) + 1;
+        spent.set(p, used);
+        let size = -1; // unknown
         try {
-          size = fs.statSync(p).size;
+          size = statOf(p).size;
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
             recovering.delete(p); // gone: its unlink event covers it
             return;
           }
         }
-        const last = n + 1 >= busy.max;
-        if (last || (size === lastSize && !locked(p))) settle(p);
-        else probe(p, size, n + 1);
+        const stable = size >= 0 && size === lastSize;
+        if (used >= busy.max || (stable && !locked(p))) settle(p);
+        else probe(p, size);
       }, busy.ms),
     );
   };
@@ -192,9 +207,10 @@ export function startWatcher(
       (e?.code === 'EBUSY' || e?.code === 'EPERM') &&
       typeof e.path === 'string' &&
       !recovering.has(e.path) &&
+      (spent.get(e.path) ?? 0) < busy.max &&
       isIngestible(e.path)
     )
-      probe(e.path, -1, 0);
+      probe(e.path, -1);
   });
   signal.addEventListener('abort', fire, { once: true });
 

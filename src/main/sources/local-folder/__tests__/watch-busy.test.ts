@@ -171,10 +171,102 @@ describe('startWatcher — a file Windows reports busy (EBUSY)', () => {
     await w2.close();
   });
 
-  it('heldByAnotherProgram: a closed file is free', () => {
+  it('a re-watch that fails busy again cannot restart recovery past the budget', async () => {
+    const file = path.join(dir, 'held.txt');
+    fs.writeFileSync(file, 'x');
+    const w = startWatcher([dir], ac.signal, {
+      ms: 5,
+      max: 3,
+      locked: () => false,
+    });
+    // Every re-watch fails the way chokidar reports it: an 'error' event.
+    fake.add.mockImplementation((p: string) =>
+      fake.emit('error', busyError(p)),
+    );
+    fake.emit('error', busyError(file));
+    await sleep(150);
+    // 3 probes in all: settle at probe 2 (two stats agree), its re-watch
+    // fails, the new chain gets the 1 probe left and settles at the limit;
+    // that re-watch's error is then ignored.
+    expect(fake.add).toHaveBeenCalledTimes(2);
+    expect(drain(w)).toEqual([
+      { kind: 'change', absPath: file },
+      { kind: 'change', absPath: file },
+    ]);
+    await w.close();
+  });
+
+  it('failed stats are unknown, never stable: settles only at the limit', async () => {
+    const file = path.join(dir, 'denied.txt');
+    fs.writeFileSync(file, 'x');
+    const stat = jest.fn(() => {
+      throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    });
+    const locked = jest.fn(() => false);
+    const w = startWatcher([dir], ac.signal, { ms: 5, max: 12, locked, stat });
+    fake.emit('error', busyError(file));
+    await sleep(25);
+    expect(fake.add).not.toHaveBeenCalled();
+    await sleep(150);
+    expect(stat).toHaveBeenCalledTimes(12);
+    expect(locked).not.toHaveBeenCalled(); // never reached "stable"
+    expect(drain(w)).toEqual([{ kind: 'change', absPath: file }]);
+    expect(fake.add).toHaveBeenCalledTimes(1);
+    await w.close();
+  });
+
+  it('a size that keeps changing is not stable', async () => {
+    const file = path.join(dir, 'growing.txt');
+    fs.writeFileSync(file, 'x');
+    let n = 0;
+    const w = startWatcher([dir], ac.signal, {
+      ms: 5,
+      max: 50,
+      locked: () => false,
+      stat: () => ({ size: n++ }),
+    });
+    fake.emit('error', busyError(file));
+    await sleep(60);
+    expect(fake.add).not.toHaveBeenCalled();
+    await w.close();
+  });
+
+  it('heldByAnotherProgram: a closed file is free, and the probe closes its fd', () => {
     const file = path.join(dir, 'free.txt');
     fs.writeFileSync(file, 'x');
-    expect(heldByAnotherProgram(file)).toBe(false);
-    expect(heldByAnotherProgram(path.join(dir, 'missing.txt'))).toBe(false);
+    const close = jest.spyOn(fs, 'closeSync');
+    try {
+      expect(heldByAnotherProgram(file)).toBe(false);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      close.mockRestore();
+    }
+  });
+
+  it('heldByAnotherProgram: any open failure is "not known to be free"', () => {
+    expect(heldByAnotherProgram(path.join(dir, 'missing.txt'))).toBe(true);
+    for (const code of ['EBUSY', 'EPERM', 'EACCES']) {
+      const open = jest.spyOn(fs, 'openSync').mockImplementation(() => {
+        throw Object.assign(new Error(code), { code });
+      });
+      try {
+        expect(heldByAnotherProgram(path.join(dir, 'x.txt'))).toBe(true);
+      } finally {
+        open.mockRestore();
+      }
+    }
+  });
+
+  it('a read-only file is never "free", so it settles only at the limit', async () => {
+    const file = path.join(dir, 'readonly.txt');
+    fs.writeFileSync(file, 'x');
+    fs.chmodSync(file, 0o444);
+    const w = startWatcher([dir], ac.signal, { ms: 5, max: 12 });
+    fake.emit('error', busyError(file));
+    await sleep(25);
+    expect(fake.add).not.toHaveBeenCalled();
+    await sleep(150);
+    expect(drain(w)).toEqual([{ kind: 'change', absPath: file }]);
+    await w.close();
   });
 });
