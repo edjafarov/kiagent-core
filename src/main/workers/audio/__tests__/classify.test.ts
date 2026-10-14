@@ -103,6 +103,64 @@ describe('classifyTranscribable', () => {
     ).toBe('skip');
   });
 
+  describe('legacy local-asr repair (spec 2026-10-14 §3.4)', () => {
+    const junk = `Thank you. ${'I’m. '.repeat(790)}`.trim();
+    const legacy = (markdown: string | null, extraction: object) =>
+      doc({
+        markdown,
+        metadata: { mime: 'audio/mp4', filename: 'z.m4a', extraction },
+      });
+
+    it('admits a legacy (no rev) local-asr doc whose body is degenerate', () => {
+      expect(
+        classifyTranscribable(legacy(junk, { engine: 'local-asr', at: 'x' })),
+      ).toBe('candidate');
+    });
+
+    it('skips a legacy local-asr doc with a clean body', () => {
+      expect(
+        classifyTranscribable(
+          legacy('Wir haben sieben Kinder.', { engine: 'local-asr' }),
+        ),
+      ).toBe('skip');
+    });
+
+    it('skips a legacy body with only a short legitimate repeat', () => {
+      expect(
+        classifyTranscribable(legacy('Ja. Ja. Ja.', { engine: 'local-asr' })),
+      ).toBe('skip');
+    });
+
+    it('skips every rev-3 outcome, even with a junk body', () => {
+      for (const ex of [
+        { engine: 'local-asr', rev: 3 },
+        { engine: 'local-asr', rev: 3, speech: 'none' },
+        {
+          engine: 'local-asr',
+          rev: 3,
+          quality: 'degenerate',
+          loopsRemoved: 800,
+        },
+      ])
+        expect(classifyTranscribable(legacy(junk, ex))).toBe('skip');
+    });
+
+    it('never re-admits another extraction engine', () => {
+      expect(classifyTranscribable(legacy(junk, { engine: 'vision' }))).toBe(
+        'skip',
+      );
+    });
+
+    it('skips a legacy local-asr doc with no body', () => {
+      expect(classifyTranscribable(legacy(null, { engine: 'local-asr' }))).toBe(
+        'skip',
+      );
+      expect(classifyTranscribable(legacy('  ', { engine: 'local-asr' }))).toBe(
+        'skip',
+      );
+    });
+  });
+
   it('skips archived docs and non-file/attachment types', () => {
     expect(
       classifyTranscribable(

@@ -27,13 +27,18 @@ interface FakeProvider {
   ensureInstalled: jest.Mock;
   transcribeFile: jest.Mock;
   status: jest.Mock;
+  vadAvailable: jest.Mock;
 }
 
 function fakeProvider(over: Partial<FakeProvider> = {}): FakeProvider {
   return {
     ensureInstalled: jest.fn(),
-    transcribeFile: jest.fn(async () => 'from the WRONG provider'),
+    transcribeFile: jest.fn(async () => ({
+      text: 'from the WRONG provider',
+      speechSegments: 9,
+    })),
     status: jest.fn(() => 'standby'),
+    vadAvailable: jest.fn(() => true),
     ...over,
   };
 }
@@ -179,6 +184,16 @@ describe('attachBundledWorkers — audio worker dep wiring', () => {
     expect(localAsr.status).not.toHaveBeenCalled();
   });
 
+  it('hearReady is false without the Silero VAD asset — parks before the fetch', async () => {
+    const localAsr = fakeProvider({ vadAvailable: jest.fn(() => false) });
+    const audio = attach([READY_HEAR], localAsr, fakeProvider());
+
+    const { session, fetchBytes } = fakeSession(await wavBytes());
+    expect(await audio.work(change, session)).toBe('defer');
+    expect(fetchBytes).not.toHaveBeenCalled();
+    expect(localAsr.transcribeFile).not.toHaveBeenCalled();
+  });
+
   it('hearReady ignores providers that do not support hear', async () => {
     // A ready SEE-only provider (local-llm's vision model) must not open the
     // audio gate — `.some(p => p.supports.includes('hear') && …)`, not
@@ -198,7 +213,7 @@ describe('attachBundledWorkers — audio worker dep wiring', () => {
         seen.push([p, o]);
         // The file the worker prepared must still be on disk for whisper.
         expect((await fs.stat(p)).size).toBe(4);
-        return 'the transcript';
+        return { text: 'the transcript', speechSegments: 9 };
       }),
     });
     const localLlm = fakeProvider();
@@ -213,7 +228,7 @@ describe('attachBundledWorkers — audio worker dep wiring', () => {
     expect(enriched[0]).toMatchObject({
       documentId: 'd',
       markdown: 'the transcript',
-      metadata: { extraction: { engine: 'local-asr' } },
+      metadata: { extraction: { engine: 'local-asr', rev: 3 } },
     });
     // The real prepare ran (a per-call temp dir under tmpdir), and the worker
     // cleaned it up afterwards.

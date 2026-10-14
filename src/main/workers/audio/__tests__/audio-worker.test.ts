@@ -151,7 +151,7 @@ function setup(
   const transcribeFile = jest.fn(
     async (_p: string, _o: { format: 'wav' | 'mp3' }) => {
       order.push('transcribeFile');
-      return 'the transcript';
+      return { text: 'the transcript', speechSegments: 12 };
     },
   );
   const fetchBytes = jest.fn(async () => {
@@ -219,11 +219,11 @@ describe('maxDecodedBytes', () => {
 });
 
 describe('createAudioWorker — identity', () => {
-  it('is audio v2, and the re-drive consumer moves with the bump', () => {
+  it('is audio v3, and the re-drive consumer moves with the bump', () => {
     const { worker } = setup();
     expect(worker.name).toBe('audio');
-    expect(worker.version).toBe(2);
-    expect(workerConsumerName(worker)).toBe('worker:audio:v2');
+    expect(worker.version).toBe(3);
+    expect(workerConsumerName(worker)).toBe('worker:audio:v3');
   });
 
   it('matches audio documents and skips non-audio ones', () => {
@@ -402,7 +402,7 @@ describe('createAudioWorker — unprobeable mp3 WITH a transcoder', () => {
     let presentAtTranscribe: boolean | undefined;
     const transcribeFile = jest.fn(async (p: string) => {
       presentAtTranscribe = !(await isGone(p));
-      return 'the transcript';
+      return { text: 'the transcript', speechSegments: 12 };
     });
     const h = setup({
       deps: {
@@ -521,7 +521,10 @@ describe('createAudioWorker — transcribe outcomes', () => {
   it('throws on an empty transcript so the engine retries (bounded), not skips', async () => {
     const prepareFile = preparer({ format: 'wav', sizeBytes: 4 });
     const h = setup({
-      deps: { prepareFile, transcribeFile: async () => '   ' },
+      deps: {
+        prepareFile,
+        transcribeFile: async () => ({ text: '   ', speechSegments: 12 }),
+      },
     });
     await expect(h.worker.work(change(), h.session)).rejects.toThrow(
       /empty transcript/,
@@ -537,13 +540,107 @@ describe('createAudioWorker — transcribe outcomes', () => {
     expect(h.enriched[0]).toMatchObject({
       documentId: 'd',
       markdown: 'the transcript',
-      metadata: { extraction: { engine: 'local-asr' } },
+      metadata: { extraction: { engine: 'local-asr', rev: 3 } },
     });
     const { at } = (
       h.enriched[0] as { metadata: { extraction: { at: string } } }
     ).metadata.extraction;
     expect(Number.isNaN(Date.parse(at))).toBe(false);
     await expectCleaned(prepareFile);
+  });
+});
+
+describe('createAudioWorker — rev-3 outcomes (spec 2026-10-14 §3.2)', () => {
+  type R = { text: string; speechSegments: number | null };
+  const run = async (result: R) => {
+    const prepareFile = preparer({ format: 'wav', sizeBytes: 4 });
+    const h = setup({
+      deps: { prepareFile, transcribeFile: async () => result },
+    });
+    const outcome = await h.worker.work(change(), h.session);
+    await expectCleaned(prepareFile);
+    return { outcome, enriched: h.enriched as any[], logs: h.logs };
+  };
+  const JUNK = `Thank you. ${'I’m. '.repeat(790)}`;
+  const GOOD =
+    'Wir haben sieben Kinder, die geblieben sind. Das Training kostet 3.5 Euro. Dr. Müller kommt morgen.';
+
+  it('no speech: empty text + 0 segments → empty body, speech:none, done', async () => {
+    const { outcome, enriched } = await run({ text: '', speechSegments: 0 });
+    expect(outcome).toBe('done');
+    expect(enriched).toHaveLength(1);
+    expect(enriched[0].markdown).toBe('');
+    expect(enriched[0].metadata.extraction).toMatchObject({
+      engine: 'local-asr',
+      rev: 3,
+      speech: 'none',
+    });
+  });
+
+  it('text despite 0 segments is treated as speech, never discarded', async () => {
+    const { enriched } = await run({ text: GOOD, speechSegments: 0 });
+    expect(enriched[0].markdown).toBe(GOOD);
+    expect(enriched[0].metadata.extraction.speech).toBeUndefined();
+  });
+
+  it.each([12, null])(
+    'empty text with %p segments throws (bounded retry) and writes nothing',
+    async (n) => {
+      const prepareFile = preparer({ format: 'wav', sizeBytes: 4 });
+      const h = setup({
+        deps: {
+          prepareFile,
+          transcribeFile: async () => ({ text: '  ', speechSegments: n }),
+        },
+      });
+      await expect(h.worker.work(change(), h.session)).rejects.toThrow(
+        /empty transcript/,
+      );
+      expect(h.enriched).toHaveLength(0);
+      await expectCleaned(prepareFile);
+    },
+  );
+
+  it('degenerate → empty body, quality:degenerate, done (terminal, no throw)', async () => {
+    const { outcome, enriched, logs } = await run({
+      text: JUNK,
+      speechSegments: 300,
+    });
+    expect(outcome).toBe('done');
+    expect(enriched[0].markdown).toBe('');
+    expect(enriched[0].metadata.extraction).toMatchObject({
+      engine: 'local-asr',
+      rev: 3,
+      quality: 'degenerate',
+    });
+    expect(enriched[0].metadata.extraction.loopsRemoved).toBeGreaterThanOrEqual(
+      789,
+    );
+    expect(logs.some((l) => /degenerate/.test(l.msg))).toBe(true);
+  });
+
+  it('a loop inside good text is removed and counted', async () => {
+    const { outcome, enriched } = await run({
+      text: `${GOOD} ${'Vielen Dank. '.repeat(20)}`,
+      speechSegments: 40,
+    });
+    expect(outcome).toBe('done');
+    expect(enriched[0].markdown).toBe(`${GOOD} Vielen Dank.`);
+    expect(enriched[0].metadata.extraction).toMatchObject({
+      rev: 3,
+      loopsRemoved: 38,
+    });
+  });
+
+  it('short legit repeat collapses; clean text carries no loopsRemoved', async () => {
+    const { enriched } = await run({
+      text: ' Ja. Ja. Ja. ',
+      speechSegments: 3,
+    });
+    expect(enriched[0].markdown).toBe('Ja.');
+    const { enriched: e2 } = await run({ text: GOOD, speechSegments: 3 });
+    expect(e2[0].markdown).toBe(GOOD);
+    expect(e2[0].metadata.extraction).not.toHaveProperty('loopsRemoved');
   });
 });
 

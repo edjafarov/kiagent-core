@@ -65,8 +65,11 @@ export function attachBundledWorkers(
     // download runs during the closed processing window (spec §5).
     requestAsr: () => deps.localAsr.ensureInstalled(),
     // Read the INFERENCE PLANE, not the ASR provider: any ready `hear`
-    // provider counts, so the worker stays provider-agnostic.
+    // provider counts, so the worker stays provider-agnostic. Plus the Silero
+    // asset: the file route refuses to run without VAD (spec 2026-10-14), so
+    // a broken install parks candidates here — before the fetch.
     hearReady: () =>
+      deps.localAsr.vadAvailable() &&
       platform.inference
         .providers()
         .some((p) => p.supports.includes('hear') && p.status() === 'ready'),

@@ -1,3 +1,4 @@
+import { removeLoops } from '@shared/asr/loops';
 import type { Document } from '@shared/contracts';
 import {
   AUDIO_EXTENSIONS,
@@ -133,6 +134,26 @@ export function isTranscribableDoc(doc: Document): boolean {
   );
 }
 
+/** Bumped together with the audio worker's `version` whenever legacy output
+ *  should be re-transcribed. Every rev-N outcome carries it, so its own
+ *  re-emitted enrich can never re-admit the doc. */
+export const ASR_EXTRACTION_REV = 3;
+
+/** Legacy repair (spec 2026-10-14 §3.4): a pre-rev local-asr transcript whose
+ *  body is degenerate under the SAME rule the worker applies (`removeLoops`).
+ *  Good legacy transcripts and other extraction engines are never re-admitted. */
+export function isLegacyJunkTranscript(doc: Document): boolean {
+  const ex = (doc.metadata as TranscribableMeta).extraction as
+    | { engine?: unknown; rev?: unknown }
+    | null
+    | undefined;
+  if (ex == null || typeof ex !== 'object') return false;
+  if (ex.engine !== 'local-asr' || ex.rev !== undefined) return false;
+  const body = doc.markdown;
+  if (typeof body !== 'string' || body.trim() === '') return false;
+  return removeLoops(body).degenerate;
+}
+
 /**
  * The audio worker's candidate gate — the audio analog of the vision
  * classifier. Deliberately SEPARATE from `classifyDocument` (vision): if the
@@ -140,13 +161,16 @@ export function isTranscribableDoc(doc: Document): boolean {
  * stamp `metadata.extraction`, permanently blocking transcription.
  * Re-entrancy is covered by that same `extraction` marker: once the audio
  * worker enriches a doc, the re-emitted change has `metadata.extraction` set
- * and skips here.
+ * and skips here. Every outcome since rev 3 also carries `rev`, so even a
+ * junk-looking body can never re-admit its own re-emitted change.
  */
 export function classifyTranscribable(doc: Document): 'candidate' | 'skip' {
   if (doc.archivedAt) return 'skip';
   if (doc.type !== 'attachment' && doc.type !== 'file') return 'skip';
   const meta = doc.metadata as TranscribableMeta;
-  if (meta.extraction != null) return 'skip'; // already extracted/transcribed
+  // Already extracted/transcribed — except legacy local-asr junk (spec
+  // 2026-10-14 §3.4), which the v3 seed re-admits for re-transcription.
+  if (meta.extraction != null && !isLegacyJunkTranscript(doc)) return 'skip';
   // Size gate BEFORE the fetch: without it, widening to video materialises a
   // 2 GB screen recording in heap just to reject it — the OOM class fixed in
   // core v0.73.1 (spec §6).

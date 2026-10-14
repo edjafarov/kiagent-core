@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 
+import { removeLoops } from '@shared/asr/loops';
 import type {
   Change,
   Worker,
@@ -7,7 +8,14 @@ import type {
   WorkOutcome,
 } from '@shared/contracts';
 
-import { MAX_SOURCE_BYTES, audioExt, classifyTranscribable } from './classify';
+import type { WhisperResult } from '@main/providers/local-asr/whisper-cli';
+
+import {
+  ASR_EXTRACTION_REV,
+  MAX_SOURCE_BYTES,
+  audioExt,
+  classifyTranscribable,
+} from './classify';
 import { mp3DurationSeconds } from './mp3-duration';
 import {
   AudioUnsupportedFormatError,
@@ -48,6 +56,9 @@ export function maxDecodedBytes(totalMemBytes: number): number {
  *    rejects the input deterministically, or the clip's DECODED size exceeds
  *    the RAM-tiered cap → SKIP (permanent, and an explicit branch — a throw
  *    would land in the transcode catch-all and DEFER forever instead).
+ *  - a transcript that is mostly loop, or a file VAD finds no speech in →
+ *    DONE with an empty body and a rev-3 `extraction` marker (terminal: the
+ *    output is deterministic, so retrying would only repeat it).
  *  - no hear provider ready yet (whisper still downloading, or never
  *    approved), the processing window is closed, or a transient fault →
  *    DEFER (the scheduled re-drive retries once a model is ready / the window
@@ -65,7 +76,7 @@ export function createAudioWorker(deps: {
   transcribeFile(
     path: string,
     opts: { format: 'wav' | 'mp3' },
-  ): Promise<string>;
+  ): Promise<WhisperResult>;
   prepareFile?: (
     bytes: Uint8Array,
     meta: { mime?: string; ext?: string },
@@ -84,7 +95,9 @@ export function createAudioWorker(deps: {
 
   return {
     name: 'audio',
-    version: 2,
+    // v3 (spec 2026-10-14): VAD + -mc 0 + loop cleanup. The new consumer's
+    // seed re-admits legacy junk transcripts (classify.ts).
+    version: 3,
     schedule: { every: '30m' }, // deferred re-drive cadence; the live tail always runs
     matches: (change: Change) =>
       change.kind === 'document' &&
@@ -179,9 +192,9 @@ export function createAudioWorker(deps: {
           return 'skip';
         }
 
-        let transcript: string;
+        let result: WhisperResult;
         try {
-          transcript = await deps.transcribeFile(prepared.path, {
+          result = await deps.transcribeFile(prepared.path, {
             format: prepared.format,
           });
         } catch (err) {
@@ -201,19 +214,61 @@ export function createAudioWorker(deps: {
           return 'defer';
         }
 
-        const text = transcript.trim();
+        const text = result.text.trim();
+        const extraction = {
+          engine: 'local-asr',
+          rev: ASR_EXTRACTION_REV,
+          at: new Date().toISOString(),
+        };
         if (!text) {
+          if (result.speechSegments === 0) {
+            // VAD found no speech in the WHOLE file — terminal. The explicit
+            // '' also clears any legacy body and its FTS row.
+            session.enrich({
+              documentId: doc.id,
+              markdown: '',
+              metadata: { extraction: { ...extraction, speech: 'none' } },
+            });
+            return 'done';
+          }
           // Retained deliberately (spec §8): the audio path has returned empty
           // transcripts on valid speech; THROW so the engine's bounded retry
           // gets more shots and then records 'failed' — never a permanent skip.
           throw new Error('empty transcript');
         }
 
+        const clean = removeLoops(text);
+        if (clean.degenerate) {
+          // Terminal on purpose (spec 2026-10-14 §3.2): the output is
+          // deterministic, so a retry repeats the same junk, and a throw would
+          // leave a legacy junk body in place (failed attempts write nothing).
+          // The empty body takes the junk out of search.
+          session.log(
+            'info',
+            `audio: degenerate transcript (${clean.removedTokens}/${clean.totalTokens} tokens looped) — ${doc.id}`,
+          );
+          session.enrich({
+            documentId: doc.id,
+            markdown: '',
+            metadata: {
+              extraction: {
+                ...extraction,
+                quality: 'degenerate',
+                loopsRemoved: clean.removedTokens,
+              },
+            },
+          });
+          return 'done';
+        }
+
         session.enrich({
           documentId: doc.id,
-          markdown: text,
+          markdown: clean.text,
           metadata: {
-            extraction: { engine: 'local-asr', at: new Date().toISOString() },
+            extraction:
+              clean.removedTokens > 0
+                ? { ...extraction, loopsRemoved: clean.removedTokens }
+                : extraction,
           },
         });
         return 'done';
