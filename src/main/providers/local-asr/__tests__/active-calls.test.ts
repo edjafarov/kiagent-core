@@ -12,7 +12,12 @@ it('hear is recorded when the job starts running, not while queued', async () =>
   const tmpDir = await mkdtemp(path.join(tmpdir(), 'asr-active-calls-'));
   const modelPath = path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id);
   const gates: Array<(t: string) => void> = [];
-  const runCli = jest.fn(() => new Promise<string>((res) => gates.push(res)));
+  const runCli = jest.fn(() =>
+    new Promise<string>((res) => gates.push(res)).then((text) => ({
+      text,
+      speechSegments: null,
+    })),
+  );
   let prefs: any = {
     theme: 'system',
     logLevel: 'info',
@@ -24,6 +29,9 @@ it('hear is recorded when the job starts running, not while queued', async () =>
   const activeCalls = createActiveCalls();
   const provider = createLocalAsrProvider({
     binaryPath: '/opt/kiagent/whisper/whisper-cli',
+    // transcribeFile refuses without the Silero asset (spec 2026-10-14).
+    vadModelPath: '/opt/kiagent/whisper/ggml-silero-v5.1.2.bin',
+    fileExists: () => true,
     asrModelsDir: tmpDir,
     prefs: {
       get: () => prefs,

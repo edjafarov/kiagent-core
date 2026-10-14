@@ -32,7 +32,15 @@ function fakePrefs(overrides?: {
   };
 }
 
-/** All fakes by default: no child process, no network, no real model file. */
+/** runWhisperCli's resolved shape (spec 2026-10-14) for a fake transcript. */
+const cliOut = (text: string) => ({
+  text,
+  speechSegments: null as number | null,
+});
+
+/** All fakes by default: no child process, no network, no real model file.
+ *  The Silero VAD asset is present by default — the indexing route
+ *  (transcribeFile) refuses to run without it. */
 function makeDeps(over: Record<string, any> = {}) {
   const { prefs: prefOverrides, ...rest } = over;
   return {
@@ -49,7 +57,9 @@ function makeDeps(over: Record<string, any> = {}) {
     binaryPresent: jest.fn(() => true),
     filesPresent: jest.fn(() => false),
     download: jest.fn(async () => {}),
-    runCli: jest.fn(async () => 'the transcript'),
+    runCli: jest.fn(async () => cliOut('the transcript')),
+    vadModelPath: '/assets/whisper/ggml-silero-v5.1.2.bin',
+    fileExists: () => true,
     ...rest,
   } as any;
 }
@@ -273,7 +283,9 @@ describe('LocalAsrProvider', () => {
       releaseFirst = res;
     });
     const runCli = jest.fn((args: any) =>
-      args.inputPath === '/a.wav' ? firstGate : Promise.resolve('second'),
+      args.inputPath === '/a.wav'
+        ? firstGate.then(cliOut)
+        : Promise.resolve(cliOut('second')),
     );
 
     const provider = createLocalAsrProvider(
@@ -292,8 +304,8 @@ describe('LocalAsrProvider', () => {
 
     releaseFirst('first');
 
-    await expect(p1).resolves.toBe('first');
-    await expect(p2).resolves.toBe('second');
+    await expect(p1).resolves.toEqual(cliOut('first'));
+    await expect(p2).resolves.toEqual(cliOut('second'));
     expect(runCli).toHaveBeenCalledTimes(2);
     expect(runCli.mock.calls[1][0].inputPath).toBe('/b.wav');
   });
@@ -471,7 +483,7 @@ describe('LocalAsrProvider', () => {
       // transcribeFile settles.
       seenPath = args.inputPath;
       seen = fs.readFileSync(args.inputPath);
-      return 'guten morgen';
+      return cliOut('guten morgen');
     });
 
     const provider = createLocalAsrProvider(
@@ -541,7 +553,7 @@ describe('LocalAsrProvider', () => {
     let seenPath: string | undefined;
     const runCli = jest.fn(async (args: any) => {
       seenPath = args.inputPath;
-      return 'ok';
+      return cliOut('ok');
     });
 
     const provider = createLocalAsrProvider(
@@ -578,7 +590,7 @@ describe('LocalAsrProvider', () => {
       // Stat SYNCHRONOUSLY — cleanup removes the whole dir once we settle.
       fileMode = fs.statSync(args.inputPath).mode & 0o777;
       dirMode = fs.statSync(path.dirname(args.inputPath)).mode & 0o777;
-      return 'ok';
+      return cliOut('ok');
     });
 
     const provider = createLocalAsrProvider(
@@ -602,7 +614,7 @@ describe('LocalAsrProvider', () => {
     const seen: Array<{ timestamps?: boolean }> = [];
     const runCli = jest.fn(async (args: any) => {
       seen.push({ timestamps: args.timestamps });
-      return 'ok';
+      return cliOut('ok');
     });
     const provider = createLocalAsrProvider(
       makeDeps({ asrModelsDir: tmpDir, filesPresent: fn, runCli }),
@@ -893,7 +905,7 @@ describe('LocalAsrProvider', () => {
     expect(deps.runCli).not.toHaveBeenCalled();
   });
 
-  it('never enables VAD on the indexing transcribeFile route', async () => {
+  it('indexing transcribeFile: VAD required, -mc 0, verbose log, background (spec 2026-10-14)', async () => {
     const { fn } = keyedFilesPresent([
       path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
     ]);
@@ -904,8 +916,48 @@ describe('LocalAsrProvider', () => {
       fileExists: () => true,
     });
     const provider = createLocalAsrProvider(deps);
-    await provider.transcribeFile('/podcast.mp3', { format: 'mp3' });
-    expect(deps.runCli.mock.calls[0][0].vadModelPath).toBeUndefined();
+    const r = await provider.transcribeFile('/podcast.mp3', { format: 'mp3' });
+    expect(r).toEqual({ text: 'the transcript', speechSegments: null });
+    const a = deps.runCli.mock.calls[0][0];
+    expect(a.vadModelPath).toBe(VAD);
+    expect(a.noContext).toBe(true);
+    expect(a.verboseLog).toBe(true);
+    expect(a.priority).toBe('background');
+  });
+
+  it('indexing transcribeFile fails closed without the VAD asset (never runs without VAD)', async () => {
+    const { fn } = keyedFilesPresent([
+      path.join(tmpDir, WHISPER_LARGE_V3_TURBO_Q5_0.id),
+    ]);
+    const deps = makeDeps({
+      asrModelsDir: tmpDir,
+      filesPresent: fn,
+      vadModelPath: VAD,
+      fileExists: () => false,
+    });
+    const provider = createLocalAsrProvider(deps);
+    await expect(
+      provider.transcribeFile('/a.wav', { format: 'wav' }),
+    ).rejects.toThrow(/refusing/);
+    expect(deps.runCli).not.toHaveBeenCalled();
+  });
+
+  it('vadAvailable() reflects the Silero asset', () => {
+    const mk = (over: Record<string, unknown>) =>
+      createLocalAsrProvider(makeDeps({ asrModelsDir: tmpDir, ...over }));
+    expect(
+      mk({ vadModelPath: VAD, fileExists: () => true }).vadAvailable(),
+    ).toBe(true);
+    expect(
+      mk({ vadModelPath: VAD, fileExists: () => false }).vadAvailable(),
+    ).toBe(false);
+    expect(mk({ vadModelPath: undefined }).vadAvailable()).toBe(false);
+  });
+
+  it('hear() never passes -mc 0 or the verbose log', async () => {
+    const deps = await hearOnce({ vadModelPath: VAD, fileExists: () => true });
+    expect(deps.runCli.mock.calls[0][0].noContext).toBeUndefined();
+    expect(deps.runCli.mock.calls[0][0].verboseLog).toBeUndefined();
   });
 
   describe('accuracy variant (spec: selective accuracy retry)', () => {
@@ -956,7 +1008,7 @@ describe('LocalAsrProvider', () => {
         path.join('/models', 'whisper-large-v3-turbo-q5_0'),
         path.join('/models', ACC),
       ]);
-      const runCli = jest.fn(async (_args: any) => 'accurate');
+      const runCli = jest.fn(async (_args: any) => cliOut('accurate'));
       const p = createLocalAsrProvider(
         makeDeps({ asrModelsDir: '/models', filesPresent: fn, runCli }),
       );
@@ -980,7 +1032,7 @@ describe('LocalAsrProvider', () => {
       const { fn } = keyedFilesPresent([
         path.join('/models', 'whisper-large-v3-turbo-q5_0'),
       ]);
-      const runCli = jest.fn(async (_args: any) => 'default');
+      const runCli = jest.fn(async (_args: any) => cliOut('default'));
       const p = createLocalAsrProvider(
         makeDeps({ asrModelsDir: '/models', filesPresent: fn, runCli }),
       );
@@ -1004,7 +1056,7 @@ describe('LocalAsrProvider', () => {
       const { fn } = keyedFilesPresent([
         path.join('/models', 'whisper-large-v3-turbo-q5_0'),
       ]);
-      const runCli = jest.fn(async () => 'x');
+      const runCli = jest.fn(async () => cliOut('x'));
       const p = createLocalAsrProvider(
         makeDeps({ asrModelsDir: '/models', filesPresent: fn, runCli }),
       );
@@ -1169,12 +1221,12 @@ describe('LocalAsrProvider', () => {
       jest.fn((a: any) => {
         order.push(a.priority);
         signals.push(a.signal);
-        return new Promise<string>((resolve, reject) => {
+        return new Promise<ReturnType<typeof cliOut>>((resolve, reject) => {
           if (a.priority === 'background')
             a.signal.addEventListener('abort', () =>
               reject(new Error('whisper-cli killed by SIGTERM')),
             );
-          else resolve('meeting text');
+          else resolve(cliOut('meeting text'));
         });
       });
 
@@ -1219,7 +1271,7 @@ describe('LocalAsrProvider', () => {
     describe('interactive hold-off', () => {
       it('a background job queued right after an interactive one is rejected without launching whisper; after 90 s it launches', async () => {
         let t = 1_000_000;
-        const runCli = jest.fn(async (_a: unknown) => 'text');
+        const runCli = jest.fn(async (_a: unknown) => cliOut('text'));
         const provider = createLocalAsrProvider(
           makeDeps({
             asrModelsDir: tmpDir,
@@ -1238,13 +1290,13 @@ describe('LocalAsrProvider', () => {
         t += 2_000; // 91 s after the interactive job finished
         await expect(
           provider.transcribeFile('/tmp/a.wav', { format: 'wav' }),
-        ).resolves.toBe('text');
+        ).resolves.toEqual(cliOut('text'));
         expect(runCli).toHaveBeenCalledTimes(2);
       });
     });
 
     it('background jobs pass threads = min(4, backgroundThreads)', async () => {
-      const runCli = jest.fn(async (_a: unknown) => 'x');
+      const runCli = jest.fn(async (_a: unknown) => cliOut('x'));
       const provider = createLocalAsrProvider(
         makeDeps({
           asrModelsDir: tmpDir,
@@ -1266,7 +1318,7 @@ describe('LocalAsrProvider', () => {
     });
 
     it('a background-lane hear runs as background; interactive has no thread cap', async () => {
-      const runCli = jest.fn(async (_a: unknown) => 'x');
+      const runCli = jest.fn(async (_a: unknown) => cliOut('x'));
       const provider = createLocalAsrProvider(
         makeDeps({ asrModelsDir: tmpDir, filesPresent: () => true, runCli }),
       );

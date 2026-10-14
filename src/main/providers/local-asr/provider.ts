@@ -22,7 +22,11 @@ import {
   selectAsrModel,
   WHISPER_LARGE_V3_Q5_0,
 } from './models';
-import { runWhisperCli, WHISPER_LANGUAGES } from './whisper-cli';
+import {
+  runWhisperCli,
+  WHISPER_LANGUAGES,
+  type WhisperResult,
+} from './whisper-cli';
 
 /** `hear({ model: 'accuracy' })` on a host whose accuracy model is not on
  *  disk. Deliberately NOT `NoProviderError` — that name parks a meeting as
@@ -52,11 +56,15 @@ export interface LocalAsrProvider extends InferenceProvider {
   ensureInstalled(): void;
   cancelInstall(): Promise<void>;
   dispose(): Promise<void>;
-  /** Bundled-only file-path route (never on WorkerSession/CapSurfaces). */
+  /** Bundled-only file-path route (never on WorkerSession/CapSurfaces).
+   *  VAD required, `-mc 0`, and reports VAD's whole-file speech count
+   *  (spec 2026-10-14 file ASR quality). */
   transcribeFile(
     p: string,
     opts: { format: 'wav' | 'mp3'; timestamps?: boolean },
-  ): Promise<string>;
+  ): Promise<WhisperResult>;
+  /** The Silero VAD asset is present — transcribeFile refuses without it. */
+  vadAvailable(): boolean;
   /** Explicit, never auto-installed (spec: selective accuracy retry). */
   ensureAccuracyInstalled(): void;
   variants(): AsrVariant[];
@@ -197,12 +205,14 @@ export function createLocalAsrProvider(deps: {
       timestamps?: boolean;
       language?: string;
       detectLanguage?: boolean;
+      noContext?: boolean;
+      verboseLog?: boolean;
     },
     vadModelPath: string | undefined,
     which: ModelDescriptor = defaultModel,
     cls: QueuedJob['cls'] = 'interactive',
-  ): Promise<string> =>
-    new Promise<string>((resolve, reject) => {
+  ): Promise<WhisperResult> =>
+    new Promise<WhisperResult>((resolve, reject) => {
       if (closing) {
         reject(new Error('local-asr disposed — app quitting'));
         return;
@@ -235,7 +245,7 @@ export function createLocalAsrProvider(deps: {
           const abort = new AbortController();
           active = abort;
           try {
-            const text = await runCli({
+            const result = await runCli({
               binaryPath: deps.binaryPath,
               modelPath: path.join(
                 modelDir(deps.asrModelsDir, which.id),
@@ -245,6 +255,8 @@ export function createLocalAsrProvider(deps: {
               timestamps: opts.timestamps === true,
               language: opts.language,
               detectLanguage: opts.detectLanguage === true ? true : undefined,
+              noContext: opts.noContext === true ? true : undefined,
+              verboseLog: opts.verboseLog === true ? true : undefined,
               vadModelPath,
               signal: abort.signal,
               priority: cls,
@@ -253,7 +265,7 @@ export function createLocalAsrProvider(deps: {
                   ? Math.min(4, hostBudget(host, null).backgroundThreads)
                   : undefined,
             });
-            resolve(text);
+            resolve(result);
           } catch (err) {
             // Pass the original through unchanged — an AsrInputRejectedError
             // must stay instanceof for the worker's terminal-skip branch.
@@ -277,16 +289,26 @@ export function createLocalAsrProvider(deps: {
       pump();
     });
 
-  /** Indexing route: deliberately NO VAD. The audio worker throws on an empty
-   *  transcript into a bounded retry, and VAD legitimately returns empty for
-   *  speechless audio — enabling it here would turn silent files into retried
-   *  failures. Follow-up: enable once that path treats "no speech detected"
-   *  as a terminal skip (it would also gain VAD's ~7× speed-up). */
-  const transcribeFile = (
+  /** Indexing route (spec 2026-10-14): VAD REQUIRED — fail closed, since
+   *  running without it brings back noise-led language misdetection and
+   *  silence hallucination; `-mc 0` stops a long-form loop from running to
+   *  the end of the file; the verbose log carries VAD's whole-file speech
+   *  count, so the worker can end a speechless file as a terminal "no
+   *  speech" instead of a retried empty transcript. */
+  const transcribeFile = async (
     p: string,
     opts: { format: 'wav' | 'mp3'; timestamps?: boolean },
-  ): Promise<string> =>
-    runTranscribe(p, opts, undefined, defaultModel, 'background');
+  ): Promise<WhisperResult> =>
+    runTranscribe(
+      p,
+      { ...opts, noContext: true, verboseLog: true },
+      requireVadModel(),
+      defaultModel,
+      'background',
+    );
+
+  const vadAvailable = (): boolean =>
+    deps.vadModelPath !== undefined && fileExists(deps.vadModelPath);
 
   const ensureInstalled = (): void => {
     if (installing) return;
@@ -486,7 +508,8 @@ export function createLocalAsrProvider(deps: {
         // `vad:'required'` callers already had requireVadModel() validate
         // vadPath above; everyone else keeps the existing warn-once soft
         // path byte-for-byte.
-        return await runTranscribe(
+        // hear()'s contract stays a plain string (detect runs: the JSON).
+        const { text } = await runTranscribe(
           tmp,
           {
             format: fmt,
@@ -498,6 +521,7 @@ export function createLocalAsrProvider(deps: {
           which,
           req.lane === 'background' ? 'background' : 'interactive',
         );
+        return text;
       } finally {
         await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
       }
@@ -541,5 +565,6 @@ export function createLocalAsrProvider(deps: {
       if (run) await run.catch(() => {});
     },
     transcribeFile,
+    vadAvailable,
   };
 }
