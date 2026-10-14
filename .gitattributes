@@ -11,3 +11,5 @@
 *.woff  binary
 *.woff2 binary
 *.msg   binary
+*.doc   binary
+*.gz    binary

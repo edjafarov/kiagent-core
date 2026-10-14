@@ -1,8 +1,10 @@
+import fs from 'node:fs';
 import path from 'node:path';
 
 import {
   decideFileIndexing,
   SENSITIVE_BASENAME_RE,
+  type FileIndexCandidate,
   type FileIndexDecision,
 } from '@shared/file-indexability';
 
@@ -47,13 +49,26 @@ export function decideLocalFile(
   absPath: string,
   sizeBytes?: number,
 ): FileIndexDecision {
-  return decideFileIndexing({
+  return decideFileIndexing(localCandidate(absPath, sizeBytes));
+}
+
+/** The policy candidate for a local path. A Thunderbird mailbox has no
+ *  extension; its `.msf` index sibling is what marks it (one `existsSync`
+ *  per extensionless file), and it is admitted as `application/mbox`. */
+export function localCandidate(
+  absPath: string,
+  sizeBytes?: number,
+): FileIndexCandidate {
+  const filename = path.basename(absPath);
+  const thunderbird =
+    !path.extname(filename) && fs.existsSync(`${absPath}.msf`);
+  return {
     profile: 'local-folder',
-    filename: path.basename(absPath),
-    mime: resolvePathMime(absPath),
+    filename,
+    mime: thunderbird ? 'application/mbox' : resolvePathMime(absPath),
     sizeBytes,
     path: absPath,
-  });
+  };
 }
 
 /**

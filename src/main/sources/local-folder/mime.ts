@@ -28,6 +28,14 @@ const EXT_MIME_FALLBACK: Record<string, string> = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   csv: 'text/csv',
   xls: 'application/vnd.ms-excel',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  odt: 'application/vnd.oasis.opendocument.text',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  epub: 'application/epub+zip',
+  doc: 'application/msword',
+  rtf: 'application/rtf',
+  srt: 'application/x-subrip',
+  vtt: 'text/vtt',
   // `mime` resolves .eml to message/rfc822 and .mbox to application/mbox on
   // its own; only Apple Mail's .emlx misses. It is RFC 5322 with a byte-count
   // first line and a plist trailer, so it routes to the same parser.

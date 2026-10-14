@@ -1,6 +1,6 @@
 {
   "name": "kiagent",
-  "version": "0.111.0",
+  "version": "0.112.0",
   "description": "KIAgent desktop app",
   "license": "MIT",
   "author": {
@@ -16,8 +16,10 @@
   },
   "dependencies": {
     "@chainsafe/libp2p-yamux": "^7.0.4",
+    "@kenjiuno/decompressrtf": "^0.1.4",
     "@kenjiuno/msgreader": "1.28.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@xmldom/xmldom": "^0.8.13",
     "better-sqlite3": "^12.11.1",
     "chokidar": "^3.6.0",
     "csv-parse": "^6.2.1",
@@ -28,14 +30,19 @@
     "fast-glob": "^3.3.3",
     "google-auth-library": "^10.6.2",
     "imapflow": "^1.0.171",
+    "jszip": "^3.10.1",
+    "long": "5.3.2",
     "mailparser": "^3.7.1",
     "mammoth": "^1.12.0",
     "mime": "^3.0.0",
     "nodemailer": "^6.10.1",
     "pdf-parse": "^1.1.1",
+    "pst-extractor": "1.12.0",
     "semver": "^7.6.0",
     "tar": "^7.4.3",
     "turndown": "^7.2.4",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "word-extractor": "1.0.4",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "yauzl": "^2.10.0"
   }
 }

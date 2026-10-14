@@ -122,11 +122,13 @@ function seedMatrix(db: Database.Database): void {
   );
   seedDoc(
     db,
+    // A local .zip is a container since policy v4 (re-expanded, not
+    // archived here); a .7z is still an archive.
     candidate('local-zip', 'acc-local', 'file', {
-      mime: 'application/zip',
-      filename: 'archive.zip',
-      ext: 'zip',
-      absPath: '/Users/x/Downloads/archive.zip',
+      mime: 'application/x-7z-compressed',
+      filename: 'archive.7z',
+      ext: '7z',
+      absPath: '/Users/x/Downloads/archive.7z',
       sizeBytes: 999,
     }),
   );
@@ -503,8 +505,8 @@ describe('schema v2: unreadable metadata is skipped, not archived', () => {
     seedDoc(
       db,
       candidate('ctl-archived-zip', 'acc-local', 'file', {
-        mime: 'application/zip',
-        filename: 'drop.zip',
+        mime: 'application/x-7z-compressed',
+        filename: 'drop.7z',
         sizeBytes: 1_000,
       }),
     );
@@ -554,8 +556,8 @@ describe('schema v2: atomicity on failure', () => {
     seedDoc(
       db,
       candidate('doomed-zip', 'acc-local', 'file', {
-        mime: 'application/zip',
-        filename: 'archive.zip',
+        mime: 'application/x-7z-compressed',
+        filename: 'archive.7z',
         sizeBytes: 10,
       }),
     );

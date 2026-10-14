@@ -18,6 +18,7 @@ import {
   type Converter,
   type ParseResult,
 } from './converter';
+import { DEFAULT_EXPAND_BUDGET, type ExpandResult } from './containers/types';
 import type { RasterResult } from './parsers';
 import type { ConverterJob, ConverterReply } from './protocol';
 
@@ -363,7 +364,8 @@ export function createConverterRunner(opts: ConverterRunnerOptions): Converter {
       throw new ConverterUnavailableError(
         'converter unavailable (backing off)',
       );
-    const bytes = job.bytes.byteLength;
+    // Path jobs (expandPage) hold no bytes in the queue.
+    const bytes = 'bytes' in job ? job.bytes.byteLength : 0;
     await reserveSpace(bytes, signal);
     // The grant resolved before this continuation ran, and the waiter's abort
     // listener is already gone: a stop() or an abort in between is seen only
@@ -402,6 +404,17 @@ export function createConverterRunner(opts: ConverterRunnerOptions): Converter {
         { op: 'rasterizePdf', bytes, pages, maxEdge: o?.maxEdge },
         o?.signal,
       ) as Promise<RasterResult>,
+    expandPage: (path, kind, resume, budget, signal) =>
+      submit(
+        {
+          op: 'expandPage',
+          path,
+          kind,
+          resume,
+          budget: budget ?? DEFAULT_EXPAND_BUDGET,
+        },
+        signal,
+      ) as Promise<ExpandResult>,
     stats: () => ({
       mode: 'child',
       state,

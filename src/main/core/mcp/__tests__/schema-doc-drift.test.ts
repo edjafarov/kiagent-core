@@ -98,6 +98,7 @@ describe('schema-doc drift detector', () => {
     registerBundledSources(
       (s: Source) => ids.push(s.descriptor.id),
       brokerStub,
+      { expandPage: async () => ({ items: [], resume: null }) },
     );
 
     const sourceEnum = SCHEMA_DOC.enums.find((e) => e.name === 'source');

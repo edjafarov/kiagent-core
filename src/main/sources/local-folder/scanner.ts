@@ -1,10 +1,31 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { decideFileIndexing } from '@shared/file-indexability';
+
 import { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
-import { decideLocalFile, isIngestible } from './ingestible';
+import {
+  containerKindOf,
+  type ContainerKind,
+} from '../../core/converter/containers/types';
+import { decideLocalFile, isIngestible, localCandidate } from './ingestible';
 import { resolvePathMime } from './mime';
-import type { LocalFolderItem } from './to-document';
+import type { LocalFileItem } from './to-document';
+
+/** The container kind of a local path the policy routes to `container`,
+ *  else null. */
+export function containerOf(absPath: string): ContainerKind | null {
+  const candidate = localCandidate(absPath);
+  const d = decideFileIndexing(candidate);
+  if (d.kind !== 'index' || d.pipeline !== 'container') return null;
+  return containerKindOf(candidate.filename, candidate.mime ?? '');
+}
+
+/** `buildItem`'s answer for a container file: no document and no read —
+ *  the source records it for expansion instead. */
+export interface ContainerMarker {
+  container: ContainerKind;
+}
 
 /** ~50 files per yielded Batch — matches the porting brief's chunk size. */
 export const BATCH_SIZE = 50;
@@ -14,6 +35,17 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size)
     out.push(items.slice(i, i + size));
   return out;
+}
+
+/** Set by a walk that skipped a directory it could not read (or that
+ *  vanished mid-read): its listing is not proof that something is gone. */
+export interface WalkTrouble {
+  incomplete: boolean;
+}
+
+function noteTrouble(trouble: WalkTrouble | undefined, e: unknown): void {
+  if (trouble && (e as NodeJS.ErrnoException)?.code !== 'ENOENT')
+    trouble.incomplete = true;
 }
 
 export interface ScannedEntry {
@@ -148,13 +180,17 @@ function typeUnknown(d: fs.Dirent): boolean {
  * Only the cheap PATH gate (`isIngestible`) applies here; `walkRoot` adds the
  * size-aware one.
  */
-export async function* walkPaths(rootPath: string): AsyncGenerator<string> {
+export async function* walkPaths(
+  rootPath: string,
+  trouble?: WalkTrouble,
+): AsyncGenerator<string> {
   const open: fs.Dir[] = [];
   const descend = async (dir: string): Promise<void> => {
     try {
       open.push(await fs.promises.opendir(dir));
     } catch {
       // unreadable or vanished — skipped, as suppressErrors did
+      if (trouble) trouble.incomplete = true;
     }
   };
   await descend(path.resolve(rootPath));
@@ -167,6 +203,7 @@ export async function* walkPaths(rootPath: string): AsyncGenerator<string> {
         dirent = await dir.read();
       } catch {
         dirent = null; // the directory went away mid-read
+        if (trouble) trouble.incomplete = true;
       }
       if (dirent === null) {
         open.pop();
@@ -179,7 +216,12 @@ export async function* walkPaths(rootPath: string): AsyncGenerator<string> {
       let isFile = dirent.isFile();
       if (typeUnknown(dirent)) {
         // eslint-disable-next-line no-await-in-loop
-        const st = await fs.promises.lstat(absPath).catch(() => null);
+        const st = await fs.promises.lstat(absPath).catch((e) => {
+          // Not gone but unstat-able (EACCES…): possibly a directory whose
+          // subtree is unseen.
+          noteTrouble(trouble, e);
+          return null;
+        });
         isDir = st?.isDirectory() ?? false;
         isFile = st?.isFile() ?? false;
       }
@@ -213,14 +255,18 @@ export async function* walkPaths(rootPath: string): AsyncGenerator<string> {
  */
 export async function* walkRoot(
   rootPath: string,
+  trouble?: WalkTrouble,
 ): AsyncGenerator<ScannedEntry> {
-  for await (const absPath of walkPaths(rootPath)) {
+  for await (const absPath of walkPaths(rootPath, trouble)) {
     let stats: fs.Stats;
     try {
       // eslint-disable-next-line no-await-in-loop
       stats = await fs.promises.lstat(absPath);
-    } catch {
-      continue; // vanished since the directory was read
+    } catch (e) {
+      // Vanished since the directory was read — or unstat-able (a directory
+      // listable but not searchable), which hides the file.
+      noteTrouble(trouble, e);
+      continue;
     }
     if (stats.isFile() && decideLocalFile(absPath, stats.size).kind === 'index')
       yield { absPath, stats };
@@ -268,6 +314,7 @@ export function toAbsPosix(absPath: string): string {
  * Routes on `decideLocalFile`'s pipeline (size-aware — the same decision
  * `walkRoot` already applied at enumeration, recomputed here because a
  * watcher event calls this directly without going through `walkRoot`):
+ *  - `container` → a `ContainerMarker` (see expansion.ts); nothing read.
  *  - `ignore` → `null`. `unsupported` and `too-large` are no longer document
  *    outcomes — a file this policy rejects produces no row at all, not a
  *    metadata-only one.
@@ -301,9 +348,13 @@ export function toAbsPosix(absPath: string): string {
 export async function buildItem(
   absPath: string,
   stats: fs.Stats,
-): Promise<LocalFolderItem | null> {
+): Promise<LocalFileItem | ContainerMarker | null> {
   const decision = decideLocalFile(absPath, stats.size);
   if (decision.kind === 'ignore') return null;
+  if (decision.pipeline === 'container') {
+    const kind = containerOf(absPath);
+    return kind ? { container: kind } : null;
+  }
 
   const externalId = toAbsPosix(absPath);
   const ext = path.extname(absPath).slice(1).toLowerCase();
@@ -317,7 +368,7 @@ export async function buildItem(
   ).toISOString();
 
   let markdownText: string | null = null;
-  let binary: LocalFolderItem['binary'] = null;
+  let binary: LocalFileItem['binary'] = null;
 
   try {
     if (decision.bytes === 'eager' && decision.pipeline === 'inline-text') {

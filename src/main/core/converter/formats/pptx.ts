@@ -1,0 +1,128 @@
+/** PowerPoint OOXML → markdown: slides in presentation order, each with its
+ *  title placeholder as a heading, the remaining text (tables included), then
+ *  speaker notes. Only presentation, slide, notes, rels and core-property
+ *  parts are inflated. Pure. */
+import { openZipParts, type ZipParts } from './zip-parts';
+import { byLocalName, childByLocalName, parseXml, textContent } from './xml';
+
+const TITLE_TYPES = new Set(['title', 'ctrTitle']);
+/** Header/footer, date, slide-number and slide-image placeholders repeat
+ *  on every slide and note: chrome, not content. */
+const CHROME = new Set(['sldNum', 'sldImg', 'hdr', 'ftr', 'dt']);
+// Transitional and Strict (ISO 29500 strict) spellings of each namespace.
+const DRAWINGML = new Set([
+  'http://schemas.openxmlformats.org/drawingml/2006/main',
+  'http://purl.oclc.org/ooxml/drawingml/main',
+]);
+const RELS_NS = new Set([
+  'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+  'http://purl.oclc.org/ooxml/officeDocument/relationships',
+]);
+
+/** The `r:id` of a `p:sldId`, whichever relationships namespace it uses. */
+const relId = (el: Element): string => {
+  for (let i = 0; i < el.attributes.length; i++) {
+    const a = el.attributes.item(i);
+    if (a && a.localName === 'id' && RELS_NS.has(a.namespaceURI ?? ''))
+      return a.value;
+  }
+  return '';
+};
+
+const phType = (sp: Element): string | null => {
+  const nv = childByLocalName(sp, 'nvSpPr');
+  const nvPr = nv && childByLocalName(nv, 'nvPr');
+  const ph = nvPr && childByLocalName(nvPr, 'ph');
+  return ph ? ph.getAttribute('type') || 'body' : null;
+};
+
+const paragraphs = (el: Element): string[] =>
+  byLocalName(el, 'p')
+    .filter((p) => DRAWINGML.has(p.namespaceURI ?? ''))
+    .map((p) => textContent(p).trim())
+    .filter(Boolean);
+
+const resolve = (dir: string, target: string): string => {
+  if (target.startsWith('/')) return target.slice(1);
+  const out: string[] = [];
+  for (const s of `${dir}/${target}`.split('/')) {
+    if (s === '..') out.pop();
+    else if (s && s !== '.') out.push(s);
+  }
+  return out.join('/');
+};
+
+/** Relationship Id → { type, resolved part path } for the part at `base`. */
+async function rels(
+  parts: ZipParts,
+  base: string,
+): Promise<Map<string, { type: string; target: string }>> {
+  const cut = base.lastIndexOf('/');
+  const dir = base.slice(0, cut);
+  const xml = await parts.text(`${dir}/_rels/${base.slice(cut + 1)}.rels`);
+  const out = new Map<string, { type: string; target: string }>();
+  if (!xml) return out;
+  for (const r of byLocalName(parseXml(xml), 'Relationship')) {
+    if (r.getAttribute('TargetMode') === 'External') continue;
+    out.set(r.getAttribute('Id') ?? '', {
+      type: r.getAttribute('Type') ?? '',
+      target: resolve(dir, r.getAttribute('Target') ?? ''),
+    });
+  }
+  return out;
+}
+
+export async function pptxToMarkdown(bytes: Uint8Array): Promise<string> {
+  const parts = await openZipParts(bytes);
+  const pres = await parts.text('ppt/presentation.xml');
+  if (!pres) throw new Error('pptx: no ppt/presentation.xml');
+  const presRels = await rels(parts, 'ppt/presentation.xml');
+  const out: string[] = [];
+
+  const core = await parts.text('docProps/core.xml');
+  if (core) {
+    const doc = parseXml(core);
+    const title = byLocalName(doc, 'title')[0];
+    const author = byLocalName(doc, 'creator')[0];
+    if (title && textContent(title).trim())
+      out.push(`# ${textContent(title).trim()}`);
+    if (author && textContent(author).trim())
+      out.push(`**Author:** ${textContent(author).trim()}`);
+  }
+
+  const ids = byLocalName(parseXml(pres), 'sldId');
+  for (let i = 0; i < ids.length; i++) {
+    const rid = relId(ids[i]);
+    const part = presRels.get(rid)?.target;
+    const xml = part ? await parts.text(part) : null;
+    if (!part || !xml) continue;
+    const slide = parseXml(xml);
+    const shapes = byLocalName(slide, 'sp');
+    const titleSp = shapes.find((s) => TITLE_TYPES.has(phType(s) ?? ''));
+    const title = titleSp ? paragraphs(titleSp).join(' ') : '';
+    const body = shapes
+      .filter((s) => s !== titleSp && !CHROME.has(phType(s) ?? ''))
+      .flatMap(paragraphs);
+    // Tables live in graphicFrames, not shapes: take their rows too.
+    for (const tr of byLocalName(slide, 'tr')) {
+      const row = byLocalName(tr, 'tc')
+        .map((tc) => paragraphs(tc).join(' '))
+        .join(' | ');
+      if (row.replace(/[|\s]/g, '')) body.push(row);
+    }
+    out.push(title ? `## Slide ${i + 1} — ${title}` : `## Slide ${i + 1}`);
+    if (body.length) out.push(body.join('\n'));
+
+    const notesRel = [...(await rels(parts, part)).values()].find((r) =>
+      r.type.endsWith('/notesSlide'),
+    );
+    const notesXml = notesRel ? await parts.text(notesRel.target) : null;
+    if (notesXml) {
+      const notes = byLocalName(parseXml(notesXml), 'sp')
+        .filter((s) => !CHROME.has(phType(s) ?? ''))
+        .flatMap(paragraphs);
+      if (notes.length) out.push('### Notes', notes.join('\n'));
+    }
+  }
+  return out.join('\n\n');
+}

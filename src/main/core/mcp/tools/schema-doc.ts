@@ -483,9 +483,11 @@ TEXT and attention timestamps are INTEGER Unix milliseconds.`,
         'file',
         'calendar.event',
         'meeting.transcript',
+        'contact.card',
+        'note',
       ],
       notes:
-        'email.thread + attachment (gmail); email.message (imap); file (local-folder); calendar.event (google-calendar extension); meeting.transcript (meetings extension).',
+        'email.thread + attachment (gmail); email.message (imap); file (local-folder); calendar.event (google-calendar extension); meeting.transcript (meetings extension). local-folder also expands mailboxes, ZIPs, vCard and Evernote exports into child documents (parent_id = the container file): email.message, file, contact.card, note.',
     },
   ],
 };

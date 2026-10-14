@@ -10,6 +10,7 @@ import {
   parsePdfPages,
   rasterizePdf,
 } from '../core/converter/parsers';
+import { expandPage } from '../core/converter/containers';
 import type {
   ConverterReply,
   ConverterRequest,
@@ -45,6 +46,8 @@ const onMessage = (cb: (m: unknown) => void): void => {
 process.on('disconnect', () => process.exit(0));
 
 async function run(req: ConverterRequest): Promise<unknown> {
+  if (req.op === 'expandPage')
+    return expandPage(req.path, req.kind, req.resume, req.budget);
   // A fresh copy: bytes arriving over IPC may be a view into a larger
   // ArrayBuffer (Node's pool slice), and pdf.js reads the whole buffer —
   // the convert.ts "bad XRef entry" workaround, kept on this side.

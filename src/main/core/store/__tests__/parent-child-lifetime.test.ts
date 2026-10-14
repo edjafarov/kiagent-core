@@ -72,6 +72,53 @@ describe('parent/child lifetime', () => {
     return { diff, n };
   }
 
+  it('the mass-archive guard counts top-level rows only: a gone container with 1 000 children is one deletion', async () => {
+    const file = (id: string): DocumentInput => ({
+      externalId: id,
+      type: 'file',
+      title: id,
+      markdown: `body ${id}`,
+      metadata: {},
+      createdAt: null,
+    });
+    const child = (id: string): DocumentInput => ({
+      externalId: id,
+      type: 'email.message',
+      title: id,
+      markdown: `body ${id}`,
+      metadata: {},
+      createdAt: null,
+      parent: { externalId: '/r/inbox.mbox', type: 'file' },
+    });
+    await store.commit({
+      account: accountId,
+      documents: [
+        file('/r/inbox.mbox'),
+        ...Array.from({ length: 1000 }, (_, i) =>
+          child(`/r/inbox.mbox#msg:${i}`),
+        ),
+        file('/r/a.txt'),
+      ],
+      cursor: 2,
+    });
+    const startSeq = await store.headSeq();
+    await store.reconcileBegin(accountId);
+    await store.reconcileStage(accountId, [
+      { externalId: 'm1', type: 'email.message' },
+      { externalId: 'm2', type: 'email.message' },
+      { externalId: '/r/a.txt', type: 'file' },
+    ]);
+    const diff = await store.reconcileDiff(accountId, startSeq);
+    // m1, m2, a.txt, inbox.mbox — attachments and messages-in-a-file are not
+    // judged on their own.
+    expect(diff).toEqual({ listedCount: 3, liveCount: 4, deletionCount: 1 });
+    await store.reconcileArchive(accountId, startSeq);
+    await store.reconcileEnd(accountId);
+    expect(await archived('/r/inbox.mbox', 'file')).toBe(true);
+    expect(await archived('/r/inbox.mbox#msg:999', 'email.message')).toBe(true);
+    expect(await archived('/r/a.txt', 'file')).toBe(false);
+  });
+
   it('reconcile keeps an unlisted child whose parent is listed, and archives both when the parent is gone', async () => {
     await reconcile(['m1']);
     expect(await archived('m1', 'email.message')).toBe(false);

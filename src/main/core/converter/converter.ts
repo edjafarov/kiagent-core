@@ -5,6 +5,13 @@
  * same parsers in-process (KIA_CONVERTER_INLINE=1, tests).
  */
 import { abortError } from '../abort';
+import { expandPage } from './containers';
+import {
+  DEFAULT_EXPAND_BUDGET,
+  type ContainerKind,
+  type ExpandBudget,
+  type ExpandResult,
+} from './containers/types';
 import {
   capMarkdown,
   parseDetailed,
@@ -46,6 +53,14 @@ export interface Converter {
     pages: number[],
     opts?: { maxEdge?: number; signal?: AbortSignal },
   ): Promise<RasterResult>;
+  /** One bounded page of a container's children, read by path. */
+  expandPage(
+    path: string,
+    kind: ContainerKind,
+    resume: unknown | null,
+    budget?: ExpandBudget,
+    signal?: AbortSignal,
+  ): Promise<ExpandResult>;
   stats(): ConverterStats;
   stop(): Promise<void>;
 }
@@ -121,6 +136,10 @@ export function createInlineConverter(): Converter {
     parsePdfPages: (bytes, signal) => run(signal, () => parsePdfPages(bytes)),
     rasterizePdf: (bytes, pages, opts) =>
       run(opts?.signal, () => rasterizePdf(bytes, pages, opts?.maxEdge)),
+    expandPage: (path, kind, resume, budget, signal) =>
+      run(signal, () =>
+        expandPage(path, kind, resume, budget ?? DEFAULT_EXPAND_BUDGET),
+      ),
     stats: () => ({
       mode: 'inline',
       state: 'inline',

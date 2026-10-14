@@ -19,7 +19,14 @@
  */
 
 export type FileSourceProfile = 'local-folder' | 'cloud-drive';
-export type FilePipeline = 'inline-text' | 'converter' | 'vision' | 'audio';
+export type FilePipeline =
+  | 'inline-text'
+  | 'converter'
+  | 'vision'
+  | 'audio'
+  /** Local mailbox/archive/address-book/notebook files, expanded into child
+   *  documents by the local-folder source; read by path, never buffered. */
+  | 'container';
 export type FileIgnoreReason =
   | 'sensitive'
   | 'no-extension'
@@ -51,12 +58,32 @@ export const MAX_CLOUD_IMAGE_BYTES = 20 * 1024 * 1024; // vision would skip anyt
 export const MAX_FETCH_BYTES = 100 * 1024 * 1024;
 /** Bumped whenever a policy change makes previously IGNORED files
  *  indexable; each file source re-enumerates once on a mismatch. */
-export const FILE_POLICY_VERSION = 2;
+export const FILE_POLICY_VERSION = 5;
 /** Extensions first admitted at a given policy version (eager files the
- *  old policy ignored by TYPE, not size). */
+ *  old policy ignored by TYPE, not size), plus any whose parser changed
+ *  enough that already-indexed local files must be re-read once. */
 export const ADMITTED_SINCE: Record<number, ReadonlySet<string>> = {
   2: new Set(['msg']),
+  3: new Set([
+    'pptx',
+    'odt',
+    'ods',
+    'epub',
+    'doc',
+    'rtf',
+    'srt',
+    'vtt',
+    // Not new, but re-read once: RTF-only Outlook bodies parse since v3.
+    'msg',
+  ]),
+  // Local containers (bytes:'none' rows re-emit on any bump anyway; listed
+  // so the version that admitted them is on record).
+  4: new Set(['mbox', 'zip', 'vcf', 'enex']),
+  5: new Set(['pst']),
 };
+
+/** Local files the local-folder source expands into child documents. */
+const CONTAINER_EXTENSIONS = new Set(['mbox', 'zip', 'vcf', 'enex', 'pst']);
 
 // Verbatim from local-folder/ingestible.ts:22-23 and :31. `ingestible.ts`
 // re-exports the first as INGESTIBLE_DENY_RE, the name its test imports.
@@ -166,9 +193,7 @@ export const LOCAL_TEXT_EXTENSIONS = new Set([
   'sql',
   'log',
   'properties',
-  // transcripts, calendars, contacts — plain text by spec
-  'srt',
-  'vtt',
+  // calendars and contacts — plain text by spec (subtitles are converted)
   'ics',
   'vcf',
   // scripts and source people keep alongside documents
@@ -202,10 +227,14 @@ export const LOCAL_TEXT_EXTENSIONS = new Set([
   'php',
 ]);
 
-// Verbatim from local-folder/mime.ts's BINARY_PARSEABLE_MIMES: what the local
-// source hands to the engine converter today. The cloud set is deliberately
-// SMALLER — it mirrors each connector's isConvertibleMime, so this change adds
-// nothing to what Drive/Graph will download.
+const PPTX_MIME =
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const ODT_MIME = 'application/vnd.oasis.opendocument.text';
+const ODS_MIME = 'application/vnd.oasis.opendocument.spreadsheet';
+
+// What the local source hands to the engine converter (local-folder/mime.ts
+// re-exports it as BINARY_PARSEABLE_MIMES). The cloud set is SMALLER: no
+// mailbox and no subtitles (each connector's isConvertibleMime mirrors it).
 export const LOCAL_CONVERTER_MIMES = new Set([
   'text/html',
   'application/pdf',
@@ -216,17 +245,47 @@ export const LOCAL_CONVERTER_MIMES = new Set([
   'message/rfc822',
   'application/mbox',
   'application/vnd.ms-outlook',
+  PPTX_MIME,
+  ODT_MIME,
+  ODS_MIME,
+  'application/epub+zip',
+  'application/msword',
+  'application/rtf',
+  'text/rtf',
+  'application/x-subrip',
+  'text/vtt',
 ]);
 const CLOUD_CONVERTER_MIMES = new Set([
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
   'application/vnd.ms-outlook',
   'message/rfc822',
+  PPTX_MIME,
+  ODT_MIME,
+  ODS_MIME,
+  'application/epub+zip',
+  'application/msword',
+  'application/rtf',
 ]);
-/** Saved-email extensions Graph/Drive commonly report with no or a generic
- *  MIME; the converter dispatches on the extension, so they are safe to admit. */
-const CLOUD_EMAIL_EXT_RESCUE = new Set(['msg', 'eml']);
+/** No cloud subtitles in v1, whatever text/* MIME the drive reports. */
+const CLOUD_SUBTITLE_EXTENSIONS = new Set(['srt', 'vtt']);
+/** Extensions Graph/Drive commonly report with no or a generic MIME; the
+ *  converter dispatches on the extension, so they are safe to admit. */
+const CLOUD_EXT_RESCUE = new Set([
+  'msg',
+  'eml',
+  'pptx',
+  'odt',
+  'ods',
+  'epub',
+  'doc',
+  'rtf',
+  'csv',
+  'xls',
+  'html',
+]);
 
 const normalizedSize = (v: number | null | undefined): number | null =>
   typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
@@ -282,7 +341,15 @@ export function decideFileIndexing(c: FileIndexCandidate): FileIndexDecision {
   }
   // 2. Extensionless local files: sniffing content would defeat a gate whose
   //    whole point is being cheap at enumeration time.
-  if (local && !ext) return { kind: 'ignore', reason: 'no-extension' };
+  //    A Thunderbird mailbox (extensionless, `.msf` sibling) arrives with
+  //    `application/mbox` from the local adapter.
+  if (local && !ext && mime !== 'application/mbox')
+    return { kind: 'ignore', reason: 'no-extension' };
+  // 2b. Local containers, before the archive/text/converter steps would
+  //     claim `.zip`, `.vcf` and `application/mbox`. No size cap: they are
+  //     read by path, a page at a time.
+  if (local && (CONTAINER_EXTENSIONS.has(ext) || mime === 'application/mbox'))
+    return { kind: 'index', pipeline: 'container', bytes: 'none' };
   // 3. Archives, at every size, on both profiles. The extension test is the
   //    backstop for a generic or missing provider MIME.
   if (ARCHIVE_EXTENSIONS.has(ext) || ARCHIVE_MIMES.has(mime)) {
@@ -349,16 +416,17 @@ export function decideFileIndexing(c: FileIndexCandidate): FileIndexDecision {
       return mediaCap(size, MAX_LOCAL_AUDIO_BYTES, 'audio');
     }
   }
-  // 9. Converter. Cloud admits text/* plus the Office/PDF MIMEs and saved
-  //    email (.msg/.eml) — by MIME or, for a generic MIME, by extension;
-  //    local admits exactly the mimes BINARY_PARSEABLE_MIMES admits (plus
-  //    .msg since policy v2). A cloud .xls stays 'unsupported'.
+  // 9. Converter. Cloud admits text/* (except subtitles) plus the
+  //    document/PDF MIMEs and saved email — by MIME or, for a generic MIME,
+  //    by extension; local admits exactly LOCAL_CONVERTER_MIMES.
   const generic = mime === '' || mime === 'application/octet-stream';
   const converter = local
     ? LOCAL_CONVERTER_MIMES.has(mime)
-    : mime.startsWith('text/') ||
+    : (mime.startsWith('text/') &&
+        mime !== 'text/vtt' &&
+        !CLOUD_SUBTITLE_EXTENSIONS.has(ext)) ||
       CLOUD_CONVERTER_MIMES.has(mime) ||
-      (generic && CLOUD_EMAIL_EXT_RESCUE.has(ext));
+      (generic && CLOUD_EXT_RESCUE.has(ext));
   if (converter) {
     return docCap(
       size,

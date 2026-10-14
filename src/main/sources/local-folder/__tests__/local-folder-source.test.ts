@@ -33,7 +33,7 @@ import {
   reconcile,
 } from '../local-folder-source';
 import type { LocalFolderCursor } from '../cursor';
-import type { LocalFolderItem } from '../to-document';
+import type { LocalFileItem, LocalFolderItem } from '../to-document';
 
 const NO_ROOTS_ERROR =
   'Local-folder account has no tracked folders — remove this source and re-add its folder.';
@@ -117,6 +117,26 @@ function makeSessionWithConfig(
     credentials: async () => null,
     log: () => {},
   };
+}
+
+/** A batch's ordinary file items (container rows and children are
+ *  prebuilt documents, tested in local-folder-containers.test.ts). */
+const fileItems = (b: { items: LocalFolderItem[] }): LocalFileItem[] =>
+  b.items.filter((i): i is LocalFileItem => !('prebuilt' in i));
+
+/** `pullFn(session, null)` advanced past the scan of an empty root (its
+ *  backfill batch and the policy stamp), so the next `next()` waits on the
+ *  live watcher. */
+async function pastScan<B extends { cursor: unknown }>(
+  iter: AsyncIterable<B>,
+): Promise<AsyncIterator<B>> {
+  const it = iter[Symbol.asyncIterator]();
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await it.next();
+    if (r.done) throw new Error('pull ended during the scan');
+    if ((r.value.cursor as { policyVersion?: number }).policyVersion) return it;
+  }
 }
 
 async function collect<T>(iter: AsyncIterable<T>): Promise<T[]> {
@@ -250,7 +270,7 @@ describe('pull — backfill (cursor === null)', () => {
         .every((b) => b.phase === 'backfill'),
     ).toBe(true);
 
-    const allItems = batches.flatMap((b) => b.items);
+    const allItems = batches.flatMap(fileItems);
     const externalIds = allItems.map((i) => i.externalId).sort();
 
     // 58 bulk + readme + notes + report + photo + subdir/inner = 63
@@ -292,7 +312,7 @@ describe('pull — backfill (cursor === null)', () => {
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, false);
     const batches = await collect(pull(session, null));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
     const byAbs = new Map(items.map((i) => [i.absPath, i]));
 
     const textItem = byAbs.get(path.join(dir, 'readme.txt'))!;
@@ -430,7 +450,7 @@ describe('pull — multi-root backfill', () => {
     const controller = new AbortController();
     const session = makeSession([dirA, dirB], controller.signal, false);
     const batches = await collect(pull(session, null));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items).toHaveLength(2);
     const externalIds = items.map((i) => i.externalId).sort();
@@ -510,7 +530,7 @@ describe('pull — per-root incremental rescan', () => {
     fs.writeFileSync(path.join(dirB, 'b.txt'), 'b updated');
 
     const rescanBatches = await collect(pull(session, cursorAfterBackfill));
-    const items = rescanBatches.flatMap((b) => b.items);
+    const items = rescanBatches.flatMap(fileItems);
     expect(items).toHaveLength(1);
     expect(items[0].externalId).toBe(toExternalId(path.join(dirB, 'b.txt')));
     expect(rescanBatches.every((b) => b.phase === 'live')).toBe(true);
@@ -535,7 +555,7 @@ describe('pull — per-root incremental rescan', () => {
     const controllerAB = new AbortController();
     const sessionAB = makeSession([dirA, dirB], controllerAB.signal, false);
     const batches = await collect(pull(sessionAB, cursorAfterA));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items).toHaveLength(1);
     expect(items[0].externalId).toBe(toExternalId(path.join(dirB, 'b.txt')));
@@ -621,7 +641,7 @@ describe('pull — per-root incremental rescan', () => {
     const controllerReadd = new AbortController();
     const sessionAB = makeSession([dirA, dirB], controllerReadd.signal, false);
     const readdBatches = await collect(pull(sessionAB, cursorAfterRemoval));
-    const items = readdBatches.flatMap((b) => b.items);
+    const items = readdBatches.flatMap(fileItems);
     expect(items.map((i) => i.externalId)).toContain(
       toExternalId(path.join(dirB, 'b.txt')),
     );
@@ -657,7 +677,7 @@ describe('pull — per-root incremental rescan', () => {
     const session = makeSession([dir], controller.signal, false);
     const batches = await collect(pull(session, since));
 
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
     expect(items.map((i) => i.externalId)).toEqual([
       toExternalId(path.join(dir, 'new.txt')),
     ]);
@@ -690,7 +710,7 @@ describe('pull — per-root incremental rescan', () => {
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, false);
     const batches = await collect(pull(session, since));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items.map((i) => i.externalId)).toEqual([toExternalId(movedPath)]);
     expect(batches.every((b) => b.phase === 'live')).toBe(true);
@@ -710,7 +730,7 @@ describe('pull — per-root incremental rescan', () => {
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, false);
     const batches = await collect(pull(session, since));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items.map((i) => i.externalId)).toEqual([toExternalId(renamedPath)]);
   });
@@ -723,10 +743,10 @@ describe('pull — strict indexability policy', () => {
     writeFile(dir, 'report.pdf', '%PDF-1.4 fixture');
     writeFile(dir, 'meeting.mp3', '0123456789');
     writeFile(dir, 'movie.mp4', '0123456789');
-    writeFile(dir, 'backup.zip', '0123456789');
+    writeFile(dir, 'backup.7z', '0123456789');
     // 26 MiB sparse file — an archive is ignored at every size, so this must
     // never be read regardless of the byte-budget chunker's caps.
-    const hugeZip = path.join(dir, 'huge.zip');
+    const hugeZip = path.join(dir, 'huge.7z');
     const fd = fs.openSync(hugeZip, 'w');
     fs.ftruncateSync(fd, 26 * 1024 * 1024);
     fs.closeSync(fd);
@@ -736,7 +756,7 @@ describe('pull — strict indexability policy', () => {
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, false);
     const batches = await collect(pull(session, null));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
     const names = items.map((i) => path.basename(i.absPath)).sort();
 
     expect(names).toEqual(
@@ -744,8 +764,8 @@ describe('pull — strict indexability policy', () => {
     );
 
     const readPaths = readFileSpy.mock.calls.map((c) => String(c[0]));
-    expect(readPaths.some((p) => p.endsWith('backup.zip'))).toBe(false);
-    expect(readPaths.some((p) => p.endsWith('huge.zip'))).toBe(false);
+    expect(readPaths.some((p) => p.endsWith('backup.7z'))).toBe(false);
+    expect(readPaths.some((p) => p.endsWith('huge.7z'))).toBe(false);
     expect(readPaths.some((p) => p.endsWith('unknown.scache'))).toBe(false);
 
     readFileSpy.mockRestore();
@@ -762,7 +782,7 @@ describe('buildItem — over-cap documents are name-only rows (nothing read)', (
       birthtime: new Date(),
     } as fs.Stats;
     const readFileSpy = jest.spyOn(fs.promises, 'readFile');
-    const item = await buildItem(abs, oversizedStats);
+    const item = (await buildItem(abs, oversizedStats)) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.markdownText).toBeNull();
     expect(item!.binary).toBeNull();
@@ -779,7 +799,7 @@ describe('buildItem — over-cap documents are name-only rows (nothing read)', (
       birthtime: new Date(),
     } as fs.Stats;
     const readFileSpy = jest.spyOn(fs.promises, 'readFile');
-    const item = await buildItem(abs, oversizedStats);
+    const item = (await buildItem(abs, oversizedStats)) as LocalFileItem | null;
     expect(item).not.toBeNull();
     expect(item!.markdownText).toBeNull();
     expect(item!.binary).toBeNull();
@@ -909,7 +929,7 @@ describe('reconcile', () => {
   it('excludes archives and unknown extensions from the ref set — no second gate, the walk alone decides this', async () => {
     const dir = mkTmpDir();
     writeFile(dir, 'notes.txt', 'kept');
-    writeFile(dir, 'backup.zip', 'excluded');
+    writeFile(dir, 'backup.7z', 'excluded');
     writeFile(dir, 'unknown.scache', 'excluded');
 
     const controller = new AbortController();
@@ -975,7 +995,7 @@ describe('canonical folderRoots config', () => {
       { folderRoots: [{ id: dir, name: path.basename(dir) }], watch: false },
       controller.signal,
     );
-    const items = (await collect(pull(session, null))).flatMap((b) => b.items);
+    const items = (await collect(pull(session, null))).flatMap(fileItems);
     expect(items.map((i) => i.externalId)).toEqual([
       toExternalId(path.join(dir, 'a.txt')),
     ]);
@@ -990,7 +1010,7 @@ describe('canonical folderRoots config', () => {
       { paths: [dir], watch: false },
       controller.signal,
     );
-    const items = (await collect(pull(session, null))).flatMap((b) => b.items);
+    const items = (await collect(pull(session, null))).flatMap(fileItems);
     expect(items).toHaveLength(1);
   });
 });
@@ -1002,7 +1022,7 @@ describe('chunk (scanner helper)', () => {
   });
 });
 
-describe('watchLoop', () => {
+describe('live watcher (pull after the scan)', () => {
   it('emits add/change/unlink as live batches with absolute externalIds, advancing the per-root cursor, and closes the watcher on abort', async () => {
     class FakeWatcher extends EventEmitter {
       closed = false;
@@ -1016,13 +1036,14 @@ describe('watchLoop', () => {
     jest.resetModules();
     jest.doMock('chokidar', () => ({ watch: jest.fn(() => fakeWatcher) }));
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { watchLoop } = require('../watch') as typeof import('../watch');
+    const { pull: livePull } =
+      require('../local-folder-source') as typeof import('../local-folder-source');
 
     const dir = mkTmpDir();
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, true);
 
-    const it = watchLoop([dir], session, null);
+    const it = await pastScan(livePull(session, null));
 
     const addPath = writeFile(dir, 'added.txt', 'hello');
     const expectedExternalId = toExternalId(addPath);
@@ -1067,13 +1088,13 @@ describe('watchLoop', () => {
   });
 });
 
-describe('watchLoop — a change event that fails the post-stat policy check', () => {
+describe('live watcher — a change event that fails the post-stat policy check', () => {
   it('indexes photo.jpg, then a change event on a file grown past the image cap archives it instead of leaving a stale row', async () => {
     // NOTE ON THE BRIEF: it describes this scenario as "rename/change [the
     // file] to an ignored archive candidate". That literal case is
-    // unreachable through watchLoop: onEvent's isIngestible(path) pre-filter
+    // unreachable through the watcher: onEvent's isIngestible(path) pre-filter
     // (watch.ts) denies archive EXTENSIONS unconditionally, for every event
-    // kind including 'add'/'change', so a renamed-to-.zip path never even
+    // kind including 'add'/'change', so a renamed-to-.7z path never even
     // reaches buildItem — emitting it would just hang this test. The
     // reachable equivalent — and the actual new code path this task adds —
     // is a file whose EXTENSION still passes that coarse pre-filter but
@@ -1093,7 +1114,8 @@ describe('watchLoop — a change event that fails the post-stat policy check', (
     jest.resetModules();
     jest.doMock('chokidar', () => ({ watch: jest.fn(() => fakeWatcher) }));
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { watchLoop } = require('../watch') as typeof import('../watch');
+    const { pull: livePull } =
+      require('../local-folder-source') as typeof import('../local-folder-source');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { MAX_LOCAL_IMAGE_BYTES } =
       require('@shared/file-indexability') as typeof import('@shared/file-indexability');
@@ -1101,7 +1123,7 @@ describe('watchLoop — a change event that fails the post-stat policy check', (
     const dir = mkTmpDir();
     const controller = new AbortController();
     const session = makeSession([dir], controller.signal, true);
-    const it = watchLoop([dir], session, null);
+    const it = await pastScan(livePull(session, null));
 
     const p = writeFile(dir, 'photo.jpg', 'hello');
     const expectedExternalId = toExternalId(p);
@@ -1202,7 +1224,7 @@ describe('ingestion allowlist parity (scanner vs watcher)', () => {
       'shadercache/000.bin',
       'Horos.noindex/scan.jpg',
       'save.eu5',
-      'archive.zip',
+      'archive.7z',
       '.env',
     ]) {
       fs.writeFileSync(path.join(dir, f), 'x');
@@ -1237,20 +1259,23 @@ describe('ingestion allowlist parity (scanner vs watcher)', () => {
 
   it('the watcher emits for exactly the files the scanner lists', async () => {
     const { walkRoot } = require('../scanner') as typeof import('../scanner');
-    const { watchLoop } = require('../watch') as typeof import('../watch');
+    const { startWatcher } = require('../watch') as typeof import('../watch');
     const { dir, ingestible } = mkMixedFixture();
 
-    // watchLoop runs with ignoreInitial, so drive it with LIVE events: start
-    // the loop over an empty dir, then create the same mix underneath it.
+    // The watcher runs with ignoreInitial, so drive it with LIVE events:
+    // start it over an empty dir, then create the same mix underneath it.
     const live = mkTmpDir();
     const ctl = new AbortController();
-    const session = { signal: ctl.signal } as unknown as Session;
+    const watcher = startWatcher([live], ctl.signal);
     const seen: string[] = [];
     const pump = (async () => {
-      for await (const batch of watchLoop([live], session, { roots: {} })) {
-        for (const item of batch.items)
-          seen.push(item.externalId.slice(live.length));
+      while (!ctl.signal.aborted) {
+        for (let ev = watcher.take(); ev; ev = watcher.take())
+          seen.push(toExternalId(ev.absPath).slice(live.length));
+        // eslint-disable-next-line no-await-in-loop
+        await watcher.wait();
       }
+      await watcher.close();
     })();
 
     await sleep(600); // chokidar's initial walk of an empty dir
@@ -1266,7 +1291,7 @@ describe('ingestion allowlist parity (scanner vs watcher)', () => {
       'shadercache/000.bin',
       'Horos.noindex/scan.jpg',
       'save.eu5',
-      'archive.zip',
+      'archive.7z',
       '.env',
     ]) {
       fs.writeFileSync(path.join(live, f), 'x');
@@ -1452,7 +1477,7 @@ describe('manageFolders', () => {
     const batches = await collect(
       pull(after, update.cursor as LocalFolderCursor),
     );
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items.map((i) => i.externalId)).toEqual([
       toExternalId(path.join(dirC, 'c.txt')),
@@ -1464,13 +1489,13 @@ describe('manageFolders', () => {
     // Spec invariant 15 (DECISIONS A-10). Adding a folder widens SCOPE; it
     // never widens what is ingestible. The junk types mirror the proven
     // fixture in `pull — strict indexability policy`
-    // (local-folder-source.test.ts:645-677): .zip is ignored at every size,
+    // (local-folder-source.test.ts:645-677): .7z is ignored at every size,
     // .scache has no pipeline at all.
     const dirA = mkTmpDir();
     const dirC = mkTmpDir();
     writeFile(dirA, 'a.txt', 'a');
     writeFile(dirC, 'notes.txt', 'indexable');
-    writeFile(dirC, 'backup.zip', '0123456789');
+    writeFile(dirC, 'backup.7z', '0123456789');
     writeFile(dirC, 'unknown.scache', '0123456789');
     await sleep(20);
 
@@ -1488,7 +1513,7 @@ describe('manageFolders', () => {
     const after = makeSessionWithConfig(update.config, controller.signal);
     const items = (
       await collect(pull(after, update.cursor as LocalFolderCursor))
-    ).flatMap((b) => b.items);
+    ).flatMap(fileItems);
 
     expect(items.map((i) => i.externalId)).toEqual([
       toExternalId(path.join(dirC, 'notes.txt')),
@@ -1528,7 +1553,7 @@ describe('scopeRootId attribution', () => {
     const controller = new AbortController();
     const session = makeSession([dirA, dirB], controller.signal, false);
 
-    const items = (await collect(pull(session, null))).flatMap((b) => b.items);
+    const items = (await collect(pull(session, null))).flatMap(fileItems);
     const byName = new Map(items.map((i) => [path.basename(i.absPath), i]));
 
     expect(byName.get('a.txt')!.scopeRootId).toBe(dirA);
@@ -1556,7 +1581,7 @@ describe('scopeRootId attribution', () => {
     fs.writeFileSync(abs, 'a updated');
 
     const batches = await collect(pull(session, cursor));
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
 
     expect(items).toHaveLength(1);
     expect(items[0].scopeRootId).toBe(dir);
@@ -1582,7 +1607,7 @@ describe('scopeRootId attribution', () => {
   });
 });
 
-describe('watchLoop — scope attribution', () => {
+describe('live watcher — scope attribution', () => {
   it('stamps the covering root, and tolerates an event under NO root by yielding a NULL-scoped item', async () => {
     class FakeWatcher extends EventEmitter {
       closed = false;
@@ -1596,7 +1621,8 @@ describe('watchLoop — scope attribution', () => {
     jest.resetModules();
     jest.doMock('chokidar', () => ({ watch: jest.fn(() => fakeWatcher) }));
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { watchLoop } = require('../watch') as typeof import('../watch');
+    const { pull: livePull } =
+      require('../local-folder-source') as typeof import('../local-folder-source');
 
     const dir = mkTmpDir();
     const outside = mkTmpDir();
@@ -1606,7 +1632,7 @@ describe('watchLoop — scope attribution', () => {
       ...makeSession([dir], controller.signal, true),
       log,
     };
-    const it = watchLoop([dir], session, null);
+    const it = await pastScan(livePull(session, null));
 
     const inside = writeFile(dir, 'inside.txt', 'in');
     const p1 = it.next();
@@ -1731,7 +1757,7 @@ describe('policy recovery (FILE_POLICY_VERSION in the cursor)', () => {
   // A watermark in the future: the mtime/ctime filter alone finds nothing.
   const future = () => new Date(Date.now() + 60_000).toISOString();
   const names = (batches: Array<{ items: LocalFolderItem[] }>) =>
-    batches.flatMap((b) => b.items.map((i) => path.basename(i.absPath)));
+    batches.flatMap((b) => fileItems(b).map((i) => path.basename(i.absPath)));
   const versionOf = (c: unknown) =>
     (c as { policyVersion?: number } | null)?.policyVersion;
 
@@ -1750,7 +1776,7 @@ describe('policy recovery (FILE_POLICY_VERSION in the cursor)', () => {
     const batches = await collect(
       pull(makeSession([root], new AbortController().signal, false), old),
     );
-    const items = batches.flatMap((b) => b.items);
+    const items = batches.flatMap(fileItems);
     expect(items.map((i) => path.basename(i.absPath))).toEqual(['mail.msg']);
     expect(items[0].binary).not.toBeNull(); // eager bytes, converted at commit
   });
@@ -1804,7 +1830,7 @@ describe('policy recovery (FILE_POLICY_VERSION in the cursor)', () => {
     const batches = await collect(
       pull(makeSession([root], new AbortController().signal, false), cur),
     );
-    expect(batches.flatMap((b) => b.items)).toEqual([]);
+    expect(batches.flatMap(fileItems)).toEqual([]);
   });
 
   it('a fresh backfill stamps policyVersion', async () => {

@@ -1476,11 +1476,14 @@ export function createWriteTx(
             .get(accountId) as { n: number }
         ).n,
       );
+      // The guard judges the listing on TOP-LEVEL rows: children live and
+      // die with their parent, so a 100k-message mailbox deleted offline is
+      // one row of shrinkage, not 100k (archiveBatchTx still cascades).
       const counts = conn
         .prepare(
           `SELECT COUNT(*) AS live,
                   SUM(CASE WHEN ${unlisted(startSeq)} THEN 1 ELSE 0 END) AS gone
-             FROM documents WHERE ${ELIGIBLE}`,
+             FROM documents WHERE ${ELIGIBLE} AND parent_id IS NULL`,
         )
         .get(accountId, startSeq) as { live: number; gone: number | null };
       return {

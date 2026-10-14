@@ -1,9 +1,10 @@
 import type { Credentials, Source } from '@shared/contracts';
 
 import type { ConnectBroker } from '../auth/connect-broker';
+import type { Converter } from '../core/converter/converter';
 import { gmailSource, googleOAuthProfile, googleRefresher } from './gmail';
 import { createImapSource } from './imap';
-import { localFolderSource } from './local-folder';
+import { createLocalFolderSource } from './local-folder';
 
 /**
  * First-party sources. Each family registers its source; OAuth-backed
@@ -16,8 +17,10 @@ import { localFolderSource } from './local-folder';
 export function registerBundledSources(
   register: (source: Source) => void,
   broker: ConnectBroker,
+  converter: Pick<Converter, 'expandPage'>,
+  scratchDir?: string,
 ): Map<string, (creds: Credentials) => Promise<Credentials | null>> {
-  register(localFolderSource);
+  register(createLocalFolderSource({ converter, scratchDir }));
   register(createImapSource());
   register(gmailSource);
   broker.registerOAuthProfile('gmail', googleOAuthProfile);

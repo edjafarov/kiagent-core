@@ -10,20 +10,18 @@ import { HAS_TEXT_CHARS } from '@main/workers/convert/outcome';
 
 import { guardCfbReader } from '../engine/msg-guard';
 import { assessPage, QUALITY_VERSION } from '../engine/text-quality';
+import { docToMarkdown } from './formats/doc';
+import { epubToMarkdown } from './formats/epub';
+import { odtToMarkdown } from './formats/odt';
+import { pptxToMarkdown } from './formats/pptx';
+import { rtfBytesToMarkdown, rtfToText } from './formats/rtf';
+import { subtitlesToMarkdown } from './formats/subtitles';
+import {
+  assertZipInflatesWithin,
+  MAX_SPREADSHEET_INFLATE_BYTES,
+} from './formats/zip-parts';
 
-/** Upper bound on one document's markdown, whichever path parsed it. */
-export const MAX_MARKDOWN_CHARS = 2 * 1024 * 1024;
-export function capMarkdown(md: string): {
-  markdown: string;
-  truncated: boolean;
-} {
-  return md.length > MAX_MARKDOWN_CHARS
-    ? {
-        markdown: `${md.slice(0, MAX_MARKDOWN_CHARS)}\n\n[truncated]`,
-        truncated: true,
-      }
-    : { markdown: md, truncated: false };
-}
+export { capMarkdown, MAX_MARKDOWN_CHARS } from './formats/limits';
 
 /** What the converter can parse. `parse()` dispatches on this and the
  *  convert worker (workers/convert) matches on it, so "which documents get
@@ -31,6 +29,12 @@ export function capMarkdown(md: string): {
 export type ConvertibleKind =
   | 'pdf'
   | 'docx'
+  | 'presentation'
+  | 'odf-text'
+  | 'epub'
+  | 'word97'
+  | 'rtf'
+  | 'subtitles'
   | 'html'
   | 'csv'
   | 'spreadsheet'
@@ -53,11 +57,32 @@ export function convertibleKind(
     ext === 'docx'
   )
     return 'docx';
+  if (
+    m ===
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+    ext === 'pptx'
+  )
+    return 'presentation';
+  if (m === 'application/vnd.oasis.opendocument.text' || ext === 'odt')
+    return 'odf-text';
+  if (m === 'application/epub+zip' || ext === 'epub') return 'epub';
+  if (m === 'application/msword' || ext === 'doc') return 'word97';
+  if (m === 'application/rtf' || m === 'text/rtf' || ext === 'rtf')
+    return 'rtf';
+  if (
+    m === 'application/x-subrip' ||
+    m === 'text/vtt' ||
+    ext === 'srt' ||
+    ext === 'vtt'
+  )
+    return 'subtitles';
   if (m === 'text/html' || ext === 'html' || ext === 'htm') return 'html';
   if (m === 'text/csv' || ext === 'csv') return 'csv';
   if (
     m === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    m === 'application/vnd.oasis.opendocument.spreadsheet' ||
     ext === 'xlsx' ||
+    ext === 'ods' ||
     ext === 'xls'
   )
     return 'spreadsheet';
@@ -161,11 +186,35 @@ async function parseOther(
       const out = await mammoth.convertToMarkdown({ buffer: buf });
       return out.value;
     }
+    case 'presentation':
+      return pptxToMarkdown(bytes);
+    case 'odf-text':
+      return odtToMarkdown(bytes);
+    case 'epub':
+      return epubToMarkdown(bytes, htmlToMarkdown);
+    case 'word97': {
+      // Many ".doc" files are RTF or HTML saved under the Word name.
+      const head = buf
+        .toString('latin1', 0, 64)
+        .replace(/^\uFEFF|^\xEF\xBB\xBF/, '')
+        .trimStart();
+      if (head.startsWith('{\\rtf')) return rtfBytesToMarkdown(bytes);
+      if (head.startsWith('<')) return htmlToMarkdown(buf.toString('utf8'));
+      return docToMarkdown(bytes);
+    }
+    case 'rtf':
+      return rtfBytesToMarkdown(bytes);
+    case 'subtitles':
+      return subtitlesToMarkdown(decodeText(buf));
     case 'html':
       return htmlToMarkdown(buf.toString('utf8'));
     case 'csv':
       return csvToMarkdown(buf.toString('utf8'));
     case 'spreadsheet': {
+      // .xlsx/.ods are zips SheetJS inflates whole: bound them first.
+      if (buf[0] === 0x50 && buf[1] === 0x4b) {
+        await assertZipInflatesWithin(bytes, MAX_SPREADSHEET_INFLATE_BYTES);
+      }
       const XLSX = await import('xlsx');
       const wb = XLSX.read(buf, { type: 'buffer' });
       const parts: string[] = [];
@@ -185,13 +234,25 @@ async function parseOther(
   }
 }
 
-async function htmlToMarkdown(html: string): Promise<string> {
+/** UTF-8, else Windows-1252: most downloaded subtitle files are cp1252. */
+function decodeText(buf: Buffer): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return new TextDecoder('windows-1252').decode(buf);
+  }
+}
+
+export async function htmlToMarkdown(html: string): Promise<string> {
   const { default: TurndownService } = await import('turndown');
   const td = new TurndownService({
     headingStyle: 'atx',
     codeBlockStyle: 'fenced',
   });
-  return td.turndown(html);
+  // Full documents (saved pages, EPUB chapters) carry <head> metadata and
+  // CSS/JS whose text is not content.
+  td.remove(['head', 'title', 'style', 'script', 'noscript']);
+  return td.turndown(html.replace(/^\uFEFF/, ''));
 }
 
 function csvToMarkdown(csv: string): string {
@@ -212,7 +273,7 @@ function csvToMarkdown(csv: string): string {
  *  the markdown a single row carries. */
 const MBOX_MAX_MESSAGES = 500;
 
-interface MailParts {
+export interface MailParts {
   subject?: string;
   from?: string;
   to?: string;
@@ -224,7 +285,7 @@ interface MailParts {
 
 /** The ONE email layout, for .eml/.emlx/.mbox (mailparser) and .msg
  *  (msgreader) alike, so search sees the same shape whatever the format. */
-function renderMail(m: MailParts): string {
+export function renderMail(m: MailParts): string {
   const head: string[] = [];
   if (m.subject) head.push(`# ${m.subject}`);
   if (m.from) head.push(`**From:** ${m.from}`);
@@ -237,10 +298,50 @@ function renderMail(m: MailParts): string {
   return [head.join('\n\n'), m.body.trim()].filter(Boolean).join('\n\n');
 }
 
-/** Outlook .msg → the same markdown as .eml. Body: plain text, else the HTML
- *  body (string or, from "new Outlook", raw UTF-8 bytes). RTF-only messages
- *  index headers + attachment names (deliberate spec deviation, see the
- *  outlook-msg plan). */
+/** Compressed RTF above this is not decompressed: the LZFu output (a JS
+ *  number array) can be ~8× the input. */
+const MAX_COMPRESSED_RTF_BYTES = 4 * 1024 * 1024;
+
+/** The text body of a parsed .msg: plain text, else the HTML body (string
+ *  or, from "new Outlook", raw UTF-8 bytes), else the compressed RTF body,
+ *  decompressed and stripped. */
+export async function msgBody(d: {
+  body?: string;
+  bodyHtml?: string;
+  html?: Uint8Array;
+  compressedRtf?: Uint8Array;
+}): Promise<string> {
+  if (d.body?.trim()) return d.body;
+  // `html` bytes are decoded as UTF-8 (new Outlook writes UTF-8). Classic
+  // Outlook messages with codepage HTML always carry a plain `body`, so they
+  // never reach this branch.
+  const html =
+    d.bodyHtml ?? (d.html ? new TextDecoder().decode(d.html) : undefined);
+  if (html) return htmlToMarkdown(html);
+  const rtf = d.compressedRtf;
+  if (!rtf || rtf.length < 16 || rtf.length > MAX_COMPRESSED_RTF_BYTES)
+    return '';
+  // The header's size field drives the decompressor's loop: a corrupt one
+  // would spin far past the input, so require it to match.
+  const declared = Buffer.from(
+    rtf.buffer,
+    rtf.byteOffset,
+    rtf.byteLength,
+  ).readUInt32LE(0);
+  if (declared + 4 > rtf.length) return '';
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { decompressRTF } =
+    require('@kenjiuno/decompressrtf') as typeof import('@kenjiuno/decompressrtf');
+  try {
+    return rtfToText(
+      Buffer.from(decompressRTF(Array.from(rtf))).toString('latin1'),
+    );
+  } catch {
+    return ''; // an unreadable RTF body still indexes headers + attachments
+  }
+}
+
+/** Outlook .msg → the same markdown as .eml; body per `msgBody`. */
 async function msgToMarkdown(buf: Buffer): Promise<string> {
   // A typed lazy require, NOT `await import()`: under module node16 a dynamic
   // import of this CJS package yields the class at `.default.default` (TS2351
@@ -269,12 +370,7 @@ async function msgToMarkdown(buf: Buffer): Promise<string> {
       .map((r) => who(r.name, r.smtpAddress ?? r.email))
       .filter(Boolean)
       .join(', ');
-  // `html` bytes are decoded as UTF-8 (new Outlook writes UTF-8). Classic
-  // Outlook messages with codepage HTML always carry a plain `body`, so they
-  // never reach this branch.
-  const html =
-    d.bodyHtml ?? (d.html ? new TextDecoder().decode(d.html) : undefined);
-  const body = d.body?.trim() ? d.body : html ? await htmlToMarkdown(html) : '';
+  const body = await msgBody(d);
   const when = d.messageDeliveryTime ?? d.clientSubmitTime;
   return renderMail({
     subject: d.subject,
