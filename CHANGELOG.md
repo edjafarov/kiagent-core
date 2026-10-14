@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.113.2](https://github.com/edjafarov/kiagent-core/compare/v0.113.1...v0.113.2) (2026-10-14)
+
+### Bug Fixes
+
+* **local-folder:** a file Windows reports busy no longer goes unindexed ([71704c7](https://github.com/edjafarov/kiagent-core/commit/71704c7a2e95f1c674e7b9865e3b78e480ec4fe3))
+* **local-folder:** busy-file recovery has a per-path budget; failed stats are unknown ([f35b789](https://github.com/edjafarov/kiagent-core/commit/f35b7893edc46fc8707e5441fe2ed5c0a6cb61e3))
+* **local-folder:** busy-file recovery re-watches the file, once per path ([04344e5](https://github.com/edjafarov/kiagent-core/commit/04344e52dd0fefcd0132465889f50fafa93a398c))
+
 ## [0.113.1](https://github.com/edjafarov/kiagent-core/compare/v0.113.0...v0.113.1) (2026-10-14)
 
 ### Bug Fixes
