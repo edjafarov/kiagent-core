@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.113.1](https://github.com/edjafarov/kiagent-core/compare/v0.113.0...v0.113.1) (2026-10-14)
+
+### Bug Fixes
+
+* **local-llm:** find the vendored llama-server on Windows and Linux ([#127](https://github.com/edjafarov/kiagent-core/issues/127)) ([618b7f9](https://github.com/edjafarov/kiagent-core/commit/618b7f94454b7e7fbac85a3f5608926f6fdea82a))
+* **local-llm:** probe the backend once so a late probe can't undo the cpu fallback ([011a417](https://github.com/edjafarov/kiagent-core/commit/011a417ab03562ce853a9c1c1c1b466847676c88))
+
 ## [0.113.0](https://github.com/edjafarov/kiagent-core/compare/v0.112.0...v0.113.0) (2026-10-14)
 
 ### Features
