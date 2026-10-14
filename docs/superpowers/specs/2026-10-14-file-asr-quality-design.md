@@ -26,6 +26,12 @@ The indexing route disables VAD on purpose (`provider.ts:280`). VAD returns empt
 | VAD, 10-min chunks (`-ot/-d`), no `-mc 0` | de p=0.915 (identical in every chunk) | 6.7k words, 86 adjacent duplicate sentences. Several chunks lose most of their 10 minutes to loops: chunk 3 is 364 words of mostly "Klinikentizität."; chunk 7 is 80 words. |
 | VAD, 10-min chunks, `-mc 0` | de p=0.915 | 10.2k words, 34 duplicates. 19 of them are "Vielen Dank." in the closing applause. 273 s in total. |
 
+| **Acceptance, exact production argv** (VAD + pinned params, `-mc 0`, no `--no-prints`), whole file | de p=0.915, `speechSegments` 1372 | 114 s, 9,962 words, readable German at 15 / 50 / 85 % samples. `removeLoops` removed 16 tokens; not degenerate. |
+| Acceptance, 30 s digital silence | — | `speechSegments` 0, empty stdout, 0.3 s → "no speech" |
+| `removeLoops` on the app's stored junk (no-VAD repro) | — | 876 / 953 tokens removed → degenerate, so it gets repaired |
+
+Acceptance was checked by reading the text, not by listening to the audio.
+
 Three things follow:
 
 - **VAD fixes language detection.** With VAD on, whisper detects the language on the first speech in the file, confidently. `-ot` does not move detection.
