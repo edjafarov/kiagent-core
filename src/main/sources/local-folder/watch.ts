@@ -74,13 +74,29 @@ export interface Watcher {
   close(): Promise<void>;
 }
 
-/** Re-check cadence for a file Windows reported busy (see the 'error'
- *  handler): every `ms` until two stats agree, at most `max` times. */
+/** Recovery cadence for a file Windows reported busy (see the 'error'
+ *  handler): probe every `ms`, give up after `max` probes. */
 export interface BusyRecheck {
   ms: number;
   max: number;
+  /** true while another program still holds the file. Default: opening it
+   *  for writing fails with EBUSY (Windows' sharing violation) — a reader
+   *  can open a file mid-copy, a second writer cannot. */
+  locked?(absPath: string): boolean;
 }
-const BUSY_RECHECK: BusyRecheck = { ms: 2000, max: 30 };
+const BUSY_RECHECK: BusyRecheck = { ms: 2000, max: 90 };
+
+export function heldByAnotherProgram(absPath: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(absPath, 'r+');
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EBUSY';
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
 
 export function startWatcher(
   rootPaths: string[],
@@ -132,36 +148,53 @@ export function startWatcher(
   // chokidar reports that as an 'error' event; with no listener the emit
   // THROWS out of its add path, so the file's 'add' was never emitted and
   // the throw surfaced as an unhandled rejection. Listening lets chokidar go
-  // on and emit 'add' (possibly while the write is still running), and the
-  // re-check below queues a 'change' once the size stops moving, so the
-  // finished file replaces a partial read. Other errors (ENOSPC, …) have
-  // nothing to retry; the next rescan reconciles.
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-  const recheck = (p: string, lastSize: number, n: number): void => {
-    const t = setTimeout(() => {
-      timers.delete(t);
-      if (signal.aborted) return;
-      let size: number;
-      try {
-        size = fs.statSync(p).size;
-      } catch {
-        return; // gone (an unlink event covers it) or unreadable
-      }
-      if (size === lastSize) {
-        queue.push({ kind: 'change', absPath: p });
-        fire();
-      } else if (n + 1 < busy.max) recheck(p, size, n + 1);
-    }, busy.ms);
-    timers.add(t);
+  // on and emit 'add' (the file may still be mid-write), but it leaves the
+  // file without a native watch, so later edits would go unseen.
+  //
+  // Recovery, one per path: probe until the writer lets go (and the size
+  // holds still), then re-watch the file (unwatch + add rebuilds chokidar's
+  // fs.watch) and queue one 'change' so the finished content replaces a
+  // partial read. A file held forever (Outlook keeps its .pst open) gets the
+  // same re-watch + 'change' once, at the probe limit. Other errors (ENOSPC,
+  // …) have nothing to retry; the next rescan reconciles.
+  const locked = busy.locked ?? heldByAnotherProgram;
+  const recovering = new Map<string, ReturnType<typeof setTimeout>>();
+  const settle = (p: string): void => {
+    recovering.delete(p);
+    watcher.unwatch(p);
+    watcher.add(p);
+    queue.push({ kind: 'change', absPath: p });
+    fire();
+  };
+  const probe = (p: string, lastSize: number, n: number): void => {
+    recovering.set(
+      p,
+      setTimeout(() => {
+        if (signal.aborted) return;
+        let size = lastSize;
+        try {
+          size = fs.statSync(p).size;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            recovering.delete(p); // gone: its unlink event covers it
+            return;
+          }
+        }
+        const last = n + 1 >= busy.max;
+        if (last || (size === lastSize && !locked(p))) settle(p);
+        else probe(p, size, n + 1);
+      }, busy.ms),
+    );
   };
   watcher.on('error', (err: unknown) => {
     const e = err as NodeJS.ErrnoException;
     if (
       (e?.code === 'EBUSY' || e?.code === 'EPERM') &&
       typeof e.path === 'string' &&
+      !recovering.has(e.path) &&
       isIngestible(e.path)
     )
-      recheck(e.path, -1, 0);
+      probe(e.path, -1, 0);
   });
   signal.addEventListener('abort', fire, { once: true });
 
@@ -180,8 +213,8 @@ export function startWatcher(
           }),
     close: async () => {
       signal.removeEventListener('abort', fire);
-      timers.forEach(clearTimeout);
-      timers.clear();
+      recovering.forEach(clearTimeout);
+      recovering.clear();
       fire();
       await watcher.close();
     },
