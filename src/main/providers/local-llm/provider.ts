@@ -128,7 +128,10 @@ export function createLocalLlmProvider(deps: {
   const detectOnce = (): Promise<BackendInfo> => {
     if (backend) return Promise.resolve(backend);
     detecting ??= detect().then(
-      (b) => (backend ??= b),
+      (b) => {
+        backend ??= b;
+        return backend;
+      },
       (err) => {
         detecting = null;
         throw err;
@@ -406,14 +409,14 @@ export function createLocalLlmProvider(deps: {
       const firstDetect = !backend;
       const { accel } = await detectOnce();
       if (firstDetect) checkModelChange();
-      const launch = (accel: LlmAccel): ServerLike =>
+      const launch = (as: LlmAccel): ServerLike =>
         makeServer({
-          binaryPath: binaryFor(accel),
+          binaryPath: binaryFor(as),
           modelPath: path.join(dir, gguf.name),
           ...(mmproj ? { mmprojPath: path.join(dir, mmproj.name) } : {}),
-          gpuLayers: accel === 'cpu' ? 0 : 999,
+          gpuLayers: as === 'cpu' ? 0 : 999,
           ...(embeddings ? { embeddings: true } : {}),
-          extraArgs: llamaThreadArgs(host, accel),
+          extraArgs: llamaThreadArgs(host, as),
           log: deps.log,
         });
       let s = launch(accel);
