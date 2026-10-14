@@ -124,11 +124,12 @@ export const DEGENERATE_MIN_REMOVED_TOKENS = 50;
 export const DEGENERATE_MIN_RATIO = 0.5;
 
 /** Sentence rows for the loop rule: split after . ! ? … (plus any closing
- *  quote/bracket) when whitespace follows, and on newlines. A decimal like
+ *  quote/bracket) when whitespace follows, after CJK 。！？ (no space
+ *  follows those), and on newlines. A decimal like
  *  "3.5" has no whitespace after its dot, so it never splits. */
 export function sentenceRows(text: string): LoopRow[] {
   return text
-    .split(/\n+|(?<=[.!?…]["'»“”)\]]*)\s+/u)
+    .split(/\n+|(?<=[。！？])|(?<=[.!?…]["'»“”)\]]*)\s+/u)
     .map((t) => t.trim())
     .filter((t) => t.length > 0)
     .map((t, i) => ({

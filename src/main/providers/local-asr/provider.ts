@@ -190,9 +190,12 @@ export function createLocalAsrProvider(deps: {
    *  `vad: 'required'` need to KNOW transcription happened without VAD
    *  rather than silently getting hallucinated-repeat output, so this
    *  throws instead of warning-and-continuing. */
+  const vadAvailable = (): boolean =>
+    deps.vadModelPath !== undefined && fileExists(deps.vadModelPath);
+
   const requireVadModel = (): string => {
     const p = deps.vadModelPath;
-    if (p !== undefined && fileExists(p)) return p;
+    if (p !== undefined && vadAvailable()) return p;
     throw new Error(
       `VAD model missing at ${p ?? '(no vadModelPath configured)'} — refusing to transcribe without it (vad: 'required')`,
     );
@@ -306,9 +309,6 @@ export function createLocalAsrProvider(deps: {
       defaultModel,
       'background',
     );
-
-  const vadAvailable = (): boolean =>
-    deps.vadModelPath !== undefined && fileExists(deps.vadModelPath);
 
   const ensureInstalled = (): void => {
     if (installing) return;

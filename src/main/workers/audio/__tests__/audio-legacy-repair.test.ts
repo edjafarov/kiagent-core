@@ -142,4 +142,69 @@ describe('audio v3 legacy repair (real store + engine)', () => {
     expect(transcribeFile).toHaveBeenCalledTimes(1);
     await handle.stop();
   });
+
+  it('a re-transcription that is still degenerate clears the junk body (empty markdown) and is final', async () => {
+    const engine = createEngine({
+      store,
+      sources: { get: () => folderSource() },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+      },
+      convert: async (d) => d,
+      logs: { log: () => {} },
+    });
+    const account = await store.createAccount({
+      source: 'folder',
+      identifier: 'x',
+    });
+    await store.commit({
+      account: account.id,
+      documents: [legacyFile('junk', JUNK)],
+      cursor: 1,
+    });
+
+    const transcribeFile = jest.fn(async () => ({
+      text: JUNK,
+      speechSegments: 300,
+    }));
+    const worker = createAudioWorker({
+      laneOpen: () => true,
+      requestAsr: () => {},
+      hearReady: () => true,
+      transcribeFile,
+      prepareFile: async () => {
+        const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-audio-v3-p-'));
+        const p = path.join(d, 'a.wav');
+        fs.writeFileSync(p, Buffer.alloc(4));
+        return { path: p, dir: d, format: 'wav', sizeBytes: 4 };
+      },
+      mp3Duration: () => null,
+      totalMemBytes: 32 * 1024 ** 3,
+    });
+    const handle = engine.attach(worker);
+
+    const read = async () =>
+      (await store.read.byExternalId(account.id, 'junk', 'file')) as Document;
+    await waitFor(async () =>
+      (read().then((d) => d.metadata) as Promise<any>).then(
+        (m) => m.extraction?.rev === 3,
+      ),
+    );
+    const d = await read();
+    expect(d.markdown).toBe('');
+    expect((d.metadata as any).extraction).toMatchObject({
+      engine: 'local-asr',
+      rev: 3,
+      quality: 'degenerate',
+    });
+    const hits = await store.read.search({ text: 'thank' } as never);
+    expect(JSON.stringify(hits)).not.toContain(d.id);
+
+    await new Promise((r) => setTimeout(r, 400));
+    expect(transcribeFile).toHaveBeenCalledTimes(1);
+    await handle.stop();
+  });
 });

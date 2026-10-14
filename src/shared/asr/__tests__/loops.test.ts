@@ -177,6 +177,16 @@ describe('sentenceRows', () => {
   });
 });
 
+describe('sentenceRows — CJK', () => {
+  test('splits after 。！？ even with no following space', () => {
+    expect(sentenceRows('你好。谢谢！真的？').map((r) => r.text)).toEqual([
+      '你好。',
+      '谢谢！',
+      '真的？',
+    ]);
+  });
+});
+
 describe('removeLoops', () => {
   test('leaves clean text byte-identical and not degenerate', () => {
     const r = removeLoops(LONG_CLEAN);
@@ -206,6 +216,17 @@ describe('removeLoops', () => {
     const r = removeLoops(`${LONG_CLEAN} ${'Vielen Dank. '.repeat(20)}`.trim());
     expect(r.text).toBe(`${LONG_CLEAN} Vielen Dank. Vielen Dank.`);
     expect(r.removedTokens).toBe(36);
+    expect(r.degenerate).toBe(false);
+  });
+
+  test('cleans the measured "Und dann ist es so…" chunk-tail loop without calling it degenerate', () => {
+    // Shape of the real Z88 chunk-1 tail (no -mc 0): good speech, then the
+    // same sentence ×5 to the chunk edge.
+    const loop = 'Und dann ist es so, dass wir das machen.';
+    const good = CLEAN_DE.join(' ');
+    const r = removeLoops(`${good} ${Array(5).fill(loop).join(' ')}`);
+    expect(r.text).toBe(`${good} ${loop}`);
+    expect(r.removedTokens).toBe(4 * normaliseTokens(loop).length);
     expect(r.degenerate).toBe(false);
   });
 
