@@ -27,6 +27,7 @@ The indexing route disables VAD on purpose (`provider.ts:280`). VAD returns empt
 | VAD, 10-min chunks, `-mc 0` | de p=0.915 | 10.2k words, 34 duplicates. 19 of them are "Vielen Dank." in the closing applause. 273 s in total. |
 
 | **Acceptance, exact production argv** (VAD + pinned params, `-mc 0`, no `--no-prints`), whole file | de p=0.915, `speechSegments` 1372 | 114 s, 9,962 words, readable German at 15 / 50 / 85 % samples. `removeLoops` removed 16 tokens; not degenerate. |
+| Acceptance, 60 s clean clip (Z88 at 20:00) | de p=0.99, `speechSegments` 22 | 90 tokens of coherent German, nothing removed |
 | Acceptance, 30 s digital silence | — | `speechSegments` 0, empty stdout, 0.3 s → "no speech" |
 | `removeLoops` on the app's stored junk (no-VAD repro) | — | 876 / 953 tokens removed → degenerate, so it gets repaired |
 
