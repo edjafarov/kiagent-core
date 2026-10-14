@@ -249,7 +249,7 @@ reloads the page.
 
 ## Versioning
 
-Current release: **1.10.0** (platform API **2.13.0**: file policy v5 formats; `kiagentCore` set at release).
+Current release: **1.10.0**, `kiagentCore: 0.112.0` (platform API **2.13.0**: file policy v5 formats).
 The SDK version, core version and manifest `engine` range are independent.
 Newer core contracts do not retroactively appear in a published SDK tarball.
 Running `build` here regenerates from the *current checkout*, so a locally
