@@ -53,14 +53,20 @@ export function createDocumentBytes(deps: {
       if (!account) return null;
       const src = deps.sources.get(account.source);
       if (!src?.fetchBytes) return null;
+      const m = doc.metadata ?? {};
+      // Refuse before downloading when the source recorded a size.
+      const declared = Number(m.size ?? m.sizeBytes);
+      if (Number.isFinite(declared) && declared > DOCUMENT_BYTES_MAX)
+        throw new Error('documents: file too large (50 MB max)');
       const bytes = await src.fetchBytes(
         deps.session(account, new AbortController().signal),
         doc,
       );
       if (!bytes) return null;
-      if (bytes.length > DOCUMENT_BYTES_MAX)
+      if (!(bytes instanceof Uint8Array))
+        throw new Error('documents: source returned no bytes');
+      if (bytes.byteLength > DOCUMENT_BYTES_MAX)
         throw new Error('documents: file too large (50 MB max)');
-      const m = doc.metadata ?? {};
       const filename = path.basename(
         str(m.filename) ?? str(m.name) ?? str(doc.title) ?? 'file',
       );

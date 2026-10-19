@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { createOwnerMail } from '../owner-mail';
+import { createOwnerMail, encodedSizeBound } from '../owner-mail';
 
 const account = {
   id: 'a1',
@@ -273,6 +273,7 @@ describe('sendToOwner attachments', () => {
       attachments: [
         file('../../etc/Vertrag\r\n.pdf'),
         file('a.bin', 'not a mime'),
+        file('b.x', 'application/x-unknown'),
       ],
     });
     expect((sent[0] as { attachments: unknown }).attachments).toEqual([
@@ -283,6 +284,11 @@ describe('sendToOwner attachments', () => {
       },
       {
         filename: 'a.bin',
+        mime: 'application/octet-stream',
+        contentBase64: 'AQI=',
+      },
+      {
+        filename: 'b.x',
         mime: 'application/octet-stream',
         contentBase64: 'AQI=',
       },
@@ -307,6 +313,23 @@ describe('sendToOwner attachments', () => {
       om.sendToOwner('a1', {
         ...base,
         attachments: [file('big.pdf', 'application/pdf', big)],
+      }),
+    ).rejects.toThrow('ownerMail: message too large');
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  test('bounds the whole MIME message, not just the base64', async () => {
+    // 18 MiB composes to ~25.8 MB with MIME line breaks: over the cap.
+    expect(encodedSizeBound(100, [18 * 1024 * 1024])).toBeGreaterThan(
+      24 * 1024 * 1024,
+    );
+    const { om, sender } = setup();
+    await expect(
+      om.sendToOwner('a1', {
+        ...base,
+        attachments: [
+          file('b.pdf', 'application/pdf', new Uint8Array(18 * 1024 * 1024)),
+        ],
       }),
     ).rejects.toThrow('ownerMail: message too large');
     expect(sender.send).not.toHaveBeenCalled();

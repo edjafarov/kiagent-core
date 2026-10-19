@@ -118,6 +118,26 @@ const row = {
   automated: false,
 };
 
+it('passes well-formed attachment rows through', async () => {
+  const withAtt = {
+    ...row,
+    attachments: [
+      {
+        id: '1',
+        filename: 'a.pdf',
+        mime: 'application/pdf',
+        size: 5,
+        inline: false,
+      },
+    ],
+  };
+  const { proxySet, entry } = await setup([withAtt]);
+  const src = proxySet.makeSource(entry('mailsrc'));
+  await expect(
+    src.listAddressedTo!(session, { toAddress: 'a+kia@x.com', since: 0 }),
+  ).resolves.toEqual([withAtt]);
+});
+
 it('reports hasListAddressedTo per source and proxies the call with a live session', async () => {
   const { proxySet, entry, seen } = await setup([row]);
   expect(entry('mailsrc').hasListAddressedTo).toBe(true);
@@ -135,6 +155,30 @@ it.each([
   ['a non-boolean sent', [{ providerId: 'p', sent: 'yes' }]],
   ['a missing providerId', [{ sent: true }]],
   ['a non-array result', { rows: [] }],
+  [
+    'attachments with a negative size',
+    [
+      {
+        ...row,
+        attachments: [
+          { id: '1', filename: 'a', mime: 'x/y', size: -1, inline: false },
+        ],
+      },
+    ],
+  ],
+  [
+    'attachments on a non-sent row',
+    [
+      {
+        ...row,
+        sent: false,
+        attachments: [
+          { id: '1', filename: 'a', mime: 'x/y', size: 1, inline: false },
+        ],
+      },
+    ],
+  ],
+  ['non-array attachments', [{ ...row, attachments: 'x' }]],
 ])('rejects %s from the connector', async (_label, rows) => {
   const { proxySet, entry } = await setup(rows);
   const src = proxySet.makeSource(entry('mailsrc'));

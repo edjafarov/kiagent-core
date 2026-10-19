@@ -28,6 +28,9 @@ export const OWNER_CHANNEL_HEADERS = {
   'X-Kia-Channel': 'owner',
 } as const;
 
+/** Gmail refuses messages over 25 MB (the whole encoded message). */
+const GMAIL_MESSAGE_MAX = 25 * 1024 * 1024;
+
 function composeRaw(opts: {
   from: string | { name: string; address: string };
   to: string[];
@@ -135,6 +138,8 @@ export function createGmailSender(deps: {
         ownerChannel: intent.ownerChannel,
         attachments: intent.attachments,
       });
+      if (raw.length > GMAIL_MESSAGE_MAX)
+        throw new Error('gmail: message too large');
       try {
         const r = await sendGmailMessage(
           { credentials: () => freshCredentials(intent.accountId) },

@@ -59,8 +59,23 @@ test('null for unknown, archived or byte-less docs', async () => {
 });
 
 test('throws over 50 MB', async () => {
-  const big = { length: DOCUMENT_BYTES_MAX + 1 } as unknown as Uint8Array;
+  const big = new Uint8Array(DOCUMENT_BYTES_MAX + 1);
   await expect(setup({ bytes: big }).api.fetchBytes('d1')).rejects.toThrow(
     'too large',
   );
+});
+
+test('rejects non-byte source output', async () => {
+  const { api } = setup({
+    bytes: new ArrayBuffer(DOCUMENT_BYTES_MAX + 1) as never,
+  });
+  await expect(api.fetchBytes('d1')).rejects.toThrow('no bytes');
+});
+
+test('refuses before downloading when the recorded size is over the cap', async () => {
+  const { api, fetchBytes } = setup({
+    document: doc({ metadata: { size: DOCUMENT_BYTES_MAX + 1 } }),
+  });
+  await expect(api.fetchBytes('d1')).rejects.toThrow('too large');
+  expect(fetchBytes).not.toHaveBeenCalled();
 });

@@ -112,6 +112,26 @@ export interface SourceProxySet {
   dispose(): void;
 }
 
+/** Attachment metadata of an addressed mail from a connector: absent, or an
+ *  array of well-formed rows, and only on the owner's own sent mail. */
+function validAttachments(r: AddressedMail): boolean {
+  const a = (r as { attachments?: unknown }).attachments;
+  if (a === undefined) return true;
+  if (!Array.isArray(a) || (!r.sent && a.length > 0)) return false;
+  return a.every(
+    (x) =>
+      !!x &&
+      typeof x.id === 'string' &&
+      x.id.length > 0 &&
+      typeof x.filename === 'string' &&
+      x.filename.length > 0 &&
+      typeof x.mime === 'string' &&
+      Number.isSafeInteger(x.size) &&
+      x.size >= 0 &&
+      typeof x.inline === 'boolean',
+  );
+}
+
 export function createSourceProxySet(
   target: RpcEndpoint | ProxyBinding,
 ): SourceProxySet {
@@ -394,7 +414,10 @@ export function createSourceProxySet(
                 doc,
               ]);
             });
-            return v == null ? null : (v as Uint8Array);
+            if (v == null) return null;
+            if (!(v instanceof Uint8Array))
+              throw new Error('invalid bytes from connector');
+            return v;
           } finally {
             sessions.delete(id);
           }
@@ -428,7 +451,8 @@ export function createSourceProxySet(
                 (r) =>
                   !!r &&
                   typeof (r as AddressedMail).providerId === 'string' &&
-                  typeof (r as AddressedMail).sent === 'boolean',
+                  typeof (r as AddressedMail).sent === 'boolean' &&
+                  validAttachments(r as AddressedMail),
               )
             )
               throw new Error('invalid addressed mail from connector');

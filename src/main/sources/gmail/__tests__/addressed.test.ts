@@ -1,5 +1,9 @@
 /** @jest-environment node */
-import { fetchAddressedAttachment, listAddressedTo } from '../addressed';
+import {
+  fetchAddressedAttachment,
+  filenameParam,
+  listAddressedTo,
+} from '../addressed';
 
 const session = (fetchMap: Record<string, unknown>) => {
   const calls: string[] = [];
@@ -284,6 +288,42 @@ describe('attachments', () => {
     ]);
   });
 
+  test('lists named parts served inline in body.data', async () => {
+    const { s } = session({
+      '/messages?': { messages: [{ id: 'm3' }] },
+      '/messages/m3?format=metadata': meta('m3', ['SENT']),
+      '/messages/m3?format=full': {
+        id: 'm3',
+        labelIds: ['SENT'],
+        payload: {
+          mimeType: 'multipart/mixed',
+          parts: [
+            {
+              partId: '1',
+              mimeType: 'text/csv',
+              filename: 'small.csv',
+              headers: hdr({ 'Content-Disposition': 'attachment' }),
+              body: { data: Buffer.from('a,b').toString('base64url'), size: 3 },
+            },
+          ],
+        },
+      },
+    });
+    const [row] = await listAddressedTo(s, {
+      toAddress: 'me+kia@gmail.com',
+      since: 0,
+    });
+    expect(row.attachments).toEqual([
+      {
+        id: '1',
+        filename: 'small.csv',
+        mime: 'text/csv',
+        size: 3,
+        inline: false,
+      },
+    ]);
+  });
+
   test('non-sent rows carry no attachments', async () => {
     const { s, calls } = session({
       '/messages?': { messages: [{ id: 'm2' }] },
@@ -349,4 +389,38 @@ describe('fetchAddressedAttachment', () => {
     ).rejects.toThrow('too large');
     expect(calls.some((u) => u.includes('/attachments/'))).toBe(false);
   });
+});
+
+describe('filenameParam', () => {
+  test('decodes RFC 2231 extended names', () => {
+    expect(filenameParam("attachment; filename*=UTF-8''Pr%C3%BCfung.txt")).toBe(
+      'Prüfung.txt',
+    );
+    expect(filenameParam('attachment; filename="plain name.pdf"')).toBe(
+      'plain name.pdf',
+    );
+  });
+});
+
+test('fetchAddressedAttachment decodes a part served in body.data', async () => {
+  const { s, calls } = session({
+    '/messages/m1?format=full': {
+      id: 'm1',
+      labelIds: ['SENT'],
+      payload: {
+        mimeType: 'multipart/mixed',
+        parts: [
+          {
+            partId: '1',
+            mimeType: 'text/csv',
+            filename: 'small.csv',
+            body: { data: Buffer.from('a,b').toString('base64url'), size: 3 },
+          },
+        ],
+      },
+    },
+  });
+  const bytes = await fetchAddressedAttachment(s, 'm1', '1', { maxBytes: 10 });
+  expect(Buffer.from(bytes).toString()).toBe('a,b');
+  expect(calls.some((u) => u.includes('/attachments/'))).toBe(false);
 });

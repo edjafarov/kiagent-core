@@ -24,9 +24,42 @@ const ID_RX = /^<[^\s<>@]+@[^\s<>@]+>$/;
 /** A plain display name: no address, quotes, brackets or line breaks. */
 const NAME_RX = /^[\p{L}\p{N} .'-]{1,40}$/u;
 const MAX_ATTACHMENTS = 10;
-/** Encoded (base64) total; leaves headroom under Gmail's 25 MB message cap. */
+/** Whole encoded message; leaves headroom under Gmail's 25 MB cap. */
 const MAX_ENCODED = 24 * 1024 * 1024;
-const MIME_RX = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i;
+/** Types sent as declared; anything else goes as application/octet-stream. */
+const MIME_ALLOW = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.ms-excel',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
+  'application/rtf',
+  'application/zip',
+  'application/json',
+  'text/plain',
+  'text/csv',
+  'text/markdown',
+  'text/html',
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/svg+xml',
+]);
+/** Upper bound of the MIME message: base64 lines of 76 + CRLF, part headers
+ *  and boundaries, and the body. */
+export const encodedSizeBound = (bodyChars: number, sizes: number[]): number =>
+  sizes.reduce(
+    (n, b) => n + Math.ceil((Math.ceil(b / 3) * 4 * 78) / 76) + 1024,
+    0,
+  ) +
+  bodyChars * 3 +
+  16 * 1024;
 
 /** One line, no path, no control characters; never empty. */
 export function safeAttachmentName(name: string): string {
@@ -189,14 +222,17 @@ export function createOwnerMail(deps: {
         throw new Error('ownerMail: at most 10 attachments');
       const attachments = files.map((f) => ({
         filename: safeAttachmentName(f.filename),
-        mime: MIME_RX.test(f.mime)
+        mime: MIME_ALLOW.has(f.mime.toLowerCase())
           ? f.mime.toLowerCase()
           : 'application/octet-stream',
         contentBase64: Buffer.from(f.bytes).toString('base64'),
       }));
       if (
-        attachments.reduce((n, f) => n + f.contentBase64.length, 0) >
-        MAX_ENCODED
+        attachments.length &&
+        encodedSizeBound(
+          m.bodyText.length,
+          files.map((f) => f.bytes.byteLength),
+        ) > MAX_ENCODED
       )
         throw new Error('ownerMail: message too large');
       const t = now();
