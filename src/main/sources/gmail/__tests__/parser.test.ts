@@ -142,4 +142,17 @@ describe('parseGmailMessage HTML-only body', () => {
     expect(parsed.body).not.toContain('track.shop.example');
     expect(parsed.body).not.toContain('cdn.shop.example');
   });
+
+  it('drops the invisible preview padding newsletters put before the text', () => {
+    const pad = '\u034f\u200c\u00a0\ufeff\u00ad\u200b\u200d\u200e\u200f\u2007 '.repeat(40);
+    const parsed = parseGmailMessage(
+      htmlOnly(
+        `<div style="display:none">${pad}</div><p>Dein Paket ist unterwegs</p>` +
+          '<p>Family \u{1F468}\u200d\u{1F469}\u200d\u{1F467} · می\u200cخواهم</p>',
+      ),
+    );
+    expect(parsed.body).toBe(
+      'Dein Paket ist unterwegs\n\nFamily \u{1F468}\u200d\u{1F469}\u200d\u{1F467} · می\u200cخواهم',
+    );
+  });
 });

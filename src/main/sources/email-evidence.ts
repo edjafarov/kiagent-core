@@ -67,7 +67,24 @@ export function htmlToText(html: string): string {
   } catch {
     text = bareText(html);
   }
-  return text.replace(/\n{3,}/g, '\n\n').trim();
+  return dropPreviewPadding(text).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** Newsletters pad their hidden inbox-preview line with invisible characters
+ *  (grapheme joiners, soft hyphens, zero-width spaces, BOMs) so the client
+ *  shows nothing after it. They carry no text. A zero-width non-joiner is
+ *  kept between two letters, where scripts like Persian need it, and a
+ *  zero-width joiner between two emoji, where it builds one glyph. */
+function dropPreviewPadding(text: string): string {
+  return text
+    .replace(/[\u00ad\u034f\u061c\u180e\u200b\u200e\u200f\u2060-\u2064\ufeff]/g, '')
+    .replace(/\u200c(?!\p{L})|(?<!\p{L})\u200c/gu, '')
+    .replace(
+      /\u200d(?!\p{Extended_Pictographic})|(?<!\p{Extended_Pictographic}\ufe0f?)\u200d/gu,
+      '',
+    )
+    .replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, ' ')
+    .replace(/^[ \t]+$/gm, '');
 }
 
 const ENTITIES: Record<string, string> = {
