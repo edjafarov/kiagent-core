@@ -769,7 +769,8 @@ export interface Source<Cursor = unknown, Item = unknown> {
    *  `listAddressedTo` returned. Must re-check that the message is in this
    *  account's own Sent mail and throw an Error whose message contains
    *  "not a sent message" otherwise; must throw one containing "too large"
-   *  instead of downloading more than `opts.maxBytes`. */
+   *  instead of downloading more than `opts.maxBytes`, and one containing
+   *  "no such attachment" when the message has no such part. */
   fetchAddressedAttachment?(
     session: Session,
     providerId: string,

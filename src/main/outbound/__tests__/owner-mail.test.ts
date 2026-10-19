@@ -246,6 +246,17 @@ describe('fetchAttachment', () => {
     );
   });
 
+  test('maps a missing part to a stable error', async () => {
+    const { om } = setup({
+      fetchAddressedAttachment: async () => {
+        throw new Error('gmail: no such attachment');
+      },
+    });
+    await expect(om.fetchAttachment('a1', 'm1', 'x')).rejects.toThrow(
+      'ownerMail: no such attachment',
+    );
+  });
+
   test('throws when the source cannot fetch attachments', async () => {
     const { om } = setup();
     await expect(om.fetchAttachment('a1', 'm1', '2')).rejects.toThrow(

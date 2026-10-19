@@ -24,7 +24,9 @@ const ID_RX = /^<[^\s<>@]+@[^\s<>@]+>$/;
 /** A plain display name: no address, quotes, brackets or line breaks. */
 const NAME_RX = /^[\p{L}\p{N} .'-]{1,40}$/u;
 const MAX_ATTACHMENTS = 10;
-/** Whole encoded message; leaves headroom under Gmail's 25 MB cap. */
+/** Whole encoded message; leaves headroom under Gmail's 25 MB cap. The
+ *  caller (the assistant's delivery planner) applies the smaller per-file
+ *  and per-request caps of other providers before calling. */
 const MAX_ENCODED = 24 * 1024 * 1024;
 /** Types sent as declared; anything else goes as application/octet-stream. */
 const MIME_ALLOW = new Set([
@@ -188,6 +190,8 @@ export function createOwnerMail(deps: {
           throw new Error('ownerMail: not an owner message');
         if (/too large/i.test(msg))
           throw new Error('ownerMail: attachment too large');
+        if (/no such attachment/i.test(msg))
+          throw new Error('ownerMail: no such attachment');
         throw e;
       }
       if (bytes.length > OWNER_ATTACHMENT_MAX)
