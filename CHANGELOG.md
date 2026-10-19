@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.113.4](https://github.com/edjafarov/kiagent-core/compare/v0.113.3...v0.113.4) (2026-10-19)
+
+### Bug Fixes
+
+* **mail:** text from mail HTML drops the invisible preview padding newsletters add ([3806585](https://github.com/edjafarov/kiagent-core/commit/3806585))
+
 ## [0.113.3](https://github.com/edjafarov/kiagent-core/compare/v0.113.2...v0.113.3) (2026-10-19)
 
 ### Bug Fixes
