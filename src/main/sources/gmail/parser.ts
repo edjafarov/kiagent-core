@@ -69,9 +69,10 @@ export function parseGmailMessage(msg: GmailApiMessage): ParsedEmail {
   if (!msg.payload) throw new Error('no payload');
   const headers = collectHeaders(msg.payload);
   const htmlBody = findBody(msg.payload, 'text/html');
-  let plain = findBody(msg.payload, 'text/plain');
-  if (!plain && htmlBody) plain = ''; // HTML→md left to the engine's converter
-  const body = plain ? stripQuotedReplies(plain) : '';
+  const plain = findBody(msg.payload, 'text/plain');
+  // A message with only an HTML part (receipts, newsletters) is read from it.
+  const text = plain || (htmlBody ? htmlToText(htmlBody) : '');
+  const body = text ? stripQuotedReplies(text) : '';
   const date = parseMessageDate(msg.internalDate, headers.date);
   return {
     messageId: headers['message-id'] ?? '',

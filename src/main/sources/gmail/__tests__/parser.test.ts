@@ -98,3 +98,48 @@ describe('parseGmailMessage address lists', () => {
     expect(parsed.cc).toEqual([]);
   });
 });
+
+describe('parseGmailMessage HTML-only body', () => {
+  function htmlOnly(html: string): GmailApiMessage {
+    return {
+      id: 'html-only',
+      threadId: 'thread-html',
+      internalDate: '1704106800000',
+      payload: {
+        mimeType: 'text/html',
+        headers: [
+          { name: 'From', value: 'Shop <noreply@shop.example>' },
+          { name: 'Message-ID', value: '<html-only@shop.example>' },
+        ],
+        body: { data: Buffer.from(html).toString('base64url') },
+      },
+    };
+  }
+
+  it('turns a message with only an HTML part into body text', () => {
+    const parsed = parseGmailMessage(
+      htmlOnly(
+        '<html><head><style>.x{color:red}</style></head><body>' +
+          '<h1>Your parcel is on its way</h1><p>Order <b>DE5Y46</b> ships today.</p>' +
+          '</body></html>',
+      ),
+    );
+    expect(parsed.body).toContain('Your parcel is on its way');
+    expect(parsed.body).toContain('DE5Y46');
+    expect(parsed.body).not.toContain('color:red');
+  });
+
+  it('keeps image alt text but drops tracking pixels and image URLs', () => {
+    const parsed = parseGmailMessage(
+      htmlOnly(
+        '<p><img src="https://cdn.shop.example/logo.png" alt="Shop logo">' +
+          'Thanks for your order.</p>' +
+          '<img src="https://track.shop.example/open.gif" width="1" height="1">',
+      ),
+    );
+    expect(parsed.body).toContain('Thanks for your order.');
+    expect(parsed.body).toContain('Shop logo');
+    expect(parsed.body).not.toContain('track.shop.example');
+    expect(parsed.body).not.toContain('cdn.shop.example');
+  });
+});

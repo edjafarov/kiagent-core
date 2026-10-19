@@ -51,10 +51,19 @@ export function extractMessageEvidence(input: {
 export function htmlToText(html: string): string {
   let text: string;
   try {
-    text = new TurndownService({
+    const td = new TurndownService({
       headingStyle: 'atx',
       bulletListMarker: '-',
-    }).turndown(html);
+    });
+    // Mail HTML carries <head> CSS whose text is not content, and images that
+    // are logos or tracking pixels: keep what an image says, not where it is.
+    td.remove(['head', 'title', 'style', 'script', 'noscript']);
+    td.addRule('imageAlt', {
+      filter: 'img',
+      replacement: (_content, node) =>
+        ((node as HTMLElement).getAttribute('alt') ?? '').trim(),
+    });
+    text = td.turndown(html);
   } catch {
     text = bareText(html);
   }
