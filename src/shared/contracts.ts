@@ -765,6 +765,17 @@ export interface Source<Cursor = unknown, Item = unknown> {
     session: Session,
     q: AddressedQuery,
   ): Promise<AddressedMail[]>;
+  /** The bytes of one attachment (`AddressedAttachment.id`) of a message
+   *  `listAddressedTo` returned. Must re-check that the message is in this
+   *  account's own Sent mail and throw an Error whose message contains
+   *  "not a sent message" otherwise; must throw one containing "too large"
+   *  instead of downloading more than `opts.maxBytes`. */
+  fetchAddressedAttachment?(
+    session: Session,
+    providerId: string,
+    attachmentId: string,
+    opts: { maxBytes: number },
+  ): Promise<Uint8Array>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -845,6 +856,9 @@ export interface SendIntent {
    *  (a Gmail "Send mail as" alias); Gmail falls back to the account address
    *  when it is not configured. */
   fromAddress?: string;
+  /** Owner channel only (validated by ownerMail; senders ignore it
+   *  otherwise). Base64 so the intent stays plain data over Connector RPC. */
+  attachments?: { filename: string; mime: string; contentBase64: string }[];
 }
 
 export interface SendResult {
@@ -858,6 +872,18 @@ export interface SendResult {
  *  account's credentials and passes them in at send time. */
 export interface SenderContext {
   credentials: Credentials | null;
+}
+
+/** A file attached to an owner-channel message. `id` is stable across API
+ *  sessions (Gmail: the MIME part id; attachment ids rotate). */
+export interface AddressedAttachment {
+  id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  /** Sent with `Content-Disposition: inline` (Apple Mail does this for PDFs
+   *  and images). Inline images under 8 KB (signature logos) are omitted. */
+  inline: boolean;
 }
 
 /** A message addressed To a given address, as an owner-channel source lists
@@ -879,6 +905,8 @@ export interface AddressedMail {
   text: string;
   ownChannel: boolean;
   automated: boolean;
+  /** Sent rows only; `[]` or absent otherwise (sources predating it omit it). */
+  attachments?: AddressedAttachment[];
 }
 
 export interface AddressedQuery {

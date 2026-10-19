@@ -42,8 +42,9 @@ const base = (id: string) => ({
   toDocument: () => null,
 });
 
-function moduleWith(rows: unknown) {
+function moduleWith(rows: unknown, bytes: unknown = new Uint8Array([1, 2, 3])) {
   const seen: Array<{ q: AddressedQuery; creds: unknown }> = [];
+  const fetched: unknown[][] = [];
   const mod = {
     async activate() {
       return {
@@ -54,17 +55,27 @@ function moduleWith(rows: unknown) {
               seen.push({ q, creds: await session.credentials() });
               return rows;
             },
+            async fetchAddressedAttachment(
+              _s: Session,
+              providerId: string,
+              attachmentId: string,
+              opts: { maxBytes: number },
+            ) {
+              fetched.push([providerId, attachmentId, opts]);
+              if (providerId === 'inbox') throw new Error('not a sent message');
+              return bytes;
+            },
           },
           base('plainsrc'),
         ],
       };
     },
   };
-  return { mod, seen };
+  return { mod, seen, fetched };
 }
 
-async function setup(rows: unknown) {
-  const { mod, seen } = moduleWith(rows);
+async function setup(rows: unknown, bytes?: unknown) {
+  const { mod, seen, fetched } = moduleWith(rows, bytes);
   const { main, child } = createInMemoryHostPair();
   const mainEp = createRpcEndpoint(main);
   const proxySet = createSourceProxySet(mainEp);
@@ -82,7 +93,7 @@ async function setup(rows: unknown) {
   const contributions = await activated;
   const entry = (id: string) =>
     contributions.sources.find((s) => s.descriptor.id === id)!;
-  return { proxySet, entry, seen };
+  return { proxySet, entry, seen, fetched };
 }
 
 const session = {
@@ -130,4 +141,40 @@ it.each([
   await expect(
     src.listAddressedTo!(session, { toAddress: 'a+kia@x.com', since: 0 }),
   ).rejects.toThrow(/invalid addressed mail from connector/);
+});
+
+describe('fetchAddressedAttachment', () => {
+  it('is flagged per source and proxies bytes with the cap', async () => {
+    const { proxySet, entry, fetched } = await setup([]);
+    expect(entry('mailsrc').hasFetchAddressedAttachment).toBe(true);
+    expect(entry('plainsrc').hasFetchAddressedAttachment).toBe(false);
+    expect(
+      proxySet.makeSource(entry('plainsrc')).fetchAddressedAttachment,
+    ).toBeUndefined();
+    const src = proxySet.makeSource(entry('mailsrc'));
+    const got = await src.fetchAddressedAttachment!(session, 'p1', 'a1', {
+      maxBytes: 10,
+    });
+    expect(Array.from(got)).toEqual([1, 2, 3]);
+    expect(fetched).toEqual([['p1', 'a1', { maxBytes: 10 }]]);
+  });
+
+  it('keeps the connector error text', async () => {
+    const { proxySet, entry } = await setup([]);
+    const src = proxySet.makeSource(entry('mailsrc'));
+    await expect(
+      src.fetchAddressedAttachment!(session, 'inbox', 'a1', { maxBytes: 10 }),
+    ).rejects.toThrow(/not a sent message/);
+  });
+
+  it.each([
+    ['non-bytes', 'abc', /invalid attachment bytes/],
+    ['bytes over the cap', new Uint8Array(11), /too large/],
+  ])('rejects %s from the connector', async (_label, bytes, rx) => {
+    const { proxySet, entry } = await setup([], bytes);
+    const src = proxySet.makeSource(entry('mailsrc'));
+    await expect(
+      src.fetchAddressedAttachment!(session, 'p1', 'a1', { maxBytes: 10 }),
+    ).rejects.toThrow(rx);
+  });
 });

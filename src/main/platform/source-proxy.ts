@@ -438,6 +438,42 @@ export function createSourceProxySet(
           }
         };
       }
+      if (entry.hasFetchAddressedAttachment) {
+        source.fetchAddressedAttachment = async (
+          session: Session,
+          providerId: string,
+          attachmentId: string,
+          opts: { maxBytes: number },
+        ): Promise<Uint8Array> => {
+          const id = nextId;
+          nextId += 1;
+          try {
+            const v = await live((endpoint) => {
+              sessions.set(id, {
+                credentials: () => session.credentials(),
+                log: (l, m) => session.log(l, m),
+              });
+              return endpoint.call('source', 'fetch-addressed-attachment', [
+                id,
+                descriptor.id,
+                session.account,
+                providerId,
+                attachmentId,
+                opts,
+              ]);
+            });
+            // Untrusted connector output: bytes only, and never past the cap
+            // the caller asked for.
+            if (!(v instanceof Uint8Array))
+              throw new Error('invalid attachment bytes from connector');
+            if (v.byteLength > opts.maxBytes)
+              throw new Error('attachment too large');
+            return v;
+          } finally {
+            sessions.delete(id);
+          }
+        };
+      }
       if (entry.hasReconcile) {
         source.reconcile = async function* reconcile(session: Session) {
           const pullId = nextId;

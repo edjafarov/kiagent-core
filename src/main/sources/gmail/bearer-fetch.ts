@@ -39,7 +39,7 @@ export interface BearerFetchOpts {
   /** HTTP method; default GET. */
   method?: string;
   /** Request body — a STRING (reusable across retry attempts, never a stream). */
-  body?: string;
+  body?: string | Uint8Array;
   /** content-type header, set only when body is present. */
   contentType?: string;
   /** Total attempts including the first (1 = try once, never retry);

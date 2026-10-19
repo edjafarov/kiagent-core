@@ -37,7 +37,7 @@ import {
 } from './gmail-api';
 import { attachmentsOf, parseGmailMessage } from './parser';
 import { normalizeAuthor } from '../email-evidence';
-import { listAddressedTo } from './addressed';
+import { fetchAddressedAttachment, listAddressedTo } from './addressed';
 import { GMAIL_SCOPES } from './oauth';
 import {
   GMAIL_THREAD_DOCUMENT_TYPE,
@@ -339,6 +339,7 @@ export const gmailSource: Source<GmailCursor, GmailThreadItem> = {
   toDocument,
   manageFolders,
   listAddressedTo,
+  fetchAddressedAttachment,
   async readMessageEvidence(session, doc, options) {
     if (doc.type !== GMAIL_THREAD_DOCUMENT_TYPE) return [];
     const wanted = new Set(

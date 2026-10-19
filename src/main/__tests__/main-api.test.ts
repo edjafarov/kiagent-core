@@ -927,6 +927,7 @@ describe('buildMainApi vault', () => {
     const ownerMail = {
       describe: jest.fn(),
       listAddressedTo: jest.fn(),
+      fetchAttachment: jest.fn(),
       sendToOwner: jest.fn(),
     };
     const api = buildMainApi({

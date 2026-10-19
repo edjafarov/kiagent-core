@@ -4,11 +4,21 @@
  * Gmail's SENT label. Only sent rows are fetched in full — foreign mail is
  * metadata only, so its body never leaves Gmail.
  */
-import type { AddressedMail, AddressedQuery, Session } from '@shared/contracts';
+import type {
+  AddressedAttachment,
+  AddressedMail,
+  AddressedQuery,
+  Session,
+} from '@shared/contracts';
 
 import { isAutomatedMessage } from '../imap/filter';
-import { getMessage, getMessageMetadata, listMessagesPage } from './gmail-api';
-import { plainTextOf, type GmailApiMessage } from './parser';
+import {
+  getAttachment,
+  getMessage,
+  getMessageMetadata,
+  listMessagesPage,
+} from './gmail-api';
+import { plainTextOf, type GmailApiMessage, type GmailPart } from './parser';
 
 const HEADERS = [
   'From',
@@ -46,6 +56,31 @@ const addrs = (v = '') =>
     .map((x) => addr(x))
     .filter(Boolean);
 const ids = (v = '') => v.match(/<[^<>\s]+>/g) ?? [];
+const INLINE_IMAGE_MIN = 8 * 1024;
+
+/** Every named file part of a message, attachment or inline. */
+export function attachmentsOfMessage(
+  msg: GmailApiMessage,
+): AddressedAttachment[] {
+  const out: AddressedAttachment[] = [];
+  const walk = (part: GmailPart): void => {
+    const cd =
+      part.headers?.find((h) => h.name.toLowerCase() === 'content-disposition')
+        ?.value ?? '';
+    const filename =
+      /filename\*?="?([^";]+)"?/i.exec(cd)?.[1] ?? part.filename ?? '';
+    const mime = part.mimeType || 'application/octet-stream';
+    const size = part.body?.size ?? 0;
+    if (part.body?.attachmentId && filename && part.partId) {
+      const inline = !cd.trimStart().toLowerCase().startsWith('attachment');
+      if (!(inline && mime.startsWith('image/') && size < INLINE_IMAGE_MIN))
+        out.push({ id: part.partId, filename, mime, size, inline });
+    }
+    for (const c of part.parts ?? []) walk(c);
+  };
+  if (msg.payload) walk(msg.payload);
+  return out;
+}
 
 export async function listAddressedTo(
   session: Session,
@@ -73,10 +108,9 @@ export async function listAddressedTo(
     const sent = labels.includes('SENT');
     const date = Number(meta.internalDate ?? 0);
     if (date < (sent ? q.since : auditSince)) continue;
-    const text = sent
-      ? // eslint-disable-next-line no-await-in-loop
-        plainTextOf(await getMessage(session, id)).slice(0, TEXT_CAP)
-      : '';
+    // eslint-disable-next-line no-await-in-loop
+    const full = sent ? await getMessage(session, id) : null;
+    const text = full ? plainTextOf(full).slice(0, TEXT_CAP) : '';
     const inReplyTo = ids(h['in-reply-to'])[0];
     out.push({
       providerId: id,
@@ -94,7 +128,35 @@ export async function listAddressedTo(
       text,
       ownChannel: 'x-kia-channel' in h,
       automated: isAutomatedMessage(h, h.from ?? '').matched,
+      attachments: full ? attachmentsOfMessage(full) : [],
     });
   }
   return out;
+}
+
+/** One attachment of an owner message, by MIME part id. Re-checks SENT on
+ *  the full message and refuses parts over `maxBytes` before downloading. */
+export async function fetchAddressedAttachment(
+  session: Session,
+  providerId: string,
+  attachmentId: string,
+  opts: { maxBytes: number },
+): Promise<Uint8Array> {
+  const msg = await getMessage(session, providerId);
+  if (!(msg.labelIds ?? []).includes('SENT'))
+    throw new Error('gmail: not a sent message');
+  let found: GmailPart | undefined;
+  const walk = (part: GmailPart): void => {
+    if (part.partId === attachmentId && part.body?.attachmentId) found = part;
+    for (const c of part.parts ?? []) walk(c);
+  };
+  if (msg.payload) walk(msg.payload);
+  if (!found?.body?.attachmentId) throw new Error('gmail: no such attachment');
+  if ((found.body.size ?? 0) > opts.maxBytes)
+    throw new Error('gmail: attachment too large');
+  const res = await getAttachment(session, providerId, found.body.attachmentId);
+  const bytes = new Uint8Array(Buffer.from(res.data ?? '', 'base64url'));
+  if (bytes.length > opts.maxBytes)
+    throw new Error('gmail: attachment too large');
+  return bytes;
 }

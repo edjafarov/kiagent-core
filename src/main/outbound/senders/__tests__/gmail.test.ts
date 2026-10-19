@@ -271,6 +271,112 @@ describe('gmail sender', () => {
     ).toString('utf8');
     expect(raw).not.toMatch(/X-Kia-Channel|Reply-To|Auto-Submitted/);
   });
+  describe('attachments', () => {
+    const creds = () =>
+      store.vault.save(accountId, {
+        accessToken: 'tok-1',
+        expiresAt: futureIso(),
+        scope: 'https://www.googleapis.com/auth/gmail.send',
+      });
+    const owner = (
+      attachments: { filename: string; mime: string; contentBase64: string }[],
+      ownerChannel = true,
+    ) => ({
+      accountId,
+      kind: 'new' as const,
+      to: ['me@gmail.com'],
+      subject: 'Your files',
+      bodyMarkdown: 'Attached.',
+      replyTo: 'me+kia@gmail.com',
+      ownerChannel,
+      attachments,
+    });
+    const rawOf = (init: { body: unknown }) =>
+      Buffer.from(JSON.parse(String(init.body)).raw, 'base64url');
+
+    it('composeRaw with attachments parses back via mailparser with the same names and bytes', async () => {
+      await creds();
+      fetchMock = jest.fn(async () => okJson({ id: 'm1', threadId: 't1' }));
+      global.fetch = fetchMock as unknown as typeof fetch;
+      const pdf = Buffer.from('%PDF-1.4 test');
+      await createGmailSender({ store }).send(
+        owner([
+          {
+            filename: 'MG Vertrag (redline).docx',
+            mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            contentBase64: Buffer.from('docx-bytes').toString('base64'),
+          },
+          {
+            filename: 'Vertrag.pdf',
+            mime: 'application/pdf',
+            contentBase64: pdf.toString('base64'),
+          },
+        ]),
+      );
+      const { simpleParser } = await import('mailparser');
+      const parsed = await simpleParser(rawOf(fetchMock.mock.calls[0][1]));
+      expect(parsed.text?.trim()).toBe('Attached.');
+      expect(
+        parsed.attachments.map((a) => [
+          a.filename,
+          a.contentType,
+          a.content.toString(),
+        ]),
+      ).toEqual([
+        [
+          'MG Vertrag (redline).docx',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'docx-bytes',
+        ],
+        ['Vertrag.pdf', 'application/pdf', '%PDF-1.4 test'],
+      ]);
+    });
+
+    it('ignores attachments without ownerChannel (the Outbox path never carries files)', async () => {
+      await creds();
+      fetchMock = jest.fn(async () => okJson({ id: 'm1', threadId: 't1' }));
+      global.fetch = fetchMock as unknown as typeof fetch;
+      await createGmailSender({ store }).send(
+        owner(
+          [
+            {
+              filename: 'x.pdf',
+              mime: 'application/pdf',
+              contentBase64: 'AQI=',
+            },
+          ],
+          false,
+        ),
+      );
+      const { simpleParser } = await import('mailparser');
+      const parsed = await simpleParser(rawOf(fetchMock.mock.calls[0][1]));
+      expect(parsed.attachments).toHaveLength(0);
+    });
+
+    it('large messages go through the media-upload endpoint with the thread id', async () => {
+      await creds();
+      fetchMock = jest.fn(async () => okJson({ id: 'm1', threadId: 't1' }));
+      global.fetch = fetchMock as unknown as typeof fetch;
+      const big = Buffer.alloc(5 * 1024 * 1024, 7).toString('base64');
+      await createGmailSender({ store }).send({
+        ...owner([
+          { filename: 'big.pdf', mime: 'application/pdf', contentBase64: big },
+        ]),
+        threading: { gmailThreadId: 't77' },
+      });
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe(
+        'https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=multipart',
+      );
+      expect(init.headers['content-type']).toMatch(
+        /^multipart\/related; boundary=/,
+      );
+      const body = Buffer.from(init.body).toString('latin1');
+      expect(body).toContain('{"threadId":"t77"}');
+      expect(body).toContain('Content-Type: message/rfc822');
+      expect(body).toContain('X-Kia-Channel: owner');
+    });
+  });
 });
 
 describe('bundled senders (phase 5: gmail joins imap)', () => {

@@ -17,10 +17,26 @@ import { EMAIL_RX, senderAddressFor } from './identity';
 import type { SenderLookup } from './senders';
 
 const HOUR = 3_600_000;
+/** Inbound attachment cap: Gmail's own 25 MB message limit. */
+export const OWNER_ATTACHMENT_MAX = 25 * 1024 * 1024;
 const CAP = 60;
 const ID_RX = /^<[^\s<>@]+@[^\s<>@]+>$/;
 /** A plain display name: no address, quotes, brackets or line breaks. */
 const NAME_RX = /^[\p{L}\p{N} .'-]{1,40}$/u;
+const MAX_ATTACHMENTS = 10;
+/** Encoded (base64) total; leaves headroom under Gmail's 25 MB message cap. */
+const MAX_ENCODED = 24 * 1024 * 1024;
+const MIME_RX = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i;
+
+/** One line, no path, no control characters; never empty. */
+export function safeAttachmentName(name: string): string {
+  const base = name.split(/[\\/]/).pop() ?? '';
+  // eslint-disable-next-line no-control-regex -- control chars are what we strip
+  const controls = /[\u0000-\u001f\u007f]/g;
+  const clean = base.replace(controls, '').trim().slice(0, 200);
+  return clean && clean !== '.' && clean !== '..' ? clean : 'attachment';
+}
+
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export interface OwnerMessage {
@@ -38,6 +54,8 @@ export interface OwnerMessage {
   fromName?: string;
   /** Send-as address; must be a plus-variant of the owner, like replyTo. */
   fromAddress?: string;
+  /** Files to attach: at most 10, 24 MiB encoded in total. */
+  attachments?: { filename: string; mime: string; bytes: Uint8Array }[];
 }
 
 export interface OwnerMailApi {
@@ -52,6 +70,13 @@ export interface OwnerMailApi {
     accountId: string,
     m: OwnerMessage,
   ): Promise<{ externalMessageId?: string; providerThreadId?: string }>;
+  /** One attachment of an owner message (`AddressedAttachment.id`); the
+   *  source re-checks the message is in Sent. Capped at 25 MB. */
+  fetchAttachment(
+    accountId: string,
+    providerId: string,
+    attachmentId: string,
+  ): Promise<Uint8Array>;
 }
 
 export function createOwnerMail(deps: {
@@ -111,6 +136,32 @@ export function createOwnerMail(deps: {
       );
     },
 
+    async fetchAttachment(id, providerId, attachmentId) {
+      const { a } = await load(id);
+      const src = deps.sources.get(a.source);
+      if (!src?.fetchAddressedAttachment)
+        throw new Error('ownerMail: source cannot fetch attachments');
+      let bytes: Uint8Array;
+      try {
+        bytes = await src.fetchAddressedAttachment(
+          deps.session(a, new AbortController().signal),
+          providerId,
+          attachmentId,
+          { maxBytes: OWNER_ATTACHMENT_MAX },
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/not a sent message/i.test(msg))
+          throw new Error('ownerMail: not an owner message');
+        if (/too large/i.test(msg))
+          throw new Error('ownerMail: attachment too large');
+        throw e;
+      }
+      if (bytes.length > OWNER_ATTACHMENT_MAX)
+        throw new Error('ownerMail: attachment too large');
+      return bytes;
+    },
+
     async sendToOwner(id, m) {
       const { a, owner } = await load(id);
       const [local, domain] = owner.split('@');
@@ -133,6 +184,21 @@ export function createOwnerMail(deps: {
       for (const x of [m.messageId, m.inReplyTo, ...(m.references ?? [])])
         if (x !== undefined && !ID_RX.test(x))
           throw new Error('ownerMail: malformed message id');
+      const files = m.attachments ?? [];
+      if (files.length > MAX_ATTACHMENTS)
+        throw new Error('ownerMail: at most 10 attachments');
+      const attachments = files.map((f) => ({
+        filename: safeAttachmentName(f.filename),
+        mime: MIME_RX.test(f.mime)
+          ? f.mime.toLowerCase()
+          : 'application/octet-stream',
+        contentBase64: Buffer.from(f.bytes).toString('base64'),
+      }));
+      if (
+        attachments.reduce((n, f) => n + f.contentBase64.length, 0) >
+        MAX_ENCODED
+      )
+        throw new Error('ownerMail: message too large');
       const t = now();
       const recent = (sends.get(id) ?? []).filter((s) => t - s < HOUR);
       if (recent.length >= CAP)
@@ -159,6 +225,7 @@ export function createOwnerMail(deps: {
         ...(m.fromName ? { fromName: m.fromName } : {}),
         ...(m.fromAddress ? { fromAddress: m.fromAddress.toLowerCase() } : {}),
         ownerChannel: true,
+        ...(attachments.length ? { attachments } : {}),
         ...(Object.keys(threading).length ? { threading } : {}),
       });
       return {

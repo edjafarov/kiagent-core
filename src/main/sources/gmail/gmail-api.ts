@@ -212,25 +212,41 @@ export function isSendSafeRetry(status: number, body: string): boolean {
  *  on ambiguous failures — a retried timeout/5xx could double-deliver.
  *  Worst case across the 4 attempts: a 30s per-attempt timeout plus up to
  *  10s per backoff wait. */
+/** Above this the message goes through the media-upload endpoint (35 MB
+ *  limit) instead of a base64 JSON body. */
+const SEND_UPLOAD_ABOVE = 4 * 1024 * 1024;
+
 export function sendGmailMessage(
   auth: { credentials(): Promise<Credentials | null> },
   raw: Buffer,
   threadId?: string,
 ): Promise<GmailSendResult> {
+  const meta = threadId ? { threadId } : {};
+  const upload = raw.length > SEND_UPLOAD_ABOVE;
+  const boundary = `kia-${Date.now().toString(36)}`;
   return bearerFetch<GmailSendResult>(
-    `${BASE}/messages/send`,
+    upload
+      ? `${BASE.replace('/gmail/v1/', '/upload/gmail/v1/')}/messages/send?uploadType=multipart`
+      : `${BASE}/messages/send`,
     () => tokenFor(auth),
     {
       errorPrefix: 'gmail',
       logTag: '[gmail]',
       method: 'POST',
-      contentType: 'application/json',
-      body: JSON.stringify({
-        raw: raw.toString('base64url'),
-        ...(threadId ? { threadId } : {}),
-      }),
+      contentType: upload
+        ? `multipart/related; boundary=${boundary}`
+        : 'application/json',
+      body: upload
+        ? Buffer.concat([
+            Buffer.from(
+              `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: message/rfc822\r\n\r\n`,
+            ),
+            raw,
+            Buffer.from(`\r\n--${boundary}--`),
+          ])
+        : JSON.stringify({ raw: raw.toString('base64url'), ...meta }),
       maxAttempts: 4,
-      timeoutMs: 30_000,
+      timeoutMs: upload ? 180_000 : 30_000,
       retryNetErrors: false,
       retryOn: isSendSafeRetry,
       maxRetryDelayMs: 10_000,

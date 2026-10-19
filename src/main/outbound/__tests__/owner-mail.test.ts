@@ -9,7 +9,13 @@ const account = {
   status: 'idle',
 } as never;
 
-function setup(over: { listAddressedTo?: unknown; now?: () => number } = {}) {
+function setup(
+  over: {
+    listAddressedTo?: unknown;
+    fetchAddressedAttachment?: unknown;
+    now?: () => number;
+  } = {},
+) {
   const sent: unknown[] = [];
   const sender = {
     send: jest.fn(async (i: unknown) => {
@@ -23,6 +29,7 @@ function setup(over: { listAddressedTo?: unknown; now?: () => number } = {}) {
       get: () =>
         ({
           listAddressedTo: over.listAddressedTo ?? (async () => []),
+          fetchAddressedAttachment: over.fetchAddressedAttachment,
         }) as never,
     },
     senders: { get: () => sender, ids: () => ['gmail'] },
@@ -199,4 +206,115 @@ test('listAddressedTo delegates to the source with a session', async () => {
     await om.listAddressedTo('a1', { toAddress: 'me+kia@gmail.com', since: 0 }),
   ).toEqual([{ providerId: 'p' }]);
   expect(list).toHaveBeenCalled();
+});
+
+describe('fetchAttachment', () => {
+  test('returns bytes of a sent message part, passing the cap to the source', async () => {
+    const fetchAddressedAttachment = jest.fn(
+      async () => new Uint8Array([1, 2, 3]),
+    );
+    const { om } = setup({ fetchAddressedAttachment });
+    expect(await om.fetchAttachment('a1', 'm1', '2')).toEqual(
+      new Uint8Array([1, 2, 3]),
+    );
+    expect(fetchAddressedAttachment).toHaveBeenCalledWith(
+      expect.anything(),
+      'm1',
+      '2',
+      {
+        maxBytes: 25 * 1024 * 1024,
+      },
+    );
+  });
+
+  test('refuses a message not in Sent', async () => {
+    const { om } = setup({
+      fetchAddressedAttachment: async () => {
+        throw new Error('gmail: not a sent message');
+      },
+    });
+    await expect(om.fetchAttachment('a1', 'm1', '2')).rejects.toThrow(
+      'ownerMail: not an owner message',
+    );
+  });
+
+  test('caps at 25 MB', async () => {
+    const big = { length: 25 * 1024 * 1024 + 1 } as unknown as Uint8Array;
+    const { om } = setup({ fetchAddressedAttachment: async () => big });
+    await expect(om.fetchAttachment('a1', 'm1', '2')).rejects.toThrow(
+      'ownerMail: attachment too large',
+    );
+  });
+
+  test('throws when the source cannot fetch attachments', async () => {
+    const { om } = setup();
+    await expect(om.fetchAttachment('a1', 'm1', '2')).rejects.toThrow(
+      'ownerMail: source cannot fetch attachments',
+    );
+  });
+});
+
+describe('sendToOwner attachments', () => {
+  const base = { replyTo: 'me+kia@gmail.com', subject: 's', bodyText: 'b' };
+  const file = (
+    filename: string,
+    mime = 'application/pdf',
+    bytes = new Uint8Array([1, 2]),
+  ) => ({
+    filename,
+    mime,
+    bytes,
+  });
+
+  test('rides along base64-encoded with sanitised names and mimes', async () => {
+    const { om, sent } = setup();
+    await om.sendToOwner('a1', {
+      ...base,
+      attachments: [
+        file('../../etc/Vertrag\r\n.pdf'),
+        file('a.bin', 'not a mime'),
+      ],
+    });
+    expect((sent[0] as { attachments: unknown }).attachments).toEqual([
+      {
+        filename: 'Vertrag.pdf',
+        mime: 'application/pdf',
+        contentBase64: 'AQI=',
+      },
+      {
+        filename: 'a.bin',
+        mime: 'application/octet-stream',
+        contentBase64: 'AQI=',
+      },
+    ]);
+  });
+
+  test('rejects more than 10 attachments', async () => {
+    const { om, sender } = setup();
+    await expect(
+      om.sendToOwner('a1', {
+        ...base,
+        attachments: Array.from({ length: 11 }, (_, i) => file(`${i}.pdf`)),
+      }),
+    ).rejects.toThrow('ownerMail: at most 10 attachments');
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  test('rejects an encoded total over 24 MiB', async () => {
+    const { om, sender } = setup();
+    const big = new Uint8Array(19 * 1024 * 1024); // 19 MiB → ~25.3 MiB base64
+    await expect(
+      om.sendToOwner('a1', {
+        ...base,
+        attachments: [file('big.pdf', 'application/pdf', big)],
+      }),
+    ).rejects.toThrow('ownerMail: message too large');
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  test('no attachments key without files', async () => {
+    const { om, sent } = setup();
+    await om.sendToOwner('a1', base);
+    expect(sent[0]).not.toHaveProperty('attachments');
+  });
 });

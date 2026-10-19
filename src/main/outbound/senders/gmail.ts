@@ -39,6 +39,7 @@ function composeRaw(opts: {
   replyTo?: string;
   messageId?: string;
   ownerChannel?: boolean;
+  attachments?: SendIntent['attachments'];
 }): Promise<Buffer> {
   const mail = new MailComposer({
     from: opts.from,
@@ -51,6 +52,15 @@ function composeRaw(opts: {
     replyTo: opts.replyTo,
     messageId: opts.messageId,
     headers: opts.ownerChannel ? { ...OWNER_CHANNEL_HEADERS } : undefined,
+    // Owner channel only: the Outbox path never carries files.
+    attachments:
+      opts.ownerChannel && opts.attachments?.length
+        ? opts.attachments.map((a) => ({
+            filename: a.filename,
+            contentType: a.mime,
+            content: Buffer.from(a.contentBase64, 'base64'),
+          }))
+        : undefined,
   });
   return new Promise((resolve, reject) => {
     mail.compile().build((err, message) => {
@@ -123,6 +133,7 @@ export function createGmailSender(deps: {
         replyTo: intent.replyTo,
         messageId: intent.messageId,
         ownerChannel: intent.ownerChannel,
+        attachments: intent.attachments,
       });
       try {
         const r = await sendGmailMessage(

@@ -26,7 +26,7 @@ import type {
 import type { FileChange } from './plugin-files';
 import type { SourceErrorCode, WireErrorCode } from './source-errors';
 
-export const PLATFORM_API_VERSION = '2.13.0';
+export const PLATFORM_API_VERSION = '2.14.0';
 
 /** A Batch after the child mapped items through the source's toDocument —
  *  the generic Item type never crosses the wire. */
@@ -66,6 +66,9 @@ export interface Contributions {
     /** Owner-channel listing (platform 2.7.0). Optional on the wire: a
      *  child built against an older host never sends it. */
     hasListAddressedTo?: boolean;
+    /** Owner-mail attachment bytes (platform 2.14.0). Optional on the wire
+     *  for the same reason as hasListAddressedTo. */
+    hasFetchAddressedAttachment?: boolean;
   }>;
   tools: ToolDescriptor[];
   /** Source ids this extension provides a Sender for (declared AND returned

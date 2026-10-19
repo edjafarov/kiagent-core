@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { listAddressedTo } from '../addressed';
+import { fetchAddressedAttachment, listAddressedTo } from '../addressed';
 
 const session = (fetchMap: Record<string, unknown>) => {
   const calls: string[] = [];
@@ -208,4 +208,145 @@ test('pages through nextPageToken and drops rows older than the window', async (
   });
   expect(page).toBe(2);
   expect(rows.map((r) => r.providerId)).toEqual(['a']); // b (500) is before auditSince
+});
+
+describe('attachments', () => {
+  const DOCX =
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const meta = (id: string, labels: string[]) => ({
+    id,
+    threadId: 't',
+    labelIds: labels,
+    internalDate: '5000',
+    payload: {
+      headers: hdr({ From: 'me@gmail.com', To: 'me+kia@gmail.com' }),
+    },
+  });
+  const part = (
+    partId: string,
+    mimeType: string,
+    filename: string,
+    size: number,
+    disposition: string,
+  ) => ({
+    partId,
+    mimeType,
+    filename,
+    headers: hdr({
+      'Content-Disposition': `${disposition}; filename="${filename}"`,
+    }),
+    body: { attachmentId: `att-${partId}-rotating`, size },
+  });
+
+  test('lists attachments of a sent message', async () => {
+    const { s } = session({
+      '/messages?': { messages: [{ id: 'm1' }] },
+      '/messages/m1?format=metadata': meta('m1', ['SENT']),
+      '/messages/m1?format=full': {
+        id: 'm1',
+        labelIds: ['SENT'],
+        payload: {
+          mimeType: 'multipart/mixed',
+          parts: [
+            {
+              partId: '0',
+              mimeType: 'text/plain',
+              body: { data: Buffer.from('see attached').toString('base64url') },
+            },
+            part('1', DOCX, 'MG Vertrag.docx', 46000, 'attachment'),
+            part('2', 'image/png', 'logo.png', 3000, 'inline'),
+            part('3', 'application/pdf', 'Scan.pdf', 120000, 'inline'),
+          ],
+        },
+      },
+    });
+    const [row] = await listAddressedTo(s, {
+      toAddress: 'me+kia@gmail.com',
+      since: 0,
+    });
+    expect(row.text).toBe('see attached');
+    expect(row.attachments).toEqual([
+      {
+        id: '1',
+        filename: 'MG Vertrag.docx',
+        mime: DOCX,
+        size: 46000,
+        inline: false,
+      },
+      // inline images under 8 KB (signature logos) are omitted
+      {
+        id: '3',
+        filename: 'Scan.pdf',
+        mime: 'application/pdf',
+        size: 120000,
+        inline: true,
+      },
+    ]);
+  });
+
+  test('non-sent rows carry no attachments', async () => {
+    const { s, calls } = session({
+      '/messages?': { messages: [{ id: 'm2' }] },
+      '/messages/m2?format=metadata': meta('m2', ['INBOX']),
+    });
+    const [row] = await listAddressedTo(s, {
+      toAddress: 'me+kia@gmail.com',
+      since: 0,
+    });
+    expect(row.attachments).toEqual([]);
+    expect(calls.some((u) => u.includes('format=full'))).toBe(false);
+  });
+});
+
+describe('fetchAddressedAttachment', () => {
+  const full = (labels: string[], size = 5) => ({
+    id: 'm1',
+    labelIds: labels,
+    payload: {
+      mimeType: 'multipart/mixed',
+      parts: [
+        {
+          partId: '1',
+          mimeType: 'application/pdf',
+          filename: 'a.pdf',
+          body: { attachmentId: 'rot-1', size },
+        },
+      ],
+    },
+  });
+
+  test('returns the bytes of a sent message part (resolving the rotating id)', async () => {
+    const { s, calls } = session({
+      '/messages/m1?format=full': full(['SENT']),
+      '/messages/m1/attachments/rot-1': {
+        size: 5,
+        data: Buffer.from('hello').toString('base64url'),
+      },
+    });
+    const bytes = await fetchAddressedAttachment(s, 'm1', '1', {
+      maxBytes: 100,
+    });
+    expect(Buffer.from(bytes).toString()).toBe('hello');
+    expect(calls.some((u) => u.includes('/attachments/rot-1'))).toBe(true);
+  });
+
+  test('refuses a message not in Sent', async () => {
+    const { s, calls } = session({
+      '/messages/m1?format=full': full(['INBOX']),
+    });
+    await expect(
+      fetchAddressedAttachment(s, 'm1', '1', { maxBytes: 100 }),
+    ).rejects.toThrow('not a sent message');
+    expect(calls.some((u) => u.includes('/attachments/'))).toBe(false);
+  });
+
+  test('refuses a part over the cap before downloading', async () => {
+    const { s, calls } = session({
+      '/messages/m1?format=full': full(['SENT'], 500),
+    });
+    await expect(
+      fetchAddressedAttachment(s, 'm1', '1', { maxBytes: 100 }),
+    ).rejects.toThrow('too large');
+    expect(calls.some((u) => u.includes('/attachments/'))).toBe(false);
+  });
 });
