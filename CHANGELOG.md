@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.113.3](https://github.com/edjafarov/kiagent-core/compare/v0.113.2...v0.113.3) (2026-10-19)
+
+### Bug Fixes
+
+* **gmail:** HTML-only messages keep their body text; mail HTML drops head CSS and image URLs, keeping alt text ([442bb9b](https://github.com/edjafarov/kiagent-core/commit/442bb9b8))
+
 ## [0.113.2](https://github.com/edjafarov/kiagent-core/compare/v0.113.1...v0.113.2) (2026-10-14)
 
 ### Bug Fixes
