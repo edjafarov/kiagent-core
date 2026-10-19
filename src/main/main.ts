@@ -127,6 +127,7 @@ import { outboundInvokeHandlers } from './outbound/ipc';
 import { createOutboundRoutes } from './outbound/routes';
 import { buildBundledSenders, composeSenders } from './outbound/senders';
 import { createOwnerMail } from './outbound/owner-mail';
+import { createDocumentBytes } from './outbound/document-bytes';
 import { loadProductConfig } from './product';
 import { registerBundledProviders } from './providers';
 import { createInstallRegistry } from './providers/install-registry';
@@ -1058,6 +1059,12 @@ app
       senders: senderLookup,
       session: (a, signal) => p.engine.session(a, signal, 'owner-mail'),
     });
+    const documentBytes = createDocumentBytes({
+      document: (id) => p.readsFor('other').document(id),
+      account: (id) => p.store.account(id),
+      sources: p.sources,
+      session: (a, signal) => p.engine.session(a, signal, 'owner-mail'),
+    });
     try {
       await p.store.outbox.recoverOrphanedSending();
     } catch (err) {
@@ -1313,6 +1320,7 @@ app
           outbound: { service: outbound, routes: outboundRoutes },
           readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
           ownerMail,
+          documents: documentBytes,
           inference: p.inference,
           busy,
           runAccount: (account) => runAccount(p, account),

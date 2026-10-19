@@ -18,6 +18,7 @@ import type { CoreStore } from './core/store/store';
 import type { TrayMenuController } from './tray-menu';
 import type { OutboundService } from './outbound/service';
 import type { OwnerMailApi } from './outbound/owner-mail';
+import type { DocumentBytesApi } from './outbound/document-bytes';
 import type { FileRootRegistry } from './platform/file-roots';
 import {
   folderScopedConfig,
@@ -127,6 +128,9 @@ export interface MainProcessApi {
   /** Owner-only mail: list mail addressed to a plus-variant of an account's
    *  own address, and send to the owner (recipient pinned by core). */
   ownerMail?: OwnerMailApi;
+  /** Original bytes of an indexed document (50 MB cap), for staging a
+   *  document the owner refers to into the assistant's files workspace. */
+  documents?: DocumentBytesApi;
   /** Generation token for fencing work across model changes, plus the
    *  seam a trusted extension uses to add a provider and route its own
    *  tasks to it. */
@@ -168,6 +172,7 @@ export interface BuildMainApiDeps {
     input: MessageEvidenceReadInput,
   ) => Promise<MessageEvidenceReadResult>;
   ownerMail?: OwnerMailApi;
+  documents?: DocumentBytesApi;
   inference?: {
     generation(): number;
     register(p: InferenceProvider): () => void;
@@ -394,6 +399,7 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
       ? { messageEvidence: { read: deps.readMessageEvidence } }
       : {}),
     ...(deps.ownerMail ? { ownerMail: deps.ownerMail } : {}),
+    ...(deps.documents ? { documents: deps.documents } : {}),
     ...(deps.inference
       ? {
           inference: {
