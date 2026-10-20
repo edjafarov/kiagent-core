@@ -9,11 +9,13 @@ import type {
   AccountId,
   ConfirmMode,
   DocumentId,
+  DraftMirror,
+  DraftPatch,
+  DraftSnapshot,
   OutboxAttachment,
   OutboxRow,
   OutboxStatus,
   Prefs,
-  SendIntent,
   SendResult,
   Sender,
   SourceDescriptor,
@@ -22,11 +24,12 @@ import type {
 import { withLogMessage } from '../core/mcp/log-safe';
 import { currentClient, currentTransport } from '../core/mcp/transport-context';
 import type { LogSink } from '../core/engine/engine';
-import { snapshotOf } from '../core/store/outbox';
+import { normalizeSnapshot, snapshotOf } from '../core/store/outbox';
 import type { CoreStore } from '../core/store/store';
 import { createDraftLock } from './draft-lock';
 import { isShapedSummary, shapeOutboundError } from './error-copy';
 import { EMAIL_RX, selfAddressesFor, senderAddressFor } from './identity';
+import { createMirrorOps, deadline, intentOf, providerLabel } from './mirror';
 import { resolveImapReply } from './resolve';
 import { resolveGmailReply } from './resolve-gmail';
 // Type-only on purpose: the bundled senders (and their nodemailer/imapflow
@@ -281,6 +284,12 @@ export interface OutboundService extends OutboundToolApi {
   ): Promise<DraftToolResult>;
   /** Discard a pending draft (in-app Discard, page Cancel). */
   discardById(draftId: string): Promise<OutboxRow | null>;
+  /** The provider's current draft into the row, before a review surface
+   *  shows it; an unreachable provider leaves the row. PANEL-ONLY. */
+  refreshById(draftId: string): Promise<OutboxRow | null>;
+  /** Listings: pending mirrored rows refreshed in parallel, ~5 s budget.
+   *  PANEL-ONLY. */
+  refreshPending(rows: OutboxRow[]): Promise<void>;
   /** Panel support: the source ids that can send (bundled + extension
    *  senders), for the Outbox's "Sends from". PANEL-ONLY. */
   senderSources(): string[];
@@ -580,16 +589,11 @@ export function createOutboundService(deps: {
       return fail(message);
     }
 
-    const intent: SendIntent = {
-      accountId: row.accountId,
-      kind: row.kind,
-      outboundRef: row.outboundRef ?? undefined,
-      to: row.to,
-      cc: row.cc,
-      subject: row.subject ?? undefined,
-      bodyMarkdown: row.bodyMarkdown,
-      threading: row.threading ?? undefined,
-    };
+    // A mirrored row is sent as the provider's draft — the one the user
+    // may have edited there — never re-composed from the row (§5.4).
+    const ref = row.mirror?.ref ?? null;
+    if (ref && !sender.drafts)
+      return fail('not sent: this account can no longer send its drafts');
 
     // Only the send attempt itself is caught here. A throw from this
     // block is recorded as 'failed' and classified by shapeOutboundError:
@@ -606,7 +610,10 @@ export function createOutboundService(deps: {
     // honest "it may have sent, go check" outcome for that case.
     let result: SendResult;
     try {
-      result = await sender.send(intent);
+      result =
+        ref && sender.drafts
+          ? await sender.drafts.send(ref)
+          : await sender.send(intentOf(row));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return fail(message);
@@ -651,6 +658,89 @@ export function createOutboundService(deps: {
 
   const withDraft = createDraftLock();
 
+  const sourceOf = async (row: OutboxRow): Promise<string> =>
+    (await deps.store.account(row.accountId))?.source ?? '';
+  /** The account's draft mirror, when its sender keeps provider drafts. */
+  const draftsFor = async (row: OutboxRow): Promise<DraftMirror | undefined> =>
+    lookup.get(await sourceOf(row))?.drafts;
+  const mirror = createMirrorOps({
+    store: deps.store,
+    logSink: deps.logSink,
+    nowMs,
+    sourceOf,
+  });
+
+  /** A just-inserted row becomes a provider draft when the account can
+   *  mirror (§5.2). Never throws: a failed create leaves it Outbox-only. */
+  const mirrorNew = (row: OutboxRow): Promise<OutboxRow> =>
+    withDraft(row.id, async () => {
+      const drafts = await draftsFor(row);
+      return drafts ? mirror.createLocked(row, drafts) : row;
+    });
+
+  /** The provider's current draft into the row (§5.3); a row that is not
+   *  mirrored comes back as it is. Throws `couldn't reach <provider>`. */
+  const refreshLocked = async (
+    row: OutboxRow,
+    ms?: number,
+  ): Promise<OutboxRow> => {
+    if (!row.mirror?.ref || row.status !== 'draft') return row;
+    const drafts = await draftsFor(row);
+    if (!drafts) return row;
+    try {
+      return await mirror.refreshLocked(row, drafts, ms);
+    } catch (e) {
+      const label = providerLabel(await sourceOf(row));
+      deps.logSink.log(
+        'outbound',
+        'warn',
+        `draft ${row.id}: refresh failed (${e instanceof Error ? e.message : String(e)})`,
+        { draftId: row.id },
+      );
+      throw new Error(`couldn't reach ${label} — try again`);
+    }
+  };
+
+  /** Refresh one row by id under its lock; a failure keeps the row. */
+  const refreshById = (draftId: string, ms?: number) =>
+    withDraft(draftId, async () => {
+      const row = await deps.store.outbox.get(draftId);
+      if (!row) return null;
+      return refreshLocked(row, ms).catch(() => row);
+    });
+
+  /** Listings: every pending mirrored row refreshed in parallel, bounded;
+   *  a miss renders the row as it was (§5.3). Reads only. */
+  const LIST_REFRESH_MS = 5_000;
+  const refreshPending = async (rows: OutboxRow[]): Promise<void> => {
+    const ids = rows
+      .filter((r) => r.status === 'draft' && r.mirror?.ref)
+      .map((r) => r.id);
+    if (!ids.length) return;
+    await deadline(
+      Promise.allSettled(ids.map((id) => refreshById(id, LIST_REFRESH_MS))),
+      LIST_REFRESH_MS,
+      'outbox refresh',
+    ).catch(() => {});
+  };
+
+  /** Discard in Kia removes the provider draft too (§5.4). */
+  const discardLocked = async (
+    draftId: string,
+  ): Promise<{ moved: boolean; row: OutboxRow | null }> => {
+    const before = await deps.store.outbox.get(draftId);
+    const moved = await deps.store.outbox.transition(
+      draftId,
+      ['draft'],
+      'discarded',
+    );
+    if (moved && before?.mirror?.ref) {
+      const drafts = await draftsFor(before);
+      if (drafts) await mirror.removeLocked(before, drafts);
+    }
+    return { moved, row: await deps.store.outbox.get(draftId) };
+  };
+
   /** The page's confirm, once the caller has shown who is asking (a
    *  verified token, or the user's own click in the app): sweep, re-read,
    *  the revision check, the CAS, send. The ONE body every confirm path
@@ -665,8 +755,22 @@ export function createOutboundService(deps: {
     // valid past the draft row's own expires_at; without this, the CAS below
     // would happily move an expired draft into 'sending'.
     await deps.store.outbox.expireOverdue();
-    const row = await deps.store.outbox.get(draftId);
-    if (!row) return { kind: 'invalid' };
+    const stored = await deps.store.outbox.get(draftId);
+    if (!stored) return { kind: 'invalid' };
+    if (stored.status !== 'draft') return { kind: 'already', row: stored };
+    // A mirrored row sends what the provider holds now: read it first, and
+    // refuse (provably unsent) when the provider can't be reached.
+    let row: OutboxRow;
+    try {
+      row = await refreshLocked(stored);
+    } catch (e) {
+      const error = `not sent: ${e instanceof Error ? e.message : String(e)}`;
+      await deps.store.outbox.transition(stored.id, ['draft'], 'failed', {
+        error,
+      });
+      const failed = (await deps.store.outbox.get(stored.id)) ?? stored;
+      return { kind: 'failed', row: failed, error };
+    }
     if (row.status !== 'draft') return { kind: 'already', row };
     if (revision === null || row.revision !== revision)
       return { kind: 'changed', row };
@@ -710,8 +814,17 @@ export function createOutboundService(deps: {
     patch: DraftRevision,
   ): Promise<DraftToolResult> => {
     await deps.store.outbox.expireOverdue();
-    const row = await deps.store.outbox.get(draftId);
-    if (!row) throw new Error(`${tool}: unknown draft '${draftId}'`);
+    const stored = await deps.store.outbox.get(draftId);
+    if (!stored) throw new Error(`${tool}: unknown draft '${draftId}'`);
+    if (stored.status !== 'draft') throw notPendingError(tool, stored);
+    let row: OutboxRow;
+    try {
+      row = await refreshLocked(stored);
+    } catch (e) {
+      throw new Error(
+        `${tool}: ${e instanceof Error ? e.message : String(e)} — the draft was not changed`,
+      );
+    }
     if (row.status !== 'draft') throw notPendingError(tool, row);
     if (row.revision !== revision) throw changedError(tool, revision, row);
     const touchesRecipients = patch.to !== undefined || patch.cc !== undefined;
@@ -737,13 +850,50 @@ export function createOutboundService(deps: {
     const cc = addrs(patch.cc, 'cc');
     if (patch.body !== undefined && !patch.body.trim())
       throw new Error(`${tool}: body must not be empty`);
-    const { row: next } = await deps.store.outbox.applyContent(row.id, {
+    const providerPatch: DraftPatch = {
+      ...(to ? { to } : {}),
+      ...(cc ? { cc } : {}),
+      ...(patch.subject !== undefined ? { subject: patch.subject } : {}),
+      ...(patch.body !== undefined ? { bodyMarkdown: patch.body } : {}),
+    };
+    const local: DraftSnapshot = {
       ...snapshotOf(row),
       ...(to ? { to } : {}),
       ...(cc ? { cc } : {}),
       ...(patch.subject !== undefined ? { subject: patch.subject } : {}),
       ...(patch.body !== undefined ? { bodyMarkdown: patch.body } : {}),
-    });
+    };
+    if (normalizeSnapshot(local) === normalizeSnapshot(snapshotOf(row)))
+      return toolResult(row, []);
+    const drafts = await draftsFor(row);
+    if (row.mirror?.ref && drafts) {
+      // Kia's edit goes to the provider; its readback is what the row holds.
+      try {
+        const next = await mirror.updateLocked(
+          row,
+          drafts,
+          providerPatch,
+          local,
+        );
+        return toolResult(next, []);
+      } catch (e) {
+        const label = providerLabel(await sourceOf(row));
+        deps.logSink.log(
+          'outbound',
+          'warn',
+          `draft ${row.id}: update failed (${e instanceof Error ? e.message : String(e)})`,
+          { draftId: row.id },
+        );
+        throw new Error(
+          `${tool}: couldn't reach ${label} — the draft was not changed; try again`,
+        );
+      }
+    }
+    const { row: next } = await deps.store.outbox.applyContent(row.id, local);
+    // Not mirrored yet on an account that can: a revise is when the create
+    // is tried again, from the edited row (one revision bump).
+    if (drafts && !next.mirror?.ref)
+      return toolResult(await mirror.createLocked(next, drafts), []);
     return toolResult(next, []);
   };
 
@@ -853,7 +1003,7 @@ export function createOutboundService(deps: {
           expiresAt: expiresAt(),
         });
       }
-      return toolResult(row, warnings);
+      return toolResult(await mirrorNew(row), warnings);
     },
 
     async draftMessage({ accountId, to, subject, body }) {
@@ -888,7 +1038,7 @@ export function createOutboundService(deps: {
         createdBy: currentClient(),
         expiresAt: expiresAt(),
       });
-      return toolResult(row, []);
+      return toolResult(await mirrorNew(row), []);
     },
 
     async listOutbox({ limit }) {
@@ -904,6 +1054,7 @@ export function createOutboundService(deps: {
         typeof limit === 'number' && Number.isFinite(limit)
           ? Math.min(100, Math.max(1, Math.floor(limit)))
           : 20;
+      await refreshPending(await deps.store.outbox.listRecent(clampedLimit));
       const rows = await deps.store.outbox.listRecent(clampedLimit);
       // Fetch the (decrypted) secret at most once per call rather than once
       // per draft row — with OUTBOX_PENDING_CAP-sized listings this avoids
@@ -977,10 +1128,11 @@ export function createOutboundService(deps: {
     },
 
     discardById: (draftId) =>
-      withDraft(draftId, async () => {
-        await deps.store.outbox.transition(draftId, ['draft'], 'discarded');
-        return deps.store.outbox.get(draftId);
-      }),
+      withDraft(draftId, async () => (await discardLocked(draftId)).row),
+
+    refreshById: (draftId) => refreshById(draftId),
+
+    refreshPending,
 
     async sendDraft({ draftId, revision }) {
       // Deliberately NO transport gate (unlike the drafting tools): a draft
@@ -1085,7 +1237,8 @@ export function createOutboundService(deps: {
       const parsed = verifyConfirmToken(secret, token, nowMs());
       if (!parsed) return { kind: 'invalid' };
       await deps.store.outbox.expireOverdue();
-      const row = await deps.store.outbox.get(parsed.draftId);
+      // Every review shows the provider's current draft (§5.3).
+      const row = await refreshById(parsed.draftId);
       if (!row) return { kind: 'invalid' };
       if (row.status !== 'draft') return { kind: 'gone', row };
       return { kind: 'ok', row, mode: row.confirmMode };
@@ -1109,14 +1262,7 @@ export function createOutboundService(deps: {
       const before = await deps.store.outbox.get(parsed.draftId);
       if (!before) return { kind: 'invalid' };
       if (before.status !== 'draft') return { kind: 'already', row: before };
-      const after = await withDraft(before.id, async () => {
-        const moved = await deps.store.outbox.transition(
-          before.id,
-          ['draft'],
-          'discarded',
-        );
-        return { moved, row: await deps.store.outbox.get(before.id) };
-      });
+      const after = await withDraft(before.id, () => discardLocked(before.id));
       if (!after.moved) return { kind: 'already', row: after.row ?? before };
       return { kind: 'cancelled', row: after.row ?? before };
     },
@@ -1181,6 +1327,13 @@ export function createOutboundService(deps: {
       // Account-gone and unsupported-source refusals, identical to
       // draft_reply time (service.ts:191-201), read live off the lookup.
       const account = await accountFor(row.accountId as string);
+      // One provider draft belongs to one row: a failed row's draft goes
+      // before the new row makes its own.
+      if (row.mirror?.ref && row.status === 'failed') {
+        const drafts = await draftsFor(row);
+        if (drafts)
+          await withDraft(row.id, () => mirror.removeLocked(row, drafts));
+      }
       // Deliberately NO re-resolution: outboundRef / to / cc / threading are
       // copied verbatim off the frozen row. Re-running the resolver could
       // surface the "this document has no reply target" refusal
@@ -1188,7 +1341,7 @@ export function createOutboundService(deps: {
       // could silently re-target a reply if the thread moved.
       // create() itself runs expireOverdue() and enforces
       // OUTBOX_PENDING_CAP (outbox.ts:171-217) — no extra gate needed here.
-      return deps.store.outbox.create({
+      const fresh = await deps.store.outbox.create({
         accountId: row.accountId,
         kind: row.kind,
         replyToDocumentId: row.replyToDocumentId,
@@ -1213,6 +1366,7 @@ export function createOutboundService(deps: {
         // Files added in the mail app went with the removed provider draft.
         attachments: row.attachments.filter((a) => a.from),
       });
+      return mirrorNew(fresh);
     },
   };
 }

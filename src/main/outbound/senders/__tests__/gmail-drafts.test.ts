@@ -168,7 +168,7 @@ describe('gmail draft mirror', () => {
     });
     use(() => res(200, {}));
     await expect(drafts().create(intent())).rejects.toThrow(
-      'Reconnect this account to sync drafts',
+      'Reconnect this account in Settings to sync drafts',
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -180,7 +180,7 @@ describe('gmail draft mirror', () => {
       }),
     );
     await expect(drafts().create(intent())).rejects.toThrow(
-      'Reconnect this account to sync drafts',
+      'Reconnect this account in Settings to sync drafts',
     );
   });
 

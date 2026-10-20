@@ -1,0 +1,441 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
+import type {
+  AccountId,
+  DraftContent,
+  DraftMirror,
+  DraftReadResult,
+  DraftRef,
+  Prefs,
+  Sender,
+  SendIntent,
+} from '@shared/contracts';
+
+import { openDb } from '../../db/app-db';
+import { openStore, type CoreStore } from '../../core/store/store';
+import { OUTBOX_PENDING_CAP } from '../../core/store/outbox';
+import { createOutboundService, type OutboundService } from '../service';
+import { shapeOutboundError } from '../error-copy';
+
+const deps = {
+  encrypt: (s: string) => Buffer.from(s, 'utf8'),
+  decrypt: (b: Buffer) => b.toString('utf8'),
+  detectLanguages: () => ['eng'],
+};
+
+function fakePrefs(): Prefs {
+  const p = {} as unknown as ReturnType<Prefs['get']>;
+  return { get: () => p, patch: async () => {}, onChange: () => () => {} };
+}
+
+/** An in-memory provider: drafts by id, with knobs for failures. */
+function fakeProvider() {
+  const drafts = new Map<string, DraftContent>();
+  let n = 0;
+  const p = {
+    drafts,
+    createImpl: null as null | ((i: SendIntent) => Promise<DraftRef>),
+    readImpl: null as null | ((r: DraftRef) => Promise<DraftReadResult>),
+    updateImpl: null as null | (() => Promise<void>),
+    sendImpl: null as null | (() => Promise<{ externalMessageId: string }>),
+    removeFails: false,
+    calls: [] as string[],
+    mirror: null as unknown as DraftMirror,
+  };
+  p.mirror = {
+    async create(intent) {
+      p.calls.push('create');
+      if (p.createImpl) return p.createImpl(intent);
+      const id = `d${++n}`;
+      drafts.set(id, {
+        to: intent.to ?? [],
+        cc: intent.cc ?? [],
+        bcc: intent.bcc ?? [],
+        subject: intent.subject ?? null,
+        bodyText: intent.bodyMarkdown,
+        attachments: [],
+      });
+      return { accountId: intent.accountId, id, threadId: 't1' };
+    },
+    async update(ref, patch) {
+      p.calls.push('update');
+      if (p.updateImpl) await p.updateImpl();
+      const c = drafts.get(ref.id)!;
+      drafts.set(ref.id, {
+        ...c,
+        ...(patch.to ? { to: patch.to } : {}),
+        ...(patch.cc ? { cc: patch.cc } : {}),
+        ...(patch.subject !== undefined ? { subject: patch.subject } : {}),
+        ...(patch.bodyMarkdown !== undefined
+          ? { bodyText: patch.bodyMarkdown }
+          : {}),
+      });
+      return ref;
+    },
+    async read(ref) {
+      p.calls.push('read');
+      if (p.readImpl) return p.readImpl(ref);
+      const c = drafts.get(ref.id);
+      return c ? { state: 'draft', ref, content: c } : { state: 'gone' };
+    },
+    async remove(ref) {
+      p.calls.push('remove');
+      if (p.removeFails) throw new Error('offline');
+      drafts.delete(ref.id);
+    },
+    async send(ref) {
+      p.calls.push('send');
+      if (p.sendImpl) return p.sendImpl();
+      drafts.delete(ref.id);
+      return { externalMessageId: `sent-${ref.id}` };
+    },
+  };
+  return p;
+}
+
+describe('outbound service — provider draft mirror', () => {
+  let dir: string;
+  let store: CoreStore;
+  let accountId: AccountId;
+  let service: OutboundService;
+  let provider: ReturnType<typeof fakeProvider>;
+  let sendMock: jest.Mock;
+  let now: number;
+
+  const make = (withDrafts = true) => {
+    const sender: Sender = {
+      send: sendMock,
+      ...(withDrafts ? { drafts: provider.mirror } : {}),
+    };
+    service = createOutboundService({
+      store,
+      prefs: fakePrefs(),
+      senders: new Map<string, Sender>([['gmail', sender]]),
+      logSink: { log: () => {} },
+      nowMs: () => now,
+    });
+    service.setBaseUrl('http://127.0.0.1:7421');
+  };
+
+  const draft = (body = 'Hello Bob') =>
+    service.draftMessage({
+      accountId,
+      to: ['bob@example.com'],
+      subject: 'Hi',
+      body,
+    });
+  const row = (id: string) => store.outbox.get(id);
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-outmirror-'));
+    store = openStore(await openDb(path.join(dir, 'test.db')), deps);
+    const account = await store.createAccount({
+      source: 'gmail',
+      identifier: 'me@gmail.com',
+      config: {},
+    });
+    accountId = account.id;
+    provider = fakeProvider();
+    sendMock = jest.fn(async () => ({ externalMessageId: '<plain@x>' }));
+    now = Date.now();
+    make();
+  });
+
+  afterEach(async () => {
+    jest.useRealTimers();
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  describe('create on draft', () => {
+    it('creates, reads back and stores the ref before the tool returns', async () => {
+      const r = await draft();
+      expect(r.revision).toBe(1);
+      expect(provider.calls).toEqual(['create', 'read']);
+      expect((await row(r.draft_id))?.mirror).toEqual({
+        ref: { accountId, id: 'd1', threadId: 't1' },
+      });
+    });
+
+    it('a failed create leaves the row Outbox-only with the reason', async () => {
+      provider.createImpl = async () => {
+        throw new Error('Reconnect this account in Settings to sync drafts');
+      };
+      const r = await draft();
+      expect(r.revision).toBe(1);
+      expect((await row(r.draft_id))?.mirror).toEqual({
+        ref: null,
+        error: 'Reconnect this account in Settings to sync drafts',
+      });
+    });
+
+    it('a create that hangs past 20 s leaves the row Outbox-only; the tool still returns', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+      provider.createImpl = () => new Promise(() => {});
+      const pending = draft();
+      await jest.advanceTimersByTimeAsync(20_001);
+      const r = await pending;
+      expect((await row(r.draft_id))?.mirror).toEqual({
+        ref: null,
+        error: 'draft create timed out',
+      });
+    });
+
+    it('the pending cap refuses before the provider is asked', async () => {
+      make(false);
+      for (let i = 0; i < OUTBOX_PENDING_CAP; i++) await draft(`n${i}`);
+      make();
+      await expect(draft()).rejects.toThrow();
+      expect(provider.calls).toEqual([]);
+    });
+
+    it('accounts whose sender keeps no drafts are never mirrored', async () => {
+      make(false);
+      const r = await draft();
+      expect((await row(r.draft_id))?.mirror).toBeNull();
+    });
+  });
+
+  describe('refresh', () => {
+    it('adopts a body changed in the provider as a new revision', async () => {
+      const r = await draft();
+      provider.drafts.get('d1')!.bodyText = 'Edited in Gmail';
+      const [item] = await service.listOutbox({});
+      expect(item.revision).toBe(2);
+      expect(item.draft?.body).toBe('Edited in Gmail');
+      expect((await row(r.draft_id))?.revision).toBe(2);
+    });
+
+    it('a whitespace-only difference is no new revision but refreshes the ref', async () => {
+      const r = await draft();
+      provider.readImpl = async (ref) => ({
+        state: 'draft',
+        ref: { ...ref, threadId: 't2' },
+        content: { ...provider.drafts.get('d1')!, bodyText: 'Hello Bob  \r\n' },
+      });
+      await service.listOutbox({});
+      const got = await row(r.draft_id);
+      expect(got?.revision).toBe(1);
+      expect(got?.mirror?.ref?.threadId).toBe('t2');
+    });
+
+    it('sent in the provider → sent, marked sent elsewhere', async () => {
+      const r = await draft();
+      provider.readImpl = async () => ({
+        state: 'sent',
+        externalMessageId: 'm1',
+      });
+      await service.listOutbox({});
+      const got = await row(r.draft_id);
+      expect(got?.status).toBe('sent');
+      expect(got?.mirror?.sentElsewhere).toBe(true);
+      expect(got?.externalMessageId).toBe('m1');
+    });
+
+    it('deleted in the provider → discarded', async () => {
+      const r = await draft();
+      provider.readImpl = async () => ({ state: 'deleted' });
+      await service.listOutbox({});
+      expect(await row(r.draft_id)).toMatchObject({
+        status: 'discarded',
+        error: 'Deleted in Gmail',
+      });
+    });
+
+    it('gone from Drafts → delivery unknown, never claiming either', async () => {
+      const r = await draft();
+      provider.drafts.clear();
+      await service.listOutbox({});
+      expect(await row(r.draft_id)).toMatchObject({
+        status: 'delivery_unknown',
+        error:
+          'No longer in Drafts — sent from Gmail or deleted there; check Sent',
+      });
+    });
+
+    it('a listing whose refresh fails or hangs renders the row as it was, within ~5 s', async () => {
+      const r = await draft();
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+      provider.readImpl = () => new Promise(() => {});
+      const pending = service.listOutbox({});
+      await jest.advanceTimersByTimeAsync(5_001);
+      const [item] = await pending;
+      expect(item.draft_id).toBe(r.draft_id);
+      expect(item.revision).toBe(1);
+      jest.useRealTimers();
+      provider.readImpl = async () => {
+        throw new Error('offline');
+      };
+      const [again] = await service.listOutbox({});
+      expect(again.status).toBe('draft');
+    });
+
+    it('listing and review surfaces never retry a failed create', async () => {
+      provider.createImpl = async () => {
+        throw new Error('offline');
+      };
+      const r = await draft();
+      provider.createImpl = null;
+      provider.calls = [];
+      await service.listOutbox({});
+      await service.refreshById(r.draft_id);
+      expect(provider.calls).toEqual([]);
+    });
+  });
+
+  describe('revise', () => {
+    it('sends the edit to the provider and adopts the readback: one bump', async () => {
+      const r = await draft();
+      provider.calls = [];
+      const v = await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        body: 'Shorter',
+      });
+      expect(v.revision).toBe(2);
+      expect(provider.drafts.get('d1')?.bodyText).toBe('Shorter');
+      expect(provider.calls).toEqual(['read', 'update', 'read']);
+    });
+
+    it('a change made in the provider first makes the revise stale', async () => {
+      const r = await draft();
+      provider.drafts.get('d1')!.bodyText = 'Edited in Gmail';
+      await expect(
+        service.reviseDraft({ draftId: r.draft_id, revision: 1, body: 'x' }),
+      ).rejects.toThrow(/this draft changed[\s\S]*Edited in Gmail/);
+      expect(provider.drafts.get('d1')?.bodyText).toBe('Edited in Gmail');
+    });
+
+    it('a failed provider update refuses and changes nothing', async () => {
+      const r = await draft();
+      provider.updateImpl = async () => {
+        throw new Error('503');
+      };
+      await expect(
+        service.reviseDraft({ draftId: r.draft_id, revision: 1, body: 'x' }),
+      ).rejects.toThrow(/couldn't reach Gmail[\s\S]*not changed/);
+      expect((await row(r.draft_id))?.revision).toBe(1);
+    });
+
+    it('an Outbox-only row on a mirroring account retries the create: one bump', async () => {
+      provider.createImpl = async () => {
+        throw new Error('offline');
+      };
+      const r = await draft();
+      provider.createImpl = null;
+      const v = await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        body: 'Shorter',
+      });
+      expect(v.revision).toBe(2);
+      const got = await row(r.draft_id);
+      expect(got?.mirror?.ref?.id).toBe('d1');
+      expect(provider.drafts.get('d1')?.bodyText).toBe('Shorter');
+    });
+  });
+
+  describe('send', () => {
+    it('a mirrored row is sent as the provider draft, never re-composed', async () => {
+      const r = await draft();
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out.kind).toBe('sent');
+      expect(provider.calls).toContain('send');
+      expect(sendMock).not.toHaveBeenCalled();
+      expect((await row(r.draft_id))?.externalMessageId).toBe('sent-d1');
+    });
+
+    it('the confirm reads the provider first: an edit there means review again', async () => {
+      const r = await draft();
+      provider.drafts.get('d1')!.bodyText = 'Edited in Gmail';
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out.kind).toBe('changed');
+      expect(provider.calls).not.toContain('send');
+    });
+
+    it('an unreachable provider refuses the send, provably unsent', async () => {
+      const r = await draft();
+      provider.readImpl = async () => {
+        throw new Error('ETIMEDOUT');
+      };
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out.kind).toBe('failed');
+      const got = await row(r.draft_id);
+      expect(got?.status).toBe('failed');
+      expect(got?.error).toBe("not sent: couldn't reach Gmail — try again");
+      expect(shapeOutboundError(got!.error!).canRetry).toBe(true);
+      expect(provider.calls).not.toContain('send');
+      expect(sendMock).not.toHaveBeenCalled();
+      // Try again keeps the same provider draft.
+      provider.readImpl = null;
+      const back = await service.reopenById(r.draft_id);
+      expect(back?.mirror?.ref?.id).toBe('d1');
+    });
+
+    it('an Outbox-only row sends as today and never tries the create', async () => {
+      provider.createImpl = async () => {
+        throw new Error('offline');
+      };
+      const r = await draft();
+      provider.calls = [];
+      expect((await service.sendById(r.draft_id, 1)).kind).toBe('sent');
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      expect(provider.calls).toEqual([]);
+    });
+
+    it('an ambiguous provider send stays terminal', async () => {
+      const r = await draft();
+      provider.sendImpl = async () => {
+        throw new Error('gmail 503 https://x socket hang up');
+      };
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out.kind).toBe('failed');
+      expect(await service.reopenById(r.draft_id)).toBeNull();
+    });
+  });
+
+  describe('discard and redraft', () => {
+    it('discard removes the provider draft', async () => {
+      const r = await draft();
+      await service.discardById(r.draft_id);
+      expect(provider.drafts.size).toBe(0);
+      expect((await row(r.draft_id))?.status).toBe('discarded');
+    });
+
+    it('a failed remove is logged and the row is still discarded', async () => {
+      const r = await draft();
+      provider.removeFails = true;
+      await service.discardById(r.draft_id);
+      expect((await row(r.draft_id))?.status).toBe('discarded');
+    });
+
+    it('cancel on the page removes it too', async () => {
+      const r = await draft();
+      const token = r.confirm_url!.split('/outbox/confirm/')[1];
+      expect((await service.cancelByToken(token)).kind).toBe('cancelled');
+      expect(provider.drafts.size).toBe(0);
+    });
+
+    it('redraft of a failed mirrored row removes its draft and mirrors the new row', async () => {
+      const r = await draft();
+      provider.sendImpl = async () => {
+        throw new Error('gmail 503 https://x socket hang up');
+      };
+      await service.sendById(r.draft_id, 1);
+      provider.sendImpl = null;
+      const fresh = await service.redraft(r.draft_id);
+      expect(provider.drafts.has('d1')).toBe(false);
+      expect(fresh.mirror?.ref?.id).toBe('d2');
+    });
+  });
+
+  it('peek by token shows the provider’s current draft', async () => {
+    const r = await draft();
+    provider.drafts.get('d1')!.bodyText = 'Edited in Gmail';
+    const token = r.confirm_url!.split('/outbox/confirm/')[1];
+    const peek = await service.peekByToken(token);
+    expect(peek.kind === 'ok' && peek.row.bodyMarkdown).toBe('Edited in Gmail');
+  });
+});

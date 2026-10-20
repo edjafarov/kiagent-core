@@ -36,7 +36,10 @@ import {
   splitAddressList,
 } from '../../sources/gmail/parser';
 
-export const DRAFT_RECONNECT = 'Reconnect this account to sync drafts';
+/** Matches error-copy's `reconnect .* in Settings` auth contract, so a
+ *  refused send reads as provably not sent. */
+export const DRAFT_RECONNECT =
+  'Reconnect this account in Settings to sync drafts';
 
 const SCOPE_ERROR_RE =
   /ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficientPermissions/i;
