@@ -913,6 +913,52 @@ describe('outbound service — provider draft mirror', () => {
       expect((await row(r.draft_id))?.status).toBe('draft');
     });
 
+    it('a refresh that runs past the 5 minutes is not sent: missed', async () => {
+      const r = await draft();
+      const at = inMin(10);
+      await service.scheduleById(r.draft_id, 1, at);
+      now += 10 * 60_000 + 4 * 60_000 + 50_000; // 4 min 50 s late
+      provider.readImpl = async (ref) => {
+        now += 20_000; // the refresh takes it past 5 min
+        return { state: 'draft', ref, content: provider.drafts.get(ref.id)! };
+      };
+      expect(await service.sendScheduled(r.draft_id, at)).toBe('missed');
+      expect(provider.calls).not.toContain('send');
+    });
+
+    it('a clock that went back never sends early', async () => {
+      const r = await draft();
+      const at = inMin(10);
+      await service.scheduleById(r.draft_id, 1, at);
+      // picked as due, but by the last check the clock reads earlier
+      expect(await service.sendScheduled(r.draft_id, at)).toBe('skipped');
+      expect((await row(r.draft_id))?.sendAt).toBe(at);
+      expect(provider.calls).not.toContain('send');
+    });
+
+    it('a due send that can never go as it is stops at once and says why', async () => {
+      make(false);
+      fs.writeFileSync(path.join(home, 'c.pdf'), '%PDF-c');
+      const r = await service.draftMessage({
+        accountId,
+        to: ['bob@example.com'],
+        subject: 'Hi',
+        body: 'x',
+        attachments: [{ path: path.join(home, 'c.pdf') }],
+      });
+      const at = inMin(10);
+      await service.scheduleById(r.draft_id, 1, at);
+      fs.rmSync(path.join(home, 'c.pdf'));
+      now += 10 * 60_000;
+      expect(await service.sendScheduled(r.draft_id, at)).toBe('missed');
+      const got = await row(r.draft_id);
+      expect(got?.sendAt).toBeNull();
+      expect(got?.error).toBe(
+        'Not sent at its time — attachment "c.pdf" is no longer available (~/c.pdf)',
+      );
+      expect(sendMock).not.toHaveBeenCalled();
+    });
+
     it('scheduled rows do not expire', async () => {
       const r = await draft();
       await service.scheduleById(r.draft_id, 1, inMin(60 * 24 * 30));

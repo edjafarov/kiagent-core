@@ -28,7 +28,11 @@ import type {
 import { withLogMessage } from '../core/mcp/log-safe';
 import { currentClient, currentTransport } from '../core/mcp/transport-context';
 import type { LogSink } from '../core/engine/engine';
-import { normalizeSnapshot, snapshotOf } from '../core/store/outbox';
+import {
+  DRAFT_TTL_MS,
+  normalizeSnapshot,
+  snapshotOf,
+} from '../core/store/outbox';
 import type { CoreStore } from '../core/store/store';
 import { createDraftLock } from './draft-lock';
 import { isShapedSummary, shapeOutboundError } from './error-copy';
@@ -60,7 +64,7 @@ export const CONFIRM_TTL_MS: Record<ConfirmMode, number> = {
   // the page-confirm fallback list_outbox re-links for them (spec mode C).
   chat: 30 * 60_000,
 };
-export const DRAFT_TTL_MS = 24 * 60 * 60_000;
+export { DRAFT_TTL_MS };
 
 /** gmail's `GmailReplyResolution` carries no subject — resolve-gmail.ts
  *  resolves recipients/threading only — so this mirrors resolve.ts's
@@ -256,7 +260,9 @@ export type PeekResult =
 export type ConfirmOutcome =
   | { kind: 'sent'; row: OutboxRow }
   | { kind: 'cancelled'; row: OutboxRow }
-  | { kind: 'failed'; row: OutboxRow; error: string }
+  /** `refused`: the send can't go as the draft is (a file gone or changed,
+   *  files a source can't carry) — trying again later won't help. */
+  | { kind: 'failed'; row: OutboxRow; error: string; refused?: boolean }
   | { kind: 'already'; row: OutboxRow } // link raced/reused
   /** The caller showed another revision than the row's: review again. */
   | { kind: 'changed'; row: OutboxRow }
@@ -986,6 +992,9 @@ export function createOutboundService(deps: {
   const confirmLocked = async (
     draftId: string,
     revision: number | null,
+    /** Last word before the CAS, once the row is refreshed and ready (a
+     *  scheduled send re-checks its time here). An outcome stops the send. */
+    lastCheck?: (row: OutboxRow) => Promise<ConfirmOutcome | null>,
   ): Promise<ConfirmOutcome> => {
     // Mirror peekByToken's lazy sweep: a token minted near the end of its
     // (short) TTL — or a review sheet left open — can still be nominally
@@ -1018,7 +1027,10 @@ export function createOutboundService(deps: {
         kind: 'failed',
         row,
         error: shapeOutboundError(ready.error).summary,
+        refused: true,
       };
+    const stop = lastCheck ? await lastCheck(row) : null;
+    if (stop) return stop;
 
     // The atomicity primitive: only the caller that wins this UPDATE
     // proceeds to send. In-process callers are already serialized by the
@@ -1591,11 +1603,17 @@ export function createOutboundService(deps: {
             row,
             error: ready.error.replace(/^not sent: /, 'not scheduled: '),
           };
-        await deps.store.outbox.schedule(draftId, new Date(at).toISOString());
-        return {
-          kind: 'scheduled',
-          row: (await deps.store.outbox.get(draftId)) ?? row,
-        };
+        const saved = await deps.store.outbox.schedule(
+          draftId,
+          new Date(at).toISOString(),
+        );
+        const current = await deps.store.outbox.get(draftId);
+        // It expired or moved on meanwhile (a sweep runs outside the lock).
+        if (!saved || !current)
+          return current
+            ? { kind: 'already', row: current }
+            : { kind: 'invalid' };
+        return { kind: 'scheduled', row: current };
       }),
 
     sendScheduled: (draftId, sendAt) =>
@@ -1619,8 +1637,31 @@ export function createOutboundService(deps: {
         }
         // The confirmed revision: any edit since cleared send_at, and one
         // adopted from the provider right now comes back as `changed`. A
-        // provider out of reach leaves the row armed for the next tick.
-        const out = await confirmLocked(draftId, row.revision);
+        // provider out of reach leaves the row armed for the next tick. The
+        // time is checked again just before the send: the refresh may have
+        // taken it past the 5 minutes, or the clock may have gone back.
+        let verdict: ScheduledSend | null = null;
+        const out = await confirmLocked(draftId, row.revision, async (r) => {
+          const t = nowMs();
+          const due = Date.parse(sendAt);
+          if (r.sendAt !== sendAt || t < due) verdict = 'skipped';
+          else if (t - due > SCHEDULE_LATE_MS) {
+            await deps.store.outbox.missSchedule(draftId, sendAt, expiresAt());
+            verdict = 'missed';
+          }
+          return verdict ? { kind: 'already', row: r } : null;
+        });
+        if (verdict) return verdict;
+        if (out.kind === 'failed' && out.refused) {
+          // Waiting won't fix it: stop now and say why.
+          await deps.store.outbox.missSchedule(
+            draftId,
+            sendAt,
+            expiresAt(),
+            `Not sent at its time — ${out.error.replace(/^not sent:\s*/, '')}`,
+          );
+          return 'missed';
+        }
         deps.logSink.log(
           'outbound',
           'info',

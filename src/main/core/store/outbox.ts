@@ -23,6 +23,8 @@ import type { AppDb, AppDbParam } from '../../db/app-db';
 import { newId } from '../ids';
 
 export const OUTBOX_PENDING_CAP = 20;
+/** How long a pending draft waits for review before it expires. */
+export const DRAFT_TTL_MS = 24 * 60 * 60_000;
 
 export interface OutboxDraftInput {
   accountId: AccountId;
@@ -115,8 +117,10 @@ export interface OutboxStore {
    *  `patch` fields only ever SET a value — `null` and "field omitted" are
    *  the same instruction: leave the stored column unchanged (COALESCE
    *  against the existing value). No transition ever clears a patch field
-   *  back to null; the table is an audit log, and a retry/redraft is a NEW
-   *  row, never a scrub of an old one's `error`/`externalMessageId`/`sentAt`. */
+   *  back to null — with one exception: 'draft' → 'sending' drops the
+   *  draft's schedule note (a draft's `error` is only ever that note). The
+   *  table is otherwise an audit log, and a retry/redraft is a NEW row,
+   *  never a scrub of an old one's `error`/`externalMessageId`/`sentAt`. */
   transition(
     id: string,
     from: OutboxStatus[],
@@ -158,7 +162,13 @@ export interface OutboxStore {
   /** A schedule that can no longer be kept (more than 5 min late): send_at
    *  cleared, a fresh expiry, the note "Missed its time — send now or
    *  reschedule". Only if send_at is still `sendAt`. */
-  missSchedule(id: string, sendAt: string, expiresAt: string): Promise<boolean>;
+  missSchedule(
+    id: string,
+    sendAt: string,
+    expiresAt: string,
+    /** Why, when not merely late (a send that can't go as it is). */
+    note?: string,
+  ): Promise<boolean>;
   /** A provably-failed or expired row back to draft as a new revision
    *  (error and send_at cleared, fresh expiry). Null if it was neither. */
   reopen(id: string, expiresAt: string): Promise<OutboxRow | null>;
@@ -245,6 +255,8 @@ export function createOutboxStore(
   },
 ): OutboxStore {
   const fireChanged = () => deps.changed.emit('change');
+  const freshExpiry = () =>
+    new Date(Date.parse(deps.now()) + DRAFT_TTL_MS).toISOString();
 
   const get = async (id: string): Promise<OutboxRow | null> => {
     const r = (
@@ -470,6 +482,10 @@ export function createOutboxStore(
                     recipient_display = ?, revision = revision + 1,
                     error = CASE WHEN send_at IS NOT NULL
                                  THEN 'Edited — schedule again' ELSE NULL END,
+                    -- A schedule kept the draft from expiring; without it
+                    -- the draft gets a fresh wait, not a lapsed one.
+                    expires_at = CASE WHEN send_at IS NOT NULL
+                                      THEN ? ELSE expires_at END,
                     send_at = NULL, mirror_json = COALESCE(?, mirror_json)
                   WHERE id = ? AND status = 'draft'`,
             params: [
@@ -480,6 +496,7 @@ export function createOutboxStore(
               snapshot.bodyMarkdown,
               JSON.stringify(snapshot.attachments),
               display,
+              freshExpiry(),
               mirror ?? null,
               id,
             ],
@@ -515,9 +532,11 @@ export function createOutboxStore(
     async schedule(id, sendAt) {
       const results = await db.batch([
         {
-          sql: `UPDATE outbox SET send_at = ?, error = NULL
+          sql: `UPDATE outbox SET send_at = ?, error = NULL,
+                  expires_at = CASE WHEN ? IS NULL AND send_at IS NOT NULL
+                                    THEN ? ELSE expires_at END
                 WHERE id = ? AND status = 'draft'`,
-          params: [sendAt, id],
+          params: [sendAt, sendAt, freshExpiry(), id],
         },
       ]);
       const moved = results[0].changes === 1;
@@ -535,13 +554,17 @@ export function createOutboxStore(
       return rows.map((r) => ({ id: r.id, sendAt: r.send_at }));
     },
 
-    async missSchedule(id, sendAt, expiresAt) {
+    async missSchedule(id, sendAt, expiresAt, note) {
       const results = await db.batch([
         {
-          sql: `UPDATE outbox SET send_at = NULL, expires_at = ?,
-                  error = 'Missed its time — send now or reschedule'
+          sql: `UPDATE outbox SET send_at = NULL, expires_at = ?, error = ?
                 WHERE id = ? AND status = 'draft' AND send_at = ?`,
-          params: [expiresAt, id, sendAt],
+          params: [
+            expiresAt,
+            note ?? 'Missed its time — send now or reschedule',
+            id,
+            sendAt,
+          ],
         },
       ]);
       const moved = results[0].changes === 1;

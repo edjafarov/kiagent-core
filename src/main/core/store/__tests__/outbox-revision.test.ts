@@ -260,6 +260,30 @@ describe('outbox revisions', () => {
     expect(await store.outbox.schedule(row.id, null)).toBe(false);
   });
 
+  it('a cancelled or edited schedule gives the draft a fresh wait, not a lapsed one', async () => {
+    const past = '2000-01-01T00:00:00.000Z';
+    const cancelled = await store.outbox.create(draft({ expiresAt: past }));
+    await store.outbox.schedule(cancelled.id, '2099-01-01T00:00:00Z');
+    await store.outbox.schedule(cancelled.id, null);
+    const edited = await store.outbox.create(draft({ expiresAt: past }));
+    await store.outbox.schedule(edited.id, '2099-01-01T00:00:00Z');
+    await store.outbox.applyContent(
+      edited.id,
+      snapshot({ bodyMarkdown: 'new' }),
+    );
+    await store.outbox.expireOverdue();
+    for (const id of [cancelled.id, edited.id])
+      expect((await store.outbox.get(id))?.status).toBe('draft');
+    expect((await store.outbox.get(edited.id))?.error).toBe(
+      'Edited — schedule again',
+    );
+    // An unscheduled draft keeps its own expiry.
+    const plain = await store.outbox.create(draft({ expiresAt: past }));
+    await store.outbox.schedule(plain.id, null);
+    await store.outbox.expireOverdue();
+    expect((await store.outbox.get(plain.id))?.status).toBe('expired');
+  });
+
   it('scheduled and mirrored drafts never expire; mirrored ones skip the cap', async () => {
     const past = '2000-01-01T00:00:00.000Z';
     const plain = await store.outbox.create(draft({ expiresAt: past }));
