@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.114.0](https://github.com/edjafarov/kiagent-core/compare/v0.113.4...v0.114.0) (2026-10-20)
+
+### Features
+
+* **main-api:** documents.fetchBytes for indexed originals (50 MB cap) ([6e4c995](https://github.com/edjafarov/kiagent-core/commit/6e4c995e38de4564c386837d62502c4fa32c6ed0))
+* **owner-mail:** attachments in and out of the owner channel ([5caccee](https://github.com/edjafarov/kiagent-core/commit/5cacceec289cc6aa32f7f30ef45810e635b635aa))
+
+### Bug Fixes
+
+* **owner-mail:** review fixes for attachments ([09320d1](https://github.com/edjafarov/kiagent-core/commit/09320d1e6ce7c79293fbd53d79d98a00da43039c))
+* **owner-mail:** stable 'no such attachment' error; document cap split ([bb6df1c](https://github.com/edjafarov/kiagent-core/commit/bb6df1c873e95848664d82e6ff2f119a5c83eb86))
+
 ## [0.113.4](https://github.com/edjafarov/kiagent-core/compare/v0.113.3...v0.113.4) (2026-10-19)
 
 ### Bug Fixes
