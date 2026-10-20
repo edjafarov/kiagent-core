@@ -315,7 +315,35 @@ export interface OutboundService extends OutboundToolApi {
   /** Panel support: the source ids that can send (bundled + extension
    *  senders), for the Outbox's "Sends from". PANEL-ONLY. */
   senderSources(): string[];
+  /** The review sheet's "Send later…" (spec §8): a confirm of `revision`
+   *  that sets the send time instead of sending; `sendAt` null cancels.
+   *  PANEL-ONLY — models may suggest a time, only the user schedules. */
+  scheduleById(
+    draftId: string,
+    revision: number,
+    sendAt: string | null,
+  ): Promise<ScheduleOutcome>;
+  /** The scheduler's send of one due row, if it is still scheduled for
+   *  `sendAt` (a cancel or reschedule in between wins). */
+  sendScheduled(draftId: string, sendAt: string): Promise<ScheduledSend>;
 }
+
+export type ScheduleOutcome =
+  | { kind: 'scheduled'; row: OutboxRow }
+  | { kind: 'unscheduled'; row: OutboxRow }
+  | { kind: 'changed'; row: OutboxRow }
+  | { kind: 'already'; row: OutboxRow }
+  | { kind: 'failed'; row: OutboxRow; error: string }
+  | { kind: 'invalid' };
+
+/** What a scheduler tick did with one due row. */
+export type ScheduledSend = 'skipped' | 'missed' | ConfirmOutcome['kind'];
+
+/** A schedule is never kept later than this (sleep, app closed, a refresh
+ *  that kept failing): the row waits for the user instead (spec §8). */
+export const SCHEDULE_LATE_MS = 5 * 60_000;
+/** The furthest ahead a send can be scheduled. */
+const SCHEDULE_MAX_AHEAD_MS = 365 * 24 * 3600_000;
 
 export function createOutboundService(deps: {
   store: CoreStore;
@@ -1521,6 +1549,80 @@ export function createOutboundService(deps: {
     },
 
     sendById: (draftId, revision) => confirmRow(draftId, revision),
+
+    scheduleById: (draftId, revision, sendAt) =>
+      withDraft(draftId, async (): Promise<ScheduleOutcome> => {
+        await deps.store.outbox.expireOverdue();
+        const stored = await deps.store.outbox.get(draftId);
+        if (!stored) return { kind: 'invalid' };
+        if (stored.status !== 'draft') return { kind: 'already', row: stored };
+        if (sendAt === null) {
+          await deps.store.outbox.schedule(draftId, null);
+          const row = (await deps.store.outbox.get(draftId)) ?? stored;
+          return { kind: 'unscheduled', row };
+        }
+        const at = Date.parse(sendAt);
+        if (!Number.isFinite(at)) throw new Error('outbox: not a time');
+        if (at < nowMs() + 60_000)
+          throw new Error('pick a time at least a minute from now');
+        if (at > nowMs() + SCHEDULE_MAX_AHEAD_MS)
+          throw new Error('pick a time within a year');
+        // A confirm of what the user saw: the provider's draft now, at the
+        // shown revision, and nothing that would refuse the send then.
+        let row: OutboxRow;
+        try {
+          row = await syncLocked(stored);
+        } catch (e) {
+          const error = `not scheduled: ${e instanceof Error ? e.message : String(e)}`;
+          return { kind: 'failed', row: stored, error };
+        }
+        if (row.status !== 'draft') return { kind: 'already', row };
+        if (row.revision !== revision) return { kind: 'changed', row };
+        const ready = await prepareSend(row);
+        if ('error' in ready)
+          return {
+            kind: 'failed',
+            row,
+            error: ready.error.replace(/^not sent: /, 'not scheduled: '),
+          };
+        await deps.store.outbox.schedule(draftId, new Date(at).toISOString());
+        return {
+          kind: 'scheduled',
+          row: (await deps.store.outbox.get(draftId)) ?? row,
+        };
+      }),
+
+    sendScheduled: (draftId, sendAt) =>
+      withDraft(draftId, async (): Promise<ScheduledSend> => {
+        const row = await deps.store.outbox.get(draftId);
+        if (!row || row.status !== 'draft' || row.sendAt !== sendAt)
+          return 'skipped';
+        const late = nowMs() - Date.parse(sendAt) > SCHEDULE_LATE_MS;
+        // An extension's sender comes up a little after boot: wait for it
+        // (still armed) rather than fail the send.
+        if (!late && !lookup.get(await sourceOf(row))) return 'skipped';
+        if (late) {
+          await deps.store.outbox.missSchedule(draftId, sendAt, expiresAt());
+          deps.logSink.log(
+            'outbound',
+            'info',
+            `draft ${draftId}: missed its scheduled time`,
+            { draftId },
+          );
+          return 'missed';
+        }
+        // The confirmed revision: any edit since cleared send_at, and one
+        // adopted from the provider right now comes back as `changed`. A
+        // provider out of reach leaves the row armed for the next tick.
+        const out = await confirmLocked(draftId, row.revision);
+        deps.logSink.log(
+          'outbound',
+          'info',
+          `draft ${draftId}: scheduled send → ${out.kind}`,
+          { draftId },
+        );
+        return out.kind;
+      }),
 
     senderSources: () => lookup.ids(),
 

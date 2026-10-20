@@ -800,6 +800,128 @@ describe('outbound service — provider draft mirror', () => {
     });
   });
 
+  describe('scheduled send', () => {
+    const inMin = (m: number) => new Date(now + m * 60_000).toISOString();
+
+    it('schedules at the shown revision; a stale one is changed', async () => {
+      const r = await draft();
+      expect((await service.scheduleById(r.draft_id, 2, inMin(10))).kind).toBe(
+        'changed',
+      );
+      const out = await service.scheduleById(r.draft_id, 1, inMin(10));
+      expect(out.kind).toBe('scheduled');
+      expect((await row(r.draft_id))?.sendAt).toBe(inMin(10));
+      expect(provider.calls).not.toContain('send');
+    });
+
+    it('refuses a time in the past or under a minute away', async () => {
+      const r = await draft();
+      await expect(
+        service.scheduleById(r.draft_id, 1, inMin(0.5)),
+      ).rejects.toThrow(/at least a minute/);
+    });
+
+    it('a due row is sent at its revision, as the provider draft', async () => {
+      const r = await draft();
+      await service.scheduleById(r.draft_id, 1, inMin(10));
+      now += 10 * 60_000;
+      expect(await service.sendScheduled(r.draft_id, inMin(0))).toBe('sent');
+      expect(provider.calls).toContain('send');
+      expect((await row(r.draft_id))?.status).toBe('sent');
+    });
+
+    it('a cancel or reschedule between the pick and the lock wins', async () => {
+      const r = await draft();
+      const first = inMin(10);
+      await service.scheduleById(r.draft_id, 1, first);
+      await service.scheduleById(r.draft_id, 1, inMin(20));
+      now += 10 * 60_000;
+      expect(await service.sendScheduled(r.draft_id, first)).toBe('skipped');
+      await service.scheduleById(r.draft_id, 1, null);
+      expect((await row(r.draft_id))?.sendAt).toBeNull();
+      expect(provider.calls).not.toContain('send');
+    });
+
+    it('more than 5 min late is never sent: missed, with a fresh expiry', async () => {
+      const r = await draft();
+      const at = inMin(10);
+      await service.scheduleById(r.draft_id, 1, at);
+      now += 16 * 60_000;
+      expect(await service.sendScheduled(r.draft_id, at)).toBe('missed');
+      const got = await row(r.draft_id);
+      expect(got?.status).toBe('draft');
+      expect(got?.sendAt).toBeNull();
+      expect(got?.error).toBe('Missed its time — send now or reschedule');
+      expect(Date.parse(got!.expiresAt)).toBeGreaterThan(now);
+      expect(provider.calls).not.toContain('send');
+      // Send now clears the note.
+      expect((await service.sendById(r.draft_id, 1)).kind).toBe('sent');
+      expect((await row(r.draft_id))?.error).toBeNull();
+    });
+
+    it('a provider out of reach keeps the row armed; the next tick sends', async () => {
+      const r = await draft();
+      const at = inMin(10);
+      await service.scheduleById(r.draft_id, 1, at);
+      now += 10 * 60_000;
+      provider.readImpl = async () => {
+        throw new Error('offline');
+      };
+      expect(await service.sendScheduled(r.draft_id, at)).toBe('failed');
+      expect((await row(r.draft_id))?.sendAt).toBe(at);
+      provider.readImpl = null;
+      now += 30_000;
+      expect(await service.sendScheduled(r.draft_id, at)).toBe('sent');
+    });
+
+    it('an edit (Kia or the provider) clears the schedule and says so', async () => {
+      const r = await draft();
+      await service.scheduleById(r.draft_id, 1, inMin(10));
+      provider.drafts.get('d1')!.bodyText = 'Edited in Gmail';
+      await service.refreshById(r.draft_id);
+      const got = await row(r.draft_id);
+      expect(got?.sendAt).toBeNull();
+      expect(got?.error).toBe('Edited — schedule again');
+      await service.scheduleById(r.draft_id, 2, inMin(10));
+      expect((await row(r.draft_id))?.error).toBeNull();
+    });
+
+    it('waits for a sender that is not up yet instead of failing', async () => {
+      const ms = await store.createAccount({
+        source: 'ms365',
+        identifier: 'me@outlook.com',
+        config: {},
+      });
+      const r = await service.draftMessage({
+        accountId: ms.id,
+        to: ['bob@example.com'],
+        subject: 'Hi',
+        body: 'x',
+      });
+      const at = inMin(10);
+      await service.scheduleById(r.draft_id, 1, at);
+      // the extension's sender has not registered yet
+      service = createOutboundService({
+        store,
+        prefs: fakePrefs(),
+        senders: new Map<string, Sender>([['gmail', { send: sendMock }]]),
+        logSink: { log: () => {} },
+        nowMs: () => now,
+      });
+      now += 10 * 60_000;
+      expect(await service.sendScheduled(r.draft_id, at)).toBe('skipped');
+      expect((await row(r.draft_id))?.status).toBe('draft');
+    });
+
+    it('scheduled rows do not expire', async () => {
+      const r = await draft();
+      await service.scheduleById(r.draft_id, 1, inMin(60 * 24 * 30));
+      now += 60 * 24 * 3600_000;
+      await store.outbox.expireOverdue();
+      expect((await row(r.draft_id))?.status).toBe('draft');
+    });
+  });
+
   it('peek by token shows the provider’s current draft', async () => {
     const r = await draft();
     provider.drafts.get('d1')!.bodyText = 'Edited in Gmail';

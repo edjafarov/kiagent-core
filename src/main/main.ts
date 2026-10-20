@@ -129,6 +129,7 @@ import { buildBundledSenders, composeSenders } from './outbound/senders';
 import { createOwnerMail } from './outbound/owner-mail';
 import { createDocumentBytes } from './outbound/document-bytes';
 import { createAttachments } from './outbound/attachments';
+import { createOutboxScheduler } from './outbound/scheduler';
 import { loadProductConfig } from './product';
 import { registerBundledProviders } from './providers';
 import { createInstallRegistry } from './providers/install-registry';
@@ -162,6 +163,7 @@ let bundledProviders: {
 } | null = null;
 let activity: ActivityLog | null = null;
 let stopActivityWatch: (() => void) | null = null;
+let stopOutboxScheduler: (() => void) | null = null;
 // Must stay referenced for the app's lifetime or GC destroys the icon.
 let tray: Tray | null = null;
 let trayMenu: TrayMenuController | null = null;
@@ -1088,6 +1090,16 @@ app
       );
     }
 
+    // Scheduled sends (spec §8): one tick now settles anything due or
+    // missed while the app was closed, then every 30 s.
+    const outboxScheduler = createOutboxScheduler({
+      store: p.store,
+      service: outbound,
+      logSink: p.logSink,
+    });
+    outboxScheduler.start();
+    stopOutboxScheduler = () => outboxScheduler.stop();
+
     // Tells the renderer the outbox may have changed (create, a transition,
     // an expired sweep, or an account removal cascade) without a per-row
     // payload — coalesced internally to one push per 50 ms.
@@ -1666,6 +1678,7 @@ app.on('before-quit', (event) => {
     tray?.destroy();
     tray = null;
     stopActivityWatch?.();
+    stopOutboxScheduler?.();
     await bundledProviders?.localLlm.dispose().catch(() => {});
     await bundledProviders?.localAsr.dispose().catch(() => {});
     await mcp?.stop().catch(() => {});

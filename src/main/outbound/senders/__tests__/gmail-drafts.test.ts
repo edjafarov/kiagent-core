@@ -308,7 +308,10 @@ describe('gmail draft mirror', () => {
             mimeType: 'multipart/mixed',
             headers: [{ name: 'To', value: 'bob@example.com' }],
             parts: [
-              { mimeType: 'text/html', body: { data: b64('<p>Real body</p>') } },
+              {
+                mimeType: 'text/html',
+                body: { data: b64('<p>Real body</p>') },
+              },
               {
                 mimeType: 'text/plain',
                 filename: 'notes.txt',

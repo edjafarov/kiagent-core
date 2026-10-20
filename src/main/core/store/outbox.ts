@@ -150,8 +150,15 @@ export interface OutboxStore {
   ): Promise<{ row: OutboxRow; changed: boolean }>;
   /** Mirror bookkeeping only; no revision bump. */
   setMirror(id: string, mirror: MirrorState): Promise<void>;
-  /** Sets or clears send_at on a draft; no revision bump. */
+  /** Sets or clears send_at on a draft; no revision bump. Clears the
+   *  draft's schedule note ("Missed its time", "Edited — schedule again"). */
   schedule(id: string, sendAt: string | null): Promise<boolean>;
+  /** Scheduled drafts whose time has come (send_at <= nowIso). */
+  listDue(nowIso: string): Promise<Array<{ id: string; sendAt: string }>>;
+  /** A schedule that can no longer be kept (more than 5 min late): send_at
+   *  cleared, a fresh expiry, the note "Missed its time — send now or
+   *  reschedule". Only if send_at is still `sendAt`. */
+  missSchedule(id: string, sendAt: string, expiresAt: string): Promise<boolean>;
   /** A provably-failed or expired row back to draft as a new revision
    *  (error and send_at cleared, fresh expiry). Null if it was neither. */
   reopen(id: string, expiresAt: string): Promise<OutboxRow | null>;
@@ -397,12 +404,15 @@ export function createOutboxStore(
       const placeholders = from.map(() => '?').join(',');
       const results = await db.batch([
         {
+          // Leaving 'draft' for 'sending' drops a draft's schedule note.
           sql: `UPDATE outbox SET status = ?,
-                  error = COALESCE(?, error),
+                  error = CASE WHEN ? = 'sending' THEN NULL
+                               ELSE COALESCE(?, error) END,
                   external_message_id = COALESCE(?, external_message_id),
                   sent_at = COALESCE(?, sent_at)
                 WHERE id = ? AND status IN (${placeholders})`,
           params: [
+            to,
             to,
             patch.error ?? null,
             patch.externalMessageId ?? null,
@@ -458,6 +468,8 @@ export function createOutboxStore(
             sql: `UPDATE outbox SET to_json = ?, cc_json = ?, bcc_json = ?,
                     subject = ?, body_markdown = ?, attachments_json = ?,
                     recipient_display = ?, revision = revision + 1,
+                    error = CASE WHEN send_at IS NOT NULL
+                                 THEN 'Edited — schedule again' ELSE NULL END,
                     send_at = NULL, mirror_json = COALESCE(?, mirror_json)
                   WHERE id = ? AND status = 'draft'`,
             params: [
@@ -503,8 +515,33 @@ export function createOutboxStore(
     async schedule(id, sendAt) {
       const results = await db.batch([
         {
-          sql: `UPDATE outbox SET send_at = ? WHERE id = ? AND status = 'draft'`,
+          sql: `UPDATE outbox SET send_at = ?, error = NULL
+                WHERE id = ? AND status = 'draft'`,
           params: [sendAt, id],
+        },
+      ]);
+      const moved = results[0].changes === 1;
+      if (moved) fireChanged();
+      return moved;
+    },
+
+    async listDue(nowIso) {
+      const rows = (await db.all(
+        `SELECT id, send_at FROM outbox
+          WHERE status = 'draft' AND send_at IS NOT NULL AND send_at <= ?
+          ORDER BY send_at`,
+        [nowIso],
+      )) as unknown as Array<{ id: string; send_at: string }>;
+      return rows.map((r) => ({ id: r.id, sendAt: r.send_at }));
+    },
+
+    async missSchedule(id, sendAt, expiresAt) {
+      const results = await db.batch([
+        {
+          sql: `UPDATE outbox SET send_at = NULL, expires_at = ?,
+                  error = 'Missed its time — send now or reschedule'
+                WHERE id = ? AND status = 'draft' AND send_at = ?`,
+          params: [expiresAt, id, sendAt],
         },
       ]);
       const moved = results[0].changes === 1;
