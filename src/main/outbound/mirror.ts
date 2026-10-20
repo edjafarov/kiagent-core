@@ -266,6 +266,13 @@ export function createMirrorOps(deps: {
       // flight after the lock is released could overwrite a later edit, or
       // land between a confirm's read and its send. The provider calls are
       // bounded themselves (per-attempt timeouts; the extension RPC's 60 s).
+      // Only the files this write uploads are Kia's by name alone.
+      const uploading = new Set(
+        (patch.attachments ?? []).map((a) => a.filename),
+      );
+      const origins = local.attachments.filter((a) =>
+        uploading.has(a.filename),
+      );
       let next: DraftRef;
       try {
         next = await drafts.update(ref, patch);
@@ -278,12 +285,8 @@ export function createMirrorOps(deps: {
         throw e;
       }
       try {
-        // Only the files this write uploads are Kia's by name alone.
-        const uploading = new Set(
-          (patch.attachments ?? []).map((a) => a.filename),
-        );
         return await readAdopt(row, drafts, next, MIRROR_CALL_DEADLINE_MS, {
-          origins: local.attachments.filter((a) => uploading.has(a.filename)),
+          origins,
           local,
           created,
         });
@@ -298,7 +301,9 @@ export function createMirrorOps(deps: {
             draftId: row.id,
           },
         );
-        return (await store.outbox.applyContent(row.id, local, next)).row;
+        return (
+          await store.outbox.applyContent(row.id, local, next, { origins })
+        ).row;
       }
     },
 

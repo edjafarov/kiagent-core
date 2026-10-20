@@ -797,6 +797,41 @@ describe('outbound service — provider draft mirror', () => {
       ).toBe('%PDF-b');
     });
 
+    it("a file Kia replaced whose read then failed is judged by Kia's size, not the old one's", async () => {
+      fs.mkdirSync(path.join(home, 'v3'));
+      fs.writeFileSync(path.join(home, 'v3', 'a.pdf'), 'x'.repeat(900));
+      const r = await withFile();
+      expect((await row(r.draft_id))?.mirror?.sizes).toEqual({ 'a.pdf': 6 });
+      let reads = 0;
+      provider.readImpl = async (ref) => {
+        reads += 1;
+        // revise: its sync read (1) passes, the update's own read (2) fails
+        if (reads === 2) throw new Error('read timed out');
+        return { state: 'draft', ref, content: provider.drafts.get(ref.id)! };
+      };
+      const v = await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        removeAttachments: ['a.pdf'],
+        addAttachments: [file('v3/a.pdf')],
+      });
+      expect(v.revision).toBe(2);
+      expect((await row(r.draft_id))?.mirror?.sizes).toBeUndefined();
+      // A plain Gmail refresh: the new file at its own size, no new revision.
+      await service.listOutbox({});
+      let got = await row(r.draft_id);
+      expect(got?.revision).toBe(2);
+      expect(got?.attachments[0]).toMatchObject({ size: 900 });
+      expect(got?.attachments[0].from).toMatchObject({ kind: 'file' });
+      // Swapped there for a file of the old file's size: an edit to review.
+      const d = provider.drafts.get('d1')!;
+      d.attachments = d.attachments.map((a) => ({ ...a, size: 6 }));
+      await service.listOutbox({});
+      got = await row(r.draft_id);
+      expect(got?.revision).toBe(3);
+      expect(got?.attachments[0].from).toBeUndefined();
+    });
+
     it('a file swapped for a link out of bounds after it was added is not sent', async () => {
       make(false);
       const r = await withFile();

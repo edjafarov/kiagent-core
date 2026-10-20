@@ -501,11 +501,21 @@ export function createOutboxStore(
             : a;
         }),
       };
+      // The provider's count of each file, as just read. Kia's own write
+      // forgets the count of each file it uploads or drops: whatever the
+      // provider reports next for that name is not vouched for.
       const sizes = fromProvider
         ? Object.fromEntries(
             incoming.attachments.map((a) => [a.filename, a.size]),
           )
-        : undefined;
+        : row.mirror?.sizes &&
+          Object.fromEntries(
+            Object.entries(row.mirror.sizes).filter(
+              ([name]) =>
+                !uploading.has(name) &&
+                incoming.attachments.some((a) => a.filename === name),
+            ),
+          );
       const loose = from === 'provider' || from === 'created';
       const key = (x: DraftSnapshot) =>
         normalizeSnapshot(x, { provider: loose });
