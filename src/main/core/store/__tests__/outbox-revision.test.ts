@@ -355,6 +355,21 @@ describe('outbox revisions', () => {
     );
   });
 
+  it("Outlook's RE: on a reply is no edit; any other subject change is", () => {
+    const kia = snapshot({ subject: 'Re: Lunch' });
+    const key = (s: string) =>
+      normalizeSnapshot(snapshot({ subject: s }), { provider: true });
+    expect(key('RE: Lunch')).toBe(normalizeSnapshot(kia, { provider: true }));
+    expect(key('RE: lunch')).not.toBe(
+      normalizeSnapshot(kia, { provider: true }),
+    );
+    expect(key('Lunch')).not.toBe(normalizeSnapshot(kia, { provider: true }));
+    // Kia's own edit stays strict.
+    expect(normalizeSnapshot(snapshot({ subject: 'RE: Lunch' }))).not.toBe(
+      normalizeSnapshot(kia),
+    );
+  });
+
   it('normalizeSnapshot is stable under attachment order', () => {
     const a = { filename: 'a', mime: 'x', size: 1 };
     const b = { filename: 'b', mime: 'x', size: 2 };
