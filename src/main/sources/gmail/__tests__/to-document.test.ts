@@ -429,6 +429,46 @@ describe('owner-channel mail stays out of the corpus', () => {
   });
 });
 
+describe('unsent drafts stay out of the corpus', () => {
+  const msg = (id: string, labelIds: string[], from: string) =>
+    ({
+      id,
+      threadId: 'td',
+      labelIds,
+      internalDate: '1704106800000',
+      payload: {
+        mimeType: 'text/plain',
+        headers: [
+          { name: 'From', value: from },
+          { name: 'To', value: 'me@gmail.com' },
+          { name: 'Subject', value: 'Plans' },
+        ],
+        body: { data: Buffer.from(`body ${id}`).toString('base64url') },
+      },
+    }) as GmailApiMessage;
+  const item = (messages: GmailApiMessage[]): GmailThreadItem => ({
+    id: 'td',
+    accountEmail: 'me@gmail.com',
+    selectedBuckets: ['mail'],
+    messages,
+  });
+
+  it('indexes only the sent messages of a thread with a draft reply', () => {
+    const real = msg('r', ['INBOX'], 'bob@x.com');
+    const draft = msg('d', ['DRAFT'], 'me@gmail.com');
+    const out = toDocument(item([real, draft]));
+    const doc = (Array.isArray(out) ? out[0] : out) as DocumentInput;
+    const text = JSON.stringify(doc);
+    expect(text).toContain('body r');
+    expect(text).not.toContain('body d');
+    expect(doc.metadata?.messageCount).toBe(1);
+  });
+
+  it('a thread that is only a draft is not a document', () => {
+    expect(toDocument(item([msg('d', ['DRAFT'], 'me@gmail.com')]))).toBeNull();
+  });
+});
+
 describe('toDocument with an unreadable message', () => {
   it('indexes the rest of the thread instead of failing the sync', () => {
     const item = itemFromFixture();

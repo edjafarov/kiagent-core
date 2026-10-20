@@ -63,10 +63,14 @@ export function toDocument(
 ): DocumentInput | DocumentInput[] | null {
   // Owner-channel mail (requests to you+kia@ and Kia's answers) is a
   // conversation with the assistant, not the user's mail — never indexed.
+  // Neither is an unsent draft: it is not mail yet, and Kia's own drafts
+  // live in the outbox.
   const item = {
     ...thread,
     messages: thread.messages.filter(
-      (m) => !isOwnerChannelMessage(m, thread.accountEmail),
+      (m) =>
+        !m.labelIds?.includes('DRAFT') &&
+        !isOwnerChannelMessage(m, thread.accountEmail),
     ),
   };
   if (item.messages.length === 0) return null;
