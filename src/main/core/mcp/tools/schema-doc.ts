@@ -338,7 +338,36 @@ TEXT and attention timestamps are INTEGER Unix milliseconds.`,
         {
           name: 'expires_at',
           type: 'TEXT (ISO-8601)',
-          notes: 'Confirmation deadline; past this a pending draft expires.',
+          notes:
+            'Confirmation deadline; past this a pending draft expires (never for scheduled or Gmail/Outlook-mirrored drafts).',
+        },
+        {
+          name: 'revision',
+          type: 'INTEGER',
+          notes:
+            'Starts at 1; bumped by every content change. A send names the revision the user saw.',
+        },
+        {
+          name: 'bcc_json',
+          type: 'TEXT (JSON array)',
+          notes: 'Bcc addresses (from the Gmail/Outlook draft).',
+        },
+        {
+          name: 'attachments_json',
+          type: 'TEXT (JSON array)',
+          notes:
+            '[{filename, mime, size, from?: {kind: document|file, documentId|path}}]; no `from` = added in Gmail/Outlook.',
+        },
+        {
+          name: 'mirror_json',
+          type: 'TEXT (JSON)',
+          notes:
+            '{ref: {accountId, id, threadId?} | null, error?, sentElsewhere?} — the Gmail/Outlook draft this row mirrors; NULL when not mirrored.',
+        },
+        {
+          name: 'send_at',
+          type: 'TEXT (ISO-8601)',
+          notes: 'Scheduled send time; NULL when not scheduled.',
         },
       ],
       relations: [

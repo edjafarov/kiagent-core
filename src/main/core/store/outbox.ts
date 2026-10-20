@@ -11,6 +11,10 @@ import type {
   AccountId,
   ConfirmMode,
   DocumentId,
+  DraftRef,
+  DraftSnapshot,
+  MirrorState,
+  OutboxAttachment,
   OutboxRow,
   OutboxStatus,
 } from '@shared/contracts';
@@ -36,6 +40,44 @@ export interface OutboxDraftInput {
   /** The drafting MCP client's name; null for the panel or an unnamed app. */
   createdBy?: string | null;
   expiresAt: string;
+  bcc?: string[];
+  attachments?: OutboxAttachment[];
+}
+
+/** A row that mirrors a provider draft: never expires, not in the cap. */
+const MIRRORED = `(mirror_json IS NOT NULL AND json_extract(mirror_json, '$.ref') IS NOT NULL)`;
+
+const lowerAll = (xs: string[]) => xs.map((x) => x.trim().toLowerCase());
+
+/** The comparison key of a draft's reviewable content (spec §4.1): trimmed,
+ *  CRLF → LF, trailing whitespace stripped per line, addresses lower-cased,
+ *  attachments as a set of filename + size. */
+export function normalizeSnapshot(s: DraftSnapshot): string {
+  const body = s.bodyMarkdown
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.replace(/\s+$/, ''))
+    .join('\n')
+    .trim();
+  return JSON.stringify([
+    lowerAll(s.to),
+    lowerAll(s.cc),
+    lowerAll(s.bcc),
+    s.subject?.trim() ?? null,
+    body,
+    s.attachments.map((a) => [a.filename, a.size]).sort(),
+  ]);
+}
+
+export function snapshotOf(row: OutboxRow): DraftSnapshot {
+  return {
+    to: row.to,
+    cc: row.cc,
+    bcc: row.bcc,
+    subject: row.subject,
+    bodyMarkdown: row.bodyMarkdown,
+    attachments: row.attachments,
+  };
 }
 
 export interface OutboxStore {
@@ -92,6 +134,22 @@ export interface OutboxStore {
    *  sent; never auto-retried). Sends run in-process, so at boot no send can
    *  legitimately be in flight. */
   recoverOrphanedSending(): Promise<void>;
+  /** The ONE content write (spec §4.1). The caller holds the per-draft
+   *  lock and has compared revisions. Stores `ref` when given; when the
+   *  normalized content differs, writes it, bumps the revision, clears
+   *  send_at and recomputes recipient_display. Throws on a non-draft. */
+  applyContent(
+    id: string,
+    snapshot: DraftSnapshot,
+    ref?: DraftRef | null,
+  ): Promise<{ row: OutboxRow; changed: boolean }>;
+  /** Mirror bookkeeping only; no revision bump. */
+  setMirror(id: string, mirror: MirrorState): Promise<void>;
+  /** Sets or clears send_at on a draft; no revision bump. */
+  schedule(id: string, sendAt: string | null): Promise<boolean>;
+  /** A provably-failed or expired row back to draft as a new revision
+   *  (error and send_at cleared, fresh expiry). Null if it was neither. */
+  reopen(id: string, expiresAt: string): Promise<OutboxRow | null>;
   /** Lazily generated 32-byte HMAC secret, sealed with the store's encrypt
    *  codec, persisted in the meta table under 'outboundSecret'. */
   secret(): Promise<Buffer>;
@@ -118,6 +176,11 @@ interface OutboxRowSql {
   created_at: string;
   sent_at: string | null;
   expires_at: string;
+  revision: number;
+  bcc_json: string;
+  attachments_json: string;
+  mirror_json: string | null;
+  send_at: string | null;
 }
 
 function toRow(r: OutboxRowSql): OutboxRow {
@@ -145,6 +208,12 @@ function toRow(r: OutboxRowSql): OutboxRow {
     createdAt: r.created_at,
     sentAt: r.sent_at,
     expiresAt: r.expires_at,
+    revision: r.revision,
+    bcc: JSON.parse(r.bcc_json) as string[],
+    attachments: JSON.parse(r.attachments_json) as OutboxAttachment[],
+    mirror:
+      r.mirror_json === null ? null : (JSON.parse(r.mirror_json) as MirrorState),
+    sendAt: r.send_at,
   };
 }
 
@@ -174,7 +243,7 @@ export function createOutboxStore(
     const r = (
       await db.all(
         `SELECT COUNT(*) AS n FROM outbox
-          WHERE account_id = ? AND status = 'draft'`,
+          WHERE account_id = ? AND status = 'draft' AND NOT ${MIRRORED}`,
         [accountId],
       )
     )[0] as { n: number };
@@ -187,7 +256,8 @@ export function createOutboxStore(
     const results = await db.batch([
       {
         sql: `UPDATE outbox SET status = 'expired'
-                WHERE status = 'draft' AND expires_at <= ?`,
+                WHERE status = 'draft' AND expires_at <= ?
+                  AND send_at IS NULL AND NOT ${MIRRORED}`,
         params: [deps.now()],
       },
     ]);
@@ -229,8 +299,8 @@ export function createOutboxStore(
         `INSERT INTO outbox (id, account_id, kind, reply_to_document_id,
            outbound_ref, recipient_display, to_json, cc_json, subject,
            body_markdown, threading_json, confirm_mode, status, created_via,
-           created_by, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
+           created_by, created_at, expires_at, bcc_json, attachments_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)`,
         [
           id,
           d.accountId,
@@ -250,6 +320,8 @@ export function createOutboxStore(
           d.createdBy ?? null,
           deps.now(),
           d.expiresAt,
+          JSON.stringify(d.bcc ?? []),
+          JSON.stringify(d.attachments ?? []),
         ],
       );
       const row = await get(id);
@@ -336,6 +408,89 @@ export function createOutboxStore(
       const moved = results[0].changes === 1;
       if (moved) fireChanged();
       return moved;
+    },
+
+    async applyContent(id, snapshot, ref) {
+      const row = await get(id);
+      if (!row || row.status !== 'draft') throw new Error('outbox: not a draft');
+      const changed =
+        normalizeSnapshot(snapshotOf(row)) !== normalizeSnapshot(snapshot);
+      const mirror =
+        ref === undefined
+          ? undefined
+          : JSON.stringify({ ...(row.mirror ?? {}), ref, error: undefined });
+      if (changed) {
+        const sameTo =
+          JSON.stringify(lowerAll(row.to)) ===
+          JSON.stringify(lowerAll(snapshot.to));
+        const display =
+          row.kind === 'reply' && sameTo
+            ? row.recipientDisplay
+            : snapshot.to.join(', ') || row.recipientDisplay;
+        await db.batch([
+          {
+            sql: `UPDATE outbox SET to_json = ?, cc_json = ?, bcc_json = ?,
+                    subject = ?, body_markdown = ?, attachments_json = ?,
+                    recipient_display = ?, revision = revision + 1,
+                    send_at = NULL, mirror_json = COALESCE(?, mirror_json)
+                  WHERE id = ? AND status = 'draft'`,
+            params: [
+              JSON.stringify(snapshot.to),
+              JSON.stringify(snapshot.cc),
+              JSON.stringify(snapshot.bcc),
+              snapshot.subject,
+              snapshot.bodyMarkdown,
+              JSON.stringify(snapshot.attachments),
+              display,
+              mirror ?? null,
+              id,
+            ],
+          },
+        ]);
+        fireChanged();
+      } else if (mirror !== undefined) {
+        await db.run(`UPDATE outbox SET mirror_json = ? WHERE id = ?`, [
+          mirror,
+          id,
+        ]);
+      }
+      const next = await get(id);
+      if (!next) throw new Error('outbox: row vanished');
+      return { row: next, changed };
+    },
+
+    async setMirror(id, mirror) {
+      await db.run(`UPDATE outbox SET mirror_json = ? WHERE id = ?`, [
+        JSON.stringify(mirror),
+        id,
+      ]);
+      fireChanged();
+    },
+
+    async schedule(id, sendAt) {
+      const results = await db.batch([
+        {
+          sql: `UPDATE outbox SET send_at = ? WHERE id = ? AND status = 'draft'`,
+          params: [sendAt, id],
+        },
+      ]);
+      const moved = results[0].changes === 1;
+      if (moved) fireChanged();
+      return moved;
+    },
+
+    async reopen(id, expiresAt) {
+      const results = await db.batch([
+        {
+          sql: `UPDATE outbox SET status = 'draft', error = NULL,
+                  revision = revision + 1, send_at = NULL, expires_at = ?
+                WHERE id = ? AND status IN ('failed', 'expired')`,
+          params: [expiresAt, id],
+        },
+      ]);
+      if (results[0].changes !== 1) return null;
+      fireChanged();
+      return get(id);
     },
 
     async recoverOrphanedSending() {

@@ -834,6 +834,52 @@ export interface OutboxRow {
   createdAt: string;
   sentAt: string | null;
   expiresAt: string;
+  /** Bumped by every content change; every send names the revision its
+   *  caller showed (schema v10). */
+  revision: number;
+  bcc: string[];
+  attachments: OutboxAttachment[];
+  /** The provider draft this row mirrors (Gmail/Outlook), or null. */
+  mirror: MirrorState | null;
+  /** Scheduled send time (ISO), or null. */
+  sendAt: string | null;
+}
+
+/** A file on an Outbox draft. Its identity is the filename, unique within
+ *  a draft. `from` says where Kia got it; absent = added in Gmail/Outlook. */
+export interface OutboxAttachment {
+  filename: string;
+  mime: string;
+  size: number;
+  from?:
+    | { kind: 'document'; documentId: string }
+    | { kind: 'file'; path: string };
+}
+
+/** A provider draft (Gmail/Outlook). Carries the account so every
+ *  ref-based mirror op can pick credentials. */
+export interface DraftRef {
+  accountId: AccountId;
+  id: string;
+  threadId?: string;
+}
+
+export interface MirrorState {
+  /** null = not mirrored (yet). */
+  ref: DraftRef | null;
+  /** Why the last mirror operation failed. */
+  error?: string;
+  sentElsewhere?: boolean;
+}
+
+/** The reviewable content of a draft: what a revision covers. */
+export interface DraftSnapshot {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string | null;
+  bodyMarkdown: string;
+  attachments: OutboxAttachment[];
 }
 
 /** What a Sender is asked to send — plain data in, plain data out, no

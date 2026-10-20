@@ -47,6 +47,11 @@ describe('outbox schema', () => {
       'sent_at',
       'expires_at',
       'created_by', // v8, appended by ALTER TABLE
+      'revision', // v10
+      'bcc_json',
+      'attachments_json',
+      'mirror_json',
+      'send_at',
     ]);
   });
 

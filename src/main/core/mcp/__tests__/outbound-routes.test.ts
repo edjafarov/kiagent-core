@@ -585,6 +585,11 @@ function baseRow(overrides: Partial<OutboxRow> = {}): OutboxRow {
     createdAt: '2026-07-01T00:00:00Z',
     sentAt: null,
     expiresAt: '2026-07-02T00:00:00Z',
+    revision: 1,
+    bcc: [],
+    attachments: [],
+    mirror: null,
+    sendAt: null,
     ...overrides,
   };
 }

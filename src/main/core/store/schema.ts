@@ -1179,6 +1179,25 @@ const MIGRATIONS: Migration[] = [
       PRIMARY KEY (consumer, doc_id, key)
     )`);
   },
+
+  // v10 — outbox revisions, Bcc, attachments, the provider-draft mirror and
+  // scheduled send (alpha-cent docs/superpowers/specs/
+  // 2026-10-20-outbox-draft-sync-design.md §4.1). ADD COLUMN only.
+  (db) => {
+    const cols = new Set(
+      (
+        db.prepare(`PRAGMA table_info(outbox)`).all() as { name: string }[]
+      ).map((c) => c.name),
+    );
+    const add = (name: string, ddl: string) => {
+      if (!cols.has(name)) db.exec(`ALTER TABLE outbox ADD COLUMN ${ddl}`);
+    };
+    add('revision', 'revision INTEGER NOT NULL DEFAULT 1');
+    add('bcc_json', `bcc_json TEXT NOT NULL DEFAULT '[]'`);
+    add('attachments_json', `attachments_json TEXT NOT NULL DEFAULT '[]'`);
+    add('mirror_json', 'mirror_json TEXT');
+    add('send_at', 'send_at TEXT');
+  },
 ];
 
 /**
