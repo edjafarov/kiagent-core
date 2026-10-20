@@ -672,20 +672,30 @@ describe('outbound service — provider draft mirror', () => {
       expect((await row(r.draft_id))?.subject).toBe('RE: Hi');
     });
 
-    it('a draft synced before sizes were remembered is no new revision on its next read', async () => {
+    it("with no remembered size, a file is Kia's only at Kia's own size", async () => {
+      // A row synced before sizes were remembered, or whose upload read failed.
+      const forget = async (id: string) => {
+        const before = (await row(id))!;
+        await store.outbox.setMirror(id, {
+          ...before.mirror!,
+          sizes: undefined,
+        });
+      };
       const r = await withFile();
-      const before = (await row(r.draft_id))!;
-      await store.outbox.setMirror(r.draft_id, {
-        ...before.mirror!,
-        sizes: undefined,
-      });
-      const d = provider.drafts.get('d1')!;
-      d.attachments = d.attachments.map((a) => ({ ...a, size: a.size + 158 }));
+      await forget(r.draft_id);
+      // Gmail counts exactly: no new revision, and remembered from here on.
       await service.listOutbox({});
-      const got = await row(r.draft_id);
+      let got = await row(r.draft_id);
       expect(got?.revision).toBe(1);
-      expect(got?.attachments[0]).toMatchObject({ size: 6 });
-      expect(got?.mirror?.sizes).toEqual({ 'a.pdf': 164 });
+      expect(got?.mirror?.sizes).toEqual({ 'a.pdf': 6 });
+      // Any other size might be a replaced file: an edit, to be reviewed.
+      await forget(r.draft_id);
+      const d = provider.drafts.get('d1')!;
+      d.attachments = d.attachments.map((a) => ({ ...a, size: 900 }));
+      await service.listOutbox({});
+      got = await row(r.draft_id);
+      expect(got?.revision).toBe(2);
+      expect(got?.attachments[0].from).toBeUndefined();
     });
 
     it('a file replaced in the provider under the same name is an edit', async () => {

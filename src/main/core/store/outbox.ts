@@ -478,18 +478,17 @@ export function createOutboxStore(
       // A readback carries no `from`: keep where Kia got each file. A
       // provider's size is its own count (Outlook adds MIME overhead), so a
       // file Kia attached keeps the size Kia read — while the provider
-      // reports the size it reported last time, or Kia is uploading it now.
-      // Another size under the same name is a file replaced there (the same
-      // size is not caught: no provider hands out a content hash on a read).
+      // reports the size it reported last time (none remembered: Kia's own
+      // count), or Kia is uploading it now. Another size under the same name
+      // is a file replaced there (the same size is not caught: no provider
+      // hands out a content hash on a read).
       const known = new Map(
         [...row.attachments, ...origins]
           .filter((a) => a.from)
           .map((a) => [a.filename, a]),
       );
       const uploading = new Set(origins.map((a) => a.filename));
-      // A row synced before sizes were remembered: trust the name once, as
-      // before, and remember from here on.
-      const seen = row.mirror?.sizes;
+      const seen = row.mirror?.sizes ?? {};
       const snapshot = {
         ...incoming,
         attachments: incoming.attachments.map((a) => {
@@ -497,8 +496,7 @@ export function createOutboxStore(
           if (a.from || !k) return a;
           if (!fromProvider) return { ...a, from: k.from };
           return uploading.has(a.filename) ||
-            !seen ||
-            seen[a.filename] === a.size
+            a.size === (seen[a.filename] ?? k.size)
             ? { ...a, from: k.from, size: k.size }
             : a;
         }),
