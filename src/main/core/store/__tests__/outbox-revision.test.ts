@@ -169,6 +169,42 @@ describe('outbox revisions', () => {
     expect(r.row.recipientDisplay).toBe('Bob Builder');
   });
 
+  it("a reply that left its subject to the provider takes the provider's without a new revision", async () => {
+    // Outlook replies: Kia sends no subject, createReply writes "RE: …".
+    const row = await store.outbox.create(
+      draft({ kind: 'reply', subject: null }),
+    );
+    const ref = { accountId, id: 'ol-1', threadId: 'c-1' };
+    const r = await store.outbox.applyContent(
+      row.id,
+      snapshot({ subject: 'RE: Hi' }),
+      ref,
+      [],
+      true,
+    );
+    expect(r.changed).toBe(false);
+    expect(r.row).toMatchObject({ revision: 1, subject: 'RE: Hi' });
+    expect(r.row.mirror).toEqual({ ref });
+    // Once it has one, a subject edit in the provider is an edit.
+    const r2 = await store.outbox.applyContent(
+      row.id,
+      snapshot({ subject: 'RE: Hi there' }),
+      ref,
+      [],
+      true,
+    );
+    expect(r2.row).toMatchObject({ revision: 2, subject: 'RE: Hi there' });
+    // Kia's own edit to a null subject stays an edit.
+    const own = await store.outbox.create(
+      draft({ kind: 'reply', subject: null }),
+    );
+    const r3 = await store.outbox.applyContent(
+      own.id,
+      snapshot({ subject: 'Re: Hi' }),
+    );
+    expect(r3.row.revision).toBe(2);
+  });
+
   it('stores a ref without a revision bump when the content is the same', async () => {
     const row = await store.outbox.create(draft());
     const ref = { accountId, id: 'gm-1', threadId: 't-1' };

@@ -479,7 +479,15 @@ export function createOutboxStore(
       };
       const key = (x: DraftSnapshot) =>
         normalizeSnapshot(x, { provider: fromProvider });
-      const changed = key(snapshotOf(row)) !== key(snapshot);
+      // A reply that left its subject to the provider (Outlook's createReply
+      // writes "RE: …") takes the provider's without a new revision.
+      const filled =
+        fromProvider && row.subject === null && snapshot.subject !== null;
+      const changed =
+        key({
+          ...snapshotOf(row),
+          ...(filled && { subject: snapshot.subject }),
+        }) !== key(snapshot);
       const merged =
         ref === undefined
           ? undefined
@@ -527,6 +535,13 @@ export function createOutboxStore(
         ]);
         // expireOverdue runs outside the per-draft lock.
         if (results[0].changes !== 1) throw new Error('outbox: not a draft');
+        fireChanged();
+      } else if (filled) {
+        await db.run(
+          `UPDATE outbox SET subject = ?, mirror_json = COALESCE(?, mirror_json)
+            WHERE id = ?`,
+          [snapshot.subject, mirror ?? null, id],
+        );
         fireChanged();
       } else if (mirror !== undefined) {
         await db.run(`UPDATE outbox SET mirror_json = ? WHERE id = ?`, [

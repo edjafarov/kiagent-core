@@ -18,7 +18,7 @@ describe('changedFields', () => {
     expect(
       changedFields(
         row({}),
-        row({ to: ['Ann <ann@x.example>'], subject: 'RE: Lunch' }),
+        row({ to: ['Ann <ann@x.example>'], bodyMarkdown: ' Hi\n' }),
       ),
     ).toEqual([]);
     expect(
