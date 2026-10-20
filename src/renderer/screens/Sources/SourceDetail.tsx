@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { AccountId } from '@shared/contracts';
 import {
   AttentionList,
@@ -57,6 +57,41 @@ function Problem(props: {
             onReconnect={props.onReconnect}
             primaryLast
           />
+        }
+      />
+    </AttentionList>
+  );
+}
+
+/** An account whose grant predates draft sync: Kia's drafts stay in the
+ *  Outbox only until it is reconnected (outbox:mirror-status). */
+function DraftSyncNote(props: {
+  accountId: AccountId;
+  onReconnect: () => void;
+}): React.ReactElement | null {
+  const [reconnect, setReconnect] = useState(false);
+  useEffect(() => {
+    let live = true;
+    window.kiagent
+      .invoke('outbox:mirror-status', { accountId: props.accountId })
+      .then((r) => live && setReconnect(r.reconnect))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [props.accountId]);
+  if (!reconnect) return null;
+  return (
+    <AttentionList aria-label="Drafts">
+      <AttentionRow
+        tone="work"
+        kind="Drafts"
+        title="Reconnect to sync drafts"
+        sub="Kia's drafts stay in the Outbox until this account allows drafts."
+        action={
+          <Button size="sm" onClick={props.onReconnect}>
+            Reconnect
+          </Button>
         }
       />
     </AttentionList>
@@ -185,6 +220,10 @@ export function SourceDetail(props: {
           ) : (
             <>
               <Problem entry={entry} onReconnect={() => setView('reconnect')} />
+              <DraftSyncNote
+                accountId={a.id}
+                onReconnect={() => setView('reconnect')}
+              />
               {descriptor?.folderScope === true && (
                 <TrackedFolders account={a} />
               )}

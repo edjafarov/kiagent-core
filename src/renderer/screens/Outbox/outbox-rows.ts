@@ -38,7 +38,8 @@ export function actionFor(r: OutboxPanelRow): RowAction {
   return 'none';
 }
 
-/** The word a history row shows beside its action — none for `sent`. A
+/** The word a history row shows beside its action — none for a `sent`
+ *  row Kia sent. A
  *  `tone` word is a `Status` (with its dot); the rest are plain and muted. */
 export function statusWord(
   r: OutboxPanelRow,
@@ -58,9 +59,24 @@ export function statusWord(
       return { label: 'Discarded' };
     case 'expired':
       return { label: 'Expired' };
+    case 'sent':
+      // Sent from the mail app, not from Kia: say so.
+      return r.mirror?.sentElsewhere
+        ? { label: `Sent from ${r.mirror.provider ?? 'your mail app'}` }
+        : null;
     default:
       return null;
   }
+}
+
+/** The review's line on where the draft also lives: "In Gmail Drafts", or
+ *  why it is not there. Null when the account can't keep drafts. */
+export function mirrorLine(r: OutboxPanelRow): string | null {
+  const m = r.mirror;
+  if (!m || r.status !== 'draft') return null;
+  if (m.synced)
+    return m.provider ? `In ${m.provider} Drafts` : "In your mail app's Drafts";
+  return m.error ? `Not synced: ${m.error}` : null;
 }
 
 /** A row that did not go out reads faint (its mark and words). */

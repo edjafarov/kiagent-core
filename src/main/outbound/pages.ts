@@ -54,6 +54,7 @@ const OUTBOX_CSS = `
 .ob-to-label { font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
 .ob-to-name { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; color: var(--text-primary); }
 .ob-to-list { font-size: 12.5px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.ob-mirror { font-size: 12px; color: var(--text-secondary); }
 .ob-subject { font-size: 15px; font-weight: 600; color: var(--text-primary); }
 .ob-body { white-space: pre-wrap; font-family: inherit; font-size: 14px; line-height: 1.55;
   color: var(--text-primary); background: var(--bg-muted);
@@ -169,6 +170,15 @@ function recipientBlock(row: OutboxRow): string {
   </div>`;
 }
 
+/** Where the draft lives besides Kia: "In Gmail Drafts", or why not. */
+export function mirrorNote(row: OutboxRow): string | null {
+  const m = row.mirror;
+  if (!m) return null;
+  if (m.ref)
+    return m.provider ? `In ${m.provider} Drafts` : "In your mail app's Drafts";
+  return m.error ? `Not synced: ${m.error}` : null;
+}
+
 /** The one confirm page for every mode (spec §4.3). `confirmPath` carries
  *  the revision shown here; `changed` = a Send from an older page landed
  *  here instead (HTTP 409). */
@@ -180,6 +190,7 @@ export function reviewPage(
     chrome(`
   ${p.changed ? `<p class="ob-note ob-changed">This draft changed — review it again. Nothing was sent.</p>` : ''}
   ${recipientBlock(row)}
+  ${mirrorNote(row) ? `<div class="ob-mirror">${esc(mirrorNote(row)!)}</div>` : ''}
   ${row.subject ? `<div class="ob-subject">${esc(row.subject)}</div>` : ''}
   <pre class="ob-body">${esc(row.bodyMarkdown)}</pre>
   <span class="ob-rev" hidden>${row.revision}</span>

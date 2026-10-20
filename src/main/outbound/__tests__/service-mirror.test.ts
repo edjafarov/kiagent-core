@@ -156,6 +156,7 @@ describe('outbound service — provider draft mirror', () => {
       expect(provider.calls).toEqual(['create', 'read']);
       expect((await row(r.draft_id))?.mirror).toEqual({
         ref: { accountId, id: 'd1', threadId: 't1' },
+        provider: 'Gmail',
       });
     });
 
@@ -168,6 +169,7 @@ describe('outbound service — provider draft mirror', () => {
       expect((await row(r.draft_id))?.mirror).toEqual({
         ref: null,
         error: 'Reconnect this account in Settings to sync drafts',
+        provider: 'Gmail',
       });
     });
 
@@ -180,6 +182,7 @@ describe('outbound service — provider draft mirror', () => {
       expect((await row(r.draft_id))?.mirror).toEqual({
         ref: null,
         error: 'draft create timed out',
+        provider: 'Gmail',
       });
     });
 

@@ -66,6 +66,7 @@ function row(over: Partial<OutboxPanelRow>): OutboxPanelRow {
     sourceId: 'gmail',
     createdBy: 'Anthropic/ClaudeAI',
     createdVia: 'mcp-remote',
+    mirror: null,
     ...over,
   };
 }
@@ -483,6 +484,56 @@ test('review: a sent message opens read-only', async () => {
   expect(within(s).queryByRole('button', { name: 'Send' })).toBeNull();
   // The footer's Close beside the sheet's own close control.
   expect(within(s).getAllByRole('button', { name: 'Close' })).toHaveLength(2);
+});
+
+test('a message sent from Gmail says so in the list and the review', async () => {
+  rows = [
+    row({
+      draftId: 'gm',
+      mirror: {
+        provider: 'Gmail',
+        synced: true,
+        error: null,
+        sentElsewhere: true,
+      },
+    }),
+  ];
+  await mount();
+  expect(within(history()).getByText('Sent from Gmail')).toBeInTheDocument();
+  const s = await openReview('gm');
+  expect(s).toHaveTextContent('Sent from Gmail');
+});
+
+test('review: a pending draft says where else it lives, or why not', async () => {
+  rows = [
+    row({
+      draftId: 'm1',
+      status: 'draft',
+      mirror: {
+        provider: 'Gmail',
+        synced: true,
+        error: null,
+        sentElsewhere: false,
+      },
+    }),
+  ];
+  expect(await openReview('m1')).toHaveTextContent('In Gmail Drafts');
+});
+
+test('review: a draft that is not synced says why', async () => {
+  rows = [
+    row({
+      draftId: 'm2',
+      status: 'draft',
+      mirror: {
+        provider: 'Gmail',
+        synced: false,
+        error: 'offline',
+        sentElsewhere: false,
+      },
+    }),
+  ];
+  expect(await openReview('m2')).toHaveTextContent('Not synced: offline');
 });
 
 test('review: a failure shows its technical details', async () => {

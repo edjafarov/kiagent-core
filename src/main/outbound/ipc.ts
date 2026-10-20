@@ -80,7 +80,8 @@ function errorFieldsOf(
     };
   }
   return {
-    error: null,
+    // "Deleted in Outlook" — the one reason a discarded row carries.
+    error: row.status === 'discarded' ? row.error : null,
     errorDetail: null,
     canRetry: false,
     deliveryUncertain: false,
@@ -107,6 +108,14 @@ function panelRow(row: OutboxRow, account: Account | null): OutboxPanelRow {
     sourceId: account?.source ?? '',
     createdBy: row.createdBy,
     createdVia: row.createdVia,
+    mirror: row.mirror
+      ? {
+          provider: row.mirror.provider ?? null,
+          synced: Boolean(row.mirror.ref),
+          error: row.mirror.ref ? null : (row.mirror.error ?? null),
+          sentElsewhere: row.mirror.sentElsewhere === true,
+        }
+      : null,
     ...errorFieldsOf(row),
   };
 }
@@ -135,6 +144,7 @@ export function outboundInvokeHandlers(deps: {
   | 'outbox:send'
   | 'outbox:reopen'
   | 'outbox:sender-sources'
+  | 'outbox:mirror-status'
 > {
   const { service, store, openExternal } = deps;
 
@@ -168,14 +178,20 @@ export function outboundInvokeHandlers(deps: {
       // an absent `status` means every row, a present-but-empty `status: []`
       // means none. This handler must never default a missing `status` to
       // `[]` or coerce an empty one away.
-      const rows = await store.outbox.list({
+      const query = {
         limit: clamped,
         status: req?.status,
         before: req?.before && {
           createdAt: req.before.createdAt,
           id: req.before.draftId,
         },
-      });
+      };
+      // Pending mirrored rows show what the provider holds now (§5.3).
+      let rows = await store.outbox.list(query);
+      if (rows.some((r) => r.status === 'draft' && r.mirror?.ref)) {
+        await service.refreshPending(rows);
+        rows = await store.outbox.list(query);
+      }
 
       const accounts = new Map<AccountId, Account | null>();
       const out: OutboxPanelRow[] = [];
@@ -239,7 +255,8 @@ export function outboundInvokeHandlers(deps: {
 
     'outbox:get': async ({ draftId }) => {
       await store.outbox.expireOverdue();
-      const row = await store.outbox.get(draftId);
+      // The review sheet shows the provider's current draft (§5.3).
+      const row = await service.refreshById(draftId);
       if (!row) return null;
       const detail: OutboxDraftDetail = {
         ...panelRow(row, await store.account(row.accountId)),
@@ -264,5 +281,18 @@ export function outboundInvokeHandlers(deps: {
     },
 
     'outbox:sender-sources': async () => service.senderSources(),
+
+    'outbox:mirror-status': async ({ accountId }) => {
+      // The newest draft of this account that tried to mirror says whether
+      // its grant can (a later successful one clears the note).
+      const rows = await store.outbox.list({ limit: 50 });
+      const last = rows.find((r) => r.accountId === accountId && r.mirror);
+      return {
+        reconnect:
+          !!last &&
+          !last.mirror?.ref &&
+          /reconnect .* to sync drafts/i.test(last.mirror?.error ?? ''),
+      };
+    },
   };
 }

@@ -870,6 +870,8 @@ export interface MirrorState {
   /** Why the last mirror operation failed. */
   error?: string;
   sentElsewhere?: boolean;
+  /** Display name of the provider: "Gmail", "Outlook". */
+  provider?: string;
 }
 
 /** The reviewable content of a draft: what a revision covers. */

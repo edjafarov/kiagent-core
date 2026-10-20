@@ -301,6 +301,20 @@ export interface OutboxPanelRow {
    *  older than schema v8. */
   createdBy: string | null;
   createdVia: 'mcp-local' | 'mcp-remote' | 'mcp-agent' | 'panel';
+  /** The provider draft this row keeps in step with; null = never tried
+   *  (account can't mirror). */
+  mirror: OutboxMirrorStatus | null;
+}
+
+export interface OutboxMirrorStatus {
+  /** "Gmail", "Outlook" (null on rows from before it was recorded). */
+  provider: string | null;
+  /** A provider draft exists for this row. */
+  synced: boolean;
+  /** Why the create failed ("Not synced: …"); null when synced. */
+  error: string | null;
+  /** Sent from the provider, not from Kia. */
+  sentElsewhere: boolean;
 }
 
 /** One draft in full, for the in-app review. */
@@ -509,6 +523,12 @@ export interface Invokes {
   'outbox:reopen': { req: { draftId: string }; res: { draftId: string } };
   /** Source ids that can send (bundled + extension senders). */
   'outbox:sender-sources': { req: void; res: string[] };
+  /** `reconnect`: the account's newest draft could not become a provider
+   *  draft because its grant predates draft sync. */
+  'outbox:mirror-status': {
+    req: { accountId: string };
+    res: { reconnect: boolean };
+  };
 
   'mcp:info': { req: void; res: McpInfo };
   'mcp:connect-client': { req: { id: string }; res: void };
@@ -744,6 +764,7 @@ const INVOKE_CHANNEL_MAP = {
   'outbox:send': 0,
   'outbox:reopen': 0,
   'outbox:sender-sources': 0,
+  'outbox:mirror-status': 0,
   'mcp:info': 0,
   'mcp:connect-client': 0,
   'mcp:disconnect-client': 0,

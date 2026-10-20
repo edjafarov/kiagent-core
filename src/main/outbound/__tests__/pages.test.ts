@@ -35,6 +35,23 @@ function baseRow(overrides: Partial<OutboxRow> = {}): OutboxRow {
 }
 
 describe('reviewPage', () => {
+  it('says where the draft also lives, or why not', () => {
+    const paths = { confirmPath: '/c', cancelPath: '/x' };
+    const ref = { accountId: 'acc-1' as AccountId, id: 'd1' };
+    expect(
+      reviewPage(baseRow({ mirror: { ref, provider: 'Gmail' } }), paths),
+    ).toContain('In Gmail Drafts');
+    expect(
+      reviewPage(
+        baseRow({
+          mirror: { ref: null, error: 'offline', provider: 'Outlook' },
+        }),
+        paths,
+      ),
+    ).toContain('Not synced: offline');
+    expect(reviewPage(baseRow(), paths)).not.toContain('ob-mirror"');
+  });
+
   it('renders recipient, subject, body, the send form, cancel form, status div, and the inline script', () => {
     const row = baseRow({ recipientDisplay: 'Alice <alice@example.com>' });
     const html = reviewPage(row, {

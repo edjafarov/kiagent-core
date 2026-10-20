@@ -122,7 +122,12 @@ export function createMirrorOps(deps: {
         sentAt: new Date(deps.nowMs()).toISOString(),
         externalMessageId: r.externalMessageId ?? null,
       });
-      await store.outbox.setMirror(row.id, { ref, sentElsewhere: true });
+      await store.outbox.setMirror(row.id, {
+        ...row.mirror,
+        ref,
+        provider: label,
+        sentElsewhere: true,
+      });
     } else if (r.state === 'deleted') {
       await store.outbox.transition(row.id, ['draft'], 'discarded', {
         error: `Deleted in ${label}`,
@@ -147,6 +152,7 @@ export function createMirrorOps(deps: {
     async createLocked(row, drafts, intent) {
       const started = deps.nowMs();
       const left = () => MIRROR_CREATE_DEADLINE_MS - (deps.nowMs() - started);
+      const provider = providerLabel(await deps.sourceOf(row));
       let ref: DraftRef;
       try {
         ref = await deadline(
@@ -156,7 +162,7 @@ export function createMirrorOps(deps: {
         );
       } catch (e) {
         const error = short(e);
-        await store.outbox.setMirror(row.id, { ref: null, error });
+        await store.outbox.setMirror(row.id, { ref: null, error, provider });
         deps.logSink.log(
           'outbound',
           'warn',
@@ -168,7 +174,7 @@ export function createMirrorOps(deps: {
         return (await store.outbox.get(row.id)) ?? row;
       }
       // The ref first: from here on the provider draft is the row's.
-      await store.outbox.setMirror(row.id, { ref });
+      await store.outbox.setMirror(row.id, { ref, provider });
       const mirrored = (await store.outbox.get(row.id)) ?? row;
       try {
         return await readAdopt(mirrored, drafts, ref, Math.max(1, left()));

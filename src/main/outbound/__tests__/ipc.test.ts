@@ -117,11 +117,12 @@ describe('outbound ipc delegate', () => {
   const tokenOf = (r: { confirm_url?: string }) =>
     r.confirm_url!.split('/outbox/confirm/')[1];
 
-  it('registers the nine outbox channels', () => {
+  it('registers the ten outbox channels', () => {
     expect([...handlers.keys()].sort()).toEqual([
       'outbox:discard',
       'outbox:get',
       'outbox:list',
+      'outbox:mirror-status',
       'outbox:open-confirm',
       'outbox:pending-count',
       'outbox:redraft',
@@ -387,6 +388,7 @@ describe('outbound ipc delegate', () => {
       'error',
       'errorDetail',
       'kind',
+      'mirror',
       'recipientDisplay',
       'revision',
       'sentAt',
@@ -655,6 +657,114 @@ describe('outbound ipc delegate', () => {
     expect(res.outcome).toBe('failed');
     const [listed] = await invoke('outbox:list', { status: ['failed'] });
     expect(res.row).toEqual(listed);
+  });
+
+  describe('with a provider draft mirror', () => {
+    let body: string;
+    let readFails: boolean;
+    const ref = () => ({ accountId: '' as AccountId, id: 'd1' });
+    beforeEach(() => {
+      body = 'Hello';
+      readFails = false;
+      const content = () => ({
+        to: ['bob@example.com'],
+        cc: [],
+        bcc: [],
+        subject: 'Hi',
+        bodyText: body,
+        attachments: [],
+      });
+      const sender: Sender = {
+        send: sendMock,
+        drafts: {
+          create: async (i) => ({ ...ref(), accountId: i.accountId }),
+          update: async (r) => r,
+          read: async (r) => {
+            if (readFails) throw new Error('offline');
+            return { state: 'draft', ref: r, content: content() };
+          },
+          remove: async () => {},
+          send: async () => ({ externalMessageId: 'x' }),
+        },
+      };
+      service = createOutboundService({
+        store,
+        prefs: fakePrefs(),
+        senders: new Map<string, Sender>([['imap', sender]]),
+        logSink,
+      });
+      service.setBaseUrl('http://127.0.0.1:7421');
+      handlers = new Map(
+        Object.entries(
+          outboundInvokeHandlers({
+            service,
+            store,
+            openExternal: async () => {},
+          }),
+        ) as Array<[string, Handler]>,
+      );
+    });
+    const accountId = async () =>
+      (await store.read.document(docId as never))!.accountId;
+    const newDraft = async () =>
+      service.draftMessage({
+        accountId: await accountId(),
+        to: ['bob@example.com'],
+        subject: 'Hi',
+        body: 'Hello',
+      });
+
+    it('outbox:get and outbox:list show the provider draft as it is now', async () => {
+      const r = await newDraft();
+      body = 'Edited in the mail app';
+      const got = await invoke('outbox:get', { draftId: r.draft_id });
+      expect(got).toMatchObject({
+        body: 'Edited in the mail app',
+        revision: 2,
+        mirror: {
+          provider: 'Outlook',
+          synced: true,
+          error: null,
+          sentElsewhere: false,
+        },
+      });
+      body = 'Edited again';
+      const [row] = await invoke('outbox:list', {});
+      expect(row.revision).toBe(3);
+    });
+
+    it('an unreachable provider still shows the row', async () => {
+      const r = await newDraft();
+      readFails = true;
+      const got = await invoke('outbox:get', { draftId: r.draft_id });
+      expect(got?.revision).toBe(1);
+    });
+
+    it('outbox:mirror-status asks to reconnect after a grant refusal', async () => {
+      const id = await accountId();
+      expect(await invoke('outbox:mirror-status', { accountId: id })).toEqual({
+        reconnect: false,
+      });
+      const row = await store.outbox.create({
+        accountId: id,
+        kind: 'new',
+        recipientDisplay: 'bob@example.com',
+        to: ['bob@example.com'],
+        cc: [],
+        subject: 'Hi',
+        bodyMarkdown: 'x',
+        confirmMode: 'review',
+        createdVia: 'mcp-local',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      });
+      await store.outbox.setMirror(row.id, {
+        ref: null,
+        error: 'Reconnect this account in Settings to sync drafts',
+      });
+      expect(await invoke('outbox:mirror-status', { accountId: id })).toEqual({
+        reconnect: true,
+      });
+    });
   });
 
   it('outbox:sender-sources lists the sources that can send', async () => {

@@ -14,7 +14,12 @@ import {
   type KeyValueItem,
 } from '@shared/web-ui/ui';
 import { formatRelativeCompact } from '@renderer/screens/Sources/format';
-import { actionFor, statusWord, stripIpcWrapper } from './outbox-rows';
+import {
+  actionFor,
+  mirrorLine,
+  statusWord,
+  stripIpcWrapper,
+} from './outbox-rows';
 
 /** Who drafted it: the app that asked, the user (Draft again), or an app
  *  that never named itself (rows older than the column, stdio clients). */
@@ -153,7 +158,9 @@ export function ReviewSheet(props: {
   // The list shows no word for a sent row; a single message says so.
   const word =
     d.status === 'sent'
-      ? { label: `Sent ${formatRelativeCompact(d.sentAt)}` }
+      ? {
+          label: `Sent${d.mirror?.sentElsewhere ? ` from ${d.mirror.provider ?? 'your mail app'}` : ''} ${formatRelativeCompact(d.sentAt)}`,
+        }
       : statusWord(d);
 
   const items: KeyValueItem[] = [
@@ -178,6 +185,7 @@ export function ReviewSheet(props: {
     { label: 'Drafted by', value: draftedBy(d) },
     { label: 'Sending account', value: d.accountLabel },
     ...(d.subject ? [{ label: 'Subject', value: d.subject }] : []),
+    ...(mirrorLine(d) ? [{ label: 'Drafts', value: mirrorLine(d) }] : []),
   ];
 
   let footer: React.ReactNode;
