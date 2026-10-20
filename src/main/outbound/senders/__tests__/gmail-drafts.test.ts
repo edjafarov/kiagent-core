@@ -372,6 +372,24 @@ describe('gmail draft mirror', () => {
     );
   });
 
+  it('read of a draft sent from Gmail, whose id still answers, is sent', async () => {
+    use(() =>
+      res(200, {
+        id: 'd1',
+        message: {
+          id: 'm9',
+          threadId: 't123',
+          labelIds: ['SENT', 'INBOX'],
+          payload: { mimeType: 'text/plain', body: { data: b64('hi') } },
+        },
+      }),
+    );
+    expect(await drafts().read(ref())).toEqual({
+      state: 'sent',
+      externalMessageId: 'm9',
+    });
+  });
+
   it('read of a draft that no longer exists is gone', async () => {
     use(() =>
       res(404, {

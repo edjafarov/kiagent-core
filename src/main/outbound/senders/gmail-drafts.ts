@@ -115,6 +115,13 @@ export function createGmailDrafts(deps: {
         getGmailDraft(auth(ref.accountId), ref.id, 'full'),
       );
       if (!d?.message) return { state: 'gone' };
+      // Sent from Gmail, the draft id can still answer — with the sent
+      // message, which no longer carries DRAFT.
+      const labels = d.message.labelIds;
+      if (labels && !labels.includes('DRAFT'))
+        return labels.includes('SENT')
+          ? { state: 'sent', externalMessageId: d.message.id }
+          : { state: 'gone' };
       return {
         state: 'draft',
         ref: {
