@@ -213,6 +213,8 @@ export function scheduleNote(row: OutboxRow, timeZone?: string): string | null {
       month: 'short',
       hour: '2-digit',
       minute: '2-digit',
+      // The page may open on a phone in another zone: say whose time.
+      timeZoneName: 'short',
       ...(timeZone ? { timeZone } : {}),
     });
     return `Scheduled for ${when} — Send here sends it now`;

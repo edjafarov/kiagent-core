@@ -416,16 +416,17 @@ export function createOutboxStore(
       const placeholders = from.map(() => '?').join(',');
       const results = await db.batch([
         {
-          // Leaving 'draft' for 'sending' drops a draft's schedule note.
+          // Leaving 'draft' drops a draft's schedule note unless the patch
+          // brings its own (a missed time must not follow a discard).
           sql: `UPDATE outbox SET status = ?,
-                  error = CASE WHEN ? = 'sending' THEN NULL
+                  error = CASE WHEN status = 'draft' THEN ?
                                ELSE COALESCE(?, error) END,
                   external_message_id = COALESCE(?, external_message_id),
                   sent_at = COALESCE(?, sent_at)
                 WHERE id = ? AND status IN (${placeholders})`,
           params: [
             to,
-            to,
+            patch.error ?? null,
             patch.error ?? null,
             patch.externalMessageId ?? null,
             patch.sentAt ?? null,

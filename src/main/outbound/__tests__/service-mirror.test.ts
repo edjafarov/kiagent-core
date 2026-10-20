@@ -124,7 +124,10 @@ describe('outbound service — provider draft mirror', () => {
   let now: number;
   let home: string;
 
-  const make = (withDrafts = true) => {
+  const make = (
+    withDrafts = true,
+    wrap: (a: ReturnType<typeof createAttachments>) => typeof a = (a) => a,
+  ) => {
     const sender: Sender = {
       send: sendMock,
       ...(withDrafts ? { drafts: provider.mirror } : {}),
@@ -139,10 +142,12 @@ describe('outbound service — provider draft mirror', () => {
       ]),
       descriptorFor: (id) =>
         (id === 'ms365' ? { compose: 'email' } : undefined) as never,
-      attachments: createAttachments({
-        documentBytes: { fetchBytes: async () => null },
-        home,
-      }),
+      attachments: wrap(
+        createAttachments({
+          documentBytes: { fetchBytes: async () => null },
+          home,
+        }),
+      ),
       logSink: { log: () => {} },
       nowMs: () => now,
     });
@@ -957,6 +962,36 @@ describe('outbound service — provider draft mirror', () => {
         'Not sent at its time — attachment "c.pdf" is no longer available (~/c.pdf)',
       );
       expect(sendMock).not.toHaveBeenCalled();
+    });
+
+    it('a read that runs out of time is tried again while the time holds', async () => {
+      let stall = false;
+      make(false, (a) => ({
+        ...a,
+        read: async (x) => {
+          if (stall) throw new Error('reading the attachments timed out');
+          return a.read(x);
+        },
+      }));
+      const r = await service.draftMessage({
+        accountId,
+        to: ['bob@example.com'],
+        subject: 'Hi',
+        body: 'x',
+        attachments: [{ path: path.join(home, 'a.pdf') }],
+      });
+      const at = inMin(10);
+      await service.scheduleById(r.draft_id, 1, at);
+      stall = true;
+      now += 10 * 60_000;
+      expect(await service.sendScheduled(r.draft_id, at)).not.toBe('missed');
+      const held = await row(r.draft_id);
+      expect(held?.status).toBe('draft');
+      expect(held?.sendAt).toBe(at);
+      stall = false;
+      now += 60_000;
+      expect(await service.sendScheduled(r.draft_id, at)).toBe('sent');
+      expect(sendMock).toHaveBeenCalledTimes(1);
     });
 
     it('scheduled rows do not expire', async () => {

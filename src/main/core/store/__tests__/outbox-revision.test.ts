@@ -284,6 +284,26 @@ describe('outbox revisions', () => {
     expect((await store.outbox.get(plain.id))?.status).toBe('expired');
   });
 
+  it('leaving draft drops its schedule note unless the move brings one', async () => {
+    const missed = await store.outbox.create(draft());
+    await store.outbox.schedule(missed.id, '2099-01-01T00:00:00Z');
+    await store.outbox.missSchedule(
+      missed.id,
+      '2099-01-01T00:00:00Z',
+      '2099-02-01T00:00:00Z',
+    );
+    expect((await store.outbox.get(missed.id))?.error).toBeTruthy();
+    await store.outbox.transition(missed.id, ['draft'], 'discarded');
+    expect((await store.outbox.get(missed.id))?.error).toBeNull();
+    const deleted = await store.outbox.create(draft());
+    await store.outbox.transition(deleted.id, ['draft'], 'discarded', {
+      error: 'Deleted in Gmail',
+    });
+    expect((await store.outbox.get(deleted.id))?.error).toBe(
+      'Deleted in Gmail',
+    );
+  });
+
   it('scheduled and mirrored drafts never expire; mirrored ones skip the cap', async () => {
     const past = '2000-01-01T00:00:00.000Z';
     const plain = await store.outbox.create(draft({ expiresAt: past }));

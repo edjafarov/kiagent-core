@@ -1027,7 +1027,8 @@ export function createOutboundService(deps: {
         kind: 'failed',
         row,
         error: shapeOutboundError(ready.error).summary,
-        refused: true,
+        // A read that ran out of time may go on a later try; the rest won't.
+        refused: !/timed out$/.test(ready.error),
       };
     const stop = lastCheck ? await lastCheck(row) : null;
     if (stop) return stop;

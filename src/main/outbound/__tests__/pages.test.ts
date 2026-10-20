@@ -84,7 +84,7 @@ describe('reviewPage', () => {
     const paths = { confirmPath: '/c', cancelPath: '/x' };
     expect(
       scheduleNote(baseRow({ sendAt: '2026-10-21T07:00:00.000Z' }), 'UTC'),
-    ).toMatch(/^Scheduled for .*07:00.* — Send here sends it now$/);
+    ).toMatch(/^Scheduled for .*07:00.*UTC — Send here sends it now$/);
     expect(
       reviewPage(baseRow({ sendAt: '2026-10-21T07:00:00.000Z' }), paths),
     ).toContain('Scheduled for');
