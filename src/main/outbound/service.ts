@@ -497,7 +497,8 @@ export function createOutboundService(deps: {
     const head = `${tool}: this draft changed${shown === null ? '' : ` since revision ${shown}`} — it is now revision ${row.revision}`;
     const lines = [
       `${head}. Show the user the current draft before going on:`,
-      `To: ${[row.recipientDisplay, ...row.cc].join(', ')}`,
+      `To: ${row.recipientDisplay}`,
+      ...(row.cc.length ? [`Cc: ${row.cc.join(', ')}`] : []),
       ...(row.bcc.length ? [`Bcc: ${row.bcc.join(', ')}`] : []),
       ...(row.subject ? [`Subject: ${row.subject}`] : []),
       ...(d.attachments.length
