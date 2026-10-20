@@ -48,6 +48,8 @@ function row(over: Partial<OutboxPanelRow>): OutboxPanelRow {
   return {
     draftId: 'd',
     status: 'sent',
+    sendAt: null,
+    note: null,
     kind: 'reply',
     accountLabel: 'alex@example.com',
     recipientDisplay: 'Sam Patel',
@@ -130,6 +132,12 @@ let sendResult: {
   error?: string;
 };
 let files: OutboxDraftDetail['attachments'];
+/** What outbox:schedule answers: the draft with the time set (or cleared). */
+const scheduleOk = (p: { draftId: string; sendAt: string | null }) => ({
+  outcome: p.sendAt ? 'scheduled' : 'unscheduled',
+  detail: { ...detail(p.draftId)!, sendAt: p.sendAt },
+});
+let scheduleResult = scheduleOk;
 let fileResult: { detail: OutboxDraftDetail | null; changed: boolean };
 
 function detail(id: string): OutboxDraftDetail | null {
@@ -139,6 +147,7 @@ function detail(id: string): OutboxDraftDetail | null {
 }
 
 beforeEach(() => {
+  scheduleResult = scheduleOk;
   files = [];
   fileResult = { detail: null, changed: false };
   jest.useFakeTimers({ now: NOW, doNotFake: ['queueMicrotask'] });
@@ -165,6 +174,8 @@ beforeEach(() => {
         return Promise.resolve(fileResult);
       case 'outbox:send':
         return Promise.resolve(sendResult);
+      case 'outbox:schedule':
+        return Promise.resolve(scheduleResult(payload));
       case 'outbox:sender-sources':
         return Promise.resolve(['slack', 'gmail']);
       case 'app:info':
@@ -494,6 +505,66 @@ test('review: a mail app out of reach before the send keeps the draft and Send',
   expect(
     within(sheet()).getByRole('button', { name: 'Send' }),
   ).toBeInTheDocument();
+});
+
+test('review: Send later picks a time and schedules the shown revision', async () => {
+  const s = await openReview('wait');
+  fireEvent.click(within(s).getByRole('button', { name: 'Send later…' }));
+  const input = within(sheet()).getByLabelText('Send at') as HTMLInputElement;
+  // the next whole hour, at least 30 min away
+  expect(input.value).toBe('2026-09-24T13:00');
+  fireEvent.change(input, { target: { value: '2026-09-25T09:30' } });
+  fireEvent.click(within(sheet()).getByRole('button', { name: 'Schedule' }));
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledWith('outbox:schedule', {
+    draftId: 'wait',
+    revision: 1,
+    sendAt: new Date(2026, 8, 25, 9, 30).toISOString(),
+  });
+  expect(sheet()).toHaveTextContent('Scheduled for');
+  expect(
+    within(sheet()).getByRole('button', { name: 'Send now' }),
+  ).toBeInTheDocument();
+  expect(
+    within(sheet()).queryByRole('button', { name: 'Send later…' }),
+  ).toBeNull();
+  fireEvent.click(
+    within(sheet()).getByRole('button', { name: 'Cancel schedule' }),
+  );
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledWith('outbox:schedule', {
+    draftId: 'wait',
+    revision: 1,
+    sendAt: null,
+  });
+  expect(sheet()).not.toHaveTextContent('Scheduled for');
+});
+
+test('review: a schedule refused says why and schedules nothing', async () => {
+  scheduleResult = (p) =>
+    ({
+      outcome: 'failed',
+      detail: detail(p.draftId)!,
+      error:
+        'not scheduled: attachment "a.pdf" is no longer available (~/a.pdf)',
+    }) as never;
+  const s = await openReview('wait');
+  fireEvent.click(within(s).getByRole('button', { name: 'Send later…' }));
+  fireEvent.click(within(sheet()).getByRole('button', { name: 'Schedule' }));
+  await act(async () => {});
+  expect(sheet()).toHaveTextContent(
+    'Not scheduled — attachment "a.pdf" is no longer available (~/a.pdf)',
+  );
+});
+
+test('review: a missed schedule says so', async () => {
+  rows = rows.map((r) =>
+    r.draftId === 'wait'
+      ? { ...r, note: 'Missed its time — send now or reschedule' }
+      : r,
+  );
+  const s = await openReview('wait');
+  expect(s).toHaveTextContent('Missed its time — send now or reschedule');
 });
 
 test('review: Open in browser uses the signed page', async () => {

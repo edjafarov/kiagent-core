@@ -202,6 +202,24 @@ export function mirrorNote(row: OutboxRow): string | null {
   return m.error ? `Not synced: ${m.error}` : null;
 }
 
+/** A draft scheduled in the app (read-only here): when it goes. Its note
+ *  otherwise ("Missed its time — …", "Edited — schedule again"). */
+export function scheduleNote(row: OutboxRow, timeZone?: string): string | null {
+  if (row.status !== 'draft') return null;
+  if (row.sendAt) {
+    const when = new Date(row.sendAt).toLocaleString(undefined, {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      ...(timeZone ? { timeZone } : {}),
+    });
+    return `Scheduled for ${when} — Send here sends it now`;
+  }
+  return row.error;
+}
+
 /** The one confirm page for every mode (spec §4.3). `confirmPath` carries
  *  the revision shown here; `changed` = a Send from an older page landed
  *  here instead (HTTP 409). */
@@ -214,6 +232,7 @@ export function reviewPage(
   ${p.changed ? `<p class="ob-note ob-changed">This draft changed — review it again. Nothing was sent.</p>` : ''}
   ${recipientBlock(row)}
   ${mirrorNote(row) ? `<div class="ob-mirror">${esc(mirrorNote(row)!)}</div>` : ''}
+  ${scheduleNote(row) ? `<div class="ob-mirror">${esc(scheduleNote(row)!)}</div>` : ''}
   ${row.subject ? `<div class="ob-subject">${esc(row.subject)}</div>` : ''}
   <pre class="ob-body">${esc(row.bodyMarkdown)}</pre>
   ${attachmentList(row)}

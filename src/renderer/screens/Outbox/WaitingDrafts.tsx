@@ -7,7 +7,7 @@ import {
   sourceCategory,
 } from '@shared/web-ui/ui';
 import { formatRelativeCompact } from '@renderer/screens/Sources/format';
-import { quoted } from './outbox-rows';
+import { quoted, scheduledFor } from './outbox-rows';
 import type { OutboxData } from './use-outbox';
 
 /** A chat message is "Slack message to #design"; mail is "Sam · Subject". */
@@ -43,7 +43,11 @@ export function WaitingDrafts(props: {
             sub={
               failed
                 ? actions.error?.message
-                : `${quoted(r.bodyPreview)} · ${source} · ${formatRelativeCompact(r.createdAt)}`
+                : `${quoted(r.bodyPreview)} · ${source} · ${
+                    r.sendAt
+                      ? scheduledFor(r.sendAt)
+                      : (r.note ?? formatRelativeCompact(r.createdAt))
+                  }`
             }
             action={
               <>

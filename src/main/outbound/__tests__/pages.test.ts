@@ -1,7 +1,7 @@
 import type { AccountId, OutboxRow } from '@shared/contracts';
 
 import { shapeOutboundError } from '../error-copy';
-import { failedPage, resultPage, reviewPage } from '../pages';
+import { failedPage, resultPage, reviewPage, scheduleNote } from '../pages';
 
 function baseRow(overrides: Partial<OutboxRow> = {}): OutboxRow {
   return {
@@ -78,6 +78,24 @@ describe('reviewPage', () => {
       ),
     ).toContain('Not synced: offline');
     expect(reviewPage(baseRow(), paths)).not.toContain('ob-mirror"');
+  });
+
+  it('a scheduled draft says when it goes, read-only; a note otherwise', () => {
+    const paths = { confirmPath: '/c', cancelPath: '/x' };
+    expect(
+      scheduleNote(baseRow({ sendAt: '2026-10-21T07:00:00.000Z' }), 'UTC'),
+    ).toMatch(/^Scheduled for .*07:00.* — Send here sends it now$/);
+    expect(
+      reviewPage(baseRow({ sendAt: '2026-10-21T07:00:00.000Z' }), paths),
+    ).toContain('Scheduled for');
+    expect(
+      reviewPage(baseRow({ error: 'Edited — schedule again' }), paths),
+    ).toContain('Edited — schedule again');
+    expect(
+      scheduleNote(
+        baseRow({ status: 'sent', sendAt: '2026-10-21T07:00:00.000Z' }),
+      ),
+    ).toBeNull();
   });
 
   it('renders recipient, subject, body, the send form, cancel form, status div, and the inline script', () => {

@@ -16,7 +16,9 @@ import {
 import { formatRelativeCompact } from '@renderer/screens/Sources/format';
 import {
   actionFor,
+  defaultSendLater,
   mirrorLine,
+  scheduledFor,
   statusWord,
   stripIpcWrapper,
 } from './outbox-rows';
@@ -68,6 +70,8 @@ export function ReviewSheet(props: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmRedraft, setConfirmRedraft] = useState(false);
+  /** "Send later…" open: the picked local time (`datetime-local`). */
+  const [later, setLater] = useState<string | null>(null);
 
   const read = useCallback(() => {
     void window.kiagent
@@ -175,6 +179,25 @@ export function ReviewSheet(props: {
       }),
     );
 
+  // Send later: a confirm of the revision shown, for a send at `when`
+  // (null cancels). A draft that moved on is re-read instead.
+  const schedule = (revision: number, when: string | null) =>
+    act(async () => {
+      const res = await window.kiagent.invoke('outbox:schedule', {
+        draftId,
+        revision,
+        sendAt: when === null ? null : new Date(when).toISOString(),
+      });
+      if (res.detail) setDetail(res.detail);
+      if (res.outcome === 'changed')
+        setError('This draft changed — review it again.');
+      else if (res.outcome === 'failed')
+        setError(
+          `Not scheduled — ${(res.error ?? 'try again').replace(/^not scheduled:\s*/, '')}`,
+        );
+      else setLater(null);
+    });
+
   const openInBrowser = () =>
     act(() => window.kiagent.invoke('outbox:open-confirm', { draftId }));
 
@@ -237,13 +260,21 @@ export function ReviewSheet(props: {
         <TextButton disabled={busy} onClick={() => void openInBrowser()}>
           Open in browser
         </TextButton>
+        {!d.sendAt && later === null && (
+          <Button
+            disabled={busy}
+            onClick={() => setLater(defaultSendLater(Date.now()))}
+          >
+            Send later…
+          </Button>
+        )}
         <Button
           variant="primary"
           icon="send"
           disabled={busy}
           onClick={() => void send(d.revision)}
         >
-          {busy ? 'Sending…' : 'Send'}
+          {busy ? 'Sending…' : d.sendAt ? 'Send now' : 'Send'}
         </Button>
       </>
     );
@@ -341,9 +372,49 @@ export function ReviewSheet(props: {
           )}
         </ul>
       )}
+      {sendable && d.sendAt && (
+        <p className="ob-schedule">
+          {scheduledFor(d.sendAt)}{' '}
+          <TextButton
+            disabled={busy}
+            onClick={() => void schedule(d.revision, null)}
+          >
+            Cancel schedule
+          </TextButton>
+        </p>
+      )}
+      {sendable && !d.sendAt && d.note && <p className="ob-note">{d.note}</p>}
+      {sendable && later !== null && (
+        <p className="ob-schedule">
+          <label>
+            Send at{' '}
+            <input
+              type="datetime-local"
+              value={later}
+              onChange={(e) => setLater(e.target.value)}
+              aria-label="Send at"
+            />
+          </label>{' '}
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={busy || !later}
+            onClick={() => void schedule(d.revision, later)}
+          >
+            Schedule
+          </Button>{' '}
+          <TextButton disabled={busy} onClick={() => setLater(null)}>
+            Cancel
+          </TextButton>
+        </p>
+      )}
       {error && <p className="ob-note is-err">{error}</p>}
       {sendable && (
-        <p className="ob-note">Nothing is sent until you press Send.</p>
+        <p className="ob-note">
+          {d.sendAt
+            ? 'It goes at that time as it is now — any change cancels the schedule.'
+            : 'Nothing is sent until you press Send.'}
+        </p>
       )}
     </Sheet>
   );

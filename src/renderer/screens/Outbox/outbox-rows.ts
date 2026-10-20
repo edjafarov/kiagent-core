@@ -79,6 +79,28 @@ export function mirrorLine(r: OutboxPanelRow): string | null {
   return m.error ? `Not synced: ${m.error}` : null;
 }
 
+/** "Scheduled for Tue 21 Oct, 09:00" — a draft's send time, local. */
+export function scheduledFor(iso: string): string {
+  const when = new Date(iso).toLocaleString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `Scheduled for ${when}`;
+}
+
+/** The value a time picker starts at: the next whole hour, at least
+ *  30 minutes away, as `datetime-local` wants it (local, no zone). */
+export function defaultSendLater(nowMs: number): string {
+  const d = new Date(nowMs + 30 * 60_000);
+  d.setMinutes(0, 0, 0);
+  d.setHours(d.getHours() + 1);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /** A row that did not go out reads faint (its mark and words). */
 export function isFaint(r: OutboxPanelRow): boolean {
   return r.status === 'discarded' || r.status === 'expired';

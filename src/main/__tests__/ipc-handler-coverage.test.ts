@@ -112,6 +112,7 @@ describe('attention IPC composition', () => {
         'ext:invoke',
         'outbox:send',
         'outbox:reopen',
+        'outbox:schedule',
         'outbox:add-files',
         'outbox:remove-files',
       ]),

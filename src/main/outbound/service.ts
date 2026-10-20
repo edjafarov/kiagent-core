@@ -193,6 +193,9 @@ export interface OutboxListItem {
    *  draft — show it before asking to send. */
   revision: number | null;
   draft: DraftToolResult | null;
+  /** A pending draft the user scheduled in the app (ISO): it goes then,
+   *  unless it changes. Only the user schedules. */
+  scheduled_for?: string;
 }
 
 /** What `send_draft` reports back once a chat-confirmed draft has been sent
@@ -1391,6 +1394,9 @@ export function createOutboundService(deps: {
                   }`,
                 }
               : null,
+          ...(row.status === 'draft' && row.sendAt
+            ? { scheduled_for: row.sendAt }
+            : {}),
         });
       }
       return out;

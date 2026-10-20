@@ -95,6 +95,8 @@ function panelRow(row: OutboxRow, account: Account | null): OutboxPanelRow {
   return {
     draftId: row.id,
     status: row.status,
+    sendAt: row.status === 'draft' ? row.sendAt : null,
+    note: row.status === 'draft' ? row.error : null,
     kind: row.kind,
     accountLabel: account?.identifier ?? '(removed)',
     recipientDisplay: row.recipientDisplay,
@@ -146,6 +148,7 @@ export function outboundInvokeHandlers(deps: {
   | 'outbox:get'
   | 'outbox:send'
   | 'outbox:reopen'
+  | 'outbox:schedule'
   | 'outbox:sender-sources'
   | 'outbox:mirror-status'
   | 'outbox:add-files'
@@ -319,6 +322,16 @@ export function outboundInvokeHandlers(deps: {
     },
 
     'outbox:sender-sources': async () => service.senderSources(),
+
+    'outbox:schedule': async ({ draftId, revision, sendAt }) => {
+      const out = await service.scheduleById(draftId, revision, sendAt);
+      if (out.kind === 'invalid') return { outcome: 'gone', detail: null };
+      return {
+        outcome: out.kind,
+        detail: await detailOf(out.row),
+        ...(out.kind === 'failed' ? { error: out.error } : {}),
+      };
+    },
 
     'outbox:add-files': async ({ draftId, revision }) => {
       const paths = (await deps.pickFiles?.()) ?? [];

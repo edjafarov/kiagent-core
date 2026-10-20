@@ -268,6 +268,11 @@ export interface UpdateState {
 export interface OutboxPanelRow {
   draftId: string;
   status: OutboxStatus;
+  /** A draft's scheduled send time (ISO), or null. */
+  sendAt: string | null;
+  /** A pending draft's schedule note: "Missed its time — send now or
+   *  reschedule", "Edited — schedule again". Null otherwise. */
+  note: string | null;
   kind: 'reply' | 'new';
   /** The account's `identifier`; '(removed)' if it vanished. */
   accountLabel: string;
@@ -329,6 +334,21 @@ export interface OutboxDraftDetail extends OutboxPanelRow {
 export interface OutboxReviseResult {
   detail: OutboxDraftDetail | null;
   changed: boolean;
+}
+
+/** What "Send later…" did (or its cancel). `changed`: the draft moved on
+ *  from the revision the sheet showed — nothing was scheduled; `failed`:
+ *  why it can't be scheduled (`error`); `gone`: no such draft. */
+export interface OutboxScheduleResult {
+  outcome:
+    | 'scheduled'
+    | 'unscheduled'
+    | 'changed'
+    | 'already'
+    | 'failed'
+    | 'gone';
+  detail: OutboxDraftDetail | null;
+  error?: string;
 }
 
 /** What the in-app Send did, with the row as it now stands (its `error`
@@ -549,6 +569,12 @@ export interface Invokes {
   /** Try again on a provably-failed (or expired) draft: the same row back
    *  to review as a new revision. */
   'outbox:reopen': { req: { draftId: string }; res: { draftId: string } };
+  /** The review sheet's "Send later…": confirm the shown revision for a
+   *  send at `sendAt` (ISO); null cancels the schedule. */
+  'outbox:schedule': {
+    req: { draftId: string; revision: number; sendAt: string | null };
+    res: OutboxScheduleResult;
+  };
   /** Source ids that can send (bundled + extension senders). */
   'outbox:sender-sources': { req: void; res: string[] };
   /** `reconnect`: the account's newest draft could not become a provider
@@ -791,6 +817,7 @@ const INVOKE_CHANNEL_MAP = {
   'outbox:get': 0,
   'outbox:send': 0,
   'outbox:reopen': 0,
+  'outbox:schedule': 0,
   'outbox:sender-sources': 0,
   'outbox:mirror-status': 0,
   'outbox:add-files': 0,

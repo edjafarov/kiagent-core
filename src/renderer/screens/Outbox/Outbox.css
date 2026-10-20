@@ -71,6 +71,22 @@
 .ob-note.is-err {
   color: var(--text-primary);
 }
+.ob-schedule {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+}
+.ob-schedule input {
+  font: inherit;
+  color: inherit;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
 .ob-foot-warn {
   margin-right: auto;
   color: var(--text-primary);

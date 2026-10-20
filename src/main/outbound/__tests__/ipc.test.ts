@@ -118,7 +118,7 @@ describe('outbound ipc delegate', () => {
   const tokenOf = (r: { confirm_url?: string }) =>
     r.confirm_url!.split('/outbox/confirm/')[1];
 
-  it('registers the twelve outbox channels', () => {
+  it('registers the thirteen outbox channels', () => {
     expect([...handlers.keys()].sort()).toEqual([
       'outbox:add-files',
       'outbox:discard',
@@ -130,9 +130,67 @@ describe('outbound ipc delegate', () => {
       'outbox:redraft',
       'outbox:remove-files',
       'outbox:reopen',
+      'outbox:schedule',
       'outbox:send',
       'outbox:sender-sources',
     ]);
+  });
+
+  it('outbox:schedule sets and cancels a send time at the shown revision', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'later' });
+    const at = new Date(Date.now() + 3600_000).toISOString();
+    expect(
+      (
+        await invoke('outbox:schedule', {
+          draftId: r.draft_id,
+          revision: 2,
+          sendAt: at,
+        })
+      ).outcome,
+    ).toBe('changed');
+    const set = await invoke('outbox:schedule', {
+      draftId: r.draft_id,
+      revision: 1,
+      sendAt: at,
+    });
+    expect(set.outcome).toBe('scheduled');
+    expect(set.detail?.sendAt).toBe(at);
+    const [listed] = await invoke('outbox:list', {});
+    expect(listed.sendAt).toBe(at);
+    const off = await invoke('outbox:schedule', {
+      draftId: r.draft_id,
+      revision: 1,
+      sendAt: null,
+    });
+    expect(off.outcome).toBe('unscheduled');
+    expect(off.detail?.sendAt).toBeNull();
+    expect(
+      (
+        await invoke('outbox:schedule', {
+          draftId: 'nope',
+          revision: 1,
+          sendAt: null,
+        })
+      ).outcome,
+    ).toBe('gone');
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('an edit after scheduling shows "Edited — schedule again"', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'later' });
+    await invoke('outbox:schedule', {
+      draftId: r.draft_id,
+      revision: 1,
+      sendAt: new Date(Date.now() + 3600_000).toISOString(),
+    });
+    await service.reviseDraft({
+      draftId: r.draft_id,
+      revision: 1,
+      body: 'edited',
+    });
+    const d = await invoke('outbox:get', { draftId: r.draft_id });
+    expect(d?.sendAt).toBeNull();
+    expect(d?.note).toBe('Edited — schedule again');
   });
 
   it('outbox:list maps rows to the panel shape', async () => {
@@ -392,8 +450,10 @@ describe('outbound ipc delegate', () => {
       'errorDetail',
       'kind',
       'mirror',
+      'note',
       'recipientDisplay',
       'revision',
+      'sendAt',
       'sentAt',
       'sourceId',
       'status',
