@@ -459,17 +459,23 @@ export function createOutboxStore(
       const row = await get(id);
       if (!row || row.status !== 'draft')
         throw new Error('outbox: not a draft');
-      // A readback carries no `from`: keep where Kia got each file.
+      // A readback carries no `from`: keep where Kia got each file. A
+      // provider's size is its own count (Outlook adds MIME overhead), so a
+      // file Kia attached keeps the size Kia read.
       const known = new Map(
-        [...row.attachments, ...origins].map((a) => [a.filename, a.from]),
+        [...row.attachments, ...origins]
+          .filter((a) => a.from)
+          .map((a) => [a.filename, a]),
       );
       const snapshot = {
         ...incoming,
-        attachments: incoming.attachments.map((a) =>
-          a.from || !known.get(a.filename)
-            ? a
-            : { ...a, from: known.get(a.filename) },
-        ),
+        attachments: incoming.attachments.map((a) => {
+          const k = known.get(a.filename);
+          if (a.from || !k) return a;
+          return fromProvider
+            ? { ...a, from: k.from, size: k.size }
+            : { ...a, from: k.from };
+        }),
       };
       const key = (x: DraftSnapshot) =>
         normalizeSnapshot(x, { provider: fromProvider });

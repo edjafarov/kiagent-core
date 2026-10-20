@@ -611,6 +611,29 @@ describe('outbound service — provider draft mirror', () => {
       ]);
     });
 
+    it("a provider that counts a file's size its own way (Outlook) is no new revision", async () => {
+      provider.readImpl = async (ref) => {
+        const c = provider.drafts.get(ref.id)!;
+        return {
+          state: 'draft',
+          ref,
+          content: {
+            ...c,
+            attachments: c.attachments.map((a) => ({
+              ...a,
+              size: a.size + 158,
+            })),
+          },
+        };
+      };
+      const r = await withFile();
+      expect(r.revision).toBe(1);
+      await service.listOutbox({});
+      const got = await row(r.draft_id);
+      expect(got?.revision).toBe(1);
+      expect(got?.attachments[0].size).toBe(6);
+    });
+
     it('revise adds and removes files on the provider draft in one revision', async () => {
       const r = await withFile();
       const v = await service.reviseDraft({
