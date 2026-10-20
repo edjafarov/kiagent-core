@@ -17,12 +17,26 @@ import type {
 } from '@shared/contracts';
 
 import type { LogSink } from '../core/engine/engine';
+import { normalizeSnapshot, snapshotOf } from '../core/store/outbox';
 import type { CoreStore } from '../core/store/store';
 
 /** Whole create → read → adopt, before draft_reply returns (§5.2). */
 export const MIRROR_CREATE_DEADLINE_MS = 20_000;
 /** One read/update round trip on the confirm and revise paths. */
 export const MIRROR_CALL_DEADLINE_MS = 20_000;
+
+const FIELDS = ['to', 'cc', 'bcc', 'subject', 'body', 'attachments'];
+
+/** Which fields a provider's copy changed, by name only — never the
+ *  content, which stays out of the log. */
+export function changedFields(a: OutboxRow, b: OutboxRow): string[] {
+  const key = (r: OutboxRow) =>
+    JSON.parse(
+      normalizeSnapshot(snapshotOf(r), { provider: true }),
+    ) as unknown[];
+  const [x, y] = [key(a), key(b)];
+  return FIELDS.filter((_, i) => JSON.stringify(x[i]) !== JSON.stringify(y[i]));
+}
 
 export function providerLabel(source: string): string {
   return source === 'gmail' ? 'Gmail' : 'Outlook';
@@ -114,16 +128,24 @@ export function createMirrorOps(deps: {
     ref: DraftRef,
     c: DraftContent,
     origins?: OutboxAttachment[],
-  ) =>
-    (
-      await store.outbox.applyContent(
-        row.id,
-        snapshotOfContent(c),
-        ref,
-        origins,
-        true,
-      )
-    ).row;
+  ) => {
+    const before = (await store.outbox.get(row.id)) ?? row;
+    const { row: next, changed } = await store.outbox.applyContent(
+      row.id,
+      snapshotOfContent(c),
+      ref,
+      origins,
+      true,
+    );
+    if (changed)
+      deps.logSink.log(
+        'outbound',
+        'info',
+        `draft ${row.id}: ${providerLabel(await deps.sourceOf(row))} copy changed ${changedFields(before, next).join(', ')}`,
+        { draftId: row.id },
+      );
+    return next;
+  };
 
   const readAdopt = async (
     row: OutboxRow,
