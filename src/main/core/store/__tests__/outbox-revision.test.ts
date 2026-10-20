@@ -194,6 +194,30 @@ describe('outbox revisions', () => {
     expect(bigger.row.attachments).toEqual([{ ...att, size: 11 }]);
   });
 
+  it('a readback without `from` keeps where Kia got each file', async () => {
+    const att = {
+      filename: 'a.pdf',
+      mime: 'application/pdf',
+      size: 10,
+      from: { kind: 'document' as const, documentId: 'd1' },
+    };
+    const row = await store.outbox.create(draft({ attachments: [att] }));
+    const r = await store.outbox.applyContent(
+      row.id,
+      snapshot({
+        bodyMarkdown: 'changed in Gmail',
+        attachments: [
+          { filename: 'a.pdf', mime: 'application/pdf', size: 10 },
+          { filename: 'b.png', mime: 'image/png', size: 5 },
+        ],
+      }),
+    );
+    expect(r.row.attachments).toEqual([
+      att,
+      { filename: 'b.png', mime: 'image/png', size: 5 },
+    ]);
+  });
+
   it('refuses to change a row that is no longer a draft', async () => {
     const row = await store.outbox.create(draft());
     await store.outbox.transition(row.id, ['draft'], 'discarded');

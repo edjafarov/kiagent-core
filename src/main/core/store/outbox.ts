@@ -141,7 +141,7 @@ export interface OutboxStore {
   applyContent(
     id: string,
     snapshot: DraftSnapshot,
-    ref?: DraftRef | null,
+    ref?: DraftRef,
   ): Promise<{ row: OutboxRow; changed: boolean }>;
   /** Mirror bookkeeping only; no revision bump. */
   setMirror(id: string, mirror: MirrorState): Promise<void>;
@@ -412,10 +412,20 @@ export function createOutboxStore(
       return moved;
     },
 
-    async applyContent(id, snapshot, ref) {
+    async applyContent(id, incoming, ref) {
       const row = await get(id);
       if (!row || row.status !== 'draft')
         throw new Error('outbox: not a draft');
+      // A readback carries no `from`: keep where Kia got each file.
+      const known = new Map(row.attachments.map((a) => [a.filename, a.from]));
+      const snapshot = {
+        ...incoming,
+        attachments: incoming.attachments.map((a) =>
+          a.from || !known.get(a.filename)
+            ? a
+            : { ...a, from: known.get(a.filename) },
+        ),
+      };
       const changed =
         normalizeSnapshot(snapshotOf(row)) !== normalizeSnapshot(snapshot);
       const mirror =
@@ -430,7 +440,7 @@ export function createOutboxStore(
           row.kind === 'reply' && sameTo
             ? row.recipientDisplay
             : snapshot.to.join(', ') || row.recipientDisplay;
-        await db.batch([
+        const results = await db.batch([
           {
             sql: `UPDATE outbox SET to_json = ?, cc_json = ?, bcc_json = ?,
                     subject = ?, body_markdown = ?, attachments_json = ?,
@@ -450,12 +460,15 @@ export function createOutboxStore(
             ],
           },
         ]);
+        // expireOverdue runs outside the per-draft lock.
+        if (results[0].changes !== 1) throw new Error('outbox: not a draft');
         fireChanged();
       } else if (mirror !== undefined) {
         await db.run(`UPDATE outbox SET mirror_json = ? WHERE id = ?`, [
           mirror,
           id,
         ]);
+        fireChanged();
       }
       const next = await get(id);
       if (!next) throw new Error('outbox: row vanished');
