@@ -231,10 +231,16 @@ describe('extension outbound + error taxonomy e2e (real forked child)', () => {
       ],
     });
 
+    // This contract is the reply ref round trip through send(); the
+    // fixture's draft mirror (its RPC is pinned in extension-platform.test)
+    // is left out so the drafts stay Outbox-only.
+    const plainSenders = new Map<string, Sender>(
+      [...senderRegistry].map(([id, s]) => [id, { send: s.send.bind(s) }]),
+    );
     const svc = createOutboundService({
       store,
       prefs: fakePrefs(),
-      senders: senderRegistry,
+      senders: plainSenders,
       logSink: { log: () => {} },
     });
     svc.setBaseUrl('http://127.0.0.1:7421');
