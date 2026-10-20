@@ -1185,9 +1185,9 @@ const MIGRATIONS: Migration[] = [
   // 2026-10-20-outbox-draft-sync-design.md §4.1). ADD COLUMN only.
   (db) => {
     const cols = new Set(
-      (
-        db.prepare(`PRAGMA table_info(outbox)`).all() as { name: string }[]
-      ).map((c) => c.name),
+      (db.prepare(`PRAGMA table_info(outbox)`).all() as { name: string }[]).map(
+        (c) => c.name,
+      ),
     );
     const add = (name: string, ddl: string) => {
       if (!cols.has(name)) db.exec(`ALTER TABLE outbox ADD COLUMN ${ddl}`);

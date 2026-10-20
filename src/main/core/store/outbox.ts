@@ -212,7 +212,9 @@ function toRow(r: OutboxRowSql): OutboxRow {
     bcc: JSON.parse(r.bcc_json) as string[],
     attachments: JSON.parse(r.attachments_json) as OutboxAttachment[],
     mirror:
-      r.mirror_json === null ? null : (JSON.parse(r.mirror_json) as MirrorState),
+      r.mirror_json === null
+        ? null
+        : (JSON.parse(r.mirror_json) as MirrorState),
     sendAt: r.send_at,
   };
 }
@@ -412,7 +414,8 @@ export function createOutboxStore(
 
     async applyContent(id, snapshot, ref) {
       const row = await get(id);
-      if (!row || row.status !== 'draft') throw new Error('outbox: not a draft');
+      if (!row || row.status !== 'draft')
+        throw new Error('outbox: not a draft');
       const changed =
         normalizeSnapshot(snapshotOf(row)) !== normalizeSnapshot(snapshot);
       const mirror =
