@@ -25,6 +25,15 @@ export const MIRROR_CREATE_DEADLINE_MS = 20_000;
 /** One read/update round trip on the confirm and revise paths. */
 export const MIRROR_CALL_DEADLINE_MS = 20_000;
 
+interface ReadOptions {
+  /** Files this write uploads: where each came from. */
+  origins?: OutboxAttachment[];
+  /** The read right after the create. */
+  created?: boolean;
+  /** What Kia just wrote, when the read follows Kia's own update. */
+  local?: DraftSnapshot;
+}
+
 const FIELDS = ['to', 'cc', 'bcc', 'subject', 'body', 'attachments'];
 
 /** Which fields a provider's copy changed, by name only — never the
@@ -127,17 +136,22 @@ export function createMirrorOps(deps: {
     row: OutboxRow,
     ref: DraftRef,
     c: DraftContent,
-    origins?: OutboxAttachment[],
+    { origins, created, local }: ReadOptions,
   ) => {
+    const copy = snapshotOfContent(c);
+    // The provider's copy of Kia's own write, the same text bar whitespace:
+    // the row keeps Kia's text, so an edit of line breaks alone is not lost.
+    const text = (s: DraftSnapshot) =>
+      normalizeSnapshot({ ...s, attachments: [] }, { provider: true });
+    const echo = local !== undefined && text(copy) === text(local);
     const before = (await store.outbox.get(row.id)) ?? row;
     const { row: next, changed } = await store.outbox.applyContent(
       row.id,
-      snapshotOfContent(c),
+      echo ? { ...local, attachments: copy.attachments } : copy,
       ref,
-      origins,
-      true,
+      { origins, from: echo ? 'echo' : created ? 'created' : 'provider' },
     );
-    if (changed)
+    if (changed && !echo)
       deps.logSink.log(
         'outbound',
         'info',
@@ -152,13 +166,12 @@ export function createMirrorOps(deps: {
     drafts: DraftMirror,
     ref: DraftRef,
     ms: number,
-    origins?: OutboxAttachment[],
-    /** Right after a create only a draft is a believable answer. */
-    expectDraft = false,
+    opts: ReadOptions = {},
   ): Promise<OutboxRow> => {
     const r = await deadline(drafts.read(ref), ms, 'draft read');
-    if (r.state === 'draft') return adopt(row, r.ref, r.content, origins);
-    if (expectDraft) throw new Error(`a new draft read back as ${r.state}`);
+    if (r.state === 'draft') return adopt(row, r.ref, r.content, opts);
+    // Right after a create only a draft is a believable answer.
+    if (opts.created) throw new Error(`a new draft read back as ${r.state}`);
     const label = providerLabel(await deps.sourceOf(row));
     if (r.state === 'sent') {
       await store.outbox.transition(row.id, ['draft'], 'sent', {
@@ -221,14 +234,9 @@ export function createMirrorOps(deps: {
       const mirrored = (await store.outbox.get(row.id)) ?? row;
       if (opts.readback === false) return mirrored;
       try {
-        return await readAdopt(
-          mirrored,
-          drafts,
-          ref,
-          Math.max(1, left()),
-          undefined,
-          true,
-        );
+        return await readAdopt(mirrored, drafts, ref, Math.max(1, left()), {
+          created: true,
+        });
       } catch (e) {
         deps.logSink.log(
           'outbound',
@@ -267,13 +275,14 @@ export function createMirrorOps(deps: {
         throw e;
       }
       try {
-        return await readAdopt(
-          row,
-          drafts,
-          next,
-          MIRROR_CALL_DEADLINE_MS,
-          local.attachments,
+        // Only the files this write uploads are Kia's by name alone.
+        const uploading = new Set(
+          (patch.attachments ?? []).map((a) => a.filename),
         );
+        return await readAdopt(row, drafts, next, MIRROR_CALL_DEADLINE_MS, {
+          origins: local.attachments.filter((a) => uploading.has(a.filename)),
+          local,
+        });
       } catch (e) {
         // The provider has the edit; show it until the next refresh reads
         // the provider's own version.

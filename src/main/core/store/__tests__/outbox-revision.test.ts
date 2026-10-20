@@ -169,7 +169,7 @@ describe('outbox revisions', () => {
     expect(r.row.recipientDisplay).toBe('Bob Builder');
   });
 
-  it("a reply that left its subject to the provider takes the provider's without a new revision", async () => {
+  it("a reply that left its subject to the provider takes the provider's on create, without a new revision", async () => {
     // Outlook replies: Kia sends no subject, createReply writes "RE: …".
     const row = await store.outbox.create(
       draft({ kind: 'reply', subject: null }),
@@ -179,8 +179,7 @@ describe('outbox revisions', () => {
       row.id,
       snapshot({ subject: 'RE: Hi' }),
       ref,
-      [],
-      true,
+      { from: 'created' },
     );
     expect(r.changed).toBe(false);
     expect(r.row).toMatchObject({ revision: 1, subject: 'RE: Hi' });
@@ -190,19 +189,77 @@ describe('outbox revisions', () => {
       row.id,
       snapshot({ subject: 'RE: Hi there' }),
       ref,
-      [],
-      true,
+      { from: 'provider' },
     );
     expect(r2.row).toMatchObject({ revision: 2, subject: 'RE: Hi there' });
+    // A later read (the create's own read failed) is an edit: the user may
+    // have typed that subject, and an open confirmation must not send it.
+    const late = await store.outbox.create(
+      draft({ kind: 'reply', subject: null }),
+    );
+    const r3 = await store.outbox.applyContent(
+      late.id,
+      snapshot({ subject: 'RE: Hi' }),
+      ref,
+      { from: 'provider' },
+    );
+    expect(r3.row.revision).toBe(2);
     // Kia's own edit to a null subject stays an edit.
     const own = await store.outbox.create(
       draft({ kind: 'reply', subject: null }),
     );
-    const r3 = await store.outbox.applyContent(
+    const r4 = await store.outbox.applyContent(
       own.id,
       snapshot({ subject: 'Re: Hi' }),
     );
-    expect(r3.row.revision).toBe(2);
+    expect(r4.row.revision).toBe(2);
+  });
+
+  it("a file keeps Kia's size while the provider repeats its own count; another size is a replaced file", async () => {
+    const att = {
+      filename: 'offer.pdf',
+      mime: 'application/pdf',
+      size: 6,
+      from: { kind: 'document' as const, documentId: 'd1' },
+    };
+    const row = await store.outbox.create(draft({ attachments: [att] }));
+    const ref = { accountId, id: 'ol-1' };
+    const seen = (size: number) =>
+      snapshot({
+        attachments: [{ filename: 'offer.pdf', mime: 'application/pdf', size }],
+      });
+    // The upload's own read: Kia's file by name, whatever Outlook counts.
+    const up = await store.outbox.applyContent(row.id, seen(164), ref, {
+      origins: [att],
+      from: 'provider',
+    });
+    expect(up.row).toMatchObject({ revision: 1, attachments: [att] });
+    expect(up.row.mirror?.sizes).toEqual({ 'offer.pdf': 164 });
+    // A refresh with the same count: still Kia's file.
+    const same = await store.outbox.applyContent(row.id, seen(164), ref, {
+      from: 'provider',
+    });
+    expect(same.row).toMatchObject({ revision: 1, attachments: [att] });
+    // Replaced in Outlook with another offer.pdf: an edit, not Kia's file.
+    const swapped = await store.outbox.applyContent(row.id, seen(900), ref, {
+      from: 'provider',
+    });
+    expect(swapped.row.revision).toBe(2);
+    expect(swapped.row.attachments).toEqual([
+      { filename: 'offer.pdf', mime: 'application/pdf', size: 900 },
+    ]);
+  });
+
+  it('a paragraph break is an edit from the provider; a re-wrap is not', () => {
+    const key = (bodyMarkdown: string) =>
+      normalizeSnapshot(snapshot({ bodyMarkdown }), { provider: true });
+    expect(key('Hello Bob, how are you')).toBe(
+      key('Hello Bob,\nhow are  you\n'),
+    );
+    expect(key('Hello Bob, how are you')).not.toBe(
+      key('Hello Bob,\n\nhow are you'),
+    );
+    expect(key('a\n\nb')).toBe(key('a\r\n \r\nb'));
   });
 
   it('stores a ref without a revision bump when the content is the same', async () => {

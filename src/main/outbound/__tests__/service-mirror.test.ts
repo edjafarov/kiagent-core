@@ -401,6 +401,24 @@ describe('outbound service — provider draft mirror', () => {
   });
 
   describe('revise', () => {
+    it("Kia's own edit of line breaks alone is kept, and can be undone", async () => {
+      const r = await draft();
+      const v = await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        body: 'Hello\nBob',
+      });
+      expect(v.revision).toBe(2);
+      expect((await row(r.draft_id))?.bodyMarkdown).toBe('Hello\nBob');
+      const back = await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 2,
+        body: 'Hello Bob',
+      });
+      expect(back.revision).toBe(3);
+      expect(provider.drafts.get('d1')?.bodyText).toBe('Hello Bob');
+    });
+
     it('sends the edit to the provider and adopts the readback: one bump', async () => {
       const r = await draft();
       provider.calls = [];
@@ -632,6 +650,64 @@ describe('outbound service — provider draft mirror', () => {
       const got = await row(r.draft_id);
       expect(got?.revision).toBe(1);
       expect(got?.attachments[0].size).toBe(6);
+    });
+
+    it('a file replaced in the provider under the same name is an edit', async () => {
+      provider.readImpl = async (ref) => {
+        const c = provider.drafts.get(ref.id)!;
+        return {
+          state: 'draft',
+          ref,
+          content: {
+            ...c,
+            attachments: c.attachments.map((a) => ({
+              ...a,
+              size: a.size + 158,
+            })),
+          },
+        };
+      };
+      const r = await withFile();
+      expect(r.revision).toBe(1);
+      const d = provider.drafts.get('d1')!;
+      d.attachments = d.attachments.map((a) => ({ ...a, size: 900 }));
+      await service.listOutbox({});
+      const got = await row(r.draft_id);
+      expect(got?.revision).toBe(2);
+      expect(got?.attachments[0]).toMatchObject({ size: 1058 });
+      expect(got?.attachments[0].from).toBeUndefined();
+    });
+
+    it("a file replaced in the provider during Kia's own edit is not Kia's", async () => {
+      let reads = 0;
+      provider.readImpl = async (ref) => {
+        const c = provider.drafts.get(ref.id)!;
+        reads += 1;
+        return {
+          state: 'draft',
+          ref,
+          content: {
+            ...c,
+            attachments: c.attachments.map((a) => ({
+              ...a,
+              size: reads > 3 ? 900 : a.size + 158,
+            })),
+          },
+        };
+      };
+      const r = await withFile();
+      // reads: create's file upload read (1); revise: sync (2), then the
+      // update's own read (3+).
+      reads = 2;
+      await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        body: 'Shorter',
+      });
+      const got = await row(r.draft_id);
+      expect(got?.bodyMarkdown).toBe('Shorter');
+      expect(got?.attachments[0]).toMatchObject({ size: 900 });
+      expect(got?.attachments[0].from).toBeUndefined();
     });
 
     it('revise adds and removes files on the provider draft in one revision', async () => {

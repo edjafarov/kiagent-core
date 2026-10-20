@@ -59,15 +59,20 @@ const lowerAll = (xs: string[]) => xs.map(addressKey);
  *  CRLF → LF, trailing whitespace stripped per line, addresses by mailbox,
  *  attachments as a set of filename + size + where Kia got it (a file
  *  swapped for another of the same name and size is still a change).
- *  `provider`: the key a provider's copy is compared by — every whitespace
- *  run as one space, since Gmail re-wraps plain text when a draft is merely
- *  opened there. */
+ *  `provider`: the key a provider's copy is compared by — within each
+ *  paragraph every whitespace run as one space, since Gmail re-wraps plain
+ *  text when a draft is merely opened there; a paragraph break still counts. */
 export function normalizeSnapshot(
   s: DraftSnapshot,
   { provider = false }: { provider?: boolean } = {},
 ): string {
   const body = provider
-    ? s.bodyMarkdown.replace(/\s+/g, ' ').trim()
+    ? s.bodyMarkdown
+        .replace(/\r\n/g, '\n')
+        .split(/\n[ \t]*\n\s*/)
+        .map((p) => p.replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+        .join('\n\n')
     : s.bodyMarkdown
         .replace(/\r\n/g, '\n')
         .split('\n')
@@ -84,6 +89,20 @@ export function normalizeSnapshot(
       .map((a) => JSON.stringify([a.filename, a.size, a.from ?? null]))
       .sort(),
   ]);
+}
+
+export interface ApplyOptions {
+  /** Files Kia is uploading in this write: where each came from. */
+  origins?: OutboxAttachment[];
+  /** Where the snapshot comes from (default: Kia's own edit).
+   *  - `provider`: the provider's copy, compared by
+   *    `normalizeSnapshot(…, { provider: true })`.
+   *  - `created`: the same, read right after the create — a reply that left
+   *    its subject to the provider (Outlook's createReply writes "RE: …")
+   *    takes the provider's without a new revision.
+   *  - `echo`: the provider's copy of Kia's own write — Kia's text, the
+   *    provider's files, compared strictly. */
+  from?: 'provider' | 'created' | 'echo';
 }
 
 export function snapshotOf(row: OutboxRow): DraftSnapshot {
@@ -161,11 +180,7 @@ export interface OutboxStore {
     id: string,
     snapshot: DraftSnapshot,
     ref?: DraftRef,
-    /** Files Kia is adding in this write: where each came from. */
-    origins?: OutboxAttachment[],
-    /** The snapshot is the provider's copy: compared by
-     *  `normalizeSnapshot(…, { provider: true })`. */
-    fromProvider?: boolean,
+    opts?: ApplyOptions,
   ): Promise<{ row: OutboxRow; changed: boolean }>;
   /** Mirror bookkeeping only; no revision bump. */
   setMirror(id: string, mirror: MirrorState): Promise<void>;
@@ -455,34 +470,44 @@ export function createOutboxStore(
       return moved;
     },
 
-    async applyContent(id, incoming, ref, origins = [], fromProvider = false) {
+    async applyContent(id, incoming, ref, { origins = [], from } = {}) {
       const row = await get(id);
       if (!row || row.status !== 'draft')
         throw new Error('outbox: not a draft');
+      const fromProvider = from !== undefined;
       // A readback carries no `from`: keep where Kia got each file. A
       // provider's size is its own count (Outlook adds MIME overhead), so a
-      // file Kia attached keeps the size Kia read.
+      // file Kia attached keeps the size Kia read — while the provider
+      // reports the size it reported last time, or Kia is uploading it now.
+      // Another size under the same name is a file replaced there.
       const known = new Map(
         [...row.attachments, ...origins]
           .filter((a) => a.from)
           .map((a) => [a.filename, a]),
       );
+      const uploading = new Set(origins.map((a) => a.filename));
+      const seen = row.mirror?.sizes ?? {};
       const snapshot = {
         ...incoming,
         attachments: incoming.attachments.map((a) => {
           const k = known.get(a.filename);
           if (a.from || !k) return a;
-          return fromProvider
+          if (!fromProvider) return { ...a, from: k.from };
+          return uploading.has(a.filename) || seen[a.filename] === a.size
             ? { ...a, from: k.from, size: k.size }
-            : { ...a, from: k.from };
+            : a;
         }),
       };
+      const sizes = fromProvider
+        ? Object.fromEntries(
+            incoming.attachments.map((a) => [a.filename, a.size]),
+          )
+        : undefined;
+      const loose = from === 'provider' || from === 'created';
       const key = (x: DraftSnapshot) =>
-        normalizeSnapshot(x, { provider: fromProvider });
-      // A reply that left its subject to the provider (Outlook's createReply
-      // writes "RE: …") takes the provider's without a new revision.
+        normalizeSnapshot(x, { provider: loose });
       const filled =
-        fromProvider && row.subject === null && snapshot.subject !== null;
+        from === 'created' && row.subject === null && snapshot.subject !== null;
       const changed =
         key({
           ...snapshotOf(row),
@@ -491,7 +516,14 @@ export function createOutboxStore(
       const merged =
         ref === undefined
           ? undefined
-          : JSON.stringify({ ...(row.mirror ?? {}), ref, error: undefined });
+          : JSON.stringify({
+              ...(row.mirror ?? {}),
+              ref,
+              error: undefined,
+              ...(sizes && {
+                sizes: Object.keys(sizes).length ? sizes : undefined,
+              }),
+            });
       // An unchanged mirror is no write and no change event: a refresh that
       // found nothing new must not wake the screens that list the Outbox.
       const mirror =

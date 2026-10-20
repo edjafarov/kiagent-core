@@ -873,6 +873,8 @@ export interface MirrorState {
   sentElsewhere?: boolean;
   /** Display name of the provider: "Gmail", "Outlook". */
   provider?: string;
+  /** Each file's size as the provider last reported it (its own count). */
+  sizes?: Record<string, number>;
 }
 
 /** The reviewable content of a draft: what a revision covers. */
