@@ -124,6 +124,11 @@ export function createSmtpSender(deps: {
         text: intent.bodyMarkdown,
         inReplyTo: intent.threading?.inReplyTo as string | undefined,
         references: intent.threading?.references as string[] | undefined,
+        attachments: intent.attachments?.map((a) => ({
+          filename: a.filename,
+          contentType: a.mime,
+          content: Buffer.from(a.contentBase64, 'base64'),
+        })),
       });
       const node = mail.compile();
       const messageId = node.messageId();

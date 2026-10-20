@@ -173,6 +173,29 @@ describe('smtp sender', () => {
     expect(result.externalMessageId).toMatch(/^<.+>$/);
   });
 
+  it('carries files and blind copies', async () => {
+    await sender().send({
+      ...intent(),
+      bcc: ['boss@example.com'],
+      attachments: [
+        {
+          filename: 'a.pdf',
+          mime: 'application/pdf',
+          contentBase64: Buffer.from('%PDF').toString('base64'),
+        },
+      ],
+    });
+    const { envelope, raw } = sendMail.mock.calls[0][0];
+    expect(envelope.to).toEqual(['alice@example.com', 'boss@example.com']);
+    const { simpleParser } = await import('mailparser');
+    const m = await simpleParser(raw);
+    expect(
+      m.attachments.map((x) => [x.filename, x.content.toString()]),
+    ).toEqual([['a.pdf', '%PDF']]);
+    // Blind copies travel in the envelope only.
+    expect(raw.toString('utf8')).not.toContain('boss@example.com');
+  });
+
   it('a port-587 account override reaches the transport as {port: 587, secure: false} — no implicit TLS against a STARTTLS-only server', async () => {
     await store.setAccountConfig(accountId, {
       host: 'imap.example.com',
