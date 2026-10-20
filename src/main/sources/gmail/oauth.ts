@@ -64,14 +64,25 @@ function expiresAtFrom(expiresInSeconds: number | undefined): string {
   return new Date(Date.now() + seconds * 1000).toISOString();
 }
 
+const TOKEN_TIMEOUT_MS = 30_000;
+
 async function postToken(
   params: Record<string, string>,
 ): Promise<GoogleTokenResponse> {
-  const res = await fetch(TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(params).toString(),
-  });
+  // Bounded: a send waits on this refresh while it holds its draft.
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), TOKEN_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(params).toString(),
+      signal: abort.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
   const body = (await res.json()) as GoogleTokenResponse;
   if (!res.ok || body.error) {
     const message = `gmail oauth token request failed: ${body.error ?? res.status}${body.error_description ? ` — ${body.error_description}` : ''}`;

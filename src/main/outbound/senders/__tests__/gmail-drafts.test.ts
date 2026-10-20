@@ -239,6 +239,50 @@ describe('gmail draft mirror', () => {
     });
   });
 
+  it('read lists text files added in Gmail, not inline images', async () => {
+    use(() =>
+      res(200, {
+        id: 'd1',
+        message: {
+          threadId: 't123',
+          payload: {
+            mimeType: 'multipart/mixed',
+            headers: [{ name: 'To', value: 'bob@example.com' }],
+            parts: [
+              { mimeType: 'text/plain', body: { data: b64('Hi') } },
+              {
+                mimeType: 'text/plain',
+                filename: 'notes.txt',
+                headers: [
+                  {
+                    name: 'Content-Disposition',
+                    value: 'attachment; filename="notes.txt"',
+                  },
+                ],
+                body: { attachmentId: 'a1', size: 3 },
+              },
+              {
+                mimeType: 'image/png',
+                filename: 'logo.png',
+                headers: [
+                  {
+                    name: 'Content-Disposition',
+                    value: 'inline; filename="logo.png"',
+                  },
+                ],
+                body: { attachmentId: 'a2', size: 9 },
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const r = await drafts().read(ref());
+    expect(r.state === 'draft' && r.content.attachments).toEqual([
+      { filename: 'notes.txt', mime: 'text/plain', size: 3 },
+    ]);
+  });
+
   it('read of an HTML-only draft gives its text', async () => {
     use(() =>
       res(200, {

@@ -30,10 +30,10 @@ import {
   updateGmailDraft,
 } from '../../sources/gmail/gmail-api';
 import {
-  attachmentsOf,
   headersOf,
   plainTextOf,
   splitAddressList,
+  type GmailPart,
 } from '../../sources/gmail/parser';
 
 /** Matches error-copy's `reconnect .* in Settings` auth contract, so a
@@ -145,12 +145,31 @@ function contentOf(msg: Parameters<typeof plainTextOf>[0]): DraftContent {
     bcc: splitAddressList(h.bcc),
     subject: h.subject ?? null,
     bodyText: plainTextOf(msg),
-    attachments: attachmentsOf(msg).map((a) => ({
-      filename: a.filename,
-      mime: a.mimeType,
-      size: a.sizeBytes,
-    })),
+    attachments: filesOf(msg.payload),
   };
+}
+
+/** Every part the message carries as a file — whatever its type, so a
+ *  .txt or .html added in Gmail is reviewed like any other. Inline images
+ *  stay part of the body. */
+function filesOf(p: GmailPart | undefined): DraftContent['attachments'] {
+  if (!p) return [];
+  const out: DraftContent['attachments'] = [];
+  const walk = (part: GmailPart) => {
+    const cd =
+      part.headers?.find((h) => h.name.toLowerCase() === 'content-disposition')
+        ?.value ?? '';
+    const named = /filename="?([^";]+)"?/i.exec(cd)?.[1] ?? part.filename;
+    if (named && !/^\s*inline/i.test(cd))
+      out.push({
+        filename: named,
+        mime: part.mimeType || 'application/octet-stream',
+        size: part.body?.size ?? 0,
+      });
+    for (const c of part.parts ?? []) walk(c);
+  };
+  walk(p);
+  return out;
 }
 
 function addresses(a: AddressObject | AddressObject[] | undefined): string[] {

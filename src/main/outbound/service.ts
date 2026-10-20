@@ -722,7 +722,7 @@ export function createOutboundService(deps: {
 
   /** The provider's current draft into the row (§5.3); a row that is not
    *  mirrored comes back as it is. Throws `couldn't reach <provider>`. */
-  const refreshLocked = async (
+  const syncLocked = async (
     row: OutboxRow,
     ms?: number,
   ): Promise<OutboxRow> => {
@@ -743,13 +743,21 @@ export function createOutboundService(deps: {
     }
   };
 
-  /** Refresh one row by id under its lock; a failure keeps the row. */
-  const refreshById = (draftId: string, ms?: number) =>
-    withDraft(draftId, async () => {
+  /** Refresh one row by id under its lock; a failure keeps the row.
+   *  Concurrent callers share one read rather than queueing more of them on
+   *  the lock ahead of a Send. */
+  const inFlight = new Map<string, Promise<OutboxRow | null>>();
+  const refreshById = (draftId: string, ms?: number) => {
+    const running = inFlight.get(draftId);
+    if (running) return running;
+    const run = withDraft(draftId, async () => {
       const row = await deps.store.outbox.get(draftId);
       if (!row) return null;
-      return refreshLocked(row, ms).catch(() => row);
-    });
+      return syncLocked(row, ms).catch(() => row);
+    }).finally(() => inFlight.delete(draftId));
+    inFlight.set(draftId, run);
+    return run;
+  };
 
   /** Listings: every pending mirrored row refreshed in parallel, bounded;
    *  a miss renders the row as it was (§5.3). Reads only. */
@@ -836,7 +844,12 @@ export function createOutboundService(deps: {
   const discardLocked = async (
     draftId: string,
   ): Promise<{ moved: boolean; row: OutboxRow | null }> => {
-    const before = await deps.store.outbox.get(draftId);
+    const stored = await deps.store.outbox.get(draftId);
+    // A draft already sent (or gone) from the mail app is recorded as that,
+    // never as discarded — "Draft again" on it would invite a duplicate.
+    const before = stored ? await syncLocked(stored).catch(() => stored) : null;
+    if (before && before.status !== 'draft')
+      return { moved: false, row: before };
     const moved = await deps.store.outbox.transition(
       draftId,
       ['draft'],
@@ -870,7 +883,7 @@ export function createOutboundService(deps: {
     // refuse (provably unsent) when the provider can't be reached.
     let row: OutboxRow;
     try {
-      row = await refreshLocked(stored);
+      row = await syncLocked(stored);
     } catch (e) {
       const error = `not sent: ${e instanceof Error ? e.message : String(e)}`;
       await deps.store.outbox.transition(stored.id, ['draft'], 'failed', {
@@ -928,7 +941,7 @@ export function createOutboundService(deps: {
     if (stored.status !== 'draft') throw notPendingError(tool, stored);
     let row: OutboxRow;
     try {
-      row = await refreshLocked(stored);
+      row = await syncLocked(stored);
     } catch (e) {
       throw new Error(
         `${tool}: ${e instanceof Error ? e.message : String(e)} — the draft was not changed`,

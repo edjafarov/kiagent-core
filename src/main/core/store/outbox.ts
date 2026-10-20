@@ -432,10 +432,16 @@ export function createOutboxStore(
       };
       const changed =
         normalizeSnapshot(snapshotOf(row)) !== normalizeSnapshot(snapshot);
-      const mirror =
+      const merged =
         ref === undefined
           ? undefined
           : JSON.stringify({ ...(row.mirror ?? {}), ref, error: undefined });
+      // An unchanged mirror is no write and no change event: a refresh that
+      // found nothing new must not wake the screens that list the Outbox.
+      const mirror =
+        merged === undefined || merged === JSON.stringify(row.mirror)
+          ? undefined
+          : merged;
       if (changed) {
         const sameTo =
           JSON.stringify(lowerAll(row.to)) ===
@@ -480,11 +486,15 @@ export function createOutboxStore(
     },
 
     async setMirror(id, mirror) {
-      await db.run(`UPDATE outbox SET mirror_json = ? WHERE id = ?`, [
-        JSON.stringify(mirror),
-        id,
+      const json = JSON.stringify(mirror);
+      const results = await db.batch([
+        {
+          sql: `UPDATE outbox SET mirror_json = ?
+                WHERE id = ? AND mirror_json IS NOT ?`,
+          params: [json, id, json],
+        },
       ]);
-      fireChanged();
+      if (results[0].changes === 1) fireChanged();
     },
 
     async schedule(id, sendAt) {

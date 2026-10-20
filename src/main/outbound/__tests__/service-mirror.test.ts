@@ -220,6 +220,14 @@ describe('outbound service — provider draft mirror', () => {
       });
     });
 
+    it('a new draft that reads back as missing stays a pending, synced draft', async () => {
+      provider.readImpl = async () => ({ state: 'gone' });
+      const r = await draft();
+      const got = await row(r.draft_id);
+      expect(got?.status).toBe('draft');
+      expect(got?.mirror?.ref?.id).toBe('d1');
+    });
+
     it('the pending cap refuses before the provider is asked', async () => {
       make(false);
       for (let i = 0; i < OUTBOX_PENDING_CAP; i++) await draft(`n${i}`);
@@ -309,6 +317,27 @@ describe('outbound service — provider draft mirror', () => {
       expect(again.status).toBe('draft');
     });
 
+    it('a refresh that finds nothing new is no change event', async () => {
+      await draft();
+      const events = jest.fn();
+      const off = store.outbox.onChange(events);
+      await service.listOutbox({});
+      await service.listOutbox({});
+      off();
+      expect(events).not.toHaveBeenCalled();
+    });
+
+    it('concurrent refreshes of one draft share one read', async () => {
+      const r = await draft();
+      provider.calls = [];
+      await Promise.all([
+        service.refreshById(r.draft_id),
+        service.refreshById(r.draft_id),
+        service.listOutbox({}),
+      ]);
+      expect(provider.calls.filter((c) => c === 'read')).toHaveLength(1);
+    });
+
     it('listing and review surfaces never retry a failed create', async () => {
       provider.createImpl = async () => {
         throw new Error('offline');
@@ -343,6 +372,22 @@ describe('outbound service — provider draft mirror', () => {
         service.reviseDraft({ draftId: r.draft_id, revision: 1, body: 'x' }),
       ).rejects.toThrow(/this draft changed[\s\S]*Edited in Gmail/);
       expect(provider.drafts.get('d1')?.bodyText).toBe('Edited in Gmail');
+    });
+
+    it('a slow provider update is waited for, never abandoned', async () => {
+      const r = await draft();
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+      provider.updateImpl = () =>
+        new Promise((resolve) => setTimeout(resolve, 45_000));
+      const pending = service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        body: 'Slow',
+      });
+      await jest.advanceTimersByTimeAsync(45_001);
+      const v = await pending;
+      expect(v.revision).toBe(2);
+      expect(provider.drafts.get('d1')?.bodyText).toBe('Slow');
     });
 
     it('a failed provider update refuses and changes nothing', async () => {
@@ -439,6 +484,17 @@ describe('outbound service — provider draft mirror', () => {
       await service.discardById(r.draft_id);
       expect(provider.drafts.size).toBe(0);
       expect((await row(r.draft_id))?.status).toBe('discarded');
+    });
+
+    it('discarding a draft already sent from Gmail records it as sent', async () => {
+      const r = await draft();
+      provider.readImpl = async () => ({
+        state: 'sent',
+        externalMessageId: 'm1',
+      });
+      await service.discardById(r.draft_id);
+      expect((await row(r.draft_id))?.status).toBe('sent');
+      expect(provider.calls).not.toContain('remove');
     });
 
     it('a failed remove is logged and the row is still discarded', async () => {

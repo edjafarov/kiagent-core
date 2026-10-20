@@ -127,10 +127,13 @@ export function createMirrorOps(deps: {
     ref: DraftRef,
     ms: number,
     origins?: OutboxAttachment[],
+    /** Right after a create only a draft is a believable answer. */
+    expectDraft = false,
   ): Promise<OutboxRow> => {
     const r = await deadline(drafts.read(ref), ms, 'draft read');
-    const label = providerLabel(await deps.sourceOf(row));
     if (r.state === 'draft') return adopt(row, r.ref, r.content, origins);
+    if (expectDraft) throw new Error(`a new draft read back as ${r.state}`);
+    const label = providerLabel(await deps.sourceOf(row));
     if (r.state === 'sent') {
       await store.outbox.transition(row.id, ['draft'], 'sent', {
         sentAt: new Date(deps.nowMs()).toISOString(),
@@ -191,7 +194,14 @@ export function createMirrorOps(deps: {
       await store.outbox.setMirror(row.id, { ref, provider });
       const mirrored = (await store.outbox.get(row.id)) ?? row;
       try {
-        return await readAdopt(mirrored, drafts, ref, Math.max(1, left()));
+        return await readAdopt(
+          mirrored,
+          drafts,
+          ref,
+          Math.max(1, left()),
+          undefined,
+          true,
+        );
       } catch (e) {
         deps.logSink.log(
           'outbound',
@@ -214,11 +224,11 @@ export function createMirrorOps(deps: {
     async updateLocked(row, drafts, patch, local) {
       const ref = row.mirror?.ref;
       if (!ref) throw new Error('outbox: not mirrored');
-      const next = await deadline(
-        drafts.update(ref, patch),
-        MIRROR_CALL_DEADLINE_MS,
-        'draft update',
-      );
+      // Awaited to the end, never abandoned at a deadline: a write still in
+      // flight after the lock is released could overwrite a later edit, or
+      // land between a confirm's read and its send. The provider calls are
+      // bounded themselves (per-attempt timeouts; the extension RPC's 60 s).
+      const next = await drafts.update(ref, patch);
       try {
         return await readAdopt(
           row,
