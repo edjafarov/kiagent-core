@@ -49,19 +49,31 @@ export interface OutboxDraftInput {
 /** A row that mirrors a provider draft: never expires, not in the cap. */
 const MIRRORED = `(mirror_json IS NOT NULL AND json_extract(mirror_json, '$.ref') IS NOT NULL)`;
 
-const lowerAll = (xs: string[]) => xs.map((x) => x.trim().toLowerCase());
+/** An address as compared: the mailbox alone, lower-cased. Gmail re-saves
+ *  an opened draft with display names ("Ann <ann@x>"), which is no edit. */
+const addressKey = (x: string) =>
+  (/<([^<>]+)>\s*$/.exec(x)?.[1] ?? x).trim().toLowerCase();
+const lowerAll = (xs: string[]) => xs.map(addressKey);
 
 /** The comparison key of a draft's reviewable content (spec §4.1): trimmed,
- *  CRLF → LF, trailing whitespace stripped per line, addresses lower-cased,
+ *  CRLF → LF, trailing whitespace stripped per line, addresses by mailbox,
  *  attachments as a set of filename + size + where Kia got it (a file
- *  swapped for another of the same name and size is still a change). */
-export function normalizeSnapshot(s: DraftSnapshot): string {
-  const body = s.bodyMarkdown
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((l) => l.replace(/\s+$/, ''))
-    .join('\n')
-    .trim();
+ *  swapped for another of the same name and size is still a change).
+ *  `provider`: the key a provider's copy is compared by — every whitespace
+ *  run as one space, since Gmail re-wraps plain text when a draft is merely
+ *  opened there. */
+export function normalizeSnapshot(
+  s: DraftSnapshot,
+  { provider = false }: { provider?: boolean } = {},
+): string {
+  const body = provider
+    ? s.bodyMarkdown.replace(/\s+/g, ' ').trim()
+    : s.bodyMarkdown
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .map((l) => l.replace(/\s+$/, ''))
+        .join('\n')
+        .trim();
   return JSON.stringify([
     lowerAll(s.to),
     lowerAll(s.cc),
@@ -151,6 +163,9 @@ export interface OutboxStore {
     ref?: DraftRef,
     /** Files Kia is adding in this write: where each came from. */
     origins?: OutboxAttachment[],
+    /** The snapshot is the provider's copy: compared by
+     *  `normalizeSnapshot(…, { provider: true })`. */
+    fromProvider?: boolean,
   ): Promise<{ row: OutboxRow; changed: boolean }>;
   /** Mirror bookkeeping only; no revision bump. */
   setMirror(id: string, mirror: MirrorState): Promise<void>;
@@ -440,7 +455,7 @@ export function createOutboxStore(
       return moved;
     },
 
-    async applyContent(id, incoming, ref, origins = []) {
+    async applyContent(id, incoming, ref, origins = [], fromProvider = false) {
       const row = await get(id);
       if (!row || row.status !== 'draft')
         throw new Error('outbox: not a draft');
@@ -456,8 +471,9 @@ export function createOutboxStore(
             : { ...a, from: known.get(a.filename) },
         ),
       };
-      const changed =
-        normalizeSnapshot(snapshotOf(row)) !== normalizeSnapshot(snapshot);
+      const key = (x: DraftSnapshot) =>
+        normalizeSnapshot(x, { provider: fromProvider });
+      const changed = key(snapshotOf(row)) !== key(snapshot);
       const merged =
         ref === undefined
           ? undefined

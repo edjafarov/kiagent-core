@@ -121,6 +121,7 @@ export function createMirrorOps(deps: {
         snapshotOfContent(c),
         ref,
         origins,
+        true,
       )
     ).row;
 

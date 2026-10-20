@@ -286,6 +286,25 @@ describe('outbound service — provider draft mirror', () => {
       expect(got?.mirror?.ref?.threadId).toBe('t2');
     });
 
+    it('a draft Gmail re-saved on open (names added, text re-wrapped) is no new revision', async () => {
+      const r = await draft(
+        'A line long enough that Gmail wraps it when the draft is opened there.',
+      );
+      const d = provider.drafts.get('d1')!;
+      provider.drafts.set('d1', {
+        ...d,
+        to: ['Bob Example <Bob@Example.com>'],
+        bodyText:
+          'A line long enough that Gmail wraps it when the draft is\nopened there.\n',
+      });
+      await service.listOutbox({});
+      expect((await row(r.draft_id))?.revision).toBe(1);
+      // A real edit there still counts.
+      provider.drafts.get('d1')!.bodyText = 'Shorter, from Gmail.';
+      await service.listOutbox({});
+      expect((await row(r.draft_id))?.revision).toBe(2);
+    });
+
     it('sent in the provider → sent, marked sent elsewhere', async () => {
       const r = await draft();
       provider.readImpl = async () => ({

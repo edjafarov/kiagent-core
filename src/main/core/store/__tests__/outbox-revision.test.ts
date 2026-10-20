@@ -331,6 +331,30 @@ describe('outbox revisions', () => {
     expect((await store.outbox.get(row.id))?.status).toBe('expired');
   });
 
+  it('a change of line breaks is an edit from Kia, not from the provider', () => {
+    const a = snapshot({
+      bodyMarkdown: 'one two\nthree',
+      to: ['ann@x.example'],
+    });
+    const b = snapshot({
+      bodyMarkdown: 'one\ntwo three',
+      to: ['Ann <ANN@x.example>'],
+    });
+    expect(normalizeSnapshot(a)).not.toBe(normalizeSnapshot(b));
+    expect(normalizeSnapshot(a, { provider: true })).toBe(
+      normalizeSnapshot(b, { provider: true }),
+    );
+    // Addresses compare by mailbox either way.
+    expect(normalizeSnapshot(a)).toBe(
+      normalizeSnapshot(
+        snapshot({
+          bodyMarkdown: 'one two\nthree',
+          to: ['Ann <ann@x.example>'],
+        }),
+      ),
+    );
+  });
+
   it('normalizeSnapshot is stable under attachment order', () => {
     const a = { filename: 'a', mime: 'x', size: 1 };
     const b = { filename: 'b', mime: 'x', size: 2 };
