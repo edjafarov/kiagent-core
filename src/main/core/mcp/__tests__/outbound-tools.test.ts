@@ -166,7 +166,10 @@ describe('outbound MCP tools', () => {
       body: 'Yes, works for me.',
     })) as { draft_id: string; confirm_url?: string };
     expect(draft.confirm_url).toBeUndefined();
-    const sent = (await call('send_draft', { draft_id: draft.draft_id })) as {
+    const sent = (await call('send_draft', {
+      draft_id: draft.draft_id,
+      revision: 1,
+    })) as {
       status: string;
     };
     expect(sent.status).toBe('sent');
@@ -179,7 +182,7 @@ describe('outbound MCP tools', () => {
       body: 'Hi',
     })) as { draft_id: string };
     await expect(
-      call('send_draft', { draft_id: draft.draft_id }),
+      call('send_draft', { draft_id: draft.draft_id, revision: 1 }),
     ).rejects.toThrow(/chat-mode/);
   });
 
@@ -187,7 +190,7 @@ describe('outbound MCP tools', () => {
     const cold = buildBuiltinTools(store.read);
     const t = cold.find((x) => x.name === 'send_draft');
     expect(t).toBeDefined();
-    await expect(t!.call({ draft_id: 'x' })).rejects.toThrow(
+    await expect(t!.call({ draft_id: 'x', revision: 1 })).rejects.toThrow(
       /unavailable on this transport/i,
     );
   });
@@ -210,7 +213,7 @@ describe('outbound MCP tools', () => {
     expect((await store.outbox.get(local.draft_id))?.confirmMode).toBe('chat');
     await expect(
       runWithTransport('agent', () =>
-        call('send_draft', { draft_id: local.draft_id }),
+        call('send_draft', { draft_id: local.draft_id, revision: 1 }),
       ),
     ).rejects.toThrow(/needs the user's confirmation/);
     expect((await store.outbox.get(local.draft_id))?.status).toBe('draft');

@@ -157,23 +157,32 @@ function recipientBlock(row: OutboxRow): string {
   const cc = row.cc.length
     ? `<div class="ob-to-list">Cc: ${esc(row.cc.join(', '))}</div>`
     : '';
+  const bcc = row.bcc.length
+    ? `<div class="ob-to-list ob-bcc">Bcc: ${esc(row.bcc.join(', '))}</div>`
+    : '';
   return `<div>
     <div class="ob-to-label">To</div>
     <div class="ob-to-name">${esc(row.recipientDisplay)}</div>
     ${row.to.length > 1 ? `<div class="ob-to-list">${esc(row.to.join(', '))}</div>` : ''}
     ${cc}
+    ${bcc}
   </div>`;
 }
 
+/** The one confirm page for every mode (spec §4.3). `confirmPath` carries
+ *  the revision shown here; `changed` = a Send from an older page landed
+ *  here instead (HTTP 409). */
 export function reviewPage(
   row: OutboxRow,
-  p: { confirmPath: string; cancelPath: string },
+  p: { confirmPath: string; cancelPath: string; changed?: boolean },
 ): string {
   const body =
     chrome(`
+  ${p.changed ? `<p class="ob-note ob-changed">This draft changed — review it again. Nothing was sent.</p>` : ''}
   ${recipientBlock(row)}
   ${row.subject ? `<div class="ob-subject">${esc(row.subject)}</div>` : ''}
   <pre class="ob-body">${esc(row.bodyMarkdown)}</pre>
+  <span class="ob-rev" hidden>${row.revision}</span>
   <div class="ob-actions">
     ${sendForm(p.confirmPath, 'Confirm & send')}
     <form method="POST" action="${esc(p.cancelPath)}"><button type="submit" class="btn ob-btn-secondary ob-disable">Cancel</button></form>
@@ -186,23 +195,9 @@ export function reviewPage(
   });
 }
 
-export function linkPage(row: OutboxRow, p: { confirmPath: string }): string {
-  const body =
-    chrome(`
-  ${recipientBlock(row)}
-  <div class="ob-actions">${sendForm(p.confirmPath, 'Send')}</div>`) +
-    CONFIRM_SCRIPT;
-  return renderShell(css(), {
-    title: 'Send message?',
-    variant: 'minimal',
-    wordmark: 'kia',
-    body,
-  });
-}
-
 export function failedPage(
   row: OutboxRow,
-  p: { shaped: ShapedOutboundError; confirmPath: string },
+  p: { shaped: ShapedOutboundError; reopenPath: string },
 ): string {
   // kind 'unknown' means shapeOutboundError could not prove the send was
   // ever rejected — its own message already says the send "MAY still have
@@ -215,20 +210,18 @@ export function failedPage(
   // and the red error icon stay correct for it.
   const uncertain = p.shaped.kind === 'unknown';
   const retry = p.shaped.canRetry
-    ? `<div class="ob-actions">${sendForm(p.confirmPath, 'Try again')}</div>`
+    ? `<div class="ob-actions"><form method="POST" action="${esc(p.reopenPath)}"><button type="submit" class="btn primary ob-btn">Review again</button></form></div>`
     : `<p class="ob-note">${
         uncertain
           ? "If it's not in your Sent folder, ask your assistant to create a new draft."
           : 'Ask your assistant to create a new draft.'
       }</p>`;
-  const body =
-    chrome(`
+  const body = chrome(`
   ${ICON_SVGS[p.shaped.canRetry || uncertain ? 'warn' : 'error']}
   <p class="ob-msg">${esc(p.shaped.message)}</p>
   <div class="ob-to-list">To ${esc(row.recipientDisplay)}</div>
   ${retry}
-  ${detailBlock(p.shaped.summary)}`) +
-    (p.shaped.canRetry ? CONFIRM_SCRIPT : '');
+  ${detailBlock(p.shaped.summary)}`);
   return renderShell(css(), {
     title: uncertain ? 'Delivery uncertain' : 'Not sent',
     variant: 'minimal',

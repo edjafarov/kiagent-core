@@ -11,7 +11,7 @@ import type { OutboxRow } from '@shared/contracts';
 
 import { shapeOutboundError } from './error-copy';
 import { isOutboundToolOp } from './ops';
-import { failedPage, linkPage, resultPage, reviewPage } from './pages';
+import { failedPage, resultPage, reviewPage } from './pages';
 import type { OutboundService } from './service';
 
 function sendHtml(
@@ -108,7 +108,7 @@ function sentWhen(row: OutboxRow): string {
   return ` (${when})`;
 }
 
-function gonePage(row: OutboxRow, confirmPath: string): string {
+function gonePage(row: OutboxRow, token: string): string {
   if (row.status === 'sent')
     return resultPage(
       'Already sent',
@@ -122,7 +122,7 @@ function gonePage(row: OutboxRow, confirmPath: string): string {
   if (row.status === 'failed')
     return failedPage(row, {
       shaped: shapeOutboundError(row.error ?? ''),
-      confirmPath,
+      reopenPath: `/outbox/reopen/${token}`,
     });
   if (row.status === 'delivery_unknown')
     return resultPage(
@@ -162,30 +162,32 @@ type PageResult = { status: number; html: string };
 // pages/outcomes/status codes stay byte-identical across transports —
 // the only difference between the two entry points is which paths are
 // allowlisted and how the request URL gets parsed.
+/** One review page for every confirm mode (spec §4.3), bound to the row's
+ *  revision: its Send posts to /outbox/confirm/<token>/<revision>. */
+function reviewFor(row: OutboxRow, token: string, changed = false): string {
+  return reviewPage(row, {
+    confirmPath: `/outbox/confirm/${token}/${row.revision}`,
+    cancelPath: `/outbox/cancel/${token}`,
+    changed,
+  });
+}
+
+function peekPage(
+  peek: Awaited<ReturnType<OutboundService['peekByToken']>>,
+  token: string,
+): PageResult {
+  if (peek.kind === 'invalid') return { status: 404, html: invalidPage() };
+  if (peek.kind === 'gone')
+    return { status: 200, html: gonePage(peek.row, token) };
+  return { status: 200, html: reviewFor(peek.row, token) };
+}
+
 async function getConfirm(
   outbound: OutboundService,
   token: string,
 ): Promise<PageResult> {
-  const confirmPath = `/outbox/confirm/${token}`;
   try {
-    const peek = await outbound.peekByToken(token);
-    if (peek.kind === 'invalid') return { status: 404, html: invalidPage() };
-    if (peek.kind === 'gone')
-      return { status: 200, html: gonePage(peek.row, confirmPath) };
-    const cancelPath = `/outbox/cancel/${token}`;
-    return {
-      status: 200,
-      html:
-        // Only 'link' gets the minimal page. 'chat' falls through to the FULL
-        // review page on purpose: a chat draft's page confirm is a FALLBACK
-        // (the model never showed a link), so it must be the strictly
-        // stronger surface — whole draft rendered, plus a Cancel button —
-        // rather than a bare Send button for a message the user may never
-        // have seen on this device.
-        peek.mode === 'link'
-          ? linkPage(peek.row, { confirmPath })
-          : reviewPage(peek.row, { confirmPath, cancelPath }),
-    };
+    return peekPage(await outbound.peekByToken(token), token);
   } catch {
     return {
       status: 500,
@@ -201,11 +203,15 @@ async function getConfirm(
 async function postConfirm(
   outbound: OutboundService,
   token: string,
+  revision: number | null,
 ): Promise<PageResult> {
-  const confirmPath = `/outbox/confirm/${token}`;
   try {
-    const out = await outbound.confirmByToken(token);
+    const out = await outbound.confirmByToken(token, revision);
     if (out.kind === 'invalid') return { status: 404, html: invalidPage() };
+    // 409: the confirmed page showed another revision (or an old page
+    // carried none). The current one is shown; nothing was sent.
+    if (out.kind === 'changed')
+      return { status: 409, html: reviewFor(out.row, token, true) };
     if (out.kind === 'sent')
       return {
         status: 200,
@@ -215,18 +221,8 @@ async function postConfirm(
           { icon: 'success', footNote: 'You can close this page.' },
         ),
       };
-    // 'failed' and 'already' (a raced/reused link) both render the same
-    // terminal page as any other non-draft row.
-    return { status: 200, html: gonePage(out.row, confirmPath) };
+    return { status: 200, html: gonePage(out.row, token) };
   } catch {
-    // This catch can't tell a pre-send throw (secret(), expireOverdue,
-    // outbox.get — nothing sent yet) apart from a post-send bookkeeping
-    // throw (sender.send() already resolved — the message may be on the
-    // wire per confirmByToken's own comment). Since both land here
-    // indistinguishably, the copy below stays conservative for BOTH cases
-    // rather than risk ever reading "failed to send" for a message that
-    // actually went out. Honest unknown-state copy only; the boot-time
-    // sweep classifies the row itself for the post-send case.
     return {
       status: 500,
       html: resultPage(
@@ -240,11 +236,29 @@ async function postConfirm(
   }
 }
 
+/** The failed page's "Review again": reopen, then the review page. */
+async function postReopen(
+  outbound: OutboundService,
+  token: string,
+): Promise<PageResult> {
+  try {
+    return peekPage(await outbound.reopenByToken(token), token);
+  } catch {
+    return {
+      status: 500,
+      html: resultPage(
+        'Something went wrong',
+        'This draft could not be reopened right now. Nothing was sent — try again in a moment.',
+        { icon: 'warn' },
+      ),
+    };
+  }
+}
+
 async function postCancel(
   outbound: OutboundService,
   token: string,
 ): Promise<PageResult> {
-  const confirmPath = `/outbox/confirm/${token}`;
   try {
     const out = await outbound.cancelByToken(token);
     if (out.kind === 'invalid') return { status: 404, html: invalidPage() };
@@ -255,7 +269,7 @@ async function postCancel(
           icon: 'info',
         }),
       };
-    return { status: 200, html: gonePage(out.row, confirmPath) };
+    return { status: 200, html: gonePage(out.row, token) };
   } catch {
     return {
       status: 500,
@@ -270,7 +284,8 @@ async function postCancel(
 
 type OutboxMatch =
   | { kind: 'get-confirm'; token: string }
-  | { kind: 'post-confirm'; token: string }
+  | { kind: 'post-confirm'; token: string; revision: number | null }
+  | { kind: 'post-reopen'; token: string }
   | { kind: 'post-cancel'; token: string };
 
 // Routing decision for the THREE token-gated confirm/cancel routes shared by
@@ -289,11 +304,20 @@ function matchOutboxPage(
   method: string | undefined,
   pathname: string,
 ): OutboxMatch | null {
-  const confirm = /^\/outbox\/confirm\/([^/]+)$/.exec(pathname);
+  // The revision segment rides only on the page's Send; a GET ignores it.
+  const confirm = /^\/outbox\/confirm\/([^/]+)(?:\/(\d+))?$/.exec(pathname);
   if (confirm && method === 'GET')
     return { kind: 'get-confirm', token: confirm[1] };
   if (confirm && method === 'POST')
-    return { kind: 'post-confirm', token: confirm[1] };
+    return {
+      kind: 'post-confirm',
+      token: confirm[1],
+      revision: confirm[2] === undefined ? null : Number(confirm[2]),
+    };
+
+  const reopen = /^\/outbox\/reopen\/([^/]+)$/.exec(pathname);
+  if (reopen && method === 'POST')
+    return { kind: 'post-reopen', token: reopen[1] };
 
   const cancel = /^\/outbox\/cancel\/([^/]+)$/.exec(pathname);
   if (cancel && method === 'POST')
@@ -307,7 +331,9 @@ function runOutboxMatch(
   match: OutboxMatch,
 ): Promise<PageResult> {
   if (match.kind === 'get-confirm') return getConfirm(outbound, match.token);
-  if (match.kind === 'post-confirm') return postConfirm(outbound, match.token);
+  if (match.kind === 'post-confirm')
+    return postConfirm(outbound, match.token, match.revision);
+  if (match.kind === 'post-reopen') return postReopen(outbound, match.token);
   return postCancel(outbound, match.token);
 }
 
@@ -318,7 +344,8 @@ export function createOutboundRoutes(outbound: OutboundService): {
     url: URL,
   ): Promise<boolean>;
   /** Remote-transport entry: serves ONLY GET/POST /outbox/confirm/<token>
-   *  and POST /outbox/cancel/<token>. Everything else under /outbox/ —
+   *  (POST with /<revision>), POST /outbox/reopen/<token> and POST
+   *  /outbox/cancel/<token>. Everything else under /outbox/ —
    *  including /outbox/api — returns false (caller 404s). No Host/Origin
    *  loopback check: the remote server has real TLS Host semantics and the
    *  pages are HMAC-token-gated. Parses the path itself since the remote
@@ -380,6 +407,15 @@ export function createOutboundRoutes(outbound: OutboundService): {
               ok: true,
               result: await outbound.sendDraft(
                 args as Parameters<OutboundService['sendDraft']>[0],
+              ),
+            });
+          } else if (op === 'reviseDraft') {
+            sendJson(res, {
+              ok: true,
+              result: await outbound.reviseDraft(
+                args as unknown as Parameters<
+                  OutboundService['reviseDraft']
+                >[0],
               ),
             });
           } else {

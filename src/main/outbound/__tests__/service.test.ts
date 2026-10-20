@@ -115,7 +115,7 @@ describe('outbound service — drafts', () => {
     expect(r.confirm_url).toMatch(
       /^http:\/\/127\.0\.0\.1:7421\/outbox\/confirm\//,
     );
-    expect(r.body).toBeUndefined(); // review mode carries no draft fields
+    expect(r.body).toBe('Thanks!'); // every mode carries the draft (to revise it)
     expect(r.instruction).toMatch(/review/i);
     const row = await store.outbox.get(r.draft_id);
     expect(row?.status).toBe('draft');
@@ -484,7 +484,7 @@ describe('outbound service — drafts', () => {
       expect(inFlight?.status).toBe('sending');
       return { externalMessageId: '<sent@x>' };
     });
-    const out = await service.confirmByToken(tokenOf(r));
+    const out = await service.confirmByToken(tokenOf(r), 1);
     expect(out.kind).toBe('sent');
     expect(sendMock).toHaveBeenCalledTimes(1);
     const intent = sendMock.mock.calls[0][0];
@@ -502,7 +502,7 @@ describe('outbound service — drafts', () => {
   it('a sender that resolves with no fields still lands in sent, not failed', async () => {
     sendMock.mockResolvedValueOnce(undefined);
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    const out = await service.confirmByToken(tokenOf(r));
+    const out = await service.confirmByToken(tokenOf(r), 1);
     expect(out.kind).toBe('sent');
     const row = await store.outbox.get(r.draft_id);
     expect(row?.status).toBe('sent');
@@ -511,8 +511,8 @@ describe('outbound service — drafts', () => {
 
   it('a confirm link is single-use', async () => {
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    await service.confirmByToken(tokenOf(r));
-    const second = await service.confirmByToken(tokenOf(r));
+    await service.confirmByToken(tokenOf(r), 1);
+    const second = await service.confirmByToken(tokenOf(r), 1);
     expect(second.kind).toBe('already');
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
@@ -521,8 +521,8 @@ describe('outbound service — drafts', () => {
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
     const token = tokenOf(r);
     const [a, b] = await Promise.all([
-      service.confirmByToken(token),
-      service.confirmByToken(token),
+      service.confirmByToken(token, 1),
+      service.confirmByToken(token, 1),
     ]);
     expect([a.kind, b.kind].sort()).toEqual(['already', 'sent']);
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -533,7 +533,7 @@ describe('outbound service — drafts', () => {
   it('a sender failure lands in failed with the error recorded', async () => {
     sendMock.mockRejectedValueOnce(new Error('SMTP 535 auth failed'));
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    const out = await service.confirmByToken(tokenOf(r));
+    const out = await service.confirmByToken(tokenOf(r), 1);
     expect(out.kind).toBe('failed');
     const row = await store.outbox.get(r.draft_id);
     expect(row?.status).toBe('failed');
@@ -549,7 +549,7 @@ describe('outbound service — drafts', () => {
       logSink,
     });
     senderless.setBaseUrl('http://127.0.0.1:7421');
-    const out = await senderless.confirmByToken(tokenOf(r));
+    const out = await senderless.confirmByToken(tokenOf(r), 1);
     expect(out.kind).toBe('failed');
     const row = await store.outbox.get(r.draft_id);
     expect(row?.status).toBe('failed');
@@ -569,7 +569,7 @@ describe('outbound service — drafts', () => {
   it('fail() stores the classifier shaped summary, never the raw error blob', async () => {
     sendMock.mockRejectedValueOnce(new Error(SMOKE_403));
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    const out = await service.confirmByToken(tokenOf(r));
+    const out = await service.confirmByToken(tokenOf(r), 1);
     expect(out.kind).toBe('failed');
     const row = await store.outbox.get(r.draft_id);
     expect(row?.status).toBe('failed');
@@ -578,16 +578,19 @@ describe('outbound service — drafts', () => {
     );
   });
 
-  it('a retryable failed row re-confirms through the same token (Try again)', async () => {
+  it('a retryable failed row comes back through reopen (Try again), then sends', async () => {
     sendMock.mockRejectedValueOnce(new Error(SMOKE_403));
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
     const token = tokenOf(r);
-    const first = await service.confirmByToken(token);
+    const first = await service.confirmByToken(token, 1);
     expect(first.kind).toBe('failed');
     expect((await store.outbox.get(r.draft_id))?.status).toBe('failed');
 
+    // the old link alone never re-sends a failed row
+    expect((await service.confirmByToken(token, 1)).kind).toBe('already');
+    expect((await service.reopenById(r.draft_id))?.revision).toBe(2);
     sendMock.mockResolvedValueOnce({ externalMessageId: '<retry@x>' });
-    const second = await service.confirmByToken(token);
+    const second = await service.confirmByToken(token, 2);
     expect(second.kind).toBe('sent');
     const row = await store.outbox.get(r.draft_id);
     expect(row?.status).toBe('sent');
@@ -599,7 +602,7 @@ describe('outbound service — drafts', () => {
     sendMock.mockRejectedValueOnce(new Error(SMOKE_403));
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
     const token = tokenOf(r);
-    const first = await service.confirmByToken(token);
+    const first = await service.confirmByToken(token, 1);
     expect(first.kind).toBe('failed');
 
     const failedListing = await service.listOutbox({});
@@ -607,8 +610,9 @@ describe('outbound service — drafts', () => {
     expect(failedItem?.status).toBe('failed');
     expect(failedItem?.error).toBeTruthy();
 
+    await service.reopenById(r.draft_id);
     sendMock.mockResolvedValueOnce({ externalMessageId: '<retry@x>' });
-    const second = await service.confirmByToken(token);
+    const second = await service.confirmByToken(token, 2);
     expect(second.kind).toBe('sent');
 
     const sentListing = await service.listOutbox({});
@@ -621,10 +625,10 @@ describe('outbound service — drafts', () => {
     sendMock.mockRejectedValueOnce(new Error('completely novel explosion'));
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
     const token = tokenOf(r);
-    const first = await service.confirmByToken(token);
+    const first = await service.confirmByToken(token, 1);
     expect(first.kind).toBe('failed');
 
-    const second = await service.confirmByToken(token);
+    const second = await service.confirmByToken(token, 1);
     expect(second.kind).toBe('already');
     const row = await store.outbox.get(r.draft_id);
     expect(row?.status).toBe('failed');
@@ -635,24 +639,9 @@ describe('outbound service — drafts', () => {
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
     const token = tokenOf(r);
     const spy = jest.spyOn(store.outbox, 'transition');
-    await service.confirmByToken(token);
+    await service.confirmByToken(token, 1);
     const toSending = spy.mock.calls.find((c) => c[2] === 'sending');
     expect(toSending?.[1]).toEqual(['draft']);
-    spy.mockRestore();
-  });
-
-  it('the CAS transition uses the OBSERVED status, never the union [draft,failed]', async () => {
-    sendMock.mockRejectedValueOnce(new Error(SMOKE_403));
-    const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    const token = tokenOf(r);
-    await service.confirmByToken(token); // drive draft -> failed (retryable)
-    expect((await store.outbox.get(r.draft_id))?.status).toBe('failed');
-
-    const spy = jest.spyOn(store.outbox, 'transition');
-    sendMock.mockResolvedValueOnce({ externalMessageId: '<retry@x>' });
-    await service.confirmByToken(token);
-    const toSending = spy.mock.calls.find((c) => c[2] === 'sending');
-    expect(toSending?.[1]).toEqual(['failed']);
     spy.mockRestore();
   });
 
@@ -674,7 +663,7 @@ describe('outbound service — drafts', () => {
       expiresAt: new Date(Date.now() - 1_000).toISOString(),
     });
     const token = signConfirmToken(secret, stale.id, Date.now() + 60_000);
-    const out = await service.confirmByToken(token);
+    const out = await service.confirmByToken(token, 1);
     expect(out.kind).toBe('already');
     const row = await store.outbox.get(stale.id);
     expect(row?.status).toBe('expired');
@@ -691,7 +680,7 @@ describe('outbound service — drafts', () => {
 
   it('cancelByToken after a completed confirm loses the CAS and leaves the sent row alone', async () => {
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    await service.confirmByToken(tokenOf(r));
+    await service.confirmByToken(tokenOf(r), 1);
     const out = await service.cancelByToken(tokenOf(r));
     expect(out.kind).toBe('already');
     const row = await store.outbox.get(r.draft_id);
@@ -701,7 +690,7 @@ describe('outbound service — drafts', () => {
   describe('sendById (the in-app review)', () => {
     it('sends a draft like the page confirm does', async () => {
       const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-      const out = await service.sendById(r.draft_id);
+      const out = await service.sendById(r.draft_id, 1);
       expect(out.kind).toBe('sent');
       expect((await store.outbox.get(r.draft_id))?.externalMessageId).toBe(
         '<sent@x>',
@@ -711,26 +700,27 @@ describe('outbound service — drafts', () => {
     it('two sends of one draft — sheet and page, or a double click — send once', async () => {
       const r = await service.draftReply({ documentId: docId, body: 'Yo' });
       const [a, b] = await Promise.all([
-        service.sendById(r.draft_id),
-        service.confirmByToken(tokenOf(r)),
+        service.sendById(r.draft_id, 1),
+        service.confirmByToken(tokenOf(r), 1),
       ]);
       expect([a.kind, b.kind].sort()).toEqual(['already', 'sent']);
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
 
-    it('re-sends a retryable failure on the same row (Try again)', async () => {
+    it('re-sends a retryable failure on the same row after reopen (Try again)', async () => {
       sendMock.mockRejectedValueOnce(new Error(SMOKE_403));
       const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-      expect((await service.sendById(r.draft_id)).kind).toBe('failed');
-      expect((await service.sendById(r.draft_id)).kind).toBe('sent');
+      expect((await service.sendById(r.draft_id, 1)).kind).toBe('failed');
+      await service.reopenById(r.draft_id);
+      expect((await service.sendById(r.draft_id, 2)).kind).toBe('sent');
       expect(sendMock).toHaveBeenCalledTimes(2);
     });
 
     it('a sent row is already; an unknown id is invalid; an expired draft is swept, not sent', async () => {
       const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-      await service.sendById(r.draft_id);
-      expect((await service.sendById(r.draft_id)).kind).toBe('already');
-      expect((await service.sendById('nope')).kind).toBe('invalid');
+      await service.sendById(r.draft_id, 1);
+      expect((await service.sendById(r.draft_id, 1)).kind).toBe('already');
+      expect((await service.sendById('nope', 1)).kind).toBe('invalid');
       const stale = await store.outbox.create({
         accountId,
         kind: 'new',
@@ -743,7 +733,7 @@ describe('outbound service — drafts', () => {
         createdVia: 'mcp-local',
         expiresAt: new Date(Date.now() - 1_000).toISOString(),
       });
-      expect((await service.sendById(stale.id)).kind).toBe('already');
+      expect((await service.sendById(stale.id, 1)).kind).toBe('already');
       expect((await store.outbox.get(stale.id))?.status).toBe('expired');
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
@@ -763,7 +753,7 @@ describe('outbound service — drafts', () => {
   });
 
   it('garbage tokens are invalid for both operations', async () => {
-    expect((await service.confirmByToken('nope')).kind).toBe('invalid');
+    expect((await service.confirmByToken('nope', 1)).kind).toBe('invalid');
     expect((await service.cancelByToken('nope')).kind).toBe('invalid');
   });
 
@@ -817,7 +807,7 @@ describe('outbound service — drafts', () => {
   it('sendDraft sends a chat-mode draft', async () => {
     const svc = chatService();
     const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
-    const out = await svc.sendDraft({ draftId: r.draft_id });
+    const out = await svc.sendDraft({ draftId: r.draft_id, revision: 1 });
     expect(out.status).toBe('sent');
     expect(out.recipient_display).toBe(r.recipient_display);
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -826,9 +816,9 @@ describe('outbound service — drafts', () => {
 
   it('sendDraft refuses non-chat drafts, naming the mode', async () => {
     const r = await service.draftReply({ documentId: docId, body: 'Yo' });
-    await expect(service.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
-      /mode 'review'.*list_outbox/,
-    );
+    await expect(
+      service.sendDraft({ draftId: r.draft_id, revision: 1 }),
+    ).rejects.toThrow(/mode 'review'.*list_outbox/);
     expect(sendMock).not.toHaveBeenCalled();
   });
 
@@ -837,9 +827,9 @@ describe('outbound service — drafts', () => {
     const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
     // Same store, but the service whose prefs default is 'review' — models
     // the user turning the global setting back off before the model sends.
-    await expect(service.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
-      /no longer/i,
-    );
+    await expect(
+      service.sendDraft({ draftId: r.draft_id, revision: 1 }),
+    ).rejects.toThrow(/no longer/i);
     expect(sendMock).not.toHaveBeenCalled();
   });
 
@@ -850,9 +840,9 @@ describe('outbound service — drafts', () => {
       ...IMAP_CFG,
       outbound: { mode: 'review' },
     });
-    await expect(svc.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
-      /no longer/i,
-    );
+    await expect(
+      svc.sendDraft({ draftId: r.draft_id, revision: 1 }),
+    ).rejects.toThrow(/no longer/i);
     expect(sendMock).not.toHaveBeenCalled();
   });
 
@@ -863,21 +853,21 @@ describe('outbound service — drafts', () => {
     });
     const svc = chatService();
     const a = await svc.draftReply({ documentId: docId, body: 'one' });
-    await svc.sendDraft({ draftId: a.draft_id });
+    await svc.sendDraft({ draftId: a.draft_id, revision: 1 });
     const b = await svc.draftReply({ documentId: docId, body: 'two' });
-    await expect(svc.sendDraft({ draftId: b.draft_id })).rejects.toThrow(
-      /rate limit/i,
-    );
+    await expect(
+      svc.sendDraft({ draftId: b.draft_id, revision: 1 }),
+    ).rejects.toThrow(/rate limit/i);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
   it('sendDraft is single-use', async () => {
     const svc = chatService();
     const r = await svc.draftReply({ documentId: docId, body: 'Yo' });
-    await svc.sendDraft({ draftId: r.draft_id });
-    await expect(svc.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
-      /'sent'/,
-    );
+    await svc.sendDraft({ draftId: r.draft_id, revision: 1 });
+    await expect(
+      svc.sendDraft({ draftId: r.draft_id, revision: 1 }),
+    ).rejects.toThrow(/'sent'/);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
@@ -888,9 +878,9 @@ describe('outbound service — drafts', () => {
     // Anchored on purpose: the stored summary is ALREADY prefixed
     // `send failed: ` by the classifier, so a naive re-prefix would produce
     // `send failed: send failed: SMTP 550 …` and fail this assertion.
-    await expect(svc.sendDraft({ draftId: r.draft_id })).rejects.toThrow(
-      /^send failed: SMTP 550/,
-    );
+    await expect(
+      svc.sendDraft({ draftId: r.draft_id, revision: 1 }),
+    ).rejects.toThrow(/^send failed: SMTP 550/);
     const row = await store.outbox.get(r.draft_id);
     expect(row?.status).toBe('failed');
     expect(row?.error).toMatch(/550/);
@@ -1013,7 +1003,7 @@ describe('outbound service — drafts', () => {
     const { svc, slackSend, hookDocId } = await slackSetup();
     const r = await svc.draftReply({ documentId: hookDocId, body: 'On it!' });
     expect(r.recipient_display).toBe('#general (thread)');
-    const out = await svc.confirmByToken(tokenOf(r));
+    const out = await svc.confirmByToken(tokenOf(r), 1);
     expect(out.kind).toBe('sent');
     // The opaque ref round-trips to the source's own Sender verbatim —
     // still an object, not the JSON string the outbox column stores.
@@ -1033,7 +1023,7 @@ describe('outbound service — drafts', () => {
     expect(r.recipient_display).toBe(
       '#general (thread on Bob · 2026-07-01 10:00)',
     );
-    const out = await svc.confirmByToken(tokenOf(r));
+    const out = await svc.confirmByToken(tokenOf(r), 1);
     expect(out.kind).toBe('sent');
     // The SELECTED sub-ref round-trips to the sender, not the day default.
     expect(slackSend.mock.calls[0][0].outboundRef).toEqual({
@@ -1046,7 +1036,7 @@ describe('outbound service — drafts', () => {
     const { svc, slackSend, dayDocId } = await slackSetup();
     const r = await svc.draftReply({ documentId: dayDocId, body: 'Hi all' });
     expect(r.recipient_display).toBe('#general');
-    await svc.confirmByToken(tokenOf(r));
+    await svc.confirmByToken(tokenOf(r), 1);
     expect(slackSend.mock.calls[0][0].outboundRef).toEqual({ channel: 'C9' });
   });
 
@@ -1150,7 +1140,7 @@ describe('outbound service — drafts', () => {
     const row = await store.outbox.get(r.draft_id);
     expect(row?.to).toEqual(['alice@contoso.com']);
     expect(row?.cc).toEqual([]);
-    await svc.confirmByToken(tokenOf(r));
+    await svc.confirmByToken(tokenOf(r), 1);
     const intent = mailSend.mock.calls[0][0];
     expect(intent.outboundRef).toEqual({ messageId: 'AAMk-last-from-alice' });
     expect(intent.to).toEqual(['alice@contoso.com']);
@@ -1167,7 +1157,7 @@ describe('outbound service — drafts', () => {
     expect(r.recipient_display).toBe(
       'alice@contoso.com, bob@contoso.com; cc carol@contoso.com',
     );
-    await svc.confirmByToken(tokenOf(r));
+    await svc.confirmByToken(tokenOf(r), 1);
     const intent = mailSend.mock.calls[0][0];
     expect(intent.outboundRef).toEqual({ messageId: 'AAMk-last' });
     expect(intent.to).toEqual(['alice@contoso.com', 'bob@contoso.com']);
@@ -1182,7 +1172,7 @@ describe('outbound service — drafts', () => {
       replyAll: true,
     });
     expect(r.recipient_display).toBe('#general (thread)');
-    await svc.confirmByToken(tokenOf(r));
+    await svc.confirmByToken(tokenOf(r), 1);
     expect(slackSend.mock.calls[0][0].outboundRef).toEqual({
       channel: 'C9',
       thread_ts: '1719.00',
@@ -1219,7 +1209,7 @@ describe('outbound service — drafts', () => {
       subject: 'Hello',
       body: 'Hi Dana',
     });
-    await svc.confirmByToken(tokenOf(r));
+    await svc.confirmByToken(tokenOf(r), 1);
     expect(mailSend.mock.calls[0][0]).toMatchObject({
       kind: 'new',
       to: ['dana@contoso.com'],
@@ -1286,16 +1276,15 @@ describe('outbound service — drafts', () => {
       new Error('smtp transient 421: mailbox busy'),
     );
     const r = await service.draftReply({ documentId: docId, body: 'Retry me' });
-    await service.confirmByToken(tokenOf(r));
+    await service.confirmByToken(tokenOf(r), 1);
     expect((await store.outbox.get(r.draft_id))?.status).toBe('failed');
 
     const url = await service.confirmUrlFor(r.draft_id);
     expect(url).toContain('/outbox/confirm/');
-    // …and that URL really is a live retry: confirming it sends.
-    const outcome = await service.confirmByToken(
-      url!.split('/outbox/confirm/')[1],
-    );
-    expect(outcome.kind).toBe('sent');
+    // …and that URL really is a live retry: reopen through it, then send.
+    const token = url!.split('/outbox/confirm/')[1];
+    expect((await service.reopenByToken(token)).kind).toBe('ok');
+    expect((await service.confirmByToken(token, 2)).kind).toBe('sent');
   });
 
   it('confirmUrlFor returns null for an ambiguous failure', async () => {
@@ -1306,16 +1295,15 @@ describe('outbound service — drafts', () => {
       documentId: docId,
       body: 'Uncertain',
     });
-    await service.confirmByToken(tokenOf(r));
+    await service.confirmByToken(tokenOf(r), 1);
     expect(await service.confirmUrlFor(r.draft_id)).toBeNull();
   });
 
   it('redraft duplicates a failed row verbatim under the current mode', async () => {
-    sendMock.mockRejectedValueOnce(
-      new Error('smtp transient 421: mailbox busy'),
-    );
+    // a failure that cannot be retried as is (a retryable one reopens)
+    sendMock.mockRejectedValueOnce(new Error('socket hang up'));
     const r = await service.draftReply({ documentId: docId, body: 'Original' });
-    await service.confirmByToken(tokenOf(r));
+    await service.confirmByToken(tokenOf(r), 1);
 
     const old = await store.outbox.get(r.draft_id);
     const fresh = await service.redraft(r.draft_id);
@@ -1350,7 +1338,7 @@ describe('outbound service — drafts', () => {
     await expect(service.redraft(pending.draft_id)).rejects.toThrow(/'draft'/);
 
     const ok = await service.draftReply({ documentId: docId, body: 'b' });
-    await service.confirmByToken(tokenOf(ok));
+    await service.confirmByToken(tokenOf(ok), 1);
     await expect(service.redraft(ok.draft_id)).rejects.toThrow(/'sent'/);
   });
 

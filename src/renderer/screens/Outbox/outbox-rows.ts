@@ -24,7 +24,9 @@ export function actionFor(r: OutboxPanelRow): RowAction {
     // prevent, so it sits behind a confirmation.
     return r.deliveryUncertain ? 'redraft-guarded' : 'redraft';
   }
-  if (r.status === 'expired' || r.status === 'discarded') {
+  // An expired draft comes back to review as it is (`outbox:reopen`).
+  if (r.status === 'expired') return 'retry';
+  if (r.status === 'discarded') {
     // Belt-and-suspenders: main never sets `deliveryUncertain` here today;
     // this keeps "no maybe-delivered row gets a one-click re-draft" an
     // invariant of THIS function rather than of the mapper.

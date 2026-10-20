@@ -102,6 +102,8 @@ function panelRow(row: OutboxRow, account: Account | null): OutboxPanelRow {
     sentAt: row.sentAt,
     to: row.to,
     cc: row.cc,
+    bcc: row.bcc,
+    revision: row.revision,
     sourceId: account?.source ?? '',
     createdBy: row.createdBy,
     createdVia: row.createdVia,
@@ -131,6 +133,7 @@ export function outboundInvokeHandlers(deps: {
   | 'outbox:redraft'
   | 'outbox:get'
   | 'outbox:send'
+  | 'outbox:reopen'
   | 'outbox:sender-sources'
 > {
   const { service, store, openExternal } = deps;
@@ -197,7 +200,8 @@ export function outboundInvokeHandlers(deps: {
       // Result ignored on purpose: losing the race (the row left 'draft'
       // meanwhile) is a fine outcome — the panel refetches and shows whatever
       // actually happened. Mints nothing, so no `minting` wrapper is needed.
-      await store.outbox.transition(draftId, ['draft'], 'discarded');
+      // Through the service: the draft lock (and, mirrored, the provider).
+      await service.discardById(draftId);
     },
 
     'outbox:open-confirm': async ({ draftId }) => {
@@ -215,6 +219,14 @@ export function outboundInvokeHandlers(deps: {
         );
       }
       await openExternal(url);
+    },
+
+    'outbox:reopen': async ({ draftId }) => {
+      // Try again: the same row back to review as a new revision. Only a
+      // provably-not-sent failure (or an expired draft) reopens.
+      const row = await service.reopenById(draftId);
+      if (!row) throw new Error('this draft can no longer be tried again');
+      return { draftId: row.id };
     },
 
     'outbox:redraft': async ({ draftId }) => {
@@ -236,11 +248,13 @@ export function outboundInvokeHandlers(deps: {
       return detail;
     },
 
-    'outbox:send': async ({ draftId }) => {
-      const outcome = await service.sendById(draftId);
+    'outbox:send': async ({ draftId, revision }) => {
+      const outcome = await service.sendById(draftId, revision);
       if (outcome.kind === 'invalid') return { outcome: 'gone', row: null };
       const kind =
-        outcome.kind === 'sent' || outcome.kind === 'failed'
+        outcome.kind === 'sent' ||
+        outcome.kind === 'failed' ||
+        outcome.kind === 'changed'
           ? outcome.kind
           : 'already';
       return {

@@ -95,6 +95,7 @@ const BUILTIN_TOOL_NAMES = [
   'get_schema',
   'list_outbox',
   'query_sql',
+  'revise_draft',
   'search',
   'send_draft',
 ].sort();

@@ -122,6 +122,7 @@ describe('outbound proxy ↔ the real /outbox/api dispatcher', () => {
       draftMessage: record('draftMessage'),
       listOutbox: record('listOutbox'),
       sendDraft: record('sendDraft'),
+      reviseDraft: record('reviseDraft'),
     } as unknown as OutboundService;
     return { calls, service };
   }
@@ -218,7 +219,8 @@ describe('outbound proxy ↔ the real /outbox/api dispatcher', () => {
     await proxy.draftReply({ documentId: 'd', body: 'b' });
     await proxy.draftMessage({ accountId: 'a', to: [], subject: '', body: '' });
     await proxy.listOutbox({});
-    await proxy.sendDraft({ draftId: 'd' });
+    await proxy.sendDraft({ draftId: 'd', revision: 1 });
+    await proxy.reviseDraft({ draftId: 'd', revision: 1, body: 'b' });
     expect([...new Set(seen)].sort()).toEqual([...OUTBOUND_TOOL_OPS].sort());
   });
 });

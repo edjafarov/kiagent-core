@@ -9,6 +9,7 @@ import type {
   AccountId,
   ConfirmMode,
   DocumentId,
+  OutboxAttachment,
   OutboxRow,
   OutboxStatus,
   Prefs,
@@ -20,7 +21,9 @@ import type {
 
 import { currentClient, currentTransport } from '../core/mcp/transport-context';
 import type { LogSink } from '../core/engine/engine';
+import { snapshotOf } from '../core/store/outbox';
 import type { CoreStore } from '../core/store/store';
+import { createDraftLock } from './draft-lock';
 import { isShapedSummary, shapeOutboundError } from './error-copy';
 import { EMAIL_RX, selfAddressesFor, senderAddressFor } from './identity';
 import { resolveImapReply } from './resolve';
@@ -45,6 +48,14 @@ export const DRAFT_TTL_MS = 24 * 60 * 60_000;
  *  the imap path derives one from the message document's title. */
 function subjectFor(title: string | null): string | null {
   return title === null ? null : /^re:/i.test(title) ? title : `Re: ${title}`;
+}
+
+/** Where an attachment came from, for every review surface. */
+export function originOf(a: OutboxAttachment): string {
+  if (!a.from) return 'added in the mail app';
+  return a.from.kind === 'file'
+    ? `from ${a.from.path}`
+    : 'from your indexed documents';
 }
 
 /** One reply variant a source stored in `metadata.outbound`: the opaque
@@ -130,15 +141,21 @@ function pickOutbound(
 
 export interface DraftToolResult {
   draft_id: string;
+  /** Bumped by every change; revise_draft and send_draft name it. */
+  revision: number;
   mode: ConfirmMode;
   recipient_display: string;
   /** Absent for chat mode: the model confirms in conversation and calls
    *  send_draft — the page fallback link is re-issued by list_outbox. */
   confirm_url?: string;
-  to?: string[]; // link + chat modes
-  cc?: string[]; // link + chat modes
-  subject?: string | null; // link + chat modes
-  body?: string; // link + chat modes
+  /** The whole current draft, in every mode: the model has to be able to
+   *  show and revise what the user will actually send. */
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string | null;
+  body: string;
+  attachments: { filename: string; size: number; origin: string }[];
   warnings: string[];
   instruction: string;
 }
@@ -151,6 +168,10 @@ export interface OutboxListItem {
   created_at: string;
   error: string | null;
   confirm_url: string | null; // re-issued for status 'draft', else null
+  /** Pending drafts only (else null): the revision and the whole current
+   *  draft — show it before asking to send. */
+  revision: number | null;
+  draft: DraftToolResult | null;
 }
 
 /** What `send_draft` reports back once a chat-confirmed draft has been sent
@@ -182,7 +203,20 @@ export interface OutboundToolApi {
     body: string;
   }): Promise<DraftToolResult>;
   listOutbox(a: { limit?: number }): Promise<OutboxListItem[]>;
-  sendDraft(a: { draftId: string }): Promise<SendDraftResult>;
+  sendDraft(a: { draftId: string; revision: number }): Promise<SendDraftResult>;
+  /** Change a pending draft in place (spec §4.2). Refuses — with the current
+   *  draft in the message — when `revision` is not the row's revision. */
+  reviseDraft(
+    a: DraftRevision & { draftId: string; revision: number },
+  ): Promise<DraftToolResult>;
+}
+
+/** The fields revise_draft may change. */
+export interface DraftRevision {
+  body?: string;
+  subject?: string;
+  to?: string[];
+  cc?: string[];
 }
 
 export type PeekResult =
@@ -195,12 +229,21 @@ export type ConfirmOutcome =
   | { kind: 'cancelled'; row: OutboxRow }
   | { kind: 'failed'; row: OutboxRow; error: string }
   | { kind: 'already'; row: OutboxRow } // link raced/reused
+  /** The caller showed another revision than the row's: review again. */
+  | { kind: 'changed'; row: OutboxRow }
   | { kind: 'invalid' };
 
 export interface OutboundService extends OutboundToolApi {
   peekByToken(token: string): Promise<PeekResult>;
-  confirmByToken(token: string): Promise<ConfirmOutcome>; // Task 7 fills in
-  cancelByToken(token: string): Promise<ConfirmOutcome>; // Task 7 fills in
+  /** `revision` = the one the page showed (null: an old page/link that
+   *  carried none → `changed`). */
+  confirmByToken(
+    token: string,
+    revision: number | null,
+  ): Promise<ConfirmOutcome>;
+  cancelByToken(token: string): Promise<ConfirmOutcome>;
+  /** The failed page's "Review again": reopen, then show the review. */
+  reopenByToken(token: string): Promise<PeekResult>;
   setBaseUrl(url: string): void;
   /** Product pushes the public device base URL (https://<device-subdomain>)
    *  when the remote HTTPS server is up, null when it goes down. */
@@ -225,7 +268,18 @@ export interface OutboundService extends OutboundToolApi {
    *  confirm's gate and send (`confirmRow`) for the draft the user is
    *  looking at. Same outcomes as `confirmByToken`; `invalid` = no such
    *  row. PANEL-ONLY — see confirmUrlFor. */
-  sendById(draftId: string): Promise<ConfirmOutcome>;
+  sendById(draftId: string, revision: number): Promise<ConfirmOutcome>;
+  /** Panel support: a provably-failed or expired row back to review as a
+   *  new revision (spec §4.1 reopen). Null when it is neither. PANEL-ONLY. */
+  reopenById(draftId: string): Promise<OutboxRow | null>;
+  /** Panel support: the review sheet's edits. PANEL-ONLY. */
+  reviseById(
+    draftId: string,
+    revision: number,
+    patch: DraftRevision,
+  ): Promise<DraftToolResult>;
+  /** Discard a pending draft (in-app Discard, page Cancel). */
+  discardById(draftId: string): Promise<OutboxRow | null>;
   /** Panel support: the source ids that can send (bundled + extension
    *  senders), for the Outbox's "Sends from". PANEL-ONLY. */
   senderSources(): string[];
@@ -348,11 +402,36 @@ export function createOutboundService(deps: {
     return buildConfirmUrl(secret, draftId, mode);
   };
 
+  const draftFields = (row: OutboxRow) => ({
+    revision: row.revision,
+    to: row.to,
+    cc: row.cc,
+    bcc: row.bcc,
+    subject: row.subject,
+    body: row.bodyMarkdown,
+    attachments: row.attachments.map((a) => ({
+      filename: a.filename,
+      size: a.size,
+      origin: originOf(a),
+    })),
+  });
+
+  const REVISE_HINT =
+    `To change it, call revise_draft with this draft_id and revision — ` +
+    `never create a new draft for a change.`;
+
   const toolResult = async (
     row: OutboxRow,
     warnings: string[],
   ): Promise<DraftToolResult> => {
     const mode = row.confirmMode;
+    const base = {
+      draft_id: row.id,
+      mode,
+      recipient_display: row.recipientDisplay,
+      ...draftFields(row),
+      warnings,
+    };
     if (mode === 'chat') {
       // Mode C: no link at all — the model renders the draft, the user says
       // yes in the conversation, and send_draft carries out the send. The
@@ -360,69 +439,78 @@ export function createOutboundService(deps: {
       // re-issues a URL for any pending row (including this one), so nothing
       // is lost if the model never calls send_draft.
       return {
-        draft_id: row.id,
-        mode,
-        recipient_display: row.recipientDisplay,
-        to: row.to,
-        cc: row.cc,
-        subject: row.subject,
-        body: row.bodyMarkdown,
-        warnings,
+        ...base,
         instruction:
           `Show the user this draft exactly as written — recipient, ` +
-          `subject, and body verbatim — and ask whether to send it. Call ` +
-          `send_draft with this draft_id ONLY after the user explicitly ` +
-          `agrees in this conversation. If they want changes, create a new ` +
-          `draft instead. Never call send_draft without a clear yes.`,
+          `subject, body and attachments verbatim — and ask whether to send ` +
+          `it. Call send_draft with this draft_id and revision ONLY after the ` +
+          `user explicitly agrees in this conversation. If they want ` +
+          `changes, call revise_draft with this draft_id and revision ` +
+          `instead, then show the result. Never call send_draft without a ` +
+          `clear yes.`,
       };
     }
     if (currentTransport() === 'agent') {
       // A confirm link is a send capability (a POST to it sends), so a
       // hosted agent never holds one: the user sends from the Outbox page.
       return {
-        draft_id: row.id,
-        mode,
-        recipient_display: row.recipientDisplay,
-        warnings,
+        ...base,
         instruction:
           `Draft created — nothing has been sent. It waits in the user's ` +
-          `Outbox in KIAgent, where they review and send it.`,
+          `Outbox in KIAgent, where they review and send it. ${REVISE_HINT}`,
       };
     }
     const url = await confirmUrl(row.id, mode);
     if (mode === 'review') {
       return {
-        draft_id: row.id,
-        mode,
-        recipient_display: row.recipientDisplay,
+        ...base,
         confirm_url: url,
-        warnings,
         instruction:
           `Draft created — nothing has been sent. Show the user this link ` +
           `to review and send the message: ${url} (it expires in ` +
           `${CONFIRM_TTL_MS.review / 60_000} minutes; if it expires, call ` +
-          `list_outbox for a fresh one).`,
+          `list_outbox for a fresh one). ${REVISE_HINT}`,
       };
     }
     return {
-      draft_id: row.id,
-      mode,
-      recipient_display: row.recipientDisplay,
+      ...base,
       confirm_url: url,
-      to: row.to,
-      cc: row.cc,
-      subject: row.subject,
-      body: row.bodyMarkdown,
-      warnings,
       instruction:
         `Draft created — nothing has been sent. Render the draft exactly ` +
-        `as returned (recipient, subject, body) for the user to review in ` +
-        `chat, then present this link as the send action: ${url}. It opens ` +
-        `a page with a Send button; the link expires in ` +
+        `as returned (recipient, subject, body, attachments) for the user to ` +
+        `review in chat, then present this link as the send action: ${url}. ` +
+        `It opens a page with a Send button; the link expires in ` +
         `${CONFIRM_TTL_MS.link / 60_000} minutes — call list_outbox for a ` +
-        `fresh one if needed.`,
+        `fresh one if needed. ${REVISE_HINT}`,
     };
   };
+
+  /** A refusal that carries the current draft: the caller showed (or
+   *  revised) another revision, and must start from this one. */
+  const changedError = (
+    tool: string,
+    shown: number | null,
+    row: OutboxRow,
+  ): Error => {
+    const d = draftFields(row);
+    const lines = [
+      `${tool}: this draft changed${shown === null ? '' : ` since revision ${shown}`} — it is now revision ${row.revision}. Show the user the current draft before going on:`,
+      `To: ${[row.recipientDisplay, ...row.cc].join(', ')}`,
+      ...(row.bcc.length ? [`Bcc: ${row.bcc.join(', ')}`] : []),
+      ...(row.subject ? [`Subject: ${row.subject}`] : []),
+      ...(d.attachments.length
+        ? [`Attachments: ${d.attachments.map((a) => a.filename).join(', ')}`]
+        : []),
+      '',
+      row.bodyMarkdown,
+    ];
+    return new Error(lines.join('\n'));
+  };
+
+  const notPendingError = (tool: string, row: OutboxRow): Error =>
+    new Error(
+      `${tool}: this draft is '${row.status}', not pending — create a new draft instead.`,
+    );
 
   const expiresAt = (): string =>
     new Date(nowMs() + DRAFT_TTL_MS).toISOString();
@@ -557,39 +645,34 @@ export function createOutboundService(deps: {
     return Number.isFinite(n) && n > 0 ? n : 30;
   };
 
+  const withDraft = createDraftLock();
+
   /** The page's confirm, once the caller has shown who is asking (a
    *  verified token, or the user's own click in the app): sweep, re-read,
-   *  the retryable-failure gate, the CAS from the OBSERVED status, send.
-   *  The ONE body `confirmByToken` and `sendById` share, so the two paths
-   *  cannot drift. */
-  const confirmRow = async (draftId: string): Promise<ConfirmOutcome> => {
+   *  the revision check, the CAS, send. The ONE body every confirm path
+   *  shares, so they cannot drift. Caller holds the draft lock. A failed
+   *  row is never re-sent here: "Try again" is reopen (spec §4.1). */
+  const confirmLocked = async (
+    draftId: string,
+    revision: number | null,
+  ): Promise<ConfirmOutcome> => {
     // Mirror peekByToken's lazy sweep: a token minted near the end of its
-    // (short) TTL — or a review sheet left open — can still be nominally valid past the draft row's own
-    // (much longer) expires_at if nothing called peekByToken/listOutbox
-    // first to trigger the sweep — without this, the CAS below would
-    // happily move an expired draft into 'sending'.
+    // (short) TTL — or a review sheet left open — can still be nominally
+    // valid past the draft row's own expires_at; without this, the CAS below
+    // would happily move an expired draft into 'sending'.
     await deps.store.outbox.expireOverdue();
     const row = await deps.store.outbox.get(draftId);
     if (!row) return { kind: 'invalid' };
-    if (row.status !== 'draft') {
-      // A failed row may be re-confirmed (Try again, spec §3) ONLY when
-      // its stored error classifies as provably-not-sent — ambiguous
-      // failures stay terminal so a duplicate can never be user-invited.
-      const retryableFailed =
-        row.status === 'failed' && shapeOutboundError(row.error ?? '').canRetry;
-      if (!retryableFailed) return { kind: 'already', row };
-    }
+    if (row.status !== 'draft') return { kind: 'already', row };
+    if (revision === null || row.revision !== revision)
+      return { kind: 'changed', row };
 
-    // The atomicity primitive (spec's CAS gate): only the caller that wins
-    // this UPDATE proceeds to send. The from-state is the OBSERVED status
-    // — never the union ['draft','failed'] — so a confirm that read
-    // 'draft' can't steal a row that concurrently became 'failed' and
-    // bypass the canRetry gate above. A losing concurrent confirm re-reads
-    // the row (now owned by the winner) and reports 'already' — it never
-    // reaches the Sender.
+    // The atomicity primitive: only the caller that wins this UPDATE
+    // proceeds to send. In-process callers are already serialized by the
+    // draft lock; the CAS stays as cheap defense.
     const moved = await deps.store.outbox.transition(
       row.id,
-      [row.status],
+      ['draft'],
       'sending',
     );
     if (!moved) {
@@ -598,6 +681,63 @@ export function createOutboundService(deps: {
     }
 
     return executeSend(row);
+  };
+
+  const confirmRow = (draftId: string, revision: number | null) =>
+    withDraft(draftId, () => confirmLocked(draftId, revision));
+
+  // Back to review as the same row: an expired draft, or a failure that
+  // provably never went out. Uncertain failures stay terminal.
+  const isReopenable = (row: OutboxRow): boolean =>
+    row.status === 'expired' ||
+    (row.status === 'failed' && shapeOutboundError(row.error ?? '').canRetry);
+
+  const reopenLocked = async (draftId: string): Promise<OutboxRow | null> => {
+    const row = await deps.store.outbox.get(draftId);
+    if (!row) return null;
+    if (!isReopenable(row)) return null;
+    return deps.store.outbox.reopen(row.id, expiresAt());
+  };
+
+  const reviseLocked = async (
+    tool: string,
+    draftId: string,
+    revision: number,
+    patch: DraftRevision,
+  ): Promise<DraftToolResult> => {
+    await deps.store.outbox.expireOverdue();
+    const row = await deps.store.outbox.get(draftId);
+    if (!row) throw new Error(`${tool}: unknown draft '${draftId}'`);
+    if (row.status !== 'draft') throw notPendingError(tool, row);
+    if (row.revision !== revision) throw changedError(tool, revision, row);
+    const touchesRecipients = patch.to !== undefined || patch.cc !== undefined;
+    if (touchesRecipients && row.kind !== 'new')
+      throw new Error(
+        `${tool}: the recipients of a reply come from the original message — ` +
+          `change only the body, or the user can edit recipients in their mail app`,
+      );
+    const addrs = (xs: string[] | undefined, field: string) => {
+      if (xs === undefined) return undefined;
+      const trimmed = xs.map((t) => String(t).trim()).filter(Boolean);
+      const bad = trimmed.filter((t) => !EMAIL_RX.test(t));
+      if (bad.length || (field === 'to' && trimmed.length === 0))
+        throw new Error(
+          `${tool}: invalid ${field} address(es): ${bad.join(', ') || '(none given)'}`,
+        );
+      return trimmed;
+    };
+    const to = addrs(patch.to, 'to');
+    const cc = addrs(patch.cc, 'cc');
+    if (patch.body !== undefined && !patch.body.trim())
+      throw new Error(`${tool}: body must not be empty`);
+    const { row: next } = await deps.store.outbox.applyContent(row.id, {
+      ...snapshotOf(row),
+      ...(to ? { to } : {}),
+      ...(cc ? { cc } : {}),
+      ...(patch.subject !== undefined ? { subject: patch.subject } : {}),
+      ...(patch.body !== undefined ? { bodyMarkdown: patch.body } : {}),
+    });
+    return toolResult(next, []);
   };
 
   return {
@@ -780,12 +920,59 @@ export function createOutboundService(deps: {
           // failed.
           error: row.status === 'failed' ? row.error : null,
           confirm_url: url,
+          revision: row.status === 'draft' ? row.revision : null,
+          draft:
+            row.status === 'draft'
+              ? {
+                  draft_id: row.id,
+                  mode: row.confirmMode,
+                  recipient_display: row.recipientDisplay,
+                  ...draftFields(row),
+                  warnings: [],
+                  instruction: `Show the user this draft before asking to send it. ${
+                    REVISE_HINT
+                  }`,
+                }
+              : null,
         });
       }
       return out;
     },
 
-    async sendDraft({ draftId }) {
+    async reviseDraft({ draftId, revision, ...patch }) {
+      assertReady();
+      return withDraft(draftId, () =>
+        reviseLocked('revise_draft', draftId, revision, patch),
+      );
+    },
+
+    reviseById: (draftId, revision, patch) =>
+      withDraft(draftId, () =>
+        reviseLocked('revise', draftId, revision, patch),
+      ),
+
+    reopenById: (draftId) => withDraft(draftId, () => reopenLocked(draftId)),
+
+    async reopenByToken(token) {
+      const secret = await deps.store.outbox.secret();
+      const parsed = verifyConfirmToken(secret, token, nowMs());
+      if (!parsed) return { kind: 'invalid' };
+      const row = await withDraft(parsed.draftId, async () => {
+        await reopenLocked(parsed.draftId);
+        return deps.store.outbox.get(parsed.draftId);
+      });
+      if (!row) return { kind: 'invalid' };
+      if (row.status !== 'draft') return { kind: 'gone', row };
+      return { kind: 'ok', row, mode: row.confirmMode };
+    },
+
+    discardById: (draftId) =>
+      withDraft(draftId, async () => {
+        await deps.store.outbox.transition(draftId, ['draft'], 'discarded');
+        return deps.store.outbox.get(draftId);
+      }),
+
+    async sendDraft({ draftId, revision }) {
       // Deliberately NO transport gate (unlike the drafting tools): a draft
       // row can only exist if drafting was permitted on the transport that
       // created it, and the user's agreement is observed by the model
@@ -843,20 +1030,22 @@ export function createOutboundService(deps: {
 
       // Same CAS gate the page confirm uses — the single-use property and
       // the race protection live here, not in the checks above.
-      const moved = await deps.store.outbox.transition(
-        row.id,
-        ['draft'],
-        'sending',
+      const outcome = await withDraft(row.id, () =>
+        confirmLocked(row.id, typeof revision === 'number' ? revision : null),
       );
-      if (!moved) {
+      if (outcome.kind === 'changed')
+        throw changedError(
+          'send_draft',
+          typeof revision === 'number' ? revision : null,
+          outcome.row,
+        );
+      if (outcome.kind === 'already' || outcome.kind === 'invalid') {
         const current = await deps.store.outbox.get(row.id);
         throw new Error(
           `send_draft: this draft can no longer be sent — its status is ` +
             `'${current?.status ?? 'unknown'}'.`,
         );
       }
-
-      const outcome = await executeSend(row);
       if (outcome.kind !== 'sent') {
         const detail =
           outcome.kind === 'failed'
@@ -892,14 +1081,14 @@ export function createOutboundService(deps: {
       return { kind: 'ok', row, mode: row.confirmMode };
     },
 
-    async confirmByToken(token) {
+    async confirmByToken(token, revision) {
       const secret = await deps.store.outbox.secret();
       const parsed = verifyConfirmToken(secret, token, nowMs());
       if (!parsed) return { kind: 'invalid' };
-      return confirmRow(parsed.draftId);
+      return confirmRow(parsed.draftId, revision);
     },
 
-    sendById: (draftId) => confirmRow(draftId),
+    sendById: (draftId, revision) => confirmRow(draftId, revision),
 
     senderSources: () => lookup.ids(),
 
@@ -907,20 +1096,19 @@ export function createOutboundService(deps: {
       const secret = await deps.store.outbox.secret();
       const parsed = verifyConfirmToken(secret, token, nowMs());
       if (!parsed) return { kind: 'invalid' };
-      const row = await deps.store.outbox.get(parsed.draftId);
-      if (!row) return { kind: 'invalid' };
-
-      const moved = await deps.store.outbox.transition(
-        row.id,
-        ['draft'],
-        'discarded',
-      );
-      if (!moved) {
-        const current = await deps.store.outbox.get(row.id);
-        return { kind: 'already', row: current ?? row };
-      }
-      const discarded = await deps.store.outbox.get(row.id);
-      return { kind: 'cancelled', row: discarded ?? row };
+      const before = await deps.store.outbox.get(parsed.draftId);
+      if (!before) return { kind: 'invalid' };
+      if (before.status !== 'draft') return { kind: 'already', row: before };
+      const after = await withDraft(before.id, async () => {
+        const moved = await deps.store.outbox.transition(
+          before.id,
+          ['draft'],
+          'discarded',
+        );
+        return { moved, row: await deps.store.outbox.get(before.id) };
+      });
+      if (!after.moved) return { kind: 'already', row: after.row ?? before };
+      return { kind: 'cancelled', row: after.row ?? before };
     },
 
     async confirmUrlFor(draftId) {
@@ -966,14 +1154,18 @@ export function createOutboundService(deps: {
             `new draft.`,
         );
       }
-      if (
-        row.status !== 'failed' &&
-        row.status !== 'expired' &&
-        row.status !== 'discarded'
-      ) {
+      // A row that can come back to review (expired, or a failure that
+      // provably never went out) is reopened instead: the same row, so one
+      // provider draft is only ever owned by one row. A new row is for a
+      // discarded draft, or a failure that cannot be retried as is.
+      if (isReopenable(row))
         throw new Error(
-          `only failed, expired, or discarded drafts can be re-drafted — ` +
-            `this one is '${row.status}'`,
+          `this draft can be tried again as it is — use Try again`,
+        );
+      if (row.status !== 'discarded' && row.status !== 'failed') {
+        throw new Error(
+          `only failed or discarded drafts can be re-drafted — this one is ` +
+            `'${row.status}'`,
         );
       }
       // Account-gone and unsupported-source refusals, identical to
@@ -1007,6 +1199,9 @@ export function createOutboundService(deps: {
         createdVia: 'panel',
         createdBy: null,
         expiresAt: expiresAt(),
+        bcc: row.bcc,
+        // Files added in the mail app went with the removed provider draft.
+        attachments: row.attachments.filter((a) => a.from),
       });
     },
   };

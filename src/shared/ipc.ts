@@ -282,8 +282,8 @@ export interface OutboxPanelRow {
   /** `shaped.summary` — the technical one-liner, rendered behind a
    *  <details>Technical details</details>. Null unless status is 'failed'. */
   errorDetail: string | null;
-  /** `shaped.canRetry` — gates the "Try again" action (re-confirm the SAME
-   *  row; provably-not-sent failures only). */
+  /** `shaped.canRetry` — gates the "Try again" action (`outbox:reopen`:
+   *  the SAME row back to review; provably-not-sent failures only). */
   canRetry: boolean;
   /** The message MAY have gone out — gates OFF one-click "Draft again". */
   deliveryUncertain: boolean;
@@ -292,6 +292,9 @@ export interface OutboxPanelRow {
   /** Verbatim from the row (`store/outbox.ts` `OutboxRow.to`/`.cc`). */
   to: string[];
   cc: string[];
+  bcc: string[];
+  /** The row's revision: the in-app Send names the one it shows. */
+  revision: number;
   /** The account's source id (brand mark, "Slack · 10:52"). */
   sourceId: string;
   /** The drafting MCP client's name; null for panel re-drafts and rows
@@ -309,7 +312,9 @@ export interface OutboxDraftDetail extends OutboxPanelRow {
  *  and `canRetry` say what to show after a failure). `gone` = no such
  *  draft, `row` null. */
 export interface OutboxSendResult {
-  outcome: 'sent' | 'failed' | 'already' | 'gone';
+  /** `changed`: the draft is at another revision than the one shown —
+   *  `row` is the current one; review it again. */
+  outcome: 'sent' | 'failed' | 'already' | 'gone' | 'changed';
   row: OutboxPanelRow | null;
 }
 
@@ -495,7 +500,13 @@ export interface Invokes {
   /** One draft in full (after the overdue sweep); null for an unknown id. */
   'outbox:get': { req: { draftId: string }; res: OutboxDraftDetail | null };
   /** The in-app review's Send: the page confirm's own gate and send. */
-  'outbox:send': { req: { draftId: string }; res: OutboxSendResult };
+  'outbox:send': {
+    req: { draftId: string; revision: number };
+    res: OutboxSendResult;
+  };
+  /** Try again on a provably-failed (or expired) draft: the same row back
+   *  to review as a new revision. */
+  'outbox:reopen': { req: { draftId: string }; res: { draftId: string } };
   /** Source ids that can send (bundled + extension senders). */
   'outbox:sender-sources': { req: void; res: string[] };
 
@@ -731,6 +742,7 @@ const INVOKE_CHANNEL_MAP = {
   'outbox:open-confirm': 0,
   'outbox:get': 0,
   'outbox:send': 0,
+  'outbox:reopen': 0,
   'outbox:sender-sources': 0,
   'mcp:info': 0,
   'mcp:connect-client': 0,

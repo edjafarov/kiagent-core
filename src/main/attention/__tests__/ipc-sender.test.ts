@@ -26,7 +26,13 @@ describe('trusted attention renderer sender', () => {
       }),
     ).toBe(false);
     expect(SENDER_VALIDATED_CHANNELS).toEqual(
-      new Set(['attention:list', 'attention:act', 'ext:invoke', 'outbox:send']),
+      new Set([
+        'attention:list',
+        'attention:act',
+        'ext:invoke',
+        'outbox:send',
+        'outbox:reopen',
+      ]),
     );
   });
 

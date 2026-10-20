@@ -9,7 +9,7 @@
  */
 import type { OutboundToolApi } from '@main/outbound/service';
 
-export const sendDraftDescription = `Send a pending outbound draft after the user has explicitly agreed in this conversation. Only works when chat confirmation mode is enabled in the app settings; otherwise present the confirm link from the draft result instead. The draft must have been shown to the user verbatim first.`;
+export const sendDraftDescription = `Send a pending outbound draft after the user has explicitly agreed in this conversation. Only works when chat confirmation mode is enabled in the app settings; otherwise present the confirm link from the draft result instead. The draft must have been shown to the user verbatim first, at the revision you pass.`;
 
 export const sendDraftInputSchema = {
   type: 'object',
@@ -18,16 +18,23 @@ export const sendDraftInputSchema = {
       type: 'string',
       description: 'The draft_id returned by draft_reply or draft_message',
     },
+    revision: {
+      type: 'integer',
+      description: 'The revision of the draft the user agreed to',
+    },
   },
-  required: ['draft_id'],
+  required: ['draft_id', 'revision'],
 } as const;
 
 export function makeSendDraftTool(outbound: OutboundToolApi) {
   return async function sendDraft(
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    const a = args as { draft_id?: string };
+    const a = args as { draft_id?: string; revision?: unknown };
     if (!a.draft_id) throw new Error('send_draft: draft_id is required');
-    return outbound.sendDraft({ draftId: a.draft_id });
+    const revision = Number(a.revision);
+    if (!Number.isInteger(revision) || revision < 1)
+      throw new Error('send_draft: revision is required');
+    return outbound.sendDraft({ draftId: a.draft_id, revision });
   };
 }

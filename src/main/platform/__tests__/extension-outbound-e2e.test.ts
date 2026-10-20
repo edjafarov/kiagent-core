@@ -256,7 +256,7 @@ describe('extension outbound + error taxonomy e2e (real forked child)', () => {
       body: 'on it',
     });
     expect(dflt.recipient_display).toBe('fixroom (item 0)');
-    expect(await svc.confirmByToken(tokenOf(dflt))).toMatchObject({
+    expect(await svc.confirmByToken(tokenOf(dflt), 1)).toMatchObject({
       kind: 'sent',
     });
     // Still the structured object the source wrote — not the JSON string the
@@ -275,7 +275,7 @@ describe('extension outbound + error taxonomy e2e (real forked child)', () => {
       target: 'm0b',
     });
     expect(targeted.recipient_display).toBe('fixroom (thread on message b)');
-    expect(await svc.confirmByToken(tokenOf(targeted))).toMatchObject({
+    expect(await svc.confirmByToken(tokenOf(targeted), 1)).toMatchObject({
       kind: 'sent',
     });
     expect(await lastSend()).toEqual({

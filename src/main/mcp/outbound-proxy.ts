@@ -54,7 +54,7 @@ export function createOutboundProxy(
     );
   };
 
-  // `op: OutboundToolOp` (not `string`) is what keeps this client's four
+  // `op: OutboundToolOp` (not `string`) is what keeps this client's
   // forwards below spelled the way the route dispatcher reads them — the
   // shared list in ops.ts is the referee for both.
   const call = async (op: OutboundToolOp, args: unknown): Promise<unknown> => {
@@ -76,5 +76,6 @@ export function createOutboundProxy(
     draftMessage: (a) => call('draftMessage', a) as never,
     listOutbox: (a) => call('listOutbox', a) as never,
     sendDraft: (a) => call('sendDraft', a) as never,
+    reviseDraft: (a) => call('reviseDraft', a) as never,
   };
 }

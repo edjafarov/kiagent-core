@@ -117,7 +117,7 @@ describe('outbound ipc delegate', () => {
   const tokenOf = (r: { confirm_url?: string }) =>
     r.confirm_url!.split('/outbox/confirm/')[1];
 
-  it('registers the eight outbox channels', () => {
+  it('registers the nine outbox channels', () => {
     expect([...handlers.keys()].sort()).toEqual([
       'outbox:discard',
       'outbox:get',
@@ -125,6 +125,7 @@ describe('outbound ipc delegate', () => {
       'outbox:open-confirm',
       'outbox:pending-count',
       'outbox:redraft',
+      'outbox:reopen',
       'outbox:send',
       'outbox:sender-sources',
     ]);
@@ -195,7 +196,7 @@ describe('outbound ipc delegate', () => {
   it('outbox:list shapes failed rows and marks ambiguity', async () => {
     sendMock.mockRejectedValueOnce(new Error('socket hang up'));
     const r = await service.draftReply({ documentId: docId, body: 'x' });
-    await service.confirmByToken(tokenOf(r));
+    await service.confirmByToken(tokenOf(r), 1);
 
     const [row] = await invoke('outbox:list', {});
     expect(row.status).toBe('failed');
@@ -212,7 +213,7 @@ describe('outbound ipc delegate', () => {
       new Error('smtp transient 421: mailbox busy'),
     );
     const r = await service.draftReply({ documentId: docId, body: 'x' });
-    await service.confirmByToken(tokenOf(r));
+    await service.confirmByToken(tokenOf(r), 1);
 
     const [row] = await invoke('outbox:list', {});
     expect(row.canRetry).toBe(true);
@@ -231,7 +232,7 @@ describe('outbound ipc delegate', () => {
       ),
     );
     const r = await service.draftReply({ documentId: docId, body: 'x' });
-    await service.confirmByToken(tokenOf(r));
+    await service.confirmByToken(tokenOf(r), 1);
 
     const [row] = await invoke('outbox:list', {});
     expect(row.status).toBe('failed');
@@ -266,15 +267,16 @@ describe('outbound ipc delegate', () => {
       new Error('smtp transient 421: mailbox busy'),
     );
     const r = await service.draftReply({ documentId: docId, body: 'x' });
-    await service.confirmByToken(tokenOf(r));
+    await service.confirmByToken(tokenOf(r), 1);
     expect((await invoke('outbox:list', {}))[0].canRetry).toBe(true);
 
-    // Try again: re-confirm the SAME row via a freshly minted panel URL.
-    const retryUrl = await service.confirmUrlFor(r.draft_id);
-    const outcome = await service.confirmByToken(
-      retryUrl!.split('/outbox/confirm/')[1],
-    );
-    expect(outcome.kind).toBe('sent');
+    // Try again: the SAME row back to review as revision 2, then sent.
+    await invoke('outbox:reopen', { draftId: r.draft_id });
+    const outcome = await invoke('outbox:send', {
+      draftId: r.draft_id,
+      revision: 2,
+    });
+    expect(outcome.outcome).toBe('sent');
 
     const [row] = await invoke('outbox:list', {});
     expect(row.status).toBe('sent');
@@ -282,7 +284,8 @@ describe('outbound ipc delegate', () => {
     expect(row.errorDetail).toBeNull();
     expect(row.canRetry).toBe(false);
     expect(row.deliveryUncertain).toBe(false);
-    expect((await store.outbox.get(r.draft_id))?.error).not.toBeNull(); // audit trail intact
+    // reopen cleared the old failure: the row holds only what went out
+    expect((await store.outbox.get(r.draft_id))?.error).toBeNull();
   });
 
   // ── Task 9: status filter, keyset cursor, pending-count, to/cc ──────────
@@ -372,6 +375,7 @@ describe('outbound ipc delegate', () => {
     // implementation.
     expect(Object.keys(rowsArr[0]).sort()).toEqual([
       'accountLabel',
+      'bcc',
       'bodyPreview',
       'canRetry',
       'cc',
@@ -384,6 +388,7 @@ describe('outbound ipc delegate', () => {
       'errorDetail',
       'kind',
       'recipientDisplay',
+      'revision',
       'sentAt',
       'sourceId',
       'status',
@@ -589,7 +594,7 @@ describe('outbound ipc delegate', () => {
   it('outbox:redraft creates a fresh draft for the in-app review (no browser)', async () => {
     sendMock.mockRejectedValueOnce(new Error('socket hang up'));
     const r = await service.draftReply({ documentId: docId, body: 'orig' });
-    await service.confirmByToken(tokenOf(r));
+    await service.confirmByToken(tokenOf(r), 1);
 
     const { draftId } = await invoke('outbox:redraft', { draftId: r.draft_id });
     expect(draftId).not.toBe(r.draft_id);
@@ -619,13 +624,21 @@ describe('outbound ipc delegate', () => {
 
   it('outbox:send runs the page confirm: sent, then already; unknown is gone', async () => {
     const r = await service.draftReply({ documentId: docId, body: 'x' });
-    const first = await invoke('outbox:send', { draftId: r.draft_id });
+    const first = await invoke('outbox:send', {
+      draftId: r.draft_id,
+      revision: 1,
+    });
     expect(first.outcome).toBe('sent');
     expect(first.row?.status).toBe('sent');
-    const again = await invoke('outbox:send', { draftId: r.draft_id });
+    const again = await invoke('outbox:send', {
+      draftId: r.draft_id,
+      revision: 1,
+    });
     expect(again.outcome).toBe('already');
     expect(again.row?.status).toBe('sent');
-    expect(await invoke('outbox:send', { draftId: 'nope' })).toEqual({
+    expect(
+      await invoke('outbox:send', { draftId: 'nope', revision: 1 }),
+    ).toEqual({
       outcome: 'gone',
       row: null,
     });
@@ -635,7 +648,10 @@ describe('outbound ipc delegate', () => {
   it('outbox:send returns a failed row in its own words, with its retry verdict', async () => {
     sendMock.mockRejectedValueOnce(new Error('socket hang up'));
     const r = await service.draftReply({ documentId: docId, body: 'x' });
-    const res = await invoke('outbox:send', { draftId: r.draft_id });
+    const res = await invoke('outbox:send', {
+      draftId: r.draft_id,
+      revision: 1,
+    });
     expect(res.outcome).toBe('failed');
     const [listed] = await invoke('outbox:list', { status: ['failed'] });
     expect(res.row).toEqual(listed);

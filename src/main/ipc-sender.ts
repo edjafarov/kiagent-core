@@ -16,6 +16,7 @@ export const SENDER_VALIDATED_CHANNELS = new Set([
   // The in-app review's Send carries no signed token (Airy §9): only the
   // app's own renderer may name a draft to send.
   'outbox:send',
+  'outbox:reopen',
 ]);
 
 export function guardIpcHandler<Req, Res>(

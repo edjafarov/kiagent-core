@@ -84,9 +84,19 @@ export function ReviewSheet(props: {
     }
   };
 
-  const send = () =>
+  const send = (revision: number) =>
     act(async () => {
-      const res = await window.kiagent.invoke('outbox:send', { draftId });
+      const res = await window.kiagent.invoke('outbox:send', {
+        draftId,
+        revision,
+      });
+      if (res.outcome === 'changed' && res.row) {
+        // Edited elsewhere (chat, the browser page, the mailbox) since this
+        // sheet read it: show the new text, send nothing.
+        read();
+        setError('This draft changed — review it again.');
+        return;
+      }
       if (
         res.outcome === 'failed' &&
         res.row &&
@@ -105,6 +115,14 @@ export function ReviewSheet(props: {
     act(async () => {
       await window.kiagent.invoke('outbox:discard', { draftId });
       props.onClose();
+    });
+
+  // Try again on a provably-failed send: the same row back to review as a
+  // new revision, so what goes out is what this sheet then shows.
+  const reopen = () =>
+    act(async () => {
+      await window.kiagent.invoke('outbox:reopen', { draftId });
+      read();
     });
 
   const redraft = () =>
@@ -130,7 +148,7 @@ export function ReviewSheet(props: {
 
   const d = detail;
   const action = actionFor(d);
-  const sendable = action === 'review' || action === 'retry';
+  const sendable = action === 'review';
   const source = props.sourceName(d.sourceId);
   // The list shows no word for a sent row; a single message says so.
   const word =
@@ -156,6 +174,7 @@ export function ReviewSheet(props: {
       ),
     },
     ...(d.cc.length > 0 ? [{ label: 'Cc', value: d.cc.join(', ') }] : []),
+    ...(d.bcc.length > 0 ? [{ label: 'Bcc', value: d.bcc.join(', ') }] : []),
     { label: 'Drafted by', value: draftedBy(d) },
     { label: 'Sending account', value: d.accountLabel },
     ...(d.subject ? [{ label: 'Subject', value: d.subject }] : []),
@@ -165,15 +184,9 @@ export function ReviewSheet(props: {
   if (sendable)
     footer = (
       <>
-        {action === 'review' && (
-          <Button
-            variant="ghost"
-            disabled={busy}
-            onClick={() => void discard()}
-          >
-            Discard
-          </Button>
-        )}
+        <Button variant="ghost" disabled={busy} onClick={() => void discard()}>
+          Discard
+        </Button>
         <TextButton disabled={busy} onClick={() => void openInBrowser()}>
           Open in browser
         </TextButton>
@@ -181,11 +194,17 @@ export function ReviewSheet(props: {
           variant="primary"
           icon="send"
           disabled={busy}
-          onClick={() => void send()}
+          onClick={() => void send(d.revision)}
         >
           {busy ? 'Sending…' : 'Send'}
         </Button>
       </>
+    );
+  else if (action === 'retry')
+    footer = (
+      <Button variant="primary" disabled={busy} onClick={() => void reopen()}>
+        Review again
+      </Button>
     );
   else if (action === 'redraft')
     footer = (

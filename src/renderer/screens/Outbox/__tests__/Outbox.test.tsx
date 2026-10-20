@@ -61,6 +61,8 @@ function row(over: Partial<OutboxPanelRow>): OutboxPanelRow {
     sentAt: iso(24, 9, 5),
     to: ['sam@example.com'],
     cc: [],
+    bcc: [],
+    revision: 1,
     sourceId: 'gmail',
     createdBy: 'Anthropic/ClaudeAI',
     createdVia: 'mcp-remote',
@@ -286,15 +288,21 @@ test('a sending row says so', async () => {
 
 test('a maybe-delivered row offers no one-click action in the list', async () => {
   await mount();
-  // Discarded and expired offer Draft again; the uncertain one does not.
+  // Discarded offers Draft again (expired comes back via Try again); the
+  // uncertain one offers no one-click action.
   expect(
     within(history()).getAllByRole('button', { name: 'Draft again' }),
+  ).toHaveLength(1);
+  expect(
+    within(history()).getAllByRole('button', { name: 'Try again' }),
   ).toHaveLength(2);
 });
 
 test('Try again opens the same row; Draft again opens the fresh draft', async () => {
   await mount();
-  fireEvent.click(within(history()).getByRole('button', { name: 'Try again' }));
+  fireEvent.click(
+    within(history()).getAllByRole('button', { name: 'Try again' })[0],
+  );
   await act(async () => {});
   expect(sheet()).toHaveTextContent('Full body of retry');
   fireEvent.keyDown(sheet(), { key: 'Escape' });
@@ -420,8 +428,25 @@ test('review: Send sends and closes', async () => {
   const s = await openReview('wait');
   fireEvent.click(within(s).getByRole('button', { name: 'Send' }));
   await act(async () => {});
-  expect(invoke).toHaveBeenCalledWith('outbox:send', { draftId: 'wait' });
+  expect(invoke).toHaveBeenCalledWith('outbox:send', {
+    draftId: 'wait',
+    revision: 1,
+  });
   expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+test('review: a draft changed meanwhile stays open and says so', async () => {
+  sendResult = {
+    outcome: 'changed',
+    row: row({ draftId: 'wait', status: 'draft', revision: 2, sentAt: null }),
+  };
+  const s = await openReview('wait');
+  fireEvent.click(within(s).getByRole('button', { name: 'Send' }));
+  await act(async () => {});
+  expect(sheet()).toHaveTextContent('This draft changed — review it again.');
+  expect(
+    within(sheet()).getByRole('button', { name: 'Send' }),
+  ).toBeInTheDocument();
 });
 
 test('review: a failed send stays open with the reason; Send stays only if it never went out', async () => {
@@ -463,7 +488,10 @@ test('review: a sent message opens read-only', async () => {
 test('review: a failure shows its technical details', async () => {
   const s = await openReview('retry');
   expect(s).toHaveTextContent('Technical details');
-  expect(within(s).getByRole('button', { name: 'Send' })).toBeInTheDocument();
+  expect(within(s).queryByRole('button', { name: 'Send' })).toBeNull();
+  fireEvent.click(within(s).getByRole('button', { name: 'Review again' }));
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledWith('outbox:reopen', { draftId: 'retry' });
 });
 
 test('review: a maybe-delivered message drafts again only after a confirmation', async () => {

@@ -1,7 +1,7 @@
 import type { AccountId, OutboxRow } from '@shared/contracts';
 
 import { shapeOutboundError } from '../error-copy';
-import { failedPage, linkPage, resultPage, reviewPage } from '../pages';
+import { failedPage, resultPage, reviewPage } from '../pages';
 
 function baseRow(overrides: Partial<OutboxRow> = {}): OutboxRow {
   return {
@@ -68,6 +68,20 @@ describe('reviewPage', () => {
     expect(html.split('<body>')[1]).not.toContain('border-radius');
   });
 
+  it('shows Bcc, carries the revision, and says when the draft changed', () => {
+    const html = reviewPage(
+      baseRow({ bcc: ['hid@example.com'], revision: 3 }),
+      {
+        confirmPath: '/outbox/confirm/tok/3',
+        cancelPath: '/outbox/cancel/tok',
+        changed: true,
+      },
+    );
+    expect(html).toContain('hid@example.com');
+    expect(html).toContain('action="/outbox/confirm/tok/3"');
+    expect(html).toContain('ob-changed');
+  });
+
   it('escapes a script-bearing subject and body', () => {
     const row = baseRow({
       subject: '<script>alert(1)</script>',
@@ -84,24 +98,8 @@ describe('reviewPage', () => {
   });
 });
 
-describe('linkPage', () => {
-  it('renders recipient + send form + script, but no body preview', () => {
-    const row = baseRow({
-      recipientDisplay: 'Carol <carol@example.com>',
-      bodyMarkdown: 'the secret body should not preview here',
-    });
-    const html = linkPage(row, { confirmPath: '/outbox/confirm/tok2' });
-    expect(html).toContain('Carol &lt;carol@example.com&gt;');
-    expect(html).toContain(
-      '<form id="ob-send" method="POST" action="/outbox/confirm/tok2">',
-    );
-    expect(html).toContain('<script>');
-    expect(html).not.toContain('the secret body should not preview here');
-  });
-});
-
 describe('failedPage', () => {
-  it('retryable: title "Not sent", human message, a Try again form, the summary in <details>, warn icon', () => {
+  it('retryable: title "Not sent", human message, a Review again form, the summary in <details>, warn icon', () => {
     const shaped = shapeOutboundError(
       'rate-limited: the mail service rejected the send (HTTP 403) — nothing was sent',
     );
@@ -109,14 +107,12 @@ describe('failedPage', () => {
     const row = baseRow({ status: 'failed', error: shaped.summary });
     const html = failedPage(row, {
       shaped,
-      confirmPath: '/outbox/confirm/tok3',
+      reopenPath: '/outbox/reopen/tok3',
     });
     expect(html).toContain('Not sent');
     expect(html).toContain(shaped.message);
-    expect(html).toContain(
-      '<form id="ob-send" method="POST" action="/outbox/confirm/tok3">',
-    );
-    expect(html).toContain('Try again');
+    expect(html).toContain('<form method="POST" action="/outbox/reopen/tok3">');
+    expect(html).toContain('Review again');
     expect(html).toContain('<details class="ob-detail">');
     expect(html).toContain(shaped.summary);
     expect(html).toContain('stroke="#c2410c"'); // warn icon
@@ -129,10 +125,10 @@ describe('failedPage', () => {
     const row = baseRow({ status: 'failed', error: shaped.summary });
     const html = failedPage(row, {
       shaped,
-      confirmPath: '/outbox/confirm/tok4',
+      reopenPath: '/outbox/reopen/tok4',
     });
     expect(html).not.toContain('method="POST"');
-    expect(html).not.toContain('Try again');
+    expect(html).not.toContain('Review again');
     expect(html).toContain('Delivery uncertain');
     expect(html).not.toContain('<h1 class="sh-min__h1">Not sent</h1>');
     expect(html).toMatch(/could not confirm delivery|sent folder/i);
@@ -154,12 +150,12 @@ describe('failedPage', () => {
     const row = baseRow({ status: 'failed', error: shaped.summary });
     const html = failedPage(row, {
       shaped,
-      confirmPath: '/outbox/confirm/tok5',
+      reopenPath: '/outbox/reopen/tok5',
     });
     expect(html).toContain('<h1 class="sh-min__h1">Not sent</h1>');
     expect(html).not.toContain('Delivery uncertain');
     expect(html).not.toContain('method="POST"');
-    expect(html).not.toContain('Try again');
+    expect(html).not.toContain('Review again');
     expect(html).toContain('Ask your assistant to create a new draft.');
     expect(html).toContain('stroke="#e11d48"'); // certain failure keeps the error icon
   });

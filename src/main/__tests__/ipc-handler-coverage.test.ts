@@ -106,7 +106,13 @@ describe('attention IPC composition', () => {
   it('S10c registers attention handlers through the sender guard', () => {
     expect(mainSource).toContain('guardIpcHandler(');
     expect(SENDER_VALIDATED_CHANNELS).toEqual(
-      new Set(['attention:list', 'attention:act', 'ext:invoke', 'outbox:send']),
+      new Set([
+        'attention:list',
+        'attention:act',
+        'ext:invoke',
+        'outbox:send',
+        'outbox:reopen',
+      ]),
     );
   });
 

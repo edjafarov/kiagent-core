@@ -191,12 +191,12 @@ describe('outbox confirm routes', () => {
 
   it('POST confirm sends exactly once; the link then dies', async () => {
     const url = await draftUrl();
-    const res = await fetch(url, { method: 'POST' });
+    const res = await fetch(`${url}/1`, { method: 'POST' });
     expect(res.status).toBe(200);
     expect(await res.text()).toMatch(/sent/i);
     expect(sendMock).toHaveBeenCalledTimes(1);
     sendMock.mockClear();
-    const again = await fetch(url, { method: 'POST' });
+    const again = await fetch(`${url}/1`, { method: 'POST' });
     expect(await again.text()).toMatch(/already/i);
     expect(sendMock).not.toHaveBeenCalled();
     const getAfter = await fetch(url);
@@ -211,17 +211,55 @@ describe('outbox confirm routes', () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
-  it('link mode serves the minimal page', async () => {
+  it('link mode serves the full review page: what is sent is what is shown', async () => {
     await store.setAccountConfig(accountId, {
       ...IMAP_CFG,
       outbound: { mode: 'link' },
     });
+    try {
+      const url = await draftUrl();
+      const html = await (await fetch(url)).text();
+      expect(html).toContain('Alice');
+      expect(html).toContain('Yo');
+      expect(html).toContain(
+        `action="/outbox/confirm/${url.split('/').pop()}/1"`,
+      );
+    } finally {
+      await store.setAccountConfig(accountId, IMAP_CFG);
+    }
+  });
+
+  it('a confirm of an older revision answers 409 with the current draft', async () => {
     const url = await draftUrl();
-    const html = await (await fetch(url)).text();
-    expect(html).toContain('Alice');
-    expect(html).not.toContain('Yo'); // minimal page: recipient + button only
-    expect(html).toContain('method="POST"');
-    await store.setAccountConfig(accountId, IMAP_CFG);
+    const token = url.split('/outbox/confirm/')[1];
+    const { id } = (await store.outbox.listRecent(1))[0];
+    await service.reviseDraft({ draftId: id, revision: 1, body: 'Revised' });
+    const stale = await fetch(`${url}/1`, { method: 'POST' });
+    expect(stale.status).toBe(409);
+    const html = await stale.text();
+    expect(html).toContain('Revised');
+    expect(html).toContain('ob-changed');
+    expect(html).toContain(`action="/outbox/confirm/${token}/2"`);
+    expect(sendMock).not.toHaveBeenCalled();
+    // a confirm that names no revision never sends either
+    expect((await fetch(url, { method: 'POST' })).status).toBe(409);
+    const ok = await fetch(`${url}/2`, { method: 'POST' });
+    expect(ok.status).toBe(200);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a provably failed send reopens through its page as a new revision', async () => {
+    sendMock.mockRejectedValueOnce(new Error('rate-limited: slow down'));
+    const url = await draftUrl();
+    const token = url.split('/outbox/confirm/')[1];
+    await fetch(`${url}/1`, { method: 'POST' });
+    const failed = await (await fetch(url)).text();
+    expect(failed).toContain(`action="/outbox/reopen/${token}"`);
+    const back = await fetch(`${base}/outbox/reopen/${token}`, {
+      method: 'POST',
+    });
+    expect(back.status).toBe(200);
+    expect(await back.text()).toContain(`action="/outbox/confirm/${token}/2"`);
   });
 
   it('a bad token 404s', async () => {
@@ -314,7 +352,7 @@ describe('outbox confirm routes', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         op: 'sendDraft',
-        args: { draftId: draft.result.draft_id },
+        args: { draftId: draft.result.draft_id, revision: 1 },
       }),
     });
     const sent = (await sendRes.json()) as {
@@ -377,7 +415,7 @@ describe('handleRemote', () => {
     const page = await fetch(`${remoteBase}/outbox/confirm/${token}`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain('Remote!');
-    const sent = await fetch(`${remoteBase}/outbox/confirm/${token}`, {
+    const sent = await fetch(`${remoteBase}/outbox/confirm/${token}/1`, {
       method: 'POST',
     });
     expect(sent.status).toBe(200);
@@ -541,7 +579,11 @@ describe('callTool (in-process, agent transport)', () => {
     const { draft_id: id } = (
       drafted as { ok: true; result: { draft_id: string } }
     ).result;
-    const out = await mcp.callTool('send_draft', { draft_id: id }, opts);
+    const out = await mcp.callTool(
+      'send_draft',
+      { draft_id: id, revision: 1 },
+      opts,
+    );
     expect(out).toEqual({
       ok: false,
       error: expect.stringMatching(/can never send/),
