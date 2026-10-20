@@ -766,6 +766,20 @@ describe('outbound service — provider draft mirror', () => {
       ).rejects.toThrow("this source can't send files yet");
     });
 
+    it('a Gmail draft that never synced still sends its files, and does not warn otherwise', async () => {
+      provider.createImpl = async () => {
+        throw new Error('insufficient scope');
+      };
+      const r = await withFile();
+      expect(r.warnings).toEqual([]);
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out.kind).toBe('sent');
+      const intent = sendMock.mock.calls[0][0] as {
+        attachments?: { filename: string }[];
+      };
+      expect(intent.attachments?.map((a) => a.filename)).toEqual(['a.pdf']);
+    });
+
     it('an Outlook draft that never synced refuses to send its files', async () => {
       const ms = await store.createAccount({
         source: 'ms365',

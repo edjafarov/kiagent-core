@@ -775,15 +775,19 @@ export function createOutboundService(deps: {
       { ...intent, attachments: undefined },
       { readback: !files.length },
     );
-    const label = providerLabel(await sourceOf(row));
+    const source = await sourceOf(row);
+    const label = providerLabel(source);
     if (!made.mirror?.ref)
       return {
         row: made,
-        warnings: files.length
-          ? [
-              `not synced to ${label} (${made.mirror?.error ?? 'unknown error'}), so its files can't be sent yet — edit the draft to try again, or remove the files`,
-            ]
-          : [],
+        // Gmail and IMAP send files without the provider draft; only a
+        // source whose files ride the draft can't send them now.
+        warnings:
+          files.length && attachRefusal(source, false)
+            ? [
+                `not synced to ${label} (${made.mirror?.error ?? 'unknown error'}), so its files can't be sent yet — edit the draft to try again, or remove the files`,
+              ]
+            : [],
       };
     if (!files.length) return { row: made, warnings: [] };
     try {
