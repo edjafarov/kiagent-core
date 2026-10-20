@@ -5,8 +5,10 @@
  * lives here.
  *
  * Direction of `call`: host-surface calls originate child→main (ns = a Cap,
- * 'base', or the 'auth'/'session' callback namespaces); source/tool/send/ui
- * invocations originate main→child (ns 'source' | 'tool' | 'send' | 'ui').
+ * 'base', or the 'auth'/'session' callback namespaces); source/tool/send/
+ * draft/ui invocations originate main→child (ns 'source' | 'tool' | 'send' |
+ * 'draft' | 'ui'). 'draft' (2.15.0): `method` is the source id, args[0] the
+ * DraftMirror op, the rest its arguments with the SenderContext last.
  * Replies mirror the call's id. Everything else is a one-way notification.
  *
  * 'ui' (B1, host-owned renderer eventing) mirrors 'tool': `method` is the
@@ -26,7 +28,7 @@ import type {
 import type { FileChange } from './plugin-files';
 import type { SourceErrorCode, WireErrorCode } from './source-errors';
 
-export const PLATFORM_API_VERSION = '2.14.0';
+export const PLATFORM_API_VERSION = '2.15.0';
 
 /** A Batch after the child mapped items through the source's toDocument —
  *  the generic Item type never crosses the wire. */
@@ -74,6 +76,9 @@ export interface Contributions {
   /** Source ids this extension provides a Sender for (declared AND returned
    *  from activate) — [] when none. */
   senders: string[];
+  /** Of those, the ones whose Sender keeps provider drafts (2.15.0).
+   *  Optional on the wire: an older child never sends it. */
+  drafts?: string[];
 }
 
 export interface ExtensionBootstrap {
@@ -90,7 +95,7 @@ export type MainToChild =
   | {
       kind: 'call';
       id: number;
-      ns: 'source' | 'tool' | 'send' | 'ui';
+      ns: 'source' | 'tool' | 'send' | 'draft' | 'ui';
       method: string;
       args: unknown[];
       deadline?: number;

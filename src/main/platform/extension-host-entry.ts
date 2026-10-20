@@ -9,19 +9,21 @@
  */
 import { createRequire } from 'module';
 
-import type {
-  DocumentInput,
-  EventMeta,
-  ExternalRef,
-  ExtensionModule,
-  FolderNode,
-  FolderPickerSpec,
-  McpTool,
-  PullPhase,
-  SendIntent,
-  Sender,
-  SenderContext,
-  Source,
+import {
+  DRAFT_MIRROR_OPS,
+  type DraftMirrorOp,
+  type DocumentInput,
+  type EventMeta,
+  type ExternalRef,
+  type ExtensionModule,
+  type FolderNode,
+  type FolderPickerSpec,
+  type McpTool,
+  type PullPhase,
+  type SendIntent,
+  type Sender,
+  type SenderContext,
+  type Source,
 } from '@shared/contracts';
 import type { FileChange } from '@shared/plugin-files';
 import type { PluginNetInit } from '@shared/plugin-net';
@@ -417,6 +419,9 @@ export function runExtensionHost(
           tier: t.tier,
         })),
         senders: [...senders.keys()],
+        drafts: [...senders.entries()]
+          .filter(([, s]) => s.drafts && typeof s.drafts === 'object')
+          .map(([id]) => id),
       };
       endpoint.post({ kind: 'activated', contributions } satisfies ChildToMain);
     } catch (e) {
@@ -452,6 +457,18 @@ export function runExtensionHost(
           args[0] as SendIntent,
           args[1] as SenderContext | undefined,
         );
+      }
+      if (ns === 'draft') {
+        // `method` is the SOURCE id, args[0] the op; the ctx (credentials)
+        // is the last argument, as on the DraftMirror contract.
+        const drafts = senders.get(method)?.drafts;
+        if (!drafts) throw new Error(`no draft mirror for ${method}`);
+        const [op, ...rest] = args as [string, ...unknown[]];
+        if (!(DRAFT_MIRROR_OPS as readonly string[]).includes(op))
+          throw new Error(`unknown draft op ${op}`);
+        return (
+          drafts[op as DraftMirrorOp] as (...a: unknown[]) => Promise<unknown>
+        ).apply(drafts, rest);
       }
       throw new Error(`unexpected main→child namespace ${ns}`);
     })();

@@ -903,8 +903,8 @@ export interface SendIntent {
    *  (a Gmail "Send mail as" alias); Gmail falls back to the account address
    *  when it is not configured. */
   fromAddress?: string;
-  /** Owner channel only (validated by ownerMail; senders ignore it
-   *  otherwise). Base64 so the intent stays plain data over Connector RPC. */
+  /** Files to send: the owner channel's, and an Outbox draft's (platform
+   *  2.15.0). Base64 so the intent stays plain data over Connector RPC. */
   attachments?: { filename: string; mime: string; contentBase64: string }[];
 }
 
@@ -969,7 +969,61 @@ export interface AddressedQuery {
  *  plane directly. */
 export interface Sender {
   send(intent: SendIntent, ctx?: SenderContext): Promise<SendResult>;
+  /** Optional (platform 2.15.0): this source keeps a provider draft — the
+   *  Outbox draft is also a Gmail/Outlook draft, kept in step both ways. */
+  drafts?: DraftMirror;
 }
+
+/** Only the fields present change; everything else on the provider draft
+ *  (HTML body, signature, inline images, Bcc, attachments not removed) is
+ *  kept. An attachment's identity is its filename, unique within a draft. */
+export type DraftPatch = Partial<
+  Pick<SendIntent, 'to' | 'cc' | 'subject' | 'bodyMarkdown' | 'attachments'>
+> & { removeAttachments?: string[] };
+
+/** A provider draft as it is now. `bodyText`: its plain-text rendering. */
+export interface DraftContent {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string | null;
+  bodyText: string;
+  attachments: { filename: string; mime: string; size: number }[];
+}
+
+export type DraftReadResult =
+  | { state: 'draft'; ref: DraftRef; content: DraftContent }
+  | { state: 'sent'; externalMessageId?: string }
+  /** Provably deleted (Outlook Deleted Items). */
+  | { state: 'deleted' }
+  /** No longer a draft; whether it was sent is unknown. */
+  | { state: 'gone' };
+
+/** A source's provider drafts. Every ref-based op picks credentials by
+ *  `ref.accountId` — bundled senders from the vault, an extension's from
+ *  `ctx.credentials`, exactly as `send` does with `intent.accountId`. */
+export interface DraftMirror {
+  create(intent: SendIntent, ctx?: SenderContext): Promise<DraftRef>;
+  /** Returns the ref (ids may change). */
+  update(
+    ref: DraftRef,
+    patch: DraftPatch,
+    ctx?: SenderContext,
+  ): Promise<DraftRef>;
+  read(ref: DraftRef, ctx?: SenderContext): Promise<DraftReadResult>;
+  remove(ref: DraftRef, ctx?: SenderContext): Promise<void>;
+  /** Sends the provider draft as it is. Same never-retry rules as send(). */
+  send(ref: DraftRef, ctx?: SenderContext): Promise<SendResult>;
+}
+
+export const DRAFT_MIRROR_OPS = [
+  'create',
+  'update',
+  'read',
+  'remove',
+  'send',
+] as const;
+export type DraftMirrorOp = (typeof DRAFT_MIRROR_OPS)[number];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. THE INFERENCE PLANE — LLM / vision behind one queue

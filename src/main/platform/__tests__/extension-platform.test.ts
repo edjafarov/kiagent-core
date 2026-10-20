@@ -1847,7 +1847,12 @@ describe('createExtensionPlatform', () => {
     expect(registry.has('goodopts')).toBe(true);
     expect(registry.has('badopts')).toBe(false);
     expect(registry.get('goodopts')?.descriptor.options).toEqual([
-      { key: 'skipThings', label: 'Skip things', type: 'boolean', default: true },
+      {
+        key: 'skipThings',
+        label: 'Skip things',
+        type: 'boolean',
+        default: true,
+      },
     ]);
     expect(logs).toContainEqual(
       expect.objectContaining({
@@ -2578,6 +2583,55 @@ describe('createExtensionPlatform', () => {
       });
 
       loadSpy.mockRestore();
+    });
+
+    it("exposes the sender's draft mirror: every op crosses the RPC with the account's credentials", async () => {
+      await platform.start();
+      await installSenderFixture(FIXTURE_SENDER, 'test.sender');
+      const account = await store.createAccount({
+        source: 'fixsrc',
+        identifier: 'fix-account',
+        config: {},
+        status: 'live',
+      });
+      await store.vault.save(account.id, { accessToken: 'FAKE-DRAFT-TOKEN' });
+      const drafts = senderRegistry.get('fixsrc')!.drafts!;
+      expect(drafts).toBeDefined();
+      const ref = await drafts.create({
+        accountId: account.id,
+        kind: 'new',
+        to: ['a@x.example'],
+        bodyMarkdown: 'hi',
+      });
+      expect(ref).toEqual({
+        accountId: account.id,
+        id: 'pd-1',
+        threadId: 't-1',
+      });
+      await expect(drafts.read(ref)).resolves.toMatchObject({
+        state: 'draft',
+        content: { bodyText: 'B' },
+      });
+      await drafts.update(ref, { bodyMarkdown: 'new' });
+      await drafts.remove(ref);
+      await expect(drafts.send(ref)).resolves.toEqual({
+        externalMessageId: 'fix-draft-sent',
+      });
+      const { calls } = (await tools.get('draft_calls')!.call({})) as {
+        calls: Array<{ op: string; ctx: unknown; patch?: unknown }>;
+      };
+      expect(calls.map((c) => c.op)).toEqual([
+        'create',
+        'read',
+        'update',
+        'remove',
+        'send',
+      ]);
+      for (const c of calls)
+        expect(c.ctx).toEqual({
+          credentials: { accessToken: 'FAKE-DRAFT-TOKEN' },
+        });
+      expect(calls[2].patch).toEqual({ bodyMarkdown: 'new' });
     });
 
     /** A platform whose OAuth refresher map binds `fixsrc` — the sender

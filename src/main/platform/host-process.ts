@@ -31,6 +31,7 @@
  */
 import type {
   Cap,
+  DraftMirrorOp,
   EventMeta,
   ExtensionStatus,
   SendIntent,
@@ -170,6 +171,14 @@ export function createExtensionHost(deps: HostDeps): {
     intent: SendIntent,
     ctx: SenderContext,
   ): Promise<SendResult>;
+  /** A DraftMirror op on the child's sender for `sourceId` (2.15.0); the
+   *  ctx rides last, as on the contract. */
+  callDraft(
+    sourceId: string,
+    op: DraftMirrorOp,
+    args: unknown[],
+    ctx: SenderContext,
+  ): Promise<unknown>;
   /** #137: resolves once the host is live, waking a dormant one; rejects
    *  'extension is not running' when stopped or after the wake bound. */
   ensureLive(): Promise<void>;
@@ -767,6 +776,11 @@ export function createExtensionHost(deps: HostDeps): {
             intent,
             ctx,
           ]) as Promise<SendResult>,
+      );
+    },
+    callDraft(sourceId, op, args, ctx) {
+      return callLive((inc) =>
+        inc.endpoint.call('draft', sourceId, [op, ...args, ctx]),
       );
     },
     ensureLive,

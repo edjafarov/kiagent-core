@@ -13,7 +13,8 @@
     ],
     "tools": [
       "sender_last_ctx",
-      "sender_last_intent"
+      "sender_last_intent",
+      "draft_calls"
     ],
     "senders": [
       "fixsrc"

@@ -23,6 +23,8 @@ let lastIntent;
 // was never invoked since the last time it saw this ref". The counter is
 // what makes the difference observable.
 const stats = { sends: 0 };
+// The draft mirror (platform 2.15.0): each op records what reached it.
+const draftCalls = [];
 
 module.exports = {
   async activate() {
@@ -84,6 +86,12 @@ module.exports = {
           call: async () => ({ ctx: lastCtx === undefined ? null : lastCtx }),
         },
         {
+          name: 'draft_calls',
+          description: 'reports every draft-mirror op that reached the child',
+          inputSchema: { type: 'object' },
+          call: async () => ({ calls: draftCalls }),
+        },
+        {
           name: 'sender_last_intent',
           description:
             'reports the SendIntent seen by the last send, and how many ' +
@@ -102,6 +110,42 @@ module.exports = {
             lastIntent = intent === undefined ? null : intent;
             stats.sends += 1;
             return { externalMessageId: 'fix-1' };
+          },
+          drafts: {
+            async create(intent, ctx) {
+              draftCalls.push({ op: 'create', intent, ctx });
+              return {
+                accountId: intent.accountId,
+                id: 'pd-1',
+                threadId: 't-1',
+              };
+            },
+            async update(ref, patch, ctx) {
+              draftCalls.push({ op: 'update', ref, patch, ctx });
+              return ref;
+            },
+            async read(ref, ctx) {
+              draftCalls.push({ op: 'read', ref, ctx });
+              return {
+                state: 'draft',
+                ref,
+                content: {
+                  to: ['a@x.example'],
+                  cc: [],
+                  bcc: [],
+                  subject: 'S',
+                  bodyText: 'B',
+                  attachments: [],
+                },
+              };
+            },
+            async remove(ref, ctx) {
+              draftCalls.push({ op: 'remove', ref, ctx });
+            },
+            async send(ref, ctx) {
+              draftCalls.push({ op: 'send', ref, ctx });
+              return { externalMessageId: 'fix-draft-sent' };
+            },
           },
         },
       },

@@ -588,8 +588,7 @@ export function buildSurfaces(deps: SurfaceDeps): {
           ...(opts as object),
         }),
       lane: () => deps.inference.lane(),
-      describe: (kind) =>
-        describeInference(kind as InferenceKind),
+      describe: (kind) => describeInference(kind as InferenceKind),
       // Background only: an extension cannot embed on the interactive lane.
       embed: async (texts, opts) => {
         if (!deps.inference.embed) {

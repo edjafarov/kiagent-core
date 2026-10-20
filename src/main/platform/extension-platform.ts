@@ -16,6 +16,10 @@ import type {
   ConsentRecord,
   Credentials,
   DeclaredFileRoot,
+  DraftMirror,
+  DraftMirrorOp,
+  DraftReadResult,
+  DraftRef,
   ExtensionId,
   ExtensionSnapshot,
   ExtensionStatus,
@@ -23,6 +27,7 @@ import type {
   LogLevel,
   Manifest,
   McpTool,
+  SendResult,
   Source,
 } from '@shared/contracts';
 import type { ExtensionPreview, ExtInvokeEnvelope } from '@shared/ipc';
@@ -837,7 +842,19 @@ export function createExtensionPlatform(
         );
         continue;
       }
+      const drafts = c.drafts?.includes(id)
+        ? extensionDraftMirror((op, accountId, args) =>
+            senderCredentials(id, accountId as AccountId).then((credentials) =>
+              withTimeout(
+                e.host!.callDraft(id, op, args, { credentials }),
+                60_000,
+                `extension draft ${op} for '${id}' timed out after 60s`,
+              ),
+            ),
+          )
+        : undefined;
       deps.senders.register(id, {
+        ...(drafts ? { drafts } : {}),
         send: async (intent) => {
           // An out-of-process sender has no vault access of its own, so the
           // host resolves the account's credentials here — at send time,
@@ -1872,5 +1889,27 @@ export function createExtensionPlatform(
     onUiBroadcast(cb) {
       return uiRegistry.onBroadcast(cb);
     },
+  };
+}
+
+/** The main-side DraftMirror of an extension's sender: every op resolves
+ *  the account's credentials (by `ref.accountId` / `intent.accountId`) and
+ *  crosses the 'draft' RPC namespace. */
+function extensionDraftMirror(
+  call: (
+    op: DraftMirrorOp,
+    accountId: string,
+    args: unknown[],
+  ) => Promise<unknown>,
+): DraftMirror {
+  return {
+    create: (intent) =>
+      call('create', intent.accountId, [intent]) as Promise<DraftRef>,
+    update: (ref, patch) =>
+      call('update', ref.accountId, [ref, patch]) as Promise<DraftRef>,
+    read: (ref) =>
+      call('read', ref.accountId, [ref]) as Promise<DraftReadResult>,
+    remove: (ref) => call('remove', ref.accountId, [ref]) as Promise<void>,
+    send: (ref) => call('send', ref.accountId, [ref]) as Promise<SendResult>,
   };
 }
