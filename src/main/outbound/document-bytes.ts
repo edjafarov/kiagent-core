@@ -10,7 +10,7 @@ import type { Account, Document, Session, Source } from '@shared/contracts';
 
 export const DOCUMENT_BYTES_MAX = 50 * 1024 * 1024;
 
-const MIME_BY_EXT: Record<string, string> = {
+export const MIME_BY_EXT: Record<string, string> = {
   pdf: 'application/pdf',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

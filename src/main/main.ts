@@ -128,6 +128,7 @@ import { createOutboundRoutes } from './outbound/routes';
 import { buildBundledSenders, composeSenders } from './outbound/senders';
 import { createOwnerMail } from './outbound/owner-mail';
 import { createDocumentBytes } from './outbound/document-bytes';
+import { createAttachments } from './outbound/attachments';
 import { loadProductConfig } from './product';
 import { registerBundledProviders } from './providers';
 import { createInstallRegistry } from './providers/install-registry';
@@ -1035,8 +1036,15 @@ app
       buildBundledSenders({ store: p.store, logSink: p.logSink }),
       p.senders,
     );
+    const documentBytes = createDocumentBytes({
+      document: (id) => p.readsFor('other').document(id),
+      account: (id) => p.store.account(id),
+      sources: p.sources,
+      session: (a, signal) => p.engine.session(a, signal, 'owner-mail'),
+    });
     const outbound = createOutboundService({
       store: p.store,
+      attachments: createAttachments({ documentBytes }),
       prefs: p.prefs,
       senders: senderLookup,
       descriptorFor: (id) => p.sources.get(id)?.descriptor,
@@ -1057,12 +1065,6 @@ app
       account: (id) => p.store.account(id),
       sources: p.sources,
       senders: senderLookup,
-      session: (a, signal) => p.engine.session(a, signal, 'owner-mail'),
-    });
-    const documentBytes = createDocumentBytes({
-      document: (id) => p.readsFor('other').document(id),
-      account: (id) => p.store.account(id),
-      sources: p.sources,
       session: (a, signal) => p.engine.session(a, signal, 'owner-mail'),
     });
     try {

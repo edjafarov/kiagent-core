@@ -142,6 +142,8 @@ export interface OutboxStore {
     id: string,
     snapshot: DraftSnapshot,
     ref?: DraftRef,
+    /** Files Kia is adding in this write: where each came from. */
+    origins?: OutboxAttachment[],
   ): Promise<{ row: OutboxRow; changed: boolean }>;
   /** Mirror bookkeeping only; no revision bump. */
   setMirror(id: string, mirror: MirrorState): Promise<void>;
@@ -412,12 +414,14 @@ export function createOutboxStore(
       return moved;
     },
 
-    async applyContent(id, incoming, ref) {
+    async applyContent(id, incoming, ref, origins = []) {
       const row = await get(id);
       if (!row || row.status !== 'draft')
         throw new Error('outbox: not a draft');
       // A readback carries no `from`: keep where Kia got each file.
-      const known = new Map(row.attachments.map((a) => [a.filename, a.from]));
+      const known = new Map(
+        [...row.attachments, ...origins].map((a) => [a.filename, a.from]),
+      );
       const snapshot = {
         ...incoming,
         attachments: incoming.attachments.map((a) =>

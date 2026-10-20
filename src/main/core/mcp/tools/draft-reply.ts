@@ -6,6 +6,8 @@
  */
 import type { OutboundToolApi } from '@main/outbound/service';
 
+import { attachmentsSchema, parseAttachments } from './attachment-args';
+
 export const draftReplyDescription = `Create a DRAFT reply to an email or chat document from the corpus (use the document id from search/get results; for a chat, the day document of the conversation). The app resolves the recipient and threading from the stored document — do not supply addresses. NOTHING IS SENT by this tool: the result includes an instruction and a confirmation link for the user; follow the instruction exactly.`;
 
 export const draftReplyInputSchema = {
@@ -30,6 +32,7 @@ export const draftReplyInputSchema = {
         'the reply under that specific message. Omit to use the ' +
         'document’s default reply target.',
     },
+    attachments: attachmentsSchema,
   },
   required: ['document_id', 'body'],
 } as const;
@@ -43,6 +46,7 @@ export function makeDraftReplyTool(outbound: OutboundToolApi) {
       body?: string;
       reply_all?: boolean;
       target?: string;
+      attachments?: unknown;
     };
     if (!a.document_id) throw new Error('draft_reply: document_id is required');
     if (!a.body) throw new Error('draft_reply: body is required');
@@ -51,6 +55,7 @@ export function makeDraftReplyTool(outbound: OutboundToolApi) {
       body: a.body,
       replyAll: a.reply_all === true,
       ...(typeof a.target === 'string' ? { target: a.target } : {}),
+      attachments: parseAttachments('draft_reply', a.attachments),
     });
   };
 }

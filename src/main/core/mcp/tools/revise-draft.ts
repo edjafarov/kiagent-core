@@ -6,7 +6,9 @@
  */
 import type { OutboundToolApi } from '@main/outbound/service';
 
-export const reviseDraftDescription = `Change a pending DRAFT in place (a draft_id from draft_reply, draft_message or list_outbox): pass its draft_id and the revision you last saw, plus only the fields to change. NOTHING IS SENT. Use this for every change the user asks for — never create another draft. If the draft changed meanwhile (the user edited it), this refuses and returns the current draft: show it and revise from that. A reply keeps the recipients of the original message.`;
+import { attachmentsSchema, parseAttachments } from './attachment-args';
+
+export const reviseDraftDescription = `Change a pending DRAFT in place (a draft_id from draft_reply, draft_message or list_outbox): pass its draft_id and the revision you last saw, plus only the fields to change. NOTHING IS SENT. Use this for every change the user asks for — never create another draft. If the draft changed meanwhile (the user edited it), this refuses and returns the current draft: show it and revise from that. A reply keeps the recipients of the original message. Rewriting the body of a draft the user formatted in Gmail/Outlook makes it plain text.`;
 
 export const reviseDraftInputSchema = {
   type: 'object',
@@ -28,6 +30,12 @@ export const reviseDraftInputSchema = {
       items: { type: 'string' },
       description: 'New Cc (new messages only)',
     },
+    add_attachments: attachmentsSchema,
+    remove_attachments: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Filenames of attached files to take off',
+    },
   },
   required: ['draft_id', 'revision'],
 } as const;
@@ -43,6 +51,8 @@ export function makeReviseDraftTool(outbound: OutboundToolApi) {
       subject?: string;
       to?: unknown;
       cc?: unknown;
+      add_attachments?: unknown;
+      remove_attachments?: unknown;
     };
     if (!a.draft_id) throw new Error('revise_draft: draft_id is required');
     const revision = Number(a.revision);
@@ -61,6 +71,16 @@ export function makeReviseDraftTool(outbound: OutboundToolApi) {
       ...(typeof a.subject === 'string' ? { subject: a.subject } : {}),
       ...(a.to !== undefined ? { to: list(a.to, 'to') } : {}),
       ...(a.cc !== undefined ? { cc: list(a.cc, 'cc') } : {}),
+      ...(a.add_attachments !== undefined
+        ? {
+            addAttachments: parseAttachments('revise_draft', a.add_attachments),
+          }
+        : {}),
+      ...(a.remove_attachments !== undefined
+        ? {
+            removeAttachments: list(a.remove_attachments, 'remove_attachments'),
+          }
+        : {}),
     });
   };
 }

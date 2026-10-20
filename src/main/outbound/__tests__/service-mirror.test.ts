@@ -17,6 +17,7 @@ import { openDb } from '../../db/app-db';
 import { openStore, type CoreStore } from '../../core/store/store';
 import { OUTBOX_PENDING_CAP } from '../../core/store/outbox';
 import { createOutboundService, type OutboundService } from '../service';
+import { createAttachments } from '../attachments';
 import { shapeOutboundError } from '../error-copy';
 
 const deps = {
@@ -37,6 +38,8 @@ function fakeProvider() {
   const p = {
     drafts,
     createImpl: null as null | ((i: SendIntent) => Promise<DraftRef>),
+    created: [] as SendIntent[],
+    patches: [] as unknown[],
     readImpl: null as null | ((r: DraftRef) => Promise<DraftReadResult>),
     updateImpl: null as null | (() => Promise<void>),
     sendImpl: null as null | (() => Promise<{ externalMessageId: string }>),
@@ -47,6 +50,7 @@ function fakeProvider() {
   p.mirror = {
     async create(intent) {
       p.calls.push('create');
+      p.created.push(intent);
       if (p.createImpl) return p.createImpl(intent);
       const id = `d${++n}`;
       drafts.set(id, {
@@ -55,14 +59,28 @@ function fakeProvider() {
         bcc: intent.bcc ?? [],
         subject: intent.subject ?? null,
         bodyText: intent.bodyMarkdown,
-        attachments: [],
+        attachments: (intent.attachments ?? []).map((a) => ({
+          filename: a.filename,
+          mime: a.mime,
+          size: Buffer.from(a.contentBase64, 'base64').length,
+        })),
       });
       return { accountId: intent.accountId, id, threadId: 't1' };
     },
     async update(ref, patch) {
       p.calls.push('update');
+      p.patches.push(patch);
       if (p.updateImpl) await p.updateImpl();
       const c = drafts.get(ref.id)!;
+      const removed = new Set(patch.removeAttachments ?? []);
+      const files = [
+        ...c.attachments.filter((a) => !removed.has(a.filename)),
+        ...(patch.attachments ?? []).map((a) => ({
+          filename: a.filename,
+          mime: a.mime,
+          size: Buffer.from(a.contentBase64, 'base64').length,
+        })),
+      ];
       drafts.set(ref.id, {
         ...c,
         ...(patch.to ? { to: patch.to } : {}),
@@ -71,6 +89,7 @@ function fakeProvider() {
         ...(patch.bodyMarkdown !== undefined
           ? { bodyText: patch.bodyMarkdown }
           : {}),
+        attachments: files,
       });
       return ref;
     },
@@ -103,6 +122,7 @@ describe('outbound service — provider draft mirror', () => {
   let provider: ReturnType<typeof fakeProvider>;
   let sendMock: jest.Mock;
   let now: number;
+  let home: string;
 
   const make = (withDrafts = true) => {
     const sender: Sender = {
@@ -112,7 +132,17 @@ describe('outbound service — provider draft mirror', () => {
     service = createOutboundService({
       store,
       prefs: fakePrefs(),
-      senders: new Map<string, Sender>([['gmail', sender]]),
+      senders: new Map<string, Sender>([
+        ['gmail', sender],
+        ['ms365', { send: sendMock, drafts: provider.mirror }],
+        ['slack', { send: sendMock }],
+      ]),
+      descriptorFor: (id) =>
+        (id === 'ms365' ? { compose: 'email' } : undefined) as never,
+      attachments: createAttachments({
+        documentBytes: { fetchBytes: async () => null },
+        home,
+      }),
       logSink: { log: () => {} },
       nowMs: () => now,
     });
@@ -140,6 +170,9 @@ describe('outbound service — provider draft mirror', () => {
     provider = fakeProvider();
     sendMock = jest.fn(async () => ({ externalMessageId: '<plain@x>' }));
     now = Date.now();
+    home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kia-home-')));
+    fs.writeFileSync(path.join(home, 'a.pdf'), '%PDF-a');
+    fs.writeFileSync(path.join(home, 'b.txt'), 'bee');
     make();
   });
 
@@ -147,6 +180,7 @@ describe('outbound service — provider draft mirror', () => {
     jest.useRealTimers();
     await store.close();
     fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
   });
 
   describe('create on draft', () => {
@@ -431,6 +465,163 @@ describe('outbound service — provider draft mirror', () => {
       const fresh = await service.redraft(r.draft_id);
       expect(provider.drafts.has('d1')).toBe(false);
       expect(fresh.mirror?.ref?.id).toBe('d2');
+    });
+  });
+
+  describe('attachments', () => {
+    const file = (n: string) => ({ path: path.join(home, n) });
+    const withFile = () =>
+      service.draftMessage({
+        accountId,
+        to: ['bob@example.com'],
+        subject: 'Hi',
+        body: 'See attached',
+        attachments: [file('a.pdf')],
+      });
+
+    it('a mirrored draft is created with the file bytes; every surface lists it', async () => {
+      const r = await withFile();
+      expect(
+        Buffer.from(
+          provider.created[0].attachments![0].contentBase64,
+          'base64',
+        ).toString(),
+      ).toBe('%PDF-a');
+      expect(r.revision).toBe(1);
+      expect(r.attachments).toEqual([
+        {
+          filename: 'a.pdf',
+          size: 6,
+          origin: `from ${path.join(home, 'a.pdf')}`,
+        },
+      ]);
+    });
+
+    it('revise adds and removes files on the provider draft in one revision', async () => {
+      const r = await withFile();
+      const v = await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        addAttachments: [file('b.txt')],
+        removeAttachments: ['a.pdf'],
+      });
+      expect(v.revision).toBe(2);
+      expect(provider.patches[0]).toMatchObject({
+        removeAttachments: ['a.pdf'],
+        attachments: [{ filename: 'b.txt' }],
+      });
+      expect(v.attachments.map((a) => a.filename)).toEqual(['b.txt']);
+      // where Kia got the file survives the readback
+      expect((await row(r.draft_id))?.attachments[0].from).toEqual({
+        kind: 'file',
+        path: path.join(home, 'b.txt'),
+      });
+    });
+
+    it('a duplicate name or an unknown removal is refused', async () => {
+      const r = await withFile();
+      await expect(
+        service.reviseDraft({
+          draftId: r.draft_id,
+          revision: 1,
+          addAttachments: [file('a.pdf')],
+        }),
+      ).rejects.toThrow(/already on this draft/);
+      await expect(
+        service.reviseDraft({
+          draftId: r.draft_id,
+          revision: 1,
+          removeAttachments: ['nope.pdf'],
+        }),
+      ).rejects.toThrow(/no file named "nope.pdf"/);
+    });
+
+    it('an unmirrored Gmail send carries the file bytes', async () => {
+      make(false);
+      const r = await withFile();
+      expect((await service.sendById(r.draft_id, 1)).kind).toBe('sent');
+      const intent = sendMock.mock.calls[0][0] as SendIntent;
+      expect(intent.attachments?.map((a) => a.filename)).toEqual(['a.pdf']);
+    });
+
+    it('a file gone at send fails provably unsent, naming it', async () => {
+      make(false);
+      const r = await withFile();
+      fs.rmSync(path.join(home, 'a.pdf'));
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out.kind).toBe('failed');
+      const got = await row(r.draft_id);
+      expect(got?.error).toBe(
+        'not sent: attachment "a.pdf" is no longer available (~/a.pdf)',
+      );
+      expect(shapeOutboundError(got!.error!).canRetry).toBe(true);
+      expect(sendMock).not.toHaveBeenCalled();
+    });
+
+    it('a chat source refuses files', async () => {
+      const slack = await store.createAccount({
+        source: 'slack',
+        identifier: 'team',
+        config: {},
+      });
+      await store.commit({
+        account: slack.id,
+        documents: [
+          {
+            externalId: 'c1',
+            type: 'chat.day',
+            title: 'design',
+            markdown: 'x',
+            metadata: {
+              outbound: { ref: { channel: 'c1' }, display: '#design' },
+            },
+            createdAt: '2026-07-01T00:00:00Z',
+          },
+        ],
+        cursor: null,
+      });
+      const [doc] = await store.read.search({ limit: 10 });
+      await expect(
+        service.draftReply({
+          documentId: doc.id as string,
+          body: 'hi',
+          attachments: [file('a.pdf')],
+        }),
+      ).rejects.toThrow("this source can't send files yet");
+    });
+
+    it('an Outlook draft that never synced refuses to send its files', async () => {
+      const ms = await store.createAccount({
+        source: 'ms365',
+        identifier: 'me@outlook.com',
+        config: {},
+      });
+      provider.createImpl = async () => {
+        throw new Error('offline');
+      };
+      const r = await service.draftMessage({
+        accountId: ms.id,
+        to: ['bob@example.com'],
+        subject: 'Hi',
+        body: 'x',
+        attachments: [file('a.pdf')],
+      });
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out.kind).toBe('failed');
+      expect((await row(r.draft_id))?.error).toBe(
+        'not sent: files need this draft synced to Outlook first — edit the draft to try again',
+      );
+      expect(sendMock).not.toHaveBeenCalled();
+    });
+
+    it('the remote transport cannot attach by path', async () => {
+      const { runWithTransport } = await import(
+        '../../core/mcp/transport-context'
+      );
+      service.setRemoteBaseUrl('https://dev.example');
+      await expect(
+        runWithTransport('remote', () => withFile()),
+      ).rejects.toThrow(/document_id/);
     });
   });
 

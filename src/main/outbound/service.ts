@@ -4,6 +4,9 @@
  * Task 7) the confirm/cancel/send pipeline. Everything a tool returns is
  * JSON-serializable so the stdio sibling can proxy it verbatim.
  */
+import os from 'node:os';
+import path from 'node:path';
+
 import type {
   Account,
   AccountId,
@@ -16,6 +19,7 @@ import type {
   OutboxRow,
   OutboxStatus,
   Prefs,
+  SendIntent,
   SendResult,
   Sender,
   SourceDescriptor,
@@ -30,6 +34,12 @@ import { createDraftLock } from './draft-lock';
 import { isShapedSummary, shapeOutboundError } from './error-copy';
 import { EMAIL_RX, selfAddressesFor, senderAddressFor } from './identity';
 import { createMirrorOps, deadline, intentOf, providerLabel } from './mirror';
+import {
+  checkAttachments,
+  type AttachmentBytes,
+  type AttachmentInput,
+  type AttachmentsApi,
+} from './attachments';
 import { resolveImapReply } from './resolve';
 import { resolveGmailReply } from './resolve-gmail';
 // Type-only on purpose: the bundled senders (and their nodemailer/imapflow
@@ -55,11 +65,12 @@ function subjectFor(title: string | null): string | null {
 }
 
 /** Where an attachment came from, for every review surface. */
-export function originOf(a: OutboxAttachment): string {
-  if (!a.from) return 'added in the mail app';
-  return a.from.kind === 'file'
-    ? `from ${a.from.path}`
-    : 'from your indexed documents';
+export function originOf(a: OutboxAttachment, provider?: string): string {
+  if (!a.from) return `added in ${provider ?? 'the mail app'}`;
+  if (a.from.kind === 'document') return 'from your indexed documents';
+  const home = os.homedir();
+  const p = a.from.path;
+  return `from ${p.startsWith(home + path.sep) ? `~${p.slice(home.length)}` : p}`;
 }
 
 /** One reply variant a source stored in `metadata.outbound`: the opaque
@@ -199,12 +210,14 @@ export interface OutboundToolApi {
      *  (`metadata.outbound.targets[].key`) — threads the reply under that
      *  message. Omit for the document's default `metadata.outbound.ref`. */
     target?: string;
+    attachments?: AttachmentInput[];
   }): Promise<DraftToolResult>;
   draftMessage(a: {
     accountId: string;
     to: string[];
     subject: string;
     body: string;
+    attachments?: AttachmentInput[];
   }): Promise<DraftToolResult>;
   listOutbox(a: { limit?: number }): Promise<OutboxListItem[]>;
   sendDraft(a: { draftId: string; revision: number }): Promise<SendDraftResult>;
@@ -221,6 +234,9 @@ export interface DraftRevision {
   subject?: string;
   to?: string[];
   cc?: string[];
+  addAttachments?: AttachmentInput[];
+  /** Filenames of files on the draft. */
+  removeAttachments?: string[];
 }
 
 export type PeekResult =
@@ -307,6 +323,8 @@ export function createOutboundService(deps: {
    *  (an extension email source whose accounts may originate mail).
    *  Optional: without it every non-bundled source stays reply-only. */
   descriptorFor?: (sourceId: string) => SourceDescriptor | undefined;
+  /** Files on drafts; without it every attachment is refused. */
+  attachments?: AttachmentsApi;
   nowMs?: () => number; // injectable clock for tests; default Date.now
 }): OutboundService {
   // Bound to a local first: property narrowing on `deps.senders` would not
@@ -422,7 +440,7 @@ export function createOutboundService(deps: {
     attachments: row.attachments.map((a) => ({
       filename: a.filename,
       size: a.size,
-      origin: originOf(a),
+      origin: originOf(a, row.mirror?.provider),
     })),
   });
 
@@ -594,6 +612,18 @@ export function createOutboundService(deps: {
     const ref = row.mirror?.ref ?? null;
     if (ref && !sender.drafts)
       return fail('not sent: this account can no longer send its drafts');
+    let intent: SendIntent | null = null;
+    if (!ref) {
+      const why = row.attachments.length
+        ? attachRefusal(await sourceOf(row), false)
+        : null;
+      if (why) return fail(`not sent: ${why} — edit the draft to try again`);
+      try {
+        intent = await intentWithFiles(row);
+      } catch (e) {
+        return fail(`not sent: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
 
     // Only the send attempt itself is caught here. A throw from this
     // block is recorded as 'failed' and classified by shapeOutboundError:
@@ -613,7 +643,7 @@ export function createOutboundService(deps: {
       result =
         ref && sender.drafts
           ? await sender.drafts.send(ref)
-          : await sender.send(intentOf(row));
+          : await sender.send(intent ?? intentOf(row));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return fail(message);
@@ -672,10 +702,22 @@ export function createOutboundService(deps: {
 
   /** A just-inserted row becomes a provider draft when the account can
    *  mirror (§5.2). Never throws: a failed create leaves it Outbox-only. */
-  const mirrorNew = (row: OutboxRow): Promise<OutboxRow> =>
+  const mirrorNew = (
+    row: OutboxRow,
+    files: AttachmentBytes[] = [],
+  ): Promise<OutboxRow> =>
     withDraft(row.id, async () => {
       const drafts = await draftsFor(row);
-      return drafts ? mirror.createLocked(row, drafts) : row;
+      if (!drafts) return row;
+      let intent: SendIntent;
+      try {
+        intent = await intentWithFiles(row, files);
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        await deps.store.outbox.setMirror(row.id, { ref: null, error });
+        return (await deps.store.outbox.get(row.id)) ?? row;
+      }
+      return mirror.createLocked(row, drafts, intent);
     });
 
   /** The provider's current draft into the row (§5.3); a row that is not
@@ -722,6 +764,72 @@ export function createOutboundService(deps: {
       LIST_REFRESH_MS,
       'outbox refresh',
     ).catch(() => {});
+  };
+
+  /** Files ride the bundled email senders, or a provider draft (§6.2). */
+  const attachRefusal = (source: string, mirrored: boolean): string | null => {
+    if (source === 'gmail' || source === 'imap' || mirrored) return null;
+    if (lookup.get(source)?.drafts)
+      return `files need this draft synced to ${providerLabel(source)} first`;
+    return "this source can't send files yet";
+  };
+
+  /** The files a tool call names, read and checked against what the draft
+   *  already holds. Refuses before anything is written. */
+  const resolveFiles = async (
+    tool: string,
+    inputs: AttachmentInput[] | undefined,
+    existing: OutboxAttachment[],
+    source: string,
+    opts: { mirrored: boolean; userPicked?: boolean },
+  ): Promise<
+    Array<{ attachment: OutboxAttachment; bytes: AttachmentBytes }>
+  > => {
+    if (!inputs?.length) return [];
+    const why = attachRefusal(source, opts.mirrored);
+    if (why) throw new Error(`${tool}: ${why}`);
+    const api = deps.attachments;
+    if (!api) throw new Error(`${tool}: attachments are not available`);
+    const files: Array<{
+      attachment: OutboxAttachment;
+      bytes: AttachmentBytes;
+    }> = [];
+    for (const input of inputs) {
+      try {
+        files.push(
+          await api.resolve(input, {
+            transport: currentTransport(),
+            userPicked: opts.userPicked,
+          }),
+        );
+      } catch (e) {
+        throw new Error(
+          `${tool}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+    try {
+      checkAttachments([...existing, ...files.map((f) => f.attachment)]);
+    } catch (e) {
+      throw new Error(`${tool}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return files;
+  };
+
+  /** A send (or a create) of the row with every file's bytes. */
+  const intentWithFiles = async (
+    row: OutboxRow,
+    known: AttachmentBytes[] = [],
+  ): Promise<SendIntent> => {
+    const intent = intentOf(row);
+    if (!row.attachments.length) return intent;
+    const api = deps.attachments;
+    if (!api) throw new Error('attachments are not available');
+    const byName = new Map(known.map((b) => [b.filename, b]));
+    intent.attachments = await Promise.all(
+      row.attachments.map((a) => byName.get(a.filename) ?? api.read(a)),
+    );
+    return intent;
   };
 
   /** Discard in Kia removes the provider draft too (§5.4). */
@@ -812,6 +920,7 @@ export function createOutboundService(deps: {
     draftId: string,
     revision: number,
     patch: DraftRevision,
+    opts: { userPicked?: boolean } = {},
   ): Promise<DraftToolResult> => {
     await deps.store.outbox.expireOverdue();
     const stored = await deps.store.outbox.get(draftId);
@@ -850,11 +959,23 @@ export function createOutboundService(deps: {
     const cc = addrs(patch.cc, 'cc');
     if (patch.body !== undefined && !patch.body.trim())
       throw new Error(`${tool}: body must not be empty`);
+    const removed = new Set(patch.removeAttachments ?? []);
+    for (const name of removed)
+      if (!row.attachments.some((a) => a.filename === name))
+        throw new Error(`${tool}: no file named "${name}" on this draft`);
+    const kept = row.attachments.filter((a) => !removed.has(a.filename));
+    const source = await sourceOf(row);
+    const files = await resolveFiles(tool, patch.addAttachments, kept, source, {
+      mirrored: Boolean(row.mirror?.ref),
+      userPicked: opts.userPicked,
+    });
     const providerPatch: DraftPatch = {
       ...(to ? { to } : {}),
       ...(cc ? { cc } : {}),
       ...(patch.subject !== undefined ? { subject: patch.subject } : {}),
       ...(patch.body !== undefined ? { bodyMarkdown: patch.body } : {}),
+      ...(files.length ? { attachments: files.map((f) => f.bytes) } : {}),
+      ...(removed.size ? { removeAttachments: [...removed] } : {}),
     };
     const local: DraftSnapshot = {
       ...snapshotOf(row),
@@ -862,6 +983,7 @@ export function createOutboundService(deps: {
       ...(cc ? { cc } : {}),
       ...(patch.subject !== undefined ? { subject: patch.subject } : {}),
       ...(patch.body !== undefined ? { bodyMarkdown: patch.body } : {}),
+      attachments: [...kept, ...files.map((f) => f.attachment)],
     };
     if (normalizeSnapshot(local) === normalizeSnapshot(snapshotOf(row)))
       return toolResult(row, []);
@@ -892,8 +1014,12 @@ export function createOutboundService(deps: {
     const { row: next } = await deps.store.outbox.applyContent(row.id, local);
     // Not mirrored yet on an account that can: a revise is when the create
     // is tried again, from the edited row (one revision bump).
-    if (drafts && !next.mirror?.ref)
-      return toolResult(await mirror.createLocked(next, drafts), []);
+    if (drafts && !next.mirror?.ref) {
+      const known = files.map((f) => f.bytes);
+      const intent = await intentWithFiles(next, known).catch(() => null);
+      if (intent)
+        return toolResult(await mirror.createLocked(next, drafts, intent), []);
+    }
     return toolResult(next, []);
   };
 
@@ -906,13 +1032,22 @@ export function createOutboundService(deps: {
       remoteBaseUrl = url;
     },
 
-    async draftReply({ documentId, body, replyAll, target }) {
+    async draftReply({ documentId, body, replyAll, target, attachments }) {
       assertReady();
       const doc = await deps.store.read.document(documentId as DocumentId);
       if (!doc)
         throw new Error(`draft_reply: unknown document '${documentId}'`);
       const account = await accountFor(doc.accountId as string);
       const mode = modeFor(account);
+      const files = await resolveFiles(
+        'draft_reply',
+        attachments,
+        [],
+        account.source,
+        // A new draft on a mirroring account becomes a provider draft.
+        { mirrored: Boolean(lookup.get(account.source)?.drafts) },
+      );
+      const fileList = files.map((f) => f.attachment);
 
       // Universality hook (spec §6): a source that wrote metadata.outbound
       // owns its reply addressing — the ref is opaque and round-trips to
@@ -938,6 +1073,7 @@ export function createOutboundService(deps: {
           createdVia: createdViaNow(),
           createdBy: currentClient(),
           expiresAt: expiresAt(),
+          attachments: fileList,
         });
       } else if (target !== undefined) {
         // Per-message targets live only in metadata.outbound.targets; email
@@ -967,6 +1103,7 @@ export function createOutboundService(deps: {
           createdVia: createdViaNow(),
           createdBy: currentClient(),
           expiresAt: expiresAt(),
+          attachments: fileList,
         });
       } else if (account.source !== 'imap') {
         // A document from an extension-sender source that carries no
@@ -1001,12 +1138,19 @@ export function createOutboundService(deps: {
           createdVia: createdViaNow(),
           createdBy: currentClient(),
           expiresAt: expiresAt(),
+          attachments: fileList,
         });
       }
-      return toolResult(await mirrorNew(row), warnings);
+      return toolResult(
+        await mirrorNew(
+          row,
+          files.map((f) => f.bytes),
+        ),
+        warnings,
+      );
     },
 
-    async draftMessage({ accountId, to, subject, body }) {
+    async draftMessage({ accountId, to, subject, body, attachments }) {
       assertReady();
       const account = await accountFor(accountId);
       // An extension source that declares `compose: 'email'` sends as the
@@ -1025,6 +1169,14 @@ export function createOutboundService(deps: {
           `draft_message: invalid recipient address(es) (${bad.length})`,
         );
       }
+      const files = await resolveFiles(
+        'draft_message',
+        attachments,
+        [],
+        account.source,
+        // A new draft on a mirroring account becomes a provider draft.
+        { mirrored: Boolean(lookup.get(account.source)?.drafts) },
+      );
       const row = await deps.store.outbox.create({
         accountId: account.id,
         kind: 'new',
@@ -1037,8 +1189,15 @@ export function createOutboundService(deps: {
         createdVia: createdViaNow(),
         createdBy: currentClient(),
         expiresAt: expiresAt(),
+        attachments: files.map((f) => f.attachment),
       });
-      return toolResult(await mirrorNew(row), []);
+      return toolResult(
+        await mirrorNew(
+          row,
+          files.map((f) => f.bytes),
+        ),
+        [],
+      );
     },
 
     async listOutbox({ limit }) {
@@ -1107,9 +1266,10 @@ export function createOutboundService(deps: {
       );
     },
 
+    // The review sheet's files come from the user's own file dialog.
     reviseById: (draftId, revision, patch) =>
       withDraft(draftId, () =>
-        reviseLocked('revise', draftId, revision, patch),
+        reviseLocked('revise', draftId, revision, patch, { userPicked: true }),
       ),
 
     reopenById: (draftId) => withDraft(draftId, () => reopenLocked(draftId)),

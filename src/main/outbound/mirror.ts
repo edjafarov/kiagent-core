@@ -11,6 +11,7 @@ import type {
   DraftPatch,
   DraftRef,
   DraftSnapshot,
+  OutboxAttachment,
   OutboxRow,
   SendIntent,
 } from '@shared/contracts';
@@ -105,18 +106,31 @@ export function createMirrorOps(deps: {
 }): MirrorOps {
   const { store } = deps;
 
-  const adopt = async (row: OutboxRow, ref: DraftRef, c: DraftContent) =>
-    (await store.outbox.applyContent(row.id, snapshotOfContent(c), ref)).row;
+  const adopt = async (
+    row: OutboxRow,
+    ref: DraftRef,
+    c: DraftContent,
+    origins?: OutboxAttachment[],
+  ) =>
+    (
+      await store.outbox.applyContent(
+        row.id,
+        snapshotOfContent(c),
+        ref,
+        origins,
+      )
+    ).row;
 
   const readAdopt = async (
     row: OutboxRow,
     drafts: DraftMirror,
     ref: DraftRef,
     ms: number,
+    origins?: OutboxAttachment[],
   ): Promise<OutboxRow> => {
     const r = await deadline(drafts.read(ref), ms, 'draft read');
     const label = providerLabel(await deps.sourceOf(row));
-    if (r.state === 'draft') return adopt(row, r.ref, r.content);
+    if (r.state === 'draft') return adopt(row, r.ref, r.content, origins);
     if (r.state === 'sent') {
       await store.outbox.transition(row.id, ['draft'], 'sent', {
         sentAt: new Date(deps.nowMs()).toISOString(),
@@ -206,7 +220,13 @@ export function createMirrorOps(deps: {
         'draft update',
       );
       try {
-        return await readAdopt(row, drafts, next, MIRROR_CALL_DEADLINE_MS);
+        return await readAdopt(
+          row,
+          drafts,
+          next,
+          MIRROR_CALL_DEADLINE_MS,
+          local.attachments,
+        );
       } catch (e) {
         // The provider has the edit; show it until the next refresh reads
         // the provider's own version.

@@ -5,6 +5,8 @@
  */
 import type { OutboundToolApi } from '@main/outbound/service';
 
+import { attachmentsSchema, parseAttachments } from './attachment-args';
+
 export const draftMessageDescription = `Create a DRAFT email to explicit recipients from one of the user's email accounts (account ids come from digital_memory_info). NOTHING IS SENT by this tool: the result includes an instruction and a confirmation link for the user; follow the instruction exactly.`;
 
 export const draftMessageInputSchema = {
@@ -18,6 +20,7 @@ export const draftMessageInputSchema = {
     },
     subject: { type: 'string' },
     body: { type: 'string', description: 'Body (plain text/markdown)' },
+    attachments: attachmentsSchema,
   },
   required: ['account_id', 'to', 'subject', 'body'],
 } as const;
@@ -31,6 +34,7 @@ export function makeDraftMessageTool(outbound: OutboundToolApi) {
       to?: unknown;
       subject?: string;
       body?: string;
+      attachments?: unknown;
     };
     if (!a.account_id) throw new Error('draft_message: account_id is required');
     if (!Array.isArray(a.to) || a.to.length === 0)
@@ -42,6 +46,7 @@ export function makeDraftMessageTool(outbound: OutboundToolApi) {
       to: a.to.map(String),
       subject: a.subject,
       body: a.body,
+      attachments: parseAttachments('draft_message', a.attachments),
     });
   };
 }
