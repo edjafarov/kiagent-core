@@ -61,8 +61,7 @@ const lowerAll = (xs: string[]) => xs.map(addressKey);
  *  swapped for another of the same name and size is still a change).
  *  `provider`: the key a provider's copy is compared by — every whitespace
  *  run as one space, since Gmail re-wraps plain text when a draft is merely
- *  opened there, and Outlook's own reply draft writes `RE:` where Kia wrote
- *  `Re:`. */
+ *  opened there. */
 export function normalizeSnapshot(
   s: DraftSnapshot,
   { provider = false }: { provider?: boolean } = {},
@@ -79,9 +78,7 @@ export function normalizeSnapshot(
     lowerAll(s.to),
     lowerAll(s.cc),
     lowerAll(s.bcc),
-    provider
-      ? (s.subject?.trim().replace(/^re:/i, 'Re:') ?? null)
-      : (s.subject?.trim() ?? null),
+    s.subject?.trim() ?? null,
     body,
     s.attachments
       .map((a) => JSON.stringify([a.filename, a.size, a.from ?? null]))
