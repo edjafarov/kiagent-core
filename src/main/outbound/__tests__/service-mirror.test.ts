@@ -652,6 +652,42 @@ describe('outbound service — provider draft mirror', () => {
       expect(got?.attachments[0].size).toBe(6);
     });
 
+    it("a draft with files that left its subject to the provider takes the provider's: still revision 1", async () => {
+      // Outlook replies with files: no readback at create; the upload's
+      // read is the create's read.
+      provider.readImpl = async (ref) => ({
+        state: 'draft',
+        ref,
+        content: { ...provider.drafts.get(ref.id)!, subject: 'RE: Hi' },
+      });
+      // A reply row's null subject, through the same create-with-files path.
+      const r = await service.draftMessage({
+        accountId,
+        to: ['bob@example.com'],
+        subject: undefined as unknown as string,
+        body: 'See attached',
+        attachments: [file('a.pdf')],
+      });
+      expect(r.revision).toBe(1);
+      expect((await row(r.draft_id))?.subject).toBe('RE: Hi');
+    });
+
+    it('a draft synced before sizes were remembered is no new revision on its next read', async () => {
+      const r = await withFile();
+      const before = (await row(r.draft_id))!;
+      await store.outbox.setMirror(r.draft_id, {
+        ...before.mirror!,
+        sizes: undefined,
+      });
+      const d = provider.drafts.get('d1')!;
+      d.attachments = d.attachments.map((a) => ({ ...a, size: a.size + 158 }));
+      await service.listOutbox({});
+      const got = await row(r.draft_id);
+      expect(got?.revision).toBe(1);
+      expect(got?.attachments[0]).toMatchObject({ size: 6 });
+      expect(got?.mirror?.sizes).toEqual({ 'a.pdf': 164 });
+    });
+
     it('a file replaced in the provider under the same name is an edit', async () => {
       provider.readImpl = async (ref) => {
         const c = provider.drafts.get(ref.id)!;

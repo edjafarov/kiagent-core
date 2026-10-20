@@ -797,6 +797,7 @@ export function createOutboundService(deps: {
           drafts,
           { attachments: files },
           { ...snapshotOf(made), attachments: row.attachments },
+          { created: true },
         ),
         warnings: [],
       };

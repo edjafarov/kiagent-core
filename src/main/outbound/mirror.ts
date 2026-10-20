@@ -113,12 +113,15 @@ export interface MirrorOps {
     drafts: DraftMirror,
     ms?: number,
   ): Promise<OutboxRow>;
-  /** Kia's edit → provider → read → adopt (one revision bump). */
+  /** Kia's edit → provider → read → adopt (one revision bump).
+   *  `created`: the files upload that finishes a create — its read is the
+   *  create's read. */
   updateLocked(
     row: OutboxRow,
     drafts: DraftMirror,
     patch: DraftPatch,
     local: DraftSnapshot,
+    opts?: { created?: boolean },
   ): Promise<OutboxRow>;
   /** Best effort: a failure is logged, never thrown. */
   removeLocked(row: OutboxRow, drafts: DraftMirror): Promise<void>;
@@ -256,7 +259,7 @@ export function createMirrorOps(deps: {
       return readAdopt(row, drafts, ref, ms);
     },
 
-    async updateLocked(row, drafts, patch, local) {
+    async updateLocked(row, drafts, patch, local, { created } = {}) {
       const ref = row.mirror?.ref;
       if (!ref) throw new Error('outbox: not mirrored');
       // Awaited to the end, never abandoned at a deadline: a write still in
@@ -282,6 +285,7 @@ export function createMirrorOps(deps: {
         return await readAdopt(row, drafts, next, MIRROR_CALL_DEADLINE_MS, {
           origins: local.attachments.filter((a) => uploading.has(a.filename)),
           local,
+          created,
         });
       } catch (e) {
         // The provider has the edit; show it until the next refresh reads
