@@ -141,7 +141,9 @@ export function createSmtpSender(deps: {
             transport.sendMail({
               envelope: {
                 from: fromAddress,
-                to: [...to, ...(cc ?? [])].map(bareAddress),
+                to: [...to, ...(cc ?? []), ...(intent.bcc ?? [])].map(
+                  bareAddress,
+                ),
               },
               raw,
             }),

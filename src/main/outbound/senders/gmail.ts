@@ -20,6 +20,7 @@ import type { CoreStore } from '../../core/store/store';
 import { googleRefresher } from '../../sources/gmail/oauth';
 import { sendGmailMessage } from '../../sources/gmail/gmail-api';
 import { senderAddressFor } from '../identity';
+import { createGmailDrafts } from './gmail-drafts';
 
 const REFRESH_MARGIN_MS = 60_000;
 
@@ -35,6 +36,7 @@ function composeRaw(opts: {
   from: string | { name: string; address: string };
   to: string[];
   cc?: string[];
+  bcc?: string[];
   subject?: string;
   text: string;
   inReplyTo?: string;
@@ -48,6 +50,7 @@ function composeRaw(opts: {
     from: opts.from,
     to: opts.to,
     cc: opts.cc?.length ? opts.cc : undefined,
+    bcc: opts.bcc?.length ? opts.bcc : undefined,
     subject: opts.subject,
     text: opts.text,
     inReplyTo: opts.inReplyTo,
@@ -55,18 +58,20 @@ function composeRaw(opts: {
     replyTo: opts.replyTo,
     messageId: opts.messageId,
     headers: opts.ownerChannel ? { ...OWNER_CHANNEL_HEADERS } : undefined,
-    // Owner channel only: the Outbox path never carries files.
-    attachments:
-      opts.ownerChannel && opts.attachments?.length
-        ? opts.attachments.map((a) => ({
-            filename: a.filename,
-            contentType: a.mime,
-            content: Buffer.from(a.contentBase64, 'base64'),
-          }))
-        : undefined,
+    attachments: opts.attachments?.length
+      ? opts.attachments.map((a) => ({
+          filename: a.filename,
+          contentType: a.mime,
+          content: Buffer.from(a.contentBase64, 'base64'),
+        }))
+      : undefined,
   });
   return new Promise((resolve, reject) => {
-    mail.compile().build((err, message) => {
+    const node = mail.compile();
+    // Gmail reads the recipients from the headers (and strips Bcc on
+    // delivery), so the Bcc header has to stay in the raw.
+    node.keepBcc = true;
+    node.build((err, message) => {
       if (err) reject(err);
       else resolve(message);
     });
@@ -105,7 +110,34 @@ export function createGmailSender(deps: {
     return fresh;
   }
 
+  async function compose(intent: SendIntent): Promise<Buffer> {
+    const account = await deps.store.account(intent.accountId);
+    if (!account) throw new Error('the sending account no longer exists');
+    const threading = (intent.threading ?? {}) as {
+      inReplyTo?: string;
+      references?: string[];
+    };
+    const raw = await composeRaw({
+      from: fromFor(intent, senderAddressFor(account)),
+      to: intent.to ?? [],
+      cc: intent.cc,
+      bcc: intent.bcc,
+      subject: intent.subject,
+      text: intent.bodyMarkdown,
+      inReplyTo: threading.inReplyTo,
+      references: threading.references,
+      replyTo: intent.replyTo,
+      messageId: intent.messageId,
+      ownerChannel: intent.ownerChannel,
+      attachments: intent.attachments,
+    });
+    if (raw.length > GMAIL_MESSAGE_MAX)
+      throw new Error('gmail: message too large');
+    return raw;
+  }
+
   return {
+    drafts: createGmailDrafts({ credentials: freshCredentials, compose }),
     async send(intent: SendIntent): Promise<SendResult> {
       const account = await deps.store.account(intent.accountId);
       if (!account) throw new Error('the sending account no longer exists');
@@ -115,31 +147,18 @@ export function createGmailSender(deps: {
         throw new Error(
           `no Gmail credentials — reconnect ${account.identifier}`,
         );
-      // Fail fast when we KNOW the grant predates gmail.send; unknown
-      // (pre-scope-tracking blob) falls through to the API's verdict.
-      if (creds.scope && !creds.scope.includes('gmail.send'))
+      // Fail fast when we KNOW the grant can't send (gmail.compose also
+      // allows sending); unknown (pre-scope-tracking blob) falls through
+      // to the API's verdict.
+      if (
+        creds.scope &&
+        !creds.scope.includes('gmail.send') &&
+        !creds.scope.includes('gmail.compose')
+      )
         throw new Error(reconnectMsg);
 
-      const threading = (intent.threading ?? {}) as {
-        gmailThreadId?: string;
-        inReplyTo?: string;
-        references?: string[];
-      };
-      const raw = await composeRaw({
-        from: fromFor(intent, senderAddressFor(account)),
-        to: intent.to ?? [],
-        cc: intent.cc,
-        subject: intent.subject,
-        text: intent.bodyMarkdown,
-        inReplyTo: threading.inReplyTo,
-        references: threading.references,
-        replyTo: intent.replyTo,
-        messageId: intent.messageId,
-        ownerChannel: intent.ownerChannel,
-        attachments: intent.attachments,
-      });
-      if (raw.length > GMAIL_MESSAGE_MAX)
-        throw new Error('gmail: message too large');
+      const threading = (intent.threading ?? {}) as { gmailThreadId?: string };
+      const raw = await compose(intent);
       try {
         const r = await sendGmailMessage(
           { credentials: () => freshCredentials(intent.accountId) },

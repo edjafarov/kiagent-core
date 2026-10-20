@@ -332,7 +332,7 @@ describe('gmail sender', () => {
       ]);
     });
 
-    it('ignores attachments without ownerChannel (the Outbox path never carries files)', async () => {
+    it('carries attachments on the Outbox path too', async () => {
       await creds();
       fetchMock = jest.fn(async () => okJson({ id: 'm1', threadId: 't1' }));
       global.fetch = fetchMock as unknown as typeof fetch;
@@ -350,7 +350,7 @@ describe('gmail sender', () => {
       );
       const { simpleParser } = await import('mailparser');
       const parsed = await simpleParser(rawOf(fetchMock.mock.calls[0][1]));
-      expect(parsed.attachments).toHaveLength(0);
+      expect(parsed.attachments.map((a) => a.filename)).toEqual(['x.pdf']);
     });
 
     it('large messages go through the media-upload endpoint with the thread id', async () => {

@@ -216,40 +216,183 @@ export function isSendSafeRetry(status: number, body: string): boolean {
  *  limit) instead of a base64 JSON body. */
 const SEND_UPLOAD_ABOVE = 4 * 1024 * 1024;
 
-export function sendGmailMessage(
+/** One RFC822 message to a Gmail endpoint that takes it either as a base64
+ *  JSON field or (large) through the media-upload twin of the same path.
+ *  `wrap` places `raw` into the JSON body; `meta` is the JSON part of the
+ *  upload form. */
+function rawRequest<T>(
   auth: { credentials(): Promise<Credentials | null> },
-  raw: Buffer,
-  threadId?: string,
-): Promise<GmailSendResult> {
-  const meta = threadId ? { threadId } : {};
-  const upload = raw.length > SEND_UPLOAD_ABOVE;
+  req: {
+    path: string;
+    method: 'POST' | 'PUT';
+    raw: Buffer;
+    meta: Record<string, unknown>;
+    wrap: (raw: string) => Record<string, unknown>;
+    nonIdempotent: boolean;
+  },
+): Promise<T> {
+  const upload = req.raw.length > SEND_UPLOAD_ABOVE;
   const boundary = `kia-${Date.now().toString(36)}`;
-  return bearerFetch<GmailSendResult>(
+  return bearerFetch<T>(
     upload
-      ? `${BASE.replace('/gmail/v1/', '/upload/gmail/v1/')}/messages/send?uploadType=multipart`
-      : `${BASE}/messages/send`,
+      ? `${BASE.replace('/gmail/v1/', '/upload/gmail/v1/')}${req.path}?uploadType=multipart`
+      : `${BASE}${req.path}`,
     () => tokenFor(auth),
     {
       errorPrefix: 'gmail',
       logTag: '[gmail]',
-      method: 'POST',
+      method: req.method,
       contentType: upload
         ? `multipart/related; boundary=${boundary}`
         : 'application/json',
       body: upload
         ? Buffer.concat([
             Buffer.from(
-              `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: message/rfc822\r\n\r\n`,
+              `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(req.meta)}\r\n--${boundary}\r\nContent-Type: message/rfc822\r\n\r\n`,
             ),
-            raw,
+            req.raw,
             Buffer.from(`\r\n--${boundary}--`),
           ])
-        : JSON.stringify({ raw: raw.toString('base64url'), ...meta }),
+        : JSON.stringify(req.wrap(req.raw.toString('base64url'))),
       maxAttempts: 4,
       timeoutMs: upload ? 180_000 : 30_000,
+      ...(req.nonIdempotent
+        ? { retryNetErrors: false, retryOn: isSendSafeRetry }
+        : {}),
+      maxRetryDelayMs: 10_000,
+    },
+  );
+}
+
+export function sendGmailMessage(
+  auth: { credentials(): Promise<Credentials | null> },
+  raw: Buffer,
+  threadId?: string,
+): Promise<GmailSendResult> {
+  const meta = threadId ? { threadId } : {};
+  return rawRequest(auth, {
+    path: '/messages/send',
+    method: 'POST',
+    raw,
+    meta,
+    wrap: (r) => ({ raw: r, ...meta }),
+    nonIdempotent: true,
+  });
+}
+
+// ── Drafts (the Outbox mirror) ────────────────────────────────────────────
+
+export interface GmailDraft {
+  id: string;
+  message: GmailApiMessage & { raw?: string };
+}
+
+type Auth = { credentials(): Promise<Credentials | null> };
+
+/** drafts.create. Retried only on proven rejections — a retried timeout
+ *  could leave two drafts. */
+export function createGmailDraft(
+  auth: Auth,
+  raw: Buffer,
+  threadId?: string,
+): Promise<GmailDraft> {
+  const message = threadId ? { threadId } : {};
+  return rawRequest(auth, {
+    path: '/drafts',
+    method: 'POST',
+    raw,
+    meta: { message },
+    wrap: (r) => ({ message: { raw: r, ...message } }),
+    nonIdempotent: true,
+  });
+}
+
+/** drafts.update replaces the whole draft message (idempotent). */
+export function updateGmailDraft(
+  auth: Auth,
+  id: string,
+  raw: Buffer,
+  threadId?: string,
+): Promise<GmailDraft> {
+  const message = threadId ? { threadId } : {};
+  return rawRequest(auth, {
+    path: `/drafts/${encodeURIComponent(id)}`,
+    method: 'PUT',
+    raw,
+    meta: { id, message },
+    wrap: (r) => ({ id, message: { raw: r, ...message } }),
+    nonIdempotent: false,
+  });
+}
+
+/** drafts.get; null when the draft no longer exists (sent or deleted). */
+export async function getGmailDraft(
+  auth: Auth,
+  id: string,
+  format: 'full' | 'raw',
+): Promise<GmailDraft | null> {
+  try {
+    return await bearerFetch<GmailDraft>(
+      `${BASE}/drafts/${encodeURIComponent(id)}?format=${format}`,
+      () => tokenFor(auth),
+      {
+        errorPrefix: 'gmail',
+        logTag: '[gmail]',
+        maxAttempts: 3,
+        timeoutMs: 30_000,
+        maxRetryDelayMs: 5_000,
+      },
+    );
+  } catch (e) {
+    if (isNotFound(e)) return null;
+    throw e;
+  }
+}
+
+/** drafts.delete; an already-missing draft counts as deleted. */
+export async function deleteGmailDraft(auth: Auth, id: string): Promise<void> {
+  try {
+    await bearerFetch<unknown>(
+      `${BASE}/drafts/${encodeURIComponent(id)}`,
+      () => tokenFor(auth),
+      {
+        errorPrefix: 'gmail',
+        logTag: '[gmail]',
+        method: 'DELETE',
+        responseType: 'text',
+        maxAttempts: 3,
+        timeoutMs: 30_000,
+        maxRetryDelayMs: 5_000,
+      },
+    );
+  } catch (e) {
+    if (!isNotFound(e)) throw e;
+  }
+}
+
+/** drafts.send — the same retry rule as messages.send. */
+export function sendGmailDraft(
+  auth: Auth,
+  id: string,
+): Promise<GmailSendResult> {
+  return bearerFetch<GmailSendResult>(
+    `${BASE}/drafts/send`,
+    () => tokenFor(auth),
+    {
+      errorPrefix: 'gmail',
+      logTag: '[gmail]',
+      method: 'POST',
+      contentType: 'application/json',
+      body: JSON.stringify({ id }),
+      maxAttempts: 4,
+      timeoutMs: 60_000,
       retryNetErrors: false,
       retryOn: isSendSafeRetry,
       maxRetryDelayMs: 10_000,
     },
   );
+}
+
+function isNotFound(e: unknown): boolean {
+  return e instanceof Error && /^gmail 404 /.test(e.message);
 }

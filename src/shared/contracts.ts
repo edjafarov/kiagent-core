@@ -890,6 +890,8 @@ export interface SendIntent {
   outboundRef?: unknown;
   to?: string[];
   cc?: string[];
+  /** Blind copies — set when the user added them in the provider's draft. */
+  bcc?: string[];
   subject?: string;
   bodyMarkdown: string;
   threading?: Record<string, unknown>;

@@ -336,10 +336,10 @@ describe('gmail oauth profile', () => {
   });
 
   describe('scope', () => {
-    it('requests exactly readonly + send (pinned — scope drift must be loud)', () => {
+    it('requests exactly readonly + compose (pinned — scope drift must be loud)', () => {
       expect(GMAIL_SCOPES).toEqual([
         'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.send',
+        'https://www.googleapis.com/auth/gmail.compose',
       ]);
     });
 

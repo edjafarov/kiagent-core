@@ -14,14 +14,15 @@ import {
 
 /**
  * Gmail scopes requested at connect time. gmail.readonly matches legacy
- * (kiagent-ref src/main/connectors/gmail/oauth.ts GMAIL_SCOPES); gmail.send
- * was added for the unified outbound layer so KIAgent can send mail through
- * the same connected account. This port does not do the combined
+ * (kiagent-ref src/main/connectors/gmail/oauth.ts GMAIL_SCOPES); gmail.compose
+ * (which includes sending) lets KIAgent send through the same connected
+ * account and keep Outbox drafts as real Gmail drafts; grants from before
+ * it hold gmail.send, which still sends but cannot sync drafts. This port does not do the combined
  * identity+gmail single-consent flow the legacy app offered during sign-in.
  */
 export const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.compose',
 ];
 
 /**

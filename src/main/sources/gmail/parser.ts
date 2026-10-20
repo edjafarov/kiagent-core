@@ -65,6 +65,16 @@ export function plainTextOf(msg: GmailApiMessage): string {
   return html ? htmlToText(html) : '';
 }
 
+/** A message's first header of each name, lower-cased keys. */
+export function headersOf(msg: GmailApiMessage): Record<string, string> {
+  return msg.payload ? collectHeaders(msg.payload) : {};
+}
+
+/** An address-list header split into one entry per recipient. */
+export function splitAddressList(s: string | undefined): string[] {
+  return split(s);
+}
+
 export function parseGmailMessage(msg: GmailApiMessage): ParsedEmail {
   if (!msg.payload) throw new Error('no payload');
   const headers = collectHeaders(msg.payload);
