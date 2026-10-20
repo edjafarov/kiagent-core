@@ -4,6 +4,7 @@
 import http from 'http';
 import net from 'net';
 
+import { logMessageOf, withLogMessage } from '../../core/mcp/log-safe';
 import { OUTBOUND_TOOL_OPS } from '../../outbound/ops';
 import { createOutboundRoutes } from '../../outbound/routes';
 import type { OutboundService } from '../../outbound/service';
@@ -178,6 +179,20 @@ describe('outbound proxy ↔ the real /outbox/api dispatcher', () => {
     // is what stands between that call and a TypeError on the service side.
     await proxy.listOutbox(undefined as never);
     expect(calls.map((c) => c.args)).toEqual([{ limit: 5 }, {}]);
+  });
+
+  it('a refusal keeps its content-free log line across the wire', async () => {
+    const service = {
+      reviseDraft: async () => {
+        throw withLogMessage(new Error('changed\n\nsecret body'), 'changed');
+      },
+    } as unknown as OutboundService;
+    const proxy = createOutboundProxy(undefined, [await startRoutes(service)]);
+    const err = await proxy
+      .reviseDraft({ draftId: 'd', revision: 1, body: 'x' })
+      .catch((e: unknown) => e);
+    expect((err as Error).message).toContain('secret body');
+    expect(logMessageOf(err)).toBe('changed');
   });
 
   it('both sides agree on the op set — every OUTBOUND_TOOL_OPS entry dispatches, and the proxy uses no other', async () => {

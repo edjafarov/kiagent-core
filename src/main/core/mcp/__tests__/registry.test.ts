@@ -11,6 +11,7 @@ import {
   createToolRegistry,
   redactArgsForLog,
 } from '../registry';
+import { withLogMessage } from '../log-safe';
 import { currentClient } from '../transport-context';
 
 type ActivityRec = Omit<McpActivityRecord, 'transport'>;
@@ -244,6 +245,43 @@ describe('audit log redaction', () => {
       { args: Record<string, unknown> },
     ];
     expect(fields.args.body).toBe(`[redacted: ${body.length} chars]`);
+  });
+
+  it('a refusal carrying the draft text logs and feeds only its content-free line', async () => {
+    logSink.log.mockClear();
+    const secret = 'the confidential draft body';
+    const changed: McpTool = {
+      name: 'revise_draft',
+      description: '',
+      inputSchema: {},
+      call: async () => {
+        throw withLogMessage(
+          new Error(
+            `revise_draft: this draft changed — now revision 2.\n\n${secret}`,
+          ),
+          'revise_draft: this draft changed — now revision 2',
+        );
+      },
+    };
+    const activity: ActivityRec[] = [];
+    const { mcp, handlers } = capture();
+    attachToolHandlers(
+      mcp,
+      createToolRegistry([changed]),
+      logSink as never,
+      (r) => activity.push(r),
+    );
+    const out = (await handlers[1]({
+      params: {
+        name: 'revise_draft',
+        arguments: { draft_id: 'd', revision: 1 },
+      },
+    })) as { content: Array<{ text: string }> };
+    // the caller still gets the draft to show the user
+    expect(JSON.stringify(out)).toContain(secret);
+    expect(JSON.stringify(logSink.log.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(activity)).not.toContain(secret);
+    expect(JSON.stringify(logSink.log.mock.calls)).toContain('now revision 2');
   });
 
   it('the tool itself still receives the raw args (redaction is a log-only copy)', async () => {

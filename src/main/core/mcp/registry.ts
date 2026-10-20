@@ -21,6 +21,7 @@ import type { McpActivityRecord, McpTool } from '@shared/contracts';
 
 import type { LogSink } from '../engine/engine';
 import { summarizeCall } from './activity';
+import { logMessageOf } from './log-safe';
 import { runWithClient } from './transport-context';
 
 /** The live, mutable tool set. A plain Map so registerTool()/its disposer are
@@ -233,6 +234,6 @@ export async function invokeTool(
     return { ok: true, result };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return fail(message, message);
+    return fail(logMessageOf(err), message);
   }
 }

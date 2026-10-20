@@ -230,7 +230,7 @@ function compactArgs(args: Record<string, unknown>): string {
  * `ids`), get_related → GetRelatedSummary[], count → Array<{key, count}>. Unknown
  * (extension) tools fall back to name + compact args, no detail.
  *
- * draft_reply/draft_message/list_outbox are outbound-drafting tools
+ * draft_reply/draft_message/revise_draft/list_outbox are outbound-drafting tools
  * (core/mcp/tools/draft-*.ts, list-outbox.ts): their args/result carry real
  * email content — recipient addresses, subject, and body text (the result
  * even echoes `to`/`subject`/`body` back verbatim in 'link' confirm mode).
@@ -329,6 +329,15 @@ export function summarizeCall(
       return {
         summary: `Drafted a new message to ${count} recipient(s)${id}`,
       };
+    }
+    case 'revise_draft': {
+      const draftId = typeof args.draft_id === 'string' ? args.draft_id : '?';
+      const rev =
+        result != null &&
+        typeof (result as { revision?: unknown }).revision === 'number'
+          ? ` → revision ${(result as { revision: number }).revision}`
+          : '';
+      return { summary: `Revised draft ${draftId}${rev}` };
     }
     case 'list_outbox': {
       const rows = Array.isArray(result) ? result : [];

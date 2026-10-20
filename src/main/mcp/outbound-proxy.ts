@@ -6,11 +6,14 @@
  * draft creation fundamentally needs the app (confirm pages + senders live
  * there).
  */
+import { withLogMessage } from '../core/mcp/log-safe';
 import { PORT_CANDIDATES } from '../core/mcp/server';
 import type { OutboundToolOp } from '../outbound/ops';
 import type { OutboundToolApi } from '../outbound/service';
 
-type ApiResponse = { ok: true; result: unknown } | { ok: false; error: string };
+type ApiResponse =
+  | { ok: true; result: unknown }
+  | { ok: false; error: string; logMessage?: string };
 
 export function createOutboundProxy(
   fetchFn: typeof fetch = fetch,
@@ -67,7 +70,12 @@ export function createOutboundProxy(
       cachedPort = await probe();
       response = await post(cachedPort, { op, args });
     }
-    if (!response.ok) throw new Error(response.error);
+    if (!response.ok) {
+      const err = new Error(response.error);
+      throw response.logMessage
+        ? withLogMessage(err, response.logMessage)
+        : err;
+    }
     return response.result;
   };
 

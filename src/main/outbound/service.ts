@@ -19,6 +19,7 @@ import type {
   SourceDescriptor,
 } from '@shared/contracts';
 
+import { withLogMessage } from '../core/mcp/log-safe';
 import { currentClient, currentTransport } from '../core/mcp/transport-context';
 import type { LogSink } from '../core/engine/engine';
 import { snapshotOf } from '../core/store/outbox';
@@ -493,8 +494,9 @@ export function createOutboundService(deps: {
     row: OutboxRow,
   ): Error => {
     const d = draftFields(row);
+    const head = `${tool}: this draft changed${shown === null ? '' : ` since revision ${shown}`} — it is now revision ${row.revision}`;
     const lines = [
-      `${tool}: this draft changed${shown === null ? '' : ` since revision ${shown}`} — it is now revision ${row.revision}. Show the user the current draft before going on:`,
+      `${head}. Show the user the current draft before going on:`,
       `To: ${[row.recipientDisplay, ...row.cc].join(', ')}`,
       ...(row.bcc.length ? [`Bcc: ${row.bcc.join(', ')}`] : []),
       ...(row.subject ? [`Subject: ${row.subject}`] : []),
@@ -504,7 +506,8 @@ export function createOutboundService(deps: {
       '',
       row.bodyMarkdown,
     ];
-    return new Error(lines.join('\n'));
+    // The draft is for the caller; logs and the activity feed get the head.
+    return withLogMessage(new Error(lines.join('\n')), head);
   };
 
   const notPendingError = (tool: string, row: OutboxRow): Error =>

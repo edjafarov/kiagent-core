@@ -9,6 +9,7 @@ import type http from 'http';
 
 import type { OutboxRow } from '@shared/contracts';
 
+import { logMessageOf } from '../core/mcp/log-safe';
 import { shapeOutboundError } from './error-copy';
 import { isOutboundToolOp } from './ops';
 import { failedPage, resultPage, reviewPage } from './pages';
@@ -432,9 +433,12 @@ export function createOutboundRoutes(outbound: OutboundService): {
             // tearing down the connection can't race it.
             req.destroy();
           } else {
+            const error = err instanceof Error ? err.message : String(err);
+            const logMessage = logMessageOf(err);
             sendJson(res, {
               ok: false,
-              error: err instanceof Error ? err.message : String(err),
+              error,
+              ...(logMessage !== error ? { logMessage } : {}),
             });
           }
         }

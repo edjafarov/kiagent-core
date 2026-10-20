@@ -397,6 +397,25 @@ describe('summarizeCall', () => {
       expect(out.detail).toBeUndefined();
     });
 
+    it('revise_draft: draft id and new revision, no body or recipients', () => {
+      const out = summarizeCall(
+        'revise_draft',
+        {
+          draft_id: 'draft-7',
+          revision: 1,
+          body: SECRET_BODY,
+          to: [SECRET_ADDR],
+        },
+        {
+          draft_id: 'draft-7',
+          revision: 2,
+          body: SECRET_BODY,
+          to: [SECRET_ADDR],
+        },
+      );
+      expect(out).toEqual({ summary: 'Revised draft draft-7 → revision 2' });
+    });
+
     it('draft_reply: degrades gracefully with no document_id/result shape', () => {
       const out = summarizeCall('draft_reply', { body: SECRET_BODY }, null);
       expect(out.summary).toBe('Drafted a reply');
