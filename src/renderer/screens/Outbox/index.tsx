@@ -40,7 +40,17 @@ export function Outbox(): React.ReactElement {
   const descriptors = useSourceDescriptors();
   const sourceName = (id: string) => sourceLabel(id, descriptors);
   const { params, replaceParams } = useView();
-  const [open, setOpen] = useState<string | null>(params.draft ?? null);
+  const [open, setOpenId] = useState<string | null>(params.draft ?? null);
+  // Files a Draft again could not bring along, said once on the new draft.
+  const [openNote, setOpenNote] = useState<string | null>(null);
+  const setOpen = (id: string | null, notCarriedOver: string[] = []) => {
+    setOpenNote(
+      notCarriedOver.length
+        ? `Not carried over: ${notCarriedOver.join(', ')} (added in the mail app)`
+        : null,
+    );
+    setOpenId(id);
+  };
 
   useEffect(() => {
     if (!params.draft) return;
@@ -110,6 +120,7 @@ export function Outbox(): React.ReactElement {
         <ReviewSheet
           key={open}
           draftId={open}
+          note={openNote}
           sourceName={sourceName}
           onOpen={setOpen}
           onClose={() => setOpen(null)}

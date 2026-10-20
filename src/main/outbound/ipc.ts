@@ -20,11 +20,12 @@ import type {
   InvokeHandlers,
   OutboxDraftDetail,
   OutboxPanelRow,
+  OutboxReviseResult,
 } from '@shared/ipc';
 
 import type { CoreStore } from '../core/store/store';
 import { shapeOutboundError } from './error-copy';
-import type { OutboundService } from './service';
+import { originOf, type DraftRevision, type OutboundService } from './service';
 
 /** `baseFor()` throws this bare internal string when the loopback server
  *  never bound (service.ts:158-171). It must never reach a user's screen. */
@@ -133,6 +134,8 @@ export function outboundInvokeHandlers(deps: {
   store: CoreStore;
   /** `shell.openExternal` in production; injected so tests can observe it. */
   openExternal: (url: string) => Promise<void>;
+  /** The native multi-file open dialog; [] when cancelled. */
+  pickFiles?: () => Promise<string[]>;
 }): Pick<
   InvokeHandlers,
   | 'outbox:list'
@@ -145,8 +148,38 @@ export function outboundInvokeHandlers(deps: {
   | 'outbox:reopen'
   | 'outbox:sender-sources'
   | 'outbox:mirror-status'
+  | 'outbox:add-files'
+  | 'outbox:remove-files'
 > {
   const { service, store, openExternal } = deps;
+
+  const detailOf = async (row: OutboxRow): Promise<OutboxDraftDetail> => ({
+    ...panelRow(row, await store.account(row.accountId)),
+    body: row.bodyMarkdown,
+    attachments: row.attachments.map((a) => ({
+      filename: a.filename,
+      size: a.size,
+      origin: originOf(a, row.mirror?.provider),
+    })),
+  });
+
+  /** A review-sheet edit at the revision the sheet showed. */
+  const revise = async (
+    draftId: string,
+    revision: number,
+    patch: DraftRevision,
+  ): Promise<OutboxReviseResult> => {
+    try {
+      await service.reviseById(draftId, revision, patch);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!msg.includes('this draft changed')) throw e;
+      const row = await store.outbox.get(draftId);
+      return { detail: row ? await detailOf(row) : null, changed: true };
+    }
+    const row = await store.outbox.get(draftId);
+    return { detail: row ? await detailOf(row) : null, changed: false };
+  };
 
   return {
     // `req` is read defensively rather than destructured in the parameter
@@ -249,8 +282,14 @@ export function outboundInvokeHandlers(deps: {
       // redraft() calls assertReady() before its insert, so a cold base throws
       // here rather than leaving an orphan row. The fresh draft opens in the
       // app's review sheet (Airy §9), not the browser.
+      const old = await store.outbox.get(draftId);
       const fresh = await minting(() => service.redraft(draftId));
-      return { draftId: fresh.id };
+      return {
+        draftId: fresh.id,
+        notCarriedOver: (old?.attachments ?? [])
+          .filter((a) => !a.from)
+          .map((a) => a.filename),
+      };
     },
 
     'outbox:get': async ({ draftId }) => {
@@ -258,11 +297,7 @@ export function outboundInvokeHandlers(deps: {
       // The review sheet shows the provider's current draft (§5.3).
       const row = await service.refreshById(draftId);
       if (!row) return null;
-      const detail: OutboxDraftDetail = {
-        ...panelRow(row, await store.account(row.accountId)),
-        body: row.bodyMarkdown,
-      };
-      return detail;
+      return detailOf(row);
     },
 
     'outbox:send': async ({ draftId, revision }) => {
@@ -281,6 +316,17 @@ export function outboundInvokeHandlers(deps: {
     },
 
     'outbox:sender-sources': async () => service.senderSources(),
+
+    'outbox:add-files': async ({ draftId, revision }) => {
+      const paths = (await deps.pickFiles?.()) ?? [];
+      if (!paths.length) return { detail: null, changed: false };
+      return revise(draftId, revision, {
+        addAttachments: paths.map((path) => ({ path })),
+      });
+    },
+
+    'outbox:remove-files': ({ draftId, revision, filenames }) =>
+      revise(draftId, revision, { removeAttachments: filenames }),
 
     'outbox:mirror-status': async ({ accountId }) => {
       // The newest draft of this account that tried to mirror says whether

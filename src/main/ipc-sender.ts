@@ -17,6 +17,9 @@ export const SENDER_VALIDATED_CHANNELS = new Set([
   // app's own renderer may name a draft to send.
   'outbox:send',
   'outbox:reopen',
+  // A file the user picks is read off disk and attached with no path rule.
+  'outbox:add-files',
+  'outbox:remove-files',
 ]);
 
 export function guardIpcHandler<Req, Res>(

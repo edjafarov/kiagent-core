@@ -33,6 +33,12 @@ export function draftedBy(d: OutboxDraftDetail): string {
   return `${who} · ${formatRelativeCompact(d.createdAt)}`;
 }
 
+export function fileSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function errorText(e: unknown): string {
   return stripIpcWrapper(e instanceof Error ? e.message : String(e));
 }
@@ -50,7 +56,9 @@ export function ReviewSheet(props: {
   draftId: string;
   sourceName: (sourceId: string) => string;
   /** Opens another message (the fresh draft after Draft again). */
-  onOpen: (draftId: string) => void;
+  onOpen: (draftId: string, notCarriedOver?: string[]) => void;
+  /** Said once above the draft (what a Draft again left behind). */
+  note?: string | null;
   onClose: () => void;
 }): React.ReactElement {
   const { draftId } = props;
@@ -133,8 +141,31 @@ export function ReviewSheet(props: {
   const redraft = () =>
     act(async () => {
       const fresh = await window.kiagent.invoke('outbox:redraft', { draftId });
-      props.onOpen(fresh.draftId);
+      props.onOpen(fresh.draftId, fresh.notCarriedOver);
     });
+
+  // Files: the user's own picks (main opens the dialog) or a removal, at the
+  // revision this sheet shows — a draft that moved on is re-read instead.
+  const editFiles = (
+    run: () => Promise<{ detail: OutboxDraftDetail | null; changed: boolean }>,
+  ) =>
+    act(async () => {
+      const res = await run();
+      if (res.detail) setDetail(res.detail);
+      if (res.changed) setError('This draft changed — review it again.');
+    });
+  const addFiles = (revision: number) =>
+    editFiles(() =>
+      window.kiagent.invoke('outbox:add-files', { draftId, revision }),
+    );
+  const removeFile = (revision: number, filename: string) =>
+    editFiles(() =>
+      window.kiagent.invoke('outbox:remove-files', {
+        draftId,
+        revision,
+        filenames: [filename],
+      }),
+    );
 
   const openInBrowser = () =>
     act(() => window.kiagent.invoke('outbox:open-confirm', { draftId }));
@@ -252,6 +283,7 @@ export function ReviewSheet(props: {
       width={640}
       footer={footer}
     >
+      {props.note && <p className="ob-note">{props.note}</p>}
       <KeyValue items={items} />
       {word && (
         <div className="ob-state">
@@ -269,6 +301,38 @@ export function ReviewSheet(props: {
         </Disclosure>
       )}
       <div className="ob-body">{d.body}</div>
+      {(d.attachments.length > 0 || sendable) && (
+        <ul className="ob-files" aria-label="Attachments">
+          {d.attachments.map((a) => (
+            <li key={a.filename} className="ob-file">
+              <span className="ob-file-name">{a.filename}</span>
+              <span className="ob-file-meta">
+                {' '}
+                · {fileSize(a.size)} · {a.origin}
+              </span>
+              {sendable && (
+                <TextButton
+                  disabled={busy}
+                  aria-label={`Remove ${a.filename}`}
+                  onClick={() => void removeFile(d.revision, a.filename)}
+                >
+                  Remove
+                </TextButton>
+              )}
+            </li>
+          ))}
+          {sendable && (
+            <li>
+              <TextButton
+                disabled={busy}
+                onClick={() => void addFiles(d.revision)}
+              >
+                Add file…
+              </TextButton>
+            </li>
+          )}
+        </ul>
+      )}
       {error && <p className="ob-note is-err">{error}</p>}
       {sendable && (
         <p className="ob-note">Nothing is sent until you press Send.</p>

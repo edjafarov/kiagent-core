@@ -125,14 +125,18 @@ let listeners: Set<() => void>;
 const push = () => listeners.forEach((fn) => fn());
 let invoke: jest.Mock;
 let sendResult: { outcome: string; row: OutboxPanelRow | null };
+let files: OutboxDraftDetail['attachments'];
+let fileResult: { detail: OutboxDraftDetail | null; changed: boolean };
 
 function detail(id: string): OutboxDraftDetail | null {
   const fresh = row({ draftId: 'fresh', status: 'draft', createdVia: 'panel' });
   const r = [...rows, fresh].find((x) => x.draftId === id);
-  return r ? { ...r, body: `Full body of ${id}` } : null;
+  return r ? { ...r, body: `Full body of ${id}`, attachments: files } : null;
 }
 
 beforeEach(() => {
+  files = [];
+  fileResult = { detail: null, changed: false };
   jest.useFakeTimers({ now: NOW, doNotFake: ['queueMicrotask'] });
   rows = ROWS;
   listeners = new Set();
@@ -152,6 +156,9 @@ beforeEach(() => {
         return Promise.resolve({ draftId: 'fresh' });
       case 'outbox:get':
         return Promise.resolve(detail(payload.draftId));
+      case 'outbox:add-files':
+      case 'outbox:remove-files':
+        return Promise.resolve(fileResult);
       case 'outbox:send':
         return Promise.resolve(sendResult);
       case 'outbox:sender-sources':
@@ -534,6 +541,51 @@ test('review: a draft that is not synced says why', async () => {
     }),
   ];
   expect(await openReview('m2')).toHaveTextContent('Not synced: offline');
+});
+
+test('review: files list with size and origin; Remove and Add file go to main', async () => {
+  files = [
+    {
+      filename: 'Vertrag.pdf',
+      size: 2048,
+      origin: 'from ~/Documents/Vertrag.pdf',
+    },
+  ];
+  const s = await openReview('wait');
+  expect(
+    within(s).getByRole('list', { name: 'Attachments' }),
+  ).toHaveTextContent('Vertrag.pdf · 2 KB · from ~/Documents/Vertrag.pdf');
+  fileResult = {
+    detail: { ...detail('wait')!, attachments: [], revision: 2 },
+    changed: false,
+  };
+  await act(async () => {
+    fireEvent.click(
+      within(s).getByRole('button', { name: 'Remove Vertrag.pdf' }),
+    );
+  });
+  expect(invoke).toHaveBeenCalledWith('outbox:remove-files', {
+    draftId: 'wait',
+    revision: 1,
+    filenames: ['Vertrag.pdf'],
+  });
+  expect(within(s).queryByText('Vertrag.pdf')).toBeNull();
+  await act(async () => {
+    fireEvent.click(within(s).getByRole('button', { name: 'Add file…' }));
+  });
+  expect(invoke).toHaveBeenCalledWith('outbox:add-files', {
+    draftId: 'wait',
+    revision: 2,
+  });
+});
+
+test('review: a file edit on a draft that moved on says so', async () => {
+  const s = await openReview('wait');
+  fileResult = { detail: { ...detail('wait')!, revision: 3 }, changed: true };
+  await act(async () => {
+    fireEvent.click(within(s).getByRole('button', { name: 'Add file…' }));
+  });
+  expect(s).toHaveTextContent('This draft changed — review it again.');
 });
 
 test('review: a failure shows its technical details', async () => {

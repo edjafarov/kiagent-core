@@ -14,6 +14,7 @@ import { openDb, type AppDb } from '../../db/app-db';
 import { openStore, type CoreStore } from '../../core/store/store';
 import { outboundInvokeHandlers } from '../ipc';
 import { createOutboundService, type OutboundService } from '../service';
+import { createAttachments } from '../attachments';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -117,8 +118,9 @@ describe('outbound ipc delegate', () => {
   const tokenOf = (r: { confirm_url?: string }) =>
     r.confirm_url!.split('/outbox/confirm/')[1];
 
-  it('registers the ten outbox channels', () => {
+  it('registers the twelve outbox channels', () => {
     expect([...handlers.keys()].sort()).toEqual([
+      'outbox:add-files',
       'outbox:discard',
       'outbox:get',
       'outbox:list',
@@ -126,6 +128,7 @@ describe('outbound ipc delegate', () => {
       'outbox:open-confirm',
       'outbox:pending-count',
       'outbox:redraft',
+      'outbox:remove-files',
       'outbox:reopen',
       'outbox:send',
       'outbox:sender-sources',
@@ -764,6 +767,103 @@ describe('outbound ipc delegate', () => {
       expect(await invoke('outbox:mirror-status', { accountId: id })).toEqual({
         reconnect: true,
       });
+    });
+  });
+
+  describe('files from the review sheet', () => {
+    let picked: string[];
+    let other: string;
+    beforeEach(() => {
+      other = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-pick-'));
+      fs.writeFileSync(path.join(other, 'scan.pdf'), '%PDF-scan');
+      picked = [path.join(other, 'scan.pdf')];
+      service = createOutboundService({
+        store,
+        prefs: fakePrefs(),
+        senders: new Map<string, Sender>([['imap', { send: sendMock }]]),
+        attachments: createAttachments({
+          documentBytes: { fetchBytes: async () => null },
+        }),
+        logSink,
+      });
+      service.setBaseUrl('http://127.0.0.1:7421');
+      handlers = new Map(
+        Object.entries(
+          outboundInvokeHandlers({
+            service,
+            store,
+            openExternal: async () => {},
+            pickFiles: async () => picked,
+          }),
+        ) as Array<[string, Handler]>,
+      );
+    });
+    afterEach(() => fs.rmSync(other, { recursive: true, force: true }));
+
+    it('adds the files the user picked — anywhere — as a new revision, and removes them', async () => {
+      const r = await service.draftReply({ documentId: docId, body: 'Hi' });
+      const added = await invoke('outbox:add-files', {
+        draftId: r.draft_id,
+        revision: 1,
+      });
+      expect(added.changed).toBe(false);
+      expect(added.detail?.revision).toBe(2);
+      expect(added.detail?.attachments).toEqual([
+        {
+          filename: 'scan.pdf',
+          size: 9,
+          origin: `from ${path.join(other, 'scan.pdf')}`,
+        },
+      ]);
+      const removed = await invoke('outbox:remove-files', {
+        draftId: r.draft_id,
+        revision: 2,
+        filenames: ['scan.pdf'],
+      });
+      expect(removed.detail?.attachments).toEqual([]);
+      expect(removed.detail?.revision).toBe(3);
+    });
+
+    it('a cancelled dialog changes nothing', async () => {
+      const r = await service.draftReply({ documentId: docId, body: 'Hi' });
+      picked = [];
+      expect(
+        await invoke('outbox:add-files', { draftId: r.draft_id, revision: 1 }),
+      ).toEqual({ detail: null, changed: false });
+      expect((await store.outbox.get(r.draft_id))?.revision).toBe(1);
+    });
+
+    it('an edit at an old revision answers changed with the current draft', async () => {
+      const r = await service.draftReply({ documentId: docId, body: 'Hi' });
+      await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        body: 'Two',
+      });
+      const res = await invoke('outbox:add-files', {
+        draftId: r.draft_id,
+        revision: 1,
+      });
+      expect(res.changed).toBe(true);
+      expect(res.detail?.body).toBe('Two');
+      expect(res.detail?.attachments).toEqual([]);
+    });
+
+    it('Draft again names the files it could not bring along', async () => {
+      const r = await service.draftReply({ documentId: docId, body: 'Hi' });
+      await store.outbox.applyContent(r.draft_id, {
+        to: ['Alice <alice@example.com>'],
+        cc: [],
+        bcc: [],
+        subject: 'Re: Numbers',
+        bodyMarkdown: 'Hi',
+        attachments: [
+          { filename: 'from-gmail.png', mime: 'image/png', size: 4 },
+        ],
+      });
+      await service.discardById(r.draft_id);
+      const res = await invoke('outbox:redraft', { draftId: r.draft_id });
+      expect(res.notCarriedOver).toEqual(['from-gmail.png']);
     });
   });
 

@@ -320,6 +320,15 @@ export interface OutboxMirrorStatus {
 /** One draft in full, for the in-app review. */
 export interface OutboxDraftDetail extends OutboxPanelRow {
   body: string;
+  /** Each file: name, size in bytes, where it came from ("from ~/…"). */
+  attachments: { filename: string; size: number; origin: string }[];
+}
+
+/** What a review-sheet edit did: the draft as it now stands; `changed` =
+ *  it had moved on from the revision the sheet showed (nothing applied). */
+export interface OutboxReviseResult {
+  detail: OutboxDraftDetail | null;
+  changed: boolean;
 }
 
 /** What the in-app Send did, with the row as it now stands (its `error`
@@ -507,7 +516,23 @@ export interface Invokes {
   /** Discard a pending draft (no-op if it left 'draft' meanwhile). */
   'outbox:discard': { req: { draftId: string }; res: void };
   /** Duplicate a terminal row into a fresh draft (the app opens its review). */
-  'outbox:redraft': { req: { draftId: string }; res: { draftId: string } };
+  'outbox:redraft': {
+    req: { draftId: string };
+    /** `notCarriedOver`: files added in the mail app, which went with the
+     *  old provider draft. */
+    res: { draftId: string; notCarriedOver: string[] };
+  };
+  /** The review sheet's own file picker: the user's choice of files onto
+   *  the draft (main opens the dialog). `detail` null = cancelled. */
+  'outbox:add-files': {
+    req: { draftId: string; revision: number };
+    res: OutboxReviseResult;
+  };
+  /** Takes files off a draft, by filename. */
+  'outbox:remove-files': {
+    req: { draftId: string; revision: number; filenames: string[] };
+    res: OutboxReviseResult;
+  };
   /** Open the confirm page for a still-actionable row in the default
    *  browser (pending drafts, and retryable failures → "Try again"). */
   'outbox:open-confirm': { req: { draftId: string }; res: void };
@@ -765,6 +790,8 @@ const INVOKE_CHANNEL_MAP = {
   'outbox:reopen': 0,
   'outbox:sender-sources': 0,
   'outbox:mirror-status': 0,
+  'outbox:add-files': 0,
+  'outbox:remove-files': 0,
   'mcp:info': 0,
   'mcp:connect-client': 0,
   'mcp:disconnect-client': 0,

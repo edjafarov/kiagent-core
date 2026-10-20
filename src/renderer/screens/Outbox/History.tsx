@@ -53,7 +53,7 @@ export function History(props: {
   now: number;
   sourceName: (sourceId: string) => string;
   actions: Pick<OutboxData, 'busyId' | 'error' | 'run'>;
-  onOpen: (draftId: string) => void;
+  onOpen: (draftId: string, notCarriedOver?: string[]) => void;
 }): React.ReactElement {
   const { rows, now, actions } = props;
 
@@ -76,11 +76,13 @@ export function History(props: {
             disabled={busy}
             onClick={() =>
               void actions.run(r.draftId, async () => {
-                const { draftId } = await window.kiagent.invoke(
+                const { draftId, notCarriedOver } = await window.kiagent.invoke(
                   'outbox:redraft',
-                  { draftId: r.draftId },
+                  {
+                    draftId: r.draftId,
+                  },
                 );
-                props.onOpen(draftId);
+                props.onOpen(draftId, notCarriedOver);
               })
             }
           >

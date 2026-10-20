@@ -32,6 +32,8 @@ describe('trusted attention renderer sender', () => {
         'ext:invoke',
         'outbox:send',
         'outbox:reopen',
+        'outbox:add-files',
+        'outbox:remove-files',
       ]),
     );
   });

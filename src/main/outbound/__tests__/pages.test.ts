@@ -35,6 +35,34 @@ function baseRow(overrides: Partial<OutboxRow> = {}): OutboxRow {
 }
 
 describe('reviewPage', () => {
+  it('lists every file with its size and where it came from', () => {
+    const html = reviewPage(
+      baseRow({
+        mirror: {
+          ref: { accountId: 'acc-1' as AccountId, id: 'd1' },
+          provider: 'Gmail',
+        },
+        attachments: [
+          {
+            filename: 'Vertrag.pdf',
+            mime: 'application/pdf',
+            size: 2048,
+            from: { kind: 'document', documentId: 'doc1' },
+          },
+          { filename: 'logo<1>.png', mime: 'image/png', size: 10 },
+        ],
+      }),
+      { confirmPath: '/c', cancelPath: '/x' },
+    );
+    expect(html).toContain('class="ob-attachments"');
+    expect(html).toContain(
+      'Vertrag.pdf <span>· 2 KB · from your indexed documents</span>',
+    );
+    expect(html).toContain(
+      'logo&lt;1&gt;.png <span>· 10 B · added in Gmail</span>',
+    );
+  });
+
   it('says where the draft also lives, or why not', () => {
     const paths = { confirmPath: '/c', cancelPath: '/x' };
     const ref = { accountId: 'acc-1' as AccountId, id: 'd1' };

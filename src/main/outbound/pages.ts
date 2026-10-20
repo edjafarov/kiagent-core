@@ -9,6 +9,8 @@ import { loadShellCss } from '@shared/web-ui/loader-node';
 import type { ShellCss } from '@shared/web-ui/render-shell';
 import type { OutboxRow } from '@shared/contracts';
 
+import { originOf } from './service';
+
 import type { ShapedOutboundError } from './error-copy';
 
 const EMPTY_CSS: ShellCss = { tokens: '', components: '', shell: '' };
@@ -55,6 +57,9 @@ const OUTBOX_CSS = `
 .ob-to-name { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; color: var(--text-primary); }
 .ob-to-list { font-size: 12.5px; color: var(--text-secondary); overflow-wrap: anywhere; }
 .ob-mirror { font-size: 12px; color: var(--text-secondary); }
+.ob-attachments { list-style: none; margin: 0; padding: 0; font-size: 13px; color: var(--text-primary); }
+.ob-attachments li { overflow-wrap: anywhere; }
+.ob-attachments span { color: var(--text-secondary); }
 .ob-subject { font-size: 15px; font-weight: 600; color: var(--text-primary); }
 .ob-body { white-space: pre-wrap; font-family: inherit; font-size: 14px; line-height: 1.55;
   color: var(--text-primary); background: var(--bg-muted);
@@ -170,6 +175,24 @@ function recipientBlock(row: OutboxRow): string {
   </div>`;
 }
 
+function sizeText(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Every file that goes with the message: name, size, where it came from. */
+function attachmentList(row: OutboxRow): string {
+  if (!row.attachments.length) return '';
+  const items = row.attachments
+    .map(
+      (a) =>
+        `<li>${esc(a.filename)} <span>· ${esc(sizeText(a.size))} · ${esc(originOf(a, row.mirror?.provider))}</span></li>`,
+    )
+    .join('');
+  return `<ul class="ob-attachments" aria-label="Attachments">${items}</ul>`;
+}
+
 /** Where the draft lives besides Kia: "In Gmail Drafts", or why not. */
 export function mirrorNote(row: OutboxRow): string | null {
   const m = row.mirror;
@@ -193,6 +216,7 @@ export function reviewPage(
   ${mirrorNote(row) ? `<div class="ob-mirror">${esc(mirrorNote(row)!)}</div>` : ''}
   ${row.subject ? `<div class="ob-subject">${esc(row.subject)}</div>` : ''}
   <pre class="ob-body">${esc(row.bodyMarkdown)}</pre>
+  ${attachmentList(row)}
   <span class="ob-rev" hidden>${row.revision}</span>
   <div class="ob-actions">
     ${sendForm(p.confirmPath, 'Confirm & send')}

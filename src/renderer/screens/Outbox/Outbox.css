@@ -41,6 +41,28 @@
   white-space: pre-wrap;
   color: var(--text-primary);
 }
+.ob-files {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ob-file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ob-file-name {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.ob-file-meta {
+  color: var(--text-secondary);
+  flex: 1;
+  overflow-wrap: anywhere;
+}
 .ob-note {
   margin-top: 12px;
   color: var(--text-secondary);

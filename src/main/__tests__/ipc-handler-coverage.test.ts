@@ -112,6 +112,8 @@ describe('attention IPC composition', () => {
         'ext:invoke',
         'outbox:send',
         'outbox:reopen',
+        'outbox:add-files',
+        'outbox:remove-files',
       ]),
     );
   });

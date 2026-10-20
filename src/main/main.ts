@@ -839,6 +839,13 @@ function registerIpc(
       service: outbound,
       store: p.store,
       openExternal: (url) => shell.openExternal(url),
+      pickFiles: async () => {
+        const res = await dialog.showOpenDialog({
+          title: 'Attach files',
+          properties: ['openFile', 'multiSelections'],
+        });
+        return res.canceled ? [] : res.filePaths;
+      },
     }),
   };
 
