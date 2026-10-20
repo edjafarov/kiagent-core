@@ -79,6 +79,9 @@ export interface MirrorOps {
     row: OutboxRow,
     drafts: DraftMirror,
     intent?: SendIntent,
+    /** `readback: false` when an update follows at once (its own readback
+     *  then adopts the result). */
+    opts?: { readback?: boolean },
   ): Promise<OutboxRow>;
   /** read → adopt, or move the row to its terminal state. Throws when the
    *  provider can't be reached (the row is left as it was). */
@@ -166,7 +169,7 @@ export function createMirrorOps(deps: {
   };
 
   return {
-    async createLocked(row, drafts, intent) {
+    async createLocked(row, drafts, intent, opts = {}) {
       const started = deps.nowMs();
       const left = () => MIRROR_CREATE_DEADLINE_MS - (deps.nowMs() - started);
       const provider = providerLabel(await deps.sourceOf(row));
@@ -193,6 +196,7 @@ export function createMirrorOps(deps: {
       // The ref first: from here on the provider draft is the row's.
       await store.outbox.setMirror(row.id, { ref, provider });
       const mirrored = (await store.outbox.get(row.id)) ?? row;
+      if (opts.readback === false) return mirrored;
       try {
         return await readAdopt(
           mirrored,
@@ -228,7 +232,17 @@ export function createMirrorOps(deps: {
       // flight after the lock is released could overwrite a later edit, or
       // land between a confirm's read and its send. The provider calls are
       // bounded themselves (per-attempt timeouts; the extension RPC's 60 s).
-      const next = await drafts.update(ref, patch);
+      let next: DraftRef;
+      try {
+        next = await drafts.update(ref, patch);
+      } catch (e) {
+        // A provider may have applied part of it (Outlook: the text, then
+        // the files): show what it holds now before giving up.
+        await readAdopt(row, drafts, ref, MIRROR_CALL_DEADLINE_MS).catch(
+          () => undefined,
+        );
+        throw e;
+      }
       try {
         return await readAdopt(
           row,

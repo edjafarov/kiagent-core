@@ -53,7 +53,7 @@ describe('attachments', () => {
       filename: 'Vertrag.pdf',
       mime: 'application/pdf',
       size: 3,
-      from: { kind: 'document', documentId: 'doc1' },
+      from: { kind: 'document', documentId: 'doc1', sha: expect.any(String) },
     });
     expect(Buffer.from(r.bytes.contentBase64, 'base64')).toEqual(
       Buffer.from([1, 2, 3]),
@@ -73,7 +73,7 @@ describe('attachments', () => {
       filename: 'notes.txt',
       mime: 'text/plain',
       size: 5,
-      from: { kind: 'file', path: p },
+      from: { kind: 'file', path: p, sha: expect.any(String) },
     });
   });
 
@@ -149,6 +149,7 @@ describe('attachments', () => {
       kind: 'file',
       path: path.join(outside, 'other.txt'),
       picked: true,
+      sha: expect.any(String),
     });
     await expect(api().read(r.attachment)).resolves.toMatchObject({
       filename: 'other.txt',

@@ -559,7 +559,11 @@ export function createOutboundService(deps: {
    *  bookkeeping throw after a successful send, in 'sending' for the
    *  boot-time recovery sweep; see the comment on the send attempt below).
    *  `row` is the pre-CAS snapshot: nothing the CAS writes is read here. */
-  const executeSend = async (row: OutboxRow): Promise<ConfirmOutcome> => {
+  const executeSend = async (
+    row: OutboxRow,
+    /** Composed before the CAS (prepareSend); null for a mirrored row. */
+    intent: SendIntent | null,
+  ): Promise<ConfirmOutcome> => {
     const fail = async (message: string): Promise<ConfirmOutcome> => {
       // Store the classifier's short summary, never the raw error — the
       // page, list_outbox, and logs all read this column, and render-time
@@ -618,18 +622,6 @@ export function createOutboundService(deps: {
     const ref = row.mirror?.ref ?? null;
     if (ref && !sender.drafts)
       return fail('not sent: this account can no longer send its drafts');
-    let intent: SendIntent | null = null;
-    if (!ref) {
-      const why = row.attachments.length
-        ? attachRefusal(await sourceOf(row), false)
-        : null;
-      if (why) return fail(`not sent: ${why} — edit the draft to try again`);
-      try {
-        intent = await intentWithFiles(row);
-      } catch (e) {
-        return fail(`not sent: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
 
     // Only the send attempt itself is caught here. A throw from this
     // block is recorded as 'failed' and classified by shapeOutboundError:
@@ -711,20 +703,72 @@ export function createOutboundService(deps: {
   const mirrorNew = (
     row: OutboxRow,
     files: AttachmentBytes[] = [],
-  ): Promise<OutboxRow> =>
+  ): Promise<{ row: OutboxRow; warnings: string[] }> =>
     withDraft(row.id, async () => {
       const drafts = await draftsFor(row);
-      if (!drafts) return row;
+      if (!drafts) return { row, warnings: [] };
       let intent: SendIntent;
       try {
         intent = await intentWithFiles(row, files);
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
         await deps.store.outbox.setMirror(row.id, { ref: null, error });
-        return (await deps.store.outbox.get(row.id)) ?? row;
+        return {
+          row: (await deps.store.outbox.get(row.id)) ?? row,
+          warnings: [],
+        };
       }
-      return mirror.createLocked(row, drafts, intent);
+      return createWithFilesLocked(row, drafts, intent);
     });
+
+  /** The provider draft first, its files after (§5.2): the create stays
+   *  fast and inside its deadline whatever the files weigh, and the upload
+   *  runs as an update, awaited to the end. A failed upload leaves a synced
+   *  draft without those files, and says so — never a row whose files
+   *  nothing can send. */
+  const createWithFilesLocked = async (
+    row: OutboxRow,
+    drafts: DraftMirror,
+    intent: SendIntent,
+  ): Promise<{ row: OutboxRow; warnings: string[] }> => {
+    const files = intent.attachments ?? [];
+    const made = await mirror.createLocked(
+      row,
+      drafts,
+      { ...intent, attachments: undefined },
+      { readback: !files.length },
+    );
+    const label = providerLabel(await sourceOf(row));
+    if (!made.mirror?.ref)
+      return {
+        row: made,
+        warnings: files.length
+          ? [
+              `not synced to ${label} (${made.mirror?.error ?? 'unknown error'}), so its files can't be sent yet — edit the draft to try again, or remove the files`,
+            ]
+          : [],
+      };
+    if (!files.length) return { row: made, warnings: [] };
+    try {
+      return {
+        row: await mirror.updateLocked(
+          made,
+          drafts,
+          { attachments: files },
+          { ...snapshotOf(made), attachments: row.attachments },
+        ),
+        warnings: [],
+      };
+    } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      return {
+        row: (await deps.store.outbox.get(row.id)) ?? made,
+        warnings: [
+          `the files were not added to the ${label} draft (${why}) — add them again`,
+        ],
+      };
+    }
+  };
 
   /** The provider's current draft into the row (§5.3); a row that is not
    *  mirrored comes back as it is. Throws `couldn't reach <provider>`. */
@@ -861,6 +905,26 @@ export function createOutboundService(deps: {
     return intent;
   };
 
+  /** The send's intent with its files' bytes, or why it can't go: run
+   *  before the CAS, so a refusal leaves the row a draft. A mirrored row
+   *  needs none — it is sent as the provider's draft. */
+  const prepareSend = async (
+    row: OutboxRow,
+  ): Promise<{ intent: SendIntent | null } | { error: string }> => {
+    if (row.mirror?.ref) return { intent: null };
+    const why = row.attachments.length
+      ? attachRefusal(await sourceOf(row), false)
+      : null;
+    if (why) return { error: `not sent: ${why}` };
+    try {
+      return { intent: await intentWithFiles(row) };
+    } catch (e) {
+      return {
+        error: `not sent: ${e instanceof Error ? e.message : String(e)}`,
+      };
+    }
+  };
+
   /** Discard in Kia removes the provider draft too (§5.4). */
   const discardLocked = async (
     draftId: string,
@@ -914,6 +978,16 @@ export function createOutboundService(deps: {
     if (row.status !== 'draft') return { kind: 'already', row };
     if (revision === null || row.revision !== revision)
       return { kind: 'changed', row };
+    // What would refuse the send anyway refuses it here, with the row still
+    // a draft (nothing happened to it): a file gone or changed, files on a
+    // source that can't carry them.
+    const ready = await prepareSend(row);
+    if ('error' in ready)
+      return {
+        kind: 'failed',
+        row,
+        error: shapeOutboundError(ready.error).summary,
+      };
 
     // The atomicity primitive: only the caller that wins this UPDATE
     // proceeds to send. In-process callers are already serialized by the
@@ -928,7 +1002,7 @@ export function createOutboundService(deps: {
       return { kind: 'already', row: raced ?? row };
     }
 
-    return executeSend(row);
+    return executeSend(row, ready.intent);
   };
 
   const confirmRow = (draftId: string, revision: number | null) =>
@@ -1044,7 +1118,7 @@ export function createOutboundService(deps: {
           { draftId: row.id },
         );
         throw new Error(
-          `${tool}: couldn't reach ${label} — the draft was not changed; try again`,
+          `${tool}: couldn't update the ${label} draft (${e instanceof Error ? e.message : String(e)}) — it now shows what ${label} has; try again`,
         );
       }
     }
@@ -1054,8 +1128,10 @@ export function createOutboundService(deps: {
     if (drafts && !next.mirror?.ref) {
       const known = files.map((f) => f.bytes);
       const intent = await intentWithFiles(next, known).catch(() => null);
-      if (intent)
-        return toolResult(await mirror.createLocked(next, drafts, intent), []);
+      if (intent) {
+        const made = await createWithFilesLocked(next, drafts, intent);
+        return toolResult(made.row, made.warnings);
+      }
     }
     return toolResult(next, []);
   };
@@ -1178,13 +1254,11 @@ export function createOutboundService(deps: {
           attachments: fileList,
         });
       }
-      return toolResult(
-        await mirrorNew(
-          row,
-          files.map((f) => f.bytes),
-        ),
-        warnings,
+      const made = await mirrorNew(
+        row,
+        files.map((f) => f.bytes),
       );
+      return toolResult(made.row, [...warnings, ...made.warnings]);
     },
 
     async draftMessage({ accountId, to, subject, body, attachments }) {
@@ -1228,13 +1302,11 @@ export function createOutboundService(deps: {
         expiresAt: expiresAt(),
         attachments: files.map((f) => f.attachment),
       });
-      return toolResult(
-        await mirrorNew(
-          row,
-          files.map((f) => f.bytes),
-        ),
-        [],
+      const made = await mirrorNew(
+        row,
+        files.map((f) => f.bytes),
       );
+      return toolResult(made.row, made.warnings);
     },
 
     async listOutbox({ limit }) {
@@ -1563,7 +1635,7 @@ export function createOutboundService(deps: {
         // Files added in the mail app went with the removed provider draft.
         attachments: row.attachments.filter((a) => a.from),
       });
-      return mirrorNew(fresh);
+      return (await mirrorNew(fresh)).row;
     },
   };
 }

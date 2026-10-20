@@ -298,6 +298,57 @@ describe('gmail draft mirror', () => {
     ]);
   });
 
+  it('a .txt attached to an HTML-only draft is a file, never its text', async () => {
+    use(() =>
+      res(200, {
+        id: 'd1',
+        message: {
+          threadId: 't123',
+          payload: {
+            mimeType: 'multipart/mixed',
+            headers: [{ name: 'To', value: 'bob@example.com' }],
+            parts: [
+              { mimeType: 'text/html', body: { data: b64('<p>Real body</p>') } },
+              {
+                mimeType: 'text/plain',
+                filename: 'notes.txt',
+                headers: [
+                  {
+                    name: 'Content-Disposition',
+                    value: 'attachment; filename="notes.txt"',
+                  },
+                ],
+                body: { data: b64('attachment text'), size: 15 },
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const r = await drafts().read(ref());
+    expect(r.state === 'draft' && r.content.bodyText).toContain('Real body');
+    expect(r.state === 'draft' && r.content.bodyText).not.toContain(
+      'attachment text',
+    );
+  });
+
+  it('a draft whose text Gmail left out is refused, not adopted as empty', async () => {
+    use(() =>
+      res(200, {
+        id: 'd1',
+        message: {
+          threadId: 't123',
+          payload: {
+            mimeType: 'text/plain',
+            headers: [{ name: 'To', value: 'bob@example.com' }],
+            body: { attachmentId: 'big', size: 9_000_000 },
+          },
+        },
+      }),
+    );
+    await expect(drafts().read(ref())).rejects.toThrow(/too large to read/);
+  });
+
   it('read of an HTML-only draft gives its text', async () => {
     use(() =>
       res(200, {

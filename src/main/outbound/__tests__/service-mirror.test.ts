@@ -422,7 +422,9 @@ describe('outbound service — provider draft mirror', () => {
       };
       await expect(
         service.reviseDraft({ draftId: r.draft_id, revision: 1, body: 'x' }),
-      ).rejects.toThrow(/couldn't reach Gmail[\s\S]*not changed/);
+      ).rejects.toThrow(
+        /couldn't update the Gmail draft \(503\)[\s\S]*try again/,
+      );
       expect((await row(r.draft_id))?.revision).toBe(1);
     });
 
@@ -565,13 +567,15 @@ describe('outbound service — provider draft mirror', () => {
         attachments: [file('a.pdf')],
       });
 
-    it('a mirrored draft is created with the file bytes; every surface lists it', async () => {
+    it('a mirrored draft is created first, its files added after; every surface lists them', async () => {
       const r = await withFile();
+      expect(provider.created[0].attachments).toBeUndefined();
+      expect(provider.calls).toEqual(['create', 'update', 'read']);
+      const patch = provider.patches[0] as {
+        attachments: { contentBase64: string }[];
+      };
       expect(
-        Buffer.from(
-          provider.created[0].attachments![0].contentBase64,
-          'base64',
-        ).toString(),
+        Buffer.from(patch.attachments[0].contentBase64, 'base64').toString(),
       ).toBe('%PDF-a');
       expect(r.revision).toBe(1);
       expect(r.attachments).toEqual([
@@ -592,7 +596,7 @@ describe('outbound service — provider draft mirror', () => {
         removeAttachments: ['a.pdf'],
       });
       expect(v.revision).toBe(2);
-      expect(provider.patches[0]).toMatchObject({
+      expect(provider.patches[1]).toMatchObject({
         removeAttachments: ['a.pdf'],
         attachments: [{ filename: 'b.txt' }],
       });
@@ -601,6 +605,7 @@ describe('outbound service — provider draft mirror', () => {
       expect((await row(r.draft_id))?.attachments[0].from).toEqual({
         kind: 'file',
         path: path.join(home, 'b.txt'),
+        sha: expect.any(String),
       });
     });
 
@@ -631,11 +636,54 @@ describe('outbound service — provider draft mirror', () => {
       fs.rmSync(path.join(home, 'a.pdf'));
       fs.symlinkSync(path.join(home, '.ssh', 'id'), path.join(home, 'a.pdf'));
       const out = await service.sendById(r.draft_id, 1);
-      expect(out.kind).toBe('failed');
-      expect((await row(r.draft_id))?.error).toMatch(
-        /^not sent: attachment "a.pdf" can no longer be attached/,
-      );
+      expect(out).toMatchObject({
+        kind: 'failed',
+        error: expect.stringMatching(
+          /^not sent: attachment "a.pdf" (can no longer be attached|changed since it was added)/,
+        ),
+      });
+      expect((await row(r.draft_id))?.status).toBe('draft');
       expect(sendMock).not.toHaveBeenCalled();
+    });
+
+    it('a file upload that fails leaves a synced draft without it, and says so', async () => {
+      provider.updateImpl = async () => {
+        throw new Error('upload timed out');
+      };
+      const r = await withFile();
+      const got = await row(r.draft_id);
+      expect(got?.mirror?.ref?.id).toBe('d1');
+      expect(got?.attachments).toEqual([]);
+      expect(r.warnings.join(' ')).toMatch(
+        /files were not added to the Gmail draft \(upload timed out\) — add them again/,
+      );
+    });
+
+    it('a file whose bytes changed since it was added is not sent', async () => {
+      make(false);
+      const r = await withFile();
+      fs.writeFileSync(path.join(home, 'a.pdf'), '%PDF-X');
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out).toMatchObject({
+        kind: 'failed',
+        error:
+          'not sent: attachment "a.pdf" changed since it was added (~/a.pdf) — add it again',
+      });
+      expect(sendMock).not.toHaveBeenCalled();
+    });
+
+    it('re-adding the same path after its bytes changed is an edit', async () => {
+      make(false);
+      const r = await withFile();
+      fs.writeFileSync(path.join(home, 'a.pdf'), '%PDF-X');
+      const v = await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        removeAttachments: ['a.pdf'],
+        addAttachments: [file('a.pdf')],
+      });
+      expect(v.revision).toBe(2);
+      expect((await service.sendById(r.draft_id, 2)).kind).toBe('sent');
     });
 
     it('a duplicate name or an unknown removal is refused', async () => {
@@ -669,12 +717,15 @@ describe('outbound service — provider draft mirror', () => {
       const r = await withFile();
       fs.rmSync(path.join(home, 'a.pdf'));
       const out = await service.sendById(r.draft_id, 1);
-      expect(out.kind).toBe('failed');
-      const got = await row(r.draft_id);
-      expect(got?.error).toBe(
-        'not sent: attachment "a.pdf" is no longer available (~/a.pdf)',
-      );
-      expect(shapeOutboundError(got!.error!).canRetry).toBe(true);
+      expect(out).toMatchObject({
+        kind: 'failed',
+        error: 'not sent: attachment "a.pdf" is no longer available (~/a.pdf)',
+      });
+      expect(
+        shapeOutboundError((out as { error: string }).error).canRetry,
+      ).toBe(true);
+      // Nothing happened to it: still the draft, at its revision.
+      expect((await row(r.draft_id))?.status).toBe('draft');
       expect(sendMock).not.toHaveBeenCalled();
     });
 
@@ -726,11 +777,15 @@ describe('outbound service — provider draft mirror', () => {
         body: 'x',
         attachments: [file('a.pdf')],
       });
-      const out = await service.sendById(r.draft_id, 1);
-      expect(out.kind).toBe('failed');
-      expect((await row(r.draft_id))?.error).toBe(
-        'not sent: files need this draft synced to Outlook first — edit the draft to try again',
+      // Said at once, not only at Send.
+      expect(r.warnings.join(' ')).toMatch(
+        /not synced to Outlook \(offline\), so its files can't be sent yet/,
       );
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out).toMatchObject({
+        kind: 'failed',
+        error: 'not sent: files need this draft synced to Outlook first',
+      });
       expect(sendMock).not.toHaveBeenCalled();
     });
 

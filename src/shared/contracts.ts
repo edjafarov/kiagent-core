@@ -852,9 +852,9 @@ export interface OutboxAttachment {
   mime: string;
   size: number;
   from?:
-    | { kind: 'document'; documentId: string }
+    | { kind: 'document'; documentId: string; sha?: string }
     /** `picked`: the user chose it in the app (the path rule never applied). */
-    | { kind: 'file'; path: string; picked?: boolean };
+    | { kind: 'file'; path: string; picked?: boolean; sha?: string };
 }
 
 /** A provider draft (Gmail/Outlook). Carries the account so every

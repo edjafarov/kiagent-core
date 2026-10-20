@@ -136,7 +136,18 @@ function collectHeaders(p: GmailPart): Record<string, string> {
   return out;
 }
 
+/** A part that is a file, not the message's text: it has a name, or says
+ *  it is an attachment. A .txt attached to an HTML-only mail is not its body. */
+export function isFilePart(p: GmailPart): boolean {
+  if (p.filename) return true;
+  const cd =
+    p.headers?.find((h) => h.name.toLowerCase() === 'content-disposition')
+      ?.value ?? '';
+  return /^\s*attachment/i.test(cd);
+}
+
 function findBody(p: GmailPart, mt: string): string | null {
+  if (isFilePart(p)) return null;
   if (p.mimeType === mt && p.body?.data) {
     return Buffer.from(p.body.data, 'base64url').toString('utf-8');
   }

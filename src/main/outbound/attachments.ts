@@ -5,6 +5,7 @@
  * document or a local path — and its bytes are read from there when they are
  * written to the provider draft or sent.
  */
+import { createHash } from 'node:crypto';
 import { promises as fsp, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,6 +37,11 @@ export interface AttachmentsApi {
   /** Bytes from the origin, for a send or a provider write. */
   read(a: OutboxAttachment): Promise<AttachmentBytes>;
 }
+
+/** What the bytes were when the file was added: a file swapped for other
+ *  bytes is an edit, and a send never carries bytes nobody reviewed. */
+const shaOf = (b: Uint8Array) =>
+  createHash('sha256').update(b).digest('hex').slice(0, 32);
 
 const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)} MB`;
 
@@ -128,7 +134,11 @@ export function createAttachments(deps: {
             filename: got.filename,
             mime: got.mime,
             size,
-            from: { kind: 'document', documentId: input.document_id },
+            from: {
+              kind: 'document',
+              documentId: input.document_id,
+              sha: shaOf(got.bytes),
+            },
           },
           bytes: {
             filename: got.filename,
@@ -175,6 +185,7 @@ export function createAttachments(deps: {
             kind: 'file',
             path: p,
             ...(opts.userPicked ? { picked: true } : {}),
+            sha: shaOf(bytes),
           },
         },
         bytes: { filename, mime, contentBase64: bytes.toString('base64') },
@@ -193,14 +204,25 @@ export function createAttachments(deps: {
           })`,
         );
       if (!a.from) throw gone();
+      const changed = () =>
+        new Error(
+          `attachment "${a.filename}" changed since it was added (${
+            a.from?.kind === 'file' ? shown(a.from.path) : 'its document'
+          }) — add it again`,
+        );
+      const same = (b: Uint8Array) =>
+        b.byteLength === a.size && (!a.from?.sha || shaOf(b) === a.from.sha);
       if (a.from.kind === 'file') {
         // The rule again, on what the path points at NOW: a file or link
         // can be swapped after it was added.
         const p = a.from.path;
         let resolved: string;
+        let size: number;
         try {
           resolved = await fsp.realpath(p);
-          if (!(await fsp.stat(resolved)).isFile()) throw gone();
+          const st = await fsp.stat(resolved);
+          if (!st.isFile()) throw gone();
+          size = st.size;
         } catch {
           throw gone();
         }
@@ -212,7 +234,10 @@ export function createAttachments(deps: {
           throw new Error(
             `attachment "${a.filename}" can no longer be attached (${shown(p)}): ${why}`,
           );
+        // Before reading: a file that grew is never loaded whole.
+        if (size !== a.size) throw changed();
         const bytes = await readFile(resolved, a.filename);
+        if (!same(bytes)) throw changed();
         return {
           filename: a.filename,
           mime: a.mime,
@@ -223,6 +248,7 @@ export function createAttachments(deps: {
         .fetchBytes(a.from.documentId)
         .catch(() => null);
       if (!got) throw gone();
+      if (!same(got.bytes)) throw changed();
       return {
         filename: a.filename,
         mime: a.mime,

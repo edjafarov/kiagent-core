@@ -31,6 +31,7 @@ import {
 } from '../../sources/gmail/gmail-api';
 import {
   headersOf,
+  isFilePart,
   plainTextOf,
   splitAddressList,
   type GmailPart,
@@ -137,14 +138,26 @@ export function createGmailDrafts(deps: {
   };
 }
 
+/** True when Gmail left the text out of a `format=full` answer (a body part
+ *  stored by reference): adopting that would read as an emptied draft. */
+function bodyByReference(p: GmailPart | undefined): boolean {
+  if (!p || isFilePart(p)) return false;
+  if (/^text\/(plain|html)$/i.test(p.mimeType ?? '') && !p.body?.data)
+    return Boolean(p.body?.attachmentId);
+  return (p.parts ?? []).some(bodyByReference);
+}
+
 function contentOf(msg: Parameters<typeof plainTextOf>[0]): DraftContent {
+  const bodyText = plainTextOf(msg);
+  if (!bodyText && bodyByReference(msg.payload))
+    throw new Error('the Gmail draft text is too large to read');
   const h = headersOf(msg);
   return {
     to: splitAddressList(h.to),
     cc: splitAddressList(h.cc),
     bcc: splitAddressList(h.bcc),
     subject: h.subject ?? null,
-    bodyText: plainTextOf(msg),
+    bodyText,
     attachments: filesOf(msg.payload),
   };
 }
@@ -160,7 +173,8 @@ function filesOf(p: GmailPart | undefined): DraftContent['attachments'] {
     const header = (name: string) =>
       part.headers?.find((h) => h.name.toLowerCase() === name)?.value ?? '';
     const cd = header('content-disposition');
-    const named = /filename="?([^";]+)"?/i.exec(cd)?.[1] ?? part.filename;
+    // Gmail's own (decoded) name first; the header only as a fallback.
+    const named = part.filename || /filename="?([^";]+)"?/i.exec(cd)?.[1];
     const inBody = /^\s*inline/i.test(cd) && header('content-id') !== '';
     if (named && !inBody)
       out.push({
