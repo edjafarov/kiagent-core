@@ -239,7 +239,7 @@ describe('gmail draft mirror', () => {
     });
   });
 
-  it('read lists text files added in Gmail, not inline images', async () => {
+  it('read lists text files and inline files added in Gmail, not body images', async () => {
     use(() =>
       res(200, {
         id: 'd1',
@@ -269,8 +269,22 @@ describe('gmail draft mirror', () => {
                     name: 'Content-Disposition',
                     value: 'inline; filename="logo.png"',
                   },
+                  { name: 'Content-ID', value: '<logo@x>' },
                 ],
                 body: { attachmentId: 'a2', size: 9 },
+              },
+              {
+                // Apple Mail's inline PDF: no Content-ID, so not in the
+                // body — a file that will be sent.
+                mimeType: 'application/pdf',
+                filename: 'scan.pdf',
+                headers: [
+                  {
+                    name: 'Content-Disposition',
+                    value: 'inline; filename="scan.pdf"',
+                  },
+                ],
+                body: { attachmentId: 'a3', size: 40 },
               },
             ],
           },
@@ -280,6 +294,7 @@ describe('gmail draft mirror', () => {
     const r = await drafts().read(ref());
     expect(r.state === 'draft' && r.content.attachments).toEqual([
       { filename: 'notes.txt', mime: 'text/plain', size: 3 },
+      { filename: 'scan.pdf', mime: 'application/pdf', size: 40 },
     ]);
   });
 

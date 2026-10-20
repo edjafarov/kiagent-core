@@ -128,8 +128,11 @@ function gonePage(row: OutboxRow, token: string): string {
   if (row.status === 'delivery_unknown')
     return resultPage(
       'Delivery uncertain',
-      'The app closed while this message was being sent — it MAY have gone ' +
-        'out. Check your Sent folder before creating a new draft.',
+      // A mirrored draft that left the mail app's Drafts says so itself.
+      row.error?.startsWith('No longer in Drafts')
+        ? `${row.error}.`
+        : 'The app closed while this message was being sent — it MAY have gone ' +
+            'out. Check your Sent folder before creating a new draft.',
       { icon: 'warn' },
     );
   if (row.status === 'expired')
@@ -221,6 +224,14 @@ async function postConfirm(
           `Sent to ${out.row.recipientDisplay}${sentWhen(out.row)}.`,
           { icon: 'success', footNote: 'You can close this page.' },
         ),
+      };
+    if (out.kind === 'failed' && out.row.status === 'draft')
+      return {
+        status: 503,
+        html: resultPage('Not sent', shapeOutboundError(out.error).message, {
+          icon: 'warn',
+          footNote: 'Reload this page to send it again.',
+        }),
       };
     return { status: 200, html: gonePage(out.row, token) };
   } catch {

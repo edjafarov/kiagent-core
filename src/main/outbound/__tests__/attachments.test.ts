@@ -23,7 +23,12 @@ describe('attachments', () => {
         : null,
     ),
   };
-  const api = () => createAttachments({ documentBytes: docs, home });
+  const api = () =>
+    createAttachments({
+      documentBytes: docs,
+      home,
+      blocked: [path.join(home, 'KIAgent')],
+    });
   const local = { transport: 'local' as const };
 
   beforeEach(() => {
@@ -80,6 +85,18 @@ describe('attachments', () => {
       /\. or \.\. segments/,
     ],
     ['~/Library', () => path.join(home, 'Library', 'secret.db'), /Library/],
+    ['a dotfile', () => path.join(home, '.netrc'), /hidden files/],
+    [
+      'a dot-folder',
+      () => path.join(home, '.ssh', 'id_ed25519'),
+      /hidden files/,
+    ],
+    ['~/AppData', () => path.join(home, 'AppData', 'x.db'), /AppData/],
+    [
+      'the app data folder',
+      () => path.join(home, 'KIAgent', 'kia.db'),
+      /app's own data/,
+    ],
     ['outside home', () => path.join(outside, 'other.txt'), /home folder/],
     ['a folder', () => path.join(home, 'Documents'), /not a file/],
     ['a missing file', () => path.join(home, 'nope.txt'), /no such file/],
@@ -121,6 +138,31 @@ describe('attachments', () => {
         { filename: 'b', mime: 'x', size: 1 },
       ]),
     ).toThrow(/attachments are 18\.0 MB — the limit is 18\.0 MB/);
+  });
+
+  it('a picked file is marked so a later read keeps it', async () => {
+    const r = await api().resolve(
+      { path: path.join(outside, 'other.txt') },
+      { transport: 'local', userPicked: true },
+    );
+    expect(r.attachment.from).toEqual({
+      kind: 'file',
+      path: path.join(outside, 'other.txt'),
+      picked: true,
+    });
+    await expect(api().read(r.attachment)).resolves.toMatchObject({
+      filename: 'other.txt',
+    });
+  });
+
+  it('read applies the rule again to what the path points at now', async () => {
+    const p = path.join(home, 'Documents', 'notes.txt');
+    const { attachment } = await api().resolve({ path: p }, local);
+    fs.rmSync(p);
+    fs.symlinkSync(path.join(outside, 'other.txt'), p);
+    await expect(api().read(attachment)).rejects.toThrow(
+      /can no longer be attached \(~\/Documents\/notes.txt\): only files inside your home folder/,
+    );
   });
 
   it('read names a file that has gone missing', async () => {

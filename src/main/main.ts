@@ -1051,7 +1051,10 @@ app
     });
     const outbound = createOutboundService({
       store: p.store,
-      attachments: createAttachments({ documentBytes }),
+      attachments: createAttachments({
+        documentBytes,
+        blocked: [app.getPath('userData')],
+      }),
       prefs: p.prefs,
       senders: senderLookup,
       descriptorFor: (id) => p.sources.get(id)?.descriptor,

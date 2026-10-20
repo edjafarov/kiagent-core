@@ -719,6 +719,51 @@ describe('outbox routes — honest errors and terminal statuses (unit, fake serv
     expect(body()).toMatch(/sent folder|may have|unknown/i);
   });
 
+  it('a mail app unreachable before the send says nothing was sent, the draft still there', async () => {
+    const routes = createOutboundRoutes(
+      fakeService({
+        confirmByToken: async () => ({
+          kind: 'failed',
+          row: baseRow(),
+          error: "not sent: couldn't reach Gmail — try again",
+        }),
+      }),
+    );
+    const { res, status, body } = fakeRes();
+    await routes.handle(
+      fakeReq('POST'),
+      res,
+      new URL('http://x/outbox/confirm/tok/1'),
+    );
+    expect(status()).toBe(503);
+    expect(body()).toMatch(/NOT sent/);
+    expect(body()).toMatch(/Reload this page/);
+    expect(body()).not.toMatch(/In progress/);
+  });
+
+  it('a mirrored draft that left Drafts says so on its page', async () => {
+    const routes = createOutboundRoutes(
+      fakeService({
+        peekByToken: async () => ({
+          kind: 'gone',
+          row: baseRow({
+            status: 'delivery_unknown',
+            error:
+              'No longer in Drafts — sent from Gmail or deleted there; check Sent',
+          }),
+        }),
+      }),
+    );
+    const { res, body } = fakeRes();
+    await routes.handle(
+      fakeReq('GET'),
+      res,
+      new URL('http://x/outbox/confirm/tok'),
+    );
+    expect(body()).toMatch(/No longer in Drafts/);
+    expect(body()).not.toMatch(/The app closed/);
+  });
+
   it('an unexpected throw from cancelByToken renders unknown-state, never claims cancellation', async () => {
     const routes = createOutboundRoutes(
       fakeService({

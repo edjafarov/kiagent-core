@@ -312,6 +312,9 @@ export function outboundInvokeHandlers(deps: {
       return {
         outcome: kind,
         row: panelRow(outcome.row, await store.account(outcome.row.accountId)),
+        ...(outcome.kind === 'failed' && outcome.row.status === 'draft'
+          ? { error: outcome.error }
+          : {}),
       };
     },
 

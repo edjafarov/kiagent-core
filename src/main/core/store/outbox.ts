@@ -51,7 +51,8 @@ const lowerAll = (xs: string[]) => xs.map((x) => x.trim().toLowerCase());
 
 /** The comparison key of a draft's reviewable content (spec §4.1): trimmed,
  *  CRLF → LF, trailing whitespace stripped per line, addresses lower-cased,
- *  attachments as a set of filename + size. */
+ *  attachments as a set of filename + size + where Kia got it (a file
+ *  swapped for another of the same name and size is still a change). */
 export function normalizeSnapshot(s: DraftSnapshot): string {
   const body = s.bodyMarkdown
     .replace(/\r\n/g, '\n')
@@ -65,7 +66,9 @@ export function normalizeSnapshot(s: DraftSnapshot): string {
     lowerAll(s.bcc),
     s.subject?.trim() ?? null,
     body,
-    s.attachments.map((a) => [a.filename, a.size]).sort(),
+    s.attachments
+      .map((a) => JSON.stringify([a.filename, a.size, a.from ?? null]))
+      .sort(),
   ]);
 }
 

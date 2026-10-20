@@ -73,6 +73,7 @@ async function postToken(
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), TOKEN_TIMEOUT_MS);
   let res: Response;
+  let body: GoogleTokenResponse;
   try {
     res = await fetch(TOKEN_ENDPOINT, {
       method: 'POST',
@@ -80,10 +81,11 @@ async function postToken(
       body: new URLSearchParams(params).toString(),
       signal: abort.signal,
     });
+    // The body too: a stalled one would hang the refresh just the same.
+    body = (await res.json()) as GoogleTokenResponse;
   } finally {
     clearTimeout(timer);
   }
-  const body = (await res.json()) as GoogleTokenResponse;
   if (!res.ok || body.error) {
     const message = `gmail oauth token request failed: ${body.error ?? res.status}${body.error_description ? ` — ${body.error_description}` : ''}`;
     // invalid_grant = the refresh token itself is revoked/expired — retrying

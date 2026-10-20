@@ -220,6 +220,21 @@ describe('outbound service — provider draft mirror', () => {
       });
     });
 
+    it('a create that lands after the deadline is removed again', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+      let land: (r: DraftRef) => void = () => {};
+      provider.createImpl = () =>
+        new Promise((resolve) => {
+          land = resolve;
+        });
+      const pending = draft();
+      await jest.advanceTimersByTimeAsync(20_001);
+      await pending;
+      land({ accountId, id: 'late' });
+      await jest.advanceTimersByTimeAsync(0);
+      expect(provider.calls).toContain('remove');
+    });
+
     it('a new draft that reads back as missing stays a pending, synced draft', async () => {
       provider.readImpl = async () => ({ state: 'gone' });
       const r = await draft();
@@ -338,6 +353,16 @@ describe('outbound service — provider draft mirror', () => {
       expect(provider.calls.filter((c) => c === 'read')).toHaveLength(1);
     });
 
+    it('a review refresh never waits out a long write on the lock', async () => {
+      const r = await draft();
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+      provider.updateImpl = () => new Promise(() => {});
+      void service.reviseDraft({ draftId: r.draft_id, revision: 1, body: 'x' });
+      const pending = service.refreshById(r.draft_id);
+      await jest.advanceTimersByTimeAsync(20_001);
+      expect((await pending)?.revision).toBe(1);
+    });
+
     it('listing and review surfaces never retry a failed create', async () => {
       provider.createImpl = async () => {
         throw new Error('offline');
@@ -437,23 +462,28 @@ describe('outbound service — provider draft mirror', () => {
       expect(provider.calls).not.toContain('send');
     });
 
-    it('an unreachable provider refuses the send, provably unsent', async () => {
+    it('an unreachable provider refuses the send, provably unsent; the row stays a draft', async () => {
       const r = await draft();
       provider.readImpl = async () => {
         throw new Error('ETIMEDOUT');
       };
       const out = await service.sendById(r.draft_id, 1);
-      expect(out.kind).toBe('failed');
+      expect(out).toMatchObject({
+        kind: 'failed',
+        error: "not sent: couldn't reach Gmail — try again",
+      });
+      expect(
+        shapeOutboundError((out as { error: string }).error).canRetry,
+      ).toBe(true);
       const got = await row(r.draft_id);
-      expect(got?.status).toBe('failed');
-      expect(got?.error).toBe("not sent: couldn't reach Gmail — try again");
-      expect(shapeOutboundError(got!.error!).canRetry).toBe(true);
+      expect(got?.status).toBe('draft');
+      expect(got?.revision).toBe(1);
       expect(provider.calls).not.toContain('send');
       expect(sendMock).not.toHaveBeenCalled();
-      // Try again keeps the same provider draft.
+      // Send again once it is back: same revision, same provider draft.
       provider.readImpl = null;
-      const back = await service.reopenById(r.draft_id);
-      expect(back?.mirror?.ref?.id).toBe('d1');
+      expect((await service.sendById(r.draft_id, 1)).kind).toBe('sent');
+      expect(provider.calls).toContain('send');
     });
 
     it('an Outbox-only row sends as today and never tries the create', async () => {
@@ -572,6 +602,40 @@ describe('outbound service — provider draft mirror', () => {
         kind: 'file',
         path: path.join(home, 'b.txt'),
       });
+    });
+
+    it('swapping a file for another of the same name and size is still an edit', async () => {
+      make(false);
+      fs.mkdirSync(path.join(home, 'v2'));
+      fs.writeFileSync(path.join(home, 'v2', 'a.pdf'), '%PDF-b');
+      const r = await withFile();
+      const v = await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        removeAttachments: ['a.pdf'],
+        addAttachments: [file('v2/a.pdf')],
+      });
+      expect(v.revision).toBe(2);
+      await service.sendById(r.draft_id, 2);
+      const intent = sendMock.mock.calls[0][0] as SendIntent;
+      expect(
+        Buffer.from(intent.attachments![0].contentBase64, 'base64').toString(),
+      ).toBe('%PDF-b');
+    });
+
+    it('a file swapped for a link out of bounds after it was added is not sent', async () => {
+      make(false);
+      const r = await withFile();
+      fs.mkdirSync(path.join(home, '.ssh'));
+      fs.writeFileSync(path.join(home, '.ssh', 'id'), 'KEY');
+      fs.rmSync(path.join(home, 'a.pdf'));
+      fs.symlinkSync(path.join(home, '.ssh', 'id'), path.join(home, 'a.pdf'));
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out.kind).toBe('failed');
+      expect((await row(r.draft_id))?.error).toMatch(
+        /^not sent: attachment "a.pdf" can no longer be attached/,
+      );
+      expect(sendMock).not.toHaveBeenCalled();
     });
 
     it('a duplicate name or an unknown removal is refused', async () => {

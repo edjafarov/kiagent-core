@@ -853,7 +853,8 @@ export interface OutboxAttachment {
   size: number;
   from?:
     | { kind: 'document'; documentId: string }
-    | { kind: 'file'; path: string };
+    /** `picked`: the user chose it in the app (the path rule never applied). */
+    | { kind: 'file'; path: string; picked?: boolean };
 }
 
 /** A provider draft (Gmail/Outlook). Carries the account so every

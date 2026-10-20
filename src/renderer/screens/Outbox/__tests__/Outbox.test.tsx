@@ -124,7 +124,11 @@ let rows: OutboxPanelRow[];
 let listeners: Set<() => void>;
 const push = () => listeners.forEach((fn) => fn());
 let invoke: jest.Mock;
-let sendResult: { outcome: string; row: OutboxPanelRow | null };
+let sendResult: {
+  outcome: string;
+  row: OutboxPanelRow | null;
+  error?: string;
+};
 let files: OutboxDraftDetail['attachments'];
 let fileResult: { detail: OutboxDraftDetail | null; changed: boolean };
 
@@ -473,6 +477,23 @@ test('review: a failed send stays open with the reason; Send stays only if it ne
   await act(async () => {});
   expect(sheet()).toHaveTextContent('Slack refused it');
   expect(within(sheet()).queryByRole('button', { name: 'Send' })).toBeNull();
+});
+
+test('review: a mail app out of reach before the send keeps the draft and Send', async () => {
+  sendResult = {
+    outcome: 'failed',
+    row: row({ draftId: 'wait', status: 'draft' }),
+    error: "not sent: couldn't reach Gmail — try again",
+  };
+  const s = await openReview('wait');
+  fireEvent.click(within(s).getByRole('button', { name: 'Send' }));
+  await act(async () => {});
+  expect(sheet()).toHaveTextContent(
+    "Not sent — couldn't reach Gmail — try again",
+  );
+  expect(
+    within(sheet()).getByRole('button', { name: 'Send' }),
+  ).toBeInTheDocument();
 });
 
 test('review: Open in browser uses the signed page', async () => {

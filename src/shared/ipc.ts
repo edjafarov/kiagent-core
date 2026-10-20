@@ -339,6 +339,9 @@ export interface OutboxSendResult {
    *  `row` is the current one; review it again. */
   outcome: 'sent' | 'failed' | 'already' | 'gone' | 'changed';
   row: OutboxPanelRow | null;
+  /** `failed` while the row is still a draft (the mail app couldn't be
+   *  reached before sending): why — nothing was sent. */
+  error?: string;
 }
 
 /** invoke(channel, payload) → response. */

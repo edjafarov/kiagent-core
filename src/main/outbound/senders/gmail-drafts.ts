@@ -150,17 +150,19 @@ function contentOf(msg: Parameters<typeof plainTextOf>[0]): DraftContent {
 }
 
 /** Every part the message carries as a file — whatever its type, so a
- *  .txt or .html added in Gmail is reviewed like any other. Inline images
- *  stay part of the body. */
+ *  .txt or .html added in Gmail is reviewed like any other. Inline parts
+ *  the body refers to (a Content-ID) stay part of the body; an inline part
+ *  without one (Apple Mail's inline PDF) is a file that will be sent. */
 function filesOf(p: GmailPart | undefined): DraftContent['attachments'] {
   if (!p) return [];
   const out: DraftContent['attachments'] = [];
   const walk = (part: GmailPart) => {
-    const cd =
-      part.headers?.find((h) => h.name.toLowerCase() === 'content-disposition')
-        ?.value ?? '';
+    const header = (name: string) =>
+      part.headers?.find((h) => h.name.toLowerCase() === name)?.value ?? '';
+    const cd = header('content-disposition');
     const named = /filename="?([^";]+)"?/i.exec(cd)?.[1] ?? part.filename;
-    if (named && !/^\s*inline/i.test(cd))
+    const inBody = /^\s*inline/i.test(cd) && header('content-id') !== '';
+    if (named && !inBody)
       out.push({
         filename: named,
         mime: part.mimeType || 'application/octet-stream',
@@ -192,7 +194,8 @@ async function rebuild(raw: Buffer, patch: DraftPatch): Promise<Buffer> {
   const kept: Mail.Attachment[] = m.attachments
     .filter(
       (a) =>
-        a.contentDisposition === 'inline' || !removed.has(a.filename ?? ''),
+        (a.contentDisposition === 'inline' && Boolean(a.cid)) ||
+        !removed.has(a.filename ?? ''),
     )
     .map((a) => ({
       filename: a.filename,

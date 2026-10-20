@@ -110,6 +110,14 @@ export function ReviewSheet(props: {
         setError('This draft changed — review it again.');
         return;
       }
+      if (res.outcome === 'failed' && res.row?.status === 'draft') {
+        // Couldn't reach the mail app first: nothing was sent and the draft
+        // is as it was — Send again when it's back.
+        setError(
+          `Not sent — ${(res.error ?? 'try again').replace(/^not sent:\s*/, '')}`,
+        );
+        return;
+      }
       if (
         res.outcome === 'failed' &&
         res.row &&

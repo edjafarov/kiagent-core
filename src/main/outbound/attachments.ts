@@ -59,31 +59,48 @@ export function checkAttachments(list: OutboxAttachment[]): void {
 }
 
 /** Where a model may read a file from: an absolute path inside the home
- *  folder, no `.`/`..` segments, outside ~/Library. Checked on the path as
- *  given and again once symlinks are resolved. */
-function pathRefusal(p: string, home: string): string | null {
+ *  folder, no segment starting with `.` (`..`, and the dotfiles and
+ *  dot-folders where keys and tokens live: ~/.ssh, ~/.aws, ~/.config…),
+ *  outside ~/Library and ~/AppData (app data, this app's own profile among
+ *  it) and outside the app's own data folder. Checked on the path as given
+ *  and again once symlinks are resolved — at add time and at every read. */
+function pathRefusal(
+  p: string,
+  home: string,
+  blocked: string[],
+): string | null {
   if (!path.isAbsolute(p)) return 'the path must be absolute';
-  if (p.split(/[\\/]+/).some((s) => s === '.' || s === '..'))
-    return 'the path must not contain . or .. segments';
   const rel = path.relative(home, p);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel))
     return 'only files inside your home folder can be attached';
-  const top = rel.split(path.sep)[0];
-  if (top === 'Library') return 'files under ~/Library cannot be attached';
+  if (p.split(/[\\/]+/).some((s) => s === '.' || s === '..'))
+    return 'the path must not contain . or .. segments';
+  const segments = rel.split(/[\\/]+/);
+  if (segments.some((s) => s.startsWith('.')))
+    return 'hidden files and folders (names starting with .) cannot be attached';
+  if (/^(Library|AppData)$/i.test(segments[0]))
+    return `files under ~/${segments[0]} cannot be attached`;
+  if (blocked.some((b) => p === b || p.startsWith(b + path.sep)))
+    return "the app's own data cannot be attached";
   return null;
 }
 
 export function createAttachments(deps: {
   documentBytes: DocumentBytesApi;
   home?: string;
+  /** Folders never attached by path (the app's own data folder). */
+  blocked?: string[];
 }): AttachmentsApi {
   const home = deps.home ?? os.homedir();
-  let homeReal = home;
-  try {
-    homeReal = realpathSync(home);
-  } catch {
-    // keep the given one
-  }
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  const homeReal = real(home);
+  const blocked = (deps.blocked ?? []).flatMap((b) => [b, real(b)]);
   const shown = (p: string) =>
     p.startsWith(home + path.sep) ? `~${p.slice(home.length)}` : p;
 
@@ -126,19 +143,19 @@ export function createAttachments(deps: {
           throw new Error(
             'files from this computer can only be attached by an app on it — attach an indexed document (document_id) instead',
           );
-        const why = pathRefusal(p, home);
+        const why = pathRefusal(p, home, blocked);
         if (why) throw new Error(`cannot attach ${p}: ${why}`);
       }
-      let real: string;
+      let resolved: string;
       let stat: Awaited<ReturnType<typeof fsp.stat>>;
       try {
-        real = await fsp.realpath(p);
-        stat = await fsp.stat(real);
+        resolved = await fsp.realpath(p);
+        stat = await fsp.stat(resolved);
       } catch {
         throw new Error(`cannot attach ${p}: no such file`);
       }
       if (!opts.userPicked) {
-        const why = pathRefusal(real, homeReal);
+        const why = pathRefusal(resolved, homeReal, blocked);
         if (why) throw new Error(`cannot attach ${p}: ${why}`);
       }
       if (!stat.isFile()) throw new Error(`cannot attach ${p}: not a file`);
@@ -148,13 +165,17 @@ export function createAttachments(deps: {
         );
       const filename = path.basename(p);
       const mime = mimeOf(filename);
-      const bytes = await readFile(real, filename);
+      const bytes = await readFile(resolved, filename);
       return {
         attachment: {
           filename,
           mime,
           size: bytes.byteLength,
-          from: { kind: 'file', path: p },
+          from: {
+            kind: 'file',
+            path: p,
+            ...(opts.userPicked ? { picked: true } : {}),
+          },
         },
         bytes: { filename, mime, contentBase64: bytes.toString('base64') },
       };
@@ -173,7 +194,25 @@ export function createAttachments(deps: {
         );
       if (!a.from) throw gone();
       if (a.from.kind === 'file') {
-        const bytes = await readFile(a.from.path, a.filename);
+        // The rule again, on what the path points at NOW: a file or link
+        // can be swapped after it was added.
+        const p = a.from.path;
+        let resolved: string;
+        try {
+          resolved = await fsp.realpath(p);
+          if (!(await fsp.stat(resolved)).isFile()) throw gone();
+        } catch {
+          throw gone();
+        }
+        const why = a.from.picked
+          ? null
+          : (pathRefusal(p, home, blocked) ??
+            pathRefusal(resolved, homeReal, blocked));
+        if (why)
+          throw new Error(
+            `attachment "${a.filename}" can no longer be attached (${shown(p)}): ${why}`,
+          );
+        const bytes = await readFile(resolved, a.filename);
         return {
           filename: a.filename,
           mime: a.mime,

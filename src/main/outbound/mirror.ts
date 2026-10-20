@@ -171,13 +171,13 @@ export function createMirrorOps(deps: {
       const left = () => MIRROR_CREATE_DEADLINE_MS - (deps.nowMs() - started);
       const provider = providerLabel(await deps.sourceOf(row));
       let ref: DraftRef;
+      const creating = drafts.create(intent ?? intentOf(row));
       try {
-        ref = await deadline(
-          drafts.create(intent ?? intentOf(row)),
-          left(),
-          'draft create',
-        );
+        ref = await deadline(creating, left(), 'draft create');
       } catch (e) {
+        // A create still in flight at the deadline may land later; that
+        // draft would be no row's, and the next try would make another.
+        creating.then((late) => drafts.remove(late)).catch(() => undefined);
         const error = short(e);
         await store.outbox.setMirror(row.id, { ref: null, error, provider });
         deps.logSink.log(

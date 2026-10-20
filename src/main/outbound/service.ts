@@ -33,7 +33,13 @@ import type { CoreStore } from '../core/store/store';
 import { createDraftLock } from './draft-lock';
 import { isShapedSummary, shapeOutboundError } from './error-copy';
 import { EMAIL_RX, selfAddressesFor, senderAddressFor } from './identity';
-import { createMirrorOps, deadline, intentOf, providerLabel } from './mirror';
+import {
+  MIRROR_CALL_DEADLINE_MS,
+  createMirrorOps,
+  deadline,
+  intentOf,
+  providerLabel,
+} from './mirror';
 import {
   checkAttachments,
   type AttachmentBytes,
@@ -747,16 +753,24 @@ export function createOutboundService(deps: {
    *  Concurrent callers share one read rather than queueing more of them on
    *  the lock ahead of a Send. */
   const inFlight = new Map<string, Promise<OutboxRow | null>>();
-  const refreshById = (draftId: string, ms?: number) => {
-    const running = inFlight.get(draftId);
-    if (running) return running;
-    const run = withDraft(draftId, async () => {
-      const row = await deps.store.outbox.get(draftId);
-      if (!row) return null;
-      return syncLocked(row, ms).catch(() => row);
-    }).finally(() => inFlight.delete(draftId));
-    inFlight.set(draftId, run);
-    return run;
+  const refreshById = (
+    draftId: string,
+    ms = MIRROR_CALL_DEADLINE_MS,
+  ): Promise<OutboxRow | null> => {
+    let run = inFlight.get(draftId);
+    if (!run) {
+      run = withDraft(draftId, async () => {
+        const row = await deps.store.outbox.get(draftId);
+        if (!row) return null;
+        return syncLocked(row, ms).catch(() => row);
+      }).finally(() => inFlight.delete(draftId));
+      inFlight.set(draftId, run);
+    }
+    // A read never waits out a long write on the lock (an upload): past the
+    // deadline it shows the row as stored.
+    return deadline(run, ms, 'draft refresh').catch(() =>
+      deps.store.outbox.get(draftId),
+    );
   };
 
   /** Listings: every pending mirrored row refreshed in parallel, bounded;
@@ -824,6 +838,7 @@ export function createOutboundService(deps: {
     return files;
   };
 
+  const ATTACHMENT_READ_MS = 30_000;
   /** A send (or a create) of the row with every file's bytes. */
   const intentWithFiles = async (
     row: OutboxRow,
@@ -834,8 +849,14 @@ export function createOutboundService(deps: {
     const api = deps.attachments;
     if (!api) throw new Error('attachments are not available');
     const byName = new Map(known.map((b) => [b.filename, b]));
-    intent.attachments = await Promise.all(
-      row.attachments.map((a) => byName.get(a.filename) ?? api.read(a)),
+    // Bounded: a send waits on these reads with its row in 'sending', and
+    // a stalled source must end in a provable "not sent", not a hang.
+    intent.attachments = await deadline(
+      Promise.all(
+        row.attachments.map((a) => byName.get(a.filename) ?? api.read(a)),
+      ),
+      ATTACHMENT_READ_MS,
+      'reading the attachments',
     );
     return intent;
   };
@@ -880,17 +901,15 @@ export function createOutboundService(deps: {
     if (!stored) return { kind: 'invalid' };
     if (stored.status !== 'draft') return { kind: 'already', row: stored };
     // A mirrored row sends what the provider holds now: read it first, and
-    // refuse (provably unsent) when the provider can't be reached.
+    // refuse (provably unsent) when the provider can't be reached. The row
+    // stays a draft — nothing happened to it, and Send can simply be
+    // pressed again (§9: refresh failures leave the row as it was).
     let row: OutboxRow;
     try {
       row = await syncLocked(stored);
     } catch (e) {
       const error = `not sent: ${e instanceof Error ? e.message : String(e)}`;
-      await deps.store.outbox.transition(stored.id, ['draft'], 'failed', {
-        error,
-      });
-      const failed = (await deps.store.outbox.get(stored.id)) ?? stored;
-      return { kind: 'failed', row: failed, error };
+      return { kind: 'failed', row: stored, error };
     }
     if (row.status !== 'draft') return { kind: 'already', row };
     if (revision === null || row.revision !== revision)
@@ -998,7 +1017,12 @@ export function createOutboundService(deps: {
       ...(patch.body !== undefined ? { bodyMarkdown: patch.body } : {}),
       attachments: [...kept, ...files.map((f) => f.attachment)],
     };
-    if (normalizeSnapshot(local) === normalizeSnapshot(snapshotOf(row)))
+    // Files named in the edit are always written: the same name and size
+    // can still be other bytes.
+    if (
+      !files.length &&
+      normalizeSnapshot(local) === normalizeSnapshot(snapshotOf(row))
+    )
       return toolResult(row, []);
     const drafts = await draftsFor(row);
     if (row.mirror?.ref && drafts) {
