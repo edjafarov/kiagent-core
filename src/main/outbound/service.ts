@@ -724,8 +724,11 @@ export function createOutboundService(deps: {
       const trimmed = xs.map((t) => String(t).trim()).filter(Boolean);
       const bad = trimmed.filter((t) => !EMAIL_RX.test(t));
       if (bad.length || (field === 'to' && trimmed.length === 0))
-        throw new Error(
-          `${tool}: invalid ${field} address(es): ${bad.join(', ') || '(none given)'}`,
+        throw withLogMessage(
+          new Error(
+            `${tool}: invalid ${field} address(es): ${bad.join(', ') || '(none given)'}`,
+          ),
+          `${tool}: invalid ${field} address(es) (${bad.length})`,
         );
       return trimmed;
     };
@@ -864,8 +867,11 @@ export function createOutboundService(deps: {
       const trimmed = to.map((t) => t.trim());
       const bad = trimmed.filter((t) => !EMAIL_RX.test(t));
       if (trimmed.length === 0 || bad.length > 0) {
-        throw new Error(
-          `draft_message: invalid recipient address(es): ${bad.join(', ') || '(none given)'}`,
+        throw withLogMessage(
+          new Error(
+            `draft_message: invalid recipient address(es): ${bad.join(', ') || '(none given)'}`,
+          ),
+          `draft_message: invalid recipient address(es) (${bad.length})`,
         );
       }
       const row = await deps.store.outbox.create({

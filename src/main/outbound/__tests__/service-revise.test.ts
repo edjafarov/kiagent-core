@@ -13,6 +13,7 @@ import { openDb } from '../../db/app-db';
 import { openStore, type CoreStore } from '../../core/store/store';
 import { createOutboundService, type OutboundService } from '../service';
 import { verifyConfirmToken } from '../tokens';
+import { logMessageOf } from '../../core/mcp/log-safe';
 import { runWithTransport } from '../../core/mcp/transport-context';
 
 const deps = {
@@ -164,6 +165,20 @@ describe('outbound service — revisions', () => {
     });
     expect(v.to).toEqual(['ann@example.com']);
     expect(v.recipient_display).toBe('ann@example.com');
+  });
+
+  it('an invalid address refusal names it to the caller but not to the logs', async () => {
+    const r = await service.draftMessage({
+      accountId,
+      to: ['bob@example.com'],
+      subject: 'Hi',
+      body: 'Hello',
+    });
+    const err = await service
+      .reviseDraft({ draftId: r.draft_id, revision: 1, to: ['not-an-address'] })
+      .catch((e: unknown) => e);
+    expect((err as Error).message).toContain('not-an-address');
+    expect(logMessageOf(err)).not.toContain('not-an-address');
   });
 
   it('refuses to revise a draft that is no longer pending', async () => {

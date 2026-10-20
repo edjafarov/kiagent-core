@@ -182,7 +182,7 @@ describe('audit log redaction', () => {
     ];
     expect(fields.args.body).toBe(`[redacted: ${body.length} chars]`);
     expect(fields.args.to).toBe('[2 recipients]');
-    expect(fields.args.subject).toBe('hello');
+    expect(fields.args.subject).toBe('[redacted: 5 chars]');
     expect(fields.args.account_id).toBe('acct-1');
   });
 
@@ -340,9 +340,15 @@ describe('redactArgsForLog', () => {
     expect(out.note).toBe(`${'q'.repeat(200)}…(+50 chars)`);
   });
 
+  it('redacts a draft subject', () => {
+    expect(redactArgsForLog({ subject: 'Salary talk' })).toEqual({
+      subject: '[redacted: 11 chars]',
+    });
+  });
+
   it('passes through short strings unchanged', () => {
-    const out = redactArgsForLog({ subject: 'short' });
-    expect(out.subject).toBe('short');
+    const out = redactArgsForLog({ document_id: 'short' });
+    expect(out.document_id).toBe('short');
   });
 
   it('caps large arrays and objects by JSON size, passes small ones through', () => {

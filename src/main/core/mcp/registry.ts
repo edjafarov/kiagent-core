@@ -35,6 +35,8 @@ const BODY_KEYS = new Set([
   'markdown',
   'text',
   'content',
+  // A draft's subject is user content too.
+  'subject',
 ]);
 /** Top-level keys holding recipients — redacted to a count, not logged. */
 const RECIPIENT_KEYS = new Set(['to', 'cc', 'bcc']);
