@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.116.0](https://github.com/edjafarov/kiagent-core/compare/v0.115.0...v0.116.0) (2026-10-21)
+
+### Features
+
+* **calendar-out:** event draft service, gate and availability ([2cbc1e7](https://github.com/edjafarov/kiagent-core/commit/2cbc1e7195a4d3b66bdf31787079eadd8022189d))
+* **calendar-out:** fingerprints and availability tiers ([1cacf80](https://github.com/edjafarov/kiagent-core/commit/1cacf80ab70e379d9b5223825a719506f2adf0ea))
+* **calendar-out:** review page, routes, prefs and main wiring ([9258ba8](https://github.com/edjafarov/kiagent-core/commit/9258ba8801a567cfeaacf3e223e9bfc8635ca00f))
+* **mcp:** list_calendars, find_free_time and draft_event tools ([9e7a8d0](https://github.com/edjafarov/kiagent-core/commit/9e7a8d0c1e7c28edc33ed181dae79c95f484f9c3))
+* **outbox:** Calendar group and event review sheet ([8c868fa](https://github.com/edjafarov/kiagent-core/commit/8c868fab9b990fdeb5072c58c7c53a330d9ef859))
+* **platform:** calendar.write cap and CalendarWriter contributions (2.16.0) ([e70bab7](https://github.com/edjafarov/kiagent-core/commit/e70bab7ae60f9f124057098245ab24f02ae6fb1b))
+* **store:** event_drafts table (schema v12) and its state machine ([9187ddf](https://github.com/edjafarov/kiagent-core/commit/9187ddf2ab9cafb4b80e296190fb8454568176a3))
+
+### Bug Fixes
+
+* **calendar-out:** calendar picks per source, freshness for every account, honest copy ([3b9a7d1](https://github.com/edjafarov/kiagent-core/commit/3b9a7d181b4b8e0e347a3c1e1a5958d662768ab9))
+* **calendar-out:** serialize draft_event, honest coverage on listing failure, links only for drafts ([6bddaa6](https://github.com/edjafarov/kiagent-core/commit/6bddaa6c763a6fe9c0dad9cfceb40c869d62e289))
+
 ## [0.115.0](https://github.com/edjafarov/kiagent-core/compare/v0.114.0...v0.115.0) (2026-10-21)
 
 ### Features
