@@ -77,11 +77,21 @@ const OUTBOX_CSS = `
 .ob-actions form { margin: 0; }
 .ob-btn { height: 48px; width: 100%; font-size: 15px; }
 .ob-btn-secondary { height: 44px; width: 100%; font-size: 14px; }
+.ob-split { display: flex; position: relative; }
+.ob-split > form { flex: 1; min-width: 0; }
+.ob-split .ob-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .ob-later > summary { list-style: none; display: flex; align-items: center;
-  justify-content: center; cursor: pointer; box-sizing: border-box; }
-.ob-actions:has(.ob-later[open]) { position: static; }
+  justify-content: center; cursor: pointer; box-sizing: border-box;
+  height: 48px; width: 48px; padding: 0; margin-left: 1px;
+  border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .ob-later > summary::-webkit-details-marker { display: none; }
-.ob-later-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.ob-later > summary svg { width: 16px; height: 16px; }
+.ob-later[open] > summary svg { transform: rotate(180deg); }
+.ob-later-list { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px);
+  z-index: 2; display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  max-height: 70vh; overflow: auto; background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle); box-shadow: 0 8px 24px rgba(15,23,42,0.12); }
+.ob-later-title { font-size: 12px; color: var(--text-secondary); padding: 2px 4px; }
 .ob-later-list .btn { height: 40px; width: 100%; font-size: 14px;
   display: flex; justify-content: space-between; }
 .ob-later-list .btn span { color: var(--text-secondary); }
@@ -190,10 +200,10 @@ function chrome(inner: string): string {
   return `<style>${OUTBOX_CSS}</style><div class="ob">${inner}</div>`;
 }
 
-function sendForm(confirmPath: string, label: string): string {
-  return `<form id="ob-send" method="POST" action="${esc(confirmPath)}">
+function sendForm(confirmPath: string, label: string, menu = ''): string {
+  return `<div class="ob-split"><form id="ob-send" method="POST" action="${esc(confirmPath)}">
     <button id="ob-send-btn" type="submit" class="btn primary ob-btn ob-disable" data-label="${esc(label)}">${esc(label)}</button>
-  </form>
+  </form>${menu}</div>
   <div id="ob-status" class="ob-status" role="status" aria-live="polite"></div>`;
 }
 
@@ -264,8 +274,8 @@ export function scheduleNote(row: OutboxRow, timeZone?: string): string | null {
   return row.error;
 }
 
-/** Send later on the link page (spec 2026-10-21 §5.3): the app's presets,
- *  then a time of the user's own. Folded until asked for. */
+/** Send's ▾ on the link page (spec 2026-10-21 §5.3), like the app's: the
+ *  presets, then a time of the user's own. Opens above the button. */
 function laterBlock(
   later: NonNullable<Parameters<typeof reviewPage>[1]['later']>,
   scheduled: boolean,
@@ -277,8 +287,9 @@ function laterBlock(
     )
     .join('');
   return `<details class="ob-later">
-    <summary class="btn ob-btn-secondary">${scheduled ? 'Change time' : 'Send later'} ▾</summary>
+    <summary class="btn primary" aria-label="${scheduled ? 'Change time' : 'Send later'}" title="${scheduled ? 'Change time' : 'Send later'}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></summary>
     <div class="ob-later-list">
+      <div class="ob-later-title">${scheduled ? 'Change time' : 'Send later'}</div>
       ${presets}
       <form id="ob-custom" class="ob-custom" method="POST" action="${esc(later.customPath)}">
         <input type="datetime-local" name="at" required value="${esc(defaultSendLater(Date.now()))}" aria-label="Send at">
@@ -331,8 +342,11 @@ export function reviewPage(
         ? `<form method="POST" action="${esc(p.suggestion.path)}"><button type="submit" class="btn primary ob-btn ob-disable">${esc(p.suggestion.label)}</button></form>`
         : ''
     }
-    ${sendForm(p.confirmPath, p.suggestion || p.unschedulePath ? 'Send now' : 'Confirm & send')}
-    ${p.later ? laterBlock(p.later, Boolean(p.unschedulePath)) : ''}
+    ${sendForm(
+      p.confirmPath,
+      p.suggestion || p.unschedulePath ? 'Send now' : 'Confirm & send',
+      p.later ? laterBlock(p.later, Boolean(p.unschedulePath)) : '',
+    )}
     ${
       p.unschedulePath
         ? `<form method="POST" action="${esc(p.unschedulePath)}"><button type="submit" class="btn ob-btn-secondary ob-disable">Cancel schedule</button></form>`
