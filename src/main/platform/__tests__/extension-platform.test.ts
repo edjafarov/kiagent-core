@@ -23,6 +23,10 @@ import {
   type ExtensionPlatform,
   type ExtensionPlatformDeps,
 } from '../extension-platform';
+import {
+  createCalendarWriterRegistry,
+  type CalendarWriterRegistry,
+} from '@main/calendar-out/writers';
 import { runExtensionHost } from '../extension-host-entry';
 import { createInMemoryHostPair } from '../transport';
 import {
@@ -54,6 +58,12 @@ const FIXTURE_SENDER_UNDECLARED = path.join(
   __dirname,
   'fixtures',
   'ext-sender-undeclared',
+);
+const FIXTURE_CALWRITER = path.join(__dirname, 'fixtures', 'ext-calwriter');
+const FIXTURE_CALWRITER_NOCAP = path.join(
+  __dirname,
+  'fixtures',
+  'ext-calwriter-nocap',
 );
 const FIXTURE_EVENTS_A = path.join(__dirname, 'fixtures', 'ext-events-a');
 const FIXTURE_EVENTS_B = path.join(__dirname, 'fixtures', 'ext-events-b');
@@ -183,6 +193,7 @@ describe('createExtensionPlatform', () => {
   // same four methods, so asserting on this map is asserting on what the
   // platform registered.
   let senderRegistry: Map<string, Sender>;
+  let writerRegistry: CalendarWriterRegistry;
   let tools: Map<string, McpTool>;
   // Proxy for the internal 'extension.activated' bus emit: registerContributions()
   // calls registerTool() for the fixture's one tool and unconditionally
@@ -214,6 +225,7 @@ describe('createExtensionPlatform', () => {
         ids: () => [...senderRegistry.keys()],
         unregister: (id: string) => void senderRegistry.delete(id),
       },
+      calendarWriters: writerRegistry,
       scheduler: {
         register: jest.fn(),
         unregister: jest.fn(),
@@ -261,6 +273,7 @@ describe('createExtensionPlatform', () => {
     snapshots = [];
     registry = new Map();
     senderRegistry = new Map();
+    writerRegistry = createCalendarWriterRegistry();
     tools = new Map();
     activationsCount = 0;
     logs = [];
@@ -2891,6 +2904,107 @@ describe('createExtensionPlatform', () => {
         ok: true,
       });
       expect(senderRegistry.get('fixsrc')).toBeDefined();
+    });
+  });
+
+  describe('extension calendar writer contributions (2.16.0)', () => {
+    async function install(fixture: string, id: string) {
+      const preview = await platform.installPreview(fixture);
+      if (!('token' in preview))
+        throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+      await expect(platform.installCommit(preview.token)).resolves.toEqual({
+        ok: true,
+        id,
+      });
+    }
+
+    it('registers only the declared writer backed by a registered source; the others warn and skip', async () => {
+      await platform.start();
+      await install(FIXTURE_CALWRITER, 'test.calwriter');
+      expect(writerRegistry.sources()).toEqual(['calsrc']);
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          level: 'warn',
+          msg: expect.stringContaining(
+            "calendar writer id 'sneakysrc' is not declared in contributes.calendarWriters",
+          ),
+        }),
+      );
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          level: 'warn',
+          msg: expect.stringContaining(
+            "calendar writer id 'ghostsrc' has no registered source",
+          ),
+        }),
+      );
+    });
+
+    it('needs the calendar.write cap', async () => {
+      await platform.start();
+      await install(FIXTURE_CALWRITER_NOCAP, 'test.calwriter-nocap');
+      expect(writerRegistry.get('calsrc')).toBeUndefined();
+      expect(registry.has('calsrc')).toBe(true);
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          level: 'warn',
+          msg: expect.stringContaining("requires the 'calendar.write' cap"),
+        }),
+      );
+    });
+
+    it('resolves credentials host-side and hands them to the child in ctx', async () => {
+      await platform.start();
+      await install(FIXTURE_CALWRITER, 'test.calwriter');
+      const account = await store.createAccount({
+        source: 'calsrc',
+        identifier: 'cal-account',
+        config: {},
+        status: 'live',
+      });
+      await store.vault.save(account.id, { accessToken: 'FAKE-CAL-TOKEN' });
+      const w = writerRegistry.get('calsrc')!;
+      await expect(w.listCalendars(account.id)).resolves.toEqual([
+        expect.objectContaining({ id: 'primary@cal', canWrite: true }),
+      ]);
+      const created = await w.createEvent({
+        accountId: account.id,
+        idempotencyKey: 'd1:1',
+        calendarId: 'primary@cal',
+        title: 'Elternabend 7b',
+        start: '2026-11-03T18:00:00+01:00',
+        end: '2026-11-03T19:30:00+01:00',
+        allDay: false,
+        timeZone: 'Europe/Berlin',
+        location: null,
+        description: null,
+        attendees: [],
+        conference: 'none',
+        category: 'kids',
+        kia: { draftId: 'd1', sourceDocumentId: null },
+      });
+      expect(created.eventId).toBe('ev-d1:1');
+      const { calls } = (await tools.get('writer_calls')!.call({})) as {
+        calls: Array<{ tag: string; op: string; ctx: unknown }>;
+      };
+      expect(calls.map((c) => `${c.tag}:${c.op}`)).toEqual([
+        'calsrc:listCalendars',
+        'calsrc:createEvent',
+      ]);
+      for (const c of calls)
+        expect(c.ctx).toEqual({
+          credentials: { accessToken: 'FAKE-CAL-TOKEN' },
+        });
+    });
+
+    it('deactivation unregisters the writer', async () => {
+      await platform.start();
+      await install(FIXTURE_CALWRITER, 'test.calwriter');
+      expect(writerRegistry.get('calsrc')).toBeDefined();
+      await expect(
+        platform.setEnabled('test.calwriter', false),
+      ).resolves.toEqual({ ok: true });
+      expect(writerRegistry.get('calsrc')).toBeUndefined();
     });
   });
 

@@ -126,6 +126,7 @@ import {
 import { outboundInvokeHandlers } from './outbound/ipc';
 import { createOutboundRoutes } from './outbound/routes';
 import { buildBundledSenders, composeSenders } from './outbound/senders';
+import { createCalendarWriterRegistry } from './calendar-out/writers';
 import { createOwnerMail } from './outbound/owner-mail';
 import { createDocumentBytes } from './outbound/document-bytes';
 import { createAttachments } from './outbound/attachments';
@@ -1041,6 +1042,9 @@ app
     // Bundled transports SHADOW extension senders on a colliding source
     // id, and both sides are read live on every send — so an extension
     // activating after this point is picked up without re-composing.
+    // Calendar writers (platform 2.16.0): extensions register into it on
+    // activation; the event-draft service reads it live.
+    const calendarWriters = createCalendarWriterRegistry();
     const senderLookup = composeSenders(
       buildBundledSenders({ store: p.store, logSink: p.logSink }),
       p.senders,
@@ -1355,6 +1359,7 @@ app
       store: p.store,
       sources: p.sources,
       senders: p.senders,
+      calendarWriters,
       scheduler: p.scheduler,
       registerTool: (t) => (mcp ? mcp.registerTool(t) : () => {}),
       inference: p.inference,

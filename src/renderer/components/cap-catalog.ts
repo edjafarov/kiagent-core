@@ -84,6 +84,14 @@ export const CAP_CATALOG: Record<Cap, CapInfo> = {
     risk: 'elevated',
     icon: 'external',
   },
+  'calendar.write': {
+    label: 'Add calendar events',
+    description:
+      'Can add events, and send their invitations, to its accounts’ ' +
+      'calendars — only after you confirm each one in the app.',
+    risk: 'elevated',
+    icon: 'external',
+  },
   'unsafe.mainProcess': {
     label: 'Full app access (bundled only)',
     description:

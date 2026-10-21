@@ -10,6 +10,8 @@
 import { createRequire } from 'module';
 
 import {
+  CALENDAR_WRITER_OPS,
+  type CalendarWriter,
   DRAFT_MIRROR_OPS,
   type DraftMirrorOp,
   type DocumentInput,
@@ -329,6 +331,8 @@ export function runExtensionHost(
   // transport. Lives here (not in onBootstrap) so the onCall dispatcher,
   // registered once below, can reach it.
   const senders = new Map<string, Sender>();
+  // Same keying for calendar writers (platform 2.16.0).
+  const writers = new Map<string, CalendarWriter>();
   const eventCbs = new Map<
     string,
     Set<(p: unknown, meta: EventMeta) => void>
@@ -401,6 +405,10 @@ export function runExtensionHost(
       for (const t of contrib.tools ?? []) tools.set(t.name, t);
       for (const [sourceId, sender] of Object.entries(contrib.senders ?? {}))
         senders.set(sourceId, sender);
+      for (const [sourceId, writer] of Object.entries(
+        contrib.calendarWriters ?? {},
+      ))
+        writers.set(sourceId, writer);
       const contributions: Contributions = {
         sources: [...sources.values()].map((s) => ({
           descriptor: s.descriptor,
@@ -422,6 +430,7 @@ export function runExtensionHost(
         drafts: [...senders.entries()]
           .filter(([, s]) => s.drafts && typeof s.drafts === 'object')
           .map(([id]) => id),
+        calendarWriters: [...writers.keys()],
       };
       endpoint.post({ kind: 'activated', contributions } satisfies ChildToMain);
     } catch (e) {
@@ -469,6 +478,20 @@ export function runExtensionHost(
         return (
           drafts[op as DraftMirrorOp] as (...a: unknown[]) => Promise<unknown>
         ).apply(drafts, rest);
+      }
+      if (ns === 'calendar') {
+        // Same shape as 'draft': `method` is the SOURCE id, args[0] the op,
+        // the ctx (credentials) last.
+        const writer = writers.get(method);
+        if (!writer) throw new Error(`no calendar writer for ${method}`);
+        const [op, ...rest] = args as [string, ...unknown[]];
+        if (!(CALENDAR_WRITER_OPS as readonly string[]).includes(op))
+          throw new Error(`unknown calendar op ${op}`);
+        return (
+          writer[op as keyof CalendarWriter] as (
+            ...a: unknown[]
+          ) => Promise<unknown>
+        ).apply(writer, rest);
       }
       throw new Error(`unexpected main→child namespace ${ns}`);
     })();
