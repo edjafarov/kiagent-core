@@ -44,7 +44,10 @@ import type { AttentionService } from '@main/attention/service';
 import type { CoreStore } from '@main/core/store/store';
 import type { CoreScheduler } from '@main/core/scheduler';
 import type { SenderRegistry, SourceRegistry } from '@main/core/boot';
-import type { CalendarWriterRegistry } from '@main/calendar-out/writers';
+import {
+  createCalendarWriterRegistry,
+  type CalendarWriterRegistry,
+} from '@main/calendar-out/writers';
 import type { LogSink } from '@main/core/engine/engine';
 import { freshCredentials } from '@main/core/engine/fresh-credentials';
 import type { OAuthProfile } from '@main/auth/oauth-window';
@@ -300,8 +303,8 @@ export interface ExtensionPlatformDeps {
    *  registered on activation, dropped on every host exit (crash included),
    *  re-registered by the respawn. */
   senders: SenderRegistry;
-  /** Calendar writers (platform 2.16.0). Optional: a platform without one
-   *  skips calendarWriters contributions with a warning. */
+  /** Calendar writers (platform 2.16.0). Optional only so test harnesses
+   *  need not pass one; omitted, the platform keeps a private registry. */
   calendarWriters?: CalendarWriterRegistry;
   scheduler: CoreScheduler;
   registerTool(tool: McpTool): () => void;
@@ -529,6 +532,8 @@ export function createExtensionPlatform(
   deps: ExtensionPlatformDeps,
 ): ExtensionPlatform {
   const entries = new Map<string, Entry>();
+  const calendarWriters =
+    deps.calendarWriters ?? createCalendarWriterRegistry();
   const bus = createEventBus(deps.logSink);
   // B1: ONE registry shared across every extension's incarnations, same
   // lifetime as `bus` — see ui-registry.ts's header for why identity is
@@ -912,14 +917,6 @@ export function createExtensionPlatform(
         );
         continue;
       }
-      if (!deps.calendarWriters) {
-        deps.logSink.log(
-          scope,
-          'warn',
-          `calendar writer '${id}' skipped — this platform has no calendar writer registry`,
-        );
-        continue;
-      }
       // Credentials resolved host-side per call, exactly as for a sender;
       // the child's writer gets them in ctx. 60 s bounds a hung child.
       const call = (
@@ -934,7 +931,7 @@ export function createExtensionPlatform(
             `extension calendar ${op} for '${id}' timed out after 60s`,
           ),
         );
-      deps.calendarWriters.register(id, {
+      calendarWriters.register(id, {
         listCalendars: (accountId) =>
           call('listCalendars', accountId, []) as Promise<WritableCalendar[]>,
         createEvent: (intent) =>
@@ -988,7 +985,7 @@ export function createExtensionPlatform(
       // unregister, and blindly dropping it would tear down whatever else
       // holds that id.
       registeredSenders.forEach((sid) => deps.senders.unregister(sid));
-      registeredWriters.forEach((sid) => deps.calendarWriters?.unregister(sid));
+      registeredWriters.forEach((sid) => calendarWriters.unregister(sid));
       toolDisposers.forEach((d) => d());
       bus.emit('platform', 'extension.deactivated', { id: e.manifest.id });
     };
