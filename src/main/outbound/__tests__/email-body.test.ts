@@ -34,6 +34,28 @@ describe('renderEmailBody', () => {
     expect(html('before <!-- hide\n\nafter')).toContain('after');
   });
 
+  it('escapes text after an inline raw tag (marked’s raw-block state)', () => {
+    for (const raw of [
+      'Hi <code><img src=x onerror=alert(1)//\nmore</code> there',
+      '<kbd>x<y</kbd>',
+      '<script>"x"',
+      '<pre>\n<img/src=x/onerror=1>',
+      'a <code><svg/onload=1> b',
+      '<kbd>a < b & c</kbd>',
+    ]) {
+      const out = html(raw);
+      expect(out).not.toMatch(/<(img|svg|script|kbd|pre|code)\b/i);
+      expect(out).not.toMatch(/<y/);
+    }
+    expect(html('<kbd>a < b & c</kbd>')).toContain('a &lt; b &amp; c');
+  });
+
+  it('keeps entities the writer typed and escapes a bare ampersand', () => {
+    expect(html('Tom &amp; Jerry &nbsp; R&D')).toContain(
+      'Tom &amp; Jerry &nbsp; R&amp;D',
+    );
+  });
+
   it('keeps only http(s) and mailto links', () => {
     expect(html('[site](https://example.com)')).toContain(
       '<a href="https://example.com">site</a>',

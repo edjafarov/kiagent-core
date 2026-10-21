@@ -1,6 +1,7 @@
 /**
  * @jest-environment node
  */
+import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import http from 'http';
@@ -271,6 +272,22 @@ describe('outbox confirm routes', () => {
     expect(html).toContain('<strong>one</strong>');
     expect(html).toMatch(/<h2[^>]*>Plan<\/h2>/);
     expect(html).not.toContain('**one**');
+  });
+
+  it('pages run only their own script: a strict CSP whose hash is the page script', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Hi' });
+    const res = await fetch(r.confirm_url!);
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("form-action 'self'");
+    expect(csp).not.toMatch(/unsafe-inline'[^;]*;?\s*$|script-src[^;]*unsafe/);
+    const html = await res.text();
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(
+      (m) => m[1],
+    );
+    expect(scripts).toHaveLength(1);
+    const hash = createHash('sha256').update(scripts[0]).digest('base64');
+    expect(csp).toContain(`script-src 'sha256-${hash}'`);
   });
 
   it('a suggested time is one click on the page; only that time, at the shown revision', async () => {

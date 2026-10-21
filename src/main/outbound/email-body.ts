@@ -19,6 +19,9 @@ const esc = (s: string): string =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
+/** As `esc`, but an entity the writer typed (`&nbsp;`) stays one. */
+const escText = (s: string): string => esc(s).replace(/&amp;(#?\w+;)/g, '&$1');
+
 const SAFE_HREF = /^(https?:|mailto:)/i;
 
 const WRAP =
@@ -37,6 +40,13 @@ const marked = new Marked({
     // Raw HTML is the model's text, shown as text.
     html({ text }: Tokens.HTML | Tokens.Tag) {
       return esc(text);
+    },
+    // marked passes text after an inline <code>/<pre>/<kbd>/<script> tag
+    // through as "already escaped" (its raw-block state); here nothing is.
+    text(t: Tokens.Text | Tokens.Escape) {
+      return 'tokens' in t && t.tokens
+        ? this.parser.parseInline(t.tokens)
+        : escText(t.text);
     },
     link({ href, title, tokens }: Tokens.Link) {
       const inner = this.parser.parseInline(tokens);

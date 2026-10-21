@@ -4,6 +4,7 @@
  * app will send, no matter what a prompt-injected session claimed in chat.
  * The recipient line is the load-bearing element on every page.
  */
+import { createHash } from 'crypto';
 import { esc, renderShell } from '@shared/web-ui';
 import { loadShellCss } from '@shared/web-ui/loader-node';
 import type { ShellCss } from '@shared/web-ui/render-shell';
@@ -110,7 +111,7 @@ const ICON_SVGS: Record<OutboxIcon, string> = {
 // deferred a tick: disabling a submit button synchronously inside its own
 // submit event can cancel form submission in some engines. `pageshow`
 // resets state when bfcache restores the page after back-navigation.
-const CONFIRM_SCRIPT = `<script>(function () {
+const CONFIRM_JS = `(function () {
   var form = document.getElementById('ob-send');
   if (!form) return;
   var statusEl = document.getElementById('ob-status');
@@ -147,7 +148,22 @@ const CONFIRM_SCRIPT = `<script>(function () {
     if (b) b.textContent = b.dataset.label || 'Send';
     if (statusEl) statusEl.textContent = '';
   });
-}());</script>`;
+}());`;
+const CONFIRM_SCRIPT = `<script>${CONFIRM_JS}</script>`;
+
+/** The outbox pages' Content-Security-Policy: no script but the page's own
+ *  (by hash), no remote images, forms post only back here — a draft body
+ *  that slipped past the renderer still could not run or phone home. */
+export const PAGE_CSP = [
+  "default-src 'none'",
+  `script-src 'sha256-${createHash('sha256').update(CONFIRM_JS).digest('base64')}'`,
+  "style-src 'unsafe-inline' https://fonts.googleapis.com",
+  'font-src https://fonts.gstatic.com',
+  'img-src data:',
+  "form-action 'self'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+].join('; ');
 
 function chrome(inner: string): string {
   return `<style>${OUTBOX_CSS}</style><div class="ob">${inner}</div>`;

@@ -12,7 +12,7 @@ import type { OutboxRow } from '@shared/contracts';
 import { logMessageOf } from '../core/mcp/log-safe';
 import { shapeOutboundError } from './error-copy';
 import { isOutboundToolOp } from './ops';
-import { failedPage, resultPage, reviewPage } from './pages';
+import { failedPage, PAGE_CSP, resultPage, reviewPage } from './pages';
 import type { OutboundService } from './service';
 
 function sendHtml(
@@ -28,6 +28,7 @@ function sendHtml(
     'Content-Type': 'text/html; charset=utf-8',
     'Cache-Control': 'no-store',
     'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': PAGE_CSP,
   });
   res.end(html);
 }
