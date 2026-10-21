@@ -314,6 +314,9 @@ export interface OutboundService extends OutboundToolApi {
     revision: number,
     atMs: number,
   ): Promise<ScheduleOutcome>;
+  /** The link page's "Cancel schedule": the draft stays, unscheduled, at
+   *  the revision the page showed. */
+  unscheduleByToken(token: string, revision: number): Promise<ScheduleOutcome>;
   /** An email row's body as it will be sent (core's rendering); undefined
    *  for chats. */
   bodyHtmlFor(row: OutboxRow): Promise<string | undefined>;
@@ -2032,6 +2035,19 @@ export function createOutboundService(deps: {
             error: `not scheduled: ${e instanceof Error ? e.message : String(e)}`,
           };
         }
+      });
+    },
+
+    async unscheduleByToken(token, revision) {
+      const secret = await deps.store.outbox.secret();
+      const parsed = verifyConfirmToken(secret, token, nowMs());
+      if (!parsed) return { kind: 'invalid' };
+      return withDraft(parsed.draftId, async () => {
+        const row = await deps.store.outbox.get(parsed.draftId);
+        if (!row) return { kind: 'invalid' };
+        if (row.status !== 'draft') return { kind: 'already', row };
+        if (row.revision !== revision) return { kind: 'changed', row };
+        return scheduleLocked(row.id, revision, null);
       });
     },
 

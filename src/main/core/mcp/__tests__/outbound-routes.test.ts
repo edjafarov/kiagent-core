@@ -290,6 +290,32 @@ describe('outbox confirm routes', () => {
     expect(csp).toContain(`script-src 'sha256-${hash}'`);
   });
 
+  it('a scheduled draft’s page offers Send now and Cancel schedule; the draft stays', async () => {
+    const r = await service.draftReply({ documentId: docId, body: 'Later' });
+    const token = r.confirm_url!.split('/outbox/confirm/')[1];
+    const at = new Date(Date.now() + 2 * 3600_000).toISOString();
+    await service.scheduleById(r.draft_id, 1, at);
+    const page = await (await fetch(r.confirm_url!)).text();
+    expect(page).toContain(`action="/outbox/unschedule/${token}/1"`);
+    expect(page).toContain('Cancel schedule');
+    expect(page).toContain('Send now');
+    expect(page).not.toContain(`action="/outbox/cancel/${token}"`);
+    // A stale page changes nothing.
+    const stale = await fetch(`${base}/outbox/unschedule/${token}/2`, {
+      method: 'POST',
+    });
+    expect(stale.status).toBe(409);
+    expect((await store.outbox.get(r.draft_id))?.sendAt).toBe(at);
+    const ok = await fetch(`${base}/outbox/unschedule/${token}/1`, {
+      method: 'POST',
+    });
+    expect(ok.status).toBe(200);
+    expect(await ok.text()).toContain('Schedule cancelled');
+    const got = await store.outbox.get(r.draft_id);
+    expect(got?.status).toBe('draft');
+    expect(got?.sendAt).toBeNull();
+  });
+
   it('a suggested time is one click on the page; only that time, at the shown revision', async () => {
     sendMock.mockClear();
     const r = await service.draftReply({ documentId: docId, body: 'Later' });

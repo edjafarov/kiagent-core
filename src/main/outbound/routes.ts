@@ -180,6 +180,9 @@ async function reviewFor(
   return reviewPage(row, {
     confirmPath: `/outbox/confirm/${token}/${row.revision}`,
     cancelPath: `/outbox/cancel/${token}`,
+    ...(row.sendAt && {
+      unschedulePath: `/outbox/unschedule/${token}/${row.revision}`,
+    }),
     changed,
     bodyHtml: await outbound.bodyHtmlFor(row),
     ...(ahead && {
@@ -201,6 +204,42 @@ function timeText(iso: string): string {
     minute: '2-digit',
     timeZoneName: 'short',
   });
+}
+
+/** The link page's "Cancel schedule": the draft stays (spec 2026-10-21 §5.3). */
+async function postUnschedule(
+  outbound: OutboundService,
+  token: string,
+  revision: number,
+): Promise<PageResult> {
+  try {
+    const out = await outbound.unscheduleByToken(token, revision);
+    if (out.kind === 'invalid') return { status: 404, html: invalidPage() };
+    if (out.kind === 'changed')
+      return {
+        status: 409,
+        html: await reviewFor(outbound, out.row, token, true),
+      };
+    if (out.kind === 'unscheduled')
+      return {
+        status: 200,
+        html: resultPage(
+          'Schedule cancelled',
+          `The message to ${out.row.recipientDisplay} stays a draft — nothing will be sent until you send it.`,
+          { icon: 'info', footNote: 'You can close this page.' },
+        ),
+      };
+    return { status: 200, html: gonePage(out.row, token) };
+  } catch {
+    return {
+      status: 500,
+      html: resultPage(
+        'Something went wrong',
+        'The schedule could not be cancelled right now — try again in a moment.',
+        { icon: 'warn' },
+      ),
+    };
+  }
 }
 
 /** The link page's "Schedule for …" (spec 2026-10-21 §5.3). */
@@ -376,7 +415,8 @@ type OutboxMatch =
   | { kind: 'post-confirm'; token: string; revision: number | null }
   | { kind: 'post-reopen'; token: string }
   | { kind: 'post-cancel'; token: string }
-  | { kind: 'post-schedule'; token: string; revision: number; atMs: number };
+  | { kind: 'post-schedule'; token: string; revision: number; atMs: number }
+  | { kind: 'post-unschedule'; token: string; revision: number };
 
 // Routing decision for the THREE token-gated confirm/cancel routes shared by
 // both transports — deliberately a PLAIN (non-async) function. `handle` must
@@ -422,6 +462,14 @@ function matchOutboxPage(
       atMs: Number(schedule[3]),
     };
 
+  const unschedule = /^\/outbox\/unschedule\/([^/]+)\/(\d+)$/.exec(pathname);
+  if (unschedule && method === 'POST')
+    return {
+      kind: 'post-unschedule',
+      token: unschedule[1],
+      revision: Number(unschedule[2]),
+    };
+
   return null;
 }
 
@@ -435,6 +483,8 @@ function runOutboxMatch(
   if (match.kind === 'post-reopen') return postReopen(outbound, match.token);
   if (match.kind === 'post-schedule')
     return postSchedule(outbound, match.token, match.revision, match.atMs);
+  if (match.kind === 'post-unschedule')
+    return postUnschedule(outbound, match.token, match.revision);
   return postCancel(outbound, match.token);
 }
 
@@ -445,8 +495,9 @@ export function createOutboundRoutes(outbound: OutboundService): {
     url: URL,
   ): Promise<boolean>;
   /** Remote-transport entry: serves ONLY GET/POST /outbox/confirm/<token>
-   *  (POST with /<revision>), POST /outbox/reopen/<token> and POST
-   *  /outbox/cancel/<token>. Everything else under /outbox/ —
+   *  (POST with /<revision>), POST /outbox/reopen/<token>, POST
+   *  /outbox/cancel/<token> and POST /outbox/{schedule,unschedule}/<token>/
+   *  <revision>[/<time>]. Everything else under /outbox/ —
    *  including /outbox/api — returns false (caller 404s). No Host/Origin
    *  loopback check: the remote server has real TLS Host semantics and the
    *  pages are HMAC-token-gated. Parses the path itself since the remote

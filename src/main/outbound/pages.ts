@@ -251,6 +251,8 @@ export function reviewPage(
   p: {
     confirmPath: string;
     cancelPath: string;
+    /** A scheduled draft: its "Cancel schedule" (the draft stays). */
+    unschedulePath?: string;
     changed?: boolean;
     /** An email's body as it will be sent (core's rendering, safe). */
     bodyHtml?: string;
@@ -278,8 +280,12 @@ export function reviewPage(
         ? `<form method="POST" action="${esc(p.suggestion.path)}"><button type="submit" class="btn primary ob-btn ob-disable">${esc(p.suggestion.label)}</button></form>`
         : ''
     }
-    ${sendForm(p.confirmPath, p.suggestion ? 'Send now' : 'Confirm & send')}
-    <form method="POST" action="${esc(p.cancelPath)}"><button type="submit" class="btn ob-btn-secondary ob-disable">Cancel</button></form>
+    ${sendForm(p.confirmPath, p.suggestion || p.unschedulePath ? 'Send now' : 'Confirm & send')}
+    ${
+      p.unschedulePath
+        ? `<form method="POST" action="${esc(p.unschedulePath)}"><button type="submit" class="btn ob-btn-secondary ob-disable">Cancel schedule</button></form>`
+        : `<form method="POST" action="${esc(p.cancelPath)}"><button type="submit" class="btn ob-btn-secondary ob-disable">Cancel</button></form>`
+    }
   </div>`) + CONFIRM_SCRIPT;
   return renderShell(css(), {
     title: 'Review and send',
