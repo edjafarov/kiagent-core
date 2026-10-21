@@ -843,6 +843,8 @@ export interface OutboxRow {
   mirror: MirrorState | null;
   /** Scheduled send time (ISO), or null. */
   sendAt: string | null;
+  /** A time an AI app suggested; the user confirms it (spec 2026-10-21 §5.2). */
+  suggestedSendAt?: string | null;
 }
 
 /** A file on an Outbox draft. Its identity is the filename, unique within

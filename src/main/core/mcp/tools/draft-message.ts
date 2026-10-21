@@ -19,7 +19,11 @@ export const draftMessageInputSchema = {
       description: 'Recipient email addresses',
     },
     subject: { type: 'string' },
-    body: { type: 'string', description: 'Body (plain text/markdown)' },
+    body: {
+      type: 'string',
+      description:
+        'Body in Markdown — sent as a formatted email (headings, bold, lists, links)',
+    },
     attachments: attachmentsSchema,
   },
   required: ['account_id', 'to', 'subject', 'body'],

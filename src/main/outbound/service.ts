@@ -198,9 +198,28 @@ export interface OutboxListItem {
    *  draft — show it before asking to send. */
   revision: number | null;
   draft: DraftToolResult | null;
-  /** A pending draft the user scheduled in the app (ISO): it goes then,
-   *  unless it changes. Only the user schedules. */
+  /** A pending draft that is scheduled (ISO): it goes then, unless it
+   *  changes. */
   scheduled_for?: string;
+  /** A time suggested with schedule_drafts, waiting for the user (ISO). */
+  suggested_for?: string;
+}
+
+/** One draft in a `schedule_drafts` call. `send_at` null cancels. */
+export interface ScheduleItem {
+  draftId: string;
+  revision: number;
+  sendAt?: string | null;
+}
+
+/** What `schedule_drafts` did with one draft. */
+export interface ScheduleItemResult {
+  draft_id: string;
+  status: 'scheduled' | 'suggested' | 'unscheduled' | 'unchanged' | 'error';
+  send_at?: string;
+  confirm_url?: string;
+  revision?: number;
+  error?: string;
 }
 
 /** What `send_draft` reports back once a chat-confirmed draft has been sent
@@ -240,6 +259,12 @@ export interface OutboundToolApi {
   reviseDraft(
     a: DraftRevision & { draftId: string; revision: number },
   ): Promise<DraftToolResult>;
+  /** Times for several drafts (spec 2026-10-21 §5.1): scheduled in chat
+   *  mode, suggested for the user to confirm otherwise. */
+  scheduleDrafts(a: {
+    drafts: ScheduleItem[];
+    spread?: { start?: string; minutes: number };
+  }): Promise<{ results: ScheduleItemResult[]; instruction: string }>;
 }
 
 /** The fields revise_draft may change. */
@@ -354,6 +379,45 @@ export type ScheduledSend = 'skipped' | 'missed' | ConfirmOutcome['kind'];
 export const SCHEDULE_LATE_MS = 5 * 60_000;
 /** The furthest ahead a send can be scheduled. */
 const SCHEDULE_MAX_AHEAD_MS = 365 * 24 * 3600_000;
+
+const HOUR_MS = 60 * 60_000;
+
+/**
+ * Distinct whole-minute times spread over `[startMs, startMs + minutes)`:
+ * n equal slots, shuffled over the drafts, a random minute inside each
+ * (spec 2026-10-21 §5.1). Needs `minutes >= n`.
+ */
+export function spreadTimes(
+  n: number,
+  startMs: number,
+  minutes: number,
+  rand: () => number = Math.random,
+): number[] {
+  if (n < 1 || minutes < n) throw new Error('spread: more drafts than minutes');
+  const s = minutes / n;
+  const slots = Array.from({ length: n }, (_, i) => {
+    const lo = Math.ceil(i * s);
+    const hi = Math.max(lo, Math.ceil((i + 1) * s) - 1);
+    return startMs + (lo + Math.floor(rand() * (hi - lo + 1))) * 60_000;
+  });
+  for (let i = slots.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rand() * (i + 1));
+    [slots[i], slots[j]] = [slots[j], slots[i]];
+  }
+  return slots;
+}
+
+/** Whether one more send at `t` keeps every 60-minute window that holds it
+ *  at or under `limit` sends. */
+export function fitsRate(times: number[], t: number, limit: number): boolean {
+  const all = [...times, t].sort((a, b) => a - b);
+  return all.every(
+    (a) =>
+      a > t ||
+      a <= t - HOUR_MS ||
+      all.filter((x) => x >= a && x < a + HOUR_MS).length <= limit,
+  );
+}
 
 export function createOutboundService(deps: {
   store: CoreStore;
@@ -723,6 +787,26 @@ export function createOutboundService(deps: {
   };
 
   const withDraft = createDraftLock();
+  // Chat-mode sends and schedules of one account pass the rate rule one at
+  // a time (account lock first, then the draft's).
+  const withAccount = createDraftLock();
+
+  /** The rate rule for a chat-mode send at `t` (spec 2026-10-21 §5.1):
+   *  sent and scheduled sends of the account count. Caller holds the
+   *  account lock. */
+  const admits = async (
+    account: Account,
+    t: number,
+    exceptId?: string,
+  ): Promise<boolean> => {
+    const times = await deps.store.outbox.listSendTimes(
+      account.id,
+      new Date(t - HOUR_MS).toISOString(),
+      new Date(t + HOUR_MS).toISOString(),
+      exceptId,
+    );
+    return fitsRate(times.map(Date.parse), t, sendsPerHourFor(account));
+  };
 
   const sourceOf = async (row: OutboxRow): Promise<string> =>
     (await deps.store.account(row.accountId))?.source ?? '';
@@ -1103,6 +1187,260 @@ export function createOutboundService(deps: {
     return executeSend(row, ready.intent);
   };
 
+  const scheduleLocked = async (
+    draftId: string,
+    revision: number,
+    sendAt: string | null,
+    /** Last word before the schedule is stored (the rate rule). */
+    gate?: (at: number) => Promise<string | null>,
+    note?: string,
+  ): Promise<ScheduleOutcome> => {
+    await deps.store.outbox.expireOverdue();
+    const stored = await deps.store.outbox.get(draftId);
+    if (!stored) return { kind: 'invalid' };
+    if (stored.status !== 'draft') return { kind: 'already', row: stored };
+    if (sendAt === null) {
+      await deps.store.outbox.schedule(draftId, null, note);
+      const row = (await deps.store.outbox.get(draftId)) ?? stored;
+      return { kind: 'unscheduled', row };
+    }
+    const at = Date.parse(sendAt);
+    if (!Number.isFinite(at)) throw new Error('outbox: not a time');
+    if (at < nowMs() + 60_000)
+      throw new Error('pick a time at least a minute from now');
+    if (at > nowMs() + SCHEDULE_MAX_AHEAD_MS)
+      throw new Error('pick a time within a year');
+    // A confirm of what the user saw: the provider's draft now, at the
+    // shown revision, and nothing that would refuse the send then.
+    let row: OutboxRow;
+    try {
+      row = await syncLocked(stored);
+    } catch (e) {
+      const error = `not scheduled: ${e instanceof Error ? e.message : String(e)}`;
+      return { kind: 'failed', row: stored, error };
+    }
+    if (row.status !== 'draft') return { kind: 'already', row };
+    if (row.revision !== revision) return { kind: 'changed', row };
+    const ready = await prepareSend(row);
+    if ('error' in ready)
+      return {
+        kind: 'failed',
+        row,
+        error: ready.error.replace(/^not sent: /, 'not scheduled: '),
+      };
+    const stop = gate ? await gate(at) : null;
+    if (stop) return { kind: 'failed', row, error: stop };
+    const saved = await deps.store.outbox.schedule(
+      draftId,
+      new Date(at).toISOString(),
+    );
+    const current = await deps.store.outbox.get(draftId);
+    // It expired or moved on meanwhile (a sweep runs outside the lock).
+    if (!saved || !current)
+      return current ? { kind: 'already', row: current } : { kind: 'invalid' };
+    return { kind: 'scheduled', row: current };
+  };
+
+  /** A suggested time: checked like a schedule, stored for the user. */
+  const suggestLocked = async (
+    draftId: string,
+    revision: number,
+    at: number,
+  ): Promise<ScheduleItemResult> => {
+    const row = await deps.store.outbox.get(draftId);
+    if (!row || row.status !== 'draft')
+      return {
+        draft_id: draftId,
+        status: 'error',
+        error: 'not a pending draft',
+      };
+    if (row.revision !== revision)
+      return {
+        draft_id: draftId,
+        status: 'error',
+        revision: row.revision,
+        error: `This draft changed — it is now revision ${row.revision}; show it to the user again`,
+      };
+    const iso = new Date(at).toISOString();
+    await deps.store.outbox.suggest(draftId, iso);
+    return {
+      draft_id: draftId,
+      status: 'suggested',
+      send_at: iso,
+      ...(currentTransport() !== 'agent' && {
+        confirm_url: await confirmUrl(draftId, 'review'),
+      }),
+    };
+  };
+
+  const timeError = (at: number): string | null =>
+    !Number.isFinite(at)
+      ? 'not a time — use ISO 8601 with an offset'
+      : at < nowMs() + 60_000
+        ? 'pick a time at least a minute from now'
+        : at > nowMs() + SCHEDULE_MAX_AHEAD_MS
+          ? 'pick a time within a year'
+          : null;
+
+  const scheduleDrafts: OutboundToolApi['scheduleDrafts'] = async ({
+    drafts,
+    spread,
+  }) => {
+    assertReady();
+    if (!Array.isArray(drafts) || drafts.length < 1 || drafts.length > 50)
+      throw new Error('schedule_drafts: give 1 to 50 drafts');
+    const ids = new Set(drafts.map((d) => d.draftId));
+    if (ids.size !== drafts.length)
+      throw new Error('schedule_drafts: a draft is listed twice');
+    const timed = drafts.filter((d) => d.sendAt !== undefined).length;
+    if (spread ? timed > 0 : timed !== drafts.length)
+      throw new Error(
+        'schedule_drafts: give every draft a send_at, or give spread and no send_at',
+      );
+    await deps.store.outbox.expireOverdue();
+    const rows = await Promise.all(
+      drafts.map((d) => deps.store.outbox.get(d.draftId)),
+    );
+    const transport = currentTransport();
+    const app = currentClient();
+    const isChat = async (row: OutboxRow): Promise<Account | null> => {
+      if (transport === 'agent' || row.confirmMode !== 'chat') return null;
+      const account = await accountFor(row.accountId as string);
+      return modeFor(account) === 'chat' ? account : null;
+    };
+    let times: Array<number | null>;
+    if (spread) {
+      const minutes = Number(spread.minutes);
+      if (!Number.isInteger(minutes) || minutes < 5 || minutes > 1440)
+        throw new Error('schedule_drafts: spread.minutes must be 5 to 1440');
+      if (drafts.length > minutes)
+        throw new Error(
+          `schedule_drafts: ${drafts.length} drafts need a spread of at least ${drafts.length} minutes`,
+        );
+      const allChat = (
+        await Promise.all(rows.map((r) => (r ? isChat(r) : null)))
+      ).every(Boolean);
+      const start =
+        spread.start !== undefined
+          ? Date.parse(spread.start)
+          : nowMs() + (allChat ? 5 : 30) * 60_000;
+      const err = timeError(start);
+      if (err) throw new Error(`schedule_drafts: spread.start — ${err}`);
+      times = spreadTimes(drafts.length, start, minutes);
+    } else {
+      times = drafts.map((d) =>
+        d.sendAt === null ? null : Date.parse(d.sendAt!),
+      );
+    }
+    // A chat batch reads its provider drafts together first, not one by one.
+    await refreshPending(rows.filter((r): r is OutboxRow => r !== null));
+
+    const results: ScheduleItemResult[] = [];
+    for (const [i, item] of drafts.entries()) {
+      const row = rows[i];
+      const at = times[i];
+      const id = item.draftId;
+      if (!row || row.status !== 'draft') {
+        results.push({
+          draft_id: id,
+          status: 'error',
+          error: 'not a pending draft',
+        });
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const account = await isChat(row);
+      if (at === null) {
+        // Cancel: a suggestion always goes; a schedule only when chat may
+        // handle it — the user's own schedule is not the app's to undo.
+        // eslint-disable-next-line no-await-in-loop
+        await deps.store.outbox.suggest(id, null);
+        if (row.sendAt && account) {
+          // eslint-disable-next-line no-await-in-loop
+          await withDraft(id, () =>
+            scheduleLocked(
+              id,
+              item.revision,
+              null,
+              undefined,
+              `Schedule cancelled by ${app ?? 'an AI app'}`,
+            ),
+          );
+          results.push({ draft_id: id, status: 'unscheduled' });
+        } else
+          results.push({
+            draft_id: id,
+            status: row.sendAt ? 'unchanged' : 'unscheduled',
+            ...(row.sendAt && { error: 'the user scheduled this in Kia' }),
+          });
+        continue;
+      }
+      const err = timeError(at);
+      if (err) {
+        results.push({ draft_id: id, status: 'error', error: err });
+        continue;
+      }
+      if (!account) {
+        // eslint-disable-next-line no-await-in-loop
+        results.push(
+          await withDraft(id, () => suggestLocked(id, item.revision, at)),
+        );
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const out = await withAccount(account.id, () =>
+        withDraft(id, () =>
+          scheduleLocked(
+            id,
+            item.revision,
+            new Date(at).toISOString(),
+            async (t) =>
+              (await admits(account, t, id))
+                ? null
+                : `rate limit — more than ${sendsPerHourFor(account)} sends in an hour from this account; spread these wider`,
+          ),
+        ),
+      ).catch((e: unknown) => ({
+        kind: 'failed' as const,
+        row,
+        error: e instanceof Error ? e.message : String(e),
+      }));
+      if (out.kind === 'scheduled')
+        results.push({
+          draft_id: id,
+          status: 'scheduled',
+          send_at: out.row.sendAt ?? undefined,
+        });
+      else if (out.kind === 'changed')
+        results.push({
+          draft_id: id,
+          status: 'error',
+          revision: out.row.revision,
+          error: `This draft changed — it is now revision ${out.row.revision}; show it to the user again`,
+        });
+      else
+        results.push({
+          draft_id: id,
+          status: 'error',
+          error:
+            out.kind === 'failed'
+              ? out.error
+              : `can no longer be scheduled (${out.kind})`,
+        });
+    }
+    const suggested = results.some((r) => r.status === 'suggested');
+    return {
+      results,
+      instruction: suggested
+        ? `Suggested times are not schedules: nothing is sent until the user confirms each draft in KIAgent${
+            transport === 'agent'
+              ? '.'
+              : ' or on its confirm_url (show those links).'
+          }`
+        : 'Scheduled drafts go at their send_at unless they change; tell the user the times.',
+    };
+  };
+
   const confirmRow = (draftId: string, revision: number | null) =>
     withDraft(draftId, () => confirmLocked(draftId, revision));
 
@@ -1469,6 +1807,9 @@ export function createOutboundService(deps: {
           ...(row.status === 'draft' && row.sendAt
             ? { scheduled_for: row.sendAt }
             : {}),
+          ...(row.status === 'draft' && !row.sendAt && row.suggestedSendAt
+            ? { suggested_for: row.suggestedSendAt }
+            : {}),
         });
       }
       return out;
@@ -1550,26 +1891,23 @@ export function createOutboundService(deps: {
         );
       }
 
-      const limit = sendsPerHourFor(account);
-      const sinceIso = new Date(nowMs() - 60 * 60_000).toISOString();
-      const sentLastHour = await deps.store.outbox.countSentSince(
-        account.id,
-        sinceIso,
-      );
-      if (sentLastHour >= limit) {
-        throw new Error(
-          `send_draft: rate limit reached — ${sentLastHour} message(s) ` +
-            `already sent from this account in the last hour (limit ` +
-            `${limit}). The draft is still pending; try again later or use ` +
-            `list_outbox for a confirmation link.`,
-        );
-      }
-
       // Same CAS gate the page confirm uses — the single-use property and
-      // the race protection live here, not in the checks above.
-      const outcome = await withDraft(row.id, () =>
-        confirmLocked(row.id, typeof revision === 'number' ? revision : null),
-      );
+      // the race protection live here, not in the checks above. The rate
+      // rule counts what was sent and what is scheduled around now.
+      const outcome = await withAccount(account.id, async () => {
+        if (!(await admits(account, nowMs(), row.id))) {
+          const limit = sendsPerHourFor(account);
+          throw new Error(
+            `send_draft: rate limit reached — ${limit} message(s) an hour ` +
+              `from this account, counting sent and scheduled ones. The ` +
+              `draft is still pending; try again later or use list_outbox ` +
+              `for a confirmation link.`,
+          );
+        }
+        return withDraft(row.id, () =>
+          confirmLocked(row.id, typeof revision === 'number' ? revision : null),
+        );
+      });
       if (outcome.kind === 'changed')
         throw changedError(
           'send_draft',
@@ -1629,52 +1967,9 @@ export function createOutboundService(deps: {
     sendById: (draftId, revision) => confirmRow(draftId, revision),
 
     scheduleById: (draftId, revision, sendAt) =>
-      withDraft(draftId, async (): Promise<ScheduleOutcome> => {
-        await deps.store.outbox.expireOverdue();
-        const stored = await deps.store.outbox.get(draftId);
-        if (!stored) return { kind: 'invalid' };
-        if (stored.status !== 'draft') return { kind: 'already', row: stored };
-        if (sendAt === null) {
-          await deps.store.outbox.schedule(draftId, null);
-          const row = (await deps.store.outbox.get(draftId)) ?? stored;
-          return { kind: 'unscheduled', row };
-        }
-        const at = Date.parse(sendAt);
-        if (!Number.isFinite(at)) throw new Error('outbox: not a time');
-        if (at < nowMs() + 60_000)
-          throw new Error('pick a time at least a minute from now');
-        if (at > nowMs() + SCHEDULE_MAX_AHEAD_MS)
-          throw new Error('pick a time within a year');
-        // A confirm of what the user saw: the provider's draft now, at the
-        // shown revision, and nothing that would refuse the send then.
-        let row: OutboxRow;
-        try {
-          row = await syncLocked(stored);
-        } catch (e) {
-          const error = `not scheduled: ${e instanceof Error ? e.message : String(e)}`;
-          return { kind: 'failed', row: stored, error };
-        }
-        if (row.status !== 'draft') return { kind: 'already', row };
-        if (row.revision !== revision) return { kind: 'changed', row };
-        const ready = await prepareSend(row);
-        if ('error' in ready)
-          return {
-            kind: 'failed',
-            row,
-            error: ready.error.replace(/^not sent: /, 'not scheduled: '),
-          };
-        const saved = await deps.store.outbox.schedule(
-          draftId,
-          new Date(at).toISOString(),
-        );
-        const current = await deps.store.outbox.get(draftId);
-        // It expired or moved on meanwhile (a sweep runs outside the lock).
-        if (!saved || !current)
-          return current
-            ? { kind: 'already', row: current }
-            : { kind: 'invalid' };
-        return { kind: 'scheduled', row: current };
-      }),
+      withDraft(draftId, () => scheduleLocked(draftId, revision, sendAt)),
+
+    scheduleDrafts,
 
     sendScheduled: (draftId, sendAt) =>
       withDraft(draftId, async (): Promise<ScheduledSend> => {

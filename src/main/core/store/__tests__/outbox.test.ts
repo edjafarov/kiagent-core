@@ -52,6 +52,7 @@ describe('outbox schema', () => {
       'attachments_json',
       'mirror_json',
       'send_at',
+      'suggested_send_at', // v11
     ]);
   });
 

@@ -1198,6 +1198,19 @@ const MIGRATIONS: Migration[] = [
     add('mirror_json', 'mirror_json TEXT');
     add('send_at', 'send_at TEXT');
   },
+
+  // v11 — a send time an AI app suggested, for the user to confirm
+  // (alpha-cent docs/superpowers/specs/
+  // 2026-10-21-outbox-formatted-mail-send-menu-design.md §5.2). ADD COLUMN only.
+  (db) => {
+    const cols = new Set(
+      (db.prepare(`PRAGMA table_info(outbox)`).all() as { name: string }[]).map(
+        (c) => c.name,
+      ),
+    );
+    if (!cols.has('suggested_send_at'))
+      db.exec(`ALTER TABLE outbox ADD COLUMN suggested_send_at TEXT`);
+  },
 ];
 
 /**

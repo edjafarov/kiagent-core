@@ -369,6 +369,12 @@ TEXT and attention timestamps are INTEGER Unix milliseconds.`,
           type: 'TEXT (ISO-8601)',
           notes: 'Scheduled send time; NULL when not scheduled.',
         },
+        {
+          name: 'suggested_send_at',
+          type: 'TEXT (ISO-8601)',
+          notes:
+            'A send time an AI app suggested (schedule_drafts) for the user to confirm; never sends by itself.',
+        },
       ],
       relations: [
         'outbox.account_id → accounts.id',

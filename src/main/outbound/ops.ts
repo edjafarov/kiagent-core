@@ -24,6 +24,7 @@ export const OUTBOUND_TOOL_OPS = [
   'listOutbox',
   'sendDraft',
   'reviseDraft',
+  'scheduleDrafts',
 ] as const;
 
 export type OutboundToolOp = (typeof OUTBOUND_TOOL_OPS)[number];

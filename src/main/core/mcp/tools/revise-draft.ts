@@ -8,7 +8,7 @@ import type { OutboundToolApi } from '@main/outbound/service';
 
 import { attachmentsSchema, parseAttachments } from './attachment-args';
 
-export const reviseDraftDescription = `Change a pending DRAFT in place (a draft_id from draft_reply, draft_message or list_outbox): pass its draft_id and the revision you last saw, plus only the fields to change. NOTHING IS SENT. Use this for every change the user asks for — never create another draft. If the draft changed meanwhile (the user edited it), this refuses and returns the current draft: show it and revise from that. A reply keeps the recipients of the original message. Rewriting the body of a draft the user formatted in Gmail/Outlook makes it plain text.`;
+export const reviseDraftDescription = `Change a pending DRAFT in place (a draft_id from draft_reply, draft_message or list_outbox): pass its draft_id and the revision you last saw, plus only the fields to change. NOTHING IS SENT. Use this for every change the user asks for — never create another draft. If the draft changed meanwhile (the user edited it), this refuses and returns the current draft: show it and revise from that. A reply keeps the recipients of the original message. The body is Markdown, sent as a formatted email.`;
 
 export const reviseDraftInputSchema = {
   type: 'object',

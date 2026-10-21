@@ -430,6 +430,13 @@ export function createOutboundRoutes(outbound: OutboundService): {
                 >[0],
               ),
             });
+          } else if (op === 'scheduleDrafts') {
+            sendJson(res, {
+              ok: true,
+              result: await outbound.scheduleDrafts(
+                args as Parameters<OutboundService['scheduleDrafts']>[0],
+              ),
+            });
           } else {
             // Unreachable — `op` is `never` here, and that is the point:
             // adding an op to OUTBOUND_TOOL_OPS without a branch above is a

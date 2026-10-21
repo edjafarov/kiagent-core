@@ -85,5 +85,6 @@ export function createOutboundProxy(
     listOutbox: (a) => call('listOutbox', a) as never,
     sendDraft: (a) => call('sendDraft', a) as never,
     reviseDraft: (a) => call('reviseDraft', a) as never,
+    scheduleDrafts: (a) => call('scheduleDrafts', a) as never,
   };
 }

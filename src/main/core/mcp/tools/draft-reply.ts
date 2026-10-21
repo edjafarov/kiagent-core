@@ -17,7 +17,11 @@ export const draftReplyInputSchema = {
       type: 'string',
       description: 'Corpus document id of the message being replied to',
     },
-    body: { type: 'string', description: 'Reply body (plain text/markdown)' },
+    body: {
+      type: 'string',
+      description:
+        'Reply body in Markdown — sent as a formatted email (headings, bold, lists, links)',
+    },
     reply_all: {
       type: 'boolean',
       description:

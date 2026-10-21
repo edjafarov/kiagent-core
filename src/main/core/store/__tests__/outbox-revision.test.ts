@@ -46,7 +46,7 @@ describe('outbox v10 migration', () => {
       migrate(db);
       expect(
         db.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get(),
-      ).toEqual({ value: '10' });
+      ).toEqual({ value: '11' });
       expect(
         db
           .prepare(
@@ -61,6 +61,36 @@ describe('outbox v10 migration', () => {
         mirror_json: null,
         send_at: null,
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('v11 adds suggested_send_at; old rows read NULL, and a re-run is a no-op', () => {
+    const db = new Database(':memory:');
+    try {
+      migrate(db);
+      db.exec(`ALTER TABLE outbox DROP COLUMN suggested_send_at`);
+      db.prepare(`UPDATE meta SET value='10' WHERE key='schemaVersion'`).run();
+      db.prepare(
+        `INSERT INTO accounts(id, source, identifier, config, status, created_at)
+         VALUES('acc', 'test', 'me@x', '{}', 'live', '2026-01-01')`,
+      ).run();
+      db.prepare(
+        `INSERT INTO outbox (id, account_id, kind, recipient_display, to_json,
+           cc_json, body_markdown, confirm_mode, status, created_via,
+           created_at, expires_at)
+         VALUES ('old', 'acc', 'new', 'Sam', '["sam@x"]', '[]', 'hi',
+           'review', 'draft', 'mcp-local', '2026-01-01', '2026-01-02')`,
+      ).run();
+      migrate(db);
+      migrate(db);
+      expect(
+        db.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get(),
+      ).toEqual({ value: '11' });
+      expect(
+        db.prepare(`SELECT suggested_send_at FROM outbox WHERE id='old'`).get(),
+      ).toEqual({ suggested_send_at: null });
     } finally {
       db.close();
     }

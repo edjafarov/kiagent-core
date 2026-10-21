@@ -190,7 +190,22 @@ export interface OutboxStore {
   setMirror(id: string, mirror: MirrorState): Promise<void>;
   /** Sets or clears send_at on a draft; no revision bump. Clears the
    *  draft's schedule note ("Missed its time", "Edited — schedule again"). */
-  schedule(id: string, sendAt: string | null): Promise<boolean>;
+  schedule(
+    id: string,
+    sendAt: string | null,
+    /** The draft's note after a cancel ("Schedule cancelled by …"). */
+    note?: string,
+  ): Promise<boolean>;
+  /** Sets or clears the suggested time on a draft; no revision bump. */
+  suggest(id: string, at: string | null): Promise<boolean>;
+  /** Send times on an account inside [fromIso, toIso]: sent messages and
+   *  scheduled drafts (not `exceptId`) — what the rate rule counts. */
+  listSendTimes(
+    accountId: AccountId,
+    fromIso: string,
+    toIso: string,
+    exceptId?: string,
+  ): Promise<string[]>;
   /** Scheduled drafts whose time has come (send_at <= nowIso). */
   listDue(nowIso: string): Promise<Array<{ id: string; sendAt: string }>>;
   /** A schedule that can no longer be kept (more than 5 min late): send_at
@@ -237,6 +252,7 @@ interface OutboxRowSql {
   attachments_json: string;
   mirror_json: string | null;
   send_at: string | null;
+  suggested_send_at: string | null;
 }
 
 function toRow(r: OutboxRowSql): OutboxRow {
@@ -272,6 +288,7 @@ function toRow(r: OutboxRowSql): OutboxRow {
         ? null
         : (JSON.parse(r.mirror_json) as MirrorState),
     sendAt: r.send_at,
+    suggestedSendAt: r.suggested_send_at ?? null,
   };
 }
 
@@ -620,19 +637,58 @@ export function createOutboxStore(
       if (results[0].changes === 1) fireChanged();
     },
 
-    async schedule(id, sendAt) {
+    async schedule(id, sendAt, note) {
+      // A schedule replaces any suggestion: the user (or chat) decided.
       const results = await db.batch([
         {
-          sql: `UPDATE outbox SET send_at = ?, error = NULL,
+          sql: `UPDATE outbox SET send_at = ?, error = ?,
+                  suggested_send_at = CASE WHEN ? IS NULL
+                                           THEN suggested_send_at END,
                   expires_at = CASE WHEN ? IS NULL AND send_at IS NOT NULL
                                     THEN ? ELSE expires_at END
                 WHERE id = ? AND status = 'draft'`,
-          params: [sendAt, sendAt, freshExpiry(), id],
+          params: [sendAt, note ?? null, sendAt, sendAt, freshExpiry(), id],
         },
       ]);
       const moved = results[0].changes === 1;
       if (moved) fireChanged();
       return moved;
+    },
+
+    async suggest(id, at) {
+      const results = await db.batch([
+        {
+          sql: `UPDATE outbox SET suggested_send_at = ?
+                WHERE id = ? AND status = 'draft'
+                  AND suggested_send_at IS NOT ?`,
+          params: [at, id, at],
+        },
+      ]);
+      const moved = results[0].changes === 1;
+      if (moved) fireChanged();
+      return moved;
+    },
+
+    async listSendTimes(accountId, fromIso, toIso, exceptId) {
+      const rows = (await db.all(
+        `SELECT sent_at AS at FROM outbox
+          WHERE account_id = ? AND status = 'sent'
+            AND sent_at >= ? AND sent_at <= ?
+         UNION ALL
+         SELECT send_at AS at FROM outbox
+          WHERE account_id = ? AND status = 'draft' AND send_at IS NOT NULL
+            AND send_at >= ? AND send_at <= ? AND id IS NOT ?`,
+        [
+          accountId,
+          fromIso,
+          toIso,
+          accountId,
+          fromIso,
+          toIso,
+          exceptId ?? null,
+        ],
+      )) as unknown as Array<{ at: string }>;
+      return rows.map((r) => r.at);
     },
 
     async listDue(nowIso) {

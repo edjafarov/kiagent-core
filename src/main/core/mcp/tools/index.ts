@@ -49,6 +49,11 @@ import {
   reviseDraftDescription,
   reviseDraftInputSchema,
 } from './revise-draft';
+import {
+  makeScheduleDraftsTool,
+  scheduleDraftsDescription,
+  scheduleDraftsInputSchema,
+} from './schedule-drafts';
 
 /** When no outbound service exists on this transport (a stdio sibling with
  *  no proxy), the tools still register — the tool LIST must not drift
@@ -59,6 +64,7 @@ const unavailableOutbound: OutboundToolApi = {
   listOutbox: unavailable,
   sendDraft: unavailable,
   reviseDraft: unavailable,
+  scheduleDrafts: unavailable,
 };
 async function unavailable(): Promise<never> {
   throw new Error(
@@ -143,6 +149,13 @@ export function buildBuiltinTools(
       inputSchema: sendDraftInputSchema,
       tier: 'standard',
       call: makeSendDraftTool(out),
+    },
+    {
+      name: 'schedule_drafts',
+      description: scheduleDraftsDescription,
+      inputSchema: scheduleDraftsInputSchema,
+      tier: 'standard',
+      call: makeScheduleDraftsTool(out),
     },
   ];
 }

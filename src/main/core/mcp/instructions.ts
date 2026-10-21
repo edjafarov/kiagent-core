@@ -111,5 +111,10 @@ their full text and re-issues confirm links. When the user asks to change a
 draft, call revise_draft on the same draft (with the revision you last saw) —
 never draft it again. send_draft sends one — only in chat confirmation
 mode, and only after the user has explicitly agreed in this conversation;
-in any other mode present the draft's confirm link instead.
+in any other mode present the draft's confirm link instead. Draft bodies are
+Markdown and go out as formatted email (headings, bold, lists, links).
+schedule_drafts sets send times for one or many drafts (exact times, or a
+spread Kia picks): in chat mode it schedules — only after the user agreed to
+the recipients, texts and times in this conversation; in other modes it only
+suggests, and the user confirms each draft.
 `;
