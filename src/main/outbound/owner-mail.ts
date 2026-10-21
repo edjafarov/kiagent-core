@@ -13,6 +13,7 @@ import type {
   Source,
 } from '@shared/contracts';
 
+import { renderEmailBody } from './email-body';
 import { EMAIL_RX, senderAddressFor } from './identity';
 import type { SenderLookup } from './senders';
 
@@ -260,6 +261,7 @@ export function createOwnerMail(deps: {
         to: [owner],
         subject: m.subject,
         bodyMarkdown: m.bodyText,
+        bodyHtml: renderEmailBody(m.bodyText).html,
         replyTo: m.replyTo.toLowerCase(),
         ...(m.messageId ? { messageId: m.messageId } : {}),
         ...(m.fromName ? { fromName: m.fromName } : {}),

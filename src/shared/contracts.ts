@@ -875,6 +875,11 @@ export interface MirrorState {
   provider?: string;
   /** Each file's size as the provider last reported it (its own count). */
   sizes?: Record<string, number>;
+  /** `bodyHash` of the provider's body at the last read (spec 2026-10-21 §3.4). */
+  seenKey?: string;
+  /** `bodyHash` of the provider's copy of Kia's own body write: the send
+   *  carries Kia's rendering only while the provider's body still hashes so. */
+  ownKey?: string;
 }
 
 /** The reviewable content of a draft: what a revision covers. */
@@ -899,6 +904,10 @@ export interface SendIntent {
   bcc?: string[];
   subject?: string;
   bodyMarkdown: string;
+  /** Platform 2.15.0: the Markdown rendered as email HTML by core. An email
+   *  sender sends it with `bodyMarkdown` as the text part; without it (an
+   *  older core) it sends text only. Other senders ignore it. */
+  bodyHtml?: string;
   threading?: Record<string, unknown>;
   /** Owner channel only (set by core's ownerMail, never by the Outbox). */
   replyTo?: string;
@@ -985,7 +994,10 @@ export interface Sender {
  *  (HTML body, signature, inline images, Bcc, attachments not removed) is
  *  kept. An attachment's identity is its filename, unique within a draft. */
 export type DraftPatch = Partial<
-  Pick<SendIntent, 'to' | 'cc' | 'subject' | 'bodyMarkdown' | 'attachments'>
+  Pick<
+    SendIntent,
+    'to' | 'cc' | 'subject' | 'bodyMarkdown' | 'bodyHtml' | 'attachments'
+  >
 > & { removeAttachments?: string[] };
 
 /** A provider draft as it is now. `bodyText`: its plain-text rendering. */
@@ -995,6 +1007,8 @@ export interface DraftContent {
   bcc: string[];
   subject: string | null;
   bodyText: string;
+  /** Platform 2.15.0: the HTML body, when the draft has one. */
+  bodyHtml?: string;
   attachments: { filename: string; mime: string; size: number }[];
 }
 

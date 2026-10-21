@@ -51,6 +51,7 @@ import {
   type AttachmentsApi,
 } from './attachments';
 import { resolveImapReply } from './resolve';
+import { renderEmailBody } from './email-body';
 import { resolveGmailReply } from './resolve-gmail';
 // Type-only on purpose: the bundled senders (and their nodemailer/imapflow
 // dependencies) must not be pulled into this module's runtime graph.
@@ -1128,7 +1129,12 @@ export function createOutboundService(deps: {
       ...(to ? { to } : {}),
       ...(cc ? { cc } : {}),
       ...(patch.subject !== undefined ? { subject: patch.subject } : {}),
-      ...(patch.body !== undefined ? { bodyMarkdown: patch.body } : {}),
+      ...(patch.body !== undefined
+        ? {
+            bodyMarkdown: patch.body,
+            bodyHtml: renderEmailBody(patch.body).html,
+          }
+        : {}),
       ...(files.length ? { attachments: files.map((f) => f.bytes) } : {}),
       ...(removed.size ? { removeAttachments: [...removed] } : {}),
     };

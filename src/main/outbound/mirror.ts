@@ -18,6 +18,7 @@ import type {
 
 import type { LogSink } from '../core/engine/engine';
 import { normalizeSnapshot, snapshotOf } from '../core/store/outbox';
+import { renderEmailBody } from './email-body';
 import type { CoreStore } from '../core/store/store';
 
 /** Whole create → read → adopt, before draft_reply returns (§5.2). */
@@ -74,6 +75,7 @@ export function intentOf(row: OutboxRow): SendIntent {
     ...(row.bcc.length ? { bcc: row.bcc } : {}),
     subject: row.subject ?? undefined,
     bodyMarkdown: row.bodyMarkdown,
+    bodyHtml: renderEmailBody(row.bodyMarkdown).html,
     threading: row.threading ?? undefined,
   };
 }
