@@ -91,3 +91,65 @@
   margin-right: auto;
   color: var(--text-primary);
 }
+
+/* Kia's own facts above the message, one quiet line. */
+.ob-meta {
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+/* An email as the recipient sees it: core's inline-styled rendering on a
+   white page, in light and dark alike (mail is read on white). */
+.ob-body.ob-mail {
+  white-space: normal;
+  background: #ffffff;
+  color: #1e293b;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.ob-mail a {
+  color: #4f46e5;
+  cursor: default;
+}
+.ob-mail table {
+  border-collapse: collapse;
+}
+.ob-mail th,
+.ob-mail td {
+  border: 1px solid #e2e8f0;
+  padding: 4px 8px;
+}
+.ob-mail blockquote {
+  margin: 8px 0;
+  padding-left: 12px;
+  border-left: 3px solid #e2e8f0;
+  color: #475569;
+}
+.ob-mail pre {
+  white-space: pre-wrap;
+}
+/* Send | ▾ */
+.ob-split {
+  display: inline-flex;
+}
+.ob-split > .ui-btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.ob-split > .ui-btn:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  margin-left: 1px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.ob-preset {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+}
+.ob-preset-at {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}

@@ -26,6 +26,7 @@ import type {
 import type { CoreStore } from '../core/store/store';
 import { shapeOutboundError } from './error-copy';
 import { originOf, type DraftRevision, type OutboundService } from './service';
+import { renderEmailBody, wordsOf } from './email-body';
 
 /** `baseFor()` throws this bare internal string when the loopback server
  *  never bound (service.ts:158-171). It must never reach a user's screen. */
@@ -91,17 +92,35 @@ function errorFieldsOf(
 
 /** One row on the wire — the ONE mapping `outbox:list` and `outbox:get`
  *  share. `account` null = it vanished (the FK cascades, so only a race). */
-function panelRow(row: OutboxRow, account: Account | null): OutboxPanelRow {
+function panelRow(
+  row: OutboxRow,
+  account: Account | null,
+  email = false,
+): OutboxPanelRow {
   return {
     draftId: row.id,
     status: row.status,
     sendAt: row.status === 'draft' ? row.sendAt : null,
+    suggestedSendAt:
+      row.status === 'draft' && !row.sendAt
+        ? (row.suggestedSendAt ?? null)
+        : null,
     note: row.status === 'draft' ? row.error : null,
     kind: row.kind,
     accountLabel: account?.identifier ?? '(removed)',
     recipientDisplay: row.recipientDisplay,
     subject: row.subject,
-    bodyPreview: row.bodyMarkdown.replace(/\s+/g, ' ').trim().slice(0, 140),
+    // An email's preview reads as its words, without Markdown marks.
+    bodyPreview: (email
+      ? wordsOf(renderEmailBody(row.bodyMarkdown).html).replace(
+          / \[(href|src):[^\]]*\] /g,
+          ' ',
+        )
+      : row.bodyMarkdown
+    )
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 140),
     createdAt: row.createdAt,
     sentAt: row.sentAt,
     to: row.to,
@@ -156,15 +175,23 @@ export function outboundInvokeHandlers(deps: {
 > {
   const { service, store, openExternal } = deps;
 
-  const detailOf = async (row: OutboxRow): Promise<OutboxDraftDetail> => ({
-    ...panelRow(row, await store.account(row.accountId)),
-    body: row.bodyMarkdown,
-    attachments: row.attachments.map((a) => ({
-      filename: a.filename,
-      size: a.size,
-      origin: originOf(a, row.mirror?.provider),
-    })),
-  });
+  const emailOf = (account: Account | null) =>
+    account !== null && service.isEmailSource(account.source);
+
+  const detailOf = async (row: OutboxRow): Promise<OutboxDraftDetail> => {
+    const account = await store.account(row.accountId);
+    const email = emailOf(account);
+    return {
+      ...panelRow(row, account, email),
+      body: row.bodyMarkdown,
+      ...(email && { bodyHtml: renderEmailBody(row.bodyMarkdown).html }),
+      attachments: row.attachments.map((a) => ({
+        filename: a.filename,
+        size: a.size,
+        origin: originOf(a, row.mirror?.provider),
+      })),
+    };
+  };
 
   /** A review-sheet edit at the revision the sheet showed. */
   const revise = async (
@@ -238,7 +265,10 @@ export function outboundInvokeHandlers(deps: {
           // account vanished between listRecent and this lookup.
           accounts.set(row.accountId, await store.account(row.accountId));
         }
-        out.push(panelRow(row, accounts.get(row.accountId) ?? null));
+        {
+          const account = accounts.get(row.accountId) ?? null;
+          out.push(panelRow(row, account, emailOf(account)));
+        }
       }
       return out;
     },
@@ -314,7 +344,10 @@ export function outboundInvokeHandlers(deps: {
           : 'already';
       return {
         outcome: kind,
-        row: panelRow(outcome.row, await store.account(outcome.row.accountId)),
+        row: await (async () => {
+          const account = await store.account(outcome.row.accountId);
+          return panelRow(outcome.row, account, emailOf(account));
+        })(),
         ...(outcome.kind === 'failed' && outcome.row.status === 'draft'
           ? { error: outcome.error }
           : {}),

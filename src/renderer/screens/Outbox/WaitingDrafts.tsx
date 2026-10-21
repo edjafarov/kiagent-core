@@ -7,7 +7,7 @@ import {
   sourceCategory,
 } from '@shared/web-ui/ui';
 import { formatRelativeCompact } from '@renderer/screens/Sources/format';
-import { quoted, scheduledFor } from './outbox-rows';
+import { quoted, scheduledFor, suggestedFor } from './outbox-rows';
 import type { OutboxData } from './use-outbox';
 
 /** A chat message is "Slack message to #design"; mail is "Sam · Subject". */
@@ -46,7 +46,10 @@ export function WaitingDrafts(props: {
                 : `${quoted(r.bodyPreview)} · ${source} · ${
                     r.sendAt
                       ? scheduledFor(r.sendAt)
-                      : (r.note ?? formatRelativeCompact(r.createdAt))
+                      : r.suggestedSendAt &&
+                          Date.parse(r.suggestedSendAt) > Date.now()
+                        ? suggestedFor(r.suggestedSendAt, Date.now())
+                        : (r.note ?? formatRelativeCompact(r.createdAt))
                   }`
             }
             action={

@@ -270,6 +270,9 @@ export interface OutboxPanelRow {
   status: OutboxStatus;
   /** A draft's scheduled send time (ISO), or null. */
   sendAt: string | null;
+  /** A time an AI app suggested (schedule_drafts), for a draft that is not
+   *  scheduled; the user confirms it. Null otherwise. */
+  suggestedSendAt: string | null;
   /** A pending draft's schedule note: "Missed its time — send now or
    *  reschedule", "Edited — schedule again". Null otherwise. */
   note: string | null;
@@ -325,6 +328,9 @@ export interface OutboxMirrorStatus {
 /** One draft in full, for the in-app review. */
 export interface OutboxDraftDetail extends OutboxPanelRow {
   body: string;
+  /** An email's body as it will be sent (core's rendering, safe to insert:
+   *  raw HTML escaped, links http(s)/mailto only). Absent for chats. */
+  bodyHtml?: string;
   /** Each file: name, size in bytes, where it came from ("from ~/…"). */
   attachments: { filename: string; size: number; origin: string }[];
 }

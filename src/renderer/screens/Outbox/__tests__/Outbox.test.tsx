@@ -49,6 +49,7 @@ function row(over: Partial<OutboxPanelRow>): OutboxPanelRow {
     draftId: 'd',
     status: 'sent',
     sendAt: null,
+    suggestedSendAt: null,
     note: null,
     kind: 'reply',
     accountLabel: 'alex@example.com',
@@ -132,6 +133,7 @@ let sendResult: {
   error?: string;
 };
 let files: OutboxDraftDetail['attachments'];
+let bodyHtml: string | undefined;
 /** What outbox:schedule answers: the draft with the time set (or cleared). */
 const scheduleOk = (p: { draftId: string; sendAt: string | null }) => ({
   outcome: p.sendAt ? 'scheduled' : 'unscheduled',
@@ -143,12 +145,20 @@ let fileResult: { detail: OutboxDraftDetail | null; changed: boolean };
 function detail(id: string): OutboxDraftDetail | null {
   const fresh = row({ draftId: 'fresh', status: 'draft', createdVia: 'panel' });
   const r = [...rows, fresh].find((x) => x.draftId === id);
-  return r ? { ...r, body: `Full body of ${id}`, attachments: files } : null;
+  return r
+    ? {
+        ...r,
+        body: `Full body of ${id}`,
+        ...(bodyHtml !== undefined && { bodyHtml }),
+        attachments: files,
+      }
+    : null;
 }
 
 beforeEach(() => {
   scheduleResult = scheduleOk;
   files = [];
+  bodyHtml = undefined;
   fileResult = { detail: null, changed: false };
   jest.useFakeTimers({ now: NOW, doNotFake: ['queueMicrotask'] });
   rows = ROWS;
@@ -507,9 +517,15 @@ test('review: a mail app out of reach before the send keeps the draft and Send',
   ).toBeInTheDocument();
 });
 
-test('review: Send later picks a time and schedules the shown revision', async () => {
-  const s = await openReview('wait');
-  fireEvent.click(within(s).getByRole('button', { name: 'Send later…' }));
+const openSendMenu = () =>
+  fireEvent.click(
+    within(sheet()).getByRole('button', { name: 'More send options' }),
+  );
+
+test('review: a custom time schedules the shown revision', async () => {
+  await openReview('wait');
+  openSendMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Custom time…' }));
   const input = within(sheet()).getByLabelText('Send at') as HTMLInputElement;
   // the next whole hour, at least 30 min away
   expect(input.value).toBe('2026-09-24T13:00');
@@ -525,9 +541,6 @@ test('review: Send later picks a time and schedules the shown revision', async (
   expect(
     within(sheet()).getByRole('button', { name: 'Send now' }),
   ).toBeInTheDocument();
-  expect(
-    within(sheet()).queryByRole('button', { name: 'Send later…' }),
-  ).toBeNull();
   fireEvent.click(
     within(sheet()).getByRole('button', { name: 'Cancel schedule' }),
   );
@@ -548,13 +561,89 @@ test('review: a schedule refused says why and schedules nothing', async () => {
       error:
         'not scheduled: attachment "a.pdf" is no longer available (~/a.pdf)',
     }) as never;
-  const s = await openReview('wait');
-  fireEvent.click(within(s).getByRole('button', { name: 'Send later…' }));
-  fireEvent.click(within(sheet()).getByRole('button', { name: 'Schedule' }));
+  await openReview('wait');
+  openSendMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: /^In 1 hour/ }));
   await act(async () => {});
   expect(sheet()).toHaveTextContent(
     'Not scheduled — attachment "a.pdf" is no longer available (~/a.pdf)',
   );
+});
+
+test('review: Send ▾ offers the presets with their times; one click schedules', async () => {
+  await openReview('wait');
+  openSendMenu();
+  const names = screen.getAllByRole('menuitem').map((m) => m.textContent ?? '');
+  // 11:37 on Thu 24 Sep: this afternoon and evening are still ahead.
+  expect(names).toEqual([
+    expect.stringMatching(/^In 15 minutes/),
+    expect.stringMatching(/^In 1 hour/),
+    expect.stringMatching(/^In 3 hours/),
+    expect.stringMatching(/^This afternoon.*(14:00|02:00 PM)/),
+    expect.stringMatching(/^This evening.*(18:00|06:00 PM)/),
+    expect.stringMatching(/^Tomorrow morning.*(09:00|09:00 AM)/),
+    expect.stringMatching(/^Tomorrow afternoon.*(14:00|02:00 PM)/),
+    expect.stringMatching(/^Monday morning.*(09:00|09:00 AM)/),
+    'Custom time…',
+  ]);
+  fireEvent.click(screen.getByRole('menuitem', { name: /^Tomorrow morning/ }));
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledWith('outbox:schedule', {
+    draftId: 'wait',
+    revision: 1,
+    sendAt: new Date(2026, 8, 25, 9, 0).toISOString(),
+  });
+  // Scheduled: Send now first, the menu can reschedule or cancel.
+  expect(
+    within(sheet()).getByRole('button', { name: 'Send now' }),
+  ).toBeInTheDocument();
+  openSendMenu();
+  expect(
+    screen.getByRole('menuitem', { name: 'Cancel schedule' }),
+  ).toBeInTheDocument();
+});
+
+test('review: an AI app’s suggested time is the one-click action', async () => {
+  rows = rows.map((r) =>
+    r.draftId === 'wait' ? { ...r, suggestedSendAt: iso(24, 14, 12) } : r,
+  );
+  await openReview('wait');
+  expect(sheet()).toHaveTextContent('Suggested for');
+  fireEvent.click(
+    within(sheet()).getByRole('button', {
+      name: /^Schedule for .*(14:12|02:12 PM)/,
+    }),
+  );
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledWith('outbox:schedule', {
+    draftId: 'wait',
+    revision: 1,
+    sendAt: iso(24, 14, 12),
+  });
+});
+
+test('review: a passed suggestion is not offered', async () => {
+  rows = rows.map((r) =>
+    r.draftId === 'wait' ? { ...r, suggestedSendAt: iso(24, 9, 0) } : r,
+  );
+  await openReview('wait');
+  expect(sheet()).toHaveTextContent('Suggested time passed');
+  expect(
+    within(sheet()).queryByRole('button', { name: /^Schedule for/ }),
+  ).toBeNull();
+  expect(
+    within(sheet()).getByRole('button', { name: 'Send' }),
+  ).toBeInTheDocument();
+});
+
+test('review: an email shows as the recipient sees it, not as Markdown', async () => {
+  bodyHtml =
+    '<div style="x"><h2>Plan</h2><ul><li><strong>one</strong></li></ul></div>';
+  await openReview('wait');
+  const body = sheet().querySelector('.ob-mail');
+  expect(body?.querySelector('h2')?.textContent).toBe('Plan');
+  expect(body?.querySelector('strong')?.textContent).toBe('one');
+  expect(body?.textContent).not.toContain('##');
 });
 
 test('review: a missed schedule says so', async () => {

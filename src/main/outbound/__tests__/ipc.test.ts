@@ -458,6 +458,7 @@ describe('outbound ipc delegate', () => {
       'sourceId',
       'status',
       'subject',
+      'suggestedSendAt',
       'to',
     ]);
     expect(rowsArr.map((r) => r.draftId)).toEqual(
@@ -685,6 +686,18 @@ describe('outbound ipc delegate', () => {
       createdBy: null,
     });
     expect(await invoke('outbox:get', { draftId: 'nope' })).toBeNull();
+  });
+
+  it('an email draft carries its rendered body; its preview reads without Markdown marks', async () => {
+    const r = await service.draftReply({
+      documentId: docId,
+      body: '## Plan\n\n- **one** [doc](https://x.io/d)',
+    });
+    const d = await invoke('outbox:get', { draftId: r.draft_id });
+    expect(d?.bodyHtml).toContain('<strong>one</strong>');
+    expect(d?.bodyPreview).toBe('Plan one doc');
+    const [listed] = await invoke('outbox:list', undefined as never);
+    expect(listed.bodyPreview).toBe('Plan one doc');
   });
 
   it('outbox:send runs the page confirm: sent, then already; unknown is gone', async () => {

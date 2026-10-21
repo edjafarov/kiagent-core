@@ -350,6 +350,8 @@ export interface OutboundService extends OutboundToolApi {
   /** Panel support: the source ids that can send (bundled + extension
    *  senders), for the Outbox's "Sends from". PANEL-ONLY. */
   senderSources(): string[];
+  /** Whether drafts of this source are emails (rendered as HTML). */
+  isEmailSource(sourceId: string): boolean;
   /** The review sheet's "Send later…" (spec §8): a confirm of `revision`
    *  that sets the send time instead of sending; `sendAt` null cancels.
    *  PANEL-ONLY — models may suggest a time, only the user schedules. */
@@ -2027,6 +2029,11 @@ export function createOutboundService(deps: {
       }),
 
     senderSources: () => lookup.ids(),
+
+    isEmailSource: (sourceId) =>
+      sourceId === 'gmail' ||
+      sourceId === 'imap' ||
+      deps.descriptorFor?.(sourceId)?.compose === 'email',
 
     async cancelByToken(token) {
       const secret = await deps.store.outbox.secret();

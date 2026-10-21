@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { OutboxDraftDetail } from '@shared/ipc';
 import {
   BrandGlyph,
@@ -6,12 +6,14 @@ import {
   Button,
   Disclosure,
   KeyValue,
+  Menu,
   Sheet,
   Status,
   TextButton,
   clientBrand,
   sourceBrand,
   type KeyValueItem,
+  type MenuEntry,
 } from '@shared/web-ui/ui';
 import { formatRelativeCompact } from '@renderer/screens/Sources/format';
 import {
@@ -19,8 +21,11 @@ import {
   defaultSendLater,
   mirrorLine,
   scheduledFor,
+  sendPresets,
   statusWord,
   stripIpcWrapper,
+  suggestedFor,
+  whenLabel,
 } from './outbox-rows';
 
 /** Who drafted it: the app that asked, the user (Draft again), or an app
@@ -70,8 +75,11 @@ export function ReviewSheet(props: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmRedraft, setConfirmRedraft] = useState(false);
-  /** "Send later…" open: the picked local time (`datetime-local`). */
+  /** "Custom time…" open: the picked local time (`datetime-local`). */
   const [later, setLater] = useState<string | null>(null);
+  /** The Send ▾ menu. */
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuAnchor = useRef<HTMLButtonElement>(null);
 
   const read = useCallback(() => {
     void window.kiagent
@@ -225,7 +233,9 @@ export function ReviewSheet(props: {
         }
       : statusWord(d);
 
+  const email = d.bodyHtml !== undefined;
   const items: KeyValueItem[] = [
+    ...(email ? [{ label: 'From', value: d.accountLabel }] : []),
     {
       label: 'To',
       value: (
@@ -244,11 +254,69 @@ export function ReviewSheet(props: {
     },
     ...(d.cc.length > 0 ? [{ label: 'Cc', value: d.cc.join(', ') }] : []),
     ...(d.bcc.length > 0 ? [{ label: 'Bcc', value: d.bcc.join(', ') }] : []),
-    { label: 'Drafted by', value: draftedBy(d) },
-    { label: 'Sending account', value: d.accountLabel },
+    ...(!email ? [{ label: 'Sending account', value: d.accountLabel }] : []),
     ...(d.subject ? [{ label: 'Subject', value: d.subject }] : []),
-    ...(mirrorLine(d) ? [{ label: 'Drafts', value: mirrorLine(d) }] : []),
   ];
+  // Kia's own facts, one quiet line above the message.
+  const meta = [`Drafted by ${draftedBy(d)}`, mirrorLine(d)]
+    .filter(Boolean)
+    .join(' · ');
+
+  const nowMs = Date.now();
+  const suggested =
+    !d.sendAt &&
+    d.suggestedSendAt &&
+    Date.parse(d.suggestedSendAt) > nowMs + 60_000
+      ? d.suggestedSendAt
+      : null;
+  const menuItems: MenuEntry[] = [
+    ...(suggested
+      ? ([
+          {
+            key: 'now',
+            label: 'Send now',
+            onSelect: () => void send(d.revision),
+          },
+          'separator',
+        ] as MenuEntry[])
+      : []),
+    ...sendPresets(nowMs).map(
+      (p): MenuEntry => ({
+        key: p.key,
+        label: (
+          <span className="ob-preset">
+            <span>{p.label}</span>
+            <span className="ob-preset-at">{whenLabel(p.at, nowMs)}</span>
+          </span>
+        ),
+        onSelect: () => void schedule(d.revision, new Date(p.at).toISOString()),
+      }),
+    ),
+    'separator',
+    {
+      key: 'custom',
+      label: 'Custom time…',
+      onSelect: () => setLater(defaultSendLater(nowMs)),
+    },
+    ...(d.sendAt
+      ? ([
+          'separator',
+          {
+            key: 'cancel',
+            label: 'Cancel schedule',
+            onSelect: () => void schedule(d.revision, null),
+          },
+        ] as MenuEntry[])
+      : []),
+  ];
+  const primary = d.sendAt
+    ? { label: 'Send now', run: () => void send(d.revision) }
+    : suggested
+      ? {
+          label: `Schedule for ${whenLabel(Date.parse(suggested), nowMs)}`,
+          run: () => void schedule(d.revision, suggested),
+        }
+      : { label: 'Send', run: () => void send(d.revision) };
 
   let footer: React.ReactNode;
   if (sendable)
@@ -260,22 +328,34 @@ export function ReviewSheet(props: {
         <TextButton disabled={busy} onClick={() => void openInBrowser()}>
           Open in browser
         </TextButton>
-        {!d.sendAt && later === null && (
+        <span className="ob-split">
           <Button
+            variant="primary"
+            icon={suggested ? 'clock' : 'send'}
             disabled={busy}
-            onClick={() => setLater(defaultSendLater(Date.now()))}
+            onClick={primary.run}
           >
-            Send later…
+            {busy ? 'Working…' : primary.label}
           </Button>
-        )}
-        <Button
-          variant="primary"
-          icon="send"
-          disabled={busy}
-          onClick={() => void send(d.revision)}
-        >
-          {busy ? 'Sending…' : d.sendAt ? 'Send now' : 'Send'}
-        </Button>
+          <Button
+            ref={menuAnchor}
+            variant="primary"
+            icon="chev-down"
+            aria-label="More send options"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            disabled={busy}
+            onClick={() => setMenuOpen((o) => !o)}
+          />
+        </span>
+        <Menu
+          open={menuOpen}
+          anchorRef={menuAnchor}
+          onClose={() => setMenuOpen(false)}
+          items={menuItems}
+          aria-label="Send options"
+          placement="top-end"
+        />
       </>
     );
   else if (action === 'retry')
@@ -323,6 +403,7 @@ export function ReviewSheet(props: {
       footer={footer}
     >
       {props.note && <p className="ob-note">{props.note}</p>}
+      <p className="ob-meta">{meta}</p>
       <KeyValue items={items} />
       {word && (
         <div className="ob-state">
@@ -339,7 +420,20 @@ export function ReviewSheet(props: {
           <code className="ob-detail">{d.errorDetail}</code>
         </Disclosure>
       )}
-      <div className="ob-body">{d.body}</div>
+      {email ? (
+        <div
+          className="ob-body ob-mail"
+          // Core's rendering: raw HTML escaped, links http(s)/mailto only.
+          // eslint-disable-next-line react/no-danger
+          dangerouslySetInnerHTML={{ __html: d.bodyHtml! }}
+          onClickCapture={(e) => {
+            // A preview, not a browser: links show their target, never open.
+            if ((e.target as HTMLElement).closest('a')) e.preventDefault();
+          }}
+        />
+      ) : (
+        <div className="ob-body">{d.body}</div>
+      )}
       {(d.attachments.length > 0 || sendable) && (
         <ul className="ob-files" aria-label="Attachments">
           {d.attachments.map((a) => (
@@ -381,6 +475,13 @@ export function ReviewSheet(props: {
           >
             Cancel schedule
           </TextButton>
+        </p>
+      )}
+      {sendable && !d.sendAt && d.suggestedSendAt && (
+        <p className="ob-schedule">
+          {suggested
+            ? suggestedFor(suggested, nowMs)
+            : 'Suggested time passed — send now or pick a time'}
         </p>
       )}
       {sendable && !d.sendAt && d.note && <p className="ob-note">{d.note}</p>}
