@@ -443,7 +443,9 @@ describe('outbound service — provider draft mirror', () => {
       provider.drafts.set('d1', {
         ...d,
         bodyText: 'Plan\n\n* one\n* two doc <https://x.io/d>',
-        bodyHtml: `<html><head><style>p{margin:0}</style></head><body><div dir="ltr">${html('d1')
+        bodyHtml: `<html><head><style>p{margin:0}</style></head><body><div dir="ltr">${html(
+          'd1',
+        )
           .replace(/<strong>/g, '<b>')
           .replace(/<\/strong>/g, '</b>')
           .replace(/\n/g, '\r\n')}</div></body></html>`,

@@ -93,9 +93,7 @@ export function sameBody(c: DraftContent, md: string): boolean {
   const theirs =
     c.bodyHtml !== undefined ? wordsOf(c.bodyHtml) : collapse(c.bodyText);
   const mine =
-    c.bodyHtml !== undefined
-      ? wordsOf(renderEmailBody(md).html)
-      : collapse(md);
+    c.bodyHtml !== undefined ? wordsOf(renderEmailBody(md).html) : collapse(md);
   return theirs === mine;
 }
 

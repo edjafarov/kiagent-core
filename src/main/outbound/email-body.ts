@@ -87,9 +87,33 @@ export function renderEmailBody(
 }
 
 const INLINE = new Set([
-  'a', 'abbr', 'b', 'bdi', 'bdo', 'cite', 'code', 'del', 'dfn', 'em', 'font',
-  'i', 'ins', 'kbd', 'mark', 'q', 's', 'samp', 'small', 'span', 'strike',
-  'strong', 'sub', 'sup', 'tt', 'u', 'var',
+  'a',
+  'abbr',
+  'b',
+  'bdi',
+  'bdo',
+  'cite',
+  'code',
+  'del',
+  'dfn',
+  'em',
+  'font',
+  'i',
+  'ins',
+  'kbd',
+  'mark',
+  'q',
+  's',
+  'samp',
+  'small',
+  'span',
+  'strike',
+  'strong',
+  'sub',
+  'sup',
+  'tt',
+  'u',
+  'var',
 ]);
 
 /**
@@ -113,7 +137,7 @@ export function wordsOf(html: string): string {
 
 /** All whitespace (incl. no-break spaces) as one space, trimmed. */
 export function collapse(s: string): string {
-  return s.replace(/[\s ​]+/g, ' ').trim();
+  return s.replace(/[\s\u00a0\u200b]+/g, ' ').trim();
 }
 
 /** The exact provider body, for "is this still Kia's own write". */

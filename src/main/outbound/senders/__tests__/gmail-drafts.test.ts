@@ -461,7 +461,7 @@ describe('gmail draft mirror', () => {
       ]);
     });
 
-    it('a body change with HTML replaces both parts with Kia\'s', async () => {
+    it("a body change with HTML replaces both parts with Kia's", async () => {
       withStored();
       await drafts().update(ref(), {
         bodyMarkdown: 'New **text**',
