@@ -181,6 +181,9 @@ export interface DraftToolResult {
   bcc: string[];
   subject: string | null;
   body: string;
+  /** The body as the recipient sees it (email drafts, `listOutbox({html})`
+   *  only — the phone shows it; models read `body`). */
+  body_html?: string;
   attachments: { filename: string; size: number; origin: string }[];
   warnings: string[];
   instruction: string;
@@ -252,7 +255,8 @@ export interface OutboundToolApi {
     body: string;
     attachments?: AttachmentInput[];
   }): Promise<DraftToolResult>;
-  listOutbox(a: { limit?: number }): Promise<OutboxListItem[]>;
+  /** `html`: pending email drafts also carry `body_html` (the phone). */
+  listOutbox(a: { limit?: number; html?: boolean }): Promise<OutboxListItem[]>;
   sendDraft(a: { draftId: string; revision: number }): Promise<SendDraftResult>;
   /** Change a pending draft in place (spec §4.2). Refuses — with the current
    *  draft in the message — when `revision` is not the row's revision. */
@@ -802,6 +806,19 @@ export function createOutboundService(deps: {
     sourceId === 'gmail' ||
     sourceId === 'imap' ||
     deps.descriptorFor?.(sourceId)?.compose === 'email';
+
+  /** What the recipient sees, for an email account's draft. */
+  async function bodyHtmlFor(row: OutboxRow): Promise<string | undefined> {
+    const account = await deps.store.account(row.accountId);
+    if (!account) return undefined;
+    return isEmailSource(account.source)
+      ? renderEmailBody(row.bodyMarkdown).html
+      : undefined;
+  }
+  const bodyHtmlOf = async (row: OutboxRow) => {
+    const h = await bodyHtmlFor(row);
+    return h === undefined ? {} : { body_html: h };
+  };
 
   const withDraft = createDraftLock();
   // Chat-mode sends and schedules of one account pass the rate rule one at
@@ -1767,7 +1784,7 @@ export function createOutboundService(deps: {
       return toolResult(made.row, made.warnings);
     },
 
-    async listOutbox({ limit }) {
+    async listOutbox({ limit, html }) {
       assertReady();
       await deps.store.outbox.expireOverdue();
       // The model supplies `limit` straight from tool args (list-outbox.ts
@@ -1815,6 +1832,7 @@ export function createOutboundService(deps: {
                   mode: row.confirmMode,
                   recipient_display: row.recipientDisplay,
                   ...draftFields(row),
+                  ...(html && (await bodyHtmlOf(row))),
                   warnings: [],
                   instruction: `Show the user this draft before asking to send it. ${
                     REVISE_HINT
@@ -2006,13 +2024,7 @@ export function createOutboundService(deps: {
       });
     },
 
-    async bodyHtmlFor(row) {
-      const account = await deps.store.account(row.accountId);
-      if (!account) return undefined;
-      return isEmailSource(account.source)
-        ? renderEmailBody(row.bodyMarkdown).html
-        : undefined;
-    },
+    bodyHtmlFor,
 
     sendById: (draftId, revision) => confirmRow(draftId, revision),
 

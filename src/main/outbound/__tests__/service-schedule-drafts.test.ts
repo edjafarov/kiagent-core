@@ -1,3 +1,4 @@
+import { renderEmailBody } from '../email-body';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -363,5 +364,13 @@ describe('outbound service — schedule_drafts', () => {
     const [item] = await service.listOutbox({});
     expect(item.suggested_for).toBe(at(40));
     expect(item.scheduled_for).toBeUndefined();
+  });
+
+  it('list_outbox gives the rendered body only when asked (the phone)', async () => {
+    await draft();
+    const [plain] = await service.listOutbox({});
+    expect(plain.draft?.body_html).toBeUndefined();
+    const [item] = await service.listOutbox({ html: true });
+    expect(item.draft?.body_html).toBe(renderEmailBody('Hello').html);
   });
 });
