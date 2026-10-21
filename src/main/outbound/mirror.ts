@@ -34,6 +34,9 @@ interface ReadOptions {
   created?: boolean;
   /** What Kia just wrote, when the read follows Kia's own update. */
   local?: DraftSnapshot;
+  /** That update wrote the body: only then can its echo vouch for the
+   *  provider's body as Kia's rendering. */
+  wroteBody?: boolean;
 }
 
 const FIELDS = ['to', 'cc', 'bcc', 'subject', 'body', 'attachments'];
@@ -158,7 +161,7 @@ export function createMirrorOps(deps: {
     row: OutboxRow,
     ref: DraftRef,
     c: DraftContent,
-    { origins, created, local }: ReadOptions,
+    { origins, created, local, wroteBody }: ReadOptions,
   ) => {
     // The words decide whether the provider changed the body (spec
     // 2026-10-21 §3.4a): a provider re-serializing Kia's HTML, or the user
@@ -182,9 +185,11 @@ export function createMirrorOps(deps: {
       ours === local.bodyMarkdown &&
       fields(copy) === fields(local);
     // Kia's own rendering as the provider holds it: what a send may carry
-    // without writing the body again (§3.4b).
+    // without writing the body again (§3.4b). A subject- or files-only
+    // write never vouches for a body Kia did not write; the last key stays.
     const own =
-      echo || (created === true && ours === row.bodyMarkdown && !local);
+      (echo && wroteBody === true) ||
+      (created === true && ours === row.bodyMarkdown && !local);
     const hash = bodyHash(c);
     const before = (await store.outbox.get(row.id)) ?? row;
     const { row: next, changed } = await store.outbox.applyContent(
@@ -342,6 +347,8 @@ export function createMirrorOps(deps: {
           origins,
           local,
           created,
+          // The create's own files upload: the body was written by the create.
+          wroteBody: patch.bodyMarkdown !== undefined || created === true,
         });
       } catch (e) {
         // The provider has the edit; show it until the next refresh reads

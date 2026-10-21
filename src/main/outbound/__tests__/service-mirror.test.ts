@@ -505,6 +505,22 @@ describe('outbound service — provider draft mirror', () => {
       expect(after?.ownKey).not.toBe(before);
     });
 
+    it('a subject-only write never vouches for a body the provider formatted', async () => {
+      const r = await draft('Hello Sam, see you');
+      provider.drafts.get('d1')!.bodyHtml =
+        '<div><p>Hello <b>Sam</b>, see you</p></div>';
+      await service.listOutbox({});
+      await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        subject: 'New subject',
+      });
+      const m = (await row(r.draft_id))?.mirror;
+      expect(m?.seenKey).toBeDefined();
+      // Still not Kia's rendering: the send rewrites the body first.
+      expect(m?.ownKey).not.toBe(m?.seenKey);
+    });
+
     it('a changed link target is an edit', async () => {
       const r = await draft('see [doc](https://x.io/d)');
       provider.drafts.get('d1')!.bodyHtml = html('d1').replace(
