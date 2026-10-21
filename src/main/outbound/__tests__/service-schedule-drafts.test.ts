@@ -1,9 +1,9 @@
-import { renderEmailBody } from '../email-body';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
 import type { AccountId, ConfirmMode, Prefs, Sender } from '@shared/contracts';
+import { renderEmailBody } from '../email-body';
 
 import { openDb } from '../../db/app-db';
 import { openStore, type CoreStore } from '../../core/store/store';
