@@ -198,12 +198,14 @@ export interface OutboxStore {
   ): Promise<boolean>;
   /** Sets or clears the suggested time on a draft; no revision bump. */
   suggest(id: string, at: string | null): Promise<boolean>;
-  /** Send times on an account inside [fromIso, toIso]: sent messages and
-   *  scheduled drafts (not `exceptId`) — what the rate rule counts. */
+  /** Send times on an account inside [fromIso, toIso]: sent messages,
+   *  scheduled drafts (not `exceptId`) and sends in flight (at their
+   *  schedule, else `nowIso`) — what the rate rule counts. */
   listSendTimes(
     accountId: AccountId,
     fromIso: string,
     toIso: string,
+    nowIso: string,
     exceptId?: string,
   ): Promise<string[]>;
   /** Scheduled drafts whose time has come (send_at <= nowIso). */
@@ -669,7 +671,7 @@ export function createOutboxStore(
       return moved;
     },
 
-    async listSendTimes(accountId, fromIso, toIso, exceptId) {
+    async listSendTimes(accountId, fromIso, toIso, nowIso, exceptId) {
       const rows = (await db.all(
         `SELECT sent_at AS at FROM outbox
           WHERE account_id = ? AND status = 'sent'
@@ -677,7 +679,10 @@ export function createOutboxStore(
          UNION ALL
          SELECT send_at AS at FROM outbox
           WHERE account_id = ? AND status = 'draft' AND send_at IS NOT NULL
-            AND send_at >= ? AND send_at <= ? AND id IS NOT ?`,
+            AND send_at >= ? AND send_at <= ? AND id IS NOT ?
+         UNION ALL
+         SELECT COALESCE(send_at, ?) AS at FROM outbox
+          WHERE account_id = ? AND status = 'sending' AND id IS NOT ?`,
         [
           accountId,
           fromIso,
@@ -685,6 +690,9 @@ export function createOutboxStore(
           accountId,
           fromIso,
           toIso,
+          exceptId ?? null,
+          nowIso,
+          accountId,
           exceptId ?? null,
         ],
       )) as unknown as Array<{ at: string }>;

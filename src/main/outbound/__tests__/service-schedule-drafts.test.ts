@@ -329,6 +329,25 @@ describe('outbound service — schedule_drafts', () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  it('a send in flight counts: a scheduled send going out holds its slot', async () => {
+    const ids = [];
+    for (const to of ['a', 'b', 'c', 'd'])
+      ids.push((await draft(`${to}@example.com`)).draft_id);
+    await service.scheduleDrafts({
+      drafts: ids.slice(0, 3).map((draftId, i) => ({
+        draftId,
+        revision: 1,
+        sendAt: at(10 + i),
+      })),
+    });
+    // The scheduler has picked the first one up; the provider has not answered.
+    expect(await store.outbox.transition(ids[0], ['draft'], 'sending')).toBe(true);
+    const out = await service.scheduleDrafts({
+      drafts: [{ draftId: ids[3], revision: 1, sendAt: at(20) }],
+    });
+    expect(out.results[0].error).toMatch(/rate limit/);
+  });
+
   it('two batches at once cannot both pass the rate rule', async () => {
     const ids = [];
     for (const to of ['a', 'b', 'c', 'd'])

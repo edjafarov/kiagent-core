@@ -837,6 +837,7 @@ export function createOutboundService(deps: {
       account.id,
       new Date(t - HOUR_MS).toISOString(),
       new Date(t + HOUR_MS).toISOString(),
+      new Date(nowMs()).toISOString(),
       exceptId,
     );
     return fitsRate(times.map(Date.parse), t, sendsPerHourFor(account));
