@@ -21,6 +21,7 @@ import type {
   DraftEventResult,
   SimilarEvent,
 } from './types';
+import type { DraftLock } from '../outbound/draft-lock';
 import type { OutboundContext } from '../outbound/service';
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -34,6 +35,9 @@ export interface DraftingDeps {
   ctx: () => OutboundContext;
   /** null on the agent transport, or while the server is not up. */
   urlFor(row: EventDraftRow): Promise<string | null>;
+  /** Serializes draft_event calls: the dedupe check and the insert must not
+   *  interleave (a model captures in parallel batches). */
+  lock: DraftLock;
 }
 
 export const systemTimeZone = (): string =>
@@ -198,7 +202,9 @@ export function createDrafting(deps: DraftingDeps) {
     target: CalendarListItem,
     existing: boolean,
   ): Promise<DraftEventResult> => {
-    const url = await deps.urlFor(row);
+    // The review page serves `draft` rows only; other states wait in the
+    // Outbox and say where they stand.
+    const url = row.status === 'draft' ? await deps.urlFor(row) : null;
     return {
       draftId: row.id,
       revision: row.revision,
@@ -209,13 +215,18 @@ export function createDrafting(deps: DraftingDeps) {
         name: target.name,
         accountEmail: target.accountEmail,
       },
-      similarEvents: await similarTo(row.accountId, row.payload, row.id),
+      similarEvents: existing
+        ? []
+        : await similarTo(row.accountId, row.payload, row.id),
       ...(existing && { existing: true as const }),
-      instruction: existing
-        ? INSTRUCTION.existing
-        : url
-          ? INSTRUCTION.link
-          : INSTRUCTION.review,
+      instruction:
+        row.status !== 'draft'
+          ? INSTRUCTION.inProgress
+          : existing
+            ? INSTRUCTION.existing
+            : url
+              ? INSTRUCTION.link
+              : INSTRUCTION.review,
     };
   };
 
@@ -228,7 +239,12 @@ export function createDrafting(deps: DraftingDeps) {
     return mode === 'chat' ? 'link' : mode;
   };
 
-  async function draftEvent(a: DraftEventArgs): Promise<DraftEventResult> {
+  const draftEvent = (a: DraftEventArgs): Promise<DraftEventResult> =>
+    deps.lock('draft_event', () => draftEventLocked(a));
+
+  async function draftEventLocked(
+    a: DraftEventArgs,
+  ): Promise<DraftEventResult> {
     const via = deps.ctx().createdViaNow();
     const defaultTz = calendarPrefs(deps.prefs).timeZone ?? systemTimeZone();
 
@@ -292,7 +308,13 @@ export function createDrafting(deps: DraftingDeps) {
           (await placeholderState(store, r)) === 'unseen');
       if (active) {
         await store.eventDrafts.touch(r.id, via);
-        return result((await store.eventDrafts.get(r.id))!, target, true);
+        const own =
+          (await deps.calendars.list()).find(
+            (c) =>
+              c.accountId === r.accountId &&
+              c.calendarId === r.payload.calendarId,
+          ) ?? target;
+        return result((await store.eventDrafts.get(r.id))!, own, true);
       }
     }
 

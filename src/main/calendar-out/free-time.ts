@@ -14,7 +14,7 @@ import {
   type Busyish,
 } from './availability';
 import { calendarPrefs, type CalendarsView } from './calendars';
-import { TOO_FAR_COPY } from './copy';
+import { NO_WRITER_NOTE, TOO_FAR_COPY } from './copy';
 import { systemTimeZone } from './drafting';
 import { placeholderState } from './placeholder';
 import type { FindFreeTimeArgs, FreeTimeResult } from './types';
@@ -54,15 +54,23 @@ export function createFreeTime(deps: {
     const to = new Date(toMs).toISOString();
 
     // Coverage — which calendars Kia actually sees.
-    const cals = (await deps.calendars.list()).filter(
-      (c) => c.calendarId !== '',
-    );
+    const listed = await deps.calendars.list();
+    const cals = listed.filter((c) => c.calendarId !== '');
+    // Accounts whose calendars could not be listed (or that have no writer):
+    // their indexed events still count, whatever calendar they are on.
+    const unlisted = listed.filter((c) => c.calendarId === '');
+    const wholeAccount = new Set(unlisted.map((c) => c.accountId));
     const wanted = (id: string) => !a.calendarIds || a.calendarIds.includes(id);
     const indexed = cals.filter((c) => c.indexed && wanted(c.calendarId));
     const indexedKey = new Set(
       indexed.map((c) => `${c.accountId}|${c.calendarId}`),
     );
     const warnings: string[] = [];
+    for (const c of unlisted)
+      if (c.note !== NO_WRITER_NOTE)
+        warnings.push(
+          `${c.accountEmail}: ${c.note ?? 'calendars unavailable'}`,
+        );
     const notIndexedWritable = cals
       .filter((c) => !c.indexed && c.canWrite && wanted(c.calendarId))
       .map((c) => ({ accountEmail: c.accountEmail, calendar: c.name }));
@@ -85,7 +93,12 @@ export function createFreeTime(deps: {
     // Busy-ish blocks.
     const blocks: Busyish[] = [];
     for (const e of await deps.store.calendarIndex.overlap(from, to)) {
-      if (!indexedKey.has(`${e.accountId}|${e.metadata.calendarId}`)) continue;
+      const key = `${e.accountId}|${e.metadata.calendarId}`;
+      if (
+        !indexedKey.has(key) &&
+        !(wholeAccount.has(e.accountId) && wanted(e.metadata.calendarId))
+      )
+        continue;
       const tier = classifyEvent(e.metadata);
       if (tier === 'ignore') continue;
       blocks.push({

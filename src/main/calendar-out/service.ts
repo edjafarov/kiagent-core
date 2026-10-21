@@ -129,6 +129,7 @@ export function createCalendarOutService(deps: {
     prefs: deps.prefs,
     ctx: deps.ctx,
     urlFor: (row) => mintUrl(row, currentTransport()),
+    lock: createDraftLock(),
   });
 
   const findFreeTime = createFreeTime({
@@ -138,19 +139,26 @@ export function createCalendarOutService(deps: {
     now,
   });
 
-  const toView = async (row: EventDraftRow): Promise<EventDraftView> => {
-    const account = await store.account(row.accountId);
-    let calendarName: string | null = null;
+  /** One calendar listing per batch of views, never one per row. */
+  const calendarSnapshot = async (): Promise<CalendarListItem[]> => {
     try {
-      calendarName =
-        (await calendars.list()).find(
-          (c) =>
-            c.accountId === row.accountId &&
-            c.calendarId === row.payload.calendarId,
-        )?.name ?? null;
+      return await calendars.list();
     } catch {
-      calendarName = null;
+      return [];
     }
+  };
+
+  const toView = async (
+    row: EventDraftRow,
+    cals: CalendarListItem[],
+  ): Promise<EventDraftView> => {
+    const account = await store.account(row.accountId);
+    const calendarName =
+      cals.find(
+        (c) =>
+          c.accountId === row.accountId &&
+          c.calendarId === row.payload.calendarId,
+      )?.name ?? null;
     const doc = row.sourceDocumentId
       ? await store.read.document(row.sourceDocumentId as never)
       : null;
@@ -233,7 +241,7 @@ export function createCalendarOutService(deps: {
       const row = await store.eventDrafts.get(t.draftId);
       if (!row || row.status !== 'draft') return { kind: 'gone' };
       if (row.revision !== t.revision) return { kind: 'changed' };
-      return { kind: 'ok', view: await toView(row) };
+      return { kind: 'ok', view: await toView(row, await calendarSnapshot()) };
     },
 
     async confirmByToken(token, revision) {
@@ -246,10 +254,15 @@ export function createCalendarOutService(deps: {
     async cancelByToken(token) {
       const t = await verify(token);
       if (t.kind !== 'ok') return { kind: 'gone' };
-      const row = await withDraft(t.draftId, () =>
-        store.eventDrafts.discard(t.draftId),
-      );
-      return row ? { kind: 'discarded' } : { kind: 'gone' };
+      return withDraft(t.draftId, async (): Promise<EventConfirmOutcome> => {
+        const row = await store.eventDrafts.get(t.draftId);
+        if (!row) return { kind: 'gone' };
+        // A link minted for an older revision is dead (spec §5.3).
+        if (row.revision !== t.revision) return { kind: 'changed' };
+        return (await store.eventDrafts.discard(t.draftId))
+          ? { kind: 'discarded' }
+          : { kind: 'gone' };
+      });
     },
 
     confirmById,
@@ -265,7 +278,9 @@ export function createCalendarOutService(deps: {
     restoreById: (id) => withDraft(id, () => store.eventDrafts.restore(id)),
 
     async listPending() {
-      return Promise.all((await store.eventDrafts.pending()).map(toView));
+      const cals = await calendarSnapshot();
+      const rows = await store.eventDrafts.pending();
+      return Promise.all(rows.map((r) => toView(r, cals)));
     },
 
     async confirmUrl(id, opts) {
@@ -275,8 +290,11 @@ export function createCalendarOutService(deps: {
     },
 
     async touchedSince(sinceIso, via) {
+      const snapshot = calendarSnapshot();
       return Promise.all(
-        (await store.eventDrafts.touchedSince(sinceIso, via)).map(toView),
+        (await store.eventDrafts.touchedSince(sinceIso, via)).map(async (r) =>
+          toView(r, await snapshot),
+        ),
       );
     },
 

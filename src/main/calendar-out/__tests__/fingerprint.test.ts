@@ -1,8 +1,4 @@
-import {
-  fingerprintOf,
-  normalizeTitle,
-  titleSimilarity,
-} from '../fingerprint';
+import { fingerprintOf, normalizeTitle, titleSimilarity } from '../fingerprint';
 
 describe('calendar fingerprints', () => {
   it('normalizeTitle keeps digits and umlauts', () => {

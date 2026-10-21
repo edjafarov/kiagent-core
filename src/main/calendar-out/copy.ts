@@ -22,6 +22,8 @@ export const INSTRUCTION = {
   review:
     'Event drafted — nothing was added yet. It waits in the Outbox in KIAgent, where the user reviews it and adds it to the calendar. Tell the user what you drafted.',
   link: 'Event drafted — nothing was added yet. Show the user this link; they add it to the calendar from there.',
+  inProgress:
+    'This event was already confirmed by the user — it is being added, may already be in the calendar, or is waiting in the Outbox for Try again. Do not draft it again.',
   existing:
     'This event was already drafted — the same draft is returned. Do not draft it again.',
   alreadyInCalendar:
