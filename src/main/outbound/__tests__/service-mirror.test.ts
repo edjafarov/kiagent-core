@@ -614,6 +614,65 @@ describe('outbound service — provider draft mirror', () => {
       expect((await row(r.draft_id))?.externalMessageId).toBe('sent-d1');
     });
 
+    it('an untouched draft is sent as it is: no body write first', async () => {
+      const r = await draft('**Hi** Bob');
+      provider.calls = [];
+      expect((await service.sendById(r.draft_id, 1)).kind).toBe('sent');
+      expect(provider.calls).toEqual(['read', 'send']);
+    });
+
+    it("a provider-formatted body is replaced by Kia's rendering before the send", async () => {
+      const r = await draft('Hello Sam, see you');
+      const rendered = provider.drafts.get('d1')!.bodyHtml;
+      provider.drafts.get('d1')!.bodyHtml =
+        '<div><p>Hello <b>Sam</b>, see you</p></div>';
+      provider.calls = [];
+      let sentHtml: string | undefined;
+      provider.sendImpl = async () => {
+        sentHtml = provider.drafts.get('d1')!.bodyHtml;
+        return { externalMessageId: 'x' };
+      };
+      expect((await service.sendById(r.draft_id, 1)).kind).toBe('sent');
+      expect(provider.calls).toEqual(['read', 'update', 'read', 'send']);
+      expect(provider.patches.at(-1)).toEqual({
+        bodyMarkdown: 'Hello Sam, see you',
+        bodyHtml: rendered,
+      });
+      expect(sentHtml).toBe(rendered);
+    });
+
+    it('a body write whose readback is not Kia’s text sends nothing: review again', async () => {
+      const r = await draft('Hello Sam');
+      provider.drafts.get('d1')!.bodyHtml =
+        '<div><p>Hello <b>Sam</b></p></div>';
+      let reads = 0;
+      provider.readImpl = async (ref) => {
+        // Someone typed in the provider between the write and its read.
+        if (++reads === 2) editThere(provider, 'd1', 'Hello Sam and Ann');
+        return { state: 'draft', ref, content: provider.drafts.get('d1')! };
+      };
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out.kind).toBe('changed');
+      expect(provider.calls).not.toContain('send');
+    });
+
+    it('a body write whose readback fails sends nothing; the row stays a draft', async () => {
+      const r = await draft('Hello Sam');
+      provider.drafts.get('d1')!.bodyHtml =
+        '<div><p>Hello <b>Sam</b></p></div>';
+      let reads = 0;
+      provider.readImpl = async (ref) => {
+        reads += 1;
+        if (reads === 2) throw new Error('ETIMEDOUT');
+        return { state: 'draft', ref, content: provider.drafts.get('d1')! };
+      };
+      provider.calls = [];
+      const out = await service.sendById(r.draft_id, 1);
+      expect(out.kind).toBe('failed');
+      expect(provider.calls).not.toContain('send');
+      expect((await row(r.draft_id))?.status).toBe('draft');
+    });
+
     it('the confirm reads the provider first: an edit there means review again', async () => {
       const r = await draft();
       editThere(provider, 'd1', 'Edited in Gmail');

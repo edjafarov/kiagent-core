@@ -995,6 +995,47 @@ export function createOutboundService(deps: {
    *  the revision check, the CAS, send. The ONE body every confirm path
    *  shares, so they cannot drift. Caller holds the draft lock. A failed
    *  row is never re-sent here: "Try again" is reopen (spec §4.1). */
+  const ownBodyLocked = async (
+    row: OutboxRow,
+  ): Promise<
+    { kind: 'ok'; row: OutboxRow } | { kind: 'stop'; outcome: ConfirmOutcome }
+  > => {
+    const m = row.mirror;
+    if (!m?.ref || (m.ownKey !== undefined && m.ownKey === m.seenKey))
+      return { kind: 'ok', row };
+    const drafts = await draftsFor(row);
+    if (!drafts) return { kind: 'ok', row };
+    let next: OutboxRow;
+    try {
+      next = await mirror.updateLocked(
+        row,
+        drafts,
+        {
+          bodyMarkdown: row.bodyMarkdown,
+          bodyHtml: renderEmailBody(row.bodyMarkdown).html,
+        },
+        snapshotOf(row),
+      );
+    } catch (e) {
+      const error = `not sent: ${e instanceof Error ? e.message : String(e)}`;
+      return { kind: 'stop', outcome: { kind: 'failed', row, error } };
+    }
+    if (next.revision !== row.revision)
+      return { kind: 'stop', outcome: { kind: 'changed', row: next } };
+    if (next.mirror?.ownKey === undefined)
+      // The write went but its readback did not: what the provider holds
+      // is not vouched for. Nothing was sent; Send can be pressed again.
+      return {
+        kind: 'stop',
+        outcome: {
+          kind: 'failed',
+          row: next,
+          error: `not sent: ${providerLabel(await sourceOf(row))} did not confirm the text — try again`,
+        },
+      };
+    return { kind: 'ok', row: next };
+  };
+
   const confirmLocked = async (
     draftId: string,
     revision: number | null,
@@ -1024,6 +1065,13 @@ export function createOutboundService(deps: {
     if (row.status !== 'draft') return { kind: 'already', row };
     if (revision === null || row.revision !== revision)
       return { kind: 'changed', row };
+    // The mail carries exactly what the review showed (spec 2026-10-21
+    // §3.4b): a provider body that is not Kia's own rendering as the
+    // provider holds it — re-formatted there, an image or hidden text added,
+    // an older draft — gets Kia's rendering written back first.
+    const own = await ownBodyLocked(row);
+    if (own.kind !== 'ok') return own.outcome;
+    row = own.row;
     // What would refuse the send anyway refuses it here, with the row still
     // a draft (nothing happened to it): a file gone or changed, files on a
     // source that can't carry them.
