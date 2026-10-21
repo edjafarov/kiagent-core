@@ -26,7 +26,11 @@ import type {
 } from '@shared/contracts';
 
 import { withLogMessage } from '../core/mcp/log-safe';
-import { currentClient, currentTransport } from '../core/mcp/transport-context';
+import {
+  currentClient,
+  currentTransport,
+  type McpTransport,
+} from '../core/mcp/transport-context';
 import type { LogSink } from '../core/engine/engine';
 import {
   DRAFT_TTL_MS,
@@ -298,6 +302,17 @@ export type ConfirmOutcome =
   | { kind: 'changed'; row: OutboxRow }
   | { kind: 'invalid' };
 
+/** What calendar-out borrows from the mail service (calendar spec §5.3). */
+export interface OutboundContext {
+  /** The account's effective mail confirm mode (agent transport: review). */
+  modeFor(account: Account): ConfirmMode;
+  /** The URL origin for a transport; null while that server is not up. */
+  baseFor(transport: McpTransport): string | null;
+  createdViaNow(): 'mcp-local' | 'mcp-remote' | 'mcp-agent';
+  /** The confirm-link HMAC secret (the outbox's, shared). */
+  secret(): Promise<Buffer>;
+}
+
 export interface OutboundService extends OutboundToolApi {
   peekByToken(token: string): Promise<PeekResult>;
   /** `revision` = the one the page showed (null: an old page/link that
@@ -327,6 +342,9 @@ export interface OutboundService extends OutboundToolApi {
   /** Product pushes the public device base URL (https://<device-subdomain>)
    *  when the remote HTTPS server is up, null when it goes down. */
   setRemoteBaseUrl(url: string | null): void;
+  /** The confirm-mode, URL-origin and transport closures, shared with
+   *  calendar-out so event drafts gate exactly as mail does. */
+  context(): OutboundContext;
   /** Panel support (spec §10): a fresh confirm URL for a row the user can
    *  still act on — a pending draft, or a `failed` row whose stored error
    *  PROVES the message was never accepted (that one lands on failedPage's
@@ -1634,6 +1652,13 @@ export function createOutboundService(deps: {
     setRemoteBaseUrl(url) {
       remoteBaseUrl = url;
     },
+
+    context: () => ({
+      modeFor,
+      baseFor: (t) => (t === 'remote' ? remoteBaseUrl : baseUrl),
+      createdViaNow,
+      secret: () => deps.store.outbox.secret(),
+    }),
 
     async draftReply({ documentId, body, replyAll, target, attachments }) {
       assertReady();

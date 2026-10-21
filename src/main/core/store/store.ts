@@ -33,6 +33,7 @@ import {
   createEventDraftStore,
   type EventDraftStore,
 } from './event-drafts';
+import { createCalendarIndex, type CalendarIndex } from './calendar-index';
 import {
   ACTIONABLE_VISUAL_SIZE_WHERE,
   EXTRACTED_DOCS_WHERE,
@@ -416,6 +417,7 @@ export interface CoreStore extends Store {
   outbox: OutboxStore;
   /** Calendar event drafts (schema v12). */
   eventDrafts: EventDraftStore;
+  calendarIndex: CalendarIndex;
 }
 
 const FEED_BATCH = 500;
@@ -797,6 +799,8 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       now,
       changed: eventDraftsChanged,
     }),
+
+    calendarIndex: createCalendarIndex(db),
 
     vault: {
       async save(account, c) {
