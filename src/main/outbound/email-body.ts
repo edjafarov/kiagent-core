@@ -22,7 +22,7 @@ const esc = (s: string): string =>
 const SAFE_HREF = /^(https?:|mailto:)/i;
 
 const WRAP =
-  'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:#1e293b';
+  "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:#1e293b";
 const HEADING: Record<number, string> = {
   1: 'font-size:20px;margin:16px 0 8px',
   2: 'font-size:17px;margin:16px 0 8px',
@@ -83,8 +83,14 @@ export function renderEmailBody(
     onError?.(e);
     inner = fallback(markdown);
   }
-  return { html: `<div style="${esc(WRAP)}">${inner}</div>`, text: markdown };
+  return { html: `<div style="${WRAP}">${inner}</div>`, text: markdown };
 }
+
+const INLINE = new Set([
+  'a', 'abbr', 'b', 'bdi', 'bdo', 'cite', 'code', 'del', 'dfn', 'em', 'font',
+  'i', 'ins', 'kbd', 'mark', 'q', 's', 'samp', 'small', 'span', 'strike',
+  'strong', 'sub', 'sup', 'tt', 'u', 'var',
+]);
 
 /**
  * What a reader takes from an HTML body: its words, and every link and image
@@ -96,11 +102,11 @@ export function wordsOf(html: string): string {
   const text = html
     .replace(/<(head|style|script|title)\b[\s\S]*?<\/\1\s*>/gi, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<[^>]*>/g, (tag) => {
+    .replace(/<\/?([a-z][a-z0-9]*)\b[^>]*>|<[^>]*>/gi, (tag, name?: string) => {
       const m = /\b(href|src)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
-      return m
-        ? ` [${m[1].toLowerCase()}:${m[3] ?? m[4] ?? m[5] ?? ''}] `
-        : ' ';
+      if (m) return ` [${m[1].toLowerCase()}:${m[3] ?? m[4] ?? m[5] ?? ''}] `;
+      // Inline formatting sits inside a word run; anything else separates.
+      return name && INLINE.has(name.toLowerCase()) ? '' : ' ';
     });
   return collapse(decodeHTML(text));
 }

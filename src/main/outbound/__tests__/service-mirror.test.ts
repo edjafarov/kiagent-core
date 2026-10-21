@@ -59,6 +59,7 @@ function fakeProvider() {
         bcc: intent.bcc ?? [],
         subject: intent.subject ?? null,
         bodyText: intent.bodyMarkdown,
+        ...(intent.bodyHtml !== undefined && { bodyHtml: intent.bodyHtml }),
         attachments: (intent.attachments ?? []).map((a) => ({
           filename: a.filename,
           mime: a.mime,
@@ -87,7 +88,7 @@ function fakeProvider() {
         ...(patch.cc ? { cc: patch.cc } : {}),
         ...(patch.subject !== undefined ? { subject: patch.subject } : {}),
         ...(patch.bodyMarkdown !== undefined
-          ? { bodyText: patch.bodyMarkdown }
+          ? { bodyText: patch.bodyMarkdown, bodyHtml: patch.bodyHtml }
           : {}),
         attachments: files,
       });
@@ -112,6 +113,18 @@ function fakeProvider() {
     },
   };
   return p;
+}
+
+/** An edit made in the provider's editor: both parts change, as Gmail's and
+ *  Outlook's do. */
+function editThere(
+  p: ReturnType<typeof fakeProvider>,
+  id: string,
+  text: string,
+): void {
+  const d = p.drafts.get(id)!;
+  d.bodyText = text;
+  d.bodyHtml = `<div><p>${text}</p></div>`;
 }
 
 describe('outbound service — provider draft mirror', () => {
@@ -193,10 +206,15 @@ describe('outbound service — provider draft mirror', () => {
       const r = await draft();
       expect(r.revision).toBe(1);
       expect(provider.calls).toEqual(['create', 'read']);
-      expect((await row(r.draft_id))?.mirror).toEqual({
+      const mirror = (await row(r.draft_id))?.mirror;
+      expect(mirror).toEqual({
         ref: { accountId, id: 'd1', threadId: 't1' },
         provider: 'Gmail',
+        seenKey: expect.any(String),
+        ownKey: expect.any(String),
       });
+      // The create's own read is Kia's rendering as Gmail holds it.
+      expect(mirror?.ownKey).toBe(mirror?.seenKey);
     });
 
     it('a failed create leaves the row Outbox-only with the reason', async () => {
@@ -266,7 +284,7 @@ describe('outbound service — provider draft mirror', () => {
   describe('refresh', () => {
     it('adopts a body changed in the provider as a new revision', async () => {
       const r = await draft();
-      provider.drafts.get('d1')!.bodyText = 'Edited in Gmail';
+      editThere(provider, 'd1', 'Edited in Gmail');
       const [item] = await service.listOutbox({});
       expect(item.revision).toBe(2);
       expect(item.draft?.body).toBe('Edited in Gmail');
@@ -300,7 +318,7 @@ describe('outbound service — provider draft mirror', () => {
       await service.listOutbox({});
       expect((await row(r.draft_id))?.revision).toBe(1);
       // A real edit there still counts.
-      provider.drafts.get('d1')!.bodyText = 'Shorter, from Gmail.';
+      editThere(provider, 'd1', 'Shorter, from Gmail.');
       await service.listOutbox({});
       expect((await row(r.draft_id))?.revision).toBe(2);
     });
@@ -400,6 +418,102 @@ describe('outbound service — provider draft mirror', () => {
     });
   });
 
+  describe('formatted bodies (spec 2026-10-21 §3.4)', () => {
+    const md = '## Plan\n\n- **one**\n- two [doc](https://x.io/d)';
+    const html = (d: string) => provider.drafts.get(d)!.bodyHtml!;
+
+    it('the draft goes to the provider as HTML, the Markdown as text', async () => {
+      await draft(md);
+      expect(provider.created[0].bodyHtml).toContain('<strong>one</strong>');
+      expect(provider.drafts.get('d1')!.bodyText).toBe(md);
+    });
+
+    it('HTML changed while the plain part stayed is an edit (the HTML wins)', async () => {
+      const r = await draft('Pay €100');
+      provider.drafts.get('d1')!.bodyHtml = '<div><p>Pay €1,000</p></div>';
+      await service.listOutbox({});
+      const got = await row(r.draft_id);
+      expect(got?.revision).toBe(2);
+      expect(got?.bodyMarkdown).toBe('Pay €1,000');
+    });
+
+    it("a provider re-serializing Kia's HTML is no new revision", async () => {
+      const r = await draft(md);
+      const d = provider.drafts.get('d1')!;
+      provider.drafts.set('d1', {
+        ...d,
+        bodyText: 'Plan\n\n* one\n* two doc <https://x.io/d>',
+        bodyHtml: `<html><head><style>p{margin:0}</style></head><body><div dir="ltr">${html('d1')
+          .replace(/<strong>/g, '<b>')
+          .replace(/<\/strong>/g, '</b>')
+          .replace(/\n/g, '\r\n')}</div></body></html>`,
+      });
+      await service.listOutbox({});
+      const got = await row(r.draft_id);
+      expect(got?.revision).toBe(1);
+      expect(got?.bodyMarkdown).toBe(md);
+      expect(got?.mirror?.seenKey).not.toBe(got?.mirror?.ownKey);
+    });
+
+    it('a text edit in the provider is adopted once, as Markdown; the next refresh is quiet', async () => {
+      const r = await draft(md);
+      provider.drafts.get('d1')!.bodyHtml =
+        '<div><p>Plan <b>changed</b> in Gmail</p></div>';
+      await service.listOutbox({});
+      let got = await row(r.draft_id);
+      expect(got?.revision).toBe(2);
+      expect(got?.bodyMarkdown).toBe('Plan **changed** in Gmail');
+      await service.listOutbox({});
+      got = await row(r.draft_id);
+      expect(got?.revision).toBe(2);
+    });
+
+    it('bolding a word in the provider is no edit: the schedule stays', async () => {
+      const r = await draft('Hello Sam, see you');
+      await service.scheduleById(
+        r.draft_id,
+        1,
+        new Date(now + 10 * 60_000).toISOString(),
+      );
+      provider.drafts.get('d1')!.bodyHtml =
+        '<div><p>Hello <b>Sam</b>, see you</p></div>';
+      await service.listOutbox({});
+      const got = await row(r.draft_id);
+      expect(got?.revision).toBe(1);
+      expect(got?.sendAt).not.toBeNull();
+    });
+
+    it("Kia's body write clears ownKey before the update; its echo sets it again", async () => {
+      const r = await draft(md);
+      const before = (await row(r.draft_id))?.mirror?.ownKey;
+      expect(before).toBeDefined();
+      let during: string | undefined = 'unread';
+      provider.updateImpl = async () => {
+        during = (await row(r.draft_id))?.mirror?.ownKey;
+      };
+      await service.reviseDraft({
+        draftId: r.draft_id,
+        revision: 1,
+        body: 'Shorter **now**',
+      });
+      expect(during).toBeUndefined();
+      const after = (await row(r.draft_id))?.mirror;
+      expect(after?.ownKey).toBeDefined();
+      expect(after?.ownKey).toBe(after?.seenKey);
+      expect(after?.ownKey).not.toBe(before);
+    });
+
+    it('a changed link target is an edit', async () => {
+      const r = await draft('see [doc](https://x.io/d)');
+      provider.drafts.get('d1')!.bodyHtml = html('d1').replace(
+        'https://x.io/d',
+        'https://evil.example/d',
+      );
+      await service.listOutbox({});
+      expect((await row(r.draft_id))?.revision).toBe(2);
+    });
+  });
+
   describe('revise', () => {
     it("Kia's own edit of line breaks alone is kept, and can be undone", async () => {
       const r = await draft();
@@ -434,7 +548,7 @@ describe('outbound service — provider draft mirror', () => {
 
     it('a change made in the provider first makes the revise stale', async () => {
       const r = await draft();
-      provider.drafts.get('d1')!.bodyText = 'Edited in Gmail';
+      editThere(provider, 'd1', 'Edited in Gmail');
       await expect(
         service.reviseDraft({ draftId: r.draft_id, revision: 1, body: 'x' }),
       ).rejects.toThrow(/this draft changed[\s\S]*Edited in Gmail/);
@@ -500,7 +614,7 @@ describe('outbound service — provider draft mirror', () => {
 
     it('the confirm reads the provider first: an edit there means review again', async () => {
       const r = await draft();
-      provider.drafts.get('d1')!.bodyText = 'Edited in Gmail';
+      editThere(provider, 'd1', 'Edited in Gmail');
       const out = await service.sendById(r.draft_id, 1);
       expect(out.kind).toBe('changed');
       expect(provider.calls).not.toContain('send');
@@ -1095,7 +1209,7 @@ describe('outbound service — provider draft mirror', () => {
     it('an edit (Kia or the provider) clears the schedule and says so', async () => {
       const r = await draft();
       await service.scheduleById(r.draft_id, 1, inMin(10));
-      provider.drafts.get('d1')!.bodyText = 'Edited in Gmail';
+      editThere(provider, 'd1', 'Edited in Gmail');
       await service.refreshById(r.draft_id);
       const got = await row(r.draft_id);
       expect(got?.sendAt).toBeNull();
@@ -1218,7 +1332,7 @@ describe('outbound service — provider draft mirror', () => {
 
   it('peek by token shows the provider’s current draft', async () => {
     const r = await draft();
-    provider.drafts.get('d1')!.bodyText = 'Edited in Gmail';
+    editThere(provider, 'd1', 'Edited in Gmail');
     const token = r.confirm_url!.split('/outbox/confirm/')[1];
     const peek = await service.peekByToken(token);
     expect(peek.kind === 'ok' && peek.row.bodyMarkdown).toBe('Edited in Gmail');

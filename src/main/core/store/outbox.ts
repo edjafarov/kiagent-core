@@ -103,6 +103,10 @@ export interface ApplyOptions {
    *  - `echo`: the provider's copy of Kia's own write — Kia's text, the
    *    provider's files, compared strictly. */
   from?: 'provider' | 'created' | 'echo';
+  /** Body hashes for the mirror (spec 2026-10-21 §3.4): `seenKey` replaces
+   *  the stored one; `ownKey` a string sets it, `null` clears it, absent
+   *  keeps it. */
+  keys?: { seenKey?: string; ownKey?: string | null };
 }
 
 export function snapshotOf(row: OutboxRow): DraftSnapshot {
@@ -470,7 +474,7 @@ export function createOutboxStore(
       return moved;
     },
 
-    async applyContent(id, incoming, ref, { origins = [], from } = {}) {
+    async applyContent(id, incoming, ref, { origins = [], from, keys } = {}) {
       const row = await get(id);
       if (!row || row.status !== 'draft')
         throw new Error('outbox: not a draft');
@@ -535,6 +539,10 @@ export function createOutboxStore(
               error: undefined,
               ...(sizes && {
                 sizes: Object.keys(sizes).length ? sizes : undefined,
+              }),
+              ...(keys?.seenKey !== undefined && { seenKey: keys.seenKey }),
+              ...(keys?.ownKey !== undefined && {
+                ownKey: keys.ownKey ?? undefined,
               }),
             });
       // An unchanged mirror is no write and no change event: a refresh that

@@ -18,7 +18,8 @@ import type {
 
 import type { LogSink } from '../core/engine/engine';
 import { normalizeSnapshot, snapshotOf } from '../core/store/outbox';
-import { renderEmailBody } from './email-body';
+import { htmlToText } from '../sources/email-evidence';
+import { bodyHash, collapse, renderEmailBody, wordsOf } from './email-body';
 import type { CoreStore } from '../core/store/store';
 
 /** Whole create → read → adopt, before draft_reply returns (§5.2). */
@@ -80,13 +81,31 @@ export function intentOf(row: OutboxRow): SendIntent {
   };
 }
 
+/** The provider's body as Markdown: its HTML when it has one (the plain
+ *  part never vouches for a different HTML part), else its text. */
+function markdownOf(c: DraftContent): string {
+  return c.bodyHtml !== undefined ? htmlToText(c.bodyHtml) : c.bodyText;
+}
+
+/** Whether the provider's body says what `md` renders to, word for word
+ *  (links and images included). */
+export function sameBody(c: DraftContent, md: string): boolean {
+  const theirs =
+    c.bodyHtml !== undefined ? wordsOf(c.bodyHtml) : collapse(c.bodyText);
+  const mine =
+    c.bodyHtml !== undefined
+      ? wordsOf(renderEmailBody(md).html)
+      : collapse(md);
+  return theirs === mine;
+}
+
 function snapshotOfContent(c: DraftContent): DraftSnapshot {
   return {
     to: c.to,
     cc: c.cc,
     bcc: c.bcc,
     subject: c.subject,
-    bodyMarkdown: c.bodyText,
+    bodyMarkdown: markdownOf(c),
     attachments: c.attachments,
   };
 }
@@ -143,18 +162,42 @@ export function createMirrorOps(deps: {
     c: DraftContent,
     { origins, created, local }: ReadOptions,
   ) => {
-    const copy = snapshotOfContent(c);
-    // The provider's copy of Kia's own write, the same text bar whitespace:
-    // the row keeps Kia's text, so an edit of line breaks alone is not lost.
-    const text = (s: DraftSnapshot) =>
-      normalizeSnapshot({ ...s, attachments: [] }, { provider: true });
-    const echo = local !== undefined && text(copy) === text(local);
+    // The words decide whether the provider changed the body (spec
+    // 2026-10-21 §3.4a): a provider re-serializing Kia's HTML, or the user
+    // bolding a word, is the same body — the row keeps its Markdown. Any
+    // other change is adopted as the provider's text.
+    const ours = [local?.bodyMarkdown, row.bodyMarkdown].find(
+      (md) => md !== undefined && sameBody(c, md),
+    );
+    const copy = {
+      ...snapshotOfContent(c),
+      ...(ours !== undefined && { bodyMarkdown: ours }),
+    };
+    const fields = (s: DraftSnapshot) =>
+      normalizeSnapshot(
+        { ...s, bodyMarkdown: '', attachments: [] },
+        { provider: true },
+      );
+    // The provider's copy of Kia's own write: the row keeps Kia's text.
+    const echo =
+      local !== undefined &&
+      ours === local.bodyMarkdown &&
+      fields(copy) === fields(local);
+    // Kia's own rendering as the provider holds it: what a send may carry
+    // without writing the body again (§3.4b).
+    const own =
+      echo || (created === true && ours === row.bodyMarkdown && !local);
+    const hash = bodyHash(c);
     const before = (await store.outbox.get(row.id)) ?? row;
     const { row: next, changed } = await store.outbox.applyContent(
       row.id,
       echo ? { ...local, attachments: copy.attachments } : copy,
       ref,
-      { origins, from: echo ? 'echo' : created ? 'created' : 'provider' },
+      {
+        origins,
+        from: echo ? 'echo' : created ? 'created' : 'provider',
+        keys: { seenKey: hash, ...(own && { ownKey: hash }) },
+      },
     );
     if (changed && !echo)
       deps.logSink.log(
@@ -275,6 +318,16 @@ export function createMirrorOps(deps: {
       const origins = local.attachments.filter((a) =>
         uploading.has(a.filename),
       );
+      // Kia's body write: until its readback is an echo, the provider's
+      // body is not vouched for as Kia's rendering (§3.4b).
+      if (patch.bodyMarkdown !== undefined) {
+        const fresh = (await store.outbox.get(row.id)) ?? row;
+        if (fresh.mirror?.ownKey !== undefined)
+          await store.outbox.setMirror(row.id, {
+            ...fresh.mirror,
+            ownKey: undefined,
+          });
+      }
       let next: DraftRef;
       try {
         next = await drafts.update(ref, patch);

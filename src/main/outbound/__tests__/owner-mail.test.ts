@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { renderEmailBody } from '../email-body';
 import { createOwnerMail, encodedSizeBound } from '../owner-mail';
 
 const account = {
@@ -65,6 +66,7 @@ test('sendToOwner pins recipient to owner and stamps channel fields', async () =
     to: ['me@gmail.com'],
     subject: 'Re: x',
     bodyMarkdown: 'hi',
+    bodyHtml: renderEmailBody('hi').html,
     replyTo: 'me+kia@gmail.com',
     messageId: '<1@kia.local>',
     ownerChannel: true,
