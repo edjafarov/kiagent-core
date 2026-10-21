@@ -124,8 +124,13 @@ import {
   type OutboundService,
 } from './outbound/service';
 import { outboundInvokeHandlers } from './outbound/ipc';
+import { calendarOutInvokeHandlers } from './calendar-out/ipc';
+import { wireCalendarOutPush } from './calendar-out/push';
 import { createOutboundRoutes } from './outbound/routes';
-import { createCalendarOutService } from './calendar-out/service';
+import {
+  createCalendarOutService,
+  type CalendarOutService,
+} from './calendar-out/service';
 import { buildBundledSenders, composeSenders } from './outbound/senders';
 import { createCalendarWriterRegistry } from './calendar-out/writers';
 import { createOwnerMail } from './outbound/owner-mail';
@@ -503,6 +508,7 @@ function registerIpc(
   catalog: MarketplaceCatalog,
   broker: ConnectBroker,
   outbound: OutboundService,
+  calendarOut: CalendarOutService,
   attention: AttentionService,
   refreshWaiting: () => Promise<void>,
 ): void {
@@ -851,6 +857,7 @@ function registerIpc(
         return res.canceled ? [] : res.filePaths;
       },
     }),
+    ...calendarOutInvokeHandlers({ service: calendarOut, store: p.store }),
   };
 
   // The loop is the point: it registers exactly the declared channels, and
@@ -1143,6 +1150,7 @@ app
     // an expired sweep, or an account removal cascade) without a per-row
     // payload — coalesced internally to one push per 50 ms.
     wireOutboxPush(p.store, broadcast);
+    wireCalendarOutPush(p.store, broadcast);
 
     // Bundled SQL runner (webpack `sqlRunner` entry): prod `sqlRunner.js`, dev
     // `sqlRunner.bundle.dev.js`.
@@ -1487,6 +1495,7 @@ app
       catalog,
       broker,
       outbound,
+      calendarOut,
       attention,
       () => processingStatus.refreshWaiting(),
     );

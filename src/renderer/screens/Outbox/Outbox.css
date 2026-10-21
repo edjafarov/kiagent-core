@@ -153,3 +153,19 @@
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
+
+/* A group of waiting items with its own heading (the Calendar group). */
+.ob-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.ob-group-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
