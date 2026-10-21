@@ -16,6 +16,19 @@ import { signConfirmToken } from '../../outbound/tokens';
 import { createCalendarOutService, type CalendarOutService } from '../service';
 import { createCalendarWriterRegistry } from '../writers';
 
+/** Source registry stub: google-calendar is calendar-only; microsoft-365
+ *  syncs mail too (its folderRoots are mail folders). */
+const CAL_SOURCES = {
+  get: (id: string) => ({
+    descriptor: {
+      documentTypes:
+        id === 'microsoft-365'
+          ? ['email.thread', 'attachment', 'calendar.event']
+          : ['calendar.event'],
+    },
+  }),
+};
+
 const SECRET = Buffer.from('k'.repeat(32));
 
 describe('event review pages under /outbox/event/', () => {
@@ -64,6 +77,7 @@ describe('event review pages under /outbox/event/', () => {
       },
     });
     svc = createCalendarOutService({
+      sources: CAL_SOURCES,
       store,
       writers,
       ctx: () => ({

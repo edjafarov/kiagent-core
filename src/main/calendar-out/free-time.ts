@@ -78,7 +78,10 @@ export function createFreeTime(deps: {
       warnings.push(
         `${c.calendar} (${c.accountEmail}) is not synced by Kia — its events are unknown`,
       );
-    const accountIds = [...new Set(indexed.map((c) => c.accountId))];
+    // Every account whose events count, writer or not, gets a freshness check.
+    const accountIds = [
+      ...new Set([...indexed.map((c) => c.accountId), ...wholeAccount]),
+    ];
     const lastSync = new Map<string, string | null>();
     for (const id of accountIds) {
       const acc = await deps.store.account(id);

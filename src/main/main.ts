@@ -1088,6 +1088,7 @@ app
     const calendarOut = createCalendarOutService({
       store: p.store,
       writers: calendarWriters,
+      sources: p.sources,
       ctx: () => outbound.context(),
       prefs: p.prefs,
       vaultScope: async (id) => (await p.store.vault.load(id))?.scope,

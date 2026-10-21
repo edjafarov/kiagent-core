@@ -15,6 +15,7 @@ import type { CoreStore } from '../core/store/store';
 import { createDraftLock } from '../outbound/draft-lock';
 import type { OutboundContext } from '../outbound/service';
 import { signEventToken, verifyEventToken } from '../outbound/tokens';
+import type { SourceLookup } from '../platform/account-types';
 import { createCalendarsView } from './calendars';
 import { reconnectCopy, UNKNOWN_COPY } from './copy';
 import { createDrafting } from './drafting';
@@ -62,18 +63,14 @@ export interface CalendarOutService extends CalendarToolApi {
 }
 
 /** Writer errors → row status by message class (spec §5.3). Auth wording
- *  differs per connector, so any "reconnect" counts and is re-worded. */
+ *  differs per connector, so any "reconnect" counts and is re-worded to
+ *  name the account (§9). */
 export function classifyWriterError(
   msg: string,
   accountEmail: string,
 ): { status: 'failed' | 'unknown'; error: string } {
   if (/\breconnect\b/i.test(msg))
-    return {
-      status: 'failed',
-      error: /reconnect .* in Settings/.test(msg)
-        ? msg
-        : reconnectCopy(accountEmail),
-    };
+    return { status: 'failed', error: reconnectCopy(accountEmail) };
   if (/^(rate-limited|not created):/.test(msg))
     return { status: 'failed', error: msg };
   return { status: 'unknown', error: `${msg} — ${UNKNOWN_COPY}` };
@@ -82,6 +79,7 @@ export function classifyWriterError(
 export function createCalendarOutService(deps: {
   store: CoreStore;
   writers: CalendarWriterRegistry;
+  sources: SourceLookup;
   ctx: () => OutboundContext;
   prefs: Prefs;
   /** Credentials.scope, for effective can_write. */
@@ -98,6 +96,7 @@ export function createCalendarOutService(deps: {
   const calendars = createCalendarsView({
     store,
     writers: { get: (id) => deps.writers.get(id) },
+    sources: deps.sources,
     prefs: deps.prefs,
     vaultScope: deps.vaultScope,
     logSink: deps.logSink,

@@ -218,7 +218,7 @@ export async function postEventCancel(
       status: 200,
       html: eventResultPage(
         'Discarded',
-        'Discarded — nothing was added. You can restore it from the Outbox in KIAgent.',
+        'Discarded — nothing was added. Ask Kia again if you change your mind.',
       ),
     };
   if (out.kind === 'changed') return CHANGED();

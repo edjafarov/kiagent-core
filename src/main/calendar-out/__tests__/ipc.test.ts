@@ -25,6 +25,19 @@ import {
 } from '../service';
 import { createCalendarWriterRegistry } from '../writers';
 
+/** Source registry stub: google-calendar is calendar-only; microsoft-365
+ *  syncs mail too (its folderRoots are mail folders). */
+const CAL_SOURCES = {
+  get: (id: string) => ({
+    descriptor: {
+      documentTypes:
+        id === 'microsoft-365'
+          ? ['email.thread', 'attachment', 'calendar.event']
+          : ['calendar.event'],
+    },
+  }),
+};
+
 const BASE = 'http://127.0.0.1:7421';
 const T0 = '2026-11-02T08:00:00.000Z';
 
@@ -101,6 +114,7 @@ describe('calendar-out IPC', () => {
       secret: async () => Buffer.from('s'.repeat(32)),
     };
     svc = createCalendarOutService({
+      sources: CAL_SOURCES,
       store,
       writers,
       ctx: () => ctx,

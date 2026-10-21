@@ -12,6 +12,7 @@ import type {
 } from '@shared/contracts';
 
 import type { CoreStore } from '../core/store/store';
+import { withAccountTypes, type SourceLookup } from '../platform/account-types';
 import type { LogSink } from '../core/engine/engine';
 import type { CalendarWriterRegistry } from './writers';
 import { NO_WRITER_NOTE, notIndexedCopy, reconnectCopy } from './copy';
@@ -53,6 +54,8 @@ export interface CalendarsView {
 export function createCalendarsView(deps: {
   store: CoreStore;
   writers: Pick<CalendarWriterRegistry, 'get'>;
+  /** The source registry: accounts carry their documentTypes from it. */
+  sources: SourceLookup;
   prefs: Prefs;
   vaultScope: (accountId: AccountId) => Promise<string | undefined>;
   logSink: LogSink;
@@ -68,17 +71,26 @@ export function createCalendarsView(deps: {
     return cals;
   };
 
+  /** The calendars the user picked to sync. `calendarRoots` when the
+   *  source names them; `folderRoots` only on a calendar-only source (on a
+   *  mail source they are mail folders). Null = no explicit pick: fall back
+   *  to "has indexed events". */
   const explicitRoots = (a: QueryAccount): Set<string> | null => {
     const cfg = a.config as {
       folderRoots?: { id: string }[];
       calendarRoots?: { id: string }[];
     };
-    const roots = cfg.calendarRoots ?? cfg.folderRoots;
+    const calendarOnly =
+      a.documentTypes?.length === 1 && a.documentTypes[0] === 'calendar.event';
+    const roots = cfg.calendarRoots ?? (calendarOnly ? cfg.folderRoots : null);
     return Array.isArray(roots) ? new Set(roots.map((r) => r.id)) : null;
   };
 
   const list = async (): Promise<CalendarListItem[]> => {
-    const accounts = await deps.store.read.accounts();
+    const accounts = await withAccountTypes(
+      deps.store.read,
+      deps.sources,
+    ).accounts();
     const def = calendarPrefs(deps.prefs).defaultCalendar;
     const out: CalendarListItem[] = [];
     for (const a of accounts) {

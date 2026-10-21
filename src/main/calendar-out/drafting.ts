@@ -327,7 +327,7 @@ export function createDrafting(deps: DraftingDeps) {
         };
       if (currentTransport() === 'agent')
         throw new Error(
-          'force is not available here — the user can restore it from the Outbox',
+          'force is not available here — the user can ask again from Claude or ChatGPT',
         );
       const restored = await store.eventDrafts.restore(dismissed.id);
       if (!restored)

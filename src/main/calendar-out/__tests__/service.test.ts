@@ -25,6 +25,19 @@ import {
 } from '../service';
 import { createCalendarWriterRegistry } from '../writers';
 
+/** Source registry stub: google-calendar is calendar-only; microsoft-365
+ *  syncs mail too (its folderRoots are mail folders). */
+const CAL_SOURCES = {
+  get: (id: string) => ({
+    descriptor: {
+      documentTypes:
+        id === 'microsoft-365'
+          ? ['email.thread', 'attachment', 'calendar.event']
+          : ['calendar.event'],
+    },
+  }),
+};
+
 const SECRET = Buffer.from('s'.repeat(32));
 const BASE = 'http://127.0.0.1:7421';
 const T0 = '2026-11-02T08:00:00.000Z'; // Monday 09:00 Berlin
@@ -162,6 +175,7 @@ describe('calendar-out service', () => {
       secret: async () => SECRET,
     };
     svc = createCalendarOutService({
+      sources: CAL_SOURCES,
       store,
       writers,
       ctx: () => ctx,
@@ -506,6 +520,12 @@ describe('calendar-out service', () => {
       status: 'failed',
       error: 'reconnect me@x in Settings to allow adding events',
     });
+    expect(
+      classifyWriterError(
+        'reconnect Google Calendar (fam@group.calendar.google.com) in Settings to allow adding events',
+        'me@x',
+      ).error,
+    ).toBe('reconnect me@x in Settings to allow adding events');
     expect(classifyWriterError('rate-limited: slow down', 'me@x').status).toBe(
       'failed',
     );
@@ -562,6 +582,7 @@ describe('calendar-out service', () => {
       },
     });
     const svc2 = createCalendarOutService({
+      sources: CAL_SOURCES,
       store,
       writers: failing,
       ctx: () => ({
@@ -596,5 +617,86 @@ describe('calendar-out service', () => {
     expect(again).toMatchObject({ draftId: d.draftId, existing: true });
     expect(again.confirmUrl).toBeUndefined();
     expect(again.instruction).toMatch(/already confirmed/);
+  });
+
+  const svcWith = (writers: ReturnType<typeof createCalendarWriterRegistry>) =>
+    createCalendarOutService({
+      sources: CAL_SOURCES,
+      store,
+      writers,
+      ctx: () => ({
+        modeFor: () => 'review',
+        baseFor: () => BASE,
+        createdViaNow: () => 'mcp-local',
+        secret: async () => SECRET,
+      }),
+      prefs: { get: () => ({}) } as unknown as Prefs,
+      vaultScope: async () => undefined,
+      now: () => clock,
+      logSink: { log: () => {} } as never,
+    });
+
+  it("a mail source's folderRoots are not calendar picks: indexed follows synced events", async () => {
+    const ms = await store.createAccount({
+      source: 'microsoft-365',
+      identifier: 'me@outlook.com',
+      config: { folderRoots: [{ id: 'inbox-folder', name: 'Inbox' }] },
+    });
+    await store.commit({
+      account: ms.id,
+      documents: [
+        {
+          externalId: 'ms-ev',
+          type: 'calendar.event',
+          title: 'Standup',
+          markdown: null,
+          metadata: meta({
+            calendarId: 'AAMk-cal',
+            calendarName: 'Calendar',
+            eventId: 'ms-ev',
+            occurrenceKey: 'ms-ev',
+          }) as unknown as Record<string, unknown>,
+          createdAt: '2026-11-03T17:00:00.000Z',
+        },
+      ],
+      cursor: 1,
+    });
+    const writers = createCalendarWriterRegistry();
+    writers.register('microsoft-365', {
+      listCalendars: async () => [
+        cal({ id: 'AAMk-cal', name: 'Calendar' }),
+        cal({ id: 'AAMk-birthdays', name: 'Birthdays', primary: false }),
+      ],
+      createEvent: (i) => createImpl(i),
+    });
+    const list = await svcWith(writers).listCalendars({});
+    const mine = list.filter((c) => c.accountId === ms.id);
+    expect(mine.map((c) => [c.calendarId, c.indexed])).toEqual([
+      ['AAMk-cal', true],
+      ['AAMk-birthdays', false],
+    ]);
+  });
+
+  it('a stale account without a writer still makes coverage incomplete', async () => {
+    clock = new Date(Date.parse(T0) - 3 * 86_400_000);
+    const ro = await store.createAccount({
+      source: 'ics-feed',
+      identifier: 'school@ics',
+      config: {},
+    });
+    await store.commit({ account: ro.id, documents: [], cursor: 0 });
+    clock = new Date(T0);
+    const writers = createCalendarWriterRegistry();
+    writers.register('google-calendar', {
+      listCalendars: async () => [cal()],
+      createEvent: (i) => createImpl(i),
+    });
+    const r = await svcWith(writers).findFreeTime({
+      from: T0,
+      to: '2026-11-03T00:00:00Z',
+      durationMinutes: 30,
+    });
+    expect(r.complete).toBe(false);
+    expect(r.coverage.warnings).toContain('school@ics last synced 3 days ago');
   });
 });
