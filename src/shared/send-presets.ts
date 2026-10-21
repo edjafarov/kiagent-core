@@ -11,6 +11,17 @@ export function defaultSendLater(nowMs: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/** "14:00" today, "Thu 09:00" on another day — a send time, short. */
+export function whenLabel(ms: number, nowMs: number): string {
+  const d = new Date(ms);
+  const time = d.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  if (d.toDateString() === new Date(nowMs).toDateString()) return time;
+  return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
+}
+
 export interface SendPreset {
   key: string;
   label: string;

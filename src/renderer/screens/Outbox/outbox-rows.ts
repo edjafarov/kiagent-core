@@ -4,10 +4,13 @@
 import type { OutboxPanelRow } from '@shared/ipc';
 import type { StatusTone } from '@shared/web-ui/ui';
 
+import { whenLabel } from '@shared/send-presets';
+
 export {
   defaultSendLater,
   sendPresets,
   type SendPreset,
+  whenLabel,
 } from '@shared/send-presets';
 
 export type RowAction =
@@ -95,17 +98,6 @@ export function scheduledFor(iso: string): string {
     minute: '2-digit',
   });
   return `Scheduled for ${when}`;
-}
-
-/** "14:00" today, "Thu 09:00" on another day — a send time, short. */
-export function whenLabel(ms: number, nowMs: number): string {
-  const d = new Date(ms);
-  const time = d.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-  if (d.toDateString() === new Date(nowMs).toDateString()) return time;
-  return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
 }
 
 /** "Suggested for Thu 14:12" — a time an AI app suggested, local. */

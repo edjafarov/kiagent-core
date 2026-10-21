@@ -9,7 +9,7 @@ import type http from 'http';
 
 import type { OutboxRow } from '@shared/contracts';
 
-import { sendPresets } from '@shared/send-presets';
+import { sendPresets, whenLabel } from '@shared/send-presets';
 import { logMessageOf } from '../core/mcp/log-safe';
 import { shapeOutboundError } from './error-copy';
 import { isOutboundToolOp } from './ops';
@@ -200,7 +200,7 @@ async function reviewFor(
       presets: sendPresets(Date.now()).map((x) => ({
         path: `/outbox/schedule/${token}/${row.revision}/${x.key}`,
         label: x.label,
-        when: timeText(new Date(x.at).toISOString()),
+        when: whenLabel(x.at, Date.now()),
       })),
       customPath: `/outbox/schedule/${token}/${row.revision}`,
     },
