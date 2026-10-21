@@ -78,7 +78,8 @@ const OUTBOX_CSS = `
 .ob-btn { height: 48px; width: 100%; font-size: 15px; }
 .ob-btn-secondary { height: 44px; width: 100%; font-size: 14px; }
 .ob-later > summary { list-style: none; display: flex; align-items: center;
-  justify-content: center; cursor: pointer; }
+  justify-content: center; cursor: pointer; box-sizing: border-box; }
+.ob-actions:has(.ob-later[open]) { position: static; }
 .ob-later > summary::-webkit-details-marker { display: none; }
 .ob-later-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .ob-later-list .btn { height: 40px; width: 100%; font-size: 14px;
