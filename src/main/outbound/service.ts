@@ -303,6 +303,16 @@ export interface OutboundService extends OutboundToolApi {
     revision: number | null,
   ): Promise<ConfirmOutcome>;
   cancelByToken(token: string): Promise<ConfirmOutcome>;
+  /** The link page's "Schedule for …": only the time an AI app suggested
+   *  (`atMs`), at the revision the page showed. */
+  scheduleByToken(
+    token: string,
+    revision: number,
+    atMs: number,
+  ): Promise<ScheduleOutcome>;
+  /** An email row's body as it will be sent (core's rendering); undefined
+   *  for chats. */
+  bodyHtmlFor(row: OutboxRow): Promise<string | undefined>;
   /** The failed page's "Review again": reopen, then show the review. */
   reopenByToken(token: string): Promise<PeekResult>;
   setBaseUrl(url: string): void;
@@ -787,6 +797,11 @@ export function createOutboundService(deps: {
     const n = Number(cfg.sendsPerHour);
     return Number.isFinite(n) && n > 0 ? n : 30;
   };
+
+  const isEmailSource = (sourceId: string): boolean =>
+    sourceId === 'gmail' ||
+    sourceId === 'imap' ||
+    deps.descriptorFor?.(sourceId)?.compose === 'email';
 
   const withDraft = createDraftLock();
   // Chat-mode sends and schedules of one account pass the rate rule one at
@@ -1966,6 +1981,39 @@ export function createOutboundService(deps: {
       return confirmRow(parsed.draftId, revision);
     },
 
+    async scheduleByToken(token, revision, atMs) {
+      const secret = await deps.store.outbox.secret();
+      const parsed = verifyConfirmToken(secret, token, nowMs());
+      if (!parsed) return { kind: 'invalid' };
+      return withDraft(parsed.draftId, async () => {
+        const row = await deps.store.outbox.get(parsed.draftId);
+        if (!row) return { kind: 'invalid' };
+        // The page offers the suggestion only: any other time is not one
+        // the user was shown.
+        if (!row.suggestedSendAt || Date.parse(row.suggestedSendAt) !== atMs)
+          return row.status === 'draft'
+            ? { kind: 'changed', row }
+            : { kind: 'already', row };
+        try {
+          return await scheduleLocked(row.id, revision, row.suggestedSendAt);
+        } catch (e) {
+          return {
+            kind: 'failed',
+            row,
+            error: `not scheduled: ${e instanceof Error ? e.message : String(e)}`,
+          };
+        }
+      });
+    },
+
+    async bodyHtmlFor(row) {
+      const account = await deps.store.account(row.accountId);
+      if (!account) return undefined;
+      return isEmailSource(account.source)
+        ? renderEmailBody(row.bodyMarkdown).html
+        : undefined;
+    },
+
     sendById: (draftId, revision) => confirmRow(draftId, revision),
 
     scheduleById: (draftId, revision, sendAt) =>
@@ -2030,10 +2078,7 @@ export function createOutboundService(deps: {
 
     senderSources: () => lookup.ids(),
 
-    isEmailSource: (sourceId) =>
-      sourceId === 'gmail' ||
-      sourceId === 'imap' ||
-      deps.descriptorFor?.(sourceId)?.compose === 'email',
+    isEmailSource,
 
     async cancelByToken(token) {
       const secret = await deps.store.outbox.secret();

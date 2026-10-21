@@ -65,6 +65,11 @@ const OUTBOX_CSS = `
   color: var(--text-primary); background: var(--bg-muted);
   border: 1px solid var(--border-subtle);
   padding: 12px 14px; max-height: 50vh; overflow: auto; margin: 0; }
+.ob-body.ob-mail { white-space: normal; background: #ffffff; color: #1e293b;
+  overflow-wrap: anywhere; }
+.ob-mail a { color: #4f46e5; }
+.ob-mail th, .ob-mail td { border: 1px solid #e2e8f0; padding: 4px 8px; }
+.ob-mail table { border-collapse: collapse; }
 .ob-actions { display: flex; flex-direction: column; gap: 10px;
   position: sticky; bottom: 0; background: var(--bg-canvas); padding: 10px 0 2px; }
 .ob-actions form { margin: 0; }
@@ -227,7 +232,15 @@ export function scheduleNote(row: OutboxRow, timeZone?: string): string | null {
  *  here instead (HTTP 409). */
 export function reviewPage(
   row: OutboxRow,
-  p: { confirmPath: string; cancelPath: string; changed?: boolean },
+  p: {
+    confirmPath: string;
+    cancelPath: string;
+    changed?: boolean;
+    /** An email's body as it will be sent (core's rendering, safe). */
+    bodyHtml?: string;
+    /** The AI app's suggested time, still ahead: one click schedules it. */
+    suggestion?: { path: string; label: string };
+  },
 ): string {
   const body =
     chrome(`
@@ -236,11 +249,20 @@ export function reviewPage(
   ${mirrorNote(row) ? `<div class="ob-mirror">${esc(mirrorNote(row)!)}</div>` : ''}
   ${scheduleNote(row) ? `<div class="ob-mirror">${esc(scheduleNote(row)!)}</div>` : ''}
   ${row.subject ? `<div class="ob-subject">${esc(row.subject)}</div>` : ''}
-  <pre class="ob-body">${esc(row.bodyMarkdown)}</pre>
+  ${
+    p.bodyHtml !== undefined
+      ? `<div class="ob-body ob-mail">${p.bodyHtml}</div>`
+      : `<pre class="ob-body">${esc(row.bodyMarkdown)}</pre>`
+  }
   ${attachmentList(row)}
   <span class="ob-rev" hidden>${row.revision}</span>
   <div class="ob-actions">
-    ${sendForm(p.confirmPath, 'Confirm & send')}
+    ${
+      p.suggestion
+        ? `<form method="POST" action="${esc(p.suggestion.path)}"><button type="submit" class="btn primary ob-btn ob-disable">${esc(p.suggestion.label)}</button></form>`
+        : ''
+    }
+    ${sendForm(p.confirmPath, p.suggestion ? 'Send now' : 'Confirm & send')}
     <form method="POST" action="${esc(p.cancelPath)}"><button type="submit" class="btn ob-btn-secondary ob-disable">Cancel</button></form>
   </div>`) + CONFIRM_SCRIPT;
   return renderShell(css(), {

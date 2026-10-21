@@ -168,22 +168,95 @@ type PageResult = { status: number; html: string };
 // allowlisted and how the request URL gets parsed.
 /** One review page for every confirm mode (spec §4.3), bound to the row's
  *  revision: its Send posts to /outbox/confirm/<token>/<revision>. */
-function reviewFor(row: OutboxRow, token: string, changed = false): string {
+async function reviewFor(
+  outbound: OutboundService,
+  row: OutboxRow,
+  token: string,
+  changed = false,
+): Promise<string> {
+  const at = row.suggestedSendAt ? Date.parse(row.suggestedSendAt) : NaN;
+  const ahead = !row.sendAt && at > Date.now() + 60_000;
   return reviewPage(row, {
     confirmPath: `/outbox/confirm/${token}/${row.revision}`,
     cancelPath: `/outbox/cancel/${token}`,
     changed,
+    bodyHtml: await outbound.bodyHtmlFor(row),
+    ...(ahead && {
+      suggestion: {
+        path: `/outbox/schedule/${token}/${row.revision}/${at}`,
+        label: `Schedule for ${timeText(row.suggestedSendAt!)}`,
+      },
+    }),
   });
 }
 
-function peekPage(
+/** "Thu 22 Oct, 14:12 CEST" — the zone named: the page may open elsewhere. */
+function timeText(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+}
+
+/** The link page's "Schedule for …" (spec 2026-10-21 §5.3). */
+async function postSchedule(
+  outbound: OutboundService,
+  token: string,
+  revision: number,
+  atMs: number,
+): Promise<PageResult> {
+  try {
+    const out = await outbound.scheduleByToken(token, revision, atMs);
+    if (out.kind === 'invalid') return { status: 404, html: invalidPage() };
+    if (out.kind === 'changed')
+      return {
+        status: 409,
+        html: await reviewFor(outbound, out.row, token, true),
+      };
+    if (out.kind === 'scheduled')
+      return {
+        status: 200,
+        html: resultPage(
+          'Scheduled',
+          `It goes to ${out.row.recipientDisplay} on ${timeText(out.row.sendAt!)}, as it is now — any change cancels the schedule.`,
+          { icon: 'success', footNote: 'You can close this page.' },
+        ),
+      };
+    if (out.kind === 'failed')
+      return {
+        status: 503,
+        html: resultPage(
+          'Not scheduled',
+          out.error.replace(/^not scheduled:\s*/, ''),
+          { icon: 'warn', footNote: 'Nothing was sent.' },
+        ),
+      };
+    return { status: 200, html: gonePage(out.row, token) };
+  } catch {
+    return {
+      status: 500,
+      html: resultPage(
+        'Something went wrong',
+        'This could not be scheduled right now. Nothing was sent — try again in a moment.',
+        { icon: 'warn' },
+      ),
+    };
+  }
+}
+
+async function peekPage(
+  outbound: OutboundService,
   peek: Awaited<ReturnType<OutboundService['peekByToken']>>,
   token: string,
-): PageResult {
+): Promise<PageResult> {
   if (peek.kind === 'invalid') return { status: 404, html: invalidPage() };
   if (peek.kind === 'gone')
     return { status: 200, html: gonePage(peek.row, token) };
-  return { status: 200, html: reviewFor(peek.row, token) };
+  return { status: 200, html: await reviewFor(outbound, peek.row, token) };
 }
 
 async function getConfirm(
@@ -191,7 +264,7 @@ async function getConfirm(
   token: string,
 ): Promise<PageResult> {
   try {
-    return peekPage(await outbound.peekByToken(token), token);
+    return await peekPage(outbound, await outbound.peekByToken(token), token);
   } catch {
     return {
       status: 500,
@@ -215,7 +288,10 @@ async function postConfirm(
     // 409: the confirmed page showed another revision (or an old page
     // carried none). The current one is shown; nothing was sent.
     if (out.kind === 'changed')
-      return { status: 409, html: reviewFor(out.row, token, true) };
+      return {
+        status: 409,
+        html: await reviewFor(outbound, out.row, token, true),
+      };
     if (out.kind === 'sent')
       return {
         status: 200,
@@ -254,7 +330,7 @@ async function postReopen(
   token: string,
 ): Promise<PageResult> {
   try {
-    return peekPage(await outbound.reopenByToken(token), token);
+    return await peekPage(outbound, await outbound.reopenByToken(token), token);
   } catch {
     return {
       status: 500,
@@ -298,7 +374,8 @@ type OutboxMatch =
   | { kind: 'get-confirm'; token: string }
   | { kind: 'post-confirm'; token: string; revision: number | null }
   | { kind: 'post-reopen'; token: string }
-  | { kind: 'post-cancel'; token: string };
+  | { kind: 'post-cancel'; token: string }
+  | { kind: 'post-schedule'; token: string; revision: number; atMs: number };
 
 // Routing decision for the THREE token-gated confirm/cancel routes shared by
 // both transports — deliberately a PLAIN (non-async) function. `handle` must
@@ -335,6 +412,15 @@ function matchOutboxPage(
   if (cancel && method === 'POST')
     return { kind: 'post-cancel', token: cancel[1] };
 
+  const schedule = /^\/outbox\/schedule\/([^/]+)\/(\d+)\/(\d+)$/.exec(pathname);
+  if (schedule && method === 'POST')
+    return {
+      kind: 'post-schedule',
+      token: schedule[1],
+      revision: Number(schedule[2]),
+      atMs: Number(schedule[3]),
+    };
+
   return null;
 }
 
@@ -346,6 +432,8 @@ function runOutboxMatch(
   if (match.kind === 'post-confirm')
     return postConfirm(outbound, match.token, match.revision);
   if (match.kind === 'post-reopen') return postReopen(outbound, match.token);
+  if (match.kind === 'post-schedule')
+    return postSchedule(outbound, match.token, match.revision, match.atMs);
   return postCancel(outbound, match.token);
 }
 

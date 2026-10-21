@@ -262,6 +262,52 @@ describe('outbox confirm routes', () => {
     expect(await back.text()).toContain(`action="/outbox/confirm/${token}/2"`);
   });
 
+  it('the review page shows an email as it will arrive, not its Markdown', async () => {
+    const r = await service.draftReply({
+      documentId: docId,
+      body: '## Plan\n\n- **one**',
+    });
+    const html = await (await fetch(r.confirm_url!)).text();
+    expect(html).toContain('<strong>one</strong>');
+    expect(html).toMatch(/<h2[^>]*>Plan<\/h2>/);
+    expect(html).not.toContain('**one**');
+  });
+
+  it('a suggested time is one click on the page; only that time, at the shown revision', async () => {
+    sendMock.mockClear();
+    const r = await service.draftReply({ documentId: docId, body: 'Later' });
+    const token = r.confirm_url!.split('/outbox/confirm/')[1];
+    const at = Date.now() + 2 * 3600_000;
+    const iso = new Date(at).toISOString();
+    await store.outbox.suggest(r.draft_id, iso);
+    const page = await (await fetch(r.confirm_url!)).text();
+    expect(page).toContain(
+      `action="/outbox/schedule/${token}/1/${Date.parse(iso)}"`,
+    );
+    expect(page).toContain('Send now');
+    // Another time than the one shown is refused: nothing scheduled.
+    const forged = await fetch(
+      `${base}/outbox/schedule/${token}/1/${Date.parse(iso) + 60_000}`,
+      { method: 'POST' },
+    );
+    expect(forged.status).toBe(409);
+    expect((await store.outbox.get(r.draft_id))?.sendAt).toBeNull();
+    const ok = await fetch(
+      `${base}/outbox/schedule/${token}/1/${Date.parse(iso)}`,
+      { method: 'POST' },
+    );
+    expect(ok.status).toBe(200);
+    expect(await ok.text()).toMatch(/Scheduled/);
+    const got = await store.outbox.get(r.draft_id);
+    expect(got?.sendAt).toBe(iso);
+    expect(got?.suggestedSendAt).toBeNull();
+    expect(sendMock).not.toHaveBeenCalled();
+    const bad = await fetch(`${base}/outbox/schedule/nope/1/${at}`, {
+      method: 'POST',
+    });
+    expect(bad.status).toBe(404);
+  });
+
   it('a bad token 404s', async () => {
     const res = await fetch(`${base}/outbox/confirm/garbage`);
     expect(res.status).toBe(404);
