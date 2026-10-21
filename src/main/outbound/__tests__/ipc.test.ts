@@ -700,6 +700,15 @@ describe('outbound ipc delegate', () => {
     expect(listed.bodyPreview).toBe('Plan one doc');
   });
 
+  it('a body that starts or ends with a link previews without its target', async () => {
+    const r = await service.draftReply({
+      documentId: docId,
+      body: '[Doc](https://x.io/d) and [more](https://x.io/m)',
+    });
+    const d = await invoke('outbox:get', { draftId: r.draft_id });
+    expect(d?.bodyPreview).toBe('Doc and more');
+  });
+
   it('outbox:send runs the page confirm: sent, then already; unknown is gone', async () => {
     const r = await service.draftReply({ documentId: docId, body: 'x' });
     const first = await invoke('outbox:send', {

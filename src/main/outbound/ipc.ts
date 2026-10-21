@@ -113,7 +113,7 @@ function panelRow(
     // An email's preview reads as its words, without Markdown marks.
     bodyPreview: (email
       ? wordsOf(renderEmailBody(row.bodyMarkdown).html).replace(
-          / \[(href|src):[^\]]*\] /g,
+          /\s*\[(href|src):[^\]]*\]\s*/g,
           ' ',
         )
       : row.bodyMarkdown

@@ -570,6 +570,22 @@ test('review: a schedule refused says why and schedules nothing', async () => {
   );
 });
 
+test('review: a relative preset counts from the pick, not from when the sheet opened', async () => {
+  await openReview('wait');
+  openSendMenu();
+  // The user leaves the menu open for 20 minutes, then picks "In 15 minutes".
+  jest.setSystemTime(NOW.getTime() + 20 * 60_000);
+  fireEvent.click(screen.getByRole('menuitem', { name: /^In 15 minutes/ }));
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledWith('outbox:schedule', {
+    draftId: 'wait',
+    revision: 1,
+    sendAt: new Date(
+      Math.ceil((NOW.getTime() + 35 * 60_000) / 60_000) * 60_000,
+    ).toISOString(),
+  });
+});
+
 test('review: Send ▾ offers the presets with their times; one click schedules', async () => {
   await openReview('wait');
   openSendMenu();

@@ -289,7 +289,12 @@ export function ReviewSheet(props: {
             <span className="ob-preset-at">{whenLabel(p.at, nowMs)}</span>
           </span>
         ),
-        onSelect: () => void schedule(d.revision, new Date(p.at).toISOString()),
+        // The time as of the pick: the sheet may have been open a while.
+        onSelect: () => {
+          const at =
+            sendPresets(Date.now()).find((x) => x.key === p.key)?.at ?? p.at;
+          void schedule(d.revision, new Date(at).toISOString());
+        },
       }),
     ),
     'separator',
