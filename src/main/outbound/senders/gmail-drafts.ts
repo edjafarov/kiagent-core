@@ -3,8 +3,8 @@
  * Kia row (spec §5.5). Create composes exactly what a send would; update
  * rebuilds the stored draft from its own raw so what the user added in Gmail
  * (Bcc, HTML, inline images, files) survives a Kia edit — except that a body
- * change replaces the text and drops the HTML, which would otherwise say
- * the old thing. Read maps `format=full` to DraftContent; a draft that no
+ * change replaces both parts with Kia's (the Markdown as text, its rendering
+ * as HTML), which would otherwise say the old thing. Read maps `format=full` to DraftContent; a draft that no
  * longer exists is `gone` (Gmail cannot tell sent from deleted).
  */
 import MailComposer from 'nodemailer/lib/mail-composer';
@@ -31,6 +31,7 @@ import {
 } from '../../sources/gmail/gmail-api';
 import {
   headersOf,
+  htmlBodyOf,
   isFilePart,
   plainTextOf,
   splitAddressList,
@@ -159,12 +160,14 @@ function contentOf(msg: Parameters<typeof plainTextOf>[0]): DraftContent {
   if (!bodyText && bodyByReference(msg.payload))
     throw new Error('the Gmail draft text is too large to read');
   const h = headersOf(msg);
+  const bodyHtml = htmlBodyOf(msg);
   return {
     to: splitAddressList(h.to),
     cc: splitAddressList(h.cc),
     bcc: splitAddressList(h.bcc),
     subject: h.subject ?? null,
     bodyText,
+    ...(bodyHtml !== undefined ? { bodyHtml } : {}),
     attachments: filesOf(msg.payload),
   };
 }
@@ -239,7 +242,7 @@ async function rebuild(raw: Buffer, patch: DraftPatch): Promise<Buffer> {
     bcc: addresses(m.bcc),
     subject: patch.subject ?? m.subject,
     text: bodyChanged ? patch.bodyMarkdown : (m.text ?? ''),
-    html: bodyChanged || !m.html ? undefined : m.html,
+    html: bodyChanged ? patch.bodyHtml : m.html || undefined,
     inReplyTo: m.inReplyTo,
     references: refs ? (Array.isArray(refs) ? refs : [refs]) : undefined,
     messageId: m.messageId,

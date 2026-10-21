@@ -65,6 +65,11 @@ export function plainTextOf(msg: GmailApiMessage): string {
   return html ? htmlToText(html) : '';
 }
 
+/** The message's HTML body, when it has one. */
+export function htmlBodyOf(msg: GmailApiMessage): string | undefined {
+  return (msg.payload && findBody(msg.payload, 'text/html')) || undefined;
+}
+
 /** A message's first header of each name, lower-cased keys. */
 export function headersOf(msg: GmailApiMessage): Record<string, string> {
   return msg.payload ? collectHeaders(msg.payload) : {};

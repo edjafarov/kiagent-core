@@ -122,6 +122,7 @@ export function createSmtpSender(deps: {
         cc,
         subject: intent.subject,
         text: intent.bodyMarkdown,
+        html: intent.bodyHtml,
         inReplyTo: intent.threading?.inReplyTo as string | undefined,
         references: intent.threading?.references as string[] | undefined,
         attachments: intent.attachments?.map((a) => ({

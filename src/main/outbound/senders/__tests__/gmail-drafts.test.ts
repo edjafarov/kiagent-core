@@ -159,6 +159,20 @@ describe('gmail draft mirror', () => {
     expect((parsed.bcc as { text: string }).text).toBe('boss@example.com');
   });
 
+  it('create sends the rendered HTML with the Markdown as text', async () => {
+    use(() => res(200, { id: 'd1', message: { id: 'm1', threadId: 't1' } }));
+    await drafts().create({
+      ...intent(),
+      bodyMarkdown: '**Thanks!**',
+      bodyHtml: '<div><p><strong>Thanks!</strong></p></div>',
+    });
+    const raw = sentRaw(0).toString('utf8');
+    expect(raw).toMatch(/multipart\/alternative/);
+    const parsed = await simpleParser(sentRaw(0));
+    expect(parsed.text?.trim()).toBe('**Thanks!**');
+    expect(parsed.html).toContain('<strong>Thanks!</strong>');
+  });
+
   it('a grant without gmail.compose asks to reconnect and never calls Gmail', async () => {
     await store.vault.save(accountId, {
       accessToken: 'tok-1',
@@ -370,6 +384,9 @@ describe('gmail draft mirror', () => {
     expect(r.state === 'draft' && r.content.bodyText).toMatch(
       /Hello \*\*Bob\*\*/,
     );
+    expect(r.state === 'draft' && r.content.bodyHtml).toBe(
+      '<p>Hello <b>Bob</b></p>',
+    );
   });
 
   it('read of a draft sent from Gmail, whose id still answers, is sent', async () => {
@@ -442,6 +459,18 @@ describe('gmail draft mirror', () => {
         'b.txt',
         'logo.png',
       ]);
+    });
+
+    it('a body change with HTML replaces both parts with Kia\'s', async () => {
+      withStored();
+      await drafts().update(ref(), {
+        bodyMarkdown: 'New **text**',
+        bodyHtml: '<div><p>New <strong>text</strong></p></div>',
+      });
+      const m = await simpleParser(sentRaw(1));
+      expect(m.text?.trim()).toBe('New **text**');
+      expect(m.html).toContain('New <strong>text</strong>');
+      expect(m.html).not.toContain('Old text');
     });
 
     it('a subject change keeps the HTML', async () => {

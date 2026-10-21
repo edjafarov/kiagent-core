@@ -173,6 +173,19 @@ describe('smtp sender', () => {
     expect(result.externalMessageId).toMatch(/^<.+>$/);
   });
 
+  it('sends the rendered HTML with the Markdown as text', async () => {
+    await sender().send({
+      ...intent(),
+      bodyMarkdown: '**Thanks!**',
+      bodyHtml: '<div><p><strong>Thanks!</strong></p></div>',
+    });
+    const { raw } = sendMail.mock.calls[0][0];
+    const { simpleParser } = await import('mailparser');
+    const m = await simpleParser(raw);
+    expect(m.text?.trim()).toBe('**Thanks!**');
+    expect(m.html).toContain('<strong>Thanks!</strong>');
+  });
+
   it('carries files and blind copies', async () => {
     await sender().send({
       ...intent(),

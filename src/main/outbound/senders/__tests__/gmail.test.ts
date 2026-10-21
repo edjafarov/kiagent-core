@@ -108,6 +108,31 @@ describe('gmail sender', () => {
     expect(result.externalMessageId).toBe('m9');
   });
 
+  it('1b. a body with HTML goes as multipart/alternative, the Markdown as text', async () => {
+    await store.vault.save(accountId, {
+      accessToken: 'tok-1',
+      expiresAt: futureIso(),
+      scope:
+        'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send',
+    });
+    fetchMock = jest.fn(async () => okJson({ id: 'm9', threadId: 't123' }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    await createGmailSender({ store }).send({
+      ...intent(),
+      bodyMarkdown: '- **one**',
+      bodyHtml: '<div><ul><li><strong>one</strong></li></ul></div>',
+    });
+    const raw = Buffer.from(
+      JSON.parse(fetchMock.mock.calls[0][1].body).raw,
+      'base64url',
+    );
+    expect(raw.toString('utf8')).toMatch(/multipart\/alternative/);
+    const { simpleParser } = await import('mailparser');
+    const m = await simpleParser(raw);
+    expect(m.text?.trim()).toBe('- **one**');
+    expect(m.html).toContain('<strong>one</strong>');
+  });
+
   it('2. expired creds trigger the injected refresher once, and the fresh token is both saved to the vault and used for the send', async () => {
     await store.vault.save(accountId, {
       accessToken: 'stale-tok',

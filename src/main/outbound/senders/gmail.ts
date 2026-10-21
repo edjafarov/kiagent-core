@@ -39,6 +39,7 @@ function composeRaw(opts: {
   bcc?: string[];
   subject?: string;
   text: string;
+  html?: string;
   inReplyTo?: string;
   references?: string[];
   replyTo?: string;
@@ -53,6 +54,7 @@ function composeRaw(opts: {
     bcc: opts.bcc?.length ? opts.bcc : undefined,
     subject: opts.subject,
     text: opts.text,
+    html: opts.html,
     inReplyTo: opts.inReplyTo,
     references: opts.references?.length ? opts.references : undefined,
     replyTo: opts.replyTo,
@@ -124,6 +126,7 @@ export function createGmailSender(deps: {
       bcc: intent.bcc,
       subject: intent.subject,
       text: intent.bodyMarkdown,
+      html: intent.bodyHtml,
       inReplyTo: threading.inReplyTo,
       references: threading.references,
       replyTo: intent.replyTo,
