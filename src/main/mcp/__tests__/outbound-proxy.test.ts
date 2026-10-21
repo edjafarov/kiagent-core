@@ -256,6 +256,16 @@ describe('outbound proxy ↔ the real /outbox/api dispatcher', () => {
     await proxy.sendDraft({ draftId: 'd', revision: 1 });
     await proxy.reviseDraft({ draftId: 'd', revision: 1, body: 'b' });
     await proxy.scheduleDrafts({ drafts: [{ draftId: 'd', revision: 1 }] });
+    // No calendar service behind this dispatcher: the ops still go on the
+    // wire (that is what is checked) and come back as a refusal.
+    const refused = () => undefined;
+    await proxy.listCalendars({}).catch(refused);
+    await proxy
+      .findFreeTime({ from: '', to: '', durationMinutes: 30 })
+      .catch(refused);
+    await proxy
+      .draftEvent({ title: 't', start: 's', category: 'kids' })
+      .catch(refused);
     expect([...new Set(seen)].sort()).toEqual([...OUTBOUND_TOOL_OPS].sort());
   });
 });

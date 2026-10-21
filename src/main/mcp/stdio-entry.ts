@@ -118,7 +118,10 @@ async function main(): Promise<void> {
     createInProcessSqlExecutor(readDb._conn!).exec,
   );
   const registry = createToolRegistry([
-    ...buildBuiltinTools(query, createOutboundProxy()),
+    ...(() => {
+      const proxy = createOutboundProxy();
+      return buildBuiltinTools(query, proxy, proxy);
+    })(),
     ...rawSql.tools,
   ]);
   const server = makeMcpServer();

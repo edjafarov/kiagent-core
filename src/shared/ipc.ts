@@ -5,9 +5,11 @@ import type {
   AppState,
   Cadence,
   Cap,
+  CreatedEvent,
   DeclaredFileRoot,
   Document,
   DocumentId,
+  EventIntent,
   FolderCount,
   FolderNode,
   Identity,
@@ -32,6 +34,57 @@ import type { ExtErrorCode } from './source-errors';
  * state; the invoke channels are commands and page-local reads. (The legacy
  * app needed 85 channels; the feed/projection design needs these.)
  */
+
+/** An event draft as the Outbox shows it — the wire mirror of main's
+ *  `EventDraftView` (calendar-out/types.ts), so the renderer imports nothing
+ *  from main. Only draft|failed|unknown rows are ever listed. */
+export interface CalendarDraftView {
+  id: string;
+  accountId: AccountId;
+  revision: number;
+  payload: Omit<EventIntent, 'accountId' | 'idempotencyKey' | 'kia'>;
+  status:
+    | 'draft'
+    | 'creating'
+    | 'created'
+    | 'failed'
+    | 'discarded'
+    | 'expired'
+    | 'unknown';
+  error: string | null;
+  createdAt: string;
+  expiresAt: string;
+  calendarName: string | null;
+  accountEmail: string | null;
+  source: { title: string | null; createdAt: string | null } | null;
+  similarEvents: {
+    kind: 'event' | 'draft';
+    title: string;
+    start: string;
+    calendar: string;
+  }[];
+}
+
+export type CalendarConfirmOutcome =
+  | { kind: 'created'; event: CreatedEvent }
+  | { kind: 'failed' | 'unknown'; error: string }
+  | { kind: 'changed' | 'gone' | 'discarded' };
+
+/** A calendar an event can be added to (mirror of main's CalendarListItem). */
+export interface CalendarListEntry {
+  accountId: AccountId;
+  accountEmail: string;
+  source: string;
+  calendarId: string;
+  name: string;
+  primary: boolean;
+  shared: boolean;
+  timeZone: string | null;
+  indexed: boolean;
+  canWrite: boolean;
+  isDefault: boolean;
+  note?: string;
+}
 
 /** Pushed to every window on each projection diff. `seq` is the feed
  *  position the state reflects; `rev` is the broadcast ordering counter
@@ -590,6 +643,21 @@ export interface Invokes {
     res: { reconnect: boolean };
   };
 
+  // Calendar event drafts in the Outbox (calendar spec §5.6).
+  'calendar-out:list': { req: void; res: CalendarDraftView[] };
+  'calendar-out:confirm': {
+    req: { id: string; revision: number };
+    res: CalendarConfirmOutcome;
+  };
+  'calendar-out:confirm-all': {
+    req: { items: { id: string; revision: number }[] };
+    res: { created: number; failed: number; changed: number };
+  };
+  'calendar-out:retry': { req: { id: string }; res: CalendarConfirmOutcome };
+  'calendar-out:discard': { req: { id: string }; res: void };
+  'calendar-out:restore': { req: { id: string }; res: void };
+  'calendar-out:list-calendars': { req: void; res: CalendarListEntry[] };
+
   'mcp:info': { req: void; res: McpInfo };
   'mcp:connect-client': { req: { id: string }; res: void };
   'mcp:disconnect-client': { req: { id: string }; res: void };
@@ -744,6 +812,10 @@ export interface Pushes {
    *  never a statement that a specific row changed. */
   'push:outbox-changed': void;
   'push:attention-changed': void;
+  /** Event drafts may have changed (calendar spec §5.6). Coalesced to one
+   *  broadcast per 50 ms; no payload — re-read `calendar-out:list` and
+   *  `outbox:pending-count`. */
+  'push:calendar-out-changed': void;
   /** B1: an extension's `host.ui.broadcast(name, payload)`, fanned out to
    *  every renderer window verbatim. */
   'ext:push': ExtPushEvent;
@@ -828,6 +900,13 @@ const INVOKE_CHANNEL_MAP = {
   'outbox:mirror-status': 0,
   'outbox:add-files': 0,
   'outbox:remove-files': 0,
+  'calendar-out:list': 0,
+  'calendar-out:confirm': 0,
+  'calendar-out:confirm-all': 0,
+  'calendar-out:retry': 0,
+  'calendar-out:discard': 0,
+  'calendar-out:restore': 0,
+  'calendar-out:list-calendars': 0,
   'mcp:info': 0,
   'mcp:connect-client': 0,
   'mcp:disconnect-client': 0,
@@ -873,6 +952,7 @@ const PUSH_CHANNEL_MAP = {
   'push:update-state': 0,
   'push:outbox-changed': 0,
   'push:attention-changed': 0,
+  'push:calendar-out-changed': 0,
   'ext:push': 0,
 } as const satisfies Record<PushChannel, 0>;
 

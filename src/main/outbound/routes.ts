@@ -14,6 +14,12 @@ import { logMessageOf } from '../core/mcp/log-safe';
 import { shapeOutboundError } from './error-copy';
 import { isOutboundToolOp } from './ops';
 import { failedPage, PAGE_CSP, resultPage, reviewPage } from './pages';
+import {
+  getEventConfirm,
+  postEventCancel,
+  postEventConfirm,
+} from '../calendar-out/pages';
+import type { CalendarOutService } from '../calendar-out/service';
 import type { OutboundService } from './service';
 
 function sendHtml(
@@ -471,7 +477,11 @@ type OutboxMatch =
       /** Epoch ms or a preset key; none = the custom form's body. */
       when: string | undefined;
     }
-  | { kind: 'post-unschedule'; token: string; revision: number };
+  | { kind: 'post-unschedule'; token: string; revision: number }
+  // Calendar event drafts (calendar spec §5.6), served by calendar-out.
+  | { kind: 'get-event-confirm'; token: string }
+  | { kind: 'post-event-confirm'; token: string; revision: number | null }
+  | { kind: 'post-event-cancel'; token: string };
 
 // Routing decision for the THREE token-gated confirm/cancel routes shared by
 // both transports — deliberately a PLAIN (non-async) function. `handle` must
@@ -489,6 +499,21 @@ function matchOutboxPage(
   method: string | undefined,
   pathname: string,
 ): OutboxMatch | null {
+  const eventConfirm = /^\/outbox\/event\/confirm\/([^/]+)(?:\/(\d+))?$/.exec(
+    pathname,
+  );
+  if (eventConfirm && method === 'GET')
+    return { kind: 'get-event-confirm', token: eventConfirm[1] };
+  if (eventConfirm && method === 'POST')
+    return {
+      kind: 'post-event-confirm',
+      token: eventConfirm[1],
+      revision: eventConfirm[2] === undefined ? null : Number(eventConfirm[2]),
+    };
+  const eventCancel = /^\/outbox\/event\/cancel\/([^/]+)$/.exec(pathname);
+  if (eventCancel && method === 'POST')
+    return { kind: 'post-event-cancel', token: eventCancel[1] };
+
   // The revision segment rides only on the page's Send; a GET ignores it.
   const confirm = /^\/outbox\/confirm\/([^/]+)(?:\/(\d+))?$/.exec(pathname);
   if (confirm && method === 'GET')
@@ -535,7 +560,24 @@ function runOutboxMatch(
   outbound: OutboundService,
   match: OutboxMatch,
   req: http.IncomingMessage,
+  calendar?: CalendarOutService,
 ): Promise<PageResult> {
+  if (
+    match.kind === 'get-event-confirm' ||
+    match.kind === 'post-event-confirm' ||
+    match.kind === 'post-event-cancel'
+  ) {
+    if (!calendar)
+      return Promise.resolve({
+        status: 404,
+        html: resultPage('Not available', 'Calendar events are not available.'),
+      });
+    if (match.kind === 'get-event-confirm')
+      return getEventConfirm(calendar, match.token);
+    if (match.kind === 'post-event-confirm')
+      return postEventConfirm(calendar, match.token, match.revision);
+    return postEventCancel(calendar, match.token);
+  }
   if (match.kind === 'get-confirm') return getConfirm(outbound, match.token);
   if (match.kind === 'post-confirm')
     return postConfirm(outbound, match.token, match.revision);
@@ -547,7 +589,11 @@ function runOutboxMatch(
   return postCancel(outbound, match.token);
 }
 
-export function createOutboundRoutes(outbound: OutboundService): {
+export function createOutboundRoutes(
+  outbound: OutboundService,
+  /** Calendar drafting (calendar spec §5.5); absent → those ops refuse. */
+  calendar?: CalendarOutService,
+): {
   handle(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -570,7 +616,7 @@ export function createOutboundRoutes(outbound: OutboundService): {
     async handle(req, res, url) {
       const match = matchOutboxPage(req.method, url.pathname);
       if (match) {
-        const page = await runOutboxMatch(outbound, match, req);
+        const page = await runOutboxMatch(outbound, match, req, calendar);
         sendHtml(res, page.status, page.html);
         return true;
       }
@@ -636,6 +682,27 @@ export function createOutboundRoutes(outbound: OutboundService): {
                 args as Parameters<OutboundService['scheduleDrafts']>[0],
               ),
             });
+          } else if (
+            op === 'listCalendars' ||
+            op === 'findFreeTime' ||
+            op === 'draftEvent'
+          ) {
+            if (!calendar) throw new Error('calendar drafting is unavailable');
+            const result =
+              op === 'listCalendars'
+                ? await calendar.listCalendars({})
+                : op === 'findFreeTime'
+                  ? await calendar.findFreeTime(
+                      args as unknown as Parameters<
+                        CalendarOutService['findFreeTime']
+                      >[0],
+                    )
+                  : await calendar.draftEvent(
+                      args as unknown as Parameters<
+                        CalendarOutService['draftEvent']
+                      >[0],
+                    );
+            sendJson(res, { ok: true, result });
           } else {
             // Unreachable — `op` is `never` here, and that is the point:
             // adding an op to OUTBOUND_TOOL_OPS without a branch above is a
@@ -669,7 +736,7 @@ export function createOutboundRoutes(outbound: OutboundService): {
       const url = new URL(req.url ?? '/', 'http://x');
       const match = matchOutboxPage(req.method, url.pathname);
       if (!match) return false;
-      const page = await runOutboxMatch(outbound, match, req);
+      const page = await runOutboxMatch(outbound, match, req, calendar);
       sendHtml(res, page.status, page.html);
       return true;
     },

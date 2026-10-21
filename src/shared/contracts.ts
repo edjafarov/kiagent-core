@@ -148,6 +148,9 @@ export interface CalendarEventMetadata {
   location: string | null;
   eventType: string;
   transparency: string;
+  /** Platform 2.16.0: Kia's work/personal/kids stamp, read back from the
+   *  provider. Absent / null on events Kia did not categorise. */
+  category?: EventCategory | null;
 }
 
 /** When recurring work runs. Declared as DATA on contributions — never a
@@ -1039,6 +1042,79 @@ export interface DraftMirror {
   send(ref: DraftRef, ctx?: SenderContext): Promise<SendResult>;
 }
 
+// ── Calendar writes (platform 2.16.0) ───────────────────────────────────────
+
+/** A calendar an account can see, as its source's CalendarWriter lists it. */
+export interface WritableCalendar {
+  /** Provider calendar id (== calendar.event metadata.calendarId). */
+  id: string;
+  name: string;
+  color: string | null;
+  /** Google primary / Graph isDefaultCalendar. */
+  primary: boolean;
+  /** The USER's right on the calendar (Google accessRole owner|writer /
+   *  Graph canEdit) — not whether Kia's grant can write; core adds that. */
+  canWrite: boolean;
+  /** Owned by someone else (Google accessRole !== 'owner' / Graph owner). */
+  shared: boolean;
+  /** IANA zone, when the provider says. */
+  timeZone: string | null;
+}
+
+export type EventCategory = 'work' | 'personal' | 'kids';
+export const EVENT_CATEGORIES: readonly EventCategory[] = [
+  'work',
+  'personal',
+  'kids',
+];
+
+/** What a CalendarWriter is asked to create — plain data, as SendIntent. */
+export interface EventIntent {
+  accountId: AccountId;
+  /** Stable per create attempt; the writer derives the provider's
+   *  idempotency id from it, so a retry with the same key is safe. */
+  idempotencyKey: string;
+  calendarId: string;
+  title: string;
+  /** Timed: ISO instant with offset. All-day: YYYY-MM-DD, end EXCLUSIVE. */
+  start: string;
+  end: string;
+  allDay: boolean;
+  /** IANA zone the user thinks in. */
+  timeZone: string;
+  location: string | null;
+  /** Plain text. */
+  description: string | null;
+  /** [] = nobody is invited. */
+  attendees: { email: string; name?: string }[];
+  /** 'auto' = a Meet / Teams link if the provider can make one. */
+  conference: 'none' | 'auto';
+  category: EventCategory;
+  kia: { draftId: string; sourceDocumentId: string | null };
+}
+
+export interface CreatedEvent {
+  eventId: string;
+  iCalUID: string | null;
+  htmlLink: string | null;
+  conferenceUrl: string | null;
+  /** The provider is still making the video link. */
+  conferencePending: boolean;
+  /** A note for the user, e.g. why no video link was added. */
+  note: string | null;
+}
+
+/** Calendar writes for one source id (platform 2.16.0). Like Sender,
+ *  `createEvent` is reachable ONLY after a confirmation gate. Credentials
+ *  arrive in ctx: an extension runs out-of-process with no vault access. */
+export interface CalendarWriter {
+  listCalendars(ctx: SenderContext): Promise<WritableCalendar[]>;
+  createEvent(intent: EventIntent, ctx: SenderContext): Promise<CreatedEvent>;
+}
+
+export const CALENDAR_WRITER_OPS = ['listCalendars', 'createEvent'] as const;
+export type CalendarWriterOp = (typeof CALENDAR_WRITER_OPS)[number];
+
 export const DRAFT_MIRROR_OPS = [
   'create',
   'update',
@@ -1489,6 +1565,10 @@ export type Cap =
    *  extensions never initiate sends. Not a host namespace: there is no
    *  host.send.* surface. */
   | 'send'
+  /** May create calendar events through the host's event-draft pipeline —
+   *  the host calls the extension's CalendarWriter only AFTER a user
+   *  confirmation gate (platform 2.16.0). Not a host namespace either. */
+  | 'calendar.write'
   /** Privileged, bundled-tier only: run in the main process and receive the
    *  opaque main-process handle as activate()'s extras.mainProcess. Rejected
    *  for marketplace/dev extensions at manifest validation. */
@@ -1572,6 +1652,9 @@ export interface Manifest {
     /** Source ids this extension provides an outbound Sender for — []
      *  for none. Required since platform 2.0.0. */
     senders: string[];
+    /** Source ids this extension provides a CalendarWriter for (platform
+     *  2.16.0). Optional: absent = none. */
+    calendarWriters?: string[];
     commands?: Array<{ id: string; title: string }>;
     /** B3: renderer screens this extension contributes. Bundled tier only;
      *  requires the `ui` cap. See `manifest.ts`'s `parseManifest` for the
@@ -1725,6 +1808,7 @@ export interface CapSurfaces {
   };
   /** Host-initiated only — no extension→host surface. */
   send: {};
+  'calendar.write': {};
   /** Privileged, bundled-tier only: main-process handle passed as
    *  extras.mainProcess in activate(), not as a host surface. */
   'unsafe.mainProcess': {};
@@ -1760,6 +1844,10 @@ export interface ExtensionModule<G extends Cap = Cap> {
     /** Senders keyed by SOURCE id — each must be listed in
      *  contributes.senders and its source contributed by this extension. */
     senders?: Record<string, Sender>;
+    /** Calendar writers keyed by SOURCE id — each must be listed in
+     *  contributes.calendarWriters and its source contributed by this
+     *  extension (platform 2.16.0). */
+    calendarWriters?: Record<string, CalendarWriter>;
   }>;
   deactivate?(): void | Promise<void>;
 }
@@ -1824,6 +1912,14 @@ export interface OnboardingPrefs {
   dismissedAt: string | null; // manual Skip
 }
 
+export interface CalendarPrefs {
+  defaultCalendar: { accountId: string; calendarId: string } | null;
+  /** Local "HH:MM"; days are ISO weekdays, 1 = Monday … 7 = Sunday. */
+  workingHours: { start: string; end: string; days: number[] } | null;
+  /** IANA zone; null = the system zone. */
+  timeZone: string | null;
+}
+
 /** App-level settings — not per-account (Account.config), not per-extension
  *  (PrivateDb). */
 export interface AppPrefs {
@@ -1842,6 +1938,9 @@ export interface AppPrefs {
    *  2026-07-27) — the per-account setting offers only review/link and acts
    *  as the opt-out for individual accounts. */
   outbound: { defaultMode: ConfirmMode };
+  /** Calendar drafting (platform 2.16.0). Nulls = defaults: the only
+   *  account's primary calendar, 09:00–18:00 Mon–Fri, the system zone. */
+  calendar: CalendarPrefs;
   /** Product feature switches. A missing key means "not decided": the
    *  product applies its own default. Core knows no feature names. */
   features: Record<string, boolean>;

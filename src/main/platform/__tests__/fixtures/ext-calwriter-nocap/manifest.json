@@ -1,0 +1,20 @@
+{
+  "id": "test.calwriter-nocap",
+  "name": "Calendar Writer Fixture (no cap)",
+  "version": "1.0.0",
+  "engine": "^2.16.0",
+  "entry": "index.js",
+  "caps": [],
+  "contributes": {
+    "sources": [
+      "calsrc"
+    ],
+    "tools": [
+      "writer_calls"
+    ],
+    "senders": [],
+    "calendarWriters": [
+      "calsrc"
+    ]
+  }
+}

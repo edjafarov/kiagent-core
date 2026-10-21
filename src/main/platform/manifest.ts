@@ -51,6 +51,7 @@ export const CAPS = [
   'events',
   'attention',
   'send',
+  'calendar.write',
   'unsafe.mainProcess',
 ] as const satisfies readonly Cap[];
 
@@ -188,6 +189,8 @@ const schema = z.strictObject({
       error:
         'contributes.senders is required — the source ids this extension provides an outbound Sender for, or []',
     }),
+    // Platform 2.16.0: optional, so every older manifest stays valid.
+    calendarWriters: z.array(z.string()).optional(),
     commands: z
       .array(z.strictObject({ id: z.string(), title: z.string() }))
       .optional(),
@@ -311,6 +314,14 @@ export function senderContributions(
   manifest: Pick<Manifest, 'contributes'>,
 ): string[] {
   return manifest.contributes.senders;
+}
+
+/** The source ids this extension declares a CalendarWriter for — THE way
+ *  to consume `contributes.calendarWriters`, defaulting to `[]`. */
+export function calendarWriterContributions(
+  manifest: Pick<Manifest, 'contributes'>,
+): string[] {
+  return manifest.contributes.calendarWriters ?? [];
 }
 
 /** The tool names this extension declares — THE way to consume

@@ -12,8 +12,10 @@ import NodeModule from 'module';
 
 import type {
   AccountId,
+  CalendarWriterOp,
   Cap,
   ConsentRecord,
+  CreatedEvent,
   Credentials,
   DeclaredFileRoot,
   DraftMirror,
@@ -29,6 +31,7 @@ import type {
   McpTool,
   SendResult,
   Source,
+  WritableCalendar,
 } from '@shared/contracts';
 import type { ExtensionPreview, ExtInvokeEnvelope } from '@shared/ipc';
 import type { Contributions } from '@shared/extension-rpc';
@@ -41,6 +44,10 @@ import type { AttentionService } from '@main/attention/service';
 import type { CoreStore } from '@main/core/store/store';
 import type { CoreScheduler } from '@main/core/scheduler';
 import type { SenderRegistry, SourceRegistry } from '@main/core/boot';
+import {
+  createCalendarWriterRegistry,
+  type CalendarWriterRegistry,
+} from '@main/calendar-out/writers';
 import type { LogSink } from '@main/core/engine/engine';
 import { freshCredentials } from '@main/core/engine/fresh-credentials';
 import type { OAuthProfile } from '@main/auth/oauth-window';
@@ -56,6 +63,7 @@ import {
   loadIconDataUrl,
   oauthSourceBindings,
   senderContributions,
+  calendarWriterContributions,
   sourceContributions,
   toolContributions,
   uiContributions,
@@ -295,6 +303,9 @@ export interface ExtensionPlatformDeps {
    *  registered on activation, dropped on every host exit (crash included),
    *  re-registered by the respawn. */
   senders: SenderRegistry;
+  /** Calendar writers (platform 2.16.0). Optional only so test harnesses
+   *  need not pass one; omitted, the platform keeps a private registry. */
+  calendarWriters?: CalendarWriterRegistry;
   scheduler: CoreScheduler;
   registerTool(tool: McpTool): () => void;
   /** `lane` is deliberately excluded here: it is supplied at surface-build
@@ -521,6 +532,8 @@ export function createExtensionPlatform(
   deps: ExtensionPlatformDeps,
 ): ExtensionPlatform {
   const entries = new Map<string, Entry>();
+  const calendarWriters =
+    deps.calendarWriters ?? createCalendarWriterRegistry();
   const bus = createEventBus(deps.logSink);
   // B1: ONE registry shared across every extension's incarnations, same
   // lifetime as `bus` — see ui-registry.ts's header for why identity is
@@ -755,6 +768,8 @@ export function createExtensionPlatform(
     );
     const declaredSenders = new Set(senderContributions(e.manifest));
     const declaredTools = new Set(toolContributions(e.manifest));
+    const declaredWriters = new Set(calendarWriterContributions(e.manifest));
+    const registeredWriters: string[] = [];
     const registeredSources: string[] = [];
     const registeredOAuthSources: string[] = [];
     const registeredSenders: string[] = [];
@@ -874,6 +889,58 @@ export function createExtensionPlatform(
       });
       registeredSenders.push(id);
     }
+    // Calendar writers (platform 2.16.0): the same triple gate as senders —
+    // the cap, the manifest list, and a source this activation registered.
+    for (const id of c.calendarWriters ?? []) {
+      const scope = `extension:${e.manifest.id}`;
+      if (!e.manifest.caps.includes('calendar.write')) {
+        deps.logSink.log(
+          scope,
+          'warn',
+          `calendar writer for source '${id}' requires the 'calendar.write' cap, which this extension does not declare — skipping`,
+        );
+        continue;
+      }
+      if (!declaredWriters.has(id)) {
+        deps.logSink.log(
+          scope,
+          'warn',
+          `calendar writer id '${id}' is not declared in contributes.calendarWriters — skipping`,
+        );
+        continue;
+      }
+      if (!registeredSources.includes(id)) {
+        deps.logSink.log(
+          scope,
+          'warn',
+          `calendar writer id '${id}' has no registered source of that id — skipping`,
+        );
+        continue;
+      }
+      // Credentials resolved host-side per call, exactly as for a sender;
+      // the child's writer gets them in ctx. 60 s bounds a hung child.
+      const call = (
+        op: CalendarWriterOp,
+        accountId: AccountId,
+        args: unknown[],
+      ): Promise<unknown> =>
+        senderCredentials(id, accountId).then((credentials) =>
+          withTimeout(
+            e.host!.callCalendar(id, op, args, { credentials }),
+            60_000,
+            `extension calendar ${op} for '${id}' timed out after 60s`,
+          ),
+        );
+      calendarWriters.register(id, {
+        listCalendars: (accountId) =>
+          call('listCalendars', accountId, []) as Promise<WritableCalendar[]>,
+        createEvent: (intent) =>
+          call('createEvent', intent.accountId, [
+            intent,
+          ]) as Promise<CreatedEvent>,
+      });
+      registeredWriters.push(id);
+    }
     // Like `c.senders`, `c.tools` arrives unfiltered from the child —
     // activate() may return any name — so `contributes.tools` is the filter.
     for (const t of c.tools) {
@@ -918,6 +985,7 @@ export function createExtensionPlatform(
       // unregister, and blindly dropping it would tear down whatever else
       // holds that id.
       registeredSenders.forEach((sid) => deps.senders.unregister(sid));
+      registeredWriters.forEach((sid) => calendarWriters.unregister(sid));
       toolDisposers.forEach((d) => d());
       bus.emit('platform', 'extension.deactivated', { id: e.manifest.id });
     };

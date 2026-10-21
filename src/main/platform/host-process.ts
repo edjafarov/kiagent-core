@@ -31,6 +31,7 @@
  */
 import type {
   Cap,
+  CalendarWriterOp,
   DraftMirrorOp,
   EventMeta,
   ExtensionStatus,
@@ -176,6 +177,14 @@ export function createExtensionHost(deps: HostDeps): {
   callDraft(
     sourceId: string,
     op: DraftMirrorOp,
+    args: unknown[],
+    ctx: SenderContext,
+  ): Promise<unknown>;
+  /** A CalendarWriter op on the child's writer for `sourceId` (2.16.0);
+   *  the ctx rides last, as on the contract. */
+  callCalendar(
+    sourceId: string,
+    op: CalendarWriterOp,
     args: unknown[],
     ctx: SenderContext,
   ): Promise<unknown>;
@@ -781,6 +790,11 @@ export function createExtensionHost(deps: HostDeps): {
     callDraft(sourceId, op, args, ctx) {
       return callLive((inc) =>
         inc.endpoint.call('draft', sourceId, [op, ...args, ctx]),
+      );
+    },
+    callCalendar(sourceId, op, args, ctx) {
+      return callLive((inc) =>
+        inc.endpoint.call('calendar', sourceId, [op, ...args, ctx]),
       );
     },
     ensureLive,

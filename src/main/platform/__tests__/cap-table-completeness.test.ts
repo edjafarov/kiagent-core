@@ -20,10 +20,14 @@ import { buildSurfaces, createEventBus } from '../host-surfaces';
 import { CAPS } from '../manifest';
 import { CAP_CATALOG } from '../../../renderer/components/cap-catalog';
 
-/** Caps that deliberately have NO host namespace: 'send' is host-initiated
+/** Caps that deliberately have NO host namespace: 'send' and 'calendar.write' are host-initiated
  *  (main→child only) and 'unsafe.mainProcess' is delivered as activate()'s
  *  extras, not as a surface. Everything else must be routable. */
-const NAMESPACE_LESS: readonly Cap[] = ['send', 'unsafe.mainProcess'];
+const NAMESPACE_LESS: readonly Cap[] = [
+  'send',
+  'calendar.write',
+  'unsafe.mainProcess',
+];
 
 function realSurfaces() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-captable-'));

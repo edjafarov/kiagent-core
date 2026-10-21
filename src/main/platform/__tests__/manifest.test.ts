@@ -10,6 +10,7 @@ import {
   oauthSourceBindings,
   parseManifest,
   senderContributions,
+  calendarWriterContributions,
   sourceContributions,
   validateManifestDir,
 } from '../manifest';
@@ -287,6 +288,27 @@ describe('sender contributions', () => {
 
   it('senders default to empty', () => {
     expect(senderContributions(parseManifest(GOOD))).toEqual([]);
+  });
+});
+
+describe('calendar writer contributions (2.16.0)', () => {
+  it('accepts the calendar.write cap and contributes.calendarWriters', () => {
+    const m = parseManifest({
+      ...GOOD,
+      engine: '^2.16.0',
+      caps: ['net', 'calendar.write'],
+      contributes: {
+        sources: ['google-calendar'],
+        senders: [],
+        calendarWriters: ['google-calendar'],
+      },
+    });
+    expect(m.caps).toContain('calendar.write');
+    expect(calendarWriterContributions(m)).toEqual(['google-calendar']);
+  });
+
+  it('calendarWriters is optional and defaults to empty', () => {
+    expect(calendarWriterContributions(parseManifest(GOOD))).toEqual([]);
   });
 });
 

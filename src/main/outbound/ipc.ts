@@ -275,7 +275,13 @@ export function outboundInvokeHandlers(deps: {
 
     'outbox:pending-count': async () => {
       await store.outbox.expireOverdue();
-      return { pending: await store.outbox.countPending() };
+      // Event drafts count too (draft + failed + unknown), so a failed or
+      // unknown event never vanishes from the badge.
+      return {
+        pending:
+          (await store.outbox.countPending()) +
+          (await store.eventDrafts.pending()).length,
+      };
     },
 
     'outbox:discard': async ({ draftId }) => {

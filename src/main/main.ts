@@ -124,8 +124,15 @@ import {
   type OutboundService,
 } from './outbound/service';
 import { outboundInvokeHandlers } from './outbound/ipc';
+import { calendarOutInvokeHandlers } from './calendar-out/ipc';
+import { wireCalendarOutPush } from './calendar-out/push';
 import { createOutboundRoutes } from './outbound/routes';
+import {
+  createCalendarOutService,
+  type CalendarOutService,
+} from './calendar-out/service';
 import { buildBundledSenders, composeSenders } from './outbound/senders';
+import { createCalendarWriterRegistry } from './calendar-out/writers';
 import { createOwnerMail } from './outbound/owner-mail';
 import { createDocumentBytes } from './outbound/document-bytes';
 import { createAttachments } from './outbound/attachments';
@@ -501,6 +508,7 @@ function registerIpc(
   catalog: MarketplaceCatalog,
   broker: ConnectBroker,
   outbound: OutboundService,
+  calendarOut: CalendarOutService,
   attention: AttentionService,
   refreshWaiting: () => Promise<void>,
 ): void {
@@ -849,6 +857,7 @@ function registerIpc(
         return res.canceled ? [] : res.filePaths;
       },
     }),
+    ...calendarOutInvokeHandlers({ service: calendarOut, store: p.store }),
   };
 
   // The loop is the point: it registers exactly the declared channels, and
@@ -1041,6 +1050,9 @@ app
     // Bundled transports SHADOW extension senders on a colliding source
     // id, and both sides are read live on every send — so an extension
     // activating after this point is picked up without re-composing.
+    // Calendar writers (platform 2.16.0): extensions register into it on
+    // activation; the event-draft service reads it live.
+    const calendarWriters = createCalendarWriterRegistry();
     const senderLookup = composeSenders(
       buildBundledSenders({ store: p.store, logSink: p.logSink }),
       p.senders,
@@ -1071,6 +1083,17 @@ app
     // extensionsPlatform.start() guard below) — startMcp/createTray/
     // resumeAccounts/createWindow must all still run; any 'sending' rows
     // left behind are simply picked up by the next boot's sweep.
+    // Calendar event drafts (calendar spec §5): gated exactly as mail —
+    // confirm modes, URL origins and the link secret come from `outbound`.
+    const calendarOut = createCalendarOutService({
+      store: p.store,
+      writers: calendarWriters,
+      sources: p.sources,
+      ctx: () => outbound.context(),
+      prefs: p.prefs,
+      vaultScope: async (id) => (await p.store.vault.load(id))?.scope,
+      logSink: p.logSink,
+    });
     // Owner-only route for the assistant's email channel: no Outbox, the
     // recipient is pinned to the account's own address by core.
     const ownerMail = createOwnerMail({
@@ -1079,6 +1102,14 @@ app
       senders: senderLookup,
       session: (a, signal) => p.engine.session(a, signal, 'owner-mail'),
     });
+    try {
+      // A 'creating' event draft also means a process died mid-create.
+      await calendarOut.recover();
+    } catch (err) {
+      p.logSink.log('calendar-out', 'error', 'boot-time recover failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     try {
       await p.store.outbox.recoverOrphanedSending();
     } catch (err) {
@@ -1098,12 +1129,29 @@ app
       logSink: p.logSink,
     });
     outboxScheduler.start();
-    stopOutboxScheduler = () => outboxScheduler.stop();
+    // Event drafts expire after 7 days; a coarse sweep is enough.
+    const eventExpiry = setInterval(() => {
+      calendarOut
+        .expireOverdue()
+        .catch((err) =>
+          p.logSink.log(
+            'calendar-out',
+            'warn',
+            `expire sweep failed: ${String(err)}`,
+          ),
+        );
+    }, 60_000);
+    eventExpiry.unref?.();
+    stopOutboxScheduler = () => {
+      outboxScheduler.stop();
+      clearInterval(eventExpiry);
+    };
 
     // Tells the renderer the outbox may have changed (create, a transition,
     // an expired sweep, or an account removal cascade) without a per-row
     // payload — coalesced internally to one push per 50 ms.
     wireOutboxPush(p.store, broadcast);
+    wireCalendarOutPush(p.store, broadcast);
 
     // Bundled SQL runner (webpack `sqlRunner` entry): prod `sqlRunner.js`, dev
     // `sqlRunner.bundle.dev.js`.
@@ -1132,6 +1180,7 @@ app
       // no longer hold (candidate-port fallback). Tests never set this.
       reconcileClientConfigs: true,
       outbound,
+      calendar: calendarOut,
       admission: p.admission,
     });
     bootTimer.mark('mcp');
@@ -1311,7 +1360,7 @@ app
     // instance for server.ts's /outbox/* dispatch. Both share all state
     // through `outbound`, so having two instances is intentional, not a
     // duplication bug.
-    const outboundRoutes = createOutboundRoutes(outbound);
+    const outboundRoutes = createOutboundRoutes(outbound, calendarOut);
     // One do-not-disturb state for the run, shared by every extension.
     const busy = createBusyRegistry();
 
@@ -1341,7 +1390,11 @@ app
           dataDir,
           tray: trayMenu!,
           ui: { openWindow: showMainWindow },
-          outbound: { service: outbound, routes: outboundRoutes },
+          outbound: {
+            service: outbound,
+            calendar: calendarOut,
+            routes: outboundRoutes,
+          },
           readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
           ownerMail,
           documents: documentBytes,
@@ -1355,6 +1408,7 @@ app
       store: p.store,
       sources: p.sources,
       senders: p.senders,
+      calendarWriters,
       scheduler: p.scheduler,
       registerTool: (t) => (mcp ? mcp.registerTool(t) : () => {}),
       inference: p.inference,
@@ -1442,6 +1496,7 @@ app
       catalog,
       broker,
       outbound,
+      calendarOut,
       attention,
       () => processingStatus.refreshWaiting(),
     );

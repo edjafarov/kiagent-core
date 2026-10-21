@@ -22,6 +22,12 @@ export const SENDER_VALIDATED_CHANNELS = new Set([
   // A file the user picks is read off disk and attached with no path rule.
   'outbox:add-files',
   'outbox:remove-files',
+  // An event confirm creates a real calendar entry (and sends invites).
+  'calendar-out:confirm',
+  'calendar-out:confirm-all',
+  'calendar-out:retry',
+  'calendar-out:discard',
+  'calendar-out:restore',
 ]);
 
 export function guardIpcHandler<Req, Res>(

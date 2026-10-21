@@ -1,6 +1,6 @@
 import type { Query, QueryAccount } from '@shared/contracts';
 
-type SourceLookup = {
+export type SourceLookup = {
   get(id: string): { descriptor: { documentTypes: string[] } } | undefined;
 };
 

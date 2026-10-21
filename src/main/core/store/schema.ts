@@ -1211,6 +1211,38 @@ const MIGRATIONS: Migration[] = [
     if (!cols.has('suggested_send_at'))
       db.exec(`ALTER TABLE outbox ADD COLUMN suggested_send_at TEXT`);
   },
+
+  // v12 — calendar event drafts (alpha-cent docs/superpowers/specs/
+  // 2026-10-21-calendar-events-booking-design.md §5.1). A sibling of the
+  // outbox, not an outbox kind: an event's revision covers every event
+  // field. Discarded/expired rows are kept — they are the dismissal memory.
+  `
+  CREATE TABLE IF NOT EXISTS event_drafts (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL DEFAULT 1,
+    payload_json TEXT NOT NULL,
+    idempotency_key TEXT,
+    source_document_id TEXT,
+    fingerprint TEXT NOT NULL,
+    confirm_mode TEXT NOT NULL CHECK (confirm_mode IN ('review','link')),
+    status TEXT NOT NULL CHECK (status IN
+      ('draft','creating','created','failed','discarded','expired','unknown')),
+    error TEXT,
+    created_event_json TEXT,
+    created_via TEXT NOT NULL,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    expires_at TEXT NOT NULL,
+    touched_at TEXT NOT NULL,
+    touched_via TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_event_drafts_account_status ON event_drafts(account_id, status);
+  CREATE INDEX IF NOT EXISTS idx_event_drafts_fingerprint ON event_drafts(account_id, fingerprint);
+  CREATE INDEX IF NOT EXISTS idx_event_drafts_touched ON event_drafts(touched_at);
+  `,
 ];
 
 /**

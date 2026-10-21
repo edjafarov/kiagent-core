@@ -9,6 +9,7 @@
  * rate limit (see outbound/service.ts).
  */
 import type { McpTool, Query } from '@shared/contracts';
+import type { CalendarToolApi } from '@main/calendar-out/service';
 import type { OutboundToolApi } from '@main/outbound/service';
 
 import { countDescription, countInputSchema, makeCountTool } from './count';
@@ -27,7 +28,22 @@ import {
   draftReplyInputSchema,
   makeDraftReplyTool,
 } from './draft-reply';
+import {
+  draftEventDescription,
+  draftEventInputSchema,
+  makeDraftEventTool,
+} from './draft-event';
+import {
+  findFreeTimeDescription,
+  findFreeTimeInputSchema,
+  makeFindFreeTimeTool,
+} from './find-free-time';
 import { getDescription, getInputSchema, makeGetTool } from './get';
+import {
+  listCalendarsDescription,
+  listCalendarsInputSchema,
+  makeListCalendarsTool,
+} from './list-calendars';
 import {
   getRelatedDescription,
   getRelatedInputSchema,
@@ -66,6 +82,11 @@ const unavailableOutbound: OutboundToolApi = {
   reviseDraft: unavailable,
   scheduleDrafts: unavailable,
 };
+const unavailableCalendar: CalendarToolApi = {
+  listCalendars: unavailable,
+  findFreeTime: unavailable,
+  draftEvent: unavailable,
+};
 async function unavailable(): Promise<never> {
   throw new Error(
     'Outbound drafting is unavailable on this transport right now — the ' +
@@ -76,8 +97,10 @@ async function unavailable(): Promise<never> {
 export function buildBuiltinTools(
   query: Query,
   outbound?: OutboundToolApi,
+  calendar?: CalendarToolApi,
 ): McpTool[] {
   const out = outbound ?? unavailableOutbound;
+  const cal = calendar ?? unavailableCalendar;
   const digitalMemoryInfo = makeDigitalMemoryInfoTool(query);
   return [
     {
@@ -156,6 +179,27 @@ export function buildBuiltinTools(
       inputSchema: scheduleDraftsInputSchema,
       tier: 'standard',
       call: makeScheduleDraftsTool(out),
+    },
+    {
+      name: 'list_calendars',
+      description: listCalendarsDescription,
+      inputSchema: listCalendarsInputSchema,
+      tier: 'standard',
+      call: makeListCalendarsTool(cal),
+    },
+    {
+      name: 'find_free_time',
+      description: findFreeTimeDescription,
+      inputSchema: findFreeTimeInputSchema,
+      tier: 'standard',
+      call: makeFindFreeTimeTool(cal),
+    },
+    {
+      name: 'draft_event',
+      description: draftEventDescription,
+      inputSchema: draftEventInputSchema,
+      tier: 'standard',
+      call: makeDraftEventTool(cal),
     },
   ];
 }

@@ -23,6 +23,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
 import type { McpActivityRecord, McpTool, Query } from '@shared/contracts';
+import type { CalendarOutService } from '@main/calendar-out/service';
 import type { OutboundService } from '@main/outbound/service';
 import { createOutboundRoutes } from '@main/outbound/routes';
 
@@ -71,6 +72,8 @@ export interface McpDeps {
    *  a real backend AND turns on the /outbox/* HTTP routes (Task 8) — a
    *  stdio-only sibling process has neither. */
   outbound?: OutboundService;
+  /** Calendar drafting (list_calendars / find_free_time / draft_event). */
+  calendar?: CalendarOutService;
   /** Defaults to `PORT_CANDIDATES`. Tests that start a REAL server (as
    *  opposed to driving handlers in-process) should override this to `[0]`
    *  so the OS assigns an ephemeral port instead of racing every other
@@ -300,11 +303,11 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   const rawSql = createRawSqlTools(sql.exec);
   const foreground: Foreground = (fn) => inForeground(deps.admission, fn);
   const registry = createToolRegistry([
-    ...buildBuiltinTools(deps.query, deps.outbound),
+    ...buildBuiltinTools(deps.query, deps.outbound, deps.calendar),
     ...rawSql.tools,
   ]);
   const outboundRoutes = deps.outbound
-    ? createOutboundRoutes(deps.outbound)
+    ? createOutboundRoutes(deps.outbound, deps.calendar)
     : null;
 
   // A reusable session dispatcher: owns ONE `mcp-session-id`-keyed pool and its

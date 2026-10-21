@@ -12,10 +12,12 @@ import {
 import { sourceLabel } from '@renderer/screens/Sources/source-label';
 import { useSourceDescriptors } from '@renderer/screens/Sources/sources-registry';
 import { useView } from '@renderer/state/view';
+import { CalendarDrafts } from './CalendarDrafts';
 import { ConfirmModeCard } from './ConfirmModeCard';
 import { History } from './History';
 import { ReviewSheet } from './ReviewSheet';
 import { SendsFrom } from './SendsFrom';
+import { useCalendarDrafts } from './use-calendar-drafts';
 import { useOutbox } from './use-outbox';
 import { WaitingDrafts } from './WaitingDrafts';
 import './Outbox.css';
@@ -36,6 +38,7 @@ export function outboxMeta(waiting: number): string {
 export function Outbox(): React.ReactElement {
   const outbox = useOutbox();
   const { rows, loadFailed, reload } = outbox;
+  const calendar = useCalendarDrafts();
   const now = useNow(30_000);
   const descriptors = useSourceDescriptors();
   const sourceName = (id: string) => sourceLabel(id, descriptors);
@@ -84,6 +87,7 @@ export function Outbox(): React.ReactElement {
             {retry}
           </div>
         )}
+        <CalendarDrafts data={calendar} />
         {waiting.length > 0 && (
           <WaitingDrafts
             rows={waiting}
@@ -104,7 +108,14 @@ export function Outbox(): React.ReactElement {
 
   const known = rows !== null && !(loadFailed && rows.length === 0);
   return (
-    <Page title="Outbox" meta={known ? outboxMeta(waiting.length) : undefined}>
+    <Page
+      title="Outbox"
+      meta={
+        known
+          ? outboxMeta(waiting.length + (calendar.drafts?.length ?? 0))
+          : undefined
+      }
+    >
       <Split
         aside="sm"
         side={
