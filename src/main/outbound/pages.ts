@@ -9,6 +9,7 @@ import { esc, renderShell } from '@shared/web-ui';
 import { loadShellCss } from '@shared/web-ui/loader-node';
 import type { ShellCss } from '@shared/web-ui/render-shell';
 import type { OutboxRow } from '@shared/contracts';
+import { defaultSendLater } from '@shared/send-presets';
 
 import { originOf } from './service';
 
@@ -76,6 +77,18 @@ const OUTBOX_CSS = `
 .ob-actions form { margin: 0; }
 .ob-btn { height: 48px; width: 100%; font-size: 15px; }
 .ob-btn-secondary { height: 44px; width: 100%; font-size: 14px; }
+.ob-later > summary { list-style: none; display: flex; align-items: center;
+  justify-content: center; cursor: pointer; }
+.ob-later > summary::-webkit-details-marker { display: none; }
+.ob-later-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.ob-later-list .btn { height: 40px; width: 100%; font-size: 14px;
+  display: flex; justify-content: space-between; }
+.ob-later-list .btn span { color: var(--text-secondary); }
+.ob-custom { display: flex; gap: 6px; }
+.ob-custom input { flex: 1; min-width: 0; height: 40px; font: inherit; font-size: 14px;
+  padding: 0 8px; border: 1px solid var(--border-subtle); background: var(--bg-canvas);
+  color: var(--text-primary); }
+.ob-custom .btn { width: auto; flex: none; justify-content: center; }
 .ob-status { min-height: 20px; display: flex; gap: 8px; align-items: center;
   justify-content: center; font-size: 13px; color: var(--text-secondary); }
 .ob-icon { width: 44px; height: 44px; }
@@ -136,6 +149,13 @@ const CONFIRM_JS = `(function () {
         }, 12000));
       }
     }, 0);
+  });
+  var custom = document.getElementById('ob-custom');
+  if (custom) custom.addEventListener('submit', function () {
+    var at = custom.elements.namedItem('at');
+    var ms = custom.elements.namedItem('ms');
+    var t = at && at.value ? new Date(at.value).getTime() : NaN;
+    if (ms) ms.value = isFinite(t) ? String(t) : '';
   });
   window.addEventListener('pageshow', function (e) {
     if (!e.persisted) return;
@@ -243,6 +263,31 @@ export function scheduleNote(row: OutboxRow, timeZone?: string): string | null {
   return row.error;
 }
 
+/** Send later on the link page (spec 2026-10-21 §5.3): the app's presets,
+ *  then a time of the user's own. Folded until asked for. */
+function laterBlock(
+  later: NonNullable<Parameters<typeof reviewPage>[1]['later']>,
+  scheduled: boolean,
+): string {
+  const presets = later.presets
+    .map(
+      (x) =>
+        `<form method="POST" action="${esc(x.path)}"><button type="submit" class="btn ob-disable">${esc(x.label)} <span>${esc(x.when)}</span></button></form>`,
+    )
+    .join('');
+  return `<details class="ob-later">
+    <summary class="btn ob-btn-secondary">${scheduled ? 'Change time' : 'Send later'} ▾</summary>
+    <div class="ob-later-list">
+      ${presets}
+      <form id="ob-custom" class="ob-custom" method="POST" action="${esc(later.customPath)}">
+        <input type="datetime-local" name="at" required value="${esc(defaultSendLater(Date.now()))}" aria-label="Send at">
+        <input type="hidden" name="ms" value="">
+        <button type="submit" class="btn primary ob-disable">Schedule</button>
+      </form>
+    </div>
+  </details>`;
+}
+
 /** The one confirm page for every mode (spec §4.3). `confirmPath` carries
  *  the revision shown here; `changed` = a Send from an older page landed
  *  here instead (HTTP 409). */
@@ -258,6 +303,11 @@ export function reviewPage(
     bodyHtml?: string;
     /** The AI app's suggested time, still ahead: one click schedules it. */
     suggestion?: { path: string; label: string };
+    /** Send later: the app's Send ▾ presets and a custom time. */
+    later?: {
+      presets: { path: string; label: string; when: string }[];
+      customPath: string;
+    };
   },
 ): string {
   const body =
@@ -281,6 +331,7 @@ export function reviewPage(
         : ''
     }
     ${sendForm(p.confirmPath, p.suggestion || p.unschedulePath ? 'Send now' : 'Confirm & send')}
+    ${p.later ? laterBlock(p.later, Boolean(p.unschedulePath)) : ''}
     ${
       p.unschedulePath
         ? `<form method="POST" action="${esc(p.unschedulePath)}"><button type="submit" class="btn ob-btn-secondary ob-disable">Cancel schedule</button></form>`

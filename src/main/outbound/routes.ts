@@ -9,6 +9,7 @@ import type http from 'http';
 
 import type { OutboxRow } from '@shared/contracts';
 
+import { sendPresets } from '@shared/send-presets';
 import { logMessageOf } from '../core/mcp/log-safe';
 import { shapeOutboundError } from './error-copy';
 import { isOutboundToolOp } from './ops';
@@ -48,13 +49,24 @@ function sendJson(res: http.ServerResponse, body: unknown, status = 200): void {
 const MAX_JSON_BODY_BYTES = 64 * 1024;
 
 class BodyTooLargeError extends Error {
-  constructor() {
-    super(`request body exceeds ${MAX_JSON_BODY_BYTES} bytes`);
+  constructor(max = MAX_JSON_BODY_BYTES) {
+    super(`request body exceeds ${max} bytes`);
     this.name = 'BodyTooLargeError';
   }
 }
 
 function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
+  return readBody(req, MAX_JSON_BODY_BYTES).then((text) =>
+    text ? JSON.parse(text) : null,
+  );
+}
+
+// The link page's custom-time form: two short fields.
+const MAX_FORM_BODY_BYTES = 1024;
+
+/** A request body as text, at most `max` bytes. Its listeners attach
+ *  synchronously (see `matchOutboxPage`). */
+function readBody(req: http.IncomingMessage, max: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -63,7 +75,7 @@ function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
     req.on('data', (c: Buffer) => {
       if (settled) return;
       size += c.length;
-      if (size > MAX_JSON_BODY_BYTES) {
+      if (size > max) {
         settled = true;
         // Stop retaining chunks (bounds memory) and reject so the caller can
         // send its 413 — but do NOT destroy the request/socket here: an
@@ -72,7 +84,7 @@ function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
         // 413 itself and can surface to the client as a connection reset
         // instead of a clean JSON error. The caller destroys the connection
         // (if it wants to) only after res.end() has gone out.
-        reject(new BodyTooLargeError());
+        reject(new BodyTooLargeError(max));
         return;
       }
       chunks.push(c);
@@ -81,8 +93,7 @@ function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
       if (settled) return;
       settled = true;
       try {
-        const text = Buffer.concat(chunks).toString('utf8');
-        resolve(text ? JSON.parse(text) : null);
+        resolve(Buffer.concat(chunks).toString('utf8'));
       } catch (e) {
         reject(e);
       }
@@ -185,6 +196,14 @@ async function reviewFor(
     }),
     changed,
     bodyHtml: await outbound.bodyHtmlFor(row),
+    later: {
+      presets: sendPresets(Date.now()).map((x) => ({
+        path: `/outbox/schedule/${token}/${row.revision}/${x.key}`,
+        label: x.label,
+        when: timeText(new Date(x.at).toISOString()),
+      })),
+      customPath: `/outbox/schedule/${token}/${row.revision}`,
+    },
     ...(ahead && {
       suggestion: {
         path: `/outbox/schedule/${token}/${row.revision}/${at}`,
@@ -242,14 +261,44 @@ async function postUnschedule(
   }
 }
 
-/** The link page's "Schedule for …" (spec 2026-10-21 §5.3). */
+/** The time a schedule POST names: the AI's suggestion (epoch ms in the
+ *  path), a Send later preset (its key — counted from now, not from when
+ *  the page opened) or the custom form (`ms` from the page's script, else
+ *  `at` as this computer's local time). NaN = none. */
+async function scheduleTime(
+  req: http.IncomingMessage,
+  when: string | undefined,
+): Promise<number> {
+  if (when !== undefined) {
+    if (/^\d+$/.test(when)) return Number(when);
+    return sendPresets(Date.now()).find((x) => x.key === when)?.at ?? NaN;
+  }
+  const form = new URLSearchParams(await readBody(req, MAX_FORM_BODY_BYTES));
+  const ms = form.get('ms') ?? '';
+  if (/^\d+$/.test(ms)) return Number(ms);
+  const at = form.get('at') ?? '';
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(at) ? Date.parse(at) : NaN;
+}
+
+/** The link page's "Schedule for …" and Send later (spec 2026-10-21 §5.3). */
 async function postSchedule(
   outbound: OutboundService,
+  req: http.IncomingMessage,
   token: string,
   revision: number,
-  atMs: number,
+  when: string | undefined,
 ): Promise<PageResult> {
   try {
+    const atMs = await scheduleTime(req, when);
+    if (!Number.isFinite(atMs))
+      return {
+        status: 400,
+        html: resultPage(
+          'Not scheduled',
+          'That time is not available any more — open the link again and pick another.',
+          { icon: 'warn', footNote: 'Nothing was sent.' },
+        ),
+      };
     const out = await outbound.scheduleByToken(token, revision, atMs);
     if (out.kind === 'invalid') return { status: 404, html: invalidPage() };
     if (out.kind === 'changed')
@@ -415,7 +464,13 @@ type OutboxMatch =
   | { kind: 'post-confirm'; token: string; revision: number | null }
   | { kind: 'post-reopen'; token: string }
   | { kind: 'post-cancel'; token: string }
-  | { kind: 'post-schedule'; token: string; revision: number; atMs: number }
+  | {
+      kind: 'post-schedule';
+      token: string;
+      revision: number;
+      /** Epoch ms or a preset key; none = the custom form's body. */
+      when: string | undefined;
+    }
   | { kind: 'post-unschedule'; token: string; revision: number };
 
 // Routing decision for the THREE token-gated confirm/cancel routes shared by
@@ -453,13 +508,16 @@ function matchOutboxPage(
   if (cancel && method === 'POST')
     return { kind: 'post-cancel', token: cancel[1] };
 
-  const schedule = /^\/outbox\/schedule\/([^/]+)\/(\d+)\/(\d+)$/.exec(pathname);
+  const schedule =
+    /^\/outbox\/schedule\/([^/]+)\/(\d+)(?:\/(\d+|[a-z][a-z0-9-]*))?$/.exec(
+      pathname,
+    );
   if (schedule && method === 'POST')
     return {
       kind: 'post-schedule',
       token: schedule[1],
       revision: Number(schedule[2]),
-      atMs: Number(schedule[3]),
+      when: schedule[3],
     };
 
   const unschedule = /^\/outbox\/unschedule\/([^/]+)\/(\d+)$/.exec(pathname);
@@ -476,13 +534,14 @@ function matchOutboxPage(
 function runOutboxMatch(
   outbound: OutboundService,
   match: OutboxMatch,
+  req: http.IncomingMessage,
 ): Promise<PageResult> {
   if (match.kind === 'get-confirm') return getConfirm(outbound, match.token);
   if (match.kind === 'post-confirm')
     return postConfirm(outbound, match.token, match.revision);
   if (match.kind === 'post-reopen') return postReopen(outbound, match.token);
   if (match.kind === 'post-schedule')
-    return postSchedule(outbound, match.token, match.revision, match.atMs);
+    return postSchedule(outbound, req, match.token, match.revision, match.when);
   if (match.kind === 'post-unschedule')
     return postUnschedule(outbound, match.token, match.revision);
   return postCancel(outbound, match.token);
@@ -497,7 +556,7 @@ export function createOutboundRoutes(outbound: OutboundService): {
   /** Remote-transport entry: serves ONLY GET/POST /outbox/confirm/<token>
    *  (POST with /<revision>), POST /outbox/reopen/<token>, POST
    *  /outbox/cancel/<token> and POST /outbox/{schedule,unschedule}/<token>/
-   *  <revision>[/<time>]. Everything else under /outbox/ —
+   *  <revision>[/<time or preset>]. Everything else under /outbox/ —
    *  including /outbox/api — returns false (caller 404s). No Host/Origin
    *  loopback check: the remote server has real TLS Host semantics and the
    *  pages are HMAC-token-gated. Parses the path itself since the remote
@@ -511,7 +570,7 @@ export function createOutboundRoutes(outbound: OutboundService): {
     async handle(req, res, url) {
       const match = matchOutboxPage(req.method, url.pathname);
       if (match) {
-        const page = await runOutboxMatch(outbound, match);
+        const page = await runOutboxMatch(outbound, match, req);
         sendHtml(res, page.status, page.html);
         return true;
       }
@@ -610,7 +669,7 @@ export function createOutboundRoutes(outbound: OutboundService): {
       const url = new URL(req.url ?? '/', 'http://x');
       const match = matchOutboxPage(req.method, url.pathname);
       if (!match) return false;
-      const page = await runOutboxMatch(outbound, match);
+      const page = await runOutboxMatch(outbound, match, req);
       sendHtml(res, page.status, page.html);
       return true;
     },

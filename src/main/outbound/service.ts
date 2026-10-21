@@ -307,8 +307,9 @@ export interface OutboundService extends OutboundToolApi {
     revision: number | null,
   ): Promise<ConfirmOutcome>;
   cancelByToken(token: string): Promise<ConfirmOutcome>;
-  /** The link page's "Schedule for …": only the time an AI app suggested
-   *  (`atMs`), at the revision the page showed. */
+  /** The link page's "Schedule for …" and Send later: `atMs` (the AI's
+   *  suggestion, a preset or a custom time), at the revision the page
+   *  showed. */
   scheduleByToken(
     token: string,
     revision: number,
@@ -2020,14 +2021,14 @@ export function createOutboundService(deps: {
       return withDraft(parsed.draftId, async () => {
         const row = await deps.store.outbox.get(parsed.draftId);
         if (!row) return { kind: 'invalid' };
-        // The page offers the suggestion only: any other time is not one
-        // the user was shown.
-        if (!row.suggestedSendAt || Date.parse(row.suggestedSendAt) !== atMs)
-          return row.status === 'draft'
-            ? { kind: 'changed', row }
-            : { kind: 'already', row };
+        // Any time the page offered or the user typed there: the AI's
+        // suggestion, a Send later preset or a custom time.
         try {
-          return await scheduleLocked(row.id, revision, row.suggestedSendAt);
+          return await scheduleLocked(
+            row.id,
+            revision,
+            new Date(atMs).toISOString(),
+          );
         } catch (e) {
           return {
             kind: 'failed',

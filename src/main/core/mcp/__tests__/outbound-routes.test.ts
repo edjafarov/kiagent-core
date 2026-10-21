@@ -316,7 +316,7 @@ describe('outbox confirm routes', () => {
     expect(got?.sendAt).toBeNull();
   });
 
-  it('a suggested time is one click on the page; only that time, at the shown revision', async () => {
+  it('a suggested time is one click on the page, at the shown revision', async () => {
     sendMock.mockClear();
     const r = await service.draftReply({ documentId: docId, body: 'Later' });
     const token = r.confirm_url!.split('/outbox/confirm/')[1];
@@ -328,12 +328,12 @@ describe('outbox confirm routes', () => {
       `action="/outbox/schedule/${token}/1/${Date.parse(iso)}"`,
     );
     expect(page).toContain('Send now');
-    // Another time than the one shown is refused: nothing scheduled.
-    const forged = await fetch(
-      `${base}/outbox/schedule/${token}/1/${Date.parse(iso) + 60_000}`,
+    // A page of an older revision schedules nothing.
+    const stale = await fetch(
+      `${base}/outbox/schedule/${token}/2/${Date.parse(iso)}`,
       { method: 'POST' },
     );
-    expect(forged.status).toBe(409);
+    expect(stale.status).toBe(409);
     expect((await store.outbox.get(r.draft_id))?.sendAt).toBeNull();
     const ok = await fetch(
       `${base}/outbox/schedule/${token}/1/${Date.parse(iso)}`,
@@ -349,6 +349,77 @@ describe('outbox confirm routes', () => {
       method: 'POST',
     });
     expect(bad.status).toBe(404);
+  });
+
+  it('the page has Send later: a preset counts from the click, sends nothing', async () => {
+    sendMock.mockClear();
+    const r = await service.draftReply({ documentId: docId, body: 'Later' });
+    const token = r.confirm_url!.split('/outbox/confirm/')[1];
+    const page = await (await fetch(r.confirm_url!)).text();
+    expect(page).toContain('Send later');
+    expect(page).toContain(`action="/outbox/schedule/${token}/1/in15"`);
+    expect(page).toContain(`action="/outbox/schedule/${token}/1/tomorrow-am"`);
+    expect(page).toContain(`action="/outbox/schedule/${token}/1"`);
+    expect(page).toContain('type="datetime-local"');
+    const before = Date.now();
+    const res = await fetch(`${base}/outbox/schedule/${token}/1/in60`, {
+      method: 'POST',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toMatch(/Scheduled/);
+    const at = Date.parse((await store.outbox.get(r.draft_id))!.sendAt!);
+    expect(at).toBeGreaterThanOrEqual(before + 60 * 60_000);
+    expect(at).toBeLessThanOrEqual(Date.now() + 61 * 60_000);
+    expect(at % 60_000).toBe(0);
+    expect(sendMock).not.toHaveBeenCalled();
+    // An unknown preset schedules nothing.
+    const r2 = await service.draftReply({ documentId: docId, body: 'Two' });
+    const t2 = r2.confirm_url!.split('/outbox/confirm/')[1];
+    const odd = await fetch(`${base}/outbox/schedule/${t2}/1/someday`, {
+      method: 'POST',
+    });
+    expect(odd.status).toBe(400);
+    expect((await store.outbox.get(r2.draft_id))?.sendAt).toBeNull();
+    // Under the account's pending-draft cap for the tests after this one.
+    for (const t of [token, t2])
+      await fetch(`${base}/outbox/cancel/${t}`, { method: 'POST' });
+  });
+
+  it('a custom time on the page schedules: the browser’s ms, else local `at`', async () => {
+    const post = (token: string, body: string) =>
+      fetch(`${base}/outbox/schedule/${token}/1`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+    const r = await service.draftReply({ documentId: docId, body: 'Later' });
+    const token = r.confirm_url!.split('/outbox/confirm/')[1];
+    const ms = Math.ceil((Date.now() + 3 * 3600_000) / 60_000) * 60_000;
+    const res = await post(token, `at=2001-01-01T00%3A00&ms=${ms}`);
+    expect(res.status).toBe(200);
+    expect((await store.outbox.get(r.draft_id))?.sendAt).toBe(
+      new Date(ms).toISOString(),
+    );
+    // No script: `at` read as this computer's local time.
+    const r2 = await service.draftReply({ documentId: docId, body: 'Two' });
+    const t2 = r2.confirm_url!.split('/outbox/confirm/')[1];
+    const d = new Date(Date.now() + 26 * 3600_000);
+    const p = (n: number) => String(n).padStart(2, '0');
+    const local = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    expect((await post(t2, `at=${encodeURIComponent(local)}&ms=`)).status).toBe(
+      200,
+    );
+    expect((await store.outbox.get(r2.draft_id))?.sendAt).toBe(
+      new Date(Date.parse(local)).toISOString(),
+    );
+    // A time in the past or no time: nothing scheduled.
+    const r3 = await service.draftReply({ documentId: docId, body: 'Three' });
+    const t3 = r3.confirm_url!.split('/outbox/confirm/')[1];
+    expect((await post(t3, `ms=${Date.now() - 60_000}`)).status).toBe(503);
+    expect((await post(t3, 'at=soon')).status).toBe(400);
+    expect((await store.outbox.get(r3.draft_id))?.sendAt).toBeNull();
+    for (const t of [token, t2, t3])
+      await fetch(`${base}/outbox/cancel/${t}`, { method: 'POST' });
   });
 
   it('a bad token 404s', async () => {
