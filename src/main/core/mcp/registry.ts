@@ -37,9 +37,11 @@ const BODY_KEYS = new Set([
   'content',
   // A draft's subject is user content too.
   'subject',
+  // An event draft's note (draft_event).
+  'description',
 ]);
 /** Top-level keys holding recipients — redacted to a count, not logged. */
-const RECIPIENT_KEYS = new Set(['to', 'cc', 'bcc']);
+const RECIPIENT_KEYS = new Set(['to', 'cc', 'bcc', 'attendees']);
 /** Any other string/array/object value is capped at this many chars. */
 const MAX_LOGGED_CHARS = 200;
 

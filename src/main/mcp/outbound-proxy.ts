@@ -9,6 +9,7 @@
 import { withLogMessage } from '../core/mcp/log-safe';
 import { PORT_CANDIDATES } from '../core/mcp/server';
 import type { OutboundToolOp } from '../outbound/ops';
+import type { CalendarToolApi } from '../calendar-out/service';
 import type { OutboundToolApi } from '../outbound/service';
 
 type ApiResponse =
@@ -26,7 +27,7 @@ export function createOutboundProxy(
   fetchFn: typeof fetch = fetch,
   ports: readonly number[] = PORT_CANDIDATES,
   opTimeoutMs = OP_TIMEOUT_MS,
-): OutboundToolApi {
+): OutboundToolApi & CalendarToolApi {
   let cachedPort: number | null = null;
 
   const post = async (port: number, body: unknown): Promise<ApiResponse> => {
@@ -101,5 +102,8 @@ export function createOutboundProxy(
     sendDraft: (a) => call('sendDraft', a) as never,
     reviseDraft: (a) => call('reviseDraft', a) as never,
     scheduleDrafts: (a) => call('scheduleDrafts', a) as never,
+    listCalendars: (a) => call('listCalendars', a) as never,
+    findFreeTime: (a) => call('findFreeTime', a) as never,
+    draftEvent: (a) => call('draftEvent', a) as never,
   };
 }

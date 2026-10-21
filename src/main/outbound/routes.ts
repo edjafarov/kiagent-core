@@ -14,6 +14,7 @@ import { logMessageOf } from '../core/mcp/log-safe';
 import { shapeOutboundError } from './error-copy';
 import { isOutboundToolOp } from './ops';
 import { failedPage, PAGE_CSP, resultPage, reviewPage } from './pages';
+import type { CalendarOutService } from '../calendar-out/service';
 import type { OutboundService } from './service';
 
 function sendHtml(
@@ -547,7 +548,11 @@ function runOutboxMatch(
   return postCancel(outbound, match.token);
 }
 
-export function createOutboundRoutes(outbound: OutboundService): {
+export function createOutboundRoutes(
+  outbound: OutboundService,
+  /** Calendar drafting (calendar spec §5.5); absent → those ops refuse. */
+  calendar?: CalendarOutService,
+): {
   handle(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -636,6 +641,27 @@ export function createOutboundRoutes(outbound: OutboundService): {
                 args as Parameters<OutboundService['scheduleDrafts']>[0],
               ),
             });
+          } else if (
+            op === 'listCalendars' ||
+            op === 'findFreeTime' ||
+            op === 'draftEvent'
+          ) {
+            if (!calendar) throw new Error('calendar drafting is unavailable');
+            const result =
+              op === 'listCalendars'
+                ? await calendar.listCalendars({})
+                : op === 'findFreeTime'
+                  ? await calendar.findFreeTime(
+                      args as unknown as Parameters<
+                        CalendarOutService['findFreeTime']
+                      >[0],
+                    )
+                  : await calendar.draftEvent(
+                      args as unknown as Parameters<
+                        CalendarOutService['draftEvent']
+                      >[0],
+                    );
+            sendJson(res, { ok: true, result });
           } else {
             // Unreachable — `op` is `never` here, and that is the point:
             // adding an op to OUTBOUND_TOOL_OPS without a branch above is a

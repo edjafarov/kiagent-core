@@ -347,6 +347,33 @@ export function summarizeCall(
       const n = Array.isArray(args.drafts) ? args.drafts.length : 0;
       return { summary: `Set send times for ${n} draft(s)` };
     }
+    case 'list_calendars': {
+      const n = Array.isArray(result) ? result.length : 0;
+      return { summary: `Listed calendars → ${n}` };
+    }
+    case 'find_free_time': {
+      const n = Array.isArray((result as { slots?: unknown })?.slots)
+        ? (result as { slots: unknown[] }).slots.length
+        : 0;
+      return { summary: `Looked for free time → ${n} slot(s)` };
+    }
+    case 'draft_event': {
+      // Titles, notes and attendees are user content: ids and outcome only.
+      const r = (result ?? {}) as {
+        draft_id?: unknown;
+        existing?: unknown;
+        already_in_calendar?: unknown;
+        dismissed?: unknown;
+      };
+      if (r.already_in_calendar)
+        return { summary: 'Event already in the calendar — not drafted' };
+      if (r.dismissed)
+        return { summary: 'Event dismissed before — not drafted' };
+      const id = typeof r.draft_id === 'string' ? ` (draft ${r.draft_id})` : '';
+      return {
+        summary: `${r.existing ? 'Found the existing' : 'Drafted a'} calendar event${id}`,
+      };
+    }
     default:
       return { summary: `${tool} ${compactArgs(args)}` };
   }

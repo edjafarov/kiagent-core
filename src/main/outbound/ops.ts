@@ -13,7 +13,11 @@
  * type-only for the same reason — it is erased at emit, leaving this module
  * with no runtime dependencies at all.
  */
+import type { CalendarToolApi } from '../calendar-out/service';
 import type { OutboundToolApi } from './service';
+
+/** Everything this plane dispatches: mail drafting plus calendar drafting. */
+type PlaneApi = OutboundToolApi & CalendarToolApi;
 
 /** 'ping' is the port-discovery probe and has no method behind it; every
  *  other op IS an OutboundToolApi method name (guarded below). */
@@ -25,6 +29,9 @@ export const OUTBOUND_TOOL_OPS = [
   'sendDraft',
   'reviseDraft',
   'scheduleDrafts',
+  'listCalendars',
+  'findFreeTime',
+  'draftEvent',
 ] as const;
 
 export type OutboundToolOp = (typeof OUTBOUND_TOOL_OPS)[number];
@@ -36,9 +43,9 @@ export type OutboundToolOp = (typeof OUTBOUND_TOOL_OPS)[number];
  *  unreachable over this plane for the stdio sibling. Either one failing
  *  collapses its alias to `never` and breaks the assignment. */
 type _OpsAreMethods =
-  Exclude<OutboundToolOp, 'ping'> extends keyof OutboundToolApi ? true : never;
+  Exclude<OutboundToolOp, 'ping'> extends keyof PlaneApi ? true : never;
 type _MethodsAreOps =
-  keyof OutboundToolApi extends Exclude<OutboundToolOp, 'ping'> ? true : never;
+  keyof PlaneApi extends Exclude<OutboundToolOp, 'ping'> ? true : never;
 const _opsMatchApi: [_OpsAreMethods, _MethodsAreOps] = [true, true];
 
 /** Narrows an op name arriving off the wire. */
