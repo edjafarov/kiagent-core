@@ -15,9 +15,17 @@ type ApiResponse =
   | { ok: true; result: unknown }
   | { ok: false; error: string; logMessage?: string };
 
+/** An op may wait on Gmail/Outlook (a send's deadline is 60 s). */
+const OP_TIMEOUT_MS = 90_000;
+
+// A DOMException, not always an Error in this realm: match by name.
+const timedOut = (e: unknown) =>
+  ['TimeoutError', 'AbortError'].includes((e as { name?: string })?.name ?? '');
+
 export function createOutboundProxy(
   fetchFn: typeof fetch = fetch,
   ports: readonly number[] = PORT_CANDIDATES,
+  opTimeoutMs = OP_TIMEOUT_MS,
 ): OutboundToolApi {
   let cachedPort: number | null = null;
 
@@ -26,7 +34,7 @@ export function createOutboundProxy(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(opTimeoutMs),
     });
     return (await res.json()) as ApiResponse;
   };
@@ -65,7 +73,14 @@ export function createOutboundProxy(
     let response: ApiResponse;
     try {
       response = await post(cachedPort, { op, args });
-    } catch {
+    } catch (e) {
+      // The app got the request and is still working on it: sending it
+      // again could create a second draft or reschedule a batch.
+      if (timedOut(e))
+        throw new Error(
+          'KIAgent did not answer in time; the action may still complete — ' +
+            'call list_outbox to see where it stands before trying again.',
+        );
       // The app may have restarted onto another candidate port — once.
       cachedPort = await probe();
       response = await post(cachedPort, { op, args });

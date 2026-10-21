@@ -1226,9 +1226,19 @@ export function createOutboundService(deps: {
     draftId: string,
     revision: number,
     sendAt: string | null,
-    /** Last word before the schedule is stored (the rate rule). */
-    gate?: (at: number) => Promise<string | null>,
-    note?: string,
+    {
+      gate,
+      note,
+      synced,
+    }: {
+      /** Last word before the schedule is stored (the rate rule). */
+      gate?: (at: number) => Promise<string | null>;
+      /** The draft's note after a cancel. */
+      note?: string;
+      /** The provider draft was just read (a batch's refresh): no second
+       *  read here — the send reads it again before anything goes. */
+      synced?: boolean;
+    } = {},
   ): Promise<ScheduleOutcome> => {
     await deps.store.outbox.expireOverdue();
     const stored = await deps.store.outbox.get(draftId);
@@ -1249,7 +1259,7 @@ export function createOutboundService(deps: {
     // shown revision, and nothing that would refuse the send then.
     let row: OutboxRow;
     try {
-      row = await syncLocked(stored);
+      row = synced ? stored : await syncLocked(stored);
     } catch (e) {
       const error = `not scheduled: ${e instanceof Error ? e.message : String(e)}`;
       return { kind: 'failed', row: stored, error };
@@ -1276,6 +1286,14 @@ export function createOutboundService(deps: {
     return { kind: 'scheduled', row: current };
   };
 
+  /** A batch item whose draft moved on from the revision the app passed. */
+  const changedResult = (row: OutboxRow): ScheduleItemResult => ({
+    draft_id: row.id,
+    status: 'error',
+    revision: row.revision,
+    error: `This draft changed — it is now revision ${row.revision}; show it to the user again`,
+  });
+
   /** A suggested time: checked like a schedule, stored for the user. */
   const suggestLocked = async (
     draftId: string,
@@ -1289,13 +1307,7 @@ export function createOutboundService(deps: {
         status: 'error',
         error: 'not a pending draft',
       };
-    if (row.revision !== revision)
-      return {
-        draft_id: draftId,
-        status: 'error',
-        revision: row.revision,
-        error: `This draft changed — it is now revision ${row.revision}; show it to the user again`,
-      };
+    if (row.revision !== revision) return changedResult(row);
     const iso = new Date(at).toISOString();
     await deps.store.outbox.suggest(draftId, iso);
     return {
@@ -1358,7 +1370,9 @@ export function createOutboundService(deps: {
       const start =
         spread.start !== undefined
           ? Date.parse(spread.start)
-          : nowMs() + (allChat ? 5 : 30) * 60_000;
+          : // Whole minutes, as every surface shows them.
+            Math.ceil((nowMs() + (allChat ? 5 : 30) * 60_000) / 60_000) *
+            60_000;
       const err = timeError(start);
       if (err) throw new Error(`schedule_drafts: spread.start — ${err}`);
       times = spreadTimes(drafts.length, start, minutes);
@@ -1386,27 +1400,30 @@ export function createOutboundService(deps: {
       // eslint-disable-next-line no-await-in-loop
       const account = await isChat(row);
       if (at === null) {
-        // Cancel: a suggestion always goes; a schedule only when chat may
-        // handle it — the user's own schedule is not the app's to undo.
+        // Cancel, at the revision the app passed (as the refresh left it):
+        // a suggestion always goes; a schedule only when chat may handle
+        // it — the user's own schedule is not the app's to undo.
+        // eslint-disable-next-line no-await-in-loop
+        const fresh = (await deps.store.outbox.get(id)) ?? row;
+        if (fresh.revision !== item.revision) {
+          results.push(changedResult(fresh));
+          continue;
+        }
         // eslint-disable-next-line no-await-in-loop
         await deps.store.outbox.suggest(id, null);
-        if (row.sendAt && account) {
+        if (fresh.sendAt && account) {
           // eslint-disable-next-line no-await-in-loop
           await withDraft(id, () =>
-            scheduleLocked(
-              id,
-              item.revision,
-              null,
-              undefined,
-              `Schedule cancelled by ${app ?? 'an AI app'}`,
-            ),
+            scheduleLocked(id, item.revision, null, {
+              note: `Schedule cancelled by ${app ?? 'an AI app'}`,
+            }),
           );
           results.push({ draft_id: id, status: 'unscheduled' });
         } else
           results.push({
             draft_id: id,
-            status: row.sendAt ? 'unchanged' : 'unscheduled',
-            ...(row.sendAt && { error: 'the user scheduled this in Kia' }),
+            status: fresh.sendAt ? 'unchanged' : 'unscheduled',
+            ...(fresh.sendAt && { error: 'the user scheduled this in Kia' }),
           });
         continue;
       }
@@ -1425,15 +1442,14 @@ export function createOutboundService(deps: {
       // eslint-disable-next-line no-await-in-loop
       const out = await withAccount(account.id, () =>
         withDraft(id, () =>
-          scheduleLocked(
-            id,
-            item.revision,
-            new Date(at).toISOString(),
-            async (t) =>
+          scheduleLocked(id, item.revision, new Date(at).toISOString(), {
+            // refreshPending above read this batch's provider drafts.
+            synced: true,
+            gate: async (t) =>
               (await admits(account, t, id))
                 ? null
                 : `rate limit — more than ${sendsPerHourFor(account)} sends in an hour from this account; spread these wider`,
-          ),
+          }),
         ),
       ).catch((e: unknown) => ({
         kind: 'failed' as const,
@@ -1446,13 +1462,7 @@ export function createOutboundService(deps: {
           status: 'scheduled',
           send_at: out.row.sendAt ?? undefined,
         });
-      else if (out.kind === 'changed')
-        results.push({
-          draft_id: id,
-          status: 'error',
-          revision: out.row.revision,
-          error: `This draft changed — it is now revision ${out.row.revision}; show it to the user again`,
-        });
+      else if (out.kind === 'changed') results.push(changedResult(out.row));
       else
         results.push({
           draft_id: id,

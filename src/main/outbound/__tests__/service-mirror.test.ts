@@ -4,6 +4,7 @@ import path from 'path';
 
 import type {
   AccountId,
+  ConfirmMode,
   DraftContent,
   DraftMirror,
   DraftReadResult,
@@ -26,8 +27,10 @@ const deps = {
   detectLanguages: () => ['eng'],
 };
 
-function fakePrefs(): Prefs {
-  const p = {} as unknown as ReturnType<Prefs['get']>;
+function fakePrefs(defaultMode?: ConfirmMode): Prefs {
+  const p = (defaultMode
+    ? { outbound: { defaultMode } }
+    : {}) as unknown as ReturnType<Prefs['get']>;
   return { get: () => p, patch: async () => {}, onChange: () => () => {} };
 }
 
@@ -140,6 +143,7 @@ describe('outbound service — provider draft mirror', () => {
   const make = (
     withDrafts = true,
     wrap: (a: ReturnType<typeof createAttachments>) => typeof a = (a) => a,
+    prefs: Prefs = fakePrefs(),
   ) => {
     const sender: Sender = {
       send: sendMock,
@@ -147,7 +151,7 @@ describe('outbound service — provider draft mirror', () => {
     };
     service = createOutboundService({
       store,
-      prefs: fakePrefs(),
+      prefs,
       senders: new Map<string, Sender>([
         ['gmail', sender],
         ['ms365', { send: sendMock, drafts: provider.mirror }],
@@ -1211,6 +1215,24 @@ describe('outbound service — provider draft mirror', () => {
 
   describe('scheduled send', () => {
     const inMin = (m: number) => new Date(now + m * 60_000).toISOString();
+
+    it('schedule_drafts reads each provider draft once, not again per draft', async () => {
+      make(true, undefined, fakePrefs('chat'));
+      const a = await draft('A');
+      const b = await draft('B');
+      provider.calls = [];
+      const out = await service.scheduleDrafts({
+        drafts: [
+          { draftId: a.draft_id, revision: 1, sendAt: inMin(10) },
+          { draftId: b.draft_id, revision: 1, sendAt: inMin(20) },
+        ],
+      });
+      expect(out.results.map((r) => r.status)).toEqual([
+        'scheduled',
+        'scheduled',
+      ]);
+      expect(provider.calls.filter((c) => c === 'read')).toHaveLength(2);
+    });
 
     it('schedules at the shown revision; a stale one is changed', async () => {
       const r = await draft();

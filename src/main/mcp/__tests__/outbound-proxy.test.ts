@@ -32,7 +32,10 @@ function ephemeralPort(): Promise<number> {
   });
 }
 
-function startStub(port: number, behave: 'ok' | 'error'): Promise<void> {
+function startStub(
+  port: number,
+  behave: 'ok' | 'error' | 'hang',
+): Promise<void> {
   server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => {
@@ -42,6 +45,7 @@ function startStub(port: number, behave: 'ok' | 'error'): Promise<void> {
       const parsed = JSON.parse(body) as { op: string };
       hits.push(parsed);
       res.setHeader('content-type', 'application/json');
+      if (behave === 'hang' && parsed.op !== 'ping') return;
       if (parsed.op === 'ping') {
         res.end(
           JSON.stringify({ ok: true, result: { pong: 'kiagent-outbox' } }),
@@ -92,6 +96,20 @@ describe('outbound proxy', () => {
         body: 'b',
       }),
     ).rejects.toThrow('no sender for gmail');
+  });
+
+  it('an op the app is still working on is never sent twice', async () => {
+    const stubPort = await ephemeralPort();
+    await startStub(stubPort, 'hang');
+    const proxy = createOutboundProxy(undefined, [stubPort], 200);
+    await expect(
+      proxy.scheduleDrafts({
+        drafts: [{ draftId: 'd1', revision: 1 }],
+        spread: { minutes: 30 },
+      }),
+    ).rejects.toThrow(/did not answer in time[\s\S]*list_outbox/);
+    expect(hits.filter((h) => h.op === 'scheduleDrafts')).toHaveLength(1);
+    server.closeAllConnections();
   });
 
   it('explains when the app is not running', async () => {

@@ -217,6 +217,9 @@ describe('outbound service — schedule_drafts', () => {
     expect(Date.parse(review.results[0].send_at!)).toBeGreaterThanOrEqual(
       now + 30 * MIN,
     );
+    // Whole minutes, as every surface shows them.
+    for (const r of [...chat.results, ...review.results])
+      expect(Date.parse(r.send_at!) % MIN).toBe(0);
   });
 
   it('input errors refuse the whole call before any write', async () => {
@@ -292,6 +295,20 @@ describe('outbound service — schedule_drafts', () => {
     expect((await row(b.draft_id))?.sendAt).toBe(at(15));
   });
 
+  it('a cancel at a stale revision is refused and keeps the suggestion', async () => {
+    mode = 'review';
+    const a = await draft();
+    await service.scheduleDrafts({
+      drafts: [{ draftId: a.draft_id, revision: 1, sendAt: at(40) }],
+    });
+    await service.reviseDraft({ draftId: a.draft_id, revision: 1, body: 'v2' });
+    const out = await service.scheduleDrafts({
+      drafts: [{ draftId: a.draft_id, revision: 1, sendAt: null }],
+    });
+    expect(out.results[0]).toMatchObject({ status: 'error', revision: 2 });
+    expect((await row(a.draft_id))?.suggestedSendAt).toBe(at(40));
+  });
+
   it('a schedule replaces a suggestion', async () => {
     mode = 'review';
     const a = await draft();
@@ -341,7 +358,9 @@ describe('outbound service — schedule_drafts', () => {
       })),
     });
     // The scheduler has picked the first one up; the provider has not answered.
-    expect(await store.outbox.transition(ids[0], ['draft'], 'sending')).toBe(true);
+    expect(await store.outbox.transition(ids[0], ['draft'], 'sending')).toBe(
+      true,
+    );
     const out = await service.scheduleDrafts({
       drafts: [{ draftId: ids[3], revision: 1, sendAt: at(20) }],
     });
