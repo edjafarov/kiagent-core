@@ -46,7 +46,7 @@ describe('outbox v10 migration', () => {
       migrate(db);
       expect(
         db.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get(),
-      ).toEqual({ value: '11' });
+      ).toEqual({ value: '12' });
       expect(
         db
           .prepare(
@@ -87,7 +87,7 @@ describe('outbox v10 migration', () => {
       migrate(db);
       expect(
         db.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get(),
-      ).toEqual({ value: '11' });
+      ).toEqual({ value: '12' });
       expect(
         db.prepare(`SELECT suggested_send_at FROM outbox WHERE id='old'`).get(),
       ).toEqual({ suggested_send_at: null });

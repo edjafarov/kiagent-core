@@ -384,6 +384,113 @@ TEXT and attention timestamps are INTEGER Unix milliseconds.`,
         'Sent/failed/discarded/expired rows are retained — this table IS the audit log, not just a queue.',
     },
     {
+      name: 'event_drafts',
+      description:
+        'Proposed calendar events awaiting user confirmation (draft_event), and their created/failed/discarded/expired history. NOT a document type: the created event re-enters the corpus through normal calendar ingestion.',
+      columns: [
+        { name: 'id', type: 'TEXT PK', notes: 'UUIDv7.' },
+        {
+          name: 'account_id',
+          type: 'TEXT',
+          notes:
+            'FK → accounts.id (ON DELETE CASCADE). The calendar account the event is added to.',
+        },
+        {
+          name: 'revision',
+          type: 'INTEGER',
+          notes:
+            'Bumped on every revise; confirm links are bound to one revision.',
+        },
+        {
+          name: 'payload_json',
+          type: 'TEXT (JSON)',
+          notes:
+            'The event: calendarId, title, start, end, allDay, timeZone, location, description, attendees, conference, category (work/personal/kids).',
+        },
+        {
+          name: 'idempotency_key',
+          type: 'TEXT',
+          notes:
+            "'<id>:<revision>' once creation has started, then frozen; retries reuse it. NULL while never confirmed.",
+        },
+        {
+          name: 'source_document_id',
+          type: 'TEXT',
+          notes:
+            'documents.id of the mail/message the event came from; NULL when none.',
+        },
+        {
+          name: 'fingerprint',
+          type: 'TEXT',
+          notes:
+            'Dedupe key: sha256(account | start minute or date | normalized title).',
+        },
+        {
+          name: 'confirm_mode',
+          type: 'TEXT',
+          notes: "Enum — 'review' (in-app) or 'link' (signed confirm link).",
+        },
+        {
+          name: 'status',
+          type: 'TEXT',
+          notes:
+            "Enum — 'draft', 'creating', 'created', 'failed', 'discarded', 'expired', 'unknown' (creation may or may not have happened).",
+        },
+        {
+          name: 'error',
+          type: 'TEXT',
+          notes: 'Why creation failed or is unknown; NULL otherwise.',
+        },
+        {
+          name: 'created_event_json',
+          type: 'TEXT (JSON)',
+          notes:
+            'Provider result (eventId, iCalUID, htmlLink, conferenceUrl) once created.',
+        },
+        {
+          name: 'created_via',
+          type: 'TEXT',
+          notes: "Transport that drafted it (e.g. 'mcp-local', 'mcp-agent').",
+        },
+        {
+          name: 'created_by',
+          type: 'TEXT',
+          notes: 'MCP client name when known.',
+        },
+        { name: 'created_at', type: 'TEXT (ISO-8601)', notes: 'Drafted at.' },
+        {
+          name: 'updated_at',
+          type: 'TEXT (ISO-8601)',
+          notes: 'Last state change.',
+        },
+        {
+          name: 'confirmed_at',
+          type: 'TEXT (ISO-8601)',
+          notes: 'When the user confirmed; NULL until then.',
+        },
+        {
+          name: 'expires_at',
+          type: 'TEXT (ISO-8601)',
+          notes:
+            'Unconfirmed drafts expire after 7 days; rows that ever started creation never expire.',
+        },
+        {
+          name: 'touched_at',
+          type: 'TEXT (ISO-8601)',
+          notes: 'Last create/revise/re-propose.',
+        },
+        {
+          name: 'touched_via',
+          type: 'TEXT',
+          notes: 'Transport of that last touch.',
+        },
+      ],
+      relations: [
+        'event_drafts.account_id → accounts.id',
+        'event_drafts.source_document_id → documents.id',
+      ],
+    },
+    {
       name: 'attention_items',
       description:
         'Current attention payloads published by extensions. Resolved and expired payloads are pruned seven days after their last transition; revision tombstones remain in attention_revisions.',

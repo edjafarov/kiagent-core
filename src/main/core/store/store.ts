@@ -30,6 +30,10 @@ import {
 } from './maintenance-keys';
 import { createOutboxStore, type OutboxStore } from './outbox';
 import {
+  createEventDraftStore,
+  type EventDraftStore,
+} from './event-drafts';
+import {
   ACTIONABLE_VISUAL_SIZE_WHERE,
   EXTRACTED_DOCS_WHERE,
   PENDING_VISUAL_WHERE,
@@ -410,6 +414,8 @@ export interface CoreStore extends Store {
   onReset(listener: () => void): () => void;
   close(): Promise<void>;
   outbox: OutboxStore;
+  /** Calendar event drafts (schema v12). */
+  eventDrafts: EventDraftStore;
 }
 
 const FEED_BATCH = 500;
@@ -430,6 +436,9 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
   // CASCADE, schema.ts:561) without ever calling into outbox.ts.
   const outboxChanged = new EventEmitter();
   outboxChanged.setMaxListeners(0);
+  // Same role for event_drafts (its rows cascade with the account too).
+  const eventDraftsChanged = new EventEmitter();
+  eventDraftsChanged.setMaxListeners(0);
   const resetListeners = new Set<() => void>();
   let closed = false;
   let rekeyed = false;
@@ -718,7 +727,10 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       // whether it actually took outbox rows with it isn't observable from
       // `seq` alone. Fire unconditionally: an extra "may have changed" signal
       // is harmless (consumers re-read list/count), a missed one is not.
-      if ('removeAccount' in batch) outboxChanged.emit('change');
+      if ('removeAccount' in batch) {
+        outboxChanged.emit('change');
+        eventDraftsChanged.emit('change');
+      }
       return seq;
     },
 
@@ -779,6 +791,11 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       encrypt: deps.encrypt,
       decrypt: deps.decrypt,
       changed: outboxChanged,
+    }),
+
+    eventDrafts: createEventDraftStore(db, {
+      now,
+      changed: eventDraftsChanged,
     }),
 
     vault: {
@@ -955,6 +972,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         // wipe, so this fires unconditionally rather than leave a factory
         // reset silently stale for anything watching the outbox.
         outboxChanged.emit('change');
+        eventDraftsChanged.emit('change');
       },
     },
 
