@@ -1912,6 +1912,14 @@ export interface OnboardingPrefs {
   dismissedAt: string | null; // manual Skip
 }
 
+export interface CalendarPrefs {
+  defaultCalendar: { accountId: string; calendarId: string } | null;
+  /** Local "HH:MM"; days are ISO weekdays, 1 = Monday … 7 = Sunday. */
+  workingHours: { start: string; end: string; days: number[] } | null;
+  /** IANA zone; null = the system zone. */
+  timeZone: string | null;
+}
+
 /** App-level settings — not per-account (Account.config), not per-extension
  *  (PrivateDb). */
 export interface AppPrefs {
@@ -1930,6 +1938,9 @@ export interface AppPrefs {
    *  2026-07-27) — the per-account setting offers only review/link and acts
    *  as the opt-out for individual accounts. */
   outbound: { defaultMode: ConfirmMode };
+  /** Calendar drafting (platform 2.16.0). Nulls = defaults: the only
+   *  account's primary calendar, 09:00–18:00 Mon–Fri, the system zone. */
+  calendar: CalendarPrefs;
   /** Product feature switches. A missing key means "not decided": the
    *  product applies its own default. Core knows no feature names. */
   features: Record<string, boolean>;

@@ -1,7 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 
-import type { AppPrefs, OnboardingPrefs, Prefs } from '@shared/contracts';
+import type {
+  AppPrefs,
+  CalendarPrefs,
+  OnboardingPrefs,
+  Prefs,
+} from '@shared/contracts';
 
 export const DEFAULT_PREFS: AppPrefs = {
   theme: 'system',
@@ -11,6 +16,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   processing: { enabled: true, window: 'idle' },
   models: { override: 'auto', autoInstall: true },
   outbound: { defaultMode: 'review' },
+  calendar: { defaultCalendar: null, workingHours: null, timeZone: null },
   features: {},
   onboarding: {
     sourceBackfilledAt: null,
@@ -22,6 +28,61 @@ export const DEFAULT_PREFS: AppPrefs = {
 
 function isoOrNull(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$|^24:00$/;
+
+function validZone(z: unknown): z is string {
+  if (typeof z !== 'string' || !z) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: z });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeCalendar(raw: unknown): CalendarPrefs {
+  const c = (raw ?? {}) as Partial<Record<keyof CalendarPrefs, unknown>>;
+  const d = c.defaultCalendar as {
+    accountId?: unknown;
+    calendarId?: unknown;
+  } | null;
+  const w = c.workingHours as {
+    start?: unknown;
+    end?: unknown;
+    days?: unknown;
+  } | null;
+  const days = Array.isArray(w?.days)
+    ? [
+        ...new Set(
+          w!.days.filter(
+            (x): x is number => Number.isInteger(x) && x >= 1 && x <= 7,
+          ),
+        ),
+      ].sort()
+    : [];
+  return {
+    defaultCalendar:
+      d &&
+      typeof d.accountId === 'string' &&
+      d.accountId &&
+      typeof d.calendarId === 'string' &&
+      d.calendarId
+        ? { accountId: d.accountId, calendarId: d.calendarId }
+        : null,
+    workingHours:
+      w &&
+      typeof w.start === 'string' &&
+      typeof w.end === 'string' &&
+      HHMM.test(w.start) &&
+      HHMM.test(w.end) &&
+      w.start < w.end &&
+      days.length > 0
+        ? { start: w.start, end: w.end, days }
+        : null,
+    timeZone: validZone(c.timeZone) ? c.timeZone : null,
+  };
 }
 
 function sanitize(raw: unknown): AppPrefs {
@@ -52,6 +113,7 @@ function sanitize(raw: unknown): AppPrefs {
           ? r.outbound.defaultMode
           : 'review',
     },
+    calendar: sanitizeCalendar(r.calendar),
     features: Object.fromEntries(
       Object.entries(
         r.features && typeof r.features === 'object' ? r.features : {},
@@ -86,6 +148,7 @@ export function createPrefs(dir: string): Prefs {
         processing: { ...current.processing, ...(p.processing ?? {}) },
         models: { ...current.models, ...(p.models ?? {}) },
         outbound: { ...current.outbound, ...(p.outbound ?? {}) },
+        calendar: { ...current.calendar, ...(p.calendar ?? {}) },
         onboarding: { ...current.onboarding, ...(p.onboarding ?? {}) },
         features: { ...current.features, ...(p.features ?? {}) },
       });

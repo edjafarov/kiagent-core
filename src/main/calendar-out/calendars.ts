@@ -5,6 +5,7 @@
  */
 import type {
   AccountId,
+  CalendarPrefs,
   Prefs,
   QueryAccount,
   WritableCalendar,
@@ -26,11 +27,7 @@ const WRITE_SCOPE: Record<string, string[]> = {
   ],
 };
 
-export interface CalendarPrefs {
-  defaultCalendar: { accountId: string; calendarId: string } | null;
-  workingHours: { start: string; end: string; days: number[] } | null;
-  timeZone: string | null;
-}
+export type { CalendarPrefs };
 
 /** Optional access on purpose: partial Prefs fakes and older pref files. */
 export function calendarPrefs(prefs: Prefs): CalendarPrefs {

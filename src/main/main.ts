@@ -125,6 +125,7 @@ import {
 } from './outbound/service';
 import { outboundInvokeHandlers } from './outbound/ipc';
 import { createOutboundRoutes } from './outbound/routes';
+import { createCalendarOutService } from './calendar-out/service';
 import { buildBundledSenders, composeSenders } from './outbound/senders';
 import { createCalendarWriterRegistry } from './calendar-out/writers';
 import { createOwnerMail } from './outbound/owner-mail';
@@ -1075,6 +1076,16 @@ app
     // extensionsPlatform.start() guard below) — startMcp/createTray/
     // resumeAccounts/createWindow must all still run; any 'sending' rows
     // left behind are simply picked up by the next boot's sweep.
+    // Calendar event drafts (calendar spec §5): gated exactly as mail —
+    // confirm modes, URL origins and the link secret come from `outbound`.
+    const calendarOut = createCalendarOutService({
+      store: p.store,
+      writers: calendarWriters,
+      ctx: () => outbound.context(),
+      prefs: p.prefs,
+      vaultScope: async (id) => (await p.store.vault.load(id))?.scope,
+      logSink: p.logSink,
+    });
     // Owner-only route for the assistant's email channel: no Outbox, the
     // recipient is pinned to the account's own address by core.
     const ownerMail = createOwnerMail({
@@ -1083,6 +1094,14 @@ app
       senders: senderLookup,
       session: (a, signal) => p.engine.session(a, signal, 'owner-mail'),
     });
+    try {
+      // A 'creating' event draft also means a process died mid-create.
+      await calendarOut.recover();
+    } catch (err) {
+      p.logSink.log('calendar-out', 'error', 'boot-time recover failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     try {
       await p.store.outbox.recoverOrphanedSending();
     } catch (err) {
@@ -1102,7 +1121,23 @@ app
       logSink: p.logSink,
     });
     outboxScheduler.start();
-    stopOutboxScheduler = () => outboxScheduler.stop();
+    // Event drafts expire after 7 days; a coarse sweep is enough.
+    const eventExpiry = setInterval(() => {
+      calendarOut
+        .expireOverdue()
+        .catch((err) =>
+          p.logSink.log(
+            'calendar-out',
+            'warn',
+            `expire sweep failed: ${String(err)}`,
+          ),
+        );
+    }, 60_000);
+    eventExpiry.unref?.();
+    stopOutboxScheduler = () => {
+      outboxScheduler.stop();
+      clearInterval(eventExpiry);
+    };
 
     // Tells the renderer the outbox may have changed (create, a transition,
     // an expired sweep, or an account removal cascade) without a per-row
@@ -1136,6 +1171,7 @@ app
       // no longer hold (candidate-port fallback). Tests never set this.
       reconcileClientConfigs: true,
       outbound,
+      calendar: calendarOut,
       admission: p.admission,
     });
     bootTimer.mark('mcp');
@@ -1315,7 +1351,7 @@ app
     // instance for server.ts's /outbox/* dispatch. Both share all state
     // through `outbound`, so having two instances is intentional, not a
     // duplication bug.
-    const outboundRoutes = createOutboundRoutes(outbound);
+    const outboundRoutes = createOutboundRoutes(outbound, calendarOut);
     // One do-not-disturb state for the run, shared by every extension.
     const busy = createBusyRegistry();
 
@@ -1345,7 +1381,11 @@ app
           dataDir,
           tray: trayMenu!,
           ui: { openWindow: showMainWindow },
-          outbound: { service: outbound, routes: outboundRoutes },
+          outbound: {
+            service: outbound,
+            calendar: calendarOut,
+            routes: outboundRoutes,
+          },
           readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
           ownerMail,
           documents: documentBytes,

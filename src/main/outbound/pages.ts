@@ -149,11 +149,12 @@ const CONFIRM_JS = `(function () {
       var els = controls();
       for (var i = 0; i < els.length; i += 1) els[i].setAttribute('disabled', '');
       var b = sendBtn();
-      if (b) b.innerHTML = '<span class="spinner"></span>\\u00a0Sending\\u2026';
+      var working = (b && b.dataset.working) || 'Sending\\u2026';
+      if (b) b.innerHTML = '<span class="spinner"></span>\\u00a0' + working;
       if (statusEl) {
-        statusEl.textContent = 'Sending\\u2026';
+        statusEl.textContent = working;
         timers.push(setTimeout(function () {
-          statusEl.textContent = 'The mail service is busy \\u2014 retrying\\u2026';
+          statusEl.textContent = (b && b.dataset.slow) || 'The mail service is busy \\u2014 retrying\\u2026';
         }, 4000));
         timers.push(setTimeout(function () {
           statusEl.textContent = 'Still working\\u2026';
@@ -198,6 +199,23 @@ export const PAGE_CSP = [
 
 function chrome(inner: string): string {
   return `<style>${OUTBOX_CSS}</style><div class="ob">${inner}</div>`;
+}
+
+/** A page in the outbox chrome — shared with calendar-out's event pages, so
+ *  they ride the same CSS and the same single hashed script (PAGE_CSP). A
+ *  form `#ob-send` with button `#ob-send-btn` gets the double-submit guard;
+ *  the button's `data-working` / `data-slow` set its progress copy. */
+export function outboxPage(
+  title: string,
+  inner: string,
+  withScript = false,
+): string {
+  return renderShell(css(), {
+    title,
+    variant: 'minimal',
+    wordmark: 'kia',
+    body: chrome(inner) + (withScript ? CONFIRM_SCRIPT : ''),
+  });
 }
 
 function sendForm(confirmPath: string, label: string, menu = ''): string {

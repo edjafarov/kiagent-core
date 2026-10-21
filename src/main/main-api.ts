@@ -16,6 +16,10 @@ import { createBusyRegistry, type BusyRegistry } from './core/busy';
 import type { McpServerHandle } from './core/mcp/server';
 import type { CoreStore } from './core/store/store';
 import type { TrayMenuController } from './tray-menu';
+import type {
+  CalendarOutService,
+  EventDraftView,
+} from './calendar-out/service';
 import type { OutboundService } from './outbound/service';
 import type { OwnerMailApi } from './outbound/owner-mail';
 import type { DocumentBytesApi } from './outbound/document-bytes';
@@ -121,6 +125,19 @@ export interface MainProcessApi {
       req: import('http').IncomingMessage,
       res: import('http').ServerResponse,
     ): Promise<boolean>;
+    /** A review link for an event draft's CURRENT revision (Email Kia
+     *  appends it to the reply). Remote origin when the tunnel is up, else
+     *  loopback; null when the draft is no longer a draft. Default TTL 24 h. */
+    eventConfirmUrl(
+      draftId: string,
+      opts?: { ttlMs?: number },
+    ): Promise<string | null>;
+    /** Event drafts a transport created, revised or re-proposed since an
+     *  instant — what an agent turn touched. */
+    eventDraftsTouched(a: {
+      since: string;
+      via: 'mcp-agent';
+    }): Promise<EventDraftView[]>;
   };
   messageEvidence?: {
     read(input: MessageEvidenceReadInput): Promise<MessageEvidenceReadResult>;
@@ -144,6 +161,9 @@ export interface MainProcessApi {
   busy: BusyRegistry;
 }
 
+/** Email Kia's event links live a day (calendar spec §10). */
+const EVENT_LINK_TTL_MS = 24 * 60 * 60_000;
+
 export interface BuildMainApiDeps {
   store: CoreStore;
   mcp: McpServerHandle;
@@ -161,6 +181,7 @@ export interface BuildMainApiDeps {
   ui: { openWindow: () => void };
   outbound: {
     service: OutboundService;
+    calendar?: CalendarOutService;
     routes: {
       handleRemote(
         req: import('http').IncomingMessage,
@@ -394,6 +415,19 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
     outbound: {
       setRemoteBaseUrl: (url) => deps.outbound.service.setRemoteBaseUrl(url),
       handleRequest: (req, res) => deps.outbound.routes.handleRemote(req, res),
+      eventConfirmUrl: async (draftId, opts) => {
+        const cal = deps.outbound.calendar;
+        if (!cal) return null;
+        const ttlMs = opts?.ttlMs ?? EVENT_LINK_TTL_MS;
+        return (
+          (await cal.confirmUrl(draftId, { ttlMs, remote: true })) ??
+          (await cal.confirmUrl(draftId, { ttlMs }))
+        );
+      },
+      eventDraftsTouched: async ({ since, via }) =>
+        deps.outbound.calendar
+          ? deps.outbound.calendar.touchedSince(since, via)
+          : [],
     },
     ...(deps.readMessageEvidence
       ? { messageEvidence: { read: deps.readMessageEvidence } }
