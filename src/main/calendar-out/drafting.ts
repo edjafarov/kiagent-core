@@ -3,9 +3,8 @@
  * dedupe chain in order — already in the calendar → active draft →
  * dismissed → insert (with similar events and drafts as hints).
  */
-import type { AccountId } from '@shared/contracts';
+import type { AccountId, Prefs } from '@shared/contracts';
 
-import type { Prefs } from '@shared/contracts';
 import { currentClient, currentTransport } from '../core/mcp/transport-context';
 import type { EventDraftRow, EventPayload } from '../core/store/event-drafts';
 import { EVENT_DRAFT_PENDING_CAP } from '../core/store/event-drafts';
@@ -71,7 +70,7 @@ export function buildPayload(
   defaultTz: string,
 ): EventPayload {
   const timeZone = a.timeZone ?? base?.timeZone ?? defaultTz;
-  const startRaw = (a.start ?? base?.start).trim();
+  const startRaw = (a.start ?? base?.start ?? '').trim();
   const allDay =
     a.allDay ?? (a.start ? DATE_ONLY.test(startRaw) : base!.allDay);
   let start: string;

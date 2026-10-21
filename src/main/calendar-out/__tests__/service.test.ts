@@ -522,7 +522,11 @@ describe('calendar-out service', () => {
   });
 
   it('parallel captures of one occurrence give one draft', async () => {
-    const rs = await Promise.all([draft(), draft(), draft({ title: 'elternabend 7B' })]);
+    const rs = await Promise.all([
+      draft(),
+      draft(),
+      draft({ title: 'elternabend 7B' }),
+    ]);
     const ids = new Set(rs.map((r) => asDraft(r).draftId));
     expect(ids.size).toBe(1);
     expect(await store.eventDrafts.pending()).toHaveLength(1);
@@ -531,13 +535,22 @@ describe('calendar-out service', () => {
   it('a stale link cannot discard a newer revision', async () => {
     const d = asDraft(await draft());
     const token = d.confirmUrl!.split('/').pop()!;
-    await svc.draftEvent({ draftId: d.draftId, revision: 1, title: 'Elternabend 7b (Aula)', start: '2026-11-03T18:00:00+01:00', category: 'kids' });
+    await svc.draftEvent({
+      draftId: d.draftId,
+      revision: 1,
+      title: 'Elternabend 7b (Aula)',
+      start: '2026-11-03T18:00:00+01:00',
+      category: 'kids',
+    });
     expect(await svc.cancelByToken(token)).toEqual({ kind: 'changed' });
     expect((await store.eventDrafts.get(d.draftId))!.status).toBe('draft');
   });
 
   it('a calendar listing failure makes coverage incomplete but keeps known busy time', async () => {
-    await seed('ev-busy', 'Dentist', { start: '2026-11-02T08:00:00Z', end: '2026-11-02T09:00:00Z' });
+    await seed('ev-busy', 'Dentist', {
+      start: '2026-11-02T08:00:00Z',
+      end: '2026-11-02T09:00:00Z',
+    });
     calendars = [cal()];
     const failing = createCalendarWriterRegistry();
     failing.register('google-calendar', {
@@ -551,16 +564,28 @@ describe('calendar-out service', () => {
     const svc2 = createCalendarOutService({
       store,
       writers: failing,
-      ctx: () => ({ modeFor: () => 'review', baseFor: () => BASE, createdViaNow: () => 'mcp-local', secret: async () => SECRET }),
+      ctx: () => ({
+        modeFor: () => 'review',
+        baseFor: () => BASE,
+        createdViaNow: () => 'mcp-local',
+        secret: async () => SECRET,
+      }),
       prefs: { get: () => ({}) } as unknown as Prefs,
       vaultScope: async () => undefined,
       now: () => clock,
       logSink: { log: () => {} } as never,
     });
-    const r = await svc2.findFreeTime({ from: T0, to: '2026-11-02T17:00:00Z', durationMinutes: 60, limit: 50 });
+    const r = await svc2.findFreeTime({
+      from: T0,
+      to: '2026-11-02T17:00:00Z',
+      durationMinutes: 60,
+      limit: 50,
+    });
     expect(r.complete).toBe(false);
     expect(r.coverage.warnings.join(' ')).toMatch(/reconnect/);
-    expect(r.slots.some((s) => s.start === '2026-11-02T08:00:00.000Z')).toBe(false);
+    expect(r.slots.some((s) => s.start === '2026-11-02T08:00:00.000Z')).toBe(
+      false,
+    );
   });
 
   it('an existing in-progress draft gets no link and says so', async () => {

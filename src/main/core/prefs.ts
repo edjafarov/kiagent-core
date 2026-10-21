@@ -35,8 +35,10 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$|^24:00$/;
 function validZone(z: unknown): z is string {
   if (typeof z !== 'string' || !z) return false;
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone: z });
-    return true;
+    return (
+      new Intl.DateTimeFormat('en-US', { timeZone: z }).resolvedOptions()
+        .timeZone !== ''
+    );
   } catch {
     return false;
   }

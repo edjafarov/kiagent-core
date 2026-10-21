@@ -18,15 +18,15 @@ import { googleOAuthProfile, googleRefresher } from '@main/sources/gmail/oauth';
 import { shapeOutboundError } from '@main/outbound/error-copy';
 
 import {
+  createCalendarWriterRegistry,
+  type CalendarWriterRegistry,
+} from '@main/calendar-out/writers';
+import {
   createExtensionPlatform,
   createLaneGate,
   type ExtensionPlatform,
   type ExtensionPlatformDeps,
 } from '../extension-platform';
-import {
-  createCalendarWriterRegistry,
-  type CalendarWriterRegistry,
-} from '@main/calendar-out/writers';
 import { runExtensionHost } from '../extension-host-entry';
 import { createInMemoryHostPair } from '../transport';
 import {

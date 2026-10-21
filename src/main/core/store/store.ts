@@ -29,10 +29,7 @@ import {
   seedConsumerName,
 } from './maintenance-keys';
 import { createOutboxStore, type OutboxStore } from './outbox';
-import {
-  createEventDraftStore,
-  type EventDraftStore,
-} from './event-drafts';
+import { createEventDraftStore, type EventDraftStore } from './event-drafts';
 import { createCalendarIndex, type CalendarIndex } from './calendar-index';
 import {
   ACTIONABLE_VISUAL_SIZE_WHERE,
