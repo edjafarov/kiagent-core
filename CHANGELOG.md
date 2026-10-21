@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.115.0](https://github.com/edjafarov/kiagent-core/compare/v0.114.0...v0.115.0) (2026-10-21)
+
+### Features
+
+* **gmail:** keep Outbox drafts as Gmail drafts ([85429ea](https://github.com/edjafarov/kiagent-core/commit/85429eabe9887b5a4269c32c8a11dfa9ac2e459a))
+* **outbound:** drafts carry attachments from the index or local files ([d242144](https://github.com/edjafarov/kiagent-core/commit/d24214441f2af6802a831f77cb907e64a416c05e))
+* **outbound:** listOutbox({ html: true }) gives the phone the rendered email body ([17444f4](https://github.com/edjafarov/kiagent-core/commit/17444f49d3d18b59734afd80f3d7cc12d171be68))
+* **outbound:** Outbox drafts mirror their Gmail/Outlook draft ([ca180ee](https://github.com/edjafarov/kiagent-core/commit/ca180ee847d5b5d6f2f7f909f3a76cb3ff53880a))
+* **outbox:** a send carries what was reviewed — a provider body that is not Kia's rendering is written back first ([47eaf53](https://github.com/edjafarov/kiagent-core/commit/47eaf53f16d284f784e359a9d197ec68b12d967c))
+* **outbox:** edit a draft in place — revise_draft, revision-bound confirm and send, reopen for Try again ([1b98120](https://github.com/edjafarov/kiagent-core/commit/1b9812065eb3bc4df817a857c6d918f846c071c9))
+* **outbox:** every review lists the draft's files; the sheet adds and removes them ([542c1a4](https://github.com/edjafarov/kiagent-core/commit/542c1a420eb228a77a66a242a07f2143960e9d87))
+* **outbox:** every review shows the live Gmail/Outlook draft ([4a1997a](https://github.com/edjafarov/kiagent-core/commit/4a1997abce6f4e01f748f6ee3c0428822bb43a49))
+* **outbox:** Gmail and SMTP send the rendered HTML with the Markdown as text; Gmail drafts read their HTML ([9495b6e](https://github.com/edjafarov/kiagent-core/commit/9495b6e9c2d2a7652013b8974560ae087046f106))
+* **outbox:** intents and draft patches carry the rendered HTML body (platform 2.15.0) ([82665ed](https://github.com/edjafarov/kiagent-core/commit/82665edca379ef1793eac77462996cea6e022033))
+* **outbox:** log which fields a provider's copy changed ([a9f9cfe](https://github.com/edjafarov/kiagent-core/commit/a9f9cfe43263d88412fa9650c6cf1e288402010c))
+* **outbox:** one rendering of a draft's Markdown as email, and its words for comparing provider copies ([5dba17d](https://github.com/edjafarov/kiagent-core/commit/5dba17d66bc9643bf0620f582958a39e7d6e0d15))
+* **outbox:** revisions, bcc, attachments and mirror columns (schema v10) ([80577c9](https://github.com/edjafarov/kiagent-core/commit/80577c9be7854d3c4b4e06ccf3247a2c5eddceda))
+* **outbox:** schedule_drafts — AI apps schedule in chat mode and suggest otherwise; one rate rule counts sent and scheduled sends (schema v11) ([eb2d581](https://github.com/edjafarov/kiagent-core/commit/eb2d58124248d0351054d3b5908924d5a61b91ae))
+* **outbox:** send a confirmed draft at a chosen time ([6273f0f](https://github.com/edjafarov/kiagent-core/commit/6273f0f8283153cf4af5d870bc99d64afb40baa6))
+* **outbox:** Send later… in the review sheet; Scheduled for … everywhere else ([ae53c13](https://github.com/edjafarov/kiagent-core/commit/ae53c130646e32c7986bcd56fe5ad83ed6a243fb))
+* **outbox:** the link page has Send later — the app's presets and a custom time ([f3b9388](https://github.com/edjafarov/kiagent-core/commit/f3b9388d23970b20fccab51382559938bd233735))
+* **outbox:** the link page of a scheduled draft offers Cancel schedule, which keeps the draft ([6ad7ded](https://github.com/edjafarov/kiagent-core/commit/6ad7ded3ac41ace0bcd37a90b2ed00efb6af5ae9))
+* **outbox:** the link page shows the email as it will arrive and offers an AI app's suggested time as one click ([277662e](https://github.com/edjafarov/kiagent-core/commit/277662e58de812162665bcec2a1ae7f1065c2abf))
+* **outbox:** the link page's Send is a split button — its ▾ opens the send-later times above it ([d46a6fc](https://github.com/edjafarov/kiagent-core/commit/d46a6fc5ce47f63c2c9744049f0eadcdb8e109f5))
+* **outbox:** the review shows the email as it will arrive; Send gets a ▾ of times, and an AI app's suggested time is one click ([d409480](https://github.com/edjafarov/kiagent-core/commit/d409480f1d9b62637b58058f448e7240d31f6643))
+* **outbox:** the words decide whether a provider changed a body; the mirror remembers the provider's form of Kia's own write ([1b09e24](https://github.com/edjafarov/kiagent-core/commit/1b09e24582169f3b22e211c46766b86420b32107))
+* **platform:** optional provider-draft mirror on senders (API 2.15.0) ([7d502e7](https://github.com/edjafarov/kiagent-core/commit/7d502e757e6d45273208c2fa67f3dbff85e77a98))
+* **senders:** Outbox sends carry attachments ([f604468](https://github.com/edjafarov/kiagent-core/commit/f6044686a2f7f8b59a4087cbef4b28977e63995d))
+
+### Bug Fixes
+
+* **gmail:** a draft sent from Gmail reads as sent, though its id still answers ([7997eef](https://github.com/edjafarov/kiagent-core/commit/7997eef33954167474626fb0570a9a243f922bb7))
+* **gmail:** unsent drafts are not indexed as mail ([968a688](https://github.com/edjafarov/kiagent-core/commit/968a6881bac0828d1f9f4ba62259894cf61ac57b))
+* **outbound:** 50% review — tighter path rule, a confirm refresh miss keeps the draft ([3b33d2b](https://github.com/edjafarov/kiagent-core/commit/3b33d2bb32e7ccac26012d81297980633bed3ee2))
+* **outbound:** a Gmail or IMAP draft that didn't sync no longer claims its files can't be sent ([82bb7af](https://github.com/edjafarov/kiagent-core/commit/82bb7af20eb1b3f48b8c1e8df96954b7aa2e48df))
+* **outbound:** mirror refreshes stay quiet, writes are never abandoned ([16b9eb6](https://github.com/edjafarov/kiagent-core/commit/16b9eb65b65c425ee38ee4924195483638e8a6ab))
+* **outbound:** Part 2 final review — files after the create, refusals before the send ([9130bf8](https://github.com/edjafarov/kiagent-core/commit/9130bf84185880106250a5d6d28ef1c7ed35f11c))
+* **outbox:** a batch is one provider read per draft, never replayed; spread times are whole minutes ([a339c6c](https://github.com/edjafarov/kiagent-core/commit/a339c6c88eeb28f6205f2f3a1aaa1da55d2a7546))
+* **outbox:** a changed-draft refusal lists Cc on its own line ([a823ba7](https://github.com/edjafarov/kiagent-core/commit/a823ba77997e3d1793782d6f842fb6f65c3a99bf))
+* **outbox:** a draft Gmail re-saves on open is not an edit — names and re-wrapping don't bump the revision ([6fa341a](https://github.com/edjafarov/kiagent-core/commit/6fa341a70432b86e6d2011f16c93a0760f2ce223))
+* **outbox:** a draft's subject and rejected addresses stay out of the logs ([2769878](https://github.com/edjafarov/kiagent-core/commit/276987848de5c63eec2396dc8bbd63921dedcda1))
+* **outbox:** a file keeps the size Kia read when the provider counts it its own way ([c6280c1](https://github.com/edjafarov/kiagent-core/commit/c6280c1d004aae873d92e275d50c15075b868295))
+* **outbox:** a refusal that carries the draft keeps it out of the logs and the activity feed ([d18f84f](https://github.com/edjafarov/kiagent-core/commit/d18f84f99c137d7ee93252119d87c9df35ec76a7))
+* **outbox:** a Send ▾ preset counts from the pick; a body's leading or trailing link never shows its target in the list ([12ac5c7](https://github.com/edjafarov/kiagent-core/commit/12ac5c722f046e7a80d7a114e7e147fcef4a53d5))
+* **outbox:** an Outlook reply's own subject is no edit ([29d501c](https://github.com/edjafarov/kiagent-core/commit/29d501c8183b05ac6cfe10d1f1fe852f03d6d4c7))
+* **outbox:** applyContent keeps where each file came from and refuses a row that left draft ([dc09d35](https://github.com/edjafarov/kiagent-core/commit/dc09d35775cb377d94c84a518977947908a5d120))
+* **outbox:** Kia's own write forgets the provider count of files it changes ([3cb52ed](https://github.com/edjafarov/kiagent-core/commit/3cb52edab1fad2793491b01fc690d68ccfc7e1c4))
+* **outbox:** no raw HTML after an inline <code>/<kbd>/<pre> tag; outbox pages get a strict CSP ([2f9f005](https://github.com/edjafarov/kiagent-core/commit/2f9f005cd741c1fbdf9d8a2f4720bd44996b0973))
+* **outbox:** older mirrors and Outlook replies with files read cleanly ([a7784e2](https://github.com/edjafarov/kiagent-core/commit/a7784e2f772dd729cf925a8eb197e07835772524))
+* **outbox:** only a write of the body vouches for the provider's body as Kia's rendering ([a0399f3](https://github.com/edjafarov/kiagent-core/commit/a0399f3f6319c1e25517226d0fbb9aac2893094f))
+* **outbox:** Part 3 final review — a discard drops the schedule note, a timed-out read retries in its window, the page names its time zone ([e3fafcf](https://github.com/edjafarov/kiagent-core/commit/e3fafcf99d4663e26cf3cb007c97b3d243cdf589))
+* **outbox:** Part 3 review — the time is checked last, a removed schedule re-arms expiry ([7b62db3](https://github.com/edjafarov/kiagent-core/commit/7b62db33fe918cb5cc673c6f5836eca8292b48d5))
+* **outbox:** provider reads never pass off an unreviewed change ([814c122](https://github.com/edjafarov/kiagent-core/commit/814c122248cd8f79ee026e7bbedbdefd1648b069))
+* **outbox:** the link page's Send later bar is as wide as its buttons; the open list scrolls with the page ([39edab3](https://github.com/edjafarov/kiagent-core/commit/39edab3f043504511e807d41164a3ea0b094ed23))
+* **outbox:** the link page's Send later times read short, like the app's (10:26, Thu 09:00) ([be8b3f5](https://github.com/edjafarov/kiagent-core/commit/be8b3f5d05c7114bc30b35fadd39697898ebb52f))
+* **outbox:** the rate rule counts sends in flight ([2bd45c2](https://github.com/edjafarov/kiagent-core/commit/2bd45c22e0a3afb2718989a3693f35b09d1010c5))
+* **outbox:** with no remembered size, only Kia's own size keeps a file Kia's ([5c46297](https://github.com/edjafarov/kiagent-core/commit/5c46297fb8b879397d14a47e9136b3e7e79fabc6))
+
 ## [0.114.0](https://github.com/edjafarov/kiagent-core/compare/v0.113.4...v0.114.0) (2026-10-20)
 
 ### Features
