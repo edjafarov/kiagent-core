@@ -7,9 +7,7 @@ let resolvers: ((v: CalendarDayView | null) => void)[];
 beforeEach(() => {
   resolvers = [];
   (window as any).kiagent = {
-    invoke: jest.fn(
-      () => new Promise((resolve) => resolvers.push(resolve)),
-    ),
+    invoke: jest.fn(() => new Promise((resolve) => resolvers.push(resolve))),
   };
 });
 afterEach(() => {
