@@ -18,6 +18,8 @@ import { signEventToken, verifyEventToken } from '../outbound/tokens';
 import type { SourceLookup } from '../platform/account-types';
 import { createCalendarsView } from './calendars';
 import { reconnectCopy, UNKNOWN_COPY } from './copy';
+import { collectWindow } from './collect';
+import { buildDayModel, dayWindow, type DayModel } from './day-model';
 import { createDrafting } from './drafting';
 import { createFreeTime } from './free-time';
 import type {
@@ -38,6 +40,9 @@ export type * from './types';
 /** The review page's one deadline, from the start of peekByToken. */
 export const PAGE_DEADLINE_MS = 1500;
 
+/** Day view bounds: more candidates than this and there is no day view. */
+const DAY_LIMITS = { events: 1000, drafts: 200 };
+
 /** What MCP tools may call. Deliberately no confirm. */
 export interface CalendarToolApi {
   listCalendars(a: Record<string, never>): Promise<CalendarListItem[]>;
@@ -54,8 +59,9 @@ export interface CalendarOutService extends CalendarToolApi {
   discardById(id: string): Promise<EventDraftRow | null>;
   restoreById(id: string): Promise<EventDraftRow | null>;
   listPending(): Promise<EventDraftView[]>;
-  /** The day model for the review page (Task 4 fills it). */
-  dayView(view: EventDraftView): Promise<null>;
+  /** The day model for the review page; null = no day view (listing failed,
+   *  too many candidates, or the page deadline passed). Rejects on errors. */
+  dayView(view: EventDraftView): Promise<DayModel | null>;
   /** A review-page URL for the row's CURRENT revision; null while the
    *  server for that transport is not up. */
   confirmUrl(
@@ -320,7 +326,40 @@ export function createCalendarOutService(deps: {
       return Promise.all(rows.map((r) => toView(r, cals)));
     },
 
-    dayView: async () => null,
+    async dayView(view) {
+      if (!view.listing.ok) return null;
+      const listed = view.listing.items;
+      const w = dayWindow(view.payload);
+      const run = collectWindow(
+        { store },
+        {
+          ...w,
+          now: now(),
+          listed,
+          limits: DAY_LIMITS,
+        },
+      ).then((col) =>
+        'overflow' in col
+          ? null
+          : buildDayModel(view, col, view.payload.timeZone),
+      );
+      // deadlineMs 0 = no deadline (views built outside the review page).
+      if (!view.deadlineMs) return run;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<null>((resolve) => {
+        timer = setTimeout(
+          () => resolve(null),
+          Math.max(0, view.deadlineMs - Date.now()),
+        );
+      });
+      // If the timer wins, a late rejection from `run` must not go unhandled.
+      run.catch(() => {});
+      try {
+        return await Promise.race([run, timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
 
     async confirmUrl(id, opts) {
       const row = await store.eventDrafts.get(id);
