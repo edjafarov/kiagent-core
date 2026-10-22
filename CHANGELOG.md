@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.117.0](https://github.com/edjafarov/kiagent-core/compare/v0.116.0...v0.117.0) (2026-10-22)
+
+### Features
+
+* **calendar-out:** day model for the event review page ([57df30a](https://github.com/edjafarov/kiagent-core/commit/57df30aa415a0e2c4a46e7ec92b1f3194a271bfe))
+* **calendar-out:** day view for the app's review sheet over IPC ([92f7a8b](https://github.com/edjafarov/kiagent-core/commit/92f7a8bc7a5f347b6b88fa9674b009dfdb273990))
+* **calendar-out:** day view on the event review page ([da62c25](https://github.com/edjafarov/kiagent-core/commit/da62c258141e9a2acaf226bfcc7a451a3aeb6d1a))
+* **calendar-out:** DST-safe local day bounds; offset-aware whenText ([d5319ba](https://github.com/edjafarov/kiagent-core/commit/d5319ba0d66a051af32f98fa1ada355a7d7f6c6e))
+* **calendar-out:** sync the account right after creating an event ([0eaf11a](https://github.com/edjafarov/kiagent-core/commit/0eaf11a40199cecd94221db59107a3c1a29ed7d8))
+* **outbox:** the event review sheet shows the review page's day view ([829fe6b](https://github.com/edjafarov/kiagent-core/commit/829fe6b498e6f616bb9d9d727a87705f7e552780))
+
+### Bug Fixes
+
+* **calendar-out:** 16px phone gutters on event pages with a grid; log skipped day views once; proposal counts against the block cap ([be18b10](https://github.com/edjafarov/kiagent-core/commit/be18b10220d65fe3d2007dd4e7e4afcd34fc7535))
+* **calendar-out:** all-day Kia placeholders never busy-clash; skip collection past the deadline; cap test proves clash retention ([66a2fd5](https://github.com/edjafarov/kiagent-core/commit/66a2fd586478c508a12d918ac25e52ed514cbec9))
+* **calendar-out:** bound localDayStart on skipped/impossible dates; name the end day at midnight; pin query limits ([bc32935](https://github.com/edjafarov/kiagent-core/commit/bc32935c89acb9d0c665e88576d7ab79538f9542))
+* **calendar-out:** bounded calendar listing on the review page; similar note respects disclosure ([9a4a4ea](https://github.com/edjafarov/kiagent-core/commit/9a4a4eabe342f263cec2383280508f5e008afd4b))
+* **calendar-out:** dashed border on all-day draft chips; renderer colour fallback matches the model ([be2ef0c](https://github.com/edjafarov/kiagent-core/commit/be2ef0c8c4a117a5d39f088a39f148f476985f5c))
+* **calendar-out:** no model after the deadline; cap keeps clash-set members for all-day proposals; real draft-limit assertion ([32400f8](https://github.com/edjafarov/kiagent-core/commit/32400f8c28d95f7e9c0d59a90dc5f957fbe073c2))
+* **outbound:** review pages use Referrer-Policy same-origin ([536d903](https://github.com/edjafarov/kiagent-core/commit/536d903443e7c5cff9f98c82a16b446fd7be56d3))
+* **outbox:** day view on failed drafts; no stale grid after a revision change ([ed918a4](https://github.com/edjafarov/kiagent-core/commit/ed918a47509d7b112af472cc74a6d57ac84c200d))
+
+### Performance Improvements
+
+* **store:** index calendar overlap lookups ([16db99f](https://github.com/edjafarov/kiagent-core/commit/16db99f221cecb493fbfc024a3ea040869171321))
+
 ## [0.116.0](https://github.com/edjafarov/kiagent-core/compare/v0.115.0...v0.116.0) (2026-10-21)
 
 ### Features
