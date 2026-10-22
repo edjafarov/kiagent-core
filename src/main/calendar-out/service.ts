@@ -67,7 +67,8 @@ export interface CalendarOutService extends CalendarToolApi {
    *  too many candidates, or the page deadline passed). Rejects on errors. */
   dayView(view: EventDraftView): Promise<DayModel | null>;
   /** The page's day section for the app's review sheet, at `revision`.
-   *  Null when the row is gone, not a draft, at another revision, past the
+   *  Null when the row is gone, not open (draft / failed / unknown), at
+   *  another revision, past the
    *  sheet deadline (one deadline over the whole call), or on any error. */
   dayViewById(id: string, revision: number): Promise<CalendarDayView | null>;
   /** One warning line to the main-process log (calendar-out). */
@@ -345,8 +346,10 @@ export function createCalendarOutService(deps: {
       const deadlineMs = Date.now() + sheetDeadlineMs;
       const run = (async (): Promise<CalendarDayView | null> => {
         const row = await store.eventDrafts.get(id);
-        if (!row || row.status !== 'draft' || row.revision !== revision)
-          return null;
+        // Failed / unknown rows are still added by Try again, so their
+        // clash view matters as much as a fresh draft's.
+        const open = ['draft', 'failed', 'unknown'].includes(row?.status ?? '');
+        if (!row || !open || row.revision !== revision) return null;
         const view = await toView(
           row,
           await calendarSnapshot(deadlineMs),

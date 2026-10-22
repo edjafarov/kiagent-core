@@ -36,8 +36,13 @@ export function EventReviewSheet(props: {
   const [discarded, setDiscarded] = useState(false);
   const invites = p.attendees.length > 0;
   const retryable = d.status === 'failed' || d.status === 'unknown';
+  // Add is held by Checking…; Try again (failed / unknown) shows the day
+  // view too but is not held.
   const actionable = live && !discarded && d.status === 'draft';
-  const { day, checking } = useSheetDayView(d, actionable);
+  const { day, checking } = useSheetDayView(
+    d,
+    live && !discarded && (actionable || retryable),
+  );
   const dayRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const grid = dayRef.current?.querySelector<HTMLElement>('.dv-scroll');
@@ -167,8 +172,8 @@ export function EventReviewSheet(props: {
       <p className="ob-meta">
         {CATEGORY_LABEL[p.category]} · {p.title}
       </p>
-      <KeyValue items={head} />
-      {actionable && day && (
+      <KeyValue items={day ? head : [...head, ...tail]} />
+      {day && (
         <div
           ref={dayRef}
           className="ob-day"
@@ -178,7 +183,7 @@ export function EventReviewSheet(props: {
           dangerouslySetInnerHTML={{ __html: day.lineHtml + day.html }}
         />
       )}
-      {tail.length > 0 && <KeyValue items={tail} />}
+      {day && tail.length > 0 && <KeyValue items={tail} />}
       {discarded && (
         <p className="ob-note">
           Discarded — nothing was added. You can restore it.

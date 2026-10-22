@@ -134,11 +134,23 @@ test('no day view, or a failed request, leaves the normal label and no grid', as
   expect(primary()).toBeEnabled();
 });
 
-test('an answer for another revision is ignored', async () => {
+test('a mismatched answer installs no grid and does not hold Add', async () => {
   render(<EventReviewSheet draft={ev()} onClose={() => {}} />);
   await settle(0, answer(2, { busyClash: true }));
   expect(document.querySelector('.ob-day')).toBeNull();
   expect(primary()).toHaveTextContent('Add');
+});
+
+test('a revision change hides the old grid and holds Add in the same render', async () => {
+  const { rerender } = render(
+    <EventReviewSheet draft={ev()} onClose={() => {}} />,
+  );
+  await settle(0, answer(1, { busyClash: true }));
+  expect(document.querySelector('.ob-day')).not.toBeNull();
+  rerender(<EventReviewSheet draft={ev({ revision: 2 })} onClose={() => {}} />);
+  expect(document.querySelector('.ob-day')).toBeNull();
+  expect(primary()).toHaveTextContent('Checking…');
+  expect(primary()).toBeDisabled();
 });
 
 test('revision changes in flight: one request at a time, one follow-up, Checking… again', async () => {
@@ -158,11 +170,12 @@ test('revision changes in flight: one request at a time, one follow-up, Checking
   expect(calls).toHaveLength(2);
 });
 
-test('unmount mid-flight updates nothing and asks no more', async () => {
+test('unmount mid-flight drops the answer and the queued follow-up', async () => {
   const error = jest.spyOn(console, 'error').mockImplementation(() => {});
-  const { unmount } = render(
+  const { rerender, unmount } = render(
     <EventReviewSheet draft={ev()} onClose={() => {}} />,
   );
+  rerender(<EventReviewSheet draft={ev({ revision: 2 })} onClose={() => {}} />);
   unmount();
   await settle(0, answer(1));
   expect(error).not.toHaveBeenCalled();
@@ -189,6 +202,30 @@ test('a Discard that fails during the first fetch still ends Checking…', async
   await settle(0, answer(1));
   expect(primary()).toHaveTextContent('Add');
   expect(screen.getByText('nope')).toBeVisible();
+});
+
+test('a failed draft shows the grid too, and Try again is not held by Checking…', async () => {
+  render(
+    <EventReviewSheet
+      draft={ev({ status: 'failed', error: 'reconnect me' })}
+      onClose={() => {}}
+    />,
+  );
+  expect(primary()).toHaveTextContent('Try again');
+  expect(primary()).toBeEnabled();
+  await settle(0, answer(1));
+  expect(document.querySelector('.ob-day')).not.toBeNull();
+});
+
+test('without a grid the fields stay one list', async () => {
+  render(
+    <EventReviewSheet
+      draft={ev({ payload: { ...ev().payload, description: 'Bring towel' } })}
+      onClose={() => {}}
+    />,
+  );
+  await settle(0, null);
+  expect(document.querySelectorAll('dl.ui-kv')).toHaveLength(1);
 });
 
 test('a sheet whose draft left the list shows no grid and drops the answer', async () => {
