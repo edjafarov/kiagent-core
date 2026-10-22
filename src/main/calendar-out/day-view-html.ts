@@ -9,13 +9,7 @@
 import { esc } from '@shared/web-ui';
 import type { EventCategory } from '@shared/contracts';
 
-import {
-  BUSY_GREY,
-  safeColor,
-  type Block,
-  type Chip,
-  type DayModel,
-} from './day-model';
+import { safeColor, type Block, type Chip, type DayModel } from './day-model';
 
 const CATEGORY_DOT: Record<EventCategory, string> = {
   work: '#3f51b5',
@@ -35,6 +29,7 @@ export const DAY_VIEW_CSS = `<style>
 .dv-chip { font-size: 11px; font-weight: 500; padding: 3px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: color-mix(in srgb, var(--c) 16%, var(--bg-surface)); border-left: 3px solid var(--c); }
 .dv-chip.dv-declined { opacity: 0.5; text-decoration: line-through; }
+.dv-chip.dv-draft { border: 1px dashed var(--c); border-left: 3px solid var(--c); }
 .dv-chip.dv-prop { background: var(--accent-subtle); color: var(--accent-text); border: 2px dashed var(--accent-solid); border-left: 4px solid var(--accent-solid); font-weight: 600; }
 .dv-scroll { height: 360px; overflow-y: auto; position: relative; }
 .dv-grid { display: flex; position: relative; }
@@ -86,6 +81,7 @@ function chipHtml(c: Chip): string {
   const cls = [
     'dv-chip',
     c.proposed ? 'dv-prop' : '',
+    c.draft ? 'dv-draft' : '',
     c.declined ? 'dv-declined' : '',
   ]
     .filter(Boolean)
@@ -108,7 +104,7 @@ function blockHtml(b: Block): string {
   ]
     .filter(Boolean)
     .join(' ');
-  return `<div class="${cls}" style="--c:${safeColor(b.color, BUSY_GREY)};${pos(b)};padding:${size.pad}">
+  return `<div class="${cls}" style="--c:${safeColor(b.color)};${pos(b)};padding:${size.pad}">
 <div class="dv-row">${dot(b.category)}<span class="dv-title" style="font-size:${size.font}px;line-height:${px(Math.min(b.h - 2, size.font + 4))}px">${esc(b.title)}</span></div>${size.time ? `<span class="dv-time">${esc(b.time)}</span>` : ''}</div>`;
 }
 
