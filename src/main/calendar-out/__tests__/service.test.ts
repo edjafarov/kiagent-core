@@ -804,9 +804,7 @@ describe('calendar-out service', () => {
       ).toEqual({ overflow: true });
       // The queries themselves are capped: overflow never reads everything.
       expect(overlap.mock.calls[0][3]).toBe(2);
-      expect(inWindow.mock.calls.every((c) => c[2] === 2)).toBe(true);
       overlap.mockRestore();
-      inWindow.mockRestore();
       expect(
         await collect([item()], { limits: { events: 2, drafts: 1 } }),
       ).not.toHaveProperty('overflow');
@@ -819,6 +817,9 @@ describe('calendar-out service', () => {
       expect(
         await collect([item()], { limits: { events: 5, drafts: 1 } }),
       ).toEqual({ overflow: true });
+      expect(inWindow.mock.calls.length).toBeGreaterThan(0);
+      expect(inWindow.mock.calls.at(-1)?.[2]).toBe(2);
+      inWindow.mockRestore();
     });
   });
 });

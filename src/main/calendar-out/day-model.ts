@@ -349,7 +349,9 @@ export function buildDayModel(
   }
 
   // Cap: clashing blocks always survive, then the rest by start.
-  const isClash = (t: { cand: Cand }) => outlineOf(t.cand) !== null;
+  // Membership in the clash set, not the outline: an all-day proposal has no
+  // outlines but its "That day: N events" items must still be drawn.
+  const isClash = (t: { cand: Cand }) => clashes.includes(t.cand);
   const must = timed.filter(isClash);
   const rest = timed
     .filter((t) => !isClash(t))

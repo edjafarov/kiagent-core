@@ -345,7 +345,7 @@ export function createCalendarOutService(deps: {
           limits: DAY_LIMITS,
         },
       ).then((col) =>
-        'overflow' in col
+        'overflow' in col || (view.deadlineMs && Date.now() >= view.deadlineMs)
           ? null
           : buildDayModel(view, col, view.payload.timeZone),
       );

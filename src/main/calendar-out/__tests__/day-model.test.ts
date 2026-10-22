@@ -259,6 +259,35 @@ describe('buildDayModel', () => {
     ]);
   });
 
+  it('an all-day proposal keeps its counted events through the cap', () => {
+    const d = draftRow('me', {
+      allDay: true,
+      start: '2026-11-03',
+      end: '2026-11-04',
+    });
+    const events: Collected['events'] = [];
+    const base = Date.parse('2026-11-02T23:00:00.000Z');
+    for (let i = 0; i < 200; i += 1) {
+      const x = ev(`i${i}`, {
+        eventId: `i${i}`,
+        transparency: 'transparent',
+        start: new Date(base + i * 120_000).toISOString(),
+        end: new Date(base + i * 120_000 + 60_000).toISOString(),
+      });
+      events.push({ ...x, tier: 'ignore' });
+    }
+    events.push(
+      ev('Real', {
+        start: '2026-11-03T15:00:00.000Z',
+        end: '2026-11-03T16:00:00.000Z',
+      }),
+    );
+    const m = buildDayModel(d, col({ events }), BER);
+    expect(m.line).toMatchObject({ kind: 'count' });
+    expect(m.blocks.some((b) => b.title === 'Real')).toBe(true);
+    expect(m.more).toBe(1);
+  });
+
   it('an unseen all-day placeholder is strip-only, never a busy clash', () => {
     const m = buildDayModel(
       draftRow('me'),
@@ -778,5 +807,12 @@ describe('service.dayView', () => {
     const t0 = Date.now();
     expect(await svc.dayView({ ...v, deadlineMs: Date.now() + 30 })).toBeNull();
     expect(Date.now() - t0).toBeLessThan(1000);
+
+    // Already past the deadline: no query is started, no model is built.
+    overlap.mockClear();
+    expect(
+      await svc.dayView({ ...v, deadlineMs: Date.now() - 1000 }),
+    ).toBeNull();
+    expect(overlap).not.toHaveBeenCalled();
   });
 });
