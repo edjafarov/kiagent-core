@@ -113,6 +113,9 @@ export function createCalendarOutService(deps: {
   pageDeadlineMs?: number;
   /** The review sheet's deadline (default SHEET_DEADLINE_MS). */
   sheetDeadlineMs?: number;
+  /** After an event is created: ask its account to sync now, so the event
+   *  shows up in the app's Calendar without waiting for the next cadence. */
+  onCreated?: (account: { id: AccountId; source: string }) => void;
 }): CalendarOutService {
   const { store } = deps;
   const now = deps.now ?? (() => new Date());
@@ -249,6 +252,11 @@ export function createCalendarOutService(deps: {
     try {
       const event = await writer.createEvent(intent);
       await store.eventDrafts.finishCreate(row.id, event);
+      try {
+        deps.onCreated?.({ id: row.accountId, source: account.source });
+      } catch {
+        // Only a nudge; the next cadence sync picks the event up anyway.
+      }
       return { kind: 'created', event };
     } catch (e) {
       const msg = (e as Error)?.message ?? String(e);
