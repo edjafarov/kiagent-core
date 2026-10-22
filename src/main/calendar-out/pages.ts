@@ -8,6 +8,7 @@
 import { esc } from '@shared/web-ui';
 
 import { outboxPage, type OutboxIcon } from '../outbound/pages';
+import { dayViewHtml } from './day-view-html';
 import { fmtTime, localDate, rangeNeedsOffsets } from './local-time';
 import type { CalendarOutService } from './service';
 import type { EventDraftView } from './types';
@@ -63,14 +64,85 @@ export function whenText(p: EventDraftView['payload']): string {
   return `${day(a)}, ${fmtTime(a, tz, off)}–${fmtTime(b, tz, off)} (${tz})`;
 }
 
+const hasInvitees = (view: EventDraftView): boolean =>
+  view.payload.attendees.length > 0;
+
 const row = (k: string, v: string, cls = '') =>
   `<div class="ev-row"><span class="ev-k">${esc(k)}</span><span class="ev-v ${cls}">${v}</span></div>`;
+
+export interface DaySection {
+  html: string;
+  lineHtml: string;
+  busyClash: boolean;
+}
+
+const loggedDays = new Set<string>();
+
+/**
+ * The day view's one failure boundary: any reject, hang past the page
+ * deadline, or render error returns null (the page renders as before) and
+ * is logged once per draft id per process.
+ */
+export async function daySection(
+  calendar: Pick<CalendarOutService, 'dayView'>,
+  view: EventDraftView,
+  log: (message: string) => void = (m) => console.warn(m),
+): Promise<DaySection | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const run = calendar.dayView(view);
+    let model: Awaited<typeof run>;
+    if (view.deadlineMs) {
+      run.catch(() => {});
+      model = await Promise.race([
+        run,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(
+            () => resolve(null),
+            Math.max(0, view.deadlineMs - Date.now()),
+          );
+        }),
+      ]);
+    } else model = await run;
+    if (!model) return null;
+    const { kind } = model.line;
+    const cls =
+      kind === 'busy'
+        ? ' ev-line-busy'
+        : kind === 'maybe'
+          ? ' ev-line-maybe'
+          : '';
+    return {
+      html: dayViewHtml(model),
+      lineHtml: `<div class="ev-line${cls}">${esc(model.line.text)}</div>`,
+      busyClash: model.busyClash,
+    };
+  } catch (err) {
+    if (!loggedDays.has(view.id)) {
+      loggedDays.add(view.id);
+      log(
+        `event day view skipped for draft ${view.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function eventReviewPage(
   view: EventDraftView,
   token: string,
   changed = false,
+  day: DaySection | null = null,
 ): string {
+  const addLabel = day?.busyClash
+    ? hasInvitees(view)
+      ? 'Add anyway and send invites'
+      : 'Add anyway'
+    : hasInvitees(view)
+      ? 'Add and send invites'
+      : 'Add to calendar';
   const p = view.payload;
   const who = p.attendees.length
     ? `Invites will be sent to: ${esc(p.attendees.map((a) => (a.name ? `${a.name} <${a.email}>` : a.email)).join(', '))}`
@@ -100,23 +172,24 @@ export function eventReviewPage(
           ? `Similar event already in your calendar: ${s.title}`
           : 'A similar event may already be in your calendar',
     )
-    .map(esc)
-    .join('<br>');
+    .map(esc);
+  const similarHtml = [...new Set(similar)].join('<br>');
   const inner = `${EVENT_CSS}
   ${changed ? `<p class="ob-note">This event changed — review it again. Nothing was added.</p>` : ''}
   <div class="ev-what">${esc(p.title)}<span class="ev-chip">${CATEGORY_LABEL[p.category]}</span></div>
   ${row('When', esc(whenText(p)))}
   ${row('Calendar', esc([view.calendarName ?? p.calendarId, view.accountEmail].filter(Boolean).join(' · ')))}
   ${row('Who', who, p.attendees.length ? 'ev-invite' : '')}
+  ${day ? `${day.lineHtml}${day.html}` : ''}
   ${where ? row('Where', where) : ''}
   ${p.description ? row('Note', esc(p.description)) : ''}
   ${view.source ? row('From', esc([view.source.title, view.source.createdAt?.slice(0, 10)].filter(Boolean).join(' · '))) : ''}
-  ${similar ? `<p class="ob-note">${similar}</p>` : ''}
+  ${similarHtml ? `<p class="ob-note">${similarHtml}</p>` : ''}
   <div class="ob-actions">
     <div class="ob-split"><form id="ob-send" method="POST" action="/outbox/event/confirm/${esc(token)}/${view.revision}">
       <button id="ob-send-btn" type="submit" class="btn primary ob-btn ob-disable"
-        data-label="${p.attendees.length ? 'Add and send invites' : 'Add to calendar'}" data-working="Adding…"
-        data-slow="The calendar is slow — still adding…">${p.attendees.length ? 'Add and send invites' : 'Add to calendar'}</button>
+        data-label="${addLabel}" data-working="Adding…"
+        data-slow="The calendar is slow — still adding…">${addLabel}</button>
     </form></div>
     <div id="ob-status" class="ob-status" role="status" aria-live="polite"></div>
     <form method="POST" action="/outbox/event/cancel/${esc(token)}"><button type="submit" class="btn ob-btn-secondary ob-disable">Discard</button></form>
@@ -136,6 +209,11 @@ export function eventResultPage(
     ${opts?.link ? `<p class="ob-note"><a href="${esc(opts.link)}" rel="noreferrer noopener" target="_blank">Open in calendar</a></p>` : ''}`,
   );
 }
+
+const logOf =
+  (calendar: CalendarOutService) =>
+  (message: string): void =>
+    calendar.logWarn ? calendar.logWarn(message) : console.warn(message);
 
 const GONE = (): PageResult => ({
   status: 410,
@@ -157,8 +235,13 @@ export async function getEventConfirm(
   token: string,
 ): Promise<PageResult> {
   const peek = await calendar.peekByToken(token);
-  if (peek.kind === 'ok')
-    return { status: 200, html: eventReviewPage(peek.view, token) };
+  if (peek.kind === 'ok') {
+    const day = await daySection(calendar, peek.view, logOf(calendar));
+    return {
+      status: 200,
+      html: eventReviewPage(peek.view, token, false, day),
+    };
+  }
   if (peek.kind === 'changed') return CHANGED();
   if (peek.kind === 'expired')
     return {
@@ -212,9 +295,12 @@ export async function postEventConfirm(
       };
     case 'changed': {
       const peek = await calendar.peekByToken(token);
-      return peek.kind === 'ok'
-        ? { status: 409, html: eventReviewPage(peek.view, token, true) }
-        : CHANGED();
+      if (peek.kind !== 'ok') return CHANGED();
+      const day = await daySection(calendar, peek.view, logOf(calendar));
+      return {
+        status: 409,
+        html: eventReviewPage(peek.view, token, true, day),
+      };
     }
     default:
       return GONE();

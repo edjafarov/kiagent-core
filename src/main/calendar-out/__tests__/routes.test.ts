@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { createHash } from 'crypto';
 import fs from 'fs';
 import http from 'http';
 import type { AddressInfo } from 'net';
@@ -13,6 +14,8 @@ import { openStore, type CoreStore } from '../../core/store/store';
 import { createOutboundRoutes } from '../../outbound/routes';
 import type { OutboundService } from '../../outbound/service';
 import { signConfirmToken } from '../../outbound/tokens';
+import * as dayViewHtmlModule from '../day-view-html';
+import { daySection } from '../pages';
 import { createCalendarOutService, type CalendarOutService } from '../service';
 import { createCalendarWriterRegistry } from '../writers';
 
@@ -308,16 +311,24 @@ describe('review page: bounded listing + similar-event disclosure', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  const seedEvent = async (calendarId: string, title: string) => {
+  const seedEvent = async (
+    calendarId: string,
+    title: string,
+    when = {
+      start: '2026-12-03T14:00:00.000Z',
+      end: '2026-12-03T15:00:00.000Z',
+    },
+    id = `ev-${calendarId}`,
+  ) => {
     const md = {
       calendarId,
       calendarName: calendarId,
       calendarColor: null,
-      eventId: `ev-${calendarId}`,
+      eventId: id,
       iCalUID: null,
-      occurrenceKey: `ev-${calendarId}`,
-      start: '2026-12-03T14:00:00.000Z',
-      end: '2026-12-03T15:00:00.000Z',
+      occurrenceKey: id,
+      start: when.start,
+      end: when.end,
       allDay: false,
       timeZone: 'Europe/Berlin',
       status: 'confirmed',
@@ -334,7 +345,7 @@ describe('review page: bounded listing + similar-event disclosure', () => {
       account: accId as never,
       documents: [
         {
-          externalId: `ev-${calendarId}`,
+          externalId: id,
           type: 'calendar.event',
           title,
           markdown: null,
@@ -346,10 +357,14 @@ describe('review page: bounded listing + similar-event disclosure', () => {
     });
   };
 
-  const draftToken = async (calendarId: string, title: string) => {
+  const draftToken = async (
+    calendarId: string,
+    title: string,
+    start = '2026-12-03T10:00:00Z',
+  ) => {
     const r = await svc.draftEvent({
       title,
-      start: '2026-12-03T10:00:00Z',
+      start,
       category: 'work',
       calendarId,
     } as never);
@@ -376,6 +391,119 @@ describe('review page: bounded listing + similar-event disclosure', () => {
     expect(html).not.toContain('Secret Dentist');
   });
 
+  const getPage = async (token: string) => {
+    const res = await fetch(`${base}/outbox/event/confirm/${token}`);
+    return { res, html: await res.text() };
+  };
+
+  it('GET has the day view with the proposed block and a free line', async () => {
+    const token = await draftToken(
+      'fam',
+      'Plain visit',
+      '2026-12-08T08:00:00Z',
+    );
+    const { res, html } = await getPage(token);
+    expect(res.status).toBe(200);
+    expect(html).toContain('id="ev-day"');
+    expect(html).toContain('data-scroll=');
+    expect(html).toContain('Free');
+    expect(html).toContain('Add to calendar');
+  });
+
+  it('a busy clash relabels the button Add anyway', async () => {
+    await seedEvent(
+      'fam',
+      'Clashing meeting',
+      { start: '2026-12-03T10:00:00.000Z', end: '2026-12-03T11:00:00.000Z' },
+      'ev-clash',
+    );
+    const token = await draftToken('fam', 'Overlapper');
+    const { html } = await getPage(token);
+    expect(html).toContain('Overlaps Clashing meeting');
+    expect(html).toContain('Add anyway');
+    expect(html).not.toContain('>Add to calendar<');
+  });
+
+  it('the generic similar note appears at most once', async () => {
+    await seedEvent('other', 'Hidden twin one', undefined, 'ev-tw1');
+    await seedEvent('other', 'Hidden twin two', undefined, 'ev-tw2');
+    const token = await draftToken('fam', 'Hidden twin');
+    const { html } = await getPage(token);
+    expect(
+      html.split('A similar event may already be in your calendar'),
+    ).toHaveLength(2);
+  });
+
+  describe.each([
+    [
+      'rejects',
+      () => jest.spyOn(svc, 'dayView').mockRejectedValue(new Error('boom')),
+    ],
+    [
+      'hangs',
+      () =>
+        jest
+          .spyOn(svc, 'dayView')
+          .mockImplementation(() => new Promise(() => {})),
+    ],
+    [
+      'render throws',
+      () =>
+        jest.spyOn(dayViewHtmlModule, 'dayViewHtml').mockImplementation(() => {
+          throw new Error('render');
+        }),
+    ],
+  ])('day view %s', (_name, arm) => {
+    it('still serves the page, without the day view or the line', async () => {
+      await seedEvent(
+        'fam',
+        'Clash again',
+        { start: '2026-12-03T10:00:00.000Z', end: '2026-12-03T11:00:00.000Z' },
+        'ev-clash2',
+      );
+      const token = await draftToken('fam', 'Survivor');
+      const spy = arm();
+      try {
+        const { res, html } = await getPage(token);
+        expect(res.status).toBe(200);
+        expect(html).not.toContain('id="ev-day"');
+        expect(html).not.toContain('Overlaps');
+        expect(html).not.toContain('Free');
+        expect(html).toContain('Add to calendar');
+        expect(html).not.toContain('Add anyway');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  it('the CSP script hash equals the sha256 of the served script', async () => {
+    const token = await draftToken('fam', 'Hash check');
+    const { res, html } = await getPage(token);
+    const script = /<script>([\s\S]*?)<\/script>/.exec(html)![1];
+    const hash = createHash('sha256').update(script).digest('base64');
+    expect(res.headers.get('content-security-policy')).toContain(
+      `script-src 'sha256-${hash}'`,
+    );
+    expect(script.indexOf("getElementById('ev-day')")).toBeLessThan(
+      script.indexOf("getElementById('ob-send')"),
+    );
+  });
+
+  it('daySection logs once per draft id', async () => {
+    const view = { id: 'dup-1', deadlineMs: 0 } as never;
+    const log = jest.fn();
+    const cal = {
+      dayView: async () => {
+        throw new Error('x');
+      },
+    } as never;
+    expect(await daySection(cal, view, log)).toBeNull();
+    expect(await daySection(cal, view, log)).toBeNull();
+    expect(log).toHaveBeenCalledTimes(1);
+  });
+
+  // Last: a hung listing stays in the service's in-flight cache.
   it('a hanging listing still renders in time, with the generic note', async () => {
     const token = await draftToken('fam', 'Dentist Anna again');
     skewMs = 10 * 60_000; // past the 5-minute calendar-list cache

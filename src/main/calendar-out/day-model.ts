@@ -77,6 +77,8 @@ export interface DayModel {
   blocks: Block[];
   more: number;
   proposed: {
+    /** The proposal's own title (drawn on its block). */
+    title: string;
     y: number;
     h: number;
     lane: number;
@@ -399,6 +401,7 @@ export function buildDayModel(
   const pY = proposal ? yOf(proposal.start) : y08;
   const proposed: DayModel['proposed'] = proposal
     ? {
+        title: p.title,
         y: pY,
         h: Math.max(6, (proposal.end - proposal.start) / MIN - 1),
         ...proposedLane,
@@ -407,6 +410,7 @@ export function buildDayModel(
         time: `${rangeText(pStartMs, pEndMs, tz)}${continues ? ' continues →' : ''}`,
       }
     : {
+        title: p.title,
         y: y08,
         h: 0,
         lane: 0,

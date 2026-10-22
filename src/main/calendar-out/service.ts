@@ -62,6 +62,8 @@ export interface CalendarOutService extends CalendarToolApi {
   /** The day model for the review page; null = no day view (listing failed,
    *  too many candidates, or the page deadline passed). Rejects on errors. */
   dayView(view: EventDraftView): Promise<DayModel | null>;
+  /** One warning line to the main-process log (calendar-out). */
+  logWarn?(message: string): void;
   /** A review-page URL for the row's CURRENT revision; null while the
    *  server for that transport is not up. */
   confirmUrl(
@@ -325,6 +327,8 @@ export function createCalendarOutService(deps: {
       const rows = await store.eventDrafts.pending();
       return Promise.all(rows.map((r) => toView(r, cals)));
     },
+
+    logWarn: (message) => deps.logSink.log('calendar-out', 'warn', message),
 
     async dayView(view) {
       if (!view.listing.ok) return null;
