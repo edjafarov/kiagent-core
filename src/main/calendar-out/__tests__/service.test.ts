@@ -129,7 +129,12 @@ describe('calendar-out service', () => {
       ...over,
     } as never);
 
+  let synced: string[];
+  let syncThrows: boolean;
+
   beforeEach(async () => {
+    synced = [];
+    syncThrows = false;
     clock = new Date(T0);
     scope = undefined;
     calendars = [
@@ -185,6 +190,10 @@ describe('calendar-out service', () => {
       vaultScope: async () => scope,
       now: () => clock,
       logSink: { log: () => {} } as never,
+      onCreated: (a) => {
+        synced.push(a.id);
+        if (syncThrows) throw new Error('scheduler down');
+      },
     });
   });
 
@@ -346,6 +355,26 @@ describe('calendar-out service', () => {
     expect(keys).toEqual([`${d.draftId}:1`]);
     expect((await store.eventDrafts.get(d.draftId))!.created).toMatchObject({
       eventId: `ev-${d.draftId}`,
+    });
+  });
+
+  it('a created event asks its account to sync; a failed create does not', async () => {
+    const d = asDraft(await draft());
+    await svc.confirmById(d.draftId, 1);
+    expect(synced).toEqual([acc.id]);
+    const e = asDraft(await draft({ title: 'Piano' }));
+    createImpl = async () => {
+      throw new Error('not created: refused');
+    };
+    await svc.confirmById(e.draftId, e.revision);
+    expect(synced).toEqual([acc.id]);
+  });
+
+  it('a throwing sync request never fails the create', async () => {
+    syncThrows = true;
+    const d = asDraft(await draft());
+    expect(await svc.confirmById(d.draftId, 1)).toMatchObject({
+      kind: 'created',
     });
   });
 
