@@ -58,8 +58,7 @@ export function whenText(p: EventDraftView['payload']): string {
       month: 'short',
     });
   const off = rangeNeedsOffsets(a, b, tz);
-  // An end exactly at midnight still belongs to the start's day.
-  if (localDate(a, tz) !== localDate(Math.max(a, b - 1), tz))
+  if (localDate(a, tz) !== localDate(b, tz))
     return `${day(a)}, ${fmtTime(a, tz, off)} – ${day(b)}, ${fmtTime(b, tz, off)} (${tz})`;
   return `${day(a)}, ${fmtTime(a, tz, off)}–${fmtTime(b, tz, off)} (${tz})`;
 }

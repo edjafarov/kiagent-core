@@ -59,14 +59,21 @@ export function offsetMinutes(ms: number, tz: string): number {
   return Math.round((wall - Math.floor(ms / 1000) * 1000) / MIN);
 }
 
-/** The earliest instant whose local date in `tz` is `date`. */
+/** The earliest instant whose local date in `tz` is `date` — or, for a
+ *  date the zone skipped (Pacific/Apia 2011-12-30), the start of the next
+ *  date. An impossible date (11-31) rolls over like Date.UTC does. */
 export function localDayStart(date: string, tz: string): number {
   const [y, m, d] = date.split('-').map(Number);
-  // No zone is more than 14 h ahead of UTC, so 15 h before UTC midnight is
-  // always still the previous local date; a day is never shorter than 23 h.
+  const want = addDays(
+    `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+    0,
+  );
+  // No zone is more than 14 h ahead of UTC or 12 h behind, so 15 h before UTC
+  // midnight is still an earlier local date and 39 h after is a later one.
   let t = Date.UTC(y, m - 1, d) - 15 * HOUR;
-  while (localDate(t, tz) !== date) t += HOUR;
-  while (localDate(t - MIN, tz) === date) t -= MIN;
+  const stop = t + 54 * HOUR;
+  while (t < stop && localDate(t, tz) < want) t += HOUR;
+  for (let i = 0; i < 60 && localDate(t - MIN, tz) >= want; i += 1) t -= MIN;
   return t;
 }
 

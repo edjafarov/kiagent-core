@@ -107,3 +107,28 @@ describe('whenText', () => {
     ).toBe('Fri 23 Oct, 23:00 – Sat 24 Oct, 01:00 (Europe/Berlin)');
   });
 });
+
+describe('local-time edge dates', () => {
+  it('rolls an impossible date over instead of looping', () => {
+    expect(localDayStart('2026-11-31', 'Europe/Berlin')).toBe(
+      localDayStart('2026-12-01', 'Europe/Berlin'),
+    );
+  });
+
+  it('a skipped date starts where the next date starts (Apia 2011-12-30)', () => {
+    const next = localDayStart('2011-12-31', 'Pacific/Apia');
+    expect(localDayStart('2011-12-30', 'Pacific/Apia')).toBe(next);
+    expect(localDate(next, 'Pacific/Apia')).toBe('2011-12-31');
+  });
+
+  it('names the end day when a timed event ends at midnight', () => {
+    expect(
+      whenText({
+        start: '2026-10-23T23:00:00+02:00',
+        end: '2026-10-24T00:00:00+02:00',
+        allDay: false,
+        timeZone: 'Europe/Berlin',
+      } as never),
+    ).toBe('Fri 23 Oct, 23:00 – Sat 24 Oct, 00:00 (Europe/Berlin)');
+  });
+});

@@ -797,9 +797,16 @@ describe('calendar-out service', () => {
     it('reports overflow past the limits', async () => {
       await seed('a', 'One', {});
       await seed('b', 'Two', {});
+      const overlap = jest.spyOn(store.calendarIndex, 'overlap');
+      const inWindow = jest.spyOn(store.eventDrafts, 'inWindow');
       expect(
         await collect([item()], { limits: { events: 1, drafts: 1 } }),
       ).toEqual({ overflow: true });
+      // The queries themselves are capped: overflow never reads everything.
+      expect(overlap.mock.calls[0][3]).toBe(2);
+      expect(inWindow.mock.calls.every((c) => c[2] === 2)).toBe(true);
+      overlap.mockRestore();
+      inWindow.mockRestore();
       expect(
         await collect([item()], { limits: { events: 2, drafts: 1 } }),
       ).not.toHaveProperty('overflow');
