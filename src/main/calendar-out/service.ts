@@ -332,6 +332,8 @@ export function createCalendarOutService(deps: {
 
     async dayView(view) {
       if (!view.listing.ok) return null;
+      // Out of time already: don't start a query nobody will wait for.
+      if (view.deadlineMs && Date.now() >= view.deadlineMs) return null;
       const listed = view.listing.items;
       const w = dayWindow(view.payload);
       const run = collectWindow(

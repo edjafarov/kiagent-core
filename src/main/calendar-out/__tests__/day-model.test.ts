@@ -259,6 +259,34 @@ describe('buildDayModel', () => {
     ]);
   });
 
+  it('an unseen all-day placeholder is strip-only, never a busy clash', () => {
+    const m = buildDayModel(
+      draftRow('me'),
+      col({
+        drafts: [
+          other(
+            'p',
+            {
+              title: 'Holiday',
+              allDay: true,
+              start: '2026-11-03',
+              end: '2026-11-04',
+            },
+            'busy',
+            true,
+            { status: 'created' },
+          ),
+        ],
+      }),
+      BER,
+    );
+    expect(m.busyClash).toBe(false);
+    expect(m.line.kind).toBe('free');
+    expect(m.allDay.map((c) => c.title)).toEqual([
+      'Holiday (added by Kia, not seen in sync yet)',
+    ]);
+  });
+
   it("a Tokyo all-day event on the next date is not in Berlin's strip", () => {
     // Berlin Fri 23 Oct 22:00–23:00 CEST. Tokyo's all-day Sat 24 Oct runs
     // 2026-10-23T15:00Z–10-24T15:00Z, so it overlaps but is not on D.
@@ -583,21 +611,29 @@ describe('buildDayModel', () => {
   it('caps timed blocks at 200 keeping clashing ones; all-day chips uncapped', () => {
     const d = draftRow('me');
     const events: Collected['events'] = [];
-    // 201 five-minute blocks from 00:00 local; the LAST one clashes with the
-    // proposal (11:00–12:00 Berlin = 10:00Z–11:00Z) by being at 10:00Z.
+    // 200 one-minute blocks from 00:00 Berlin, all before the proposal
+    // (11:00–12:00 Berlin = 10:00Z–11:00Z); then a clash and a late block that
+    // both sort AFTER them by start. A plain start-order cap would drop the
+    // clash; the rule keeps it and drops the latest non-clashing ones.
     const base = Date.parse('2026-11-02T23:00:00.000Z');
     for (let i = 0; i < 200; i += 1)
       events.push(
         ev(`e${i}`, {
           eventId: `e${i}`,
-          start: new Date(base + i * 300_000).toISOString(),
-          end: new Date(base + i * 300_000 + 240_000).toISOString(),
+          start: new Date(base + i * 120_000).toISOString(),
+          end: new Date(base + i * 120_000 + 60_000).toISOString(),
         }),
       );
     events.push(
       ev('clash', {
         start: '2026-11-03T10:00:00.000Z',
         end: '2026-11-03T10:30:00.000Z',
+      }),
+    );
+    events.push(
+      ev('late', {
+        start: '2026-11-03T17:00:00.000Z',
+        end: '2026-11-03T17:30:00.000Z',
       }),
     );
     for (let i = 0; i < 5; i += 1)
@@ -612,11 +648,13 @@ describe('buildDayModel', () => {
       );
     const m = buildDayModel(d, col({ events }), BER);
     expect(m.blocks).toHaveLength(200);
-    expect(m.more).toBe(1);
+    expect(m.more).toBe(2);
     expect(
       m.blocks.some((b) => b.title === 'clash' && b.outline === 'busy'),
     ).toBe(true);
+    expect(m.blocks.some((b) => b.title === 'e198')).toBe(true);
     expect(m.blocks.some((b) => b.title === 'e199')).toBe(false);
+    expect(m.blocks.some((b) => b.title === 'late')).toBe(false);
     expect(m.allDay).toHaveLength(5);
   });
 });

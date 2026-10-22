@@ -272,7 +272,9 @@ export function buildDayModel(
       start: Date.parse(d.span.start),
       end: Date.parse(d.span.end),
       allDay: dp.allDay,
-      tier: d.tier,
+      // Spec §Clash rules: all-day Kia drafts and placeholders are strip-only
+      // "maybe", even while an unseen placeholder is busy for find_free_time.
+      tier: dp.allDay && d.tier === 'busy' ? 'maybe' : d.tier,
       disclosable: d.disclosable,
       color: BUSY_GREY,
       category: d.disclosable ? dp.category : null,
