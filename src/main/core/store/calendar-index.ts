@@ -55,16 +55,28 @@ const toEvent = (r: Raw): IndexedEvent => ({
 
 const LIVE_EVENTS = `type = 'calendar.event' AND archived_at IS NULL`;
 
+/**
+ * The overlap query, served by docs_calendar_events (schema.ts): its
+ * partial WHERE is LIVE_EVENTS and its expressions are spelled exactly as
+ * here, or the planner can't match them. `+account_id` keeps the no-stats
+ * planner off the per-account indexes, which would read every document of
+ * the account; if the index is ever missing this degrades to a scan rather
+ * than failing as INDEXED BY would.
+ */
+export function overlapSql(opts: { account: boolean; limit: boolean }) {
+  return `SELECT id, account_id, title, metadata FROM documents
+          WHERE ${LIVE_EVENTS}
+            AND julianday(created_at) < julianday(?)
+            AND julianday(json_extract(metadata, '$.end')) > julianday(?)
+            ${opts.account ? 'AND +account_id = ?' : ''}
+          ORDER BY created_at${opts.limit ? ' LIMIT ?' : ''}`;
+}
+
 export function createCalendarIndex(db: AppDb): CalendarIndex {
   return {
     async overlap(from, to, accountId, limit) {
       const rows = (await db.all(
-        `SELECT id, account_id, title, metadata FROM documents
-          WHERE ${LIVE_EVENTS}
-            AND julianday(created_at) < julianday(?)
-            AND julianday(json_extract(metadata, '$.end')) > julianday(?)
-            ${accountId ? 'AND account_id = ?' : ''}
-          ORDER BY created_at${limit === undefined ? '' : ' LIMIT ?'}`,
+        overlapSql({ account: !!accountId, limit: limit !== undefined }),
         [
           to,
           from,

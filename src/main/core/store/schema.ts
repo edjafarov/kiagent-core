@@ -88,6 +88,15 @@ const QUERY_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [
   // if it repeats `outcome IS NOT 'skip'` (the planner must prove this
   // partial WHERE). ledgerDeferred/ledgerHasDeferred repeat it too (#139);
   // alpha-cent's vision patch anchors on their exact SQL text.
+  // Backs calendarIndex.overlap() (calendar-index.ts): find_free_time, the
+  // event review page's day view, and the drafting duplicate checks. Keyed
+  // on the event's end, so a window near today skips the past; start and
+  // account_id ride along so non-matching rows are rejected from the index
+  // alone. Expressions match overlapSql()'s spelling exactly.
+  {
+    name: 'docs_calendar_events',
+    sql: `CREATE INDEX docs_calendar_events ON documents(julianday(json_extract(metadata, '$.end')), julianday(created_at), account_id) WHERE type = 'calendar.event' AND archived_at IS NULL`,
+  },
   {
     name: 'work_ledger_active',
     sql: `CREATE INDEX work_ledger_active ON work_ledger(consumer, outcome, seq) WHERE outcome IS NOT 'skip'`,
