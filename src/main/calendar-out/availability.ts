@@ -2,6 +2,8 @@ import type { CalendarEventMetadata } from '@shared/contracts';
 
 import type { EventDraftRow, EventPayload } from '../core/store/event-drafts';
 
+import { localDayStart } from './local-time';
+
 export type Tier = 'busy' | 'maybe' | 'ignore';
 
 export interface Busyish {
@@ -72,10 +74,8 @@ export function draftSpan(
       start: new Date(p.start).toISOString(),
       end: new Date(p.end).toISOString(),
     };
-  const day = (d: string) => {
-    const [y, m, dd] = d.slice(0, 10).split('-').map(Number);
-    return new Date(zonedToUtc(y, m, dd, 0, 0, p.timeZone)).toISOString();
-  };
+  const day = (d: string) =>
+    new Date(localDayStart(d.slice(0, 10), p.timeZone)).toISOString();
   return { start: day(p.start), end: day(p.end) };
 }
 

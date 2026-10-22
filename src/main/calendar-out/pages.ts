@@ -8,6 +8,7 @@
 import { esc } from '@shared/web-ui';
 
 import { outboxPage, type OutboxIcon } from '../outbound/pages';
+import { fmtTime, localDate, rangeNeedsOffsets } from './local-time';
 import type { CalendarOutService } from './service';
 import type { EventDraftView } from './types';
 
@@ -46,21 +47,21 @@ export function whenText(p: EventDraftView['payload']): string {
       ? `${d(p.start)} (all day)`
       : `${d(p.start)} – ${d(last)} (all day)`;
   }
-  const opts = { timeZone: p.timeZone } as const;
-  const day = new Date(p.start).toLocaleDateString('en-GB', {
-    ...opts,
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-  });
-  const t = (s: string) =>
-    new Date(s).toLocaleTimeString('en-GB', {
-      ...opts,
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
+  const tz = p.timeZone;
+  const a = new Date(p.start).getTime();
+  const b = new Date(p.end).getTime();
+  const day = (ms: number) =>
+    new Date(ms).toLocaleDateString('en-GB', {
+      timeZone: tz,
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
     });
-  return `${day}, ${t(p.start)}–${t(p.end)} (${p.timeZone})`;
+  const off = rangeNeedsOffsets(a, b, tz);
+  // An end exactly at midnight still belongs to the start's day.
+  if (localDate(a, tz) !== localDate(Math.max(a, b - 1), tz))
+    return `${day(a)}, ${fmtTime(a, tz, off)} – ${day(b)}, ${fmtTime(b, tz, off)} (${tz})`;
+  return `${day(a)}, ${fmtTime(a, tz, off)}–${fmtTime(b, tz, off)} (${tz})`;
 }
 
 const row = (k: string, v: string, cls = '') =>
