@@ -21,6 +21,7 @@ function ev(
     expiresAt: '2026-11-09T08:00:00.000Z',
     calendarName: 'Family',
     accountEmail: 'me@example.com',
+    when: 'Thu 5 Nov, 16:00–16:30 (Europe/Berlin)',
     source: null,
     similarEvents: [],
     payload: {
@@ -61,6 +62,7 @@ beforeEach(() => {
       return Promise.resolve({ created: 2, failed: 0, changed: 0 });
     if (channel === 'calendar-out:confirm')
       return Promise.resolve({ kind: 'created', event: {} });
+    if (channel === 'calendar-out:day-view') return Promise.resolve(null);
     return Promise.resolve(undefined);
   });
   (window as any).kiagent = {
@@ -75,6 +77,12 @@ beforeEach(() => {
 afterEach(() => {
   delete (window as any).kiagent;
 });
+
+/** Open the sheet and let its day-view request settle (Checking… → Add). */
+const openSheet = async () => {
+  fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+  await act(async () => {});
+};
 
 const two = () => [
   ev({ id: 'e1', revision: 3 }),
@@ -130,7 +138,7 @@ test('invite rows show "Invites will be sent to" and offer Add and send invites'
     ev({ attendees: [{ email: 'teacher@school.de', name: 'Frau Roth' }] }),
   ];
   await mount();
-  fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+  await openSheet();
   const sheet = screen.getByRole('dialog');
   expect(sheet).toHaveTextContent(
     'Invites will be sent to: Frau Roth <teacher@school.de>',
@@ -143,7 +151,7 @@ test('invite rows show "Invites will be sent to" and offer Add and send invites'
 test('a draft with nobody invited says so; Add confirms at the shown revision', async () => {
   drafts = [ev({ revision: 4 })];
   await mount();
-  fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+  await openSheet();
   const sheet = screen.getByRole('dialog');
   expect(sheet).toHaveTextContent('No one will be invited');
   await act(async () => {
@@ -161,7 +169,7 @@ test('a failed draft shows its error and Try again', async () => {
     ev({ status: 'failed', error: 'Reconnect me@example.com in Settings' }),
   ];
   await mount();
-  fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+  await openSheet();
   const sheet = screen.getByRole('dialog');
   expect(sheet).toHaveTextContent('Reconnect me@example.com in Settings');
   await act(async () => {
@@ -173,7 +181,7 @@ test('a failed draft shows its error and Try again', async () => {
 test('Discard leaves a Restore in the sheet', async () => {
   drafts = [ev({})];
   await mount();
-  fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+  await openSheet();
   drafts = [];
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));

@@ -169,3 +169,12 @@
   text-transform: uppercase;
   color: var(--text-secondary);
 }
+
+/* The review page's day view inside the event sheet: the clash line, then
+   the grid (markup and its own <style> come from main, day-view-html.ts). */
+.ob-day {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
