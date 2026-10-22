@@ -21,6 +21,7 @@ import { reconnectCopy, UNKNOWN_COPY } from './copy';
 import { createDrafting } from './drafting';
 import { createFreeTime } from './free-time';
 import type {
+  CalendarListing,
   CalendarListItem,
   DraftEventArgs,
   DraftEventResult,
@@ -33,6 +34,9 @@ import type {
 import type { CalendarWriterRegistry } from './writers';
 
 export type * from './types';
+
+/** The review page's one deadline, from the start of peekByToken. */
+export const PAGE_DEADLINE_MS = 1500;
 
 /** What MCP tools may call. Deliberately no confirm. */
 export interface CalendarToolApi {
@@ -50,6 +54,8 @@ export interface CalendarOutService extends CalendarToolApi {
   discardById(id: string): Promise<EventDraftRow | null>;
   restoreById(id: string): Promise<EventDraftRow | null>;
   listPending(): Promise<EventDraftView[]>;
+  /** The day model for the review page (Task 4 fills it). */
+  dayView(view: EventDraftView): Promise<null>;
   /** A review-page URL for the row's CURRENT revision; null while the
    *  server for that transport is not up. */
   confirmUrl(
@@ -86,10 +92,13 @@ export function createCalendarOutService(deps: {
   vaultScope: (accountId: AccountId) => Promise<string | undefined>;
   now?: () => Date;
   logSink: LogSink;
+  /** The one review-page deadline (default PAGE_DEADLINE_MS); tests shrink it. */
+  pageDeadlineMs?: number;
 }): CalendarOutService {
   const { store } = deps;
   const now = deps.now ?? (() => new Date());
   const nowMs = () => now().getTime();
+  const pageDeadlineMs = deps.pageDeadlineMs ?? PAGE_DEADLINE_MS;
   const withDraft = createDraftLock();
 
   // The tool-side view of the registry: listing only.
@@ -138,19 +147,41 @@ export function createCalendarOutService(deps: {
     now,
   });
 
-  /** One calendar listing per batch of views, never one per row. */
-  const calendarSnapshot = async (): Promise<CalendarListItem[]> => {
+  /** One calendar listing per batch of views, never one per row. With a
+   *  `deadlineAt` (wall clock) it gives up when the page deadline passes:
+   *  `{ok: false}` means "could not list", never "no calendars". */
+  const calendarSnapshot = async (
+    deadlineAt?: number,
+  ): Promise<CalendarListing> => {
+    const listing = calendars.list().then(
+      (items): CalendarListing => ({ ok: true, items }),
+      (): CalendarListing => ({ ok: false }),
+    );
+    if (deadlineAt === undefined) return listing;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<CalendarListing>((resolve) => {
+      timer = setTimeout(
+        () => resolve({ ok: false }),
+        Math.max(0, deadlineAt - Date.now()),
+      );
+    });
     try {
-      return await calendars.list();
-    } catch {
-      return [];
+      // `listing` never rejects (it has its own handler), so the loser of
+      // the race cannot raise an unhandled rejection.
+      return await Promise.race([listing, timeout]);
+    } finally {
+      clearTimeout(timer);
     }
   };
+  const itemsOf = (l: CalendarListing): CalendarListItem[] =>
+    l.ok ? l.items : [];
 
   const toView = async (
     row: EventDraftRow,
-    cals: CalendarListItem[],
+    listing: CalendarListing,
+    deadlineMs = 0,
   ): Promise<EventDraftView> => {
+    const cals = itemsOf(listing);
     const account = await store.account(row.accountId);
     const calendarName =
       cals.find(
@@ -165,6 +196,8 @@ export function createCalendarOutService(deps: {
       ...row,
       calendarName,
       accountEmail: account?.identifier ?? null,
+      listing,
+      deadlineMs,
       source: doc
         ? { title: doc.title ?? null, createdAt: doc.createdAt ?? null }
         : null,
@@ -235,12 +268,17 @@ export function createCalendarOutService(deps: {
     draftEvent: drafting.draftEvent,
 
     async peekByToken(token) {
+      const startedAt = Date.now();
       const t = await verify(token);
       if (t.kind !== 'ok') return { kind: t.kind };
       const row = await store.eventDrafts.get(t.draftId);
       if (!row || row.status !== 'draft') return { kind: 'gone' };
       if (row.revision !== t.revision) return { kind: 'changed' };
-      return { kind: 'ok', view: await toView(row, await calendarSnapshot()) };
+      const deadlineMs = startedAt + pageDeadlineMs;
+      return {
+        kind: 'ok',
+        view: await toView(row, await calendarSnapshot(deadlineMs), deadlineMs),
+      };
     },
 
     async confirmByToken(token, revision) {
@@ -281,6 +319,8 @@ export function createCalendarOutService(deps: {
       const rows = await store.eventDrafts.pending();
       return Promise.all(rows.map((r) => toView(r, cals)));
     },
+
+    dayView: async () => null,
 
     async confirmUrl(id, opts) {
       const row = await store.eventDrafts.get(id);

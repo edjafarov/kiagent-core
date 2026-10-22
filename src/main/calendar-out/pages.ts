@@ -82,11 +82,24 @@ export function eventReviewPage(
   ]
     .filter(Boolean)
     .join(' · ');
+  // An event's title is shown only when its calendar is known to be one
+  // Kia syncs (the same rule find_free_time applies); otherwise a generic
+  // note, so the page never leaks a title from an unlisted calendar.
+  const disclosable = (s: (typeof view.similarEvents)[number]) =>
+    view.listing.ok &&
+    view.listing.items.some(
+      (c) =>
+        c.indexed &&
+        c.accountId === s.accountId &&
+        c.calendarId === s.calendarId,
+    );
   const similar = view.similarEvents
     .map((s) =>
-      s.kind === 'event'
-        ? `Similar event already in your calendar: ${s.title}`
-        : `Similar draft waiting: ${s.title}`,
+      s.kind === 'draft'
+        ? `Similar draft waiting: ${s.title}`
+        : disclosable(s)
+          ? `Similar event already in your calendar: ${s.title}`
+          : 'A similar event may already be in your calendar',
     )
     .map(esc)
     .join('<br>');

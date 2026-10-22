@@ -230,3 +230,163 @@ describe('prefs', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('review page: bounded listing + similar-event disclosure', () => {
+  let dir: string;
+  let store: CoreStore;
+  let svc: CalendarOutService;
+  let srv: http.Server;
+  let base: string;
+  let hang = false;
+  let skewMs = 0;
+  let accId: string;
+
+  beforeAll(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-evlisting-'));
+    store = openStore(await openDb(path.join(dir, 'test.db')), {
+      encrypt: (s) => Buffer.from(s, 'utf8'),
+      decrypt: (b) => b.toString('utf8'),
+      detectLanguages: () => ['eng'],
+    });
+    const acc = await store.createAccount({
+      source: 'google-calendar',
+      identifier: 'me@example.com',
+      config: { folderRoots: [{ id: 'fam', name: 'Family' }] },
+    });
+    accId = acc.id;
+    const writers = createCalendarWriterRegistry();
+    const cal = (id: string) => ({
+      id,
+      name: id,
+      color: null,
+      primary: id === 'fam',
+      canWrite: true,
+      shared: false,
+      timeZone: 'Europe/Berlin',
+    });
+    writers.register('google-calendar', {
+      listCalendars: () =>
+        hang
+          ? new Promise<never>(() => {})
+          : Promise.resolve([cal('fam'), cal('other')]),
+      createEvent: async () => {
+        throw new Error('unused');
+      },
+    });
+    svc = createCalendarOutService({
+      sources: CAL_SOURCES,
+      store,
+      writers,
+      now: () => new Date(Date.now() + skewMs),
+      pageDeadlineMs: 150,
+      ctx: () => ({
+        modeFor: () => 'review',
+        baseFor: () => base,
+        createdViaNow: () => 'mcp-local',
+        secret: async () => SECRET,
+      }),
+      prefs: { get: () => ({}) } as unknown as Prefs,
+      vaultScope: async () => undefined,
+      logSink: { log: () => {} } as never,
+    });
+    const routes = createOutboundRoutes({} as OutboundService, svc);
+    srv = http.createServer((req, res) => {
+      void routes.handleRemote(req, res).then((handled) => {
+        if (!handled) {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    srv.close();
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const seedEvent = async (calendarId: string, title: string) => {
+    const md = {
+      calendarId,
+      calendarName: calendarId,
+      calendarColor: null,
+      eventId: `ev-${calendarId}`,
+      iCalUID: null,
+      occurrenceKey: `ev-${calendarId}`,
+      start: '2026-12-03T14:00:00.000Z',
+      end: '2026-12-03T15:00:00.000Z',
+      allDay: false,
+      timeZone: 'Europe/Berlin',
+      status: 'confirmed',
+      organizer: null,
+      selfResponse: 'accepted',
+      attendees: [],
+      participants: [],
+      conferenceUrl: null,
+      location: null,
+      eventType: 'default',
+      transparency: 'opaque',
+    };
+    await store.commit({
+      account: accId as never,
+      documents: [
+        {
+          externalId: `ev-${calendarId}`,
+          type: 'calendar.event',
+          title,
+          markdown: null,
+          metadata: md,
+          createdAt: md.start,
+        },
+      ],
+      cursor: 1,
+    });
+  };
+
+  const draftToken = async (calendarId: string, title: string) => {
+    const r = await svc.draftEvent({
+      title,
+      start: '2026-12-03T10:00:00Z',
+      category: 'work',
+      calendarId,
+    } as never);
+    if (!('confirmUrl' in r) || !r.confirmUrl) throw new Error('no url');
+    return r.confirmUrl.split('/outbox/event/confirm/')[1];
+  };
+
+  it('shows the title of a similar event on an indexed calendar', async () => {
+    await seedEvent('fam', 'Dentist Anna');
+    const token = await draftToken('fam', 'Dentist Anna');
+    const res = await fetch(`${base}/outbox/event/confirm/${token}`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain(
+      'Similar event already in your calendar: Dentist Anna',
+    );
+  });
+
+  it('hides the title when the calendar is not indexed', async () => {
+    await seedEvent('other', 'Secret Dentist Anna');
+    const token = await draftToken('fam', 'Dentist Anna visit');
+    const res = await fetch(`${base}/outbox/event/confirm/${token}`);
+    const html = await res.text();
+    expect(html).toContain('A similar event may already be in your calendar');
+    expect(html).not.toContain('Secret Dentist');
+  });
+
+  it('a hanging listing still renders in time, with the generic note', async () => {
+    const token = await draftToken('fam', 'Dentist Anna again');
+    skewMs = 10 * 60_000; // past the 5-minute calendar-list cache
+    hang = true;
+    const t0 = Date.now();
+    const res = await fetch(`${base}/outbox/event/confirm/${token}`);
+    const html = await res.text();
+    hang = false;
+    expect(res.status).toBe(200);
+    expect(Date.now() - t0).toBeLessThan(1500);
+    expect(html).toContain('A similar event may already be in your calendar');
+    expect(html).not.toContain('already in your calendar: Dentist');
+  });
+});

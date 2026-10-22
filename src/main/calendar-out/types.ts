@@ -51,6 +51,9 @@ export interface SimilarEvent {
   start: string;
   calendar: string;
   draftId?: string;
+  /** Internal (disclosure check on the review page); not in tool output. */
+  accountId?: AccountId;
+  calendarId?: string;
 }
 
 export type DraftEventResult =
@@ -110,7 +113,15 @@ export interface EventDraftView extends EventDraftRow {
   accountEmail: string | null;
   source: { title: string | null; createdAt: string | null } | null;
   similarEvents: SimilarEvent[];
+  /** The calendar listing the page was built from. */
+  listing: CalendarListing;
+  /** Wall-clock ms at which the review page gives up on slow lookups. */
+  deadlineMs: number;
 }
+
+export type CalendarListing =
+  | { ok: true; items: CalendarListItem[] }
+  | { ok: false };
 
 export type EventConfirmOutcome =
   | { kind: 'created'; event: CreatedEvent }

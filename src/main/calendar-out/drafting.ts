@@ -170,6 +170,8 @@ export function createDrafting(deps: DraftingDeps) {
           ? (e.metadata.startDate ?? e.metadata.start)
           : e.metadata.start,
         calendar: e.metadata.calendarName,
+        accountId: e.accountId,
+        calendarId: e.metadata.calendarId,
       });
     }
     for (const r of await store.eventDrafts.activeOnDay(
