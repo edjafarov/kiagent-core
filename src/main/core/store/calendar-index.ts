@@ -25,6 +25,7 @@ export interface CalendarIndex {
     from: string,
     to: string,
     accountId?: AccountId,
+    limit?: number,
   ): Promise<IndexedEvent[]>;
   /** Live events of the account with this iCalUID. */
   byICalUID(accountId: AccountId, iCalUID: string): Promise<IndexedEvent[]>;
@@ -56,15 +57,20 @@ const LIVE_EVENTS = `type = 'calendar.event' AND archived_at IS NULL`;
 
 export function createCalendarIndex(db: AppDb): CalendarIndex {
   return {
-    async overlap(from, to, accountId) {
+    async overlap(from, to, accountId, limit) {
       const rows = (await db.all(
         `SELECT id, account_id, title, metadata FROM documents
           WHERE ${LIVE_EVENTS}
             AND julianday(created_at) < julianday(?)
             AND julianday(json_extract(metadata, '$.end')) > julianday(?)
             ${accountId ? 'AND account_id = ?' : ''}
-          ORDER BY created_at`,
-        accountId ? [to, from, accountId] : [to, from],
+          ORDER BY created_at${limit === undefined ? '' : ' LIMIT ?'}`,
+        [
+          to,
+          from,
+          ...(accountId ? [accountId] : []),
+          ...(limit === undefined ? [] : [limit]),
+        ],
       )) as Raw[];
       return rows.map(toEvent);
     },

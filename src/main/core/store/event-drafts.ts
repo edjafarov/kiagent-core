@@ -114,7 +114,7 @@ export interface EventDraftStore {
   pending(accountId?: AccountId): Promise<EventDraftRow[]>;
   countPending(accountId: AccountId): Promise<number>;
   /** Rows that may hold time in [from, to): draft|creating|unknown|created. */
-  inWindow(from: string, to: string): Promise<EventDraftRow[]>;
+  inWindow(from: string, to: string, limit?: number): Promise<EventDraftRow[]>;
   /** Same-day candidates for similarity checks on one account. */
   activeOnDay(
     accountId: AccountId,
@@ -407,12 +407,12 @@ export function createEventDraftStore(
       return Number(r.n);
     },
 
-    inWindow(from, to) {
+    inWindow(from, to, limit) {
       return many(
         `SELECT * FROM event_drafts
           WHERE status IN ('draft','creating','unknown','created')
-            AND ${SQL_START} < ? AND ${SQL_END} > ?`,
-        [to, from],
+            AND ${SQL_START} < ? AND ${SQL_END} > ?${limit === undefined ? '' : ' LIMIT ?'}`,
+        limit === undefined ? [to, from] : [to, from, limit],
       );
     },
 
