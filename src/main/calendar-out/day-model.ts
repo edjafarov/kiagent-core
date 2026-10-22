@@ -356,10 +356,12 @@ export function buildDayModel(
   const rest = timed
     .filter((t) => !isClash(t))
     .sort((a, b) => a.start - b.start);
-  const kept = [
-    ...must,
-    ...rest.slice(0, Math.max(0, MAX_BLOCKS - must.length)),
-  ];
+  // The proposed block counts against the cap when it is drawn in the grid.
+  const cap =
+    timedProposal && pStartMs < dayEndMs && pEndMs > dayStartMs
+      ? MAX_BLOCKS - 1
+      : MAX_BLOCKS;
+  const kept = [...must, ...rest.slice(0, Math.max(0, cap - must.length))];
   const more = timed.length - kept.length;
 
   const proposal = timedProposal

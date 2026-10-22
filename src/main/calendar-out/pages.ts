@@ -28,6 +28,12 @@ const EVENT_CSS = `<style>
 .ev-k { font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
 .ev-v { font-size: 14px; color: var(--text-primary); overflow-wrap: anywhere; white-space: pre-wrap; }
 .ev-invite { font-weight: 600; }
+/* Phones: the shared minimal shell's 24px padding + 25px stripe inset leave
+   the day grid's lanes too narrow; event pages with a grid get 16px gutters. */
+@media (max-width: 480px) {
+  .sh-min:has(#ev-day) { padding-left: 16px; padding-right: 16px; }
+  .sh-min:has(#ev-day) .sh-min__card { padding-left: 13px; }
+}
 </style>`;
 
 /** "Tue 3 Nov, 18:00–19:30 (Europe/Berlin)" / "Tue 3 Nov" / "26 Oct – 30 Oct". */
@@ -88,6 +94,11 @@ export async function daySection(
   view: EventDraftView,
   log: (message: string) => void = (m) => console.warn(m),
 ): Promise<DaySection | null> {
+  const logOnce = (why: string) => {
+    if (loggedDays.has(view.id)) return;
+    loggedDays.add(view.id);
+    log(`event day view skipped for draft ${view.id}: ${why}`);
+  };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const run = calendar.dayView(view);
@@ -104,7 +115,10 @@ export async function daySection(
         }),
       ]);
     } else model = await run;
-    if (!model) return null;
+    if (!model) {
+      logOnce('listing failed, too many events, or out of time');
+      return null;
+    }
     const { kind } = model.line;
     const cls =
       kind === 'busy'
@@ -118,12 +132,7 @@ export async function daySection(
       busyClash: model.busyClash,
     };
   } catch (err) {
-    if (!loggedDays.has(view.id)) {
-      loggedDays.add(view.id);
-      log(
-        `event day view skipped for draft ${view.id}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    logOnce(err instanceof Error ? err.message : String(err));
     return null;
   } finally {
     clearTimeout(timer);

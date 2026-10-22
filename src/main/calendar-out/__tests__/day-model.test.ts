@@ -676,12 +676,14 @@ describe('buildDayModel', () => {
         }),
       );
     const m = buildDayModel(d, col({ events }), BER);
-    expect(m.blocks).toHaveLength(200);
-    expect(m.more).toBe(2);
+    // 200 timed blocks drawn in total: the proposal + 199 others.
+    expect(m.blocks).toHaveLength(199);
+    expect(m.more).toBe(3);
     expect(
       m.blocks.some((b) => b.title === 'clash' && b.outline === 'busy'),
     ).toBe(true);
-    expect(m.blocks.some((b) => b.title === 'e198')).toBe(true);
+    expect(m.blocks.some((b) => b.title === 'e197')).toBe(true);
+    expect(m.blocks.some((b) => b.title === 'e198')).toBe(false);
     expect(m.blocks.some((b) => b.title === 'e199')).toBe(false);
     expect(m.blocks.some((b) => b.title === 'late')).toBe(false);
     expect(m.allDay).toHaveLength(5);
