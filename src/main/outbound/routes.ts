@@ -30,11 +30,13 @@ function sendHtml(
   // These pages carry draft content (recipient/subject/body) under a
   // token-bearing URL — keep them out of any disk/shared cache and never
   // leak the URL (hence the token) via a Referer header to a link the page
-  // itself might contain.
+  // itself might contain. `same-origin`, not `no-referrer`: under
+  // no-referrer the browser sends `Origin: null` on the page's own form
+  // POSTs, which the loopback Origin guard rejects (403 on Send / Add).
   res.writeHead(status, {
     'Content-Type': 'text/html; charset=utf-8',
     'Cache-Control': 'no-store',
-    'Referrer-Policy': 'no-referrer',
+    'Referrer-Policy': 'same-origin',
     'Content-Security-Policy': PAGE_CSP,
   });
   res.end(html);

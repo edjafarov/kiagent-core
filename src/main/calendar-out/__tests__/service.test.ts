@@ -24,6 +24,8 @@ import {
   type DraftEventResult,
 } from '../service';
 import { createCalendarWriterRegistry } from '../writers';
+import { collectWindow } from '../collect';
+import type { CalendarListItem } from '../types';
 
 /** Source registry stub: google-calendar is calendar-only; microsoft-365
  *  syncs mail too (its folderRoots are mail folders). */
@@ -698,5 +700,126 @@ describe('calendar-out service', () => {
     });
     expect(r.complete).toBe(false);
     expect(r.coverage.warnings).toContain('school@ics last synced 3 days ago');
+  });
+
+  describe('collectWindow', () => {
+    const W = {
+      from: '2026-11-03T00:00:00.000Z',
+      to: '2026-11-04T00:00:00.000Z',
+    };
+    const item = (over: Partial<CalendarListItem> = {}): CalendarListItem => ({
+      accountId: acc.id,
+      accountEmail: 'me@example.com',
+      source: 'google-calendar',
+      calendarId: 'family@group',
+      name: 'Family',
+      primary: true,
+      shared: false,
+      timeZone: 'Europe/Berlin',
+      indexed: true,
+      canWrite: true,
+      isDefault: true,
+      ...over,
+    });
+    const collect = (
+      listed: CalendarListItem[],
+      extra: Partial<Parameters<typeof collectWindow>[1]> = {},
+    ) => collectWindow({ store }, { ...W, now: clock, listed, ...extra });
+    const ok = async (...a: Parameters<typeof collect>) => {
+      const r = await collect(...a);
+      if ('overflow' in r) throw new Error('overflow');
+      return r;
+    };
+
+    it('filters by calendarIds and keeps ignore-tier events', async () => {
+      await seed('a', 'Family thing', {});
+      await seed('b', 'Work thing', { calendarId: 'work@group' });
+      await seed('c', 'Free marker', { transparency: 'transparent' });
+      await seed('d', 'Gone', { status: 'cancelled' });
+      const listed = [
+        item(),
+        item({ calendarId: 'work@group', name: 'Work', primary: false }),
+      ];
+      const all = await ok(listed);
+      expect(all.events.map((x) => [x.e.title, x.tier, x.disclosable])).toEqual(
+        expect.arrayContaining([
+          ['Family thing', 'busy', true],
+          ['Work thing', 'busy', true],
+          ['Free marker', 'ignore', true],
+        ]),
+      );
+      expect(all.events.map((x) => x.e.title)).not.toContain('Gone');
+      const only = await ok(listed, { calendarIds: ['work@group'] });
+      expect(only.events.map((x) => x.e.title)).toEqual(['Work thing']);
+      expect(only.indexed.map((c) => c.calendarId)).toEqual(['work@group']);
+    });
+
+    it('an unlisted account counts whole but is not disclosable', async () => {
+      await seed('a', 'Secret', { calendarId: 'whatever' });
+      const r = await ok([
+        item({ calendarId: '', note: 'boom', indexed: false }),
+      ]);
+      expect(r.events).toHaveLength(1);
+      expect(r.events[0]).toMatchObject({ tier: 'busy', disclosable: false });
+      expect(r.warnings).toContain('me@example.com: boom');
+    });
+
+    it('excludes events on a non-indexed calendar', async () => {
+      await seed('a', 'Hidden', {});
+      const r = await ok([item({ indexed: false })]);
+      expect(r.events).toHaveLength(0);
+      expect(r.notIndexedWritable).toEqual([
+        { accountEmail: 'me@example.com', calendar: 'Family' },
+      ]);
+    });
+
+    it('drafts carry tier, span, seen, disclosable; a seen placeholder is ignore', async () => {
+      const d = asDraft(await draft());
+      const listed = [item()];
+      let r = await ok(listed);
+      expect(r.drafts).toHaveLength(1);
+      expect(r.drafts[0]).toMatchObject({
+        tier: 'maybe',
+        seen: false,
+        disclosable: true,
+        span: { start: '2026-11-03T17:00:00.000Z' },
+      });
+      const noCal = await ok([item({ indexed: false })]);
+      expect(noCal.drafts[0].disclosable).toBe(false);
+
+      await svc.confirmById(d.draftId, 1);
+      await seed(`ev-${d.draftId}`, 'Elternabend 7b', {});
+      r = await ok(listed);
+      expect(r.drafts).toHaveLength(1);
+      expect(r.drafts[0]).toMatchObject({ tier: 'ignore', seen: true });
+    });
+
+    it('reports overflow past the limits', async () => {
+      await seed('a', 'One', {});
+      await seed('b', 'Two', {});
+      const overlap = jest.spyOn(store.calendarIndex, 'overlap');
+      const inWindow = jest.spyOn(store.eventDrafts, 'inWindow');
+      expect(
+        await collect([item()], { limits: { events: 1, drafts: 1 } }),
+      ).toEqual({ overflow: true });
+      // The queries themselves are capped: overflow never reads everything.
+      expect(overlap.mock.calls[0][3]).toBe(2);
+      overlap.mockRestore();
+      expect(
+        await collect([item()], { limits: { events: 2, drafts: 1 } }),
+      ).not.toHaveProperty('overflow');
+      await draft();
+      await draft({
+        title: 'Second',
+        start: '2026-11-03T20:00:00+01:00',
+        end: undefined,
+      });
+      expect(
+        await collect([item()], { limits: { events: 5, drafts: 1 } }),
+      ).toEqual({ overflow: true });
+      expect(inWindow.mock.calls.length).toBeGreaterThan(0);
+      expect(inWindow.mock.calls.at(-1)?.[2]).toBe(2);
+      inWindow.mockRestore();
+    });
   });
 });

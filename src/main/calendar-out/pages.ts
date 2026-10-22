@@ -8,6 +8,8 @@
 import { esc } from '@shared/web-ui';
 
 import { outboxPage, type OutboxIcon } from '../outbound/pages';
+import { dayViewHtml } from './day-view-html';
+import { fmtTime, localDate, rangeNeedsOffsets } from './local-time';
 import type { CalendarOutService } from './service';
 import type { EventDraftView } from './types';
 
@@ -26,6 +28,12 @@ const EVENT_CSS = `<style>
 .ev-k { font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
 .ev-v { font-size: 14px; color: var(--text-primary); overflow-wrap: anywhere; white-space: pre-wrap; }
 .ev-invite { font-weight: 600; }
+/* Phones: the shared minimal shell's 24px padding + 25px stripe inset leave
+   the day grid's lanes too narrow; event pages with a grid get 16px gutters. */
+@media (max-width: 480px) {
+  .sh-min:has(#ev-day) { padding-left: 16px; padding-right: 16px; }
+  .sh-min:has(#ev-day) .sh-min__card { padding-left: 13px; }
+}
 </style>`;
 
 /** "Tue 3 Nov, 18:00–19:30 (Europe/Berlin)" / "Tue 3 Nov" / "26 Oct – 30 Oct". */
@@ -46,31 +54,104 @@ export function whenText(p: EventDraftView['payload']): string {
       ? `${d(p.start)} (all day)`
       : `${d(p.start)} – ${d(last)} (all day)`;
   }
-  const opts = { timeZone: p.timeZone } as const;
-  const day = new Date(p.start).toLocaleDateString('en-GB', {
-    ...opts,
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-  });
-  const t = (s: string) =>
-    new Date(s).toLocaleTimeString('en-GB', {
-      ...opts,
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
+  const tz = p.timeZone;
+  const a = new Date(p.start).getTime();
+  const b = new Date(p.end).getTime();
+  const day = (ms: number) =>
+    new Date(ms).toLocaleDateString('en-GB', {
+      timeZone: tz,
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
     });
-  return `${day}, ${t(p.start)}–${t(p.end)} (${p.timeZone})`;
+  const off = rangeNeedsOffsets(a, b, tz);
+  if (localDate(a, tz) !== localDate(b, tz))
+    return `${day(a)}, ${fmtTime(a, tz, off)} – ${day(b)}, ${fmtTime(b, tz, off)} (${tz})`;
+  return `${day(a)}, ${fmtTime(a, tz, off)}–${fmtTime(b, tz, off)} (${tz})`;
 }
+
+const hasInvitees = (view: EventDraftView): boolean =>
+  view.payload.attendees.length > 0;
 
 const row = (k: string, v: string, cls = '') =>
   `<div class="ev-row"><span class="ev-k">${esc(k)}</span><span class="ev-v ${cls}">${v}</span></div>`;
+
+export interface DaySection {
+  html: string;
+  lineHtml: string;
+  busyClash: boolean;
+}
+
+const loggedDays = new Set<string>();
+
+/**
+ * The day view's one failure boundary: any reject, hang past the page
+ * deadline, or render error returns null (the page renders as before) and
+ * is logged once per draft id per process.
+ */
+export async function daySection(
+  calendar: Pick<CalendarOutService, 'dayView'>,
+  view: EventDraftView,
+  log: (message: string) => void = (m) => console.warn(m),
+): Promise<DaySection | null> {
+  const logOnce = (why: string) => {
+    if (loggedDays.has(view.id)) return;
+    loggedDays.add(view.id);
+    log(`event day view skipped for draft ${view.id}: ${why}`);
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const run = calendar.dayView(view);
+    let model: Awaited<typeof run>;
+    if (view.deadlineMs) {
+      run.catch(() => {});
+      model = await Promise.race([
+        run,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(
+            () => resolve(null),
+            Math.max(0, view.deadlineMs - Date.now()),
+          );
+        }),
+      ]);
+    } else model = await run;
+    if (!model) {
+      logOnce('listing failed, too many events, or out of time');
+      return null;
+    }
+    const { kind } = model.line;
+    const cls =
+      kind === 'busy'
+        ? ' ev-line-busy'
+        : kind === 'maybe'
+          ? ' ev-line-maybe'
+          : '';
+    return {
+      html: dayViewHtml(model),
+      lineHtml: `<div class="ev-line${cls}">${esc(model.line.text)}</div>`,
+      busyClash: model.busyClash,
+    };
+  } catch (err) {
+    logOnce(err instanceof Error ? err.message : String(err));
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function eventReviewPage(
   view: EventDraftView,
   token: string,
   changed = false,
+  day: DaySection | null = null,
 ): string {
+  const addLabel = day?.busyClash
+    ? hasInvitees(view)
+      ? 'Add anyway and send invites'
+      : 'Add anyway'
+    : hasInvitees(view)
+      ? 'Add and send invites'
+      : 'Add to calendar';
   const p = view.payload;
   const who = p.attendees.length
     ? `Invites will be sent to: ${esc(p.attendees.map((a) => (a.name ? `${a.name} <${a.email}>` : a.email)).join(', '))}`
@@ -81,29 +162,43 @@ export function eventReviewPage(
   ]
     .filter(Boolean)
     .join(' · ');
+  // An event's title is shown only when its calendar is known to be one
+  // Kia syncs (the same rule find_free_time applies); otherwise a generic
+  // note, so the page never leaks a title from an unlisted calendar.
+  const disclosable = (s: (typeof view.similarEvents)[number]) =>
+    view.listing.ok &&
+    view.listing.items.some(
+      (c) =>
+        c.indexed &&
+        c.accountId === s.accountId &&
+        c.calendarId === s.calendarId,
+    );
   const similar = view.similarEvents
     .map((s) =>
-      s.kind === 'event'
-        ? `Similar event already in your calendar: ${s.title}`
-        : `Similar draft waiting: ${s.title}`,
+      s.kind === 'draft'
+        ? `Similar draft waiting: ${s.title}`
+        : disclosable(s)
+          ? `Similar event already in your calendar: ${s.title}`
+          : 'A similar event may already be in your calendar',
     )
-    .map(esc)
-    .join('<br>');
+    .map(esc);
+  const similarHtml = [...new Set(similar)].join('<br>');
   const inner = `${EVENT_CSS}
   ${changed ? `<p class="ob-note">This event changed — review it again. Nothing was added.</p>` : ''}
   <div class="ev-what">${esc(p.title)}<span class="ev-chip">${CATEGORY_LABEL[p.category]}</span></div>
   ${row('When', esc(whenText(p)))}
   ${row('Calendar', esc([view.calendarName ?? p.calendarId, view.accountEmail].filter(Boolean).join(' · ')))}
   ${row('Who', who, p.attendees.length ? 'ev-invite' : '')}
+  ${day ? `${day.lineHtml}${day.html}` : ''}
   ${where ? row('Where', where) : ''}
   ${p.description ? row('Note', esc(p.description)) : ''}
   ${view.source ? row('From', esc([view.source.title, view.source.createdAt?.slice(0, 10)].filter(Boolean).join(' · '))) : ''}
-  ${similar ? `<p class="ob-note">${similar}</p>` : ''}
+  ${similarHtml ? `<p class="ob-note">${similarHtml}</p>` : ''}
   <div class="ob-actions">
     <div class="ob-split"><form id="ob-send" method="POST" action="/outbox/event/confirm/${esc(token)}/${view.revision}">
       <button id="ob-send-btn" type="submit" class="btn primary ob-btn ob-disable"
-        data-label="${p.attendees.length ? 'Add and send invites' : 'Add to calendar'}" data-working="Adding…"
-        data-slow="The calendar is slow — still adding…">${p.attendees.length ? 'Add and send invites' : 'Add to calendar'}</button>
+        data-label="${addLabel}" data-working="Adding…"
+        data-slow="The calendar is slow — still adding…">${addLabel}</button>
     </form></div>
     <div id="ob-status" class="ob-status" role="status" aria-live="polite"></div>
     <form method="POST" action="/outbox/event/cancel/${esc(token)}"><button type="submit" class="btn ob-btn-secondary ob-disable">Discard</button></form>
@@ -123,6 +218,11 @@ export function eventResultPage(
     ${opts?.link ? `<p class="ob-note"><a href="${esc(opts.link)}" rel="noreferrer noopener" target="_blank">Open in calendar</a></p>` : ''}`,
   );
 }
+
+const logOf =
+  (calendar: CalendarOutService) =>
+  (message: string): void =>
+    calendar.logWarn ? calendar.logWarn(message) : console.warn(message);
 
 const GONE = (): PageResult => ({
   status: 410,
@@ -144,8 +244,13 @@ export async function getEventConfirm(
   token: string,
 ): Promise<PageResult> {
   const peek = await calendar.peekByToken(token);
-  if (peek.kind === 'ok')
-    return { status: 200, html: eventReviewPage(peek.view, token) };
+  if (peek.kind === 'ok') {
+    const day = await daySection(calendar, peek.view, logOf(calendar));
+    return {
+      status: 200,
+      html: eventReviewPage(peek.view, token, false, day),
+    };
+  }
   if (peek.kind === 'changed') return CHANGED();
   if (peek.kind === 'expired')
     return {
@@ -199,9 +304,12 @@ export async function postEventConfirm(
       };
     case 'changed': {
       const peek = await calendar.peekByToken(token);
-      return peek.kind === 'ok'
-        ? { status: 409, html: eventReviewPage(peek.view, token, true) }
-        : CHANGED();
+      if (peek.kind !== 'ok') return CHANGED();
+      const day = await daySection(calendar, peek.view, logOf(calendar));
+      return {
+        status: 409,
+        html: eventReviewPage(peek.view, token, true, day),
+      };
     }
     default:
       return GONE();

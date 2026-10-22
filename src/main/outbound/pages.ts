@@ -136,6 +136,8 @@ const ICON_SVGS: Record<OutboxIcon, string> = {
 // submit event can cancel form submission in some engines. `pageshow`
 // resets state when bfcache restores the page after back-navigation.
 const CONFIRM_JS = `(function () {
+  var day = document.getElementById('ev-day');
+  if (day) day.scrollTop = +day.dataset.scroll || 0;
   var form = document.getElementById('ob-send');
   if (!form) return;
   var statusEl = document.getElementById('ob-status');

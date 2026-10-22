@@ -204,6 +204,25 @@ describe('outbox confirm routes', () => {
     expect(await getAfter.text()).toMatch(/already|sent/i);
   });
 
+  // A browser submitting the page's own form sends an Origin header; under
+  // `Referrer-Policy: no-referrer` that Origin is "null" and the loopback
+  // guard answers 403 (the page's Send / Add button was dead).
+  it('a browser-shaped form POST (same-origin Origin) passes the loopback guard', async () => {
+    const url = await draftUrl();
+    const res = await fetch(`${url}/1`, {
+      method: 'POST',
+      headers: { origin: base },
+    });
+    expect(res.status).toBe(200);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    sendMock.mockClear();
+    const nul = await fetch(`${base}/outbox/cancel/x`, {
+      method: 'POST',
+      headers: { origin: 'null' },
+    });
+    expect(nul.status).toBe(403);
+  });
+
   it('POST cancel discards without sending', async () => {
     const url = await draftUrl();
     const cancel = url.replace('/outbox/confirm/', '/outbox/cancel/');
@@ -482,7 +501,7 @@ describe('outbox confirm routes', () => {
     const page = await fetch(url);
     expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(page.headers.get('cache-control')).toBe('no-store');
-    expect(page.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(page.headers.get('referrer-policy')).toBe('same-origin');
 
     const api = await fetch(`${base}/outbox/api`, {
       method: 'POST',

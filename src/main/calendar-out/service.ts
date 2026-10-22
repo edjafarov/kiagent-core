@@ -18,9 +18,12 @@ import { signEventToken, verifyEventToken } from '../outbound/tokens';
 import type { SourceLookup } from '../platform/account-types';
 import { createCalendarsView } from './calendars';
 import { reconnectCopy, UNKNOWN_COPY } from './copy';
+import { collectWindow } from './collect';
+import { buildDayModel, dayWindow, type DayModel } from './day-model';
 import { createDrafting } from './drafting';
 import { createFreeTime } from './free-time';
 import type {
+  CalendarListing,
   CalendarListItem,
   DraftEventArgs,
   DraftEventResult,
@@ -33,6 +36,12 @@ import type {
 import type { CalendarWriterRegistry } from './writers';
 
 export type * from './types';
+
+/** The review page's one deadline, from the start of peekByToken. */
+export const PAGE_DEADLINE_MS = 1500;
+
+/** Day view bounds: more candidates than this and there is no day view. */
+const DAY_LIMITS = { events: 1000, drafts: 200 };
 
 /** What MCP tools may call. Deliberately no confirm. */
 export interface CalendarToolApi {
@@ -50,6 +59,11 @@ export interface CalendarOutService extends CalendarToolApi {
   discardById(id: string): Promise<EventDraftRow | null>;
   restoreById(id: string): Promise<EventDraftRow | null>;
   listPending(): Promise<EventDraftView[]>;
+  /** The day model for the review page; null = no day view (listing failed,
+   *  too many candidates, or the page deadline passed). Rejects on errors. */
+  dayView(view: EventDraftView): Promise<DayModel | null>;
+  /** One warning line to the main-process log (calendar-out). */
+  logWarn?(message: string): void;
   /** A review-page URL for the row's CURRENT revision; null while the
    *  server for that transport is not up. */
   confirmUrl(
@@ -86,10 +100,13 @@ export function createCalendarOutService(deps: {
   vaultScope: (accountId: AccountId) => Promise<string | undefined>;
   now?: () => Date;
   logSink: LogSink;
+  /** The one review-page deadline (default PAGE_DEADLINE_MS); tests shrink it. */
+  pageDeadlineMs?: number;
 }): CalendarOutService {
   const { store } = deps;
   const now = deps.now ?? (() => new Date());
   const nowMs = () => now().getTime();
+  const pageDeadlineMs = deps.pageDeadlineMs ?? PAGE_DEADLINE_MS;
   const withDraft = createDraftLock();
 
   // The tool-side view of the registry: listing only.
@@ -138,19 +155,41 @@ export function createCalendarOutService(deps: {
     now,
   });
 
-  /** One calendar listing per batch of views, never one per row. */
-  const calendarSnapshot = async (): Promise<CalendarListItem[]> => {
+  /** One calendar listing per batch of views, never one per row. With a
+   *  `deadlineAt` (wall clock) it gives up when the page deadline passes:
+   *  `{ok: false}` means "could not list", never "no calendars". */
+  const calendarSnapshot = async (
+    deadlineAt?: number,
+  ): Promise<CalendarListing> => {
+    const listing = calendars.list().then(
+      (items): CalendarListing => ({ ok: true, items }),
+      (): CalendarListing => ({ ok: false }),
+    );
+    if (deadlineAt === undefined) return listing;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<CalendarListing>((resolve) => {
+      timer = setTimeout(
+        () => resolve({ ok: false }),
+        Math.max(0, deadlineAt - Date.now()),
+      );
+    });
     try {
-      return await calendars.list();
-    } catch {
-      return [];
+      // `listing` never rejects (it has its own handler), so the loser of
+      // the race cannot raise an unhandled rejection.
+      return await Promise.race([listing, timeout]);
+    } finally {
+      clearTimeout(timer);
     }
   };
+  const itemsOf = (l: CalendarListing): CalendarListItem[] =>
+    l.ok ? l.items : [];
 
   const toView = async (
     row: EventDraftRow,
-    cals: CalendarListItem[],
+    listing: CalendarListing,
+    deadlineMs = 0,
   ): Promise<EventDraftView> => {
+    const cals = itemsOf(listing);
     const account = await store.account(row.accountId);
     const calendarName =
       cals.find(
@@ -165,6 +204,8 @@ export function createCalendarOutService(deps: {
       ...row,
       calendarName,
       accountEmail: account?.identifier ?? null,
+      listing,
+      deadlineMs,
       source: doc
         ? { title: doc.title ?? null, createdAt: doc.createdAt ?? null }
         : null,
@@ -235,12 +276,17 @@ export function createCalendarOutService(deps: {
     draftEvent: drafting.draftEvent,
 
     async peekByToken(token) {
+      const startedAt = Date.now();
       const t = await verify(token);
       if (t.kind !== 'ok') return { kind: t.kind };
       const row = await store.eventDrafts.get(t.draftId);
       if (!row || row.status !== 'draft') return { kind: 'gone' };
       if (row.revision !== t.revision) return { kind: 'changed' };
-      return { kind: 'ok', view: await toView(row, await calendarSnapshot()) };
+      const deadlineMs = startedAt + pageDeadlineMs;
+      return {
+        kind: 'ok',
+        view: await toView(row, await calendarSnapshot(deadlineMs), deadlineMs),
+      };
     },
 
     async confirmByToken(token, revision) {
@@ -280,6 +326,45 @@ export function createCalendarOutService(deps: {
       const cals = await calendarSnapshot();
       const rows = await store.eventDrafts.pending();
       return Promise.all(rows.map((r) => toView(r, cals)));
+    },
+
+    logWarn: (message) => deps.logSink.log('calendar-out', 'warn', message),
+
+    async dayView(view) {
+      if (!view.listing.ok) return null;
+      // Out of time already: don't start a query nobody will wait for.
+      if (view.deadlineMs && Date.now() >= view.deadlineMs) return null;
+      const listed = view.listing.items;
+      const w = dayWindow(view.payload);
+      const run = collectWindow(
+        { store },
+        {
+          ...w,
+          now: now(),
+          listed,
+          limits: DAY_LIMITS,
+        },
+      ).then((col) =>
+        'overflow' in col || (view.deadlineMs && Date.now() >= view.deadlineMs)
+          ? null
+          : buildDayModel(view, col, view.payload.timeZone),
+      );
+      // deadlineMs 0 = no deadline (views built outside the review page).
+      if (!view.deadlineMs) return run;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<null>((resolve) => {
+        timer = setTimeout(
+          () => resolve(null),
+          Math.max(0, view.deadlineMs - Date.now()),
+        );
+      });
+      // If the timer wins, a late rejection from `run` must not go unhandled.
+      run.catch(() => {});
+      try {
+        return await Promise.race([run, timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
     },
 
     async confirmUrl(id, opts) {
