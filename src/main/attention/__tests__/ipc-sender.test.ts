@@ -35,6 +35,11 @@ describe('trusted attention renderer sender', () => {
         'outbox:schedule',
         'outbox:add-files',
         'outbox:remove-files',
+        'calendar-out:confirm',
+        'calendar-out:confirm-all',
+        'calendar-out:retry',
+        'calendar-out:discard',
+        'calendar-out:restore',
       ]),
     );
   });
