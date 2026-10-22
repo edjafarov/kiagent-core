@@ -1,51 +1,14 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import type { CalendarDraftView } from '@shared/ipc';
 import { Button, KeyValue, Sheet, type KeyValueItem } from '@shared/web-ui/ui';
 import { errorText } from './use-calendar-drafts';
+import { useSheetDayView } from './use-sheet-day-view';
 
 export const CATEGORY_LABEL = {
   work: 'Work',
   personal: 'Personal',
   kids: 'Kids',
 } as const;
-
-type Payload = CalendarDraftView['payload'];
-
-/** "Tue 3 Nov, 18:00–19:30 (Europe/Berlin)" / "Tue 3 Nov (all day)" — the
- *  review page's wording, in the event's own zone. */
-export function eventWhen(p: Payload): string {
-  if (p.allDay) {
-    const d = (s: string) =>
-      new Date(`${s}T12:00:00Z`).toLocaleDateString('en-GB', {
-        weekday: 'short',
-        day: 'numeric',
-        month: 'short',
-        timeZone: 'UTC',
-      });
-    const [y, m, dd] = p.end.split('-').map(Number);
-    const last = new Date(Date.UTC(y, m - 1, dd - 1))
-      .toISOString()
-      .slice(0, 10);
-    return last === p.start
-      ? `${d(p.start)} (all day)`
-      : `${d(p.start)} – ${d(last)} (all day)`;
-  }
-  const opts = { timeZone: p.timeZone } as const;
-  const day = new Date(p.start).toLocaleDateString('en-GB', {
-    ...opts,
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-  });
-  const t = (s: string) =>
-    new Date(s).toLocaleTimeString('en-GB', {
-      ...opts,
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
-  return `${day}, ${t(p.start)}–${t(p.end)} (${p.timeZone})`;
-}
 
 export function calendarLabel(d: CalendarDraftView): string {
   return [d.calendarName ?? d.payload.calendarId, d.accountEmail]
@@ -54,22 +17,32 @@ export function calendarLabel(d: CalendarDraftView): string {
 }
 
 /**
- * One event draft in full — the review page's fields. Add runs the same gate
- * and create as the page (`calendar-out:confirm`, at the revision shown), so
- * an event that changed meanwhile is not added. Discard keeps the sheet open
- * on a Restore, because a discarded draft leaves the list.
+ * One event draft in full — the review page's fields and its day view
+ * (main renders both, so the sheet and the link page can't drift). Add runs
+ * the same gate and create as the page (`calendar-out:confirm`, at the
+ * revision shown), so an event that changed meanwhile is not added. Discard
+ * keeps the sheet open on a Restore, because a discarded draft leaves the
+ * list; `live` is false once the draft left the list some other way.
  */
 export function EventReviewSheet(props: {
   draft: CalendarDraftView;
   onClose: () => void;
+  live?: boolean;
 }): React.ReactElement {
-  const { draft: d, onClose } = props;
+  const { draft: d, onClose, live = true } = props;
   const p = d.payload;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [discarded, setDiscarded] = useState(false);
   const invites = p.attendees.length > 0;
   const retryable = d.status === 'failed' || d.status === 'unknown';
+  const actionable = live && !discarded && d.status === 'draft';
+  const { day, checking } = useSheetDayView(d, actionable);
+  const dayRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const grid = dayRef.current?.querySelector<HTMLElement>('.dv-scroll');
+    if (grid) grid.scrollTop = Number(grid.dataset.scroll) || 0;
+  }, [day?.html]);
 
   const act = async (run: () => Promise<void>) => {
     setBusy(true);
@@ -118,8 +91,8 @@ export function EventReviewSheet(props: {
   ]
     .filter(Boolean)
     .join(' · ');
-  const items: KeyValueItem[] = [
-    { label: 'When', value: eventWhen(p) },
+  const head: KeyValueItem[] = [
+    { label: 'When', value: d.when },
     { label: 'Calendar', value: calendarLabel(d) },
     {
       label: 'Who',
@@ -129,6 +102,8 @@ export function EventReviewSheet(props: {
             .join(', ')}`
         : 'No one will be invited',
     },
+  ];
+  const tail: KeyValueItem[] = [
     ...(where ? [{ label: 'Where', value: where }] : []),
     ...(p.description ? [{ label: 'Note', value: p.description }] : []),
     ...(d.source
@@ -167,16 +142,16 @@ export function EventReviewSheet(props: {
         </Button>
         <Button
           variant="primary"
-          disabled={busy}
+          disabled={busy || (actionable && checking)}
           onClick={() => void (retryable ? retry() : add())}
         >
           {busy
             ? 'Working…'
             : retryable
               ? 'Try again'
-              : invites
-                ? 'Add and send invites'
-                : 'Add'}
+              : actionable && checking
+                ? 'Checking…'
+                : `Add${day?.busyClash ? ' anyway' : ''}${invites ? ' and send invites' : ''}`}
         </Button>
       </>
     );
@@ -192,7 +167,18 @@ export function EventReviewSheet(props: {
       <p className="ob-meta">
         {CATEGORY_LABEL[p.category]} · {p.title}
       </p>
-      <KeyValue items={items} />
+      <KeyValue items={head} />
+      {actionable && day && (
+        <div
+          ref={dayRef}
+          className="ob-day"
+          // Built in main by day-view-html.ts: every text escaped, colours
+          // hex-only, styles numeric — the review page's own markup.
+          // eslint-disable-next-line react/no-danger
+          dangerouslySetInnerHTML={{ __html: day.lineHtml + day.html }}
+        />
+      )}
+      {tail.length > 0 && <KeyValue items={tail} />}
       {discarded && (
         <p className="ob-note">
           Discarded — nothing was added. You can restore it.

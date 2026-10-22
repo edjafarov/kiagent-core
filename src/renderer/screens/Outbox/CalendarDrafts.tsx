@@ -119,6 +119,7 @@ export function CalendarDrafts(props: {
         <EventReviewSheet
           key={open.id}
           draft={open}
+          live={list.some((d) => d.id === open.id)}
           onClose={() => {
             setOpenId(null);
             setSnapshot(null);

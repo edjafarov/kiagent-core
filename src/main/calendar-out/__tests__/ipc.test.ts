@@ -16,6 +16,7 @@ import { openDb } from '../../db/app-db';
 import { openStore, type CoreStore } from '../../core/store/store';
 import type { OutboundContext, OutboundService } from '../../outbound/service';
 import { outboundInvokeHandlers } from '../../outbound/ipc';
+import { CALENDAR_LIST_TTL_MS } from '../calendars';
 import { calendarOutInvokeHandlers } from '../ipc';
 import { wireCalendarOutPush } from '../push';
 import {
@@ -63,6 +64,8 @@ describe('calendar-out IPC', () => {
   let svc: CalendarOutService;
   let acc: Account;
   let created: string[];
+  let hang: boolean;
+  let skewMs: number;
   let handlers: Pick<InvokeHandlers, InvokeChannel>;
 
   const draft = async (title: string, over: Record<string, unknown> = {}) =>
@@ -79,6 +82,8 @@ describe('calendar-out IPC', () => {
 
   beforeEach(async () => {
     created = [];
+    hang = false;
+    skewMs = 0;
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-calout-ipc-'));
     store = openStore(await openDb(path.join(dir, 'test.db')), {
       encrypt: (s) => Buffer.from(s, 'utf8'),
@@ -94,7 +99,8 @@ describe('calendar-out IPC', () => {
     await store.commit({ account: acc.id, documents: [], cursor: 0 });
     const writers = createCalendarWriterRegistry();
     writers.register('google-calendar', {
-      listCalendars: async () => [cal],
+      listCalendars: () =>
+        hang ? new Promise<never>(() => {}) : Promise.resolve([cal]),
       createEvent: async (i: EventIntent): Promise<CreatedEvent> => {
         created.push(i.kia.draftId);
         return {
@@ -120,8 +126,9 @@ describe('calendar-out IPC', () => {
       ctx: () => ctx,
       prefs: { get: () => ({}) } as unknown as Prefs,
       vaultScope: async () => undefined,
-      now: () => new Date(T0),
+      now: () => new Date(Date.parse(T0) + skewMs),
       logSink: { log: () => {} } as never,
+      sheetDeadlineMs: 150,
     });
     handlers = {
       ...calendarOutInvokeHandlers({ service: svc, store }),
@@ -224,5 +231,53 @@ describe('calendar-out IPC', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  describe('day view for the review sheet', () => {
+    const dayView = (id: string, revision: number) =>
+      handlers['calendar-out:day-view']({ id, revision });
+
+    it('answers the current revision with the page markup', async () => {
+      const d = await draft('Elternabend 7b');
+      const out = await dayView(d.draftId, d.revision);
+      expect(out).toMatchObject({ revision: d.revision, busyClash: false });
+      expect(out!.html).toContain('id="ev-day"');
+      expect(out!.lineHtml).toContain('ev-line');
+    });
+
+    it('answers null for another revision or a discarded draft', async () => {
+      const d = await draft('Elternabend 7b');
+      expect(await dayView(d.draftId, d.revision + 1)).toBeNull();
+      await handlers['calendar-out:discard']({ id: d.draftId });
+      expect(await dayView(d.draftId, d.revision)).toBeNull();
+      expect(await dayView('missing', 1)).toBeNull();
+    });
+
+    it('answers null within the deadline when the listing hangs', async () => {
+      const d = await draft('Elternabend 7b');
+      hang = true;
+      skewMs = CALENDAR_LIST_TTL_MS + 1; // past the listing cache
+      const t0 = Date.now();
+      expect(await dayView(d.draftId, d.revision)).toBeNull();
+      expect(Date.now() - t0).toBeLessThan(1000);
+    });
+
+    it('answers null within the deadline when a store read stalls', async () => {
+      const d = await draft('Elternabend 7b');
+      jest
+        .spyOn(store, 'account')
+        .mockImplementation(() => new Promise<never>(() => {}));
+      const t0 = Date.now();
+      expect(await dayView(d.draftId, d.revision)).toBeNull();
+      expect(Date.now() - t0).toBeLessThan(1000);
+    });
+
+    it('list rows carry when and no listing', async () => {
+      await draft('Elternabend 7b');
+      const [row] = await handlers['calendar-out:list'](undefined);
+      expect(row.when).toBe('Tue 3 Nov, 18:00–19:30 (Europe/Berlin)');
+      expect(row).not.toHaveProperty('listing');
+      expect(row).not.toHaveProperty('deadlineMs');
+    });
   });
 });
