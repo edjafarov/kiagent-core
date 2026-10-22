@@ -66,6 +66,7 @@ describe('calendar-out IPC', () => {
   let created: string[];
   let hang: boolean;
   let skewMs: number;
+  let refuse: boolean;
   let handlers: Pick<InvokeHandlers, InvokeChannel>;
 
   const draft = async (title: string, over: Record<string, unknown> = {}) =>
@@ -84,6 +85,7 @@ describe('calendar-out IPC', () => {
     created = [];
     hang = false;
     skewMs = 0;
+    refuse = false;
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-calout-ipc-'));
     store = openStore(await openDb(path.join(dir, 'test.db')), {
       encrypt: (s) => Buffer.from(s, 'utf8'),
@@ -102,6 +104,7 @@ describe('calendar-out IPC', () => {
       listCalendars: () =>
         hang ? new Promise<never>(() => {}) : Promise.resolve([cal]),
       createEvent: async (i: EventIntent): Promise<CreatedEvent> => {
+        if (refuse) throw new Error('not created: refused');
         created.push(i.kia.draftId);
         return {
           eventId: `ev-${i.kia.draftId}`,
@@ -253,6 +256,19 @@ describe('calendar-out IPC', () => {
       expect(await dayView('missing', 1)).toBeNull();
     });
 
+    it('answers a failed draft too: Try again still adds it', async () => {
+      const d = await draft('Elternabend 7b');
+      refuse = true;
+      await handlers['calendar-out:confirm']({
+        id: d.draftId,
+        revision: d.revision,
+      });
+      const row = await store.eventDrafts.get(d.draftId);
+      expect(row!.status).toBe('failed');
+      const out = await dayView(d.draftId, row!.revision);
+      expect(out!.html).toContain('id="ev-day"');
+    });
+
     it('answers null within the deadline when the listing hangs', async () => {
       const d = await draft('Elternabend 7b');
       hang = true;
@@ -262,14 +278,54 @@ describe('calendar-out IPC', () => {
       expect(Date.now() - t0).toBeLessThan(1000);
     });
 
-    it('answers null within the deadline when a store read stalls', async () => {
+    const slow = <T>(ms: number, v: () => Promise<T>) =>
+      new Promise<T>((r) => setTimeout(r, ms)).then(v);
+
+    it('answers null when the row read stalls', async () => {
       const d = await draft('Elternabend 7b');
       jest
-        .spyOn(store, 'account')
+        .spyOn(store.eventDrafts, 'get')
         .mockImplementation(() => new Promise<never>(() => {}));
       const t0 = Date.now();
       expect(await dayView(d.draftId, d.revision)).toBeNull();
-      expect(Date.now() - t0).toBeLessThan(1000);
+      expect(Date.now() - t0).toBeLessThan(400);
+    });
+
+    it('one deadline covers the whole call: two 100 ms steps miss 150 ms', async () => {
+      const d = await draft('Elternabend 7b');
+      const get = store.eventDrafts.get.bind(store.eventDrafts);
+      const account = store.account.bind(store);
+      jest
+        .spyOn(store.eventDrafts, 'get')
+        .mockImplementation((id) => slow(100, () => get(id)));
+      jest
+        .spyOn(store, 'account')
+        .mockImplementation((id) => slow(100, () => account(id)));
+      expect(await dayView(d.draftId, d.revision)).toBeNull();
+    });
+
+    it('a rejection after the deadline is consumed', async () => {
+      const d = await draft('Elternabend 7b');
+      const unhandled = jest.fn();
+      process.on('unhandledRejection', unhandled);
+      jest
+        .spyOn(store.eventDrafts, 'get')
+        .mockImplementation(() =>
+          slow(250, () => Promise.reject(new Error('late'))),
+        );
+      expect(await dayView(d.draftId, d.revision)).toBeNull();
+      await new Promise((r) => setTimeout(r, 300));
+      process.off('unhandledRejection', unhandled);
+      expect(unhandled).not.toHaveBeenCalled();
+    });
+
+    it('answers null for a created draft', async () => {
+      const d = await draft('Elternabend 7b');
+      await handlers['calendar-out:confirm']({
+        id: d.draftId,
+        revision: d.revision,
+      });
+      expect(await dayView(d.draftId, d.revision)).toBeNull();
     });
 
     it('list rows carry when and no listing', async () => {
