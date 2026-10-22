@@ -5,10 +5,20 @@
  * (`CalendarOutService.confirmById`), so a changed draft comes back
  * `changed` and nothing is added.
  */
-import type { InvokeHandlers } from '@shared/ipc';
+import type { CalendarDraftView, InvokeHandlers } from '@shared/ipc';
 
 import type { CoreStore } from '../core/store/store';
+import { whenText } from './pages';
 import type { CalendarOutService } from './service';
+import type { EventDraftView } from './types';
+
+/** The renderer's row: the page's When line, and none of main's
+ *  page-only fields (the calendar listing, the page deadline). */
+const toRow = ({
+  listing: _listing,
+  deadlineMs: _deadlineMs,
+  ...v
+}: EventDraftView): CalendarDraftView => ({ ...v, when: whenText(v.payload) });
 
 export function calendarOutInvokeHandlers(deps: {
   service: CalendarOutService;
@@ -22,10 +32,11 @@ export function calendarOutInvokeHandlers(deps: {
   | 'calendar-out:discard'
   | 'calendar-out:restore'
   | 'calendar-out:list-calendars'
+  | 'calendar-out:day-view'
 > {
   const { service, store } = deps;
   return {
-    'calendar-out:list': () => service.listPending(),
+    'calendar-out:list': async () => (await service.listPending()).map(toRow),
     'calendar-out:confirm': ({ id, revision }) =>
       service.confirmById(id, revision),
     'calendar-out:confirm-all': async ({ items }) => {
@@ -55,5 +66,7 @@ export function calendarOutInvokeHandlers(deps: {
       await service.restoreById(id);
     },
     'calendar-out:list-calendars': () => service.listCalendars({}),
+    'calendar-out:day-view': ({ id, revision }) =>
+      service.dayViewById(id, revision),
   };
 }

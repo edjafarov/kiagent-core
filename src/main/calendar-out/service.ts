@@ -7,6 +7,7 @@
  * only — it can list, look and draft, never create.
  */
 import type { AccountId, EventIntent, Prefs } from '@shared/contracts';
+import type { CalendarDayView } from '@shared/ipc';
 
 import type { LogSink } from '../core/engine/engine';
 import { currentTransport } from '../core/mcp/transport-context';
@@ -22,6 +23,7 @@ import { collectWindow } from './collect';
 import { buildDayModel, dayWindow, type DayModel } from './day-model';
 import { createDrafting } from './drafting';
 import { createFreeTime } from './free-time';
+import { daySection } from './pages';
 import type {
   CalendarListing,
   CalendarListItem,
@@ -39,6 +41,8 @@ export type * from './types';
 
 /** The review page's one deadline, from the start of peekByToken. */
 export const PAGE_DEADLINE_MS = 1500;
+/** The app's review sheet waits a little longer: it is already open. */
+export const SHEET_DEADLINE_MS = 3000;
 
 /** Day view bounds: more candidates than this and there is no day view. */
 const DAY_LIMITS = { events: 1000, drafts: 200 };
@@ -62,6 +66,10 @@ export interface CalendarOutService extends CalendarToolApi {
   /** The day model for the review page; null = no day view (listing failed,
    *  too many candidates, or the page deadline passed). Rejects on errors. */
   dayView(view: EventDraftView): Promise<DayModel | null>;
+  /** The page's day section for the app's review sheet, at `revision`.
+   *  Null when the row is gone, not a draft, at another revision, past the
+   *  sheet deadline (one deadline over the whole call), or on any error. */
+  dayViewById(id: string, revision: number): Promise<CalendarDayView | null>;
   /** One warning line to the main-process log (calendar-out). */
   logWarn?(message: string): void;
   /** A review-page URL for the row's CURRENT revision; null while the
@@ -102,11 +110,14 @@ export function createCalendarOutService(deps: {
   logSink: LogSink;
   /** The one review-page deadline (default PAGE_DEADLINE_MS); tests shrink it. */
   pageDeadlineMs?: number;
+  /** The review sheet's deadline (default SHEET_DEADLINE_MS). */
+  sheetDeadlineMs?: number;
 }): CalendarOutService {
   const { store } = deps;
   const now = deps.now ?? (() => new Date());
   const nowMs = () => now().getTime();
   const pageDeadlineMs = deps.pageDeadlineMs ?? PAGE_DEADLINE_MS;
+  const sheetDeadlineMs = deps.sheetDeadlineMs ?? SHEET_DEADLINE_MS;
   const withDraft = createDraftLock();
 
   // The tool-side view of the registry: listing only.
@@ -270,7 +281,7 @@ export function createCalendarOutService(deps: {
     return { kind: 'ok' as const, ...t };
   };
 
-  return {
+  const service: CalendarOutService = {
     listCalendars: () => calendars.list(),
     findFreeTime,
     draftEvent: drafting.draftEvent,
@@ -329,6 +340,36 @@ export function createCalendarOutService(deps: {
     },
 
     logWarn: (message) => deps.logSink.log('calendar-out', 'warn', message),
+
+    async dayViewById(id, revision) {
+      const deadlineMs = Date.now() + sheetDeadlineMs;
+      const run = (async (): Promise<CalendarDayView | null> => {
+        const row = await store.eventDrafts.get(id);
+        if (!row || row.status !== 'draft' || row.revision !== revision)
+          return null;
+        const view = await toView(
+          row,
+          await calendarSnapshot(deadlineMs),
+          deadlineMs,
+        );
+        const day = await daySection(service, view, service.logWarn);
+        return day && { revision: row.revision, ...day };
+      })().catch(() => null);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          run,
+          new Promise<null>((resolve) => {
+            timer = setTimeout(
+              () => resolve(null),
+              Math.max(0, deadlineMs - Date.now()),
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
 
     async dayView(view) {
       if (!view.listing.ok) return null;
@@ -395,4 +436,5 @@ export function createCalendarOutService(deps: {
 
     expireOverdue: () => store.eventDrafts.expireOverdue(),
   };
+  return service;
 }

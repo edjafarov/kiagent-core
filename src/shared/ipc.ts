@@ -56,6 +56,9 @@ export interface CalendarDraftView {
   expiresAt: string;
   calendarName: string | null;
   accountEmail: string | null;
+  /** The review page's When line ("Tue 3 Nov, 18:00–19:30 (Europe/Berlin)"),
+   *  built in main so the sheet and the page never word it differently. */
+  when: string;
   source: { title: string | null; createdAt: string | null } | null;
   similarEvents: {
     kind: 'event' | 'draft';
@@ -63,6 +66,14 @@ export interface CalendarDraftView {
     start: string;
     calendar: string;
   }[];
+}
+
+/** `daySection()` output: escaped markup from day-view-html.ts. */
+export interface CalendarDayView {
+  revision: number;
+  html: string;
+  lineHtml: string;
+  busyClash: boolean;
 }
 
 export type CalendarConfirmOutcome =
@@ -657,6 +668,12 @@ export interface Invokes {
   'calendar-out:discard': { req: { id: string }; res: void };
   'calendar-out:restore': { req: { id: string }; res: void };
   'calendar-out:list-calendars': { req: void; res: CalendarListEntry[] };
+  /** The review page's day view for one draft at the revision the sheet
+   *  shows; null = no day view (stale revision, not a draft, timed out). */
+  'calendar-out:day-view': {
+    req: { id: string; revision: number };
+    res: CalendarDayView | null;
+  };
 
   'mcp:info': { req: void; res: McpInfo };
   'mcp:connect-client': { req: { id: string }; res: void };
@@ -907,6 +924,7 @@ const INVOKE_CHANNEL_MAP = {
   'calendar-out:discard': 0,
   'calendar-out:restore': 0,
   'calendar-out:list-calendars': 0,
+  'calendar-out:day-view': 0,
   'mcp:info': 0,
   'mcp:connect-client': 0,
   'mcp:disconnect-client': 0,
