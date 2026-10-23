@@ -397,18 +397,24 @@ export interface NetFetchOptions {
   dispatcherFactory?: (hostname: string, addresses: string[]) => unknown;
 }
 
-function pinnedDispatcher(hostname: string, addresses: string[]): Agent {
+export function pinnedDispatcher(hostname: string, addresses: string[]): Agent {
   return new Agent({
     connect: {
       servername: hostname,
+      // Answer on the next tick, as real DNS does. Answered synchronously, a
+      // connect the OS refuses on the spot (no network) destroys the TLS
+      // socket inside tls.connect, before undici listens for its error —
+      // an uncaught exception that takes down the main process.
       lookup: (_hostname, options, callback) => {
         const records = addresses.map((address) => ({
           address,
           family: net.isIP(address),
         }));
-        if ((options as { all?: boolean }).all)
-          callback(null, records as never);
-        else callback(null, records[0].address, records[0].family as 4 | 6);
+        process.nextTick(() => {
+          if ((options as { all?: boolean }).all)
+            callback(null, records as never);
+          else callback(null, records[0].address, records[0].family as 4 | 6);
+        });
       },
     },
   });
