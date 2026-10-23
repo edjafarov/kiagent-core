@@ -7,6 +7,7 @@ import {
   MAX_NET_FETCH_BYTES,
   normalizeAddress,
   NetDestinationError,
+  pinnedDispatcher,
   type LookupFn,
 } from '../net-guard';
 
@@ -325,5 +326,34 @@ describe('createNetFetch', () => {
 
   it('the download cap equals the worker fetch cap, so a deferred 100 MiB PDF is reachable', () => {
     expect(MAX_NET_FETCH_BYTES).toBe(MAX_FETCH_BYTES);
+  });
+});
+
+describe('pinnedDispatcher', () => {
+  // A connect the OS refuses on the spot (no network: ENETUNREACH; here a
+  // broadcast address: EAFNOSUPPORT/EACCES). With the pinned lookup answering
+  // synchronously, the TLS socket was destroyed inside tls.connect, its error
+  // had no listener yet, and the main process died on an uncaught exception
+  // (dev app 2026-10-22, network drop).
+  it('a connect refused at once fails the request, never the process', async () => {
+    const uncaught: unknown[] = [];
+    const onUncaught = (e: unknown) => uncaught.push(e);
+    process.on('uncaughtException', onUncaught);
+    const dispatcher = pinnedDispatcher('example.com', [
+      '255.255.255.255',
+      '255.255.255.255',
+    ]);
+    try {
+      await expect(
+        fetch('https://example.com:4999/', {
+          dispatcher,
+        } as RequestInit),
+      ).rejects.toThrow();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(uncaught).toEqual([]);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      await dispatcher.close();
+    }
   });
 });
