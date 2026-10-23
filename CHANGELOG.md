@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.117.1](https://github.com/edjafarov/kiagent-core/compare/v0.117.0...v0.117.1) (2026-10-23)
+
+### Bug Fixes
+
+* **net-guard:** answer the pinned lookup asynchronously ([825c7f6](https://github.com/edjafarov/kiagent-core/commit/825c7f6c30fc1a4bc46fa0e04f5e212f4b7b771f))
+
 ## [0.117.0](https://github.com/edjafarov/kiagent-core/compare/v0.116.0...v0.117.0) (2026-10-22)
 
 ### Features
