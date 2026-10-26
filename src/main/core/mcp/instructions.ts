@@ -40,15 +40,18 @@ Operators (gmail-style, inside the query string):
   label:inbox   has:attachment   filename:report   ext:pdf
   in:gmail (alias source:)   type:email.thread
   order:newest | order:relevance (default: relevance with text,
-    newest without)
+    nearest to now without)
 Repeat an operator to OR within it (from:a from:b); different
-operators AND. Operators-only queries list matching docs newest
-first. Example: from:@zoolatech.com has:attachment order:newest
+operators AND. Operators-only queries list matching docs nearest
+to now first (recent items and upcoming events). Example: from:@zoolatech.com has:attachment order:newest
 
 Recency & dates. The digital memory can span many years and holds
 outdated, superseded material. Every date — created_at and the
 from_date / to_date filters — is when the item was sent, received,
-or created at the source, never when Kia indexed it. Unless the
+or created at the source, never when Kia indexed it. A calendar
+event's date is its START: for "what's on Monday" pass from_date and
+to_date both as that day — a bare YYYY-MM-DD covers the whole day
+in the user's local time. Unless the
 user explicitly asks about the past, treat the newest matching
 document as current and older ones as superseded; when several
 documents answer the same factual question, prefer the most recent

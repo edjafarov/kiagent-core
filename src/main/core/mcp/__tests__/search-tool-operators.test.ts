@@ -39,6 +39,23 @@ describe('search tool operator wiring', () => {
     expect(calls[0].people).toEqual({ from: ['sebastian'] });
   });
 
+  it('a listing without text is nearest-to-now first; text keeps relevance; order: wins', async () => {
+    const calls: any[] = [];
+    const search = makeSearchTool(stubQuery(calls));
+    await search({ source: 'gmail' });
+    await search({ query: 'from:sebastian' });
+    await search({ query: 'invoice' });
+    await search({ query: 'order:newest', source: 'gmail' });
+    await search({ query: 'order:nearest invoice' });
+    expect(calls.map((c) => c.orderBy)).toEqual([
+      'nearest',
+      'nearest',
+      undefined,
+      'newest',
+      'newest',
+    ]);
+  });
+
   it('in: operator overrides the source JSON param and routes to that account', async () => {
     const calls: any[] = [];
     const search = makeSearchTool(stubQuery(calls));

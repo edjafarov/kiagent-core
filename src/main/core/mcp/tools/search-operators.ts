@@ -17,7 +17,7 @@ export interface ParsedQuery {
   hasAttachment: boolean;
   source?: string;
   type?: string;
-  order?: 'newest' | 'relevance';
+  order?: 'newest' | 'relevance' | 'nearest';
 }
 
 // Token scanner: `from:"Roman Kaplun"` and `"term sheet"` are single tokens.
@@ -95,7 +95,8 @@ export function parseOperators(raw: string): ParsedQuery {
         break;
       case 'order': {
         const v = value.toLowerCase();
-        if (v === 'newest' || v === 'relevance') out.order = v;
+        if (v === 'newest' || v === 'relevance' || v === 'nearest')
+          out.order = v;
         else rest.push(tok);
         break;
       }

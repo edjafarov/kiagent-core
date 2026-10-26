@@ -12,7 +12,7 @@ export const COUNT_GROUP_BY_VALUES = ['source', 'from', 'label'] as const;
 export type CountGroupBy = (typeof COUNT_GROUP_BY_VALUES)[number];
 
 export const countDescription = `Aggregate document counts, optionally filtered by \`source\`/\`type\`/\`from_date\`/\`to_date\`.
-\`group_by\`: 'source' (per connected source), 'from' (per sender, email-ish docs), 'label' (per gmail label). "How many mails per sender this week" = \`{group_by:'from', from_date:...}\`. For anything else use \`query_sql\` (see \`get_schema\`).`;
+\`group_by\`: 'source' (per connected source), 'from' (per sender, email-ish docs), 'label' (per gmail label). "How many mails per sender this week" = \`{group_by:'from', from_date:...}\`. A bare day \`YYYY-MM-DD\` in \`from_date\`/\`to_date\` covers that whole local day. For anything else use \`query_sql\` (see \`get_schema\`).`;
 
 export const countInputSchema = {
   type: 'object',
