@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.117.2](https://github.com/edjafarov/kiagent-core/compare/v0.117.1...v0.117.2) (2026-10-26)
+
+### Bug Fixes
+
+* **search:** accept order:nearest; with text it means newest ([d874fb4](https://github.com/edjafarov/kiagent-core/commit/d874fb465c38556fe472c8202afe00079d300a84))
+* **search:** bare-day date bounds cover the whole day; nearest-first listings ([7ed0bc1](https://github.com/edjafarov/kiagent-core/commit/7ed0bc1e4028ed851eb6c97640942ba2fc9506bd))
+
 ## [0.117.1](https://github.com/edjafarov/kiagent-core/compare/v0.117.0...v0.117.1) (2026-10-23)
 
 ### Bug Fixes
