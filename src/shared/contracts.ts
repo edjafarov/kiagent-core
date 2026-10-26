@@ -341,12 +341,15 @@ export interface Query {
    *  Without `text` the result is a recency listing ordered by the
    *  document's origin date (createdAt, falling back to ingestedAt) —
    *  NOT by write order, which inverts after a newest-first backfill.
-   *  `fromDate`/`toDate` bound that same origin date (inclusive).
+   *  `fromDate`/`toDate` bound that same origin date (inclusive). A bare
+   *  `YYYY-MM-DD` means that whole local calendar day on either side.
    *
    *  Structured metadata filters (people/label/hasAttachment/filename/ext)
    *  are case-insensitive matches over documents.metadata JSON — arrays OR
    *  within a field, fields AND. `orderBy: 'newest'` forces origin-date
-   *  ordering even with `text`. */
+   *  ordering even with `text`. `orderBy: 'nearest'` (listings without
+   *  `text` only) orders by distance from now, so upcoming calendar events
+   *  sit next to recent ones instead of after everything a year ahead. */
   search(q: {
     text?: string;
     type?: string;
@@ -361,7 +364,7 @@ export interface Query {
     hasAttachment?: boolean;
     filename?: string[];
     ext?: string[];
-    orderBy?: 'newest' | 'relevance';
+    orderBy?: 'newest' | 'relevance' | 'nearest';
     /** What each row carries. `'full'` (default) = today's rows incl. the whole
      *  markdown. `'snippet'` = `markdown` is '' and `snippet` is always set.
      *  `'metadata'` = `markdown` is '' and there is no snippet work at all. */

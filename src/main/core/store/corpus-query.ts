@@ -59,6 +59,46 @@ export interface CorpusQueryOptions {
    *  sibling): the cache is keyed by `PRAGMA data_version`, sampled on the same
    *  connection BEFORE the lookup that fills it. */
   languageCache?: 'explicit' | 'data-version';
+  /** Clock for `orderBy: 'nearest'`; tests pin it. */
+  now?: () => Date;
+}
+
+const BARE_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** First instant of a `YYYY-MM-DD` local day (plus `days`), as stored dates
+ *  are written: ISO UTC with milliseconds. */
+function localDayStart(day: string, days: number): string {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(y, m - 1, d + days).toISOString();
+}
+
+/** Bounds on the ORIGIN date `col`. A bare `YYYY-MM-DD` means that whole
+ *  local day — compared as text, `<= '2026-10-26'` ended before the day's
+ *  first event, so a one-day window matched nothing. A full timestamp is an
+ *  inclusive bound, as before. */
+export function originDateBounds(
+  col: string,
+  fromDate: string | undefined,
+  toDate: string | undefined,
+): { filters: string[]; params: string[] } {
+  const filters: string[] = [];
+  const params: string[] = [];
+  if (fromDate) {
+    filters.push(`${col} >= ?`);
+    params.push(
+      BARE_DAY.test(fromDate) ? localDayStart(fromDate, 0) : fromDate,
+    );
+  }
+  if (toDate) {
+    if (BARE_DAY.test(toDate)) {
+      filters.push(`${col} < ?`);
+      params.push(localDayStart(toDate, 1));
+    } else {
+      filters.push(`${col} <= ?`);
+      params.push(toDate);
+    }
+  }
+  return { filters, params };
 }
 
 export interface CorpusQuery {
@@ -199,13 +239,14 @@ export function createCorpusQuery(
       // Bounds apply to the document's ORIGIN date (when the email/message
       // was written), falling back to ingest time for undated documents —
       // never to write order, which a newest-first backfill inverts.
-      if (q.fromDate) {
-        filters.push(`COALESCE(d.created_at, d.ingested_at) >= ?`);
-        params.push(q.fromDate);
-      }
-      if (q.toDate) {
-        filters.push(`COALESCE(d.created_at, d.ingested_at) <= ?`);
-        params.push(q.toDate);
+      {
+        const b = originDateBounds(
+          'COALESCE(d.created_at, d.ingested_at)',
+          q.fromDate,
+          q.toDate,
+        );
+        filters.push(...b.filters);
+        params.push(...b.params);
       }
       // Structured metadata filters (spec 2026-08-08): all json_extract over
       // documents.metadata, appended to the SAME filters/params arrays so
@@ -398,12 +439,44 @@ export function createCorpusQuery(
           : project === 'snippet'
             ? `${DOC_COLUMNS_NO_BODY}, substr(d.markdown, 1, ${RECENCY_HEAD_CHARS}) AS markdown`
             : DOC_COLUMNS_NO_BODY;
-      const recency = (await db.all(
-        `SELECT ${recencyCols} FROM documents d WHERE 1=1 ${where}
-           ORDER BY COALESCE(d.created_at, d.ingested_at) DESC, d.id DESC
-           LIMIT ? OFFSET ?`,
-        [...params, limit, offset],
-      )) as unknown as DocRow[];
+      let recency: DocRow[];
+      if (q.orderBy === 'nearest') {
+        // Distance from now, read as two index-ordered halves — the past
+        // newest first, the future soonest first — merged by distance. Each
+        // half reads offset+limit rows, which is exactly enough to page.
+        const now = (opts.now ?? (() => new Date()))();
+        const nowIso = now.toISOString();
+        const take = offset + limit;
+        const half = async (op: '<=' | '>', dir: 'DESC' | 'ASC') =>
+          (await db.all(
+            `SELECT ${recencyCols} FROM documents d WHERE 1=1 ${where}
+               AND COALESCE(d.created_at, d.ingested_at) ${op} ?
+               ORDER BY COALESCE(d.created_at, d.ingested_at) ${dir}, d.id ${dir}
+               LIMIT ?`,
+            [...params, nowIso, take],
+          )) as unknown as DocRow[];
+        const past = await half('<=', 'DESC');
+        const future = await half('>', 'ASC');
+        const at = (r: DocRow) => Date.parse(r.created_at ?? r.ingested_at);
+        const merged: DocRow[] = [];
+        let i = 0;
+        let j = 0;
+        while (merged.length < take && (i < past.length || j < future.length)) {
+          const pastGap =
+            i < past.length ? now.getTime() - at(past[i]) : Infinity;
+          const futureGap =
+            j < future.length ? at(future[j]) - now.getTime() : Infinity;
+          merged.push(pastGap <= futureGap ? past[i++] : future[j++]);
+        }
+        recency = merged.slice(offset);
+      } else {
+        recency = (await db.all(
+          `SELECT ${recencyCols} FROM documents d WHERE 1=1 ${where}
+             ORDER BY COALESCE(d.created_at, d.ingested_at) DESC, d.id DESC
+             LIMIT ? OFFSET ?`,
+          [...params, limit, offset],
+        )) as unknown as DocRow[];
+      }
       return recency.map((r) =>
         project === 'snippet'
           ? toHit(
@@ -430,13 +503,14 @@ export function createCorpusQuery(
         filters.push(`account_id = ?`);
         params.push(q.account);
       }
-      if (q.fromDate) {
-        filters.push(`COALESCE(created_at, ingested_at) >= ?`);
-        params.push(q.fromDate);
-      }
-      if (q.toDate) {
-        filters.push(`COALESCE(created_at, ingested_at) <= ?`);
-        params.push(q.toDate);
+      {
+        const b = originDateBounds(
+          'COALESCE(created_at, ingested_at)',
+          q.fromDate,
+          q.toDate,
+        );
+        filters.push(...b.filters);
+        params.push(...b.params);
       }
       const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
       const r = (
@@ -456,13 +530,14 @@ export function createCorpusQuery(
         filters.push(`d.account_id = ?`);
         params.push(q.account);
       }
-      if (q.fromDate) {
-        filters.push(`COALESCE(d.created_at, d.ingested_at) >= ?`);
-        params.push(q.fromDate);
-      }
-      if (q.toDate) {
-        filters.push(`COALESCE(d.created_at, d.ingested_at) <= ?`);
-        params.push(q.toDate);
+      {
+        const b = originDateBounds(
+          'COALESCE(d.created_at, d.ingested_at)',
+          q.fromDate,
+          q.toDate,
+        );
+        filters.push(...b.filters);
+        params.push(...b.params);
       }
       const where = filters.join(' AND ');
       const sql =

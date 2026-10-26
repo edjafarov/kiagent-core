@@ -40,10 +40,10 @@ START by calling \`digital_memory_info\` to see which sources/accounts/types exi
 
 Query syntax: bare terms are ANDed ("a b" = both must match); "quoted phrases" match exactly; \`-term\` or NOT excludes; UPPERCASE OR alternates (lowercase and/or/not are ordinary terms); \`term*\` prefix-matches; parentheses group. Terms are stemmed ("invoice" matches "invoices"). Example: \`("term sheet" OR investor*) -newsletter\`. Prefer OR-of-synonyms over long AND chains — every bare term narrows the result.
 
-Operators (gmail-style, inside the query string): \`from:\` \`to:\` \`participant:\` match people by case-insensitive substring on name or address — \`from:sebastian\`, \`from:@zoolatech.com\`, \`from:"Roman Kaplun"\`. Case folding is ASCII-only — names with non-ASCII capitals (Ünal, MÜLLER) may not match; use the address, or a substring without those letters (from:nal). \`label:inbox\`; \`has:attachment\`; \`filename:report\`; \`ext:pdf\`; \`in:gmail\` (alias \`source:\`) and \`type:email.thread\` mirror the JSON params; \`order:newest\`/\`order:relevance\` picks the sort (default: relevance with text, newest without). Repeat an operator to OR within it (\`from:a from:b\`); different operators AND. When a source has several connected accounts, merged results are ordered by date — order:relevance applies within each account. Example: \`from:@zoolatech.com has:attachment order:newest log*\`.
-Omit \`query\` (or pass operators only) for a recency listing ordered by the document's own date, newest first.
+Operators (gmail-style, inside the query string): \`from:\` \`to:\` \`participant:\` match people by case-insensitive substring on name or address — \`from:sebastian\`, \`from:@zoolatech.com\`, \`from:"Roman Kaplun"\`. Case folding is ASCII-only — names with non-ASCII capitals (Ünal, MÜLLER) may not match; use the address, or a substring without those letters (from:nal). \`label:inbox\`; \`has:attachment\`; \`filename:report\`; \`ext:pdf\`; \`in:gmail\` (alias \`source:\`) and \`type:email.thread\` mirror the JSON params; \`order:newest\`/\`order:relevance\` picks the sort (default: relevance with text, nearest to now without). Repeat an operator to OR within it (\`from:a from:b\`); different operators AND. When a source has several connected accounts, merged results are ordered by date — order:relevance applies within each account. Example: \`from:@zoolatech.com has:attachment order:newest log*\`.
+Omit \`query\` (or pass operators only) for a listing ordered by the document's own date nearest to now first: recent items, with upcoming calendar events interleaved by how soon they start. \`order:newest\` lists strictly newest first instead (that puts calendar events a year ahead first).
 
-Filters: \`source\` (account's source id, e.g. "gmail"), \`type\`, \`from_date\`/\`to_date\` (ISO, inclusive bounds on the document's origin \`created_at\`), \`limit\` (default 10, max 50). \`context_lines\` controls how many lines of surrounding context are included in the snippet (default 2, max 30) when a snippet has to be built client-side.
+Filters: \`source\` (account's source id, e.g. "gmail"), \`type\`, \`from_date\`/\`to_date\` (inclusive bounds on the document's origin \`created_at\`; a bare day \`YYYY-MM-DD\` covers that whole day in the user's local time — a calendar.event's \`created_at\` IS its start, so for "what's on Monday" pass \`from_date\` and \`to_date\` both as that day), \`limit\` (default 10, max 50). \`context_lines\` controls how many lines of surrounding context are included in the snippet (default 2, max 30) when a snippet has to be built client-side.
 
 Batch mode: pass \`queries\` (array of independent search arg objects) to run several searches in one round-trip. Cannot be combined with top-level filters.
 
@@ -57,7 +57,7 @@ export const searchInputSchema = {
     query: {
       type: 'string',
       description:
-        'optional — full-text search. Terms AND by default (stemmed); "phrases", -exclusions, UPPERCASE OR, prefix*, (grouping); gmail-style operators from:/to:/participant:/label:/has:attachment/filename:/ext:/in:/type:/order:. Omit/empty for a recency listing (newest first by document date).',
+        'optional — full-text search. Terms AND by default (stemmed); "phrases", -exclusions, UPPERCASE OR, prefix*, (grouping); gmail-style operators from:/to:/participant:/label:/has:attachment/filename:/ext:/in:/type:/order:. Omit/empty for a listing nearest to now first by document date.',
     },
     source: {
       type: 'string',
@@ -66,11 +66,13 @@ export const searchInputSchema = {
     type: { type: 'string' },
     from_date: {
       type: 'string',
-      description: 'ISO lower bound on the document created_at',
+      description:
+        'lower bound on the document created_at: ISO timestamp, or a bare YYYY-MM-DD = from the start of that local day',
     },
     to_date: {
       type: 'string',
-      description: 'ISO upper bound on the document created_at',
+      description:
+        'upper bound on the document created_at: ISO timestamp (inclusive), or a bare YYYY-MM-DD = through the end of that local day',
     },
     limit: { type: 'number', description: 'max results (default 10, max 50)' },
     context_lines: {
@@ -145,7 +147,9 @@ export function makeSearchTool(query: Query) {
       hasAttachment: parsed.hasAttachment || undefined,
       filename: parsed.filename.length ? parsed.filename : undefined,
       ext: parsed.ext.length ? parsed.ext : undefined,
-      orderBy: parsed.order,
+      // A listing without text defaults to nearest-to-now: newest-first
+      // would put recurring calendar events a year ahead before today's.
+      orderBy: parsed.order ?? (rawText ? undefined : ('nearest' as const)),
       // The store builds the snippet where the rows are read; the tool never
       // needs a body (get(id) fetches it).
       project: 'snippet' as const,
@@ -161,11 +165,18 @@ export function makeSearchTool(query: Query) {
       );
       docs = lists.flat();
       // Multiple per-account result lists are each independently ranked;
-      // merge by the document's own date as the best cross-account ordering.
+      // merge by the document's own date as the best cross-account ordering
+      // — by distance from now when the lists are nearest-first.
       const dateOf = (d: Document) => d.createdAt ?? d.ingestedAt;
-      docs.sort((a, b) =>
-        dateOf(a) < dateOf(b) ? 1 : dateOf(a) > dateOf(b) ? -1 : 0,
-      );
+      if (base.orderBy === 'nearest') {
+        const now = Date.now();
+        const gap = (d: Document) => Math.abs(Date.parse(dateOf(d)) - now);
+        docs.sort((a, b) => gap(a) - gap(b));
+      } else {
+        docs.sort((a, b) =>
+          dateOf(a) < dateOf(b) ? 1 : dateOf(a) > dateOf(b) ? -1 : 0,
+        );
+      }
       docs = docs.slice(0, limit);
     }
 
