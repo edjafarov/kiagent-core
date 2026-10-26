@@ -46,10 +46,12 @@ describe('search tool operator wiring', () => {
     await search({ query: 'from:sebastian' });
     await search({ query: 'invoice' });
     await search({ query: 'order:newest', source: 'gmail' });
+    await search({ query: 'order:nearest invoice' });
     expect(calls.map((c) => c.orderBy)).toEqual([
       'nearest',
       'nearest',
       undefined,
+      'newest',
       'newest',
     ]);
   });

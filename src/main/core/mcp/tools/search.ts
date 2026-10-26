@@ -40,7 +40,7 @@ START by calling \`digital_memory_info\` to see which sources/accounts/types exi
 
 Query syntax: bare terms are ANDed ("a b" = both must match); "quoted phrases" match exactly; \`-term\` or NOT excludes; UPPERCASE OR alternates (lowercase and/or/not are ordinary terms); \`term*\` prefix-matches; parentheses group. Terms are stemmed ("invoice" matches "invoices"). Example: \`("term sheet" OR investor*) -newsletter\`. Prefer OR-of-synonyms over long AND chains — every bare term narrows the result.
 
-Operators (gmail-style, inside the query string): \`from:\` \`to:\` \`participant:\` match people by case-insensitive substring on name or address — \`from:sebastian\`, \`from:@zoolatech.com\`, \`from:"Roman Kaplun"\`. Case folding is ASCII-only — names with non-ASCII capitals (Ünal, MÜLLER) may not match; use the address, or a substring without those letters (from:nal). \`label:inbox\`; \`has:attachment\`; \`filename:report\`; \`ext:pdf\`; \`in:gmail\` (alias \`source:\`) and \`type:email.thread\` mirror the JSON params; \`order:newest\`/\`order:relevance\` picks the sort (default: relevance with text, nearest to now without). Repeat an operator to OR within it (\`from:a from:b\`); different operators AND. When a source has several connected accounts, merged results are ordered by date — order:relevance applies within each account. Example: \`from:@zoolatech.com has:attachment order:newest log*\`.
+Operators (gmail-style, inside the query string): \`from:\` \`to:\` \`participant:\` match people by case-insensitive substring on name or address — \`from:sebastian\`, \`from:@zoolatech.com\`, \`from:"Roman Kaplun"\`. Case folding is ASCII-only — names with non-ASCII capitals (Ünal, MÜLLER) may not match; use the address, or a substring without those letters (from:nal). \`label:inbox\`; \`has:attachment\`; \`filename:report\`; \`ext:pdf\`; \`in:gmail\` (alias \`source:\`) and \`type:email.thread\` mirror the JSON params; \`order:newest\`/\`order:relevance\`/\`order:nearest\` picks the sort (default: relevance with text, nearest to now without). Repeat an operator to OR within it (\`from:a from:b\`); different operators AND. When a source has several connected accounts, merged results are ordered by date — order:relevance applies within each account. Example: \`from:@zoolatech.com has:attachment order:newest log*\`.
 Omit \`query\` (or pass operators only) for a listing ordered by the document's own date nearest to now first: recent items, with upcoming calendar events interleaved by how soon they start. \`order:newest\` lists strictly newest first instead (that puts calendar events a year ahead first).
 
 Filters: \`source\` (account's source id, e.g. "gmail"), \`type\`, \`from_date\`/\`to_date\` (inclusive bounds on the document's origin \`created_at\`; a bare day \`YYYY-MM-DD\` covers that whole day in the user's local time — a calendar.event's \`created_at\` IS its start, so for "what's on Monday" pass \`from_date\` and \`to_date\` both as that day), \`limit\` (default 10, max 50). \`context_lines\` controls how many lines of surrounding context are included in the snippet (default 2, max 30) when a snippet has to be built client-side.
@@ -149,7 +149,12 @@ export function makeSearchTool(query: Query) {
       ext: parsed.ext.length ? parsed.ext : undefined,
       // A listing without text defaults to nearest-to-now: newest-first
       // would put recurring calendar events a year ahead before today's.
-      orderBy: parsed.order ?? (rawText ? undefined : ('nearest' as const)),
+      // Text matches have no nearest order; order:nearest there means newest.
+      orderBy: rawText
+        ? parsed.order === 'nearest'
+          ? ('newest' as const)
+          : parsed.order
+        : (parsed.order ?? ('nearest' as const)),
       // The store builds the snippet where the rows are read; the tool never
       // needs a body (get(id) fetches it).
       project: 'snippet' as const,
