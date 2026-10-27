@@ -535,12 +535,16 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       kind: Change['kind'];
       ref_id: string;
     },
-    everySeq = false,
+    everySeq: boolean,
+    /** Pre-read body-less rows for the window (see materialize). */
+    heads?: Map<string, DocRow>,
   ): Promise<Change | null> => {
     if (r.kind === 'document') {
-      const doc = (
-        await db.all(`SELECT * FROM documents WHERE id = ?`, [r.ref_id])
-      )[0] as unknown as DocRow | undefined;
+      const doc = heads
+        ? heads.get(r.ref_id)
+        : ((
+            await db.all(`SELECT * FROM documents WHERE id = ?`, [r.ref_id])
+          )[0] as unknown as DocRow | undefined);
       // Row already purged — the tombstone further down the feed informs.
       // #59 §0: a document is fed only under its CURRENT seq. An older change
       // of the same document materializes to nothing: the newer change is
@@ -567,12 +571,21 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     };
   };
 
+  /** A document row without its body: what a read-only projection needs
+   *  (ids, title, timestamps, archive state). The body columns come back
+   *  empty, so toDocument() still yields a well-formed Document. */
+  const HEAD_COLUMNS = `id, account_id, external_id, type, title, url,
+    created_at, parent_id, content_hash, seq, ingest_seq, archived_at,
+    ingested_at, updated_at, scope_root_id,
+    '' AS markdown, '{}' AS metadata, '[]' AS languages`;
+
   /** `high` = last RAW change row scanned — callers advance to it even when
    *  every row in the window materialized to nothing. */
   const materialize = async (
     after: Seq,
     kinds?: Change['kind'][],
     everySeq = false,
+    noBody = false,
   ): Promise<{ changes: Change[]; high: Seq }> => {
     const kindFilter = kinds?.length
       ? ` AND kind IN (${kinds.map(() => '?').join(',')})`
@@ -586,9 +599,34 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       kind: Change['kind'];
       ref_id: string;
     }>;
+    // Without bodies the rows are small, so the window's documents come back
+    // in ONE worker round trip instead of one per change: a backfill puts
+    // thousands of document changes ahead of anything else in the log, and
+    // per-row reads queued behind ingest commits kept the app projection
+    // minutes behind (a new account stayed invisible until relaunch).
+    // Feeds with bodies stay per row: 500 large bodies in one reply would
+    // blow the worker's structured-clone budget.
+    let heads: Map<string, DocRow> | undefined;
+    if (noBody) {
+      const ids = [
+        ...new Set(
+          rows.filter((r) => r.kind === 'document').map((r) => r.ref_id),
+        ),
+      ];
+      heads = new Map();
+      if (ids.length) {
+        const found = (await db.all(
+          `SELECT ${HEAD_COLUMNS} FROM documents
+             WHERE id IN (${ids.map(() => '?').join(',')})`,
+          ids,
+        )) as unknown as DocRow[];
+        for (const d of found) heads.set(d.id, d);
+      }
+    }
     const changes: Change[] = [];
     for (const r of rows) {
-      const c = await materializeRow(r, everySeq);
+      // eslint-disable-next-line no-await-in-loop
+      const c = await materializeRow(r, everySeq, heads);
       if (c) changes.push(c);
     }
     return { changes, high: rows.length ? rows[rows.length - 1].seq : after };
@@ -758,6 +796,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
                     cursor,
                     opts?.kinds,
                     opts?.everySeq,
+                    opts?.noBody,
                   );
                   if (changes.length > 0) {
                     cursor = high;

@@ -95,6 +95,13 @@ export function createAppProjection(
 ): Projection<AppState> {
   const archivedOf = new WeakMap<AppState, ArchivedIndex>();
   return {
+    // apply() reads only ids, titles, timestamps and archive state.
+    documentBodies: false,
+    // A new source must show up while an earlier one is still backfilling:
+    // the main feed can be thousands of document changes behind. Account
+    // upserts by id and documents of an unknown account are skipped below,
+    // so seeing these early and twice is safe.
+    leadKinds: ['account', 'accountRemoved'],
     async init(read) {
       const accounts = await read.accounts();
       const archived = new Map<AccountId, ReadonlySet<DocumentId>>();

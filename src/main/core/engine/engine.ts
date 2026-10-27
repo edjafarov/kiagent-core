@@ -2474,18 +2474,60 @@ export function createEngine(deps: EngineDeps): Engine & {
             let seq = await store.headSeq();
             let state: S = state0;
             onDiff(state, seq);
-            for await (const changes of abortable(
-              // #59 §0: a projection writes no ledger, and app-projection
-              // counts a document's insert row (seq === ingestSeq) even when
-              // the reader only reaches it after a later update.
-              store.feed(seq, { everySeq: true }),
-              abort.signal,
-            )) {
-              if (abort.signal.aborted) return;
-              state = projection.apply(state, changes);
-              seq = changes[changes.length - 1].seq;
-              onDiff(state, seq);
-              retries = 0;
+            const noBody = projection.documentBodies === false;
+            // Projection.leadKinds: a second tail applies those kinds into the
+            // same state ahead of the main feed, which can sit minutes behind
+            // a backfill. It lives for this attempt only; a retry re-inits
+            // and starts a fresh one.
+            const attempt = new AbortController();
+            const endAttempt = () => attempt.abort();
+            abort.signal.addEventListener('abort', endAttempt, { once: true });
+            const leadKinds = projection.leadKinds ?? [];
+            const lead = leadKinds.length
+              ? (async () => {
+                  try {
+                    for await (const changes of abortable(
+                      store.feed(seq, {
+                        kinds: leadKinds,
+                        everySeq: true,
+                        noBody,
+                      }),
+                      attempt.signal,
+                    )) {
+                      if (attempt.signal.aborted) return;
+                      state = projection.apply(state, changes);
+                      onDiff(state, seq);
+                    }
+                  } catch (err) {
+                    // The main feed meets the same store failure and retries;
+                    // until then these kinds just move at its pace.
+                    if (!attempt.signal.aborted)
+                      logs.log(
+                        'engine',
+                        'warn',
+                        `projection lead feed stopped: ${String(err)}`,
+                      );
+                  }
+                })()
+              : undefined;
+            try {
+              for await (const changes of abortable(
+                // #59 §0: a projection writes no ledger, and app-projection
+                // counts a document's insert row (seq === ingestSeq) even when
+                // the reader only reaches it after a later update.
+                store.feed(seq, { everySeq: true, noBody }),
+                abort.signal,
+              )) {
+                if (abort.signal.aborted) return;
+                state = projection.apply(state, changes);
+                seq = changes[changes.length - 1].seq;
+                onDiff(state, seq);
+                retries = 0;
+              }
+            } finally {
+              attempt.abort();
+              abort.signal.removeEventListener('abort', endAttempt);
+              await lead;
             }
             return;
           } catch (err) {
