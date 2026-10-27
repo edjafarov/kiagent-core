@@ -347,30 +347,36 @@ export function createCorpusQuery(
         let rows: Array<DocRow & { _snippet: string | null }>;
         if (rankFirst) {
           // Pages count live rows, like the joined statement: rank once
-          // (ids only, never a row), then read rows a batch at a time,
-          // dropping filtered ones, until the page is full.
-          const ranked = (await db.all(
-            `SELECT doc_id FROM documents_fts WHERE documents_fts MATCH ?
-               ORDER BY bm25(documents_fts, 0, 4.0, 1.0, 2.0, 0.5), rowid`,
-            [match],
-          )) as unknown as Array<{ doc_id: string }>;
+          // (index rowids only — even doc_id is a stored-row read), then read
+          // rows a batch at a time, dropping filtered ones, until the page
+          // is full.
+          const ranked = (
+            (await db.all(
+              `SELECT rowid AS r FROM documents_fts WHERE documents_fts MATCH ?
+                 ORDER BY bm25(documents_fts, 0, 4.0, 1.0, 2.0, 0.5), rowid`,
+              [match],
+            )) as unknown as Array<{ r: number }>
+          ).map((h) => h.r);
           const live: Array<DocRow & { _snippet: string | null }> = [];
           for (
             let at = 0;
             at < ranked.length && live.length < offset + limit;
             at += RANK_BATCH
           ) {
-            const ids = ranked.slice(at, at + RANK_BATCH).map((h) => h.doc_id);
+            const batch = ranked.slice(at, at + RANK_BATCH);
             // eslint-disable-next-line no-await-in-loop
             const found = (await db.all(
-              `SELECT ${cols}, NULL AS _snippet FROM documents d
-                 WHERE d.id IN (${ids.map(() => '?').join(',')}) ${where}`,
-              [...ids, ...params],
-            )) as unknown as Array<DocRow & { _snippet: string | null }>;
-            const byId = new Map(found.map((r) => [r.id, r]));
-            for (const id of ids) {
-              const r = byId.get(id);
-              if (r) live.push(r);
+              `SELECT ${cols}, NULL AS _snippet, f.rowid AS _rank
+                 FROM documents_fts f JOIN documents d ON d.id = f.doc_id
+                 WHERE f.rowid IN (${batch.map(() => '?').join(',')}) ${where}`,
+              [...batch, ...params],
+            )) as unknown as Array<
+              DocRow & { _snippet: string | null; _rank: number }
+            >;
+            const byRank = new Map(found.map((r) => [r._rank, r]));
+            for (const r of batch) {
+              const row = byRank.get(r);
+              if (row) live.push(row);
             }
           }
           rows = live.slice(offset, offset + limit);

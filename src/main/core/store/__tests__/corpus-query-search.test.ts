@@ -234,8 +234,10 @@ describe('corpus query: fuzzy pass and projections', () => {
       limit: 100,
     });
     expect(hits).toHaveLength(50);
-    expect(sqls.filter((q) => q.includes('documents_fts'))).toHaveLength(1);
-    expect(sqls.filter((q) => q.includes('d.id IN'))).toHaveLength(2);
+    expect(sqls.filter((q) => q.includes('documents_fts MATCH'))).toHaveLength(
+      1,
+    );
+    expect(sqls.filter((q) => q.includes('f.rowid IN'))).toHaveLength(2);
   });
 
   it('archived-heavy corpus still returns the live fuzzy hits', async () => {
