@@ -216,6 +216,28 @@ describe('corpus query: fuzzy pass and projections', () => {
     ]);
   });
 
+  it("'metadata' relevance ranks once even when a filter needs several row batches", async () => {
+    await commit(
+      acc,
+      Array.from({ length: 700 }, (_, i) =>
+        doc(`n${i}`, {
+          markdown: 'invoice',
+          createdAt: i < 650 ? '2025-01-01T00:00:00Z' : '2026-03-01T00:00:00Z',
+        }),
+      ),
+    );
+    sqls.length = 0;
+    const hits = await query.search({
+      text: 'invoice',
+      project: 'metadata',
+      fromDate: '2026-02-01T00:00:00Z',
+      limit: 100,
+    });
+    expect(hits).toHaveLength(50);
+    expect(sqls.filter((q) => q.includes('documents_fts'))).toHaveLength(1);
+    expect(sqls.filter((q) => q.includes('d.id IN'))).toHaveLength(2);
+  });
+
   it('archived-heavy corpus still returns the live fuzzy hits', async () => {
     await commit(
       acc,
