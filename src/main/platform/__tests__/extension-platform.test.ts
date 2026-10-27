@@ -312,6 +312,21 @@ describe('createExtensionPlatform', () => {
       expect(writerSearch).not.toHaveBeenCalled();
     });
 
+    it('bulk pages stay on the writer even when deps.reads is given', async () => {
+      await platform.stop();
+      const documentPage = jest.fn(async () => ({ items: [], nextSeq: 0 }));
+      const writerPage = jest
+        .spyOn(store.read, 'documentPage')
+        .mockResolvedValue({ items: [], nextSeq: 0 } as never);
+      platform = makePlatform({
+        reads: { ...store.read, documentPage } as never,
+      });
+      await probe();
+      await tools.get('query_page')!.call({});
+      expect(writerPage).toHaveBeenCalledWith({ afterSeq: 0, limit: 1 });
+      expect(documentPage).not.toHaveBeenCalled();
+    });
+
     it("falls back to the writer's store.read without deps.reads", async () => {
       await expect(probe()).resolves.toEqual([]);
     });

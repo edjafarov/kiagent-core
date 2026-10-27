@@ -299,9 +299,11 @@ export interface ExtensionPlatformDeps {
   /** Optional test/integration seam; production uses the guarded default. */
   networkFactory?: (owner: string, signal: AbortSignal) => NetworkService;
   store: CoreStore;
-  /** What `host.query` reads through: the read worker, so an extension's
-   *  reads never queue behind ingest on the writer. Omitted (tests), the
-   *  writer's `store.read` answers. */
+  /** What `host.query`'s interactive reads go through: the read worker, so
+   *  a search never queues behind ingest on the writer. Bulk pages
+   *  (documentPage, seedPage) stay on the writer: on the one read worker
+   *  they held MCP, renderer and search reads for seconds. Omitted (tests),
+   *  the writer's `store.read` answers everything. */
   reads?: Query;
   sources: SourceRegistry;
   /** Where cap-gated extension Senders land. Same lifecycle as `sources`:
@@ -1136,7 +1138,13 @@ export function createExtensionPlatform(
             // Accounts name their source's documentTypes (calendar
             // accounts are found by type, never by source id).
             query: withAccountTypes(
-              deps.reads ?? deps.store.read,
+              deps.reads
+                ? {
+                    ...deps.reads,
+                    documentPage: deps.store.read.documentPage,
+                    seedPage: deps.store.read.seedPage,
+                  }
+                : deps.store.read,
               deps.sources,
             ),
             inference: {

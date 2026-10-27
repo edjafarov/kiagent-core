@@ -7,7 +7,7 @@
   "caps": ["query"],
   "contributes": {
     "sources": [],
-    "tools": ["query_probe"],
+    "tools": ["query_probe", "query_page"],
     "senders": []
   }
 }

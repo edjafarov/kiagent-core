@@ -10,6 +10,12 @@ module.exports = {
           inputSchema: { type: 'object' },
           call: async () => host.query.search({ text: 'probe' }),
         },
+        {
+          name: 'query_page',
+          description: 'pages',
+          inputSchema: { type: 'object' },
+          call: async () => host.query.documentPage({ afterSeq: 0, limit: 1 }),
+        },
       ],
     };
   },
