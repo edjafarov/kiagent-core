@@ -138,6 +138,43 @@ describe('corpus query: fuzzy pass and projections', () => {
     expect(corpus.fuzzyRuns()).toBe(1);
   });
 
+  it("'metadata' relevance ranks inside the index, then reads only the page's rows", async () => {
+    await commit(acc, [
+      doc('body1', {
+        markdown: 'an invoice',
+        createdAt: '2026-03-01T00:00:00Z',
+      }),
+      doc('titled', { title: 'Invoice March', markdown: 'see invoice' }),
+      doc('body2', { markdown: 'the invoice again' }),
+      doc('gone', { title: 'Invoice gone', markdown: 'invoice' }),
+      doc('other', { markdown: 'nothing here' }),
+    ]);
+    await db.run(
+      `UPDATE documents SET archived_at = '2026-02-01T00:00:00Z' WHERE external_id = 'gone'`,
+    );
+    const full = await query.search({ text: 'invoice' });
+    sqls.length = 0;
+    const meta = await query.search({ text: 'invoice', project: 'metadata' });
+    expect(meta.map((h) => h.externalId)).toEqual(
+      full.map((h) => h.externalId),
+    );
+    expect(meta[0].externalId).toBe('titled');
+    expect(meta.map((h) => h.externalId)).not.toContain('gone');
+    const ranking = sqls.find((s) => s.includes('documents_fts')) ?? '';
+    expect(ranking).not.toMatch(/JOIN/);
+    // a filter the index cannot apply keeps the joined statement
+    sqls.length = 0;
+    const scoped = await query.search({
+      text: 'invoice',
+      project: 'metadata',
+      account: acc,
+    });
+    expect(scoped.map((h) => h.externalId)).toEqual(
+      full.map((h) => h.externalId),
+    );
+    expect(sqls.find((s) => s.includes('documents_fts'))).toMatch(/JOIN/);
+  });
+
   it('archived-heavy corpus still returns the live fuzzy hits', async () => {
     await commit(
       acc,

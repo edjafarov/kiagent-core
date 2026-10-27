@@ -335,26 +335,54 @@ export function createCorpusQuery(
           project === 'metadata'
             ? 'NULL'
             : `snippet(documents_fts, 2, '<b>', '</b>', '…', 24)`;
-        const rows = (await db.all(
-          `SELECT ${cols}, ${snippetSql} AS _snippet
-             FROM documents_fts f JOIN documents d ON d.id = f.doc_id
-             WHERE documents_fts MATCH ? ${where}
-             ${orderSql}
-             LIMIT ? OFFSET ?`,
-          [
-            ftsQuery(q.text, (term) => stemVariants(term, langs)),
-            ...params,
-            limit,
-            offset,
-          ],
-        )) as unknown as Array<DocRow & { _snippet: string | null }>;
+        const match = ftsQuery(q.text, (term) => stemVariants(term, langs));
+        // A relevance page with no snippet and no filter but archived is
+        // ranked and cut inside the index; only the page's rows are read.
+        // Joining first reads every hit's row — past its body, which comes
+        // before most columns — so a common word cost seconds.
+        const rankFirst =
+          q.orderBy !== 'newest' &&
+          project === 'metadata' &&
+          filters.every((f) => f === 'd.archived_at IS NULL');
+        let indexHits = 0;
+        let rows: Array<DocRow & { _snippet: string | null }>;
+        if (rankFirst) {
+          const page = (await db.all(
+            `SELECT doc_id, bm25(documents_fts, 0, 4.0, 1.0, 2.0, 0.5) AS r
+               FROM documents_fts WHERE documents_fts MATCH ?
+               ORDER BY r LIMIT ? OFFSET ?`,
+            [match, limit, offset],
+          )) as unknown as Array<{ doc_id: string }>;
+          indexHits = page.length;
+          const found = page.length
+            ? ((await db.all(
+                `SELECT ${cols}, NULL AS _snippet FROM documents d
+                   WHERE d.id IN (${page.map(() => '?').join(',')}) ${where}`,
+                [...page.map((h) => h.doc_id), ...params],
+              )) as unknown as Array<DocRow & { _snippet: string | null }>)
+            : [];
+          const byId = new Map(found.map((r) => [r.id, r]));
+          rows = page
+            .map((h) => byId.get(h.doc_id))
+            .filter((r): r is DocRow & { _snippet: null } => r !== undefined);
+        } else {
+          rows = (await db.all(
+            `SELECT ${cols}, ${snippetSql} AS _snippet
+               FROM documents_fts f JOIN documents d ON d.id = f.doc_id
+               WHERE documents_fts MATCH ? ${where}
+               ${orderSql}
+               LIMIT ? OFFSET ?`,
+            [match, ...params, limit, offset],
+          )) as unknown as Array<DocRow & { _snippet: string | null }>;
+          indexHits = rows.length;
+        }
         const exact = rows.map((r) =>
           toHit(r, project === 'metadata' ? undefined : (r._snippet ?? '')),
         );
 
         // Fuzzy fallback (trigram substring recall): only when the exact pass
         // left the FIRST page short — good queries never pay for a second scan.
-        if (offset > 0 || rows.length >= limit) return exact;
+        if (offset > 0 || indexHits >= limit) return exact;
         const { positive, negated } = extractTerms(q.text);
         // Cannot-represent-it ⇒ don't-fuzz: (a) every positive term must
         // survive into the trigram AND group; (b) grouped negation has no
