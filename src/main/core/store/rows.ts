@@ -25,8 +25,9 @@ export interface DocRow {
   languages: string;
   ingested_at: string;
   updated_at: string;
-  /** v3. `undefined` on a pre-v3 database — every read site is `SELECT *`,
-   *  so `toDocument`'s `?? null` absorbs the absence. */
+  /** v3. `undefined` on a pre-v3 database — most read sites are `SELECT *`,
+   *  so `toDocument`'s `?? null` absorbs the absence (the feed's body-less
+   *  read names it; openDb migrates before any store opens). */
   scope_root_id: string | null;
 }
 

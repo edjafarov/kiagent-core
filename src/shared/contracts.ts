@@ -444,6 +444,11 @@ export interface Store {
        *  sets this to receive every document change, each paired with the
        *  current document. Never for a consumer that writes the ledger. */
       everySeq?: boolean;
+      /** Documents arrive without their body: `markdown` '', `metadata` {}
+       *  and `languages` []. Each window's documents are then read in one
+       *  round trip. For read-only projections that use only ids, titles,
+       *  timestamps and archive state. */
+      noBody?: boolean;
     },
   ): AsyncIterable<Change[]>;
   /** Engine-only in practice — no extension ever holds this. */
@@ -1545,6 +1550,14 @@ export interface Worker {
 export interface Projection<S> {
   init(read: Query): Promise<S>;
   apply(state: S, changes: Change[]): S; // PURE
+  /** false: documents are fed without bodies (see Store.feed `noBody`). */
+  documentBodies?: boolean;
+  /** Kinds a second, light tail feeds AHEAD of the main feed, so e.g. a new
+   *  account reaches the state while a document backlog is still being
+   *  worked through. apply() then sees these changes twice, and before the
+   *  older document changes around them: it must be idempotent for them and
+   *  must ignore documents of an account it does not hold. */
+  leadKinds?: Change['kind'][];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
