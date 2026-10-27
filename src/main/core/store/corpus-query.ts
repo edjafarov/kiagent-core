@@ -339,14 +339,11 @@ export function createCorpusQuery(
             ? 'NULL'
             : `snippet(documents_fts, 2, '<b>', '</b>', '…', 24)`;
         const match = ftsQuery(q.text, (term) => stemVariants(term, langs));
-        // A relevance page with no snippet and no filter but archived is
-        // ranked and cut inside the index; only the page's rows are read.
+        // A relevance page without snippets is ranked inside the index and
+        // only the rows it reaches are read, filters applied per window.
         // Joining first reads every hit's row — past its body, which comes
         // before most columns — so a common word cost seconds.
-        const rankFirst =
-          q.orderBy !== 'newest' &&
-          project === 'metadata' &&
-          filters.every((f) => f === 'd.archived_at IS NULL');
+        const rankFirst = q.orderBy !== 'newest' && project === 'metadata';
         let rows: Array<DocRow & { _snippet: string | null }>;
         if (rankFirst) {
           // Pages count live rows, like the joined statement: walk the

@@ -162,7 +162,7 @@ describe('corpus query: fuzzy pass and projections', () => {
     expect(meta.map((h) => h.externalId)).not.toContain('gone');
     const ranking = sqls.find((s) => s.includes('documents_fts')) ?? '';
     expect(ranking).not.toMatch(/JOIN/);
-    // a filter the index cannot apply keeps the joined statement
+    // filters apply to each ranked window
     sqls.length = 0;
     const scoped = await query.search({
       text: 'invoice',
@@ -172,7 +172,24 @@ describe('corpus query: fuzzy pass and projections', () => {
     expect(scoped.map((h) => h.externalId)).toEqual(
       full.map((h) => h.externalId),
     );
-    expect(sqls.find((s) => s.includes('documents_fts'))).toMatch(/JOIN/);
+    expect(sqls.find((s) => s.includes('documents_fts'))).not.toMatch(/JOIN/);
+    const other = (
+      await store.createAccount({ source: 'test', identifier: 'b@x' })
+    ).id;
+    await commit(other, [doc('elsewhere', { title: 'Invoice elsewhere' })]);
+    const mine = await query.search({
+      text: 'invoice',
+      project: 'metadata',
+      account: acc,
+      limit: 1,
+    });
+    expect(mine.map((h) => h.externalId)).toEqual(['titled']);
+    const dated = await query.search({
+      text: 'invoice',
+      project: 'metadata',
+      fromDate: '2026-02-01T00:00:00Z',
+    });
+    expect(dated.map((h) => h.externalId)).toEqual(['body1']);
   });
 
   it("'metadata' relevance pages count live rows when archived hits rank first", async () => {
