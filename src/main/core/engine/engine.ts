@@ -2468,6 +2468,13 @@ export function createEngine(deps: EngineDeps): Engine & {
         let retries = 0;
         for (;;) {
           try {
+            const leadKinds = projection.leadKinds ?? [];
+            // The lead starts from BEFORE init: an account created while
+            // init() runs (its reads queue behind a backfill's commits) is
+            // otherwise in neither the snapshot nor the main feed. Account
+            // replays are idempotent; documents are not, hence the main feed
+            // keeps its after-init head.
+            const leadFrom = leadKinds.length ? await store.headSeq() : 0;
             const state0 = (await projection.init(read)) as S;
             // Head captured after init: a change landing mid-init may be applied
             // twice; apply() must tolerate replays (upserts by id do).
@@ -2482,12 +2489,18 @@ export function createEngine(deps: EngineDeps): Engine & {
             const attempt = new AbortController();
             const endAttempt = () => attempt.abort();
             abort.signal.addEventListener('abort', endAttempt, { once: true });
-            const leadKinds = projection.leadKinds ?? [];
+            // Last seq the lead applied. The main feed skips lead-kind
+            // changes at or below it: it may have read such a row (current at
+            // read time) before the lead read a newer one, and applying it
+            // after would roll the state back — a removed account would come
+            // back for the whole backlog.
+            let leadSeq = leadFrom;
+            let leadErr: unknown;
             const lead = leadKinds.length
               ? (async () => {
                   try {
                     for await (const changes of abortable(
-                      store.feed(seq, {
+                      store.feed(leadFrom, {
                         kinds: leadKinds,
                         everySeq: true,
                         noBody,
@@ -2496,17 +2509,15 @@ export function createEngine(deps: EngineDeps): Engine & {
                     )) {
                       if (attempt.signal.aborted) return;
                       state = projection.apply(state, changes);
+                      leadSeq = changes[changes.length - 1].seq;
                       onDiff(state, seq);
                     }
                   } catch (err) {
-                    // The main feed meets the same store failure and retries;
-                    // until then these kinds just move at its pace.
-                    if (!attempt.signal.aborted)
-                      logs.log(
-                        'engine',
-                        'warn',
-                        `projection lead feed stopped: ${String(err)}`,
-                      );
+                    // The main feed may be parked waiting for a commit and
+                    // never see this failure: end the attempt so it reaches
+                    // the retry below instead of leaving the lead dead.
+                    leadErr = err;
+                    attempt.abort();
                   }
                 })()
               : undefined;
@@ -2516,10 +2527,15 @@ export function createEngine(deps: EngineDeps): Engine & {
                 // counts a document's insert row (seq === ingestSeq) even when
                 // the reader only reaches it after a later update.
                 store.feed(seq, { everySeq: true, noBody }),
-                abort.signal,
+                attempt.signal,
               )) {
-                if (abort.signal.aborted) return;
-                state = projection.apply(state, changes);
+                if (attempt.signal.aborted) break;
+                state = projection.apply(
+                  state,
+                  changes.filter(
+                    (c) => c.seq > leadSeq || !leadKinds.includes(c.kind),
+                  ),
+                );
                 seq = changes[changes.length - 1].seq;
                 onDiff(state, seq);
                 retries = 0;
@@ -2529,6 +2545,8 @@ export function createEngine(deps: EngineDeps): Engine & {
               abort.signal.removeEventListener('abort', endAttempt);
               await lead;
             }
+            if (abort.signal.aborted) return;
+            if (leadErr !== undefined) throw leadErr;
             return;
           } catch (err) {
             if (abort.signal.aborted) return;
