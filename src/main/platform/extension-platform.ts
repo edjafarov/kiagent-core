@@ -29,6 +29,7 @@ import type {
   LogLevel,
   Manifest,
   McpTool,
+  Query,
   SendResult,
   Source,
   WritableCalendar,
@@ -298,6 +299,10 @@ export interface ExtensionPlatformDeps {
   /** Optional test/integration seam; production uses the guarded default. */
   networkFactory?: (owner: string, signal: AbortSignal) => NetworkService;
   store: CoreStore;
+  /** What `host.query` reads through: the read worker, so an extension's
+   *  reads never queue behind ingest on the writer. Omitted (tests), the
+   *  writer's `store.read` answers. */
+  reads?: Query;
   sources: SourceRegistry;
   /** Where cap-gated extension Senders land. Same lifecycle as `sources`:
    *  registered on activation, dropped on every host exit (crash included),
@@ -1130,7 +1135,10 @@ export function createExtensionPlatform(
             files,
             // Accounts name their source's documentTypes (calendar
             // accounts are found by type, never by source id).
-            query: withAccountTypes(deps.store.read, deps.sources),
+            query: withAccountTypes(
+              deps.reads ?? deps.store.read,
+              deps.sources,
+            ),
             inference: {
               ...deps.inference,
               lane: async () => deps.laneState(),

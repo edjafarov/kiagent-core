@@ -10,7 +10,7 @@ import type { AppDb } from '../../db/app-db';
 import { DB_WORKER_CRASHED, DB_WORKER_DEAD } from '../../db/worker-client';
 import { QUERY_METHODS, type QueryMethod } from './corpus-query';
 
-export type ReadCaller = 'mcp' | 'renderer' | 'other';
+export type ReadCaller = 'mcp' | 'renderer' | 'extension' | 'other';
 export type ReadVia = 'reader' | 'writer';
 export type FallbackReason = 'open-failed' | 'crashed' | 'dead';
 export type ReadMode = 'reader' | 'writer';

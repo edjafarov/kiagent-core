@@ -1,0 +1,13 @@
+{
+  "id": "test.query",
+  "name": "Query Test Extension",
+  "version": "1.0.0",
+  "engine": "^2.0.0",
+  "entry": "index.js",
+  "caps": ["query"],
+  "contributes": {
+    "sources": [],
+    "tools": ["query_probe"],
+    "senders": []
+  }
+}

@@ -1376,6 +1376,7 @@ app
         'bundled-extensions-data',
       ),
       db: p.db,
+      reads: p.readsFor('extension'),
       attention,
       fileRoots,
       // Declared roots (platform 2.3.0) may never cover the app's own data.
