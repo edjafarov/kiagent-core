@@ -175,6 +175,30 @@ describe('corpus query: fuzzy pass and projections', () => {
     expect(sqls.find((s) => s.includes('documents_fts'))).toMatch(/JOIN/);
   });
 
+  it("'metadata' relevance pages count live rows when archived hits rank first", async () => {
+    await commit(acc, [
+      doc('a1', { title: 'invoice invoice', markdown: 'invoice' }),
+      doc('a2', { title: 'invoice invoice', markdown: 'invoice' }),
+      doc('l1', { markdown: 'an invoice' }),
+      doc('l2', { markdown: 'an invoice' }),
+      doc('l3', { markdown: 'an invoice' }),
+    ]);
+    await db.run(
+      `UPDATE documents SET archived_at = '2026-02-01T00:00:00Z' WHERE external_id LIKE 'a%'`,
+    );
+    const page = (offset: number) =>
+      query.search({ text: 'invoice', project: 'metadata', limit: 2, offset });
+    const first = await page(0);
+    const second = await page(2);
+    expect(first).toHaveLength(2);
+    expect(second).toHaveLength(1);
+    expect([...first, ...second].map((h) => h.externalId).sort()).toEqual([
+      'l1',
+      'l2',
+      'l3',
+    ]);
+  });
+
   it('archived-heavy corpus still returns the live fuzzy hits', async () => {
     await commit(
       acc,

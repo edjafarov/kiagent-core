@@ -49,6 +49,9 @@ const RECENCY_HEAD_CHARS = 65536;
 /** #59 §3a: largest seed page the reader serves in one call. */
 const SEED_PAGE_MAX = 500;
 /** Every documents column except the body — what 'snippet'/'metadata' select. */
+/** Index hits ranked per round trip on the rank-first search path. */
+const RANK_WINDOW = 500;
+
 const DOC_COLUMNS_NO_BODY =
   'd.id, d.account_id, d.external_id, d.type, d.title, d.url, d.metadata, d.created_at, d.parent_id, d.content_hash, d.seq, d.ingest_seq, d.archived_at, d.languages, d.ingested_at, d.updated_at, d.scope_root_id';
 
@@ -344,27 +347,35 @@ export function createCorpusQuery(
           q.orderBy !== 'newest' &&
           project === 'metadata' &&
           filters.every((f) => f === 'd.archived_at IS NULL');
-        let indexHits = 0;
         let rows: Array<DocRow & { _snippet: string | null }>;
         if (rankFirst) {
-          const page = (await db.all(
-            `SELECT doc_id, bm25(documents_fts, 0, 4.0, 1.0, 2.0, 0.5) AS r
-               FROM documents_fts WHERE documents_fts MATCH ?
-               ORDER BY r LIMIT ? OFFSET ?`,
-            [match, limit, offset],
-          )) as unknown as Array<{ doc_id: string }>;
-          indexHits = page.length;
-          const found = page.length
-            ? ((await db.all(
-                `SELECT ${cols}, NULL AS _snippet FROM documents d
-                   WHERE d.id IN (${page.map(() => '?').join(',')}) ${where}`,
-                [...page.map((h) => h.doc_id), ...params],
-              )) as unknown as Array<DocRow & { _snippet: string | null }>)
-            : [];
-          const byId = new Map(found.map((r) => [r.id, r]));
-          rows = page
-            .map((h) => byId.get(h.doc_id))
-            .filter((r): r is DocRow & { _snippet: null } => r !== undefined);
+          // Pages count live rows, like the joined statement: walk the
+          // ranking from the top in index windows, dropping filtered rows,
+          // until the page is full or the index runs out.
+          const live: Array<DocRow & { _snippet: string | null }> = [];
+          for (let at = 0; live.length < offset + limit; at += RANK_WINDOW) {
+            // eslint-disable-next-line no-await-in-loop
+            const ids = (await db.all(
+              `SELECT doc_id FROM documents_fts WHERE documents_fts MATCH ?
+                 ORDER BY bm25(documents_fts, 0, 4.0, 1.0, 2.0, 0.5)
+                 LIMIT ? OFFSET ?`,
+              [match, RANK_WINDOW, at],
+            )) as unknown as Array<{ doc_id: string }>;
+            if (ids.length === 0) break;
+            // eslint-disable-next-line no-await-in-loop
+            const found = (await db.all(
+              `SELECT ${cols}, NULL AS _snippet FROM documents d
+                 WHERE d.id IN (${ids.map(() => '?').join(',')}) ${where}`,
+              [...ids.map((h) => h.doc_id), ...params],
+            )) as unknown as Array<DocRow & { _snippet: string | null }>;
+            const byId = new Map(found.map((r) => [r.id, r]));
+            for (const h of ids) {
+              const r = byId.get(h.doc_id);
+              if (r) live.push(r);
+            }
+            if (ids.length < RANK_WINDOW) break;
+          }
+          rows = live.slice(offset, offset + limit);
         } else {
           rows = (await db.all(
             `SELECT ${cols}, ${snippetSql} AS _snippet
@@ -374,7 +385,6 @@ export function createCorpusQuery(
                LIMIT ? OFFSET ?`,
             [match, ...params, limit, offset],
           )) as unknown as Array<DocRow & { _snippet: string | null }>;
-          indexHits = rows.length;
         }
         const exact = rows.map((r) =>
           toHit(r, project === 'metadata' ? undefined : (r._snippet ?? '')),
@@ -382,7 +392,7 @@ export function createCorpusQuery(
 
         // Fuzzy fallback (trigram substring recall): only when the exact pass
         // left the FIRST page short — good queries never pay for a second scan.
-        if (offset > 0 || indexHits >= limit) return exact;
+        if (offset > 0 || rows.length >= limit) return exact;
         const { positive, negated } = extractTerms(q.text);
         // Cannot-represent-it ⇒ don't-fuzz: (a) every positive term must
         // survive into the trigram AND group; (b) grouped negation has no
