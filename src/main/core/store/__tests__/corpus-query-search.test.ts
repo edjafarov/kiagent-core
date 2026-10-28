@@ -138,6 +138,108 @@ describe('corpus query: fuzzy pass and projections', () => {
     expect(corpus.fuzzyRuns()).toBe(1);
   });
 
+  it("'metadata' relevance ranks inside the index, then reads only the page's rows", async () => {
+    await commit(acc, [
+      doc('body1', {
+        markdown: 'an invoice',
+        createdAt: '2026-03-01T00:00:00Z',
+      }),
+      doc('titled', { title: 'Invoice March', markdown: 'see invoice' }),
+      doc('body2', { markdown: 'the invoice again' }),
+      doc('gone', { title: 'Invoice gone', markdown: 'invoice' }),
+      doc('other', { markdown: 'nothing here' }),
+    ]);
+    await db.run(
+      `UPDATE documents SET archived_at = '2026-02-01T00:00:00Z' WHERE external_id = 'gone'`,
+    );
+    const full = await query.search({ text: 'invoice' });
+    sqls.length = 0;
+    const meta = await query.search({ text: 'invoice', project: 'metadata' });
+    expect(meta.map((h) => h.externalId)).toEqual(
+      full.map((h) => h.externalId),
+    );
+    expect(meta[0].externalId).toBe('titled');
+    expect(meta.map((h) => h.externalId)).not.toContain('gone');
+    const ranking = sqls.find((s) => s.includes('documents_fts')) ?? '';
+    expect(ranking).not.toMatch(/JOIN/);
+    // filters apply to each ranked window
+    sqls.length = 0;
+    const scoped = await query.search({
+      text: 'invoice',
+      project: 'metadata',
+      account: acc,
+    });
+    expect(scoped.map((h) => h.externalId)).toEqual(
+      full.map((h) => h.externalId),
+    );
+    expect(sqls.find((s) => s.includes('documents_fts'))).not.toMatch(/JOIN/);
+    const other = (
+      await store.createAccount({ source: 'test', identifier: 'b@x' })
+    ).id;
+    await commit(other, [doc('elsewhere', { title: 'Invoice elsewhere' })]);
+    const mine = await query.search({
+      text: 'invoice',
+      project: 'metadata',
+      account: acc,
+      limit: 1,
+    });
+    expect(mine.map((h) => h.externalId)).toEqual(['titled']);
+    const dated = await query.search({
+      text: 'invoice',
+      project: 'metadata',
+      fromDate: '2026-02-01T00:00:00Z',
+    });
+    expect(dated.map((h) => h.externalId)).toEqual(['body1']);
+  });
+
+  it("'metadata' relevance pages count live rows when archived hits rank first", async () => {
+    await commit(acc, [
+      doc('a1', { title: 'invoice invoice', markdown: 'invoice' }),
+      doc('a2', { title: 'invoice invoice', markdown: 'invoice' }),
+      doc('l1', { markdown: 'an invoice' }),
+      doc('l2', { markdown: 'an invoice' }),
+      doc('l3', { markdown: 'an invoice' }),
+    ]);
+    await db.run(
+      `UPDATE documents SET archived_at = '2026-02-01T00:00:00Z' WHERE external_id LIKE 'a%'`,
+    );
+    const page = (offset: number) =>
+      query.search({ text: 'invoice', project: 'metadata', limit: 2, offset });
+    const first = await page(0);
+    const second = await page(2);
+    expect(first).toHaveLength(2);
+    expect(second).toHaveLength(1);
+    expect([...first, ...second].map((h) => h.externalId).sort()).toEqual([
+      'l1',
+      'l2',
+      'l3',
+    ]);
+  });
+
+  it("'metadata' relevance ranks once even when a filter needs several row batches", async () => {
+    await commit(
+      acc,
+      Array.from({ length: 700 }, (_, i) =>
+        doc(`n${i}`, {
+          markdown: 'invoice',
+          createdAt: i < 650 ? '2025-01-01T00:00:00Z' : '2026-03-01T00:00:00Z',
+        }),
+      ),
+    );
+    sqls.length = 0;
+    const hits = await query.search({
+      text: 'invoice',
+      project: 'metadata',
+      fromDate: '2026-02-01T00:00:00Z',
+      limit: 100,
+    });
+    expect(hits).toHaveLength(50);
+    expect(sqls.filter((q) => q.includes('documents_fts MATCH'))).toHaveLength(
+      1,
+    );
+    expect(sqls.filter((q) => q.includes('f.rowid IN'))).toHaveLength(2);
+  });
+
   it('archived-heavy corpus still returns the live fuzzy hits', async () => {
     await commit(
       acc,

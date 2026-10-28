@@ -235,6 +235,34 @@ describe('engine.project leadKinds', () => {
     await handle.stop();
   });
 
+  it('stop() during init() ends the projection once init returns', async () => {
+    let releaseInit = () => {};
+    const initGate = new Promise<void>((resolve) => {
+      releaseInit = resolve;
+    });
+    let started = false;
+    const base = projection({ leadKinds: ['account'] });
+    const handle = engine().project(
+      {
+        ...base,
+        async init(read) {
+          started = true;
+          await initGate;
+          return base.init(read);
+        },
+      },
+      () => {},
+    );
+    await waitUntil(() => started);
+    let stopped = false;
+    const stopping = handle.stop().then(() => {
+      stopped = true;
+    });
+    releaseInit();
+    await waitUntil(() => stopped);
+    await stopping;
+  });
+
   it('an account created while init() runs still arrives', async () => {
     const states: State[] = [];
     let created = '';

@@ -49,6 +49,9 @@ const RECENCY_HEAD_CHARS = 65536;
 /** #59 §3a: largest seed page the reader serves in one call. */
 const SEED_PAGE_MAX = 500;
 /** Every documents column except the body — what 'snippet'/'metadata' select. */
+/** Ranked hits whose rows the rank-first search path reads per round trip. */
+const RANK_BATCH = 500;
+
 const DOC_COLUMNS_NO_BODY =
   'd.id, d.account_id, d.external_id, d.type, d.title, d.url, d.metadata, d.created_at, d.parent_id, d.content_hash, d.seq, d.ingest_seq, d.archived_at, d.languages, d.ingested_at, d.updated_at, d.scope_root_id';
 
@@ -335,19 +338,58 @@ export function createCorpusQuery(
           project === 'metadata'
             ? 'NULL'
             : `snippet(documents_fts, 2, '<b>', '</b>', '…', 24)`;
-        const rows = (await db.all(
-          `SELECT ${cols}, ${snippetSql} AS _snippet
-             FROM documents_fts f JOIN documents d ON d.id = f.doc_id
-             WHERE documents_fts MATCH ? ${where}
-             ${orderSql}
-             LIMIT ? OFFSET ?`,
-          [
-            ftsQuery(q.text, (term) => stemVariants(term, langs)),
-            ...params,
-            limit,
-            offset,
-          ],
-        )) as unknown as Array<DocRow & { _snippet: string | null }>;
+        const match = ftsQuery(q.text, (term) => stemVariants(term, langs));
+        // A relevance page without snippets is ranked inside the index and
+        // only the rows it reaches are read, filters applied per window.
+        // Joining first reads every hit's row — past its body, which comes
+        // before most columns — so a common word cost seconds.
+        const rankFirst = q.orderBy !== 'newest' && project === 'metadata';
+        let rows: Array<DocRow & { _snippet: string | null }>;
+        if (rankFirst) {
+          // Pages count live rows, like the joined statement: rank once
+          // (index rowids only — even doc_id is a stored-row read), then read
+          // rows a batch at a time, dropping filtered ones, until the page
+          // is full.
+          const ranked = (
+            (await db.all(
+              `SELECT rowid AS r FROM documents_fts WHERE documents_fts MATCH ?
+                 ORDER BY bm25(documents_fts, 0, 4.0, 1.0, 2.0, 0.5), rowid`,
+              [match],
+            )) as unknown as Array<{ r: number }>
+          ).map((h) => h.r);
+          const live: Array<DocRow & { _snippet: string | null }> = [];
+          for (
+            let at = 0;
+            at < ranked.length && live.length < offset + limit;
+            at += RANK_BATCH
+          ) {
+            const batch = ranked.slice(at, at + RANK_BATCH);
+            // eslint-disable-next-line no-await-in-loop
+            const found = (await db.all(
+              `SELECT ${cols}, NULL AS _snippet, f.rowid AS _rank
+                 FROM documents_fts f JOIN documents d ON d.id = f.doc_id
+                 WHERE f.rowid IN (${batch.map(() => '?').join(',')}) ${where}`,
+              [...batch, ...params],
+            )) as unknown as Array<
+              DocRow & { _snippet: string | null; _rank: number }
+            >;
+            const byRank = new Map(found.map((r) => [r._rank, r]));
+            for (const r of batch) {
+              const row = byRank.get(r);
+              if (row) live.push(row);
+            }
+          }
+          rows = live.slice(offset, offset + limit);
+        } else {
+          rows = (await db.all(
+            `SELECT ${cols}, ${snippetSql} AS _snippet
+               FROM documents_fts f JOIN documents d ON d.id = f.doc_id
+               WHERE documents_fts MATCH ? ${where}
+               ${orderSql}
+               LIMIT ? OFFSET ?`,
+            [match, ...params, limit, offset],
+          )) as unknown as Array<DocRow & { _snippet: string | null }>;
+        }
         const exact = rows.map((r) =>
           toHit(r, project === 'metadata' ? undefined : (r._snippet ?? '')),
         );

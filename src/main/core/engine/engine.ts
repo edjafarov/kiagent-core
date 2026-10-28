@@ -2489,6 +2489,8 @@ export function createEngine(deps: EngineDeps): Engine & {
             const attempt = new AbortController();
             const endAttempt = () => attempt.abort();
             abort.signal.addEventListener('abort', endAttempt, { once: true });
+            // stop() during init already fired its event.
+            if (abort.signal.aborted) attempt.abort();
             // Last seq the lead applied. The main feed skips lead-kind
             // changes at or below it: it may have read such a row (current at
             // read time) before the lead read a newer one, and applying it

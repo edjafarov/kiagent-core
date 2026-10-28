@@ -67,6 +67,7 @@ const FIXTURE_CALWRITER_NOCAP = path.join(
 );
 const FIXTURE_EVENTS_A = path.join(__dirname, 'fixtures', 'ext-events-a');
 const FIXTURE_EVENTS_B = path.join(__dirname, 'fixtures', 'ext-events-b');
+const FIXTURE_QUERY = path.join(__dirname, 'fixtures', 'ext-query');
 
 describe('createLaneGate', () => {
   it('closed -> open emits once, with the resolved state in the payload', () => {
@@ -284,6 +285,51 @@ describe('createExtensionPlatform', () => {
     await platform.stop();
     await store.close();
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  describe('host.query', () => {
+    async function probe(): Promise<unknown> {
+      await platform.start();
+      const preview = await platform.installPreview(FIXTURE_QUERY);
+      if (!('token' in preview))
+        throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+      await expect(platform.installCommit(preview.token)).resolves.toEqual({
+        ok: true,
+        id: 'test.query',
+      });
+      return tools.get('query_probe')!.call({});
+    }
+
+    it('reads through deps.reads, never the writer, when it is given', async () => {
+      await platform.stop();
+      const search = jest.fn(async () => [{ id: 'from-reads' }]);
+      const writerSearch = jest.spyOn(store.read, 'search');
+      platform = makePlatform({
+        reads: { ...store.read, search } as never,
+      });
+      await expect(probe()).resolves.toEqual([{ id: 'from-reads' }]);
+      expect(search).toHaveBeenCalledWith({ text: 'probe' });
+      expect(writerSearch).not.toHaveBeenCalled();
+    });
+
+    it('bulk pages stay on the writer even when deps.reads is given', async () => {
+      await platform.stop();
+      const documentPage = jest.fn(async () => ({ items: [], nextSeq: 0 }));
+      const writerPage = jest
+        .spyOn(store.read, 'documentPage')
+        .mockResolvedValue({ items: [], nextSeq: 0 } as never);
+      platform = makePlatform({
+        reads: { ...store.read, documentPage } as never,
+      });
+      await probe();
+      await tools.get('query_page')!.call({});
+      expect(writerPage).toHaveBeenCalledWith({ afterSeq: 0, limit: 1 });
+      expect(documentPage).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the writer's store.read without deps.reads", async () => {
+      await expect(probe()).resolves.toEqual([]);
+    });
   });
 
   describe('declared file roots', () => {

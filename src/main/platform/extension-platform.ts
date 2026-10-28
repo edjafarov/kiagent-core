@@ -29,6 +29,7 @@ import type {
   LogLevel,
   Manifest,
   McpTool,
+  Query,
   SendResult,
   Source,
   WritableCalendar,
@@ -298,6 +299,12 @@ export interface ExtensionPlatformDeps {
   /** Optional test/integration seam; production uses the guarded default. */
   networkFactory?: (owner: string, signal: AbortSignal) => NetworkService;
   store: CoreStore;
+  /** What `host.query`'s interactive reads go through: the read worker, so
+   *  a search never queues behind ingest on the writer. Bulk pages
+   *  (documentPage, seedPage) stay on the writer: on the one read worker
+   *  they held MCP, renderer and search reads for seconds. Omitted (tests),
+   *  the writer's `store.read` answers everything. */
+  reads?: Query;
   sources: SourceRegistry;
   /** Where cap-gated extension Senders land. Same lifecycle as `sources`:
    *  registered on activation, dropped on every host exit (crash included),
@@ -1130,7 +1137,16 @@ export function createExtensionPlatform(
             files,
             // Accounts name their source's documentTypes (calendar
             // accounts are found by type, never by source id).
-            query: withAccountTypes(deps.store.read, deps.sources),
+            query: withAccountTypes(
+              deps.reads
+                ? {
+                    ...deps.reads,
+                    documentPage: deps.store.read.documentPage,
+                    seedPage: deps.store.read.seedPage,
+                  }
+                : deps.store.read,
+              deps.sources,
+            ),
             inference: {
               ...deps.inference,
               lane: async () => deps.laneState(),
