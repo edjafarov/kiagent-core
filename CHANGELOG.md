@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.117.3](https://github.com/edjafarov/kiagent-core/compare/v0.117.2...v0.117.3) (2026-10-28)
+
+### Bug Fixes
+
+* **projection:** new sources reach the app while a backfill is running ([73cf888](https://github.com/edjafarov/kiagent-core/commit/73cf888c39bb99802216133cedb906bdaf430380))
+* **projection:** the main feed never rolls back what the lead applied ([184d823](https://github.com/edjafarov/kiagent-core/commit/184d8238f9e8640f4570ff870fe51884519f8dc2))
+* **search,projection:** rank-first pages count live rows; stop() during init ends the projection ([0feb4b7](https://github.com/edjafarov/kiagent-core/commit/0feb4b769dbbb2b9cad243622010c73bf439c47f))
+
+### Performance Improvements
+
+* **extensions:** bulk pages stay on the writer; only interactive reads use the read worker ([d39a2d0](https://github.com/edjafarov/kiagent-core/commit/d39a2d0b58a39bc2127080f46c57f0c45b82ca18))
+* **extensions:** host.query reads on the read worker, not behind ingest ([7324aaf](https://github.com/edjafarov/kiagent-core/commit/7324aaf1cc701035f3d1a07720596801c42b11c9))
+* **search:** rank a metadata relevance page inside the index ([88debff](https://github.com/edjafarov/kiagent-core/commit/88debfff061e4069b5d36722250d7d3401ac51fb))
+* **search:** rank-first applies every filter per ranked window ([9ba5531](https://github.com/edjafarov/kiagent-core/commit/9ba55317aeda130f3ac89ba35f9f0404dc92826c))
+* **search:** rank-first ranks FTS rowids only ([ad43587](https://github.com/edjafarov/kiagent-core/commit/ad43587241f75841493f3e112e4e16b8919177e4))
+* **search:** rank-first ranks once, then reads rows in batches ([e8b333b](https://github.com/edjafarov/kiagent-core/commit/e8b333b27322cd6a9e8349caf1b7c632f2faa0d8))
+
 ## [0.117.2](https://github.com/edjafarov/kiagent-core/compare/v0.117.1...v0.117.2) (2026-10-26)
 
 ### Bug Fixes
