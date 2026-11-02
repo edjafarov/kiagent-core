@@ -7,6 +7,7 @@ import {
   type StageEntry,
   type SyncCursor,
 } from '../sync/delta';
+import { readRoleSync, SyncReadOnly, type SyncRole } from '../sync/role';
 import { COPIED_CORE_TABLES } from '../sync/tables';
 import { createHash } from 'crypto';
 
@@ -1552,7 +1553,7 @@ export function createWriteTx(
     },
   );
 
-  return {
+  const tx: WriteTx = {
     applyDelta: (stagePath) => {
       const { target, rows } = validateStage(stagePath);
       applyDeltaTx(stageEntries(stagePath, rows), target);
@@ -1627,4 +1628,19 @@ export function createWriteTx(
     ),
     rekeyLedgerPage: (limit) => rekeyLedgerPageTx(limit),
   };
+
+  // A follower writes only what the master sends (alpha-cent spec 7.6). Read
+  // on first use: a role changes only at the boot swap, before this is built.
+  let role: SyncRole | null = null;
+  const guard = tx as unknown as Record<string, (...a: unknown[]) => unknown>;
+  for (const name of Object.keys(guard)) {
+    if (name === 'applyDelta') continue;
+    const real = guard[name];
+    guard[name] = (...args: unknown[]) => {
+      role ??= readRoleSync(conn);
+      if (role === 'follower') throw new SyncReadOnly(name);
+      return real(...args);
+    };
+  }
+  return tx;
 }

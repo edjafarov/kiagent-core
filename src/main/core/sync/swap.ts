@@ -41,9 +41,9 @@ export function prepareSwap(
   },
 ): 'ready' | 'no-disk' | 'invalid' {
   if (hashFile(file) !== sha256) return 'invalid';
-  // The merge writes one more copy of the snapshot's size at most, plus local
-  // tables. The old file stays as the archive, so it frees nothing.
-  const needed = fs.statSync(file).size + 64 * 1024 * 1024;
+  // The file was already downloaded here, so only the local tables are new.
+  // They can't outgrow the database they come from.
+  const needed = fs.statSync(dbPath).size;
   if (freeBytes() < needed) return 'no-disk';
   fs.renameSync(file, incomingPath(dbPath));
   const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
@@ -145,7 +145,11 @@ export function applyPendingSwap(
     const old = new Database(dbPath);
     old.pragma('wal_checkpoint(TRUNCATE)');
     old.close();
-    fs.copyFileSync(incomingPath(dbPath), merged);
+    // A move, so no second copy of the data. The merge is one transaction, so a
+    // crash during it leaves this file as it arrived.
+    if (fs.existsSync(incomingPath(dbPath))) {
+      fs.renameSync(incomingPath(dbPath), merged);
+    }
     mergeLocalTables(merged, dbPath, j.masterDeviceId);
     writeJournal(dbPath, { ...j, merged: true });
     crashAt('merged');
@@ -161,7 +165,6 @@ export function applyPendingSwap(
     fs.renameSync(merged, dbPath);
     crashAt('replaced');
   }
-  fs.rmSync(incomingPath(dbPath), { force: true });
   fs.rmSync(journalPath(dbPath), { force: true });
   return 'swapped';
 }
