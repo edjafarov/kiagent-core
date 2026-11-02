@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+
+import { readStage, SyncStageInvalid, type StageEntry, type SyncCursor } from '../sync/delta';
+import { COPIED_CORE_TABLES } from '../sync/tables';
 import { createHash } from 'crypto';
 
 import type BetterSqlite3 from 'better-sqlite3';
@@ -256,6 +260,10 @@ export interface RekeyPageResult {
 
 export interface WriteTx {
   commit(batch: CommitBatch): CommitResult;
+  /** Multi-device sync: apply one validated stage from the master, rows and
+   *  cursor in ONE transaction (alpha-cent spec 7.4). Throws SyncStageInvalid
+   *  before touching anything if the stage is bad. */
+  applyDelta(stagePath: string): { applied: number; target: SyncCursor };
   accountWrite(op: AccountWriteOp): AccountWriteResult;
   /** Start a pass: drop whatever the previous one staged for this account. */
   reconcileBegin(accountId: string): void;
@@ -1448,7 +1456,108 @@ export function createWriteTx(
     },
   );
 
+  const applyDeltaTx = conn.transaction(
+    (entries: StageEntry[], target: SyncCursor): void => {
+      conn.pragma('defer_foreign_keys = ON');
+      conn.prepare(`UPDATE sync_state SET tracking = 0`).run();
+      const upserts = new Map<string, BetterSqlite3.Statement>();
+      const columns = new Map<string, Set<string>>();
+      const upsertRow = (tbl: string, row: Record<string, unknown>): void => {
+        const cols = Object.keys(row);
+        const known =
+          columns.get(tbl) ??
+          new Set(
+            (
+              conn.prepare(`SELECT name FROM pragma_table_info(?)`).all(tbl) as {
+                name: string;
+              }[]
+            ).map((c) => c.name),
+          );
+        columns.set(tbl, known);
+        for (const c of cols) {
+          if (!known.has(c)) throw new SyncStageInvalid(`column ${tbl}.${c}`);
+        }
+        const key = `${tbl}|${cols.join(',')}`;
+        let stmt = upserts.get(key);
+        if (!stmt) {
+          // Never INSERT OR REPLACE: it deletes the old row, which fires the
+          // foreign key cascade and changes the rowid search is pinned to.
+          stmt = conn.prepare(
+            `INSERT INTO ${tbl}(${cols.join(',')}) VALUES(${cols.map(() => '?').join(',')})
+             ON CONFLICT(id) DO UPDATE SET ${cols
+               .filter((c) => c !== 'id')
+               .map((c) => `${c} = excluded.${c}`)
+               .join(', ')}`,
+          );
+          upserts.set(key, stmt);
+        }
+        stmt.run(...cols.map((c) => row[c]));
+      };
+      const searchedText = conn.prepare(
+        `SELECT title, markdown, languages FROM documents WHERE id = ?`,
+      );
+      const addChange = conn.prepare(
+        `INSERT OR IGNORE INTO changes(seq, kind, ref_id, at) VALUES(?, 'document', ?, ?)`,
+      );
+      const accountDocs = conn.prepare(`SELECT id FROM documents WHERE account_id = ?`);
+      const deleteDoc = conn.prepare(`DELETE FROM documents WHERE id = ?`);
+      const deleteAccount = conn.prepare(`DELETE FROM accounts WHERE id = ?`);
+
+      for (const e of entries) {
+        if (!COPIED_CORE_TABLES.includes(e.tbl)) {
+          throw new SyncStageInvalid(`table ${e.tbl}`);
+        }
+        if (e.op === 'delete') {
+          const id = e.pk[0];
+          if (e.tbl === 'documents') {
+            ftsDelete(id);
+            deleteDoc.run(id);
+          } else {
+            for (const d of accountDocs.all(id) as { id: string }[]) ftsDelete(d.id);
+            deleteAccount.run(id);
+          }
+        } else if (e.tbl === 'documents') {
+          const id = e.row.id as string;
+          const before = searchedText.get(id) as
+            | { title: string | null; markdown: string | null; languages: string }
+            | undefined;
+          upsertRow('documents', e.row);
+          if (
+            !before ||
+            before.title !== e.row.title ||
+            before.markdown !== e.row.markdown ||
+            before.languages !== e.row.languages
+          ) {
+            ftsUpsert(
+              id,
+              e.row.title as string | null,
+              e.row.markdown as string | null,
+              JSON.parse(e.row.languages as string) as string[],
+            );
+          }
+          if ((e.row.seq as number) > 0) addChange.run(e.row.seq, id, deps.now());
+        } else {
+          upsertRow(e.tbl, e.row);
+        }
+      }
+      conn
+        .prepare(`UPDATE sync_state SET after_seq = ?, after_cursor = ?`)
+        .run(target.seq, target.cursor);
+    },
+  );
+
   return {
+    applyDelta: (stagePath) => {
+      const { entries, target } = readStage(stagePath);
+      applyDeltaTx(entries, target);
+      // One big apply leaves a big WAL (2.7 GB at the 250 MB cap, measured).
+      const wal = `${conn.name}-wal`;
+      if (fs.existsSync(wal) && fs.statSync(wal).size > 256 * 1024 * 1024) {
+        conn.pragma('wal_checkpoint(TRUNCATE)');
+      }
+      return { applied: entries.length, target };
+    },
+
     commit: publishing((batch: CommitBatch): CommitResult => {
       appended = 0;
       const seq = commitTx(batch);
