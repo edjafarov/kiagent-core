@@ -137,7 +137,6 @@ export interface SyncService {
   /** After an account batch committed here: when this device is a follower and
    *  owns the account, queue it (split under 16 MiB) for the leader. `gone` is
    *  the account row read before a removal. True when something was queued. */
-  queueOwnedCommit(batch: CommitBatch, gone?: OwnedAccount | null): Promise<boolean>;
   /** Reads the stored device id and the accounts this device owns, once at
    *  boot, before any account starts. */
   loadOwned(): Promise<void>;
@@ -394,59 +393,6 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         await deps.db.run(`UPDATE sync_state SET adopted_at = ?`, [new Date().toISOString()]);
       }
       await refreshOwned();
-    },
-    queueOwnedCommit: async (batch, gone) => {
-      if (!readOnly()) return false;
-      const me = deviceId ?? deps.deviceId?.() ?? null;
-      if (!me) return false;
-      const removed = 'removeAccount' in batch;
-      const id = removed
-        ? (batch as { removeAccount: string }).removeAccount
-        : 'account' in batch
-          ? (batch as { account: string }).account
-          : null;
-      if (!id) return false;
-      let account: OwnedAccount | null = null;
-      if (removed && gone) account = gone;
-      else {
-        const row = (
-          await deps.db.all(
-            `SELECT id, source, identifier, config, cadence, owner_device_id FROM accounts WHERE id = ?`,
-            [id],
-          )
-        )[0] as
-          | { id: string; source: string; identifier: string; config: string; cadence: string | null; owner_device_id: string | null }
-          | undefined;
-        if (row) {
-          account = {
-            id: row.id,
-            source: row.source,
-            identifier: row.identifier,
-            config: JSON.parse(row.config || '{}') as Record<string, unknown>,
-            cadence: row.cadence ? JSON.parse(row.cadence) : null,
-            ownerDeviceId: row.owner_device_id,
-          };
-        }
-      }
-      if (!account || account.ownerDeviceId !== me || !isDeviceOwned(account.source)) return false;
-      for (const piece of splitBatch(batch)) {
-        await deps.db.run(
-          `INSERT INTO sync_outbound(kind, extension_id, payload, created_at) VALUES(?, NULL, ?, ?)`,
-          [
-            'core.commitBatch',
-            Buffer.from(
-              JSON.stringify({
-                kind: 'commit',
-                name: 'core.commitBatch',
-                payload: { account, batch: piece },
-              }),
-              'utf8',
-            ),
-            new Date().toISOString(),
-          ],
-        );
-      }
-      return true;
     },
     loadOwned: async () => {
       if (!deviceId) {

@@ -40,10 +40,6 @@ async function device(opts: { follower?: boolean; joined?: boolean } = {}): Prom
     encrypt: (s: string) => Buffer.from(s, 'utf8'),
     decrypt: (b: Buffer) => b.toString('utf8'),
     detectLanguages: () => ['eng'],
-    afterCommit: async (batch: CommitBatch, gone: never) => {
-      after.push(batch);
-      await svc.queueOwnedCommit(batch, gone);
-    },
   } as never);
   svc = createSyncService({
     db,
@@ -193,6 +189,83 @@ describe('the writer guard on a follower', () => {
     await expect(
       d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: null }),
     ).rejects.toThrow(SyncReadOnly);
+  });
+});
+
+describe('an owned commit and its queue row are one transaction', () => {
+  it('a queue write that fails rolls the documents back', async () => {
+    const d = await device({ follower: true });
+    await d.svc.setDeviceId(DEVICE);
+    addAccount(d, 'own', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
+    d.conn().exec(
+      `CREATE TRIGGER refuse_queue BEFORE INSERT ON sync_outbound BEGIN SELECT RAISE(ABORT, 'queue full'); END`,
+    );
+    await expect(
+      d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: { n: 1 } }),
+    ).rejects.toThrow();
+    expect(d.conn().prepare(`SELECT count(*) n FROM documents WHERE account_id = 'own'`).get()).toEqual({ n: 0 });
+  });
+
+  it('a removal queue write that fails keeps the account', async () => {
+    const d = await device({ follower: true });
+    await d.svc.setDeviceId(DEVICE);
+    addAccount(d, 'own', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
+    d.conn().exec(
+      `CREATE TRIGGER refuse_queue BEFORE INSERT ON sync_outbound BEGIN SELECT RAISE(ABORT, 'queue full'); END`,
+    );
+    await expect(d.store.commit({ removeAccount: 'own' as never })).rejects.toThrow();
+    expect(d.conn().prepare(`SELECT count(*) n FROM accounts WHERE id = 'own'`).get()).toEqual({ n: 1 });
+  });
+
+  it('a master commit queues nothing', async () => {
+    const d = await device();
+    await d.svc.setDeviceId(DEVICE);
+    addAccount(d, 'own', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
+    await d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: { n: 1 } });
+    expect(queued(d)).toEqual([]);
+  });
+});
+
+describe('connecting a device-owned account after the device id is known', () => {
+  it('local-folder, meetings and the other device-owned sources get the suffix and the owner', async () => {
+    const d = await device();
+    await d.svc.setDeviceId(DEVICE);
+    for (const source of ['local-folder', 'meetings', 'whatsapp', 'codex']) {
+      const a = await d.store.createAccount({ source, identifier: source === 'local-folder' ? 'this-machine' : 'local' });
+      expect(a.identifier).toMatch(new RegExp(`#${SUFFIX}$`));
+      expect(a.ownerDeviceId).toBe(DEVICE);
+    }
+    const g = await d.store.getOrCreateAccount('assistant', 'local');
+    expect(g.identifier).toBe(`local#${SUFFIX}`);
+    expect(g.ownerDeviceId).toBe(DEVICE);
+  });
+
+  it('connecting again upserts the one suffixed row', async () => {
+    const d = await device();
+    await d.svc.setDeviceId(DEVICE);
+    const a = await d.store.createAccount({ source: 'local-folder', identifier: 'this-machine' });
+    const b = await d.store.createAccount({ source: 'local-folder', identifier: 'this-machine' });
+    const c = await d.store.createAccount({ source: 'local-folder', identifier: `this-machine#${SUFFIX}` });
+    expect(new Set([a.id, b.id, c.id]).size).toBe(1);
+    expect(d.conn().prepare(`SELECT count(*) n FROM accounts WHERE source = 'local-folder'`).get()).toEqual({ n: 1 });
+  });
+
+  it('another source keeps its identifier and no owner; no device id keeps the bare identifier', async () => {
+    const d = await device();
+    const bare = await d.store.createAccount({ source: 'local-folder', identifier: 'this-machine' });
+    expect(bare.identifier).toBe('this-machine');
+    expect(bare.ownerDeviceId ?? null).toBeNull();
+    await d.svc.setDeviceId(DEVICE);
+    const mail = await d.store.createAccount({ source: 'gmail', identifier: 'me@x.com' });
+    expect(mail.identifier).toBe('me@x.com');
+    expect(mail.ownerDeviceId ?? null).toBeNull();
+  });
+
+  it('a follower device-owned connect is suffixed too', async () => {
+    const d = await device({ follower: true });
+    await d.svc.setDeviceId(DEVICE);
+    const a = await d.store.createAccount({ source: 'local-folder', identifier: 'this-machine' });
+    expect(a.identifier).toBe(`this-machine#${SUFFIX}`);
   });
 });
 

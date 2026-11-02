@@ -184,20 +184,6 @@ export interface StoreDeps {
   /** Follower, joining or fenced: asked on every call. Outbox and event
    *  drafts refuse writes then (they write outside the writer guard). */
   readOnly?(): boolean;
-  /** After an account batch committed. A follower that owns the account hands
-   *  the batch to the delivery queue here (step 3); `gone` is the account row
-   *  read before a removal. A failure here never fails the commit. */
-  afterCommit?(
-    batch: CommitBatch,
-    gone: {
-      id: string;
-      source: string;
-      identifier: string;
-      config: Record<string, unknown>;
-      cadence: unknown;
-      ownerDeviceId: string | null;
-    } | null,
-  ): void | Promise<void>;
 }
 
 export interface LedgerCounts {
@@ -818,11 +804,6 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async commit(batch) {
-      // A removal erases the row the queue needs to name, so read it first.
-      const gone =
-        deps.afterCommit && 'removeAccount' in batch
-          ? await store.account(batch.removeAccount)
-          : null;
       const { seq, logged } = writeTx
         ? writeTx.commit(batch)
         : ((await db.proc!('commit', batch)) as CommitResult);
@@ -842,25 +823,6 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       if ('removeAccount' in batch) {
         outboxChanged.emit('change');
         eventDraftsChanged.emit('change');
-      }
-      if (deps.afterCommit && ('account' in batch || 'removeAccount' in batch)) {
-        try {
-          await deps.afterCommit(
-            batch,
-            gone
-              ? {
-                  id: gone.id,
-                  source: gone.source,
-                  identifier: gone.identifier,
-                  config: (gone.config ?? {}) as Record<string, unknown>,
-                  cadence: gone.cadence ?? null,
-                  ownerDeviceId: gone.ownerDeviceId ?? null,
-                }
-              : null,
-          );
-        } catch {
-          // The commit stands; the queue is best effort and logs for itself.
-        }
       }
       return seq;
     },

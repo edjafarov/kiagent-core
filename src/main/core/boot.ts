@@ -364,10 +364,6 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     detectLanguages,
     profileDir: deps.dataDir,
     readOnly: () => sync.readOnly(),
-    // A follower that owns the account queues its batch for the leader.
-    afterCommit: async (batch, gone) => {
-      await sync.queueOwnedCommit(batch, gone);
-    },
   });
   const budget = hostBudget(host, null);
   // Foreground reads (MCP, renderer) run on their own read-only worker so they

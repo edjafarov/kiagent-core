@@ -16,7 +16,8 @@ import type {
   SyncStatus,
 } from '@shared/contracts';
 import { isPlainObject } from '@shared/source-options';
-import { DEVICE_OWNED_SOURCES, isDeviceOwned } from '../sync/sources';
+import { DEVICE_OWNED_SOURCES, deviceSuffix, isDeviceOwned } from '../sync/sources';
+import { splitBatch, type OwnedAccount } from '../sync/owned';
 import { copiedTables, primaryKeyColumns } from '../sync/tables';
 import { NEWER, STAMP_EPOCH, STAMP_N } from '../sync/vault-stamp';
 import {
@@ -788,10 +789,32 @@ export function createWriteTx(
     },
   );
 
+  // Step 3: once this device has an id, a device-owned account made here is
+  // named `<identifier>#<device8>` and owned by it, so UNIQUE(source,
+  // identifier) holds across devices and no bare identifier reaches a copied
+  // table. An identifier that already carries the suffix is left alone.
+  const ownDevice = conn.prepare(`SELECT device_id FROM sync_state`);
+  const ownedName = (
+    source: string,
+    identifier: string,
+  ): { identifier: string; owner: string | null } => {
+    if (!isDeviceOwned(source)) return { identifier, owner: null };
+    const me = (ownDevice.get() as { device_id: string | null } | undefined)
+      ?.device_id;
+    if (!me) return { identifier, owner: null };
+    const tail = `#${deviceSuffix(me)}`;
+    return {
+      identifier: identifier.endsWith(tail) ? identifier : identifier + tail,
+      owner: me,
+    };
+  };
+
   const accountWriteTx = conn.transaction(
     (w: AccountWriteOp): AccountWriteResult => {
       switch (w.op) {
         case 'create': {
+          const named = ownedName(w.source, w.identifier);
+          w = { ...w, identifier: named.identifier };
           const prior = conn
             .prepare(
               `SELECT config FROM accounts WHERE source = ? AND identifier = ?`,
@@ -799,8 +822,8 @@ export function createWriteTx(
             .get(w.source, w.identifier) as { config: string } | undefined;
           const row = conn
             .prepare(
-              `INSERT INTO accounts(id, source, identifier, config, status, cadence, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?)
+              `INSERT INTO accounts(id, source, identifier, config, status, cadence, created_at, owner_device_id)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(source, identifier) DO UPDATE SET
                  config = excluded.config,
                  status = excluded.status
@@ -814,11 +837,14 @@ export function createWriteTx(
               w.status ?? 'connecting',
               w.cadence ? JSON.stringify(w.cadence) : null,
               deps.now(),
+              named.owner,
             ) as { id: AccountId };
           appendChange('account', row.id);
           return { id: row.id, logged: true };
         }
         case 'getOrCreate': {
+          const named = ownedName(w.source, w.identifier);
+          w = { ...w, identifier: named.identifier };
           const found = conn
             .prepare(
               `SELECT id FROM accounts WHERE source = ? AND identifier = ?`,
@@ -828,10 +854,10 @@ export function createWriteTx(
           const id = hashedId<'account'>('account', [w.source, w.identifier]);
           conn
             .prepare(
-              `INSERT INTO accounts(id, source, identifier, config, status, created_at)
-               VALUES(?, ?, ?, '{}', 'live', ?)`,
+              `INSERT INTO accounts(id, source, identifier, config, status, created_at, owner_device_id)
+               VALUES(?, ?, ?, '{}', 'live', ?, ?)`,
             )
-            .run(id, w.source, w.identifier, deps.now());
+            .run(id, w.source, w.identifier, deps.now(), named.owner);
           appendChange('account', id);
           return { id, logged: true };
         }
@@ -1888,16 +1914,71 @@ export function createWriteTx(
     const id = pick(args);
     return id !== null && !!ownedByMe.get(id, ...DEVICE_OWNED_SOURCES);
   };
+  const accountRow = conn.prepare(
+    `SELECT id, source, identifier, config, cadence, owner_device_id FROM accounts WHERE id = ?`,
+  );
+  const ownedAccountOf = (batch: CommitBatch): OwnedAccount | null => {
+    const b = batch as { account?: string; removeAccount?: string };
+    const id = b.account ?? b.removeAccount;
+    if (!id) return null;
+    const r = accountRow.get(id) as
+      | {
+          id: string;
+          source: string;
+          identifier: string;
+          config: string | null;
+          cadence: string | null;
+          owner_device_id: string | null;
+        }
+      | undefined;
+    if (!r) return null;
+    return {
+      id: r.id,
+      source: r.source,
+      identifier: r.identifier,
+      config: JSON.parse(r.config || '{}') as Record<string, unknown>,
+      cadence: r.cadence ? JSON.parse(r.cadence) : null,
+      ownerDeviceId: r.owner_device_id,
+    };
+  };
+  const insertQueued = conn.prepare(
+    `INSERT INTO sync_outbound(kind, extension_id, payload, created_at) VALUES(?, NULL, ?, ?)`,
+  );
+  const queueOwned = (account: OwnedAccount, batch: CommitBatch): void => {
+    for (const piece of splitBatch(batch))
+      insertQueued.run(
+        'core.commitBatch',
+        Buffer.from(
+          JSON.stringify({
+            kind: 'commit',
+            name: 'core.commitBatch',
+            payload: { account, batch: piece },
+          }),
+          'utf8',
+        ),
+        deps.now(),
+      );
+  };
   for (const name of Object.keys(guard)) {
     if (name === 'applyDelta' || name === 'importSecrets') continue;
     const real = guard[name];
     guard[name] = (...args: unknown[]) => {
       // A joining device is read-only too (spec 7.7), the same single rule.
-      if (
-        (deps.fenced?.() || gateFrom(readGateSync(conn))) &&
-        !(!deps.fenced?.() && ownerMayWrite(name, args))
-      )
-        throw new SyncReadOnly(name);
+      if (deps.fenced?.() || gateFrom(readGateSync(conn))) {
+        if (deps.fenced?.() || !ownerMayWrite(name, args))
+          throw new SyncReadOnly(name);
+        // An owner's account batch and its delivery row are one transaction:
+        // a crash between them would lose the batch for the leader.
+        if (name === 'commit') {
+          const batch = args[0] as CommitBatch;
+          return conn.transaction(() => {
+            const account = ownedAccountOf(batch);
+            const result = real(...args);
+            if (account) queueOwned(account, batch);
+            return result;
+          })();
+        }
+      }
       return real(...args);
     };
   }
