@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
 import type BetterSqlite3 from 'better-sqlite3';
 
@@ -31,6 +32,7 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
     joined: s.joined === 1,
     documents: documents.n,
     lastSwap: readSwapOutcome(conn.name),
+    archiveBytes: archiveFiles(conn.name).reduce((n, f) => n + fs.statSync(f).size, 0),
     tracking: s.tracking === 1,
     historyId: s.history_id,
     masterDeviceId: s.master_device_id,
@@ -52,5 +54,19 @@ export function readSwapOutcome(dbPath: string): 'swapped' | 'abandoned' | null 
     return v === 'swapped' || v === 'abandoned' ? v : null;
   } catch {
     return null;
+  }
+}
+
+/** The old database a join set aside, with its WAL and SHM files. */
+export function archiveFiles(dbPath: string): string[] {
+  const dir = path.dirname(dbPath);
+  const prefix = `${path.basename(dbPath)}.archive-`;
+  try {
+    return fs
+      .readdirSync(dir)
+      .filter((n) => n.startsWith(prefix))
+      .map((n) => path.join(dir, n));
+  } catch {
+    return [];
   }
 }

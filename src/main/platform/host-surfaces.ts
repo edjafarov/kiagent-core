@@ -274,6 +274,7 @@ function syncSurface(
     canAcceptSources: call('canAcceptSources'),
     importSources: call('importSources'),
     isBusy: call('isBusy'),
+    deleteArchive: call('deleteArchive'),
   };
 }
 

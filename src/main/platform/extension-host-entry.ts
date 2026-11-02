@@ -138,6 +138,7 @@ export const NS_METHODS: Record<string, string[]> = {
     'canAcceptSources',
     'importSources',
     'isBusy',
+    'deleteArchive',
   ],
 };
 

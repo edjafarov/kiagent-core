@@ -18,7 +18,7 @@ import {
   PAUSE_MOVED_SQL,
   type OfferedSource,
 } from './sources';
-import { swapOutcomePath } from './status';
+import { archiveFiles, swapOutcomePath } from './status';
 import { dropPendingSwap } from './swap';
 
 export interface SyncStatus {
@@ -37,6 +37,8 @@ export interface SyncStatus {
   documents: number;
   /** The last boot swap's result, until finishJoin or leaveJoin clears it. */
   lastSwap: 'swapped' | 'abandoned' | null;
+  /** Size of the old database a join set aside, 0 when none. */
+  archiveBytes: number;
 }
 
 export interface SyncService {
@@ -82,6 +84,8 @@ export interface SyncService {
   ): Promise<ImportSourcesResult>;
   /** Why this device must not restart or be interrupted right now, if so. */
   isBusy(): string | null;
+  /** Deletes the old database a join set aside. Restoring it is then gone. */
+  deleteArchive(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -222,6 +226,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       return r;
     },
     isBusy: () => deps.busy?.() ?? null,
+    deleteArchive: async () => {
+      for (const f of archiveFiles(deps.dbPath)) fs.rmSync(f, { force: true });
+    },
     close: async () => {
       if (worker) await (await worker).close();
       worker = null;

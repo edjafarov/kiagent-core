@@ -71,6 +71,7 @@ describe('through a real forked extension host', () => {
         canAcceptSources: note('canAcceptSources', true),
         importSources: note('importSources', { created: ['a'], existing: [], needsConnector: [] }),
         isBusy: note('isBusy', null),
+        deleteArchive: note('deleteArchive', undefined),
         close: async () => undefined,
       } as never,
       sources: { register: () => {}, get: () => undefined, list: () => [], unregister: () => {} },

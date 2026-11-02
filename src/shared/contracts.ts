@@ -1610,6 +1610,8 @@ export interface SyncStatusWire {
   joined: boolean;
   documents: number;
   lastSwap: 'swapped' | 'abandoned' | null;
+  /** Size of the old database a join set aside, 0 when none. */
+  archiveBytes: number;
 }
 
 export type Cap =
@@ -1909,6 +1911,7 @@ export interface CapSurfaces {
         from: string,
       ): Promise<{ created: string[]; existing: string[]; needsConnector: string[] }>;
       isBusy(): Promise<string | null>;
+      deleteArchive(): Promise<void>;
     };
   };
   /** Host-initiated only — no extension→host surface. */

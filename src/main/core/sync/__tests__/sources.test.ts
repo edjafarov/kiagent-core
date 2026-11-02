@@ -438,6 +438,39 @@ describe('importSources', () => {
   });
 });
 
+describe('what an offer reports for a connector the seed lacks', () => {
+  it('names the source and identifier, and only when there is one', async () => {
+    const sync = createSyncService({
+      db, store, dbPath: conn().name, workerFile: '', deviceId: () => 'seedseed-9999',
+      encryptStrict: (x) => Buffer.from(x), keystoreAvailable: () => true,
+      isInstalled: (s) => s !== 'notion',
+    });
+    const entry = (source: string, identifier: string) => ({
+      source, identifier, config: '{}', cadence: null, credentials: { t: 1 }, owner_device_id: null,
+    });
+    const r = await sync.importSources('o1', [entry('gmail', 'a@x.com'), entry('notion', 'Acme')] as never, 'abcdefgh-1');
+    expect(r.needsConnector).toHaveLength(1);
+    expect(r.needsConnectorSources).toEqual([{ source: 'notion', identifier: 'Acme' }]);
+    const again = await sync.importSources('o1', [entry('gmail', 'a@x.com'), entry('notion', 'Acme')] as never, 'abcdefgh-1');
+    expect(again.needsConnectorSources).toEqual([{ source: 'notion', identifier: 'Acme' }]);
+    const none = await sync.importSources('o2', [entry('gmail', 'b@x.com')] as never, 'abcdefgh-1');
+    expect(none.needsConnectorSources).toBeUndefined();
+  });
+});
+
+describe('the archive a join leaves behind', () => {
+  it('reports its size and deletes it', async () => {
+    const sync = createSyncService({ db, store, dbPath: conn().name, workerFile: '', deviceId: () => 'x' });
+    expect(readSyncStatus(conn()).archiveBytes).toBe(0);
+    fs.writeFileSync(`${conn().name}.archive-20261102000000`, Buffer.alloc(1000));
+    fs.writeFileSync(`${conn().name}.archive-20261102000000-wal`, Buffer.alloc(24));
+    expect(readSyncStatus(conn()).archiveBytes).toBe(1024);
+    await sync.deleteArchive();
+    expect(readSyncStatus(conn()).archiveBytes).toBe(0);
+    expect(fs.existsSync(conn().name)).toBe(true);
+  });
+});
+
 describe('readOnly is read at each call', () => {
   it('a promotion needs no new wiring', async () => {
     let ro = true;

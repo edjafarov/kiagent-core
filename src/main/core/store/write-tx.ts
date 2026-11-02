@@ -296,6 +296,9 @@ export interface ImportSourcesResult {
   created: string[];
   existing: string[];
   needsConnector: string[];
+  /** Names for `needsConnector`, so the joining device can say what to install.
+   *  Absent when there are none. */
+  needsConnectorSources?: { source: string; identifier: string }[];
 }
 
 export interface WriteTx {
@@ -698,11 +701,17 @@ export function createWriteTx(
         existing: [],
         needsConnector: [],
       };
+      let current: { source: string; identifier: string } | null = null;
+      const lacking = (id: string): void => {
+        out.needsConnector.push(id);
+        if (current) (out.needsConnectorSources ??= []).push(current);
+      };
       const seen = (row: { id: string; status: string }) => {
         out.existing.push(row.id);
-        if (row.status === 'needs-connector') out.needsConnector.push(row.id);
+        if (row.status === 'needs-connector') lacking(row.id);
       };
       for (const e of i.entries) {
+        current = { source: e.source, identifier: e.identifier };
         const owned = e.ownerDeviceId !== null;
         // A display name can collide between two workspaces, so an unstable
         // match is a separate account under a suffixed identifier, which is
@@ -755,7 +764,7 @@ export function createWriteTx(
         appendChange('account', row.id);
         if (e.blob) vault.run(row.id, Buffer.from(e.blob));
         out.created.push(row.id);
-        if (status === 'needs-connector') out.needsConnector.push(row.id);
+        if (status === 'needs-connector') lacking(row.id);
       }
       return out;
     },
