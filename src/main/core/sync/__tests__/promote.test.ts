@@ -150,6 +150,21 @@ describe('promote', () => {
     expect(head).toBeGreaterThan(3 * GAP);
   });
 
+  it('raises counters that already have rows, with one sequence row each, and the next rows land above', async () => {
+    await write();
+    await write();
+    await follow();
+    await sync.promote(3);
+    for (const name of ['changes', 'sync_rows']) {
+      const rows = await db.all(`SELECT seq FROM sqlite_sequence WHERE name = ?`, [name]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].seq as number).toBeGreaterThanOrEqual(3 * GAP);
+    }
+    await write();
+    const head = (await db.all(`SELECT max(seq) AS m FROM changes`))[0].m as number;
+    expect(head).toBeGreaterThan(3 * GAP);
+  });
+
   it('never lowers a counter that is already higher', async () => {
     await follow();
     await db.run(`INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES ('changes', ?)`, [9 * GAP]);

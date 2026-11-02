@@ -25,12 +25,18 @@ export function promote(conn: BetterSqlite3.Database, epoch: number): void {
       .prepare(`UPDATE sync_state SET role = 'normal', master_device_id = NULL, joining = 0, epoch = ?`)
       .run(epoch);
     if (done) return;
-    // A table that never had an insert has no sequence row, so this inserts.
-    const raise = conn.prepare(
-      `INSERT OR REPLACE INTO sqlite_sequence(name, seq)
-       VALUES (?, max(coalesce((SELECT seq FROM sqlite_sequence WHERE name = ?), 0), ?))`,
+    // sqlite_sequence has no unique key, so INSERT OR REPLACE would add a second
+    // row beside the existing one, and SQLite reads the first. Update what is
+    // there; a table that never had an insert has no row, so only then insert.
+    const raise = conn.prepare(`UPDATE sqlite_sequence SET seq = max(seq, ?) WHERE name = ?`);
+    const create = conn.prepare(
+      `INSERT INTO sqlite_sequence(name, seq)
+       SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = ?)`,
     );
-    for (const name of COUNTERS) raise.run(name, name, epoch * EPOCH_GAP);
+    for (const name of COUNTERS) {
+      raise.run(epoch * EPOCH_GAP, name);
+      create.run(name, epoch * EPOCH_GAP, name);
+    }
     enableTracking(conn);
     // After the triggers exist, so this is the first tracked row and travels.
     conn
