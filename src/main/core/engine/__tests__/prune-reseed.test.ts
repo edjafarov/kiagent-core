@@ -165,10 +165,10 @@ describe('pruning the changes log (#59 §3b)', () => {
     let n = 0;
     const killing = {
       ...store,
-      deleteChangesRange: async (a: number, b: number) => {
+      deleteChangesBelow: async (limit: number, size: number) => {
         n += 1;
         if (n === 2) throw new Error('killed');
-        return store.deleteChangesRange(a, b);
+        return store.deleteChangesBelow(limit, size);
       },
     };
     await expect(prune({ store: killing, batch: 4 })).rejects.toThrow('killed');

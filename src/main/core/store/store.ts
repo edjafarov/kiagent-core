@@ -343,6 +343,12 @@ export interface CoreStore extends Store {
   /** Delete `changes` rows with `from <= seq < to` — one primary-key range,
    *  one writer call. Returns the number deleted. */
   deleteChangesRange(from: Seq, to: Seq): Promise<number>;
+  /** Delete up to `batch` of the lowest EXISTING `changes` rows below `limit`.
+   *  Returns how many; 0 means nothing is left below. Walks rows, not
+   *  numbers, so a 10^10 gap between epochs costs nothing. */
+  deleteChangesBelow(limit: Seq, batch: number): Promise<number>;
+  /** How many existing changes lie above `cursor`, counted to at most `cap`. */
+  pendingChanges(cursor: Seq, cap?: number): Promise<number>;
   /** `PRAGMA wal_checkpoint(PASSIVE)`. */
   walCheckpoint(): Promise<void>;
   ledgerRecord(
@@ -1285,6 +1291,26 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       return r.changes;
     },
 
+    async deleteChangesBelow(limit, batch) {
+      if (batch <= 0) return 0;
+      const [r] = await db.batch([
+        {
+          sql: `DELETE FROM changes WHERE seq IN
+                  (SELECT seq FROM changes WHERE seq < ? ORDER BY seq LIMIT ?)`,
+          params: [limit, batch],
+        },
+      ]);
+      return r.changes;
+    },
+
+    async pendingChanges(cursor, cap = 100_000) {
+      const r = (await db.all(
+        `SELECT COUNT(*) AS n FROM (SELECT 1 FROM changes WHERE seq > ? LIMIT ?)`,
+        [cursor, cap],
+      ))[0] as { n: number };
+      return r.n;
+    },
+
     async walCheckpoint() {
       await db.exec(`PRAGMA wal_checkpoint(PASSIVE)`);
     },
@@ -1424,12 +1450,6 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         }
       }
       counts.skip = total - notSkip;
-      const head =
-        (
-          (await db.all(`SELECT MAX(seq) AS s FROM changes`))[0] as {
-            s: number | null;
-          }
-        ).s ?? 0;
       const lags = (await db.all(
         `SELECT name, cursor FROM consumers WHERE name NOT LIKE '${SEED_CONSUMER_PREFIX}%'`,
       )) as Array<{
@@ -1437,9 +1457,15 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         cursor: number;
       }>;
       const live = consumers ? new Set(consumers) : null;
-      counts.pending = lags
-        .filter((r) => !live || live.has(r.name))
-        .reduce((max, r) => Math.max(max, head - r.cursor), 0);
+      // Existing rows above each cursor, not the difference of two seqs: a
+      // takeover leaves a 10^10 gap in the numbering.
+      let pending = 0;
+      for (const r of lags) {
+        if (live && !live.has(r.name)) continue;
+        // eslint-disable-next-line no-await-in-loop
+        pending = Math.max(pending, await store.pendingChanges(r.cursor));
+      }
+      counts.pending = pending;
       return counts;
     },
 

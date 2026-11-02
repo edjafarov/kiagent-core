@@ -146,8 +146,7 @@ export type PruneStore = Pick<
   | 'firstChangeSeqAt'
   | 'headSeq'
   | 'publishChangesFloor'
-  | 'minChangeSeq'
-  | 'deleteChangesRange'
+  | 'deleteChangesBelow'
   | 'walCheckpoint'
 >;
 
@@ -184,23 +183,21 @@ export async function pruneChangesOnce(deps: {
   // returns below it re-seeds, and a crash between windows leaves only
   // garbage below the floor, which the next run deletes.
   await deps.store.publishChangesFloor(limit);
-  const min = await deps.store.minChangeSeq();
   let deleted = 0;
   let batches = 0;
-  if (min !== null) {
-    for (let lo = min; lo < limit; lo += batch) {
+  // The lowest existing rows each time: epochs leave gaps of 10^10 in the
+  // numbering, which a walk over seq ranges would cross one window at a time.
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const n = await deps.store.deleteChangesBelow(limit, batch);
+    if (n === 0) break;
+    deleted += n;
+    batches += 1;
+    if (batches % PRUNE_CHECKPOINT_EVERY === 0)
       // eslint-disable-next-line no-await-in-loop
-      deleted += await deps.store.deleteChangesRange(
-        lo,
-        Math.min(lo + batch, limit),
-      );
-      batches += 1;
-      if (batches % PRUNE_CHECKPOINT_EVERY === 0)
-        // eslint-disable-next-line no-await-in-loop
-        await deps.store.walCheckpoint();
-      // eslint-disable-next-line no-await-in-loop
-      await yieldTurn();
-    }
+      await deps.store.walCheckpoint();
+    // eslint-disable-next-line no-await-in-loop
+    await yieldTurn();
   }
   await deps.store.walCheckpoint();
   return { limit, deleted, batches };

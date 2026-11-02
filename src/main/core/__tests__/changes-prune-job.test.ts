@@ -18,6 +18,7 @@ function fakeStore(over: Partial<ReturnType<typeof baseStore>> = {}) {
 }
 
 function baseStore(calls: string[]) {
+  let next = 1;
   return {
     ledgerRekeyed: async () => true,
     consumerFloor: async (): Promise<number | null> => 100,
@@ -27,9 +28,12 @@ function baseStore(calls: string[]) {
       calls.push(`floor:${n}`);
     },
     minChangeSeq: async () => 1,
-    deleteChangesRange: async (a: number, b: number) => {
-      calls.push(`del:${a}-${b}`);
-      return b - a;
+    // The oldest existing rows below the limit, `batch` at a time.
+    deleteChangesBelow: async (limit: number, batch: number) => {
+      const n = Math.max(0, Math.min(batch, limit - next));
+      if (n > 0) calls.push(`del:${next}-${next + n}`);
+      next += n;
+      return n;
     },
     walCheckpoint: async () => {
       calls.push('ckpt');
@@ -58,6 +62,34 @@ describe('changes prune (#59 §3b)', () => {
     expect(calls[1]).toBe('del:1-3');
     expect(calls.filter((c) => c === 'ckpt')).toHaveLength(3); // 20, 40, end
     expect(calls).toContain('del:99-100');
+  });
+
+  it('pruning after three epochs walks no empty range', async () => {
+    // Rows 1..5 and one row 3 x 10^10 up: the old walk was 6 x 10^5 windows.
+    const GAP = 10_000_000_000;
+    const rows = [1, 2, 3, 4, 5, 3 * GAP + 1];
+    let asked = 0;
+    const { store } = fakeStore({
+      consumerFloor: async () => 3 * GAP + 1,
+      firstChangeSeqAt: async () => 3 * GAP + 1,
+      headSeq: async () => 3 * GAP + 1,
+      deleteChangesBelow: async (limit: number, batch: number) => {
+        asked += 1;
+        const gone = rows.filter((r) => r < limit).slice(0, batch);
+        for (const g of gone) rows.splice(rows.indexOf(g), 1);
+        return gone.length;
+      },
+    });
+    const r = await pruneChangesOnce({
+      store,
+      activeConsumers: () => ['w'],
+      now: () => NOW,
+      batch: 2,
+      yieldTurn: async () => {},
+    });
+    expect(r).toMatchObject({ deleted: 5, batches: 3 });
+    expect(asked).toBe(4); // three with rows, one empty to stop
+    expect(rows).toEqual([3 * GAP + 1]);
   });
 
   it('is a no-op until the re-key repair is done', async () => {

@@ -131,6 +131,37 @@ describe('prune primitives (#59 §3b)', () => {
     expect(await store.deleteChangesRange(5, 5)).toBe(0);
   });
 
+  it('deleteChangesBelow deletes the lowest existing rows, a batch at a time', async () => {
+    await store.commit({
+      account: accountId,
+      documents: [doc('a'), doc('b'), doc('c'), doc('d')],
+      cursor: 1,
+    });
+    const head = await store.headSeq();
+    const before = (await db.all(`SELECT seq FROM changes ORDER BY seq`)) as { seq: number }[];
+    expect(await store.deleteChangesBelow(head, 2)).toBe(2);
+    const after = (await db.all(`SELECT seq FROM changes ORDER BY seq`)) as { seq: number }[];
+    expect(after.map((r) => r.seq)).toEqual(before.slice(2).map((r) => r.seq));
+    expect(await store.deleteChangesBelow(head, 100)).toBe(before.length - 3);
+    expect(await store.deleteChangesBelow(head, 100)).toBe(0);
+    expect(await store.headSeq()).toBe(head);
+  });
+
+  it('pending counts existing rows across a 10^10 gap', async () => {
+    const GAP = 10_000_000_000;
+    await store.commit({ account: accountId, documents: [doc('a'), doc('b')], cursor: 1 });
+    await db.run(`UPDATE sqlite_sequence SET seq = ? WHERE name = 'changes'`, [3 * GAP]);
+    await store.commit({ account: accountId, documents: [doc('c'), doc('d')], cursor: 2 });
+    const all = (await db.all(`SELECT seq FROM changes ORDER BY seq`)) as { seq: number }[];
+    expect(all[all.length - 1].seq).toBeGreaterThan(3 * GAP);
+    await store.commit({ consumer: 'worker:lag:v1', cursor: 1 });
+    const counts = await store.ledgerCountsAll();
+    expect(counts.pending).toBe(all.filter((r) => r.seq > 1).length);
+    expect(await store.pendingChanges(1)).toBe(all.filter((r) => r.seq > 1).length);
+    expect(await store.pendingChanges(1, 2)).toBe(2); // bounded
+    expect(await store.pendingChanges(all[all.length - 1].seq)).toBe(0);
+  });
+
   it('publishChangesFloor never lowers the floor', async () => {
     await store.publishChangesFloor(10);
     await store.publishChangesFloor(4);
