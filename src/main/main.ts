@@ -75,7 +75,7 @@ import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
 import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
-import { forwardCore, isForwardedChannel } from './core/sync/forward-core';
+import { FORWARDED_CHANNELS, forwardCore } from './core/sync/forward-core';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
@@ -873,21 +873,21 @@ function registerIpc(
     ...calendarOutInvokeHandlers({ service: calendarOut, store: p.store }),
   };
 
-  // The loop is the point: it registers exactly the declared channels, and
-  // `handlers` cannot be missing one of them without failing tsc. The
-  // generic `dispatch` keeps `req` tied to its channel instead of collapsing
-  // to a union call signature at the indexing site.
   // Multi-device sync (step 3): on a follower the writing channels run on the
-  // leader, read now on every call; on the leader they run here unchanged.
-  const dispatch = <C extends InvokeChannel>(
-    channel: C,
-    req: Invokes[C]['req'],
-  ) =>
-    isForwardedChannel(channel) && p.sync.readOnly()
-      ? (forwardCore(p.sync, channel, req) as ReturnType<
-          InvokeHandlers[C]
-        >)
-      : handlers[channel](req);
+  // leader, read now on every call; on the leader they run here unchanged. The
+  // map is wrapped in place, not `dispatch`, so the app overlay's patch of
+  // `dispatch` still finds its text.
+  const forwardedLocal = new Map<string, (req: unknown) => unknown>();
+  {
+    const table = handlers as unknown as Record<string, (req: unknown) => unknown>;
+    for (const channel of FORWARDED_CHANNELS) {
+      const local = table[channel];
+      if (!local) continue; // an overlay-handled channel is wrapped by its owner
+      forwardedLocal.set(channel, local);
+      table[channel] = (req) =>
+        p.sync.readOnly() ? forwardCore(p.sync, channel, req) : local(req);
+    }
+  }
   p.sync.setRunners({
     ui: async (extensionId, name, payload) => {
       const r = await extensions.callUi(extensionId, name, payload);
@@ -895,11 +895,21 @@ function registerIpc(
       throw new Error(r.message);
     },
     core: async (name, req) => {
-      if (!isForwardedChannel(name)) throw new Error(`${name} is not a forwarded channel`);
-      return (handlers[name] as (r: unknown) => unknown)(req);
+      const local = forwardedLocal.get(name);
+      if (!local) throw new Error(`${name} is not a forwarded channel`);
+      return local(req);
     },
     commit: (input) => runCommitBatch({ db: p.db, store: p.store }, input as CommitInput),
   });
+
+  // The loop is the point: it registers exactly the declared channels, and
+  // `handlers` cannot be missing one of them without failing tsc. The
+  // generic `dispatch` keeps `req` tied to its channel instead of collapsing
+  // to a union call signature at the indexing site.
+  const dispatch = <C extends InvokeChannel>(
+    channel: C,
+    req: Invokes[C]['req'],
+  ) => handlers[channel](req);
   const isTrustedSender = createTrustedRendererPredicate({
     app,
     BrowserWindow,
