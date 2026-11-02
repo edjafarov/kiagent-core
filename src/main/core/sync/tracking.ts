@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto';
 
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { readRoleSync, SyncReadOnly } from './role';
+
 const ON = `(SELECT tracking FROM sync_state) = 1`;
 
 const track = (tbl: string, row: 'OLD' | 'NEW') =>
@@ -24,6 +26,9 @@ const TRIGGERS = `
 `;
 
 export function enableTracking(conn: BetterSqlite3.Database): void {
+  if (readRoleSync(conn) === 'follower') {
+    throw new SyncReadOnly('enableTracking');
+  }
   conn.transaction(() => {
     conn.exec(TRIGGERS);
     conn

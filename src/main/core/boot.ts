@@ -55,6 +55,9 @@ import { createLogs } from './logs';
 import { createPrefs } from './prefs';
 import { createScheduler } from './scheduler';
 import type { CoreScheduler } from './scheduler';
+import { applyFollowerGate, readSyncRole } from './sync/role';
+import { createSyncService, type SyncService } from './sync/service';
+import { applyPendingSwap } from './sync/swap';
 import { openReads } from './reads';
 import type { ReadCaller } from './store/read-proxy';
 import { openStore } from './store/store';
@@ -174,6 +177,9 @@ export interface CorePlatform {
   readDiagnostics(sql?: SqlRunnerDiagnostics | null): Promise<ReadDiagnostics>;
   /** The single worker-backed database service shared by core and plugins. */
   db: AppDb;
+  /** This device is a read-only follower (spec 7.6). */
+  readOnly: boolean;
+  sync: SyncService;
   store: CoreStore;
   engine: ReturnType<typeof createEngine>;
   scheduler: CoreScheduler;
@@ -319,7 +325,11 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   // AppDb-driven, so every read/write and the relocated commit transaction
   // cross the bridge); this is what keeps backfill off the main event loop.
   const dbPath = path.join(deps.dataDir, 'kiagent.db');
+  // A snapshot from the master replaces the file before anything opens it.
+  applyPendingSwap(dbPath);
   const db = await openDbInWorker(dbPath, deps.dbWorkerFile);
+  // Read once, before anything starts: only the boot swap changes it.
+  const readOnly = (await readSyncRole(db)) === 'follower';
   const store = openStore(db, {
     encrypt: deps.encrypt,
     decrypt: deps.decrypt,
@@ -388,7 +398,15 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     reads: readPlane.readsFor('other'),
   });
 
-  registerArchiveSweep({ store, scheduler, logs: sink });
+  const sync = createSyncService({
+    db,
+    store,
+    dbPath,
+    workerFile: deps.dbWorkerFile,
+  });
+  if (readOnly) applyFollowerGate(engine);
+  // A follower's copied rows change only by what the master sends.
+  if (!readOnly) registerArchiveSweep({ store, scheduler, logs: sink });
   // #59 §3b: prune `changes` to a bounded tail. Never at boot; first-ever
   // run 10 minutes in; a no-op until the ledger re-key repair is done.
   void registerChangesPrune({
@@ -415,8 +433,10 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   });
 
   platform = {
+    readOnly,
+    sync,
     startLedgerRekey: () => {
-      void ledgerRekey.then((r) => r.kick());
+      if (!readOnly) void ledgerRekey.then((r) => r.kick());
     },
     db,
     store,
@@ -451,6 +471,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
       scheduler.stop();
       await engine.stopAll();
       await converter.stop();
+      await sync.close();
       await readPlane.close();
       await store.close();
     },

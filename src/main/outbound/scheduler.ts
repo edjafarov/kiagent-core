@@ -23,6 +23,8 @@ export function createOutboxScheduler(deps: {
   store: CoreStore;
   service: Pick<OutboundService, 'sendScheduled'>;
   logSink: LogSink;
+  /** A follower sends nothing: the master owns outgoing mail (spec 7.6). */
+  readOnly?: boolean;
   now?: () => number;
   setInterval?: (fn: () => void, ms: number) => unknown;
   clearInterval?: (t: unknown) => void;
@@ -71,7 +73,7 @@ export function createOutboxScheduler(deps: {
 
   return {
     start() {
-      if (timer) return;
+      if (deps.readOnly || timer) return;
       void tick();
       timer = every(() => void tick(), SCHEDULE_TICK_MS);
     },
@@ -79,6 +81,6 @@ export function createOutboxScheduler(deps: {
       if (timer) cancel(timer);
       timer = null;
     },
-    tick,
+    tick: deps.readOnly ? async () => undefined : tick,
   };
 }

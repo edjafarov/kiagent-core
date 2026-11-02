@@ -12,7 +12,8 @@ import { migrate } from '../../store/schema';
 import { openStore, type CoreStore } from '../../store/store';
 import { createWriteTx, type WriteTx } from '../../store/write-tx';
 import { buildDelta, SyncStageInvalid, type SyncCursor } from '../delta';
-import { enableTracking } from '../tracking';
+import { disableTracking, enableTracking } from '../tracking';
+import { SyncReadOnly } from '../role';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -68,6 +69,7 @@ beforeEach(async () => {
   enableTracking(src());
   dest = await openDb(path.join(dir, 'dst.db'));
   migrate(dst());
+  dst().prepare(`UPDATE sync_state SET role = 'follower'`).run();
   destTx = createWriteTx(dst(), { detectLanguages: () => ['eng'], now: () => new Date().toISOString() });
   reader = new Database(file, { readonly: true });
   stage = path.join(dir, 'stage');
@@ -165,7 +167,11 @@ it('an interrupted then repeated apply of the same stage converges', async () =>
 it('writes no sync_rows while applying, even with triggers present', async () => {
   const a = await account();
   await commit(a.id, [doc('d1')]);
+  // Triggers remain on a device that was tracking before it became a follower.
+  dst().prepare(`UPDATE sync_state SET role = 'normal'`).run();
   enableTracking(dst());
+  disableTracking(dst());
+  dst().prepare(`UPDATE sync_state SET role = 'follower'`).run();
   dst().prepare(`DELETE FROM sync_rows`).run();
   sync();
   expect(dst().prepare(`SELECT count(*) n FROM sync_rows`).get()).toEqual({ n: 0 });
@@ -207,4 +213,26 @@ it('a delete and re-ingest under a new id with the same natural key applies', as
   sync();
   expect(rows(dst(), 'documents')).toEqual(rows(src(), 'documents'));
   expect(search(dst(), 'bravo')).toHaveLength(1);
+});
+
+it('a damaged target in the trailer is refused, and the position does not move', () => {
+  const r = buildDelta(reader, after, stage, 250 * 1024 * 1024);
+  if (r.status !== 'ok') throw new Error(r.status);
+  const text = fs.readFileSync(stage, 'utf8').trimEnd().split('\n');
+  const trailer = JSON.parse(text[text.length - 1]);
+  trailer.target.seq += 1000;
+  text[text.length - 1] = JSON.stringify(trailer);
+  fs.writeFileSync(stage, `${text.join('\n')}\n`);
+  expect(() => destTx.applyDelta(stage)).toThrow(SyncStageInvalid);
+});
+
+it('a master refuses to apply a delta', () => {
+  dst().prepare(`UPDATE sync_state SET role = 'normal'`).run();
+  const r = buildDelta(reader, after, stage, 250 * 1024 * 1024);
+  if (r.status !== 'ok') throw new Error(r.status);
+  expect(() => destTx.applyDelta(stage)).toThrow('only a follower');
+});
+
+it('a follower cannot turn tracking on', () => {
+  expect(() => enableTracking(dst())).toThrow(SyncReadOnly);
 });

@@ -4,6 +4,11 @@
  * thread, never the main process event loop. The main process talks to it
  * through the bridge protocol (see ./bridge.ts) via openDbInWorker.
  */
+import { buildDelta, type SyncCursor } from '../core/sync/delta';
+import { buildSnapshot } from '../core/sync/snapshot';
+import { readSyncStatus } from '../core/sync/status';
+import { prepareSwap } from '../core/sync/swap';
+import { disableTracking, enableTracking } from '../core/sync/tracking';
 import { parentPort, workerData } from 'node:worker_threads';
 import path from 'node:path';
 import type { CommitBatch, ExternalRef, Seq } from '@shared/contracts';
@@ -39,7 +44,7 @@ if (!parentPort) {
 const { dbPath, pluginSources, role, cacheKiB } = workerData as {
   dbPath: string;
   pluginSources?: Record<string, string>;
-  role?: 'write' | 'read';
+  role?: 'write' | 'read' | 'sync';
   cacheKiB?: number;
 };
 const trustedPluginSources = new Map(
@@ -96,8 +101,35 @@ async function runReadRole(): Promise<void> {
   });
 }
 
+/** Sync role: long reads and hashing, away from the reader foreground search
+ *  uses. Query-only; a snapshot opens its own connection. */
+async function runSyncRole(): Promise<void> {
+  const db = await openCorpusReadConnection(dbPath, {
+    cacheKiB: cacheKiB ?? 2048,
+    queryOnly: true,
+  });
+  const conn = db._conn!;
+  attachDbHost(parentPort!, db, () => process.exit(0), {
+    status: () => readSyncStatus(conn),
+    buildDelta: (args) => {
+      const a = args as { after: SyncCursor; out: string; capBytes: number };
+      return buildDelta(conn, a.after, a.out, a.capBytes);
+    },
+    buildSnapshot: (args) => buildSnapshot(dbPath, (args as { out: string }).out),
+    prepareSwap: (args) => {
+      const a = args as { file: string; sha256: string; masterDeviceId: string };
+      return prepareSwap(dbPath, a.file, a.sha256, a.masterDeviceId);
+    },
+  });
+}
+
 (async () => {
   try {
+    if (role === 'sync') {
+      await runSyncRole();
+      parentPort!.postMessage({ t: 'ready' });
+      return;
+    }
     if (role === 'read') {
       await runReadRole();
       parentPort!.postMessage({ t: 'ready' });
@@ -140,6 +172,13 @@ async function runReadRole(): Promise<void> {
       {
         commit: (args) => writeTx.commit(args as CommitBatch),
         accountWrite: (args) => writeTx.accountWrite(args as AccountWriteOp),
+        syncApply: (args) =>
+          writeTx.applyDelta((args as { stagePath: string }).stagePath),
+        syncTracking: (args) => {
+          if ((args as { on: boolean }).on) enableTracking(db._conn!);
+          else disableTracking(db._conn!);
+          return null;
+        },
         // The reconcile pass runs entirely on this connection: its staging
         // table is TEMP (connection-scoped), and the point of the whole
         // procedure set is that neither the listing nor the deletion set ever

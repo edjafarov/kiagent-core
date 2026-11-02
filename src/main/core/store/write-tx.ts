@@ -1466,7 +1466,11 @@ export function createWriteTx(
   const applyDeltaTx = conn.transaction(
     (entries: Iterable<StageEntry>, target: SyncCursor): void => {
       conn.pragma('defer_foreign_keys = ON');
-      conn.prepare(`UPDATE sync_state SET tracking = 0`).run();
+      // The triggers stay quiet only because a follower doesn't track; applying
+      // on a master would corrupt the history its own followers read.
+      if (readRoleSync(conn) !== 'follower') {
+        throw new Error('only a follower applies a delta');
+      }
       const upserts = new Map<string, BetterSqlite3.Statement>();
       const columns = new Map<string, Set<string>>();
       const upsertRow = (tbl: string, row: Record<string, unknown>): void => {

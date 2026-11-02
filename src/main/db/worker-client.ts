@@ -51,7 +51,7 @@ export interface OpenDbInWorkerOptions {
   execArgv?: string[];
   /** `'read'`: the worker opens a query-only connection and serves only the
    *  `read` procedure (worker-entry.ts); no migrations. Default `'write'`. */
-  role?: 'write' | 'read';
+  role?: 'write' | 'read' | 'sync';
   /** Page cache for the read role, in KiB. */
   cacheKiB?: number;
   /** Host-validated legacy sources keyed by immutable plugin id. This map is

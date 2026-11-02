@@ -107,6 +107,7 @@ export function buildDelta(
         cursor: Math.max(head.cursor ?? 0, after.cursor),
       };
     })();
+    hash.update(JSON.stringify(target));
     const sha256 = hash.digest('hex');
     const trailer: Trailer = { trailer: true, target, rows, sha256 };
     fs.writeSync(fd, `${JSON.stringify(trailer)}\n`);
@@ -170,6 +171,7 @@ export function validateStage(file: string): { target: SyncCursor; rows: number 
     throw new SyncStageInvalid('no trailer');
   }
   if (!trailer || trailer.trailer !== true) throw new SyncStageInvalid('no trailer');
+  hash.update(JSON.stringify(trailer.target));
   if (hash.digest('hex') !== trailer.sha256) throw new SyncStageInvalid('checksum');
   if (count !== trailer.rows) throw new SyncStageInvalid('row count');
   return { target: trailer.target, rows: count };

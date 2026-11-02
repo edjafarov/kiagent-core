@@ -1,3 +1,4 @@
+import type { SyncCursor } from '../sync/delta';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
@@ -196,6 +197,10 @@ export interface ScheduleRow {
  * this type — they get the plain `Store` slices their caps allow.
  */
 export interface CoreStore extends Store {
+  /** Applies a stage from the master and wakes everything a commit wakes. */
+  applySyncDelta(
+    stagePath: string,
+  ): Promise<{ applied: number; target: SyncCursor }>;
   /** Documents that entered the store at or after `since` (ISO), per
    *  account — new items only: updates, moves and restores of older
    *  documents do not count. Archived documents are left out. */
@@ -745,6 +750,20 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           updatedAt: r.updated_at,
         })),
       };
+    },
+
+    async applySyncDelta(stagePath) {
+      const r = writeTx
+        ? writeTx.applyDelta(stagePath)
+        : ((await db.proc!('syncApply', { stagePath })) as {
+            applied: number;
+            target: SyncCursor;
+          });
+      corpus.invalidateLanguages();
+      emitCommit();
+      outboxChanged.emit('change');
+      eventDraftsChanged.emit('change');
+      return r;
     },
 
     async commit(batch) {

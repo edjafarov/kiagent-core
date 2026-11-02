@@ -88,3 +88,23 @@ describe('outbox scheduler', () => {
     expect(t.service.sendScheduled).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('outbox scheduler on a follower', () => {
+  it('starts no timer and sends nothing', async () => {
+    const every = jest.fn();
+    const listDue = jest.fn(async () => [{ id: 'a', sendAt: 'x' }]);
+    const sendScheduled = jest.fn();
+    const s = createOutboxScheduler({
+      store: { outbox: { listDue } } as unknown as CoreStore,
+      service: { sendScheduled },
+      logSink: { log: () => {} },
+      setInterval: every,
+      readOnly: true,
+    });
+    s.start();
+    await s.tick();
+    expect(every).not.toHaveBeenCalled();
+    expect(listDue).not.toHaveBeenCalled();
+    expect(sendScheduled).not.toHaveBeenCalled();
+  });
+});
