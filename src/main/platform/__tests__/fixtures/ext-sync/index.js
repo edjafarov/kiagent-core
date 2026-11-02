@@ -7,7 +7,7 @@ module.exports = {
       status: await host.sync.status(),
       enableTracking: await host.sync.enableTracking(),
       disableTracking: await host.sync.disableTracking(),
-      buildDelta: await host.sync.buildDelta(c, 'out', 5),
+      buildDelta: await host.sync.buildDelta(c, 'out', 5, 3),
       buildSnapshot: await host.sync.buildSnapshot('snap'),
       applyDelta: await host.sync.applyDelta('stage'),
       prepareSwap: await host.sync.prepareSwap('f', 'h', 'm'),
@@ -21,6 +21,12 @@ module.exports = {
       canAcceptSources: await host.sync.canAcceptSources(),
       importSources: await host.sync.importSources('offer', [], 'from'),
       isBusy: await host.sync.isBusy(),
+      exportSecrets: await host.sync.exportSecrets({ epoch: 1, n: 2 }),
+      importSecrets: await host.sync.importSecrets([{ accountId: 'a', epoch: 1, n: 3, value: null }]),
+      promote: await host.sync.promote(2),
+      demote: await host.sync.demote('m1'),
+      setFenced: await host.sync.setFenced(true),
+      readOnly: await host.sync.readOnly(),
     };
     fs.writeFileSync(process.env.KIA_SYNC_FIXTURE_OUT, JSON.stringify(calls));
   },

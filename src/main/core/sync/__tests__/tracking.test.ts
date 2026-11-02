@@ -15,6 +15,7 @@ import {
 } from '../tables';
 import { disableTracking, enableTracking } from '../tracking';
 import { copiedSetDigest, copiedTables } from '../tables';
+import { readSyncStatus } from '../status';
 import { addOutbox, descriptor, physical, registerPlugin } from './synced-plugin';
 
 const deps = {
@@ -215,6 +216,10 @@ describe('synced plugin tables', () => {
     expect(copiedTables(conn())).toEqual([...COPIED_CORE_TABLES]);
     await registerPlugin(file(), conn());
     expect(copiedTables(conn())).toEqual([...COPIED_CORE_TABLES, physical('notes'), physical('blobs')]);
+  });
+
+  it('status reports the copied-set digest', () => {
+    expect(readSyncStatus(conn()).copiedSet).toBe(copiedSetDigest(conn()));
   });
 
   it('copiedSetDigest changes with the version, the table list and a descriptor digest, and not with row data', async () => {

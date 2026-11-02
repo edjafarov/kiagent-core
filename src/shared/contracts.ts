@@ -1623,6 +1623,9 @@ export interface SyncStatusWire {
   archiveBytes: number;
   /** The epoch of the master this device last applied from, or led as. */
   epoch: number;
+  /** Digest of the copied set (schema version, copied table names, synced
+   *  descriptors): a follower echoes the one its master reported. */
+  copiedSet: string;
   /** The highest login stamp held: what a follower asks the leader for next. */
   secretsAfter: { epoch: number; n: number };
   /** Where this device's own epoch began, once it has led. */
@@ -1903,6 +1906,8 @@ export interface CapSurfaces {
         after: SyncCursorWire,
         out: string,
         capBytes: number,
+        /** The epoch the asker last applied from; absent, nothing is rewound. */
+        fromEpoch?: number,
       ): Promise<
         | { status: 'ok'; target: SyncCursorWire; rows: number; bytes: number; sha256: string }
         | { status: 'too-large' }
@@ -1936,6 +1941,14 @@ export interface CapSurfaces {
       /** Stores logins from the leader; follower only. */
       importSecrets(list: SecretWire[]): Promise<{ applied: number }>;
       isBusy(): Promise<string | null>;
+      /** Leads from the next call on, no restart (alpha-cent spec 7.8). */
+      promote(epoch: number): Promise<void>;
+      /** Stops leading; the caller relaunches. */
+      demote(masterDeviceId: string): Promise<void>;
+      /** A master that woke has not heard from registration: close the gates. */
+      setFenced(on: boolean): Promise<void>;
+      /** Follower, joining or fenced. */
+      readOnly(): Promise<boolean>;
       deleteArchive(): Promise<void>;
     };
   };

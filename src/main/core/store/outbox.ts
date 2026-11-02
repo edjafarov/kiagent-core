@@ -305,6 +305,8 @@ export function createOutboxStore(
      *  delete runs in SQL — schema.ts:561's ON DELETE CASCADE — and never
      *  touches this module's create/transition/expireOverdue). */
     changed: EventEmitter;
+    /** Follower or fenced: sweeps do nothing, every other write refuses. */
+    readOnly?: () => boolean;
   },
 ): OutboxStore {
   const fireChanged = () => deps.changed.emit('change');
@@ -330,6 +332,7 @@ export function createOutboxStore(
   };
 
   const expireOverdue = async (): Promise<void> => {
+    if (deps.readOnly?.()) return; // the leader owns expiry; it travels
     // db.batch (not db.run) so the sweep can tell whether it actually moved
     // a row — onChange must stay silent on a sweep that finds nothing.
     const results = await db.batch([
@@ -742,6 +745,7 @@ export function createOutboxStore(
     },
 
     async recoverOrphanedSending() {
+      if (deps.readOnly?.()) return;
       await db.run(
         `UPDATE outbox SET status = 'delivery_unknown',
            error = 'the app closed while sending — the message may have been sent; check the Sent folder before re-drafting'

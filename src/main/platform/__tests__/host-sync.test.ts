@@ -71,6 +71,12 @@ describe('through a real forked extension host', () => {
         canAcceptSources: note('canAcceptSources', true),
         importSources: note('importSources', { created: ['a'], existing: [], needsConnector: [] }),
         isBusy: note('isBusy', null),
+        exportSecrets: note('exportSecrets', [{ accountId: 'a', epoch: 1, n: 3, value: null }]),
+        importSecrets: note('importSecrets', { applied: 1 }),
+        promote: note('promote', undefined),
+        demote: note('demote', undefined),
+        setFenced: note('setFenced', undefined),
+        readOnly: note('readOnly', true),
         deleteArchive: note('deleteArchive', undefined),
         close: async () => undefined,
       } as never,
@@ -125,15 +131,23 @@ describe('through a real forked extension host', () => {
       exportSources: [{ source: 'gmail' }],
       importSources: { created: ['a'], existing: [], needsConnector: [] },
       canAcceptSources: true,
+      exportSecrets: [{ accountId: 'a', epoch: 1, n: 3, value: null }],
+      importSecrets: { applied: 1 },
+      readOnly: true,
     });
+    expect(seen.promote).toEqual([2]);
+    expect(seen.demote).toEqual(['m1']);
+    expect(seen.setFenced).toEqual([true]);
+    expect(seen.exportSecrets).toEqual([{ epoch: 1, n: 2 }]);
     expect(seen.importSources).toEqual(['offer', [], 'from']);
-    expect(seen.buildDelta).toEqual([{ seq: 1, cursor: 2 }, 'out', 5]);
+    expect(seen.buildDelta).toEqual([{ seq: 1, cursor: 2 }, 'out', 5, 3]);
     expect(seen.prepareSwap).toEqual(['f', 'h', 'm']);
     expect(Object.keys(seen).sort()).toEqual(
       [
-        'applyDelta', 'beginJoin', 'buildDelta', 'buildSnapshot', 'canAcceptSources', 'disableTracking',
-        'enableTracking', 'exportSources', 'finishJoin', 'forgetMoved', 'importSources', 'isBusy',
-        'leaveJoin', 'prepareRestore', 'prepareSwap', 'setDeviceId', 'status',
+        'applyDelta', 'beginJoin', 'buildDelta', 'buildSnapshot', 'canAcceptSources', 'demote',
+        'disableTracking', 'enableTracking', 'exportSecrets', 'exportSources', 'finishJoin', 'forgetMoved', 'importSecrets',
+        'importSources', 'isBusy', 'leaveJoin', 'prepareRestore', 'prepareSwap', 'promote', 'readOnly', 'setDeviceId',
+        'setFenced', 'status',
       ],
     );
   });

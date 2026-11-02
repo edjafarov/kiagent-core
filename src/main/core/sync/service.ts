@@ -51,6 +51,8 @@ export interface SyncStatus {
   archiveBytes: number;
   /** The epoch of the master this device last applied from, or led as. */
   epoch: number;
+  /** Digest of the copied set; a follower echoes the one its master sent. */
+  copiedSet: string;
   /** The highest login stamp held: what a follower asks the leader for next. */
   secretsAfter: { epoch: number; n: number };
   /** Where this device's own epoch began, once it has led. */

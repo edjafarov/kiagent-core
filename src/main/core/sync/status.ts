@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { copiedSetDigest } from './tables';
 import type { SyncRole } from './role';
 import type { SyncStatus } from './service';
 
@@ -34,6 +35,7 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
     .prepare(`SELECT epoch, n FROM vault ORDER BY epoch DESC, n DESC LIMIT 1`)
     .get() as { epoch: number; n: number } | undefined;
   return {
+    copiedSet: copiedSetDigest(conn),
     secretsAfter: secrets ?? { epoch: 0, n: 0 },
     epoch: s.epoch,
     grant: grant ?? null,

@@ -182,7 +182,7 @@ const SQL_END = `CASE WHEN json_extract(payload_json,'$.allDay') THEN json_extra
 
 export function createEventDraftStore(
   db: AppDb,
-  deps: { now: () => string; changed: EventEmitter },
+  deps: { now: () => string; changed: EventEmitter; readOnly?: () => boolean },
 ): EventDraftStore {
   const fire = () => deps.changed.emit('change');
   const freshExpiry = () =>
@@ -346,6 +346,7 @@ export function createEventDraftStore(
     },
 
     async expireOverdue() {
+      if (deps.readOnly?.()) return 0; // the leader owns expiry
       const [r] = await db.batch([
         {
           sql: `UPDATE event_drafts SET status = 'expired', updated_at = ?
@@ -359,6 +360,7 @@ export function createEventDraftStore(
     },
 
     async recoverOrphanedCreating() {
+      if (deps.readOnly?.()) return 0;
       const [r] = await db.batch([
         {
           sql: `UPDATE event_drafts

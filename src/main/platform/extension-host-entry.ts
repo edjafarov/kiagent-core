@@ -140,6 +140,10 @@ export const NS_METHODS: Record<string, string[]> = {
     'exportSecrets',
     'importSecrets',
     'isBusy',
+    'promote',
+    'demote',
+    'setFenced',
+    'readOnly',
     'deleteArchive',
   ],
 };

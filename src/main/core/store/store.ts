@@ -29,6 +29,7 @@ import {
   SEED_CONSUMER_PREFIX,
   seedConsumerName,
 } from './maintenance-keys';
+import { readGuardedDb } from '../sync/read-guard';
 import { createOutboxStore, type OutboxStore } from './outbox';
 import { createEventDraftStore, type EventDraftStore } from './event-drafts';
 import { createCalendarIndex, type CalendarIndex } from './calendar-index';
@@ -179,6 +180,9 @@ export interface StoreDeps {
   now?(): string;
   /** Profile root whose app-owned referenced assets are included in exports. */
   profileDir?: string;
+  /** Follower, joining or fenced: asked on every call. Outbox and event
+   *  drafts refuse writes then (they write outside the writer guard). */
+  readOnly?(): boolean;
 }
 
 export interface LedgerCounts {
@@ -468,6 +472,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     gen += 1;
   };
   /** Every feed nudge also moves the generation. */
+  const guardedDb = readGuardedDb(db, () => deps.readOnly?.() ?? false);
   const emitCommit = (): void => {
     bumpGen();
     nudge.emit('commit');
@@ -873,15 +878,17 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       };
     },
 
-    outbox: createOutboxStore(db, {
+    outbox: createOutboxStore(guardedDb, {
       now,
+      readOnly: () => deps.readOnly?.() ?? false,
       encrypt: deps.encrypt,
       decrypt: deps.decrypt,
       changed: outboxChanged,
     }),
 
-    eventDrafts: createEventDraftStore(db, {
+    eventDrafts: createEventDraftStore(guardedDb, {
       now,
+      readOnly: () => deps.readOnly?.() ?? false,
       changed: eventDraftsChanged,
     }),
 

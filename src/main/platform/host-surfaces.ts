@@ -276,6 +276,10 @@ function syncSurface(
     exportSecrets: call('exportSecrets'),
     importSecrets: call('importSecrets'),
     isBusy: call('isBusy'),
+    promote: call('promote'),
+    demote: call('demote'),
+    setFenced: call('setFenced'),
+    readOnly: call('readOnly'),
     deleteArchive: call('deleteArchive'),
   };
 }

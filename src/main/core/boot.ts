@@ -363,6 +363,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     decrypt: deps.decrypt,
     detectLanguages,
     profileDir: deps.dataDir,
+    readOnly: () => sync.readOnly(),
   });
   const budget = hostBudget(host, null);
   // Foreground reads (MCP, renderer) run on their own read-only worker so they

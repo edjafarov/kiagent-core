@@ -157,6 +157,7 @@ async function runSyncRole(): Promise<void> {
     const attentionTx = createAttentionTx(db._conn!, {
       policy: ATTENTION_ACTION_POLICY,
       now: Date.now,
+      readOnly: () => fenced || gateFrom(readGateSync(db._conn!)),
     });
     const pluginConnections = new Map<
       string,

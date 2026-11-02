@@ -72,6 +72,9 @@ export interface AttentionTx {
 export interface AttentionTxOptions {
   policy: AttentionActionPolicy;
   now: () => number;
+  /** A follower or fenced master: attention rows are copied, so a write here
+   *  is refused and expiry is left to the leader. Asked on every call. */
+  readOnly?: () => boolean;
 }
 
 function errorDetails(error: unknown): { message: string; name?: string } {
@@ -221,6 +224,7 @@ export function createAttentionTx(
     available: Set<string>,
     failures: AttentionRowFailure[],
   ): boolean => {
+    if (options.readOnly?.()) return false;
     let changed = false;
     const openRows = selectOpenRowsStatement.all() as StoredRow[];
     for (const row of openRows) {
@@ -308,8 +312,19 @@ export function createAttentionTx(
     }
   };
 
+  const denied = (): AttentionTxResult | null =>
+    options.readOnly?.()
+      ? {
+          ok: false,
+          error: { message: 'this device is a read-only copy: attention', name: 'SyncReadOnly' },
+          rowFailures: [],
+        }
+      : null;
+
   return {
     publish(args) {
+      const no = denied();
+      if (no) return no;
       return run((now, failures) => {
         const { producer, items, availableProducers } = args;
         for (const item of items) {
@@ -404,6 +419,8 @@ export function createAttentionTx(
     },
 
     resolve(args) {
+      const no = denied();
+      if (no) return no;
       return run((now, failures) => {
         const { producer, id, revision, availableProducers } = args;
         const row = getRow(id);
@@ -419,6 +436,8 @@ export function createAttentionTx(
     },
 
     dismiss(args) {
+      const no = denied();
+      if (no) return no;
       return run((now, failures) => {
         const { id, availableProducers } = args;
         const row = getRow(id);
