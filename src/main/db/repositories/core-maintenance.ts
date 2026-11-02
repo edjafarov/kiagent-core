@@ -9,6 +9,12 @@ export async function resetCoreStoreTables(
   now: () => string,
 ): Promise<void> {
   await db.batch([
+    // First, so the wipe below isn't tracked. A later enrolment starts a new
+    // history, and any follower of this device takes a fresh snapshot.
+    {
+      sql: `UPDATE sync_state SET role = 'normal', tracking = 0, after_seq = 0,
+              after_cursor = 0, history_id = NULL, master_device_id = NULL`,
+    },
     ...[
       'documents_fts',
       'documents_tri',
@@ -21,6 +27,7 @@ export async function resetCoreStoreTables(
       'accounts',
       'attention_items',
       'attention_revisions',
+      'sync_rows',
     ].map((table) => ({ sql: `DELETE FROM ${table}` })),
     { sql: `DELETE FROM meta WHERE key != 'schemaVersion'` },
     // The wiped ledger is empty, so it is trivially re-keyed (#59 §0) —

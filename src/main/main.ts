@@ -75,6 +75,7 @@ import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
 import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
+import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
 import {
   createAttentionService,
@@ -1053,9 +1054,12 @@ app
     // Calendar writers (platform 2.16.0): extensions register into it on
     // activation; the event-draft service reads it live.
     const calendarWriters = createCalendarWriterRegistry();
-    const senderLookup = composeSenders(
-      buildBundledSenders({ store: p.store, logSink: p.logSink }),
-      p.senders,
+    const senderLookup = followerLookup(
+      composeSenders(
+        buildBundledSenders({ store: p.store, logSink: p.logSink }),
+        p.senders,
+      ),
+      p.readOnly,
     );
     const documentBytes = createDocumentBytes({
       document: (id) => p.readsFor('other').document(id),
@@ -1087,7 +1091,7 @@ app
     // confirm modes, URL origins and the link secret come from `outbound`.
     const calendarOut = createCalendarOutService({
       store: p.store,
-      writers: calendarWriters,
+      writers: followerLookup(calendarWriters, p.readOnly),
       sources: p.sources,
       ctx: () => outbound.context(),
       prefs: p.prefs,

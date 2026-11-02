@@ -10,7 +10,7 @@ import Database from 'better-sqlite3';
 import { hashFile, SNAPSHOT_META } from './snapshot';
 import { COPIED_CORE_TABLES, isDerivedTable } from './tables';
 
-export const SWAP_STEPS = ['merged', 'archived', 'replaced'] as const;
+export const SWAP_STEPS = ['committed', 'merged', 'archived', 'replaced'] as const;
 type SwapStep = (typeof SWAP_STEPS)[number];
 
 interface Journal {
@@ -43,7 +43,8 @@ export function prepareSwap(
   if (hashFile(file) !== sha256) return 'invalid';
   // The file was already downloaded here, so only the local tables are new.
   // They can't outgrow the database they come from.
-  const needed = fs.statSync(dbPath).size;
+  const wal = fs.existsSync(`${dbPath}-wal`) ? fs.statSync(`${dbPath}-wal`).size : 0;
+  const needed = fs.statSync(dbPath).size + wal;
   if (freeBytes() < needed) return 'no-disk';
   fs.renameSync(file, incomingPath(dbPath));
   const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
@@ -60,6 +61,12 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string): vo
   const db = new Database(file);
   try {
     db.pragma('foreign_keys = OFF');
+    // The merge commits, then the journal says so; a crash in between leaves a
+    // file that's already merged, which is recognised by its dropped table.
+    const pending = db
+      .prepare(`SELECT 1 FROM sqlite_master WHERE name = ?`)
+      .get(SNAPSHOT_META);
+    if (!pending) return;
     db.prepare(`ATTACH ? AS old`).run(old);
     db.unsafeMode(true);
     db.transaction(() => {
@@ -135,22 +142,34 @@ const moveIfThere = (from: string, to: string): void => {
 export function applyPendingSwap(
   dbPath: string,
   crashAt: (step: SwapStep) => void = () => undefined,
-): 'none' | 'swapped' {
+): 'none' | 'swapped' | 'abandoned' {
   if (!fs.existsSync(journalPath(dbPath))) return 'none';
   const j = JSON.parse(fs.readFileSync(journalPath(dbPath), 'utf8')) as Journal;
   const merged = mergedPath(dbPath);
 
   if (!j.merged) {
-    // Fold the old WAL in first, so the archive is one standalone file.
-    const old = new Database(dbPath);
-    old.pragma('wal_checkpoint(TRUNCATE)');
-    old.close();
-    // A move, so no second copy of the data. The merge is one transaction, so a
-    // crash during it leaves this file as it arrived.
-    if (fs.existsSync(incomingPath(dbPath))) {
-      fs.renameSync(incomingPath(dbPath), merged);
+    try {
+      // Fold the old WAL in first, so the archive is one standalone file.
+      const old = new Database(dbPath);
+      old.pragma('wal_checkpoint(TRUNCATE)');
+      old.close();
+      // A move, so no second copy of the data. The merge is one transaction, so
+      // a crash during it leaves this file as it arrived.
+      if (fs.existsSync(incomingPath(dbPath))) {
+        fs.renameSync(incomingPath(dbPath), merged);
+      }
+      mergeLocalTables(merged, dbPath, j.masterDeviceId);
+    } catch {
+      // Nothing has touched the old database, so it stays this device's data.
+      // Retrying would fail the same way at every boot.
+      fs.rmSync(incomingPath(dbPath), { force: true });
+      fs.rmSync(merged, { force: true });
+      fs.rmSync(`${merged}-wal`, { force: true });
+      fs.rmSync(`${merged}-shm`, { force: true });
+      fs.rmSync(journalPath(dbPath), { force: true });
+      return 'abandoned';
     }
-    mergeLocalTables(merged, dbPath, j.masterDeviceId);
+    crashAt('committed');
     writeJournal(dbPath, { ...j, merged: true });
     crashAt('merged');
   }

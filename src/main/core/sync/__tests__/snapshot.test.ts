@@ -243,6 +243,29 @@ describe('swap', () => {
     expect(applyPendingSwap(receiver)).toBe('none');
   });
 
+  it('a swap that cannot merge is abandoned: the old database still opens as it was', async () => {
+    await ready();
+    fs.writeFileSync(`${receiver}.swap-incoming`, 'not a database');
+    expect(applyPendingSwap(receiver)).toBe('abandoned');
+    const d = open();
+    expect(d.prepare(`SELECT role FROM sync_state`).get()).toEqual({ role: 'normal' });
+    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+    d.close();
+    expect(applyPendingSwap(receiver)).toBe('none');
+    expect(fs.readdirSync(path.dirname(receiver)).filter((f) => f.includes('.swap'))).toEqual([]);
+  });
+
+  it('room counts an uncheckpointed WAL too', async () => {
+    const a = await account();
+    await commit(a.id, [doc('d1')]);
+    const r = snapshot();
+    fs.writeFileSync(`${receiver}-wal`, Buffer.alloc(0));
+    const size = fs.statSync(receiver).size;
+    fs.writeFileSync(`${receiver}-wal`, Buffer.alloc(4096));
+    expect(prepareSwap(receiver, snap, r.sha256, MASTER_ID, () => size + 1024)).toBe('no-disk');
+    fs.rmSync(`${receiver}-wal`);
+  });
+
   it.each(SWAP_STEPS)('a crash after %s leaves a database that opens, and the swap finishes on retry', async (step) => {
     await ready();
     expect(() =>

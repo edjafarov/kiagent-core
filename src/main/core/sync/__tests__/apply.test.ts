@@ -236,3 +236,23 @@ it('a master refuses to apply a delta', () => {
 it('a follower cannot turn tracking on', () => {
   expect(() => enableTracking(dst())).toThrow(SyncReadOnly);
 });
+
+it('reset all makes a follower a normal device with nothing to resume', async () => {
+  const a = await account();
+  await commit(a.id, [doc('d1')]);
+  sync();
+  const destStore = openStore(dest, deps);
+  await destStore.maintenance.resetAll();
+  expect(dst().prepare(`SELECT role, tracking, after_seq, after_cursor, history_id, master_device_id FROM sync_state`).get()).toEqual({
+    role: 'normal', tracking: 0, after_seq: 0, after_cursor: 0, history_id: null, master_device_id: null,
+  });
+});
+
+it('reset all on a tracking master starts a new history and leaves no tracked rows', async () => {
+  const a = await account();
+  await commit(a.id, [doc('d1')]);
+  enableTracking(src());
+  await sourceStore.maintenance.resetAll();
+  expect(src().prepare(`SELECT history_id, tracking FROM sync_state`).get()).toEqual({ history_id: null, tracking: 0 });
+  expect(src().prepare(`SELECT count(*) n FROM sync_rows`).get()).toEqual({ n: 0 });
+});

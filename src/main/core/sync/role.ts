@@ -62,3 +62,16 @@ export function applyFollowerGate(engine: {
     };
   }
 }
+
+/** A follower sends nothing, whichever path asks: the master owns every effect
+ *  outside the device (spec 7.6). Finding no sender is what callers already
+ *  handle for an account that can't send. */
+export function followerLookup<T extends { get(id: string): unknown }>(
+  lookup: T,
+  readOnly: boolean,
+): T {
+  if (!readOnly) return lookup;
+  const gated = Object.create(lookup) as T;
+  gated.get = (() => undefined) as T['get'];
+  return gated;
+}

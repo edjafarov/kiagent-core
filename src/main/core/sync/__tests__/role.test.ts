@@ -8,7 +8,7 @@ import Database from 'better-sqlite3';
 
 import { migrate } from '../../store/schema';
 import { createWriteTx } from '../../store/write-tx';
-import { applyFollowerGate, readRoleSync, SyncReadOnly } from '../role';
+import { applyFollowerGate, followerLookup, readRoleSync, SyncReadOnly } from '../role';
 
 let dir: string;
 let db: Database.Database;
@@ -110,5 +110,14 @@ describe('write guard', () => {
           !/^\S+:\d+:\s*(\/\/|\*)/.test(l),
       );
     expect(strays).toEqual([]);
+  });
+});
+
+describe('side effects', () => {
+  it('a follower finds no sender or calendar writer, whatever is registered', () => {
+    const real = { get: (id: string) => ({ id }), ids: () => ['mail'] };
+    expect(followerLookup(real, true).get('mail')).toBeUndefined();
+    expect(followerLookup(real, true).ids()).toEqual(['mail']);
+    expect(followerLookup(real, false)).toBe(real);
   });
 });

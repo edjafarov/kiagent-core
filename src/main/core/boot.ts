@@ -326,7 +326,9 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   // cross the bridge); this is what keeps backfill off the main event loop.
   const dbPath = path.join(deps.dataDir, 'kiagent.db');
   // A snapshot from the master replaces the file before anything opens it.
-  applyPendingSwap(dbPath);
+  if (applyPendingSwap(dbPath) === 'abandoned') {
+    sink.log('sync', 'error', 'could not apply the snapshot; kept this device as it was');
+  }
   const db = await openDbInWorker(dbPath, deps.dbWorkerFile);
   // Read once, before anything starts: only the boot swap changes it.
   const readOnly = (await readSyncRole(db)) === 'follower';
