@@ -5,6 +5,7 @@
  * MCP registration, and projects ExtensionSnapshot[] into AppState via
  * onChange. All IPC handlers call methods here.
  */
+import type { SyncService } from '../core/sync/service';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -289,6 +290,7 @@ export interface ExtensionPlatformDeps {
   /** The one boot-owned worker service. */
   db?: AppDb;
   attention: AttentionService;
+  sync?: SyncService;
   /** Trusted root grants restored/created by product main-process flows. */
   fileRoots?: FileRootRegistry;
   /** The app's userData dir — a declared root may never cover or sit inside it. */
@@ -1152,6 +1154,7 @@ export function createExtensionPlatform(
               lane: async () => deps.laneState(),
             },
             attention: deps.attention,
+            sync: deps.sync,
             notify: deps.notify,
             bus,
             deliverEvent,

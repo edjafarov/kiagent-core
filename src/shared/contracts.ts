@@ -1566,6 +1566,20 @@ export interface Projection<S> {
 
 /** NOTE THE ABSENCE of 'db.write': writes to the shared store are return
  *  values (Source batches, Worker emits) committed by the engine. */
+export interface SyncCursorWire {
+  seq: number;
+  cursor: number;
+}
+export interface SyncStatusWire {
+  role: 'normal' | 'follower';
+  tracking: boolean;
+  historyId: string | null;
+  masterDeviceId: string | null;
+  after: SyncCursorWire;
+  head: SyncCursorWire;
+  schemaVersion: number;
+}
+
 export type Cap =
   | 'query'
   | 'net'
@@ -1576,6 +1590,8 @@ export type Cap =
   | 'inference'
   | 'events'
   | 'attention'
+  /** Copies this device's data to and from a sibling. Privileged. */
+  | 'sync'
   /** May deliver outbound messages through the host's send pipeline — the
    *  host calls the extension's Sender only AFTER a user confirmation gate;
    *  extensions never initiate sends. Not a host namespace: there is no
@@ -1820,6 +1836,33 @@ export interface CapSurfaces {
         id: string,
         revision?: number,
       ): Promise<{ rejected: { id: string; reason: string }[] }>;
+    };
+  };
+  /** Privileged, bundled-tier only (alpha-cent spec 7.6). */
+  sync: {
+    sync: {
+      status(): Promise<SyncStatusWire>;
+      enableTracking(): Promise<void>;
+      disableTracking(): Promise<void>;
+      buildDelta(
+        after: SyncCursorWire,
+        out: string,
+        capBytes: number,
+      ): Promise<
+        | { status: 'ok'; target: SyncCursorWire; rows: number; bytes: number; sha256: string }
+        | { status: 'too-large' }
+      >;
+      buildSnapshot(
+        out: string,
+      ): Promise<{ bytes: number; target: SyncCursorWire; sha256: string }>;
+      applyDelta(
+        stagePath: string,
+      ): Promise<{ applied: number; target: SyncCursorWire }>;
+      prepareSwap(
+        file: string,
+        sha256: string,
+        masterDeviceId: string,
+      ): Promise<'ready' | 'no-disk' | 'invalid'>;
     };
   };
   /** Host-initiated only — no extension→host surface. */

@@ -76,6 +76,14 @@ export const CAP_CATALOG: Record<Cap, CapInfo> = {
     risk: 'normal',
     icon: 'info',
   },
+  sync: {
+    label: 'Copy your data between your devices',
+    description:
+      'Can read and replace everything KIAgent has indexed on this device. ' +
+      'Only extensions that ship with the app can use this.',
+    risk: 'elevated',
+    icon: 'info',
+  },
   send: {
     label: 'Send messages',
     description:

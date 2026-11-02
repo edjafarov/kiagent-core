@@ -4,6 +4,7 @@
  * host incarnation. files and commands are implemented here; only commands
  * outside the public capability surface are rejected by the router.
  */
+import type { SyncService } from '../core/sync/service';
 import type {
   EmbedResult,
   EventMeta,
@@ -206,6 +207,9 @@ export interface SurfaceDeps {
     } | null>;
   };
   attention: AttentionService;
+  /** Boot-owned; only an extension granted the privileged `sync` cap reaches
+   *  it. Absent in a surface built without it: every call rejects. */
+  sync?: SyncSurface;
   notify(msg: string, level?: LogLevel): void;
   bus: EventBus;
   /** Ships a host event to the child (endpoint.post({kind:'event',…})). */
@@ -240,6 +244,28 @@ const unsupported = (ns: string) => () => {
     `the '${ns}' capability is not supported in this build yet`,
   );
 };
+
+type SyncSurface = Omit<SyncService, 'close'>;
+
+function syncSurface(
+  sync: SyncSurface | undefined,
+): Record<string, (...args: unknown[]) => unknown> {
+  const call =
+    (m: keyof SyncSurface) =>
+    (...args: unknown[]) => {
+      if (!sync) throw new Error('sync is not available');
+      return (sync[m] as (...a: unknown[]) => unknown)(...args);
+    };
+  return {
+    status: call('status'),
+    enableTracking: call('enableTracking'),
+    disableTracking: call('disableTracking'),
+    buildDelta: call('buildDelta'),
+    buildSnapshot: call('buildSnapshot'),
+    applyDelta: call('applyDelta'),
+    prepareSwap: call('prepareSwap'),
+  };
+}
 
 export function buildSurfaces(deps: SurfaceDeps): {
   surfaces: Surfaces;
@@ -638,6 +664,7 @@ export function buildSurfaces(deps: SurfaceDeps): {
         deps.bus.emit(deps.extensionId, name, payload);
       },
     },
+    sync: syncSurface(deps.sync),
     attention: {
       publish: (items: unknown) =>
         deps.attention.publish(deps.extensionId, items),

@@ -1370,6 +1370,7 @@ app
     const busy = createBusyRegistry();
 
     extensionsPlatform = createExtensionPlatform({
+      sync: p.sync,
       extDir: path.join(app.getPath('userData'), 'extensions'),
       bundledDir: bundledExtensionsDir,
       dormantExtensions: product.dormantExtensions,

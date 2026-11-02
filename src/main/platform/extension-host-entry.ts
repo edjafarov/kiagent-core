@@ -120,6 +120,15 @@ export const NS_METHODS: Record<string, string[]> = {
   ],
   commands: ['register'],
   attention: ['publish', 'resolve'],
+  sync: [
+    'status',
+    'enableTracking',
+    'disableTracking',
+    'buildDelta',
+    'buildSnapshot',
+    'applyDelta',
+    'prepareSwap',
+  ],
 };
 
 function buildRemoteHost(
