@@ -192,6 +192,10 @@ const schema = z.strictObject({
     }),
     // Platform 2.16.0: optional, so every older manifest stays valid.
     calendarWriters: z.array(z.string()).optional(),
+    // Platform 2.18.0 (multi-device sync): source ids whose connector moves a
+    // login into the vault itself before it is copied (`Source.prepareExport`).
+    // Declared so a resumed join can wait for it to register.
+    prepareExport: z.array(sourceIdSchema).optional(),
     commands: z
       .array(z.strictObject({ id: z.string(), title: z.string() }))
       .optional(),
@@ -323,6 +327,13 @@ export function calendarWriterContributions(
   manifest: Pick<Manifest, 'contributes'>,
 ): string[] {
   return manifest.contributes.calendarWriters ?? [];
+}
+
+/** The source ids whose connector declares a `prepareExport` hook. */
+export function prepareExportContributions(
+  manifest: Pick<Manifest, 'contributes'>,
+): string[] {
+  return manifest.contributes.prepareExport ?? [];
 }
 
 /** The tool names this extension declares — THE way to consume

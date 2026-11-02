@@ -33,6 +33,10 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
     documents: documents.n,
     lastSwap: readSwapOutcome(conn.name),
     archiveBytes: archiveFiles(conn.name).reduce((n, f) => n + fs.statSync(f).size, 0),
+    dbBytes: [conn.name, `${conn.name}-wal`].reduce(
+      (n, f) => n + (fs.existsSync(f) ? fs.statSync(f).size : 0),
+      0,
+    ),
     tracking: s.tracking === 1,
     historyId: s.history_id,
     masterDeviceId: s.master_device_id,

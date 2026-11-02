@@ -3118,6 +3118,37 @@ describe('createExtensionPlatform', () => {
       ]);
     });
 
+    it('a manifest that declares prepareExport is advertised before its connector registers', async () => {
+      const bundledRoot = path.join(tmp, 'bundled-prep');
+      writeBundledExtension(path.join(bundledRoot, 'ext-prep'), {
+        id: 'test.prep-export',
+        name: 'Prep Export',
+        version: '1.0.0',
+        engine: '^2.18.0',
+        entry: 'index.js',
+        caps: [],
+        contributes: { sources: ['prepsrc'], senders: [], prepareExport: ['prepsrc'] },
+      });
+      let advertiser: (id: string) => boolean = () => false;
+      platform = makePlatform({
+        bundledDir: bundledRoot,
+        sources: {
+          register: (s: Source) => void registry.set(s.descriptor.id, s),
+          get: (id: string) => registry.get(id),
+          list: () => [...registry.values()].map((s) => s.descriptor),
+          unregister: (id: string) => void registry.delete(id),
+          setPrepareExportAdvertiser: (fn: (id: string) => boolean) => {
+            advertiser = fn;
+          },
+        },
+      });
+      await platform.start();
+      // The extension never registered a source (it contributes none at run time).
+      expect(registry.get('prepsrc')).toBeUndefined();
+      expect(advertiser('prepsrc')).toBe(true);
+      expect(advertiser('other')).toBe(false);
+    });
+
     it('an extension with no contributes.ui yields an empty list, not undefined', async () => {
       const bundledRoot = path.join(tmp, 'bundled-no-ui');
       writeBundledExtension(path.join(bundledRoot, 'ext-plain'), {

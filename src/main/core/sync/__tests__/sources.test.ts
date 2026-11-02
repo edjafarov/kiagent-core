@@ -158,6 +158,70 @@ describe('exportSources', () => {
     expect(lines.join('\n')).not.toContain(SECRET);
   });
 
+  describe('a connector that has not registered yet', () => {
+    type Reg = {
+      get(id: string): { prepareExport?: (c: { save(c: unknown): Promise<void> }) => Promise<void> } | undefined;
+      advertisesPrepareExport(id: string): boolean;
+      onRegister(cb: (id: string) => void): () => void;
+    };
+    const registry = (advertised: string[]) => {
+      const live = new Map<string, { prepareExport?: (c: { save(c: unknown): Promise<void> }) => Promise<void> }>();
+      const listeners = new Set<(id: string) => void>();
+      const reg: Reg = {
+        get: (id) => live.get(id),
+        advertisesPrepareExport: (id) => advertised.includes(id),
+        onRegister: (cb) => {
+          listeners.add(cb);
+          return () => void listeners.delete(cb);
+        },
+      };
+      const register = (id: string) => {
+        live.set(id, { prepareExport: async (c) => c.save({ session: SECRET }) });
+        for (const l of [...listeners]) l(id);
+      };
+      return { reg, register, listening: () => listeners.size };
+    };
+
+    afterEach(() => jest.useRealTimers());
+
+    it('is waited for, and its hook then runs before the vault is read', async () => {
+      jest.useFakeTimers();
+      await add('telegram', '42', { session: 'old' });
+      const { reg, register, listening } = registry(['telegram']);
+      let done = false;
+      const p = exportSources(store, ME, undefined, reg as never).then((o) => {
+        done = true;
+        return o;
+      });
+      await jest.advanceTimersByTimeAsync(30_000);
+      expect(done).toBe(false);
+      register('telegram');
+      const [t] = await p;
+      expect(t).toMatchObject({ source: 'telegram', credentials: { session: SECRET } });
+      expect(listening()).toBe(0);
+    });
+
+    it('after 60 s the export goes on and the log names the source, not the login', async () => {
+      jest.useFakeTimers();
+      await add('telegram', '42', { session: SECRET });
+      const lines: string[] = [];
+      const { reg } = registry(['telegram']);
+      const p = exportSources(store, ME, (l, m) => lines.push(`${l} ${m}`), reg as never);
+      await jest.advanceTimersByTimeAsync(60_000);
+      const out = await p;
+      expect(out).toHaveLength(1);
+      expect(lines.filter((l) => l.includes('telegram') && l.startsWith('warn'))).toHaveLength(1);
+      expect(lines.join('\n')).not.toContain(SECRET);
+    });
+
+    it('is not waited for when it never advertised a hook', async () => {
+      await add('gmail', 'a@x.com', { t: 1 });
+      const { reg } = registry([]);
+      const out = await exportSources(store, ME, undefined, reg as never);
+      expect(out).toHaveLength(1);
+    });
+  });
+
   it('skips the synthetic worker account', async () => {
     await add('worker', 'w');
     expect(await exportSources(store, ME)).toEqual([]);
@@ -564,5 +628,16 @@ describe('the join journal', () => {
     expect(sync.isBusy()).toBeNull();
     busyReason = 'recording a meeting';
     expect(sync.isBusy()).toBe('recording a meeting');
+  });
+});
+
+describe('the database size a joiner weighs its disk against', () => {
+  it('is the file plus its journal, read without building anything', () => {
+    const base = fs.statSync(conn().name).size;
+    expect(readSyncStatus(conn()).dbBytes).toBeGreaterThanOrEqual(base);
+    fs.writeFileSync(`${conn().name}-wal`, Buffer.alloc(4096));
+    const withWal = readSyncStatus(conn()).dbBytes;
+    expect(withWal).toBeGreaterThanOrEqual(base + 4096);
+    fs.rmSync(`${conn().name}-wal`);
   });
 });

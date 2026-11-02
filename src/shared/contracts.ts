@@ -1612,6 +1612,9 @@ export interface SyncStatusWire {
   lastSwap: 'swapped' | 'abandoned' | null;
   /** Size of the old database a join set aside, 0 when none. */
   archiveBytes: number;
+  /** The database file plus its journal: a cheap stand-in for the size of a
+   *  snapshot, so a joiner can weigh its disk before anything is built. */
+  dbBytes: number;
 }
 
 export type Cap =
@@ -1721,6 +1724,9 @@ export interface Manifest {
     /** Source ids this extension provides a CalendarWriter for (platform
      *  2.16.0). Optional: absent = none. */
     calendarWriters?: string[];
+    /** Source ids whose connector moves a login into the vault itself before
+     *  it is copied to another device (platform 2.18.0). Optional. */
+    prepareExport?: string[];
     commands?: Array<{ id: string; title: string }>;
     /** B3: renderer screens this extension contributes. Bundled tier only;
      *  requires the `ui` cap. See `manifest.ts`'s `parseManifest` for the

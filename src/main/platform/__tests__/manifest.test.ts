@@ -11,6 +11,7 @@ import {
   parseManifest,
   senderContributions,
   calendarWriterContributions,
+  prepareExportContributions,
   sourceContributions,
   validateManifestDir,
 } from '../manifest';
@@ -309,6 +310,26 @@ describe('calendar writer contributions (2.16.0)', () => {
 
   it('calendarWriters is optional and defaults to empty', () => {
     expect(calendarWriterContributions(parseManifest(GOOD))).toEqual([]);
+  });
+});
+
+describe('prepareExport contributions (2.18.0)', () => {
+  it('lists the source ids whose connector moves its own login, defaulting to none', () => {
+    const m = parseManifest({
+      ...GOOD,
+      contributes: { sources: ['telegram'], senders: [], prepareExport: ['telegram'] },
+    });
+    expect(prepareExportContributions(m)).toEqual(['telegram']);
+    expect(prepareExportContributions(parseManifest(GOOD))).toEqual([]);
+  });
+
+  it('refuses a non-list and an empty id', () => {
+    expect(() =>
+      parseManifest({ ...GOOD, contributes: { senders: [], prepareExport: 'telegram' } }),
+    ).toThrow();
+    expect(() =>
+      parseManifest({ ...GOOD, contributes: { senders: [], prepareExport: [''] } }),
+    ).toThrow();
   });
 });
 

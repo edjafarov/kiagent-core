@@ -16,6 +16,7 @@ import {
   isDeviceOwned,
   isStableIdentity,
   PAUSE_MOVED_SQL,
+  type ExportSources,
   type OfferedSource,
 } from './sources';
 import { archiveFiles, swapOutcomePath } from './status';
@@ -39,6 +40,9 @@ export interface SyncStatus {
   lastSwap: 'swapped' | 'abandoned' | null;
   /** Size of the old database a join set aside, 0 when none. */
   archiveBytes: number;
+  /** The database file plus its journal: a cheap stand-in for the size of a
+   *  snapshot, so a joiner can weigh its disk before anything is built. */
+  dbBytes: number;
 }
 
 export interface SyncService {
@@ -103,7 +107,7 @@ export interface SyncServiceDeps {
   /** Is this source's connector installed here? Absent: yes. */
   isInstalled?: (source: string) => boolean;
   /** Connectors, for their optional `prepareExport` hook. */
-  sources?: { get(id: string): Partial<Pick<Source, 'prepareExport'>> | undefined };
+  sources?: ExportSources;
   /** Starts an account that just arrived, with no restart. */
   start?: (accountId: string) => void | Promise<void>;
   /** The busy registry's first reason, or null. */

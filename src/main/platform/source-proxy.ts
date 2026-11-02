@@ -12,6 +12,7 @@ import type {
   AuthChannel,
   Batch,
   Credentials,
+  ExportContext,
   Document,
   DocumentInput,
   ExternalRef,
@@ -161,6 +162,8 @@ export function createSourceProxySet(
     {
       credentials(): Promise<Credentials | null>;
       log(l: LogLevel, m: string): void;
+      /** Only a prepareExport call carries one. */
+      save?(c: Credentials): Promise<void>;
     }
   >();
   const streams = new Map<number, StreamState>();
@@ -356,6 +359,11 @@ export function createSourceProxySet(
           session.log(rest[0] as LogLevel, String(rest[1]));
           return undefined;
         }
+        if (method === 'save') {
+          if (!session.save) throw new Error('this call cannot save a login');
+          await session.save(rest[0] as Credentials);
+          return undefined;
+        }
         throw new Error(`unknown session verb ${method}`);
       }
       throw new Error(`unknown namespace ${ns}`);
@@ -418,6 +426,30 @@ export function createSourceProxySet(
             if (!(v instanceof Uint8Array))
               throw new Error('invalid bytes from connector');
             return v;
+          } finally {
+            sessions.delete(id);
+          }
+        };
+      }
+      if (entry.hasPrepareExport) {
+        // Multi-device sync: the hook runs in the connector's host, and the
+        // login it reads or saves goes through main's vault, never a file.
+        source.prepareExport = async (ctx: ExportContext): Promise<void> => {
+          const id = nextId;
+          nextId += 1;
+          try {
+            await live((endpoint) => {
+              sessions.set(id, {
+                credentials: () => ctx.credentials(),
+                save: (c) => ctx.save(c),
+                log: (l, m) => ctx.log(l, m),
+              });
+              return endpoint.call('source', 'prepare-export', [
+                id,
+                descriptor.id,
+                ctx.account,
+              ]);
+            });
           } finally {
             sessions.delete(id);
           }

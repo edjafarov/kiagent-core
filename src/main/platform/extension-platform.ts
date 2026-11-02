@@ -64,6 +64,7 @@ import {
   fileRootsCovered,
   loadIconDataUrl,
   oauthSourceBindings,
+  prepareExportContributions,
   senderContributions,
   calendarWriterContributions,
   sourceContributions,
@@ -541,6 +542,13 @@ export function createExtensionPlatform(
   deps: ExtensionPlatformDeps,
 ): ExtensionPlatform {
   const entries = new Map<string, Entry>();
+  // Known from the manifests, before any connector has registered: a resumed
+  // join waits only for those that move their own login (multi-device sync).
+  deps.sources.setPrepareExportAdvertiser?.((id) =>
+    [...entries.values()].some(
+      (e) => e.enabled && prepareExportContributions(e.manifest).includes(id),
+    ),
+  );
   const calendarWriters =
     deps.calendarWriters ?? createCalendarWriterRegistry();
   const bus = createEventBus(deps.logSink);

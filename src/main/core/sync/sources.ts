@@ -63,13 +63,68 @@ export const deviceSuffix = (deviceId: string): string => deviceId.slice(0, 8);
 
 /** What this device would offer another one. Reads only: the caller records
  *  `sync_moved`. `log` gets counts and source ids, never a login. */
+/** How long a resumed join waits for a connector that moves its own login to
+ *  register: extensions come up after core, and an export before that would
+ *  skip the hook. */
+export const PREPARE_EXPORT_WAIT_MS = 60_000;
+
+export interface ExportSources {
+  get(id: string): Partial<Pick<Source, 'prepareExport'>> | undefined;
+  /** Did an installed connector declare a prepareExport hook? Known from its
+   *  manifest before it registers. */
+  advertisesPrepareExport?(id: string): boolean;
+  onRegister?(cb: (sourceId: string) => void): () => void;
+}
+
+/** Waits (bounded) for every connector that advertises a hook and holds an
+ *  account here but has not registered. After the bound the export goes on and
+ *  the log names the source. */
+async function awaitAdvertised(
+  accounts: { source: string }[],
+  sources: ExportSources,
+  log: (level: 'info' | 'warn', msg: string) => void,
+  waitMs: number,
+): Promise<void> {
+  if (!sources.advertisesPrepareExport || !sources.onRegister) return;
+  const waiting = new Set<string>();
+  for (const a of accounts) {
+    if (a.source === 'worker' || isDeviceOwned(a.source)) continue;
+    if (!sources.get(a.source) && sources.advertisesPrepareExport(a.source))
+      waiting.add(a.source);
+  }
+  if (waiting.size === 0) return;
+  await new Promise<void>((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const off = sources.onRegister!((id) => {
+      waiting.delete(id);
+      if (waiting.size === 0) finish();
+    });
+    function finish(): void {
+      if (timer !== undefined) clearTimeout(timer);
+      off();
+      resolve();
+    }
+    timer = setTimeout(() => {
+      for (const id of waiting)
+        log('warn', `sync: ${id} had not registered after ${waitMs / 1000} s; exporting without its prepareExport`);
+      finish();
+    }, waitMs);
+    // A connector may have registered between the check and the listener.
+    for (const id of [...waiting]) if (sources.get(id)) waiting.delete(id);
+    if (waiting.size === 0) finish();
+  });
+}
+
 export async function exportSources(
   store: Pick<CoreStore, 'read' | 'vault'>,
   me: string,
   log: (level: 'info' | 'warn', msg: string) => void = () => undefined,
-  sources?: { get(id: string): Partial<Pick<Source, 'prepareExport'>> | undefined },
+  sources?: ExportSources,
+  opts: { waitMs?: number } = {},
 ): Promise<OfferedSource[]> {
   const accounts = await store.read.accounts();
+  if (sources)
+    await awaitAdvertised(accounts, sources, log, opts.waitMs ?? PREPARE_EXPORT_WAIT_MS);
   const out: OfferedSource[] = [];
   for (const a of accounts) {
     if (a.source === 'worker') continue;

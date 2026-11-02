@@ -189,3 +189,13 @@ describe('createSourceRegistry — onRegister (#140)', () => {
     expect(seen).toEqual(['gmail']);
   });
 });
+
+describe('advertised prepareExport hooks', () => {
+  it('say no until the platform tells the registry which connectors declare one', () => {
+    const sources = createSourceRegistry();
+    expect(sources.advertisesPrepareExport!('telegram')).toBe(false);
+    sources.setPrepareExportAdvertiser!((id) => id === 'telegram');
+    expect(sources.advertisesPrepareExport!('telegram')).toBe(true);
+    expect(sources.advertisesPrepareExport!('gmail')).toBe(false);
+  });
+});

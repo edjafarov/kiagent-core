@@ -74,6 +74,9 @@ export interface Contributions {
     /** Owner-mail attachment bytes (platform 2.14.0). Optional on the wire
      *  for the same reason as hasListAddressedTo. */
     hasFetchAddressedAttachment?: boolean;
+    /** Multi-device sync: the connector moves a login into the vault before
+     *  it is copied (platform 2.18.0). Optional on the wire like the two above. */
+    hasPrepareExport?: boolean;
   }>;
   tools: ToolDescriptor[];
   /** Source ids this extension provides a Sender for (declared AND returned

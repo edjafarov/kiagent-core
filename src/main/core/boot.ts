@@ -94,6 +94,11 @@ export interface SourceRegistry {
   get(id: string): Source | undefined;
   list(): SourceDescriptor[];
   unregister(id: string): void;
+  /** Does an installed connector's manifest declare a `prepareExport` hook for
+   *  this source, whether or not it has registered yet? */
+  advertisesPrepareExport?(id: string): boolean;
+  /** The extension platform's answer to the above. */
+  setPrepareExportAdvertiser?(fn: (id: string) => boolean): void;
 }
 
 /** #140: told the id of every `register()` call — including a crash
@@ -112,7 +117,12 @@ export interface SourceRegistrations {
 export function createSourceRegistry(): SourceRegistry & SourceRegistrations {
   const registry = new Map<string, Source>();
   const listeners = new Set<(sourceId: string) => void>();
+  let advertiser: (id: string) => boolean = () => false;
   return {
+    advertisesPrepareExport: (id) => advertiser(id),
+    setPrepareExportAdvertiser(fn) {
+      advertiser = fn;
+    },
     register(source) {
       registry.set(source.descriptor.id, source);
       for (const cb of [...listeners]) {

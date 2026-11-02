@@ -439,6 +439,7 @@ export function runExtensionHost(
           hasListAddressedTo: typeof s.listAddressedTo === 'function',
           hasFetchAddressedAttachment:
             typeof s.fetchAddressedAttachment === 'function',
+          hasPrepareExport: typeof s.prepareExport === 'function',
         })),
         tools: [...tools.values()].map((t) => ({
           name: t.name,
@@ -674,6 +675,27 @@ export function runExtensionHost(
       const abort = new AbortController();
       const session = makeSession(sessionId, account, abort);
       return (await source.fetchBytes(session as never, doc as never)) ?? null;
+    }
+    if (method === 'prepare-export') {
+      const [sessionId, sourceId, account] = args as [number, string, unknown];
+      const source = sources.get(sourceId);
+      if (!source?.prepareExport)
+        throw new Error(`source ${sourceId} has no prepareExport`);
+      // The same three calls the in-process hook gets, over the session verbs.
+      await source.prepareExport({
+        account: account as never,
+        credentials: () =>
+          endpoint.call('session', 'credentials', [sessionId]) as never,
+        save: async (c) => {
+          await endpoint.call('session', 'save', [sessionId, c]);
+        },
+        log: (level, msg) => {
+          void endpoint
+            .call('session', 'log', [sessionId, level, msg])
+            .catch(() => {});
+        },
+      });
+      return null;
     }
     if (method === 'list-addressed-to') {
       const [sessionId, sourceId, account, q] = args as [
