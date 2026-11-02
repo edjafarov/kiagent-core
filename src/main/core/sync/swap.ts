@@ -17,6 +17,7 @@ interface Journal {
   masterDeviceId: string;
   /** Set once the merged file is complete; the renames can then be redone. */
   merged: boolean;
+  replacesCopy?: boolean;
   archive: string;
 }
 
@@ -28,6 +29,15 @@ const writeJournal = (db: string, j: Journal): void => {
   const tmp = `${journalPath(db)}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(j));
   fs.renameSync(tmp, journalPath(db));
+};
+
+const roleOf = (dbPath: string): string | undefined => {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return (db.prepare(`SELECT role FROM sync_state`).get() as { role: string } | undefined)?.role;
+  } finally {
+    db.close();
+  }
 };
 
 export function prepareSwap(
@@ -51,6 +61,7 @@ export function prepareSwap(
   writeJournal(dbPath, {
     masterDeviceId,
     merged: false,
+    replacesCopy: roleOf(dbPath) === 'follower',
     archive: `${dbPath}.archive-${stamp}`,
   });
   return 'ready';
@@ -210,7 +221,12 @@ export function applyPendingSwap(
     crashAt('merged');
   }
   // Each rename is checked, so a retry after a crash skips what already moved.
-  if (!fs.existsSync(j.archive)) {
+  if (j.replacesCopy && fs.existsSync(merged)) {
+    // A copy being copied again holds nothing of its own, and the user's real
+    // data is already in an archive.
+    for (const ext of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${ext}`, { force: true });
+    crashAt('archived');
+  } else if (!j.replacesCopy && !fs.existsSync(j.archive)) {
     moveIfThere(dbPath, j.archive);
     moveIfThere(`${dbPath}-wal`, `${j.archive}-wal`);
     moveIfThere(`${dbPath}-shm`, `${j.archive}-shm`);

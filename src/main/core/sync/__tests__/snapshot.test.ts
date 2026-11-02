@@ -282,6 +282,26 @@ describe('swap', () => {
     expect(kept).toHaveLength(0);
   });
 
+  it('copying again replaces the old copy, keeps one archive, and restore finds the original', async () => {
+    await ready();
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    // Archive names carry the second, and a real second copy comes much later.
+    await new Promise((res) => setTimeout(res, 1100));
+    const r = snapshot();
+    expect(prepareSwap(receiver, snap, r.sha256, MASTER_ID)).toBe('ready');
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    const archives = fs
+      .readdirSync(path.dirname(receiver))
+      .filter((f) => f.includes('.archive-') && !/-(wal|shm)$/.test(f));
+    expect(archives).toHaveLength(1);
+    expect(prepareRestore(receiver)).toBe('ready');
+    expect(applyPendingSwap(receiver)).toBe('restored');
+    const d = open();
+    expect(d.prepare(`SELECT role FROM sync_state`).get()).toEqual({ role: 'normal' });
+    expect(d.prepare(`SELECT count(*) n FROM accounts WHERE id='old'`).get()).toEqual({ n: 1 });
+    d.close();
+  });
+
   it('with no archive there is nothing to restore', async () => {
     expect(prepareRestore(receiver)).toBe('no-archive');
     expect(applyPendingSwap(receiver)).toBe('none');

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.118.2](https://github.com/edjafarov/kiagent-core/compare/v0.118.1...v0.118.2) (2026-11-02)
+
+### Bug Fixes
+
+- **sync:** copying again replaces the old copy instead of archiving it, so restore finds the user's own data.
+
 ## [0.118.1](https://github.com/edjafarov/kiagent-core/compare/v0.118.0...v0.118.1) (2026-11-02)
 
 ### Added
