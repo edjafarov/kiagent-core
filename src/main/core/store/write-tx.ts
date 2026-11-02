@@ -1,6 +1,12 @@
 import fs from 'node:fs';
 
-import { readStage, SyncStageInvalid, type StageEntry, type SyncCursor } from '../sync/delta';
+import {
+  stageEntries,
+  SyncStageInvalid,
+  validateStage,
+  type StageEntry,
+  type SyncCursor,
+} from '../sync/delta';
 import { COPIED_CORE_TABLES } from '../sync/tables';
 import { createHash } from 'crypto';
 
@@ -1457,7 +1463,7 @@ export function createWriteTx(
   );
 
   const applyDeltaTx = conn.transaction(
-    (entries: StageEntry[], target: SyncCursor): void => {
+    (entries: Iterable<StageEntry>, target: SyncCursor): void => {
       conn.pragma('defer_foreign_keys = ON');
       conn.prepare(`UPDATE sync_state SET tracking = 0`).run();
       const upserts = new Map<string, BetterSqlite3.Statement>();
@@ -1548,14 +1554,14 @@ export function createWriteTx(
 
   return {
     applyDelta: (stagePath) => {
-      const { entries, target } = readStage(stagePath);
-      applyDeltaTx(entries, target);
+      const { target, rows } = validateStage(stagePath);
+      applyDeltaTx(stageEntries(stagePath, rows), target);
       // One big apply leaves a big WAL (2.7 GB at the 250 MB cap, measured).
       const wal = `${conn.name}-wal`;
       if (fs.existsSync(wal) && fs.statSync(wal).size > 256 * 1024 * 1024) {
         conn.pragma('wal_checkpoint(TRUNCATE)');
       }
-      return { applied: entries.length, target };
+      return { applied: rows, target };
     },
 
     commit: publishing((batch: CommitBatch): CommitResult => {

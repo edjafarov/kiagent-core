@@ -123,33 +123,69 @@ export function buildDelta(
 class TooLarge extends Error {}
 
 /** Reads a stage by bytes, on \n only: JSON leaves U+2028 unescaped, and a
- *  line-reader would split on it. Validates before returning anything. */
-export function readStage(file: string): {
-  entries: StageEntry[];
-  target: SyncCursor;
-} {
-  const buf = fs.readFileSync(file);
-  if (buf.length === 0 || buf[buf.length - 1] !== 10) {
-    throw new SyncStageInvalid('truncated');
+ *  line-reader would split on it. Bounded memory, because a stage can be 250 MB
+ *  and parsed rows take several times that. */
+function* lines(file: string): Generator<Buffer> {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const chunk = Buffer.allocUnsafe(1024 * 1024);
+    let pending: Buffer[] = [];
+    for (;;) {
+      const n = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (n === 0) break;
+      let at = 0;
+      for (;;) {
+        const end = chunk.subarray(at, n).indexOf(10);
+        if (end === -1) break;
+        pending.push(chunk.subarray(at, at + end + 1));
+        yield Buffer.concat(pending);
+        pending = [];
+        at += end + 1;
+      }
+      if (at < n) pending.push(Buffer.from(chunk.subarray(at, n)));
+    }
+    if (pending.length > 0) yield Buffer.concat(pending);
+  } finally {
+    fs.closeSync(fd);
   }
-  const lastLineStart = buf.lastIndexOf(10, buf.length - 2) + 1;
+}
+
+/** Checks the whole file before anything is written. */
+export function validateStage(file: string): { target: SyncCursor; rows: number } {
+  const hash = createHash('sha256');
+  let last: Buffer | null = null;
+  let count = 0;
+  for (const line of lines(file)) {
+    if (last) {
+      hash.update(last);
+      count += 1;
+    }
+    last = line;
+  }
+  if (!last || last[last.length - 1] !== 10) throw new SyncStageInvalid('truncated');
   let trailer: Trailer;
   try {
-    trailer = JSON.parse(buf.toString('utf8', lastLineStart, buf.length - 1));
+    trailer = JSON.parse(last.toString('utf8')) as Trailer;
   } catch {
     throw new SyncStageInvalid('no trailer');
   }
-  if (!trailer || trailer.trailer !== true) {
-    throw new SyncStageInvalid('no trailer');
+  if (!trailer || trailer.trailer !== true) throw new SyncStageInvalid('no trailer');
+  if (hash.digest('hex') !== trailer.sha256) throw new SyncStageInvalid('checksum');
+  if (count !== trailer.rows) throw new SyncStageInvalid('row count');
+  return { target: trailer.target, rows: count };
+}
+
+/** Yields a validated stage's entries one at a time. */
+export function* stageEntries(file: string, rows: number): Generator<StageEntry> {
+  let i = 0;
+  for (const line of lines(file)) {
+    if (i === rows) return;
+    i += 1;
+    yield JSON.parse(line.toString('utf8')) as StageEntry;
   }
-  const sha = createHash('sha256').update(buf.subarray(0, lastLineStart)).digest('hex');
-  if (sha !== trailer.sha256) throw new SyncStageInvalid('checksum');
-  const entries: StageEntry[] = [];
-  for (let at = 0; at < lastLineStart; ) {
-    const end = buf.indexOf(10, at);
-    entries.push(JSON.parse(buf.toString('utf8', at, end)) as StageEntry);
-    at = end + 1;
-  }
-  if (entries.length !== trailer.rows) throw new SyncStageInvalid('row count');
-  return { entries, target: trailer.target };
+}
+
+export function readStage(file: string): { entries: StageEntry[]; target: SyncCursor } {
+  const { target, rows } = validateStage(file);
+  return { entries: [...stageEntries(file, rows)], target };
 }
