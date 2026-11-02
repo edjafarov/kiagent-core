@@ -46,6 +46,7 @@ import type { CoreStore } from '../store/store';
 import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
 import { FetchDeferredError } from './fetch-deferred';
 import { freshCredentials } from './fresh-credentials';
+import { isParked, isResting } from './resting';
 
 export interface LogSink {
   log(
@@ -695,7 +696,7 @@ export function createEngine(deps: EngineDeps): Engine & {
     if (!wasRunning) return;
     try {
       const now = await store.account(accountId);
-      if (now && now.status !== 'paused' && now.status !== 'needsReauth')
+      if (now && !isResting(now.status))
         engine.run(now);
     } catch {
       // Swallowed on purpose — see above.
@@ -1249,7 +1250,7 @@ export function createEngine(deps: EngineDeps): Engine & {
               // running, so it passes. The intent recheck covers a pause
               // launched between run() and this read (belt to the abort's
               // braces).
-              if (fresh.status === 'paused' || pauseIntents.has(account.id)) {
+              if (isParked(fresh.status) || pauseIntents.has(account.id)) {
                 status = 'paused';
                 return;
               }
@@ -1559,8 +1560,7 @@ export function createEngine(deps: EngineDeps): Engine & {
           !settled &&
           backfillCommitted &&
           status !== 'error' &&
-          status !== 'paused' &&
-          status !== 'needsReauth',
+          !isResting(status),
         async stats() {
           const account2 = await store.account(account.id);
           const done2 = account2?.progress?.done ?? 0;
@@ -1846,12 +1846,7 @@ export function createEngine(deps: EngineDeps): Engine & {
         // JavaScript is single-threaded — two adjacent synchronous statements
         // cannot be interleaved.
         transitionIntents.delete(accountId);
-        if (
-          after &&
-          after.status !== 'paused' &&
-          after.status !== 'needsReauth'
-        )
-          engine.run(after);
+        if (after && !isResting(after.status)) engine.run(after);
         return { archived: res.archived };
       } catch (err) {
         // C-28.4 / C-29. The account was quiesced by THIS call; if the write
@@ -2031,7 +2026,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       // resumeAccounts).
       if (!running.has(`account:${accountId}`)) return;
       const fresh = await store.account(accountId);
-      if (fresh && fresh.status !== 'paused' && fresh.status !== 'needsReauth')
+      if (fresh && !isResting(fresh.status))
         engine.run(fresh);
     },
 
@@ -2062,7 +2057,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       // Restart gate mirrors updateConfig's.
       if (!running.has(`account:${accountId}`)) return;
       const fresh = await store.account(accountId);
-      if (fresh && fresh.status !== 'paused' && fresh.status !== 'needsReauth')
+      if (fresh && !isResting(fresh.status))
         engine.run(fresh);
     },
 

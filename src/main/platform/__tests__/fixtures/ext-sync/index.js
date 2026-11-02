@@ -12,6 +12,15 @@ module.exports = {
       applyDelta: await host.sync.applyDelta('stage'),
       prepareSwap: await host.sync.prepareSwap('f', 'h', 'm'),
       prepareRestore: await host.sync.prepareRestore(),
+      setDeviceId: await host.sync.setDeviceId('dev'),
+      beginJoin: await host.sync.beginJoin(),
+      exportSources: await host.sync.exportSources('seed'),
+      finishJoin: await host.sync.finishJoin(),
+      leaveJoin: await host.sync.leaveJoin(),
+      forgetMoved: await host.sync.forgetMoved(),
+      canAcceptSources: await host.sync.canAcceptSources(),
+      importSources: await host.sync.importSources('offer', [], 'from'),
+      isBusy: await host.sync.isBusy(),
     };
     fs.writeFileSync(process.env.KIA_SYNC_FIXTURE_OUT, JSON.stringify(calls));
   },

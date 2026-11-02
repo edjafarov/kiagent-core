@@ -311,6 +311,21 @@ function applyRestore(
   return 'restored';
 }
 
+/** Stop syncing before the swap happened: forget the downloaded snapshot and
+ *  the journal, so the next boot opens this device's own database as it is. */
+export function dropPendingSwap(dbPath: string): void {
+  for (const f of [
+    incomingPath(dbPath),
+    mergedPath(dbPath),
+    `${mergedPath(dbPath)}-wal`,
+    `${mergedPath(dbPath)}-shm`,
+    journalPath(dbPath),
+    swapOutcomePath(dbPath),
+  ]) {
+    fs.rmSync(f, { force: true });
+  }
+}
+
 /** `crashAt` exists for the crash tests: it runs after each named step. */
 export function applyPendingSwap(
   dbPath: string,

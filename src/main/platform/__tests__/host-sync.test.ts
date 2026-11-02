@@ -6,6 +6,8 @@ import path from 'path';
 import { openDb } from '@main/db/app-db';
 import { openStore, type CoreStore } from '@main/core/store/store';
 
+import { PLATFORM_API_VERSION } from '@shared/extension-rpc';
+
 import { createExtensionPlatform, type ExtensionPlatform } from '../extension-platform';
 import { parseManifest } from '../manifest';
 import { nodeForkTransport } from '../transport';
@@ -16,6 +18,10 @@ const CHILD_ENTRY = path.resolve(__dirname, '../extension-host-entry.ts');
 const FIXTURE = path.join(__dirname, 'fixtures', 'ext-sync');
 
 const manifest = JSON.parse(fs.readFileSync(path.join(FIXTURE, 'manifest.json'), 'utf8'));
+
+it('the platform API moved to 2.18.0 for the join methods, once for all four steps', () => {
+  expect(PLATFORM_API_VERSION).toBe('2.18.0');
+});
 
 it('a marketplace extension declaring sync is refused, a bundled one is accepted', () => {
   expect(() => parseManifest(manifest, { tier: 'external' })).toThrow(/only extensions bundled/);
@@ -56,6 +62,15 @@ describe('through a real forked extension host', () => {
         applyDelta: note('applyDelta', { applied: 2 }),
         prepareSwap: note('prepareSwap', 'ready'),
         prepareRestore: note('prepareRestore', 'no-archive'),
+        setDeviceId: note('setDeviceId', undefined),
+        beginJoin: note('beginJoin', undefined),
+        exportSources: note('exportSources', [{ source: 'gmail' }]),
+        finishJoin: note('finishJoin', undefined),
+        leaveJoin: note('leaveJoin', undefined),
+        forgetMoved: note('forgetMoved', undefined),
+        canAcceptSources: note('canAcceptSources', true),
+        importSources: note('importSources', { created: ['a'], existing: [], needsConnector: [] }),
+        isBusy: note('isBusy', null),
         close: async () => undefined,
       } as never,
       sources: { register: () => {}, get: () => undefined, list: () => [], unregister: () => {} },
@@ -106,11 +121,19 @@ describe('through a real forked extension host', () => {
       buildDelta: { status: 'too-large' },
       applyDelta: { applied: 2 },
       prepareSwap: 'ready',
+      exportSources: [{ source: 'gmail' }],
+      importSources: { created: ['a'], existing: [], needsConnector: [] },
+      canAcceptSources: true,
     });
+    expect(seen.importSources).toEqual(['offer', [], 'from']);
     expect(seen.buildDelta).toEqual([{ seq: 1, cursor: 2 }, 'out', 5]);
     expect(seen.prepareSwap).toEqual(['f', 'h', 'm']);
     expect(Object.keys(seen).sort()).toEqual(
-      ['applyDelta', 'buildDelta', 'buildSnapshot', 'disableTracking', 'enableTracking', 'prepareRestore', 'prepareSwap', 'status'],
+      [
+        'applyDelta', 'beginJoin', 'buildDelta', 'buildSnapshot', 'canAcceptSources', 'disableTracking',
+        'enableTracking', 'exportSources', 'finishJoin', 'forgetMoved', 'importSources', 'isBusy',
+        'leaveJoin', 'prepareRestore', 'prepareSwap', 'setDeviceId', 'status',
+      ],
     );
   });
 });

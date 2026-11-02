@@ -7,7 +7,13 @@ import path from 'path';
 import { openDb, type AppDb } from '../../../db/app-db';
 import { migrate } from '../../store/schema';
 import { openStore, type CoreStore } from '../../store/store';
+import type { Account } from '@shared/contracts';
+
+import { resumeAccounts, startWhenInstalled, type CorePlatform } from '../../boot';
+import { isResting } from '../../engine/resting';
 import { gateFrom, readSyncGate } from '../role';
+import { createSyncService, type SyncService } from '../service';
+import { applyPendingSwap } from '../swap';
 import {
   DEVICE_OWNED_SOURCES,
   exportSources,
@@ -163,5 +169,311 @@ describe('status', () => {
     fs.writeFileSync(`${conn().name}.swap-outcome`, 'abandoned');
     s = readSyncStatus(conn());
     expect(s).toMatchObject({ joining: true, joined: true, lastSwap: 'abandoned' });
+  });
+});
+
+
+// ── Task 2: import ─────────────────────────────────────────────────────────
+describe('importSources', () => {
+  const JOINER = 'abcdefgh-0000-1111';
+  const SEED = 'seedseed-9999';
+  let sync: SyncService;
+  let started: string[];
+  let installed: (s: string) => boolean;
+  let keystore: boolean;
+  let strict: (s: string) => Buffer;
+  const logs: string[] = [];
+
+  beforeEach(() => {
+    started = [];
+    installed = () => true;
+    keystore = true;
+    strict = (s) => Buffer.from(s, 'utf8');
+    logs.length = 0;
+    sync = createSyncService({
+      db,
+      store,
+      dbPath: conn().name,
+      workerFile: '',
+      deviceId: () => SEED,
+      encryptStrict: (s) => strict(s),
+      keystoreAvailable: () => keystore,
+      isInstalled: (src) => installed(src),
+      start: async (id) => {
+        started.push(id);
+      },
+      busy: () => null,
+      log: (l, m) => logs.push(`${l} ${m}`),
+    });
+  });
+
+  const offer = (over: Record<string, unknown> = {}) => ({
+    source: 'gmail',
+    identifier: 'me@x.com',
+    config: JSON.stringify({ k: 2 }),
+    cadence: null,
+    credentials: { accessToken: 'joiner-token' },
+    owner_device_id: null,
+    ...over,
+  });
+  const accounts = () => conn().prepare(`SELECT * FROM accounts ORDER BY identifier`).all() as Record<string, unknown>[];
+  const vaultCount = () => (conn().prepare(`SELECT count(*) n FROM vault`).get() as { n: number }).n;
+
+  it('stable source match keeps the seed\'s token', async () => {
+    const a = await add('gmail', 'me@x.com', { accessToken: 'seed-token' });
+    const r = await sync.importSources('o1', [offer()] as never, JOINER);
+    expect(r).toEqual({ created: [], existing: [a.id], needsConnector: [] });
+    expect(accounts()).toHaveLength(1);
+    expect(await store.vault.load(a.id)).toEqual({ accessToken: 'seed-token' });
+  });
+
+  it('unstable source match imports as identifier#device8, the same on retry', async () => {
+    const seed = await add('notion', 'Acme', { token: 'seed' });
+    const r1 = await sync.importSources('o1', [offer({ source: 'notion', identifier: 'Acme', credentials: { token: 'joiner' } })] as never, JOINER);
+    expect(r1.created).toHaveLength(1);
+    const r2 = await sync.importSources('o2', [offer({ source: 'notion', identifier: 'Acme', credentials: { token: 'joiner' } })] as never, JOINER);
+    expect(r2.created).toEqual([]);
+    expect(r2.existing).toEqual(r1.created);
+    expect(accounts().map((a) => a.identifier)).toEqual(['Acme', 'Acme#abcdefgh']);
+    expect(await store.vault.load(r1.created[0] as never)).toEqual({ token: 'joiner' });
+    expect(await store.vault.load(seed.id)).toEqual({ token: 'seed' });
+  });
+
+  it('a device-owned row imports with its owner, no login, resting, and no admission path runs it', async () => {
+    const r = await sync.importSources('o1', [
+      offer({ source: 'local-folder', identifier: '/p#abcdefgh', credentials: null, owner_device_id: JOINER }),
+    ] as never, JOINER);
+    expect(r.created).toHaveLength(1);
+    const row = accounts()[0];
+    expect(row).toMatchObject({ owner_device_id: JOINER, status: 'paused' });
+    expect(vaultCount()).toBe(0);
+    expect(started).toEqual([]);
+    const acct = (await store.read.accounts())[0] as Account;
+    expect(acct.ownerDeviceId).toBe(JOINER);
+    expect(isResting(acct.status)).toBe(true);
+    const runs: string[] = [];
+    const p = {
+      store: { read: { accounts: async () => [acct] } },
+      sources: { get: () => ({ descriptor: { id: 'local-folder' } }) },
+      logSink: { log: () => undefined },
+      engine: { run: (a: Account) => (runs.push(a.id), {}) },
+      scheduler: { register: jest.fn() },
+    } as unknown as CorePlatform;
+    await resumeAccounts(p);
+    expect(runs).toEqual([]);
+  });
+
+  it('two workspaces with one display name both survive', async () => {
+    await add('notion', 'Acme', { token: 'a' });
+    await sync.importSources('o1', [offer({ source: 'notion', identifier: 'Acme', credentials: { token: 'b' } })] as never, JOINER);
+    expect(accounts()).toHaveLength(2);
+    expect(vaultCount()).toBe(2);
+  });
+
+  it('a new account starts from a null cursor with its login', async () => {
+    const r = await sync.importSources('o1', [offer()] as never, JOINER);
+    const row = accounts()[0];
+    expect(row).toMatchObject({ cursor: null, status: 'connecting', owner_device_id: null, config: JSON.stringify({ k: 2 }) });
+    expect(await store.vault.load(r.created[0] as never)).toEqual({ accessToken: 'joiner-token' });
+  });
+
+  it('new account starts after commit, without a restart', async () => {
+    const seen: number[] = [];
+    sync = createSyncService({
+      db, store, dbPath: conn().name, workerFile: '', deviceId: () => SEED,
+      encryptStrict: (s) => Buffer.from(s), keystoreAvailable: () => true,
+      start: async (id) => {
+        seen.push(accounts().filter((a) => a.id === id).length);
+        started.push(id);
+      },
+    });
+    const r = await sync.importSources('o1', [offer()] as never, JOINER);
+    expect(started).toEqual(r.created);
+    expect(seen).toEqual([1]);
+  });
+
+  it('same offer_id twice changes nothing', async () => {
+    const r1 = await sync.importSources('o1', [offer()] as never, JOINER);
+    const before = JSON.stringify(accounts());
+    const r2 = await sync.importSources('o1', [offer()] as never, JOINER);
+    expect(r2).toEqual({ created: [], existing: r1.created, needsConnector: [] });
+    expect(JSON.stringify(accounts())).toBe(before);
+    expect(vaultCount()).toBe(1);
+    expect(started).toEqual(r1.created);
+  });
+
+  it('two concurrent offers for one account: one account, one login', async () => {
+    await Promise.all([
+      sync.importSources('o1', [offer()] as never, JOINER),
+      sync.importSources('o2', [offer()] as never, JOINER),
+    ]);
+    expect(accounts()).toHaveLength(1);
+    expect(vaultCount()).toBe(1);
+  });
+
+  it('crash inside the import leaves neither account nor login', async () => {
+    conn().exec(`CREATE TRIGGER boom BEFORE INSERT ON vault WHEN NEW.account_id IN (SELECT id FROM accounts WHERE identifier = 'second') BEGIN SELECT RAISE(ABORT, 'boom'); END`);
+    // The driver's error can come from another realm, so it is read by shape.
+    const err = await sync
+      .importSources('o1', [offer(), offer({ identifier: 'second' })] as never, JOINER)
+      .then(() => null, (e: unknown) => e as { message?: string });
+    expect(String(err?.message)).toMatch(/boom/);
+    expect(accounts()).toHaveLength(0);
+    expect(vaultCount()).toBe(0);
+    expect((conn().prepare(`SELECT count(*) n FROM sync_offers`).get() as { n: number }).n).toBe(0);
+    expect(started).toEqual([]);
+  });
+
+  it('encrypt failing refuses the offer, even when availability said true: no obfuscated row', async () => {
+    strict = () => {
+      throw new Error('keystore revoked');
+    };
+    await expect(sync.importSources('o1', [offer()] as never, JOINER)).rejects.toThrow(/keystore/);
+    expect(accounts()).toHaveLength(0);
+    expect(vaultCount()).toBe(0);
+  });
+
+  it('no keystore refuses', async () => {
+    keystore = false;
+    expect(sync.canAcceptSources()).toBe(false);
+    await expect(sync.importSources('o1', [offer()] as never, JOINER)).rejects.toThrow(/keystore/);
+    expect(accounts()).toHaveLength(0);
+  });
+
+  it('unknown connector: needs-connector with the login kept, and no admission path runs it', async () => {
+    installed = () => false;
+    const r = await sync.importSources('o1', [offer({ source: 'notion', identifier: 'Acme', credentials: { token: 'n' } })] as never, JOINER);
+    expect(r.needsConnector).toEqual(r.created);
+    expect(accounts()[0].status).toBe('needs-connector');
+    expect(await store.vault.load(r.created[0] as never)).toEqual({ token: 'n' });
+    expect(started).toEqual([]);
+    expect(isResting('needs-connector')).toBe(true);
+    const acct = (await store.read.accounts())[0] as Account;
+    const runs: string[] = [];
+    const p = {
+      store: { read: { accounts: async () => [acct] } },
+      sources: { get: () => undefined },
+      logSink: { log: () => undefined },
+      engine: { run: (a: Account) => (runs.push(a.id), {}) },
+      scheduler: { register: jest.fn() },
+    } as unknown as CorePlatform;
+    await resumeAccounts(p);
+    expect(runs).toEqual([]);
+  });
+
+  it('installing the connector starts it', async () => {
+    installed = () => false;
+    const r = await sync.importSources('o1', [offer({ source: 'notion', identifier: 'Acme', credentials: { token: 'n' } })] as never, JOINER);
+    const runs: string[] = [];
+    const p = {
+      store,
+      sources: { get: (id: string) => (id === 'notion' ? { descriptor: { id } } : undefined) },
+      logSink: { log: () => undefined },
+      engine: { run: (a: Account) => (runs.push(`${a.id}:${a.status}`), {}) },
+      scheduler: { register: jest.fn() },
+    } as unknown as CorePlatform;
+    await startWhenInstalled(p, 'gmail');
+    expect(runs).toEqual([]);
+    await startWhenInstalled(p, 'notion');
+    expect(runs).toEqual([`${r.created[0]}:connecting`]);
+    expect(accounts()[0].status).toBe('connecting');
+  });
+
+  it('no credentials in logs', async () => {
+    await sync.importSources('o1', [offer({ credentials: { accessToken: SECRET } })] as never, JOINER);
+    expect(logs.join('\n')).not.toContain(SECRET);
+  });
+
+  it('a follower or joining device refuses an offer', async () => {
+    conn().prepare(`UPDATE sync_state SET joining = 1`).run();
+    sync = createSyncService({
+      db, store, dbPath: conn().name, workerFile: '', deviceId: () => SEED,
+      encryptStrict: (s) => Buffer.from(s), keystoreAvailable: () => true, readOnly: true,
+    });
+    expect(sync.canAcceptSources()).toBe(false);
+    await expect(sync.importSources('o1', [offer()] as never, JOINER)).rejects.toThrow();
+  });
+});
+
+describe('the join journal', () => {
+  const SEED = 'seedseed-9999';
+  const ME = 'abcdefgh-0000-1111';
+  let sync: SyncService;
+  let busyReason: string | null;
+  beforeEach(() => {
+    busyReason = null;
+    sync = createSyncService({
+      db, store, dbPath: conn().name, workerFile: '',
+      deviceId: () => ME,
+      busy: () => busyReason,
+    });
+  });
+
+  it('beginJoin sets joining and nothing else', async () => {
+    await add('gmail', 'me@x.com', { t: 1 });
+    await sync.beginJoin();
+    expect(conn().prepare(`SELECT joining, joined, role FROM sync_state`).get()).toEqual({ joining: 1, joined: 0, role: 'normal' });
+    expect(conn().prepare(`SELECT count(*) n FROM sync_moved`).get()).toEqual({ n: 0 });
+    expect((await store.read.accounts())[0].status).toBe('connecting');
+  });
+
+  it('exportSources records only the moveable accounts in sync_moved', async () => {
+    const g = await add('gmail', 'me@x.com', { t: 1 });
+    await add('local-folder', '/p');
+    const out = await sync.exportSources(SEED);
+    expect(out.map((o) => o.source).sort()).toEqual(['gmail', 'local-folder']);
+    expect(conn().prepare(`SELECT account_id, to_device FROM sync_moved`).all()).toEqual([{ account_id: g.id, to_device: SEED }]);
+  });
+
+  it('finishJoin deletes the moved logins, sets joined, resumes its own device-owned rows, and is safe to repeat', async () => {
+    const g = await add('gmail', 'me@x.com', { t: 1 });
+    const other = await add('notion', 'Other', { t: 2 });
+    const mine = await add('local-folder', '/p');
+    const theirs = await add('whatsapp', '49170');
+    conn().prepare(`UPDATE accounts SET owner_device_id = ?, status = 'paused', last_error = 'Owned by abcdefgh' WHERE id = ?`).run(ME, mine.id);
+    conn().prepare(`UPDATE accounts SET owner_device_id = 'zzzz', status = 'paused' WHERE id = ?`).run(theirs.id);
+    conn().prepare(`INSERT INTO sync_moved(account_id, to_device) VALUES(?, ?)`).run(g.id, SEED);
+    fs.writeFileSync(`${conn().name}.swap-outcome`, 'swapped');
+    await sync.finishJoin();
+    await sync.finishJoin();
+    expect(await store.vault.load(g.id)).toBeNull();
+    expect(await store.vault.load(other.id)).toEqual({ t: 2 });
+    expect(conn().prepare(`SELECT joined, joining FROM sync_state`).get()).toEqual({ joined: 1, joining: 0 });
+    const rows = Object.fromEntries((conn().prepare(`SELECT id, status, last_error FROM accounts`).all() as { id: string; status: string; last_error: string | null }[]).map((r) => [r.id, r]));
+    expect(rows[mine.id]).toMatchObject({ status: 'connecting', last_error: null });
+    expect(rows[theirs.id].status).toBe('paused');
+    expect(fs.existsSync(`${conn().name}.swap-outcome`)).toBe(false);
+  });
+
+  it('leaveJoin drops a pending swap, clears joining, keeps sync_moved and pauses what moved', async () => {
+    const g = await add('gmail', 'me@x.com', { t: 1 });
+    conn().prepare(`UPDATE sync_state SET joining = 1`).run();
+    conn().prepare(`INSERT INTO sync_moved(account_id, to_device) VALUES(?, ?)`).run(g.id, SEED);
+    fs.writeFileSync(`${conn().name}.swap.json`, JSON.stringify({ masterDeviceId: SEED, merged: false, archive: 'x' }));
+    fs.writeFileSync(`${conn().name}.swap-incoming`, 'bytes');
+    await sync.leaveJoin();
+    expect(conn().prepare(`SELECT joining FROM sync_state`).get()).toEqual({ joining: 0 });
+    expect(conn().prepare(`SELECT status, last_error FROM accounts WHERE id = ?`).get(g.id)).toEqual({ status: 'paused', last_error: `Moved to ${SEED}` });
+    expect(conn().prepare(`SELECT count(*) n FROM sync_moved`).get()).toEqual({ n: 1 });
+    expect(fs.existsSync(`${conn().name}.swap-incoming`)).toBe(false);
+    expect(applyPendingSwap(conn().name)).toBe('none');
+  });
+
+  it('forgetMoved clears sync_moved and lets the accounts run again', async () => {
+    const g = await add('gmail', 'me@x.com', { t: 1 });
+    const kept = await add('notion', 'Paused', { t: 2 });
+    conn().prepare(`UPDATE accounts SET status = 'paused', last_error = 'by user' WHERE id = ?`).run(kept.id);
+    conn().prepare(`INSERT INTO sync_moved(account_id, to_device) VALUES(?, ?), (?, ?)`).run(g.id, SEED, kept.id, SEED);
+    conn().prepare(`UPDATE accounts SET status = 'paused', last_error = ? WHERE id = ?`).run(`Moved to ${SEED}`, g.id);
+    await sync.forgetMoved();
+    expect(conn().prepare(`SELECT count(*) n FROM sync_moved`).get()).toEqual({ n: 0 });
+    expect(conn().prepare(`SELECT status, last_error FROM accounts WHERE id = ?`).get(g.id)).toEqual({ status: 'connecting', last_error: null });
+    expect(conn().prepare(`SELECT status FROM accounts WHERE id = ?`).get(kept.id)).toEqual({ status: 'paused' });
+  });
+
+  it('isBusy names what is busy, else null', () => {
+    expect(sync.isBusy()).toBeNull();
+    busyReason = 'recording a meeting';
+    expect(sync.isBusy()).toBe('recording a meeting');
   });
 });

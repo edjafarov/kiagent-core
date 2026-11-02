@@ -200,6 +200,12 @@ TEXT and attention timestamps are INTEGER Unix milliseconds.`,
           type: 'TEXT (ISO-8601)',
           notes: 'When connected.',
         },
+        {
+          name: 'owner_device_id',
+          type: 'TEXT',
+          notes:
+            'Set for a device-owned account (local folder, WhatsApp): the one device that reads it. NULL otherwise.',
+        },
       ],
     },
     {

@@ -47,6 +47,8 @@ import {
   type CommitResult,
   type FolderScopeInput,
   type FolderScopeResult,
+  type ImportSourcesInput,
+  type ImportSourcesResult,
   type ReconcileCounts,
   type RekeyPageResult,
 } from './write-tx';
@@ -201,6 +203,9 @@ export interface CoreStore extends Store {
   applySyncDelta(
     stagePath: string,
   ): Promise<{ applied: number; target: SyncCursor }>;
+  /** Takes an offer of accounts and logins from another device in one
+   *  transaction (alpha-cent spec 7.7), and wakes what a commit wakes. */
+  importSyncSources(input: ImportSourcesInput): Promise<ImportSourcesResult>;
   /** Documents that entered the store at or after `since` (ISO), per
    *  account — new items only: updates, moves and restores of older
    *  documents do not count. Archived documents are left out. */
@@ -763,6 +768,14 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       emitCommit();
       outboxChanged.emit('change');
       eventDraftsChanged.emit('change');
+      return r;
+    },
+
+    async importSyncSources(input) {
+      const r = writeTx
+        ? writeTx.importSources(input)
+        : ((await db.proc!('syncImportSources', input)) as ImportSourcesResult);
+      if (r.created.length) emitCommit();
       return r;
     },
 

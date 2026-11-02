@@ -129,6 +129,15 @@ export const NS_METHODS: Record<string, string[]> = {
     'applyDelta',
     'prepareSwap',
     'prepareRestore',
+    'setDeviceId',
+    'beginJoin',
+    'exportSources',
+    'finishJoin',
+    'leaveJoin',
+    'forgetMoved',
+    'canAcceptSources',
+    'importSources',
+    'isBusy',
   ],
 };
 

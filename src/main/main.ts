@@ -329,6 +329,16 @@ function makeEncryption() {
       }
       return Buffer.from(`plain:${plain}`, 'utf8');
     },
+    /** For logins that arrive from another device: no obfuscation fallback.
+     *  Availability can lie (a keystore revoked mid-session), so this throws
+     *  from the real call too, and the offer is refused whole. */
+    encryptStrict(plain: string): Buffer {
+      if (!canEncrypt) throw new Error('OS keystore unavailable');
+      return safeStorage.encryptString(plain);
+    },
+    keystoreAvailable(): boolean {
+      return canEncrypt;
+    },
     decrypt(blob: Buffer): string {
       const s = blob.toString('utf8');
       if (s.startsWith('plain:')) return s.slice('plain:'.length);
@@ -987,9 +997,14 @@ app
         path.join(__dirname, 'worker.bundle.dev.js'),
       ].find((f) => fs.existsSync(f)) ?? path.join(__dirname, 'worker.js');
 
+    // One do-not-disturb state for the run, shared by every extension and by
+    // the sync service's restart checks.
+    const busy = createBusyRegistry();
+
     platform = await bootCore({
       dataDir,
       ...enc,
+      busy,
       env: schedulerEnv,
       dbWorkerFile,
       converterSpawn: () =>
@@ -1370,9 +1385,6 @@ app
     // through `outbound`, so having two instances is intentional, not a
     // duplication bug.
     const outboundRoutes = createOutboundRoutes(outbound, calendarOut);
-    // One do-not-disturb state for the run, shared by every extension.
-    const busy = createBusyRegistry();
-
     extensionsPlatform = createExtensionPlatform({
       sync: p.sync,
       extDir: path.join(app.getPath('userData'), 'extensions'),

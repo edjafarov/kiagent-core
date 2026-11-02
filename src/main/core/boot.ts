@@ -58,6 +58,8 @@ import type { CoreScheduler } from './scheduler';
 import { applyFollowerGate, gateFrom, readSyncGate } from './sync/role';
 import { createSyncService, type SyncService } from './sync/service';
 import { applyPendingSwap } from './sync/swap';
+import { isResting } from './engine/resting';
+import type { BusyRegistry } from './busy';
 import { openReads } from './reads';
 import type { ReadCaller } from './store/read-proxy';
 import { openStore } from './store/store';
@@ -71,6 +73,13 @@ export interface BootDeps {
   dataDir: string;
   encrypt(plain: string): Buffer;
   decrypt(blob: Buffer): string;
+  /** Like `encrypt`, but throws where that one stores obfuscated bytes: the
+   *  logins another device offers are never stored that way (spec 7.7). */
+  encryptStrict?(plain: string): Buffer;
+  /** Is the OS keystore really usable right now? */
+  keystoreAvailable?(): boolean;
+  /** The run's do-not-disturb state, shared with the extensions. */
+  busy?: BusyRegistry;
   env(): SchedulerEnv;
   /** Bundled `dbWorker` entry file — the corpus SQLite connection is hosted in
    *  this worker thread so its synchronous calls never block the main loop. */
@@ -406,6 +415,22 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     store,
     dbPath,
     workerFile: deps.dbWorkerFile,
+    encryptStrict: deps.encryptStrict,
+    keystoreAvailable: deps.keystoreAvailable,
+    isInstalled: (source) => sources.get(source) !== undefined,
+    start: async (id) => {
+      const account = await store.account(id as AccountId);
+      if (account && !isResting(account.status)) runAccount(platform, account);
+    },
+    busy: () => deps.busy?.get().reasons[0] ?? null,
+    readOnly,
+    log: (level, msg) => sink.log('sync', level, msg),
+  });
+  // A connector installed later starts the accounts that were waiting for it.
+  sources.onRegister((sourceId) => {
+    void startWhenInstalled(platform, sourceId).catch((err) =>
+      sink.log('sync', 'error', `could not start accounts for ${sourceId}: ${String(err)}`),
+    );
   });
   if (readOnly) applyFollowerGate(engine);
   // A follower's copied rows change only by what the master sends.
@@ -517,12 +542,7 @@ export function runAccount(platform: CorePlatform, account: Account): Handle {
         // deliberately (revoked credential — retrying just re-hammers the
         // provider with doomed requests). Only the user's explicit Retry
         // (sync-now → runAccount) or a fresh connect starts it again.
-        if (
-          fresh &&
-          fresh.status !== 'paused' &&
-          fresh.status !== 'needsReauth'
-        )
-          platform.engine.run(fresh);
+        if (fresh && !isResting(fresh.status)) platform.engine.run(fresh);
       },
     );
   }
@@ -544,7 +564,7 @@ export async function setAccountCadence(
   await platform.store.setAccountCadence(accountId, cadence);
   const account = await platform.store.account(accountId);
   if (!account) return;
-  if (account.status === 'paused' || account.status === 'needsReauth') return;
+  if (isResting(account.status)) return;
   runAccount(platform, account);
 }
 
@@ -563,10 +583,18 @@ export async function resumeAccounts(
   for (const account of accounts) {
     if (opts.signal?.aborted) break;
     if (account.source === 'worker') continue; // synthetic accounts don't sync
-    if (account.status === 'paused') continue;
     // Same resting-state rule as the cadence tick: a needsReauth account
-    // must not resume hammering a revoked credential at every boot.
-    if (account.status === 'needsReauth') continue;
+    // must not resume hammering a revoked credential at every boot. A
+    // needs-connector account starts once its connector is registered
+    // (startWhenInstalled), and a device-owned one the seed holds is paused.
+    if (account.status === 'needs-connector') {
+      if (platform.sources.get(account.source)) {
+        const started = await startNeedsConnector(platform, account);
+        if (started) handles.set(account.id, runAccount(platform, started));
+      }
+      continue;
+    }
+    if (isResting(account.status)) continue;
     if (!platform.sources.get(account.source)) {
       if (opts.defer?.(account)) continue;
       platform.logSink.log(
@@ -579,6 +607,38 @@ export async function resumeAccounts(
     handles.set(account.id, runAccount(platform, account));
   }
   return handles;
+}
+
+/** Its connector is here now: back to connecting, then the usual start.
+ *  Returns the account to run, or null when it moved on in the meantime. */
+async function startNeedsConnector(
+  platform: CorePlatform,
+  account: Account,
+): Promise<Account | null> {
+  const fresh = await platform.store.account(account.id);
+  if (!fresh || fresh.status !== 'needs-connector') return null;
+  await platform.store.commit({
+    account: fresh.id,
+    documents: [],
+    cursor: fresh.cursor,
+    status: 'connecting',
+  });
+  return { ...fresh, status: 'connecting' };
+}
+
+/** A connector was installed or registered: every account waiting on it
+ *  starts, with no restart (spec 7.7 step 4). */
+export async function startWhenInstalled(
+  platform: CorePlatform,
+  sourceId: string,
+): Promise<void> {
+  const waiting = (await platform.store.read.accounts()).filter(
+    (a) => a.source === sourceId && a.status === 'needs-connector',
+  );
+  for (const a of waiting) {
+    const started = await startNeedsConnector(platform, a);
+    if (started) runAccount(platform, started);
+  }
 }
 
 /** Attach a worker and, when it declares a cadence, schedule its deferred

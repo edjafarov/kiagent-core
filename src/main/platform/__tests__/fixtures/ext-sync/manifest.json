@@ -2,7 +2,7 @@
   "id": "test.sync",
   "name": "Sync Test Extension",
   "version": "1.0.0",
-  "engine": "^2.17.0",
+  "engine": "^2.18.0",
   "entry": "index.js",
   "caps": ["sync"],
   "contributes": { "sources": [], "tools": [], "senders": [] }

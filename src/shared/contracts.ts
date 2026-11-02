@@ -166,7 +166,10 @@ export type SyncStatus =
   | 'live'
   | 'paused'
   | 'needsReauth'
-  | 'error';
+  | 'error'
+  /** Sync step 1: offered from another device, whose connector isn't
+   *  installed here. The login is kept; installing the connector starts it. */
+  | 'needs-connector';
 
 export interface AccountProgress {
   done: number;
@@ -1573,6 +1576,16 @@ export interface SyncCursorWire {
   seq: number;
   cursor: number;
 }
+/** One account in an offer between devices (sync step 1). `credentials` is a
+ *  login: it crosses only the mutually authenticated channel. */
+export interface OfferedSourceWire {
+  source: string;
+  identifier: string;
+  config: string;
+  cadence: string | null;
+  credentials: unknown | null;
+  owner_device_id: string | null;
+}
 export interface SyncStatusWire {
   role: 'normal' | 'follower';
   tracking: boolean;
@@ -1871,6 +1884,19 @@ export interface CapSurfaces {
         masterDeviceId: string,
       ): Promise<'ready' | 'no-disk' | 'invalid'>;
       prepareRestore(): Promise<'ready' | 'no-archive'>;
+      setDeviceId(id: string): Promise<void>;
+      beginJoin(): Promise<void>;
+      exportSources(toDevice: string): Promise<OfferedSourceWire[]>;
+      finishJoin(): Promise<void>;
+      leaveJoin(): Promise<void>;
+      forgetMoved(): Promise<void>;
+      canAcceptSources(): Promise<boolean>;
+      importSources(
+        offerId: string,
+        list: OfferedSourceWire[],
+        from: string,
+      ): Promise<{ created: string[]; existing: string[]; needsConnector: string[] }>;
+      isBusy(): Promise<string | null>;
     };
   };
   /** Host-initiated only — no extension→host surface. */

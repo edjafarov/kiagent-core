@@ -20,6 +20,7 @@ import {
   createWriteTx,
   type AccountWriteOp,
   type FolderScopeInput,
+  type ImportSourcesInput,
 } from '@main/core/store/write-tx';
 import {
   createCorpusQuery,
@@ -175,6 +176,8 @@ async function runSyncRole(): Promise<void> {
         accountWrite: (args) => writeTx.accountWrite(args as AccountWriteOp),
         syncApply: (args) =>
           writeTx.applyDelta((args as { stagePath: string }).stagePath),
+        syncImportSources: (args) =>
+          writeTx.importSources(args as ImportSourcesInput),
         syncTracking: (args) => {
           if ((args as { on: boolean }).on) enableTracking(db._conn!);
           else disableTracking(db._conn!);

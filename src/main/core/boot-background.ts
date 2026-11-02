@@ -16,6 +16,8 @@
  */
 import type { Account, AccountId, ExtensionSnapshot } from '@shared/contracts';
 
+import { isParked, isResting } from './engine/resting';
+
 export type StartIntent = 'auto' | 'explicit';
 type Level = 'info' | 'warn' | 'error';
 
@@ -82,8 +84,8 @@ export function createBootQueue(deps: BootQueueDeps): BootQueue {
     account: Account | null,
     intent: StartIntent,
   ): account is Account {
-    if (!account || account.status === 'paused') return false;
-    return intent === 'explicit' || account.status !== 'needsReauth';
+    if (!account || isParked(account.status)) return false;
+    return intent === 'explicit' || !isResting(account.status);
   }
 
   async function dispatch(
@@ -144,7 +146,7 @@ export function createBootQueue(deps: BootQueueDeps): BootQueue {
 
     syncPending(accounts) {
       for (const account of accounts) {
-        if (account.source === 'worker' || account.status === 'paused')
+        if (account.source === 'worker' || isParked(account.status))
           continue;
         if (isPending(account.source)) enqueue(account, 'explicit');
       }

@@ -270,8 +270,39 @@ export interface RekeyPageResult {
   scanned: number;
 }
 
+/** One account of an offer, encrypted and classified on main (spec 7.7). */
+export interface ImportSourceEntry {
+  source: string;
+  identifier: string;
+  config: string;
+  cadence: string | null;
+  /** Already encrypted with the strict encrypt; null for a row with no login. */
+  blob: Uint8Array | null;
+  ownerDeviceId: string | null;
+  /** The source's identifier names the provider's account (audited list). */
+  stable: boolean;
+  /** Its connector is registered on this device. */
+  installed: boolean;
+}
+
+export interface ImportSourcesInput {
+  offerId: string;
+  /** The offering device; its first 8 characters suffix an unstable match. */
+  from: string;
+  entries: ImportSourceEntry[];
+}
+
+export interface ImportSourcesResult {
+  created: string[];
+  existing: string[];
+  needsConnector: string[];
+}
+
 export interface WriteTx {
   commit(batch: CommitBatch): CommitResult;
+  /** Multi-device sync, step 1: take an offer of accounts and logins in ONE
+   *  transaction with the `sync_offers` row (alpha-cent spec 7.7). */
+  importSources(input: ImportSourcesInput): ImportSourcesResult;
   /** Multi-device sync: apply one validated stage from the master, rows and
    *  cursor in ONE transaction (alpha-cent spec 7.4). Throws SyncStageInvalid
    *  before touching anything if the stage is bad. */
@@ -636,6 +667,103 @@ export function createWriteTx(
         | { config: string }
         | undefined
     )?.config;
+
+  const importSourcesTx = conn.transaction(
+    (i: ImportSourcesInput): ImportSourcesResult => {
+      const suffix = i.from.slice(0, 8);
+      const repeat = !!conn
+        .prepare(`SELECT 1 FROM sync_offers WHERE offer_id = ?`)
+        .get(i.offerId);
+      if (!repeat) {
+        conn
+          .prepare(`INSERT INTO sync_offers(offer_id, at) VALUES(?, ?)`)
+          .run(i.offerId, deps.now());
+      }
+      const find = conn.prepare(
+        `SELECT id, status FROM accounts WHERE source = ? AND identifier = ?`,
+      );
+      const insert = conn.prepare(
+        `INSERT INTO accounts(id, source, identifier, config, status, last_error,
+                              cadence, created_at, owner_device_id)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(source, identifier) DO NOTHING
+         RETURNING id`,
+      );
+      const vault = conn.prepare(
+        `INSERT INTO vault(account_id, blob) VALUES(?, ?)
+         ON CONFLICT(account_id) DO NOTHING`,
+      );
+      const out: ImportSourcesResult = {
+        created: [],
+        existing: [],
+        needsConnector: [],
+      };
+      const seen = (row: { id: string; status: string }) => {
+        out.existing.push(row.id);
+        if (row.status === 'needs-connector') out.needsConnector.push(row.id);
+      };
+      for (const e of i.entries) {
+        const owned = e.ownerDeviceId !== null;
+        // A display name can collide between two workspaces, so an unstable
+        // match is a separate account under a suffixed identifier, which is
+        // the same on every retry. A stable one is the same account.
+        const plain = find.get(e.source, e.identifier) as
+          | { id: string; status: string }
+          | undefined;
+        let identifier = e.identifier;
+        if (!owned && !e.stable) {
+          const suffixed = find.get(e.source, `${e.identifier}#${suffix}`) as
+            | { id: string; status: string }
+            | undefined;
+          if (suffixed) {
+            seen(suffixed);
+            continue;
+          }
+          if (plain) {
+            // After the first run of this offer a plain match is its own work.
+            if (repeat) {
+              seen(plain);
+              continue;
+            }
+            identifier = `${e.identifier}#${suffix}`;
+          }
+        } else if (plain) {
+          seen(plain);
+          continue;
+        }
+        if (repeat) continue;
+        const status = owned
+          ? 'paused'
+          : e.installed
+            ? 'connecting'
+            : 'needs-connector';
+        const row = insert.get(
+          newId<'account'>(),
+          e.source,
+          identifier,
+          e.config,
+          status,
+          owned ? `Owned by ${(e.ownerDeviceId as string).slice(0, 8)}` : null,
+          e.cadence,
+          deps.now(),
+          e.ownerDeviceId,
+        ) as { id: string } | undefined;
+        if (!row) {
+          const raced = find.get(e.source, identifier) as {
+            id: string;
+            status: string;
+          };
+          seen(raced);
+          continue;
+        }
+        appendChange('account', row.id);
+        if (e.blob) vault.run(row.id, Buffer.from(e.blob));
+        out.created.push(row.id);
+        if (status === 'needs-connector') out.needsConnector.push(row.id);
+      }
+      return out;
+    },
+  );
 
   const accountWriteTx = conn.transaction(
     (w: AccountWriteOp): AccountWriteResult => {
@@ -1591,6 +1719,8 @@ export function createWriteTx(
     }),
 
     accountWrite: publishing((w: AccountWriteOp) => accountWriteTx(w)),
+
+    importSources: publishing((i: ImportSourcesInput) => importSourcesTx(i)),
 
     reconcileBegin: (accountId) => beginPass(accountId),
 

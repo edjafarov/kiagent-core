@@ -265,6 +265,15 @@ function syncSurface(
     applyDelta: call('applyDelta'),
     prepareSwap: call('prepareSwap'),
     prepareRestore: call('prepareRestore'),
+    setDeviceId: call('setDeviceId'),
+    beginJoin: call('beginJoin'),
+    exportSources: call('exportSources'),
+    finishJoin: call('finishJoin'),
+    leaveJoin: call('leaveJoin'),
+    forgetMoved: call('forgetMoved'),
+    canAcceptSources: call('canAcceptSources'),
+    importSources: call('importSources'),
+    isBusy: call('isBusy'),
   };
 }
 
