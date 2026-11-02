@@ -153,3 +153,9 @@ it('enabling twice keeps one history id', () => {
   enableTracking(conn());
   expect(h()).toBe(first);
 });
+
+it('enableTracking marks the device joined', () => {
+  expect(conn().prepare(`SELECT joined FROM sync_state`).get()).toEqual({ joined: 0 });
+  enableTracking(conn());
+  expect(conn().prepare(`SELECT joined FROM sync_state`).get()).toEqual({ joined: 1 });
+});

@@ -122,6 +122,42 @@ describe('exportSources', () => {
     expect(n.identifier).toBe('Acme');
   });
 
+  it('a moveable account with no vault row is not exported', async () => {
+    await add('gmail', 'nologin@x.com');
+    await add('gmail', 'login@x.com', { t: 1 });
+    await add('local-folder', '/p');
+    const out = await exportSources(store, ME);
+    expect(out.map((o) => o.identifier).sort()).toEqual(['/p#deviceAA', 'login@x.com']);
+  });
+
+  it('prepareExport runs for each account before its vault is read, and what it writes is exported', async () => {
+    const a = await add('telegram', '42');
+    const order: string[] = [];
+    const sources = {
+      get: (id: string) =>
+        id === 'telegram'
+          ? {
+              prepareExport: async (ctx: { account: { id: string }; save(c: unknown): Promise<void> }) => {
+                order.push(`prepare ${ctx.account.id === a.id}`);
+                await ctx.save({ session: SECRET });
+              },
+            }
+          : undefined,
+    };
+    const [t] = await exportSources(store, ME, undefined, sources as never);
+    expect(order).toEqual(['prepare true']);
+    expect(t).toMatchObject({ source: 'telegram', credentials: { session: SECRET } });
+  });
+
+  it('a prepareExport that throws is logged without its message and the export goes on', async () => {
+    await add('telegram', '42', { session: 'old' });
+    const lines: string[] = [];
+    const sources = { get: () => ({ prepareExport: async () => { throw new Error(SECRET); } }) };
+    const out = await exportSources(store, ME, (l, m) => lines.push(`${l} ${m}`), sources as never);
+    expect(out).toHaveLength(1);
+    expect(lines.join('\n')).not.toContain(SECRET);
+  });
+
   it('skips the synthetic worker account', async () => {
     await add('worker', 'w');
     expect(await exportSources(store, ME)).toEqual([]);
@@ -263,6 +299,13 @@ describe('importSources', () => {
     expect(runs).toEqual([]);
   });
 
+  it('an unstable source imports as identifier#device8 even with no collision, the same on retry', async () => {
+    const r1 = await sync.importSources('o1', [offer({ source: 'notion', identifier: 'Acme', credentials: { token: 'j' } })] as never, JOINER);
+    const r2 = await sync.importSources('o2', [offer({ source: 'notion', identifier: 'Acme', credentials: { token: 'j' } })] as never, JOINER);
+    expect(accounts().map((a) => a.identifier)).toEqual(['Acme#abcdefgh']);
+    expect(r2).toEqual({ created: [], existing: r1.created, needsConnector: [] });
+  });
+
   it('two workspaces with one display name both survive', async () => {
     await add('notion', 'Acme', { token: 'a' });
     await sync.importSources('o1', [offer({ source: 'notion', identifier: 'Acme', credentials: { token: 'b' } })] as never, JOINER);
@@ -388,10 +431,23 @@ describe('importSources', () => {
     conn().prepare(`UPDATE sync_state SET joining = 1`).run();
     sync = createSyncService({
       db, store, dbPath: conn().name, workerFile: '', deviceId: () => SEED,
-      encryptStrict: (s) => Buffer.from(s), keystoreAvailable: () => true, readOnly: true,
+      encryptStrict: (s) => Buffer.from(s), keystoreAvailable: () => true, readOnly: () => true,
     });
     expect(sync.canAcceptSources()).toBe(false);
     await expect(sync.importSources('o1', [offer()] as never, JOINER)).rejects.toThrow();
+  });
+});
+
+describe('readOnly is read at each call', () => {
+  it('a promotion needs no new wiring', async () => {
+    let ro = true;
+    const sync = createSyncService({
+      db, store, dbPath: conn().name, workerFile: '', deviceId: () => 'seedseed-9999',
+      encryptStrict: (x) => Buffer.from(x), keystoreAvailable: () => true, readOnly: () => ro,
+    });
+    expect(sync.canAcceptSources()).toBe(false);
+    ro = false;
+    expect(sync.canAcceptSources()).toBe(true);
   });
 });
 

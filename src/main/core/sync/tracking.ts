@@ -33,7 +33,8 @@ export function enableTracking(conn: BetterSqlite3.Database): void {
     conn.exec(TRIGGERS);
     conn
       .prepare(
-        `UPDATE sync_state SET tracking = 1, history_id = COALESCE(history_id, ?)`,
+        `UPDATE sync_state SET tracking = 1, joined = 1,
+                              history_id = COALESCE(history_id, ?)`,
       )
       .run(randomUUID());
   })();

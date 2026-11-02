@@ -3,6 +3,7 @@
  *  worker, so neither the window nor ingest waits for them. */
 import fs from 'node:fs';
 
+import type { Source } from '@shared/contracts';
 import type { AppDb } from '../../db/app-db';
 import { openDbInWorker } from '../../db/worker-client';
 import type { CoreStore } from '../store/store';
@@ -97,12 +98,14 @@ export interface SyncServiceDeps {
   keystoreAvailable?: () => boolean;
   /** Is this source's connector installed here? Absent: yes. */
   isInstalled?: (source: string) => boolean;
+  /** Connectors, for their optional `prepareExport` hook. */
+  sources?: { get(id: string): Partial<Pick<Source, 'prepareExport'>> | undefined };
   /** Starts an account that just arrived, with no restart. */
   start?: (accountId: string) => void | Promise<void>;
   /** The busy registry's first reason, or null. */
   busy?: () => string | null;
   /** This device is a follower or joining: it takes no offers. */
-  readOnly?: boolean;
+  readOnly?: () => boolean;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
 
@@ -143,11 +146,13 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       await deps.db.run(`UPDATE sync_state SET joining = 1`);
     },
     exportSources: async (toDevice) => {
-      const list = await exportSources(deps.store, me(), log);
+      const list = await exportSources(deps.store, me(), log, deps.sources);
       const owned = DEVICE_OWNED_SOURCES.map(() => '?').join(', ');
       await deps.db.run(
         `INSERT OR REPLACE INTO sync_moved(account_id, to_device)
-         SELECT id, ? FROM accounts WHERE source <> 'worker' AND source NOT IN (${owned})`,
+         SELECT id, ? FROM accounts
+          WHERE source <> 'worker' AND source NOT IN (${owned})
+            AND id IN (SELECT account_id FROM vault)`,
         [toDevice, ...DEVICE_OWNED_SOURCES],
       );
       return list;
@@ -180,9 +185,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       );
       await deps.db.run(`DELETE FROM sync_moved`);
     },
-    canAcceptSources: () => !deps.readOnly && deps.keystoreAvailable?.() === true,
+    canAcceptSources: () => !deps.readOnly?.() && deps.keystoreAvailable?.() === true,
     importSources: async (offerId, list, from) => {
-      if (deps.readOnly) throw new Error('this device is not the seed and takes no sources');
+      if (deps.readOnly?.()) throw new Error('this device is not the seed and takes no sources');
       if (deps.keystoreAvailable?.() !== true || !deps.encryptStrict) {
         throw new Error('no keystore on this device: its logins can not be stored safely');
       }

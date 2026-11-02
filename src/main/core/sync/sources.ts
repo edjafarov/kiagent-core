@@ -1,7 +1,7 @@
 /** Which sources move to another device, which stay, and what an offer holds
  *  (alpha-cent spec 7.7). Two lists, audited once, that every later step reads
  *  and none adds to. An unlisted source counts as unstable and not device-owned. */
-import type { Credentials } from '@shared/contracts';
+import type { Credentials, ExportContext, Source } from '@shared/contracts';
 
 import type { CoreStore } from '../store/store';
 
@@ -67,6 +67,7 @@ export async function exportSources(
   store: Pick<CoreStore, 'read' | 'vault'>,
   me: string,
   log: (level: 'info' | 'warn', msg: string) => void = () => undefined,
+  sources?: { get(id: string): Partial<Pick<Source, 'prepareExport'>> | undefined },
 ): Promise<OfferedSource[]> {
   const accounts = await store.read.accounts();
   const out: OfferedSource[] = [];
@@ -88,11 +89,28 @@ export async function exportSources(
       });
       continue;
     }
+    // A connector may still have a login to move into the vault.
+    const prepare = sources?.get(a.source)?.prepareExport;
+    if (prepare) {
+      try {
+        await prepare.call(sources!.get(a.source), {
+          account: a,
+          credentials: () => store.vault.load(a.id) as Promise<Credentials | null>,
+          save: (c) => store.vault.save(a.id, c),
+          log: (level, msg) => log(level === 'error' ? 'warn' : 'info', `${a.source}: ${msg}`),
+        } satisfies ExportContext);
+      } catch {
+        // The message could carry a login, so only the source is named.
+        log('warn', `sync: ${a.source} could not prepare an account for export`);
+      }
+    }
     const login = (await store.vault.load(a.id)) as Credentials | null;
+    // No vault row, nothing to move; the seed would hold a login-less copy.
+    if (!login) continue;
     out.push({
       ...base,
       identifier: a.identifier,
-      credentials: login ?? null,
+      credentials: login,
       owner_device_id: null,
     });
   }

@@ -423,7 +423,8 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
       if (account && !isResting(account.status)) runAccount(platform, account);
     },
     busy: () => deps.busy?.get().reasons[0] ?? null,
-    readOnly,
+    readOnly: () => readOnly,
+    sources,
     log: (level, msg) => sink.log('sync', level, msg),
   });
   // A connector installed later starts the accounts that were waiting for it.

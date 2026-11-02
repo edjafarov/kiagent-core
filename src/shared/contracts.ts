@@ -724,12 +724,24 @@ export interface FolderScopeUpdate<Cursor = unknown> {
   archiveNullScoped?: boolean;
 }
 
+/** What `Source.prepareExport` gets: the account and its vault, nothing else. */
+export interface ExportContext {
+  readonly account: Account;
+  credentials(): Promise<Credentials | null>;
+  save(credentials: Credentials): Promise<void>;
+  log(level: LogLevel, msg: string): void;
+}
+
 /** The entire connector-authoring surface. */
 export interface Source<Cursor = unknown, Item = unknown> {
   readonly descriptor: SourceDescriptor;
   connect(
     auth: AuthChannel,
   ): Promise<{ identifier: string; config?: Record<string, unknown> }>;
+  /** Optional. Runs before this account's login is copied to another device
+   *  (multi-device sync), so a login still waiting to move into the vault, such
+   *  as a session file, is there to be copied. Awaited. */
+  prepareExport?(ctx: ExportContext): Promise<void>;
   /** `null` cursor = from the beginning. Live sources keep yielding. Retry,
    *  backoff, throttling, progress, persistence: all engine-owned. */
   pull(

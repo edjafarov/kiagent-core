@@ -712,20 +712,16 @@ export function createWriteTx(
           | undefined;
         let identifier = e.identifier;
         if (!owned && !e.stable) {
-          const suffixed = find.get(e.source, `${e.identifier}#${suffix}`) as
+          // Always suffixed, not only on a collision: a display name can
+          // match another workspace by chance, and the suffixed name is the
+          // same on every retry.
+          identifier = `${e.identifier}#${suffix}`;
+          const suffixed = find.get(e.source, identifier) as
             | { id: string; status: string }
             | undefined;
           if (suffixed) {
             seen(suffixed);
             continue;
-          }
-          if (plain) {
-            // After the first run of this offer a plain match is its own work.
-            if (repeat) {
-              seen(plain);
-              continue;
-            }
-            identifier = `${e.identifier}#${suffix}`;
           }
         } else if (plain) {
           seen(plain);
