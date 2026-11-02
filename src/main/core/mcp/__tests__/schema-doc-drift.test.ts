@@ -65,6 +65,8 @@ describe('schema-doc drift detector', () => {
       'vault',
       'consents',
       'schedule',
+      'sync_rows',
+      'sync_state',
     ]);
     const isInternal = (name: string): boolean => {
       if (name.startsWith('sqlite_')) return true;
