@@ -128,6 +128,7 @@ export const NS_METHODS: Record<string, string[]> = {
     'buildSnapshot',
     'applyDelta',
     'prepareSwap',
+    'prepareRestore',
   ],
 };
 

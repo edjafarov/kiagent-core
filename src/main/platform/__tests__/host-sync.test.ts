@@ -55,6 +55,7 @@ describe('through a real forked extension host', () => {
         buildSnapshot: note('buildSnapshot', { bytes: 1 }),
         applyDelta: note('applyDelta', { applied: 2 }),
         prepareSwap: note('prepareSwap', 'ready'),
+        prepareRestore: note('prepareRestore', 'no-archive'),
         close: async () => undefined,
       } as never,
       sources: { register: () => {}, get: () => undefined, list: () => [], unregister: () => {} },
@@ -109,7 +110,7 @@ describe('through a real forked extension host', () => {
     expect(seen.buildDelta).toEqual([{ seq: 1, cursor: 2 }, 'out', 5]);
     expect(seen.prepareSwap).toEqual(['f', 'h', 'm']);
     expect(Object.keys(seen).sort()).toEqual(
-      ['applyDelta', 'buildDelta', 'buildSnapshot', 'disableTracking', 'enableTracking', 'prepareSwap', 'status'],
+      ['applyDelta', 'buildDelta', 'buildSnapshot', 'disableTracking', 'enableTracking', 'prepareRestore', 'prepareSwap', 'status'],
     );
   });
 });

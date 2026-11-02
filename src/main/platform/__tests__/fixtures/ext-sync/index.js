@@ -11,6 +11,7 @@ module.exports = {
       buildSnapshot: await host.sync.buildSnapshot('snap'),
       applyDelta: await host.sync.applyDelta('stage'),
       prepareSwap: await host.sync.prepareSwap('f', 'h', 'm'),
+      prepareRestore: await host.sync.prepareRestore(),
     };
     fs.writeFileSync(process.env.KIA_SYNC_FIXTURE_OUT, JSON.stringify(calls));
   },

@@ -7,7 +7,7 @@
 import { buildDelta, type SyncCursor } from '../core/sync/delta';
 import { buildSnapshot } from '../core/sync/snapshot';
 import { readSyncStatus } from '../core/sync/status';
-import { prepareSwap } from '../core/sync/swap';
+import { prepareRestore, prepareSwap } from '../core/sync/swap';
 import { disableTracking, enableTracking } from '../core/sync/tracking';
 import { parentPort, workerData } from 'node:worker_threads';
 import path from 'node:path';
@@ -116,6 +116,7 @@ async function runSyncRole(): Promise<void> {
       return buildDelta(conn, a.after, a.out, a.capBytes);
     },
     buildSnapshot: (args) => buildSnapshot(dbPath, (args as { out: string }).out),
+    prepareRestore: () => prepareRestore(dbPath),
     prepareSwap: (args) => {
       const a = args as { file: string; sha256: string; masterDeviceId: string };
       return prepareSwap(dbPath, a.file, a.sha256, a.masterDeviceId);

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.118.1](https://github.com/edjafarov/kiagent-core/compare/v0.118.0...v0.118.1) (2026-11-02)
+
+### Added
+
+- `host.sync.prepareRestore`: a read-only copy can go back to its archived data at the next boot.
+
 ## [0.118.0](https://github.com/edjafarov/kiagent-core/compare/v0.117.2...v0.118.0) (2026-11-02)
 
 ### Added

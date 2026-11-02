@@ -29,6 +29,8 @@ export interface SyncService {
     sha256: string,
     masterDeviceId: string,
   ): Promise<'ready' | 'no-disk' | 'invalid'>;
+  /** Next boot, this device goes back to its archived data. */
+  prepareRestore(): Promise<'ready' | 'no-archive'>;
   close(): Promise<void>;
 }
 
@@ -60,6 +62,7 @@ export function createSyncService(deps: {
     applyDelta: (stagePath) => deps.store.applySyncDelta(stagePath),
     prepareSwap: (file, sha256, masterDeviceId) =>
       onWorker('prepareSwap', { file, sha256, masterDeviceId }),
+    prepareRestore: () => onWorker('prepareRestore'),
     close: async () => {
       if (worker) await (await worker).close();
       worker = null;

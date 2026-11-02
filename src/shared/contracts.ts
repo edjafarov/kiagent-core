@@ -1863,6 +1863,7 @@ export interface CapSurfaces {
         sha256: string,
         masterDeviceId: string,
       ): Promise<'ready' | 'no-disk' | 'invalid'>;
+      prepareRestore(): Promise<'ready' | 'no-archive'>;
     };
   };
   /** Host-initiated only — no extension→host surface. */

@@ -11,7 +11,7 @@ import { hashFile, SNAPSHOT_META } from './snapshot';
 import { COPIED_CORE_TABLES, isDerivedTable } from './tables';
 
 export const SWAP_STEPS = ['committed', 'merged', 'archived', 'replaced'] as const;
-type SwapStep = (typeof SWAP_STEPS)[number];
+type SwapStep = (typeof SWAP_STEPS)[number] | 'restore-moved';
 
 interface Journal {
   masterDeviceId: string;
@@ -138,11 +138,47 @@ const moveIfThere = (from: string, to: string): void => {
   if (fs.existsSync(from)) fs.renameSync(from, to);
 };
 
+const restorePath = (db: string) => `${db}.restore.json`;
+
+/** Stop copying: at the next boot the archive becomes the database again and
+ *  the copy is deleted, since all of it lives on the master. */
+export function prepareRestore(dbPath: string): 'ready' | 'no-archive' {
+  const dir = path.dirname(dbPath);
+  const prefix = `${path.basename(dbPath)}.archive-`;
+  const newest = fs
+    .readdirSync(dir)
+    .filter((f) => f.startsWith(prefix) && /\d$/.test(f))
+    .sort()
+    .pop();
+  if (!newest) return 'no-archive';
+  const tmp = `${restorePath(dbPath)}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ archive: path.join(dir, newest) }));
+  fs.renameSync(tmp, restorePath(dbPath));
+  return 'ready';
+}
+
+function applyRestore(dbPath: string, crashAt: (step: SwapStep) => void): 'restored' {
+  const { archive } = JSON.parse(fs.readFileSync(restorePath(dbPath), 'utf8')) as {
+    archive: string;
+  };
+  // Each step is checked, so a retry skips what already happened.
+  if (fs.existsSync(archive)) {
+    for (const ext of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${ext}`, { force: true });
+    moveIfThere(archive, dbPath);
+    moveIfThere(`${archive}-wal`, `${dbPath}-wal`);
+    moveIfThere(`${archive}-shm`, `${dbPath}-shm`);
+    crashAt('restore-moved');
+  }
+  fs.rmSync(restorePath(dbPath), { force: true });
+  return 'restored';
+}
+
 /** `crashAt` exists for the crash tests: it runs after each named step. */
 export function applyPendingSwap(
   dbPath: string,
   crashAt: (step: SwapStep) => void = () => undefined,
-): 'none' | 'swapped' | 'abandoned' {
+): 'none' | 'swapped' | 'abandoned' | 'restored' {
+  if (fs.existsSync(restorePath(dbPath))) return applyRestore(dbPath, crashAt);
   if (!fs.existsSync(journalPath(dbPath))) return 'none';
   const j = JSON.parse(fs.readFileSync(journalPath(dbPath), 'utf8')) as Journal;
   const merged = mergedPath(dbPath);

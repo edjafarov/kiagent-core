@@ -13,7 +13,7 @@ import { migrate } from '../../store/schema';
 import { openStore, type CoreStore } from '../../store/store';
 import { buildDelta } from '../delta';
 import { buildSnapshot } from '../snapshot';
-import { applyPendingSwap, prepareSwap, SWAP_STEPS } from '../swap';
+import { applyPendingSwap, prepareRestore, prepareSwap, SWAP_STEPS } from '../swap';
 import { enableTracking } from '../tracking';
 
 const deps = {
@@ -264,6 +264,42 @@ describe('swap', () => {
     fs.writeFileSync(`${receiver}-wal`, Buffer.alloc(4096));
     expect(prepareSwap(receiver, snap, r.sha256, MASTER_ID, () => size + 1024)).toBe('no-disk');
     fs.rmSync(`${receiver}-wal`);
+  });
+
+  it('stop copying brings the archive back and the device is normal again', async () => {
+    await ready();
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    expect(prepareRestore(receiver)).toBe('ready');
+    expect(applyPendingSwap(receiver)).toBe('restored');
+    const d = open();
+    expect(d.prepare(`SELECT role, tracking, master_device_id FROM sync_state`).get()).toEqual({
+      role: 'normal', tracking: 0, master_device_id: null,
+    });
+    expect(d.prepare(`SELECT count(*) n FROM accounts WHERE id='old'`).get()).toEqual({ n: 1 });
+    d.close();
+    expect(applyPendingSwap(receiver)).toBe('none');
+    const kept = fs.readdirSync(path.dirname(receiver)).filter((f) => f.includes('.copy-'));
+    expect(kept).toHaveLength(0);
+  });
+
+  it('with no archive there is nothing to restore', async () => {
+    expect(prepareRestore(receiver)).toBe('no-archive');
+    expect(applyPendingSwap(receiver)).toBe('none');
+  });
+
+  it('a crash during restore finishes on retry', async () => {
+    await ready();
+    applyPendingSwap(receiver);
+    prepareRestore(receiver);
+    expect(() =>
+      applyPendingSwap(receiver, (s) => {
+        if (s === 'restore-moved') throw new Error('crash');
+      }),
+    ).toThrow('crash');
+    expect(applyPendingSwap(receiver)).toBe('restored');
+    const d = open();
+    expect(d.prepare(`SELECT role FROM sync_state`).get()).toEqual({ role: 'normal' });
+    d.close();
   });
 
   it.each(SWAP_STEPS)('a crash after %s leaves a database that opens, and the swap finishes on retry', async (step) => {

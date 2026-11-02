@@ -264,6 +264,7 @@ function syncSurface(
     buildSnapshot: call('buildSnapshot'),
     applyDelta: call('applyDelta'),
     prepareSwap: call('prepareSwap'),
+    prepareRestore: call('prepareRestore'),
   };
 }
 
