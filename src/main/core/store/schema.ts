@@ -1252,6 +1252,27 @@ const MIGRATIONS: Migration[] = [
   CREATE INDEX IF NOT EXISTS idx_event_drafts_fingerprint ON event_drafts(account_id, fingerprint);
   CREATE INDEX IF NOT EXISTS idx_event_drafts_touched ON event_drafts(touched_at);
   `,
+
+  // v13: multi-device sync. Inert until `enableTracking` adds its triggers, so
+  // a one-device user pays nothing. alpha-cent spec 2026-11-01 section 7.6.
+  `
+  CREATE TABLE IF NOT EXISTS sync_rows (
+    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+    tbl TEXT NOT NULL,
+    pk TEXT NOT NULL,
+    UNIQUE(tbl, pk)
+  );
+  CREATE TABLE IF NOT EXISTS sync_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    tracking INTEGER NOT NULL DEFAULT 0,
+    role TEXT NOT NULL DEFAULT 'normal' CHECK (role IN ('normal','follower')),
+    after_seq INTEGER NOT NULL DEFAULT 0,
+    after_cursor INTEGER NOT NULL DEFAULT 0,
+    history_id TEXT,
+    master_device_id TEXT
+  );
+  INSERT OR IGNORE INTO sync_state(id) VALUES (1);
+  `,
 ];
 
 /**
