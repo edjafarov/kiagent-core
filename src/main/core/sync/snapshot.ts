@@ -86,15 +86,19 @@ export function buildSnapshot(
         .prepare(
           `SELECT (SELECT coalesce(max(seq), 0) FROM documents) AS seq,
                   (SELECT coalesce(max(cursor), 0) FROM sync_rows) AS cursor,
-                  (SELECT history_id FROM sync_state) AS history`,
+                  (SELECT history_id FROM sync_state) AS history,
+                  (SELECT epoch FROM sync_state) AS epoch`,
         )
-        .get() as { seq: number; cursor: number; history: string | null };
+        .get() as { seq: number; cursor: number; history: string | null; epoch: number };
       conn.exec(
-        `CREATE TABLE snap.${SNAPSHOT_META}(after_seq INTEGER, after_cursor INTEGER, history_id TEXT)`,
+        `CREATE TABLE snap.${SNAPSHOT_META}(after_seq INTEGER, after_cursor INTEGER, history_id TEXT, epoch INTEGER, copied TEXT)`,
       );
+      // The master's own epoch, so a joiner is not served from the first
+      // grant, and its copied set, so the swap classifies tables by the
+      // master's list and not by the joiner's descriptors.
       conn
-        .prepare(`INSERT INTO snap.${SNAPSHOT_META} VALUES(?, ?, ?)`)
-        .run(head.seq, head.cursor, head.history);
+        .prepare(`INSERT INTO snap.${SNAPSHOT_META} VALUES(?, ?, ?, ?, ?)`)
+        .run(head.seq, head.cursor, head.history, head.epoch, JSON.stringify(copied));
       return { seq: head.seq, cursor: head.cursor };
     })();
     conn.unsafeMode(false);

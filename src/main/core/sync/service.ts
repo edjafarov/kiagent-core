@@ -299,9 +299,12 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       const decrypt = deps.decrypt;
       if (!decrypt) throw new Error('no decrypt on this device: logins can not be read');
       const rows = await deps.db.all(
+        // A device-owned account's login never leaves its owner (r16 ruling 5).
         `SELECT account_id, epoch, n, blob FROM vault
-          WHERE epoch > ? OR (epoch = ? AND n > ?) ORDER BY epoch, n`,
-        [after.epoch, after.epoch, after.n],
+          WHERE (epoch > ? OR (epoch = ? AND n > ?))
+            AND account_id NOT IN (SELECT id FROM accounts WHERE source IN (${DEVICE_OWNED_SOURCES.map(() => '?').join(', ')}))
+          ORDER BY epoch, n`,
+        [after.epoch, after.epoch, after.n, ...DEVICE_OWNED_SOURCES],
       );
       const out: Secret[] = [];
       for (const r of rows as { account_id: string; epoch: number; n: number; blob: Buffer }[]) {

@@ -15,7 +15,8 @@ import { buildDelta } from '../delta';
 import { buildSnapshot } from '../snapshot';
 import { applyPendingSwap, prepareRestore, prepareSwap, SWAP_STEPS } from '../swap';
 import { enableTracking } from '../tracking';
-import { addAttention, addOutbox, physical, registerPlugin } from './synced-plugin';
+import { copiedSetDigest } from '../tables';
+import { addAttention, addOutbox, descriptor, physical, registerPlugin } from './synced-plugin';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -473,6 +474,46 @@ describe('swap', () => {
     const d = open();
     expect(d.prepare(`SELECT role FROM sync_state`).get()).toEqual({ role: 'follower' });
     expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+    d.close();
+  });
+});
+
+describe('the snapshot carries the master epoch and copied set (step 2 corrections)', () => {
+  it('a swap sets sync_state.epoch to the master epoch', async () => {
+    conn().prepare(`UPDATE sync_state SET epoch = 3`).run();
+    const r = snapshot();
+    expect(prepareSwap(receiver, snap, r.sha256, 'm')).toBe('ready');
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    const d = new Database(receiver, { readonly: true });
+    expect(d.prepare(`SELECT epoch FROM sync_state`).get()).toEqual({ epoch: 3 });
+    d.close();
+  });
+
+  it('a table the master syncs but this device held as local is replaced, not created twice', async () => {
+    await registerPlugin(masterFile, conn());
+    conn().prepare(`INSERT INTO "${physical('notes')}"(account_id, key, body) VALUES('a','k','master')`).run();
+    // The receiver has the same plugin, but its descriptor syncs nothing.
+    const rc = new Database(receiver);
+    await registerPlugin(receiver, rc, descriptor({ synced: [] }));
+    rc.prepare(`INSERT INTO "${physical('notes')}"(account_id, key, body) VALUES('z','own','mine')`).run();
+    rc.close();
+    const r = snapshot();
+    expect(prepareSwap(receiver, snap, r.sha256, 'm')).toBe('ready');
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    const d = new Database(receiver);
+    expect(d.prepare(`SELECT account_id, key, body FROM "${physical('notes')}"`).all()).toEqual([
+      { account_id: 'a', key: 'k', body: 'master' },
+    ]);
+    // A boot registers the running build's descriptor; then the digests agree.
+    const reg = conn()
+      .prepare(`SELECT descriptor_digest, descriptor_json FROM plugin_storage WHERE plugin_id = ?`)
+      .get('test.syncplug') as { descriptor_digest: string; descriptor_json: string };
+    d.prepare(`UPDATE plugin_storage SET descriptor_digest = ?, descriptor_json = ? WHERE plugin_id = ?`).run(
+      reg.descriptor_digest,
+      reg.descriptor_json,
+      'test.syncplug',
+    );
+    expect(copiedSetDigest(d)).toBe(copiedSetDigest(conn()));
     d.close();
   });
 });

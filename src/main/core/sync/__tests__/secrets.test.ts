@@ -89,6 +89,17 @@ it('logins saved before tracking travel on the first pull', async () => {
   expect(await b.store.vault.load('x')).toEqual({ token: SECRET });
 });
 
+it('logins of device-owned accounts are never exported', async () => {
+  const a = await device('a');
+  const folder = await a.store.createAccount({ source: 'local-folder', identifier: '/tmp/x', config: {} } as never);
+  const mail = await a.store.createAccount({ source: 'gmail', identifier: 'me@x.com', config: {} } as never);
+  await a.store.vault.save(folder.id, { token: 'FOLDER' } as never);
+  await a.store.vault.save(mail.id, { token: 'MAIL' } as never);
+  enableTracking(a.conn());
+  const got = await a.svc.exportSecrets({ epoch: 0, n: 0 });
+  expect(got.map((s) => s.accountId)).toEqual([mail.id]);
+});
+
 it('promotion stamps the logins that were copied at (0, 0) under the new epoch', async () => {
   const b = await device('b');
   asFollower(b);

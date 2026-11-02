@@ -10,7 +10,7 @@ import Database from 'better-sqlite3';
 import { hashFile, SNAPSHOT_META } from './snapshot';
 import { pauseMovedAccounts } from './sources';
 import { swapOutcomePath } from './status';
-import { COPIED_CORE_TABLES, copiedTables, isDerivedTable, LOCAL_CORE_TABLES } from './tables';
+import { COPIED_CORE_TABLES, isDerivedTable, LOCAL_CORE_TABLES } from './tables';
 
 export const SWAP_STEPS = ['committed', 'merged', 'archived', 'replaced', 'outcome'] as const;
 type SwapStep = (typeof SWAP_STEPS)[number] | 'restore-merged' | 'restore-moved';
@@ -96,10 +96,15 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string): vo
         after_seq: number;
         after_cursor: number;
         history_id: string | null;
+        epoch: number;
+        copied: string;
       };
       // The plugin tables the old file's descriptors name travel with the
       // snapshot; every other plugin table stays this device's own.
-      const copiedNames = new Set(copiedTables(db, 'old'));
+      // Classified by the master's list carried in the snapshot: a table it
+      // newly syncs must come from the snapshot and not be created again from
+      // this device's own copy of it.
+      const copiedNames = new Set(JSON.parse(meta.copied) as string[]);
       const copied = (name: string) => copiedNames.has(name) || isDerivedTable(name);
       const defs = db
         .prepare(
@@ -147,8 +152,8 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string): vo
       ).run(now);
       db.prepare(
         `UPDATE main.sync_state SET role = 'follower', tracking = 0, joining = 0,
-           after_seq = ?, after_cursor = ?, history_id = ?, master_device_id = ?`,
-      ).run(meta.after_seq, meta.after_cursor, meta.history_id, masterDeviceId);
+           after_seq = ?, after_cursor = ?, history_id = ?, master_device_id = ?, epoch = ?`,
+      ).run(meta.after_seq, meta.after_cursor, meta.history_id, masterDeviceId, meta.epoch);
       db.exec(`DROP TABLE main.${SNAPSHOT_META}`);
     })();
     db.unsafeMode(false);
