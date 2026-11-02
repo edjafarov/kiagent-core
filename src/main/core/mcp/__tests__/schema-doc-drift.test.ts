@@ -67,6 +67,7 @@ describe('schema-doc drift detector', () => {
       'schedule',
       'sync_rows',
       'sync_state',
+      'sync_epochs',
       'sync_moved',
       'sync_offers',
     ]);

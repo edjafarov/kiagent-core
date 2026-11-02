@@ -1126,14 +1126,14 @@ app
     });
     try {
       // A 'creating' event draft also means a process died mid-create.
-      if (!p.readOnly) await calendarOut.recover();
+      if (!p.readOnly()) await calendarOut.recover();
     } catch (err) {
       p.logSink.log('calendar-out', 'error', 'boot-time recover failed', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
     try {
-      if (!p.readOnly) await p.store.outbox.recoverOrphanedSending();
+      if (!p.readOnly()) await p.store.outbox.recoverOrphanedSending();
     } catch (err) {
       p.logSink.log(
         'outbound',
@@ -1154,7 +1154,7 @@ app
     outboxScheduler.start();
     // Event drafts expire after 7 days; a coarse sweep is enough.
     const eventExpiry = setInterval(() => {
-      if (p.readOnly) return;
+      if (p.readOnly()) return;
       calendarOut
         .expireOverdue()
         .catch((err) =>

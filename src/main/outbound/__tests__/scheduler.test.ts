@@ -90,21 +90,41 @@ describe('outbox scheduler', () => {
 });
 
 describe('outbox scheduler on a follower', () => {
-  it('starts no timer and sends nothing', async () => {
-    const every = jest.fn();
-    const listDue = jest.fn(async () => [{ id: 'a', sendAt: 'x' }]);
+  const make = (ro: { on: boolean }) => {
+    let fire: () => void = () => undefined;
+    const every = jest.fn((fn: () => void) => {
+      fire = fn;
+      return 1;
+    });
+    const listDue = jest.fn(async () => [] as { id: string; sendAt: string }[]);
     const sendScheduled = jest.fn();
     const s = createOutboxScheduler({
       store: { outbox: { listDue } } as unknown as CoreStore,
       service: { sendScheduled },
       logSink: { log: () => {} },
-      setInterval: every,
-      readOnly: true,
+      setInterval: every as never,
+      readOnly: () => ro.on,
     });
+    return { s, every, listDue, sendScheduled, fire: () => fire() };
+  };
+
+  it('sends nothing while read-only, however often it ticks', async () => {
+    const { s, listDue, sendScheduled } = make({ on: true });
     s.start();
     await s.tick();
-    expect(every).not.toHaveBeenCalled();
     expect(listDue).not.toHaveBeenCalled();
     expect(sendScheduled).not.toHaveBeenCalled();
+  });
+
+  it('is read on every tick: the same scheduler sends once the device leads', async () => {
+    const ro = { on: true };
+    const { s, every, listDue } = make(ro);
+    s.start();
+    expect(every).toHaveBeenCalledTimes(1);
+    await s.tick();
+    expect(listDue).not.toHaveBeenCalled();
+    ro.on = false;
+    await s.tick();
+    expect(listDue).toHaveBeenCalledTimes(1);
   });
 });

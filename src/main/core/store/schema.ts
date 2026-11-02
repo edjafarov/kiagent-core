@@ -1299,6 +1299,24 @@ const MIGRATIONS: Migration[] = [
       );
     `);
   },
+  // v15: takeover (alpha-cent spec 7.8, step 2). `sync_state.epoch` is the
+  // epoch of the master this device last applied from, or led as. A promotion
+  // writes one `sync_epochs` row, the position the new master started from; a
+  // follower from an older epoch is served from the lowest later grant. Local
+  // until Task 3 moves it into the copied set.
+  (db) => {
+    const have = db
+      .prepare(`SELECT 1 FROM pragma_table_info('sync_state') WHERE name = 'epoch'`)
+      .get();
+    if (!have) db.exec(`ALTER TABLE sync_state ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0`);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sync_epochs (
+        epoch INTEGER PRIMARY KEY,
+        grant_seq INTEGER NOT NULL,
+        grant_cursor INTEGER NOT NULL
+      );
+    `);
+  },
 ];
 
 /**

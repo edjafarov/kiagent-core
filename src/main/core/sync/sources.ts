@@ -59,6 +59,13 @@ export interface OfferedSource {
 
 /** First 8 characters of a device id, the suffix that keeps two devices'
  *  copies of one local identifier apart. */
+/** After a promotion: a device-owned account runs only on its owner, so a new
+ *  master never reads another device's folder and finds it missing. */
+export const notMineToRun = (
+  a: { source: string; ownerDeviceId?: string | null },
+  me: string | null,
+): boolean => isDeviceOwned(a.source) && (a.ownerDeviceId ?? null) !== me;
+
 export const deviceSuffix = (deviceId: string): string => deviceId.slice(0, 8);
 
 /** What this device would offer another one. Reads only: the caller records

@@ -55,7 +55,8 @@ import { createLogs } from './logs';
 import { createPrefs } from './prefs';
 import { createScheduler } from './scheduler';
 import type { CoreScheduler } from './scheduler';
-import { applyFollowerGate, gateFrom, readSyncGate } from './sync/role';
+import { gateEngine, gateFrom, readSyncGate } from './sync/role';
+import { notMineToRun } from './sync/sources';
 import { createSyncService, type SyncService } from './sync/service';
 import { applyPendingSwap } from './sync/swap';
 import { isResting } from './engine/resting';
@@ -196,8 +197,13 @@ export interface CorePlatform {
   readDiagnostics(sql?: SqlRunnerDiagnostics | null): Promise<ReadDiagnostics>;
   /** The single worker-backed database service shared by core and plugins. */
   db: AppDb;
-  /** This device is a read-only follower (spec 7.6). */
-  readOnly: boolean;
+  /** This device is a read-only follower, joining, or fenced (spec 7.6). Asked
+   *  on every call, because the role changes while the app runs (step 2). */
+  readOnly(): boolean;
+  /** Runs what only a leader runs, after `sync.promote` has flipped the role:
+   *  accounts resume from the copied cursor, the archive sweep and the ledger
+   *  re-key start, and the workers held back attach. No restart. */
+  promote(): Promise<void>;
   sync: SyncService;
   store: CoreStore;
   engine: ReturnType<typeof createEngine>;
@@ -351,7 +357,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const db = await openDbInWorker(dbPath, deps.dbWorkerFile);
   // Read once, before anything starts: only the boot swap changes it. A
   // joining device is gated like a follower, across restarts (spec 7.7).
-  const readOnly = gateFrom(await readSyncGate(db));
+  const readOnlyAtBoot = gateFrom(await readSyncGate(db));
   const store = openStore(db, {
     encrypt: deps.encrypt,
     decrypt: deps.decrypt,
@@ -433,7 +439,8 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
       if (account && !isResting(account.status)) runAccount(platform, account);
     },
     busy: () => deps.busy?.get().reasons[0] ?? null,
-    readOnly: () => readOnly,
+    initialReadOnly: readOnlyAtBoot,
+    onPromoted: () => platform.promote(),
     sources,
     log: (level, msg) => sink.log('sync', level, msg),
   });
@@ -443,9 +450,16 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
       sink.log('sync', 'error', `could not start accounts for ${sourceId}: ${String(err)}`),
     );
   });
-  if (readOnly) applyFollowerGate(engine);
+  // Asked on every call, so a promotion opens this same engine.
+  const gate = gateEngine(engine, () => sync.readOnly());
   // A follower's copied rows change only by what the master sends.
-  if (!readOnly) registerArchiveSweep({ store, scheduler, logs: sink });
+  let archiveSweep = false;
+  const startArchiveSweep = (): void => {
+    if (archiveSweep) return;
+    archiveSweep = true;
+    registerArchiveSweep({ store, scheduler, logs: sink });
+  };
+  if (!readOnlyAtBoot) startArchiveSweep();
   // #59 §3b: prune `changes` to a bounded tail. Never at boot; first-ever
   // run 10 minutes in; a no-op until the ledger re-key repair is done.
   void registerChangesPrune({
@@ -472,10 +486,17 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   });
 
   platform = {
-    readOnly,
+    readOnly: () => sync.readOnly(),
+    promote: () =>
+      promoteCore(platform, {
+        deviceId: () => sync.deviceId(),
+        archiveSweep: startArchiveSweep,
+        ledgerRekey: () => void ledgerRekey.then((r) => r.kick()),
+        attachHeld: gate.attachHeld,
+      }),
     sync,
     startLedgerRekey: () => {
-      if (!readOnly) void ledgerRekey.then((r) => r.kick());
+      if (!sync.readOnly()) void ledgerRekey.then((r) => r.kick());
     },
     db,
     store,
@@ -587,13 +608,19 @@ export async function setAccountCadence(
  *  starts — checked after the read and before every dispatch. */
 export async function resumeAccounts(
   platform: CorePlatform,
-  opts: { defer?(account: Account): boolean; signal?: AbortSignal } = {},
+  opts: {
+    defer?(account: Account): boolean;
+    /** Accounts this call must not start (a promotion skips other devices'). */
+    skip?(account: Account): boolean;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<Map<string, Handle>> {
   const handles = new Map<string, Handle>();
   const accounts = await platform.store.read.accounts();
   for (const account of accounts) {
     if (opts.signal?.aborted) break;
     if (account.source === 'worker') continue; // synthetic accounts don't sync
+    if (opts.skip?.(account)) continue;
     // Same resting-state rule as the cadence tick: a needsReauth account
     // must not resume hammering a revoked credential at every boot. A
     // needs-connector account starts once its connector is registered
@@ -618,6 +645,25 @@ export async function resumeAccounts(
     handles.set(account.id, runAccount(platform, account));
   }
   return handles;
+}
+
+/** What a new leader starts, after the role flipped (spec 7.8): accounts from
+ *  the copied cursor except device-owned ones that belong to another device,
+ *  then the leader-only maintenance, then the workers that were held back. */
+export async function promoteCore(
+  platform: CorePlatform,
+  hooks: {
+    deviceId(): string | null;
+    archiveSweep(): void;
+    ledgerRekey(): void;
+    attachHeld(): Promise<void>;
+  },
+): Promise<void> {
+  const me = hooks.deviceId();
+  await resumeAccounts(platform, { skip: (a) => notMineToRun(a, me) });
+  hooks.archiveSweep();
+  hooks.ledgerRekey();
+  await hooks.attachHeld();
 }
 
 /** Its connector is here now: back to connecting, then the usual start.

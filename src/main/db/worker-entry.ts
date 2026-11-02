@@ -9,6 +9,7 @@ import { buildSnapshot } from '../core/sync/snapshot';
 import { readSyncStatus } from '../core/sync/status';
 import { prepareRestore, prepareSwap } from '../core/sync/swap';
 import { disableTracking, enableTracking } from '../core/sync/tracking';
+import { demote, promote } from '../core/sync/promote';
 import { parentPort, workerData } from 'node:worker_threads';
 import path from 'node:path';
 import type { CommitBatch, ExternalRef, Seq } from '@shared/contracts';
@@ -141,9 +142,13 @@ async function runSyncRole(): Promise<void> {
     // The corpus `commit` is procedural with read-your-own-writes, so it runs
     // as a host procedure on the worker's RAW connection — the SAME
     // createWriteTx the in-process store builds — not as a static batch().
+    // Step 2: a woken master is fenced from the main thread; a restart (a new
+    // worker) clears it, because `sync_state` decides at boot.
+    let fenced = false;
     const writeTx = createWriteTx(db._conn!, {
       detectLanguages,
       now: () => new Date().toISOString(),
+      fenced: () => fenced,
     });
     // Construct only after openDb has migrated the v4 schema. The worker and
     // in-process service both use the same real policy module (design §6 R6).
@@ -178,6 +183,18 @@ async function runSyncRole(): Promise<void> {
           writeTx.applyDelta((args as { stagePath: string }).stagePath),
         syncImportSources: (args) =>
           writeTx.importSources(args as ImportSourcesInput),
+        syncFence: (args) => {
+          fenced = (args as { on: boolean }).on;
+          return null;
+        },
+        syncPromote: (args) => {
+          promote(db._conn!, (args as { epoch: number }).epoch);
+          return null;
+        },
+        syncDemote: (args) => {
+          demote(db._conn!, (args as { masterDeviceId: string }).masterDeviceId);
+          return null;
+        },
         syncTracking: (args) => {
           if ((args as { on: boolean }).on) enableTracking(db._conn!);
           else disableTracking(db._conn!);

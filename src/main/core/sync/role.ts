@@ -77,32 +77,66 @@ const REFUSED = [
 ] as const;
 
 /** Everything that starts work goes through these, whichever path calls them:
- *  boot's attachWorker, the bundled workers and the cadence tick. */
-export function applyFollowerGate(engine: {
-  run: unknown;
-  attach: unknown;
-  rerunDeferred: unknown;
-}): void {
-  const e = engine as Record<string, unknown>;
-  e.run = () => idleHandle();
-  e.attach = () => idleHandle();
-  e.rerunDeferred = async () => undefined;
+ *  boot's attachWorker, the bundled workers and the cadence tick. The role is
+ *  asked on every call, so a promotion opens the same engine without a
+ *  restart. A worker attached while read-only is remembered, and `attachHeld`
+ *  attaches it for real; the handle given back at the time follows it. */
+export function gateEngine(
+  engine: { run: unknown; attach: unknown; rerunDeferred: unknown },
+  readOnly: () => boolean,
+): { attachHeld(): Promise<void> } {
+  const e = engine as Record<string, (...a: unknown[]) => unknown>;
+  const real = { ...e };
+  const held: { worker: unknown; proxy: HeldHandle }[] = [];
+  e.run = (...a) => (readOnly() ? idleHandle() : real.run.apply(engine, a));
+  e.attach = (...a) => {
+    if (!readOnly()) return real.attach.apply(engine, a);
+    const proxy = new HeldHandle();
+    held.push({ worker: a[0], proxy });
+    return proxy;
+  };
+  e.rerunDeferred = async (...a) =>
+    readOnly() ? undefined : real.rerunDeferred.apply(engine, a);
   for (const m of REFUSED) {
-    e[m] = async () => {
-      throw new SyncReadOnly(m);
+    e[m] = async (...a) => {
+      if (readOnly()) throw new SyncReadOnly(m);
+      return real[m].apply(engine, a);
     };
+  }
+  return {
+    async attachHeld() {
+      for (const h of held.splice(0)) {
+        if (h.proxy.stopped) continue;
+        h.proxy.inner = real.attach.call(engine, h.worker) as Handle;
+      }
+    },
+  };
+}
+
+/** What `attach` returned while the device was read-only. */
+class HeldHandle {
+  inner: Handle | null = null;
+  stopped = false;
+  get status(): Handle['status'] {
+    return this.inner ? this.inner.status : 'paused';
+  }
+  stats(): ReturnType<Handle['stats']> {
+    return this.inner ? this.inner.stats() : idleHandle().stats();
+  }
+  async stop(): Promise<void> {
+    this.stopped = true;
+    await this.inner?.stop();
   }
 }
 
 /** A follower sends nothing, whichever path asks: the master owns every effect
  *  outside the device (spec 7.6). Finding no sender is what callers already
- *  handle for an account that can't send. */
+ *  handle for an account that can't send. Asked per call (step 2). */
 export function followerLookup<T extends { get(id: string): unknown }>(
   lookup: T,
-  readOnly: boolean,
+  readOnly: () => boolean,
 ): T {
-  if (!readOnly) return lookup;
   const gated = Object.create(lookup) as T;
-  gated.get = (() => undefined) as T['get'];
+  gated.get = ((id: string) => (readOnly() ? undefined : lookup.get(id))) as T['get'];
   return gated;
 }

@@ -47,6 +47,9 @@ export interface WriteTxDeps {
   /** Cheap language detection for search stemming (ISO-639-3). */
   detectLanguages(text: string): string[];
   now(): string;
+  /** An in-memory hold on every write, set by `SyncService.setFenced` while a
+   *  woken master has not yet heard from registration. Never persisted. */
+  fenced?(): boolean;
 }
 
 function contentHash(d: DocumentInput): string {
@@ -1784,16 +1787,15 @@ export function createWriteTx(
   };
 
   // A follower writes only what the master sends (alpha-cent spec 7.6). Read
-  // on first use: a role changes only at the boot swap, before this is built.
-  let readOnly: boolean | null = null;
+  // on every call (step 2): a promotion or demotion changes the role while
+  // the app runs, and a call that was queued sees the role it runs under.
   const guard = tx as unknown as Record<string, (...a: unknown[]) => unknown>;
   for (const name of Object.keys(guard)) {
     if (name === 'applyDelta') continue;
     const real = guard[name];
     guard[name] = (...args: unknown[]) => {
       // A joining device is read-only too (spec 7.7), the same single rule.
-      readOnly ??= gateFrom(readGateSync(conn));
-      if (readOnly) throw new SyncReadOnly(name);
+      if (deps.fenced?.() || gateFrom(readGateSync(conn))) throw new SyncReadOnly(name);
       return real(...args);
     };
   }

@@ -8,7 +8,7 @@ import Database from 'better-sqlite3';
 
 import { migrate } from '../../store/schema';
 import { createWriteTx } from '../../store/write-tx';
-import { applyFollowerGate, followerLookup, readRoleSync, SyncReadOnly } from '../role';
+import { followerLookup, gateEngine, readRoleSync, SyncReadOnly } from '../role';
 
 let dir: string;
 let db: Database.Database;
@@ -43,24 +43,79 @@ const idle = (over: Record<string, unknown> = {}) => ({
 });
 
 describe('engine gate', () => {
+  const pull = (e: ReturnType<typeof idle>) =>
+    (e.run as unknown as (a: unknown) => { status: string; stats(): Promise<{ pending: number }> })({});
+
   it('a follower runs no source pull and attaches no worker', async () => {
-    const e = idle();
-    applyFollowerGate(e as never);
-    const pull = (e.run as unknown as (a: unknown) => { status: string; stats(): Promise<{ pending: number }> })({});
-    expect(pull.status).toBe('paused');
-    expect((await pull.stats()).pending).toBe(0);
+    const real = idle();
+    const run = real.run;
+    const e = { ...real };
+    gateEngine(e as never, () => true);
+    const h = pull(e);
+    expect(h.status).toBe('paused');
+    expect((await h.stats()).pending).toBe(0);
     (e.attach as unknown as (w: unknown) => unknown)({});
     expect(await (e.rerunDeferred as unknown as (w: unknown) => Promise<unknown>)({})).toBeUndefined();
+    expect(run).not.toHaveBeenCalled();
+    expect(real.attach).not.toHaveBeenCalled();
+  });
+
+  it('is read on every call: the same engine runs once the role flips', async () => {
+    let ro = true;
+    const e = idle();
+    gateEngine(e as never, () => ro);
+    expect(pull(e).status).toBe('paused');
+    ro = false;
+    expect(pull(e)).toBe('real');
+    ro = true;
+    expect(pull(e).status).toBe('paused');
+  });
+
+  it('attachHeld attaches exactly the workers held back, once, and the handle given earlier follows', async () => {
+    let ro = true;
+    const e = idle();
+    const real = e.attach;
+    const inner = { status: 'running', stats: async () => ({ pending: 3 }), stop: jest.fn(async () => undefined) };
+    real.mockReturnValue(inner as never);
+    const { attachHeld } = gateEngine(e as never, () => ro);
+    const w1 = { id: 'w1' };
+    const early = (e.attach as unknown as (w: unknown) => { status: string; stats(): Promise<{ pending: number }>; stop(): Promise<void> })(w1);
+    expect(early.status).toBe('paused');
+    expect(real).not.toHaveBeenCalled();
+    ro = false;
+    await attachHeld();
+    await attachHeld();
+    expect(real).toHaveBeenCalledTimes(1);
+    expect(real).toHaveBeenCalledWith(w1);
+    expect(early.status).toBe('running');
+    expect((await early.stats()).pending).toBe(3);
+    await early.stop();
+    expect(inner.stop).toHaveBeenCalled();
+  });
+
+  it('a held worker stopped before promotion is not attached', async () => {
+    let ro = true;
+    const e = idle();
+    const real = e.attach;
+    const { attachHeld } = gateEngine(e as never, () => ro);
+    const h = (e.attach as unknown as (w: unknown) => { stop(): Promise<void> })({});
+    await h.stop();
+    ro = false;
+    await attachHeld();
+    expect(real).not.toHaveBeenCalled();
   });
 
   it.each(['connect', 'reconnect', 'applyScope', 'remove', 'pause', 'resume', 'updateConfig', 'setOption'])(
-    '%s rejects on a follower',
+    '%s rejects on a follower and runs after promotion',
     async (m) => {
+      let ro = true;
       const real = idle();
       const spy = real[m as 'connect'];
-      applyFollowerGate(real as never);
+      gateEngine(real as never, () => ro);
       await expect((real as never as Record<string, () => Promise<unknown>>)[m]()).rejects.toBeInstanceOf(SyncReadOnly);
       expect(spy).not.toHaveBeenCalled();
+      ro = false;
+      await expect((real as never as Record<string, () => Promise<unknown>>)[m]()).resolves.toBe('real');
     },
   );
 });
@@ -131,8 +186,16 @@ describe('write guard', () => {
 describe('side effects', () => {
   it('a follower finds no sender or calendar writer, whatever is registered', () => {
     const real = { get: (id: string) => ({ id }), ids: () => ['mail'] };
-    expect(followerLookup(real, true).get('mail')).toBeUndefined();
-    expect(followerLookup(real, true).ids()).toEqual(['mail']);
-    expect(followerLookup(real, false)).toBe(real);
+    expect(followerLookup(real, () => true).get('mail')).toBeUndefined();
+    expect(followerLookup(real, () => true).ids()).toEqual(['mail']);
+  });
+
+  it('is read per call: the same lookup finds the sender once the device leads', () => {
+    let ro = true;
+    const real = { get: (id: string) => ({ id }), ids: () => ['mail'] };
+    const l = followerLookup(real, () => ro);
+    expect(l.get('mail')).toBeUndefined();
+    ro = false;
+    expect(l.get('mail')).toEqual({ id: 'mail' });
   });
 });

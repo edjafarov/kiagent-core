@@ -13,6 +13,7 @@ export const LOCAL_CORE_TABLES: readonly string[] = [
   'meta',
   'outbox',
   'schedule',
+  'sync_epochs', // copied from Task 3 on, with its trigger
   'sync_moved',
   'sync_offers',
   'sync_rows',

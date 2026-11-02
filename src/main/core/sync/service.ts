@@ -88,6 +88,20 @@ export interface SyncService {
   ): Promise<ImportSourcesResult>;
   /** Why this device must not restart or be interrupted right now, if so. */
   isBusy(): string | null;
+  /** Follower, joining or fenced, answered from memory. Every gate on the main
+   *  side (engine, sender lookup, scheduled sends) asks this on each call. */
+  readOnly(): boolean;
+  /** Closes (or reopens) the writer and the sender lookup without touching
+   *  `sync_state`: a master that woke up has not heard from registration yet.
+   *  In memory only; a restart clears it. */
+  setFenced(on: boolean): void;
+  /** Leads from the next call on, with no restart (spec 7.8): one writer
+   *  transaction, then the boot-only branches. */
+  promote(epoch: number): Promise<void>;
+  /** Stops leading: a follower of `masterDeviceId`. The caller relaunches. */
+  demote(masterDeviceId: string): Promise<void>;
+  /** This device's id, once known. */
+  deviceId(): string | null;
   /** Deletes the old database a join set aside. Restoring it is then gone. */
   deleteArchive(): Promise<void>;
   close(): Promise<void>;
@@ -112,8 +126,13 @@ export interface SyncServiceDeps {
   start?: (accountId: string) => void | Promise<void>;
   /** The busy registry's first reason, or null. */
   busy?: () => string | null;
-  /** This device is a follower or joining: it takes no offers. */
+  /** This device is a follower or joining: it takes no offers. An extra hold
+   *  on top of what `sync_state` says; the service tracks that itself. */
   readOnly?: () => boolean;
+  /** What `sync_state` said at boot (follower or joining). */
+  initialReadOnly?: boolean;
+  /** After a promotion's transaction: start what only a leader runs. */
+  onPromoted?: () => void | Promise<void>;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
 
@@ -125,6 +144,16 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     return id;
   };
   const log = deps.log ?? (() => undefined);
+  // Mirrors `sync_state` (role or joining) and the fence, so the answer is
+  // synchronous. Every method below that changes the table refreshes it.
+  let gated = deps.initialReadOnly ?? false;
+  let fenced = false;
+  const readOnly = (): boolean => gated || fenced || (deps.readOnly?.() ?? false);
+  const refreshGate = async (): Promise<void> => {
+    const rows = await deps.db.all(`SELECT role, joining FROM sync_state`);
+    const r = rows[0] as { role?: string; joining?: number } | undefined;
+    gated = r?.role === 'follower' || r?.joining === 1;
+  };
   let worker: Promise<AppDb> | null = null;
   const onWorker = async <T>(name: string, args: unknown = {}): Promise<T> => {
     worker ??= openDbInWorker(deps.dbPath, deps.workerFile, {
@@ -152,6 +181,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     beginJoin: async () => {
       await deps.db.run(`UPDATE sync_state SET joining = 1`);
+      await refreshGate();
     },
     exportSources: async (toDevice) => {
       const list = await exportSources(deps.store, me(), log, deps.sources);
@@ -178,11 +208,13 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         );
       }
       await deps.db.run(`UPDATE sync_state SET joined = 1, joining = 0`);
+      await refreshGate();
       fs.rmSync(swapOutcomePath(deps.dbPath), { force: true });
     },
     leaveJoin: async () => {
       dropPendingSwap(deps.dbPath);
       await deps.db.run(`UPDATE sync_state SET joining = 0`);
+      await refreshGate();
       await deps.db.run(PAUSE_MOVED_SQL);
     },
     forgetMoved: async () => {
@@ -193,9 +225,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       );
       await deps.db.run(`DELETE FROM sync_moved`);
     },
-    canAcceptSources: () => !deps.readOnly?.() && deps.keystoreAvailable?.() === true,
+    canAcceptSources: () => !readOnly() && deps.keystoreAvailable?.() === true,
     importSources: async (offerId, list, from) => {
-      if (deps.readOnly?.()) throw new Error('this device is not the seed and takes no sources');
+      if (readOnly()) throw new Error('this device is not the seed and takes no sources');
       if (deps.keystoreAvailable?.() !== true || !deps.encryptStrict) {
         throw new Error('no keystore on this device: its logins can not be stored safely');
       }
@@ -230,6 +262,23 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       return r;
     },
     isBusy: () => deps.busy?.() ?? null,
+    readOnly,
+    setFenced: (on) => {
+      fenced = on;
+      // The writer lives in a worker: the message is queued ahead of any write
+      // sent after this call.
+      void deps.db.proc?.('syncFence', { on })?.catch(() => undefined);
+    },
+    promote: async (epoch) => {
+      await deps.db.proc!('syncPromote', { epoch });
+      await refreshGate();
+      await deps.onPromoted?.();
+    },
+    demote: async (masterDeviceId) => {
+      await deps.db.proc!('syncDemote', { masterDeviceId });
+      await refreshGate();
+    },
+    deviceId: () => deviceId ?? deps.deviceId?.() ?? null,
     deleteArchive: async () => {
       for (const f of archiveFiles(deps.dbPath)) fs.rmSync(f, { force: true });
     },
