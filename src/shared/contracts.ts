@@ -191,6 +191,9 @@ export interface Account {
   lastError?: string;
   cadence?: Cadence; // user's per-account override of the descriptor default
   createdAt: string;
+  /** Sync step 1: set for a device-owned account (local folder, WhatsApp, ...)
+   *  that belongs to one device and runs on no other. */
+  ownerDeviceId?: string;
 }
 
 export interface Credentials {
@@ -1578,6 +1581,10 @@ export interface SyncStatusWire {
   after: SyncCursorWire;
   head: SyncCursorWire;
   schemaVersion: number;
+  joining: boolean;
+  joined: boolean;
+  documents: number;
+  lastSwap: 'swapped' | 'abandoned' | null;
 }
 
 export type Cap =

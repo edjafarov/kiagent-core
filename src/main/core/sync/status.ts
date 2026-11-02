@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+
 import type BetterSqlite3 from 'better-sqlite3';
 
 import type { SyncRole } from './role';
@@ -9,6 +11,8 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
     tracking: number;
     history_id: string | null;
     master_device_id: string | null;
+    joining: number;
+    joined: number;
     after_seq: number;
     after_cursor: number;
   };
@@ -18,8 +22,15 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
               (SELECT max(cursor) FROM sync_rows) AS cursor`,
     )
     .get() as { seq: number | null; cursor: number | null };
+  const documents = conn
+    .prepare(`SELECT count(*) AS n FROM documents WHERE archived_at IS NULL`)
+    .get() as { n: number };
   return {
     role: s.role,
+    joining: s.joining === 1,
+    joined: s.joined === 1,
+    documents: documents.n,
+    lastSwap: readSwapOutcome(conn.name),
     tracking: s.tracking === 1,
     historyId: s.history_id,
     masterDeviceId: s.master_device_id,
@@ -29,4 +40,17 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
       (conn.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get() as { value: string }).value,
     ),
   };
+}
+
+/** What the last boot swap decided, kept on disk so a crash right after it
+ *  can't lose it (spec 7.7: the join and the swap must agree at boot). */
+export const swapOutcomePath = (dbPath: string): string => `${dbPath}.swap-outcome`;
+
+export function readSwapOutcome(dbPath: string): 'swapped' | 'abandoned' | null {
+  try {
+    const v = fs.readFileSync(swapOutcomePath(dbPath), 'utf8');
+    return v === 'swapped' || v === 'abandoned' ? v : null;
+  } catch {
+    return null;
+  }
 }

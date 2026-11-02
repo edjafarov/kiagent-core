@@ -28,6 +28,37 @@ export async function readSyncRole(db: AppDb): Promise<SyncRole> {
   return (rows[0]?.role as SyncRole | undefined) ?? 'normal';
 }
 
+/** What a device may do is decided by two facts: its role, and whether it is
+ *  mid-join (spec 7.7). A joining device is read-only like a follower, and
+ *  stays so across restarts until the swap or Stop syncing clears it. */
+export interface SyncGate {
+  role: SyncRole;
+  joining: boolean;
+  joined: boolean;
+}
+
+export const gateFrom = (g: Pick<SyncGate, 'role' | 'joining'>): boolean =>
+  g.role === 'follower' || g.joining;
+
+const toGate = (r: { role?: SyncRole; joining?: number; joined?: number } | undefined): SyncGate => ({
+  role: r?.role ?? 'normal',
+  joining: r?.joining === 1,
+  joined: r?.joined === 1,
+});
+
+export function readGateSync(conn: BetterSqlite3.Database): SyncGate {
+  return toGate(
+    conn.prepare(`SELECT role, joining, joined FROM sync_state`).get() as
+      | { role: SyncRole; joining: number; joined: number }
+      | undefined,
+  );
+}
+
+export async function readSyncGate(db: AppDb): Promise<SyncGate> {
+  const rows = await db.all(`SELECT role, joining, joined FROM sync_state`);
+  return toGate(rows[0] as { role: SyncRole; joining: number; joined: number } | undefined);
+}
+
 const idleHandle = (): Handle => ({
   status: 'paused',
   stats: async () => ({ pending: 0, done: 0, skipped: 0, failed: 0, deferred: 0 }),

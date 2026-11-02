@@ -252,7 +252,7 @@ describe('swap', () => {
     expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
     d.close();
     expect(applyPendingSwap(receiver)).toBe('none');
-    expect(fs.readdirSync(path.dirname(receiver)).filter((f) => f.includes('.swap'))).toEqual([]);
+    expect(fs.readdirSync(path.dirname(receiver)).filter((f) => f.includes('.swap') && !f.endsWith('.swap-outcome'))).toEqual([]);
   });
 
   it('room counts an uncheckpointed WAL too', async () => {
@@ -320,6 +320,140 @@ describe('swap', () => {
     const d = open();
     expect(d.prepare(`SELECT role FROM sync_state`).get()).toEqual({ role: 'normal' });
     d.close();
+  });
+
+  it('merge clears joining, so the copy is a plain follower', async () => {
+    const d0 = new Database(receiver);
+    d0.prepare(`UPDATE sync_state SET joining = 1`).run();
+    d0.close();
+    await ready();
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    const d = open();
+    expect(d.prepare(`SELECT role, joining FROM sync_state`).get()).toEqual({ role: 'follower', joining: 0 });
+    d.close();
+  });
+
+  it('the swap outcome is written before the journal goes, and survives a crash after the swap', async () => {
+    await ready();
+    expect(() =>
+      applyPendingSwap(receiver, (s) => {
+        if (s === 'outcome') throw new Error('crash');
+      }),
+    ).toThrow('crash');
+    expect(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8')).toBe('swapped');
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    expect(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8')).toBe('swapped');
+  });
+
+  it('an abandoned swap leaves an outcome too, and the next prepareSwap clears the old one', async () => {
+    await ready();
+    fs.writeFileSync(`${receiver}.swap-incoming`, 'not a database');
+    expect(applyPendingSwap(receiver)).toBe('abandoned');
+    expect(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8')).toBe('abandoned');
+    const r = snapshot();
+    expect(prepareSwap(receiver, snap, r.sha256, MASTER_ID)).toBe('ready');
+    expect(fs.existsSync(`${receiver}.swap-outcome`)).toBe(false);
+  });
+
+  describe('restore after a join', () => {
+    const joined = async () => {
+      const d0 = new Database(receiver);
+      d0.exec(`
+        UPDATE sync_state SET joining = 1;
+        INSERT INTO sync_moved(account_id, to_device) VALUES('old', 'seed-device');
+        INSERT INTO meta(key, value) VALUES('archive-only', 'yes');
+      `);
+      d0.close();
+      await ready();
+      expect(applyPendingSwap(receiver)).toBe('swapped');
+      const c = open();
+      c.exec(`
+        INSERT INTO plugin_notes(doc_id, body) VALUES('since', 'written after joining');
+        CREATE TABLE meetings_rows(id INTEGER PRIMARY KEY, title TEXT);
+        INSERT INTO meetings_rows(title) VALUES('standup');
+        INSERT INTO vault(account_id, blob) VALUES('later', x'6c61746572');
+        INSERT INTO meta(key, value) VALUES('copy-only', 'yes');
+        INSERT INTO accounts(id, source, identifier, status, created_at) VALUES('seeds', 's', 'seed', 'idle', 'x');
+      `);
+      c.close();
+    };
+
+    it('keeps plugin and meeting rows written since joining, and the archive\'s vault', async () => {
+      await joined();
+      expect(prepareRestore(receiver)).toBe('ready');
+      expect(applyPendingSwap(receiver)).toBe('restored');
+      const d = open();
+      expect(d.prepare(`SELECT body FROM plugin_notes ORDER BY id`).all()).toEqual([
+        { body: 'keep me' },
+        { body: 'written after joining' },
+      ]);
+      expect(d.prepare(`SELECT title FROM meetings_rows`).all()).toEqual([{ title: 'standup' }]);
+      expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+      expect(d.prepare(`SELECT value FROM meta WHERE key IN ('archive-only','copy-only') ORDER BY key`).all()).toEqual([
+        { value: 'yes' },
+      ]);
+      expect(d.prepare(`SELECT id FROM accounts ORDER BY id`).all()).toEqual([{ id: 'old' }]);
+      d.close();
+    });
+
+    it('restore clears joining and the device is normal again', async () => {
+      await joined();
+      prepareRestore(receiver);
+      applyPendingSwap(receiver);
+      const d = open();
+      expect(d.prepare(`SELECT role, joining, master_device_id FROM sync_state`).get()).toEqual({
+        role: 'normal',
+        joining: 0,
+        master_device_id: null,
+      });
+      d.close();
+    });
+
+    it('restored moved accounts boot paused with the reason, and the list is kept', async () => {
+      await joined();
+      prepareRestore(receiver);
+      applyPendingSwap(receiver);
+      const d = open();
+      expect(d.prepare(`SELECT status, last_error FROM accounts WHERE id = 'old'`).get()).toEqual({
+        status: 'paused',
+        last_error: 'Moved to seed-device',
+      });
+      expect(d.prepare(`SELECT account_id FROM sync_moved`).all()).toEqual([{ account_id: 'old' }]);
+      d.close();
+    });
+
+    it('a crash after the merge and before the move leaves one complete database, and retry finishes', async () => {
+      await joined();
+      prepareRestore(receiver);
+      expect(() =>
+        applyPendingSwap(receiver, (s) => {
+          if (s === 'restore-merged') throw new Error('crash');
+        }),
+      ).toThrow('crash');
+      const mid = openRead(receiver);
+      expect(mid.prepare(`SELECT role FROM sync_state`).get()).toEqual({ role: 'follower' });
+      expect(mid.prepare(`SELECT count(*) n FROM documents`).get()).toEqual({ n: 1 });
+      mid.close();
+      expect(applyPendingSwap(receiver)).toBe('restored');
+      const d = open();
+      expect(d.prepare(`SELECT role FROM sync_state`).get()).toEqual({ role: 'normal' });
+      expect(d.prepare(`SELECT count(*) n FROM meetings_rows`).get()).toEqual({ n: 1 });
+      d.close();
+    });
+
+    it('an archive that cannot be merged leaves the current database in use', async () => {
+      await joined();
+      const archive = fs
+        .readdirSync(path.dirname(receiver))
+        .find((f) => /\.archive-\d+$/.test(f))!;
+      fs.writeFileSync(path.join(path.dirname(receiver), archive), 'junk');
+      prepareRestore(receiver);
+      expect(applyPendingSwap(receiver)).toBe('abandoned');
+      const d = open();
+      expect(d.prepare(`SELECT role FROM sync_state`).get()).toEqual({ role: 'follower' });
+      d.close();
+      expect(applyPendingSwap(receiver)).toBe('none');
+    });
   });
 
   it.each(SWAP_STEPS)('a crash after %s leaves a database that opens, and the swap finishes on retry', async (step) => {

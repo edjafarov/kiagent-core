@@ -1,14 +1,5 @@
 import fs from 'node:fs';
 
-import {
-  stageEntries,
-  SyncStageInvalid,
-  validateStage,
-  type StageEntry,
-  type SyncCursor,
-} from '../sync/delta';
-import { readRoleSync, SyncReadOnly, type SyncRole } from '../sync/role';
-import { COPIED_CORE_TABLES } from '../sync/tables';
 import { createHash } from 'crypto';
 
 import type BetterSqlite3 from 'better-sqlite3';
@@ -25,6 +16,20 @@ import type {
   SyncStatus,
 } from '@shared/contracts';
 import { isPlainObject } from '@shared/source-options';
+import { COPIED_CORE_TABLES } from '../sync/tables';
+import {
+  gateFrom,
+  readGateSync,
+  readRoleSync,
+  SyncReadOnly,
+} from '../sync/role';
+import {
+  stageEntries,
+  SyncStageInvalid,
+  validateStage,
+  type StageEntry,
+  type SyncCursor,
+} from '../sync/delta';
 
 import { newId } from '../ids';
 import { buildStemView } from '../stemming';
@@ -1479,7 +1484,9 @@ export function createWriteTx(
           columns.get(tbl) ??
           new Set(
             (
-              conn.prepare(`SELECT name FROM pragma_table_info(?)`).all(tbl) as {
+              conn
+                .prepare(`SELECT name FROM pragma_table_info(?)`)
+                .all(tbl) as {
                 name: string;
               }[]
             ).map((c) => c.name),
@@ -1510,7 +1517,9 @@ export function createWriteTx(
       const addChange = conn.prepare(
         `INSERT OR IGNORE INTO changes(seq, kind, ref_id, at) VALUES(?, 'document', ?, ?)`,
       );
-      const accountDocs = conn.prepare(`SELECT id FROM documents WHERE account_id = ?`);
+      const accountDocs = conn.prepare(
+        `SELECT id FROM documents WHERE account_id = ?`,
+      );
       const deleteDoc = conn.prepare(`DELETE FROM documents WHERE id = ?`);
       const deleteAccount = conn.prepare(`DELETE FROM accounts WHERE id = ?`);
 
@@ -1524,13 +1533,18 @@ export function createWriteTx(
             ftsDelete(id);
             deleteDoc.run(id);
           } else {
-            for (const d of accountDocs.all(id) as { id: string }[]) ftsDelete(d.id);
+            for (const d of accountDocs.all(id) as { id: string }[])
+              ftsDelete(d.id);
             deleteAccount.run(id);
           }
         } else if (e.tbl === 'documents') {
           const id = e.row.id as string;
           const before = searchedText.get(id) as
-            | { title: string | null; markdown: string | null; languages: string }
+            | {
+                title: string | null;
+                markdown: string | null;
+                languages: string;
+              }
             | undefined;
           upsertRow('documents', e.row);
           if (
@@ -1546,7 +1560,8 @@ export function createWriteTx(
               JSON.parse(e.row.languages as string) as string[],
             );
           }
-          if ((e.row.seq as number) > 0) addChange.run(e.row.seq, id, deps.now());
+          if ((e.row.seq as number) > 0)
+            addChange.run(e.row.seq, id, deps.now());
         } else {
           upsertRow(e.tbl, e.row);
         }
@@ -1635,14 +1650,15 @@ export function createWriteTx(
 
   // A follower writes only what the master sends (alpha-cent spec 7.6). Read
   // on first use: a role changes only at the boot swap, before this is built.
-  let role: SyncRole | null = null;
+  let readOnly: boolean | null = null;
   const guard = tx as unknown as Record<string, (...a: unknown[]) => unknown>;
   for (const name of Object.keys(guard)) {
     if (name === 'applyDelta') continue;
     const real = guard[name];
     guard[name] = (...args: unknown[]) => {
-      role ??= readRoleSync(conn);
-      if (role === 'follower') throw new SyncReadOnly(name);
+      // A joining device is read-only too (spec 7.7), the same single rule.
+      readOnly ??= gateFrom(readGateSync(conn));
+      if (readOnly) throw new SyncReadOnly(name);
       return real(...args);
     };
   }

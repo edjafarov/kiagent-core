@@ -15,6 +15,7 @@ let db: Database.Database;
 const tx = () =>
   createWriteTx(db, { detectLanguages: () => ['eng'], now: () => 'n' });
 const follower = () => db.prepare(`UPDATE sync_state SET role='follower'`).run();
+const joining = () => db.prepare(`UPDATE sync_state SET joining=1`).run();
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-role-'));
@@ -73,6 +74,20 @@ describe('write guard', () => {
     for (const p of paths) {
       expect(() => (t[p] as (...a: unknown[]) => unknown)({})).toThrow(SyncReadOnly);
     }
+  });
+
+  it('every write-tx path throws SyncReadOnly while joining', () => {
+    joining();
+    const t = tx();
+    const paths: (keyof typeof t)[] = (Object.keys(t) as (keyof typeof t)[]).filter((k) => k !== 'applyDelta');
+    for (const p of paths) {
+      expect(() => (t[p] as (...a: unknown[]) => unknown)({})).toThrow(SyncReadOnly);
+    }
+  });
+
+  it('applyDelta is not refused while joining', () => {
+    joining();
+    expect(() => tx().applyDelta(path.join(dir, 'missing'))).not.toThrow(SyncReadOnly);
   });
 
   it('applyDelta is not refused on a follower', () => {

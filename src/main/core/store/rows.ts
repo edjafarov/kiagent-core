@@ -43,6 +43,8 @@ export interface AccountRow {
   last_error: string | null;
   cadence: string | null;
   created_at: string;
+  /** Sync step 1: the device that runs this account, when it is device-owned. */
+  owner_device_id?: string | null;
 }
 
 export function toDocument(r: DocRow): Document {
@@ -81,5 +83,6 @@ export function toAccount(r: AccountRow): Account {
     lastError: r.last_error ?? undefined,
     cadence: r.cadence === null ? undefined : JSON.parse(r.cadence),
     createdAt: r.created_at,
+    ...(r.owner_device_id ? { ownerDeviceId: r.owner_device_id } : {}),
   };
 }

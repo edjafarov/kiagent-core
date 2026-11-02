@@ -15,6 +15,14 @@ export interface SyncStatus {
   after: SyncCursor;
   head: SyncCursor;
   schemaVersion: number;
+  /** Mid-join: searches, but reads no source and writes nothing (spec 7.7). */
+  joining: boolean;
+  /** Set once the join finished; a joined device ignores `join_from` for good. */
+  joined: boolean;
+  /** Documents that are not archived: the heartbeat's `doc_count`. */
+  documents: number;
+  /** The last boot swap's result, until finishJoin or leaveJoin clears it. */
+  lastSwap: 'swapped' | 'abandoned' | null;
 }
 
 export interface SyncService {

@@ -8,10 +8,12 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 
 import { hashFile, SNAPSHOT_META } from './snapshot';
-import { COPIED_CORE_TABLES, isDerivedTable } from './tables';
+import { pauseMovedAccounts } from './sources';
+import { swapOutcomePath } from './status';
+import { COPIED_CORE_TABLES, isDerivedTable, LOCAL_CORE_TABLES } from './tables';
 
-export const SWAP_STEPS = ['committed', 'merged', 'archived', 'replaced'] as const;
-type SwapStep = (typeof SWAP_STEPS)[number] | 'restore-moved';
+export const SWAP_STEPS = ['committed', 'merged', 'archived', 'replaced', 'outcome'] as const;
+type SwapStep = (typeof SWAP_STEPS)[number] | 'restore-merged' | 'restore-moved';
 
 interface Journal {
   masterDeviceId: string;
@@ -24,6 +26,14 @@ interface Journal {
 const journalPath = (db: string) => `${db}.swap.json`;
 const incomingPath = (db: string) => `${db}.swap-incoming`;
 const mergedPath = (db: string) => `${db}.swap-merged`;
+
+/** The swap's result, durable before the journal goes: the join reads it at
+ *  boot and must never be told nothing happened when it did. */
+const writeOutcome = (db: string, v: 'swapped' | 'abandoned'): void => {
+  const tmp = `${swapOutcomePath(db)}.tmp`;
+  fs.writeFileSync(tmp, v);
+  fs.renameSync(tmp, swapOutcomePath(db));
+};
 
 const writeJournal = (db: string, j: Journal): void => {
   const tmp = `${journalPath(db)}.tmp`;
@@ -57,6 +67,7 @@ export function prepareSwap(
   const needed = fs.statSync(dbPath).size + wal;
   if (freeBytes() < needed) return 'no-disk';
   fs.renameSync(file, incomingPath(dbPath));
+  fs.rmSync(swapOutcomePath(dbPath), { force: true });
   const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
   writeJournal(dbPath, {
     masterDeviceId,
@@ -133,8 +144,8 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string): vo
          SELECT seq, 'document', id, ? FROM main.documents WHERE seq > 0`,
       ).run(now);
       db.prepare(
-        `UPDATE main.sync_state SET role = 'follower', tracking = 0, after_seq = ?,
-           after_cursor = ?, history_id = ?, master_device_id = ?`,
+        `UPDATE main.sync_state SET role = 'follower', tracking = 0, joining = 0,
+           after_seq = ?, after_cursor = ?, history_id = ?, master_device_id = ?`,
       ).run(meta.after_seq, meta.after_cursor, meta.history_id, masterDeviceId);
       db.exec(`DROP TABLE main.${SNAPSHOT_META}`);
     })();
@@ -168,18 +179,134 @@ export function prepareRestore(dbPath: string): 'ready' | 'no-archive' {
   return 'ready';
 }
 
-function applyRestore(dbPath: string, crashAt: (step: SwapStep) => void): 'restored' {
-  const { archive } = JSON.parse(fs.readFileSync(restorePath(dbPath), 'utf8')) as {
+/** What the current file keeps writing for the user while it is a copy, and
+ *  so replaces the archive's: outbox and drafts, attention, and every plugin
+ *  or meeting table. Everything else a restore keeps from the archive: the
+ *  logins, the sync tables, `changes` and the work ledgers, which describe the
+ *  archive's own documents, `schedule`, `consents` and `meta`. */
+const CARRIED_CORE_TABLES: readonly string[] = [
+  'outbox',
+  'event_drafts',
+  'attention_items',
+  'attention_revisions',
+];
+
+const carriedOnRestore = (name: string): boolean =>
+  CARRIED_CORE_TABLES.includes(name) ||
+  (!COPIED_CORE_TABLES.includes(name) &&
+    !LOCAL_CORE_TABLES.includes(name) &&
+    !isDerivedTable(name) &&
+    !name.startsWith('sync_') &&
+    !name.startsWith('sqlite_'));
+
+/** Folds what the current file wrote since joining into the archive, in one
+ *  transaction, and makes the archive ready to be the database again. A
+ *  failure rolls back, and nothing has moved yet. */
+function mergeIntoArchive(archive: string, current: string): void {
+  const db = new Database(archive);
+  try {
+    db.pragma('foreign_keys = OFF');
+    db.prepare(`ATTACH ? AS cur`).run(current);
+    db.unsafeMode(true);
+    db.transaction(() => {
+      const defs = db
+        .prepare(
+          `SELECT type, name, tbl_name, sql FROM cur.sqlite_master
+           WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'`,
+        )
+        .all() as { type: string; name: string; tbl_name: string; sql: string }[];
+      const have = new Set(
+        (db.prepare(`SELECT name FROM main.sqlite_master`).all() as { name: string }[]).map(
+          (r) => r.name,
+        ),
+      );
+      const shadow = new Set(
+        (
+          db
+            .prepare(`SELECT name FROM pragma_table_list WHERE schema='cur' AND type='shadow'`)
+            .all() as { name: string }[]
+        ).map((r) => r.name),
+      );
+      const isVirtual = (sql: string) => /^CREATE\s+VIRTUAL/i.test(sql);
+      const tables = defs.filter(
+        (d) => d.type === 'table' && !shadow.has(d.name) && carriedOnRestore(d.name),
+      );
+      const cols = (schema: string, t: string) =>
+        (
+          db.prepare(`SELECT name FROM pragma_table_info(?, ?)`).all(t, schema) as {
+            name: string;
+          }[]
+        ).map((c) => c.name);
+      for (const t of tables) {
+        const fresh = !have.has(t.name);
+        if (fresh) db.exec(t.sql);
+        if (isVirtual(t.sql)) {
+          // Their rows live in shadow tables; copying those spares a rebuild.
+          for (const sh of shadow) {
+            if (!sh.startsWith(`${t.name}_`)) continue;
+            db.exec(`DELETE FROM main."${sh}"; INSERT INTO main."${sh}" SELECT * FROM cur."${sh}";`);
+          }
+          continue;
+        }
+        const common = cols('main', t.name).filter((c) => cols('cur', t.name).includes(c));
+        const list = common.map((c) => `"${c}"`).join(', ');
+        db.exec(`DELETE FROM main."${t.name}"`);
+        if (list) db.exec(`INSERT INTO main."${t.name}"(${list}) SELECT ${list} FROM cur."${t.name}"`);
+        if (fresh) {
+          for (const d of defs) {
+            if ((d.type === 'index' || d.type === 'trigger') && d.tbl_name === t.name) db.exec(d.sql);
+          }
+        }
+      }
+      const names = tables.map((t) => `'${t.name.replace(/'/g, "''")}'`).join(', ');
+      if (names) {
+        db.exec(
+          `DELETE FROM main.sqlite_sequence WHERE name IN (${names});
+           INSERT INTO main.sqlite_sequence(name, seq)
+             SELECT name, seq FROM cur.sqlite_sequence WHERE name IN (${names});`,
+        );
+      }
+      db.exec(`UPDATE main.sync_state SET joining = 0`);
+      pauseMovedAccounts(db);
+    })();
+    db.unsafeMode(false);
+    db.exec(`DETACH cur`);
+  } finally {
+    db.close();
+  }
+}
+
+function applyRestore(
+  dbPath: string,
+  crashAt: (step: SwapStep) => void,
+): 'restored' | 'abandoned' {
+  const j = JSON.parse(fs.readFileSync(restorePath(dbPath), 'utf8')) as {
     archive: string;
+    merged?: boolean;
   };
+  const { archive } = j;
   // Each step is checked, so a retry skips what already happened.
   if (fs.existsSync(archive)) {
+    if (!j.merged) {
+      try {
+        mergeIntoArchive(archive, dbPath);
+      } catch {
+        // Nothing has moved: the current file stays the database.
+        fs.rmSync(restorePath(dbPath), { force: true });
+        return 'abandoned';
+      }
+      const tmp = `${restorePath(dbPath)}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ ...j, merged: true }));
+      fs.renameSync(tmp, restorePath(dbPath));
+      crashAt('restore-merged');
+    }
     for (const ext of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${ext}`, { force: true });
     moveIfThere(archive, dbPath);
     moveIfThere(`${archive}-wal`, `${dbPath}-wal`);
     moveIfThere(`${archive}-shm`, `${dbPath}-shm`);
     crashAt('restore-moved');
   }
+  fs.rmSync(swapOutcomePath(dbPath), { force: true });
   fs.rmSync(restorePath(dbPath), { force: true });
   return 'restored';
 }
@@ -213,6 +340,7 @@ export function applyPendingSwap(
       fs.rmSync(merged, { force: true });
       fs.rmSync(`${merged}-wal`, { force: true });
       fs.rmSync(`${merged}-shm`, { force: true });
+      writeOutcome(dbPath, 'abandoned');
       fs.rmSync(journalPath(dbPath), { force: true });
       return 'abandoned';
     }
@@ -236,6 +364,8 @@ export function applyPendingSwap(
     fs.renameSync(merged, dbPath);
     crashAt('replaced');
   }
+  writeOutcome(dbPath, 'swapped');
+  crashAt('outcome');
   fs.rmSync(journalPath(dbPath), { force: true });
   return 'swapped';
 }

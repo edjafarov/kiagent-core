@@ -55,7 +55,7 @@ import { createLogs } from './logs';
 import { createPrefs } from './prefs';
 import { createScheduler } from './scheduler';
 import type { CoreScheduler } from './scheduler';
-import { applyFollowerGate, readSyncRole } from './sync/role';
+import { applyFollowerGate, gateFrom, readSyncGate } from './sync/role';
 import { createSyncService, type SyncService } from './sync/service';
 import { applyPendingSwap } from './sync/swap';
 import { openReads } from './reads';
@@ -330,8 +330,9 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     sink.log('sync', 'error', 'could not apply the snapshot; kept this device as it was');
   }
   const db = await openDbInWorker(dbPath, deps.dbWorkerFile);
-  // Read once, before anything starts: only the boot swap changes it.
-  const readOnly = (await readSyncRole(db)) === 'follower';
+  // Read once, before anything starts: only the boot swap changes it. A
+  // joining device is gated like a follower, across restarts (spec 7.7).
+  const readOnly = gateFrom(await readSyncGate(db));
   const store = openStore(db, {
     encrypt: deps.encrypt,
     decrypt: deps.decrypt,

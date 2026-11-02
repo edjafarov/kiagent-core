@@ -1273,6 +1273,32 @@ const MIGRATIONS: Migration[] = [
   );
   INSERT OR IGNORE INTO sync_state(id) VALUES (1);
   `,
+  // v14: starting by itself (alpha-cent spec 7.7). `joining` is a column, not a
+  // new role, because `role` has a CHECK that SQLite can't alter in place.
+  // `joined` is set once, by finishJoin (and by the seed when it enables
+  // tracking). `sync_moved` names the accounts whose logins were offered to
+  // another device; `sync_offers` makes a repeated offer a no-op. All local.
+  (db) => {
+    // Idempotent: the tests that rewind `schemaVersion` re-run it on a
+    // database that already has the columns.
+    const addColumn = (table: string, column: string, ddl: string) => {
+      const have = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column);
+      if (!have) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+    };
+    addColumn('sync_state', 'joining', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn('sync_state', 'joined', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn('accounts', 'owner_device_id', 'TEXT');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sync_moved (
+        account_id TEXT PRIMARY KEY,
+        to_device TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS sync_offers (
+        offer_id TEXT PRIMARY KEY,
+        at TEXT NOT NULL
+      );
+    `);
+  },
 ];
 
 /**
