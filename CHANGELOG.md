@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.118.0](https://github.com/edjafarov/kiagent-core/compare/v0.117.2...v0.118.0) (2026-11-02)
+
+### Added
+
+- Multi-device sync primitives, off until a bundled extension turns them on: a
+  change tracker, deltas and clean snapshots, a crash-safe swap at boot, a
+  read-only follower role, and a privileged `sync` host capability
+  (platform 2.17.0).
+
+### Migration
+
+- Schema v13 adds `sync_rows` and `sync_state`. No existing table changes.
+
 ## [0.117.3](https://github.com/edjafarov/kiagent-core/compare/v0.117.2...v0.117.3) (2026-10-28)
 
 ### Bug Fixes
