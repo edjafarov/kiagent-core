@@ -45,7 +45,7 @@ const account = (identifier = 'a@b') =>
 const commit = (id: string, documents: DocumentInput[]) =>
   sourceStore.commit({ account: id as never, documents, cursor: null });
 const sync = () => {
-  const r = buildDelta(reader, after, stage, 250 * 1024 * 1024);
+  const r = buildDelta(reader, after, 0, stage, 250 * 1024 * 1024);
   if (r.status !== 'ok') throw new Error(r.status);
   const res = destTx.applyDelta(stage);
   after = res.target;
@@ -134,7 +134,7 @@ it('deletes a tracked key with no row, including its search rows', async () => {
 it('a truncated stage or wrong sha256 throws and moves nothing', async () => {
   const a = await account();
   await commit(a.id, [doc('d1')]);
-  const r = buildDelta(reader, after, stage, 1e9);
+  const r = buildDelta(reader, after, 0, stage, 1e9);
   if (r.status !== 'ok') throw new Error(r.status);
   const bytes = fs.readFileSync(stage);
   fs.writeFileSync(stage, bytes.subarray(0, bytes.length - 10));
@@ -146,7 +146,7 @@ it('a truncated stage or wrong sha256 throws and moves nothing', async () => {
 it('a failure mid-apply rolls back rows and cursor together', async () => {
   const a = await account();
   await commit(a.id, [doc('d1'), doc('d2')]);
-  const r = buildDelta(reader, after, stage, 1e9);
+  const r = buildDelta(reader, after, 0, stage, 1e9);
   if (r.status !== 'ok') throw new Error(r.status);
   dst().exec(`CREATE TRIGGER boom BEFORE INSERT ON changes WHEN NEW.ref_id IN
     (SELECT id FROM documents WHERE external_id='d2') BEGIN SELECT RAISE(ABORT,'boom'); END`);
@@ -216,7 +216,7 @@ it('a delete and re-ingest under a new id with the same natural key applies', as
 });
 
 it('a damaged target in the trailer is refused, and the position does not move', () => {
-  const r = buildDelta(reader, after, stage, 250 * 1024 * 1024);
+  const r = buildDelta(reader, after, 0, stage, 250 * 1024 * 1024);
   if (r.status !== 'ok') throw new Error(r.status);
   const text = fs.readFileSync(stage, 'utf8').trimEnd().split('\n');
   const trailer = JSON.parse(text[text.length - 1]);
@@ -228,7 +228,7 @@ it('a damaged target in the trailer is refused, and the position does not move',
 
 it('a master refuses to apply a delta', () => {
   dst().prepare(`UPDATE sync_state SET role = 'normal'`).run();
-  const r = buildDelta(reader, after, stage, 250 * 1024 * 1024);
+  const r = buildDelta(reader, after, 0, stage, 250 * 1024 * 1024);
   if (r.status !== 'ok') throw new Error(r.status);
   expect(() => destTx.applyDelta(stage)).toThrow('only a follower');
 });
@@ -255,4 +255,34 @@ it('reset all on a tracking master starts a new history and leaves no tracked ro
   await sourceStore.maintenance.resetAll();
   expect(src().prepare(`SELECT history_id, tracking FROM sync_state`).get()).toEqual({ history_id: null, tracking: 0 });
   expect(src().prepare(`SELECT count(*) n FROM sync_rows`).get()).toEqual({ n: 0 });
+});
+
+describe('rewind (step 2)', () => {
+  it('writes the master epoch into sync_state in the apply transaction', async () => {
+    const a = await account();
+    await commit(a.id, [doc('d1')]);
+    src().prepare(`UPDATE sync_state SET epoch = 4`).run();
+    sync();
+    expect((dst().prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number }).epoch).toBe(4);
+  });
+
+  it('a follower ahead of the new master converges to its rows', async () => {
+    const a = await account();
+    await commit(a.id, [doc('d1', 'old master wrote this'), doc('d2')]);
+    sync();
+    // The follower heard more from the old master than the new one ever had.
+    const stale = dst().prepare(`UPDATE documents SET markdown = 'only on the old master', seq = 900 WHERE external_id = 'd1'`);
+    stale.run();
+    dst().prepare(`UPDATE sync_state SET after_seq = 900, after_cursor = 900, epoch = 1`).run();
+    after = { seq: 900, cursor: 900 };
+    src().prepare(`UPDATE sync_state SET epoch = 2`).run();
+    src().prepare(`INSERT INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES(2, 0, 0)`).run();
+    const r = buildDelta(reader, after, 1, stage, 250 * 1024 * 1024);
+    if (r.status !== 'ok') throw new Error(r.status);
+    destTx.applyDelta(stage);
+    const md = (c: Database.Database) =>
+      c.prepare(`SELECT external_id, markdown FROM documents ORDER BY external_id`).all();
+    expect(md(dst())).toEqual(md(src()));
+    expect((dst().prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number }).epoch).toBe(2);
+  });
 });

@@ -114,8 +114,8 @@ async function runSyncRole(): Promise<void> {
   attachDbHost(parentPort!, db, () => process.exit(0), {
     status: () => readSyncStatus(conn),
     buildDelta: (args) => {
-      const a = args as { after: SyncCursor; out: string; capBytes: number };
-      return buildDelta(conn, a.after, a.out, a.capBytes);
+      const a = args as { after: SyncCursor; out: string; capBytes: number; fromEpoch: number };
+      return buildDelta(conn, a.after, a.fromEpoch, a.out, a.capBytes);
     },
     buildSnapshot: (args) => buildSnapshot(dbPath, (args as { out: string }).out),
     prepareRestore: () => prepareRestore(dbPath),

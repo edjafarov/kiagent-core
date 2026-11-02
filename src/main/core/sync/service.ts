@@ -40,6 +40,10 @@ export interface SyncStatus {
   lastSwap: 'swapped' | 'abandoned' | null;
   /** Size of the old database a join set aside, 0 when none. */
   archiveBytes: number;
+  /** The epoch of the master this device last applied from, or led as. */
+  epoch: number;
+  /** Where this device's own epoch began, once it has led. */
+  grant: { seq: number; cursor: number } | null;
   /** The database file plus its journal: a cheap stand-in for the size of a
    *  snapshot, so a joiner can weigh its disk before anything is built. */
   dbBytes: number;
@@ -49,7 +53,14 @@ export interface SyncService {
   status(): Promise<SyncStatus>;
   enableTracking(): Promise<void>;
   disableTracking(): Promise<void>;
-  buildDelta(after: SyncCursor, out: string, capBytes: number): Promise<DeltaResult>;
+  /** `fromEpoch`: the epoch the asker last applied from; absent, none is
+   *  rewound. */
+  buildDelta(
+    after: SyncCursor,
+    out: string,
+    capBytes: number,
+    fromEpoch?: number,
+  ): Promise<DeltaResult>;
   buildSnapshot(out: string): Promise<{ bytes: number; target: SyncCursor; sha256: string }>;
   applyDelta(stagePath: string): Promise<{ applied: number; target: SyncCursor }>;
   prepareSwap(
@@ -170,7 +181,8 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     disableTracking: async () => {
       await deps.db.proc!('syncTracking', { on: false });
     },
-    buildDelta: (after, out, capBytes) => onWorker('buildDelta', { after, out, capBytes }),
+    buildDelta: (after, out, capBytes, fromEpoch) =>
+      onWorker('buildDelta', { after, out, capBytes, fromEpoch: fromEpoch ?? Number.MAX_SAFE_INTEGER }),
     buildSnapshot: (out) => onWorker('buildSnapshot', { out }),
     applyDelta: (stagePath) => deps.store.applySyncDelta(stagePath),
     prepareSwap: (file, sha256, masterDeviceId) =>

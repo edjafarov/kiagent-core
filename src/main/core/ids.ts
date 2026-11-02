@@ -1,4 +1,4 @@
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 
 import type { Id } from '@shared/contracts';
 
@@ -23,4 +23,21 @@ export function uuidv7(): string {
 
 export function newId<T extends string>(): Id<T> {
   return uuidv7() as Id<T>;
+}
+
+/** An id derived from a natural key, so two devices that create the same row
+ *  independently (a new master re-reading a source) end up with the same id and
+ *  the pull overwrites instead of duplicating. sha256 of the parts, each
+ *  length-prefixed so ("a", "bc") is not ("ab", "c"), truncated to 16 bytes and
+ *  laid out as a UUID. For new rows only; existing rows keep the ids they have
+ *  (spec 7.2.1). */
+export function hashedId<T extends string>(kind: T, parts: string[]): Id<T> {
+  const h = createHash('sha256');
+  h.update(`${kind}\0`);
+  for (const p of parts) h.update(`${Buffer.byteLength(p)}:${p}\0`);
+  const bytes = h.digest().subarray(0, 16);
+  bytes[6] = 0x80 | (bytes[6] & 0x0f); // version 8: custom
+  bytes[8] = 0x80 | (bytes[8] & 0x3f); // variant 10
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}` as Id<T>;
 }

@@ -31,7 +31,7 @@ import {
   type SyncCursor,
 } from '../sync/delta';
 
-import { newId } from '../ids';
+import { hashedId } from '../ids';
 import { buildStemView } from '../stemming';
 import { lastErrorAssignment } from './last-error';
 import {
@@ -525,7 +525,7 @@ export function createWriteTx(
       ftsUpsert(existing.id, input.title, input.markdown, languages);
       return seq;
     }
-    const id = newId<'document'>();
+    const id = hashedId<'document'>('document', [accountId, input.externalId, input.type]);
     const seq = appendChange('document', id);
     conn
       .prepare(
@@ -746,7 +746,7 @@ export function createWriteTx(
             ? 'connecting'
             : 'needs-connector';
         const row = insert.get(
-          newId<'account'>(),
+          hashedId<'account'>('account', [e.source, identifier]),
           e.source,
           identifier,
           e.config,
@@ -792,7 +792,7 @@ export function createWriteTx(
                RETURNING id`,
             )
             .get(
-              newId<'account'>(),
+              hashedId<'account'>('account', [w.source, w.identifier]),
               w.source,
               w.identifier,
               JSON.stringify(keepOptions(prior?.config, w.config ?? {})),
@@ -810,7 +810,7 @@ export function createWriteTx(
             )
             .get(w.source, w.identifier) as { id: AccountId } | undefined;
           if (found) return { id: found.id, logged: false };
-          const id = newId<'account'>();
+          const id = hashedId<'account'>('account', [w.source, w.identifier]);
           conn
             .prepare(
               `INSERT INTO accounts(id, source, identifier, config, status, created_at)
@@ -1147,7 +1147,7 @@ export function createWriteTx(
       .prepare(`SELECT * FROM accounts WHERE source = ? AND identifier = ?`)
       .get(source, identifier) as AccountRow | undefined;
     if (found) return found;
-    const id = newId<'account'>();
+    const id = hashedId<'account'>('account', [source, identifier]);
     conn
       .prepare(
         `INSERT INTO accounts(id, source, identifier, config, status, created_at)
@@ -1605,7 +1605,7 @@ export function createWriteTx(
   );
 
   const applyDeltaTx = conn.transaction(
-    (entries: Iterable<StageEntry>, target: SyncCursor): void => {
+    (entries: Iterable<StageEntry>, target: SyncCursor, epoch: number): void => {
       conn.pragma('defer_foreign_keys = ON');
       // The triggers stay quiet only because a follower doesn't track; applying
       // on a master would corrupt the history its own followers read.
@@ -1703,15 +1703,15 @@ export function createWriteTx(
         }
       }
       conn
-        .prepare(`UPDATE sync_state SET after_seq = ?, after_cursor = ?`)
-        .run(target.seq, target.cursor);
+        .prepare(`UPDATE sync_state SET after_seq = ?, after_cursor = ?, epoch = ?`)
+        .run(target.seq, target.cursor, epoch);
     },
   );
 
   const tx: WriteTx = {
     applyDelta: (stagePath) => {
-      const { target, rows } = validateStage(stagePath);
-      applyDeltaTx(stageEntries(stagePath, rows), target);
+      const { target, epoch, rows } = validateStage(stagePath);
+      applyDeltaTx(stageEntries(stagePath, rows), target, epoch);
       // One big apply leaves a big WAL (2.7 GB at the 250 MB cap, measured).
       const wal = `${conn.name}-wal`;
       if (fs.existsSync(wal) && fs.statSync(wal).size > 256 * 1024 * 1024) {

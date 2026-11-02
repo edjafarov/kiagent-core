@@ -17,6 +17,11 @@ export type DeltaResult =
   | {
       status: 'ok';
       target: SyncCursor;
+      /** Where this answer actually started: `after`, or the lowest grant of
+       *  the epochs the asker has not seen when that is lower (step 2). */
+      from: SyncCursor;
+      /** The epoch of the device that built it. */
+      epoch: number;
       rows: number;
       bytes: number;
       sha256: string;
@@ -37,17 +42,44 @@ export class SyncStageInvalid extends Error {
 interface Trailer {
   trailer: true;
   target: SyncCursor;
+  epoch: number;
   rows: number;
   sha256: string;
 }
 
-export function buildDelta(
+/** A follower that last applied from an older epoch than this device's is
+ *  served from the lowest grant of the epochs it has not seen: the new master's
+ *  rows overwrite its own by key (spec 7.8). A follower already at this epoch
+ *  is never rewound. */
+function rewound(
   conn: BetterSqlite3.Database,
   after: SyncCursor,
+  fromEpoch: number,
+): { from: SyncCursor; epoch: number } {
+  const epoch = (conn.prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number }).epoch;
+  if (fromEpoch >= epoch) return { from: after, epoch };
+  const g = conn
+    .prepare(
+      `SELECT MIN(grant_seq) AS seq, MIN(grant_cursor) AS cursor FROM sync_epochs WHERE epoch > ?`,
+    )
+    .get(fromEpoch) as { seq: number | null; cursor: number | null };
+  if (g.seq === null || g.cursor === null) return { from: after, epoch };
+  return {
+    from: { seq: Math.min(after.seq, g.seq), cursor: Math.min(after.cursor, g.cursor) },
+    epoch,
+  };
+}
+
+export function buildDelta(
+  conn: BetterSqlite3.Database,
+  asked: SyncCursor,
+  fromEpoch: number,
   out: string,
   capBytes: number,
 ): DeltaResult {
   const fd = fs.openSync(out, 'w');
+  let after = asked;
+  let epoch = 0;
   const hash = createHash('sha256');
   let bytes = 0;
   let rows = 0;
@@ -62,6 +94,8 @@ export function buildDelta(
 
   try {
     const target = conn.transaction((): SyncCursor => {
+      // Inside the read transaction, so the grant and the rows agree.
+      ({ from: after, epoch } = rewound(conn, asked, fromEpoch));
       const tracked = conn
         .prepare(`SELECT tbl, pk FROM sync_rows WHERE cursor > ? ORDER BY cursor`)
         .all(after.cursor) as { tbl: string; pk: string }[];
@@ -108,11 +142,12 @@ export function buildDelta(
       };
     })();
     hash.update(JSON.stringify(target));
+    hash.update(`epoch:${epoch}`);
     const sha256 = hash.digest('hex');
-    const trailer: Trailer = { trailer: true, target, rows, sha256 };
+    const trailer: Trailer = { trailer: true, target, epoch, rows, sha256 };
     fs.writeSync(fd, `${JSON.stringify(trailer)}\n`);
     fs.closeSync(fd);
-    return { status: 'ok', target, rows, bytes, sha256 };
+    return { status: 'ok', target, from: after, epoch, rows, bytes, sha256 };
   } catch (e) {
     fs.closeSync(fd);
     fs.rmSync(out, { force: true });
@@ -152,7 +187,7 @@ function* lines(file: string): Generator<Buffer> {
 }
 
 /** Checks the whole file before anything is written. */
-export function validateStage(file: string): { target: SyncCursor; rows: number } {
+export function validateStage(file: string): { target: SyncCursor; epoch: number; rows: number } {
   const hash = createHash('sha256');
   let last: Buffer | null = null;
   let count = 0;
@@ -172,9 +207,11 @@ export function validateStage(file: string): { target: SyncCursor; rows: number 
   }
   if (!trailer || trailer.trailer !== true) throw new SyncStageInvalid('no trailer');
   hash.update(JSON.stringify(trailer.target));
+  hash.update(`epoch:${trailer.epoch}`);
   if (hash.digest('hex') !== trailer.sha256) throw new SyncStageInvalid('checksum');
   if (count !== trailer.rows) throw new SyncStageInvalid('row count');
-  return { target: trailer.target, rows: count };
+  if (!Number.isSafeInteger(trailer.epoch) || trailer.epoch < 0) throw new SyncStageInvalid('epoch');
+  return { target: trailer.target, epoch: trailer.epoch, rows: count };
 }
 
 /** Yields a validated stage's entries one at a time. */
@@ -187,7 +224,11 @@ export function* stageEntries(file: string, rows: number): Generator<StageEntry>
   }
 }
 
-export function readStage(file: string): { entries: StageEntry[]; target: SyncCursor } {
-  const { target, rows } = validateStage(file);
-  return { entries: [...stageEntries(file, rows)], target };
+export function readStage(file: string): {
+  entries: StageEntry[];
+  target: SyncCursor;
+  epoch: number;
+} {
+  const { target, epoch, rows } = validateStage(file);
+  return { entries: [...stageEntries(file, rows)], target, epoch };
 }

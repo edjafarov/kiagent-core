@@ -16,6 +16,7 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
     joined: number;
     after_seq: number;
     after_cursor: number;
+    epoch: number;
   };
   const head = conn
     .prepare(
@@ -26,7 +27,12 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
   const documents = conn
     .prepare(`SELECT count(*) AS n FROM documents WHERE archived_at IS NULL`)
     .get() as { n: number };
+  const grant = conn
+    .prepare(`SELECT grant_seq AS seq, grant_cursor AS cursor FROM sync_epochs WHERE epoch = ?`)
+    .get(s.epoch) as { seq: number; cursor: number } | undefined;
   return {
+    epoch: s.epoch,
+    grant: grant ?? null,
     role: s.role,
     joining: s.joining === 1,
     joined: s.joined === 1,

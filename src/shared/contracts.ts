@@ -1612,6 +1612,10 @@ export interface SyncStatusWire {
   lastSwap: 'swapped' | 'abandoned' | null;
   /** Size of the old database a join set aside, 0 when none. */
   archiveBytes: number;
+  /** The epoch of the master this device last applied from, or led as. */
+  epoch: number;
+  /** Where this device's own epoch began, once it has led. */
+  grant: { seq: number; cursor: number } | null;
   /** The database file plus its journal: a cheap stand-in for the size of a
    *  snapshot, so a joiner can weigh its disk before anything is built. */
   dbBytes: number;

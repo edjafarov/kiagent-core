@@ -171,6 +171,13 @@ describe('promote', () => {
     expect(await state()).toMatchObject({ role: 'normal', tracking: 1, history_id: 'h1', master_device_id: null });
   });
 
+  it('status reports the epoch and the grant of the device\'s own epoch', async () => {
+    await follow();
+    expect(await sync.status()).toMatchObject({ epoch: 0, grant: null });
+    await sync.promote(3);
+    expect(await sync.status()).toMatchObject({ epoch: 3, grant: { seq: 7, cursor: 5 } });
+  });
+
   it('promoting twice with the same epoch changes nothing the second time', async () => {
     await follow();
     await sync.promote(2);

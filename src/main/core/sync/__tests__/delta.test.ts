@@ -10,7 +10,7 @@ import type { DocumentInput } from '@shared/contracts';
 import { openDb, type AppDb } from '../../../db/app-db';
 import { migrate } from '../../store/schema';
 import { openStore, type CoreStore } from '../../store/store';
-import { buildDelta, readStage, type StageEntry } from '../delta';
+import { buildDelta, readStage, validateStage, type StageEntry } from '../delta';
 import { enableTracking } from '../tracking';
 
 const deps = {
@@ -43,7 +43,7 @@ const commit = (id: string, documents: DocumentInput[]) =>
   store.commit({ account: id as never, documents, cursor: null });
 const docId = (ext: string) =>
   (conn().prepare(`SELECT id FROM documents WHERE external_id=?`).get(ext) as { id: string }).id;
-const build = (after = START, cap = 250 * MB) => buildDelta(reader, after, out, cap);
+const build = (after = START, cap = 250 * MB, fromEpoch = 0) => buildDelta(reader, after, fromEpoch, out, cap);
 
 beforeEach(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-delta-'));
@@ -169,4 +169,72 @@ it('readStage refuses a truncated or altered file', async () => {
   altered[5] ^= 1;
   fs.writeFileSync(out, altered);
   expect(() => readStage(out)).toThrow(/invalid/i);
+});
+
+describe('rewind to the grant (step 2)', () => {
+  const lead = (epoch: number, seq: number, cursor: number) => {
+    conn().prepare(`UPDATE sync_state SET epoch = ?`).run(epoch);
+    conn().prepare(`INSERT INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES(?, ?, ?)`).run(epoch, seq, cursor);
+  };
+  const seqs = () =>
+    (conn().prepare(`SELECT seq FROM documents ORDER BY seq`).all() as { seq: number }[]).map((r) => r.seq);
+  const externalIds = () =>
+    readStage(out).entries.filter((e) => e.op === 'upsert' && e.tbl === 'documents').map((e) => rowOf(e).external_id);
+  const seed = async () => {
+    enableTracking(conn());
+    const a = await account();
+    await commit(a.id, [doc('d1'), doc('d2'), doc('d3')]);
+    return seqs();
+  };
+
+  it('a follower from an older epoch is served from the grant', async () => {
+    const [s1] = await seed();
+    lead(2, s1, 0);
+    const ahead = { seq: 1000, cursor: 1000 };
+    const r = build(ahead, undefined, 1);
+    if (r.status !== 'ok') throw new Error('expected ok');
+    expect(r.from).toEqual({ seq: s1, cursor: 0 });
+    expect(externalIds().sort()).toEqual(['d2', 'd3']);
+  });
+
+  it('a follower already at the current epoch is not rewound', async () => {
+    const [s1] = await seed();
+    lead(2, s1, 0);
+    const at = { seq: 1000, cursor: 1000 };
+    const r = build(at, undefined, 2);
+    if (r.status !== 'ok') throw new Error('expected ok');
+    expect(r.from).toEqual(at);
+    expect(r.rows).toBe(0);
+  });
+
+  it('a follower behind the grant keeps its own position', async () => {
+    const [s1, s2] = await seed();
+    lead(2, s2, 0);
+    const behind = { seq: s1 - 1, cursor: 0 };
+    const r = build(behind, undefined, 1);
+    if (r.status !== 'ok') throw new Error('expected ok');
+    expect(r.from).toEqual(behind);
+  });
+
+  it('two promotions: the lowest later grant wins, and only later epochs count', async () => {
+    const [s1, s2, s3] = await seed();
+    lead(2, s2, 2);
+    lead(3, s3, 3);
+    const ahead = { seq: 1000, cursor: 1000 };
+    const one = build(ahead, undefined, 1);
+    const two = build(ahead, undefined, 2);
+    if (one.status !== 'ok' || two.status !== 'ok') throw new Error('expected ok');
+    expect(one.from).toEqual({ seq: s2, cursor: 2 });
+    expect(two.from).toEqual({ seq: s3, cursor: 3 });
+    expect(s1).toBeLessThan(s2);
+  });
+
+  it('the stage carries the master epoch', async () => {
+    await seed();
+    lead(5, 0, 0);
+    const r = build(START, undefined, 5);
+    if (r.status !== 'ok') throw new Error('expected ok');
+    expect(r.epoch).toBe(5);
+    expect(validateStage(out).epoch).toBe(5);
+  });
 });

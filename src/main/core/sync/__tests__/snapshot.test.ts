@@ -133,7 +133,7 @@ describe('buildSnapshot', () => {
     await commit(a.id, [doc('d2')]);
     const reader = openRead(masterFile);
     const stage = path.join(dir, 'stage');
-    const d = buildDelta(reader, r.target, stage, 1e9);
+    const d = buildDelta(reader, r.target, 0, stage, 1e9);
     reader.close();
     expect(d.status).toBe('ok');
     const body = fs.readFileSync(stage, 'utf8');
