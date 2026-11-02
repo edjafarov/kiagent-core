@@ -78,7 +78,24 @@ export function enableTracking(conn: BetterSqlite3.Database): void {
                               history_id = COALESCE(history_id, ?)`,
       )
       .run(randomUUID());
+    stampUnversionedLogins(conn);
   })();
+}
+
+/** Logins saved before this device led, or copied to it, carry no version yet.
+ *  They get `(epoch, 1..k)` above whatever this epoch already holds, in the
+ *  same transaction as the switch, so they travel on the first pull. */
+function stampUnversionedLogins(conn: BetterSqlite3.Database): void {
+  const { epoch } = conn.prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number };
+  const rows = conn
+    .prepare(`SELECT rowid AS r FROM vault WHERE epoch = 0 AND n = 0 ORDER BY rowid`)
+    .all() as { r: number }[];
+  if (rows.length === 0) return;
+  let n = (
+    conn.prepare(`SELECT coalesce(max(n), 0) AS m FROM vault WHERE epoch = ?`).get(epoch) as { m: number }
+  ).m;
+  const set = conn.prepare(`UPDATE vault SET epoch = ?, n = ? WHERE rowid = ?`);
+  for (const { r } of rows) set.run(epoch, (n += 1), r);
 }
 
 export function disableTracking(conn: BetterSqlite3.Database): void {

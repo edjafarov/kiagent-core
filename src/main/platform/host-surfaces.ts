@@ -273,6 +273,8 @@ function syncSurface(
     forgetMoved: call('forgetMoved'),
     canAcceptSources: call('canAcceptSources'),
     importSources: call('importSources'),
+    exportSecrets: call('exportSecrets'),
+    importSecrets: call('importSecrets'),
     isBusy: call('isBusy'),
     deleteArchive: call('deleteArchive'),
   };

@@ -432,6 +432,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     dbPath,
     workerFile: deps.dbWorkerFile,
     encryptStrict: deps.encryptStrict,
+    decrypt: deps.decrypt,
     keystoreAvailable: deps.keystoreAvailable,
     isInstalled: (source) => sources.get(source) !== undefined,
     start: async (id) => {

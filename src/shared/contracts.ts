@@ -1590,6 +1590,15 @@ export interface SyncCursorWire {
 }
 /** One account in an offer between devices (sync step 1). `credentials` is a
  *  login: it crosses only the mutually authenticated channel. */
+/** One login between devices: JSON text of the credentials, or null for a login
+ *  removed on the leader. Versioned by `(epoch, n)`. */
+export interface SecretWire {
+  accountId: string;
+  epoch: number;
+  n: number;
+  value: string | null;
+}
+
 export interface OfferedSourceWire {
   source: string;
   identifier: string;
@@ -1614,6 +1623,8 @@ export interface SyncStatusWire {
   archiveBytes: number;
   /** The epoch of the master this device last applied from, or led as. */
   epoch: number;
+  /** The highest login stamp held: what a follower asks the leader for next. */
+  secretsAfter: { epoch: number; n: number };
   /** Where this device's own epoch began, once it has led. */
   grant: { seq: number; cursor: number } | null;
   /** The database file plus its journal: a cheap stand-in for the size of a
@@ -1920,6 +1931,10 @@ export interface CapSurfaces {
         list: OfferedSourceWire[],
         from: string,
       ): Promise<{ created: string[]; existing: string[]; needsConnector: string[] }>;
+      /** Logins stamped above `after`, decrypted in main (alpha-cent spec 7.8). */
+      exportSecrets(after: { epoch: number; n: number }): Promise<SecretWire[]>;
+      /** Stores logins from the leader; follower only. */
+      importSecrets(list: SecretWire[]): Promise<{ applied: number }>;
       isBusy(): Promise<string | null>;
       deleteArchive(): Promise<void>;
     };

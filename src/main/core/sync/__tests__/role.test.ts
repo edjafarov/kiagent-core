@@ -124,7 +124,7 @@ describe('write guard', () => {
   it('every write-tx path throws SyncReadOnly on a follower', () => {
     follower();
     const t = tx();
-    const paths: (keyof typeof t)[] = (Object.keys(t) as (keyof typeof t)[]).filter((k) => k !== 'applyDelta');
+    const paths: (keyof typeof t)[] = (Object.keys(t) as (keyof typeof t)[]).filter((k) => k !== 'applyDelta' && k !== 'importSecrets');
     expect(paths.length).toBeGreaterThan(5);
     for (const p of paths) {
       expect(() => (t[p] as (...a: unknown[]) => unknown)({})).toThrow(SyncReadOnly);
@@ -134,7 +134,7 @@ describe('write guard', () => {
   it('every write-tx path throws SyncReadOnly while joining', () => {
     joining();
     const t = tx();
-    const paths: (keyof typeof t)[] = (Object.keys(t) as (keyof typeof t)[]).filter((k) => k !== 'applyDelta');
+    const paths: (keyof typeof t)[] = (Object.keys(t) as (keyof typeof t)[]).filter((k) => k !== 'applyDelta' && k !== 'importSecrets');
     for (const p of paths) {
       expect(() => (t[p] as (...a: unknown[]) => unknown)({})).toThrow(SyncReadOnly);
     }
@@ -143,6 +143,13 @@ describe('write guard', () => {
   it('applyDelta is not refused while joining', () => {
     joining();
     expect(() => tx().applyDelta(path.join(dir, 'missing'))).not.toThrow(SyncReadOnly);
+  });
+
+  it('importSecrets is not refused on a follower, and is not for anyone else', () => {
+    follower();
+    expect(tx().importSecrets([])).toEqual({ applied: 0 });
+    db.prepare(`UPDATE sync_state SET role='normal'`).run();
+    expect(() => tx().importSecrets([])).toThrow(/only a follower/);
   });
 
   it('applyDelta is not refused on a follower', () => {

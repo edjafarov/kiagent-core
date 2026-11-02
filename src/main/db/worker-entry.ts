@@ -22,6 +22,7 @@ import {
   createWriteTx,
   type AccountWriteOp,
   type FolderScopeInput,
+  type ImportSecretEntry,
   type ImportSourcesInput,
 } from '@main/core/store/write-tx';
 import {
@@ -184,6 +185,8 @@ async function runSyncRole(): Promise<void> {
           writeTx.applyDelta((args as { stagePath: string }).stagePath),
         syncImportSources: (args) =>
           writeTx.importSources(args as ImportSourcesInput),
+        syncImportSecrets: (args) =>
+          writeTx.importSecrets((args as { entries: ImportSecretEntry[] }).entries),
         syncFence: (args) => {
           fenced = (args as { on: boolean }).on;
           return null;

@@ -1317,6 +1317,16 @@ const MIGRATIONS: Migration[] = [
       );
     `);
   },
+  // v16: logins travel (alpha-cent spec 7.8, step 2). Each vault row carries
+  // the `(epoch, n)` stamp of the master's save, so an older value never wins.
+  // (0, 0) is a row that has never been stamped.
+  (db) => {
+    const cols = new Set(
+      (db.prepare(`PRAGMA table_info(vault)`).all() as { name: string }[]).map((c) => c.name),
+    );
+    if (!cols.has('epoch')) db.exec(`ALTER TABLE vault ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0`);
+    if (!cols.has('n')) db.exec(`ALTER TABLE vault ADD COLUMN n INTEGER NOT NULL DEFAULT 0`);
+  },
 ];
 
 /**

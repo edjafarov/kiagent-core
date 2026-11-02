@@ -22,6 +22,15 @@ import {
 import { archiveFiles, swapOutcomePath } from './status';
 import { dropPendingSwap } from './swap';
 
+/** One login on the wire: `value` is the credentials as JSON text, or null for
+ *  a login that was removed. */
+export interface Secret {
+  accountId: string;
+  epoch: number;
+  n: number;
+  value: string | null;
+}
+
 export interface SyncStatus {
   role: SyncRole;
   tracking: boolean;
@@ -42,6 +51,8 @@ export interface SyncStatus {
   archiveBytes: number;
   /** The epoch of the master this device last applied from, or led as. */
   epoch: number;
+  /** The highest login stamp held: what a follower asks the leader for next. */
+  secretsAfter: { epoch: number; n: number };
   /** Where this device's own epoch began, once it has led. */
   grant: { seq: number; cursor: number } | null;
   /** The database file plus its journal: a cheap stand-in for the size of a
@@ -97,6 +108,13 @@ export interface SyncService {
     list: OfferedSource[],
     from: string,
   ): Promise<ImportSourcesResult>;
+  /** The logins stamped above `after`, decrypted here in main; a removed login
+   *  has `value: null`. Meant for the secrets route only, over the mutually
+   *  authenticated channel: never written to a file or a log. */
+  exportSecrets(after: { epoch: number; n: number }): Promise<Secret[]>;
+  /** Stores logins from the leader, each encrypted with the strict keystore
+   *  first: if one fails nothing is written. Only a follower takes them. */
+  importSecrets(list: Secret[]): Promise<{ applied: number }>;
   /** Why this device must not restart or be interrupted right now, if so. */
   isBusy(): string | null;
   /** Follower, joining or fenced, answered from memory. Every gate on the main
@@ -120,7 +138,7 @@ export interface SyncService {
 
 export interface SyncServiceDeps {
   db: AppDb;
-  store: Pick<CoreStore, 'applySyncDelta' | 'importSyncSources' | 'read' | 'vault'>;
+  store: Pick<CoreStore, 'applySyncDelta' | 'importSyncSources' | 'importSyncSecrets' | 'read' | 'vault'>;
   dbPath: string;
   workerFile: string;
   execArgv?: string[];
@@ -128,6 +146,8 @@ export interface SyncServiceDeps {
   deviceId?: () => string | null;
   /** Like `encrypt`, but throws where that one falls back to obfuscation. */
   encryptStrict?: (plain: string) => Buffer;
+  /** Reads a vault blob with this device's keystore (for `exportSecrets`). */
+  decrypt?: (blob: Buffer) => string;
   keystoreAvailable?: () => boolean;
   /** Is this source's connector installed here? Absent: yes. */
   isInstalled?: (source: string) => boolean;
@@ -202,7 +222,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         `INSERT OR REPLACE INTO sync_moved(account_id, to_device)
          SELECT id, ? FROM accounts
           WHERE source <> 'worker' AND source NOT IN (${owned})
-            AND id IN (SELECT account_id FROM vault)`,
+            AND id IN (SELECT account_id FROM vault WHERE length(blob) > 0)`,
         [toDevice, ...DEVICE_OWNED_SOURCES],
       );
       return list;
@@ -271,6 +291,46 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
           if (a && a.status === 'connecting') await deps.start(id);
         }
       }
+      return r;
+    },
+    exportSecrets: async (after) => {
+      const decrypt = deps.decrypt;
+      if (!decrypt) throw new Error('no decrypt on this device: logins can not be read');
+      const rows = await deps.db.all(
+        `SELECT account_id, epoch, n, blob FROM vault
+          WHERE epoch > ? OR (epoch = ? AND n > ?) ORDER BY epoch, n`,
+        [after.epoch, after.epoch, after.n],
+      );
+      const out: Secret[] = [];
+      for (const r of rows as { account_id: string; epoch: number; n: number; blob: Buffer }[]) {
+        if (r.blob.length === 0) {
+          out.push({ accountId: r.account_id, epoch: r.epoch, n: r.n, value: null });
+          continue;
+        }
+        try {
+          out.push({ accountId: r.account_id, epoch: r.epoch, n: r.n, value: decrypt(r.blob) });
+        } catch {
+          // Named by account id only; the value is never in the message.
+          log('warn', `sync: a login for account ${r.account_id} could not be read here and is not sent`);
+        }
+      }
+      return out;
+    },
+    importSecrets: async (list) => {
+      await refreshGate();
+      if (!gated) throw new Error('only a follower takes logins from the leader');
+      if (deps.keystoreAvailable?.() !== true || !deps.encryptStrict) {
+        throw new Error('no keystore on this device: its logins can not be stored safely');
+      }
+      // Everything is encrypted before the writer sees any of it.
+      const entries = list.map((s) => ({
+        accountId: s.accountId,
+        epoch: s.epoch,
+        n: s.n,
+        blob: s.value === null ? Buffer.alloc(0) : deps.encryptStrict!(s.value),
+      }));
+      const r = await deps.store.importSyncSecrets(entries);
+      log('info', `sync: ${r.applied} of ${list.length} logins from the leader were newer`);
       return r;
     },
     isBusy: () => deps.busy?.() ?? null,

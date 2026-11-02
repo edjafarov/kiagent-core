@@ -30,7 +30,11 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
   const grant = conn
     .prepare(`SELECT grant_seq AS seq, grant_cursor AS cursor FROM sync_epochs WHERE epoch = ?`)
     .get(s.epoch) as { seq: number; cursor: number } | undefined;
+  const secrets = conn
+    .prepare(`SELECT epoch, n FROM vault ORDER BY epoch DESC, n DESC LIMIT 1`)
+    .get() as { epoch: number; n: number } | undefined;
   return {
+    secretsAfter: secrets ?? { epoch: 0, n: 0 },
     epoch: s.epoch,
     grant: grant ?? null,
     role: s.role,

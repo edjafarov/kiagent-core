@@ -32,6 +32,7 @@ import {
 import { createOutboxStore, type OutboxStore } from './outbox';
 import { createEventDraftStore, type EventDraftStore } from './event-drafts';
 import { createCalendarIndex, type CalendarIndex } from './calendar-index';
+import { STAMP_EPOCH, STAMP_N, TRACKING } from '../sync/vault-stamp';
 import {
   ACTIONABLE_VISUAL_SIZE_WHERE,
   EXTRACTED_DOCS_WHERE,
@@ -47,6 +48,7 @@ import {
   type CommitResult,
   type FolderScopeInput,
   type FolderScopeResult,
+  type ImportSecretEntry,
   type ImportSourcesInput,
   type ImportSourcesResult,
   type ReconcileCounts,
@@ -206,6 +208,9 @@ export interface CoreStore extends Store {
   /** Takes an offer of accounts and logins from another device in one
    *  transaction (alpha-cent spec 7.7), and wakes what a commit wakes. */
   importSyncSources(input: ImportSourcesInput): Promise<ImportSourcesResult>;
+  /** Takes versioned logins from the leader in one transaction: a value is
+   *  written only where its `(epoch, n)` is newer than the one held. */
+  importSyncSecrets(entries: ImportSecretEntry[]): Promise<{ applied: number }>;
   /** Documents that entered the store at or after `since` (ISO), per
    *  account — new items only: updates, moves and restores of older
    *  documents do not count. Archived documents are left out. */
@@ -771,6 +776,12 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       return r;
     },
 
+    async importSyncSecrets(entries) {
+      return writeTx
+        ? writeTx.importSecrets(entries)
+        : ((await db.proc!('syncImportSecrets', { entries })) as { applied: number });
+    },
+
     async importSyncSources(input) {
       const r = writeTx
         ? writeTx.importSources(input)
@@ -873,10 +884,13 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     vault: {
       async save(account, c) {
         // The credential blob is encrypted here on MAIN (Electron safeStorage),
-        // then the ciphertext Buffer is bound like any other parameter.
+        // then the ciphertext Buffer is bound like any other parameter. A
+        // leader stamps it for its followers; anyone else keeps the stamp.
         await db.run(
-          `INSERT INTO vault(account_id, blob) VALUES(?, ?)
-           ON CONFLICT(account_id) DO UPDATE SET blob = excluded.blob`,
+          `INSERT INTO vault(account_id, blob, epoch, n) VALUES(?, ?, ${STAMP_EPOCH}, ${STAMP_N})
+           ON CONFLICT(account_id) DO UPDATE SET blob = excluded.blob,
+             epoch = CASE WHEN ${TRACKING} THEN excluded.epoch ELSE vault.epoch END,
+             n = CASE WHEN ${TRACKING} THEN excluded.n ELSE vault.n END`,
           [account, deps.encrypt(JSON.stringify(c))],
         );
       },
@@ -884,11 +898,19 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         const r = (
           await db.all(`SELECT blob FROM vault WHERE account_id = ?`, [account])
         )[0] as { blob: Buffer } | undefined;
-        if (!r) return null;
+        // An empty blob is a login that was removed on the leader.
+        if (!r || r.blob.length === 0) return null;
         return JSON.parse(deps.decrypt(r.blob)) as Credentials;
       },
       async delete(account) {
-        await db.run(`DELETE FROM vault WHERE account_id = ?`, [account]);
+        // A leader keeps the row as an empty blob with a new stamp, so the
+        // removal reaches its followers like any other version.
+        await db.run(
+          `UPDATE vault SET blob = x'', epoch = ${STAMP_EPOCH}, n = ${STAMP_N}
+            WHERE account_id = ? AND ${TRACKING}`,
+          [account],
+        );
+        await db.run(`DELETE FROM vault WHERE account_id = ? AND NOT (${TRACKING})`, [account]);
       },
     },
 

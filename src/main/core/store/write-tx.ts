@@ -17,6 +17,7 @@ import type {
 } from '@shared/contracts';
 import { isPlainObject } from '@shared/source-options';
 import { copiedTables, primaryKeyColumns } from '../sync/tables';
+import { NEWER, STAMP_EPOCH, STAMP_N } from '../sync/vault-stamp';
 import {
   gateFrom,
   readGateSync,
@@ -288,6 +289,15 @@ export interface ImportSourceEntry {
   installed: boolean;
 }
 
+/** One login from the leader: `blob` is already encrypted with this device's
+ *  keystore, or empty for a removed login. */
+export interface ImportSecretEntry {
+  accountId: string;
+  epoch: number;
+  n: number;
+  blob: Buffer;
+}
+
 export interface ImportSourcesInput {
   offerId: string;
   /** The offering device; its first 8 characters suffix an unstable match. */
@@ -309,6 +319,10 @@ export interface WriteTx {
   /** Multi-device sync, step 1: take an offer of accounts and logins in ONE
    *  transaction with the `sync_offers` row (alpha-cent spec 7.7). */
   importSources(input: ImportSourcesInput): ImportSourcesResult;
+  /** Multi-device sync, step 2: versioned logins from the leader, in ONE
+   *  transaction. Follower only; the one write a follower makes to the vault
+   *  besides its own. */
+  importSecrets(entries: ImportSecretEntry[]): { applied: number };
   /** Multi-device sync: apply one validated stage from the master, rows and
    *  cursor in ONE transaction (alpha-cent spec 7.4). Throws SyncStageInvalid
    *  before touching anything if the stage is bad. */
@@ -696,7 +710,7 @@ export function createWriteTx(
          RETURNING id`,
       );
       const vault = conn.prepare(
-        `INSERT INTO vault(account_id, blob) VALUES(?, ?)
+        `INSERT INTO vault(account_id, blob, epoch, n) VALUES(?, ?, ${STAMP_EPOCH}, ${STAMP_N})
          ON CONFLICT(account_id) DO NOTHING`,
       );
       const out: ImportSourcesResult = {
@@ -1734,6 +1748,20 @@ export function createWriteTx(
     },
   );
 
+  const importSecretsTx = conn.transaction((entries: ImportSecretEntry[]): { applied: number } => {
+    if (readRoleSync(conn) !== 'follower') {
+      throw new Error('only a follower takes logins from the leader');
+    }
+    const put = conn.prepare(
+      `INSERT INTO vault(account_id, blob, epoch, n) VALUES(?, ?, ?, ?)
+       ON CONFLICT(account_id) DO UPDATE SET blob = excluded.blob, epoch = excluded.epoch, n = excluded.n
+        WHERE ${NEWER('excluded', 'vault')}`,
+    );
+    let applied = 0;
+    for (const e of entries) applied += put.run(e.accountId, e.blob, e.epoch, e.n).changes;
+    return { applied };
+  });
+
   const tx: WriteTx = {
     applyDelta: (stagePath) => {
       const { target, epoch, rows } = validateStage(stagePath);
@@ -1755,6 +1783,8 @@ export function createWriteTx(
     accountWrite: publishing((w: AccountWriteOp) => accountWriteTx(w)),
 
     importSources: publishing((i: ImportSourcesInput) => importSourcesTx(i)),
+
+    importSecrets: (entries) => importSecretsTx(entries),
 
     reconcileBegin: (accountId) => beginPass(accountId),
 
@@ -1817,7 +1847,7 @@ export function createWriteTx(
   // the app runs, and a call that was queued sees the role it runs under.
   const guard = tx as unknown as Record<string, (...a: unknown[]) => unknown>;
   for (const name of Object.keys(guard)) {
-    if (name === 'applyDelta') continue;
+    if (name === 'applyDelta' || name === 'importSecrets') continue;
     const real = guard[name];
     guard[name] = (...args: unknown[]) => {
       // A joining device is read-only too (spec 7.7), the same single rule.

@@ -137,6 +137,8 @@ export const NS_METHODS: Record<string, string[]> = {
     'forgetMoved',
     'canAcceptSources',
     'importSources',
+    'exportSecrets',
+    'importSecrets',
     'isBusy',
     'deleteArchive',
   ],
