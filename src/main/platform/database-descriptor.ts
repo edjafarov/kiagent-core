@@ -12,6 +12,13 @@ export interface PluginDatabaseDescriptor {
     versionTable?: string;
     userVersionModule?: string;
   };
+  /** Logical names of tables copied between a user's devices (step 2). Outside
+   *  the append-only comparison: naming a table here changes nothing a
+   *  migration made. */
+  synced?: string[];
+  /** A subset of `synced` this device may still write while it is a follower,
+   *  for rows it is capturing itself (a meeting being recorded). */
+  ownerCapture?: string[];
 }
 
 const NAME = /^[a-z][a-z0-9_]*$/;
@@ -28,7 +35,7 @@ export function parseDatabaseDescriptor(
 ): PluginDatabaseDescriptor {
   if (
     !isRecord(value) ||
-    !exact(value, ['format', 'objects', 'modules', 'legacy'])
+    !exact(value, ['format', 'objects', 'modules', 'legacy', 'synced', 'ownerCapture'])
   )
     fail('expected object with format, objects, modules and legacy');
   const root = value as Record<string, unknown>;
@@ -169,6 +176,27 @@ export function parseDatabaseDescriptor(
       );
     }
   }
+  const nameList = (key: 'synced' | 'ownerCapture'): string[] | undefined => {
+    const v = root[key];
+    if (v === undefined) return undefined;
+    if (
+      !Array.isArray(v) ||
+      v.some((n) => typeof n !== 'string' || !NAME.test(n)) ||
+      new Set(v).size !== v.length
+    )
+      fail(`invalid ${key}`);
+    return v as string[];
+  };
+  const synced = nameList('synced');
+  const ownerCapture = nameList('ownerCapture');
+  for (const name of synced ?? []) {
+    if (!tableNames.has(name)) fail(`synced ${name} is not a table of this descriptor`);
+    if (!hasPrimaryKey(name, modules))
+      fail(`synced table ${name} needs a primary key`);
+  }
+  for (const name of ownerCapture ?? []) {
+    if (!(synced ?? []).includes(name)) fail(`ownerCapture ${name} is not in synced`);
+  }
   return {
     format: 1,
     objects,
@@ -178,5 +206,27 @@ export function parseDatabaseDescriptor(
       ...(typeof versionTable === 'string' ? { versionTable } : {}),
       ...(typeof userVersionModule === 'string' ? { userVersionModule } : {}),
     },
+    ...(synced ? { synced } : {}),
+    ...(ownerCapture ? { ownerCapture } : {}),
   };
+}
+
+/** A synced table's rows are matched by key on the other device, so its
+ *  CREATE TABLE must declare one. Found in the migration text; a table made
+ *  any other way is refused rather than guessed at. */
+function hasPrimaryKey(
+  table: string,
+  modules: { migrations: { statements: string[] }[] }[],
+): boolean {
+  const create = new RegExp(
+    `CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?\\{\\{${table}\\}\\}\\s*\\(([\\s\\S]*)\\)`,
+    'i',
+  );
+  for (const m of modules)
+    for (const mig of m.migrations)
+      for (const statement of mig.statements) {
+        const body = create.exec(statement)?.[1];
+        if (body !== undefined && /\bPRIMARY\s+KEY\b/i.test(body)) return true;
+      }
+  return false;
 }

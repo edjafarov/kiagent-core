@@ -10,6 +10,7 @@ import {
 import type { DbOwner } from './coordinator';
 import type { PluginConnectionOptions } from './plugin-connections';
 import { openSqlite, type SqliteDatabase } from './sqlite-runtime';
+import { ensureSyncTriggers } from '../core/sync/tracking';
 import { createPluginAuthorizer, ownedNamespace } from './plugin-authorizer';
 
 export type PluginStorageState =
@@ -733,7 +734,7 @@ export function createPluginRegistry(
     });
     return metadataFor(pluginId);
   };
-  return {
+  const api: PluginRegistry = {
     register: async (input) => {
       const descriptor = parseDatabaseDescriptor(input.descriptor);
       validateRegisteredReferences(descriptor);
@@ -855,6 +856,10 @@ export function createPluginRegistry(
         triggers: descriptor.objects
           .filter((object) => object.kind === 'trigger')
           .map((object) => object.name),
+        ...(descriptor.synced ? { synced: descriptor.synced } : {}),
+        ...(descriptor.ownerCapture
+          ? { ownerCapture: descriptor.ownerCapture }
+          : {}),
       };
     },
     migrate: async (input) => {
@@ -1210,6 +1215,26 @@ export function createPluginRegistry(
     },
     validateSchema: async (pluginId) =>
       validateSchemaInternal(pluginId, descriptorFor(pluginId)),
+  };
+  // A new or changed synced table needs its triggers while this device tracks.
+  // They are made on the core connection, which has no authorizer: the plugin
+  // authorizer deliberately cannot create a trigger it does not own.
+  const withSyncTriggers = <A extends unknown[], R>(
+    f: (...a: A) => Promise<R>,
+  ): ((...a: A) => Promise<R>) => {
+    return async (...a: A) => {
+      const result = await f(...a);
+      const core = _coreDb as { prepare?: unknown } | undefined;
+      if (core && typeof core.prepare === 'function')
+        ensureSyncTriggers(core as Database.Database);
+      return result;
+    };
+  };
+  return {
+    ...api,
+    register: withSyncTriggers(api.register),
+    migrate: withSyncTriggers(api.migrate),
+    completeImport: withSyncTriggers(api.completeImport),
   };
 }
 

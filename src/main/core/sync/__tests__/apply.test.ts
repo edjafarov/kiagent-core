@@ -14,6 +14,7 @@ import { createWriteTx, type WriteTx } from '../../store/write-tx';
 import { buildDelta, SyncStageInvalid, type SyncCursor } from '../delta';
 import { disableTracking, enableTracking } from '../tracking';
 import { SyncReadOnly } from '../role';
+import { addAttention, addDraft, addOutbox, physical, registerPlugin } from './synced-plugin';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -284,5 +285,56 @@ describe('rewind (step 2)', () => {
       c.prepare(`SELECT external_id, markdown FROM documents ORDER BY external_id`).all();
     expect(md(dst())).toEqual(md(src()));
     expect((dst().prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number }).epoch).toBe(2);
+  });
+});
+
+describe('more copied tables (step 2)', () => {
+  it('outbox and event_drafts rows travel and apply', async () => {
+    const a = await account();
+    addOutbox(src(), a.id, 'o1', 'sent');
+    addDraft(src(), a.id, 'e1');
+    sync();
+    expect(rows(dst(), 'outbox')).toEqual(rows(src(), 'outbox'));
+    expect(rows(dst(), 'event_drafts')).toEqual(rows(src(), 'event_drafts'));
+    src().prepare(`UPDATE outbox SET status='failed' WHERE id='o1'`).run();
+    src().prepare(`DELETE FROM event_drafts`).run();
+    sync();
+    expect(rows(dst(), 'outbox')).toEqual(rows(src(), 'outbox'));
+    expect(rows(dst(), 'event_drafts')).toEqual([]);
+  });
+
+  it('attention rows and epochs travel and apply', async () => {
+    addAttention(src(), 'att1');
+    src().prepare(`INSERT INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES(2, 5, 6)`).run();
+    sync();
+    expect(rows(dst(), 'attention_items')).toEqual(rows(src(), 'attention_items'));
+    expect(rows(dst(), 'attention_revisions')).toEqual(rows(src(), 'attention_revisions'));
+    expect(dst().prepare(`SELECT * FROM sync_epochs`).all()).toEqual([{ epoch: 2, grant_seq: 5, grant_cursor: 6 }]);
+  });
+
+  it('apply upserts on the table primary key, blobs included, and deletes by it', async () => {
+    await registerPlugin(path.join(dir, 'src.db'), src());
+    await registerPlugin(path.join(dir, 'dst.db'), dst());
+    const n = physical('notes');
+    const b = physical('blobs');
+    src().prepare(`INSERT INTO "${n}"(account_id, key, body) VALUES('a','k','one'),('a','j','two')`).run();
+    src().prepare(`INSERT INTO "${b}"(id, data) VALUES('x', ?)`).run(Buffer.from([0, 1, 2, 255]));
+    sync();
+    src().prepare(`UPDATE "${n}" SET body='three' WHERE key='k'`).run();
+    src().prepare(`DELETE FROM "${n}" WHERE key='j'`).run();
+    sync();
+    expect(dst().prepare(`SELECT account_id, key, body FROM "${n}"`).all()).toEqual([
+      { account_id: 'a', key: 'k', body: 'three' },
+    ]);
+    const got = dst().prepare(`SELECT data FROM "${b}"`).get() as { data: Buffer };
+    expect(Buffer.compare(got.data, Buffer.from([0, 1, 2, 255]))).toBe(0);
+  });
+
+  it('a table that is not copied on this device is refused', async () => {
+    await registerPlugin(path.join(dir, 'src.db'), src());
+    src().prepare(`INSERT INTO "${physical('notes')}"(account_id, key, body) VALUES('a','k','one')`).run();
+    const r = buildDelta(reader, after, 0, stage, 1e9);
+    if (r.status !== 'ok') throw new Error(r.status);
+    expect(() => destTx.applyDelta(stage)).toThrow(SyncStageInvalid);
   });
 });

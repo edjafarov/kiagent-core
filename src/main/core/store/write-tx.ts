@@ -16,7 +16,7 @@ import type {
   SyncStatus,
 } from '@shared/contracts';
 import { isPlainObject } from '@shared/source-options';
-import { COPIED_CORE_TABLES } from '../sync/tables';
+import { copiedTables, primaryKeyColumns } from '../sync/tables';
 import {
   gateFrom,
   readGateSync,
@@ -1614,6 +1614,16 @@ export function createWriteTx(
       }
       const upserts = new Map<string, BetterSqlite3.Statement>();
       const columns = new Map<string, Set<string>>();
+      const keyColumns = new Map<string, string[]>();
+      const keyOf = (tbl: string): string[] => {
+        let k = keyColumns.get(tbl);
+        if (!k) {
+          k = primaryKeyColumns(conn, tbl);
+          keyColumns.set(tbl, k);
+        }
+        return k;
+      };
+      const copied = new Set(copiedTables(conn));
       const upsertRow = (tbl: string, row: Record<string, unknown>): void => {
         const cols = Object.keys(row);
         const known =
@@ -1634,18 +1644,32 @@ export function createWriteTx(
         const key = `${tbl}|${cols.join(',')}`;
         let stmt = upserts.get(key);
         if (!stmt) {
+          const pk = keyOf(tbl);
+          const rest = cols.filter((c) => !pk.includes(c));
           // Never INSERT OR REPLACE: it deletes the old row, which fires the
           // foreign key cascade and changes the rowid search is pinned to.
           stmt = conn.prepare(
-            `INSERT INTO ${tbl}(${cols.join(',')}) VALUES(${cols.map(() => '?').join(',')})
-             ON CONFLICT(id) DO UPDATE SET ${cols
-               .filter((c) => c !== 'id')
-               .map((c) => `${c} = excluded.${c}`)
-               .join(', ')}`,
+            `INSERT INTO "${tbl}"(${cols.map((c) => `"${c}"`).join(',')}) VALUES(${cols.map(() => '?').join(',')})
+             ON CONFLICT(${pk.map((c) => `"${c}"`).join(',')}) ${
+               rest.length === 0
+                 ? 'DO NOTHING'
+                 : `DO UPDATE SET ${rest.map((c) => `"${c}" = excluded."${c}"`).join(', ')}`
+             }`,
           );
           upserts.set(key, stmt);
         }
         stmt.run(...cols.map((c) => row[c]));
+      };
+      const deleters = new Map<string, BetterSqlite3.Statement>();
+      const deleteByKey = (tbl: string, pk: unknown[]): void => {
+        let stmt = deleters.get(tbl);
+        if (!stmt) {
+          stmt = conn.prepare(
+            `DELETE FROM "${tbl}" WHERE ${keyOf(tbl).map((c) => `"${c}" = ?`).join(' AND ')}`,
+          );
+          deleters.set(tbl, stmt);
+        }
+        stmt.run(...pk);
       };
       const searchedText = conn.prepare(
         `SELECT title, markdown, languages FROM documents WHERE id = ?`,
@@ -1660,18 +1684,20 @@ export function createWriteTx(
       const deleteAccount = conn.prepare(`DELETE FROM accounts WHERE id = ?`);
 
       for (const e of entries) {
-        if (!COPIED_CORE_TABLES.includes(e.tbl)) {
+        if (!copied.has(e.tbl)) {
           throw new SyncStageInvalid(`table ${e.tbl}`);
         }
         if (e.op === 'delete') {
-          const id = e.pk[0];
+          const id = e.pk[0] as string;
           if (e.tbl === 'documents') {
             ftsDelete(id);
             deleteDoc.run(id);
-          } else {
+          } else if (e.tbl === 'accounts') {
             for (const d of accountDocs.all(id) as { id: string }[])
               ftsDelete(d.id);
             deleteAccount.run(id);
+          } else {
+            deleteByKey(e.tbl, e.pk);
           }
         } else if (e.tbl === 'documents') {
           const id = e.row.id as string;

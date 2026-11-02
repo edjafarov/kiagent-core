@@ -9,6 +9,13 @@ export interface PluginAuthorizerOptions {
   /** Host-only registry metadata names. The mode is toggled around fixed
    * registry statements and is never exposed through PluginDb. */
   hostMetadataTables?: readonly string[];
+  /** Logical names of the plugin's tables that are copied between devices, and
+   *  the subset it may still write on a follower (step 2). */
+  synced?: readonly string[];
+  ownerCapture?: readonly string[];
+  /** Asked per statement; must not run SQL. A follower, a joining device or a
+   *  fenced master is read-only. */
+  readOnly?: () => boolean;
 }
 const denied = /^sqlite_/i;
 export function ownedNamespace(pluginId: string): string {
@@ -24,6 +31,10 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
     owned.add(pluginIdentifier(options.pluginId, n).replaceAll('"', ''));
   for (const n of options.triggers ?? [])
     owned.add(pluginIdentifier(options.pluginId, n).replaceAll('"', ''));
+  const physical = (n: string) => pluginIdentifier(options.pluginId, n).replaceAll('"', '');
+  const syncedTables = new Set((options.synced ?? []).map(physical));
+  const captured = new Set((options.ownerCapture ?? []).map(physical));
+  let refusedByRole: string | null = null;
   let privateTransaction = false;
   let schemaMode = false;
   let explicitSchemaSelect = false;
@@ -65,6 +76,14 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
     const table = typeof args[1] === 'string' ? args[1] : '';
     const db = typeof args[3] === 'string' ? args[3] : '';
     if (db && db !== 'main' && db !== 'temp') return 1;
+    const trigger = typeof args[4] === 'string' ? args[4] : '';
+    // The change tracker's own triggers write what they track and read the
+    // switch, whoever fired them.
+    if (trigger.startsWith('sync_')) {
+      if (table === 'sync_rows' && (action === 18 || action === 9 || action === 23)) return 0;
+      if (table === 'sync_state' && action === 20) return 0;
+      if (table === 'sqlite_sequence') return 0;
+    }
     if (action === 22) return privateTransaction ? 0 : 1;
     if (action === 33) return 0;
     if (!table) {
@@ -144,6 +163,14 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
         : 1;
     }
     if ([19, 24, 25, 26, 27, 28, 29, 30, 32].includes(action)) return 1;
+    if ([9, 18, 23].includes(action) && syncedTables.has(table)) {
+      // One write authority per copied table: on a follower only the master's
+      // delta writes it, except rows this device is capturing itself.
+      if (options.readOnly?.() && !captured.has(table)) {
+        refusedByRole = table;
+        return 1;
+      }
+    }
     if (hostMetadataMode && table === 'sqlite_sequence') return 0;
     if (denied.test(table)) return 1;
     if (hostMetadataMode && hostMetadata.has(table)) return 0;
@@ -159,6 +186,16 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
     }
   ).reset = () => {
     explicitSchemaSelect = false;
+    refusedByRole = null;
+  };
+  (
+    authorizer as typeof authorizer & {
+      takeRoleRefusal: () => string | null;
+    }
+  ).takeRoleRefusal = () => {
+    const t = refusedByRole;
+    refusedByRole = null;
+    return t;
   };
   (
     authorizer as typeof authorizer & {

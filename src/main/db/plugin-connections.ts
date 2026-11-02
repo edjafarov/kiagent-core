@@ -1,4 +1,5 @@
 import { formatPluginSql, pluginIdentifier } from '@shared/plugin-sql';
+import { SyncReadOnly } from '../core/sync/role';
 import { openSqlite } from './sqlite-runtime';
 import {
   createPluginAuthorizer,
@@ -7,6 +8,9 @@ import {
 
 export interface PluginConnectionOptions extends PluginAuthorizerOptions {
   filename?: string;
+  /** Runs before each statement is compiled, outside the authorizer: the place
+   *  to refresh whatever `readOnly` answers from. */
+  beforeStatement?: () => void;
 }
 export interface PluginConnection {
   exec(sql: string, params?: unknown[]): Promise<void>;
@@ -98,7 +102,17 @@ export async function openPluginConnection(
   const prepare = (sql: string) => {
     (authorizer as typeof authorizer & { reset?: () => void }).reset?.();
     rejectPrivateSchema(sql);
-    return db.prepare(sqlFor(options, sql));
+    options.beforeStatement?.();
+    try {
+      return db.prepare(sqlFor(options, sql));
+    } catch (e) {
+      // The authorizer can only say no; say why when the reason was the role.
+      const refused = (
+        authorizer as typeof authorizer & { takeRoleRefusal?: () => string | null }
+      ).takeRoleRefusal?.();
+      if (refused) throw new SyncReadOnly('a table copied from the master');
+      throw e;
+    }
   };
   const control = (sql: string): void => {
     const set = (

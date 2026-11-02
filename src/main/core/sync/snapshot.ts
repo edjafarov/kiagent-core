@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import Database from 'better-sqlite3';
 
 import type { SyncCursor } from './delta';
-import { COPIED_CORE_TABLES, isDerivedTable } from './tables';
+import { copiedTables, isDerivedTable } from './tables';
 
 export const SNAPSHOT_META = 'sync_snapshot_meta';
 
@@ -44,7 +44,8 @@ export function buildSnapshot(
             .all() as { name: string }[]
         ).map((r) => r.name),
       );
-      for (const t of COPIED_CORE_TABLES) {
+      const copied = copiedTables(conn);
+      for (const t of copied) {
         const def = master.find((m) => m.type === 'table' && m.name === t);
         if (!def) throw new Error(`snapshot: no table ${t}`);
         conn.exec(qualify(def.sql));
@@ -54,18 +55,27 @@ export function buildSnapshot(
       );
       for (const v of virtuals) conn.exec(qualify(v.sql));
       for (const m of master) {
-        if (m.type === 'index' && COPIED_CORE_TABLES.includes(m.tbl_name)) {
+        if (m.type === 'index' && copied.includes(m.tbl_name)) {
           conn.exec(qualify(m.sql));
         }
       }
-      for (const t of COPIED_CORE_TABLES) {
+      const rowidless = new Set(
+        (
+          conn
+            .prepare(`SELECT name FROM pragma_table_list WHERE schema='main' AND wr = 1`)
+            .all() as { name: string }[]
+        ).map((r) => r.name),
+      );
+      for (const t of copied) {
         const cols = (
           conn.prepare(`SELECT name FROM pragma_table_info(?)`).all(t) as { name: string }[]
         )
           .map((c) => `"${c.name}"`)
           .join(',');
         conn.exec(
-          `INSERT INTO snap.${t}(rowid, ${cols}) SELECT rowid, ${cols} FROM main.${t}`,
+          rowidless.has(t)
+            ? `INSERT INTO snap."${t}"(${cols}) SELECT ${cols} FROM main."${t}"`
+            : `INSERT INTO snap."${t}"(rowid, ${cols}) SELECT rowid, ${cols} FROM main."${t}"`,
         );
       }
       for (const s of shadow) {

@@ -165,6 +165,14 @@ describe('promote', () => {
     expect((await state()).epoch).toBe(3);
   });
 
+  it('the sync_epochs row is the first tracked row, so it travels', async () => {
+    await follow();
+    await sync.promote(3);
+    const first = await db.all(`SELECT tbl, pk, cursor FROM sync_rows ORDER BY cursor LIMIT 1`);
+    expect(first).toMatchObject([{ tbl: 'sync_epochs', pk: '[3]' }]);
+    expect(Number((first[0] as { cursor: number }).cursor)).toBeGreaterThan(3 * GAP);
+  });
+
   it('keeps history_id, turns tracking on and clears the master', async () => {
     await follow();
     await sync.promote(2);

@@ -10,7 +10,7 @@ import Database from 'better-sqlite3';
 import { hashFile, SNAPSHOT_META } from './snapshot';
 import { pauseMovedAccounts } from './sources';
 import { swapOutcomePath } from './status';
-import { COPIED_CORE_TABLES, isDerivedTable, LOCAL_CORE_TABLES } from './tables';
+import { COPIED_CORE_TABLES, copiedTables, isDerivedTable, LOCAL_CORE_TABLES } from './tables';
 
 export const SWAP_STEPS = ['committed', 'merged', 'archived', 'replaced', 'outcome'] as const;
 type SwapStep = (typeof SWAP_STEPS)[number] | 'restore-merged' | 'restore-moved';
@@ -97,8 +97,10 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string): vo
         after_cursor: number;
         history_id: string | null;
       };
-      const copied = (name: string) =>
-        COPIED_CORE_TABLES.includes(name) || isDerivedTable(name);
+      // The plugin tables the old file's descriptors name travel with the
+      // snapshot; every other plugin table stays this device's own.
+      const copiedNames = new Set(copiedTables(db, 'old'));
+      const copied = (name: string) => copiedNames.has(name) || isDerivedTable(name);
       const defs = db
         .prepare(
           `SELECT type, name, tbl_name, sql FROM old.sqlite_master

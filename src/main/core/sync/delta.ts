@@ -7,7 +7,7 @@ import fs from 'node:fs';
 
 import type BetterSqlite3 from 'better-sqlite3';
 
-import { COPIED_CORE_TABLES } from './tables';
+import { copiedTables, primaryKeyColumns } from './tables';
 
 export interface SyncCursor {
   seq: number;
@@ -29,7 +29,7 @@ export type DeltaResult =
   | { status: 'too-large' };
 
 export type StageEntry =
-  | { op: 'delete'; tbl: string; pk: string[] }
+  | { op: 'delete'; tbl: string; pk: unknown[] }
   | { op: 'upsert'; tbl: string; row: Record<string, unknown> };
 
 export class SyncStageInvalid extends Error {
@@ -84,6 +84,7 @@ export function buildDelta(
   let bytes = 0;
   let rows = 0;
   const write = (e: StageEntry): void => {
+    if (e.op === 'upsert') e = { ...e, row: encodeRow(e.row) };
     const line = Buffer.from(`${JSON.stringify(e)}\n`);
     bytes += line.length;
     if (bytes > capBytes) throw new TooLarge();
@@ -99,34 +100,44 @@ export function buildDelta(
       const tracked = conn
         .prepare(`SELECT tbl, pk FROM sync_rows WHERE cursor > ? ORDER BY cursor`)
         .all(after.cursor) as { tbl: string; pk: string }[];
+      const tables = copiedTables(conn);
       const keys = (tbl: string) =>
-        tracked
-          .filter((e) => e.tbl === tbl && COPIED_CORE_TABLES.includes(tbl))
-          .map((e) => JSON.parse(e.pk) as string[]);
-      const getDoc = conn.prepare(`SELECT * FROM documents WHERE id = ?`);
-      const getAccount = conn.prepare(`SELECT * FROM accounts WHERE id = ?`);
-      const docKeys = keys('documents');
-      const accountKeys = keys('accounts');
+        tracked.filter((e) => e.tbl === tbl).map((e) => JSON.parse(e.pk) as unknown[]);
+      const getters = new Map<string, BetterSqlite3.Statement>();
+      const getRow = (tbl: string, pk: unknown[]): Record<string, unknown> | undefined => {
+        let stmt = getters.get(tbl);
+        if (!stmt) {
+          const cols = primaryKeyColumns(conn, tbl);
+          stmt = conn.prepare(
+            `SELECT * FROM "${tbl}" WHERE ${cols.map((c) => `"${c}" = ?`).join(' AND ')}`,
+          );
+          getters.set(tbl, stmt);
+        }
+        return stmt.get(...pk) as Record<string, unknown> | undefined;
+      };
 
-      for (const pk of docKeys) {
-        if (!getDoc.get(pk[0])) write({ op: 'delete', tbl: 'documents', pk });
+      // Children first: the list is parents-first, so walk it backwards.
+      for (const tbl of [...tables].reverse()) {
+        for (const pk of keys(tbl)) {
+          if (!getRow(tbl, pk)) write({ op: 'delete', tbl, pk });
+        }
       }
-      for (const pk of accountKeys) {
-        if (!getAccount.get(pk[0])) write({ op: 'delete', tbl: 'accounts', pk });
-      }
-      for (const pk of accountKeys) {
-        const row = getAccount.get(pk[0]) as Record<string, unknown> | undefined;
-        if (row) write({ op: 'upsert', tbl: 'accounts', row });
-      }
-      // A write above buffers nothing, so these iterators stream the rows.
-      const fromSeq = conn
-        .prepare(`SELECT * FROM documents WHERE seq > ? ORDER BY seq`)
-        .iterate(after.seq) as IterableIterator<Record<string, unknown>>;
-      for (const row of fromSeq) write({ op: 'upsert', tbl: 'documents', row });
-      for (const pk of docKeys) {
-        const row = getDoc.get(pk[0]) as Record<string, unknown> | undefined;
-        if (row && (row.seq as number) <= after.seq) {
-          write({ op: 'upsert', tbl: 'documents', row });
+      for (const tbl of tables) {
+        if (tbl === 'documents') {
+          // A write above buffers nothing, so these iterators stream the rows.
+          const fromSeq = conn
+            .prepare(`SELECT * FROM documents WHERE seq > ? ORDER BY seq`)
+            .iterate(after.seq) as IterableIterator<Record<string, unknown>>;
+          for (const row of fromSeq) write({ op: 'upsert', tbl, row });
+          for (const pk of keys(tbl)) {
+            const row = getRow(tbl, pk);
+            if (row && (row.seq as number) <= after.seq) write({ op: 'upsert', tbl, row });
+          }
+          continue;
+        }
+        for (const pk of keys(tbl)) {
+          const row = getRow(tbl, pk);
+          if (row) write({ op: 'upsert', tbl, row });
         }
       }
 
@@ -157,6 +168,30 @@ export function buildDelta(
 }
 
 class TooLarge extends Error {}
+
+/** A BLOB column crosses the stage as `{"$b64": ...}`; JSON would turn a Buffer
+ *  into an array of numbers that SQLite can't bind. */
+function encodeRow(row: Record<string, unknown>): Record<string, unknown> {
+  let out: Record<string, unknown> | null = null;
+  for (const [k, v] of Object.entries(row)) {
+    if (Buffer.isBuffer(v) || v instanceof Uint8Array) {
+      out ??= { ...row };
+      out[k] = { $b64: Buffer.from(v).toString('base64') };
+    }
+  }
+  return out ?? row;
+}
+
+const isBlob = (v: unknown): v is { $b64: string } =>
+  !!v && typeof v === 'object' && typeof (v as { $b64?: unknown }).$b64 === 'string';
+
+function decodeEntry(e: StageEntry): StageEntry {
+  if (e.op !== 'upsert') return e;
+  for (const [k, v] of Object.entries(e.row)) {
+    if (isBlob(v)) e.row[k] = Buffer.from(v.$b64, 'base64');
+  }
+  return e;
+}
 
 /** Reads a stage by bytes, on \n only: JSON leaves U+2028 unescaped, and a
  *  line-reader would split on it. Bounded memory, because a stage can be 250 MB
@@ -220,7 +255,7 @@ export function* stageEntries(file: string, rows: number): Generator<StageEntry>
   for (const line of lines(file)) {
     if (i === rows) return;
     i += 1;
-    yield JSON.parse(line.toString('utf8')) as StageEntry;
+    yield decodeEntry(JSON.parse(line.toString('utf8')) as StageEntry);
   }
 }
 

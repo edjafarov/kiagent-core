@@ -10,6 +10,7 @@ import { readSyncStatus } from '../core/sync/status';
 import { prepareRestore, prepareSwap } from '../core/sync/swap';
 import { disableTracking, enableTracking } from '../core/sync/tracking';
 import { demote, promote } from '../core/sync/promote';
+import { gateFrom, readGateSync } from '../core/sync/role';
 import { parentPort, workerData } from 'node:worker_threads';
 import path from 'node:path';
 import type { CommitBatch, ExternalRef, Seq } from '@shared/contracts';
@@ -432,7 +433,22 @@ async function runSyncRole(): Promise<void> {
               signal,
               'core.plugin.open',
             );
-            const connection = await openPluginConnection(dbPath, registration);
+            // Only a plugin with synced tables is ever refused by role. The
+            // authorizer may not run SQL, so the gate is read before each
+            // statement and the authorizer asks the cached answer.
+            let gateReadOnly = false;
+            const connection = await openPluginConnection(
+              dbPath,
+              registration.synced?.length
+                ? {
+                    ...registration,
+                    readOnly: () => fenced || gateReadOnly,
+                    beforeStatement: () => {
+                      gateReadOnly = gateFrom(readGateSync(db._conn!));
+                    },
+                  }
+                : registration,
+            );
             pluginConnections.set(
               request.owner.handle ?? request.owner.extensionId,
               connection,

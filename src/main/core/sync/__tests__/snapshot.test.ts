@@ -15,6 +15,7 @@ import { buildDelta } from '../delta';
 import { buildSnapshot } from '../snapshot';
 import { applyPendingSwap, prepareRestore, prepareSwap, SWAP_STEPS } from '../swap';
 import { enableTracking } from '../tracking';
+import { addAttention, addOutbox, physical, registerPlugin } from './synced-plugin';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -473,5 +474,40 @@ describe('swap', () => {
     expect(d.prepare(`SELECT role FROM sync_state`).get()).toEqual({ role: 'follower' });
     expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
     d.close();
+  });
+});
+
+describe('more copied tables (step 2)', () => {
+  it('an unlisted plugin table is dropped from the snapshot, a synced one is kept', async () => {
+    await registerPlugin(masterFile, conn());
+    conn().prepare(`INSERT INTO "${physical('notes')}"(account_id, key, body) VALUES('a','k','kept')`).run();
+    conn().prepare(`INSERT INTO "${physical('local_x')}"(id, v) VALUES('1','secretlocal')`).run();
+    snapshot();
+    const s = openRead(snap);
+    const names = (s.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as { name: string }[]).map((r) => r.name);
+    expect(names).toContain(physical('notes'));
+    expect(names).not.toContain(physical('local_x'));
+    expect(s.prepare(`SELECT body FROM "${physical('notes')}"`).all()).toEqual([{ body: 'kept' }]);
+    s.close();
+  });
+
+  it('outbox, drafts and attention rows are in the snapshot, and a swap replaces the follower own', async () => {
+    const a = await account();
+    addOutbox(conn(), a.id, 'o1', 'sent');
+    addAttention(conn(), 'att');
+    const d = new Database(receiver);
+    d.prepare(`INSERT INTO accounts(id, source, identifier, status, created_at) VALUES('acc2','s','i2','idle','x')`).run();
+    d.prepare(
+      `INSERT INTO outbox(id, account_id, kind, recipient_display, body_markdown, confirm_mode, status, created_via, created_at, expires_at)
+       VALUES('mine','old','reply','r','b','review','draft','t','x','y')`,
+    ).run();
+    d.close();
+    const r = snapshot();
+    expect(prepareSwap(receiver, snap, r.sha256, 'm')).toBe('ready');
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    const after = new Database(receiver);
+    expect(after.prepare(`SELECT id, status FROM outbox`).all()).toEqual([{ id: 'o1', status: 'sent' }]);
+    expect(after.prepare(`SELECT count(*) n FROM attention_items`).get()).toEqual({ n: 1 });
+    after.close();
   });
 });

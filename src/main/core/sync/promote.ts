@@ -31,12 +31,13 @@ export function promote(conn: BetterSqlite3.Database, epoch: number): void {
        VALUES (?, max(coalesce((SELECT seq FROM sqlite_sequence WHERE name = ?), 0), ?))`,
     );
     for (const name of COUNTERS) raise.run(name, name, epoch * EPOCH_GAP);
+    enableTracking(conn);
+    // After the triggers exist, so this is the first tracked row and travels.
     conn
       .prepare(
         `INSERT OR IGNORE INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES (?, ?, ?)`,
       )
       .run(epoch, s.after_seq, s.after_cursor);
-    enableTracking(conn);
     // Workers re-seed from the new range and skip what the ledger said was done
     // on the master; this device's own bookkeeping would point into the old one.
     conn.exec(`DELETE FROM work_ledger; DELETE FROM consumers;`);
