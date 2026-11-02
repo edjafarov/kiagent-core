@@ -18,6 +18,7 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
     after_seq: number;
     after_cursor: number;
     epoch: number;
+    device_id: string | null;
   };
   const head = conn
     .prepare(
@@ -37,6 +38,7 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
   const waiting = conn.prepare(`SELECT count(*) AS n FROM sync_outbound`).get() as { n: number };
   return {
     outbound: { waiting: waiting.n },
+    deviceId: s.device_id,
     copiedSet: copiedSetDigest(conn),
     secretsAfter: secrets ?? { epoch: 0, n: 0 },
     epoch: s.epoch,

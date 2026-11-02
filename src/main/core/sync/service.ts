@@ -3,18 +3,20 @@
  *  worker, so neither the window nor ingest waits for them. */
 import fs from 'node:fs';
 
-import type { Source } from '@shared/contracts';
+import type { CommitBatch, Source } from '@shared/contracts';
 import type { AppDb } from '../../db/app-db';
 import { openDbInWorker } from '../../db/worker-client';
 import type { CoreStore } from '../store/store';
 import type { ImportSourcesResult } from '../store/write-tx';
 import type { DeltaResult, SyncCursor } from './delta';
+import { splitBatch, type OwnedAccount } from './owned';
 import type { SyncRole } from './role';
 import {
   DEVICE_OWNED_SOURCES,
   exportSources,
   isDeviceOwned,
   isStableIdentity,
+  deviceSuffix,
   PAUSE_MOVED_SQL,
   type ExportSources,
   type OfferedSource,
@@ -81,6 +83,8 @@ export interface SyncStatus {
   secretsAfter: { epoch: number; n: number };
   /** Where this device's own epoch began, once it has led. */
   grant: { seq: number; cursor: number } | null;
+  /** The id this device told core it is known by, once it has. */
+  deviceId: string | null;
   /** Results of this device that wait in `sync_outbound` for a leader. */
   outbound: { waiting: number };
   /** The database file plus its journal: a cheap stand-in for the size of a
@@ -129,7 +133,18 @@ export interface SyncService {
   retained(table: string): Promise<string[]>;
   /** The id this device is known by to its siblings. The extension that owns
    *  the device key supplies it at every activation. */
-  setDeviceId(id: string): void;
+  setDeviceId(id: string): Promise<void>;
+  /** After an account batch committed here: when this device is a follower and
+   *  owns the account, queue it (split under 16 MiB) for the leader. `gone` is
+   *  the account row read before a removal. True when something was queued. */
+  queueOwnedCommit(batch: CommitBatch, gone?: OwnedAccount | null): Promise<boolean>;
+  /** Reads the stored device id and the accounts this device owns, once at
+   *  boot, before any account starts. */
+  loadOwned(): Promise<void>;
+  /** Is this account run by this device (device-owned and mine)? From memory. */
+  ownsAccount(accountId: string): boolean;
+  /** Is this source device-owned? */
+  ownsSource(source: string): boolean;
   /** Sets `joining=1` and nothing else: the caller restarts, because the
    *  gates are read at boot (spec 7.7). */
   beginJoin(): Promise<void>;
@@ -230,6 +245,19 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     const rows = await deps.db.all(`SELECT role, joining FROM sync_state`);
     const r = rows[0] as { role?: string; joining?: number } | undefined;
     gated = r?.role === 'follower' || r?.joining === 1;
+    await refreshOwned();
+  };
+  /** Accounts this device runs whatever its role: device-owned and mine. */
+  let ownedIds = new Set<string>();
+  const refreshOwned = async (): Promise<void> => {
+    const me = deviceId ?? deps.deviceId?.() ?? null;
+    if (!me) return;
+    const marks = DEVICE_OWNED_SOURCES.map(() => '?').join(', ');
+    const rows = await deps.db.all(
+      `SELECT id FROM accounts WHERE owner_device_id = ? AND source IN (${marks})`,
+      [me, ...DEVICE_OWNED_SOURCES],
+    );
+    ownedIds = new Set((rows as { id: string }[]).map((r) => r.id));
   };
   const appliedListeners: ((tables: string[]) => void)[] = [];
   let forwarder: Forwarder | null = null;
@@ -347,9 +375,90 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       (await deps.db.all(`SELECT pk FROM sync_retained WHERE tbl = ? ORDER BY pk`, [table])).map(
         (r) => (r as { pk: string }).pk,
       ),
-    setDeviceId: (id) => {
+    setDeviceId: async (id) => {
       deviceId = id;
+      await deps.db.run(`UPDATE sync_state SET device_id = ?`, [id]);
+      const st = (await deps.db.all(`SELECT role, joined, joining, adopted_at FROM sync_state`))[0] as
+        | { role: string; joined: number; joining: number; adopted_at: string | null }
+        | undefined;
+      // Once, on a device that has never joined: its device-owned accounts get
+      // this device's suffix and owner, so `UNIQUE(source, identifier)` holds
+      // across devices. A joined device's rows arrived suffixed and owned.
+      if (st && !st.adopted_at && st.role === 'normal' && st.joined !== 1 && st.joining !== 1) {
+        const marks = DEVICE_OWNED_SOURCES.map(() => '?').join(', ');
+        await deps.db.run(
+          `UPDATE accounts SET identifier = identifier || '#' || ?, owner_device_id = ?
+            WHERE source IN (${marks}) AND owner_device_id IS NULL`,
+          [deviceSuffix(id), id, ...DEVICE_OWNED_SOURCES],
+        );
+        await deps.db.run(`UPDATE sync_state SET adopted_at = ?`, [new Date().toISOString()]);
+      }
+      await refreshOwned();
     },
+    queueOwnedCommit: async (batch, gone) => {
+      if (!readOnly()) return false;
+      const me = deviceId ?? deps.deviceId?.() ?? null;
+      if (!me) return false;
+      const removed = 'removeAccount' in batch;
+      const id = removed
+        ? (batch as { removeAccount: string }).removeAccount
+        : 'account' in batch
+          ? (batch as { account: string }).account
+          : null;
+      if (!id) return false;
+      let account: OwnedAccount | null = null;
+      if (removed && gone) account = gone;
+      else {
+        const row = (
+          await deps.db.all(
+            `SELECT id, source, identifier, config, cadence, owner_device_id FROM accounts WHERE id = ?`,
+            [id],
+          )
+        )[0] as
+          | { id: string; source: string; identifier: string; config: string; cadence: string | null; owner_device_id: string | null }
+          | undefined;
+        if (row) {
+          account = {
+            id: row.id,
+            source: row.source,
+            identifier: row.identifier,
+            config: JSON.parse(row.config || '{}') as Record<string, unknown>,
+            cadence: row.cadence ? JSON.parse(row.cadence) : null,
+            ownerDeviceId: row.owner_device_id,
+          };
+        }
+      }
+      if (!account || account.ownerDeviceId !== me || !isDeviceOwned(account.source)) return false;
+      for (const piece of splitBatch(batch)) {
+        await deps.db.run(
+          `INSERT INTO sync_outbound(kind, extension_id, payload, created_at) VALUES(?, NULL, ?, ?)`,
+          [
+            'core.commitBatch',
+            Buffer.from(
+              JSON.stringify({
+                kind: 'commit',
+                name: 'core.commitBatch',
+                payload: { account, batch: piece },
+              }),
+              'utf8',
+            ),
+            new Date().toISOString(),
+          ],
+        );
+      }
+      return true;
+    },
+    loadOwned: async () => {
+      if (!deviceId) {
+        const row = (await deps.db.all(`SELECT device_id FROM sync_state`))[0] as
+          | { device_id: string | null }
+          | undefined;
+        if (row?.device_id) deviceId = row.device_id;
+      }
+      await refreshOwned();
+    },
+    ownsAccount: (accountId) => ownedIds.has(accountId),
+    ownsSource: (source) => isDeviceOwned(source),
     beginJoin: async () => {
       await deps.db.run(`UPDATE sync_state SET joining = 1`);
       await refreshGate();

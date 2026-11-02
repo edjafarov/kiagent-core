@@ -206,3 +206,41 @@ describe('side effects', () => {
     expect(l.get('mail')).toEqual({ id: 'mail' });
   });
 });
+
+describe('gateEngine with device-owned accounts (step 3)', () => {
+  const owned = {
+    ownsAccount: (id: string) => id === 'mine',
+    ownsSource: (s: string) => s === 'local-folder',
+  };
+  const callRun = (e: ReturnType<typeof idle>, id: string) =>
+    (e.run as unknown as (a: { id: string }) => unknown)({ id });
+
+  it('a follower runs an account it owns and refuses the others', () => {
+    const e = idle();
+    gateEngine(e as never, () => true, owned);
+    expect(callRun(e, 'mine')).toBe('real');
+    expect((callRun(e, 'theirs') as { status: string }).status).toBe('paused');
+  });
+
+  it('owner verbs pass for an owned account and throw SyncReadOnly for another', async () => {
+    const e = idle();
+    gateEngine(e as never, () => true, owned);
+    const call = (name: string, ...a: unknown[]) =>
+      (e as unknown as Record<string, (...x: unknown[]) => Promise<unknown>>)[name](...a);
+    for (const verb of ['pause', 'resume', 'remove', 'updateConfig', 'setOption', 'applyScope'])
+      await expect(call(verb, 'mine')).resolves.toBe('real');
+    for (const verb of ['pause', 'resume', 'remove', 'updateConfig', 'setOption', 'applyScope'])
+      await expect(call(verb, 'theirs')).rejects.toThrow(SyncReadOnly);
+    // connect names a source, not an account.
+    await expect(call('connect', { descriptor: { id: 'local-folder' } })).resolves.toBe('real');
+    await expect(call('connect', { descriptor: { id: 'gmail' } })).rejects.toThrow(SyncReadOnly);
+  });
+
+  it('workers stay held on a follower, owned accounts or not', () => {
+    const e = idle();
+    const real = e.attach;
+    gateEngine(e as never, () => true, owned);
+    (e.attach as unknown as (w: unknown) => unknown)({});
+    expect(real).not.toHaveBeenCalled();
+  });
+});

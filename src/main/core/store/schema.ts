@@ -1347,6 +1347,17 @@ const MIGRATIONS: Migration[] = [
     PRIMARY KEY (tbl, pk)
   );
   `,
+  // v18: device-owned accounts (alpha-cent spec 7.8, step 3). The id this
+  // device told core it is known by, and when its device-owned accounts were
+  // suffixed and claimed (once, on a device that has never joined).
+  (db) => {
+    const addColumn = (table: string, column: string, ddl: string) => {
+      const have = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column);
+      if (!have) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+    };
+    addColumn('sync_state', 'device_id', 'TEXT');
+    addColumn('sync_state', 'adopted_at', 'TEXT');
+  },
 ];
 
 /**

@@ -84,11 +84,20 @@ const REFUSED = [
 export function gateEngine(
   engine: { run: unknown; attach: unknown; rerunDeferred: unknown },
   readOnly: () => boolean,
+  /** Device-owned accounts run on their owner whatever its role (step 3):
+   *  asked per call, so a promotion or a new folder changes nothing here. */
+  owned: { ownsAccount(id: string): boolean; ownsSource(source: string): boolean } = {
+    ownsAccount: () => false,
+    ownsSource: () => false,
+  },
 ): { attachHeld(): Promise<void> } {
   const e = engine as Record<string, (...a: unknown[]) => unknown>;
   const real = { ...e };
   const held: { worker: unknown; proxy: HeldHandle }[] = [];
-  e.run = (...a) => (readOnly() ? idleHandle() : real.run.apply(engine, a));
+  e.run = (...a) =>
+    readOnly() && !owned.ownsAccount((a[0] as { id: string } | undefined)?.id ?? '')
+      ? idleHandle()
+      : real.run.apply(engine, a);
   e.attach = (...a) => {
     if (!readOnly()) return real.attach.apply(engine, a);
     const proxy = new HeldHandle();
@@ -99,7 +108,14 @@ export function gateEngine(
     readOnly() ? undefined : real.rerunDeferred.apply(engine, a);
   for (const m of REFUSED) {
     e[m] = async (...a) => {
-      if (readOnly()) throw new SyncReadOnly(m);
+      if (readOnly()) {
+        // `connect` names a source; every other verb names an account.
+        const mine =
+          m === 'connect'
+            ? owned.ownsSource((a[0] as { descriptor?: { id?: string } } | undefined)?.descriptor?.id ?? '')
+            : typeof a[0] === 'string' && owned.ownsAccount(a[0]);
+        if (!mine) throw new SyncReadOnly(m);
+      }
       return real[m].apply(engine, a);
     };
   }

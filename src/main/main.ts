@@ -76,6 +76,7 @@ import { buildMainApi } from './main-api';
 import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
 import { forwardCore, isForwardedChannel } from './core/sync/forward-core';
+import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
 import {
@@ -897,9 +898,7 @@ function registerIpc(
       if (!isForwardedChannel(name)) throw new Error(`${name} is not a forwarded channel`);
       return (handlers[name] as (r: unknown) => unknown)(req);
     },
-    commit: async () => {
-      throw new Error('commit batches are bound in Task 2');
-    },
+    commit: (input) => runCommitBatch({ db: p.db, store: p.store }, input as CommitInput),
   });
   const isTrustedSender = createTrustedRendererPredicate({
     app,

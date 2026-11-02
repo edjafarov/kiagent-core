@@ -83,7 +83,7 @@ beforeEach(async () => {
     profileDir: dir,
   } as never);
   sync = createSyncService({ db, store, dbPath, workerFile: entry, execArgv });
-  sync.setDeviceId('me-device');
+  await sync.setDeviceId('me-device');
   await db.plugin!({ op: 'register', pluginId: PLUGIN, descriptor } as never);
   await db.plugin!({ op: 'prepare', pluginId: PLUGIN, descriptor } as never);
   await db.plugin!({ op: 'open', owner, pluginId: PLUGIN });

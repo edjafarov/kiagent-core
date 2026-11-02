@@ -518,6 +518,48 @@ describe('the snapshot carries the master epoch and copied set (step 2 correctio
   });
 });
 
+describe('owner-capture rows survive the swap (step 3)', () => {
+  const capture = { ownerCapture: ['notes'] };
+  it('keeps the joiner rows of an ownerCapture table, lists their keys, and replaces other synced tables', async () => {
+    await registerPlugin(masterFile, conn(), descriptor(capture));
+    conn().prepare(`INSERT INTO "${physical('notes')}"(account_id, key, body) VALUES('a','master-note','m')`).run();
+    conn().prepare(`INSERT INTO "${physical('blobs')}"(id, data) VALUES('b-master', x'01')`).run();
+    const rc = new Database(receiver);
+    await registerPlugin(receiver, rc, descriptor(capture));
+    rc.prepare(`INSERT INTO "${physical('notes')}"(account_id, key, body) VALUES('z','my-meeting','mine')`).run();
+    rc.prepare(`INSERT INTO "${physical('blobs')}"(id, data) VALUES('b-mine', x'02')`).run();
+    rc.close();
+    const r = snapshot();
+    expect(prepareSwap(receiver, snap, r.sha256, 'm')).toBe('ready');
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    const d = new Database(receiver);
+    expect(d.prepare(`SELECT key FROM "${physical('notes')}" ORDER BY key`).all()).toEqual([
+      { key: 'master-note' },
+      { key: 'my-meeting' },
+    ]);
+    expect(d.prepare(`SELECT id FROM "${physical('blobs')}"`).all()).toEqual([{ id: 'b-master' }]);
+    expect(d.prepare(`SELECT tbl, pk FROM sync_retained`).all()).toEqual([
+      { tbl: physical('notes'), pk: JSON.stringify(['z', 'my-meeting']) },
+    ]);
+    d.close();
+  });
+
+  it('a table that is not ownerCapture retains nothing', async () => {
+    await registerPlugin(masterFile, conn());
+    const rc = new Database(receiver);
+    await registerPlugin(receiver, rc);
+    rc.prepare(`INSERT INTO "${physical('notes')}"(account_id, key, body) VALUES('z','k','mine')`).run();
+    rc.close();
+    const r = snapshot();
+    prepareSwap(receiver, snap, r.sha256, 'm');
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    const d = new Database(receiver);
+    expect(d.prepare(`SELECT count(*) n FROM "${physical('notes')}"`).get()).toEqual({ n: 0 });
+    expect(d.prepare(`SELECT count(*) n FROM sync_retained`).get()).toEqual({ n: 0 });
+    d.close();
+  });
+});
+
 describe('more copied tables (step 2)', () => {
   it('an unlisted plugin table is dropped from the snapshot, a synced one is kept', async () => {
     await registerPlugin(masterFile, conn());

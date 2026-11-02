@@ -16,6 +16,7 @@ import type {
   SyncStatus,
 } from '@shared/contracts';
 import { isPlainObject } from '@shared/source-options';
+import { DEVICE_OWNED_SOURCES, isDeviceOwned } from '../sync/sources';
 import { copiedTables, primaryKeyColumns } from '../sync/tables';
 import { NEWER, STAMP_EPOCH, STAMP_N } from '../sync/vault-stamp';
 import {
@@ -1850,12 +1851,53 @@ export function createWriteTx(
   // on every call (step 2): a promotion or demotion changes the role while
   // the app runs, and a call that was queued sees the role it runs under.
   const guard = tx as unknown as Record<string, (...a: unknown[]) => unknown>;
+  // The one exception (r16 ruling 4): a joined follower writes the rows of a
+  // device-owned account it owns, through the verbs the engine's reconcile and
+  // status paths use. Everything else, and every other account, is refused.
+  const ownerOf = new Map<string, (a: unknown[]) => string | null>([
+    ['commit', (a) => {
+      const b = a[0] as { account?: string; removeAccount?: string };
+      return b.account ?? b.removeAccount ?? null;
+    }],
+    ['accountWrite', (a) => {
+      const w = a[0] as { op: string; id?: string };
+      return w.op === 'create' || w.op === 'getOrCreate' ? null : (w.id ?? null);
+    }],
+    ['reconcileBegin', (a) => String(a[0])],
+    ['reconcileStage', (a) => String(a[0])],
+    ['reconcileDiff', (a) => String(a[0])],
+    ['reconcileArchiveChunk', (a) => String(a[0])],
+    ['reconcileEnd', (a) => String(a[0])],
+    ['applyFolderScope', (a) => (a[0] as { accountId: string }).accountId],
+  ]);
+  const ownedByMe = conn.prepare(
+    `SELECT 1 FROM accounts a, sync_state s
+      WHERE a.id = ? AND s.device_id IS NOT NULL AND a.owner_device_id = s.device_id
+        AND a.source IN (${DEVICE_OWNED_SOURCES.map(() => '?').join(', ')})`,
+  );
+  const ownerMayWrite = (name: string, args: unknown[]): boolean => {
+    const pick = ownerOf.get(name);
+    if (!pick) return false;
+    const gate = readGateSync(conn);
+    if (gate.role !== 'follower' || gate.joining || !gate.joined) return false;
+    // A create for a device-owned source on this device is its own account.
+    if (name === 'accountWrite') {
+      const w = args[0] as { op: string; source?: string };
+      if (w.op === 'create' || w.op === 'getOrCreate') return isDeviceOwned(w.source ?? '');
+    }
+    const id = pick(args);
+    return id !== null && !!ownedByMe.get(id, ...DEVICE_OWNED_SOURCES);
+  };
   for (const name of Object.keys(guard)) {
     if (name === 'applyDelta' || name === 'importSecrets') continue;
     const real = guard[name];
     guard[name] = (...args: unknown[]) => {
       // A joining device is read-only too (spec 7.7), the same single rule.
-      if (deps.fenced?.() || gateFrom(readGateSync(conn))) throw new SyncReadOnly(name);
+      if (
+        (deps.fenced?.() || gateFrom(readGateSync(conn))) &&
+        !(!deps.fenced?.() && ownerMayWrite(name, args))
+      )
+        throw new SyncReadOnly(name);
       return real(...args);
     };
   }

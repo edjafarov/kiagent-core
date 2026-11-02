@@ -45,7 +45,17 @@ interface Registered {
   pluginId: string;
   digest: string;
   synced: string[];
+  ownerCapture: string[];
 }
+
+const ownerCaptureOf = (json: string): string[] => {
+  try {
+    const list = (JSON.parse(json) as { ownerCapture?: unknown }).ownerCapture;
+    return Array.isArray(list) ? list.filter((n): n is string => typeof n === 'string') : [];
+  } catch {
+    return [];
+  }
+};
 
 /** The plugins whose descriptors name synced tables, from the registry tables
  *  that live in the same file. `schema` is `main`, or an attached file. */
@@ -73,6 +83,7 @@ function registeredSynced(conn: BetterSqlite3.Database, schema: string): Registe
       pluginId: r.plugin_id,
       digest: r.descriptor_digest,
       synced: synced.filter((n): n is string => typeof n === 'string'),
+      ownerCapture: ownerCaptureOf(r.descriptor_json),
     });
   }
   return out;
@@ -92,6 +103,23 @@ export function copiedTables(conn: BetterSqlite3.Database, schema = 'main'): str
     }
   }
   return [...COPIED_CORE_TABLES, ...extra];
+}
+
+/** The physical names of the owner-capture tables the registered plugins of
+ *  `schema` list (step 3): the capturing device keeps writing these on a
+ *  follower, and a join keeps its own rows of them. */
+export function ownerCaptureTables(conn: BetterSqlite3.Database, schema = 'main'): string[] {
+  const exists = conn.prepare(
+    `SELECT 1 FROM ${schema}.sqlite_master WHERE type = 'table' AND name = ?`,
+  );
+  const out: string[] = [];
+  for (const p of registeredSynced(conn, schema)) {
+    for (const logical of p.ownerCapture) {
+      const phys = pluginIdentifier(p.pluginId, logical).replaceAll('"', '');
+      if (exists.get(phys)) out.push(phys);
+    }
+  }
+  return out;
 }
 
 /** What two devices must agree on before one can read the other's rows

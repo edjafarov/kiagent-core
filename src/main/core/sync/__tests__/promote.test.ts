@@ -41,7 +41,7 @@ const open = async () => {
     execArgv,
     onPromoted: async () => void (promoted += 1),
   });
-  sync.setDeviceId('me-device');
+  await sync.setDeviceId('me-device');
 };
 
 beforeEach(async () => {

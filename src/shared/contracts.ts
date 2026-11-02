@@ -1644,6 +1644,8 @@ export interface SyncStatusWire {
   /** The database file plus its journal: a cheap stand-in for the size of a
    *  snapshot, so a joiner can weigh its disk before anything is built. */
   dbBytes: number;
+  /** The id this device told core it is known by, once it has. */
+  deviceId: string | null;
   /** Results of this device that wait in the delivery queue for a leader. */
   outbound: { waiting: number };
 }
@@ -1945,6 +1947,8 @@ export interface CapSurfaces {
         masterDeviceId: string,
       ): Promise<'ready' | 'no-disk' | 'invalid'>;
       prepareRestore(): Promise<'ready' | 'no-archive'>;
+      /** Stores the id and, once on a device that never joined, claims its
+       *  device-owned accounts under `<identifier>#<id8>`. */
       setDeviceId(id: string): Promise<void>;
       beginJoin(): Promise<void>;
       exportSources(toDevice: string): Promise<OfferedSourceWire[]>;

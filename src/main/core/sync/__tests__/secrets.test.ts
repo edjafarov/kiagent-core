@@ -48,7 +48,7 @@ async function device(tag: string, opts: { failStrict?: (n: number) => boolean }
     keystoreAvailable: () => true,
     log: (_l, m) => void logs.push(m),
   });
-  svc.setDeviceId(`${tag}-device`);
+  await svc.setDeviceId(`${tag}-device`);
   const d = { dir, db, store, svc, logs, conn: () => db._conn! };
   devices.push(d);
   return d;
@@ -220,5 +220,5 @@ it('v16 adds the stamp columns to a vault that has none, once', async () => {
   migrate(c);
   migrate(c);
   expect(c.prepare(`SELECT epoch, n FROM vault`).get()).toEqual({ epoch: 0, n: 0 });
-  expect(c.prepare(`SELECT value FROM meta WHERE key = 'schemaVersion'`).get()).toEqual({ value: '17' });
+  expect(c.prepare(`SELECT value FROM meta WHERE key = 'schemaVersion'`).get()).toEqual({ value: '18' });
 });

@@ -10,7 +10,13 @@ import Database from 'better-sqlite3';
 import { hashFile, SNAPSHOT_META } from './snapshot';
 import { pauseMovedAccounts } from './sources';
 import { swapOutcomePath } from './status';
-import { COPIED_CORE_TABLES, isDerivedTable, LOCAL_CORE_TABLES } from './tables';
+import {
+  COPIED_CORE_TABLES,
+  isDerivedTable,
+  LOCAL_CORE_TABLES,
+  ownerCaptureTables,
+  primaryKeyColumns,
+} from './tables';
 
 export const SWAP_STEPS = ['committed', 'merged', 'archived', 'replaced', 'outcome'] as const;
 type SwapStep = (typeof SWAP_STEPS)[number] | 'restore-merged' | 'restore-moved';
@@ -131,6 +137,22 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string): vo
       for (const s of shadow) {
         if (copied(s)) continue;
         db.exec(`DELETE FROM main."${s}"; INSERT INTO main."${s}" SELECT * FROM old."${s}";`);
+      }
+      // Owner-capture tables (step 3): the master's rows come with the
+      // snapshot, and this device's own rows of them stay, listed in
+      // `sync_retained` so the extension can send each one to the leader.
+      for (const t of ownerCaptureTables(db, 'old')) {
+        if (!copiedNames.has(t)) continue; // not synced there: already carried
+        const mine = db.prepare(`SELECT 1 FROM main.sqlite_master WHERE type='table' AND name = ?`).get(t);
+        if (!mine) continue;
+        const pk = primaryKeyColumns(db, t, 'old');
+        if (pk.length === 0) continue;
+        const rows = db.prepare(`SELECT ${pk.map((c) => `"${c}"`).join(', ')} FROM old."${t}"`).all() as Record<string, unknown>[];
+        db.exec(`INSERT OR IGNORE INTO main."${t}" SELECT * FROM old."${t}"`);
+        // An old file from before this table existed has none to copy.
+        db.exec(`CREATE TABLE IF NOT EXISTS main.sync_retained (tbl TEXT NOT NULL, pk TEXT NOT NULL, PRIMARY KEY (tbl, pk))`);
+        const note = db.prepare(`INSERT OR IGNORE INTO main.sync_retained(tbl, pk) VALUES(?, ?)`);
+        for (const r of rows) note.run(t, JSON.stringify(pk.map((c) => r[c])));
       }
       for (const d of defs) {
         if (d.type === 'table') continue;
