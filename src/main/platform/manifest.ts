@@ -206,6 +206,16 @@ const schema = z.strictObject({
     ui: z.array(uiContributionSchema).optional(),
   }),
   database: z.strictObject({ schema: z.string().min(1) }).optional(),
+  // Multi-device sync (step 3): the `host.ui.handle` names that are writes. On
+  // a follower `forward` names go to the leader (refused with no leader), and
+  // `deliver` names wait in the durable queue. Names are checked against the
+  // registered handlers at activation.
+  sync: z
+    .strictObject({
+      forward: z.array(z.string().min(1)).optional(),
+      deliver: z.array(z.string().min(1)).optional(),
+    })
+    .optional(),
   fileRoots: z.array(fileRootSchema).max(8).default([]),
 });
 
@@ -241,6 +251,11 @@ export function parseManifest(
     throw new ManifestError(`invalid manifest: ${where} — ${first.message}`);
   }
   const m = parsed.data;
+  if (m.sync && !m.caps.includes('ui')) {
+    throw new ManifestError(
+      'sync.forward and sync.deliver name ui.handle handlers, so the extension needs the ui capability',
+    );
+  }
   if (m.caps.includes('db') && !m.database) {
     throw new ManifestError(
       'PLUGIN_DB_DESCRIPTOR_REQUIRED: database.schema is required for db-capability plugins',

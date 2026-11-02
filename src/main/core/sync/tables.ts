@@ -27,6 +27,8 @@ export const LOCAL_CORE_TABLES: readonly string[] = [
   'schedule',
   'sync_moved',
   'sync_offers',
+  'sync_outbound',
+  'sync_retained',
   'sync_rows',
   'sync_state',
   'vault',

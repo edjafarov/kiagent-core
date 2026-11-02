@@ -86,7 +86,7 @@ export const NS_METHODS: Record<string, string[]> = {
     'batch',
     'migrate',
   ],
-  ui: ['notify', 'handle', 'unhandle', 'broadcast'],
+  ui: ['notify', 'handle', 'unhandle', 'broadcast', 'call'],
   inference: [
     'complete',
     'completeWithMeta',
@@ -145,6 +145,10 @@ export const NS_METHODS: Record<string, string[]> = {
     'setFenced',
     'readOnly',
     'deleteArchive',
+    'setForwarder',
+    'runForwarded',
+    'drainOutbound',
+    'retained',
   ],
 };
 

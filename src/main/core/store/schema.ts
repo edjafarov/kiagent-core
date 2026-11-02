@@ -1327,6 +1327,26 @@ const MIGRATIONS: Migration[] = [
     if (!cols.has('epoch')) db.exec(`ALTER TABLE vault ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0`);
     if (!cols.has('n')) db.exec(`ALTER TABLE vault ADD COLUMN n INTEGER NOT NULL DEFAULT 0`);
   },
+  // v17: edits from any device (alpha-cent spec 7.8, step 3). `sync_outbound`
+  // is the one durable delivery queue for what a device-owned account or an
+  // extension's `sync.deliver` call produced while no leader was reachable;
+  // `sync_retained` lists the primary keys of the owner-capture rows a join
+  // kept. Both local, neither synced.
+  `
+  CREATE TABLE IF NOT EXISTS sync_outbound (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    extension_id TEXT,
+    payload BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS sync_retained (
+    tbl TEXT NOT NULL,
+    pk TEXT NOT NULL,
+    PRIMARY KEY (tbl, pk)
+  );
+  `,
 ];
 
 /**

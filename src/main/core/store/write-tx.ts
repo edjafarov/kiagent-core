@@ -326,7 +326,7 @@ export interface WriteTx {
   /** Multi-device sync: apply one validated stage from the master, rows and
    *  cursor in ONE transaction (alpha-cent spec 7.4). Throws SyncStageInvalid
    *  before touching anything if the stage is bad. */
-  applyDelta(stagePath: string): { applied: number; target: SyncCursor };
+  applyDelta(stagePath: string): { applied: number; target: SyncCursor; tables: string[] };
   accountWrite(op: AccountWriteOp): AccountWriteResult;
   /** Start a pass: drop whatever the previous one staged for this account. */
   reconcileBegin(accountId: string): void;
@@ -1618,6 +1618,8 @@ export function createWriteTx(
     },
   );
 
+  /** The tables the last applied delta touched, so a bus event can name them. */
+  let touchedTables = new Set<string>();
   const applyDeltaTx = conn.transaction(
     (entries: Iterable<StageEntry>, target: SyncCursor, epoch: number): void => {
       conn.pragma('defer_foreign_keys = ON');
@@ -1697,10 +1699,12 @@ export function createWriteTx(
       const deleteDoc = conn.prepare(`DELETE FROM documents WHERE id = ?`);
       const deleteAccount = conn.prepare(`DELETE FROM accounts WHERE id = ?`);
 
+      touchedTables = new Set<string>();
       for (const e of entries) {
         if (!copied.has(e.tbl)) {
           throw new SyncStageInvalid(`table ${e.tbl}`);
         }
+        touchedTables.add(e.tbl);
         if (e.op === 'delete') {
           const id = e.pk[0] as string;
           if (e.tbl === 'documents') {
@@ -1771,7 +1775,7 @@ export function createWriteTx(
       if (fs.existsSync(wal) && fs.statSync(wal).size > 256 * 1024 * 1024) {
         conn.pragma('wal_checkpoint(TRUNCATE)');
       }
-      return { applied: rows, target };
+      return { applied: rows, target, tables: [...touchedTables].sort() };
     },
 
     commit: publishing((batch: CommitBatch): CommitResult => {

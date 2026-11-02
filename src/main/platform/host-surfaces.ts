@@ -101,6 +101,10 @@ export type Surfaces = Record<
 
 export interface SurfaceDeps {
   extensionId: string;
+  /** Runs one of this extension's own ui handlers through the platform's
+   *  `callUi`, so a write named in the manifest's `sync` block is forwarded or
+   *  queued on a follower. */
+  callUi?: (name: string, payload: unknown) => Promise<unknown>;
   /** Retained only as host metadata; never used to open SQLite. */
   dataDir?: string;
   /** The one boot-owned worker service. There is deliberately no fallback
@@ -281,6 +285,10 @@ function syncSurface(
     setFenced: call('setFenced'),
     readOnly: call('readOnly'),
     deleteArchive: call('deleteArchive'),
+    setForwarder: call('setForwarder'),
+    runForwarded: call('runForwarded'),
+    drainOutbound: call('drainOutbound'),
+    retained: call('retained'),
   };
 }
 
@@ -561,6 +569,14 @@ export function buildSurfaces(deps: SurfaceDeps): {
             'ui.unhandle is not available for external-tier extensions',
           );
         uiIncarnation.unhandle(String(name));
+      },
+      call: (name: unknown, payload: unknown) => {
+        if (uiTier === 'external')
+          throw new CapError(
+            'ui.call is not available for external-tier extensions',
+          );
+        if (!deps.callUi) throw new Error('ui.call is not wired on this host');
+        return deps.callUi(String(name), payload);
       },
       broadcast: (name: unknown, payload: unknown) => {
         if (uiTier === 'external')

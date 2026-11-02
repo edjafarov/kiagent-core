@@ -1607,6 +1607,17 @@ export interface OfferedSourceWire {
   credentials: unknown | null;
   owner_device_id: string | null;
 }
+/** A write that crosses to the leader (multi-device sync, step 3). */
+export interface ForwardRequestWire {
+  kind: 'ui' | 'core' | 'commit';
+  extensionId?: string;
+  name: string;
+  payload: unknown;
+}
+export type ForwardResultWire =
+  | { ok: true; value: unknown }
+  | { ok: false; code: 'no-master' | 'handler'; message: string };
+
 export interface SyncStatusWire {
   role: 'normal' | 'follower';
   tracking: boolean;
@@ -1633,6 +1644,8 @@ export interface SyncStatusWire {
   /** The database file plus its journal: a cheap stand-in for the size of a
    *  snapshot, so a joiner can weigh its disk before anything is built. */
   dbBytes: number;
+  /** Results of this device that wait in the delivery queue for a leader. */
+  outbound: { waiting: number };
 }
 
 export type Cap =
@@ -1754,6 +1767,10 @@ export interface Manifest {
   caps: Cap[];
   /** Declarative database descriptor path, required when caps includes db. */
   database?: { schema: string };
+  /** Multi-device sync (platform 2.18.0): which of this extension's
+   *  `ui.handle` names are writes. On a follower `forward` names are run by the
+   *  leader and `deliver` names wait in the durable queue. */
+  sync?: { forward?: string[]; deliver?: string[] };
   /** Platform 2.3.0: read-only local folders this extension asks to read —
    *  always an array (`[]` when the manifest declares none). External tier
    *  only; requires the `files` cap. Bound into consent via
@@ -1858,6 +1875,10 @@ export interface CapSurfaces {
        *  host's `ext:push` channel. Does not require a prior `handle()`
        *  for `name`. External tier: denied, like handle/unhandle. */
       broadcast(name: string, payload: unknown): Promise<void>;
+      /** Calls one of THIS extension's own `handle` names through the host, so
+       *  a write named in the manifest's `sync` block is forwarded or queued on
+       *  a follower and runs locally on the leader (multi-device sync). */
+      call(name: string, payload: unknown): Promise<unknown>;
     };
   };
   commands: {
@@ -1917,7 +1938,7 @@ export interface CapSurfaces {
       ): Promise<{ bytes: number; target: SyncCursorWire; sha256: string }>;
       applyDelta(
         stagePath: string,
-      ): Promise<{ applied: number; target: SyncCursorWire }>;
+      ): Promise<{ applied: number; target: SyncCursorWire; tables: string[] }>;
       prepareSwap(
         file: string,
         sha256: string,
@@ -1950,6 +1971,21 @@ export interface CapSurfaces {
       /** Follower, joining or fenced. */
       readOnly(): Promise<boolean>;
       deleteArchive(): Promise<void>;
+      /** Installs how a follower's write reaches the leader (step 3). A
+       *  function, so it works for a host that shares the main process
+       *  (remote-mcp is one); null removes it. */
+      setForwarder(
+        f:
+          | ((req: ForwardRequestWire) => Promise<ForwardResultWire>)
+          | null,
+      ): Promise<void>;
+      /** The leader runs a forwarded request; a follower refuses. */
+      runForwarded(req: ForwardRequestWire): Promise<ForwardResultWire>;
+      /** Sends what waits in the delivery queue, or runs it here after a
+       *  promotion. */
+      drainOutbound(): Promise<{ sent: number; waiting: number }>;
+      /** Primary keys the swap kept for an owner-capture table. */
+      retained(table: string): Promise<string[]>;
     };
   };
   /** Host-initiated only — no extension→host surface. */

@@ -5,6 +5,7 @@
  * MCP registration, and projects ExtensionSnapshot[] into AppState via
  * onChange. All IPC handlers call methods here.
  */
+import { NO_MASTER_MESSAGE } from '../core/sync/forward-core';
 import type { SyncService } from '../core/sync/service';
 import path from 'path';
 import fs from 'fs';
@@ -552,6 +553,9 @@ export function createExtensionPlatform(
   const calendarWriters =
     deps.calendarWriters ?? createCalendarWriterRegistry();
   const bus = createEventBus(deps.logSink);
+  // Step 3: an applied delta names the copied tables it touched, so an
+  // extension that shows them can refresh.
+  deps.sync?.onApplied?.((tables) => bus.emit('platform', 'sync.applied', { tables }));
   // B1: ONE registry shared across every extension's incarnations, same
   // lifetime as `bus` — see ui-registry.ts's header for why identity is
   // keyed on DbOwner.handle rather than the coarser incarnation timestamp.
@@ -1163,6 +1167,11 @@ export function createExtensionPlatform(
             },
             attention: deps.attention,
             sync: deps.sync,
+            callUi: async (name, payload) => {
+              const r = await api.callUi(e.manifest.id, name, payload);
+              if (r.ok) return r.value;
+              throw Object.assign(new Error(r.message), { code: r.code });
+            },
             notify: deps.notify,
             bus,
             deliverEvent,
@@ -1301,6 +1310,23 @@ export function createExtensionPlatform(
       if (abortStop) {
         await abortStop;
         if (e.host === host) e.host = null;
+      }
+      // Every name the manifest's `sync` block lists must be a handler this
+      // extension registered, or a write would silently run on the wrong side.
+      if (e.host === host && e.manifest.sync) {
+        const missing = [
+          ...(e.manifest.sync.forward ?? []),
+          ...(e.manifest.sync.deliver ?? []),
+        ].filter((n) => !uiRegistry.resolve(e.manifest.id, n));
+        if (missing.length) {
+          await host.stop();
+          e.host = null;
+          setStatus(
+            e,
+            'errored',
+            `manifest sync names with no ui.handle handler: ${missing.join(', ')}`,
+          );
+        }
       }
       e.activation = undefined;
     } finally {
@@ -1520,7 +1546,7 @@ export function createExtensionPlatform(
     ).then(() => undefined);
   }
 
-  return {
+  const api: ExtensionPlatform = {
     async load() {
       loadEntries();
     },
@@ -1963,6 +1989,23 @@ export function createExtensionPlatform(
           code: 'EXT_TIER_DENIED',
           message: `extension '${extensionId}' is external-tier and cannot serve ui.handle calls`,
         };
+      // Multi-device sync (step 3): the role is read now, per call. A write the
+      // manifest names goes to the leader from a follower; an owner's result
+      // waits in the durable queue; everything else runs here.
+      const rule = e.manifest.sync;
+      if (rule && deps.sync?.readOnly()) {
+        if (rule.forward?.includes(name)) {
+          const sent = await deps.sync.forward({ kind: 'ui', extensionId, name, payload });
+          if (sent.ok) return { ok: true, value: sent.value };
+          return sent.code === 'no-master'
+            ? { ok: false, code: 'EXT_SYNC_NO_MASTER', message: NO_MASTER_MESSAGE }
+            : { ok: false, code: 'EXT_HANDLER_FAILED', message: sent.message };
+        }
+        if (rule.deliver?.includes(name)) {
+          await deps.sync.enqueue({ kind: 'ui', extensionId, name, payload });
+          return { ok: true, value: { queued: true } };
+        }
+      }
       try {
         // Bounded: a hung handler must still resolve an envelope rather
         // than leave `ext:invoke` (and the renderer awaiting it) hanging
@@ -1985,6 +2028,7 @@ export function createExtensionPlatform(
       return uiRegistry.onBroadcast(cb);
     },
   };
+  return api;
 }
 
 /** The main-side DraftMirror of an extension's sender: every op resolves

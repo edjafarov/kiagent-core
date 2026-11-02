@@ -31,6 +31,30 @@ export interface Secret {
   value: string | null;
 }
 
+/** A write that crosses to the leader (step 3). `ui`: an extension's own
+ *  handler; `core`: a core IPC handler such as `attention.act`; `commit`: an
+ *  owner's batch (Task 2). */
+export interface ForwardRequest {
+  kind: 'ui' | 'core' | 'commit';
+  extensionId?: string;
+  name: string;
+  payload: unknown;
+}
+
+export type ForwardResult =
+  | { ok: true; value: unknown }
+  | { ok: false; code: 'no-master' | 'handler'; message: string };
+
+export type Forwarder = (req: ForwardRequest) => Promise<ForwardResult>;
+
+/** What the leader runs for a forwarded request. Bound once, by main, after the
+ *  extension platform exists. */
+export interface ForwardRunners {
+  ui(extensionId: string, name: string, payload: unknown): Promise<unknown>;
+  core(name: string, payload: unknown): Promise<unknown>;
+  commit(payload: unknown): Promise<unknown>;
+}
+
 export interface SyncStatus {
   role: SyncRole;
   tracking: boolean;
@@ -57,6 +81,8 @@ export interface SyncStatus {
   secretsAfter: { epoch: number; n: number };
   /** Where this device's own epoch began, once it has led. */
   grant: { seq: number; cursor: number } | null;
+  /** Results of this device that wait in `sync_outbound` for a leader. */
+  outbound: { waiting: number };
   /** The database file plus its journal: a cheap stand-in for the size of a
    *  snapshot, so a joiner can weigh its disk before anything is built. */
   dbBytes: number;
@@ -75,7 +101,10 @@ export interface SyncService {
     fromEpoch?: number,
   ): Promise<DeltaResult>;
   buildSnapshot(out: string): Promise<{ bytes: number; target: SyncCursor; sha256: string }>;
-  applyDelta(stagePath: string): Promise<{ applied: number; target: SyncCursor }>;
+  applyDelta(stagePath: string): Promise<{ applied: number; target: SyncCursor; tables: string[] }>;
+  /** Tells `cb` which copied tables each applied delta touched, so extensions
+   *  can refresh (platform bus event `sync.applied`). Core-internal. */
+  onApplied(cb: (tables: string[]) => void): void;
   prepareSwap(
     file: string,
     sha256: string,
@@ -83,6 +112,21 @@ export interface SyncService {
   ): Promise<'ready' | 'no-disk' | 'invalid'>;
   /** Next boot, this device goes back to its archived data. */
   prepareRestore(): Promise<'ready' | 'no-archive'>;
+  /** Hands a write to the leader through the forwarder `remote-mcp` installed.
+   *  No forwarder, or one that throws, is `no-master`: never an exception. */
+  forward(req: ForwardRequest): Promise<ForwardResult>;
+  setForwarder(f: Forwarder | null): void;
+  setRunners(r: ForwardRunners | null): void;
+  /** Runs a forwarded request on the leader, with no ledger: every forwarded
+   *  handler is an idempotent upsert. A follower refuses. */
+  runForwarded(req: ForwardRequest): Promise<ForwardResult>;
+  /** Writes `sync_outbound`: a result that waits for a reachable leader. */
+  enqueue(req: ForwardRequest): Promise<void>;
+  /** Sends each waiting row, in order, to the leader (or runs it here when
+   *  this device leads now). A row is deleted only on success. */
+  drainOutbound(): Promise<{ sent: number; waiting: number }>;
+  /** The keys the swap kept for an owner-capture table. */
+  retained(table: string): Promise<string[]>;
   /** The id this device is known by to its siblings. The extension that owns
    *  the device key supplies it at every activation. */
   setDeviceId(id: string): void;
@@ -187,6 +231,57 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     const r = rows[0] as { role?: string; joining?: number } | undefined;
     gated = r?.role === 'follower' || r?.joining === 1;
   };
+  const appliedListeners: ((tables: string[]) => void)[] = [];
+  let forwarder: Forwarder | null = null;
+  let runners: ForwardRunners | null = null;
+  const dispatch = async (req: ForwardRequest): Promise<ForwardResult> => {
+    if (!runners) return { ok: false, code: 'handler', message: 'no handlers are bound on this device' };
+    try {
+      const value =
+        req.kind === 'ui'
+          ? await runners.ui(req.extensionId ?? '', req.name, req.payload)
+          : req.kind === 'core'
+            ? await runners.core(req.name, req.payload)
+            : await runners.commit(req.payload);
+      return { ok: true, value };
+    } catch (err) {
+      return { ok: false, code: 'handler', message: err instanceof Error ? err.message : String(err) };
+    }
+  };
+  const forward = async (req: ForwardRequest): Promise<ForwardResult> => {
+    if (!forwarder) return { ok: false, code: 'no-master', message: 'no leader is reachable' };
+    try {
+      return await forwarder(req);
+    } catch {
+      return { ok: false, code: 'no-master', message: 'no leader is reachable' };
+    }
+  };
+  let draining: Promise<{ sent: number; waiting: number }> | null = null;
+  const drainOnce = async (): Promise<{ sent: number; waiting: number }> => {
+    let sent = 0;
+    const waitingNow = async (): Promise<number> =>
+      Number(((await deps.db.all(`SELECT count(*) AS n FROM sync_outbound`))[0] as { n: number }).n);
+    for (;;) {
+      const next = (await deps.db.all(
+        `SELECT id, payload FROM sync_outbound ORDER BY id LIMIT 1`,
+      ))[0] as { id: number; payload: Buffer } | undefined;
+      if (!next) break;
+      const req = JSON.parse(Buffer.from(next.payload).toString('utf8')) as ForwardRequest;
+      // The role is read now: a row queued as a follower runs as the leader's
+      // own after a promotion (ruling 3).
+      const r = readOnly() ? await forward(req) : await dispatch(req);
+      if (r.ok || r.code === 'handler') {
+        // A handler that refuses will refuse again: drop it, keep the log line.
+        if (!r.ok) log('warn', `sync: a queued ${req.name} was refused and is dropped: ${r.message}`);
+        await deps.db.run(`DELETE FROM sync_outbound WHERE id = ?`, [next.id]);
+        if (r.ok) sent += 1;
+      } else {
+        await deps.db.run(`UPDATE sync_outbound SET attempts = attempts + 1 WHERE id = ?`, [next.id]);
+        break;
+      }
+    }
+    return { sent, waiting: await waitingNow() };
+  };
   let worker: Promise<AppDb> | null = null;
   const onWorker = async <T>(name: string, args: unknown = {}): Promise<T> => {
     worker ??= openDbInWorker(deps.dbPath, deps.workerFile, {
@@ -206,10 +301,52 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     buildDelta: (after, out, capBytes, fromEpoch) =>
       onWorker('buildDelta', { after, out, capBytes, fromEpoch: fromEpoch ?? Number.MAX_SAFE_INTEGER }),
     buildSnapshot: (out) => onWorker('buildSnapshot', { out }),
-    applyDelta: (stagePath) => deps.store.applySyncDelta(stagePath),
+    applyDelta: async (stagePath) => {
+      const r = await deps.store.applySyncDelta(stagePath);
+      if (r.tables.length) for (const cb of appliedListeners) cb(r.tables);
+      return r;
+    },
+    onApplied: (cb) => {
+      appliedListeners.push(cb);
+    },
     prepareSwap: (file, sha256, masterDeviceId) =>
       onWorker('prepareSwap', { file, sha256, masterDeviceId }),
     prepareRestore: () => onWorker('prepareRestore'),
+    forward,
+    setForwarder: (f) => {
+      forwarder = f;
+    },
+    setRunners: (r) => {
+      runners = r;
+    },
+    runForwarded: async (req) => {
+      if (readOnly()) {
+        return { ok: false, code: 'handler', message: 'this device is not the leader' };
+      }
+      return dispatch(req);
+    },
+    enqueue: async (req) => {
+      await deps.db.run(
+        `INSERT INTO sync_outbound(kind, extension_id, payload, created_at) VALUES(?, ?, ?, ?)`,
+        [
+          req.kind === 'commit' ? 'core.commitBatch' : req.name,
+          req.extensionId ?? null,
+          Buffer.from(JSON.stringify(req), 'utf8'),
+          new Date().toISOString(),
+        ],
+      );
+    },
+    drainOutbound: () => {
+      // One drain at a time, so a pull and the timer never send a row twice.
+      draining ??= drainOnce().finally(() => {
+        draining = null;
+      });
+      return draining;
+    },
+    retained: async (table) =>
+      (await deps.db.all(`SELECT pk FROM sync_retained WHERE tbl = ? ORDER BY pk`, [table])).map(
+        (r) => (r as { pk: string }).pk,
+      ),
     setDeviceId: (id) => {
       deviceId = id;
     },
@@ -350,6 +487,8 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       await deps.db.proc!('syncPromote', { epoch });
       await refreshGate();
       await deps.onPromoted?.();
+      // What waited for a leader runs here now.
+      await drainOnce().catch((err) => log('warn', `sync: the queue did not drain: ${String(err)}`));
     },
     demote: async (masterDeviceId) => {
       await deps.db.proc!('syncDemote', { masterDeviceId });

@@ -75,6 +75,7 @@ import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
 import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
+import { forwardCore, isForwardedChannel } from './core/sync/forward-core';
 import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
 import {
@@ -875,10 +876,31 @@ function registerIpc(
   // `handlers` cannot be missing one of them without failing tsc. The
   // generic `dispatch` keeps `req` tied to its channel instead of collapsing
   // to a union call signature at the indexing site.
+  // Multi-device sync (step 3): on a follower the writing channels run on the
+  // leader, read now on every call; on the leader they run here unchanged.
   const dispatch = <C extends InvokeChannel>(
     channel: C,
     req: Invokes[C]['req'],
-  ) => handlers[channel](req);
+  ) =>
+    isForwardedChannel(channel) && p.sync.readOnly()
+      ? (forwardCore(p.sync, channel, req) as ReturnType<
+          InvokeHandlers[C]
+        >)
+      : handlers[channel](req);
+  p.sync.setRunners({
+    ui: async (extensionId, name, payload) => {
+      const r = await extensions.callUi(extensionId, name, payload);
+      if (r.ok) return r.value;
+      throw new Error(r.message);
+    },
+    core: async (name, req) => {
+      if (!isForwardedChannel(name)) throw new Error(`${name} is not a forwarded channel`);
+      return (handlers[name] as (r: unknown) => unknown)(req);
+    },
+    commit: async () => {
+      throw new Error('commit batches are bound in Task 2');
+    },
+  });
   const isTrustedSender = createTrustedRendererPredicate({
     app,
     BrowserWindow,

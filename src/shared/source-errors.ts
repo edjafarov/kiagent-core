@@ -82,6 +82,9 @@ export type ExtDispatchErrorCode =
   | 'EXT_TIER_DENIED'
   | 'EXT_MALFORMED_REQUEST'
   | 'EXT_UNTRUSTED_SENDER'
+  /** A follower's write needs the leader and none is reachable: nothing was
+   *  changed on any device (multi-device sync, step 3). */
+  | 'EXT_SYNC_NO_MASTER'
   /** A registered handler rejected with something that isn't a
    *  `WireErrorCode` (e.g. a plain `throw new Error(...)` in extension
    *  code) — the envelope still needs SOME code, and this is the

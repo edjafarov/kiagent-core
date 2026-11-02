@@ -488,3 +488,25 @@ describe('loadIconDataUrl', () => {
     expect(loadIconDataUrl(dir, { icon: 'icon.png' })).toBeUndefined();
   });
 });
+
+describe('manifest sync block (step 3)', () => {
+  const withSync = (sync: unknown, caps = ['ui']) => ({ ...GOOD, caps, sync });
+
+  it('a manifest without sync forwards nothing', () => {
+    expect(parseManifest(GOOD).sync).toBeUndefined();
+  });
+
+  it('accepts forward and deliver name lists', () => {
+    const m = parseManifest(withSync({ forward: ['claim'], deliver: ['import'] }));
+    expect(m.sync).toEqual({ forward: ['claim'], deliver: ['import'] });
+  });
+
+  it('rejects unknown keys and empty names', () => {
+    expect(() => parseManifest(withSync({ forwards: ['x'] }))).toThrow(ManifestError);
+    expect(() => parseManifest(withSync({ forward: [''] }))).toThrow(ManifestError);
+  });
+
+  it('needs the ui capability, since the names are ui.handle names', () => {
+    expect(() => parseManifest(withSync({ forward: ['claim'] }, ['net']))).toThrow(/ui/);
+  });
+});
