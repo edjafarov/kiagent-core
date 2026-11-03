@@ -865,6 +865,7 @@ function registerIpc(
     'extension:uninstall': ({ id }) => extensions.uninstall(id),
     'extension:set-enabled': ({ id, enabled }) =>
       extensions.setEnabled(id, enabled),
+    'extension:failed': () => ({ failed: extensions.failedExtensions() }),
     'extension:grant-consent': ({ id }) => extensions.grantConsent(id),
     'extensions:ui-source': ({ extensionId, contributionId }) =>
       extensions.uiSource(extensionId, contributionId),

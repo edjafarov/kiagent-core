@@ -802,6 +802,12 @@ export interface Invokes {
     req: { id: string; enabled: boolean };
     res: { ok: boolean; error?: string };
   };
+  /** Connectors from the user's other devices that could not install here
+   *  (sync spec 7.9). Settings names them; the platform retries hourly. */
+  'extension:failed': {
+    req: undefined;
+    res: { failed: { id: string; name: string; error: string }[] };
+  };
 
   /** The renderer's half of B1's host-owned extension RPC — see
    *  `ExtInvokeRequest`/`ExtInvokeEnvelope`. Never rejects. */
@@ -961,6 +967,7 @@ const INVOKE_CHANNEL_MAP = {
   'extension:install': 0,
   'extension:uninstall': 0,
   'extension:set-enabled': 0,
+  'extension:failed': 0,
   'extension:grant-consent': 0,
   'extensions:ui-source': 0,
   'ext:invoke': 0,

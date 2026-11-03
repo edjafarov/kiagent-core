@@ -112,4 +112,10 @@ describe('preload contextBridge surface', () => {
     }
     expect(mockOn).toHaveBeenCalledTimes(PUSH_CHANNELS.length);
   });
+
+  it('lets Settings ask which connectors failed to install here', async () => {
+    const { api } = loadPreload();
+    expect(INVOKE_CHANNELS).toContain('extension:failed');
+    await expect(api.invoke('extension:failed' as never, undefined as never)).resolves.toBe('ok');
+  });
 });
