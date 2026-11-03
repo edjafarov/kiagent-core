@@ -718,6 +718,10 @@ export function createEngine(deps: EngineDeps): Engine & {
         warn: (msg) => logs.log(scope, 'warn', msg),
       });
     },
+    async saveCredentials(c) {
+      if (signal.aborted) throw new Error('the pull has ended');
+      await store.vault.save(account.id, c);
+    },
     log(level, msg) {
       logs.log(scope, level, msg);
     },
@@ -1142,6 +1146,9 @@ export function createEngine(deps: EngineDeps): Engine & {
       // reconcile pass may legitimately exceed the mass-archive breaker.
       grantAllowance(account.id, 'full');
       await running.get(`account:${account.id}`)?.stop();
+      if (connected.credentials) {
+        captured = { ...(captured ?? {}), ...connected.credentials };
+      }
       if (captured) await store.vault.save(account.id, captured);
       logs.log(
         `source:${source.descriptor.id}`,

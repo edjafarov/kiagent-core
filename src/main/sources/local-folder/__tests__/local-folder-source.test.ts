@@ -92,6 +92,7 @@ function makeSession(
   watch?: boolean,
 ): Session {
   return {
+    saveCredentials: async () => {},
     account: makeAccount(paths, watch === undefined ? {} : { watch }),
     signal,
     credentials: async () => null,
@@ -104,6 +105,7 @@ function makeSessionWithConfig(
   signal: AbortSignal,
 ): Session {
   return {
+    saveCredentials: async () => {},
     account: {
       id: 'acct-no-roots',
       source: 'local-folder',
@@ -1333,6 +1335,7 @@ describe('manageFolders', () => {
 
   function sessionFor(account: Account): Session {
     return {
+      saveCredentials: async () => {},
       account,
       signal: new AbortController().signal,
       credentials: async () => null,

@@ -98,11 +98,17 @@ async function setup() {
   return { source, proxySet, mainEp };
 }
 
-function makeSession(signal?: AbortSignal): Session {
+function makeSession(
+  signal?: AbortSignal,
+  saved?: unknown[],
+): Session {
   return {
     account,
     signal: signal ?? new AbortController().signal,
     credentials: async () => ({ password: 'pw' }),
+    saveCredentials: async (c: unknown) => {
+      saved?.push(c);
+    },
     log: jest.fn(),
   } as never;
 }
@@ -131,6 +137,74 @@ describe('source proxy ↔ real child runtime', () => {
     expect(got).toHaveLength(2);
     expect((got[0].items[0] as DocumentInput).externalId).toBe('e1');
     expect(source.toDocument(got[0].items[0] as never)).toBe(got[0].items[0]); // identity
+  });
+
+  it('proxied saveCredentials reaches the vault', async () => {
+    const saving = {
+      async activate() {
+        return {
+          sources: [
+            {
+              descriptor: {
+                id: 'savesrc',
+                name: 'Save',
+                documentTypes: ['t'],
+                auth: 'none' as const,
+              },
+              async connect() {
+                return { identifier: 'x', credentials: { secret: 'S1' } };
+              },
+              async *pull(session: Session) {
+                await session.saveCredentials({ secret: 'MOVED' });
+                yield { phase: 'live', items: [{ n: 0 }], cursor: { n: 1 } };
+              },
+              toDocument: (i: unknown) => i,
+            },
+          ],
+        };
+      },
+    };
+    const { main, child } = createInMemoryHostPair();
+    const mainEp = createRpcEndpoint(main);
+    const proxySet = createSourceProxySet(mainEp);
+    mainEp.onCall((ns, m, a) => proxySet.handleCall(ns, m, a));
+    const activated = new Promise<Contributions>((resolve) => {
+      const off = mainEp.onNotify((msg) => {
+        if (msg.kind === 'activated') {
+          off();
+          resolve(msg.contributions as Contributions);
+        }
+      });
+    });
+    runExtensionHost(child, {
+      requireModule: () => saving,
+      exit: jest.fn(),
+    });
+    mainEp.post(BOOT);
+    const source = proxySet.makeSource((await activated).sources[0]);
+    // the connect result's credentials cross the wire
+    await expect(source.connect({} as never)).resolves.toEqual({
+      identifier: 'x',
+      credentials: { secret: 'S1' },
+    });
+    const saved: unknown[] = [];
+    for await (const b of source.pull(makeSession(undefined, saved), null)) {
+      void b;
+    }
+    expect(saved).toEqual([{ secret: 'MOVED' }]);
+  });
+
+  it('saveCredentials after the pull ended throws, saving nothing', async () => {
+    const { proxySet, source } = await setup();
+    const saved: unknown[] = [];
+    for await (const b of source.pull(makeSession(undefined, saved), null)) {
+      void b;
+    }
+    // the pull is over, so its session id is gone
+    await expect(
+      proxySet.handleCall('session', 'save', [1, { secret: 'LATE' }]),
+    ).rejects.toThrow('no active session');
+    expect(saved).toEqual([]);
   });
 
   it('aborting the session signal ends the pull promptly', async () => {

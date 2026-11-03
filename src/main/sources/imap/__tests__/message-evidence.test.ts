@@ -20,6 +20,7 @@ function session(): Session {
     createdAt: new Date(0).toISOString(),
   };
   return {
+    saveCredentials: async () => {},
     account,
     signal: new AbortController().signal,
     async credentials() {

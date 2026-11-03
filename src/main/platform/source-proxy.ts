@@ -162,7 +162,7 @@ export function createSourceProxySet(
     {
       credentials(): Promise<Credentials | null>;
       log(l: LogLevel, m: string): void;
-      /** Only a prepareExport call carries one. */
+      /** A pull or a prepareExport call carries one. */
       save?(c: Credentials): Promise<void>;
     }
   >();
@@ -252,6 +252,7 @@ export function createSourceProxySet(
     streams.set(pullId, state);
     sessions.set(pullId, {
       credentials: () => session.credentials(),
+      save: (c) => session.saveCredentials(c),
       log: (l, m) => session.log(l, m),
     });
     const onAbort = () => {

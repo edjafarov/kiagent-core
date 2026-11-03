@@ -543,6 +543,9 @@ export function runExtensionHost(
       account,
       signal: abort.signal,
       credentials: () => endpoint.call('session', 'credentials', [pullId]),
+      saveCredentials: async (c: unknown) => {
+        await endpoint.call('session', 'save', [pullId, c]);
+      },
       log: (level: unknown, msg: unknown) => {
         void endpoint
           .call('session', 'log', [pullId, level, msg])

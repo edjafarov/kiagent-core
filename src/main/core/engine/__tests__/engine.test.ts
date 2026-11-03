@@ -305,6 +305,95 @@ describe('engine', () => {
     ).toBeGreaterThanOrEqual((await store.headSeq()) - 1);
   }, 15_000);
 
+  describe('a connector writes its own login (saveCredentials)', () => {
+    const channel = (over: Record<string, unknown> = {}) =>
+      ({
+        oauth: async () => ({}),
+        showQr: () => {},
+        prompt: async () => ({}),
+        status: () => {},
+        pickFolders: async () => [],
+        ...over,
+      }) as never;
+
+    it('connect result credentials are saved', async () => {
+      const source: Source = {
+        ...fakeSource(),
+        async connect() {
+          return {
+            identifier: 'tg@test',
+            credentials: { secret: 'BLOB-1' },
+          };
+        },
+      } as never;
+      const account = await makeEngine(source).connect(source, channel());
+      expect(await store.vault.load(account.id)).toEqual({ secret: 'BLOB-1' });
+    });
+
+    it('connect credentials merge over a captured 2FA password', async () => {
+      const source: Source = {
+        ...fakeSource(),
+        async connect(auth: { prompt(s: unknown): Promise<unknown> }) {
+          await auth.prompt({});
+          return {
+            identifier: 'tg@test',
+            credentials: { secret: 'BLOB-2' },
+          };
+        },
+      } as never;
+      const account = await makeEngine(source).connect(
+        source,
+        channel({ prompt: async () => ({ password: 'twofa' }) }),
+      );
+      expect(await store.vault.load(account.id)).toEqual({
+        password: 'twofa',
+        secret: 'BLOB-2',
+      });
+    });
+
+    it('saveCredentials writes the vault row and no file', async () => {
+      const source: Source<number, DocumentInput> = {
+        ...fakeSource(),
+        async *pull(session) {
+          await session.saveCredentials({ secret: 'BLOB-3' });
+          yield { phase: 'live', items: [doc('x')], cursor: 1 };
+        },
+      };
+      const engine = makeEngine(source);
+      const account = await engine.connect(source, channel());
+      const before = fs.readdirSync(dir).sort();
+      const handle = engine.run(account);
+      await new Promise((r) => {
+        setTimeout(r, 300);
+      });
+      await handle.stop();
+      expect(await store.vault.load(account.id)).toEqual({ secret: 'BLOB-3' });
+      expect(fs.readdirSync(dir).filter((f) => !before.includes(f))).toEqual(
+        [],
+      );
+    });
+
+    it('saveCredentials after the pull ended throws, saving nothing', async () => {
+      let kept: { saveCredentials(c: unknown): Promise<void> } | null = null;
+      const source: Source<number, DocumentInput> = {
+        ...fakeSource(),
+        async *pull(session) {
+          kept = session as never;
+          yield { phase: 'live', items: [doc('x')], cursor: 1 };
+        },
+      };
+      const engine = makeEngine(source);
+      const account = await engine.connect(source, channel());
+      const handle = engine.run(account);
+      await new Promise((r) => {
+        setTimeout(r, 300);
+      });
+      await handle.stop();
+      await expect(kept!.saveCredentials({ secret: 'LATE' })).rejects.toThrow();
+      expect(await store.vault.load(account.id)).toBeNull();
+    });
+  });
+
   it('remove: one cascade — documents, vault, tombstone in feed', async () => {
     const source = fakeSource();
     const engine = makeEngine(source);

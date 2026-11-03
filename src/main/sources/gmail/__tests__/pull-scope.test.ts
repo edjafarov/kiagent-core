@@ -45,6 +45,7 @@ function makeSession(config: Record<string, unknown>): Session {
     createdAt: new Date().toISOString(),
   };
   return {
+    saveCredentials: async () => {},
     account,
     signal: new AbortController().signal,
     credentials: async () => ({ accessToken: 't' }),

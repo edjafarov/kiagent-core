@@ -51,6 +51,7 @@ function makeSession(config: Record<string, unknown> = {}): Session {
     createdAt: new Date().toISOString(),
   };
   return {
+    saveCredentials: async () => {},
     account,
     signal: controller.signal,
     credentials: async () => ({ accessToken: 'test-access-token' }),

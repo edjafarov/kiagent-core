@@ -93,6 +93,19 @@ describe('exportSources', () => {
     expect(t).toMatchObject({ source: 'telegram', credentials: { session: SECRET } });
   });
 
+  it('a telegram vault row with a session in secret is exported with it', async () => {
+    await add('telegram', '42', { secret: JSON.stringify({ session: SECRET }) });
+    const [t] = await exportSources(store, ME);
+    expect(JSON.parse((t.credentials as { secret: string }).secret).session).toBe(SECRET);
+  });
+
+  it('a telegram row holding only a 2FA password still exports (the seed starts it unpaired)', async () => {
+    await add('telegram', '42', { password: 'twofa' });
+    const [t] = await exportSources(store, ME);
+    expect(t).toMatchObject({ source: 'telegram', credentials: { password: 'twofa' } });
+    expect(t.credentials).not.toHaveProperty('secret');
+  });
+
   it('a device-owned account is exported as a row with owner_device_id and no credentials', async () => {
     await add('local-folder', '/Users/me/docs');
     await add('whatsapp', '491700000', { keys: SECRET });

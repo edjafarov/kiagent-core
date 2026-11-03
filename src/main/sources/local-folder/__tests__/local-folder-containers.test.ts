@@ -38,7 +38,9 @@ function session(paths: string[], signal: AbortSignal, watch = false): Session {
     cursor: null,
     createdAt: new Date().toISOString(),
   };
-  return { account, signal, credentials: async () => null, log: () => {} };
+  return {
+    saveCredentials: async () => {},
+    account, signal, credentials: async () => null, log: () => {} };
 }
 
 const msg = (subject: string, day: number) =>

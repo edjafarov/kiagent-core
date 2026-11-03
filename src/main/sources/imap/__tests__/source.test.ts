@@ -109,6 +109,7 @@ function makeSession(
     createdAt: new Date().toISOString(),
   };
   return {
+    saveCredentials: async () => {},
     account,
     signal: opts.signal ?? new AbortController().signal,
     async credentials() {

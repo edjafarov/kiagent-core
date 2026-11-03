@@ -545,6 +545,10 @@ export interface Session {
   readonly signal: AbortSignal;
   /** ONE credential verb. The platform refreshes OAuth before returning. */
   credentials(): Promise<Credentials | null>;
+  /** Write this account's login to the vault, replacing it. For a connector
+   *  that moves a login it kept elsewhere (a session file) into the vault;
+   *  nothing else is written. Throws once the pull has ended. */
+  saveCredentials(credentials: Credentials): Promise<void>;
   log(level: LogLevel, msg: string): void;
 }
 
@@ -737,7 +741,13 @@ export interface Source<Cursor = unknown, Item = unknown> {
   readonly descriptor: SourceDescriptor;
   connect(
     auth: AuthChannel,
-  ): Promise<{ identifier: string; config?: Record<string, unknown> }>;
+  ): Promise<{
+    identifier: string;
+    config?: Record<string, unknown>;
+    /** Saved to the vault with the account, merged over what the auth flow
+     *  captured (a 2FA password). */
+    credentials?: Credentials;
+  }>;
   /** Optional. Runs before this account's login is copied to another device
    *  (multi-device sync), so a login still waiting to move into the vault, such
    *  as a session file, is there to be copied. Awaited. */
