@@ -120,6 +120,7 @@ export const NS_METHODS: Record<string, string[]> = {
   ],
   commands: ['register'],
   attention: ['publish', 'resolve'],
+  prefs: ['get', 'set', 'watch', 'unwatch'],
   sync: [
     'status',
     'enableTracking',
@@ -238,6 +239,35 @@ function buildRemoteHost(
           void callHost(endpoint, 'events', 'emit', [event, payload]).catch(
             () => {},
           );
+        },
+      };
+      continue;
+    }
+    if (cap === 'prefs') {
+      const PREFS_EVENT = 'platform.prefs.change';
+      host.prefs = {
+        get: (name: unknown) => callHost(endpoint, cap, 'get', [name]),
+        set: (name: unknown, value: unknown) =>
+          callHost(endpoint, cap, 'set', [name, value]).then(() => undefined),
+        onChange(cb: (name: string, value: unknown) => void) {
+          let set = eventCbs.get(PREFS_EVENT);
+          if (!set) {
+            set = new Set();
+            eventCbs.set(PREFS_EVENT, set);
+            void callHost(endpoint, cap, 'watch', []).catch(() => {});
+          }
+          const wrapped = (p: unknown) => {
+            const { name, value } = p as { name: string; value: unknown };
+            cb(name, value);
+          };
+          set.add(wrapped);
+          return () => {
+            if (!set!.delete(wrapped)) return;
+            if (set!.size === 0) {
+              eventCbs.delete(PREFS_EVENT);
+              void callHost(endpoint, cap, 'unwatch', []).catch(() => {});
+            }
+          };
         },
       };
       continue;

@@ -181,6 +181,32 @@ export interface CorePrefs extends Prefs {
   setForwardUser(fn: ((user: Partial<AppPrefs>) => Promise<void>) | null): void;
   /** Resolves once the store passed to `createPrefs` is attached. */
   readonly ready: Promise<void>;
+  getExt(key: string): unknown;
+  setExt(key: string, value: unknown, opts?: { notify?: boolean }): Promise<void>;
+  onExtChange(cb: (key: string, value: unknown) => void): () => void;
+  setForwardExt(fn: ((key: string, value: unknown) => Promise<void>) | null): void;
+}
+
+/** Extension settings share the table under `<extension id>.<name>`; the
+ *  `core.` prefix is the app's own. */
+const isExtKey = (k: string): boolean => typeof k === 'string' && k.length > 0 && !k.startsWith('core.');
+
+/** A copy of `value` that is exactly what the table will hold; rejects what
+ *  JSON would drop or change silently (functions, symbols, bigint, undefined). */
+function jsonCopy(value: unknown): unknown {
+  let text: string | undefined;
+  try {
+    text = JSON.stringify(value, (_k, v) => {
+      if (typeof v === 'function' || typeof v === 'symbol' || typeof v === 'bigint') {
+        throw new TypeError('not JSON');
+      }
+      return v;
+    });
+  } catch {
+    throw new TypeError('a setting must be a JSON value');
+  }
+  if (text === undefined) throw new TypeError('a setting must be a JSON value');
+  return JSON.parse(text);
 }
 
 const sameJson = (a: unknown, b: unknown): boolean =>
@@ -198,7 +224,18 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
   let store: UserPrefsStore | null = null;
   let mirror: Record<string, unknown> = {};
   let forwardUser: ((u: Partial<AppPrefs>) => Promise<void>) | null = null;
+  let forwardExt: ((key: string, value: unknown) => Promise<void>) | null = null;
   const listeners = new Set<(p: AppPrefs) => void>();
+  const extListeners = new Set<(key: string, value: unknown) => void>();
+  const fireExt = (key: string, value: unknown): void => {
+    for (const cb of extListeners) {
+      try {
+        cb(key, value);
+      } catch {
+        // one listener's failure must not hide the change from the rest
+      }
+    }
+  };
 
   /** The file's device keys, plus its user keys until the table takes over. */
   const merge = (): AppPrefs => {
@@ -333,14 +370,43 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         if (!store) return;
         const loaded = await store.all();
         if (!sameJson(loaded, mirror)) {
+          const old = mirror;
           mirror = loaded;
           const before = current;
           recompute();
           if (!sameJson(before, current)) emit();
+          for (const k of new Set([...Object.keys(old), ...Object.keys(loaded)])) {
+            if (isExtKey(k) && !sameJson(old[k], loaded[k])) fireExt(k, loaded[k]);
+          }
         }
         await seedLocked();
       }),
     seedUser: () => serial(seedLocked),
+    getExt: (key) => (isExtKey(key) ? mirror[key] : undefined),
+    setExt: (key, value, opts) =>
+      serial(async () => {
+        if (!isExtKey(key)) throw new Error(`'${key}' is not an extension setting`);
+        const stored = jsonCopy(value);
+        if (!store) throw new Error('settings are not ready yet');
+        if (store.canWrite()) {
+          await store.set(key, stored);
+          mirror[key] = stored;
+          if (opts?.notify) fireExt(key, stored);
+        } else if (forwardExt) {
+          // The leader writes it and it comes back by the feed.
+          await forwardExt(key, stored);
+          mirror[key] = stored;
+        } else {
+          throw new Error('this device is a read-only copy: it cannot change this setting');
+        }
+      }),
+    onExtChange(cb) {
+      extListeners.add(cb);
+      return () => extListeners.delete(cb);
+    },
+    setForwardExt(fn) {
+      forwardExt = fn;
+    },
     setForwardUser(fn) {
       forwardUser = fn;
     },

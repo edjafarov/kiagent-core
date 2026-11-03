@@ -50,6 +50,7 @@ export const CAPS = [
   'inference',
   'events',
   'attention',
+  'prefs',
   'sync',
   'send',
   'calendar.write',

@@ -4,6 +4,7 @@
  * host incarnation. files and commands are implemented here; only commands
  * outside the public capability surface are rejected by the router.
  */
+import type { CorePrefs } from '../core/prefs';
 import type { SyncService } from '../core/sync/service';
 import type {
   EmbedResult,
@@ -214,6 +215,9 @@ export interface SurfaceDeps {
   /** Boot-owned; only an extension granted the privileged `sync` cap reaches
    *  it. Absent in a surface built without it: every call rejects. */
   sync?: SyncSurface;
+  /** Boot-owned store behind `host.prefs`; a surface built without it
+   *  rejects every prefs call. */
+  prefs?: Pick<CorePrefs, 'getExt' | 'setExt' | 'onExtChange'>;
   notify(msg: string, level?: LogLevel): void;
   bus: EventBus;
   /** Ships a host event to the child (endpoint.post({kind:'event',…})). */
@@ -298,6 +302,7 @@ export function buildSurfaces(deps: SurfaceDeps): {
   close(): void | Promise<void>;
 } {
   const eventSubs = new Map<string, () => void>();
+  let prefsWatch: (() => void) | null = null;
   const remoteWatchers = new Map<number, { close(): Promise<void> }>();
   const uiRegistry = deps.uiRegistry ?? createUiRegistry();
   // ONE resolution of the default, reused by both the registry bind (which
@@ -699,6 +704,42 @@ export function buildSurfaces(deps: SurfaceDeps): {
       },
     },
     sync: syncSurface(deps.sync),
+    prefs: (() => {
+      const store = (): NonNullable<SurfaceDeps['prefs']> => {
+        if (!deps.prefs) throw new Error('prefs is not available');
+        return deps.prefs;
+      };
+      // Keys are `<extension id>.<name>`; extension ids contain dots, so a
+      // dotted name could land in another extension's space.
+      const keyOf = (name: unknown): string => {
+        if (typeof name !== 'string' || name === '' || name.includes('.'))
+          throw new TypeError('a prefs name is a non-empty string without dots');
+        return `${deps.extensionId}.${name}`;
+      };
+      const prefix = `${deps.extensionId}.`;
+      return {
+        get: async (name: unknown) => store().getExt(keyOf(name)),
+        set: async (name: unknown, value: unknown) =>
+          store().setExt(keyOf(name), value),
+        watch: () => {
+          if (prefsWatch) return;
+          prefsWatch = store().onExtChange((key, value) => {
+            if (!key.startsWith(prefix)) return;
+            const name = key.slice(prefix.length);
+            if (name === '' || name.includes('.')) return;
+            deps.deliverEvent(
+              'platform.prefs.change',
+              { name, value },
+              { from: 'platform', at: Date.now() },
+            );
+          });
+        },
+        unwatch: () => {
+          prefsWatch?.();
+          prefsWatch = null;
+        },
+      };
+    })(),
     attention: {
       publish: (items: unknown) =>
         deps.attention.publish(deps.extensionId, items),
@@ -770,6 +811,8 @@ export function buildSurfaces(deps: SurfaceDeps): {
       uiIncarnation.close();
       eventSubs.forEach((off) => off());
       eventSubs.clear();
+      prefsWatch?.();
+      prefsWatch = null;
       await Promise.all(
         [...remoteWatchers.values()].map((watcher) =>
           watcher.close().catch(() => undefined),

@@ -891,6 +891,12 @@ function registerIpc(
       broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
     );
   });
+  // An extension setting written on a follower is stored by the leader.
+  p.prefs.setForwardExt(async (key, value) => {
+    await forwardCore(p.sync, 'prefs:set-ext', { key, value }, (message) =>
+      broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
+    );
+  });
   // What the leader changed in user_prefs arrives by the feed.
   p.sync.onApplied((tables) => {
     if (tables.includes('user_prefs')) void p.prefs.refreshUser();
@@ -902,6 +908,14 @@ function registerIpc(
       throw new Error(r.message);
     },
     core: async (name, req) => {
+      // Not an IPC channel: only a follower's `host.prefs.set` sends it, and
+      // the leader's own listeners hear it as another device's change.
+      if (name === 'prefs:set-ext') {
+        const { key, value } = (req ?? {}) as { key?: unknown; value?: unknown };
+        if (typeof key !== 'string') throw new Error('prefs:set-ext needs a key');
+        await p.prefs.setExt(key, value, { notify: true });
+        return undefined;
+      }
       const local = forwardedLocal.get(name);
       if (!local) throw new Error(`${name} is not a forwarded channel`);
       return local(req);
@@ -1445,6 +1459,7 @@ app
     const outboundRoutes = createOutboundRoutes(outbound, calendarOut);
     extensionsPlatform = createExtensionPlatform({
       sync: p.sync,
+      prefs: p.prefs,
       extDir: path.join(app.getPath('userData'), 'extensions'),
       bundledDir: bundledExtensionsDir,
       dormantExtensions: product.dormantExtensions,

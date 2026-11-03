@@ -293,6 +293,8 @@ export interface ExtensionPlatformDeps {
   db?: AppDb;
   attention: AttentionService;
   sync?: SyncService;
+  /** The store behind `host.prefs` (the app's `CorePrefs`). */
+  prefs?: SurfaceDeps['prefs'];
   /** Trusted root grants restored/created by product main-process flows. */
   fileRoots?: FileRootRegistry;
   /** The app's userData dir — a declared root may never cover or sit inside it. */
@@ -1167,6 +1169,7 @@ export function createExtensionPlatform(
             },
             attention: deps.attention,
             sync: deps.sync,
+            prefs: deps.prefs,
             callUi: async (name, payload) => {
               const r = await api.callUi(e.manifest.id, name, payload);
               if (r.ok) return r.value;

@@ -23,6 +23,7 @@ export const NS_CAP: Record<string, Cap> = {
   inference: 'inference',
   events: 'events',
   attention: 'attention',
+  prefs: 'prefs',
   sync: 'sync',
 };
 

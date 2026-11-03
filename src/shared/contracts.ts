@@ -1670,6 +1670,9 @@ export type Cap =
   | 'inference'
   | 'events'
   | 'attention'
+  /** Reads and writes this extension's own settings, which follow the user to
+   *  every device (alpha-cent spec 7.9). */
+  | 'prefs'
   /** Copies this device's data to and from a sibling. Privileged. */
   | 'sync'
   /** May deliver outbound messages through the host's send pipeline — the
@@ -1927,6 +1930,20 @@ export interface CapSurfaces {
         id: string,
         revision?: number,
       ): Promise<{ rejected: { id: string; reason: string }[] }>;
+    };
+  };
+  /** Settings that belong to the user: stored under `<extension id>.<name>`
+   *  in the copied `user_prefs` table, so they reach every device. */
+  prefs: {
+    prefs: {
+      /** `undefined` when nothing was saved under `name`. `name` is one word
+       *  without dots. */
+      get(name: string): Promise<unknown | undefined>;
+      /** Rejects for a value that is not JSON. On a device that is not the
+       *  master the master stores it; rejects when it can't be reached. */
+      set(name: string, value: unknown): Promise<void>;
+      /** Called when another device changed one of this extension's settings. */
+      onChange(cb: (name: string, value: unknown) => void): () => void;
     };
   };
   /** Privileged, bundled-tier only (alpha-cent spec 7.6). */

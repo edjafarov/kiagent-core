@@ -76,6 +76,13 @@ export const CAP_CATALOG: Record<Cap, CapInfo> = {
     risk: 'normal',
     icon: 'info',
   },
+  prefs: {
+    label: 'Keep its settings with you',
+    description:
+      'Can save this extension’s own settings so they follow you to your other devices.',
+    risk: 'normal',
+    icon: 'info',
+  },
   sync: {
     label: 'Copy your data between your devices',
     description:
