@@ -3,7 +3,8 @@
  *  forwards still refuses. Main calls this once, after the preferences and the
  *  sync service exist. */
 import type { CorePrefs } from '../prefs';
-import { forwardCore, type OfflineHandlers } from './forward-core';
+import { forwardCore, type OfflineHandler, type OfflineHandlers } from './forward-core';
+import { extensionEnabledKey } from './settings-queue';
 import type { SyncService } from './service';
 
 export function installOfflineSettings(
@@ -20,14 +21,14 @@ export function installOfflineSettings(
     await forwardCore(sync, 'prefs:set-ext', { key, value });
   });
   sync.onQueueChange((e) => prefs.onQueueChange(e));
-  return {
-    'extension:set-enabled': async (req, runLocal) => {
-      const { id, enabled } = req as { id: string; enabled: boolean };
-      const r = (await runLocal()) as { ok: boolean };
-      if (r.ok) await prefs.queueExtensionEnabled(id, enabled);
-      return r;
-    },
+  const setEnabled: OfflineHandler = async (req, runLocal) => {
+    const { id, enabled } = req as { id: string; enabled: boolean };
+    const r = (await runLocal()) as { ok: boolean };
+    if (r.ok) await prefs.queueExtensionEnabled(id, enabled);
+    return r;
   };
+  setEnabled.held = (req) => prefs.hasQueued(extensionEnabledKey((req as { id: string }).id));
+  return { 'extension:set-enabled': setEnabled };
 }
 
 /** Boot, once the preferences have attached: what was queued before the last

@@ -5,12 +5,18 @@ import type { UserPrefKey } from '../prefs';
 import { FORWARDED_CHANNELS, type ForwardedChannel } from './forward-core';
 import type { ForwardRequest } from './service';
 
+/** A refusing handler is retried this many times, then the row is left in the
+ *  queue for good. */
+export const MAX_HANDLER_ATTEMPTS = 5;
+
 /** One queued setting as the overlay and the status see it. `key` is the
  *  coalesce key. */
 export interface QueuedSetting {
   rowId: number;
   key: string;
   value: unknown;
+  /** The leader refused it often enough that it is no longer retried. */
+  stuck: boolean;
 }
 
 export const userPrefKey = (k: string): string => `core.${k}`;
@@ -70,7 +76,7 @@ export const REFUSED_WHEN_OFFLINE: readonly ForwardedChannel[] = FORWARDED_CHANN
  *  unique index guarantees it), in id order. A row whose payload cannot be read
  *  is left out, so the overlay never shows a value nobody can deliver. */
 export function queuedSettingsOf(
-  rows: { id: number; coalesce_key: string | null; payload: Uint8Array }[],
+  rows: { id: number; coalesce_key: string | null; payload: Uint8Array; attempts: number }[],
 ): QueuedSetting[] {
   const out: QueuedSetting[] = [];
   for (const r of rows) {
@@ -81,9 +87,14 @@ export function queuedSettingsOf(
     } catch {
       value = undefined;
     }
-    if (value !== undefined) out.push({ rowId: Number(r.id), key: r.coalesce_key, value });
+    if (value !== undefined) out.push({
+        rowId: Number(r.id),
+        key: r.coalesce_key,
+        value,
+        stuck: r.attempts >= MAX_HANDLER_ATTEMPTS,
+      });
   }
   return out;
 }
 
-export const QUEUED_SETTINGS_SQL = `SELECT id, coalesce_key, payload FROM sync_outbound WHERE coalesce_key IS NOT NULL ORDER BY id`;
+export const QUEUED_SETTINGS_SQL = `SELECT id, coalesce_key, payload, attempts FROM sync_outbound WHERE coalesce_key IS NOT NULL ORDER BY id`;

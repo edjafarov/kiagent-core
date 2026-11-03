@@ -19,8 +19,8 @@ const FIXTURE = path.join(__dirname, 'fixtures', 'ext-sync');
 
 const manifest = JSON.parse(fs.readFileSync(path.join(FIXTURE, 'manifest.json'), 'utf8'));
 
-it('the platform API moved to 2.18.0 for the join methods, once for all four steps', () => {
-  expect(PLATFORM_API_VERSION).toBe('2.18.0');
+it('the platform API is 2.19.0: 2.18.0 added the join methods, 2.19.0 the queued-settings methods', () => {
+  expect(PLATFORM_API_VERSION).toBe('2.19.0');
 });
 
 it('a marketplace extension declaring sync is refused, a bundled one is accepted', () => {
@@ -80,7 +80,7 @@ describe('through a real forked extension host', () => {
         setFenced: note('setFenced', undefined),
         readOnly: note('readOnly', true),
         deleteArchive: note('deleteArchive', undefined),
-        queuedSettings: note('queuedSettings', [{ rowId: 3, key: 'core.theme', value: 'dark' }]),
+        queuedSettings: note('queuedSettings', [{ rowId: 3, key: 'core.theme', value: 'dark', stuck: false }]),
         discardQueued: note('discardQueued', undefined),
         close: async () => undefined,
       } as never,
@@ -140,7 +140,7 @@ describe('through a real forked extension host', () => {
       exportSecrets: [{ accountId: 'a', epoch: 1, n: 3, value: null }],
       importSecrets: { applied: 1 },
       readOnly: true,
-      queuedSettings: [{ rowId: 3, key: 'core.theme', value: 'dark' }],
+      queuedSettings: [{ rowId: 3, key: 'core.theme', value: 'dark', stuck: false }],
     });
     // onQueueChange and enqueue are core-internal: no extension can reach them.
     expect(seen.discardQueued).toEqual([7]);

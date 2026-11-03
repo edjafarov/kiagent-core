@@ -179,6 +179,28 @@ it('a leader that is reachable gets the request and nothing is queued', async ()
   expect(w.enabled.get('conn.a')).toBe(false); // the leader does it; this device follows by reconcile
 });
 
+it('an online edit over a queued key replaces the row and the drain delivers only the newer value', async () => {
+  const w = await wire();
+  await w.prefs.patch({ theme: 'dark' });
+  await w.table['extension:set-enabled']({ id: 'conn.a', enabled: true });
+  const sent: unknown[] = [];
+  w.svc.setForwarder(async (r) => {
+    sent.push([r.name, r.payload]);
+    return { ok: true, value: { ok: true } };
+  });
+  await w.prefs.patch({ theme: 'light' });
+  await w.table['extension:set-enabled']({ id: 'conn.a', enabled: false });
+  expect(sent).toEqual([]); // nothing forwarded around the queue
+  expect(rows(w)).toHaveLength(2);
+  expect(w.prefs.get().theme).toBe('light');
+  expect(w.prefs.getCore(EXTENSIONS_KEY)).toEqual({ 'conn.a': { enabled: false } });
+  await w.svc.drainOutbound();
+  expect(sent).toEqual([
+    ['prefs:patch', { theme: 'light' }],
+    ['extension:set-enabled', { id: 'conn.a', enabled: false }],
+  ]);
+});
+
 it('delivery: the drain sends the row, the ack drops the overlay, the value is held until a later delta', async () => {
   const w = await wire();
   await w.prefs.patch({ theme: 'dark' });

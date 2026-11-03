@@ -1669,7 +1669,7 @@ export interface SyncStatusWire {
   /** Settings changed with no leader reachable that still wait to be
    *  delivered; `key` is `core.<pref>`, `core.extensions.<id>` or
    *  `<extension id>.<name>`. */
-  queuedSettings: { rowId: number; key: string; value: unknown }[];
+  queuedSettings: { rowId: number; key: string; value: unknown; stuck: boolean }[];
 }
 
 export type Cap =
@@ -2047,7 +2047,7 @@ export interface CapSurfaces {
        *  promotion. */
       drainOutbound(): Promise<{ sent: number; waiting: number }>;
       /** Settings waiting for a leader, one per key. */
-      queuedSettings(): Promise<{ rowId: number; key: string; value: unknown }[]>;
+      queuedSettings(): Promise<{ rowId: number; key: string; value: unknown; stuck: boolean }[]>;
       /** Drops a waiting setting (never a data row). */
       discardQueued(rowId: number): Promise<void>;
       /** Primary keys the swap kept for an owner-capture table. */

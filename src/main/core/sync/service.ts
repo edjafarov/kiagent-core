@@ -10,7 +10,7 @@ import type { CoreStore } from '../store/store';
 import type { ImportSourcesResult } from '../store/write-tx';
 import type { DeltaResult, SyncCursor } from './delta';
 import { splitBatch, type OwnedAccount } from './owned';
-import { QUEUED_SETTINGS_SQL, queuedSettingsOf, type QueuedSetting } from './settings-queue';
+import { MAX_HANDLER_ATTEMPTS, QUEUED_SETTINGS_SQL, queuedSettingsOf, type QueuedSetting } from './settings-queue';
 import type { SyncRole } from './role';
 import {
   DEVICE_OWNED_SOURCES,
@@ -363,7 +363,6 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   const nowMs = deps.nowMs ?? Date.now;
   /** A refusing handler is retried this many times, with a growing wait, and
    *  then left in the queue for good: kept, never sent again, never blocking. */
-  const MAX_HANDLER_ATTEMPTS = 5;
   const backoffMs = (attempts: number): number => Math.min(30_000 * 2 ** (attempts - 1), 60 * 60_000);
   const retryAt = new Map<number, number>();
   const spentLogged = new Set<number>();

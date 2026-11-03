@@ -197,6 +197,9 @@ export interface CorePrefs extends Prefs {
   setOfflineQueue(q: OfflineQueue | null): void;
   /** Boot: rebuild the overlay from the queue's rows (no optimistic entries). */
   restoreQueued(rows: QueuedSetting[]): void;
+  /** Is a change of `key` waiting in the queue? A newer edit then goes
+   *  through the queue too, so it replaces the row instead of racing it. */
+  hasQueued(key: string): boolean;
   /** An extension switch changed with no leader: queued under
    *  `core.extensions.<id>` and shown by `getCore('core.extensions')`. */
   queueExtensionEnabled(id: string, enabled: boolean): Promise<void>;
@@ -364,7 +367,19 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
    *  write it. Idempotent; runs inside the critical section. */
   const seedLocked = async (): Promise<void> => {
     const s = store;
-    if (!s || seeded || !s.canWrite()) return;
+    if (!s) return;
+    if (s.canWrite() && optimistic.size > 0) {
+      // Promoted: the local table is the truth now. A value the old leader
+      // acknowledged but whose feed never arrived must not outlive that.
+      const ext = extView();
+      const before = current;
+      optimistic.clear();
+      mirror = await s.all();
+      recompute();
+      if (!sameJson(before, current)) emit();
+      fireExtChanges(ext);
+    }
+    if (seeded || !s.canWrite()) return;
     for (const k of USER_PREF_KEYS) {
       const t = tableKey(k);
       if (t in mirror || sameJson(fromFile[k], DEFAULT_PREFS[k])) continue;
@@ -436,12 +451,20 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         } else if (forwardUser) {
           // The leader writes it and it comes back by the feed; until then the
           // local mirror shows the change (the feed's value overwrites it).
-          try {
-            await forwardUser(userPart);
-          } catch (err) {
-            if (!queue || !isNoMaster(err)) throw err;
-            // No leader: each key waits in the queue with its COMPLETE merged
-            // value (a nested pref merges right whichever edit arrives last).
+          // A key with a row still waiting goes through the queue as well: the
+          // row is replaced, so the older value cannot be delivered after this.
+          let viaQueue = !!queue && touched.some((k) => overlay.has(userPrefKey(k)));
+          if (!viaQueue) {
+            try {
+              await forwardUser(userPart);
+            } catch (err) {
+              if (!queue || !isNoMaster(err)) throw err;
+              viaQueue = true;
+            }
+          }
+          if (viaQueue && queue) {
+            // Each key waits in the queue with its COMPLETE merged value (a
+            // nested pref merges right whichever edit arrives last).
             for (const k of touched) {
               const key = userPrefKey(k);
               const rowId = await queue.enqueue(userPrefRequest(k, next[k]), { coalesceKey: key });
@@ -452,7 +475,10 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
             emit();
             return;
           }
-          for (const k of touched) mirror[tableKey(k)] = next[k];
+          for (const k of touched) {
+            mirror[tableKey(k)] = next[k];
+            optimistic.delete(tableKey(k));
+          }
           recompute();
           emit();
         } else {
@@ -484,14 +510,18 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         fireExtChanges(ext);
         await seedLocked();
       }),
+    hasQueued: (key) => overlay.has(key),
     setOfflineQueue(q) {
       queue = q;
     },
     restoreQueued(rows) {
       const ext = extView();
       const before = current;
-      overlay.clear();
-      for (const r of rows) overlay.set(r.key, { value: r.value, rowId: r.rowId });
+      // An entry a newer edit already made stays; the rows only fill gaps.
+      for (const r of rows) {
+        const have = overlay.get(r.key);
+        if (!have || have.rowId < r.rowId) overlay.set(r.key, { value: r.value, rowId: r.rowId });
+      }
       recompute();
       if (!sameJson(before, current)) emit();
       fireExtChanges(ext);
@@ -538,16 +568,23 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
           if (opts?.notify) fireExt(key, stored);
         } else if (forwardExt) {
           // The leader writes it and it comes back by the feed.
-          try {
-            await forwardExt(key, stored);
-          } catch (err) {
-            if (!queue || !isNoMaster(err)) throw err;
+          let viaQueue = !!queue && overlay.has(key);
+          if (!viaQueue) {
+            try {
+              await forwardExt(key, stored);
+            } catch (err) {
+              if (!queue || !isNoMaster(err)) throw err;
+              viaQueue = true;
+            }
+          }
+          if (viaQueue && queue) {
             const rowId = await queue.enqueue(extPrefRequest(key, stored), { coalesceKey: key });
             overlay.set(key, { value: stored, rowId });
             optimistic.delete(key);
             return;
           }
           mirror[key] = stored;
+          optimistic.delete(key);
         } else {
           throw new Error('this device is a read-only copy: it cannot change this setting');
         }

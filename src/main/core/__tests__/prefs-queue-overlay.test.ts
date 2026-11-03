@@ -188,9 +188,9 @@ describe('the offline queue overlay', () => {
   it('restoreQueued rebuilds the overlay from rows', async () => {
     const { p } = await follower();
     const rows: QueuedSetting[] = [
-      { rowId: 4, key: 'core.theme', value: 'dark' },
-      { rowId: 5, key: 'a.b', value: 7 },
-      { rowId: 6, key: 'core.extensions.z', value: true },
+      { rowId: 4, key: 'core.theme', value: 'dark', stuck: false },
+      { rowId: 5, key: 'a.b', value: 7, stuck: false },
+      { rowId: 6, key: 'core.extensions.z', value: true, stuck: false },
     ];
     p.restoreQueued(rows);
     expect(p.get().theme).toBe('dark');
@@ -299,6 +299,74 @@ describe('the offline queue overlay', () => {
     await p.queueExtensionEnabled('a', true);
     await p.refreshUser({ prefKeys: [], pullStartedAt: 9999 });
     expect((p.getCore('core.extensions') as Record<string, { enabled: boolean }>).a.enabled).toBe(true);
+  });
+
+  it('an online edit of a key with an optimistic entry shows the new value at once', async () => {
+    const { p, queue } = await follower({ 'core.theme': 'light' });
+    await p.patch({ theme: 'dark' });
+    p.onQueueChange({ kind: 'delivered', rowId: queue.rows[0].rowId, coalesceKey: 'core.theme' });
+    p.setForwardUser(async () => undefined);
+    p.setForwardExt(async () => undefined);
+    await p.setExt('a.b', 1);
+    p.onQueueChange({ kind: 'delivered', rowId: 99, coalesceKey: 'a.b' });
+    await p.patch({ theme: 'system' });
+    expect(p.get().theme).toBe('system');
+  });
+
+  it('an online edit of an extension key with an optimistic entry shows the new value at once', async () => {
+    const { p, queue } = await follower();
+    await p.setExt('a.b', 1);
+    p.onQueueChange({ kind: 'delivered', rowId: queue.rows[0].rowId, coalesceKey: 'a.b' });
+    expect(p.getExt('a.b')).toBe(1);
+    p.setForwardExt(async () => undefined);
+    await p.setExt('a.b', 2);
+    expect(p.getExt('a.b')).toBe(2);
+  });
+
+  it('an online edit of a key with a queued row replaces the row instead of forwarding', async () => {
+    const { p, queue } = await follower();
+    await p.patch({ theme: 'dark' });
+    const first = queue.rows[0].rowId;
+    const fwd = jest.fn(async () => undefined);
+    p.setForwardUser(fwd);
+    p.setForwardExt(fwd);
+    await p.patch({ theme: 'light' });
+    expect(fwd).not.toHaveBeenCalled();
+    expect(queue.rows).toHaveLength(1);
+    expect(queue.rows[0].rowId).toBeGreaterThan(first);
+    expect((queue.rows[0].req.payload as { theme: string }).theme).toBe('light');
+    expect(p.get().theme).toBe('light');
+    p.setForwardExt(noMaster);
+    await p.setExt('a.b', 1);
+    p.setForwardExt(fwd);
+    await p.setExt('a.b', 2);
+    expect(fwd).not.toHaveBeenCalled();
+    expect(queue.rows.filter((r) => r.key === 'a.b')).toHaveLength(1);
+    expect(p.getExt('a.b')).toBe(2);
+    expect(p.hasQueued('a.b')).toBe(true);
+    expect(p.hasQueued('zzz')).toBe(false);
+  });
+
+  it('an acknowledged optimistic value does not survive promotion', async () => {
+    const { p, queue, store } = await follower({ 'core.theme': 'system' });
+    await p.patch({ theme: 'dark' });
+    p.onQueueChange({ kind: 'delivered', rowId: queue.rows[0].rowId, coalesceKey: 'core.theme' });
+    expect(p.get().theme).toBe('dark');
+    store.writable = true; // promoted before any delta arrived
+    await p.seedUser();
+    expect(p.get().theme).toBe('system'); // the local table is authoritative now
+    await p.patch({ theme: 'light' });
+    expect(p.get().theme).toBe('light');
+    expect(store.rows['core.theme']).toBe('light');
+  });
+
+  it('restoreQueued keeps a newer entry and takes a newer row', async () => {
+    const { p } = await follower();
+    p.restoreQueued([{ rowId: 8, key: 'core.theme', value: 'dark', stuck: false }]);
+    p.restoreQueued([{ rowId: 3, key: 'core.theme', value: 'light', stuck: false }]);
+    expect(p.get().theme).toBe('dark');
+    p.restoreQueued([{ rowId: 9, key: 'core.theme', value: 'light', stuck: false }]);
+    expect(p.get().theme).toBe('light');
   });
 
   it('two copies offline, A then B reach the leader: B wins, also over a value the leader changed meanwhile', async () => {

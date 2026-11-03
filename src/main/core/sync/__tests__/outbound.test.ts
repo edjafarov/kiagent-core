@@ -523,13 +523,22 @@ describe('the settings queue (phase 6c)', () => {
     expect(seen).toHaveLength(1);
   });
 
+  it('a spent row is listed as stuck', async () => {
+    const d = await device(true);
+    const id = await d.svc.enqueue(setting('theme', 'dark'), { coalesceKey: 'core.theme' });
+    expect((await d.svc.queuedSettings())[0].stuck).toBe(false);
+    d.conn().prepare(`UPDATE sync_outbound SET attempts = 5 WHERE id = ?`).run(id);
+    expect(await d.svc.queuedSettings()).toEqual([{ rowId: id, key: 'core.theme', value: 'dark', stuck: true }]);
+    expect(readSyncStatus(d.conn()).queuedSettings[0].stuck).toBe(true);
+  });
+
   it('queuedSettings lists one entry per key with the value', async () => {
     const d = await device(true);
     await d.svc.enqueue(setting('theme', 'dark'), { coalesceKey: 'core.theme' });
     const id = await d.svc.enqueue(setting('theme', 'light'), { coalesceKey: 'core.theme' });
     await d.svc.enqueue(ui('import'));
-    expect(await d.svc.queuedSettings()).toEqual([{ rowId: id, key: 'core.theme', value: 'light' }]);
-    expect(readSyncStatus(d.conn()).queuedSettings).toEqual([{ rowId: id, key: 'core.theme', value: 'light' }]);
+    expect(await d.svc.queuedSettings()).toEqual([{ rowId: id, key: 'core.theme', value: 'light', stuck: false }]);
+    expect(readSyncStatus(d.conn()).queuedSettings).toEqual([{ rowId: id, key: 'core.theme', value: 'light', stuck: false }]);
   });
 });
 
