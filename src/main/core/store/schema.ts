@@ -1358,6 +1358,14 @@ const MIGRATIONS: Migration[] = [
     addColumn('sync_state', 'device_id', 'TEXT');
     addColumn('sync_state', 'adopted_at', 'TEXT');
   },
+  // v19: user settings that follow the user (alpha-cent spec 7.9). Copied
+  // table; no rows are written here, code writes them after tracking exists.
+  `
+  CREATE TABLE IF NOT EXISTS user_prefs (
+    key TEXT PRIMARY KEY,
+    value_json TEXT NOT NULL
+  );
+  `,
 ];
 
 /**

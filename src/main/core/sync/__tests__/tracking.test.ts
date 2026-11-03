@@ -88,6 +88,7 @@ it('every core table is classified as copied, local or derived', () => {
     'sync_epochs',
     'attention_items',
     'attention_revisions',
+    'user_prefs',
   ]);
 });
 
@@ -285,6 +286,7 @@ describe('synced plugin tables', () => {
       'sync_epochs',
       'attention_items',
       'attention_revisions',
+      'user_prefs',
     ]) {
       expect(names).toEqual(
         expect.arrayContaining([`sync_i_${t}`, `sync_u_${t}`, `sync_d_${t}`]),
@@ -331,8 +333,18 @@ describe('synced plugin tables', () => {
     expect(readSyncStatus(conn()).copiedSet).toBe(copiedSetDigest(conn()));
   });
 
-  it('copiedSetDigest changes with the version, the table list and a descriptor digest, and not with row data', async () => {
+  it('user_prefs is copied and gets triggers when tracking starts', () => {
+    expect(COPIED_CORE_TABLES).toContain('user_prefs');
+    enableTracking(conn());
+    const before = entries().length;
+    conn().prepare(`INSERT INTO user_prefs(key, value_json) VALUES('k', '1')`).run();
+    const added = entries().slice(before);
+    expect(added.map((e) => e.tbl)).toEqual(['user_prefs']);
+  });
+
+  it('the digest ignores core tables and the schema version, changes with a synced plugin table, and starts with v2:', async () => {
     const d0 = copiedSetDigest(conn());
+    expect(d0.startsWith('v2:')).toBe(true);
     expect(copiedSetDigest(conn())).toBe(d0);
     const a = await account();
     await commit(a.id, [doc('d1')]);
@@ -341,8 +353,7 @@ describe('synced plugin tables', () => {
     conn()
       .prepare(`UPDATE meta SET value = value + 1 WHERE key='schemaVersion'`)
       .run();
-    const d1 = copiedSetDigest(conn());
-    expect(d1).not.toBe(d0);
+    expect(copiedSetDigest(conn())).toBe(d0);
     conn()
       .prepare(`UPDATE meta SET value = value - 1 WHERE key='schemaVersion'`)
       .run();

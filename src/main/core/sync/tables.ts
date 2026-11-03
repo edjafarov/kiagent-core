@@ -17,6 +17,7 @@ export const COPIED_CORE_TABLES: readonly string[] = [
   'sync_epochs',
   'attention_items',
   'attention_revisions',
+  'user_prefs',
 ];
 
 export const LOCAL_CORE_TABLES: readonly string[] = [
@@ -123,21 +124,20 @@ export function ownerCaptureTables(conn: BetterSqlite3.Database, schema = 'main'
 }
 
 /** What two devices must agree on before one can read the other's rows
- *  (spec 7.8, ruling 6): the schema version, which tables are copied and the
- *  digest of each descriptor that names synced tables. Never row data. */
+ *  (spec 7.8, ruling 6, narrowed in 7.9): which synced plugin tables exist and
+ *  the digest of each descriptor that names them. Core tables and the schema
+ *  version are out: the protocol and schema checks already gate those, and a
+ *  new core table must not force a full re-copy. Never row data. */
 export function copiedSetDigest(conn: BetterSqlite3.Database): string {
-  const version = (
-    conn.prepare(`SELECT value FROM meta WHERE key = 'schemaVersion'`).get() as
-      | { value: string | number }
-      | undefined
-  )?.value;
   const hash = createHash('sha256');
-  hash.update(`schema:${String(version ?? '')}\n`);
-  for (const t of [...copiedTables(conn)].sort()) hash.update(`table:${t}\n`);
+  const core = new Set(COPIED_CORE_TABLES);
+  for (const t of copiedTables(conn).filter((n) => !core.has(n)).sort()) {
+    hash.update(`table:${t}\n`);
+  }
   for (const p of registeredSynced(conn, 'main')) {
     hash.update(`descriptor:${p.pluginId}:${p.digest}\n`);
   }
-  return hash.digest('hex');
+  return `v2:${hash.digest('hex')}`;
 }
 
 /** Primary-key columns in key order: the `pk` JSON array of a tracked row is
