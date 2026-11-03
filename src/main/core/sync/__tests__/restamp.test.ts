@@ -217,3 +217,122 @@ it('a plain takeover by a follower re-numbers nothing', async () => {
   promote(vm.conn(), 14);
   expect(vm.conn().prepare(`SELECT seq FROM documents`).all()).toEqual(before);
 });
+
+describe('the restamp bound survives more than one takeover', () => {
+  let third: Dev;
+  beforeEach(async () => {
+    third = await open('third');
+  });
+  afterEach(async () => {
+    third.reader.close();
+    await third.db.close();
+  });
+
+  /** Mac leads at 0, VM and the third device follow; the VM leads at 14 and the
+   *  third device at 15; the Mac, away, wrote m1 at its old numbering. */
+  async function twoTakeovers() {
+    enableTracking(mac.conn());
+    const a = await mac.store.createAccount({ source: 'test', identifier: 'shared' });
+    await mac.store.commit({
+      account: a.id as never,
+      documents: [doc('d1', 'one'), doc('d2', 'two')],
+      cursor: null,
+    });
+    for (const d of [vm, third]) d.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
+    pull(mac, vm);
+    pull(mac, third);
+    promote(vm.conn(), 14);
+    await vm.store.commit({ account: a.id as never, documents: [doc('v1', 'vm')], cursor: null });
+    pull(vm, third);
+    expect(state(third).epoch).toBe(14);
+    promote(third.conn(), 15);
+    await third.store.commit({ account: a.id as never, documents: [doc('t1', 'third')], cursor: null });
+    const b = await mac.store.createAccount({ source: 'test', identifier: 'mac-only' });
+    await mac.store.commit({ account: b.id as never, documents: [doc('m1', 'unseen')], cursor: null });
+    return { a, b };
+  }
+
+  it("the old leader's unseen row reaches the device that led last", async () => {
+    await twoTakeovers();
+    demote(mac.conn(), 'third');
+    pull(third, mac);
+    expect(state(mac).epoch).toBe(15);
+    promote(mac.conn(), 16);
+    // The third device follows the Mac again, from its own head.
+    demote(third.conn(), 'mac');
+    pull(mac, third);
+    expect(markdownOf(third).m1).toBe('unseen');
+    expect(markdownOf(third)).toEqual(markdownOf(mac));
+    expect(names(third)).toContain('mac-only');
+  });
+
+  it('a demote remembers the epoch it left, once, and a promotion clears it', async () => {
+    await twoTakeovers();
+    const pre = () =>
+      (mac.conn().prepare(`SELECT pre_demote_epoch AS e FROM sync_state`).get() as { e: number | null }).e;
+    expect(pre()).toBeNull();
+    demote(mac.conn(), 'third');
+    expect(pre()).toBe(0);
+    pull(third, mac);
+    // Demoting again (a restart, a repeated notice) keeps the first one.
+    demote(mac.conn(), 'third');
+    expect(pre()).toBe(0);
+    promote(mac.conn(), 16);
+    expect(pre()).toBeNull();
+  });
+});
+
+describe('a follower that skipped an epoch asks a relaying leader', () => {
+  it('is served from the lowest grant it skipped, not told to re-copy', async () => {
+    // Mac leads at 0; the VM leads at 14 (a grant at the Mac's position) and
+    // writes; the Mac, never told, asks the VM with a position above that grant.
+    enableTracking(mac.conn());
+    const a = await mac.store.createAccount({ source: 'test', identifier: 'shared' });
+    await mac.store.commit({ account: a.id as never, documents: [doc('d1')], cursor: null });
+    vm.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
+    pull(mac, vm);
+    promote(vm.conn(), 14);
+    await mac.store.commit({ account: a.id as never, documents: [doc('m1')], cursor: null });
+    const s = state(mac);
+    const r = buildDelta(vm.reader, { seq: s.seq + 50, cursor: s.cursor + 50 }, 0, stage, 250 * 1024 * 1024);
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    const grant = vm
+      .conn()
+      .prepare(`SELECT grant_seq AS seq, grant_cursor AS cursor FROM sync_epochs WHERE epoch = 14`)
+      .get() as { seq: number; cursor: number };
+    expect(r.from).toEqual(grant);
+  });
+});
+
+describe('relaying to a third device (codex review point 5)', () => {
+  it('KNOWN GAP, pinned: what an interim leader changed in a non-document table does not travel on from a device that merely applied it', async () => {
+    const third = await open('relay-third');
+    try {
+      enableTracking(mac.conn());
+      const a = await mac.store.createAccount({ source: 'test', identifier: 'shared' });
+      await mac.store.commit({ account: a.id as never, documents: [doc('d1')], cursor: null });
+      for (const d of [vm, third]) d.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
+      pull(mac, vm);
+      pull(mac, third);
+      // The VM leads at 14 and changes something that is not a document.
+      promote(vm.conn(), 14);
+      await vm.store.createAccount({ source: 'test', identifier: 'vm-only' });
+      // The Mac applies it as a follower, then leads at 15.
+      demote(mac.conn(), 'vm');
+      pull(vm, mac);
+      promote(mac.conn(), 15);
+      expect(names(mac)).toContain('vm-only');
+      // The third device, away through epoch 14, asks the Mac. It is served
+      // (no re-copy), from the lowest grant it skipped...
+      demote(third.conn(), 'mac');
+      pull(mac, third);
+      expect(state(third).epoch).toBe(15);
+      // ...but the Mac never tracked the account row it only applied.
+      expect(names(third)).not.toContain('vm-only');
+    } finally {
+      third.reader.close();
+      await third.db.close();
+    }
+  });
+});

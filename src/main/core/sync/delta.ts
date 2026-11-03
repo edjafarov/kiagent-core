@@ -135,9 +135,23 @@ export function buildDelta(
           }
           continue;
         }
+        const sent = new Set<string>();
         for (const pk of keys(tbl)) {
           const row = getRow(tbl, pk);
           if (row) write({ op: 'upsert', tbl, row });
+          sent.add(JSON.stringify(pk));
+        }
+        if (tbl === 'sync_epochs') {
+          // The grant ledger travels whole above the asker's epoch. A device
+          // that only applied an interim leader's grant never tracked it, and
+          // a returning leader restamps its unseen rows from the lowest grant
+          // above the epoch it last led in.
+          const grants = conn
+            .prepare(`SELECT * FROM sync_epochs WHERE epoch > ? ORDER BY epoch`)
+            .all(fromEpoch) as Record<string, unknown>[];
+          for (const row of grants) {
+            if (!sent.has(JSON.stringify([row.epoch]))) write({ op: 'upsert', tbl, row });
+          }
         }
       }
 

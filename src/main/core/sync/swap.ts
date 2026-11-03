@@ -174,7 +174,8 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string): vo
       ).run(now);
       db.prepare(
         `UPDATE main.sync_state SET role = 'follower', tracking = 0, joining = 0,
-           after_seq = ?, after_cursor = ?, history_id = ?, master_device_id = ?, epoch = ?`,
+           after_seq = ?, after_cursor = ?, history_id = ?, master_device_id = ?, epoch = ?,
+           pre_demote_epoch = NULL`,
       ).run(meta.after_seq, meta.after_cursor, meta.history_id, masterDeviceId, meta.epoch);
       db.exec(`DROP TABLE main.${SNAPSHOT_META}`);
     })();

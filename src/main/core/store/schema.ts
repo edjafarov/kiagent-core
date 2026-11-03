@@ -1366,6 +1366,16 @@ const MIGRATIONS: Migration[] = [
     value_json TEXT NOT NULL
   );
   `,
+  // v20: split-brain fix. The epoch a device was leading in when it was
+  // demoted, kept until it leads again. Its promotion renumbers the rows it
+  // wrote after the lowest grant above this epoch, whichever takeovers came
+  // since. NULL for a device that never led. Local, not synced.
+  (db) => {
+    const have = db
+      .prepare(`SELECT 1 FROM pragma_table_info('sync_state') WHERE name = 'pre_demote_epoch'`)
+      .get();
+    if (!have) db.exec(`ALTER TABLE sync_state ADD COLUMN pre_demote_epoch INTEGER`);
+  },
 ];
 
 /**
